@@ -5,10 +5,11 @@ import { bridge } from "../../../renderer/lib/bridge"
 import { Button } from "~/components/ui/button"
 import type { BackupTenant } from "./types"
 import type { ReplacedReference } from "../../../shared/intune/restore-references"
+import type { DirectoryOptions } from "../../../main/restore/directory-service"
 import type { DirectoryReview } from "../../../main/restore/directory-9a"
 import { directoryPageUnresolved } from "../../../shared/intune/directory-page-state"
 
-interface Review { runId: string; fingerprint: string; more: boolean; discarded?: boolean; unresolved?: boolean; selection?: string[]; rows: Array<{ key: string; review: DirectoryReview }> }
+interface Review { options?: DirectoryOptions; runId: string; fingerprint: string; more: boolean; discarded?: boolean; unresolved?: boolean; selection?: string[]; rows: Array<{ key: string; review: DirectoryReview }> }
 const approvalLabel: Record<string, string> = { "directory-item": "Approve this individual change", "privileged-relationship": "Approve this privileged relationship", "security-response": "Approve undoing the apparent security response", "recycle-relationships": "Approve recovered relationships and account state", "exact-group": "Approve this removal for this group" }
 /** A bounded page of explicit approvals, outside restore all and row selection. */
 export function DirectoryRestore({ tenant, backupId = "", path = "" }: { tenant: BackupTenant; backupId?: string; path?: string }) {
@@ -36,10 +37,10 @@ export function DirectoryRestore({ tenant, backupId = "", path = "" }: { tenant:
     const run = action === "cancel" ? generation.current : ++generation.current
     const pageId = action === "resume" ? resumeId : action === "cancel" ? activeRestore : action === "reconcile" || action === "discard" ? (review?.runId ?? resumeId) : review?.runId
     if (action !== "cancel") { setBusy(true); setActiveRestore(action === "restore" ? pageId ?? null : null) }
-    if (action === "restore") { setOutcomes([]); setReview(previous => previous && { ...previous, unresolved: true }) }
+    if (action === "restore") { setOutcomes([]); setReview(previous => previous && { ...previous, selection: previous.rows.filter(row => !row.review.blocker && row.review.approvals.every(kind => approvals[row.key]?.includes(kind))).map(row => row.key), unresolved: true }) }
     setMessage("")
     try {
-      const response = await fetch("/api/restore-directory", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...tenant.credentials, storageAccountName: tenant.storageAccountName, backupId, path, action: action === "next" ? "preview" : action, ...(action === "next" ? { previousRunId: review?.runId } : {}), stage, exactMembers, exactOwners, approvals, runId: pageId, fingerprint: review?.fingerprint, mode: "replace", restoreType: "selective", selectedPolicies: [path] }) })
+      const response = await fetch("/api/restore-directory", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...tenant.credentials, storageAccountName: tenant.storageAccountName, backupId, path, action: action === "next" ? "preview" : action, ...(action === "next" ? { ...(review?.options ?? { stage, exactMembers, exactOwners }), previousRunId: review?.runId } : { stage, exactMembers, exactOwners }), approvals, runId: pageId, fingerprint: review?.fingerprint, mode: "replace", restoreType: "selective", selectedPolicies: [path] }) })
       const data = await response.json()
       if (generation.current !== run) return
       if (!response.ok) throw new Error(data.error ?? "Directory restore could not finish.")
@@ -49,6 +50,7 @@ export function DirectoryRestore({ tenant, backupId = "", path = "" }: { tenant:
         setMessage("Directory restore cancelled. No further changes will be sent. Confirm any previously sent results before continuing.")
         return
       }
+      if (data.rows && data.options) { setStage(data.options.stage); setExactMembers(data.options.exactMembers); setExactOwners(data.options.exactOwners) }
       setCanDiscard(data.canDiscard === true)
       if (action === "restore" || action === "reconcile" || action === "discard") setReview(previous => {
         const current: Review | null = data.rows ? data : previous
@@ -56,7 +58,7 @@ export function DirectoryRestore({ tenant, backupId = "", path = "" }: { tenant:
         const discarded = data.discarded ?? current.discarded ?? false
         return { ...current, discarded, unresolved: discarded ? false : data.unresolved ?? directoryPageUnresolved(false, current.selection ?? (data.outcomes ?? []).map((row: { key: string }) => row.key), data.outcomes ?? []) }
       })
-      if (action === "preview" || action === "resume" || action === "next") { setReview(data); if (data.options) { setStage(data.options.stage); setExactMembers(data.options.exactMembers); setExactOwners(data.options.exactOwners) } setApprovals(action === "resume" ? Object.fromEntries((data.rows as Review["rows"]).filter(row => data.selection?.includes(row.key)).map(row => [row.key, row.review.approvals])) : {}); setOutcomes([]); setReferences([]); setMessage(data.rows.length ? "Review each row separately." : "No relationship differences remain in this page.") }
+      if (action === "preview" || action === "resume" || action === "next") { setReview(data); setApprovals(action === "resume" ? Object.fromEntries((data.rows as Review["rows"]).filter(row => data.selection?.includes(row.key)).map(row => [row.key, row.review.approvals])) : {}); setOutcomes([]); setReferences([]); setMessage(data.rows.length ? "Review each row separately." : "No relationship differences remain in this page.") }
       else if (action === "cancel") setMessage(data.cancelled ? "Cancellation requested. In-flight results will be confirmed before continuing." : "No active restore was cancelled.")
       else if (action === "discard") { setCanDiscard(false); setOutcomes([]); setMessage("Saved restore discarded. This page can never send again.") }
       else { setOutcomes(data.outcomes ?? []); setReferences(data.replacedReferences ?? []); setMessage(data.status === "nothing-sent" ? "No directory changes were sent for this page. You can discard the saved restore." : data.status === "complete" ? "Directory page completed. Preview again for remaining differences." : `Directory restore is partial. Applied changes are retained. Review the results and warnings. Resume throttled steps after the retry time. Confirm uncertain results before continuing. ${(data.warnings ?? []).join(" ")}`) }
@@ -76,8 +78,8 @@ export function DirectoryRestore({ tenant, backupId = "", path = "" }: { tenant:
   return <div className="px-4 pb-3 pl-11 text-sm" data-no-select>
     <Button size="sm" variant="outline" disabled={busy} aria-expanded={open} onClick={() => { setOpen(!open); invalidate() }}>Review directory restore</Button>
     {open && <div className="mt-2 space-y-3 rounded-lg border border-blue-200 bg-blue-50 p-3 text-gray-900">
-      <p>Review who receives access. Each change needs its own approval and is never part of restore all. Recreated objects get a new ID. Restore the object before reviewing relationships.</p>
-      {applications ? <><p>Application restore admits only verified operations through individual review. Only nonempty app registration names and descriptions are admitted. Creation, enterprise app metadata, recycle recovery, owners, consent, app roles and policy bindings remain blocked.</p><p>A recreated app registration gets a new app ID. This breaks every client that uses the old one. Recycle-bin recovery preserves the app ID where possible, but remains blocked until all recovered access and credentials can be verified.</p><p>SAML signing keys, provisioning secrets and all credentials are never restored. Set up single sign-on and provisioning again only when rebuilding a missing app or recovering missing configuration. Name and description updates do not require this. Each owner, consent grant and app role assignment needs its own approval. App policy bindings refer to layer 8 configuration policies.</p></> : <><p>Object updates restore a user's display name or a security group's nonempty description. Clearing descriptions remains blocked after inconsistent live read-back. Other profile and group properties have no admitted restore round trip.</p>
+      <p>Review who receives access. Each change needs its own approval and is never part of restore all. {!applications && <>Recreated objects get a new ID. Restore the object before reviewing relationships.</>}</p>
+      {applications ? <p>Only nonempty app registration name and description updates run. Everything else is blocked, including creation, enterprise app metadata, recycle recovery, owners, consent, app roles, policy bindings, SAML signing keys, provisioning secrets and all credentials.</p> : <><p>Object updates restore a user's display name or a security group's nonempty description. Clearing descriptions remains blocked after inconsistent live read-back. Other profile and group properties have no admitted restore round trip.</p>
       <p>Exact member removal is blocked for Conditional Access targeted groups because it can affect policy enforcement. Remove those members in Microsoft Entra. Other admitted changes remain available.</p>
       <p>Account activation, recycle recovery, invitations, licenses, dynamic rules, role-assignable groups and nested group relationships remain blocked. Their live evidence or privileged safety integration is incomplete.</p></>}
       <label className="block">Review <select className="ml-2 rounded border bg-white p-1 text-gray-900" disabled={busy} value={stage} onChange={event => { setStage(event.target.value); invalidate() }}><option value="object">Directory object</option><option value="relationships">Relationships</option></select></label>

@@ -1,5 +1,6 @@
 import { setDirectoryRestoreService } from "../src/main/restore/directory-dispatch"
 import { POST as restoreDirectory } from "../src/portal/app/api/restore-directory/route"
+import { RestoreWriteDeferredError } from "../src/shared/intune/restore-guards"
 import { DirectoryRetryPersistenceError } from "../src/main/restore/directory-retry"
 import { INTUNE_TYPES } from "../src/shared/intune/registry"
 import { backupNeed } from "../src/shared/services/modules"
@@ -2023,6 +2024,7 @@ it("publishes later create mappings after reference cleanup fails and retries cl
   env.store.set(coordinatorKey, JSON.stringify(state))
   const reference = (source: string) => `restore.directory.create-journal.${tenant}.Groups.${source}`
   env.store.set(reference(secondSource), prefix)
+  const warning = vi.spyOn(console, "warn").mockImplementation(() => {})
   const remove = env.store.delete, cleanup = vi.spyOn(env.store, "delete").mockImplementation(key => {
     if (key === reference(resource)) throw new Error("Cleanup unavailable")
     remove(key)
@@ -2034,11 +2036,76 @@ it("publishes later create mappings after reference cleanup fails and retries cl
     expect(env.store.get(directoryMappingKey(tenant, "Groups", secondSource))).toBe(secondTarget)
     expect(env.store.get(reference(resource))).toBe(prefix)
     expect(env.store.get(reference(secondSource))).toBeNull()
+    expect(warning.mock.calls).toEqual([[`Directory create reference cleanup failed for object ${resource}. The mapping is durable; cleanup will be retried.`]])
     objects.release()
     cleanup.mockRestore()
     objects.recoverMappings(steps)
     expect(env.store.get(reference(resource))).toBeNull()
     expect(JSON.parse(env.data.get(coordinatorKey)!).locks).toEqual({})
     expect(env.writes).toEqual(["POST groups"])
-  } finally { cleanup.mockRestore() }
+  } finally { cleanup.mockRestore(); warning.mockRestore() }
+})
+
+it.each(["lock release", "final cursor"])("finishes previous page cleanup after one failed %s before sending the final 15 rows", async failurePoint => {
+  const env = world(65), service = env.service(), relationshipOptions = { ...options, stage: "relationships" as const }
+  const first = await service.prepare(tenant, env.request, relationshipOptions, env.read)
+  const coordinator = `restore.directory.coordinator.${tenant}`, cursor = directoryPagePrefix(tenant, first.runId) + "cursor"
+  const set = env.store.set
+  let failures = 0
+  const failure = vi.spyOn(env.store, "set").mockImplementation((key, value) => {
+    const finalSave = failurePoint === "lock release" ? key === coordinator && !JSON.parse(value).locks[resource] : key === cursor && JSON.parse(value).done
+    if (env.writes.length === 50 && finalSave && failures++ === 0) throw new Error("Cleanup save unavailable")
+    set(key, value)
+  })
+  try {
+    await expect(service.execute(tenant, { ...env.request, runId: first.runId }, first.fingerprint, Object.fromEntries(first.rows.map(row => [row.key, row.review.approvals])))).rejects.toThrow("Cleanup save unavailable")
+    expect(env.writes).toHaveLength(50)
+    expect((await service.resume(tenant, { ...env.request, runId: first.runId })).unresolved).toBe(false)
+    expect(JSON.parse(env.data.get(coordinator)!).locks[resource].owner).toBe(first.runId)
+    const restarted = env.service(), next = await restarted.prepare(tenant, env.request, { ...relationshipOptions, previousRunId: first.runId }, env.read)
+    expect(JSON.parse(env.data.get(cursor)!).done).toBe(true)
+    expect(JSON.parse(env.data.get(coordinator)!).locks).toEqual({})
+    expect(next.rows).toHaveLength(15); expect(next.more).toBe(false)
+    expect(next.rows.every(row => !row.review.blocker)).toBe(true)
+    expect(await restarted.execute(tenant, { ...env.request, runId: next.runId }, next.fingerprint, Object.fromEntries(next.rows.map(row => [row.key, row.review.approvals])))).toMatchObject({ status: "complete", failed: 0, unresolved: false, outcomes: next.rows.map(row => ({ key: row.key, state: "applied" })) })
+    expect(env.writes).toHaveLength(65); expect(env.members.size).toBe(65)
+  } finally { failure.mockRestore() }
+})
+
+it("refuses continuation with a retryable error while previous lock cleanup still fails", async () => {
+  const env = world(65), service = env.service(), relationshipOptions = { ...options, stage: "relationships" as const }
+  const first = await service.prepare(tenant, env.request, relationshipOptions, env.read), set = env.store.set
+  const coordinator = `restore.directory.coordinator.${tenant}`
+  const failure = vi.spyOn(env.store, "set").mockImplementation((key, value) => {
+    if (key === coordinator && env.writes.length === 50 && !JSON.parse(value).locks[resource]) throw new Error("Release unavailable")
+    set(key, value)
+  })
+  const previews = () => [...env.data.keys()].filter(key => key.startsWith("restore.directory.review."))
+  try {
+    await expect(service.execute(tenant, { ...env.request, runId: first.runId }, first.fingerprint, Object.fromEntries(first.rows.map(row => [row.key, row.review.approvals])))).rejects.toThrow("Release unavailable")
+    for (let attempt = 0; attempt < 2; attempt++) await expect(service.prepare(tenant, env.request, { ...relationshipOptions, previousRunId: first.runId }, env.read)).rejects.toMatchObject({ constructor: RestoreWriteDeferredError, message: expect.stringContaining("Retry previewing the next page") })
+    expect(previews()).toHaveLength(1); expect(env.writes).toHaveLength(50)
+    expect(JSON.parse(env.data.get(coordinator)!).locks[resource].owner).toBe(first.runId)
+    failure.mockRestore()
+    const next = await service.prepare(tenant, env.request, { ...relationshipOptions, previousRunId: first.runId }, env.read)
+    expect(next.rows).toHaveLength(15); expect(previews()).toHaveLength(2)
+    expect(await service.execute(tenant, { ...env.request, runId: next.runId }, next.fingerprint, Object.fromEntries(next.rows.map(row => [row.key, row.review.approvals])))).toMatchObject({ status: "complete" })
+    expect(env.writes).toHaveLength(65)
+  } finally { failure.mockRestore() }
+})
+
+it("defers a settled earlier inventory owner's lock and retries all 15 rows after cleanup", async () => {
+  const env = world(65), service = env.service(), relationshipOptions = { ...options, stage: "relationships" as const }
+  const first = await service.prepare(tenant, env.request, relationshipOptions, env.read)
+  await service.execute(tenant, { ...env.request, runId: first.runId }, first.fingerprint, Object.fromEntries(first.rows.map(row => [row.key, row.review.approvals])))
+  const next = await service.prepare(tenant, env.request, { ...relationshipOptions, previousRunId: first.runId }, env.read)
+  const coordinator = `restore.directory.coordinator.${tenant}`, state = JSON.parse(env.data.get(coordinator)!)
+  state.locks[resource] = { owner: first.runId, journal: directoryPagePrefix(tenant, first.runId) + "batch.2." }
+  env.store.set(coordinator, JSON.stringify(state))
+  const execute = () => service.execute(tenant, { ...env.request, runId: next.runId }, next.fingerprint, Object.fromEntries(next.rows.map(row => [row.key, row.review.approvals])))
+  expect(await execute()).toMatchObject({ status: "partial", failed: 0, unresolved: true, outcomes: next.rows.map(row => ({ key: row.key, state: "deferred", reason: expect.stringContaining("settled earlier directory page") })) })
+  expect(env.writes).toHaveLength(50)
+  await service.saved(tenant, first.runId, "reconcile")
+  expect(await execute()).toMatchObject({ status: "complete", failed: 0, unresolved: false, outcomes: next.rows.map(row => ({ key: row.key, state: "applied" })) })
+  expect(env.writes).toHaveLength(65); expect(env.members.size).toBe(65)
 })

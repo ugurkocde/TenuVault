@@ -7,7 +7,7 @@ type State = { locks: Record<string, { owner: string; journal: string; rejected?
 export const directoryPagePrefix = (tenant: string, id: string) => `restore.directory.${encodeURIComponent(tenant)}.${encodeURIComponent(id)}.`
 export const directoryMappingKey = (tenant: string, folder: string, source: string) => `restore.directory.mapping.${encodeURIComponent(tenant.toLowerCase())}.objectId.${folder}.${source.toLowerCase()}`
 /** One atomic value arbitrates page ownership and discard. All mutations are synchronous. */
-export function directoryObjectState(store: KeyValueStore, tenant: string, owner: string, now: () => number = Date.now) {
+export function directoryObjectState(store: KeyValueStore, tenant: string, owner: string, now: () => number = Date.now, retryableLock: (owner: string) => boolean = () => false) {
   const key = `restore.directory.coordinator.${tenant.toLowerCase()}`
   const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value)
   const load = (): State => {
@@ -39,7 +39,10 @@ export function directoryObjectState(store: KeyValueStore, tenant: string, owner
   }
   const acquire = (state: State, id: string, journal: string) => {
     const lock = state.locks[id.toLowerCase()]
-    if (lock && lock.owner !== owner) throw new RestoreSafetyError("Another saved directory page owns this object. Resolve or discard that page first.")
+    if (lock && lock.owner !== owner) {
+      if (retryableLock(lock.owner)) throw new RestoreWriteDeferredError("A settled earlier directory page owns this object. Retry that page's cleanup before resuming this page.")
+      throw new RestoreSafetyError("Another saved directory page owns this object. Resolve or discard that page first.")
+    }
     state.locks[id.toLowerCase()] = { owner, journal, ...(lock?.journal === journal && lock.rejected ? { rejected: lock.rejected } : {}) }
   }
   // A throttle can reach either atomic record first. Recover the journal half before
@@ -71,7 +74,7 @@ export function directoryObjectState(store: KeyValueStore, tenant: string, owner
   const clearCreateJournal = (step: Pick<GuardedStep, "folder" | "sourceId">, prefix: string) => {
     if (createJournal(step) !== prefix) return
     try { store.delete(createJournalKey(step)) }
-    catch { /* The mapping is durable. Retain the reference for cleanup on the next pass. */ }
+    catch { console.warn(`Directory create reference cleanup failed for object ${step.sourceId}. The mapping is durable; cleanup will be retried.`) }
   }
   /** Replay confirmed mapping publication only for requested identities. */
   const recoverMappings = (steps: Array<Pick<GuardedStep, "folder" | "sourceId" | "targetId">>, state = load(), history?: Map<string, GuardedRun[]>) => {

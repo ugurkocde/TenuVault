@@ -100,8 +100,8 @@ export async function checkDirectoryRestore({ check, evaluate, waitForCondition,
       await click("Preview directory changes")
       assert(await waitForCondition(`document.body.innerText.includes('Recovery app registration (application)')`), "application resource and type are missing")
       assert(await evaluate(`[...document.querySelectorAll('button')].find(b => b.innerText.startsWith('Execute approved')).disabled`), "unapproved application page can execute")
-      assert(await evaluate(`document.body.innerText.includes('breaks every client') && document.body.innerText.includes('SAML signing keys')`), "application recreation and credential risks are missing")
-      assert(await evaluate(`document.body.innerText.includes('only when rebuilding a missing app or recovering missing configuration') && document.body.innerText.includes('Name and description updates do not require this')`), "application recovery advice is not limited to missing apps or configuration")
+      assert(await evaluate(`document.body.innerText.includes('Only nonempty app registration name and description updates run. Everything else is blocked') && document.body.innerText.includes('SAML signing keys, provisioning secrets and all credentials')`), "application admitted updates or blocked credentials are missing")
+      assert(await evaluate(`!document.body.innerText.includes('Each owner, consent grant and app role assignment needs its own approval') && !document.body.innerText.includes('Set up single sign-on')`), "application review contradicts its blocked operations")
       if (blocked) {
         assert(await evaluate(`document.body.innerText.includes('Blocked: Recycle-bin recovery is blocked') && ![...document.querySelectorAll('label')].some(l => l.innerText.startsWith('Approve '))`), "blocked application row offers approval or has no refusal reason")
       } else {

@@ -7,7 +7,7 @@ import { directory9bIO } from "./directory-9b-io"
 import { applicationObjectStep, applicationRelationshipSteps } from "./directory-9b-plan"
 import { DIRECTORY_9B_FOLDERS, applicationAdmission, applicationReview, requireApplicationRestoreAccess } from "./directory-9b"
 import type { ModuleSettings } from "../services/settings"
-import type { GuardedStep } from "./guarded-run"
+import type { GuardedIO, GuardedStep } from "./guarded-run"
 import { randomUUID, createHash } from "node:crypto"
 import { INTUNE_TYPES, type Item } from "../../shared/intune/registry"
 import { canBackUp } from "../../shared/services/modules"
@@ -144,7 +144,7 @@ export class DirectoryRestoreService {
       const previous = this.load(tenant, options.previousRunId)
       if (folder !== "Groups" || options.stage !== "relationships" || previous.run.source?.path !== request.path || previous.run.source.fingerprint !== run.source!.fingerprint || previous.options.exactMembers !== options.exactMembers || previous.options.exactOwners !== options.exactOwners || previous.run.actor.userId !== actor.userId || previous.run.actor.clientId !== actor.clientId) fail("Continue the original group's relationship preview and exact choices.")
       if (!previous.inventory) fail("Preview this group again to create its relationship inventory.")
-      if (this.view(previous).unresolved) fail("Resolve or discard this saved page before previewing the next page.")
+      await this.finishContinuation(previous, io)
       inventory = { ...previous.inventory!, offset: previous.inventory!.offset + previous.run.entries.length }
       if (inventory.targetId !== object.targetId) fail("The restored group mapping changed. Preview its relationships again.")
     }
@@ -255,7 +255,7 @@ export class DirectoryRestoreService {
       if (options.previousRunId) {
         const previous = this.load(tenant, options.previousRunId)
         if (!previous.inventory || previous.run.source?.path !== request.path || previous.run.source.fingerprint !== run.source!.fingerprint || previous.run.actor.userId !== actor.userId || previous.run.actor.clientId !== actor.clientId || previous.inventory.targetId !== object.targetId) fail("Continue the original application's relationship preview.")
-        if (this.view(previous).unresolved) fail("Resolve or discard this saved page before previewing the next page.")
+        await this.finishContinuation(previous, io)
         inventory = { ...previous.inventory!, offset: previous.inventory!.offset + previous.run.entries.length }
       } else {
         inventory = { id: run.id, count: 0, offset: 0, targetId: object.targetId! }
@@ -293,6 +293,34 @@ export class DirectoryRestoreService {
     }
     this.save(page)
     return this.view(page)
+  }
+  private retryableLock(page: DirectoryPage) {
+    return (owner: string) => {
+      if (!page.inventory) return false
+      const previous = this.load(page.run.tenant, owner)
+      return previous.inventory?.id === page.inventory.id && previous.inventory.offset < page.inventory.offset && !this.view(previous).unresolved
+    }
+  }
+  private async finishContinuation(page: DirectoryPage, io: GuardedIO) {
+    const operation = this.register(page.run.tenant, page.run.id)
+    try {
+      const view = this.view(page)
+      if (view.unresolved) fail("Resolve or discard this saved page before previewing the next page.")
+      try {
+        if (view.discarded) directoryObjectState(this.store, page.run.tenant, page.run.id).release(true)
+        else if (this.store.get(directoryPagePrefix(page.run.tenant, page.run.id) + "cursor")) {
+          const entries = page.run.entries.filter(entry => page.selection?.includes(entry.step.key))
+          const { entries: _entries, mappings: _mappings, ...identity } = page.run
+          await executeDirectoryBatches(this.store, identity, { fingerprint: view.fingerprint, page: async (cursor, limit) => {
+            const start = Number(cursor ?? 0), end = Math.min(entries.length, start + limit)
+            return { entries: entries.slice(start, end), next: end < entries.length ? String(end) : null }
+          } }, io, operation.signal, 20, true, this.retryableLock(page))
+          if (!JSON.parse(this.store.get(directoryPagePrefix(page.run.tenant, page.run.id) + "cursor")!).done) throw new Error("Cursor cleanup is incomplete")
+        }
+      } catch {
+        throw new RestoreWriteDeferredError("The previous directory page could not finish its cursor and lock cleanup. Retry previewing the next page.")
+      }
+    } finally { operation.finish() }
   }
   private view(page: DirectoryPage) {
     const entries = this.history(page).flatMap(({ run }) => run.entries)
@@ -361,7 +389,7 @@ export class DirectoryRestoreService {
     const result = await executeDirectoryBatches(this.store, { ...identity, actor }, { fingerprint, page: async (cursor, limit) => {
       const start = Number(cursor ?? 0), end = Math.min(entries.length, start + limit)
       return { entries: entries.slice(start, end), next: end < entries.length ? String(end) : null }
-    } }, io, operationSignal)
+    } }, io, operationSignal, 20, false, this.retryableLock(page))
     return this.results(page, result)
   }
   private recordSourceThrottle(tenant: string, folder: string, sourceId: string, retryAt: number) {
@@ -445,7 +473,7 @@ export class DirectoryRestoreService {
       const result = await executeDirectoryBatches(this.store, { ...identity, actor: context.actor }, { fingerprint: this.view(page).fingerprint, page: async (cursor, limit) => {
         const start = Number(cursor ?? 0), end = Math.min(entries.length, start + limit)
         return { entries: entries.slice(start, end), next: end < entries.length ? String(end) : null }
-      } }, DIRECTORY_9B_FOLDERS.includes(entries[0]!.step.folder) ? context.applicationIO : context.io, controller.signal, 20, true)
+      } }, DIRECTORY_9B_FOLDERS.includes(entries[0]!.step.folder) ? context.applicationIO : context.io, controller.signal, 20, true, this.retryableLock(page))
       return { ...this.view(page), ...this.results(page, result) }
     } finally { this.running.delete(runningKey) }
   }

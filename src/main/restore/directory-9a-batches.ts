@@ -16,12 +16,12 @@ export interface DirectoryBatchSource {
   page: (cursor: string | null, limit: number) => Promise<{ entries: GuardedRun["entries"]; next: string | null }>
 }
 /** Each batch has its own durable 8a journal partition. Neither previews nor journal saves grow with the directory. */
-export async function executeDirectoryBatches(store: PartitionedRestoreStore, identity: Omit<GuardedRun, "entries" | "mappings">, source: DirectoryBatchSource, io: GuardedIO, signal?: AbortSignal, limit = 20, reconcileOnly = false): Promise<{ status: "complete" | "partial"; batches: number; failed: number }> {
+export async function executeDirectoryBatches(store: PartitionedRestoreStore, identity: Omit<GuardedRun, "entries" | "mappings">, source: DirectoryBatchSource, io: GuardedIO, signal?: AbortSignal, limit = 20, reconcileOnly = false, retryableLock?: (owner: string) => boolean): Promise<{ status: "complete" | "partial"; batches: number; failed: number }> {
   if (store.partitioned !== true) throw new RestoreSafetyError("Directory restores require partitioned durable storage, not the whole app-state store.")
   if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new RestoreSafetyError("The directory batch budget must be 1 to 100 steps.")
   const prefix = directoryPagePrefix(identity.tenant, identity.id)
   const durableStore: KeyValueStore = { get: key => restorePersistence(() => store.get(key)), set: (key, value) => restorePersistence(() => store.set(key, value)), delete: key => restorePersistence(() => store.delete(key)) }
-  const objectState = directoryObjectState(durableStore, identity.tenant, identity.id, io.now)
+  const objectState = directoryObjectState(durableStore, identity.tenant, identity.id, io.now, retryableLock)
   objectState.assertActive()
   const binding = restoreFingerprint({ ...identity, actor: { ...identity.actor, recoveryAccountIds: [] }, sourceFingerprint: source.fingerprint } as unknown as Item)
   const saved = store.get(prefix + "cursor")

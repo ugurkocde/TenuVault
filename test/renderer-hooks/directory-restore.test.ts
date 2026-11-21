@@ -51,12 +51,15 @@ it("drops a late preview after unmount", async () => {
   await act(async () => resolve(Response.json(page)))
   expect(document.body.textContent).toBe("")
 })
-it("shows staged application risks without offering execution or exact-owner removals", async () => {
+it("shows the admitted application updates and blocks every other operation", async () => {
   vi.stubGlobal("fetch", vi.fn(async () => Response.json({ ...page, more: false, rows: [{ ...page.rows[0], review: { ...page.rows[0]!.review, blocker: "Phase 2 evidence is required." } }] })))
   root = createRoot(document.body.appendChild(document.createElement("div")))
   await act(async () => root.render(createElement(DirectoryRestore, { ...props, path: "backup/Applications/app.json" })))
   await click("Review directory restore"); await click("Preview directory changes")
-  expect(document.body.textContent).toContain("breaks every client")
+  expect(document.body.textContent).toContain("Only nonempty app registration name and description updates run. Everything else is blocked")
+  expect(document.body.textContent).not.toContain("Each owner, consent grant and app role assignment needs its own approval")
+  expect(document.body.textContent).not.toContain("Set up single sign-on")
+  expect(document.body.textContent).not.toContain("Recreated objects get a new ID")
   expect(document.body.textContent).toContain("SAML signing keys")
   expect(document.body.textContent).toContain("Phase 2 evidence is required")
   expect(document.body.textContent).not.toContain("Exact ownership")
@@ -388,4 +391,57 @@ it("uses an explicit settled server flag instead of stale unresolved outcomes", 
   expect(button("Preview next page").disabled).toBe(false)
   await click("Confirm this page's results")
   expect(button("Preview next page").disabled).toBe(false)
+})
+
+it.each(["reconcile", "discard", "resume"])("hydrates saved relationship choices after %s and continues from the displayed page options", async action => {
+  const savedOptions = { stage: "relationships", exactMembers: true, exactOwners: true, previousRunId: "older-page" }
+  const saved = { ...page, runId: "saved-run", options: savedOptions, unresolved: false, discarded: action === "discard", status: "complete", outcomes: [] }
+  const fetcher = vi.fn(async (_input: unknown, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body))
+    if (body.previousRunId) {
+      const valid = body.stage === "relationships" && body.exactMembers === true && body.exactOwners === true && body.previousRunId === "saved-run"
+      return Response.json(valid ? { ...saved, runId: "next-run", more: false, discarded: false } : { error: "Continue the original group's relationship preview and exact choices." }, { status: valid ? 200 : 409 })
+    }
+    return Response.json(body.action === "preview" ? { ...page, canDiscard: true, options: { stage: "object", exactMembers: false, exactOwners: false } } : saved)
+  })
+  vi.stubGlobal("fetch", fetcher)
+  root = createRoot(document.body.appendChild(document.createElement("div")))
+  await act(async () => root.render(createElement(DirectoryRestore, props)))
+  await click("Review directory restore")
+  if (action === "discard") await click("Preview directory changes")
+  else await act(async () => {
+    const input = document.querySelector<HTMLInputElement>('input:not([type="checkbox"])')!
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "saved-run")
+    input.dispatchEvent(new Event("input", { bubbles: true }))
+  })
+  await click(action === "reconcile" ? "Confirm this page's results" : action === "discard" ? "Discard saved restore" : "Resume saved page")
+  expect(document.body.textContent).toContain("Saved page: saved-run")
+  expect(document.querySelector("select")!.value).toBe("relationships")
+  for (const label of ["Exact membership", "Exact ownership"]) {
+    const input = [...document.querySelectorAll("label")].find(item => item.textContent?.startsWith(label))!.querySelector("input")!
+    expect(input.checked).toBe(true)
+  }
+  expect(button("Preview next page").disabled).toBe(false)
+  await click("Preview next page")
+  expect(JSON.parse(String(fetcher.mock.calls.at(-1)![1]?.body))).toMatchObject({ action: "preview", stage: "relationships", exactMembers: true, exactOwners: true, previousRunId: "saved-run" })
+  expect(document.body.textContent).toContain("Saved page: next-run")
+  expect(document.body.textContent).not.toContain("Continue the original group's relationship preview")
+})
+
+it("keeps all approved keys unresolved when fallback outcomes omit unstarted rows", async () => {
+  const rows = Array.from({ length: 50 }, (_, index) => ({ ...page.rows[0]!, key: `member-${index}` }))
+  const fetcher = vi.fn(async (_input: unknown, init?: RequestInit) => Response.json(JSON.parse(String(init?.body)).action === "preview" ? { ...page, rows } : { status: "partial", outcomes: rows.slice(0, 20).map(row => ({ key: row.key, state: "applied" })) }))
+  vi.stubGlobal("fetch", fetcher)
+  root = createRoot(document.body.appendChild(document.createElement("div")))
+  await act(async () => root.render(createElement(DirectoryRestore, props)))
+  await click("Review directory restore"); await click("Preview directory changes")
+  await act(async () => document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]').forEach(input => input.click()))
+  await click("Execute approved changes or resume page")
+  expect(Object.keys(JSON.parse(String(fetcher.mock.calls.at(-1)![1]?.body)).approvals)).toHaveLength(50)
+  expect(button("Preview next page").disabled).toBe(true)
+  await click("Confirm this page's results")
+  expect(button("Preview next page").disabled).toBe(true)
+  const calls = fetcher.mock.calls.length
+  await click("Preview next page")
+  expect(fetcher.mock.calls).toHaveLength(calls)
 })
