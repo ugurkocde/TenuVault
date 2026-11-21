@@ -5,7 +5,7 @@ import { openCheckout } from "../lib/purchase"
 import { TenantTrialNotices, TrialActions, TrialUsage, TrialChanges, trialEndVisible } from "./TenantTrial"
 import { CommunityChoiceBanner } from "./CommunityTenantPicker"
 import { isAppBackupPath, desktopRouteBoundaryKey } from "../lib/app-backup-route"
-import { useEffect, useRef, useState, type ComponentType, type ReactNode, type RefObject } from "react"
+import { useEffect, useLayoutEffect, useRef, useState, type ComponentType, type ReactNode, type RefObject } from "react"
 import { Link, Outlet, useLocation } from "react-router-dom"
 import {
   Activity,
@@ -496,7 +496,8 @@ export function DesktopLayout() {
   // may have moved to another page meanwhile, which is then the one in the screenshot. The count goes up
   // on every navigation, also one back to the same page or to an entry already in the history.
   const currentRoute = useRef({ pathname, count: 0 })
-  useEffect(() => { currentRoute.current = { pathname: location.pathname, count: currentRoute.current.count + 1 } }, [location])
+  // Counted when the navigation commits, before anything paints.
+  useLayoutEffect(() => { currentRoute.current = { pathname: location.pathname, count: currentRoute.current.count + 1 } }, [location])
   const openFeedback = async (opener: HTMLElement | null) => {
     if (capturingFeedback.current || feedback.open) return
     capturingFeedback.current = true
@@ -506,12 +507,13 @@ export function DesktopLayout() {
       const { pathname: path, count } = currentRoute.current
       // After the page changed under two captures, the last one names no page, so it cannot name the wrong one.
       const page = attempt < 2 ? feedbackPageLabel(path) : undefined
+      // The page read above paints before the window is captured. Any navigation from that read until
+      // the capture returns changes the count, so the screenshot may show another page.
+      await new Promise<void>((resolve) => afterPaint(resolve))
       snapshot = await bridge.feedback.capture(page).catch(() => null)
       if (page === undefined || currentRoute.current.count === count) break
-      // The page changed while the window was captured, so the screenshot may show either one: take
-      // it again once the new page has painted, so the page named matches the one in the picture.
+      // Take it again, so the page named matches the one in the picture.
       if (snapshot) void bridge.feedback.discardCapture(snapshot.id).catch(() => undefined)
-      await new Promise<void>((resolve) => afterPaint(resolve))
     }
     capturingFeedback.current = false
     setFeedback({ open: true, snapshot })

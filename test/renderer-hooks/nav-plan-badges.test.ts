@@ -68,6 +68,9 @@ import { ViewAllActivityButton } from "../../src/portal/app/portal/dashboard/pag
 import { NAV_PLAN_FEATURES } from "../../src/renderer/components/NavPlanBadge"
 import { HUBS } from "../../src/renderer/features/hubs"
 
+// Long enough for a chosen Help item to launch: the menu's exit, two paints, then two more before the capture.
+const LAUNCH_MS = 160
+
 const roots: Root[] = []
 
 async function render(element: ReturnType<typeof createElement>, route = "/portal/dashboard"): Promise<HTMLDivElement> {
@@ -420,7 +423,7 @@ describe("sidebar groups and Help", () => {
     await act(async () => { menuItem(label)!.click() })
     // The item runs after the menu has closed and the window has painted.
     for (let wait = 0; wait < 40 && document.querySelector('[role="menu"]'); wait++) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)) })
-    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)) })
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, LAUNCH_MS)) })
   }
 
   it("puts every entry under Protect, Baselines or Oversight, after the ungrouped start entries", async () => {
@@ -473,7 +476,7 @@ describe("sidebar groups and Help", () => {
     // Reopening Help before the window is captured does nothing, so the menu cannot be in the screenshot.
     await act(async () => { trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })) })
     expect(document.querySelector('[role="menu"]')).toBeNull()
-    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 80)) })
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, LAUNCH_MS)) })
     expect(feedbackCapture).toHaveBeenCalledTimes(1)
     expect(menuAtCapture).toEqual([false])
     expect(supportDialog.mock.calls.some(([props]) => props.open)).toBe(false)
@@ -483,7 +486,7 @@ describe("sidebar groups and Help", () => {
     await act(async () => { menuItem("Support")!.click() })
     // Focus moves elsewhere before the queued item runs: Support still returns to Help.
     container.querySelector<HTMLAnchorElement>('a[href="/portal/settings"]')!.focus()
-    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 80)) })
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, LAUNCH_MS)) })
     const props = supportDialog.mock.lastCall?.[0] as { open: boolean; returnFocus?: { current: HTMLElement | null } }
     expect(props.open).toBe(true)
     expect(props.returnFocus?.current).toBe(trigger)
@@ -498,7 +501,7 @@ describe("sidebar groups and Help", () => {
     await openHelp(container)
     // The user moves on to Settings while the menu closes; the screenshot then shows Settings.
     await act(async () => { menuItem("Share feedback")!.click(); go("/portal/settings") })
-    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 80)) })
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, LAUNCH_MS)) })
     expect(feedbackCapture).toHaveBeenCalledTimes(1)
     expect(feedbackCapture.mock.calls[0]![0]).toBe(feedbackPageLabel("/portal/settings"))
     expect(feedbackPageLabel("/portal/settings")).not.toBe(feedbackPageLabel("/portal/dashboard"))
@@ -518,7 +521,7 @@ describe("sidebar groups and Help", () => {
     expect(feedbackCapture.mock.calls[0]![0]).toBe("Dashboard")
     // Settings paints while the capture is still running, so that screenshot may show either page.
     await act(async () => go("/portal/settings"))
-    await act(async () => { finishCapture(); await new Promise((resolve) => setTimeout(resolve, 80)) })
+    await act(async () => { finishCapture(); await new Promise((resolve) => setTimeout(resolve, LAUNCH_MS)) })
     expect(feedbackCapture).toHaveBeenCalledTimes(2)
     expect(feedbackCapture.mock.calls[1]![0]).toBe(feedbackPageLabel("/portal/settings"))
   })
@@ -530,7 +533,7 @@ describe("sidebar groups and Help", () => {
         feedbackCapture.mockImplementationOnce(() => new Promise((resolve) => { held.push(() => resolve({ id: `s${index}` } as never)) }))
       }
     }
-    const settle = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, 80)) })
+    const settle = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, LAUNCH_MS)) })
     const start = async () => {
       licenseStatus.current = statusFor("pro")
       selectTenant()
@@ -612,7 +615,7 @@ describe("sidebar groups and Help", () => {
       expect(menu.getAttribute("data-state")).toBe("closed")
       await act(async () => { feedback.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })) })
       await act(async () => { menu.dispatchEvent(Object.assign(new Event("animationend"), { animationName: "tv-pop-out" })) })
-      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 80)) })
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, LAUNCH_MS)) })
       expect(document.querySelector('[role="menu"]')).toBeNull()
       expect(feedbackCapture).not.toHaveBeenCalled()
       // Help opens again, since nothing was launched.
@@ -633,7 +636,7 @@ describe("sidebar groups and Help", () => {
     const container = await render(createElement("div", null, createElement(Navigator), createElement(DesktopLayout)), "/license")
     await openHelp(container)
     await act(async () => { menuItem("Share feedback")!.click() })
-    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 80)) })
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, LAUNCH_MS)) })
     expect(feedbackCapture).toHaveBeenCalledTimes(1)
     await act(async () => go("/portal/onboarding"))
     expect(container.querySelector("aside")).toBeNull()
@@ -641,7 +644,7 @@ describe("sidebar groups and Help", () => {
     expect(container.querySelector("aside")).not.toBeNull()
     await openHelp(container)
     expect(document.querySelector('[role="menu"]')).toBeNull()
-    await act(async () => { finishCapture(); await new Promise((resolve) => setTimeout(resolve, 0)) })
+    await act(async () => { finishCapture(); await new Promise((resolve) => setTimeout(resolve, LAUNCH_MS)) })
   })
 
   it("keeps Help closed while a capture started from the first-run header is pending", async () => {
@@ -653,11 +656,14 @@ describe("sidebar groups and Help", () => {
     const container = await render(createElement("div", null, createElement(Navigator), createElement(DesktopLayout)), "/portal/onboarding")
     const header = [...container.querySelectorAll<HTMLButtonElement>('nav[aria-label="Help"] button')].find((button) => button.textContent === "Share feedback")!
     await act(async () => header.click())
+    // The capture starts once the page has painted.
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, LAUNCH_MS)) })
     expect(feedbackCapture).toHaveBeenCalledTimes(1)
     await act(async () => go("/license"))
     await openHelp(container)
     expect(document.querySelector('[role="menu"]')).toBeNull()
-    await act(async () => { finishCapture(); await new Promise((resolve) => setTimeout(resolve, 0)) })
+    // The page changed under that capture, so it is taken again before the dialog opens.
+    await act(async () => { finishCapture(); await new Promise((resolve) => setTimeout(resolve, LAUNCH_MS)) })
   })
 
   it("returns focus to the current Help button when feedback closes after the sidebar came back", async () => {
@@ -669,16 +675,16 @@ describe("sidebar groups and Help", () => {
     const container = await render(createElement("div", null, createElement(Navigator), createElement(DesktopLayout)), "/license")
     const first = await openHelp(container)
     await act(async () => { menuItem("Share feedback")!.click() })
-    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 80)) })
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, LAUNCH_MS)) })
     await act(async () => go("/portal/onboarding"))
     await act(async () => go("/license"))
     const help = [...container.querySelectorAll("aside button")].find((button) => button.textContent?.startsWith("Help"))!
     expect(help).not.toBe(first)
-    await act(async () => { finishCapture(); await new Promise((resolve) => setTimeout(resolve, 0)) })
+    await act(async () => { finishCapture(); await new Promise((resolve) => setTimeout(resolve, LAUNCH_MS)) })
     const dialog = document.querySelector('[role="dialog"]')!
     expect(dialog.textContent).toContain("Share feedback")
     await act(async () => { dialog.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })) })
-    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)) })
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, LAUNCH_MS)) })
     expect(document.querySelector('[role="dialog"]')).toBeNull()
     expect(document.activeElement).toBe(help)
   })
@@ -692,7 +698,7 @@ describe("sidebar groups and Help", () => {
     await act(async () => { menuItem("What's new")!.click() })
     await act(async () => go("/portal/onboarding"))
     expect(container.querySelector("aside")).toBeNull()
-    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 80)) })
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, LAUNCH_MS)) })
     expect(whatsNewDialog.mock.lastCall?.[0].open).toBe(true)
     // With no sidebar, focus goes back to the guided setup's Support button when the dialog closes.
     const props = whatsNewDialog.mock.lastCall?.[0] as { returnFocus?: { current: HTMLElement | null } }
@@ -735,6 +741,11 @@ describe("folding sidebar groups", () => {
     expect(head(again, "Oversight").textContent).toBe("Oversight")
     expect(head(again, "Protect").getAttribute("aria-expanded")).toBe("true")
     localStorage.removeItem("tenuvault.sidebar.folded")
+  })
+
+  it("rings the keyboard-focused row of the sidebar menus, whose fill alone is too soft to see", () => {
+    const css = readFileSync("src/renderer/desktop.css", "utf8")
+    expect(css).toContain('.tv-pop [role="menuitem"]:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }')
   })
 
   it("reveals and hides folding rows by clipping only, so labels in view never lose contrast", () => {
