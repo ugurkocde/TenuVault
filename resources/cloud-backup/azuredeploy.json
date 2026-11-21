@@ -86,16 +86,6 @@
       "defaultValue": false,
       "metadata": { "description": "Set true for an incremental upgrade of an existing Automation account. Only deploy the private audit container and its dedicated role and assignment. Existing writer grants, variables, runbook and schedule are kept." }
     },
-    "publishRunbook": {
-      "type": "bool",
-      "defaultValue": true,
-      "metadata": { "description": "Set false to apply the audit role before publishing the runbook." }
-    },
-    "deploySchedule": {
-      "type": "bool",
-      "defaultValue": true,
-      "metadata": { "description": "Set false during an upgrade to preserve the existing schedule and link." }
-    },
     "runbookUri": {
       "type": "string",
       "defaultValue": "https://raw.githubusercontent.com/ugurkocde/TenuVault/main/resources/runbooks/Invoke-TenuVaultBackup.ps1",
@@ -252,7 +242,7 @@
       }
     },
     {
-      "condition": "[and(not(parameters('auditOnly')), parameters('publishRunbook'))]",
+      "condition": "[not(parameters('auditOnly'))]",
       "type": "Microsoft.Automation/automationAccounts/runbooks",
       "apiVersion": "2023-11-01",
       "name": "[concat(parameters('automationAccountName'), '/', variables('runbookName'))]",
@@ -288,7 +278,7 @@
       }
     },
     {
-      "condition": "[and(not(parameters('auditOnly')), parameters('publishRunbook'), parameters('deploySchedule'))]",
+      "condition": "[not(parameters('auditOnly'))]",
       "type": "Microsoft.Automation/automationAccounts/schedules",
       "apiVersion": "2023-11-01",
       "name": "[concat(parameters('automationAccountName'), '/', variables('scheduleName'))]",
@@ -304,7 +294,7 @@
       }
     },
     {
-      "condition": "[and(not(parameters('auditOnly')), parameters('publishRunbook'), parameters('deploySchedule'))]",
+      "condition": "[not(parameters('auditOnly'))]",
       "type": "Microsoft.Automation/automationAccounts/jobSchedules",
       "apiVersion": "2023-11-01",
       "name": "[concat(parameters('automationAccountName'), '/', guid(variables('scheduleName'), variables('runbookName')))]",
@@ -335,7 +325,7 @@
     "pasteIntoTenuVault": {
       "condition": "[not(parameters('auditOnly'))]",
       "type": "string",
-      "value": "[concat('tenantId=', parameters('tenantId'), '\nsubscriptionId=', subscription().subscriptionId, '\nresourceGroup=', resourceGroup().name, '\nautomationAccount=', parameters('automationAccountName'), '\nstorageAccount=', parameters('storageAccountName'), '\nscheduleName=', variables('scheduleName'), '\nfrequency=', if(equals(parameters('frequency'), 'Week'), 'weekly', 'daily'), '\ntime=', if(greaterOrEquals(length(parameters('scheduleStartTime')), 16), substring(parameters('scheduleStartTime'), 11, 5), ''), '\nweekDay=', parameters('weekDay'), '\ntimeZone=', parameters('timeZone'), '\ntenantKey=', variables('tenantKey'), '\nlinked=true')]",
+      "value": "[concat('tenantId=', parameters('tenantId'), '\nsubscriptionId=', subscription().subscriptionId, '\nresourceGroup=', resourceGroup().name, '\nautomationAccount=', parameters('automationAccountName'), '\nstorageAccount=', parameters('storageAccountName'), '\nscheduleName=', variables('scheduleName'), '\nfrequency=', if(equals(parameters('frequency'), 'Week'), 'weekly', 'daily'), '\ntime=', substring(parameters('scheduleStartTime'), 11, 5), '\nweekDay=', parameters('weekDay'), '\ntimeZone=', parameters('timeZone'), '\ntenantKey=', variables('tenantKey'), '\nlinked=true')]",
       "metadata": { "description": "Paste this block into TenuVault (Backup and Restore > Schedule > Where backups run > In Azure) so the app can show the cloud runner and its status." }
     }
   }

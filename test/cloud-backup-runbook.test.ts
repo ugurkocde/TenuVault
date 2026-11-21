@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process"
 import { existsSync, readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
+import { join } from "node:path"
 import { describe, expect, it, vi } from "vitest"
 import { AuditStorageService } from "../src/portal/lib/audit/storage"
 import { auditExportJSON } from "../src/portal/lib/audit/export"
@@ -406,6 +407,18 @@ describe("Cloud audit contract", () => {
     expect(resources.filter(resource => !audit.includes(resource)).every(resource => resource.condition?.includes("not(parameters('auditOnly'))"))).toBe(true)
     expect(template.outputs.pasteIntoTenuVault).toMatchObject({ condition: "[not(parameters('auditOnly'))]" })
     expect(template.parameters.auditOnly).toMatchObject({ type: "bool", defaultValue: false })
+    expect(template.parameters).not.toHaveProperty("deploySchedule")
+    expect(template.parameters).not.toHaveProperty("publishRunbook")
+    const main = process.env.TENUVAULT_TEST_MAIN_WORKTREE
+    if (main) {
+      const base = JSON.parse(readFileSync(join(main, "resources/cloud-backup/azuredeploy.json"), "utf8")) as typeof template
+      for (const kind of ["schedules", "jobSchedules"]) {
+        const current = resources.find(resource => resource.type.endsWith("/" + kind))!
+        const { condition, ...definition } = current
+        expect(condition).toBe("[not(parameters('auditOnly'))]")
+        expect(definition).toEqual(base.resources.find(resource => resource.type === current.type))
+      }
+    }
   })
 
   it("bounds the audit setup PowerShell subprocess to one minute", () => {
@@ -774,16 +787,20 @@ describe("New-TenuVaultCloudBackup.ps1", () => {
     expect(setup).toContain('-Force -Confirm:$false | Out-Null\n    Publish-AzAutomationRunbook')
   })
 
-  type SetupScenario = { scenario: string; plain: boolean; reason: string | null; error: string | null; actions: string[]; legacyVariableKept: boolean; changeReport?: string | null; changeReportActors?: string | null; tenantName?: string | null; variables: string[]; schedule: boolean; enabled: boolean; link: boolean; output: string[] }
-  let setupScenarios: Map<string, SetupScenario> | undefined
-  const setupRun = (name: string) => {
-    if (!setupScenarios) {
-      const script = fileURLToPath(new URL("./fixtures/cloud-backup/setup-upgrade.ps1", import.meta.url))
-      const lines = execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8" }).split(/\r?\n/).filter((line) => line.startsWith("{"))
-      setupScenarios = new Map(lines.map((line) => JSON.parse(line) as SetupScenario).map((run) => [run.scenario, run]))
-    }
-    return setupScenarios.get(name)!
+  type SetupScenario = {
+    scenario: string; plain: boolean; reason: string | null; error: string | null; actions: string[]
+    legacyVariableKept: boolean; changeReport?: string | null; changeReportActors?: string | null; tenantName?: string | null
+    variables: string[]; schedule: boolean; enabled: boolean; link: boolean; output: string[]
+    scheduleSettings: { timeZone: string; frequency: string; time: string; days: string[] }
   }
+  const readSetupScenarios = (setupPath?: string) => {
+    const script = fileURLToPath(new URL("./fixtures/cloud-backup/setup-upgrade.ps1", import.meta.url))
+    const args = ["-NoProfile", "-File", script, ...(setupPath ? ["-SetupPath", setupPath] : [])]
+    const lines = execFileSync(pwsh!, args, { encoding: "utf8" }).split(/\r?\n/).filter((line) => line.startsWith("{"))
+    return new Map(lines.map((line) => JSON.parse(line) as SetupScenario).map((run) => [run.scenario, run]))
+  }
+  let setupScenarios: Map<string, SetupScenario> | undefined
+  const setupRun = (name: string) => (setupScenarios ??= readSetupScenarios()).get(name)!
   const DELETE_ADVICE = "Delete the vault once no"
 
   it.runIf(Boolean(pwsh))("keeps the change report level and actors on a rerun without their parameters, and sets them when passed", () => {
@@ -795,25 +812,35 @@ describe("New-TenuVaultCloudBackup.ps1", () => {
     expect(setup).toContain('$changeReportActorsPassed = $PSBoundParameters.ContainsKey("ChangeReportWithoutActors")')
   }, 60_000)
 
-  it.runIf(Boolean(pwsh))("pauses a linked schedule before grants and checks access before publication and resumption", () => {
-    const approved = setupRun("linked-upgrade")
-    expect(approved).toMatchObject({ error: null, enabled: true, link: true })
-    expect(approved.actions).toEqual([
-      "schedule enabled=False", "import probe", "publish probe", "canary propagation", "remove probe",
-      "import confirm=False", "publish", "export Published", "canary published", "remove TenuVaultKeyVault-11111111",
-      "schedule enabled=True", "remove TenuVaultAuditPausedSchedule-11111111",
-    ])
-    expect(setup.indexOf("-Name $scheduleName -IsEnabled $false")).toBeLessThan(setup.indexOf('Assign the create-only audit role to the managed identity'))
-    const propagation = setupRun("propagation-denied")
-    expect(propagation).toMatchObject({ error: expect.stringContaining("The schedule is paused"), enabled: false, link: true })
-    expect(propagation.actions).not.toContain("publish")
-    const canary = setupRun("published-canary-denied")
-    expect(canary).toMatchObject({ error: expect.stringContaining("Enable the schedule in Azure after AUDITCANARY passes"), enabled: false, link: true })
-    expect(canary.actions).toContain("publish")
-    expect(canary.actions).not.toContain("schedule enabled=True")
-    expect(setupRun("published-canary-denied-retry")).toMatchObject({ error: null, enabled: true, link: true })
-    expect(setupRun("published-canary-denied-retry").variables).not.toContain("TenuVaultAuditPausedSchedule-11111111")
-    expect(setupRun("intentionally-disabled")).toMatchObject({ error: null, enabled: false, link: true })
+  it.runIf(Boolean(pwsh))("follows main for disabled schedules, including stale markers and partial overrides", () => {
+    const main = process.env.TENUVAULT_TEST_MAIN_WORKTREE
+    const baseline = main ? readSetupScenarios(join(main, "resources/New-TenuVaultCloudBackup.ps1")) : undefined
+    const scheduleResult = ({ error, schedule, enabled, link, scheduleSettings, actions }: SetupScenario) => ({
+      error, schedule, enabled, link, scheduleSettings,
+      scheduleWrites: actions.filter((action) => /schedule|^(un)?link$/.test(action)),
+    })
+    for (const scenario of ["disabled-canary-denied", "disabled-stale-marker", "disabled-time-override"]) {
+      const actual = setupRun(scenario)
+      const result = scheduleResult(actual)
+      expect(result).toEqual({
+        error: null, schedule: true, enabled: false, link: true, scheduleWrites: [],
+        scheduleSettings: { timeZone: "Europe/Berlin", frequency: "Week", time: "09:00", days: ["Wednesday"] },
+      })
+      expect(actual.variables).toContain("TenuVaultAuditPausedSchedule-11111111")
+      if (baseline) expect(result).toEqual(scheduleResult(baseline.get(scenario)!))
+    }
+    expect(setupRun("disabled-canary-denied").output).toContainEqual(expect.stringContaining("AUDITCANARY could not verify audit access"))
+    expect(setupRun("disabled-stale-marker").output).toContain("Cloud backup canary passed")
+
+    // Explicit Graph confirmation still requests the replacement that main performs.
+    const scenario = "disabled-explicit-replacement"
+    const result = scheduleResult(setupRun(scenario))
+    expect(result).toMatchObject({
+      error: null, schedule: true, enabled: true, link: true,
+      scheduleWrites: ["unlink", "remove schedule", "create schedule", "link"],
+      scheduleSettings: { timeZone: "UTC", frequency: "Day", time: "10:00" },
+    })
+    if (baseline) expect(result).toEqual(scheduleResult(baseline.get(scenario)!))
   }, 60_000)
 
   it.runIf(Boolean(pwsh))("keeps the Everything scope and existing exclusions when only account and tenant are supplied", () => {

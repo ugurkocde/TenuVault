@@ -165,7 +165,6 @@ $auditRunbookVersion = "1.5.0"
 $runbookPath = Join-Path $PSScriptRoot "runbooks/Invoke-TenuVaultBackup.ps1"
 $tenantKey = $TenantId.Substring(0, [Math]::Min(8, $TenantId.Length)).ToLowerInvariant()
 $scheduleName = "TenuVaultBackup-$tenantKey"
-$pausedScheduleVariable = "TenuVaultAuditPausedSchedule-$tenantKey"
 $writerRoleName = "TenuVault Backup Writer"
 
 $graphRoleNames = @(
@@ -179,7 +178,6 @@ if ($IncludeDeviceCategories) { $graphRoleNames += "DeviceManagementManagedDevic
 $appOnlyExcluded = if ($IncludeDeviceCategories) { "" } else { "DeviceCategories,DeviceCleanupRules" }
 
 $variableNames = @(
-    $pausedScheduleVariable
     "TenuVaultTenantId-$tenantKey", "TenuVaultStorageAccount-$tenantKey",
     "TenuVaultScope-$tenantKey", "TenuVaultExcludedFolders-$tenantKey", "TenuVaultAppOnlyExcluded-$tenantKey",
     "TenuVaultChangeReport-$tenantKey", "TenuVaultChangeReportActors-$tenantKey", "TenuVaultTenantName-$tenantKey"
@@ -213,6 +211,9 @@ if ($AlertEmail -and $AlertEmail -notmatch "^[^@\s]+@[^@\s]+$") {
 }
 if ($AlertEmail -and $NoFailureAlert) {
     throw "-AlertEmail and -NoFailureAlert contradict each other. Pass only one of them."
+}
+if (-not $Remove -and -not $AuditRoleOnly -and -not $AlertEmail -and -not $NoFailureAlert) {
+    throw "Decide how failed cloud backups will be noticed before anything is created: pass -AlertEmail <address> to create an Azure Monitor failure alert, or -NoFailureAlert to explicitly accept that failed runs are only visible in the Automation job list and in TenuVault. Nothing was written."
 }
 if ($GrantGraphRoles -and $GraphRolesGranted) {
     throw "-GrantGraphRoles and -GraphRolesGranted contradict each other. Pass only one of them."
@@ -493,35 +494,21 @@ function Publish-TenuVaultRunbook {
     return @{ Plain = $true; Version = $version; Reason = $null }
 }
 
-function Invoke-TenuVaultAuditCanary {
-    param([string]$Name, [switch]$WaitForRole)
-    $parameters = @{ TenantKey = $tenantKey; AuditCanary = $true }
-    if ($WaitForRole) { $parameters.AuditCanaryWait = $true }
+function Test-TenuVaultPublishedAudit {
+    param([object]$Runbook)
     try {
+        $scheduleLink = Get-AzAutomationScheduledRunbook -ResourceGroupName $ResourceGroupName `
+            -AutomationAccountName $AutomationAccountName -RunbookName $runbookName -ScheduleName $scheduleName -ErrorAction SilentlyContinue
+        if (-not $scheduleLink -or -not $PSCmdlet.ShouldProcess($runbookName, "Run the audit access canary")) { return }
+        if (-not $Runbook.Version -or [version]$Runbook.Version -lt [version]$auditRunbookVersion) {
+            throw "The audit-capable runbook could not be verified."
+        }
         $result = Start-AzAutomationRunbook -ResourceGroupName $ResourceGroupName -AutomationAccountName $AutomationAccountName `
-            -Name $Name -Parameters $parameters -Wait -MaxWaitSeconds 420 -ErrorAction Stop
+            -Name $runbookName -Parameters @{ TenantKey = $tenantKey; AuditCanary = $true } -Wait -MaxWaitSeconds 420 -ErrorAction Stop
         if (($result -join "`n") -notmatch "Cloud backup canary passed") { throw "The job did not report a passing canary." }
         Write-Host ($result -join "`n")
     } catch {
-        throw "AUDITCANARY failed for '$Name'. The schedule is paused. Check the Automation job output and managed identity grants, then rerun setup. Enable the schedule in Azure after AUDITCANARY passes. $($_.Exception.Message)"
-    }
-}
-
-function Wait-TenuVaultAuditPropagation {
-    # Run the probe with the Automation identity even when the production runbook is too old
-    # to have AUDITCANARY. Keep the production link and published slot intact during the wait.
-    $probe = "$runbookName-AuditProbe-$tenantKey"
-    if (-not $PSCmdlet.ShouldProcess($probe, "Check effective storage grants before publishing")) {
-        throw "Audit access was not checked. The schedule is paused."
-    }
-    try {
-        Import-AzAutomationRunbook -ResourceGroupName $ResourceGroupName -AutomationAccountName $AutomationAccountName `
-            -Name $probe -Path $runbookPath -Type PowerShell72 -Description "TenuVault audit permission probe" -Force -Confirm:$false | Out-Null
-        Publish-AzAutomationRunbook -ResourceGroupName $ResourceGroupName -AutomationAccountName $AutomationAccountName -Name $probe | Out-Null
-        Invoke-TenuVaultAuditCanary -Name $probe -WaitForRole
-    } finally {
-        Remove-AzAutomationRunbook -ResourceGroupName $ResourceGroupName -AutomationAccountName $AutomationAccountName `
-            -Name $probe -Force -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
+        Write-Warning "AUDITCANARY could not verify audit access for '$runbookName'. Check the Automation job output and managed identity grants. $($_.Exception.Message)"
     }
 }
 
@@ -694,14 +681,6 @@ if ($Remove) {
     return
 }
 
-$automationAccount = Get-AzAutomationAccount -ResourceGroupName $ResourceGroupName -Name $AutomationAccountName -ErrorAction SilentlyContinue
-$upgradeLink = if ($automationAccount) {
-    Get-AzAutomationScheduledRunbook -ResourceGroupName $ResourceGroupName -AutomationAccountName $AutomationAccountName `
-        -RunbookName $runbookName -ScheduleName $scheduleName -ErrorAction SilentlyContinue
-}
-if (-not $AuditRoleOnly -and -not $upgradeLink -and -not $AlertEmail -and -not $NoFailureAlert) {
-    throw "Decide how failed cloud backups will be noticed before anything is created: pass -AlertEmail <address> to create an Azure Monitor failure alert, or -NoFailureAlert to explicitly accept that failed runs are only visible in the Automation job list and in TenuVault. Nothing was written."
-}
 # ---------------------------------------------------------------------------
 # Resource group and Automation account
 # ---------------------------------------------------------------------------
@@ -720,6 +699,7 @@ if (-not $resourceGroup) {
 }
 if (-not $Location) { $Location = $resourceGroup.Location }
 
+$automationAccount = Get-AzAutomationAccount -ResourceGroupName $ResourceGroupName -Name $AutomationAccountName -ErrorAction SilentlyContinue
 if (-not $automationAccount) {
     Write-Host "Creating Automation account '$AutomationAccountName' in $Location with a system assigned identity..."
     if ($PSCmdlet.ShouldProcess($AutomationAccountName, "Create Automation account with system assigned identity")) {
@@ -757,24 +737,6 @@ if (-not $principalId -and -not $WhatIfPreference) {
     throw "The system assigned identity of '$AutomationAccountName' did not appear within five minutes. Run the script again."
 }
 if ($principalId) { Write-Host "Managed identity object (principal) id: $principalId" }
-
-$resumeSchedule = $false
-if ($upgradeLink -and -not $AuditRoleOnly -and -not $WhatIfPreference) {
-    $schedule = Get-AzAutomationSchedule -ResourceGroupName $ResourceGroupName `
-        -AutomationAccountName $AutomationAccountName -Name $scheduleName -ErrorAction Stop
-    if ($schedule.IsEnabled -eq $true) {
-        if (-not $PSCmdlet.ShouldProcess($scheduleName, "Pause scheduled backups during the audit upgrade")) { return }
-        Set-TenuVaultAutomationVariable -Name $pausedScheduleVariable -Value $scheduleName -Confirm:$false -ErrorAction Stop
-        Set-AzAutomationSchedule -ResourceGroupName $ResourceGroupName -AutomationAccountName $AutomationAccountName `
-            -Name $scheduleName -IsEnabled $false -ErrorAction Stop | Out-Null
-        $resumeSchedule = $true
-        Write-Host "Paused '$scheduleName'. If setup stops, fix the reported issue and rerun setup to resume after the canary passes."
-    } else {
-        $listed = Get-TenuVaultAutomationVariables
-        if ($listed.Error) { Write-Warning "Could not check whether setup paused '$scheduleName'. It will stay disabled." }
-        else { $resumeSchedule = $listed.Variables[$pausedScheduleVariable] -ceq $scheduleName }
-    }
-}
 
 # ---------------------------------------------------------------------------
 # Storage: container and the container scoped writer role (no delete)
@@ -910,7 +872,7 @@ if ($principalId) {
 # Runbook import and publish. A rerun is the upgrade path.
 # ---------------------------------------------------------------------------
 
-if ($WhatIfPreference) { return }
+$runbook = Publish-TenuVaultRunbook
 
 Write-Host "Writing Automation variables for this tenant (suffix -$tenantKey)..."
 Set-TenuVaultAutomationVariable -Name "TenuVaultTenantId-$tenantKey" -Value $TenantId
@@ -942,15 +904,6 @@ if ($tenantNamePassed) {
     Set-TenuVaultAutomationVariable -Name "TenuVaultTenantName-$tenantKey" -Value $savedName
 }
 if ($changeReportActorsPassed) { Set-TenuVaultAutomationVariable -Name "TenuVaultChangeReportActors-$tenantKey" -Value $(if ($ChangeReportWithoutActors) { "false" } else { "true" }) }
-
-if ($upgradeLink) { Wait-TenuVaultAuditPropagation }
-$runbook = Publish-TenuVaultRunbook
-if ($upgradeLink) {
-    if (-not $runbook.Version -or [version]$runbook.Version -lt [version]$auditRunbookVersion) {
-        throw "The audit-capable runbook could not be verified. The schedule is paused. Rerun setup and check AUDITCANARY before enabling it."
-    }
-    Invoke-TenuVaultAuditCanary -Name $runbookName
-}
 
 # Upgrade from a setup before runbook 1.2.0: name the old Key Vault, then drop its variable once
 # the published runbook was read back as one that no longer reads it.
@@ -1062,12 +1015,8 @@ if ($GrantGraphRoles) {
 # changed time or frequency replaces the schedule and its link.
 # ---------------------------------------------------------------------------
 
-$existingSchedule = Get-AzAutomationSchedule -ResourceGroupName $ResourceGroupName `
-    -AutomationAccountName $AutomationAccountName -Name $scheduleName -ErrorAction SilentlyContinue
-$existingLink = Get-AzAutomationScheduledRunbook -ResourceGroupName $ResourceGroupName `
-    -AutomationAccountName $AutomationAccountName -RunbookName $runbookName -ScheduleName $scheduleName -ErrorAction SilentlyContinue
-$linked = [bool]$existingLink
-if ($GrantGraphRoles -or $GraphRolesGranted -or $linked) {
+$linked = $false
+if ($GrantGraphRoles -or $GraphRolesGranted) {
     $tz = [TimeZoneInfo]::FindSystemTimeZoneById($TimeZone)
     $nowLocal = [TimeZoneInfo]::ConvertTimeFromUtc([DateTime]::UtcNow, $tz)
     $hour, $minute = $Time -split ":"
@@ -1077,29 +1026,17 @@ if ($GrantGraphRoles -or $GraphRolesGranted -or $linked) {
     } elseif ($next -le $nowLocal.AddMinutes(10)) { $next = $next.AddDays(1) }
     $startTime = [DateTimeOffset]::new($next, $tz.GetUtcOffset($next))
 
-    if ($existingSchedule) {
-        $existingTz = [TimeZoneInfo]::FindSystemTimeZoneById($existingSchedule.TimeZone)
-        $existingTime = [TimeZoneInfo]::ConvertTime([DateTimeOffset]$existingSchedule.StartTime, $existingTz).ToString("HH:mm")
-        $existingFrequency = if ("$($existingSchedule.Frequency)" -eq "Week") { "Weekly" } else { "Daily" }
-        $existingDay = if ($existingFrequency -eq "Weekly") { @($existingSchedule.DaysOfWeek)[0] } else { $WeekDay }
-        $changed = ($PSBoundParameters.ContainsKey("Frequency") -and $Frequency -ne $existingFrequency) -or
-            ($PSBoundParameters.ContainsKey("Time") -and $Time -ne $existingTime) -or
-            ($PSBoundParameters.ContainsKey("TimeZone") -and $TimeZone -ne $existingSchedule.TimeZone) -or
-            ($PSBoundParameters.ContainsKey("WeekDay") -and $Frequency -eq "Weekly" -and $WeekDay -ne $existingDay)
-        if ($changed -and $PSCmdlet.ShouldProcess($scheduleName, "Replace schedule")) {
-            if ($linked) {
-                Unregister-AzAutomationScheduledRunbook -ResourceGroupName $ResourceGroupName `
-                    -AutomationAccountName $AutomationAccountName -RunbookName $runbookName `
-                    -ScheduleName $scheduleName -Force -ErrorAction Stop | Out-Null
-            }
-            Remove-AzAutomationSchedule -ResourceGroupName $ResourceGroupName `
-                -AutomationAccountName $AutomationAccountName -Name $scheduleName -Force | Out-Null
-            $existingSchedule = $null
-            $linked = $false
-        } else {
-            $Frequency = $existingFrequency; $Time = $existingTime; $TimeZone = $existingSchedule.TimeZone
-            if ($existingDay) { $WeekDay = $existingDay }
-        }
+    $existingSchedule = Get-AzAutomationSchedule -ResourceGroupName $ResourceGroupName `
+        -AutomationAccountName $AutomationAccountName -Name $scheduleName -ErrorAction SilentlyContinue
+    if ($existingSchedule -and $PSCmdlet.ShouldProcess($scheduleName, "Replace schedule")) {
+        try {
+            Unregister-AzAutomationScheduledRunbook -ResourceGroupName $ResourceGroupName `
+                -AutomationAccountName $AutomationAccountName -RunbookName $runbookName `
+                -ScheduleName $scheduleName -Force -ErrorAction Stop | Out-Null
+        } catch { }
+        Remove-AzAutomationSchedule -ResourceGroupName $ResourceGroupName `
+            -AutomationAccountName $AutomationAccountName -Name $scheduleName -Force | Out-Null
+        $existingSchedule = $null
     }
     if (-not $existingSchedule) {
         Write-Host "Creating schedule '$scheduleName' ($Frequency at $Time $TimeZone, first run $($startTime.ToString('u')))..."
@@ -1113,20 +1050,11 @@ if ($GrantGraphRoles -or $GraphRolesGranted -or $linked) {
             [void](New-AzAutomationSchedule @scheduleParams)
         }
     }
-    if (-not $linked -and $PSCmdlet.ShouldProcess($runbookName, "Link runbook to schedule '$scheduleName'")) {
+    if ($PSCmdlet.ShouldProcess($runbookName, "Link runbook to schedule '$scheduleName'")) {
         Register-AzAutomationScheduledRunbook -ResourceGroupName $ResourceGroupName `
             -AutomationAccountName $AutomationAccountName -RunbookName $runbookName `
             -ScheduleName $scheduleName -Parameters @{ TenantKey = $tenantKey } | Out-Null
         $linked = $true
-    }
-    if ($linked -and $resumeSchedule) {
-        Set-AzAutomationSchedule -ResourceGroupName $ResourceGroupName -AutomationAccountName $AutomationAccountName `
-            -Name $scheduleName -IsEnabled $true -ErrorAction Stop | Out-Null
-        try {
-            Remove-AzAutomationVariable -ResourceGroupName $ResourceGroupName -AutomationAccountName $AutomationAccountName `
-                -Name $pausedScheduleVariable -Confirm:$false -ErrorAction Stop | Out-Null
-        } catch { Write-Warning "The schedule resumed, but setup could not remove its pause marker." }
-        Write-Host "Resumed '$scheduleName' after AUDITCANARY passed."
     }
 }
 
@@ -1196,4 +1124,4 @@ Write-Host "runbookVersion=$($runbook.Version)"
 Write-Host "auditCapability=$(([bool]($runbook.Version -and [version]$runbook.Version -ge [version]$auditRunbookVersion)).ToString().ToLowerInvariant())"
 Write-Host "--- End of TenuVault cloud backup setup ---"
 
-
+Test-TenuVaultPublishedAudit -Runbook $runbook

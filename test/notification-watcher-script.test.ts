@@ -64,6 +64,34 @@ describe("Azure notification watcher scripts", () => {
     ])
   }, 20_000)
 
+  it.runIf(Boolean(pwsh))("delivers new and retried audit warnings after main's notifications and change reports", () => {
+    const empty = join(mkdtempSync(join(tmpdir(), "tv-watcher-quota-")), "empty.json")
+    writeFileSync(empty, "")
+    const script = fileURLToPath(new URL("./fixtures/notifications/run-watcher.ps1", import.meta.url))
+    const run = (scenario: string, runbookPath?: string) => JSON.parse(execFileSync(pwsh!, [
+      "-NoProfile", "-File", script, "-AlertsBlobPath", empty, "-AlertsVariablePath", empty, "-QuotaScenario", scenario,
+      ...(runbookPath ? ["-RunbookPath", runbookPath] : []),
+    ], { encoding: "utf8", timeout: 15_000 })) as {
+      deliveryOrder: string[]; pendingTitles: string[]; deadTitles: string[]; heartbeat: { eventsSent: number; lastError: string | null }
+    }
+    const firstDeliveries = ["No recent backup: Lab", "TenuVault: Cloud change report"]
+    const heartbeat = { eventsSent: 1, lastError: null }
+    const main = process.env.TENUVAULT_TEST_MAIN_WORKTREE
+    if (main) {
+      const path = join(main, "resources/runbooks/Invoke-TenuVaultNotificationCheck.ps1")
+      expect(run("Baseline", path)).toMatchObject({ deliveryOrder: firstDeliveries, pendingTitles: [], deadTitles: [], heartbeat })
+    }
+    const warning = "Cloud backup audit needs attention"
+    for (const scenario of ["New", "Retry"]) {
+      expect(run(scenario)).toMatchObject({
+        deliveryOrder: [...firstDeliveries, warning],
+        pendingTitles: scenario === "New" ? [warning] : [],
+        deadTitles: scenario === "Retry" ? [warning] : [],
+        heartbeat,
+      })
+    }
+  }, 60_000)
+
   it("never reads audit request bodies, and touches property values only to name changed settings", () => {
     expect(runbook).not.toContain("requestBody")
     expect(runbook).toContain("id,displayName,componentName,actor,activity,activityDateTime,activityType,activityOperationType,activityResult,category,resources")
