@@ -156,7 +156,7 @@ function macosChange(id) {
     const state = exists(path)
     if (state.error) return { error: state.error }
     if (state === "present") {
-      return { error: `${path} already exists and does not set ${NAME} to true. The smoke does not edit a configuration profile: add ${NAME} to it, or run the smoke on a Mac without it.` }
+      return { error: `${path} already exists and does not set ${NAME} to true, or this user cannot read it. The smoke does not edit a configuration profile: add ${NAME} to it, or run the smoke on a Mac without it.` }
     }
   }
   if (sudo(["/usr/bin/true"]).status !== 0) return { error: SUDO_HINT }

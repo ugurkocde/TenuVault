@@ -6,7 +6,7 @@
  * Usage: node scripts/test-smoke-update-policy.mjs
  */
 import { spawn, spawnSync } from "node:child_process"
-import { lstatSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { lstatSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir, userInfo } from "node:os"
 import { createServer } from "node:net"
 import { join } from "node:path"
@@ -31,6 +31,9 @@ const run = (command, args, options = {}) => spawnSync(command, args, { encoding
 const sudo = (args, options) => run("/usr/bin/sudo", ["-n", ...args], options)
 const powershell = (script) => run(join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe"), ["-NoProfile", "-NonInteractive", "-Command", `$ErrorActionPreference = 'Stop'\n${script}`])
 const work = mkdtempSync(join(tmpdir(), "tenuvault-policy-test-"))
+const SCRIPT = join(import.meta.dirname, "smoke-update-policy.mjs")
+/** Registry values the test put in on Windows; cleanup removes only these and its fixture mark. */
+const planted = new Set()
 const holders = new Set()
 let failures = 0
 
@@ -117,24 +120,36 @@ function plant(target, body, mode = "644") {
 
 /** A registry key in HKCU with the fixture mark and the given values. */
 function plantKey(values) {
+  for (const name of Object.keys(values)) planted.add(name)
   const lines = Object.entries(values).map(([name, [type, value]]) => `New-ItemProperty -LiteralPath '${HKCU}' -Name '${name}' -PropertyType ${type} -Value '${value}' | Out-Null`)
   const result = powershell([`New-Item -Path '${HKCU}' | Out-Null`, `New-ItemProperty -LiteralPath '${HKCU}' -Name '${FIXTURE}' -PropertyType DWord -Value 1 | Out-Null`, ...lines].join("\n"))
   assert(result.status === 0, `could not create the fixture key: ${result.stderr}`)
 }
 
-/** Removes only what carries the fixture mark or a smoke run's mark, holding the lock. */
-const clear = () => locked(clearUnlocked)
-function clearUnlocked() {
+/**
+ * Removes what the tests left: a smoke run's mark through --clean, with the harness's own rules,
+ * then, holding the lock, only the fixtures the test planted. Anything else stays.
+ */
+async function clear() {
+  const cleaned = run(process.execPath, [SCRIPT, "--clean"])
+  if (cleaned.status !== 0) console.log(`--clean during cleanup: ${(cleaned.stderr || cleaned.stdout).trim()}`)
+  await locked(clearFixtures)
+}
+function clearFixtures() {
   if (platform === "darwin") {
+    // A fixture file is the test's own whole file; one without the fixture mark is not.
     for (const path of [FILE, USER_FILE, STAGE]) {
-      if (!present(path)) continue
-      const marked = ["TenuVaultSmokeRun", FIXTURE].some((key) => sudo(["/usr/bin/plutil", "-extract", key, "xml1", "-o", "-", path]).status === 0)
-      if (marked) sudo(["/bin/rm", "-f", path])
+      if (present(path) && sudo(["/usr/bin/plutil", "-extract", FIXTURE, "xml1", "-o", "-", path]).status === 0) sudo(["/bin/rm", "-f", path])
     }
     return
   }
+  const names = [FIXTURE, ...planted].map((name) => `'${name}'`).join(", ")
   powershell(`$key = Get-Item -LiteralPath '${HKCU}' -ErrorAction SilentlyContinue
-if ($null -ne $key -and ($null -ne $key.GetValue('${FIXTURE}', $null) -or $null -ne $key.GetValue('TenuVaultSmokeRun', $null))) { Remove-Item -LiteralPath '${HKCU}' -Recurse }`)
+if ($null -eq $key -or $null -eq $key.GetValue('${FIXTURE}', $null)) { return }
+foreach ($name in @(${names})) { Remove-ItemProperty -LiteralPath '${HKCU}' -Name $name -ErrorAction SilentlyContinue }
+$key = Get-Item -LiteralPath '${HKCU}'
+if ($key.ValueCount -eq 0 -and $key.SubKeyCount -eq 0) { Remove-Item -LiteralPath '${HKCU}' }`)
+  planted.clear()
 }
 
 /** A smoke run in its own process that sets the policy and waits to be killed. */
@@ -233,7 +248,10 @@ try {
       assert(!result.error, result.error)
       // A profile replaces the file, or Group Policy sets the value to 0 next to the smoke's mark.
       if (platform === "darwin") plant(FILE, "<key>DisableAutoUpdate</key><false/>")
-      else assert(powershell(`Set-ItemProperty -LiteralPath '${HKCU}' -Name DisableAutoUpdate -Value 0\nNew-ItemProperty -LiteralPath '${HKCU}' -Name '${FIXTURE}' -PropertyType DWord -Value 1 | Out-Null`).status === 0, "could not replace the value")
+      else {
+        planted.add("DisableAutoUpdate")
+        assert(powershell(`Set-ItemProperty -LiteralPath '${HKCU}' -Name DisableAutoUpdate -Value 0\nNew-ItemProperty -LiteralPath '${HKCU}' -Name '${FIXTURE}' -PropertyType DWord -Value 1 | Out-Null`).status === 0, "could not replace the value")
+      }
       const replaced = snapshot()
       assert(result.restore(), "restore reported a failure")
       const after = snapshot()
@@ -260,7 +278,7 @@ try {
       try {
         await locked(put)
         assert(snapshot() !== null, "nothing was planted")
-        const cleaned = run(process.execPath, [join(import.meta.dirname, "smoke-update-policy.mjs"), "--clean"])
+        const cleaned = run(process.execPath, [SCRIPT, "--clean"])
         assert(cleaned.status === 0, `--clean failed: ${cleaned.stderr || cleaned.stdout}`)
         assert(snapshot() === null, `--clean left ${left}`)
         await roundTrip()
@@ -270,12 +288,50 @@ try {
     })
   }
 
-  await check("--clean removes what a killed run left", async () => {
+  await check("changes nothing when a policy already turns updates off, and holds the lock until it ends", async () => {
+    try {
+      await locked(() => (platform === "darwin" ? plant(FILE, "<key>DisableAutoUpdate</key><true/>") : plantKey({ DisableAutoUpdate: ["DWord", 1] })))
+      const before = snapshot()
+      const result = await disableAutoUpdate()
+      assert(!result.error, result.error)
+      assert(snapshot() === before, "the run changed a policy that already turned updates off")
+      const second = await disableAutoUpdate()
+      assert(/another smoke run/.test(second.error ?? ""), `a second run did not wait for the lock: ${second.error}`)
+      assert(result.restore(), "restore reported a failure")
+      assert(snapshot() === before, "the restore changed the existing policy")
+    } finally {
+      await clear()
+    }
+  })
+
+  await check("--clean refuses while a run holds the policy", async () => {
+    const child = await holder()
+    try {
+      const during = snapshot()
+      const cleaned = run(process.execPath, [SCRIPT, "--clean"])
+      assert(cleaned.status === 1 && /another smoke run/.test(cleaned.stderr), `--clean did not refuse: ${cleaned.status} ${cleaned.stderr || cleaned.stdout}`)
+      assert(snapshot() === during, "--clean changed the live run's policy")
+    } finally {
+      await kill(child)
+      await clear()
+    }
+    assert(snapshot() === null, "the killed holder's policy was not removed")
+  })
+
+  await check("--clean removes what a killed run left, also through a symlinked path", async () => {
     const child = await holder()
     await kill(child)
     assert(managed(), "the killed holder took the policy away, so the test proves nothing")
-    const cleaned = run(process.execPath, [join(import.meta.dirname, "smoke-update-policy.mjs"), "--clean"])
-    assert(cleaned.status === 0, `--clean failed: ${cleaned.stderr || cleaned.stdout}`)
+    let script = join(work, "linked-smoke-update-policy.mjs")
+    try {
+      symlinkSync(SCRIPT, script)
+    } catch (error) {
+      // Windows allows symlinks only with a privilege or developer mode.
+      console.log(`     no symlink (${error.code}), --clean runs from its own path`)
+      script = SCRIPT
+    }
+    const cleaned = run(process.execPath, [script, "--clean"])
+    assert(cleaned.status === 0 && /No smoke run's update policy is left/.test(cleaned.stdout), `--clean failed: ${cleaned.stderr || cleaned.stdout}`)
     assert(snapshot() === null, "--clean left the policy")
   })
 } finally {

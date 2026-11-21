@@ -22,7 +22,6 @@ import { checkAppBackupCompletion } from "./app-backup-completion-smoke.mjs"
 import { disableAutoUpdate } from "./smoke-update-policy.mjs"
 
 const require = createRequire(import.meta.url)
-const electronPath = require("electron")
 const desktopDir = resolve(import.meta.dirname, "..")
 const shotsDir = resolve(process.argv[2] ?? join(desktopDir, "out", "smoke"))
 const packagedApp = process.env.TENUVAULT_SMOKE_APP
@@ -62,7 +61,9 @@ if (process.platform === "darwin" && (!packagedApp || process.env.TENUVAULT_SMOK
 // Tools that are themselves Electron apps may export ELECTRON_RUN_AS_NODE, which would start plain Node.
 const env = { ...process.env, ELECTRON_ENABLE_LOGGING: "1" }
 delete env.ELECTRON_RUN_AS_NODE
-app = spawn(packagedApp ?? electronPath, args, { stdio: ["ignore", "pipe", "pipe"], env })
+// Only a development run needs the electron package, and it loads after the policy step, so a
+// missing package cannot skip the recovery of a packaged run.
+app = spawn(packagedApp ?? require("electron"), args, { stdio: ["ignore", "pipe", "pipe"], env })
 let appLog = ""
 app.stdout.on("data", (d) => (appLog += d))
 app.stderr.on("data", (d) => (appLog += d))
