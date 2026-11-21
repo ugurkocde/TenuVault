@@ -49,7 +49,7 @@ function fakeGraph(overrides: Record<string, Response | (() => Response)> = {}) 
   }
 }
 
-function setup(graph = fakeGraph(), concurrency?: number) {
+function setup(graph = fakeGraph(), concurrency?: number, unattendedTokens?: ConstructorParameters<typeof BackupEngine>[0]["unattendedTokens"]) {
   const store = new LocalBlobStore(mkdtempSync(join(tmpdir(), "tv-engine-")), [randomBytes(32)])
   const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init)
@@ -59,7 +59,7 @@ function setup(graph = fakeGraph(), concurrency?: number) {
     throw new Error(`unexpected ${url}`)
   }) as unknown as typeof fetch
   const getToken = vi.fn(async () => "token")
-  const engine = new BackupEngine({ fetch: fetchImpl, getToken, ...(concurrency === undefined ? {} : { concurrency }) })
+  const engine = new BackupEngine({ fetch: fetchImpl, getToken, unattendedTokens, ...(concurrency === undefined ? {} : { concurrency }) })
   return { engine, store, getToken, account: localStorageAccountName(TENANT) }
 }
 
@@ -179,13 +179,15 @@ describe("BackupEngine", () => {
       "/beta/deviceManagement/deviceCompliancePolicies/cp1?$expand=scheduledActionsForRule($expand=scheduledActionConfigurations),assignments": () =>
         throttled++ === 0 ? new Response("", { status: 429, headers: { "retry-after": "0.001" } }) : Response.json({ id: "cp1" }),
       "/beta/deviceManagement/configurationPolicies/sc1?$expand=settings": () =>
-        Response.json({ error: { message: "Forbidden" } }, { status: 403 }),
+        Response.json({ error: { message: "SyntheticGraphErrorCanary" } }, { status: 403 }),
     })
     const { engine } = setup(graph)
     const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: localStorageAccountName(TENANT) }).id)
     expect(job.status).toBe("Completed")
     expect(job.progressMessage).toBe("Backup completed with 1 warning")
     expect(job.log.join("\n")).toMatch(/Could not back up "Settings catalog": Access denied by Microsoft Graph/)
+    expect(job.log.join("\n")).toContain("HTTP 403")
+    expect(JSON.stringify({ log: job.log, results: job.results })).not.toContain("SyntheticGraphErrorCanary")
     expect(throttled).toBe(2)
     // Progress views read the per type results instead of the log wording.
     const types = job.results!.types
@@ -402,6 +404,21 @@ describe("retention after incomplete backups", () => {
     expect(fetched.some((url) => url.includes("reusablePolicySettings/r1?$select=id,displayName,description,settingDefinitionId,settingInstance"))).toBe(true)
   })
 
+  it("keeps a backup with masked OMA values and no failures eligible as a successful backup", async () => {
+    const { engine, store, account } = setup(fakeGraph({
+      "/beta/deviceManagement/deviceConfigurations": Response.json({ value: [{ id: "dc1", displayName: "Masked" }] }),
+      "/beta/deviceManagement/deviceConfigurations/dc1?$expand=assignments": Response.json({
+        id: "dc1", displayName: "Masked",
+        omaSettings: [{ omaUri: "./x", isEncrypted: true, secretReferenceValueId: "s1", value: "****" }],
+      }),
+      "/beta/deviceManagement/deviceConfigurations/dc1/getOmaSettingPlainTextValue(secretReferenceValueId='s1')": Response.json({}, { status: 403 }),
+    }), undefined, () => ({ mode: "app-only", graph: async () => "reader-token", storage: async () => "reader-token" }))
+    const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account, trigger: "scheduled" }).id)
+    const metadata = JSON.parse((await store.get(account, "intune-backups", `${job.backupFolder}/metadata.json`)).data.toString())
+    expect(metadata).toMatchObject({ Status: "Success", Failures: 0, MaskedSecretItems: [expect.objectContaining({ Id: "dc1" })] })
+    expect(job.results?.warnings).toBe(1)
+  })
+
   it("skips a newly supported type the app registration has no permission for, without blocking retention", async () => {
     const graph = fakeGraph({ "/beta/deviceManagement/deviceManagementScripts": () => Response.json({ error: { message: "Forbidden" } }, { status: 403 }) })
     const { engine, store, account } = setup(graph)
@@ -614,4 +631,56 @@ it('keeps decrypted OMA-URI secrets readable in plain Azure backups, so a restor
   expect(uploads.every(item => item.type === 'application/json' && !item.body.subarray(0, 5).equals(Buffer.from('TVAZ1')))).toBe(true)
   const secret = uploads.find(item => item.url.pathname.endsWith('/DeviceConfigurations/Secret.json'))!
   expect(JSON.parse(secret.body.toString()).omaSettings[0].value).toBe('dummy-oma-secret')
+})
+
+it("reconciles a successful manifest when every PUT acknowledgement is lost", async () => {
+  const { store } = setup()
+  const account = localStorageAccountName(TENANT)
+  const graph = fakeGraph()
+  let puts = 0
+  let readbacks = 0
+  const engine = new BackupEngine({
+    getToken: async () => "token",
+    fetch: async (input, init) => {
+      const request = new Request(input, init)
+      const url = new URL(request.url)
+      if (url.hostname === "graph.microsoft.com") return graph(url)
+      if (url.pathname.endsWith("/metadata.json")) {
+        if (request.method === "PUT") {
+          puts++
+          await handleLocalBlobRequest(store, request)
+          throw new TypeError("Manifest acknowledgement lost")
+        }
+        readbacks++
+      }
+      return handleLocalBlobRequest(store, request)
+    },
+  })
+  const job = await engine.waitForJob(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }))
+  expect(job.status).toBe("Completed")
+  expect(job.commitUnconfirmed).toBeUndefined()
+  expect(puts).toBe(3)
+  expect(readbacks).toBe(1)
+  const { data } = await store.get(account, "intune-backups", `${job.backupFolder}/metadata.json`)
+  expect(JSON.parse(data.toString())).toMatchObject({ RunId: job.id, TenantId: TENANT, Status: "Success" })
+})
+
+it("reports a definitively rejected desktop manifest as failed without attempting a second manifest", async () => {
+  const { store, account } = setup()
+  const graph = fakeGraph()
+  const manifestPuts = vi.fn(() => new Response(null, { status: 403 }))
+  const engine = new BackupEngine({
+    getToken: async () => "token",
+    fetch: async (input, init) => {
+      const request = new Request(input, init)
+      const url = new URL(request.url)
+      if (url.hostname === "graph.microsoft.com") return graph(url)
+      if (request.method === "PUT" && url.pathname.endsWith("/metadata.json")) return manifestPuts()
+      return handleLocalBlobRequest(store, request)
+    },
+  })
+  const job = await engine.waitForJob(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }))
+  expect(job.status).toBe("Failed")
+  expect(job.commitUnconfirmed).toBeUndefined()
+  expect(manifestPuts).toHaveBeenCalledTimes(1)
 })

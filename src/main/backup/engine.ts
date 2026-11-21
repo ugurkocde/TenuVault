@@ -1,3 +1,5 @@
+import { auditUserFromToken } from "../api/audit-sink"
+import type { AuditUser } from "~/lib/audit/types"
 export { assertStorageAccountName } from "../../shared/storage-account"
 export { ProtectedBlobError, isImmutabilityRefusal } from "./request"
 import { createHash, randomUUID } from "node:crypto"
@@ -52,6 +54,8 @@ export interface BackupJob {
   credentialError?: true
   /** Set when the job failed because Microsoft or the storage account could not be reached, including timeouts. */
   unreachable?: boolean
+  /** A manifest PUT was dispatched, but the final response did not confirm it. */
+  commitUnconfirmed?: boolean
   log: string[]
   /** Per type results and notices for progress views, filled as the run goes; absent until the run starts. */
   results?: BackupResults
@@ -68,6 +72,8 @@ export type BackupAuthMode = "delegated" | "app-only"
 /** The tokens one backup run uses for Microsoft Graph and Azure Storage, chosen once when it starts. */
 export interface RunTokens {
   mode: BackupAuthMode
+  registrationId?: string
+  auditUser?: AuditUser
   graph: () => Promise<string>
   storage: () => Promise<string>
   /** Type folders these tokens have no permission for by design; the run leaves them out and records why. */
@@ -105,8 +111,10 @@ export interface BackupEngineDeps {
   now?: () => Date
   /** Items read at the same time. Graph throttling (429) pauses every reader. */
   concurrency?: number
+  /** Called before a job reads Graph or starts writing its assigned folder. */
+  onStarted?: (job: BackupJob, request: BackupRequest, tokens: RunTokens) => void
   /** Called once when a job has ended, with the request that started it. */
-  onFinished?: (job: BackupJob, request: BackupRequest) => void
+  onFinished?: (job: BackupJob, request: BackupRequest, tokens?: RunTokens) => void
 }
 
 /** A Graph beta path, or an absolute nextLink that must be on the Graph origin. */
@@ -394,7 +402,7 @@ export class BackupEngine {
         if (this.running.get(tenantKey)?.job === job) this.running.delete(tenantKey)
         this.executions.delete(job.id)
         this.pending--
-        this.finished(job, request)
+        this.finished(job, request, tokens)
       })
       .then(() => job)
     // The next queued backup starts only once this one has fully settled, failed manifest
@@ -416,9 +424,9 @@ export class BackupEngine {
   }
 
   /** A failing listener must not change how the job ended. */
-  private finished(job: BackupJob, request: BackupRequest): void {
+  private finished(job: BackupJob, request: BackupRequest, tokens?: RunTokens): void {
     try {
-      this.deps.onFinished?.(job, request)
+      this.deps.onFinished?.(job, request, tokens)
     } catch (error) {
       console.warn("[backup] Could not record the end of a backup:", error)
     }
@@ -430,11 +438,21 @@ export class BackupEngine {
     const fetchImpl = answeredFetch(this.deps.fetch, outcome, local ? `${request.storageAccountName.toLowerCase()}.blob.core.windows.net` : null)
     const backupFolder = `backup-${folderTimestamp(started)}`
     job.backupFolder = backupFolder
+    try {
+      this.deps.onStarted?.(job, request, tokens)
+    } catch {
+      console.warn("[audit] Backup audit checkpoint could not be saved")
+      this.write(job, "The audit checkpoint could not be saved. Terminal audit recording will still be attempted.", "warning")
+    }
     this.write(job, `Backing up tenant ${request.tenantId} to ${local ? "this device (encrypted)" : `storage account ${request.storageAccountName}`}.`)
     this.write(job, `Backup folder: ${backupFolder}`)
     if (tokens.mode === "app-only") this.write(job, "Reading as the tenant's Backup Reader (app-only, read-only).")
 
-    const graphToken = () => tokenOrStop(tokens.graph, outcome)
+    const graphToken = async () => {
+      const token = await tokenOrStop(tokens.graph, outcome)
+      tokens.auditUser ??= auditUserFromToken(token, request.tenantId)
+      return token
+    }
     const storageToken = local ? async () => "" : () => tokenOrStop(tokens.storage, outcome)
 
     const concurrency = this.deps.concurrency ?? CONCURRENCY
@@ -578,6 +596,7 @@ export class BackupEngine {
         BackupFolder: backupFolder,
         StartTime: displayTime(started),
         EndTime: displayTime(ended),
+        CompletedAt: ended.toISOString(),
         Duration: seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`,
         DurationSeconds: seconds,
         // Inventory such as Autopilot devices is counted under its own folder, not as policies.
@@ -658,7 +677,7 @@ export class BackupEngine {
     const totalPolicies = policyCount(counts)
     const saved = Object.values(counts).reduce((sum, count) => sum + count, 0)
     const inventory = Object.entries(counts).filter(([folder, count]) => count > 0 && typeForFolder(folder)?.inventory)
-    const metadata = manifest(failures > 0 ? (saved === 0 ? "Failed" : "CompletedWithWarnings") : "Success", ended)
+    const metadata = manifest(failures > 0 && saved === 0 ? "Failed" : failures ? "CompletedWithWarnings" : "Success", ended)
 
     // Detach cancellation at the first manifest PUT, after cancellable token acquisition.
     // Retention reads cannot delay the manifest, and a saved backup must not burn a retry slot.
@@ -669,9 +688,23 @@ export class BackupEngine {
     commitTimer.unref?.()
     const commitNetwork = new NetworkCircuit(3 * concurrency, commitController.signal, commitDeadline)
     const commitStorage = new BlobWriter(fetchImpl, request.storageAccountName, storageToken, commitNetwork)
+    const commit = { ambiguous: false, readbackStarted: false }
     try {
       // Once the PUT is sent it may land even when it reports a failure, so no failed manifest may follow it.
-      await commitStorage.put(`${backupFolder}/metadata.json`, JSON.stringify(metadata, null, 2), network, false, () => { stopped.committing = true })
+      await commitStorage.put(`${backupFolder}/metadata.json`, JSON.stringify(metadata, null, 2), network, false, () => { stopped.committing = true }, commit)
+    } catch (error) {
+      if (!commit.ambiguous) throw error
+      job.commitUnconfirmed = true
+      if (commit.readbackStarted || commitController.signal.aborted) throw error
+      // A lost acknowledgement may have opened the PUT circuit. Reconcile under a separate
+      // circuit while preserving the original commit deadline.
+      const readbackNetwork = new NetworkCircuit(3 * concurrency, commitController.signal, commitDeadline)
+      const reader = new BlobWriter(fetchImpl, request.storageAccountName, storageToken, readbackNetwork)
+      const saved = await reader.readJson(`${backupFolder}/metadata.json`).catch(() => null)
+      if (saved?.RunId !== job.id || saved.TenantId !== metadata.TenantId ||
+        saved.BackupFolder !== backupFolder || saved.Status !== metadata.Status) throw error
+      delete job.commitUnconfirmed
+      this.write(job, "Verified the saved backup manifest after storage did not confirm the write.")
     } finally {
       clearTimeout(commitTimer)
     }

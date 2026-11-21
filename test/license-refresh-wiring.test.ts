@@ -20,7 +20,7 @@ describe("license refresh wiring", () => {
   })
 
   it("finishes backup failure handling and notification before the trial tally", () => {
-    const finished = read("../src/main/index.ts").match(/onFinished: \(job, request\) => \{([\s\S]*?)\n    \},/)?.[1] ?? ""
+    const finished = read("../src/main/index.ts").match(/onFinished: \(job, request, tokens\) => \{([\s\S]*?)\n    \},/)?.[1] ?? ""
     expect(finished.indexOf("failedAttempts.finished")).toBeGreaterThanOrEqual(0)
     expect(finished.indexOf("notifyBackupOutcome")).toBeGreaterThan(finished.indexOf("failedAttempts.finished"))
     expect(finished.indexOf("tallyBackup")).toBeGreaterThan(finished.indexOf("notifyBackupOutcome"))

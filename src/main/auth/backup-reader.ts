@@ -209,11 +209,14 @@ export class BackupReaderService {
   }
 
   /** Records that a scheduled backup actually ran with the reader, for the card and Schedule tab. */
-  recordRun(tenantId: string, status: string): void {
-    const credential = this.read(tenantId)
-    if (!credential) return
-    credential.lastRun = { at: this.now().toISOString(), status }
-    this.write(credential)
+  recordRun(tenantId: string, status: string, trigger: BackupRequest["trigger"]): void {
+    if (trigger !== "scheduled") return
+    try {
+      const credential = this.read(tenantId)
+      if (!credential) return
+      credential.lastRun = { at: this.now().toISOString(), status }
+      this.write(credential)
+    } catch { console.warn("[backup-reader] Scheduled run status could not be saved") }
   }
 
   remove(tenantId: string): void {
@@ -244,7 +247,7 @@ export class BackupReaderService {
       }
       return acquired.accessToken
     }
-    return { mode: "app-only", graph: () => token("graph"), storage: () => token("storage"), excludedTypes: excludedTypes(verified) }
+    return { mode: "app-only", registrationId: credential.clientId, graph: () => token("graph"), storage: () => token("storage"), excludedTypes: excludedTypes(verified) }
   }
 
   private read(tenantId: string): BackupReaderCredential | null {

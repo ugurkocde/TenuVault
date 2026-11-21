@@ -22,3 +22,14 @@ it('does not retry creation when the response is lost or has no ID', async () =>
   const noId = new Restorer(async () => ({ status: 201, body: {} }), options)
   for (const restorer of [lost, noId]) expect(await restorer.restore('b/DeviceCategories/a.json', { displayName: 'A' })).toMatchObject({ success: false, retryable: false })
 })
+
+it("preserves the issuing job for each retry batch after results are serialized", () => {
+  const results = JSON.parse(JSON.stringify([
+    { path: "first", success: false, targetTenantId: "B", retryJobId: "original" },
+    { path: "second", success: false, targetTenantId: "B", retryJobId: "another" },
+  ]))
+  expect(retryBatches(results)).toEqual([
+    { targetTenantId: "b", paths: ["first"], retryOf: "original" },
+    { targetTenantId: "b", paths: ["second"], retryOf: "another" },
+  ])
+})

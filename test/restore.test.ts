@@ -1,4 +1,6 @@
-import { createAuditRecorder } from "../src/main/api/audit"
+import { AuditSink, setMainAuditSink } from "../src/main/api/audit-sink"
+import { setAuditOutboxStore, pendingEvents } from "../src/portal/lib/audit/outbox"
+import { auditId } from "../src/portal/lib/audit/projection"
 import { parseBackupFolders } from "../src/portal/app/api/detect-drifts/route"
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { validPolicyPath } from '../src/portal/lib/policies/restore'
@@ -16,7 +18,16 @@ const backupId = 'backup-2026-09-25-120000'
 const path = `${backupId}/DeviceConfigurations/Example.json`
 const body = { tenantId: 'tenant', appId: 'app', clientSecret: 'placeholder', storageAccountName: 'storage', backupId, restoreType: 'full' }
 const request = (data: object) => new NextRequest('http://tenuvault.internal/api/restore-backup', { method: 'POST', body: JSON.stringify(data) })
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => { vi.unstubAllGlobals(); setAuditOutboxStore(); setMainAuditSink(undefined) })
+const auditUnavailable = () => {
+  const account = 'auditfixture'
+  const sink = new AuditSink({
+    bind: tenantId => ({ tenantId, storageAccountName: account, user: { id: 'admin@example.test', email: 'admin@example.test', name: 'Signed-in admin' } }),
+    transport: async () => { throw new Error('Offline') },
+  })
+  setMainAuditSink(sink)
+  return () => pendingEvents(account)
+}
 
 describe('Policy copies', () => {
   it('accepts literal URL punctuation in filenames because fetch encodes each segment', () => {
@@ -86,13 +97,15 @@ describe('Restore results', () => {
     expect(result).toMatchObject({ success: true, status: 'Completed', details: { restoredCount: 2, failedCount: 0 } })
   })
   it('reports partial failure with per-policy errors and a partial audit result', async () => {
-    const audits = mock(true)
-    const response = await POST(request(body))
-    const result = await response.clone().json()
-    const record = createAuditRecorder(async req => { audits.push(await req.json()); return Response.json({ success: true }) }, () => ({ tenantId: 'tenant', clientId: 'app', username: 'admin@example.test', name: 'Signed-in admin', homeAccountId: 'account' }))
-    record(request({ ...body, userName: 'Spoofed user' }), JSON.stringify({ ...body, userName: 'Spoofed user' }), response)
-    await vi.waitFor(() => expect(audits).toHaveLength(1))
-    expect(audits[0]).toMatchObject({ user: { name: 'Signed-in admin', email: 'admin@example.test' }, logEntry: { eventType: 'RESTORE_COMPLETED', result: 'PARTIAL', severity: 'WARNING', details: { restoredCount: 1, failedCount: 1 } } })
+    mock(true)
+    const audits = auditUnavailable()
+    const response = await POST(request({ ...body, userName: 'Spoofed user' }))
+    const result = await response.json()
+    expect(audits()).toHaveLength(1)
+    expect(audits()[0]).toMatchObject({ user: { name: 'Signed-in admin', email: 'admin@example.test' },
+      eventType: 'RESTORE_COMPLETED', result: 'PARTIAL', severity: 'WARNING',
+      job: { operationId: result.jobId, counts: { created: 1, failed: 1 },
+        items: [{ outcome: 'created', applied: [{ operation: 'create', field: 'displayName' }, { operation: 'create', field: 'omaSettings' }] }, { outcome: 'failed' }] } })
     expect(result).toMatchObject({ success: false, status: 'PartiallyCompleted', details: { restoredCount: 1, failedCount: 1 } })
     expect(result.details.results[1].error).toBe('Permission denied')
   })
@@ -137,17 +150,9 @@ describe('Restore results', () => {
    } finally { if (before === undefined) delete process.env.TZ; else process.env.TZ = before }
  })
 
-it('records a policy copy once against the created policy and the real actor', async () => {
-  const logs: any[] = []
-  const record = createAuditRecorder(async req => { logs.push(await req.json()); return Response.json({ success: true }) }, () => ({ tenantId: 'tenant', clientId: 'app', username: 'admin@example.test', name: 'Admin', homeAccountId: 'account' }))
-  const req = new Request('http://tenuvault.internal/api/revert-policy', { method: 'POST' })
-  record(req, JSON.stringify({ ...body, policyId: 'original', originalName: 'Example', action: 'restore', userName: 'Fake user' }), Response.json({ success: true, policyId: 'created-copy' }))
-  await vi.waitFor(() => expect(logs).toHaveLength(1))
-  expect(logs[0]).toMatchObject({ user: { name: 'Admin' }, logEntry: { eventType: 'POLICY_RESTORED', result: 'SUCCESS', resource: { type: 'policy', id: 'created-copy' } } })
-})
-
 describe('Copy to other tenants', () => {
   it('writes each target with its own sign-in, under the original name, without assignments or scope tags', async () => {
+    const audits = auditUnavailable()
     const targets = ['33333333-3333-3333-3333-333333333333', '44444444-4444-4444-4444-444444444444']
     const created: Array<{ token: string; body: any }> = []
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -170,6 +175,9 @@ describe('Copy to other tenants', () => {
     expect(data.message).toMatch(/^Copied 2 items to 2 tenants/)
     expect(data.details.results.map((r: any) => r.targetTenantId)).toEqual(targets)
     expect(created.map(c => c.token)).toEqual(targets.map(t => `Bearer token-${t}`))
+    expect(audits().map(event => event.user.tenantId)).toEqual(targets)
+    expect(audits().map(event => event.job?.operationId)).toEqual([data.jobId, data.jobId])
+    expect(audits()[0]?.job?.items?.[0]?.targetId).toBe(auditId('new-1'))
     for (const { body: copy } of created) {
       expect(copy).toMatchObject({ displayName: 'Firewall', roleScopeTagIds: ['0'] })
       expect(copy).not.toHaveProperty('assignments')

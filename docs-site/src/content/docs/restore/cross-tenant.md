@@ -119,3 +119,7 @@ For Dev to Prod promotion, select the production tenant and open **Changes** > *
 * [Disaster recovery](/restore/disaster-recovery/)
 * [What cannot be restored](/restore/limitations/)
 * [Plans and features](/licensing/)
+
+### Destination history
+
+When you copy to other tenants, each destination has its own [audit event](/audit-log/) with the executing identity for that tenant. If a destination has backup storage configured, look for its event in that tenant’s Audit Log. Otherwise, open the source tenant’s Audit Log and check **Job details** for the destination tenant ID. Use the shared operation ID to relate the events.

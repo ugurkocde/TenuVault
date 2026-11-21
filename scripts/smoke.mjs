@@ -1915,6 +1915,80 @@ await check("compliance scoring notice dismisses once on this machine", async ()
   }
 })
 
+await check("correlated restore audit row expands and exports its item details", async () => {
+  const tenant = "11111111-1111-1111-1111-111111111111"
+  const operation = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+  const run = "aaaaaaaa-bbbb-4ccc-8ddd-ffffffffffff"
+  const frame = "window.__auditSmokeFrame"
+  try {
+    await evaluate(`(async () => {
+      const status = await window.tenuvault.license.status()
+      const tenant = ${JSON.stringify(tenant)}
+      const id = ${JSON.stringify(operation)}
+      const event = {
+        id, timestamp: new Date().toISOString(), eventType: "RESTORE_COMPLETED", severity: "WARNING", result: "PARTIAL",
+        action: "Restore backup in place", user: { id: "admin", name: "Contoso Admin", email: "admin@example.test", tenantId: tenant },
+        resource: { type: "backup", id: "backup-2026-11-20-120000", name: "Restore backup in place" },
+        context: { ipAddress: "unknown", userAgent: "TenuVault Desktop", correlationId: id },
+        job: { operationId: id, runId: ${JSON.stringify(run)}, stage: "terminal", producer: "desktop", status: "warnings",
+          sourceBackupId: "backup-2026-11-20-120000", counts: { partial: 1, unattempted: 1 },
+          items: [
+            { folder: "DeviceConfigurations", outcome: "partial", applied: [{ operation: "update", field: "description" }] },
+            { folder: "ConfigurationPolicies", outcome: "unattempted" },
+          ],
+        },
+      }
+      const frame = document.createElement("iframe")
+      frame.style.cssText = "position: fixed; inset: 0; width: 100%; height: 100%; border: 0; z-index: 9999;"
+      document.body.appendChild(frame)
+      window.__auditSmokeFrame = frame
+      window.__auditSmokeExport = null
+      const doc = frame.contentDocument, child = frame.contentWindow
+      doc.open()
+      doc.write('<html><head></head><body><div id="root"></div></body></html>')
+      doc.close()
+      child.location.hash = "#/portal/audit?tenant=" + tenant
+      const fixture = { tenantId: tenant, signedIn: true, activated: true, entitled: true, source: "key", plan: "pro",
+        tenants: 1, expiresAt: null, validUntil: null, shared: false, displayKey: null, message: null }
+      const reply = (data, headers = {}) => ({ status: 200, statusText: "OK",
+        headers: { "content-type": "application/json", ...headers }, body: new TextEncoder().encode(JSON.stringify(data)) })
+      child.tenuvault = {
+        ...window.tenuvault,
+        license: { ...window.tenuvault.license, status: async () => ({ ...status, hasKey: true, keyState: "active", plan: "pro", tenantLimit: 1, tenants: [fixture] }), onChanged: () => () => {} },
+        storage: { ...window.tenuvault.storage,
+          getItemSync: key => key === "tenuvault_selected_tenant" ? "1" : window.tenuvault.storage.getItemSync(key),
+          setItem: async () => {},
+        },
+        api: async request => {
+          if (request.path === "/api/audit/logs") return reply({ data: [event], pendingCount: 0 })
+          if (request.path === "/api/audit/stats") return reply({ data: { summary: { totalEvents: 1, successRate: "0%" }, eventsByType: {}, eventsBySeverity: {} } })
+          if (request.path === "/api/audit/export") return reply({ count: 1, logs: [event] }, { "content-disposition": 'attachment; filename="operation-history.json"' })
+          return window.tenuvault.api(request)
+        },
+      }
+      child.URL.createObjectURL = blob => { void blob.text().then(text => { window.__auditSmokeExport = JSON.parse(text) }); return "blob:fixture" }
+      child.URL.revokeObjectURL = () => {}
+      child.HTMLAnchorElement.prototype.click = function () { if (!this.download) this.dispatchEvent(new child.MouseEvent("click", { bubbles: true })) }
+      document.querySelectorAll('link[rel="stylesheet"]').forEach(link => doc.head.appendChild(link.cloneNode()))
+      const script = doc.createElement("script")
+      script.type = "module"
+      script.src = document.querySelector('script[type="module"]').src
+      doc.head.appendChild(script)
+    })()`)
+    const row = `[...${frame}.contentDocument.querySelectorAll('details[data-audit-operation="${operation}"]')].find(el => el.getBoundingClientRect().width > 0)`
+    assert(await waitForCondition(`!!(${row})`), "correlated audit row missing")
+    await evaluate(`(${row}).querySelector('summary').click()`)
+    assert(await waitForCondition(`(${row}).open && (${row}).innerText.includes('update description') && (${row}).innerText.includes('Unattempted') && (${row}).innerText.includes('${run}')`), "restore job outcomes or run ID missing")
+    await evaluate(`[...${frame}.contentDocument.querySelectorAll('button')].find(el => el.innerText.trim() === 'Export')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0 }))`)
+    const option = `[...${frame}.contentDocument.querySelectorAll('[role=menuitem]')].find(el => el.innerText.includes('Export as JSON'))`
+    assert(await waitForCondition(`!!(${option})`), "audit export menu did not open")
+    await evaluate(`(${option}).click()`)
+    assert(await waitForCondition(`window.__auditSmokeExport?.logs[0]?.job.operationId === '${operation}' && window.__auditSmokeExport?.logs[0]?.job.items[0]?.applied[0]?.field === 'description'`), "download lost correlated item details")
+  } finally {
+    await evaluate(`${frame}?.remove(); delete window.__auditSmokeFrame; delete window.__auditSmokeExport`)
+  }
+})
+
 await check("paid roadmap screens explain their plan and the server refuses Community", async () => {
   // The sidebar entries of paid screens stay links; a plan without any of their screens adds the plan badge.
   for (const [hash, name] of [["#/portal/audit", "Audit Log"], ["#/portal/governance", "Governance"], ["#/portal/changes", "Changes"], ["#/portal/operations", "Operations"]]) {

@@ -78,6 +78,7 @@ export const DESKTOP_AUDIT_EVENT_TYPES: readonly AuditEventType[] = [
   AuditEventType.BACKUP_DOWNLOADED,
   AuditEventType.RESTORE_COMPLETED,
   AuditEventType.RESTORE_FAILED,
+  AuditEventType.CONFIG_UPDATED,
   AuditEventType.POLICY_CREATED,
   AuditEventType.POLICY_REVERTED,
   AuditEventType.POLICY_RESTORED,
@@ -144,6 +145,68 @@ export interface AuditDetails {
   metadata?: Record<string, any>
 }
 
+export type AuditItemOutcome = 'created' | 'updated' | 'unchanged' | 'skipped' | 'failed' | 'partial' | 'pending' | 'unattempted' | 'uncertain'
+export type AuditJobStage = 'terminal' | 'approval-submit' | 'approval-attempt' | 'approval-complete' | 'approval-withdraw' | 'policy'
+export type AuditProducer = 'desktop' | 'backup-reader' | 'cloud-runbook'
+export type AuditJobStatus = 'completed' | 'warnings' | 'failed' | 'cancelled' | 'pending' | 'uncertain'
+
+export interface AuditApproval {
+  system: 'intune' | 'tenuvault'
+  requestId?: string
+  decisionAt?: string
+  principalId?: string
+  displayName?: string
+  upn?: string
+  applicationId?: string
+  justificationPresent?: boolean
+}
+
+export interface AuditChange {
+  operation: 'create' | 'update' | 'assign' | 'publish'
+  field?: string
+  settingDefinitionId?: string
+  /** Present only after an exact match against the public Graph settings catalog. */
+  catalogVerified?: true
+}
+
+export interface AuditRestoreStep {
+  kind: 'content' | 'assignments'
+  outcome: 'applied' | 'failed' | 'uncertain' | 'pending' | 'unattempted'
+}
+
+export interface AuditJobItem {
+  folder: string
+  sourceId?: string
+  targetId?: string
+  outcome: AuditItemOutcome
+  reason?: string
+  planned?: AuditChange[]
+  applied?: AuditChange[]
+  verified?: AuditChange[]
+  approval?: AuditApproval
+  steps?: AuditRestoreStep[]
+}
+
+export interface AuditJob {
+  operationId: string
+  runId: string
+  stage: AuditJobStage
+  producer: AuditProducer
+  status: AuditJobStatus
+  sourceBackupId?: string
+  destinationTenantId?: string
+  registrationId?: string
+  producerPrincipalId?: string
+  deliveredByPrincipalId?: string
+  trigger?: 'manual' | 'scheduled' | 'tray' | 'unknown'
+  producerVersion?: string
+  reason?: string
+  counts: Partial<Record<AuditItemOutcome | 'saved' | 'failures', number>>
+  items?: AuditJobItem[]
+  detailPages?: number
+  detailsIncomplete?: boolean
+}
+
 export interface AuditLogEntry {
   id: string
   timestamp: string
@@ -154,6 +217,7 @@ export interface AuditLogEntry {
   resource: AuditResource
   result: AuditResult
   context: AuditContext
+  job?: AuditJob
   details?: AuditDetails
   duration?: number // in milliseconds
   tags?: string[]
@@ -204,6 +268,7 @@ export interface CreateAuditLogInput {
   eventType: AuditEventType
   action: string
   resource: AuditResource
+  job?: AuditJob
   details?: AuditDetails
   severity?: AuditSeverity
   result?: AuditResult

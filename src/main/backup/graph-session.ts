@@ -50,7 +50,10 @@ export class GraphSession {
           attempted = true
           response = await this.fetchImpl(url, { signal, headers: { Authorization: `Bearer ${token}` } })
           if (response.ok) {
-            const result = (await response.json()) as T
+            const result = await response.json().catch(error => {
+              if (error instanceof SyntaxError) throw new SyntaxError("Microsoft Graph returned invalid JSON.")
+              throw error
+            }) as T
             signal.throwIfAborted()
             this.network.succeeded("Microsoft Graph")
             return result

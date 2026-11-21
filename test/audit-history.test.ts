@@ -48,9 +48,9 @@ describe('own-operation history exports', () => {
     const safe = redactAuditEntry(history()[0]!)
     const text = JSON.stringify(safe)
     for (const secret of [JWT, 'shh', 'at secret.ts:1', '"secret":"x"']) expect(text).not.toContain(secret)
-    expect(safe.details?.payload).toBe('[omitted: payload]')
+    expect(safe.details?.payload).toBeUndefined()
     expect(safe.details?.statusCode).toBe(200)
-    expect(safe).toMatchObject({ id: 'mine', action: 'Restore mine', result: 'SUCCESS', user: { email: 'admin@contoso.com' }, resource: { id: 'backup-1' } })
+    expect(safe).toMatchObject({ id: 'mine', action: 'Restore Completed', result: 'SUCCESS', user: { email: 'admin@contoso.com' }, resource: { name: 'Restore Completed' } })
   })
 
   it('labels unknown actors and outcomes instead of guessing', () => {
@@ -96,7 +96,7 @@ describe('own-operation history routes', () => {
     expect(response.status).toBe(200)
     const html = await response.text()
     expect([...html.matchAll(/<th>(.*?)<\/th>/g)].map(match => match[1])).toEqual(['Timestamp', 'Event Type', 'Severity', 'User', 'Action', 'Resource', 'Result', 'Duration'])
-    expect(html).toContain('<td>Restore mine</td>')
+    expect(html).toContain('<td>Restore Completed</td>')
     expect(html).toContain('<td>125ms</td>')
     expect(html).not.toContain('<td>local</td>')
   })
