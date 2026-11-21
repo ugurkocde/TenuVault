@@ -13,6 +13,8 @@ export async function applicationObjectStep(folder: string, snapshot: Item, io: 
   if (folder === "OAuth2PermissionGrants") return consentStep(snapshot, io, readSource)
   restorableApp(snapshot, folder)
   const located = await io.locate(folder, mapped ?? snapshot.id as string)
+  const expectedAppId = appIdentity(snapshot.appId)
+  if (located.current && appIdentity(located.current.appId) !== expectedAppId) throw new RestoreSafetyError("The saved application app ID does not match the live target.")
   if (mapped && located.action === "create") throw new RestoreSafetyError("The mapped application is missing. Resolve its mapping before recreation.")
   const gallery = folder === "ServicePrincipals" && Array.isArray(snapshot.tags) && snapshot.tags.includes("WindowsAzureActiveDirectoryGalleryApplicationPrimaryV1")
   const action = located.action === "create" && gallery ? "gallery" : located.action
@@ -20,7 +22,7 @@ export async function applicationObjectStep(folder: string, snapshot: Item, io: 
   const unresolved = gallery && action === "gallery" ? "Gallery recreation requires verified applicationTemplateId provenance. This backup does not contain it." : undefined
   const desired = action === "recycle" ? { restored: true } : appPayload(folder, action, snapshot)
   const metadataNotices = action === "update" ? ["displayName", "description"].filter(field => snapshot[field] !== undefined && (typeof snapshot[field] !== "string" || !(snapshot[field] as string).trim())).map(field => `${field}: clearing a null or empty value is blocked. Only nonempty metadata changes are offered.`) : []
-  return { key: `${folder}:${snapshot.id}:${action}`, folder, sourceId: snapshot.id as string, ...(located.action === "create" ? {} : { targetId: mapped ?? snapshot.id as string }), operation: located.action === "create" ? "create" : "update", directory: { action, ...(metadataNotices.length ? { metadataNotices } : {}), ...(unresolved ? { unresolved } : {}) }, desired, properties: Object.keys(desired), preview: restoreFingerprint(located.current), requires: [] }
+  return { key: `${folder}:${snapshot.id}:${action}`, folder, sourceId: snapshot.id as string, ...(located.action === "create" ? {} : { targetId: mapped ?? snapshot.id as string }), operation: located.action === "create" ? "create" : "update", directory: { action, expectedAppId, ...(metadataNotices.length ? { metadataNotices } : {}), ...(unresolved ? { unresolved } : {}) }, desired, properties: Object.keys(desired), preview: restoreFingerprint(located.current), requires: [] }
 }
 async function appRef(id: unknown, io: IO, readSource: (folder: string, id: string) => Promise<Item>) {
   const saved = await readSource("ServicePrincipals", appIdentity(id))

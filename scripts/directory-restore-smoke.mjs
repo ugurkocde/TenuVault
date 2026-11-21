@@ -47,10 +47,22 @@ export async function checkDirectoryRestore({ check, evaluate, waitForCondition,
       await go("#/portal/backup?tab=schedule", "Automatic backups")
     }
   })
-  await check("application restore shows staged risks and blocks execution in both themes at 1024 pixels", async () => {
+  for (const blocked of [false, true]) await check(`application ${blocked ? "recycle refusal" : "metadata restore"} shows individual review in both themes at 1024 pixels`, async () => {
+    const resourceId = "00000000-0000-4000-8000-000000000010"
+    const row = { key: blocked ? "application-recycle" : "application-metadata", review: {
+      principal: null, resource: { id: resourceId, name: "Recovery app registration", type: "application" },
+      privilege: blocked ? "recycle" : "update", scope: `tenant/application/${resourceId}`, approvals: ["directory-item"],
+      notices: blocked ? ["The recycle bin preserves the object ID and app ID, but can recover credentials and previous access. It is offered for review only and remains blocked."] : [],
+      changes: blocked ? [{ property: "restored", before: false, after: true }] : [
+        { property: "displayName", before: "Renamed app registration", after: "Recovery app registration" },
+        { property: "description", before: "Changed description", after: "Saved application description" },
+      ],
+      ...(blocked ? { blocker: "Recycle-bin recovery is blocked until credentials, inherited access and every recovered relationship can be completely verified. Recreation cannot bypass the recycle bin." } : {}),
+      roleAssignable: false,
+    } }
     await evaluate(`(() => {
       window.__directoryFetch = window.fetch; window.__directoryRequests = [];
-      const backupId = 'application-restore', path = backupId + '/Applications/00000000-0000-4000-8000-000000000010.json';
+      const backupId = 'application-restore', path = backupId + '/Applications/${resourceId}.json';
       window.fetch = (input, init) => {
         const route = String(input);
         if (route === '/api/list-backups') return Promise.resolve(Response.json({ backups: [{ id: backupId, timestamp: '2026-11-18T00:00:00Z', status: 'Success', totalPolicies: 1, counts: { Applications: 1 }, scope: null, size: 100, duration: 1 }] }));
@@ -58,7 +70,7 @@ export async function checkDirectoryRestore({ check, evaluate, waitForCondition,
         if (route === '/api/restore-preview') return Promise.resolve(Response.json({ items: [{ path, name: 'Recovery app registration', blocker: 'Use the separate directory review.', replaceBlocker: 'Use the separate directory review.' }] }));
         if (route === '/api/restore-directory') {
           const body = JSON.parse(init.body); window.__directoryRequests.push(body);
-          return Promise.resolve(Response.json(body.action === 'preview' ? { runId: 'reviewed-directory-page', fingerprint: 'bound-directory-page', more: true, rows: [{ key: 'member', review: { principal: { id: 'p', name: 'Recovery member', type: 'user' }, resource: { id: 'g', name: 'Recovery app registration', type: 'group' }, privilege: 'member', scope: 'tenant/group/00000000-0000-4000-8000-000000000010', approvals: ['directory-item', 'security-response'], notices: ['The current state looks deliberate. This restore may undo a security response.'], changes: [{ property: 'present', before: false, after: true }], blocker: 'Phase 2 lifecycle evidence is required.', roleAssignable: false } }] } : { status: 'complete', failed: 0 }));
+          return Promise.resolve(Response.json(body.action === 'preview' ? { runId: 'reviewed-application-page', fingerprint: 'bound-application-page', more: false, rows: [${JSON.stringify(row)}] } : { status: 'complete', failed: 0 }));
         }
         return window.__directoryFetch(input, init);
       };
@@ -67,22 +79,35 @@ export async function checkDirectoryRestore({ check, evaluate, waitForCondition,
     try {
       await go("#/portal/tenants", "Tenant Management"); await go("#/portal/backup", "Backup & Restore")
       await click("Refresh")
-      assert(await waitForCondition(`[...document.querySelectorAll('button')].some(b => b.innerText.includes('Restore from this backup') && !b.disabled)`), "directory backup did not load")
+      assert(await waitForCondition(`[...document.querySelectorAll('button')].some(b => b.innerText.includes('Restore from this backup') && !b.disabled)`), "application backup did not load")
       await click("Restore from this backup")
-      assert(await waitForCondition(`!![...document.querySelectorAll('button[aria-expanded]')].find(b => b.textContent.trim().startsWith('Applications'))`), "directory picker did not load")
+      assert(await waitForCondition(`!![...document.querySelectorAll('button[aria-expanded]')].find(b => b.textContent.trim().startsWith('Applications'))`), "application picker did not load")
       await evaluate(`[...document.querySelectorAll('button[aria-expanded]')].find(b => b.textContent.trim().startsWith('Applications')).click()`)
       await click("Review directory restore")
       await click("Preview directory changes")
-      assert(await waitForCondition(`document.body.innerText.includes('Recovery member (user)')`), "resolved principal is missing")
-      assert(await evaluate(`[...document.querySelectorAll('button')].find(b => b.innerText.startsWith('Execute approved')).disabled`), "unapproved page can execute")
-      assert(await evaluate(`document.body.innerText.includes('breaks every client') && document.body.innerText.includes('SAML signing keys') && document.body.innerText.includes('Phase 2 lifecycle evidence')`), "staged application risks or blocker are missing")
+      assert(await waitForCondition(`document.body.innerText.includes('Recovery app registration (application)')`), "application resource and type are missing")
+      assert(await evaluate(`[...document.querySelectorAll('button')].find(b => b.innerText.startsWith('Execute approved')).disabled`), "unapproved application page can execute")
+      assert(await evaluate(`document.body.innerText.includes('breaks every client') && document.body.innerText.includes('SAML signing keys')`), "application recreation and credential risks are missing")
+      if (blocked) {
+        assert(await evaluate(`document.body.innerText.includes('Blocked: Recycle-bin recovery is blocked') && ![...document.querySelectorAll('label')].some(l => l.innerText.startsWith('Approve '))`), "blocked application row offers approval or has no refusal reason")
+      } else {
+        assert(await evaluate(`document.body.innerText.includes('displayName') && document.body.innerText.includes('description') && document.body.innerText.includes('Current: "Renamed app registration"') && document.body.innerText.includes('Restore: "Recovery app registration"') && document.body.innerText.includes('Current: "Changed description"') && document.body.innerText.includes('Restore: "Saved application description"')`), "reviewed application metadata differences are missing")
+      }
       await send("Emulation.setDeviceMetricsOverride", { width: 1024, height: 900, deviceScaleFactor: 1, mobile: false })
       for (const dark of [false, true]) {
         await evaluate(`document.documentElement.classList.toggle('dark', ${dark}); [...document.querySelectorAll('button')].find(b => b.innerText.startsWith('Execute approved')).scrollIntoView({ block: 'center' })`)
-        assert(await evaluate(`document.documentElement.scrollWidth <= window.innerWidth`), "directory review overflows at 1024 pixels")
-        await screenshot(`application-restore-${dark ? 'dark' : 'light'}-1024`)
+        assert(await evaluate(`document.documentElement.scrollWidth <= window.innerWidth`), "application review overflows at 1024 pixels")
+        await screenshot(`application-${blocked ? "recycle-blocked" : "metadata"}-${dark ? 'dark' : 'light'}-1024`)
       }
-      assert(await evaluate(`window.__directoryRequests.every(request => request.action === 'preview')`), "application review sent an unapproved write")
+      if (blocked) {
+        await evaluate(`[...document.querySelectorAll('button')].find(b => b.innerText.startsWith('Execute approved')).click()`)
+        assert(await evaluate(`window.__directoryRequests.length === 1 && window.__directoryRequests[0].action === 'preview'`), "blocked application review sent an execution request")
+      } else {
+        await evaluate(`[...document.querySelectorAll('label')].find(l => l.innerText.startsWith('Approve this individual change')).querySelector('input').click()`)
+        await click("Execute approved changes")
+        assert(await waitForCondition(`document.body.innerText.includes('Directory page completed')`), "application result did not appear")
+        assert(await evaluate(`window.__directoryRequests.length === 2 && window.__directoryRequests[1].action === 'restore' && window.__directoryRequests[1].runId === 'reviewed-application-page' && window.__directoryRequests[1].fingerprint === 'bound-application-page' && JSON.stringify(window.__directoryRequests[1].approvals) === JSON.stringify({ 'application-metadata': ['directory-item'] })`), "application execution was not bound to the reviewed run, fingerprint and individual approval")
+      }
     } finally {
       await evaluate(`window.fetch = window.__directoryFetch; delete window.__directoryFetch; delete window.__directoryRequests; document.documentElement.classList.remove('dark')`)
       await send("Emulation.clearDeviceMetricsOverride")

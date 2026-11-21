@@ -7,6 +7,8 @@ export type DirectoryAction = "create" | "update" | "recycle" | "invite" | "memb
 export interface DirectoryIntent {
   metadataNotices?: string[]
   action: DirectoryAction
+  /** Immutable registration identity captured from the selected backup. */
+  expectedAppId?: string
   clientAppId?: string
   resourceAppId?: string
   templateId?: string

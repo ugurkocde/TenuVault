@@ -53,7 +53,7 @@ function world() {
   const io = directory9bIO(token, actor, fetcher, () => [], () => settings.get(actor.tenantId).entra)
   return { io, writes, objects, grants, roles, fetcher, settings }
 }
-const step = (action: NonNullable<GuardedStep["directory"]>["action"], folder = "Applications"): GuardedStep => ({ folder, key: "test", sourceId: id(10), targetId: id(10), operation: "update", directory: { action }, desired: { displayName: "Saved" }, properties: ["displayName"], preview: restoreFingerprint(null), requires: [] })
+const step = (action: NonNullable<GuardedStep["directory"]>["action"], folder = "Applications"): GuardedStep => ({ folder, key: "test", sourceId: id(10), targetId: id(10), operation: "update", directory: { action, expectedAppId: String(app.appId) }, desired: { displayName: "Saved" }, properties: ["displayName"], preview: restoreFingerprint(null), requires: [] })
 it("admits only metadata and refuses every other transport with a valid run and all approvals", async () => {
   const admitted: Record<string, string[]> = { Applications: ["update"], ServicePrincipals: [], OAuth2PermissionGrants: [] }
   for (const folder of DIRECTORY_9B_FOLDERS) {
@@ -241,6 +241,7 @@ it("refuses null metadata clearing and a synchronized or protected enterprise ap
   for (const unsafe of [{ ...app, onPremisesSyncEnabled: true }, { ...app, appId: actor.clientId }]) {
     const env = world(), candidate = step("update", "ServicePrincipals")
     env.objects.set(`servicePrincipals/${app.id}`, unsafe)
+    candidate.directory!.expectedAppId = String(unsafe.appId)
     candidate.preview = restoreFingerprint(unsafe)
     await expect(env.io.write(candidate, candidate.desired, candidate.targetId, () => {})).rejects.toThrow()
     if ("onPremisesSyncEnabled" in unsafe) await expect(env.io.review(candidate)).rejects.toThrow("source directory")
@@ -587,4 +588,81 @@ it.each(portalVariants)("refuses %s through the owned portal route, dispatcher a
     expect(env.writes).toEqual([])
     expect(storage.mock.calls.every(([url]) => !String(url).includes("graph.microsoft.com"))).toBe(true)
   } finally { vi.unstubAllGlobals() }
+})
+
+
+async function ownedMetadataRoute(env: ReturnType<typeof persisted>, snapshot: Item, run: (call: (body: object) => ReturnType<typeof POST>) => Promise<void>) {
+  const path = `backup/Applications/${app.id}.json`
+  const storage = vi.fn(async (url: RequestInfo | URL) => {
+    const text = String(url)
+    if (text.includes("oauth2")) return Response.json({ access_token: "storage-test-token" })
+    if (text.endsWith("metadata.json")) return Response.json({ TenantId: actor.tenantId })
+    if (text.endsWith(".tenuvault-owner.json")) return new Response(null, { status: 404 })
+    if (text.endsWith(path)) return Response.json(snapshot)
+    throw new Error("Unexpected backup read")
+  })
+  const base = { tenantId: actor.tenantId, appId: actor.clientId, clientSecret: "placeholder", storageAccountName: "store", backupId: "backup", path, stage: "object" }
+  const call = (body: object) => POST(new Request("http://localhost/api/restore-directory", { method: "POST", body: JSON.stringify({ ...base, ...body }) }) as Parameters<typeof POST>[0])
+  try {
+    vi.stubGlobal("fetch", storage)
+    setDirectoryRestoreService(env.service())
+    await run(call)
+    expect(storage.mock.calls.some(([url]) => String(url).endsWith(path))).toBe(true)
+    expect(storage.mock.calls.every(([url]) => !String(url).includes("graph.microsoft.com"))).toBe(true)
+  } finally { vi.unstubAllGlobals() }
+}
+it.each(["misfiled", "saved-appId", "live-objectId", "preview-appId"])('rejects %s identity through the owned route before saving a preview', async variant => {
+  const env = persisted(), snapshot = { ...app, displayName: "Saved", ...(variant === "misfiled" ? { id: client.id } : {}), ...(variant === "saved-appId" ? { appId: client.appId } : {}) }
+  if (variant === "live-objectId") env.objects.get(`applications/${app.id}`)!.id = id(88)
+  if (variant === "preview-appId") {
+    const original = env.fetcher.getMockImplementation()!
+    let reads = 0
+    env.fetcher.mockImplementation((url, init) => {
+      if (new URL(String(url)).pathname === `/v1.0/applications/${app.id}` && (!init?.method || init.method === "GET") && ++reads === 3) env.objects.get(`applications/${app.id}`)!.appId = client.appId
+      return original(url, init)
+    })
+  }
+  await ownedMetadataRoute(env, snapshot, async call => {
+    const response = await call({ action: "preview" }), result = await response.json()
+    expect(response.status).toBe(409)
+    expect(result.error).toContain(variant === "misfiled" ? "filename does not match" : variant === "live-objectId" ? "target identity changed" : "app ID does not match")
+    expect([...env.data.keys()].some(key => key.startsWith("restore.directory."))).toBe(false)
+    expect(env.writes).toEqual([])
+  })
+})
+it.each(["before-execution", "final-read"])('refuses appId changes at %s through the owned route and saved-page restart', async timing => {
+  const env = persisted(), request = metadataRequest()
+  await ownedMetadataRoute(env, request.snapshot, async call => {
+    const response = await call({ action: "preview" }), page = await response.json()
+    expect(response.status).toBe(200)
+    expect(page.rows[0].review.blocker).toBeUndefined()
+    const raw = JSON.parse(env.data.get(`restore.directory.review.${actor.tenantId}.${page.runId}`)!)
+    expect(raw.run.entries[0].step.directory.expectedAppId).toBe(app.appId)
+    setDirectoryRestoreService(env.service())
+    expect(await (await call({ action: "resume", runId: page.runId })).json()).toEqual(page)
+    if (timing === "before-execution") env.objects.get(`applications/${app.id}`)!.appId = client.appId
+    else {
+      const original = env.fetcher.getMockImplementation()!
+      let reads = 0
+      env.fetcher.mockImplementation((url, init) => {
+        // Initial capture and reference review each read twice. Change at the writer's final read.
+        if (new URL(String(url)).pathname === `/v1.0/applications/${app.id}` && (!init?.method || init.method === "GET") && ++reads === 5) env.objects.get(`applications/${app.id}`)!.appId = client.appId
+        return original(url, init)
+      })
+    }
+    const approvals = { [page.rows[0].key]: ["directory-item"] }
+    const result = await (await call({ action: "restore", runId: page.runId, fingerprint: page.fingerprint, approvals })).json()
+    expect(result).toMatchObject({ status: "partial", failed: 1, outcomes: [{ state: timing === "final-read" ? "failed-before-send" : "blocked" }] })
+    if (timing === "before-execution") expect(result.outcomes[0].reason).toContain("app ID does not match")
+    expect(env.writes).toEqual([])
+  })
+})
+it("refuses a metadata write without the expected appId from its saved plan", async () => {
+  const env = world(), candidate = await applicationObjectStep("Applications", { ...app, displayName: "Saved" }, env.io, async () => app)
+  await env.io.preview(candidate)
+  delete candidate.directory!.expectedAppId
+  const before = vi.fn()
+  await expect(env.io.write(candidate, candidate.desired, candidate.targetId, before, runFor(candidate))).rejects.toThrow("reference could not be resolved")
+  expect(before).not.toHaveBeenCalled()
+  expect(env.writes).toEqual([])
 })

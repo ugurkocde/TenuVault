@@ -44,11 +44,12 @@ export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typ
       next = page["@odata.nextLink"] as string | undefined
     }
   }
-  const object = async (folder: string, id: string, deleted = false): Promise<Item | null> => {
+  const object = async (folder: string, id: string, deleted = false, expectedAppId?: string): Promise<Item | null> => {
     const item = await request(`${deleted ? "directory/deletedItems" : collection(folder)}/${appIdentity(id)}?$select=id,appId,displayName,description,notes${folder === "ServicePrincipals" ? ",appOwnerOrganizationId,servicePrincipalType,tags" : ""}`)
     if (!item) return null
     if (appIdentity(item.id) !== appIdentity(id)) throw new RestoreSafetyError("The application target identity changed.")
     restorableApp(item, folder, false, protectedAppIds())
+    if (expectedAppId && appIdentity(item.appId) !== appIdentity(expectedAppId)) throw new RestoreSafetyError("The saved application app ID does not match the live target.")
     if (folder !== "Applications" || deleted) return item
     // appOwnerOrganizationId is documented on servicePrincipal, not application.
     // Resolve the same appId and apply the established first-party check to its owner.
@@ -57,6 +58,7 @@ export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typ
     const live = await request(`applications/${appIdentity(id)}?$select=id,appId,displayName,description,notes`)
     if (!live || appIdentity(live.id) !== appIdentity(id) || appIdentity(live.appId) !== appIdentity(item.appId)) throw new RestoreSafetyError("The application target identity changed.")
     restorableApp(live, folder, false, protectedAppIds())
+    if (expectedAppId && appIdentity(live.appId) !== appIdentity(expectedAppId)) throw new RestoreSafetyError("The saved application app ID does not match the live target.")
     return { ...live, appOwnerOrganizationId: principal.appOwnerOrganizationId!, servicePrincipalType: principal.servicePrincipalType!, servicePrincipalId: principal.id! }
   }
   const resolveApp = async (appId: string): Promise<Item> => {
@@ -111,7 +113,7 @@ export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typ
       const live = await object(step.folder, targetId ?? step.sourceId)
       return live ? { ...live, restored: true } : object(step.folder, targetId ?? step.sourceId, true)
     }
-    return object(step.folder, targetId ?? step.targetId ?? step.sourceId)
+    return object(step.folder, targetId ?? step.targetId ?? step.sourceId, false, step.directory?.expectedAppId)
   }
   const review = async (step: GuardedStep, preimage?: Item | null) => {
     const action = step.directory!.action
@@ -168,6 +170,7 @@ export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typ
       // Build only the exact reviewed changes. No live field is copied into the PATCH.
       const payload = Object.fromEntries(Object.entries(body).filter(([key, value]) => ["displayName", "description"].includes(key) && typeof value === "string" && value.trim()))
       if (!Object.keys(payload).length || restoreFingerprint(payload) !== restoreFingerprint(body) || restoreFingerprint(body) !== restoreFingerprint(step.desired) || JSON.stringify(Object.keys(body).sort()) !== JSON.stringify([...step.properties].sort())) throw new RestoreSafetyError("Unsupported application write properties.")
+      appIdentity(step.directory!.expectedAppId)
       const current = await read(step, targetId)
       if (restoreFingerprint(current) !== step.preview) throw new RestoreSafetyError("The tenant changed. Preview this application again.")
       if (Object.entries(payload).some(([key, value]) => JSON.stringify(current?.[key]) === JSON.stringify(value))) throw new RestoreSafetyError("Send only the changed metadata keys shown in review.")

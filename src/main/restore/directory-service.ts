@@ -9,6 +9,7 @@ import { canBackUp } from "../../shared/services/modules"
 import { grantedPermissions } from "../../shared/services/token"
 import { referenceMatches, REFERENCE_SCAN_EXCLUDED } from "./reference-scanner"
 import { isGuid } from "../../shared/security"
+import { directoryObjectId } from "../../shared/intune/entra-directory"
 import { RestoreSafetyError } from "../../shared/intune/restore-guards"
 import { relationPath, LARGE_SHARD_ITEMS } from "../../shared/large-backup"
 import type { PartitionedRestoreStore } from "../storage/directory-restore-store"
@@ -152,6 +153,8 @@ export class DirectoryRestoreService {
     if (request.origin !== "restore") fail("Application access requires an owned same-tenant backup. Imported grants and cross-tenant restores are refused.")
     requireApplicationRestoreAccess(this.settings?.get(tenant).entra)
     const folder = request.path.split("/")[1]!, snapshot = request.snapshot
+    const sourceId = request.path.split("/")[2]?.replace(/\.json$/, "")
+    if (!directoryObjectId(folder, sourceId) || !directoryObjectId(folder, snapshot.id) || (folder === "OAuth2PermissionGrants" ? sourceId !== snapshot.id : sourceId!.toLowerCase() !== String(snapshot.id).toLowerCase())) fail("The selected backup filename does not match the saved application object ID.")
     const { actor, applicationIO: io } = await this.context(tenant)
     const readSource = async (sourceFolder: string, id: string): Promise<Item> => {
       if (!["ServicePrincipals", "Applications"].includes(sourceFolder) || !isGuid(id)) fail("Invalid saved app reference.")
@@ -196,6 +199,8 @@ export class DirectoryRestoreService {
       let review: DirectoryReview
       try { await io.hydrate(step); review = await io.preview(step) }
       catch (error) {
+        // An admitted update must resolve to the saved identity before any preview is persisted.
+        if (!applicationAdmission(step)) throw error
         review = applicationReview(step, null, { id: snapshot.id!, displayName: snapshot.displayName ?? "Unresolved application" }, null, actor)
         review.blocker = error instanceof RestoreSafetyError ? error.message : "A reference could not be resolved. This item is blocked."
       }
