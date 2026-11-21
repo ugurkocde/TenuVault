@@ -513,11 +513,13 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
   }
 
   const progressId = useRef("")
+  const auditJob = useRef<string | undefined>(undefined)
   const run = async (paths: string[], retry = false) => {
     if (!backupId || !paths.length) return
     let dependencyMappings
     try { dependencyMappings = copying ? reviewedDependencyMappings(mappingJson, mappingsConfirmed, copyTargets.length) : undefined }
     catch (error) { setReviewError(error instanceof Error ? error.message : String(error)); setStep("review"); return }
+    if (!retry) auditJob.current = undefined
     const previous = retry ? result?.results ?? [] : []
     const batches = retry ? retryBatches(previous) : [{ paths }]
     if (!batches.length) return
@@ -548,7 +550,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
           : []
         if (copying && !targets.length) throw new Error("The original target tenant is no longer connected.")
         attempted.push(batch)
-        const data = await post<{ success: boolean; message: string; details?: { restoredCount: number; unchangedCount?: number; results: Outcome[] } }>("/api/restore-backup", {
+        const data = await post<{ success: boolean; jobId?: string; message: string; details?: { restoredCount: number; unchangedCount?: number; results: Outcome[] } }>("/api/restore-backup", {
           ...tenant.credentials,
           storageAccountName: tenant.storageAccountName,
           backupId,
@@ -560,10 +562,12 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
           mode: copying ? "copy" : mode,
           assignments: copying ? false : assignments,
           progressId: id,
+          retryOf: retry ? auditJob.current : undefined,
           ...(copying
             ? { targetTenants: targets.map((target) => ({ tenantId: target.tenantId, appId: target.appId })) }
             : {}),
         })
+        auditJob.current ??= data.jobId
         completed.push(...(data.details?.results ?? []))
       }
       const outcomes = mergeOutcomes(previous, completed)

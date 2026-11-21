@@ -1,3 +1,5 @@
+import { auditUserFromToken } from "../api/audit-sink"
+import type { AuditUser } from "~/lib/audit/types"
 export { assertStorageAccountName } from "../../shared/storage-account"
 export { ProtectedBlobError, isImmutabilityRefusal } from "./request"
 import { createHash, randomUUID } from "node:crypto"
@@ -68,6 +70,8 @@ export type BackupAuthMode = "delegated" | "app-only"
 /** The tokens one backup run uses for Microsoft Graph and Azure Storage, chosen once when it starts. */
 export interface RunTokens {
   mode: BackupAuthMode
+  registrationId?: string
+  auditUser?: AuditUser
   graph: () => Promise<string>
   storage: () => Promise<string>
   /** Type folders these tokens have no permission for by design; the run leaves them out and records why. */
@@ -106,7 +110,7 @@ export interface BackupEngineDeps {
   /** Items read at the same time. Graph throttling (429) pauses every reader. */
   concurrency?: number
   /** Called once when a job has ended, with the request that started it. */
-  onFinished?: (job: BackupJob, request: BackupRequest) => void
+  onFinished?: (job: BackupJob, request: BackupRequest, tokens?: RunTokens) => void
 }
 
 /** A Graph beta path, or an absolute nextLink that must be on the Graph origin. */
@@ -394,7 +398,7 @@ export class BackupEngine {
         if (this.running.get(tenantKey)?.job === job) this.running.delete(tenantKey)
         this.executions.delete(job.id)
         this.pending--
-        this.finished(job, request)
+        this.finished(job, request, tokens)
       })
       .then(() => job)
     // The next queued backup starts only once this one has fully settled, failed manifest
@@ -416,9 +420,9 @@ export class BackupEngine {
   }
 
   /** A failing listener must not change how the job ended. */
-  private finished(job: BackupJob, request: BackupRequest): void {
+  private finished(job: BackupJob, request: BackupRequest, tokens?: RunTokens): void {
     try {
-      this.deps.onFinished?.(job, request)
+      this.deps.onFinished?.(job, request, tokens)
     } catch (error) {
       console.warn("[backup] Could not record the end of a backup:", error)
     }
@@ -434,7 +438,11 @@ export class BackupEngine {
     this.write(job, `Backup folder: ${backupFolder}`)
     if (tokens.mode === "app-only") this.write(job, "Reading as the tenant's Backup Reader (app-only, read-only).")
 
-    const graphToken = () => tokenOrStop(tokens.graph, outcome)
+    const graphToken = async () => {
+      const token = await tokenOrStop(tokens.graph, outcome)
+      tokens.auditUser ??= auditUserFromToken(token, request.tenantId)
+      return token
+    }
     const storageToken = local ? async () => "" : () => tokenOrStop(tokens.storage, outcome)
 
     const concurrency = this.deps.concurrency ?? CONCURRENCY

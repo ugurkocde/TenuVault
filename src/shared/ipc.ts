@@ -20,6 +20,7 @@ export interface BackupReaderTestResult {
   graph: boolean
   /** The reader could list the backup container; null when backups stay on this device. */
   storage: boolean | null
+  audit?: boolean | null
   /** Why a part failed, in words the card can show. */
   message?: string
 }
@@ -59,6 +60,7 @@ export interface BackupReaderState {
   /** The tenant's plan includes the Backup Reader. */
   available: boolean
   reader: BackupReaderStatus | null
+  auditPending?: number | null
   /** The tenant's Azure backup storage account; omitted when backups stay on this device. */
   storageAccountName?: string
   /** After a verification: the reader works for Microsoft Graph but cannot write backups to the tenant's Azure storage. */

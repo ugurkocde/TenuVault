@@ -9,6 +9,8 @@ export interface RestoreApproval {
   requesterName?: string
   continuationPending?: boolean
   origin: "restore"
+  operationId?: string
+  auditApprover?: import("../../portal/lib/audit/types").AuditApproval
   backupPath: string
   snapshotId?: string
   repairScope?: string

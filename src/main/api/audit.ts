@@ -7,7 +7,6 @@ import { DELEGATED_CLIENT_SECRET, INTERNAL_API_ORIGIN, localStorageAccountName }
 
 /** Which API calls are audited, and how they are described. */
 export const API_AUDIT_MAP: Record<string, { eventType: AuditEventType; action: string; resourceType: string }> = {
-  "POST:/api/backup/start": { eventType: AuditEventType.BACKUP_STARTED, action: "Start backup", resourceType: "backup" },
   "POST:/api/download-backup": { eventType: AuditEventType.BACKUP_DOWNLOADED, action: "Download backup", resourceType: "backup" },
 }
 
@@ -49,18 +48,18 @@ export function createAuditRecorder(
     if (path.startsWith("/api/audit")) return
     if (path === "/api/frameworks") {
       void recordFrameworkCreation(requestBody, response.clone(), dispatch, accountFor)
-        .catch((error: unknown) => console.error("[audit] Failed to record baseline creation:", error))
+        .catch(() => console.error("[audit] Failed to record baseline creation"))
       return
     }
     if (path === "/api/oib") {
       void recordOib(requestBody, response.clone(), dispatch, accountFor, onTrialUsage)
-        .catch((error: unknown) => console.error("[audit] Failed to record OpenIntuneBaseline change:", error))
+        .catch(() => console.error("[audit] Failed to record OpenIntuneBaseline change"))
       return
     }
 
     if (["/api/restore-backup", "/api/revert-policy"].includes(path) && request.method === "POST") {
-      void recordRestore(requestBody, response.clone(), dispatch, accountFor, path === "/api/revert-policy", onRestore, onTrialUsage)
-        .catch((error: unknown) => console.error("[audit] Failed to record restore:", error))
+      void observeRestoreResponse(requestBody, response.clone(), path === "/api/revert-policy", onRestore, onTrialUsage)
+        .catch(() => console.error("[audit] Failed to process restore notification"))
       return
     }
 
@@ -86,7 +85,7 @@ export function createAuditRecorder(
       resource: {
         type: config.resourceType as CreateAuditLogInput["resource"]["type"],
         id: body.id ?? body.scheduleId ?? body.policyId ?? body.tenantId,
-        name: body.name ?? body.tenantName ?? body.policyName ?? "Unknown",
+        name: config.action,
       },
       result: ok ? AuditResult.SUCCESS : AuditResult.FAILURE,
       severity: ok ? AuditSeverity.INFO : AuditSeverity.ERROR,
@@ -114,12 +113,12 @@ export function createAuditRecorder(
       // ApiHost.dispatch resolves with error responses instead of rejecting, so a failed
       // audit write must be checked here or the entry is dropped with no trace.
       if (!logged.ok) console.error(`[audit] Failed to write audit entry (${logged.status})`)
-    }).catch((error: unknown) => console.error("[audit] Failed to write audit entry:", error))
+    }).catch(() => console.error("[audit] Failed to write audit entry"))
   }
 }
 
-/** Restore runs synchronously and can partially fail despite returning HTTP 200. */
-async function recordRestore(bodyText: string, response: Response, dispatch: (request: Request) => Promise<Response>, accountFor: (id: string) => SignedInAccount | null, policyCopy = false, onRestore?: (notice: RestoreNotice) => void, onTrialUsage?: (tenant: string, feature: Feature) => void) {
+/** Preserve restore notifications and trial usage while the route owns audit recording. */
+async function observeRestoreResponse(bodyText: string, response: Response, policyCopy = false, onRestore?: (notice: RestoreNotice) => void, onTrialUsage?: (tenant: string, feature: Feature) => void) {
   const body = JSON.parse(bodyText) as AuditBody & { backupId?: string; originalName?: string; action?: string; mode?: string; approvalAction?: string; approvalId?: string; restoreType?: string; selectedPolicies?: unknown[]; assignments?: boolean }
   if (typeof body?.tenantId !== "string" || !body.tenantId || !body.appId || !body.clientSecret || !body.storageAccountName) return
   if (["detect", "list", "dismiss"].includes(body.approvalAction ?? "")) return
@@ -159,25 +158,6 @@ async function recordRestore(bodyText: string, response: Response, dispatch: (re
       if (feature) onTrialUsage(body.tenantId, feature)
     } catch { /* A tally never changes the action's outcome. */ }
   }
-  const account = accountFor(body.tenantId)
-  const logEntry: CreateAuditLogInput = {
-    eventType: approvalAction === "submit" || approvalAction === "withdraw" ? AuditEventType.CONFIG_UPDATED : policyCopy ? (body.action === "revert" ? AuditEventType.POLICY_REVERTED : AuditEventType.POLICY_RESTORED) : ok || partial ? AuditEventType.RESTORE_COMPLETED : AuditEventType.RESTORE_FAILED,
-    action: approvalAction === "submit" ? "Restore submitted for approval" : approvalAction === "withdraw" ? "Approval request withdrawn" : approvalAction === "complete" ? "Complete approved restore item" : policyCopy
-      ? body.action === "revert" ? "Revert policy to the backed-up version in place" : "Restore policy as an unassigned copy"
-      : body.mode === "replace" ? "Restore backup in place" : "Restore backup as policy copies",
-    resource: { type: policyCopy ? "policy" : "backup", id: data.policyId ?? body.approvalId ?? data.jobId ?? body.policyId ?? body.backupId ?? body.tenantId, name: body.originalName ?? body.backupId ?? "Restore backup" },
-    result: ok ? AuditResult.SUCCESS : partial ? AuditResult.PARTIAL : AuditResult.FAILURE,
-    severity: ok ? AuditSeverity.INFO : partial ? AuditSeverity.WARNING : AuditSeverity.ERROR,
-    details: { source: "desktop", statusCode: response.status, status: data.status, backupId: body.backupId, ...data.details,
-      error: data.error ? { code: "RESTORE_FAILED", message: data.error } : undefined },
-  }
-  const logged = await dispatch(new Request(`${INTERNAL_API_ORIGIN}/api/audit/log`, {
-    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
-      tenantId: body.tenantId, appId: body.appId, clientSecret: body.clientSecret, storageAccountName: body.storageAccountName,
-      user: { id: account?.username ?? "unknown", email: account?.username ?? "unknown", name: account?.name ?? "Unknown user" }, logEntry,
-    }),
-  }))
-  if (!logged.ok) throw new Error(`Audit write failed (${logged.status})`)
 }
 
 async function recordFrameworkCreation(bodyText: string, response: Response, dispatch: (request: Request) => Promise<Response>, accountFor: (id: string) => SignedInAccount | null) {
@@ -190,9 +170,9 @@ async function recordFrameworkCreation(bodyText: string, response: Response, dis
     const ok = response.ok && !!result.id && !result.error
     const logEntry: CreateAuditLogInput = {
       eventType: AuditEventType.POLICY_CREATED, action: "Create unassigned baseline policy",
-      resource: { type: "policy", id: result.id ?? body.runId ?? body.tenantId, name: result.name },
+      resource: { type: "policy", id: result.id ?? body.runId ?? body.tenantId, name: "Baseline policy" },
       result: ok ? AuditResult.SUCCESS : AuditResult.FAILURE, severity: ok ? AuditSeverity.INFO : AuditSeverity.ERROR,
-      details: { source: "desktop-frameworks", runId: body.runId, assigned: false, error: result.error ? { code: "BASELINE_CREATION_FAILED", message: result.error } : undefined },
+      details: { source: "desktop-frameworks", runId: body.runId, assigned: false, error: result.error ? { code: "BASELINE_CREATION_FAILED", message: "Operation failed" } : undefined },
     }
     const logged = await dispatch(new Request(`${INTERNAL_API_ORIGIN}/api/audit/log`, {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
@@ -235,7 +215,7 @@ async function recordOib(
   const logEntry: CreateAuditLogInput = {
     eventType: undo ? AuditEventType.POLICY_REVERTED : body.action === "oib-fix" ? AuditEventType.POLICY_RESTORED : AuditEventType.POLICY_CREATED,
     action,
-    resource: { type: "policy", id: data.runId ?? body.runId ?? body.tenantId, name: data.reference ?? "OpenIntuneBaseline" },
+    resource: { type: "policy", id: data.runId ?? body.runId ?? body.tenantId, name: "OpenIntuneBaseline" },
     result: ok ? AuditResult.SUCCESS : response.ok ? AuditResult.PARTIAL : AuditResult.FAILURE,
     severity: ok ? AuditSeverity.INFO : response.ok ? AuditSeverity.WARNING : AuditSeverity.ERROR,
     details: {
@@ -243,7 +223,7 @@ async function recordOib(
       ...(undo
         ? { undone: (data.results ?? []).filter((r) => r.done).length, notUndone: failed }
         : { created: data.created?.length ?? 0, updated: data.updated?.length ?? 0, skipped: data.skipped?.length ?? 0, failed, backupFolder: data.backupFolder, assignedToPilotGroup: Boolean(data.pilotGroupId) }),
-      error: data.error ? { code: "OIB_FAILED", message: data.error } : undefined,
+      error: data.error ? { code: "OIB_FAILED", message: "Operation failed" } : undefined,
     },
   }
   const logged = await dispatch(new Request(`${INTERNAL_API_ORIGIN}/api/audit/log`, {

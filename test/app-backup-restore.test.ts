@@ -196,14 +196,18 @@ describe("cross-tenant restore engine", () => {
     expect(d.fetcher).not.toHaveBeenCalled()
   })
   it("uploads a fresh encrypted installer, verifies commit, publishes unassigned and retries without duplicating", async () => {
-    const f = await fixture(), d = destination(), opts = options(d)
+    const f = await fixture(), d = destination(), audit = vi.fn(), opts = { ...options(d), audit }
     const result = await restoreCapturedApp(f.store, f.source, snapshot, target, "Restored", opts)
     expect(result).toMatchObject({ tenantId: target, sourceId: f.source.id, contentVersion: "1" })
     const commit = d.calls.find(([, p]) => p.endsWith("/commit"))![2]!.fileEncryptionInfo as ContentEncryption
     const written: Buffer[] = []
     await ingestContent(stream(d.wire), commit, f.plain.length, async b => { written.push(Buffer.from(b)) })
     expect(Buffer.concat(written)).toEqual(f.plain)
+    const operationId = audit.mock.lastCall?.[0]?.operationId
+    expect(operationId).toBeTruthy()
+    expect(audit).toHaveBeenLastCalledWith(expect.objectContaining({ operationId, appId: result.appId, created: true, metadata: true, published: true }))
     expect(await restoreCapturedApp(f.store, f.source, snapshot, target, "Restored", opts)).toEqual(result)
+    expect(audit).toHaveBeenLastCalledWith(expect.objectContaining({ operationId, appId: result.appId, created: false, unchanged: true, published: true }))
     expect(d.calls.filter(([m, p]) => m === "POST" && p.endsWith("/mobileApps"))).toHaveLength(1)
     expect(d.calls.some(([m, p]) => m !== "GET" && p.endsWith("/assignments"))).toBe(false)
     expect(opts.progress).toHaveBeenLastCalledWith(expect.objectContaining({ phase: "completed" }))

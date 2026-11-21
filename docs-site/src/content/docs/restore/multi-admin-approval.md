@@ -140,3 +140,7 @@ An access policy can exclude apps from approval. Microsoft applies those exclusi
 * [CIS Benchmarks](/baselines/cis-benchmarks/)
 * [App registration and delegated permissions](/security/permissions/)
 * [Troubleshooting](/troubleshooting/#restore)
+
+### Audit history for approval stages
+
+Submission and completion have separate audit events linked by the original operation ID. The request ID stays visible when Microsoft does not return an approver. If Graph provides the approver identity, the completion event records it. Audit shows whether Intune recorded a justification. The justification text stays in Intune.

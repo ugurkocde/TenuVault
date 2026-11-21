@@ -1,3 +1,8 @@
+import { recordBackupAudit } from "./backup/audit"
+import { AuditSink, setMainAuditSink } from "./api/audit-sink"
+import { AuditStorageService } from "../portal/lib/audit/storage"
+import { type AuditJobItem } from "../portal/lib/audit/types"
+import { beginRestoreAudit } from "../portal/lib/audit/restore"
 import { requestWindowsContent } from "./app-backup/windows-helper"
 import { requireCaptureEnabled } from "./app-backup/capture-policy"
 import { checkCaptureMetadata } from "./app-backup/capture-preflight"
@@ -38,7 +43,7 @@ import { createChromiumFetch } from "./chromium-fetch"
 import { ProxyAuth, ProxyPrompts, type ProxyAuthAttempt, type ProxyChallenge } from "./proxy-auth"
 import { basename, dirname, join } from "node:path"
 import type { ApiRequest, AppPreferences, ScheduleInput } from "../shared/ipc"
-import { DELEGATED_CLIENT_SECRET, INTERNAL_API_ORIGIN, RESOURCE_SCOPES } from "../shared/constants"
+import { INTERNAL_API_ORIGIN, RESOURCE_SCOPES, localStorageAccountName } from "../shared/constants"
 import { createAuditRecorder } from "./api/audit"
 import { setAuditOutboxStore } from "../portal/lib/audit/outbox"
 import { backupRoutes, surfaceTokenErrors } from "./api/desktop-routes"
@@ -71,7 +76,7 @@ import { SETUP_SCRIPT_FILE_NAME, setupIdsFromClipboard } from "../shared/app-reg
 import { licenseKeyFromClipboard } from "./license/clipboard-key"
 import { assertStorageAccountName } from "../shared/storage-account"
 import { hostname } from "node:os"
-import { handleLocalBlobRequest, isLocalAccount, localRoutesRunning } from "./storage/blob-emulator"
+import { handleLocalBlobRequest, isLocalAccount, localRoutesRunning, withRouteTenant } from "./storage/blob-emulator"
 import { LocalBlobStore } from "./storage/local-blob-store"
 import { setRestoreApprovalStore } from "./storage/restore-approvals"
 import { setRestoreJournalStore, setRestoreJournalAuthorization } from "./storage/restore-journal"
@@ -458,7 +463,14 @@ async function bootstrap(): Promise<void> {
       }
     },
     retentionDays: backupAccess.retentionDays,
-    onFinished: (job, request) => {
+    onFinished: (job, request, tokens) => {
+      if (tokens) {
+        const account = accounts.get(job.tenantId)
+        const actor = { id: account?.username ?? "unknown", email: account?.username ?? "", name: account?.name ?? account?.username ?? "Unknown user" }
+        void recordBackupAudit(auditSink, job, request, tokens, actor, app.getVersion())
+          .catch(() => console.warn("[audit] Backup audit delivery requires attention"))
+      }
+      if (job.authMode === "app-only") backupReader.recordRun(job.tenantId, job.status)
       failedAttempts.finished(job, request)
       // Manual backup outcomes notify here; scheduled and tray outcomes notify from the
       // scheduler path, which already suppresses repeated unreachable failures.
@@ -696,6 +708,42 @@ async function bootstrap(): Promise<void> {
     }
   }
 
+  const auditSink = new AuditSink({
+    store: canEncrypt() ? appStore : undefined,
+    bind: (tenantId) => {
+      const profile = isGuid(tenantId) ? tenantProfile(tenantId) : null
+      if (!profile) return undefined
+      const account = accounts.get(tenantId)
+      return { tenantId, storageAccountName: profile.storageAccountName,
+        user: { id: account?.username ?? "unknown", email: account?.username ?? "", name: account?.name ?? account?.username ?? "Unknown user" } }
+    },
+    transport: async (storageAccountName, entry) => {
+      assertStorageAccountName(storageAccountName)
+      const tenantId = entry.user.tenantId
+      if (!tenantId || !isGuid(tenantId)) throw new Error("Audit tenant is unavailable")
+      const fetchLocal: typeof fetch = (input, init) => withRouteTenant(tenantId, () => handleLocalBlobRequest(getLocalStore(), new Request(input, init)), storageAccountName)
+      if (isLocalAccount(storageAccountName)) {
+        if (storageAccountName !== localStorageAccountName(tenantId)) throw new Error("Audit storage belongs to another tenant")
+        return new AuditStorageService({ storageAccountName, accessToken: "", fetch: fetchLocal })
+      }
+      const profile = tenantProfile(tenantId)
+      const clientId = profile?.clientId
+      if (!clientId) throw new Error("Audit tenant is unavailable")
+      if (entry.job?.producer === "backup-reader") {
+        const tokens = backupReader.tokens({ tenantId, clientId, storageAccountName, trigger: "scheduled" })
+        if (!tokens || tokens.registrationId !== entry.job.registrationId) throw new Error("The original Backup Reader is unavailable")
+        return new AuditStorageService({ storageAccountName, accessToken: await tokens.storage(), provisionContainer: false, fetch: bridgedFetch })
+      }
+      const accessToken = (await auth.getAccessToken(tenantId, clientId, RESOURCE_SCOPES.storage)).accessToken
+      return new AuditStorageService({ storageAccountName, accessToken, fetch: bridgedFetch })
+    },
+  })
+  setMainAuditSink(auditSink)
+  auditSink.recover()
+  const retryAudit = () => void auditSink.retry().catch(() => console.warn("[audit] Queued audit events could not be retried"))
+  retryAudit()
+  setInterval(retryAudit, 60_000)
+
   // Tenants connected by an older version, or whose license check never completed, are
   // checked once at start when their sign-in is available. The others are checked at
   // their next sign-in; until then the overview says the license is checked at first use.
@@ -740,7 +788,7 @@ async function bootstrap(): Promise<void> {
   // Joined requests share one notification, one audit entry and the trigger that started the job.
   // notifyKey is the delivery identity of the shared outcome, chosen by the caller that started the job,
   // so a tray or scheduled request that joined it sends to the same event instead of a second one.
-  const unattendedBackupTriggers = new WeakMap<BackupJob, { trigger: "scheduled" | "tray"; notified: boolean; audited: boolean; notifyKey?: string }>()
+  const unattendedBackupTriggers = new WeakMap<BackupJob, { trigger: "scheduled" | "tray"; notified: boolean; notifyKey?: string }>()
 
   // Best-effort notification event for one finished backup job, with fixed summary text
   // only. Resolves true when a local channel intent was queued for this outcome. A scheduled
@@ -814,13 +862,13 @@ async function bootstrap(): Promise<void> {
     if (trigger === "scheduled" && slot && !afterFailure && Date.now() - Date.parse(slot) > LATE_SLOT_MS) {
       void emitLateBackup(featureDeps, tenantId, slot).catch(() => undefined)
     }
-    let origin: { trigger: "scheduled" | "tray"; notified: boolean; audited: boolean; notifyKey?: string } = { trigger, notified: false, audited: false }
+    let origin: { trigger: "scheduled" | "tray"; notified: boolean; notifyKey?: string } = { trigger, notified: false }
     // A job that was already running was started by someone else: a manual backup notifies with its
     // folder, an unattended one through the shared origin. Only a job this scheduled call started
     // is keyed by its slot, so the retries of one failing slot send one alert.
     const liveBefore = new Set(engine.liveRuns(tenantId))
     const job = await runUnattended(engine, { tenantId, clientId: profile.clientId, storageAccountName: profile.storageAccountName, scope: scopes.get(tenantId).scope, trigger, slot, scheduleFrequency: scheduler.list().find(s => s.tenantId === tenantId)?.frequency }, (started) => {
-      origin = unattendedBackupTriggers.get(started) ?? { trigger, notified: false, audited: false }
+      origin = unattendedBackupTriggers.get(started) ?? { trigger, notified: false }
       unattendedBackupTriggers.set(started, origin)
       return waitForJob(started)
     })
@@ -831,43 +879,8 @@ async function bootstrap(): Promise<void> {
     const cancelled = result.status === "Cancelled"
     origin.notifyKey ??= trigger === "scheduled" && slot && !liveBefore.has(job.id) ? `slot:${slot}` : job.backupFolder ?? `job:${job.id}`
     const localNotified = cancelled ? false : await notifyBackupOutcome(job, trigger, origin.notifyKey)
-    const account = accounts.get(tenantId)
-    // Record scheduled backups in the tenant's audit log, attributed to the signed-in admin. A Backup
-    // Reader run skips it: the audit route signs in as the admin, which is exactly what the reader
-    // replaces, so it would ask for a sign-in after a backup that worked. Its metadata.json records
-    // the run (Trigger, AuthMode, RunId) in the backup itself.
-    // Callers that joined one shared job share this entry: only the first to claim it writes it,
-    // claimed synchronously before dispatching, so one backup never produces duplicate entries.
-    if (job.authMode !== "app-only" && !origin.audited) {
-      origin.audited = true
-      void host
-      .dispatch(
-        new Request(`${INTERNAL_API_ORIGIN}/api/audit/log`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            tenantId,
-            appId: profile.clientId,
-            clientSecret: DELEGATED_CLIENT_SECRET,
-            storageAccountName: profile.storageAccountName,
-            user: { id: account?.username ?? "unknown", email: account?.username ?? "unknown", name: account?.name ?? "Scheduled backup" },
-            logEntry: {
-              eventType: cancelled ? "BACKUP_CANCELLED" : ok ? "BACKUP_COMPLETED" : "BACKUP_FAILED",
-              action: "Scheduled backup",
-              resource: { type: "backup", id: job.backupFolder ?? job.id, name: profile.name },
-              result: cancelled ? "PARTIAL" : ok ? "SUCCESS" : "FAILURE",
-              severity: ok || cancelled ? "INFO" : "ERROR",
-              details: { source: "schedule", message: job.exception ?? job.progressMessage },
-            },
-          }),
-        }),
-      )
-      .then((logged) => { if (!logged.ok) console.warn(`[audit] Scheduled backup audit write failed (${logged.status})`) })
-      .catch((error: unknown) => console.warn("[audit] Scheduled backup audit write failed:", error instanceof Error ? error.message : String(error)))
-    }
     // A change report of this backup, when the tenant asked for one; it needs the admin's sign-in.
     if (ok && trigger === "scheduled") void afterScheduledBackup(featureDeps, tenantId, job.backupFolder ?? null).catch(() => undefined)
-    if (job.authMode === "app-only") backupReader.recordRun(tenantId, result.status)
     // Also after runs with the admin's sign-in: an expired reader no longer runs, but still needs renewing.
     void remindBackupReaderRenewal(tenantId, profile.name).catch(() => undefined)
     if (!ok && !cancelled && !origin.notified) {
@@ -969,6 +982,9 @@ async function bootstrap(): Promise<void> {
   // The Backup Reader is set up per tenant in Settings > Background runner. Scheduled backups only run in the
   // installed Windows and macOS apps, so it is not offered elsewhere.
   const readerSupported = process.platform === "win32" || process.platform === "darwin"
+  const pendingReaderAudit = (tenantId: string) => {
+    try { return auditSink.pending(tenantId, "backup-reader") } catch { return null }
+  }
   const readerState = (tenantId: string) => {
     const plan = license.plan(tenantId)
     const profile = tenantProfile(tenantId)
@@ -979,6 +995,7 @@ async function bootstrap(): Promise<void> {
     return {
       supported: readerSupported,
       available: !!plan && allows(plan, "backupReader"),
+      auditPending: pendingReaderAudit(tenantId),
       reader: reader && { ...reader, excludedTypes: reader.excludedTypes.filter((folder) => !off.has(folder)) },
       ...(azureStorage ? { storageAccountName: azureStorage } : {}),
     }
@@ -1047,8 +1064,17 @@ async function bootstrap(): Promise<void> {
         }
       }
     }
+    let audit: boolean | null = null
+    if (azure) {
+      try {
+        assertStorageAccountName(profile.storageAccountName)
+        const service = new AuditStorageService({ storageAccountName: profile.storageAccountName, accessToken: await tokens.storage(), provisionContainer: false, fetch: bridgedFetch })
+        await service.testProducerAccess(tenantId)
+        audit = true
+      } catch { audit = false }
+    }
     const message = [graph ? undefined : graphMessage, warning].filter(Boolean).join(" ") || undefined
-    backupReader.recordTest(tenantId, { graph, storage, ...(message ? { message } : {}) })
+    backupReader.recordTest(tenantId, { graph, storage, audit, ...(message ? { message } : {}) })
     return message ? { warning: message } : {}
   }
   const requireReaderPlan = async (tenantId: string) => {
@@ -1485,10 +1511,37 @@ async function bootstrap(): Promise<void> {
       pushLicense()
     },
     loadRestoreSettings: async (tenant, appId) => readRestoreSnapshot(tenant, appId, (await auth.getAccessToken(tenant, signedInClient(tenant), RESOURCE_SCOPES.graph)).accessToken, bridgedFetch, "current-settings"),
-    restore: (store, source, snapshot, target, name, signal, progress) => disclaimer.run([target], () => restoreCapturedApp(store, source, snapshot, target, name, {
-      graph: restoreGraph(async () => (await auth.getAccessToken(target, signedInClient(target), RESOURCE_SCOPES.graph)).accessToken, bridgedFetch, signal),
-      fetch: bridgedFetch, signal, progress,
-    })),
+    restore: (store, source, snapshot, target, name, signal, progress) => disclaimer.run([target], async () => {
+      const getGraphToken = async () => (await auth.getAccessToken(target, signedInClient(target), RESOURCE_SCOPES.graph)).accessToken
+      const graphToken = await getGraphToken()
+      const original: AuditJobItem = { folder: "Apps", sourceId: source.receipt.appId, outcome: "unattempted",
+        planned: [{ operation: "create", field: "metadata" }, { operation: "publish", field: "content" }] }
+      const audit = beginRestoreAudit({ destination: target, graphToken, sourceBackupId: source.id,
+        operationId: randomUUID(), action: "Restore app backup", items: [original] })
+      audit?.started(0)
+      let observed = original
+      try {
+        return await restoreCapturedApp(store, source, snapshot, target, name, {
+          graph: restoreGraph(getGraphToken, bridgedFetch, signal), fetch: bridgedFetch, signal, progress,
+          audit: ({ operationId, appId, created, metadata, publishing, published, unchanged }) => {
+            audit?.correlate(operationId)
+            observed = { ...original, targetId: appId, outcome: published ? unchanged ? "unchanged" : created ? "created" : "updated" : appId ? "partial" : "uncertain",
+              applied: [
+                ...(created ? [{ operation: "create", field: "metadata" } as const] : []),
+                ...(publishing || (published && !unchanged) ? [{ operation: "publish", field: "content" } as const] : []),
+              ],
+              verified: [
+                ...(metadata ? [{ operation: "create", field: "metadata" } as const] : []),
+                ...(published ? [{ operation: "publish", field: "content" } as const] : []),
+              ] }
+            audit?.item(0, observed)
+          },
+        })
+      } catch (error) {
+        audit?.item(0, { ...observed, outcome: observed.outcome === "unattempted" ? "failed" : observed.outcome, reason: "APP_RESTORE_FAILED" })
+        throw error
+      } finally { audit?.finish() }
+    }),
     ensureKeys: () => { backupKeys.keyring() },
     capture: async (tenant, appId, jobId, store, signal, progress) => {
       if (process.platform !== "win32") throw new Error("Back up Win32 installers on a Windows PC enrolled in this Intune tenant.")

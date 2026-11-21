@@ -36,6 +36,10 @@ export interface CloudBackupStatus {
   lastMessage: string
   backupFolder: string | null
   runbookVersion: string
+  auditCapability?: boolean
+  auditPending?: number
+  auditScanIncomplete?: boolean
+  auditReceiptFailed?: boolean
 }
 
 const GUID = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i
@@ -115,6 +119,12 @@ export function parseCloudStatus(value: unknown, tenantId: string): CloudBackupS
     lastMessage: text("LastMessage"),
     backupFolder: typeof record.BackupFolder === "string" ? record.BackupFolder : null,
     runbookVersion: text("RunbookVersion"),
+    ...(record.AuditCapability === true ? {
+      auditCapability: true,
+      auditPending: typeof record.AuditPending === "number" && Number.isSafeInteger(record.AuditPending) && record.AuditPending >= 0 ? record.AuditPending : undefined,
+      auditScanIncomplete: record.AuditScanIncomplete === true,
+      auditReceiptFailed: record.AuditReceiptFailed === true,
+    } : {}),
   }
 }
 

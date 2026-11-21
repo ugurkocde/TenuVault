@@ -46,6 +46,50 @@ function CleanupButton({ plan, cleaning, loading, onCleanup }: { plan: ReturnTyp
   )
 }
 
+const auditStatus = { completed: "Completed", warnings: "Completed with warnings", failed: "Failed", cancelled: "Cancelled", pending: "Pending approval", uncertain: "Uncertain" }
+const itemOutcomes = { created: "Created", updated: "Updated", unchanged: "Unchanged", skipped: "Skipped", failed: "Failed", partial: "Partial", pending: "Pending approval", unattempted: "Unattempted", uncertain: "Uncertain" }
+
+function AuditJobDetails({ entry }: { entry: AuditLogEntry }) {
+  const [page, setPage] = useState(0)
+  const job = entry.job
+  if (!job) return null
+  const items = job.items ?? []
+  const pageSize = 25
+  return (
+    <details className="mt-2 whitespace-normal" data-audit-operation={job.operationId}>
+      <summary className="cursor-pointer font-medium underline underline-offset-2">Job details</summary>
+      <div className="mt-2 space-y-2 break-all text-xs text-gray-700">
+        <p>Operation ID {job.operationId}</p>
+        <p>Run ID {job.runId}</p>
+        {job.sourceBackupId && <p>Source backup {job.sourceBackupId}</p>}
+        {entry.user.tenantId && <p>Destination tenant {entry.user.tenantId}</p>}
+        {job.registrationId && <p>Producer identity {job.registrationId}</p>}
+        <p>{job.stage.replaceAll("-", " ")} · {auditStatus[job.status]}{job.trigger ? ` · ${job.trigger}` : ""}</p>
+        {job.reason && <p>{job.reason.toLowerCase().replaceAll("_", " ")}</p>}
+        <p>{Object.entries(job.counts).map(([name, count]) => `${name}: ${count}`).join(" · ")}</p>
+        {items.slice(page * pageSize, (page + 1) * pageSize).map((item, index) => (
+          <div className="border-t border-gray-200 pt-2" key={index}>
+            <p className="font-medium">{item.folder} · {itemOutcomes[item.outcome]}</p>
+            {item.sourceId && <p>Source item {item.sourceId}</p>}
+            {item.targetId && <p>Destination item {item.targetId}</p>}
+            {item.reason && <p>{item.reason.toLowerCase().replaceAll("_", " ")}</p>}
+            {item.approval && <p>{item.approval.system === "intune" ? "Intune" : "TenuVault"} approval {item.approval.requestId} · {item.approval.displayName || item.approval.upn || item.approval.principalId || item.approval.applicationId || "Approver unavailable"}{item.approval.decisionAt ? ` · ${new Date(item.approval.decisionAt).toLocaleString()}` : ""}{item.approval.justificationPresent ? " · Justification recorded" : ""}</p>}
+            {(["planned", "applied", "verified"] as const).map(phase => item[phase]?.length ? (
+              <p key={phase}><span className="capitalize">{phase}</span> {item[phase].map(change => [change.operation, change.field ?? change.settingDefinitionId].filter(Boolean).join(" ")).join(", ")}</p>
+            ) : null)}
+            {![...item.planned ?? [], ...item.applied ?? [], ...item.verified ?? []].some(change => change.field || change.settingDefinitionId) && <p>Change details unavailable</p>}
+          </div>
+        ))}
+        {items.length > pageSize && <div className="flex items-center gap-2">
+          <Button size="sm" variant="outline" disabled={page === 0} onClick={() => setPage(page - 1)}>Previous items</Button>
+          <span>{page + 1} of {Math.ceil(items.length / pageSize)}</span>
+          <Button size="sm" variant="outline" disabled={(page + 1) * pageSize >= items.length} onClick={() => setPage(page + 1)}>Next items</Button>
+        </div>}
+      </div>
+    </details>
+  )
+}
+
 function AuditPageContent() {
   const { selectedTenant } = useSelectedTenant()
   // Links from Governance and Changes land here with what to look for: `q` seeds the
@@ -700,6 +744,7 @@ function AuditPageContent() {
                       </td>
                       <td className="px-6 py-4 text-sm text-gray-900">
                         {log.action}
+                        {log.job ? <AuditJobDetails entry={log} /> : log.eventType.startsWith("RESTORE_") ? <p className="mt-1 text-xs text-gray-500">Change details unavailable</p> : null}
                       </td>
                       <td className="px-6 py-4 text-sm text-gray-900">
                         <div>
@@ -713,7 +758,7 @@ function AuditPageContent() {
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="flex items-center gap-2">
                           {getResultIcon(log.result)}
-                          <span className="text-sm">{log.result}</span>
+                          <span className="text-sm">{log.job ? auditStatus[log.job.status] : log.result}</span>
                         </div>
                       </td>
                     </tr>
@@ -742,6 +787,7 @@ function AuditPageContent() {
                       <div className="space-y-2">
                         <div>
                           <p className="font-medium text-sm text-gray-900">{log.action}</p>
+                          {log.job ? <AuditJobDetails entry={log} /> : log.eventType.startsWith("RESTORE_") ? <p className="text-xs text-gray-500">Change details unavailable</p> : null}
                           <p className="text-xs text-gray-600 mt-0.5">
                             {log.resource.type}: {log.resource.name}
                             {typeof log.details?.link === "string" && log.details.link.startsWith("/portal/") && (
@@ -757,7 +803,7 @@ function AuditPageContent() {
                           </div>
                           <div className="flex items-center gap-1">
                             {getResultIcon(log.result)}
-                            <span className="text-xs text-gray-600">{log.result}</span>
+                            <span className="text-xs text-gray-600">{log.job ? auditStatus[log.job.status] : log.result}</span>
                           </div>
                         </div>
                       </div>

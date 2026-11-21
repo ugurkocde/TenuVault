@@ -33,12 +33,16 @@ function Get-TvManagedIdentityToken {
 
 function Invoke-TvHttp {
     param([string]$Uri, [string]$Token, [string]$Method = "Get", [hashtable]$Headers, [byte[]]$BodyBytes, [string]$ContentType, [long]$MaxBytes = 0)
-    if ($script:failReportList -and $Uri -like "*comp=list*") { throw [InvalidOperationException]::new("storage listing is unavailable") }
+    if ($script:failReportList -and $Uri -like "*/intune-backups?*comp=list*") { throw [InvalidOperationException]::new("storage listing is unavailable") }
     if ($script:failCompliance -and $Uri -like "https://graph.microsoft.com/beta/deviceManagement/deviceCompliancePolicies*") { throw [TvHttpError]::new(500, "HTTP 500") }
     $body = if ($null -ne $BodyBytes) { [Text.Encoding]::UTF8.GetString($BodyBytes) } else { $null }
     $script:calls.Add([pscustomobject]@{ uri = $Uri; method = $Method; contentType = $ContentType; ifNoneMatch = $Headers["If-None-Match"]; body = $body })
     $text = '{"value":[]}'
-    if ($Uri -eq "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations") {
+    if ($Uri -like "*/tenuvault-backup-results?*comp=list*") {
+        $text = "<EnumerationResults><Blobs /><NextMarker /></EnumerationResults>"
+    } elseif ($Uri -like "*/audit-cursors/*" -and $Method -eq "Get") {
+        throw [TvHttpError]::new(404, "HTTP 404")
+    } elseif ($Uri -eq "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations") {
         $text = '{"value":[{"id":"cfg-1","displayName":"Baseline Wi-Fi"}]}'
     } elseif ($Uri -eq "https://graph.microsoft.com/beta/deviceManagement/windowsAutopilotDeviceIdentities") {
         # A list-only type: the entry is the snapshot, with status fields and secrets left out.

@@ -150,7 +150,7 @@ They run the command from the request. The role assignment to the Backup Reader 
 * **Masked values.** If Microsoft refuses to return an encrypted OMA-URI value in plain text, the profile is saved with `****` and listed in the backup's metadata. They count as a warning. Restoring such a profile from that backup is blocked, because it would send `****` to devices. Run a manual backup with your sign-in to capture the values when Microsoft returns them; retention keeps the newest backup that has them in plain text.
 * **Left-out types.** Without the device inventory permission, device categories and device clean-up rules are left out and listed as "not readable by the Backup Reader". A change that writes those types needs a backup that has them, which TenuVault makes with your sign-in before the change anyway.
 * **Retention in Azure Storage.** The Backup Reader cannot delete, so expired backups stay until the next backup made with your sign-in, which applies retention to all backups of the tenant with the usual protections. Backups on this device follow retention as usual.
-* **Audit log.** The tenant audit log is written with your sign-in, so Backup Reader backups do not add an entry there. Each backup records how it ran (`Trigger`, `AuthMode` and `RunId`) in its own metadata. The reader's token requests appear in Entra ID under **Service principal sign-ins**, grouped by Microsoft and not one per backup, because a cached token can serve several runs.
+* **Audit log.** Each physical run records a terminal event as the Backup Reader service principal, including when you are signed out. The backup and audit event share a run ID. A device backup writes audit to encrypted local storage. For Azure backups, run `New-TenuVaultStorage.ps1` again with the same storage account and `-BackupReaderAppId`, wait for Azure role propagation and select **Test again**. The separate audit access test checks create and read access. Existing backups keep their original history.
 * **License.** A license key keeps working with the Backup Reader alone. A license your organization shared with the tenant is confirmed with your Microsoft sign-in, so sign in to TenuVault at least once every 14 days.
 
 ## Renew the certificate
@@ -226,3 +226,6 @@ A refusal that retrying cannot fix (an unknown or expired certificate, a missing
 * [Create a storage account for TenuVault](/getting-started/create-storage-account/#optional-let-the-backup-reader-write-backups): the Azure administrator's half of step 3
 * [App registration and delegated permissions](/security/permissions/)
 * [Settings](/settings/#backup-reader): where the card and its controls are described
+
+
+The Backup Reader card shows audit deliveries waiting to be saved. TenuVault retries with the original Reader identity, including after restart. For shared Azure storage, each producer with the audit writer role is trusted with the contents of the audit container. Check broader or inherited grants on the Reader if its existing assignments extend beyond the scoped setup roles.

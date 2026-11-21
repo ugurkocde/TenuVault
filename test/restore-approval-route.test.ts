@@ -86,3 +86,47 @@ it("refreshes and reports status after withdrawal is refused", async () => {
   expect((await response.json()).error).toContain("Current status: rejected")
   expect(restoreApprovals(tenantId)[0]?.status).toBe("rejected")
 })
+
+it("uses the Intune approver and correlates completion without copying justification", async () => {
+  const { AuditSink, setMainAuditSink } = await import("../src/main/api/audit-sink")
+  const { pendingEvents, setAuditOutboxStore } = await import("../src/portal/lib/audit/outbox")
+  const operationId = "77777777-7777-4777-8777-777777777777"
+  const approverId = "55555555-5555-4555-8555-555555555555"
+  const targetId = "66666666-6666-4666-8666-666666666666"
+  const account = "auditdecision"
+  await seed()
+  saveRestoreApproval({ ...restoreApprovals(tenantId)[0]!, operationId })
+  const original = network()
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).includes("operationApprovalRequests/")) return Response.json({
+      status: "approved", approver: { user: { id: approverId, displayName: "Approver", Upn: "approver@example.test" } },
+      approvalJustification: "SecretApprovalCanary", approvalDateTime: "2026-11-20T12:00:00Z",
+    })
+    if (String(input).includes("/deviceAppManagement/mobileAppCategories") || String(input).includes("/deviceManagement/deviceCategories")) {
+      return Response.json({ id: targetId }, { status: 201 })
+    }
+    return original(input, init)
+  }))
+  setMainAuditSink(new AuditSink({
+    bind: () => ({ tenantId, storageAccountName: account, user: { id: "untrusted", name: "Old account", email: "" } }),
+    transport: async () => { throw new Error("Offline") },
+  }))
+  try {
+    const response = await POST(request({ approvalAction: "complete", approvalId: code }))
+    expect(response.status).toBe(200)
+    const entries = pendingEvents(account)
+    expect(entries).toMatchObject([{
+      user: { id: requesterId, tenantId },
+      job: { operationId, stage: "approval-complete", status: "completed", items: [{
+        targetId, outcome: "created", approval: {
+          system: "intune", requestId: code, principalId: approverId, displayName: "Approver", upn: "approver@example.test",
+          justificationPresent: true, decisionAt: "2026-11-20T12:00:00.000Z",
+        },
+      }] },
+    }])
+    expect(JSON.stringify(entries)).not.toContain("SecretApprovalCanary")
+  } finally {
+    setMainAuditSink(undefined)
+    setAuditOutboxStore()
+  }
+})

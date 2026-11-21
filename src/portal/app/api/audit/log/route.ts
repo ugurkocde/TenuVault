@@ -1,3 +1,4 @@
+import { mainAuditSink } from "../../../../../main/api/audit-sink"
 import { isGuid } from "../../../../../shared/security"
 import { AuditStorageService } from "~/lib/audit/storage"
 import { type NextRequest, NextResponse } from "next/server"
@@ -60,6 +61,14 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Invalid tenant ID" }, { status: 400 })
     }
 
+    const sink = mainAuditSink()
+    if (sink) {
+      const binding = sink.bind(tenantId)
+      if (!binding) return NextResponse.json({ error: "Audit storage is unavailable" }, { status: 400 })
+      await sink.record(binding, logEntry)
+      return NextResponse.json({ success: true })
+    }
+
     // Preserve the event before token acquisition or any remote storage request.
     // Each entry records its tenant, so reads return only that tenant's history even when
     // several tenants share one storage account.
@@ -74,8 +83,8 @@ export async function POST(request: NextRequest) {
       message: "Audit log entry created successfully"
     })
 
-  } catch (error) {
-    console.error("Audit log error:", error)
+  } catch {
+    console.error("Audit event could not be saved")
     return NextResponse.json(
       { error: "Audit event could not be saved. Pending events are kept on this device and retried when audit history is refreshed." },
       { status: 500 }

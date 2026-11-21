@@ -244,7 +244,7 @@ export class BackupReaderService {
       }
       return acquired.accessToken
     }
-    return { mode: "app-only", graph: () => token("graph"), storage: () => token("storage"), excludedTypes: excludedTypes(verified) }
+    return { mode: "app-only", registrationId: credential.clientId, graph: () => token("graph"), storage: () => token("storage"), excludedTypes: excludedTypes(verified) }
   }
 
   private read(tenantId: string): BackupReaderCredential | null {

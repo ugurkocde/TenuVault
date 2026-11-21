@@ -18,6 +18,7 @@ interface RestoreRecord {
 export interface RestoreOptions {
   graph: RestoreGraph; fetch: typeof fetch; signal: AbortSignal
   progress: (value: AppRestoreProgress) => void
+  audit?: (value: { operationId: string; appId?: string; created?: boolean; metadata?: boolean; publishing?: boolean; published?: boolean; unchanged?: boolean }) => void
   wait?: (milliseconds: number, signal: AbortSignal) => Promise<void>
 }
 const pause = (ms: number, signal: AbortSignal) => delay(ms, undefined, { signal })
@@ -59,6 +60,9 @@ async function restoreOwnedApp(store: AppSourceStore, source: CapturedAppSource,
   } else {
     record = { schema: 1, id: randomUUID(), sourceId: source.id, target, name: name.trim(), settingsHash, secrets: newRestoreSecrets(), creationStarted: false }
   }
+  let createdNow = false
+  const audit = (stage: { metadata?: boolean; publishing?: boolean; published?: boolean; unchanged?: boolean } = {}) =>
+    options.audit?.({ operationId: record.id, appId: record.appId, created: createdNow, ...stage })
   const save = () => store.writeRestoreRecord(source.tenantId, source.id, target, record)
   const marker = `[TenuVault restore ${record.id}]`
   body.notes = [typeof body.notes === "string" ? body.notes : "", marker].filter(Boolean).join("\n")
@@ -67,6 +71,7 @@ async function restoreOwnedApp(store: AppSourceStore, source: CapturedAppSource,
   const encryption: { profile?: ContentEncryption } = {}
   for await (const _part of encryptRestoreContent(store.content(source.tenantId, source.id, signal), record.secrets, source, encryption)) { signal.throwIfAborted() }
   await save()
+  if (record.creationStarted || record.appId) audit()
   if (!record.appId && record.creationStarted) {
     const found = (await all(graph, `${BASE}?$select=id,notes&$top=100`)).filter(app => typeof app.notes === "string" && app.notes.split("\n").includes(marker))
     if (found.length !== 1) throw new Error("The earlier app creation could not be confirmed. Check Intune before retrying. TenuVault will not create a duplicate automatically.")
@@ -79,14 +84,19 @@ async function restoreOwnedApp(store: AppSourceStore, source: CapturedAppSource,
       // can create the app; unknown POST outcomes still require reconciliation.
       record.creationStarted = false; await save(); signal.throwIfAborted()
     }
+    audit()
     record.appId = identifier((await graph("POST", BASE, body)).id); await save()
+    createdNow = true
+    audit()
   }
   const appUrl = `${BASE}/${record.appId}`, contentUrl = `${appUrl}/microsoft.graph.win32LobApp/contentVersions`
   const existing = await graph("GET", appUrl)
   if (existing["@odata.type"] !== "#microsoft.graph.win32LobApp" || typeof existing.notes !== "string" || !existing.notes.split("\n").includes(marker)) throw new Error("The destination app no longer belongs to this restore. No changes were made to it.")
   assertRestoredSettings(body, existing)
+  audit({ metadata: true })
   if (record.completed) {
     if (existing.committedContentVersion !== record.version || existing.publishingState !== "published") throw new Error("The previously restored destination app has changed. Review it in Intune.")
+    audit({ metadata: true, published: true, unchanged: true })
     report("completed", totalBytes); return result()
   }
   if ((await all(graph, `${appUrl}/assignments`)).length) throw new Error("This destination app was assigned while the restore was incomplete. Remove its assignments in Intune before continuing.")
@@ -162,11 +172,13 @@ async function restoreOwnedApp(store: AppSourceStore, source: CapturedAppSource,
   if (file.isCommitted !== true || Number(file.size) !== source.bytes || Number(file.sizeEncrypted) !== totalBytes) throw new Error("Intune did not confirm the complete installer content.")
   report("publishing", totalBytes)
   await graph("PATCH", appUrl, { "@odata.type": "#microsoft.graph.win32LobApp", committedContentVersion: record.version })
+  audit({ metadata: true, publishing: true })
   for (let attempt = 0; attempt < 90; attempt++) {
     const app = await graph("GET", appUrl)
     if (app.committedContentVersion === record.version && app.publishingState === "published") {
       assertRestoredSettings(body, app)
       if ((await all(graph, `${appUrl}/assignments`)).length) throw new Error("The app was published, but assignments were added outside this restore. Review them in Intune.")
+      audit({ metadata: true, published: true })
       record.completed = true; await save(); report("completed", totalBytes); return result()
     }
     await wait(2000, signal)

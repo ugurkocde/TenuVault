@@ -1,3 +1,6 @@
+import { randomUUID } from "node:crypto"
+import { beginRestoreAudit, restoreAuditItem } from "~/lib/audit/restore"
+import { AuditEventType } from "~/lib/audit/types"
 import { readOwnedBackup, UNTAGGED_BACKUP } from "~/lib/policies/backup-owner"
 import { checkRestoreManifest, verifySnapshot } from "~/lib/policies/backup-manifest"
 import { grantedPermissions } from "../../../../shared/services/token"
@@ -108,7 +111,6 @@ export async function POST(request: NextRequest) {
 
     // Fetch the policy content from the backup
     const policyUrl = `https://${storageAccountName}.blob.core.windows.net/intune-backups/${backupPath.split("/").map(encodeURIComponent).join("/")}`
-    console.log("Attempting to fetch policy from:", policyUrl)
     
     const backupResponse = await fetch(policyUrl, {
       headers: {
@@ -119,13 +121,6 @@ export async function POST(request: NextRequest) {
 
     if (!backupResponse.ok) {
       const errorText = await backupResponse.text()
-      console.error("Failed to fetch policy from backup:", {
-        status: backupResponse.status,
-        statusText: backupResponse.statusText,
-        error: errorText,
-        url: policyUrl
-      })
-      
       // Provide more specific error messages
       if (backupResponse.status === 404) {
         return NextResponse.json(
@@ -153,8 +148,19 @@ export async function POST(request: NextRequest) {
     catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 }) }
     
     // Restore creates an unassigned copy; revert puts the existing policy back to the backed-up version.
-    const outcome = await new Restorer(graphCaller(graphToken, fetch, { tenant: tenantId, refreshToken: () => getAccessToken(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default", true) }), { mode: action === 'revert' ? 'replace' : 'copy', assignments: false, granted: grantedPermissions(graphToken) })
+    const operationId = randomUUID()
+    const audit = beginRestoreAudit({
+      destination: tenantId, graphToken, sourceBackupId: backupId, operationId,
+      action: action === "revert" ? "Revert policy to the backed-up version in place" : "Restore policy as an unassigned copy",
+      eventType: action === "revert" ? AuditEventType.POLICY_REVERTED : AuditEventType.POLICY_RESTORED,
+      items: [restoreAuditItem(backupPath, undefined, policyContent.id)],
+    })
+    audit?.started(0)
+    const outcome = await new Restorer(graphCaller(graphToken, fetch, { tenant: tenantId, refreshToken: () => getAccessToken(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default", true) }), { mode: action === 'revert' ? 'replace' : 'copy', assignments: false, granted: grantedPermissions(graphToken), operationId,
+      auditProgress: result => audit?.item(0, restoreAuditItem(backupPath, result, policyContent.id)) })
       .restore(backupPath, policyContent)
+    audit?.item(0, restoreAuditItem(backupPath, outcome, policyContent.id))
+    audit?.finish()
     const result = { success: outcome.success, error: outcome.error, policyId: outcome.policyId }
 
     if (!result.success) {
@@ -213,8 +219,8 @@ export async function POST(request: NextRequest) {
       policyId: result.policyId
     })
 
-  } catch (error) {
-    console.error("Revert policy error:", error)
+  } catch {
+    console.error("Revert policy could not finish")
     
     return NextResponse.json(
       { error: "Internal server error while reverting policy" },
@@ -343,8 +349,7 @@ async function writeRevertMetadata(
 
     if (!putResponse) return
     if (!putResponse.ok) {
-      const errorBody = await putResponse.text()
-      console.error("Failed to write revert metadata:", putResponse.status, putResponse.statusText, errorBody)
+      console.error("Failed to write revert metadata:", putResponse.status)
       
       // If it's a permission error, try to store locally or in a different way
       if (putResponse.status === 403) {
