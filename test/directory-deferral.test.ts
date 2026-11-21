@@ -712,12 +712,12 @@ it.each(folders)("keeps a non-authorization %s Graph 403 failed with the sanitiz
   expect(env.writes).toEqual([])
 })
 
-it.each(folders.flatMap(folder => ["html", "empty", "missing code", "invalid json", "wrong content type"].map(shape => ({ folder, shape }))))("keeps a $folder write uncertain for an intermediary 429 with $shape while honoring Retry-After", async ({ folder, shape }) => {
+it.each(folders.flatMap(folder => ["html", "empty", "missing code", "invalid json", "wrong content type", "non-throttle Graph code", "proxy code"].map(shape => ({ folder, shape }))))("keeps a $folder write uncertain for an intermediary 429 with $shape while honoring Retry-After", async ({ folder, shape }) => {
   const env = world(folder), request = env.request(), page = await env.prepare(request), original = env.graph.getMockImplementation()!
   let sends = 0
   const response = () => {
     const options = { status: 429, headers: { "Retry-After": "120", "Content-Type": shape === "html" ? "text/html" : shape === "wrong content type" ? "text/plain" : "application/json" } }
-    return new Response(shape === "html" ? "<html>Rate limited</html>" : shape === "empty" ? "" : shape === "invalid json" ? "{" : JSON.stringify(shape === "missing code" ? { error: {} } : { error: { code: "TooManyRequests" } }), options)
+    return new Response(shape === "html" ? "<html>Rate limited</html>" : shape === "empty" ? "" : shape === "invalid json" ? "{" : JSON.stringify(shape === "missing code" ? { error: {} } : { error: { code: shape === "non-throttle Graph code" ? "Request_BadRequest" : shape === "proxy code" ? "ProxyRateLimited" : "TooManyRequests" } }), options)
   }
   env.graph.mockImplementation((input, init) => {
     if (init?.method === "PATCH") { sends++; return Promise.resolve(response()) }
@@ -735,4 +735,29 @@ it.each(folders.flatMap(folder => ["html", "empty", "missing code", "invalid jso
   env.live[env.field] = "Saved"
   expect(await env.service().saved(tenant, page.runId, "reconcile")).toMatchObject({ outcomes: [{ state: "applied" }] })
   expect(sends).toBe(1); expect(env.writes).toEqual([])
+})
+
+it.each(folders.flatMap(folder => [401, 403].flatMap(status => ["body", "header"].map(form => ({ folder, status, form })))))("resumes $folder after a write-time $status $form claims challenge with a fresh connection and all checks", async ({ folder, status, form }) => {
+  const env = world(folder), request = env.request(), page = await env.prepare(request), original = env.graph.getMockImplementation()!
+  let sends = 0, safetyReads = 0
+  env.graph.mockImplementation((input, init) => {
+    if (init?.method === "PATCH" && ++sends === 1) return Promise.resolve(Response.json({ error: { code: form === "body" ? "insufficient_claims" : "Authorization_RequestDenied", message: "Sensitive claims body" } }, { status, headers: form === "header" ? { "WWW-Authenticate": 'Bearer error="insufficient_claims", claims="sensitive-claims"' } : {} }))
+    if (init?.method === "GET" && new URL(String(input)).pathname === `/v1.0/${env.targetPath}`) safetyReads++
+    return original(input, init)
+  })
+  expect(await env.execute(page, request)).toMatchObject({ failed: 0, outcomes: [{ state: "deferred", deferralCause: "authentication", reason: expect.stringContaining("Sign in again and satisfy the Conditional Access requirement") }] })
+  expect(sends).toBe(1); expect(env.writes).toEqual([]); expect(env.locks()).toHaveLength(1)
+  expect(env.entry(page)).toMatchObject({ state: "deferred", deferralCause: "authentication", attempt: 1 })
+  expect([...env.data.values()].join()).not.toMatch(/Sensitive claims body|sensitive-claims/)
+  const connections = env.connection.mock.calls.length
+  env.setScopes("Application.Read.All User.Read.All Group.Read.All Policy.Read.All")
+  expect(await env.execute(page, request)).toMatchObject({ outcomes: [{ state: "deferred" }] })
+  expect(env.connection.mock.calls.length).toBeGreaterThan(connections); expect(sends).toBe(1)
+  env.setScopes("Application.Read.All Application.ReadWrite.All User.ReadUpdate.All User.Read.All Group.ReadWrite.All Group.Read.All Policy.Read.All")
+  await expect(env.service().execute(tenant, { ...request, runId: page.runId }, page.fingerprint, {})).rejects.toThrow("Approve each selected row separately")
+  const before = safetyReads
+  expect(await env.execute(page, request)).toMatchObject({ status: "complete", outcomes: [{ state: "applied" }] })
+  expect(safetyReads).toBeGreaterThan(before)
+  await env.execute(page, request)
+  expect(sends).toBe(2); expect(env.writes).toEqual([{ [env.field]: "Saved" }]); expect(env.locks()).toEqual([])
 })

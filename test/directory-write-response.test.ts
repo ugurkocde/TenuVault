@@ -1,5 +1,5 @@
 import { expect, it } from "vitest"
-import { directoryWriteAuthorization, directoryWriteResponse } from "../src/main/restore/directory-write-response"
+import { directoryWriteAuthorization, directoryWriteReplication, directoryWriteResponse } from "../src/main/restore/directory-write-response"
 import { DirectoryAuthenticationDeferredError, DirectoryReadDeferredError, DirectoryRoleDeferredError } from "../src/main/restore/directory-retry"
 import { graphGroup, graphUser, graphUserCreateResponse } from "./fixtures/directory-graph-v1"
 
@@ -37,11 +37,30 @@ it.each(["users", "groups"])("binds %s create responses to the approved disabled
 it.each(["Authorization_RequestDenied", "accessDenied", "ACCESSDENIED"])("defers only authorization 403 codes: %s", async code => {
   await expect(directoryWriteAuthorization(Response.json({ error: { code } }, { status: 403 }))).rejects.toThrow(DirectoryRoleDeferredError)
 })
-it.each(["InvalidAuthenticationToken", "Forbidden", "Request_BadRequest", "insufficient_claims"])("leaves other 403 codes to the sanitized refusal: %s", async code => {
+it.each(["InvalidAuthenticationToken", "Forbidden", "Request_BadRequest"])("leaves other 403 codes to the sanitized refusal: %s", async code => {
   await expect(directoryWriteAuthorization(Response.json({ error: { code, message: "Never retain this" } }, { status: 403 }))).resolves.toBeUndefined()
 })
 it("classifies structured Graph read denials and write authentication expiry as known unapplied", async () => {
   await expect(directoryWriteAuthorization(Response.json({ error: { code: "Authorization_RequestDenied" } }, { status: 403 }), true)).rejects.toThrow(DirectoryReadDeferredError)
   await expect(directoryWriteAuthorization(Response.json({ error: { code: "InvalidAuthenticationToken" } }, { status: 401 }))).rejects.toThrow(DirectoryAuthenticationDeferredError)
   await expect(directoryWriteAuthorization(new Response("<html>Sign in</html>", { status: 401 }))).resolves.toBeUndefined()
+})
+
+it.each([401, 403])("defers a structured Graph %s insufficient-claims error for interactive sign-in", async status => {
+  await expect(directoryWriteAuthorization(Response.json({ error: { code: "insufficient_claims", message: "Sensitive claims body" } }, { status }))).rejects.toMatchObject({ deferralCause: "authentication", message: expect.stringContaining("Sign in again and satisfy the Conditional Access requirement") })
+  const headers = { "WWW-Authenticate": 'Bearer realm="", error="insufficient_claims", claims="eyJhY2Nlc3NfdG9rZW4iOnt9fQ=="' }
+  await expect(directoryWriteAuthorization(Response.json({ error: { code: "Authorization_RequestDenied" } }, { status, headers }))).rejects.toMatchObject({ deferralCause: "authentication", message: expect.stringContaining("Conditional Access") })
+})
+it("does not treat an incomplete claims header or an unstructured 403 as a claims deferral", async () => {
+  for (const challenge of ['Bearer error="insufficient_claims"', 'Basic error="insufficient_claims", claims="encoded"', 'Bearer error="other", claims="encoded"']) await expect(directoryWriteAuthorization(Response.json({ error: { code: "Forbidden" } }, { status: 403, headers: { "WWW-Authenticate": challenge } }))).resolves.toBeUndefined()
+  await expect(directoryWriteAuthorization(new Response("<html>Denied</html>", { status: 403, headers: { "WWW-Authenticate": 'Bearer error="insufficient_claims", claims="encoded"' } }))).resolves.toBeUndefined()
+})
+
+it("defers only the exact documented 400 for POST group member references", async () => {
+  const error = { code: "Request_BadRequest", message: "The source resource object or one of the objects being referenced don't exist." }
+  const path = `groups/${graphGroup.id}/members/$ref`
+  await expect(directoryWriteReplication(Response.json({ error }, { status: 400 }), "POST", url(path))).rejects.toMatchObject({ deferralCause: "replication", message: expect.stringContaining("replicating") })
+  for (const [method, target] of [["DELETE", path], ["POST", path.replace("members", "owners")], ["PATCH", `groups/${graphGroup.id}`], ["POST", "users"]]) await expect(directoryWriteReplication(Response.json({ error }, { status: 400 }), method!, url(target!))).resolves.toBeUndefined()
+  for (const other of [{ ...error, code: "Request_ResourceNotFound" }, { ...error, message: "Already a member" }, { ...error, message: undefined }]) await expect(directoryWriteReplication(Response.json({ error: other }, { status: 400 }), "POST", url(path))).resolves.toBeUndefined()
+  for (const response of [Response.json({ error }, { status: 404 }), new Response(JSON.stringify({ error }), { status: 400 }), new Response("{", { status: 400, headers: { "Content-Type": "application/json" } })]) await expect(directoryWriteReplication(response, "POST", url(path))).resolves.toBeUndefined()
 })

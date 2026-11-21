@@ -1,6 +1,6 @@
 import type { Item } from "../../shared/intune/registry"
 import { isGuid } from "../../shared/security"
-import { DirectoryAuthenticationDeferredError, DirectoryReadDeferredError, DirectoryRoleDeferredError } from "./directory-retry"
+import { DirectoryAuthenticationDeferredError, DirectoryReadDeferredError, DirectoryReplicationDeferredError, DirectoryRoleDeferredError } from "./directory-retry"
 
 const object = (value: unknown): value is Item => !!value && typeof value === "object" && !Array.isArray(value)
 const jsonContent = (response: Response) => /^application\/(?:[\w.+-]+\+)?json(?:\s*;|$)/i.test(response.headers.get("Content-Type") ?? "")
@@ -12,8 +12,18 @@ export async function directoryWriteAuthorization(response: Response, read = fal
   try { value = await response.clone().json() } catch { return }
   if (!object(value) || !object(value.error) || typeof value.error.code !== "string" || !value.error.code.trim()) return
   if (read) throw new DirectoryReadDeferredError()
+  const challenge = response.headers.get("WWW-Authenticate") ?? ""
+  if (value.error.code.toLowerCase() === "insufficient_claims" || /^Bearer\s/i.test(challenge) && /(?:\s|,)error\s*=\s*"insufficient_claims"(?:,|$)/i.test(challenge) && /(?:\s|,)claims\s*=\s*"[^"]+"/i.test(challenge)) throw new DirectoryAuthenticationDeferredError("Sign in again and satisfy the Conditional Access requirement, then resume with a fresh connection to repeat permission, approval and safety checks.")
   if (response.status === 401) throw new DirectoryAuthenticationDeferredError()
   if (["authorization_requestdenied", "accessdenied"].includes(value.error.code.toLowerCase())) throw new DirectoryRoleDeferredError()
+}
+
+/** Only the documented member-add replication failure proves this send was unapplied. */
+export async function directoryWriteReplication(response: Response, method: string, url: URL): Promise<void> {
+  if (response.status !== 400 || method !== "POST" || !/^\/v1\.0\/groups\/[^/]+\/members\/\$ref$/.test(url.pathname) || !jsonContent(response)) return
+  let value: unknown
+  try { value = await response.clone().json() } catch { return }
+  if (object(value) && object(value.error) && value.error.code === "Request_BadRequest" && value.error.message === "The source resource object or one of the objects being referenced don't exist.") throw new DirectoryReplicationDeferredError()
 }
 
 /** Bind creation evidence to the reviewed disabled user or static security group. */

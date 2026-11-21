@@ -27,7 +27,7 @@ export function directoryObjectState(store: KeyValueStore, tenant: string, owner
     const lock = state.locks[id], deadline = state.deadlines[id]
     if (lock !== undefined) {
       if (!record(lock) || Object.keys(lock).some(key => !["owner", "journal", "rejected"].includes(key)) || typeof lock.owner !== "string" || typeof lock.journal !== "string") invalid(id)
-      if (lock.rejected !== undefined && (!record(lock.rejected) || Object.keys(lock.rejected).some(key => !["step", "attempt", "cause"].includes(key)) || (lock.rejected.cause !== undefined && !["proxy", "throttle", "role", "authentication"].includes(String(lock.rejected.cause))) || typeof lock.rejected.step !== "string" || !Number.isSafeInteger(lock.rejected.attempt) || lock.rejected.attempt < 1)) invalid(id)
+      if (lock.rejected !== undefined && (!record(lock.rejected) || Object.keys(lock.rejected).some(key => !["step", "attempt", "cause"].includes(key)) || (lock.rejected.cause !== undefined && !["proxy", "throttle", "role", "authentication", "replication"].includes(String(lock.rejected.cause))) || typeof lock.rejected.step !== "string" || !Number.isSafeInteger(lock.rejected.attempt) || lock.rejected.attempt < 1)) invalid(id)
       const prefix = directoryPagePrefix(tenant, lock.owner) + "batch."
       if (!lock.journal.startsWith(prefix) || !/^\d+\.$/.test(lock.journal.slice(prefix.length))) invalid(id)
     }

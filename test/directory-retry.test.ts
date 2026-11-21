@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest"
-import { DIRECTORY_RETRIES, directoryRetryAt, waitForDirectoryRetry } from "../src/main/restore/directory-retry"
+import { DIRECTORY_RETRIES, DirectoryThrottledError, DirectoryWriteUncertainError, directoryThrottleError, directoryRetryAt, waitForDirectoryRetry } from "../src/main/restore/directory-retry"
 
 it("honors numeric and HTTP-date Retry-After and uses exponential fallback", async () => {
   const now = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-11-20T12:00:00Z"))
@@ -18,5 +18,16 @@ it("honors numeric and HTTP-date Retry-After and uses exponential fallback", asy
     const wait = vi.fn(async (_ms: number) => {})
     await expect(waitForDirectoryRetry(directoryRetryAt(new Response(null, { status: 429, headers: { "Retry-After": "120" } }), 0), undefined, wait)).rejects.toThrow("deferred")
     expect(wait).not.toHaveBeenCalled()
+  } finally { now.mockRestore() }
+})
+
+it.each(["TooManyRequests", "toomanyrequests", "Request_BadRequest", "ProxyRateLimited", "Forbidden", "429", "", " TooManyRequests "])("requires an explicit Graph throttle code on dispatched 429: %s", async code => {
+  const now = vi.spyOn(Date, "now").mockReturnValue(10000)
+  try {
+    const response = Response.json({ error: { code } }, { status: 429, headers: { "Retry-After": "120" } })
+    const error = await directoryThrottleError(response, false)
+    expect(error).toBeInstanceOf(code.toLowerCase() === "toomanyrequests" ? DirectoryThrottledError : DirectoryWriteUncertainError)
+    expect(error.retryAt).toBe(130000)
+    expect(await directoryThrottleError(response, true)).toBeInstanceOf(DirectoryThrottledError)
   } finally { now.mockRestore() }
 })

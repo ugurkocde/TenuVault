@@ -80,7 +80,15 @@ it("defers repeated or invalid directory continuations before fetching another p
 it.each([null, 42, "", "https://graph.microsoft.com/v1.0/$metadata#users", "https://graph.microsoft.com/v1.0/$metadata#identity/conditionalAccess/policiesOther", "https://other.example/v1.0/$metadata#identity/conditionalAccess/policies"])("defers a Conditional Access collection with a foreign or invalid context %j", context => {
   expect(() => directoryReadShape({ value: [], "@odata.context": context }, url("identity/conditionalAccess/policies"))).toThrow(DirectoryReadDeferredError)
 })
-it.each(["identity/conditionalAccess/policies", "identity/conditionalAccess/policies(id,conditions)"])("accepts the documented Conditional Access collection context %s", context => {
+it.each(["conditionalAccess/policies", "conditionalAccess/policies(id,conditions)", "identity/conditionalAccess/policies", "identity/conditionalAccess/policies(id,conditions)"])("accepts the documented Conditional Access collection context %s", context => {
   const page = { value: [graphUserPolicy], "@odata.context": `https://graph.microsoft.com/v1.0/$metadata#${context}` }
   expect(directoryReadShape(page, url("identity/conditionalAccess/policies?$select=id,conditions"))).toEqual(page)
+})
+
+it.each(["conditionalAccess/policiesOther", "conditionalAccess/policies()", "conditionalAccess/policies(id,)", "conditionalAccess/policies(id)(conditions)", "conditionalAccess/policies(id,*)", "conditionalAccess/policies/$entity", "identity/conditionalAccess/policies(,conditions)"])("rejects an invalid Conditional Access collection path or projection %s", context => {
+  expect(() => directoryReadShape({ value: [], "@odata.context": `https://graph.microsoft.com/v1.0/$metadata#${context}` }, url("identity/conditionalAccess/policies"))).toThrow(DirectoryReadDeferredError)
+})
+it.each(["conditionalAccess/policies", "identity/conditionalAccess/policies"])("keeps version, origin and targeting checks for %s context", context => {
+  for (const base of ["https://graph.microsoft.com/beta/$metadata", "https://other.example/v1.0/$metadata", "https://user@graph.microsoft.com/v1.0/$metadata", "https://graph.microsoft.com/v1.0/$metadata?query=1"]) expect(() => directoryReadShape({ value: [], "@odata.context": `${base}#${context}` }, url("identity/conditionalAccess/policies"))).toThrow(DirectoryReadDeferredError)
+  expect(() => directoryReadShape({ value: [{ conditions: {} }], "@odata.context": `https://graph.microsoft.com/v1.0/$metadata#${context}` }, url("identity/conditionalAccess/policies"))).toThrow(DirectoryReadDeferredError)
 })

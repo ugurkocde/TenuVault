@@ -17,7 +17,7 @@ import { join } from "node:path"
 import { DirectoryRestoreStore } from "../src/main/storage/directory-restore-store"
 import { createHash } from "node:crypto"
 import { expect, it, vi } from "vitest"
-import { DirectoryRestoreService } from "../src/main/restore/directory-service"
+import { DirectoryRestoreService, directoryExistingObjectBlocker } from "../src/main/restore/directory-service"
 import { ModuleSettings } from "../src/main/services/settings"
 import { RecoveryAccounts } from "../src/main/restore/safety-resolvers"
 import { directoryMappedId } from "../src/main/restore/directory-9a-batches"
@@ -3199,4 +3199,81 @@ it("defers exact removal for a Conditional Access collection with the wrong cont
   healthy = true
   expect(await env.service().execute(tenant, request, page.fingerprint, approvals)).toMatchObject({ outcomes: [{ state: "applied" }] })
   expect(env.writes).toEqual([`DELETE groups/${resource}/members/${id(100)}/$ref`])
+})
+
+it("defers a recreated group's member add during replication and sends once on checked resume", async () => {
+  const env = world(1, true), original = env.fetcher.getMockImplementation()!, target = id(900)
+  const connection = vi.fn(env.connection)
+  const service = () => new DirectoryRestoreService(env.store, new RecoveryAccounts(env.store), connection, connection, env.fetcher, () => [], env.settings)
+  const created = await service().prepare(tenant, env.request, options, env.read)
+  expect(await service().execute(tenant, { ...env.request, runId: created.runId }, created.fingerprint, { [created.rows[0]!.key]: created.rows[0]!.review.approvals })).toMatchObject({ status: "partial", outcomes: [{ state: "applied", targetId: target }] })
+  expect(directoryMappedId(env.store, tenant, "Groups", resource)).toBe(target)
+  let sends = 0, reads = 0, replication = true, denySafetyRead = false
+  env.fetcher.mockImplementation((input, init) => {
+    const url = new URL(String(input))
+    if (url.pathname.startsWith(`/v1.0/groups/${target}`) && init?.method === "GET") {
+      reads++
+      if (denySafetyRead) return Promise.resolve(Response.json({ error: { code: "Authorization_RequestDenied" } }, { status: 403 }))
+    }
+    if (url.pathname === `/v1.0/groups/${target}/members/$ref` && init?.method === "POST") {
+      sends++
+      if (replication) return Promise.resolve(Response.json({ error: { code: "Request_BadRequest", message: "The source resource object or one of the objects being referenced don't exist." } }, { status: 400 }))
+    }
+    // The fixture's membership store follows the group's new ID after recreation.
+    url.pathname = url.pathname.replace(`/groups/${target}/`, `/groups/${resource}/`)
+    return original(url, init)
+  })
+  const page = await service().prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read)
+  expect(page.rows).toHaveLength(1)
+  const request = { ...env.request, runId: page.runId }, approvals = { [page.rows[0]!.key]: page.rows[0]!.review.approvals }
+  vi.useFakeTimers()
+  try {
+    expect(await service().execute(tenant, request, page.fingerprint, approvals)).toMatchObject({ failed: 0, outcomes: [{ state: "deferred", deferralCause: "replication", reason: expect.stringContaining("replicating"), retryAt: Date.now() + 5000 }] })
+    expect(sends).toBe(1); expect(env.writes).toEqual(["POST groups"])
+    const record = JSON.parse(env.store.get(`restore.directory.coordinator.${tenant}`)!)
+    expect(Object.values(record.locks)).toEqual([expect.objectContaining({ rejected: expect.objectContaining({ attempt: 1, cause: "replication" }) })])
+    vi.setSystemTime(Date.now() + 5001)
+    replication = false
+    await expect(service().execute(tenant, request, page.fingerprint, {})).rejects.toThrow("Approve each selected row separately")
+    const valid = await env.connection()
+    const claims = JSON.parse(Buffer.from(valid.token.split(".")[1]!, "base64url").toString())
+    connection.mockResolvedValue({ ...valid, token: `h.${Buffer.from(JSON.stringify({ ...claims, scp: "User.Read.All Group.Read.All Application.Read.All Policy.Read.All" })).toString("base64url")}.s` })
+    expect(await service().execute(tenant, request, page.fingerprint, approvals)).toMatchObject({ outcomes: [{ state: "deferred" }] })
+    expect(sends).toBe(1)
+    connection.mockImplementation(env.connection)
+    const connections = connection.mock.calls.length
+    denySafetyRead = true
+    expect(await service().execute(tenant, request, page.fingerprint, approvals)).toMatchObject({ outcomes: [{ state: "deferred" }] })
+    expect(sends).toBe(1); expect(connection.mock.calls.length).toBeGreaterThan(connections)
+    denySafetyRead = false
+    const previousReads = reads
+    expect(await service().execute(tenant, request, page.fingerprint, approvals)).toMatchObject({ status: "partial", outcomes: [{ state: "applied" }] })
+    expect(reads).toBeGreaterThan(previousReads)
+    await service().execute(tenant, request, page.fingerprint, approvals)
+    expect(sends).toBe(2); expect(env.writes).toEqual(["POST groups", `POST groups/${resource}/members/$ref`]); expect(env.members).toEqual(new Set([id(100)]))
+  } finally { vi.useRealTimers() }
+})
+
+it.each(["Users", "Groups"])("names an existing %s source ID that appears during creation preview", async folder => {
+  const env = world(0, true), original = env.fetcher.getMockImplementation()!, source = folder === "Groups" ? resource : id(100)
+  const snapshot = folder === "Groups" ? env.request.snapshot : { ...unsetUserFields, id: source, displayName: "Saved user", userPrincipalName: "saved@example.test", mailNickname: "saved", accountEnabled: false, userType: "Member" }
+  let sourceReads = 0
+  env.fetcher.mockImplementation((input, init) => {
+    if (new URL(String(input)).pathname === `/v1.0/${folder.toLowerCase()}/${source}`) return Promise.resolve(++sourceReads === 1 ? graphNotFound() : Response.json({ ...snapshot, displayName: "Existing object" }))
+    return original(input, init)
+  })
+  const request = { origin: "restore" as const, path: `backup/${folder}/${source}.json`, snapshot }
+  const page = await env.service().prepare(tenant, request, options, env.read)
+  expect(page.rows[0]!.review.blocker).toContain("already exists")
+  expect(page.rows[0]!.review.blocker).toContain(source)
+  expect(page.rows[0]!.review.blocker).not.toContain("undefined")
+  expect(env.writes).toEqual([])
+})
+
+it.each<{ folder: string; current: Item; desired: Item; name: string }>([{ folder: "Users", current: { userPrincipalName: "saved@example.test" }, desired: {}, name: "saved@example.test" }, { folder: "Groups", current: { mailNickname: "existing-alias" }, desired: {}, name: "existing-alias" }, { folder: "Groups", current: {}, desired: {}, name: "Existing group" }])("names the $folder creation conflict key without undefined", ({ folder, current, desired, name }) => {
+  const blocker = directoryExistingObjectBlocker({ folder, sourceId: id(100), desired }, { ...current, id: id(900), displayName: "Existing group" })
+  expect(blocker).toContain(name)
+  expect(blocker).toContain(id(900))
+  expect(blocker).not.toContain("undefined")
+  if (folder === "Groups") expect(blocker).not.toContain("user principal name")
 })

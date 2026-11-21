@@ -5,7 +5,7 @@ import { restoreMatrixRow } from "../../shared/intune/restore-matrix"
 import { RestoreSafetyError, RestoreWriteDeferredError, RestoreWriteRefusedError, guardRestoreItem, type RestoreActor } from "../../shared/intune/restore-guards"
 import { isGuid } from "../../shared/security"
 import { directoryContinuation } from "./directory-read-shape"
-import { directoryWriteAuthorization, directoryWriteResponse } from "./directory-write-response"
+import { directoryWriteAuthorization, directoryWriteReplication, directoryWriteResponse } from "./directory-write-response"
 import { directoryPermissionBlocker } from "./directory-permissions"
 import { directoryReadAbsent, directoryReadShape, directoryWorkloadOnly } from "./directory-read-shape"
 import { requireRestoreActor } from "./restore-actor"
@@ -77,6 +77,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
       }
       if (method === "GET" && response.status === 404) return directoryReadAbsent(response, url)
       await directoryWriteAuthorization(response, method === "GET")
+      await directoryWriteReplication(response, method, url)
       if (method !== "GET" && response.status >= 400 && response.status < 500 && response.status !== 408) throw new RestoreWriteRefusedError(response.status)
       if (method === "GET" && (response.status === 408 || response.status >= 500)) throw new DirectoryReadDeferredError()
       if (!response.ok) throw new Error("Directory request was not confirmed. No response body is retained.")

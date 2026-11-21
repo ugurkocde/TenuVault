@@ -10,7 +10,12 @@ export class DirectoryRoleDeferredError extends RestoreWriteDeferredError {
   constructor(message = "Your Entra role does not allow this change. Activate the role, then resume.") { super(message, undefined, "role") }
 }
 export class DirectoryAuthenticationDeferredError extends RestoreWriteDeferredError {
-  constructor() { super("Microsoft Graph rejected the connection's authentication. Resume with a fresh connection to repeat permission and approval checks.", undefined, "authentication") }
+  constructor(message = "Microsoft Graph rejected the connection's authentication. Resume with a fresh connection to repeat permission and approval checks.") { super(message, undefined, "authentication") }
+}
+
+/** Graph rejected a member add while the new group replicates. No write was applied. */
+export class DirectoryReplicationDeferredError extends RestoreWriteDeferredError {
+  constructor() { super("The group has not finished replicating in Microsoft Entra. Wait a few seconds, then resume to repeat permission, approval and safety checks.", Date.now() + 5000, "replication") }
 }
 
 export class DirectoryThrottledError extends RestoreWriteDeferredError {
@@ -29,7 +34,7 @@ export async function directoryThrottleError(response: Response, read: boolean):
   if (/^application\/(?:[\w.+-]+\+)?json(?:\s*;|$)/i.test(response.headers.get("Content-Type") ?? "")) {
     try {
       const value = await response.clone().json()
-      if (value && typeof value.error?.code === "string" && value.error.code.trim()) return new DirectoryThrottledError(response)
+      if (value && typeof value.error?.code === "string" && value.error.code.toLowerCase() === "toomanyrequests") return new DirectoryThrottledError(response)
     } catch { /* Unparseable error bodies cannot prove a write was rejected by Graph. */ }
   }
   return new DirectoryWriteUncertainError(response)
@@ -39,8 +44,8 @@ export async function retryDirectoryWrite<T>(attemptWrite: () => Promise<T>, onU
   for (let attempt = 0; ; attempt++) {
     try { return await attemptWrite() }
     catch (error) {
-      if (error instanceof DirectoryRoleDeferredError || error instanceof DirectoryAuthenticationDeferredError) {
-        onUnapplied?.(Date.now(), error.deferralCause)
+      if (error instanceof DirectoryRoleDeferredError || error instanceof DirectoryAuthenticationDeferredError || error instanceof DirectoryReplicationDeferredError) {
+        onUnapplied?.(error.retryAt ?? Date.now(), error.deferralCause)
         throw error
       }
       if (!(error instanceof DirectoryThrottledError)) throw error

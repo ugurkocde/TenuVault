@@ -35,6 +35,15 @@ export interface DirectoryOptions { stage: "object" | "relationships"; exactMemb
 export interface DirectoryPage { inventory?: { id: string; count: number; offset: number; targetId: string; principalMappings?: { parts: number; fingerprint: string } }; run: GuardedRun; rows: Array<{ key: string; review: DirectoryReview }>; more: boolean; options: DirectoryOptions; selection?: string[] }
 const fail = (message: string): never => { throw new RestoreSafetyError(message) }
 const key = (tenant: string, id: string) => `restore.directory.review.${restoreTenantKey(tenant)}.${id}`
+/** Name the source-ID race or the folder-specific create-key conflict. */
+export function directoryExistingObjectBlocker(step: Pick<GuardedStep, "folder" | "sourceId" | "desired">, current: Item): string {
+  const existing = `${String(current.displayName ?? current.id)} (${String(current.id)})`
+  let conflict: string
+  if (String(current.id).toLowerCase() === step.sourceId.toLowerCase()) conflict = `The object ${existing} already exists.`
+  else if (step.folder === "Users") conflict = `The user principal name ${String(current.userPrincipalName ?? step.desired.userPrincipalName)} belongs to existing object ${existing}.`
+  else conflict = `The group ${String(current.mailNickname ?? step.desired.mailNickname ?? current.displayName ?? step.desired.displayName)} conflicts with existing object ${existing}.`
+  return `${conflict} Review that object in Microsoft Entra before restoring.`
+}
 /** Owned backup readers are supplied by the authenticated route, never by the renderer. */
 export class DirectoryRestoreService {
   private readonly pending = new DirectoryPendingPublications(() => this.now())
@@ -249,7 +258,7 @@ export class DirectoryRestoreService {
         review = directoryReview(step, { ...(current?.resource as Item | undefined), ...current }, (current?.principal as Item | null) ?? null, actor, false)
         review.blocker = error.message
       }
-      if (step.operation === "create" && current !== null) review.blocker = `The user principal name ${String(current.userPrincipalName ?? step.desired.userPrincipalName)} belongs to existing object ${String(current.displayName)} (${String(current.id)}). Review that object in Microsoft Entra before restoring.`
+      if (step.operation === "create" && current !== null) review.blocker = directoryExistingObjectBlocker(step, current)
       if (step.operation !== "create" && !review.changes.length) review.blocker ??= "This row already matches the desired state. No write is needed."
       const blocker = directoryAdmission(step)
       if (blocker) review.blocker ??= blocker
