@@ -17,7 +17,7 @@ const fixedReasons = new Set([
   'WRITE_FAILED', 'WRITE_UNCONFIRMED', 'WRITE_PARTIAL', 'RESTORE_SKIPPED', 'AWAITING_INTUNE_APPROVAL',
   'NOT_ATTEMPTED', 'PROCESS_INTERRUPTED', 'BACKUP_FAILED', 'BACKUP_WARNINGS', 'BACKUP_UNREACHABLE',
   'BACKUP_CANCELLED', 'FOLDER_CLAIM_FAILED', 'GRAPH_START_FAILED', 'GRAPH_LIST_FAILED', 'APP_RESTORE_FAILED',
-  'APPROVAL_COMPLETION_REFUSED', 'CHANGE_SET_APPLY_FAILED', 'BASELINE_CREATION_FAILED', 'OIB_FAILED', 'RESTORE_FAILED',
+  'APPROVAL_COMPLETION_REFUSED', 'RECONCILE_REQUIRED', 'CHANGE_SET_APPLY_FAILED', 'BASELINE_CREATION_FAILED', 'OIB_FAILED', 'RESTORE_FAILED',
 ])
 const numericDetails = [
   'statusCode', 'restoredCount', 'partialCount', 'failedCount', 'approvalCount', 'skippedCount',
@@ -113,6 +113,7 @@ export function projectJob(job: AuditJob): AuditJob {
     status: ['completed', 'warnings', 'failed', 'cancelled', 'pending', 'uncertain'].includes(job.status) ? job.status : 'uncertain',
     sourceBackupId: auditId(job.sourceBackupId), registrationId: auditId(job.registrationId),
     producerPrincipalId: auditId(job.producerPrincipalId),
+    deliveredByPrincipalId: auditId(job.deliveredByPrincipalId),
     trigger: job.trigger && ['manual', 'scheduled', 'tray', 'unknown'].includes(job.trigger) ? job.trigger : undefined,
     producerVersion: /^\d+\.\d+\.\d+$/.test(job.producerVersion ?? '') ? job.producerVersion : undefined,
     reason: fixedReasons.has(job.reason ?? '') ? job.reason : undefined,

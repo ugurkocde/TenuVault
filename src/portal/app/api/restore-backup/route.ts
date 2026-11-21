@@ -7,7 +7,7 @@ import { createHash, randomUUID } from "node:crypto"
 import { checkRestoreManifest, verifySnapshot, type ManifestEntry } from "~/lib/policies/backup-manifest"
 import { readOwnedBackup, UNTAGGED_BACKUP } from "~/lib/policies/backup-owner"
 import { validPolicyPath } from "~/lib/policies/restore"
-import { graphCaller, Restorer, ApprovalCompletionRefused, DependencyMappingError, type RestoreOutcome } from "~/lib/policies/graph-restore"
+import { graphCaller, Restorer, ApprovalCompletionRefused, DependencyMappingError, RestoreReconcileRequired, type RestoreOutcome } from "~/lib/policies/graph-restore"
 import { PROGRESS_ID, startProgress } from "~/lib/policies/restore-progress"
 import { restoreOrder, type Item } from "../../../../shared/intune/registry"
 import { grantedPermissions } from "../../../../shared/services/token"
@@ -410,7 +410,8 @@ async function approvalAction(body: any): Promise<Response> {
   } catch (error) {
     if (completion && !completionProgress) {
       const refused = !completionDispatched || error instanceof ApprovalCompletionRefused
-      if (refused) audit?.refuse(0, { ...initialItem, outcome: "failed", reason: "APPROVAL_COMPLETION_REFUSED" })
+      const reason = error instanceof RestoreReconcileRequired ? "RECONCILE_REQUIRED" : "APPROVAL_COMPLETION_REFUSED"
+      if (refused) audit?.refuse(0, { ...initialItem, outcome: "failed", reason })
       else audit?.item(0, { ...initialItem, outcome: "uncertain", reason: "WRITE_UNCONFIRMED" })
     }
     if (error instanceof ApprovalCompletionRefused) {

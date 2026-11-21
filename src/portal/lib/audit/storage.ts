@@ -243,7 +243,11 @@ export class AuditStorageService {
     // An acknowledgement may have been lost after an administrator explicitly recovered it.
     if (entry.job?.producer !== 'backup-reader' || saved.job?.producerPrincipalId !== entry.user.id ||
       saved.user.tenantId !== entry.user.tenantId) return false
-    const recovered = projectEntry({ ...entry, user: saved.user, job: { ...entry.job, producerPrincipalId: entry.user.id } })
+    const deliveredByPrincipalId = saved.job.deliveredByPrincipalId
+    const recovered = projectEntry({
+      ...entry, user: deliveredByPrincipalId ? entry.user : saved.user,
+      job: { ...entry.job, producerPrincipalId: entry.user.id, deliveredByPrincipalId },
+    })
     return JSON.stringify(saved) === JSON.stringify(recovered)
   }
 
@@ -252,8 +256,8 @@ export class AuditStorageService {
     if (input.job?.producer !== 'backup-reader' || !input.user.tenantId) throw new Error('Expected a Backup Reader audit event')
     if (this.credentials.provisionContainer !== false) await this.ensureContainerExists()
     const entry = projectEntry({
-      ...input, user: { ...admin, tenantId: input.user.tenantId },
-      job: { ...input.job, producerPrincipalId: input.user.id },
+      ...input,
+      job: { ...input.job, producerPrincipalId: input.user.id, deliveredByPrincipalId: admin.id },
     })
     if (!await this.eventWasSaved(input, true)) {
       try { await this.uploadLog(entry) }

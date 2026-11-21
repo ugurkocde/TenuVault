@@ -196,6 +196,7 @@ export interface AuditJob {
   sourceBackupId?: string
   registrationId?: string
   producerPrincipalId?: string
+  deliveredByPrincipalId?: string
   trigger?: 'manual' | 'scheduled' | 'tray' | 'unknown'
   producerVersion?: string
   reason?: string

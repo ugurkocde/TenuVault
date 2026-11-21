@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import { POST } from "../src/portal/app/api/restore-backup/route"
 import { NextRequest } from "../src/main/api/next-server-shim"
-import { Restorer, type GraphCall } from "../src/portal/lib/policies/graph-restore"
+import { approvalFingerprint, Restorer, type GraphCall } from "../src/portal/lib/policies/graph-restore"
 import { restoreApprovals, saveRestoreApproval, setRestoreApprovalStore, dismissRestoreApproval } from "../src/main/storage/restore-approvals"
+import { saveWrite, setRestoreJournalStore, writeKey, writeRecords } from "../src/main/storage/restore-journal"
 import { AuditSink, setMainAuditSink } from "../src/main/api/audit-sink"
 import { pendingEvents, setAuditOutboxStore } from "../src/portal/lib/audit/outbox"
 import { memoryStore } from "./helpers"
@@ -18,6 +19,7 @@ let storage: Map<string, string>
 beforeEach(() => {
   storage = new Map()
   setRestoreApprovalStore({ get: key => storage.get(key) ?? null, set: (key, value) => { storage.set(key, value) }, delete: key => { storage.delete(key) } })
+  setRestoreJournalStore(memoryStore())
 })
 afterEach(() => { vi.unstubAllGlobals(); setMainAuditSink(undefined); setAuditOutboxStore() })
 async function seed() {
@@ -170,12 +172,19 @@ it("records the completed request and the next submission with separate IDs unde
   expect(restoreApprovals(tenantId).find(item => item.id === nextId)?.operationId).toBe(operationId)
 })
 
-it("records a refusal before dispatch as failed with a stable reason", async () => {
+it.each([
+  [false, "APPROVAL_COMPLETION_REFUSED"],
+  [true, "RECONCILE_REQUIRED"],
+] as const)("records a refusal before dispatch with reason %s and %s", async (blockedByLedger, reason) => {
   await seed()
   const account = "approvalrefused"
+  if (blockedByLedger) {
+    const { method, path, body } = restoreApprovals(tenantId)[0]!.step
+    saveWrite({ key: writeKey(tenantId, method, path, JSON.parse(body!)), tenant: tenantId, method, path, at: new Date().toISOString(), state: "uncertain" })
+  }
   const original = network()
   const calls = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    if (String(input).includes("operationApprovalRequests/")) return Response.json({ status: "needsApproval" })
+    if (String(input).includes("operationApprovalRequests/")) return Response.json({ status: blockedByLedger ? "approved" : "needsApproval" })
     return original(input, init)
   })
   vi.stubGlobal("fetch", calls)
@@ -189,7 +198,7 @@ it("records a refusal before dispatch as failed with a stable reason", async () 
   expect((await POST(request({ approvalAction: "complete", approvalId: code }))).status).toBe(409)
   expect(calls.mock.calls.filter(([url, init]) => String(url).includes("graph.microsoft.com") && init?.method !== "GET")).toHaveLength(0)
   expect(pendingEvents(account)[0]?.job).toMatchObject({ status: "failed", stage: "approval-attempt", items: [{
-    outcome: "failed", reason: "APPROVAL_COMPLETION_REFUSED", approval: { requestId: code },
+    outcome: "failed", reason, approval: { requestId: code },
   }] })
 })
 
@@ -272,6 +281,137 @@ it.each([400, 403])("records definitive Graph refusal %s after dispatch with the
   expect(pendingEvents(account).map(entry => [entry.job?.stage, entry.job?.status])).toEqual([
     ["approval-attempt", "failed"], ["approval-complete", "completed"],
   ])
+})
+
+it.each([false, true])("audits the retry of an approved create after reconciliation (interrupted: %s)", async interrupted => {
+  await seed()
+  const record = restoreApprovals(tenantId)[0]!
+  const objectId = "99999999-9999-4999-8999-999999999999"
+  const operationId = "77777777-7777-4777-8777-777777777777"
+  const assignPath = `${record.step.path}/${objectId}/assign`
+  saveRestoreApproval({ ...record, operationId, totalSteps: 2, remaining: [{
+    method: "POST", kind: "assignments", path: assignPath, body: '{"assignments":[]}',
+  }] })
+  const account = "approvalreconcile"
+  const local = memoryStore()
+  setAuditOutboxStore(local)
+  const opts = {
+    store: local,
+    bind: () => ({ tenantId, storageAccountName: account, user: { id: requesterId, name: "Requester", email: "" } }),
+    transport: async () => { throw new Error("Offline") },
+  }
+  setMainAuditSink(new AuditSink(opts))
+  const original = network()
+  const writes = vi.fn()
+  let inFlight: string | null = null
+  vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).includes("operationApprovalRequests/")) return Response.json({ status: "approved" })
+    if (String(input).endsWith(assignPath)) {
+      writes("assign")
+      return new Response(null, { status: 204 })
+    }
+    if (String(input).endsWith(`/${objectId}`)) return Response.json({ ...JSON.parse(record.step.body!), id: objectId })
+    if (new Headers(init?.headers).get("x-msft-approval-code") === code) {
+      writes("create")
+      inFlight = local.get("audit.restore-jobs")
+      return Response.json({}, { status: 503 })
+    }
+    return original(input, init)
+  })
+  const complete = () => POST(request({ approvalAction: "complete", approvalId: code }))
+  expect((await complete()).status).toBe(409)
+  if (interrupted) {
+    // Restore the durable state captured while the approved POST was in flight.
+    expect(inFlight).toBeTruthy()
+    local.set("audit.restore-jobs", inFlight!)
+    local.delete("audit.restore-receipts")
+    local.delete("audit.pending-events")
+  }
+  const restarted = new AuditSink(opts)
+  restarted.recover()
+  restarted.recover()
+  setMainAuditSink(restarted)
+  expect(restarted.pending(tenantId, "desktop")).toBe(1)
+  const [uncertain] = pendingEvents(account)
+  expect(uncertain?.job).toMatchObject({ operationId, status: "uncertain", items: [{
+    outcome: "uncertain", reason: interrupted ? "PROCESS_INTERRUPTED" : "WRITE_UNCONFIRMED",
+  }] })
+  if (interrupted) {
+    expect((await complete()).status).toBe(409)
+    expect(pendingEvents(account)).toMatchObject([uncertain!, { job: {
+      operationId, stage: "approval-attempt", status: "failed", items: [{ reason: "RECONCILE_REQUIRED", approval: { requestId: code } }],
+    } }])
+    expect(writes.mock.calls).toEqual([["create"]])
+  }
+  const [previous] = writeRecords()
+  expect(previous?.state).toBe("uncertain")
+  saveWrite({ ...previous!, state: "reconciled", objectId })
+  const result = await complete()
+  expect(result.status).toBe(200)
+  expect(await result.json()).toMatchObject({ outcome: { success: true } })
+  const entries = pendingEvents(account)
+  const confirmed = entries.at(-1)
+  expect(entries[0]).toEqual(uncertain)
+  expect(confirmed?.job).toMatchObject({ operationId, stage: "approval-complete", status: "completed", items: [{
+    targetId: objectId, outcome: "created", approval: { requestId: code },
+    steps: [{ kind: "content", outcome: "applied" }, { kind: "assignments", outcome: "applied" }],
+  }] })
+  expect(entries).toHaveLength(interrupted ? 3 : 2)
+  expect(new Set(entries.map(entry => entry.id)).size).toBe(entries.length)
+  expect(new Set(entries.map(entry => entry.job?.runId)).size).toBe(entries.length)
+  saveRestoreApproval({ ...record, objectId, status: "approved", continuationPending: true })
+  setMainAuditSink(new AuditSink(opts))
+  expect((await complete()).status).toBe(409)
+  expect(pendingEvents(account)).toEqual(entries)
+  expect(writes.mock.calls).toEqual([["create"], ["assign"]])
+})
+
+it("audits a resumed approved update after the continuation baseline read fails", async () => {
+  await seed()
+  const record = restoreApprovals(tenantId)[0]!
+  const objectId = "99999999-9999-4999-8999-999999999999"
+  const operationId = "77777777-7777-4777-8777-777777777777"
+  const objectPath = `${record.step.path}/${objectId}`
+  const baseline = { id: objectId, displayName: "Before" }
+  saveRestoreApproval({
+    ...record, operationId, objectId, operation: "update", action: "updated", fingerprint: approvalFingerprint(baseline, false),
+    auditPlanned: [{ operation: "update", field: "displayName" }],
+    step: { ...record.step, method: "PATCH", path: objectPath, body: '{"displayName":"After"}' },
+  })
+  const account = "approvalresume"
+  const local = memoryStore()
+  setAuditOutboxStore(local)
+  setMainAuditSink(new AuditSink({
+    store: local,
+    bind: () => ({ tenantId, storageAccountName: account, user: { id: requesterId, name: "Requester", email: "" } }),
+    transport: async () => { throw new Error("Offline") },
+  }))
+  const original = network()
+  const patch = vi.fn()
+  let failRead = true
+  vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).includes("operationApprovalRequests/")) return Response.json({ status: "approved" })
+    if (String(input).endsWith(objectPath)) {
+      if (init?.method === "PATCH") {
+        patch()
+        return new Response(null, { status: 204 })
+      }
+      if (!patch.mock.calls.length) return Response.json(baseline)
+      if (failRead) return Response.json({}, { status: 403 })
+      return Response.json({ ...baseline, displayName: "After" })
+    }
+    return original(input, init)
+  })
+  const complete = () => POST(request({ approvalAction: "complete", approvalId: code }))
+  expect((await complete()).status).toBe(409)
+  expect(restoreApprovals(tenantId)[0]?.continuationPending).toBe(true)
+  failRead = false
+  expect((await complete()).status).toBe(200)
+  expect(pendingEvents(account).map(entry => entry.job)).toMatchObject([
+    { operationId, stage: "approval-complete", status: "warnings", items: [{ outcome: "partial", steps: [{ kind: "content", outcome: "applied" }] }] },
+    { operationId, stage: "approval-complete", status: "completed", items: [{ outcome: "updated", steps: [{ kind: "content", outcome: "applied" }] }] },
+  ])
+  expect(patch).toHaveBeenCalledTimes(1)
 })
 
 it("records a read failure before any restore write as failed", async () => {

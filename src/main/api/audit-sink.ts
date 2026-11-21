@@ -32,7 +32,9 @@ interface Checkpoint {
   binding: AuditBinding
   entry: AuditLogEntry
   finished?: boolean
+  /** Legacy flag for checkpoints whose key was also their completion ID. */
   completion?: boolean
+  completionId?: string
   ready?: boolean
   correlation?: RestoreCorrelation
 }
@@ -122,20 +124,24 @@ export class AuditSink {
 
   approvalCompletionReady(eventId: string): boolean {
     return !!(this.checkpoints[eventId]?.ready || this.receipts[eventId]?.ready)
+      || Object.values(this.checkpoints).some(checkpoint => checkpoint.completionId === eventId && checkpoint.ready)
   }
 
   begin(binding: AuditBinding, input: CreateAuditLogInput & { job: AuditJob }): AuditProgress
   begin(binding: AuditBinding, input: CreateAuditLogInput & { job: AuditJob }, options: RestoreAuditOptions): AuditProgress | undefined
   begin(binding: AuditBinding, input: CreateAuditLogInput & { job: AuditJob }, options: RestoreAuditOptions = {}): AuditProgress | undefined {
-    const old = options.eventId ? this.checkpoints[options.eventId] : undefined
-    if (options.eventId && (old?.finished || this.receipts[options.eventId])) return undefined
-    const entry = old?.entry ?? this.entry(binding, input, options.eventId ? { id: options.eventId, timestamp: new Date().toISOString() } : undefined)
-    const bound = old?.binding ?? { ...binding, user: entry.user }
+    let completionId = options.eventId
+    if (completionId && this.approvalCompletionReady(completionId)) return undefined
+    // Preserve interrupted attempts while keeping the request's receipt key for deduplication.
+    const previous = completionId && (this.checkpoints[completionId] || this.receipts[completionId])
+    const id = previous ? randomUUID() : completionId
+    const entry = this.entry(binding, input, id ? { id, timestamp: new Date().toISOString() } : undefined)
+    if (previous) entry.job!.runId = entry.id
+    const bound = { ...binding, user: entry.user }
     let finished = false
-    let completion = !!options.eventId
-    let ready = old?.ready ?? false
+    let ready = false
     const persist = (finished = false) => {
-      this.save({ ...this.checkpoints, [entry.id]: { binding: bound, entry, finished, ready, completion, correlation: options.correlation } })
+      this.save({ ...this.checkpoints, [entry.id]: { binding: bound, entry, finished, ready, completionId, correlation: options.correlation } })
     }
     try { persist() } catch { warning() }
     const storeItem = (index: number, item: AuditJobItem) => {
@@ -157,19 +163,19 @@ export class AuditSink {
         try { persist() } catch { warning() }
       },
       refuse: (index, item) => {
-        if (!completion || finished) return
+        if (!completionId || finished) return
         const { [entry.id]: _completion, ...remaining } = this.checkpoints
         const attemptId = randomUUID()
         entry.id = entry.job!.runId = attemptId
         entry.job!.stage = 'approval-attempt'
         entry.job!.items![index] = projectItem(item)
-        completion = false
+        completionId = undefined
         try { this.save({ ...remaining, [attemptId]: { binding: bound, entry } }) } catch { warning() }
       },
       finish: (uncertain = false) => {
         if (finished) return
         finished = true
-        if (!completion) entry.timestamp = new Date().toISOString()
+        if (!completionId) entry.timestamp = new Date().toISOString()
         this.finalize(entry, uncertain)
         try {
           persist(true)
@@ -200,12 +206,13 @@ export class AuditSink {
 
   private enqueueCheckpoint(id: string): void {
     const checkpoint = this.checkpoints[id]!
-    if (checkpoint.completion || checkpoint.correlation) {
+    const receiptId = checkpoint.correlation ? `restore:${checkpoint.entry.job!.runId}`
+      : checkpoint.completionId ?? (checkpoint.completion ? id : undefined)
+    if (receiptId) {
       const now = Date.now()
       const receipts = Object.fromEntries(Object.entries(this.receipts).filter(([key, receipt]) =>
         !key.startsWith('restore:') || now - receipt.at < 60 * 60_000))
-      const key = checkpoint.correlation ? `restore:${checkpoint.entry.job!.runId}` : id
-      receipts[key] = { at: now, ready: checkpoint.ready, correlation: checkpoint.correlation }
+      receipts[receiptId] = { at: now, ready: receipts[receiptId]?.ready || checkpoint.ready, correlation: checkpoint.correlation }
       this.options.store?.set(RECEIPTS, JSON.stringify(receipts))
       this.receipts = receipts
     }
@@ -241,7 +248,9 @@ export class AuditSink {
       try {
         if (!checkpoint.finished) {
           if (checkpoint.entry.job?.producer === 'backup-reader') continue
-          if (checkpoint.completion && !checkpoint.ready) continue
+          if ((checkpoint.completionId || checkpoint.completion) && !checkpoint.ready) {
+            checkpoint.entry.job!.reason = 'PROCESS_INTERRUPTED'
+          }
           this.finalize(checkpoint.entry, !checkpoint.ready)
           this.save({ ...this.checkpoints, [id]: { ...checkpoint, finished: true } })
         }
@@ -298,7 +307,8 @@ export class AuditSink {
     const matches = (entry: AuditLogEntry) => entry.user.tenantId === tenant.toLowerCase() && entry.job?.producer === producer
     const ids = new Set(queuedAccounts().flatMap(account => pendingEvents(account).filter(matches).map(entry => entry.id)))
     for (const checkpoint of Object.values(this.checkpoints)) {
-      if (checkpoint.finished && matches(checkpoint.entry)) ids.add(checkpoint.entry.id)
+      if ((checkpoint.finished || ((checkpoint.completionId || checkpoint.completion) && !checkpoint.ready)) &&
+        matches(checkpoint.entry)) ids.add(checkpoint.entry.id)
     }
     return ids.size
   }

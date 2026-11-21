@@ -398,32 +398,41 @@ it("keeps old detail pages until their root expires and preserves incomplete row
   expect(remote.blobs.size).toBe(0)
 })
 
-it.each([false, true])("recovers a replaced Reader explicitly as admin without duplicating an earlier save (%s)", async alreadySaved => {
+it.each(["new", "reader saved", "admin response lost"])("recovers a replaced Reader and preserves its actor (%s)", async condition => {
   const local = memoryStore()
   setAuditOutboxStore(local)
   const remote = storage()
   const service = remote.service
   const reader = { id: registration, email: "", name: "Backup Reader service principal" }
+  const admin = { ...binding.user, id: randomUUID() }
+  const alreadySaved = condition === "reader saved"
   const value = { ...job(), producer: "backup-reader" as const, status: "completed" as const, registrationId: registration }
   const opts = { store: local, bind: () => binding, transport: async () => service }
   if (alreadySaved) remote.lose()
   else remote.deny()
   await expect(new AuditSink(opts).record({ ...binding, user: reader }, input(value))).rejects.toThrow()
   remote.allow()
+  if (condition === "admin response lost") remote.lose()
   const restarted = new AuditSink(opts)
   expect(restarted.stuckReaderCount(tenantId, registration)).toBe(0)
   expect(restarted.stuckReaderCount(tenantId, randomUUID())).toBe(1)
   expect(restarted.stuckReaderCount(randomUUID())).toBe(0)
-  await restarted.deliverStuckReader(tenantId, randomUUID(), binding.user, account => {
+  await restarted.deliverStuckReader(tenantId, randomUUID(), admin, account => {
     expect(account).toBe(storageAccountName)
     return service
   })
   expect(restarted.pending(tenantId, "backup-reader")).toBe(0)
   const [saved] = await service.queryAllLogs(dateFilter)
   expect(remote.blobs.size).toBe(1)
-  expect(saved?.user.id).toBe(alreadySaved ? reader.id : binding.user.id)
+  expect(saved?.user).toMatchObject(reader)
   expect(saved?.job).toMatchObject({ runId: value.runId, producer: "backup-reader", registrationId: registration })
-  if (!alreadySaved) expect(saved?.job?.producerPrincipalId).toBe(reader.id)
+  expect(saved?.job?.deliveredByPrincipalId).toBe(alreadySaved ? undefined : admin.id)
+  if (!alreadySaved) {
+    expect(saved?.job?.producerPrincipalId).toBe(reader.id)
+    const csv = auditExportCSV([saved!], meta)
+    expect(csv).toContain(`,${reader.name},`)
+    expect(csv).toContain(admin.id)
+  }
 })
 
 it("reuses the Reader canary names and reports fresh creation only once", async () => {

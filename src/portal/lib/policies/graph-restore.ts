@@ -137,7 +137,7 @@ export function graphCaller(token: string, fetchImpl: typeof fetch = fetch, opti
     const key = options.tenant && method !== "GET" && path !== "$batch" ? writeKey(options.tenant, method, path, body) : undefined
     if (key) {
       const previous = writeRecords().find(entry => entry.key === key)
-      if (previous?.state === "uncertain") throw new Error("A previous write has an uncertain outcome. Reconcile it in Settings before retrying.")
+      if (previous?.state === "uncertain") throw new RestoreReconcileRequired()
       if (previous?.state === "reconciled") {
         if (createsObject) {
           if (!previous.objectId || !label || !/^[a-zA-Z0-9_-]{1,200}$/.test(previous.objectId)) throw new Error("This reconciled creation has no verifiable identity. Complete recovery manually in Intune.")
@@ -265,6 +265,10 @@ export class DependencyMappingError extends Error {
 
 export class ApprovalCompletionRefused extends Error {
   constructor(message: string, readonly status: number) { super(message) }
+}
+
+export class RestoreReconcileRequired extends Error {
+  constructor() { super("A previous write has an uncertain outcome. Reconcile it in Settings before retrying.") }
 }
 
 export class Restorer {
