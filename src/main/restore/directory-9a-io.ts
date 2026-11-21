@@ -5,7 +5,8 @@ import { restoreMatrixRow } from "../../shared/intune/restore-matrix"
 import { RestoreSafetyError, RestoreWriteDeferredError, RestoreWriteRefusedError, guardRestoreItem, type RestoreActor } from "../../shared/intune/restore-guards"
 import { isGuid } from "../../shared/security"
 import { graphContinuation } from "../../shared/graph-continuation"
-import { grantedPermissions } from "../../shared/services/token"
+import { directoryPermissionBlocker } from "./directory-permissions"
+import { directoryReadShape } from "./directory-read-shape"
 import { requireRestoreActor } from "./restore-actor"
 import { directoryPayload, directoryReview, disabledUserBody, requireDirectoryApprovals, cloudObject, DIRECTORY_9A_BLOCKER } from "./directory-9a"
 import { isRestorePersistenceError, guardedProtections, restoreFingerprint, type GuardedIO, type GuardedStep } from "./guarded-run"
@@ -78,19 +79,30 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
       if (method === "GET" && (response.status === 408 || response.status >= 500)) throw new DirectoryReadDeferredError()
       if (!response.ok) throw new Error("Directory request was not confirmed. No response body is retained.")
       if (method === "GET" && !/^application\/(?:[\w.+-]+\+)?json(?:\s*;|$)/i.test(response.headers.get("Content-Type") ?? "")) throw new DirectoryReadDeferredError()
-      if (response.status === 204) return {}
+      if (response.status === 204) {
+        if (method === "GET") throw new DirectoryReadDeferredError()
+        return {}
+      }
       const text = await response.text().catch(error => {
         if (isRestorePersistenceError(error)) throw error
         if (method === "GET" && signal?.aborted) throw new RestoreWriteDeferredError("The directory read was cancelled before sending a write.")
         if (method === "GET") throw new DirectoryReadDeferredError()
         throw error
       })
-      try { return JSON.parse(text) as Item }
+      try {
+        const value: unknown = JSON.parse(text)
+        return method === "GET" ? directoryReadShape(value, url) : value as Item
+      }
       catch (error) {
         if (method === "GET") throw new DirectoryReadDeferredError()
         throw error
       }
     }
+  }
+  const permissionBlocker = (step: GuardedStep, roleAssignable = false) => directoryPermissionBlocker(token, [...directoryPermissions(step), ...(roleAssignable && ["create", "member"].includes(step.directory!.action) ? ["RoleManagement.ReadWrite.Directory"] : [])])
+  const requirePermissions = (step: GuardedStep, roleAssignable = false) => {
+    const blocker = permissionBlocker(step, roleAssignable)
+    if (blocker) throw new RestoreWriteDeferredError(blocker)
   }
   const ids = async function* (id: string, kind: "members" | "owners"): AsyncGenerator<string> {
     const start = `https://graph.microsoft.com/${kind === "members" ? "beta" : "v1.0"}/groups/${identity(id)}/${kind}?$select=id&$top=999`
@@ -192,7 +204,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
       let admin = false
       for await (const assignment of list(`roleManagement/directory/roleAssignments?$filter=${encodeURIComponent(`principalId eq '${actor.userId}'`)}`)) {
         if (assignment.principalId !== actor.userId || assignment.directoryScopeId !== "/") continue
-        const definition = await request(`roleManagement/directory/roleDefinitions/${identity(assignment.roleDefinitionId)}?$select=templateId`)
+        const definition = await request(`roleManagement/directory/roleDefinitions/${identity(assignment.roleDefinitionId)}?$select=id,templateId`)
         if (["fdd7a751-b60b-444a-984c-02652fe8fa1c", "62e90394-69f5-4237-9190-012177145e10"].includes(String(definition?.templateId))) admin = true
       }
       if (!admin) throw new RestoreSafetyError("Security-group creation requires a current tenant-wide Groups Administrator or Global Administrator assignment. Non-admin creation can implicitly make the restoring account an owner.")
@@ -246,6 +258,8 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
     }
     if (excluded) requireEvidence("privileged-links", "Conditional Access excluded groups remain blocked: indirect security-response recovery is not admitted.")
     if (principal?.["@odata.type"] === "#microsoft.graph.group") requireEvidence("nested-links", "Nested group relationships have no live round trip or admitted indirect-beneficiary guard.")
+    const missingPermission = permissionBlocker(step, result.roleAssignable)
+    if (missingPermission) result.blocker ??= missingPermission
     return result
   }
   return {
@@ -266,7 +280,9 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
     },
     references: async (step, current, desired, readSignal) => {
       if (retryReads || (readSignal && readSignal !== signal)) return directory9aIO(token, actor, safety, fetchImpl, scan, wait, readSignal ?? signal, false, onReadThrottled).references(step, current, desired, readSignal)
+      requirePermissions(step)
       const result = await review(step)
+      requirePermissions(step, result.roleAssignable)
       if (result.blocker) throw new RestoreSafetyError(result.blocker)
       const refs = await safety(step, current, desired)
       if (step.directory?.principalId) refs.principals = [...refs.principals, step.directory.principalId]
@@ -280,13 +296,11 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
         if (restoreFingerprint(body) !== restoreFingerprint(step.desired)) throw new RestoreSafetyError("The directory write no longer matches its approved difference.")
         const type = typeForFolder(step.folder), row = restoreMatrixRow(step.folder)
         if (!type || restoreCapability(type) === "none" || !row || directoryAdmission(step)) throw new RestoreSafetyError(directoryAdmission(step) ?? DIRECTORY_9A_BLOCKER)
+        requirePermissions(step)
         const result = await review(step)
+        requirePermissions(step, result.roleAssignable)
         if (result.blocker) throw new RestoreSafetyError(result.blocker)
         requireDirectoryApprovals(step, run, result.approvals)
-        const permissions = directoryPermissions(step)
-        if (result.roleAssignable && ["create", "member"].includes(step.directory!.action)) permissions.push("RoleManagement.ReadWrite.Directory")
-        const granted = grantedPermissions(token)
-        if (granted?.kind !== "delegated" || permissions.some(permission => !granted.permissions.has(permission))) throw new RestoreSafetyError("The signed-in connection lacks this operation's least-privileged permission.")
         const admittedFields = step.folder === "Users" ? (step.directory?.action === "create" ? ["displayName", "mailNickname", "userPrincipalName", "accountEnabled"] : ["displayName"]) : ["description"]
         if (["create", "update"].includes(step.directory!.action) && !(step.folder === "Groups" && step.directory?.action === "create") && Object.keys(body).some(name => !admittedFields.includes(name))) throw new RestoreSafetyError("Only the live-verified directory metadata subset can be restored.")
         const action = step.directory!.action

@@ -1,3 +1,4 @@
+import { unsetUserFields, unsetGroupFields } from "./fixtures/directory-response"
 import { describe, it, expect, vi } from "vitest"
 import { directoryPayload, directoryReview, approveDirectory, requireDirectoryApprovals, relationshipDifference, previewDirectoryPage, NEVER_RESTORED } from "../src/main/restore/directory-9a"
 import { directory9aIO, directoryPermissions } from "../src/main/restore/directory-9a-io"
@@ -7,9 +8,10 @@ import { restoreMatrixRow } from "../src/shared/intune/restore-matrix"
 import { typeForFolder, restoreCapability, type Item } from "../src/shared/intune/registry"
 const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`
 const actor = { tenantId: uuid(1), userId: uuid(2), clientId: uuid(3), applicationObjectId: uuid(4), servicePrincipalId: uuid(5), recoveryAccountIds: [uuid(6)] }
-const user = { id: uuid(10), displayName: "Restored user", userPrincipalName: "restored@example.com", mailNickname: "restored", userType: "Member", accountEnabled: false }
-const group = { id: uuid(20), displayName: "Restored group", mailNickname: "restored", groupTypes: [], securityEnabled: true, mailEnabled: false, isAssignableToRole: false }
-const principal = { id: uuid(30), displayName: "Member", "@odata.type": "#microsoft.graph.user" }
+const savedUser = { id: uuid(10), displayName: "Restored user", userPrincipalName: "restored@example.com", mailNickname: "restored", userType: "Member", accountEnabled: false }
+const user = { ...unsetUserFields, ...savedUser }
+const group = { ...unsetGroupFields, id: uuid(20), displayName: "Restored group", mailNickname: "restored", groupTypes: [], securityEnabled: true, mailEnabled: false, isAssignableToRole: false }
+const principal = { ...unsetUserFields, userType: "Member", accountEnabled: false, id: uuid(30), displayName: "Member", "@odata.type": "#microsoft.graph.user" }
 const perms = ["User.Create", "User.ReadUpdate.All", "User.EnableDisableAccount.All", "User.Read.All", "User.ReadWrite.All", "User.DeleteRestore.All", "Group.ReadWrite.All", "GroupMember.ReadWrite.All", "RoleManagement.ReadWrite.Directory", "User.Invite.All", "LicenseAssignment.ReadWrite.All"]
 const token = (permissions = perms) => `header.${Buffer.from(JSON.stringify({ tid: actor.tenantId, oid: actor.userId, appid: actor.clientId, scp: permissions.join(" ") })).toString("base64url")}.signature`
 const storage = () => { const values = new Map<string, string>(); return { partitioned: true as const, values, get: (key: string) => values.get(key) ?? null, set: (key: string, value: string) => { values.set(key, value) }, delete: (key: string) => { values.delete(key) } } }
@@ -34,7 +36,7 @@ it("admits only individually evidenced operations and refuses licenses and invit
 })
 
 it("builds disabled users, refuses synced and guest creation, and separates group creation flags", () => {
-  expect(directoryPayload("Users", "create", user)).toMatchObject({ accountEnabled: false })
+  expect(directoryPayload("Users", "create", savedUser)).toMatchObject({ accountEnabled: false })
   expect(directoryPayload("Users", "create", { ...user, accountEnabled: true, passwordProfile: { password: "never restore" } })).not.toHaveProperty("passwordProfile")
   for (const flag of ([{ onPremisesSyncEnabled: true }, { onPremisesLastSyncDateTime: "2026-11-01" }, { onPremisesImmutableId: "old" }, { userType: "Guest" }] as Item[])) expect(() => directoryPayload("Users", "create", { ...user, ...flag })).toThrow()
   for (const flags of [{ mailEnabled: true }, { securityEnabled: false }]) expect(() => directoryPayload("Groups", "create", { ...group, ...flags })).toThrow("cannot be restored")
@@ -73,7 +75,7 @@ for (const action of ["create", "update", "recycle", "invite", "member", "owner"
     if (step.operation === "create") delete step.targetId
     const base = folder === "Users" ? user : group
     if (["member", "owner", "manager"].includes(action)) step.directory!.principalId = principal.id
-    step.desired = action === "create" ? directoryPayload(folder, "create", base) : action === "update" ? { displayName: "Changed" } : action === "recycle" ? { restored: true } : action === "invite" ? { invitedUserEmailAddress: "guest@example.com", invitedUserDisplayName: "Guest", inviteRedirectUrl: "https://myapps.microsoft.com", sendInvitationMessage: false } : action === "manager" ? { principalId: principal.id } : action === "license" ? { assignedLicenses: [{ skuId: uuid(40), disabledPlans: [] }] } : { principalId: principal.id, present: true }
+    step.desired = action === "create" ? directoryPayload(folder, "create", folder === "Users" ? savedUser : base) : action === "update" ? { displayName: "Changed" } : action === "recycle" ? { restored: true } : action === "invite" ? { invitedUserEmailAddress: "guest@example.com", invitedUserDisplayName: "Guest", inviteRedirectUrl: "https://myapps.microsoft.com", sendInvitationMessage: false } : action === "manager" ? { principalId: principal.id } : action === "license" ? { assignedLicenses: [{ skuId: uuid(40), disabledPlans: [] }] } : { principalId: principal.id, present: true }
     step.properties = Object.keys(step.desired)
     let writes = 0, live: Item | null = ["create", "invite", "recycle"].includes(action) ? null : { ...base }, deleted = action === "recycle", related = false, licensed = false
     let secret: string | undefined
@@ -200,7 +202,10 @@ for (const operation of ["create", "update"] as const) it(`group ${operation}: r
   let writes = 0, live: Item | null = operation === "create" ? null : group
   const fetcher = vi.fn(async (_url: RequestInfo | URL, options?: RequestInit) => {
     if (String(_url).includes("roleAssignments")) return Response.json({ value: [{ principalId: actor.userId, directoryScopeId: "/", roleDefinitionId: uuid(50) }] })
-    if (String(_url).includes("roleDefinitions")) return Response.json({ templateId: "fdd7a751-b60b-444a-984c-02652fe8fa1c" })
+    if (String(_url).includes("roleDefinitions")) {
+      expect(new URL(String(_url)).searchParams.get("$select")).toBe("id,templateId")
+      return Response.json({ id: uuid(50), templateId: "fdd7a751-b60b-444a-984c-02652fe8fa1c" })
+    }
     if (options?.method !== "GET") { writes++; live = { ...group, ...step.desired }; throw new Error("Lost create response") }
     if (String(_url).includes("deletedItems")) return new Response(null, { status: 404 })
     return live ? Response.json(live) : new Response(null, { status: 404 })
@@ -274,7 +279,7 @@ it("refuses non-admin group creation before Graph can implicitly add the caller 
 
 it("selects the optional user fields needed to reconcile an unanswered create", async () => {
   const step = stepFor("create", "Users"); delete step.targetId
-  step.desired = directoryPayload("Users", "create", user)
+  step.desired = directoryPayload("Users", "create", savedUser)
   const fetcher = vi.fn(async (input: RequestInfo | URL) => {
     const selected = new URL(String(input)).searchParams.get("$select")?.split(",") ?? ["id", "displayName", "userPrincipalName"]
     return Response.json({ value: [Object.fromEntries(Object.entries({ ...user, id: uuid(90) }).filter(([key]) => selected.includes(key)))] })
@@ -395,7 +400,7 @@ it.each(["Users", "Groups"] as const)("never resends an unconfirmed %s 503 PATCH
 
 it("propagates one raw create lookup throttle without a signal or internal retry", async () => {
   const step = stepFor("create", "Users")
-  step.desired = directoryPayload("Users", "create", user)
+  step.desired = directoryPayload("Users", "create", savedUser)
   const fetcher = vi.fn(async () => new Response(null, { status: 429, headers: { "Retry-After": "1" } })), wait = vi.fn(async () => {})
   const io = directory9aIO(token(), actor, refs, fetcher, undefined, wait)
   await expect(io.findCreated(step, step.desired)).rejects.toMatchObject({ retryAt: expect.any(Number) })

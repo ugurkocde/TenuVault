@@ -1,3 +1,4 @@
+import { unsetUserFields, unsetGroupFields } from "./fixtures/directory-response"
 import { rejectProxyAuthResponses, withNetworkErrors } from "../src/main/api/network-error"
 import { afterEach, expect, it, vi } from "vitest"
 import { DirectoryRestoreService } from "../src/main/restore/directory-service"
@@ -16,8 +17,9 @@ function world(folder: typeof folders[number], wrapped = false) {
   const store = { partitioned: true as const, get: (key: string) => data.get(key) ?? null, set: (key: string, value: string) => { data.set(key, value) }, delete: (key: string) => { data.delete(key) } }
   const settings = new ModuleSettings(store)
   settings.setChoice(tenant, { entra: { access: "restore", areas: ["applications", "usersAndDevices", "groups"] } })
-  const token = `h.${Buffer.from(JSON.stringify({ tid: tenant, oid: userId, appid: clientId, scp: "Application.Read.All Application.ReadWrite.All User.ReadUpdate.All User.ReadWrite.All User.Read.All Group.ReadWrite.All Group.Read.All Policy.Read.All" })).toString("base64url")}.s`
-  const live: Item = folder === "Applications" ? { id: targetId, appId, displayName: "Live", description: "Live" } : folder === "Users" ? { id: targetId, displayName: "Live", userType: "Member", accountEnabled: false } : { id: targetId, displayName: "Live", description: "Live", mailNickname: "group", groupTypes: [], mailEnabled: false, securityEnabled: true, isAssignableToRole: false }
+  let scopes = "Application.Read.All Application.ReadWrite.All User.ReadUpdate.All User.ReadWrite.All User.Read.All Group.ReadWrite.All Group.Read.All Policy.Read.All"
+  const token = () => `h.${Buffer.from(JSON.stringify({ tid: tenant, oid: userId, appid: clientId, scp: scopes })).toString("base64url")}.s`
+  const live: Item = folder === "Applications" ? { id: targetId, appId, displayName: "Live", description: "Live", notes: null } : folder === "Users" ? { ...unsetUserFields, id: targetId, displayName: "Live", userType: "Member", accountEnabled: false } : { ...unsetGroupFields, id: targetId, displayName: "Live", description: "Live", mailNickname: "group", groupTypes: [], mailEnabled: false, securityEnabled: true, isAssignableToRole: false }
   const targetPath = `${folder === "Applications" ? "applications" : folder === "Users" ? "users" : "groups"}/${targetId}`
   const field = folder === "Groups" ? "description" : "displayName"
   const writes: Item[] = []
@@ -36,14 +38,14 @@ function world(folder: typeof folders[number], wrapped = false) {
     if (path.startsWith("identity/conditionalAccess/") || path.endsWith("/memberOf")) return Response.json({ value: [] })
     return new Response(null, { status: 404 })
   })
-  const service = () => new DirectoryRestoreService(store, new RecoveryAccounts(store), async () => ({ token, tenantId: tenant, clientId, userId }), async () => ({ tenantId: tenant, clientId, userId }), wrapped ? withNetworkErrors(rejectProxyAuthResponses(graph)) : graph, () => [], settings)
+  const service = () => new DirectoryRestoreService(store, new RecoveryAccounts(store), async () => ({ token: token(), tenantId: tenant, clientId, userId }), async () => ({ tenantId: tenant, clientId, userId }), wrapped ? withNetworkErrors(rejectProxyAuthResponses(graph)) : graph, () => [], settings)
   const request = (backup = "backup", value = "Saved") => ({ path: `${backup}/${folder}/${targetId}.json`, origin: "restore" as const, snapshot: { ...live, [field]: value } })
   const prepare = async (requestValue = request()) => service().prepare(tenant, requestValue, options, async () => requestValue.snapshot)
   type Page = Awaited<ReturnType<typeof prepare>>
   const execute = (page: Page, requestValue = request()) => service().execute(tenant, { ...requestValue, runId: page.runId }, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])))
   const locks = () => Object.keys(JSON.parse(data.get(`restore.directory.coordinator.${tenant}`) ?? '{"locks":{}}').locks)
   const entry = (page: Page) => JSON.parse([...data.entries()].find(([key]) => key.includes(`${page.runId}.batch.0.restore.guarded.`))![1]).runs[page.runId].entries[0]
-  return { settings, data, store, graph, live, writes, targetPath, field, service, request, prepare, execute, locks, entry }
+  return { setScopes: (value: string) => { scopes = value }, settings, data, store, graph, live, writes, targetPath, field, service, request, prepare, execute, locks, entry }
 }
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals() })
 
@@ -486,7 +488,7 @@ it.each([
       if (manager) { expect(path).toBe(`${env.targetPath}/manager/$ref`); managerId = b; return Promise.resolve(new Response(null, { status: 204 })) }
     }
     if (manager && path === `${env.targetPath}/manager`) { reads++; return Promise.resolve(Response.json({ id: stale ? a : managerId })) }
-    if (manager && path.startsWith("users/") && path !== env.targetPath) return Promise.resolve(Response.json({ id: path.split("/")[1], displayName: "Manager", userType: "Member", accountEnabled: false }))
+    if (manager && path.startsWith("users/") && path !== env.targetPath) return Promise.resolve(Response.json({ ...unsetUserFields, id: path.split("/")[1], displayName: "Manager", userType: "Member", accountEnabled: false }))
     if (!manager && path === env.targetPath && method === "GET") { reads++; return Promise.resolve(Response.json({ ...env.live, ...(stale ? { [field]: a } : {}) })) }
     return original(input, init)
   })
@@ -553,8 +555,8 @@ it.each(folders)("previews and sends ordinary Bearer token authentication prose 
   expect(env.writes).toEqual([{ [env.field]: "Bearer token authentication" }])
 })
 
-it.each(folders.flatMap(folder => ["JWT", "Bearer token"].map(secret => ({ folder, secret }))))("refuses $secret in $folder metadata at preview before approval or journal publication", async ({ folder, secret }) => {
-  const env = world(folder), value = secret === "JWT" ? "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJmaXh0dXJlIn0.c2lnbmF0dXJl" : "Bearer " + "a".repeat(64)
+it.each(folders.flatMap(folder => ["JWT", "Bearer token", "Azure AD client secret", "Basic auth"].map(secret => ({ folder, secret }))))("refuses $secret in $folder metadata at preview before approval or journal publication", async ({ folder, secret }) => {
+  const env = world(folder), value = secret === "JWT" ? "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJmaXh0dXJlIn0.c2lnbmF0dXJl" : secret === "Bearer token" ? "Bearer " + "a".repeat(64) : secret === "Basic auth" ? "Basic " + Buffer.from("username:password-for-test-only").toString("base64") : "abc8Q~" + "a".repeat(32)
   await expect(env.prepare(env.request("backup", value))).rejects.toThrow("Credential values")
   expect([...env.data.keys()].some(key => key.startsWith("restore.directory.review.") || key.includes("restore.guarded."))).toBe(false)
   expect([...env.data.values()].some(saved => saved.includes(value))).toBe(false)
@@ -568,5 +570,56 @@ it.each(folders)("refuses a JWT in an unchanged live %s field during preview bef
   env.live[folder === "Applications" ? "description" : folder === "Groups" ? "displayName" : "jobTitle"] = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJmaXh0dXJlIn0.c2lnbmF0dXJl"
   await expect(env.prepare(request)).rejects.toThrow("Credential values")
   expect([...env.data.keys()].some(key => key.includes("restore.guarded."))).toBe(false)
+  expect(env.writes).toEqual([])
+})
+
+it.each(folders.flatMap(folder => ["initial", "final"].flatMap(phase => ["empty object", "missing selected field", "non-string id"].map(shape => ({ folder, phase, shape })))))("resumes $folder after $phase evidence has $shape and sends the approved write once", async ({ folder, phase, shape }) => {
+  const env = world(folder), request = env.request(), page = await env.prepare(request), original = env.graph.getMockImplementation()!
+  let reads = 0, malformed = false
+  const failureRead = phase === "initial" ? 1 : folder === "Users" ? 4 : 5
+  env.graph.mockImplementation((input, init) => {
+    if (!malformed && new URL(String(input)).pathname === `/v1.0/${env.targetPath}` && init?.method === "GET" && ++reads === failureRead) {
+      malformed = true
+      const value = shape === "empty object" ? {} : { ...env.live }
+      if (shape === "missing selected field") delete value.displayName
+      if (shape === "non-string id") value.id = 42
+      return Promise.resolve(Response.json(value))
+    }
+    return original(input, init)
+  })
+  expect(await env.execute(page, request)).toMatchObject({ failed: 0, outcomes: [{ state: "deferred", reason: expect.stringContaining("temporary Microsoft Graph read failure") }] })
+  expect(malformed).toBe(true); expect(env.writes).toEqual([]); expect(env.locks()).toHaveLength(1)
+  expect(await env.execute(page, request)).toMatchObject({ status: "complete", outcomes: [{ state: "applied" }] })
+  await env.execute(page, request)
+  expect(env.writes).toEqual([{ [env.field]: "Saved" }]); expect(env.locks()).toEqual([])
+})
+
+const writeScope = (folder: typeof folders[number]) => folder === "Applications" ? "Application.ReadWrite.All" : folder === "Groups" ? "Group.ReadWrite.All" : "User.ReadUpdate.All"
+const readScopes = "Application.Read.All User.Read.All Group.Read.All Policy.Read.All"
+it.each(folders)("blocks %s preview approval with the missing operation scope named", async folder => {
+  const env = world(folder)
+  env.setScopes(readScopes)
+  const request = env.request(), page = await env.prepare(request)
+  expect(page.rows).toHaveLength(1)
+  expect(page.rows[0]!.review.blocker).toBe(`The signed-in connection lacks this operation's least-privileged permission: ${writeScope(folder)}.`)
+  await expect(env.execute(page, request)).rejects.toThrow()
+  expect(env.writes).toEqual([])
+})
+it.each(folders)("defers an approved %s row after its write scope is lost and resumes after consent", async folder => {
+  const env = world(folder), request = env.request(), page = await env.prepare(request)
+  expect(page.rows[0]!.review.blocker).toBeUndefined()
+  env.setScopes(readScopes)
+  expect(await env.execute(page, request)).toMatchObject({ failed: 0, outcomes: [{ state: "deferred", reason: `The signed-in connection lacks this operation's least-privileged permission: ${writeScope(folder)}.` }] })
+  expect(env.writes).toEqual([]); expect(env.locks()).toHaveLength(1)
+  env.setScopes(`${readScopes} ${writeScope(folder)}`)
+  expect(await env.execute(page, request)).toMatchObject({ status: "complete", outcomes: [{ state: "applied" }] })
+  await env.execute(page, request)
+  expect(env.writes).toEqual([{ [env.field]: "Saved" }]); expect(env.locks()).toEqual([])
+})
+
+it.each(folders)("keeps well-formed wrong %s identity evidence as a safety refusal", async folder => {
+  const env = world(folder), request = env.request(), page = await env.prepare(request), original = env.graph.getMockImplementation()!
+  env.graph.mockImplementation((input, init) => new URL(String(input)).pathname === `/v1.0/${env.targetPath}` && init?.method === "GET" ? Promise.resolve(Response.json({ ...env.live, id: id(900) })) : original(input, init))
+  expect(await env.execute(page, request)).toMatchObject({ failed: 1, outcomes: [{ state: "blocked", reason: expect.stringMatching(/identity changed|changed after this preview/) }] })
   expect(env.writes).toEqual([])
 })

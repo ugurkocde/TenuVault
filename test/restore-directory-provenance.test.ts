@@ -1,3 +1,4 @@
+import { unsetUserFields, unsetGroupFields } from "./fixtures/directory-response"
 import { afterEach, expect, it, vi } from "vitest"
 import { POST } from "../src/portal/app/api/restore-directory/route"
 import { setDirectoryRestoreService } from "../src/main/restore/directory-dispatch"
@@ -16,7 +17,7 @@ function world(folder: string) {
   const store = { partitioned: true as const, get: (key: string) => data.get(key) ?? null, set: (key: string, value: string) => { data.set(key, value) }, delete: (key: string) => { data.delete(key) } }
   const settings = new ModuleSettings(store)
   settings.setChoice(tenant, { entra: { access: "restore", areas: ["applications", "groups", "usersAndDevices"] } })
-  const snapshot: Item = { id: resource, appId: id(11), displayName: "Saved", description: "Saved description", userType: "Member", mailNickname: "group", groupTypes: [], mailEnabled: false, securityEnabled: true, isAssignableToRole: false }
+  const snapshot: Item = { ...unsetUserFields, ...unsetGroupFields, accountEnabled: false, notes: null, id: resource, appId: id(11), displayName: "Saved", description: "Saved description", userType: "Member", mailNickname: "group", groupTypes: [], mailEnabled: false, securityEnabled: true, isAssignableToRole: false }
   const token = `h.${Buffer.from(JSON.stringify({ tid: tenant, oid: admin, appid: appId, scp: "Application.Read.All Application.ReadWrite.All User.Read.All User.ReadUpdate.All Group.Read.All Group.ReadWrite.All Policy.Read.All" })).toString("base64url")}.s`
   const graph = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input)), path = url.pathname.replace("/v1.0/", "")

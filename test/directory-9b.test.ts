@@ -16,7 +16,7 @@ import { restoreCapability, typeForFolder, type Item } from "../src/shared/intun
 import { executeGuardedRun, restoreFingerprint, GuardedRunJournal, type GuardedRun, type GuardedStep } from "../src/main/restore/guarded-run"
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12,"0")}`
 const actor = { tenantId: id(1), userId: id(2), clientId: id(3), applicationObjectId: id(4), servicePrincipalId: id(5), recoveryAccountIds: [id(6)] }
-const app = { id: id(10), appId: id(11), displayName: "API", appOwnerOrganizationId: id(1), servicePrincipalType: "Application", appRoles: [{ id: id(90), displayName: "Test role", isEnabled: true, allowedMemberTypes: ["Application"] }], oauth2PermissionScopes: [{ value: "Test.Read", isEnabled: true }] }
+const app = { tags: null, description: null, notes: null, id: id(10), appId: id(11), displayName: "API", appOwnerOrganizationId: id(1), servicePrincipalType: "Application", appRoles: [{ id: id(90), displayName: "Test role", isEnabled: true, allowedMemberTypes: ["Application"] }], oauth2PermissionScopes: [{ value: "Test.Read", isEnabled: true }] }
 const client = { ...app, id: id(12), appId: id(13), displayName: "Client" }
 const token = `h.${Buffer.from(JSON.stringify({ tid: actor.tenantId, oid: actor.userId, appid: actor.clientId, scp: "Application.Read.All Directory.Read.All Application.ReadWrite.All DelegatedPermissionGrant.ReadWrite.All AppRoleAssignment.ReadWrite.All" })).toString("base64url")}.s`
 function world() {
@@ -555,7 +555,7 @@ it.each(portalVariants)("refuses %s through the owned portal route, dispatcher a
   }
   if (variant.endsWith("Policies")) { rows[variant] = [id(80)]; snapshot[variant] = declaration(rows[variant]!, true) }
   const original = env.fetcher.getMockImplementation()!
-  env.fetcher.mockImplementation((url, init) => String(url).includes(`users/${id(60)}`) ? Promise.resolve(Response.json({ id: id(60), displayName: "Owner" })) : original(url, init))
+  env.fetcher.mockImplementation((url, init) => String(url).includes(`users/${id(60)}`) ? Promise.resolve(Response.json({ id: id(60), displayName: "Owner", onPremisesSyncEnabled: null })) : original(url, init))
   const path = `backup/${folder}/${snapshot.id}.json`
   const storage = vi.fn(async (url: RequestInfo | URL) => {
     const text = String(url)

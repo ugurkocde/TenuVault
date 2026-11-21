@@ -2,7 +2,8 @@ import { rejectProxyAuthResponses } from "../api/network-error"
 import { DirectoryReadDeferredError, DirectoryThrottledError, retryDirectoryWrite } from "./directory-retry"
 import { typeForFolder, type Item } from "../../shared/intune/registry"
 import { graphContinuation } from "../../shared/graph-continuation"
-import { grantedPermissions } from "../../shared/services/token"
+import { directoryPermissionBlocker } from "./directory-permissions"
+import { directoryReadShape } from "./directory-read-shape"
 import { RestoreSafetyError, RestoreWriteDeferredError, RestoreWriteRefusedError, guardRestoreItem, type RestoreActor } from "../../shared/intune/restore-guards"
 import { requireRestoreActor } from "./restore-actor"
 import { requireDirectoryApprovals } from "./directory-9a"
@@ -43,14 +44,20 @@ export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typ
       throw new RestoreWriteRefusedError(response.status)
     }
     if (method === "GET" && !/^application\/(?:[\w.+-]+\+)?json(?:\s*;|$)/i.test(response.headers.get("Content-Type") ?? "")) throw new DirectoryReadDeferredError()
-    if (response.status === 204) return {}
+    if (response.status === 204) {
+      if (method === "GET") throw new DirectoryReadDeferredError()
+      return {}
+    }
     const text = await response.text().catch(error => {
       if (isRestorePersistenceError(error)) throw error
       if (method === "GET" && signal?.aborted) throw new RestoreWriteDeferredError("The application read was cancelled before sending a write.")
       if (method === "GET") throw new DirectoryReadDeferredError()
       throw error
     })
-    try { return JSON.parse(text) as Item }
+    try {
+      const value: unknown = JSON.parse(text)
+      return method === "GET" ? directoryReadShape(value, new URL(root + path)) : value as Item
+    }
     catch (error) {
       if (method === "GET") throw new DirectoryReadDeferredError()
       throw error
@@ -154,6 +161,11 @@ export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typ
     }
     return applicationReview(step, current, resource, principal, actor)
   }
+  const permissionBlocker = (step: GuardedStep) => directoryPermissionBlocker(token, applicationPermissions(step))
+  const requirePermissions = (step: GuardedStep) => {
+    const blocker = permissionBlocker(step)
+    if (blocker) throw new RestoreWriteDeferredError(blocker)
+  }
   const preview = async (step: GuardedStep) => {
     requireApplicationRestoreAccess(settings())
     const current = await read(step, step.targetId)
@@ -163,9 +175,13 @@ export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typ
       step.desired = Object.fromEntries(Object.entries(step.desired).filter(([key, value]) => JSON.stringify(current?.[key]) !== JSON.stringify(value)))
       step.properties = Object.keys(step.desired)
     }
-    return review(step, current)
+    const result = await review(step, current)
+    const missingPermission = permissionBlocker(step)
+    if (missingPermission) result.blocker ??= missingPermission
+    return result
   }
   const references: GuardedIO["references"] = async (step, _current, _desired, signal) => {
+    requirePermissions(step)
     const result = await review(step, undefined, signal)
     if (result.blocker) throw new RestoreSafetyError(result.blocker)
     return { complete: true, principals: result.principal ? [result.principal.id] : [], applications: [result.resource.id, step.directory?.clientAppId ?? "", step.directory?.resourceAppId ?? ""] }
@@ -194,8 +210,7 @@ export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typ
           if (blocker) throw new RestoreSafetyError(blocker)
           if (!run || run.origin !== "restore" || run.tenant !== actor.tenantId || !run.source) throw new RestoreSafetyError("Application access can only be restored from an owned same-tenant backup.")
           requireDirectoryApprovals(step, run, ["directory-item"])
-          const granted = grantedPermissions(token)
-          if (granted?.kind !== "delegated" || applicationPermissions(step).some(permission => !granted.permissions.has(permission))) throw new RestoreSafetyError("The signed-in connection lacks this operation's least-privileged permission.")
+          requirePermissions(step)
           const path = `applications/${appIdentity(targetId)}`
           // Build only the exact reviewed changes. No live field is copied into the PATCH.
           const payload = Object.fromEntries(Object.entries(body).filter(([key, value]) => ["displayName", "description"].includes(key) && typeof value === "string" && value.trim()))

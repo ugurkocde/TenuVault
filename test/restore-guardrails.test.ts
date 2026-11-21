@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
-import { GuardedRunJournal, executeGuardedRun, restoreFingerprint, type GuardedIO, type GuardedRun, type GuardedStep } from "../src/main/restore/guarded-run"
+import { GuardedRunJournal, assertNoSecrets, executeGuardedRun, restoreFingerprint, type GuardedIO, type GuardedRun, type GuardedStep } from "../src/main/restore/guarded-run"
 import { requireRestoreActor } from "../src/main/restore/restore-actor"
 import { addsOnly, addsOnlyPayload, RestoreWriteRefusedError, guardRestoreItem, mergeConsentScopes, restoreOriginBlocker, type RestoreActor } from "../src/shared/intune/restore-guards"
 import { dependencyOrder, mappedReference, rememberMapping, replacedReferenceReport, type RestoreMapping } from "../src/shared/intune/restore-references"
@@ -138,7 +138,7 @@ describe("durable touched-object journal", () => {
     await executeGuardedRun(s.journal, s.input, s.io)
     s.input.entries[0]!.step.desired = { displayName: "different" }
     await expect(executeGuardedRun(s.journal, s.input, s.io)).rejects.toThrow("plan changed")
-    for (const value of [{ password: "x" }, { passwordCredentials: [] }, { keyCredentials: [] }, { passwordProfile: { password: "x" } }, { nested: { clientSecret: "x" } }, { description: "Bearer " + "a".repeat(64) }] as Item[]) expect(() => s.journal.save({ ...s.input, entries: [{ ...s.input.entries[0]!, before: value }] })).toThrow("Credential")
+    for (const value of [{ password: "x" }, { passwordCredentials: [] }, { keyCredentials: [] }, { passwordProfile: { password: "x" } }, { nested: { clientSecret: "x" } }, { description: "Bearer " + "a".repeat(64) }, { description: "abc8Q~" + "a".repeat(32) }, { description: "Basic " + Buffer.from("user:a-long-test-password-value").toString("base64") }] as Item[]) expect(() => s.journal.save({ ...s.input, entries: [{ ...s.input.entries[0]!, before: value }] })).toThrow("Credential")
     s.memory.set([...s.memory.keys()][0]!, "broken")
     expect(() => s.journal.load("tenant", "run")).toThrow()
   })
@@ -335,4 +335,11 @@ it.each(["captured", "failed"] as const)("binds retained %s publication to its e
   env.journal.save(env.input)
   publish()
   expect(env.journal.load("tenant", "run")!.entries).toMatchObject([{ state: "uncertain", attempt: 2 }, { state: "uncertain", attempt: 1 }])
+})
+
+it.each(["Basic authentication for the operations team", "Azure AD client secret rotation guide", "Bearer token authentication", "Basic needs a username and password", "Team directory recovery notes"])("allows ordinary description: %s", description => {
+  expect(() => assertNoSecrets({ description })).not.toThrow()
+})
+it.each(["abc8Q~" + "a".repeat(31), "A_.9Q~" + "b".repeat(34), "Basic " + Buffer.from("user:a-long-test-password-value").toString("base64")])("refuses credential values in nested descriptions: %s", description => {
+  expect(() => assertNoSecrets({ nested: { description } })).toThrow("Credential values")
 })

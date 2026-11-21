@@ -113,7 +113,7 @@ export function directoryObjectState(store: KeyValueStore, tenant: string, owner
           }
         } catch (error) {
           const affected = targets[0]
-          if (ids && affected) {
+          if (affected) {
             if (isRestorePersistenceError(error)) throw error
             invalid(affected)
           }

@@ -1,10 +1,11 @@
+import { unsetUserFields, unsetGroupFields } from "./fixtures/directory-response"
 import { rejectProxyAuthResponses, withNetworkErrors } from "../src/main/api/network-error"
 import { planGuard } from "../src/main/api/plan-gates"
 import { DirectoryPendingPublications } from "../src/main/restore/directory-pending-publications"
 import { setDirectoryRestoreService } from "../src/main/restore/directory-dispatch"
 import { POST as restoreDirectory } from "../src/portal/app/api/restore-directory/route"
 import { RestoreSafetyError, RestoreWriteDeferredError } from "../src/shared/intune/restore-guards"
-import { DirectoryRetryPersistenceError } from "../src/main/restore/directory-retry"
+import { DirectoryReadDeferredError, DirectoryRetryPersistenceError } from "../src/main/restore/directory-retry"
 import { INTUNE_TYPES } from "../src/shared/intune/registry"
 import { backupNeed } from "../src/shared/services/modules"
 import { ApiHost } from "../src/main/api/host"
@@ -35,7 +36,7 @@ function world(count = 0, missing = false, now: () => number = () => Date.now(),
   const store = { partitioned: true as const, get: (key: string) => data.get(key) ?? null, set: (key: string, value: string) => { data.set(key, value) }, delete: (key: string) => { data.delete(key) } }
   const settings = new ModuleSettings(store)
   settings.setChoice(tenant, { entra: { access: "restore", areas: ["usersAndDevices", "groups"] } })
-  const group: Item = { id: resource, displayName: "Group", mailNickname: "group", groupTypes: [], mailEnabled: false, securityEnabled: true, isAssignableToRole: false }
+  const group: Item = { ...unsetGroupFields, id: resource, displayName: "Group", mailNickname: "group", groupTypes: [], mailEnabled: false, securityEnabled: true, isAssignableToRole: false }
   const saved = Array.from({ length: count }, (_, n) => id(100 + n))
   const declaration = { format: "sorted-id-shards-v1", count, shards: Math.ceil(count / LARGE_SHARD_ITEMS), complete: true, hash: createHash("sha256").update(saved.map(value => JSON.stringify(value) + "\n").join("")).digest("hex") }
   const snapshot: Item & { members: typeof declaration; owners: typeof declaration } = { ...group, members: declaration, owners: { ...declaration, count: 0, shards: 0, hash: createHash("sha256").digest("hex") } }
@@ -54,12 +55,12 @@ function world(count = 0, missing = false, now: () => number = () => Date.now(),
     if (path.endsWith("/memberOf")) return Response.json({ value: [] })
     if (path.startsWith("identity/conditionalAccess/")) return Response.json({ value: [] })
     if (path === "roleManagement/directory/roleAssignments") return Response.json({ value: [{ principalId: admin, directoryScopeId: "/", roleDefinitionId: id(50) }] })
-    if (path === `roleManagement/directory/roleDefinitions/${id(50)}`) return Response.json({ templateId: "fdd7a751-b60b-444a-984c-02652fe8fa1c" })
+    if (path === `roleManagement/directory/roleDefinitions/${id(50)}`) return Response.json({ id: id(50), templateId: "fdd7a751-b60b-444a-984c-02652fe8fa1c" })
     if (path === `groups/${target}`) return Response.json(group)
     if (path === `groups/${resource}/members`) return Response.json({ value: [...members].map(id => ({ id })) })
     if (path === `groups/${resource}/owners`) return Response.json({ value: [] })
     if (path.startsWith(`groups/${resource}/members/`)) return members.has(path.split("/")[3]!) ? Response.json({ id: path.split("/")[3] }) : new Response(null, { status: 404 })
-    if (path.startsWith("users/")) return Response.json({ id: path.split("/")[1], displayName: "Person", userType: "Member", accountEnabled: false })
+    if (path.startsWith("users/")) return Response.json({ ...unsetUserFields, id: path.split("/")[1], displayName: "Person", userType: "Member", accountEnabled: false })
     return new Response(null, { status: 404 })
   })
   const connection = async () => ({ token, tenantId: tenant, clientId: app, userId: admin })
@@ -163,7 +164,7 @@ it("accepts the lab's explicit null role flag and refuses an omitted role classi
   expect(page.rows[0]!.review.blocker).toBeUndefined()
   expect(await service.execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, { [page.rows[0]!.key]: page.rows[0]!.review.approvals })).toMatchObject({ status: "complete" })
   delete env.group.isAssignableToRole; env.members.clear()
-  await expect(service.prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read)).rejects.toThrow("privilege could not be resolved")
+  await expect(service.prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read)).rejects.toThrow(DirectoryReadDeferredError)
   expect(env.writes).toHaveLength(1)
 })
 
@@ -567,7 +568,7 @@ it("uses one fresh snapshot for inventory review and refuses an already matching
   expect(next.rows[0]!.review.changes).toEqual([])
   expect(next.rows[0]!.review.blocker).toContain("already matches")
   const saved = JSON.parse(env.data.get(`restore.directory.review.${tenant}.${next.runId}`)!)
-  expect(saved.run.entries[0].step.preview).toBe(restoreFingerprint({ id: resource, present: true, principalId: id(150), resource: env.group, principal: { id: id(150), displayName: "Person", userType: "Member", accountEnabled: false, "@odata.type": "#microsoft.graph.user" } }))
+  expect(saved.run.entries[0].step.preview).toBe(restoreFingerprint({ id: resource, present: true, principalId: id(150), resource: env.group, principal: { ...unsetUserFields, id: id(150), displayName: "Person", userType: "Member", accountEnabled: false, "@odata.type": "#microsoft.graph.user" } }))
   await expect(service.execute(tenant, { ...env.request, runId: next.runId }, next.fingerprint, Object.fromEntries(next.rows.map(row => [row.key, row.review.approvals])))).rejects.toThrow("Approve each")
   expect(env.writes).toEqual([])
 })
@@ -1473,7 +1474,7 @@ it.each(["before preview", "after preview"])("recovers a recreated user's journa
     }
     if (path === "/v1.0/users") return Response.json({ value: [] })
     if (path === `/v1.0/users/${source}`) return new Response(null, { status: 404 })
-    if (path === `/v1.0/users/${target}`) return Response.json({ ...userRequest.snapshot, id: target })
+    if (path === `/v1.0/users/${target}`) return Response.json({ ...unsetUserFields, ...userRequest.snapshot, id: target })
     return original(input, init)
   })
   const user = await service.prepare(tenant, userRequest, options, env.read)

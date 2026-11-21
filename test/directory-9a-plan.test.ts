@@ -1,3 +1,4 @@
+import { unsetUserFields, unsetGroupFields } from "./fixtures/directory-response"
 import { expect, it, vi } from "vitest"
 import { directoryObjectStep, directoryRelationshipSteps, mappedDirectoryIds } from "../src/main/restore/directory-9a-plan"
 import { directory9aIO } from "../src/main/restore/directory-9a-io"
@@ -8,10 +9,10 @@ const actor = { tenantId: "tenant", userId: "admin", clientId: "client", recover
 const token = `header.${Buffer.from(JSON.stringify({ tid: "tenant", oid: "admin", appid: "client", scp: "User.Read.All Group.Read.All" })).toString("base64url")}.signature`
 const ioFor = (mode: "absent" | "live" | "deleted") => directory9aIO(token, actor, async () => ({ complete: true, principals: [], applications: [] }), vi.fn(async (input: RequestInfo | URL) => {
   const path = new URL(String(input)).pathname
-  if (path === `/v1.0/users/${manager}`) return Response.json({ id: manager, displayName: "Manager" })
+  if (path === `/v1.0/users/${manager}`) return Response.json({ ...unsetUserFields, id: manager, displayName: "Manager", userType: "Member", accountEnabled: false })
   if (path.endsWith("/manager")) return Response.json({ id: manager })
   if (path.includes("deletedItems")) return mode === "deleted" ? Response.json({ id, displayName: "Deleted user" }) : new Response(null, { status: 404 })
-  return mode === "live" ? Response.json({ id, displayName: "User", assignedLicenses: [] }) : new Response(null, { status: 404 })
+  return mode === "live" ? Response.json(path.startsWith("/v1.0/groups/") ? { ...unsetGroupFields, id, displayName: "Group", mailNickname: null, groupTypes: [], mailEnabled: false, securityEnabled: true, isAssignableToRole: null } : { ...unsetUserFields, id, displayName: "User", userType: "Member", accountEnabled: false, assignedLicenses: [] }) : new Response(null, { status: 404 })
 }))
 it("creates from a real backup schema without mailNickname and distinguishes recycle, update and guest invitation", async () => {
   const snapshot = { id, displayName: "Saved", userPrincipalName: "saved@example.com", userType: "Member" }
