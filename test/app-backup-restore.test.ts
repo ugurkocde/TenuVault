@@ -1,6 +1,8 @@
+import { createBridgedFetch } from "../src/main/api/fetch-bridge"
+import { graphDispatchGuard, setRestoreUploadGuard } from "../src/main/write-approvals/dispatch"
 import { setWriteApprovals } from "../src/main/write-approvals/service"
-import { reviewer, writeApprovalFixture } from "./helpers/write-approval-fixture"
-import { afterEach, beforeAll, afterAll, describe, expect, it, vi } from "vitest"
+import { requester, reviewer, unenrolledApprovals, writeApprovalFixture } from "./helpers/write-approval-fixture"
+import { afterEach, beforeEach, beforeAll, afterAll, describe, expect, it, vi } from "vitest"
 import { createCipheriv, createHash, createHmac, randomBytes, randomUUID } from "node:crypto"
 import { mkdtemp, readFile, rm, writeFile, readdir, mkdir } from "node:fs/promises"
 import { readFileSync } from "node:fs"
@@ -12,6 +14,7 @@ import { spawn } from "node:child_process"
 import { once } from "node:events"
 import { AppSourceStore } from "../src/main/app-sources/store"
 import { AppSourceService } from "../src/main/app-sources/service"
+import { appSourceRestoreHandler } from "../src/main/app-sources/restore-ipc"
 import { restoreDestinationPlan } from "../src/main/app-backup/restore-plan"
 import { withPlanError } from "../src/shared/plan-errors"
 import { LicenseService } from "../src/main/license/service"
@@ -22,6 +25,9 @@ import { restoreCapturedApp } from "../src/main/app-backup/restore"
 import { restoreGraph, putRestoreBlock, type RestoreGraph } from "../src/main/app-backup/restore-graph"
 import { assertRestoredSettings, readRestoreSnapshot, restoreBody, snapshotHash, type AppRestoreSnapshot } from "../src/main/app-backup/restore-snapshot"
 import { encryptRestoreContent, newRestoreSecrets } from "../src/main/app-backup/restore-encryption"
+
+beforeEach(() => setWriteApprovals(unenrolledApprovals("device")))
+afterEach(() => setWriteApprovals(undefined))
 
 const tenant = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", target = "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff", appId = "33333333-3333-3333-3333-333333333333"
 const identity = { tenantId: tenant, appId, contentVersion: "1", contentFileId: `sha256:${"a".repeat(64)}`, appType: "#microsoft.graph.win32LobApp" as const }
@@ -469,4 +475,62 @@ it("binds the verified App Backup source before writes and retains the requested
     expect(d.calls.filter(([method, path]) => method === "POST" && path.endsWith("/mobileApps"))).toHaveLength(1)
     expect(d.fetcher).toHaveBeenCalled()
   } finally { setWriteApprovals(undefined) }
+})
+
+
+it("binds the content version on App Backup IPC resume and checks uploads through the production transports", async () => {
+  const f = await fixture(), d = destination()
+  const { profile, state } = writeApprovalFixture()
+  const first = profile(), second = profile(reviewer)
+  const network = async (input: RequestInfo | URL, init?: RequestInit) => {
+    const request = new Request(input, init), url = new URL(request.url)
+    if (url.hostname.endsWith(".blob.core.windows.net")) return d.fetcher(input, init)
+    const method = request.method as Parameters<RestoreGraph>[0]
+    const body = request.body ? await request.json() as Record<string, unknown> : undefined
+    return Response.json(await d.graph(method, url.href, body))
+  }
+  const transport = createBridgedFetch({
+    dispatch: async () => new Response(null, { status: 404 }), getDelegatedToken: async () => ({ accessToken: "token", expiresOn: null }),
+    authorizeGraph: graphDispatchGuard(first.service, () => ({ tenant: target, actor: requester, current: () => true })),
+    fetch: network,
+  })
+  setRestoreUploadGuard(tenantId => first.service.authorize(tenantId, requester))
+  const service = new AppSourceService({
+    restore: (store, source, configuration, destination, name, signal, progress) => restoreCapturedApp(store, source, configuration, destination, name, {
+      graph: restoreGraph(async () => "token", transport, signal), fetch: transport, signal, progress, wait: async () => {},
+    }),
+    restorePlan: async () => "pro", knownTenant: id => [tenant, target].includes(id), folder: () => f.root, keys: () => [f.master],
+    setFolder: vi.fn(), pickFolder: vi.fn(), pickExport: vi.fn(), openFolder: vi.fn(), confirmNewStore: vi.fn(), checkDevice: vi.fn(), signIn: vi.fn(),
+    details: vi.fn(), apps: vi.fn(), printDetails: vi.fn(), downloadScript: vi.fn(),
+  })
+  const handler = appSourceRestoreHandler(service)
+  const run = () => handler(undefined, tenant, randomUUID(), f.source.id, target, "Restored", snapshotHash(snapshot))
+  try {
+    // Start an owned draft in the earlier, unprotected flow and lose the create response.
+    d.loseCreate()
+    await expect(run()).rejects.toThrow("interrupted")
+    expect(d.calls.filter(([method]) => method !== "GET")).toHaveLength(1)
+    setWriteApprovals(first.service)
+    await first.service.enable(target)
+    await expect(run()).rejects.toThrow("pending")
+    expect(d.calls.filter(([method]) => method !== "GET")).toHaveLength(1)
+    const row = (await second.service.inbox(target)).requests[0]!
+    await second.service.decide(target, row.request.id, "approve")
+    const base = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps"
+    let changed: Promise<unknown> | undefined
+    state.beforeAudit = event => {
+      if (event.action.endsWith("claimed")) changed = d.graph("POST", `${base}/${d.app!.id}/microsoft.graph.win32LobApp/contentVersions`, {})
+    }
+    await expect(run()).rejects.toThrow("destination changed after review")
+    await changed
+    expect(d.calls.filter(([method]) => method !== "GET")).toHaveLength(2)
+    expect(d.fetcher).not.toHaveBeenCalled()
+    state.beforeAudit = undefined
+    await expect(run()).rejects.toThrow("pending")
+    const pending = (await second.service.inbox(target)).requests.find(row => row.request.state === "pending")!
+    await second.service.decide(target, pending.request.id, "approve")
+    await expect(run()).resolves.toMatchObject({ appId: d.app!.id, contentVersion: "1" })
+    expect(d.calls.filter(([method, url]) => method === "POST" && url.endsWith("/contentVersions"))).toHaveLength(1)
+    expect(d.fetcher).toHaveBeenCalledTimes(2)
+  } finally { setRestoreUploadGuard(undefined); setWriteApprovals(undefined) }
 })

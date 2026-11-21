@@ -540,22 +540,27 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
         .catch(() => undefined)
     }, 700)
     try {
-      for (const batch of batches) {
+      const groupedRetry = copying && retry
+      const selections = (batch: (typeof batches)[number]) => batch.paths.map(path => ({
+        path, repairToken: previous.find(item => item.path === path && item.targetTenantId?.toLowerCase() === batch.targetTenantId)?.repairToken,
+      }))
+      const requests = groupedRetry ? [{ paths: [...new Set(batches.flatMap(batch => batch.paths))] }] : batches
+      for (const batch of requests) {
         id = crypto.randomUUID()
         progressId.current = id
         const targets = copying
-          ? copyCandidates.filter((target) => batch.targetTenantId
-            ? target.tenantId.toLowerCase() === batch.targetTenantId
-            : copyTargets.includes(target.tenantId))
+          ? copyCandidates.filter(target => groupedRetry
+            ? batches.some(entry => entry.targetTenantId === target.tenantId.toLowerCase())
+            : batch.targetTenantId ? target.tenantId.toLowerCase() === batch.targetTenantId : copyTargets.includes(target.tenantId))
           : []
-        if (copying && !targets.length) throw new Error("The original target tenant is no longer connected.")
-        attempted.push(batch)
+        if (copying && (!targets.length || groupedRetry && targets.length !== batches.length)) throw new Error("The original target tenant is no longer connected.")
+        attempted.push(...(groupedRetry ? batches : [batch]))
         const data = await post<{ success: boolean; message: string; details?: { restoredCount: number; unchangedCount?: number; results: Outcome[] } }>("/api/restore-backup", {
           ...tenant.credentials,
           storageAccountName: tenant.storageAccountName,
           backupId,
           restoreType: "selective",
-          selectedPolicies: batch.paths.map((path) => ({ path, repairToken: previous.find((item) => item.path === path && item.targetTenantId?.toLowerCase() === batch.targetTenantId)?.repairToken })),
+          selectedPolicies: groupedRetry ? batch.paths.map(path => ({ path })) : selections(batch),
           dependencyMappings,
           confirmMappings: mappingsConfirmed,
           justification: copying ? undefined : justification.trim() || undefined,
@@ -563,7 +568,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
           assignments: copying ? false : assignments,
           progressId: id,
           ...(copying
-            ? { targetTenants: targets.map((target) => ({ tenantId: target.tenantId, appId: target.appId })) }
+            ? { targetTenants: targets.map(target => ({ tenantId: target.tenantId, appId: target.appId, ...(groupedRetry ? { selectedPolicies: selections(batches.find(entry => entry.targetTenantId === target.tenantId.toLowerCase())!) } : {}) })) }
             : {}),
         })
         completed.push(...(data.details?.results ?? []))
@@ -588,8 +593,8 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
           .map((path) => ({ ...outcome, path, targetTenantId })))
       }
       // A refused disclaimer wrote nothing, so the batch it stopped stays open for another try.
-      const refused = error instanceof NotAccepted ? attempted.pop() : undefined
-      const notStarted = refused ? missing(refused, { success: false, retryable: true, error: "Not started: the disclaimer was not accepted." }) : []
+      const refused = error instanceof NotAccepted ? attempted.splice(copying && retry ? 0 : -1) : []
+      const notStarted = refused.flatMap(batch => missing(batch, { success: false, retryable: true, error: "Not started: the disclaimer was not accepted." }))
       // A lost response leaves the write outcome unknown. Keep completed results and
       // block blind repetition of every attempted item whose result is missing.
       const known = mergeOutcomes(previous, completed)

@@ -1,7 +1,7 @@
 import { hasWriteApproval, withWriteApproval } from "../../write-approvals/service"
 import { sameObservation, withWriteCheckpoint } from "../../write-approvals/dispatch"
 import { AuditEventType, AuditResult, AuditSeverity, type CreateAuditLogInput } from "../../../portal/lib/audit/types"
-import type { GraphCall } from "../../../portal/lib/policies/graph-restore"
+import { verifiedMutation, type GraphCall } from "../../../portal/lib/policies/graph-restore"
 import { typeForFolder, type IntuneType, type Item } from "../../../shared/intune/registry"
 import { isGraphId } from "../../../shared/security"
 import { replaceTenantVariables } from "../../../shared/oib/variables"
@@ -14,7 +14,7 @@ import { FeatureError } from "../route"
 import { withTenantWrite } from "../write-lock"
 import { cisBenchmarksAllowed } from "../../frameworks/service"
 import { requirePreChangeBackup } from "./backup"
-import { createListingMemo, GraphReadError, observe, readBack, readCurrent, sameNameIds, writeOperation, type Observation } from "./graph"
+import { createListingMemo, GraphReadError, observe, observeCurrent, readBack, readCurrent, sameNameIds, writeOperation, type Observation } from "./graph"
 import {
   assignmentTargets,
   combinedFingerprint,
@@ -684,31 +684,39 @@ async function reconcile(graph: GraphCall, type: IntuneType, operation: ChangeOp
   }
 }
 
-/**
- * Applies an approved change set, or retries one that ended partial, failed or uncertain.
- *
- * First attempt: re-reads the target and refuses when the content hash or target fingerprint
- * no longer match the approval; runs a full backup and fails closed; captures and stores the
- * sanitized pre-change state of every affected object; then writes each operation through the
- * journaled Graph caller and reads it back. Retry: never repeats a verified operation,
- * reconciles uncertain ones from live state first, and re-checks the fingerprint of the rest.
- */
 /** The next approved step checks the original observation, then the last verified live state. */
-function guardedOperationWriter(operation: ChangeOperation, type: IntuneType, reader: GraphCall, writer: GraphCall, expected: unknown): GraphCall {
+function guardedOperationWriter(operation: ChangeOperation, type: IntuneType, reader: GraphCall, writer: GraphCall, expected: unknown, saveStep: (hash: string) => void): GraphCall {
   let id = operation.targetId
+  let prior: Item | undefined
   const targetState = async () => {
     const live = id ? await readCurrent(reader, type, id) : null
-    if (!live) return null
+    if (!live) return { live: undefined, fingerprint: null }
     const revision = live["@odata.etag"] ?? live.lastModifiedDateTime
     if (sanitizeSnapshot(type, live).redacted && typeof revision !== "string") throw new FeatureError("The target has unreadable settings and no revision marker.", 409)
-    return [snapshotHash(type, live), revision]
+    return { live, fingerprint: [snapshotHash(type, live), revision] }
   }
-  let check = sameObservation(expected, async () => checkedObservation(await observe(reader, type, operation)))
+  let check = async () => {
+    await sameObservation(expected, async () => {
+      if (!id) return checkedObservation(await observe(reader, type, operation, undefined, true))
+      prior = (await targetState()).live
+      return checkedObservation(observeCurrent(type, operation.action, prior ?? null))
+    })()
+  }
   return async (method, path, body, options) => {
     const response = await withWriteCheckpoint(check, () => writer(method, path, body, options))
     if (response.status < 300 && method !== "DELETE") {
       if (!id && typeof response.body.id === "string") id = response.body.id
-      if (id) check = sameObservation(await targetState(), targetState)
+      let verified = false
+      if (id) {
+        const next = await targetState().catch(() => null)
+        if (next?.live && verifiedMutation(type, id, method, path, body, response.body, next.live, prior)) {
+          prior = next.live
+          saveStep(snapshotHash(type, prior))
+          check = sameObservation(next.fingerprint, async () => (await targetState()).fingerprint)
+          verified = true
+        }
+      }
+      if (!verified) check = async () => { throw new FeatureError("The preceding write could not be verified. Review the live object before continuing.", 409) }
     }
     return response
   }
@@ -719,6 +727,15 @@ function checkedObservation(state: Observation) {
   return [state.fingerprint, state.revision]
 }
 
+/**
+ * Applies an approved change set, or retries one that ended partial, failed or uncertain.
+ *
+ * First attempt: re-reads the target and refuses when the content hash or target fingerprint
+ * no longer match the approval; runs a full backup and fails closed; captures and stores the
+ * sanitized pre-change state of every affected object; then writes each operation through the
+ * journaled Graph caller and reads it back. Retry: never repeats a verified operation,
+ * reconciles uncertain ones from live state first, and re-checks the fingerprint of the rest.
+ */
 export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: string, input: ApplyInput, actor: Actor): Promise<Stored_> {
   if (input.confirmed !== true) throw new FeatureError("Confirm the change, including its irreversible steps, before applying.")
   const tenant = tenantId.toLowerCase()
@@ -770,7 +787,14 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
       summary: { kind: record.kind === "rollback" ? "Roll back a change set" : "Apply a change set", count: record.operations.length, reference: record.id,
         targets: record.operations.map(operation => `${operation.action} ${operation.name}`),
         assignments: record.operations.some(operation => operation.setsAssignments),
-        fields: [...new Set(record.operations.flatMap(operation => operation.diff.map(change => change.path)))],
+        operations: record.operations.map(operation => {
+          const fields = [...new Set(operation.diff.map(change => change.definitionId ?? change.path))]
+          return {
+            name: operation.name, id: operation.targetId ?? undefined, fields,
+            sensitiveFields: fields.filter(field => /password|secret|token|privatekey|certificate|scriptcontent/i.test(field)),
+            assignments: operation.setsAssignments ? ["Replace reviewed assignments"] : [],
+          }
+        }),
       },
       observe: async () => {
         const graph = await reader(deps, tenant, recoveryScope(record))
@@ -781,7 +805,7 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
         for (const operation of record.operations) {
           const result = record.results[operation.key]
           if (result?.status === "verified" || (result?.status === "approval" && result.partial)) continue
-          const observed = await observe(graph, typeOf(operation.folder), operation, listing)
+          const observed = await observe(graph, typeOf(operation.folder), operation, listing, true)
           const checked = checkedObservation(observed)
           approvedTargets.set(operation.key, checked)
           observations.push([operation.key, checked, observed.snapshot, observed.sameNameIds])
@@ -919,9 +943,13 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
       const attempt: OperationResult = { ...current, status: "writing", attempts: current.attempts + 1, message: null, readBack: null, at: at() }
       saveResult(deps, tenant, id, operation.key, attempt, actor, `Writing ${operation.name}`)
       const protectedWrite = hasWriteApproval(tenant)
-      const resultWriter = protectedWrite ? guardedOperationWriter(operation, type, gated, writer, approvedTargets.get(operation.key)) : writer
+      const resultWriter = protectedWrite ? guardedOperationWriter(operation, type, gated, writer, approvedTargets.get(operation.key), hash => {
+        attempt.verifiedPostStepHash = hash
+        saveResult(deps, tenant, id, operation.key, attempt, actor, `Verified a step for ${operation.name}`)
+      }) : writer
       const outcome = await writeOperation(resultWriter, type, { action: operation.action, targetId: operation.targetId, proposed: entry.body, assignments: entry.assignments, current: captured[operation.key]?.body ?? null }, (createdId) => {
-        saveResult(deps, tenant, id, operation.key, { ...attempt, objectId: createdId }, actor, `Created ${operation.name}`)
+        attempt.objectId = createdId
+        saveResult(deps, tenant, id, operation.key, attempt, actor, `Created ${operation.name}`)
       })
       if (outcome.state === "approval") {
         saveResult(deps, tenant, id, operation.key, { ...attempt, status: "approval", partial: outcome.partial, objectId: outcome.objectId, message: outcome.message, at: at() }, actor, `${operation.name} needs Multi Admin Approval`)

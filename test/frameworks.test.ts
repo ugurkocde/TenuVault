@@ -1,10 +1,13 @@
 import { setWriteApprovals } from "../src/main/write-approvals/service"
-import { reviewer, writeApprovalFixture } from "./helpers/write-approval-fixture"
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { reviewer, unenrolledApprovals, writeApprovalFixture } from "./helpers/write-approval-fixture"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { comparePolicies, parsePolicies, remediationPayload } from "../src/shared/frameworks/policies"
 import { frameworks, searchFrameworks } from "../src/shared/frameworks/catalog"
 import { collectGraph, handleFramework } from "../src/main/frameworks/service"
 import { setFrameworkStore } from "../src/main/frameworks/workspaces"
+
+beforeEach(() => setWriteApprovals(unenrolledApprovals("none")))
+afterEach(() => setWriteApprovals(undefined))
 
 const type = "#microsoft.graph.deviceManagementConfigurationChoiceSettingInstance"
 const policy = (value = "enabled") => ({ name: "Workstation baseline", platforms: "windows10", technologies: "mdm", description: "Approved profile",

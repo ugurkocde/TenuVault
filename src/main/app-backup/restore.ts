@@ -1,5 +1,6 @@
 import { FetchPreconditionError } from "../api/network-error"
-import { hasWriteApproval, withWriteApproval } from "../write-approvals/service"
+import type { WriteApprovalSummary } from "../../shared/write-approvals"
+import { withWriteApproval } from "../write-approvals/service"
 import { sameObservation, withWriteCheckpoint } from "../write-approvals/dispatch"
 import { randomUUID } from "node:crypto"
 import { setTimeout as delay } from "node:timers/promises"
@@ -69,26 +70,104 @@ async function restoreOwnedApp(store: AppSourceStore, source: CapturedAppSource,
   // Validate the complete source before creating anything. No plaintext reaches disk.
   const encryption: { profile?: ContentEncryption } = {}
   for await (const _part of encryptRestoreContent(store.content(source.tenantId, source.id, signal), record.secrets, source, encryption)) { signal.throwIfAborted() }
+  const findApps = () => all(graph, `${BASE}?$select=id,displayName,notes,lastModifiedDateTime&$top=100`)
+  const owned = (app: Record<string, unknown>) => typeof app.notes === "string" && app.notes.split("\n").includes(marker)
+  const verifyDraft = async (appUrl: string) => {
+    const live = await graph("GET", appUrl)
+    if (live["@odata.type"] !== "#microsoft.graph.win32LobApp" || !owned(live)) throw new Error("The destination app no longer belongs to this restore.")
+    assertRestoredSettings(body, live)
+    const assignments = await all(graph, `${appUrl}/assignments`)
+    if (assignments.length) throw new Error("The destination app has assignments. Review it before continuing.")
+    return live
+  }
   const observe = async () => {
-    const apps = (await all(graph, `${BASE}?$select=id,displayName,notes,lastModifiedDateTime&$top=100`))
-      .filter(app => (typeof app.displayName === "string" && app.displayName.toLowerCase() === name.trim().toLowerCase())
-        || (typeof app.notes === "string" && app.notes.split("\n").includes(marker)))
+    const filter = encodeURIComponent(`displayName eq '${record.name.replaceAll("'", "''")}'`)
+    const apps = record.appId ? [] : (await all(graph, `${BASE}?$select=id,displayName,notes,lastModifiedDateTime&$filter=${filter}`))
+      .filter(app => owned(app) || typeof app.displayName === "string" && app.displayName.toLowerCase() === record.name.toLowerCase())
       .sort((a, b) => String(a.id).localeCompare(String(b.id)))
     const appUrl = record.appId ? `${BASE}/${record.appId}` : null
     const contentUrl = appUrl ? `${appUrl}/microsoft.graph.win32LobApp/contentVersions` : null
-    return [apps, appUrl ? await graph("GET", appUrl) : null, appUrl ? await all(graph, `${appUrl}/assignments`) : null,
-      contentUrl ? await all(graph, contentUrl) : null,
-      contentUrl && record.version ? (await all(graph, `${contentUrl}/${record.version}/files`)).map(({ azureStorageUri: _sas, ...file }) => file) : null]
+    const filesUrl = contentUrl && record.version ? `${contentUrl}/${record.version}/files` : null
+    const live = appUrl ? await verifyDraft(appUrl) : null
+    const versions = contentUrl ? await all(graph, contentUrl) : []
+    const files = filesUrl ? await all(graph, filesUrl) : []
+    const file = filesUrl && record.fileId ? await graph("GET", `${filesUrl}/${record.fileId}`) : null
+    return { apps, live, versions, files: files.map(file => file.id), file }
   }
-  let expected: unknown
-  // Persist the draft identity before it is named in a shared request.
-  await save()
-  const work = async (): Promise<AppRestoreResult> => {
-    if (hasWriteApproval(target)) await sameObservation(expected, observe)()
+  type State = Awaited<ReturnType<typeof observe>>
+  const stableFile = (file: State["file"]) => {
+    if (!file) return null
+    const { azureStorageUri, ...state } = file
+    const location = typeof azureStorageUri === "string" && azureStorageUri ? new URL(azureStorageUri) : undefined
+    return { ...state, uploadLocation: location ? location.origin + location.pathname : undefined }
+  }
+  const stateForApproval = (state: State) => ({ ...state, file: stableFile(state.file) })
+  let expected: State | undefined
+  const reconcile = async () => {
     if (!record.appId && record.creationStarted) {
-      const found = (await all(graph, `${BASE}?$select=id,notes&$top=100`)).filter(app => typeof app.notes === "string" && app.notes.split("\n").includes(marker))
+      const found = (await findApps()).filter(owned)
+      if (found.length !== 1) throw new Error("The earlier app creation could not be confirmed. Check Intune before retrying. TenuVault will not create a duplicate automatically.")
+      record.appId = identifier(found[0]!.id)
+    }
+    if (record.appId) {
+      const appUrl = `${BASE}/${record.appId}`
+      await verifyDraft(appUrl)
+      const contentUrl = `${appUrl}/microsoft.graph.win32LobApp/contentVersions`
+      const versions = await all(graph, contentUrl)
+      if (versions.length > 1 || record.version && versions[0]?.id !== record.version) throw new Error("The destination has unexpected content versions. Review it in Intune.")
+      if (!record.version && versions.length) record.version = versionId(versions[0]!.id)
+      if (record.version) {
+        const files = await all(graph, `${contentUrl}/${record.version}/files`)
+        if (files.length > 1 || record.fileId && files[0]?.id !== record.fileId) throw new Error("The destination has unexpected content files. Review it in Intune.")
+        if (!record.fileId && files.length) {
+          if (files[0]?.name !== `${record.id}.intunewin`) throw new Error("The destination content file does not belong to this restore.")
+          record.fileId = identifier(files[0].id)
+        }
+      }
+    }
+    await save()
+  }
+  // Pin the draft marker before review. Protected resumes reconcile IDs before hashing the plan.
+  await save()
+  const checkpoint = async () => {
+    if (expected) await sameObservation(stateForApproval(expected), async () => stateForApproval(await observe()))()
+  }
+  const advance = async (stage: "app" | "version" | "file" | "upload-ready" | "commit", observedFile?: Record<string, unknown>) => {
+    if (!expected) return
+    const next = await observe()
+    const prior = expected
+    if (stage === "app") {
+      if (!next.live || next.live.id !== record.appId || next.versions.length || next.files.length) throw new Error("The new draft could not be verified.")
+    } else {
+      // Creation of content can change the parent revision timestamp. All other app properties,
+      // including assignments (checked by observe), must continue to match the approved draft.
+      const appSettings = (app: State["live"]) => {
+        const { lastModifiedDateTime: _modified, "@odata.etag": _etag, ...settings } = app ?? {}
+        return settings
+      }
+      await sameObservation(appSettings(prior.live), async () => appSettings(next.live))()
+      await sameObservation(stage === "version" ? [record.version] : prior.versions.map(version => version.id), async () => next.versions.map(version => version.id))()
+      await sameObservation(stage === "file" ? [record.fileId] : prior.files, async () => next.files)()
+      if (stage === "file" && next.file?.name !== `${record.id}.intunewin`) throw new Error("The new installer file could not be verified.")
+      if (observedFile) await sameObservation(stableFile(observedFile), async () => stableFile(next.file))()
+      else if (stage !== "file") await sameObservation(stableFile(prior.file), async () => stableFile(next.file))()
+      if (next.file && (Number(next.file.size) !== source.bytes || Number(next.file.sizeEncrypted) !== totalBytes)) {
+        throw new Error("The destination installer file has changed.")
+      }
+    }
+    expected = next
+  }
+  const work = async (): Promise<AppRestoreResult> => {
+    if (expected) await checkpoint()
+    else if (!record.appId && record.creationStarted) {
+      const found = (await all(graph, `${BASE}?$select=id,notes&$top=100`)).filter(owned)
       if (found.length !== 1) throw new Error("The earlier app creation could not be confirmed. Check Intune before retrying. TenuVault will not create a duplicate automatically.")
       record.appId = identifier(found[0]!.id); await save()
+    }
+    const send = async (method: "POST" | "PATCH", path: string, payload?: Record<string, unknown>) => {
+      if (!expected) return graph(method, path, payload)
+      await checkpoint()
+      return withWriteCheckpoint(checkpoint, () => graph(method, path, payload))
     }
     if (!record.appId) {
       report("creating"); record.creationStarted = true; await save()
@@ -97,25 +176,16 @@ async function restoreOwnedApp(store: AppSourceStore, source: CapturedAppSource,
         // can create the app; unknown POST outcomes still require reconciliation.
         record.creationStarted = false; await save(); signal.throwIfAborted()
       }
-      const send = () => graph("POST", BASE, body)
       try {
-        record.appId = identifier((await (hasWriteApproval(target) ? withWriteCheckpoint(sameObservation(expected, observe), send) : send())).id)
+        record.appId = identifier((await send("POST", BASE, body)).id)
       } catch (error) {
         if (error instanceof FetchPreconditionError) { record.creationStarted = false; await save() }
         throw error
       }
+      await advance("app")
       await save()
     }
     const appUrl = `${BASE}/${record.appId}`, contentUrl = `${appUrl}/microsoft.graph.win32LobApp/contentVersions`
-    const verifyDraft = async () => {
-      const live = await graph("GET", appUrl)
-      if (live["@odata.type"] !== "#microsoft.graph.win32LobApp" || typeof live.notes !== "string" || !live.notes.split("\n").includes(marker)) throw new Error("The destination app no longer belongs to this restore.")
-      assertRestoredSettings(body, live)
-      if ((await all(graph, `${appUrl}/assignments`)).length) throw new Error("The destination app has assignments. Review it before continuing.")
-    }
-    const send = (method: "POST" | "PATCH", path: string, payload?: Record<string, unknown>) => hasWriteApproval(target)
-      ? withWriteCheckpoint(verifyDraft, () => graph(method, path, payload))
-      : graph(method, path, payload)
     const existing = await graph("GET", appUrl)
     if (existing["@odata.type"] !== "#microsoft.graph.win32LobApp" || typeof existing.notes !== "string" || !existing.notes.split("\n").includes(marker)) throw new Error("The destination app no longer belongs to this restore. No changes were made to it.")
     assertRestoredSettings(body, existing)
@@ -125,15 +195,17 @@ async function restoreOwnedApp(store: AppSourceStore, source: CapturedAppSource,
     }
     if ((await all(graph, `${appUrl}/assignments`)).length) throw new Error("This destination app was assigned while the restore was incomplete. Remove its assignments in Intune before continuing.")
     if (!record.version) {
-      const versions = await all(graph, contentUrl)
+      const versions = expected ? [] : await all(graph, contentUrl)
       if (versions.length > 1) throw new Error("The destination has unexpected content versions. Review it in Intune.")
-      record.version = versionId(versions[0]?.id ?? (await send("POST", contentUrl, {})).id); await save()
+      record.version = versionId(versions[0]?.id ?? (await send("POST", contentUrl, {})).id)
+      await advance("version"); await save()
     }
     const filesUrl = `${contentUrl}/${record.version}/files`
     if (!record.fileId) {
-      const files = await all(graph, filesUrl)
+      const files = expected ? [] : await all(graph, filesUrl)
       if (files.length > 1) throw new Error("The destination has unexpected content files. Review it in Intune.")
-      record.fileId = identifier(files[0]?.id ?? (await send("POST", filesUrl, { "@odata.type": "#microsoft.graph.mobileAppContentFile", name: `${record.id}.intunewin`, size: source.bytes, sizeEncrypted: totalBytes, manifest: null, isDependency: false })).id); await save()
+      record.fileId = identifier(files[0]?.id ?? (await send("POST", filesUrl, { "@odata.type": "#microsoft.graph.mobileAppContentFile", name: `${record.id}.intunewin`, size: source.bytes, sizeEncrypted: totalBytes, manifest: null, isDependency: false })).id)
+      await advance("file"); await save()
     }
     const fileUrl = `${filesUrl}/${record.fileId}`
     const poll = async (states: string[]) => {
@@ -146,34 +218,50 @@ async function restoreOwnedApp(store: AppSourceStore, source: CapturedAppSource,
       }
       throw new Error("Intune is still processing the installer. Retry this restore to check the same destination app.")
     }
-    let file = await graph("GET", fileUrl)
+    let file = expected?.file ?? await graph("GET", fileUrl)
+    if (expected?.file && !file.azureStorageUri && /Success$/.test(String(file.uploadState)) && file.uploadState !== "commitFileSuccess") {
+      throw new Error("Intune did not return an upload location for the reviewed file.")
+    }
     if (/^azureStorageUri(?:Request|Renewal)(?:Failed|TimedOut)$/.test(String(file.uploadState))) {
       // Intune refuses renewal after a terminal storage failure and its Win32 file
       // DELETE route is unavailable. Keep the journal and draft; never duplicate it.
       throw new Error("Intune cannot resume this failed upload. The unassigned draft has been retained for review in Intune. No replacement app was created.")
     }
-    if (file.uploadState === "commitFilePending") file = await poll(["commitFileSuccess"])
+    if (file.uploadState === "commitFilePending") {
+      file = await poll(["commitFileSuccess"])
+      await advance("commit", file)
+    }
     if (file.uploadState !== "commitFileSuccess") {
       const ready = ["azureStorageUriRequestSuccess", "azureStorageUriRenewalSuccess"]
       // Fresh files can briefly report "success" before allocation starts. Renewal
       // is not valid until Intune has actually issued an upload URI.
       if (!ready.includes(String(file.uploadState))) file = await poll(ready)
+      await advance("upload-ready", file)
       const expiry = Date.parse(String(file.azureStorageUriExpirationDateTime))
       if (Number.isFinite(expiry) && expiry <= Date.now() + 60000) {
         await send("POST", `${fileUrl}/renewUpload`)
         file = await poll(["azureStorageUriRenewalSuccess"])
+        await advance("upload-ready", file)
       }
       let sas = String(file.azureStorageUri ?? ""), renewed = Date.now()
       const ids: string[] = [], block = Buffer.alloc(4 * 1024 ** 2)
       let used = 0, uploaded = 0
+      const put = async (query: Record<string, string>, bytes: Buffer | string) => {
+        const dispatch = () => putRestoreBlock(sas, query, bytes, fetchImpl, signal, target)
+        if (expected) {
+          await checkpoint()
+          await withWriteCheckpoint(checkpoint, dispatch)
+        } else await dispatch()
+      }
       const upload = async () => {
         signal.throwIfAborted()
         if (Date.now() - renewed > 6 * 60_000) {
           await send("POST", `${fileUrl}/renewUpload`); const renewedFile = await poll(["azureStorageUriRenewalSuccess"])
+          await advance("upload-ready", renewedFile)
           sas = String(renewedFile.azureStorageUri ?? ""); renewed = Date.now()
         }
         const id = Buffer.from(String(ids.length).padStart(6, "0")).toString("base64")
-        await putRestoreBlock(sas, { comp: "block", blockid: id }, block.subarray(0, used), fetchImpl, signal, target)
+        await put({ comp: "block", blockid: id }, block.subarray(0, used))
         ids.push(id); uploaded += used; used = 0; report("uploading", uploaded)
       }
       report("uploading")
@@ -188,11 +276,11 @@ async function restoreOwnedApp(store: AppSourceStore, source: CapturedAppSource,
       if (used) await upload()
       if (uploaded !== totalBytes || !second.profile) throw new Error("The uploaded installer length is invalid.")
       signal.throwIfAborted()
-      if (hasWriteApproval(target)) await verifyDraft()
-      await putRestoreBlock(sas, { comp: "blocklist" }, `<?xml version="1.0" encoding="utf-8"?><BlockList>${ids.map(id => `<Latest>${id}</Latest>`).join("")}</BlockList>`, fetchImpl, signal, target)
+      await put({ comp: "blocklist" }, `<?xml version="1.0" encoding="utf-8"?><BlockList>${ids.map(id => `<Latest>${id}</Latest>`).join("")}</BlockList>`)
       report("committing", totalBytes)
       await send("POST", `${fileUrl}/commit`, { fileEncryptionInfo: second.profile })
       file = await poll(["commitFileSuccess"])
+      await advance("commit", file)
     }
     if (file.isCommitted !== true || Number(file.size) !== source.bytes || Number(file.sizeEncrypted) !== totalBytes) throw new Error("Intune did not confirm the complete installer content.")
     report("publishing", totalBytes)
@@ -212,12 +300,22 @@ async function restoreOwnedApp(store: AppSourceStore, source: CapturedAppSource,
     if (!record.appId || !record.version) throw new Error("The completed restore record is missing its destination app or content version.")
     return work()
   }
+  const summary: WriteApprovalSummary = { kind: "Restore an unassigned Win32 app", count: 1, targets: [name.trim()], assignments: false, reference: source.id }
   return withWriteApproval([{
     tenant: target, reference: ["app-backup-restore", source.tenantId, source.id],
-    summary: { kind: "Restore an unassigned Win32 app", count: 1, targets: [name.trim()], assignments: false, reference: source.id, fields: Object.keys(body).sort() },
+    summary,
     observe: async () => {
+      if (!expected) await reconcile()
       expected = await observe()
-      return { content: [source.id, source.sha256, source.receipt, settingsHash, body, record.id, record.appId, record.version, record.fileId], target: expected }
+      if (expected.versions.length !== (record.version ? 1 : 0) || expected.versions[0]?.id !== record.version
+        || expected.files.length !== (record.fileId ? 1 : 0) || expected.files[0] !== record.fileId) {
+        throw new Error("The destination content changed during review. Refresh and retry.")
+      }
+      summary.operations = [{
+        name: record.name, id: record.appId, assignments: [], fields: Object.keys(body).sort(),
+        sensitiveFields: ["installCommandLine", "uninstallCommandLine", ...(JSON.stringify(body.rules ?? []).includes('"scriptContent"') ? ["scriptContent"] : [])],
+      }]
+      return { content: [source.id, source.sha256, source.receipt, settingsHash, body, record.id, record.appId, record.version, record.fileId], target: stateForApproval(expected) }
     },
   }], work)
 }

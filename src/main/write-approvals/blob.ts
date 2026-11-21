@@ -1,10 +1,13 @@
 import { assertStorageAccountName } from "../../shared/storage-account"
 
-export type BlobRecord = { value: unknown; etag: string }
+export type BlobVersion = { etag: string; serverTime?: number; modifiedAt?: number }
+export type BlobRecord = BlobVersion & { value: unknown }
 export interface ApprovalBlobs {
   get(name: string): Promise<BlobRecord | null>
+  match?(name: string, etag: string): Promise<BlobVersion | null>
   put(name: string, value: unknown, etag?: string): Promise<boolean>
   list(prefix: string): Promise<string[]>
+  delete?(name: string, etag: string): Promise<boolean>
 }
 
 function unescapeXml(value: string): string {
@@ -20,6 +23,15 @@ export function approvalBlobs(account: string, token: string, fetchImpl: typeof 
     ...init, redirect: "error", signal: AbortSignal.timeout(15_000), headers: { ...headers, ...init?.headers },
   })
   const fail = (status: number) => new Error(`The tenant approval store could not be verified (HTTP ${status}).`)
+  const version = (response: Response): BlobVersion => {
+    const etag = response.headers.get("etag")
+    if (!etag) throw fail(response.status)
+    const time = (header: string) => {
+      const parsed = Date.parse(response.headers.get(header) ?? "")
+      return Number.isFinite(parsed) ? parsed : undefined
+    }
+    return { etag, serverTime: time("date"), modifiedAt: time("last-modified") }
+  }
   return {
     async get(name) {
       const response = await request(url(name))
@@ -27,9 +39,14 @@ export function approvalBlobs(account: string, token: string, fetchImpl: typeof 
         await response.body?.cancel()
         return null
       }
-      const etag = response.headers.get("etag")
-      if (!response.ok || !etag) throw fail(response.status)
-      return { etag, value: await response.json() }
+      if (!response.ok) throw fail(response.status)
+      return { ...version(response), value: await response.json().catch(() => null) }
+    },
+    async match(name, etag) {
+      const response = await request(url(name), { method: "HEAD", headers: { "if-match": etag } })
+      if (response.status === 412 || response.status === 404 && response.headers.get("x-ms-error-code") === "BlobNotFound") return null
+      if (!response.ok) throw fail(response.status)
+      return version(response)
     },
     async put(name, value, etag) {
       const response = await request(url(name), {
@@ -43,6 +60,13 @@ export function approvalBlobs(account: string, token: string, fetchImpl: typeof 
       })
       await response.body?.cancel()
       if (response.status === 412) return false
+      if (!response.ok) throw fail(response.status)
+      return true
+    },
+    async delete(name, etag) {
+      const response = await request(url(name), { method: "DELETE", headers: { "if-match": etag } })
+      await response.body?.cancel()
+      if (response.status === 412 || response.status === 404) return false
       if (!response.ok) throw fail(response.status)
       return true
     },

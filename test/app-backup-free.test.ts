@@ -39,8 +39,10 @@ describe("free App Backup account read", () => {
     const section = main.slice(start, end)
     expect(section).not.toMatch(/requireEntitlement|featureDeps\.graph|requireRecovery|tenantProfile|tokenFor\(/)
     // Only a restore into another tenant can need a plan; no other App Backup handler reports plan errors.
-    expect(section.match(/withPlanError/g)).toHaveLength(1)
-    expect(section).toContain('handleTrusted("appSources:restore", (_event, tenant: unknown, operation: unknown, source: unknown, target: unknown, name: unknown, settingsHash: unknown) => withPlanError(')
+    expect(section).not.toContain("withPlanError")
+    expect(section).toContain('handleTrusted("appSources:restore", appSourceRestoreHandler(appSources))')
+    expect(await readFile("src/main/app-sources/restore-ipc.ts", "utf8"))
+      .toContain("withPlanError(() => service.restore(tenant, operation, source, target, name, settingsHash))")
     expect(section).toContain("restorePlan: appRestorePlan,")
     const product = await Promise.all(["src/main/app-sources/service.ts", "src/main/app-backup/account.ts", "src/main/app-backup/device-check.ts"].map(path => readFile(path, "utf8")))
     expect(product.join("\n")).not.toMatch(/authorizeAttach|requireEntitlement|requireRecovery|CommunityLimit|plan-errors/)

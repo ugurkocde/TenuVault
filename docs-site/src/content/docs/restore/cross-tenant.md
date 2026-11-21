@@ -125,3 +125,5 @@ Open **Settings > Storage and recovery > Tenant approvals** and select the desti
 * [Disaster recovery](/restore/disaster-recovery/)
 * [What cannot be restored](/restore/limitations/)
 * [Plans and features](/licensing/)
+
+When tenant approvals are enabled, a retry requests approval for the remaining copies or repairs in each destination. Each protected destination must be ready before TenuVault sends any retry writes.

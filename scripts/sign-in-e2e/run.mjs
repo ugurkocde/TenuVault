@@ -77,7 +77,7 @@ function flush() {
 /** The app did not start: every later check would fail the same way, slowly. */
 class LaunchError extends Error {}
 
-async function check(name, fn) {
+async function check(name, fn, { stopOnLaunchError = true } = {}) {
   const started = Date.now()
   try {
     await fn()
@@ -87,7 +87,7 @@ async function check(name, fn) {
     failures++
     results.push(`FAIL ${name}: ${error.message}`)
     console.log(results.at(-1))
-    if (error instanceof LaunchError) throw error
+    if (stopOnLaunchError && error instanceof LaunchError) throw error
   } finally {
     flush()
   }
@@ -98,7 +98,7 @@ function assert(condition, message) {
 }
 
 /** Starts the app with a throwaway profile and connects to its window over CDP. */
-async function launchApp(label, resetSecret = true) {
+async function launchApp(label) {
   const port = 9800 + Math.floor(Math.random() * 1000)
   const profile = mkdtempSync(join(tmpdir(), "tenuvault-sign-in-e2e-"))
   const args = [...(packagedApp ? [] : [desktopDir]), `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`]
@@ -107,7 +107,7 @@ async function launchApp(label, resetSecret = true) {
   if (process.platform === "linux") args.push("--no-sandbox", "--password-store=gnome-libsecret")
   if (process.platform === "linux" && process.env.DISPLAY) args.push("--ozone-platform=x11")
   // On macOS the app's secrets go to the disposable keychain runner.mjs makes the default.
-  if (resetSecret) forgetAppSecret()
+  forgetAppSecret()
   const env = { ...process.env, ELECTRON_ENABLE_LOGGING: "1" }
   delete env.ELECTRON_RUN_AS_NODE
   const child = spawn(packagedApp ?? require("electron"), args, { stdio: ["ignore", "pipe", "pipe"], env })
@@ -279,7 +279,7 @@ async function twoAdminApprovals(standIn) {
   const apps = []
   const session = async (account, label) => {
     standIn.setAccount(account)
-    const app = await launchApp(label, !apps.length)
+    const app = await launchApp(label)
     apps.push(app)
     await app.page.getByText("Welcome to TenuVault").waitFor({ timeout: 30_000 })
     const url = await startSignIn(app.page)
@@ -315,6 +315,13 @@ async function twoAdminApprovals(standIn) {
     const approver = await session(second, "approval-reviewer")
     const enabled = await control(origin, "enable", { confirmManagedCutover: true })
     assert(enabled.enabled, `could not activate approvals: ${enabled.error}`)
+    const switched = await approver.evaluate(async tenant => {
+      const profiles = JSON.parse(window.tenuvault.storage.getItemSync("tenuvault_tenants"))
+      profiles[0].resources.storageAccountName = `tvlocal-${tenant}`
+      try { await window.tenuvault.storage.setItem("tenuvault_tenants", JSON.stringify(profiles)); return true }
+      catch { return false }
+    }, TENANT_ID)
+    assert(!switched, "the second profile changed storage without checking the policy in the prior account")
     assert((await apply(origin)).error?.includes("pending"), "first apply did not request approval")
     assert(standIn.approvals.writes() === 0, "Graph wrote before approval")
     const inbox = await control(approver, "list")
@@ -367,7 +374,7 @@ try {
   install(certificates.ca)
   standIn = await startStandIn({ key: certificates.key, cert: certificates.cert, tenantId: TENANT_ID, clientId: CLIENT_ID, account: ACCOUNT })
   for (const engine of ENGINES) await check(`first sign-in completes in ${engine.name}`, () => signInWith(engine, standIn))
-  await check("two signed-in admins request, review and apply with shared storage", () => twoAdminApprovals(standIn))
+  await check("two signed-in admins request, review and apply with shared storage", () => twoAdminApprovals(standIn), { stopOnLaunchError: false })
   await check("a wrong state is refused and a refusal shows the app's error", () => refusals(standIn))
 } catch (error) {
   failures++

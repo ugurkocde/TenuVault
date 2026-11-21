@@ -1,6 +1,6 @@
 import { setWriteApprovals } from "../src/main/write-approvals/service"
-import { reviewer, writeApprovalFixture } from "./helpers/write-approval-fixture"
-import { afterEach, describe, expect, it } from "vitest"
+import { reviewer, unenrolledApprovals, writeApprovalFixture } from "./helpers/write-approval-fixture"
+import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { routes as syncRoutes } from "../src/main/features/sync"
 import { routes as promotionRoutes } from "../src/main/features/promotion"
 import { applyChangeSet, approveChangeSet, createChangeSet, previewChangeSet } from "../src/main/features/change-sets/engine"
@@ -15,6 +15,8 @@ import { upgradeMessage, type Plan } from "../src/shared/plans"
 import { call, fakeDeps, TENANT_A, TENANT_B, TENANT_C } from "./feature-helpers"
 import { FakeTenant, referenceSetting, setting, wire } from "./feature-change-sets-fakes"
 import { withTenantWrite } from "../src/main/features/write-lock"
+
+beforeEach(() => setWriteApprovals(unenrolledApprovals("none")))
 
 const PATH = "/api/sync"
 const TENANT_D = "44444444-4444-4444-4444-444444444444"

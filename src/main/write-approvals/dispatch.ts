@@ -5,6 +5,12 @@ import type { ApprovalActor } from "../../shared/write-approvals"
 
 type Check = () => Promise<void>
 const checkpoint = new AsyncLocalStorage<Check>()
+const exemptCaller = new AsyncLocalStorage<"registration" | "watcher-roles" | "email">()
+
+/** Only main's provisioning and delivery adapters can mark their own dispatches exempt. */
+export function withExemptGraphCaller<T>(caller: "registration" | "watcher-roles" | "email", send: () => Promise<T>): Promise<T> {
+  return exemptCaller.run(caller, send)
+}
 let uploadGuard: ((tenant: string) => Promise<void>) | undefined
 
 /** Rechecks an operation-specific live observation immediately before each dispatch and retry. */
@@ -24,24 +30,20 @@ export function setRestoreUploadGuard(guard: typeof uploadGuard): void { uploadG
 export async function authorizeRestoreUpload(tenant: string | undefined): Promise<void> {
   if (uploadGuard) {
     if (!tenant) throw new WriteApprovalError("The installer upload has no verified destination.")
-    await uploadGuard(tenant)
     await checkpoint.getStore()?.()
+    await uploadGuard(tenant)
   }
 }
 
-const graphOrigin = "https://graph.microsoft.com"
-const bootstrapping = /^(?:\/v1\.0\/(?:applications(?:\/[a-f0-9-]+)?|servicePrincipals|oauth2PermissionGrants(?:\/[a-f0-9-]+)?)|\/beta\/servicePrincipals\/[a-f0-9-]+\/appRoleAssignments)$/i
-const delivery = /^\/(?:beta|v1\.0)\/me\/sendMail$/i
+const graphHosts = new Set(["graph.microsoft.com", "graph.microsoft.us", "dod-graph.microsoft.us", "microsoftgraph.chinacloudapi.cn", "graph.microsoft.de"])
 const withdraw = /^\/beta\/deviceManagement\/operationApprovalRequests\/cancelMyRequest$/i
 const getOnly = new Set(["GET", "HEAD", "OPTIONS"])
 
 function requiresApproval(method: string, url: URL): boolean {
-  if (getOnly.has(method)) return false
-  if (bootstrapping.test(url.pathname) || (method === "POST" && (delivery.test(url.pathname) || withdraw.test(url.pathname)))) return false
-  return true
+  return !getOnly.has(method) && !(method === "POST" && withdraw.test(url.pathname))
 }
 
-function batchTargets(body: unknown, version: string): Array<{ method: string; url: URL }> {
+function batchTargets(body: unknown, version: string, graphOrigin: string): Array<{ method: string; url: URL }> {
   if (!body || typeof body !== "object" || !("requests" in body) || !Array.isArray(body.requests) || !body.requests.length || body.requests.length > 20) {
     throw new WriteApprovalError("Microsoft Graph batch requests must identify each operation.")
   }
@@ -60,23 +62,24 @@ export function graphDispatchGuard(
 ): (input: RequestInfo | URL, init?: RequestInit) => Promise<void> {
   return async (input, init) => {
     const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url)
-    if (url.origin !== graphOrigin) return
+    if (url.protocol !== "https:" || !graphHosts.has(url.hostname)) return
     const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase()
     if (getOnly.has(method)) return
     const request = new Request(input instanceof Request ? input.clone() : input, init)
     const batch = /^\/(beta|v1\.0)\/(?:\$|%24)batch\/?$/i.exec(url.pathname)
     const targets = batch && method === "POST"
-      ? batchTargets(await request.clone().json().catch(() => null), batch[1]!)
+      ? batchTargets(await request.clone().json().catch(() => null), batch[1]!, url.origin)
       : [{ method, url }]
+    if (!batch && exemptCaller.getStore()) return
     for (const child of targets) {
       if (!requiresApproval(child.method, child.url)) continue
       const token = /^Bearer (.+)$/i.exec(request.headers.get("authorization") ?? "")?.[1]
       const session = token && sessionFor(token)
       if (!session || !session.current()) throw new WriteApprovalError("A signed-in delegated destination account is required for this Graph write.")
       approvals.checkDestination(session.tenant)
+      await checkpoint.getStore()?.()
       if (session.actor) await approvals.authorize(session.tenant, session.actor)
       else if (await approvals.active(session.tenant)) throw new WriteApprovalError("Microsoft did not return a verified tenant and object ID for this account.")
-      await checkpoint.getStore()?.()
       approvals.checkDeadline(session.tenant)
       if (!session.current()) throw new WriteApprovalError("The signed-in destination account changed before the write.")
     }

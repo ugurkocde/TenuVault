@@ -4,9 +4,13 @@ import { NextRequest } from "../src/main/api/next-server-shim"
 import { Restorer, type GraphCall } from "../src/portal/lib/policies/graph-restore"
 import { restoreApprovals, saveRestoreApproval, setRestoreApprovalStore, dismissRestoreApproval } from "../src/main/storage/restore-approvals"
 import { requiredFeatures } from "../src/main/api/plan-gates"
+import { createBridgedFetch } from "../src/main/api/fetch-bridge"
+import { graphDispatchGuard } from "../src/main/write-approvals/dispatch"
 import { setWriteApprovals } from "../src/main/write-approvals/service"
-import { reviewer, writeApprovalFixture } from "./helpers/write-approval-fixture"
+import { reviewer, unenrolledApprovals, writeApprovalFixture } from "./helpers/write-approval-fixture"
 import { resultSummary, statusFromResults, emptyResult } from "../src/main/features/change-sets/model"
+
+beforeEach(() => setWriteApprovals(unenrolledApprovals("azure")))
 
 const tenantId = "44444444-4444-4444-8444-444444444444"
 const requesterId = "33333333-3333-4333-8333-333333333333"
@@ -107,18 +111,24 @@ it("keeps a saved Intune request and requires separate review for submission and
   await origin.service.enable(tenantId)
   let mutations = 0
   const token = `header.${Buffer.from(JSON.stringify({ oid: requesterId, tid: tenantId, scp: "DeviceManagementConfiguration.ReadWrite.All" })).toString("base64url")}.signature`
-  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input)
-    if (url.includes("login.microsoftonline.com")) return Response.json({ access_token: token })
-    if (url.endsWith("cancelMyRequest")) return new Response(null, { status: 204 })
-    if (url.includes("operationApprovalRequests/")) return Response.json({ status: "approved" })
-    if (init?.method === "GET") return Response.json({ value: [] })
-    mutations++
-    const headers = new Headers(init?.headers)
-    if (headers.has("x-msft-approval-justification")) return new Response("{}", { status: 412, headers: { "x-msft-approval-code": code } })
-    expect(headers.get("x-msft-approval-code")).toBe(code)
-    return Response.json({ id: code })
-  }))
+  const fetcher = createBridgedFetch({
+    dispatch: async () => new Response(null, { status: 404 }),
+    getDelegatedToken: async () => ({ accessToken: token, expiresOn: null }),
+    authorizeGraph: graphDispatchGuard(origin.service, value => value === token ? { tenant: tenantId, actor: { oid: requesterId, label: "Requester" }, current: () => true } : undefined),
+    fetch: async (input, init) => {
+      const req = new Request(input, init)
+      const url = req.url
+      if (url.includes("login.microsoftonline.com")) return Response.json({ access_token: token })
+      if (url.endsWith("cancelMyRequest")) return new Response(null, { status: 204 })
+      if (url.includes("operationApprovalRequests/")) return Response.json({ status: "approved", approver: { user: { id: reviewer.oid, displayName: "Reviewer", Upn: "reviewer@example.invalid" } } })
+      if (req.method === "GET") return Response.json({ value: [] })
+      mutations++
+      if (req.headers.has("x-msft-approval-justification")) return new Response("{}", { status: 412, headers: { "x-msft-approval-code": code } })
+      expect(req.headers.get("x-msft-approval-code")).toBe(code)
+      return Response.json({ id: code })
+    },
+  })
+  vi.stubGlobal("fetch", fetcher)
   const approve = async () => {
     const row = (await second.service.inbox(tenantId)).requests.find(item => item.request.state === "pending" && !item.decision)
     await second.service.decide(tenantId, row!.request.id, "approve")
@@ -133,6 +143,6 @@ it("keeps a saved Intune request and requires separate review for submission and
   expect((await complete()).status).toBe(409)
   expect(mutations).toBe(1)
   await approve()
-  expect(await (await complete()).json()).toMatchObject({ outcome: { success: true } })
+  expect(await (await complete()).json()).toMatchObject({ outcome: { success: true, intuneApprover: { user: { id: reviewer.oid, displayName: "Reviewer", upn: "reviewer@example.invalid" } } } })
   expect(mutations).toBe(2)
 })

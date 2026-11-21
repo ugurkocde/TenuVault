@@ -107,8 +107,9 @@ export async function readCurrent(graph: GraphCall, type: IntuneType, id: string
 }
 
 /** IDs of objects of a type whose name equals `name` (case-insensitive). */
-export async function sameNameIds(graph: GraphCall, type: IntuneType, name: string, memo?: ListingMemo): Promise<string[]> {
-  const items = await listAll(graph, `${type.path}?$select=id,${type.nameKey}`, memo)
+export async function sameNameIds(graph: GraphCall, type: IntuneType, name: string, memo?: ListingMemo, filtered = false): Promise<string[]> {
+  const filter = filtered && name ? `&$filter=${encodeURIComponent(`${type.nameKey} eq '${name.trim().replaceAll("'", "''")}'`)}` : ""
+  const items = await listAll(graph, `${type.path}?$select=id,${type.nameKey}${filter}`, memo)
   const wanted = name.trim().toLowerCase()
   return items.filter((item) => typeof item[type.nameKey] === "string" && (item[type.nameKey] as string).trim().toLowerCase() === wanted && typeof item.id === "string").map((item) => item.id as string)
 }
@@ -123,16 +124,20 @@ export interface Observation {
 }
 
 /** Reads what one operation would change in the target and fingerprints it. */
-export async function observe(graph: GraphCall, type: IntuneType, operation: { action: OperationAction; targetId: string | null; name: string }, memo?: ListingMemo): Promise<Observation> {
+export async function observe(graph: GraphCall, type: IntuneType, operation: { action: OperationAction; targetId: string | null; name: string }, memo?: ListingMemo, filtered = false): Promise<Observation> {
   if (operation.action === "create") {
-    const ids = await sameNameIds(graph, type, operation.name, memo)
+    const ids = await sameNameIds(graph, type, operation.name, memo, filtered)
     return { snapshot: null, redacted: false, sameNameIds: ids, fingerprint: operationFingerprint("create", { snapshot: null, sameNameIds: ids }) }
   }
   const live = await readCurrent(graph, type, operation.targetId!)
+  return observeCurrent(type, operation.action, live)
+}
+
+export function observeCurrent(type: IntuneType, action: OperationAction, live: Item | null): Observation {
   if (!live) return { snapshot: null, redacted: false, sameNameIds: [], fingerprint: "missing" }
   const { snapshot, redacted } = sanitizeSnapshot(type, live)
   const marker = live["@odata.etag"] ?? live.lastModifiedDateTime
-  return { snapshot, redacted, sameNameIds: [], ...(redacted && typeof marker === "string" && marker ? { revision: marker } : {}), fingerprint: operationFingerprint(operation.action, { snapshot, sameNameIds: [] }) }
+  return { snapshot, redacted, sameNameIds: [], ...(redacted && typeof marker === "string" && marker ? { revision: marker } : {}), fingerprint: operationFingerprint(action, { snapshot, sameNameIds: [] }) }
 }
 
 export type WriteOutcome =

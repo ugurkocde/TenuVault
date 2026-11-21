@@ -1,15 +1,18 @@
 import { describe, expect, it, vi } from "vitest"
+import { graphDispatchGuard } from "../src/main/write-approvals/dispatch"
+import { approvalTenant, writeApprovalFixture } from "./helpers/write-approval-fixture"
 import { provisionRegistration } from "../src/main/auth/registration-provisioning"
 import { CONSENT_ROLES, DESKTOP_APP_PERMISSIONS } from "../src/shared/app-registration"
 
 const own = { displayName: "TenuVault Desktop", id: "app", appId: "client", notes: "Used by the TenuVault desktop app", signInAudience: "AzureADMyOrg", publicClient: { redirectUris: ["http://localhost"] }, createdDateTime: "2026-01-01" }
-function fixture(options: { apps?: object[]; grants?: object[]; fail?: (url: URL, init: RequestInit, count: number) => Response | undefined; unknown?: number; missingResource?: boolean; appPrincipal?: object; probe?: () => Response } = {}) {
+function fixture(options: { apps?: object[]; grants?: object[]; fail?: (url: URL, init: RequestInit, count: number) => Response | undefined; unknown?: number; missingResource?: boolean; appPrincipal?: object; probe?: () => Response; guard?: ReturnType<typeof graphDispatchGuard> } = {}) {
   // What the sign-in service was asked. Checked after the run: the probe swallows its own errors.
   const probes: { clientId: string | null; authorization: unknown }[] = []
   const calls: { url: URL; method: string; body?: Record<string, unknown> }[] = []
   const sleep = vi.fn(async () => undefined)
   const progress = vi.fn()
   const request = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+    await options.guard?.(input, init)
     const url = new URL(String(input))
     const method = init.method ?? "GET"
     const body = init.body && !url.pathname.endsWith("devicecode") ? JSON.parse(String(init.body)) : undefined
@@ -373,4 +376,16 @@ it("sends a cancel during the last consent request through the cleanup", async (
   expect(grants).toBe(DESKTOP_APP_PERMISSIONS.length)
   expect(f.calls.filter(call => call.method === "DELETE")).toHaveLength(1)
   expect(f.probes).toHaveLength(0)
+})
+
+
+it("updates an existing base64url grant while provisioning an owned registration under tenant approval", async () => {
+  const { profile } = writeApprovalFixture()
+  const { service } = profile()
+  await service.enable(approvalTenant)
+  const guard = graphDispatchGuard(service, () => undefined)
+  const grantId = "c1D67-_BgkqJAKZxG_8FgGK6fWeo5UrHEBvnc9YfGTs"
+  const f = fixture({ guard, grants: [consent("User.Read", grantId)] })
+  await expect(f.run()).resolves.toMatchObject({ ready: true, reused: false })
+  expect(f.calls).toContainEqual(expect.objectContaining({ method: "PATCH", url: new URL(`https://graph.microsoft.com/v1.0/oauth2PermissionGrants/${grantId}`) }))
 })

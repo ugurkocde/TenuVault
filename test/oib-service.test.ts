@@ -1,10 +1,18 @@
 import { setWriteApprovals } from "../src/main/write-approvals/service"
-import { reviewer, writeApprovalFixture } from "./helpers/write-approval-fixture"
+import { approvalAccount, requester, reviewer, secondTenant, unenrolledApprovals, writeApprovalFixture } from "./helpers/write-approval-fixture"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { handleOib, migrateLegacyOibRuns, OIB_BACKUP_POLLING, setOibStore } from "../src/main/oib/service"
+import { ApiHost } from "../src/main/api/host"
+import { createAuditRecorder } from "../src/main/api/audit"
+import { createBridgedFetch } from "../src/main/api/fetch-bridge"
+import { graphDispatchGuard } from "../src/main/write-approvals/dispatch"
+import { DELEGATED_CLIENT_SECRET } from "../src/shared/constants"
+import { handleOib, reviewedOibRoute, migrateLegacyOibRuns, OIB_BACKUP_POLLING, setOibStore } from "../src/main/oib/service"
 import { packFolder, packItems, parsePackFile, resetOibSource } from "../src/main/oib/source"
 import type { OibBackupOptions, OibCatalog, OibComparison, OibProgress, OibRun, UndoResult, ValidationRun } from "../src/shared/oib/types"
 import { memoryStore } from "./helpers"
+
+beforeEach(() => setWriteApprovals(unenrolledApprovals("none")))
+afterEach(() => setWriteApprovals(undefined))
 
 const tenantId = "11111111-1111-1111-1111-111111111111"
 const appId = "22222222-2222-2222-2222-222222222222"
@@ -82,6 +90,7 @@ function world(state: Tenant, writes: string[]) {
       const metadata = backupId === "backup-1" ? (state.metadata === undefined ? COMPLETE : state.metadata) : state.backups?.find(b => b.id === backupId)?.metadata
       return Response.json({ backupId, content: { groups: [], metadata: metadata ?? null } })
     }
+    if (method === "GET" && url.endsWith("/roleScopeTags/0")) return Response.json({ id: "0" })
     const path = url.replace("https://graph.microsoft.com/beta/", "")
     if (method === "GET" && path.startsWith("deviceManagement/configurationPolicies?")) {
       return Response.json({ value: state.policies.map(p => ({ id: p.id, name: p.name, description: p.description ?? "" })) })
@@ -533,6 +542,7 @@ it("requires approval for deployment, pilot, fix and undo", async () => {
   const writes: string[] = []
   const state: Tenant = { policies: [{ id: EXISTING, name: "Existing policy", value: 2 }] }
   const graph = world(state, writes)
+  let created: Record<string, unknown> | undefined
   vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
     if (url.endsWith(`groups/${pilot}`)) return Response.json({ id: pilot })
@@ -540,7 +550,12 @@ it("requires approval for deployment, pilot, fix and undo", async () => {
     if (url.endsWith("/scopeTags/0") || url.endsWith("/roleScopeTags/0")) return Response.json({ id: "0" })
     if (url.endsWith("/configurationPolicies") && init?.method === "POST") {
       const body = JSON.parse(String(init.body))
-      state.policies.push({ id: CREATED, name: body.name })
+      state.policies.push({ id: CREATED, name: body.name, description: body.description })
+      created = { ...body, id: CREATED, assignments: [] }
+    }
+    if (created && init?.method === "GET" && url.includes(`/configurationPolicies/${CREATED}`)) {
+      if (url.includes("/assignments")) return Response.json({ value: [] })
+      return Response.json(created)
     }
     return graph(input, init)
   })
@@ -554,6 +569,7 @@ it("requires approval for deployment, pilot, fix and undo", async () => {
     const deploy = () => handleOib({ ...base, action: "oib-deploy", commit, backup: { mode: "none" }, items: [{ source: SC, mode: "create" }], pilotGroupId: pilot }) as Promise<OibRun>
     await expect(deploy()).rejects.toThrow("pending")
     expect(writes).toHaveLength(0)
+    expect((await second.service.inbox(tenantId)).requests[0]!.request.summary.operations?.[0]?.assignments[0]).toContain(pilot)
     await approve()
     const deployed = await deploy()
     expect(deployed.created).toHaveLength(1)
@@ -570,4 +586,86 @@ it("requires approval for deployment, pilot, fix and undo", async () => {
     expect(await undo()).toMatchObject({ results: [{ action: "removed", done: true }] })
     expect(writes).toHaveLength(4)
   } finally { setWriteApprovals(undefined) }
+})
+
+
+it("runs the reviewed OIB route through Graph transport and records the outcome of each batch", async () => {
+  const { profile } = writeApprovalFixture()
+  const first = profile(), second = profile(reviewer)
+  setWriteApprovals(first.service)
+  const writes: string[] = []
+  const network = world({ policies: [] }, writes)
+  const audit = vi.fn(async () => new Response(null, { status: 200 }))
+  const admit = vi.fn(async () => null)
+  const host = new ApiHost({ routes: { "/api/oib-reviewed-batches": { POST: reviewedOibRoute(admit) } }, onHandled: createAuditRecorder(audit, () => null) })
+  const transport = createBridgedFetch({
+    dispatch: request => host.dispatch(request), fetch: network,
+    getDelegatedToken: async tenant => ({ accessToken: tenant, expiresOn: null }),
+    authorizeGraph: graphDispatchGuard(first.service, token => ({ tenant: token, actor: requester, current: () => true })),
+  })
+  vi.stubGlobal("fetch", transport)
+  try {
+    await source()
+    const batches = [tenantId, secondTenant].map(tenant => ({
+      ...base, tenantId: tenant, clientSecret: DELEGATED_CLIENT_SECRET,
+      action: "oib-deploy", commit, backup: { mode: "none" }, items: [{ source: SC, mode: "create" }],
+    }))
+    const run = async () => {
+      const reply = await host.handleIpc({ method: "POST", path: "/api/oib-reviewed-batches", headers: {},
+        body: new TextEncoder().encode(JSON.stringify({ tenantId, batches })) })
+      return { status: reply.status, body: JSON.parse(new TextDecoder().decode(reply.body)) }
+    }
+    expect(await run()).toEqual({ status: 200, body: { legacy: true } })
+    await first.service.enable(tenantId)
+    await first.service.enable(secondTenant)
+    expect((await run()).status).toBe(409)
+    const approve = async (tenant: string) => {
+      const row = (await second.service.inbox(tenant)).requests[0]!
+      await second.service.decide(tenant, row.request.id, "approve")
+    }
+    await approve(tenantId)
+    expect((await run()).status).toBe(409)
+    expect(writes).toEqual([])
+    await approve(secondTenant)
+    expect(await run()).toMatchObject({ status: 200, body: { results: [{ tenant: tenantId, run: { created: [expect.anything()] } }, { tenant: secondTenant, run: { created: [expect.anything()] } }] } })
+    expect(writes).toHaveLength(2)
+    await vi.waitFor(() => expect(audit).toHaveBeenCalledTimes(2))
+  } finally { setWriteApprovals(undefined) }
+})
+
+
+it.each(["pilot", "collision"])("stops a protected OIB deployment when the %s changes during its backup", async change => {
+  const { profile } = writeApprovalFixture()
+  const first = profile(), second = profile(reviewer)
+  setWriteApprovals(first.service)
+  await first.service.enable(tenantId)
+  const state: Tenant = { policies: [] }
+  const writes: string[] = []
+  const network = world(state, writes)
+  let backupDone = false
+  const transport = createBridgedFetch({
+    dispatch: async req => {
+      const response = await network(req.url, { method: req.method, body: await req.text() })
+      if (req.url.endsWith("/api/backup/status")) {
+        backupDone = true
+        if (change === "collision") state.policies.push({ id: EXISTING, name: "Other policy with same baseline ID", description: `OIBID:${OIB_A}` })
+      }
+      return response
+    },
+    getDelegatedToken: async () => ({ accessToken: "sign-in", expiresOn: null }),
+    authorizeGraph: graphDispatchGuard(first.service, () => ({ tenant: tenantId, actor: requester, current: () => true })),
+    fetch: (input, init) => String(input).endsWith(`groups/${pilot}`)
+      ? Promise.resolve(Response.json({ id: pilot, displayName: backupDone && change === "pilot" ? "Renamed" : "Pilot" }))
+      : network(input, init),
+  })
+  vi.stubGlobal("fetch", transport)
+  await source()
+  const run = () => handleOib({ ...base, storageAccountName: approvalAccount, clientSecret: DELEGATED_CLIENT_SECRET,
+    action: "oib-deploy", commit, backup: { mode: "new" }, pilotGroupId: pilot, items: [{ source: SC, mode: "create" }],
+  })
+  await expect(run()).rejects.toThrow("pending")
+  await second.service.decide(tenantId, (await second.service.inbox(tenantId)).requests[0]!.request.id, "approve")
+  expect(await run()).toMatchObject({ created: [] })
+  expect(backupDone).toBe(true)
+  expect(writes).toEqual([])
 })

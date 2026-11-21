@@ -53,6 +53,10 @@ export function approvalEndpoints(tenant, issued, json) {
         const prefix = `${name}/${url.searchParams.get("prefix") ?? ""}`
         const names = [...blobs.keys()].filter(key => key.startsWith(prefix)).map(key => key.slice(name.length + 1))
         response.writeHead(200, { "content-type": "application/xml" }).end(`<EnumerationResults><Blobs>${names.map(key => `<Blob><Name>${asXml(key)}</Name></Blob>`).join("")}</Blobs><NextMarker /></EnumerationResults>`)
+      } else if (request.method === "HEAD") {
+        const existing = blobs.get(name)
+        if (!existing || request.headers["if-match"] !== existing.etag) response.writeHead(412).end()
+        else response.writeHead(200, { etag: existing.etag }).end()
       } else if (request.method === "GET") {
         const existing = blobs.get(name)
         if (existing) response.writeHead(200, { etag: existing.etag, "content-type": "application/json" }).end(existing.body)

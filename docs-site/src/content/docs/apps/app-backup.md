@@ -225,3 +225,5 @@ Open **Settings > Storage and recovery > Tenant approvals** and select the desti
 - [What gets backed up](/backups/coverage/): app settings and installer content are separate.
 - [Encryption and recovery key](/security/encryption/)
 - [Network connections and data flows](/security/data-flows/#app-backup): the addresses App Backup contacts and what is sent to each.
+
+If a protected restore needs to resume, the next approval includes the draft and the installer content already recorded in the destination. Changes to the draft or installer content can stop the restore before the next upload or publish step.

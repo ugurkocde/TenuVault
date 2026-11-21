@@ -1,6 +1,5 @@
 import { setApprovedRestoreRepairStore } from "../portal/lib/policies/graph-restore"
-import { deployReviewedBatches } from "./oib/service"
-import { record as frameworkRecord } from "../shared/frameworks/policies"
+import { reviewedOibRoute } from "./oib/service"
 import { createHash } from "node:crypto"
 import { WriteApprovals, setWriteApprovals, WriteApprovalError } from "./write-approvals/service"
 import { graphDispatchGuard, setRestoreUploadGuard } from "./write-approvals/dispatch"
@@ -16,6 +15,7 @@ import { restoreGraph } from "./app-backup/restore-graph"
 import { readRestoreSnapshot, sameRestoreSettings } from "./app-backup/restore-snapshot"
 import { downloadCapturedContent } from "./app-backup/capture-download"
 import { AppSourceService } from "./app-sources/service"
+import { appSourceRestoreHandler } from "./app-sources/restore-ipc"
 import { checkRecoveryDevice } from "./app-backup/device-check"
 import { readAppBackupAccount } from "./app-backup/account"
 import { appBackupClientId } from "./app-backup/sign-in"
@@ -691,18 +691,10 @@ async function bootstrap(): Promise<void> {
   })
   const host: ApiHost = new ApiHost({
     routes: { ...routes, ...backupRoutes(engine, (tenantId) => scopes.get(tenantId).scope), ...featureRoutes(featureDeps), ...driftScanRoutes(driftJobs), ...writeApprovalRoutes(writeApprovals),
-      "/api/oib-reviewed-batches": { POST: async request => {
-        try {
-          const body: unknown = await request.json()
-          if (!frameworkRecord(body)) return Response.json({ error: "Choose the deployment batches." }, { status: 400 })
-          return await deployReviewedBatches(body, async child => {
-            const check = new Request(`${INTERNAL_API_ORIGIN}/api/oib`, { method: "POST", body: JSON.stringify(child) })
-            return (await checkPlan(check)) ?? checkDisclaimer(check)
-          })
-        } catch (error) {
-          return Response.json({ error: error instanceof Error ? error.message : "Deployment could not be verified." }, { status: 409 })
-        }
-      } },
+      "/api/oib-reviewed-batches": { POST: reviewedOibRoute(async child => {
+        const check = new Request(`${INTERNAL_API_ORIGIN}/api/oib`, { method: "POST", body: JSON.stringify(child) })
+        return (await checkPlan(check)) ?? checkDisclaimer(check)
+      }) },
     },
     transform: surfaceTokenErrors,
     // Disabled CIS routes refuse before any licensing work. The plan comes next, so the
@@ -730,7 +722,7 @@ async function bootstrap(): Promise<void> {
         credentials?: { tenantId?: string; appId?: string }
         resources?: { storageAccountName?: string; subscriptionId?: string; resourceGroupName?: string; resourceGroupLocation?: string; automationAccountName?: string }
       }>
-      const tenant = tenants.find((t) => t.credentials?.tenantId?.toLowerCase() === tenantId.toLowerCase())
+      const tenant = tenants.find(t => typeof t?.credentials?.tenantId === "string" && t.credentials.tenantId.toLowerCase() === tenantId.toLowerCase())
       if (!tenant?.credentials?.appId || !tenant.resources?.storageAccountName) return null
       return {
         name: backupTenantLabel(tenant),
@@ -1272,6 +1264,7 @@ async function bootstrap(): Promise<void> {
     return account
   })
   handleTrusted("auth:signOut", async (_event, tenantId: string) => {
+    if (isGuid(tenantId) && tenantProfile(tenantId)) await writeApprovals.beforeStorageChange(tenantId.toLowerCase())
     await auth.signOut(tenantId)
     // The Backup Reader's private key goes with the tenant's sign-in on this computer.
     backupReader.remove(tenantId)
@@ -1361,6 +1354,7 @@ async function bootstrap(): Promise<void> {
   handleTrusted("license:releaseTenant", (_event, tenantId: unknown) => {
     if (!isTenantId(tenantId)) throw new Error("Unknown tenant.")
     return withStatus(async () => {
+      if (tenantProfile(tenantId)) await writeApprovals.beforeStorageChange(tenantId.toLowerCase())
       scheduler.remove(tenantId)
       await license
         .releaseTenant(tenantId)
@@ -1399,15 +1393,49 @@ async function bootstrap(): Promise<void> {
       event.returnValue = null
     }
   })
+  const tenantStorageKey = `${RENDERER_STORAGE_PREFIX}tenuvault_tenants`
+  let profileUpdate = Promise.resolve()
+  const updateTenantProfiles = (next: string | null) => {
+    const read = (serialized: string | null) => {
+      const profiles = new Map<string, string | undefined>()
+      if (!serialized) return profiles
+      const tenants = JSON.parse(serialized) as Array<{ credentials?: { tenantId?: string; appId?: string }; resources?: { storageAccountName?: string } }>
+      if (!Array.isArray(tenants)) throw new Error("The tenant profile list is invalid.")
+      for (const tenant of tenants) {
+        const id = tenant?.credentials?.tenantId
+        if (!isGuid(id)) continue
+        const normalized = id.toLowerCase()
+        // The first matching profile is the one used to resolve delegated storage access.
+        if (profiles.has(normalized)) continue
+        const account = tenant.credentials?.appId ? tenant.resources?.storageAccountName : undefined
+        if (account !== undefined && typeof account !== "string") throw new Error("The tenant storage account is invalid.")
+        profiles.set(normalized, account)
+      }
+      return profiles
+    }
+    const work = profileUpdate.then(async () => {
+      const before = read(appStore.get(tenantStorageKey))
+      const after = read(next)
+      await Promise.all([...new Set([...before.keys(), ...after.keys()])].map(tenant =>
+        writeApprovals.beforeStorageChange(tenant, after.get(tenant))))
+      if (next === null) appStore.delete(tenantStorageKey)
+      else appStore.set(tenantStorageKey, next)
+      if (!before.size && after.size) diagnostics.record({ name: "tenant_added" })
+    })
+    profileUpdate = work.catch(() => undefined)
+    return work
+  }
   handleTrusted("storage:set", (_event, key: unknown, value: unknown) => {
-    const name = rendererStorageKey(key)
+    const name = RENDERER_STORAGE_PREFIX + rendererStorageKey(key)
     const text = rendererStorageValue(value)
-    // The first tenant saved on this computer is the end of the setup.
-    const firstTenant = name === "tenuvault_tenants" && connectedTenantIds().length === 0
-    appStore.set(RENDERER_STORAGE_PREFIX + name, text)
-    if (firstTenant && connectedTenantIds().length > 0) diagnostics.record({ name: "tenant_added" })
+    if (name === tenantStorageKey) return updateTenantProfiles(text)
+    appStore.set(name, text)
   })
-  handleTrusted("storage:remove", (_event, key: unknown) => appStore.delete(RENDERER_STORAGE_PREFIX + rendererStorageKey(key)))
+  handleTrusted("storage:remove", (_event, key: unknown) => {
+    const name = RENDERER_STORAGE_PREFIX + rendererStorageKey(key)
+    if (name === tenantStorageKey) return updateTenantProfiles(null)
+    appStore.delete(name)
+  })
 
   let importingArchive = false
   handleTrusted("backups:importArchive", async () => {
@@ -1613,7 +1641,7 @@ async function bootstrap(): Promise<void> {
   handleTrusted("appSources:cancelDeviceSignIn", (_event, tenant: unknown) => appSources.cancelDeviceSignIn(tenant))
   handleTrusted("appSources:restoreReview", (_event, tenant: unknown, source: unknown) => appSources.restoreReview(tenant, source))
   handleTrusted("appSources:loadRestoreSettings", (_event, tenant: unknown, source: unknown) => appSources.loadRestoreSettings(tenant, source))
-  handleTrusted("appSources:restore", (_event, tenant: unknown, operation: unknown, source: unknown, target: unknown, name: unknown, settingsHash: unknown) => withPlanError(() => appSources.restore(tenant, operation, source, target, name, settingsHash)))
+  handleTrusted("appSources:restore", appSourceRestoreHandler(appSources))
   handleTrusted("appSources:restoreProgress", (_event, tenant: unknown, operation: unknown) => appSources.restoreProgress(tenant, operation))
   handleTrusted("appSources:capture", (_event, tenant: unknown, operation: unknown, id: unknown) => appSources.capture(tenant, operation, id))
   handleTrusted("appSources:assignments", (_event, tenant: unknown, id: unknown) => appSources.assignments(tenant, id))

@@ -1,5 +1,5 @@
 import { setWriteApprovals } from "../src/main/write-approvals/service"
-import { reviewer, writeApprovalFixture } from "./helpers/write-approval-fixture"
+import { reviewer, unenrolledApprovals, writeApprovalFixture } from "./helpers/write-approval-fixture"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { applyCisRemediation, approveCisRemediation, createCisRollback, listCisRemediations, OFFLINE_PREVIEW_NOTICE, planCisRemediation, previewCisRemediation, previewCisRollback, RECOMPARE_NOTICE } from "../src/main/features/cis-remediation/engine"
 import { applyChangeSet, approveChangeSet, previewChangeSet } from "../src/main/features/change-sets/engine"
@@ -11,6 +11,8 @@ import { routes as cisRoutes } from "../src/main/features/cis-remediation/index"
 import { FakeTenant, setting, wire } from "./feature-change-sets-fakes"
 import type { Item } from "../src/shared/intune/registry"
 import { rootMatches, type Json } from "../src/shared/frameworks/policies"
+
+beforeEach(() => setWriteApprovals(unenrolledApprovals("device")))
 
 const DEF_A = "fakebook_setting_alpha"
 const DEF_B = "fakebook_setting_beta"

@@ -415,7 +415,20 @@ async function prepareDeployment(body: RecordJson, kind: OibRun["kind"]) {
   const creator = new Restorer(graph, { writeApprovalTenant: tenant, mode: "copy", prefix: "", assignments: !!pilot })
   const replacer = new Restorer(graph, { writeApprovalTenant: tenant, mode: "replace", assignments: false, recreateMissing: false })
   const assignments = pilot ? [{ target: { "@odata.type": "#microsoft.graph.groupAssignmentTarget", groupId: pilot } }] : []
-  const observations = new Map<string, unknown>()
+  const observations = new Map<string, Awaited<ReturnType<Restorer["approvalObservation"]>>>()
+  const collisionFor = (item: typeof chosen[number], entry: TenantPolicy) => entry.folder === item.policy.folder &&
+    ((item.meta?.oibId && entry.oibId === item.meta.oibId) || entry.name.toLowerCase() === item.policy.name.toLowerCase())
+  const collisionsFor = (item: typeof chosen[number], entries: TenantPolicy[]) => entries.filter(entry => collisionFor(item, entry)).sort((a, b) => a.id.localeCompare(b.id))
+  const collisionReview = new Map<string, TenantPolicy[]>()
+  let reviewedPilot: Item | undefined
+  const readPilot = async () => {
+    if (!pilot) return undefined
+    const result = await graph("GET", `groups/${pilot}`)
+    if (result.status !== 200 || typeof result.body.id !== "string" || result.body.id.toLowerCase() !== pilot.toLowerCase()) {
+      throw new FrameworkError("The destination pilot group could not be verified.", 409)
+    }
+    return result.body
+  }
   const observe = async (item: typeof chosen[number]) => {
     const { policy } = item
     const snapshot = replaceTenantVariables(policy.snapshot, tenant)
@@ -434,18 +447,17 @@ async function prepareDeployment(body: RecordJson, kind: OibRun["kind"]) {
       const state = []
       for (const item of chosen) {
         const result = await observe(item)
-        observations.set(item.source, result.target)
+        observations.set(item.source, result)
         state.push(result)
       }
-      const pilotGroup = pilot ? await graph("GET", `groups/${pilot}`) : undefined
-      if (pilotGroup && (pilotGroup.status !== 200 || typeof pilotGroup.body.id !== "string" || pilotGroup.body.id.toLowerCase() !== pilot!.toLowerCase())) {
-        throw new FrameworkError("The destination pilot group could not be verified.", 409)
-      }
-      const folders = chosen.filter(item => item.mode === "create").map(item => item.policy.folder)
-      const collisions = folders.length ? await inventory(graph, folders) : []
+      reviewedPilot = await readPilot()
+      operation.summary.operations = state.map(result => result.review)
+      const creates = chosen.filter(item => item.mode === "create")
+      const collisions = creates.length ? await inventory(graph, creates.map(item => item.policy.folder)) : []
+      for (const item of creates) collisionReview.set(item.source, collisionsFor(item, collisions))
       return {
         content: [pack.catalog.commit, kind, pilot, backup, body.storageAccountName, items, state.map(result => result.content)],
-        target: [state.map(result => result.target), pilotGroup?.body, collisions.sort((a, b) => a.id.localeCompare(b.id))],
+        target: [state.map(result => result.target), reviewedPilot, [...collisionReview]],
       }
     },
   }
@@ -475,15 +487,21 @@ async function prepareDeployment(body: RecordJson, kind: OibRun["kind"]) {
         report({ stage: `${item.mode === "create" ? "Creating" : "Updating"} ${policy.name}`, done: index, total: chosen.length })
         const snapshot = replaceTenantVariables(policy.snapshot, tenant)
         const path = `oib/${policy.folder}/${policy.source.split("/").pop()}`
-        const check = hasWriteApproval(tenant) ? sameObservation(observations.get(item.source), async () => (await observe(item)).target) : undefined
+        const reviewed = hasWriteApproval(tenant) ? observations.get(item.source) : undefined
+        const check = reviewed ? async () => {
+          if (pilot) await sameObservation(reviewedPilot, readPilot)()
+          if (item.mode === "create" && item.meta?.oibId) {
+            await sameObservation(collisionReview.get(item.source), async () => collisionsFor(item, await inventory(graph, [policy.folder])))()
+          }
+        } : undefined
         if (item.mode === "create") {
           // A policy the tenant already has (same OIBID, or same type and name) is left alone rather than duplicated.
-          const clash = existing.find((entry) => entry.folder === policy.folder && ((item.meta?.oibId && entry.oibId === item.meta.oibId) || entry.name.toLowerCase() === policy.name.toLowerCase()))
+          const clash = existing.find(entry => collisionFor(item, entry))
           if (clash) {
             run.skipped!.push({ name: policy.name, reason: `Already in the tenant as ${clash.name}.` })
             continue
           }
-          const outcome = await creator.restore(path, { ...snapshot, assignments }, check)
+          const outcome = await creator.restore(path, { ...snapshot, assignments }, check, reviewed)
           if (outcome.policyId) {
             run.created.push({ folder: policy.folder, id: outcome.policyId, name: policy.name, ...(outcome.partial ? { partial: true } : {}), ...(outcome.warnings ? { warnings: outcome.warnings } : {}) })
             // Saved after every object, so an interrupted run can still be undone.
@@ -506,7 +524,7 @@ async function prepareDeployment(body: RecordJson, kind: OibRun["kind"]) {
           const previous = before[type.nameKey] ?? before.displayName ?? before.name
           // The pack's Default scope tag is for new policies; an update keeps the tenant's own tags.
           const { roleScopeTagIds: _packTags, ...content } = snapshot
-          const outcome = await replacer.restore(path, { ...content, ...(Array.isArray(before.roleScopeTagIds) ? { roleScopeTagIds: before.roleScopeTagIds } : {}), id: item.targetId! }, check)
+          const outcome = await replacer.restore(path, { ...content, ...(Array.isArray(before.roleScopeTagIds) ? { roleScopeTagIds: before.roleScopeTagIds } : {}), id: item.targetId! }, check, reviewed)
           if (outcome.action === "unchanged") {
             run.skipped!.push({ name: policy.name, reason: "Already matches the baseline." })
             continue
@@ -537,6 +555,18 @@ async function deploy(body: RecordJson, kind: OibRun["kind"]): Promise<OibRun> {
   })
 }
 
+export function reviewedOibRoute(admit: (child: RecordJson) => Promise<Response | null>) {
+  return async (request: Request): Promise<Response> => {
+    try {
+      const body: unknown = await request.json()
+      if (!record(body)) return Response.json({ error: "Choose the deployment batches." }, { status: 400 })
+      return await deployReviewedBatches(body, admit)
+    } catch (error) {
+      return Response.json({ error: error instanceof Error ? error.message : "Deployment could not be verified." }, { status: 409 })
+    }
+  }
+}
+
 /** Preflight all protected destinations before dispatching any batch. Each child uses its existing access rules. */
 export async function deployReviewedBatches(body: RecordJson, admit: (child: RecordJson) => Promise<Response | null>): Promise<Response> {
   if (!Array.isArray(body.batches) || body.batches.length < 2 || body.batches.length > 100 || body.batches.some(child => !record(child) || child.action !== "oib-deploy")) {
@@ -556,23 +586,29 @@ export async function deployReviewedBatches(body: RecordJson, admit: (child: Rec
     list.push(await prepareDeployment(child, "deploy"))
     prepared.set(tenant, list)
   }
-  const operations = [...prepared].map(([tenant, entries]): ApprovalOperation => ({
+  const operations = [...prepared].map(([tenant, entries]): ApprovalOperation => {
+    const operation: ApprovalOperation = {
     tenant, reference: ["oib-batches", entries.map(entry => entry.operation.reference)],
     summary: { kind: "Deploy OpenIntuneBaseline policies", count: entries.reduce((count, entry) => count + entry.operation.summary.count, 0),
       targets: entries.flatMap(entry => entry.operation.summary.targets), assignments: entries.some(entry => entry.operation.summary.assignments) },
     observe: async () => {
       const observations = await Promise.all(entries.map(entry => entry.operation.observe()))
+      operation.summary.operations = entries.flatMap(entry => entry.operation.summary.operations ?? [])
       return { content: observations.map(item => item.content), target: observations.map(item => item.target) }
     },
-  }))
+    }
+    return operation
+  })
   return withWriteApproval(operations, async () => {
-    const results: Array<{ tenant: string; platform: unknown; run?: OibRun; error?: string }> = []
+    const results: Array<{ tenant: string; platform: unknown; batchIndex: number; run?: OibRun; error?: string }> = []
     for (const [tenant, entries] of prepared) {
       await withTenantWrite(tenant, "OpenIntuneBaseline deployment", async () => {
         for (const [index, entry] of entries.entries()) {
-          const platform = batches.filter(child => tenantOf(child.tenantId) === tenant)[index]!.platform
-          try { results.push({ tenant, platform, run: await entry.work() }) }
-          catch (error) { results.push({ tenant, platform, error: message(error) }); break }
+          const indexes = batches.flatMap((child, batchIndex) => tenantOf(child.tenantId) === tenant ? [batchIndex] : [])
+          const batchIndex = indexes[index]!
+          const platform = batches[batchIndex]!.platform
+          try { results.push({ tenant, platform, batchIndex, run: await entry.work() }) }
+          catch (error) { results.push({ tenant, platform, batchIndex, error: message(error) }); break }
         }
       })
     }

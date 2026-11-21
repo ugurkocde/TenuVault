@@ -23,8 +23,10 @@ src/main/app-backup/assignment-graph.ts: fetchImpl(url.href) method "GET"
 src/main/app-backup/graph-read.ts: fetchImpl(url) method "GET"
 src/main/app-backup/restore-graph.ts: fetchImpl(url.href) method "PUT"
 src/main/app-backup/restore-graph.ts: fetchImpl(url.href) method method
-src/main/app-backup/restore.ts: graph(POST, BASE)
+src/main/app-backup/restore.ts: graph(method, path)
+src/main/app-backup/restore.ts: graph(method, path)
 src/main/app-backup/restore.ts: send(PATCH, appUrl)
+src/main/app-backup/restore.ts: send(POST, BASE)
 src/main/app-backup/restore.ts: send(POST, `${fileUrl}/commit`)
 src/main/app-backup/restore.ts: send(POST, `${fileUrl}/renewUpload`)
 src/main/app-backup/restore.ts: send(POST, `${fileUrl}/renewUpload`)
@@ -59,6 +61,11 @@ src/main/backup/graph-session.ts: this.fetchImpl(url, { signal, headers: { Autho
 src/main/backup/request.ts: request(signal)
 src/main/chromium-fetch.ts: Request(input, init)
 src/main/chromium-fetch.ts: request() method req.method
+src/main/features/change-sets/engine.ts: graph(method, path)
+src/main/features/change-sets/engine.ts: writer(method, path)
+src/main/features/change-sets/graph.ts: graph(method, path)
+src/main/features/change-sets/graph.ts: graph(method, path)
+src/main/features/cis-remediation/engine.ts: rawGraph(method, path)
 src/main/features/health-review/service.ts: deps.externalFetch(endpoint.url) method "POST"
 src/main/features/hygiene/index.ts: fetchSettingsCatalog(deps, tenantId)
 src/main/features/notifications/service.ts: deps.externalFetch(channel.url) method "POST"
@@ -124,8 +131,11 @@ src/main/write-approvals/audit.ts: dispatch(new Request(`${INTERNAL_API_ORIGIN}/
 src/main/write-approvals/blob.ts: fetchImpl(target, { ...init, redirect: "error", signal: AbortSignal.timeout(15_000), headers: { ...headers, ...init?.h)
 src/main/write-approvals/blob.ts: request(`${root}?${query}`)
 src/main/write-approvals/blob.ts: request(url(name))
+src/main/write-approvals/blob.ts: request(url(name)) method "DELETE"
+src/main/write-approvals/blob.ts: request(url(name)) method "HEAD"
 src/main/write-approvals/blob.ts: request(url(name)) method "PUT"
 src/main/write-approvals/dispatch.ts: Request(input instanceof Request ? input.clone() : input, init)
+src/main/write-approvals/dispatch.ts: requiresApproval(child.method, child.url)
 src/portal/app/api/audit/cleanup/route.ts: fetch(`https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`) method "POST"
 src/portal/app/api/audit/export/route.ts: fetch(`https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`) method "POST"
 src/portal/app/api/audit/log/route.ts: fetch(`https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`) method "POST"
@@ -197,6 +207,9 @@ src/portal/lib/audit/storage.ts: fetch(url, { headers: this.getHeaders() })
 src/portal/lib/drift/setting-names.ts: graph(POST, "$batch")
 src/portal/lib/policies/graph-restore.ts: fetchImpl(`${GRAPH}${path}`) method method
 src/portal/lib/policies/graph-restore.ts: this.graph(POST, plan.create.path)
+src/portal/lib/policies/graph-restore.ts: this.graph(record.step.method, record.step.path)
+src/portal/lib/policies/graph-restore.ts: this.graph(record.step.method, record.step.path)
+src/portal/lib/policies/graph-restore.ts: this.graph(step.method, step.path)
 src/portal/lib/storage/list.ts: fetch(target, { headers: { 'x-ms-version': '2021-12-02', Authorization: `Bearer ${token}` }, signal })
 src/shared/intune/autopilot-devices.ts: steps.push() method "POST"
 src/shared/intune/autopilot-devices.ts: steps.push() method "POST"

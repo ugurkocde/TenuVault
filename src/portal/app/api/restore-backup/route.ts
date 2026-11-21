@@ -106,10 +106,20 @@ export async function POST(request: NextRequest) {
     try { dependencyMappings = parseDependencyMappings(body.dependencyMappings) }
     catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "Invalid dependency mappings" }, { status: 400 }) }
     if (dependencyMappings.length && (targetTenants?.length !== 1 || body.confirmMappings !== true)) return NextResponse.json({ error: "Review mappings and select exactly one target tenant" }, { status: 400 })
-    const repairSelections = Array.isArray(selectedPolicies) ? selectedPolicies.filter((p: any) => p.repairToken !== undefined) : []
-    if (repairSelections.some((p: any) => typeof p.repairToken !== 'string' || !guid.test(p.repairToken)) ||
-      (repairSelections.length && (restoreType !== 'selective' || targetTenants?.length > 1))) {
-      return NextResponse.json({ error: 'Repair requests must select one target and valid repair tokens' }, { status: 400 })
+    type Selection = { path: string; repairToken?: string }
+    type Destination = { tenantId: string; appId: string; selectedPolicies?: Selection[] }
+    const destinations = targetTenants as Destination[] | undefined
+    const validSelections = (items: unknown): items is Selection[] => Array.isArray(items) && items.length > 0
+      && items.every(item => validPolicyPath(item?.path, backupId) && (item.repairToken === undefined || typeof item.repairToken === "string" && guid.test(item.repairToken)))
+      && new Set(items.map(item => item.path)).size === items.length
+    const hasTargetSelections = destinations?.some(target => target.selectedPolicies !== undefined)
+    const repairSelections: Selection[] = Array.isArray(selectedPolicies) ? selectedPolicies.filter((p: Selection) => p.repairToken !== undefined) : []
+    if (destinations && new Set(destinations.map(target => target.tenantId.toLowerCase())).size !== destinations.length
+      || hasTargetSelections && (restoreType !== "selective" || repairSelections.length > 0
+        || !destinations?.every(target => validSelections(target.selectedPolicies)
+          && target.selectedPolicies.every(item => selectedPolicies.some((policy: Selection) => policy.path === item.path))))
+      || repairSelections.length > 0 && (restoreType !== "selective" || (destinations?.length ?? 0) > 1 || !validSelections(repairSelections))) {
+      return NextResponse.json({ error: "Choose unique destinations and valid restore selections for each destination." }, { status: 400 })
     }
     const repairScope = (target: string) => JSON.stringify([tenantId, storageAccountName, backupId, target.toLowerCase(), mode, assignments, dependencyMappings])
 
@@ -167,18 +177,18 @@ export async function POST(request: NextRequest) {
       paths = policyFiles
     }
 
-    const targets = targetTenants
-      ? await Promise.all((targetTenants as Array<{ tenantId: string; appId: string }>).map(async (target) => {
+    const targets = destinations
+      ? await Promise.all(destinations.map(async (target) => {
           const token = await getAccessToken(target.tenantId, target.appId, clientSecret, "https://graph.microsoft.com/.default")
           const graph = graphCaller(token, fetch, { tenant: target.tenantId, refreshToken: () => getAccessToken(target.tenantId, target.appId, clientSecret, "https://graph.microsoft.com/.default", true) })
           const options = { writeApprovalTenant: target.tenantId, mode: "copy" as const, assignments: false, prefix: "", crossTenant: true, repairScope: repairScope(target.tenantId), granted: grantedPermissions(token) }
-          return { targetTenantId: target.tenantId.toLowerCase(), restorer: new Restorer(graph, options), observer: new Restorer(graph, options) }
+          return { targetTenantId: target.tenantId.toLowerCase(), restorer: new Restorer(graph, options), selection: target.selectedPolicies }
         }))
       : [{
           targetTenantId: undefined,
           restorer: new Restorer(graphCaller(graphToken, fetch, { tenant: tenantId, refreshToken: () => getAccessToken(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default", true) }),
             { writeApprovalTenant: tenantId, mode, assignments, approvalContext: requesterContext(graphToken, tenantId, body.justification), repairScope: repairScope(tenantId), granted: grantedPermissions(graphToken) }),
-          observer: null,
+          selection: undefined,
         }]
     try {
       if (dependencyMappings.length) for (const { restorer } of targets) await restorer.mapDependencies(dependencyMappings)
@@ -191,30 +201,31 @@ export async function POST(request: NextRequest) {
     if (!checked.ok) return NextResponse.json({ error: checked.error }, { status: 400 })
     const manifest = checked.manifest
 
-    const ordered = restoreOrder(paths)
-    const repairFor = (path: string): string | undefined => repairSelections.find((p: any) => p.path === path)?.repairToken
     const admissions = targets.map(target => {
-      const snapshots = new Map<string, { snapshot: Item; target: unknown }>()
-      const observePath = async (path: string, snapshot: Item) => {
-        if (target.observer && dependencyMappings.length) await target.observer.mapDependencies(dependencyMappings)
-        return (target.observer ?? target.restorer).approvalObservation(path, snapshot, repairFor(path))
+      const ordered = restoreOrder(target.selection?.map(item => item.path) ?? paths)
+      const repairs = new Map((target.selection ?? repairSelections).map(item => [item.path, item.repairToken]))
+      const snapshots = new Map<string, { snapshot: Item; state: Awaited<ReturnType<Restorer["approvalObservation"]>> }>()
+      const observePath = (path: string, snapshot: Item) => target.restorer.approvalObservation(path, snapshot, repairs.get(path))
+      const summary: import("../../../../shared/write-approvals").WriteApprovalSummary = {
+        kind: target.targetTenantId ? "Copy policies to another tenant" : mode === "replace" ? "Restore policies in place" : "Restore policy copies",
+        count: ordered.length, reference: backupId, targets: ordered, assignments, mappings: dependencyMappings,
       }
       return {
-        ...target, snapshots, observePath,
+        ...target, ordered, repairs, snapshots, observePath,
         operation: {
           tenant: target.targetTenantId ?? tenantId,
-          reference: ["restore", tenantId, backupId, ordered, repairSelections],
-          summary: { kind: target.targetTenantId ? "Copy policies to another tenant" : mode === "replace" ? "Restore policies in place" : "Restore policy copies",
-            count: ordered.length, reference: backupId, targets: ordered, assignments, mappings: dependencyMappings },
+          reference: ["restore", tenantId, backupId, ordered, [...repairs]],
+          summary,
           observe: async () => {
             verifyApprovalSource(tenantId, storageAccountName)
             const observed = []
             for (const path of ordered) {
-              const snapshot = repairFor(path) ? {} : await readSnapshot(path, storageAccountName, storageToken, manifest?.get(path))
+              const snapshot = repairs.get(path) ? {} : await readSnapshot(path, storageAccountName, storageToken, manifest?.get(path))
               const state = await observePath(path, snapshot)
-              snapshots.set(path, { snapshot, target: state.target })
+              snapshots.set(path, { snapshot, state })
               observed.push(state)
             }
+            summary.operations = observed.map(state => state.review)
             return {
               content: [tenantId, storageAccountName, backupId, mode, assignments, dependencyMappings, body.justification, observed.map(state => state.content)],
               target: observed.map(state => state.target),
@@ -224,17 +235,17 @@ export async function POST(request: NextRequest) {
       }
     })
     await withWriteApproval(admissions.map(entry => entry.operation), async () => {
-      const progress = progressId ? startProgress(progressId, paths.length * targets.length) : null
+      const progress = progressId ? startProgress(progressId, admissions.reduce((total, entry) => total + entry.ordered.length, 0)) : null
       try {
-        for (const { restorer, targetTenantId, snapshots, observePath } of admissions) {
+        for (const { restorer, targetTenantId, ordered, repairs, snapshots, observePath } of admissions) {
           for (const path of ordered) {
             if (progress) progress.current = path
-            const repair = repairFor(path)
+            const repair = repairs.get(path)
             const expected = snapshots.get(path)
             const active = hasWriteApproval(targetTenantId ?? tenantId)
-            const check = active && expected ? sameObservation(expected.target, async () => (await observePath(path, expected.snapshot)).target) : undefined
+            const check = active && expected && repair ? sameObservation(expected.state, () => observePath(path, expected.snapshot)) : undefined
             const result = active && expected
-              ? repair ? await restorer.repair(path, repair, check) : await restorer.restore(path, expected.snapshot, check)
+              ? repair ? await restorer.repair(path, repair, check, expected.state.target) : await restorer.restore(path, expected.snapshot, undefined, expected.state)
               : await restoreSinglePolicy(restorer, path, storageAccountName, storageToken, manifest?.get(path), repair)
             const entry = targetTenantId ? { ...result, targetTenantId } : result
             results.push(entry)
@@ -341,17 +352,21 @@ async function approvalAction(body: any): Promise<Response> {
       if (record.requesterId.toLowerCase() !== context.requesterId.toLowerCase()) throw new Error("Only the original requester can use this Intune request.")
       let expected: unknown
       const observe = () => restorer.pendingApprovalObservation(record, action)
+      const summary: import("../../../../shared/write-approvals").WriteApprovalSummary = {
+        kind: action === "submit" ? "Submit Intune approval" : "Complete Intune approval",
+        count: record.remaining.length + (record.continuationPending ? 0 : 1), reference: record.id, targets: [record.label], assignments: record.assignments,
+      }
       return await withWriteApproval([{
-        tenant: tenantId, reference: ["intune-approval", action, record.id],
-        summary: { kind: action === "submit" ? "Submit Intune approval" : "Complete Intune approval", count: record.remaining.length + 1, reference: record.id, targets: [record.label], assignments: record.assignments },
+        tenant: tenantId, reference: ["intune-approval", action, record.id], summary,
         observe: async () => {
           const observation = await observe()
+          summary.operations = [observation.review]
           expected = observation.target
           return { ...observation, content: [observation.content, action, body.justification ?? record.justification] }
         },
       }], async () => {
         const check = hasWriteApproval(tenantId) ? sameObservation(expected, async () => (await observe()).target) : undefined
-        return NextResponse.json({ outcome: action === "submit" ? await restorer.submitApproval(record, body.justification, check) : await restorer.completeApproval(record, check) })
+        return NextResponse.json({ outcome: action === "submit" ? await restorer.submitApproval(record, body.justification, check, expected) : await restorer.completeApproval(record, check, expected) })
       })
     }
     else if (action === "withdraw") {

@@ -1,6 +1,6 @@
 import { setWriteApprovals } from "../src/main/write-approvals/service"
-import { reviewer, writeApprovalFixture } from "./helpers/write-approval-fixture"
-import { afterEach, describe, expect, it } from "vitest"
+import { reviewer, unenrolledApprovals, writeApprovalFixture } from "./helpers/write-approval-fixture"
+import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { applyChangeSet, approveChangeSet, CONTENT_DOMAIN, createChangeSet, KEPT_CHANGE_SETS, createRollbackChangeSet, getChangeSet, listChangeSets, previewChangeSet, previewRollback, rejectChangeSet, reviseChangeSet } from "../src/main/features/change-sets/engine"
 import type { FeatureDeps } from "../src/main/features/deps"
 import { FeatureError } from "../src/main/features/route"
@@ -11,6 +11,8 @@ import { MAX_RECORDS } from "../src/main/features/records"
 import { fakeDeps, seedRecords, TENANT_A, TENANT_B } from "./feature-helpers"
 import { COMPLETE_BACKUP_METADATA, FakeTenant, setting, wire } from "./feature-change-sets-fakes"
 import { writeOperation } from "../src/main/features/change-sets/graph"
+
+beforeEach(() => setWriteApprovals(unenrolledApprovals("azure")))
 
 const POLICIES = typeForFolder("ConfigurationPolicies")!
 

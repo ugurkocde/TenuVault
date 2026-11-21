@@ -28,6 +28,7 @@ export async function checkAppBackupCompletion({ check, evaluate, waitForConditi
             restoreReview: async () => ({ settingsHash: 'a'.repeat(64), observedAt: '2026-11-14T13:27:27Z', currentSettings: false, name: 'PowerShell', version: '7.6.0', publisher: 'Microsoft', installCommand: 'setup.exe /quiet', uninstallCommand: 'setup.exe /uninstall', runAs: 'system', detectionRules: 1, requirementRules: 0, blocker: null }),
             restoreProgress: async () => null,
             restore: async (sourceTenant, operation, sourceId, targetTenant, name, settingsHash) => {
+              if (!fixture.approved) throw new frame.contentWindow.Error('Tenant approval 22222222-2222-4222-8222-222222222222 is pending. Open Tenant approvals in Settings.');
               fixture.restored = { sourceTenant, sourceId, targetTenant, name, settingsHash };
               return { sourceId, tenantId: targetTenant, name, appId: '77777777-7777-7777-7777-777777777777', contentVersion: '1' };
             },
@@ -87,6 +88,16 @@ export async function checkAppBackupCompletion({ check, evaluate, waitForConditi
       assert(await waitForCondition(`!${doc}.querySelector('[role=dialog]').innerText.includes(${JSON.stringify(note)})`), "plan note shown for the source tenant")
       await evaluate(`${doc}.querySelector('[role=dialog] input[type=checkbox]').click()`)
       assert(await waitForCondition(`!${control("Restore unassigned app")}.disabled`), "restore stayed disabled after review")
+      await evaluate(`${control("Restore unassigned app")}.click()`)
+      assert(await waitForCondition(`${doc}.querySelector('[role=dialog] [role=alert]')?.innerText.includes('is pending')`), "App Backup did not display the pending approval")
+      await send("Emulation.setDeviceMetricsOverride", { width: 1024, height: 700, deviceScaleFactor: 1, mobile: false })
+      for (const theme of ["light", "dark"]) {
+        await evaluate(`${doc}.documentElement.classList.toggle('dark', ${theme === "dark"})`)
+        assert(await evaluate(`${doc}.documentElement.scrollWidth <= window.__appCompletionFrame.contentWindow.innerWidth + 1`), `App Backup approval overflows in ${theme} mode`)
+        await screenshot(`app-backup-approval-1024-${theme}`)
+      }
+      await evaluate(`${doc}.documentElement.classList.remove('dark'); window.__appCompletion.approved = true`)
+      await send("Emulation.clearDeviceMetricsOverride")
       await evaluate(`${control("Restore unassigned app")}.click()`)
       assert(await waitForCondition(`Boolean(${control("Open restored app")})`), "restore completion action missing")
       assert(await evaluate(`window.__appCompletion.restored.sourceTenant === window.__appCompletion.source.tenantId && window.__appCompletion.restored.targetTenant === window.__appCompletion.source.tenantId`), "restore used the wrong tenant")

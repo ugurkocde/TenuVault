@@ -12,9 +12,10 @@ import type { ApprovalBlobs, BlobRecord } from "./blob"
 
 type Policy = { schema: 1; tenant: string; account: string; generation: number; enabled: boolean; minimumVersion: string; requester: string; approver?: string; requestId?: string }
 type Profile = { clientId: string; storageAccountName: string }
-type OpenStore = { tenant: string; account: string; actor: ApprovalActor; blobs: ApprovalBlobs; policy: Policy | null; etag?: string }
-type Permit = { request: WriteApproval; decision: WriteDecision }
-type Execution = { tenants: Set<string>; permits: Map<string, Permit> }
+type StorageSession = { tenant: string; account: string; actor: ApprovalActor; blobs: ApprovalBlobs }
+type OpenStore = StorageSession & { policy: Policy | null; etag?: string; serverTime?: number }
+type Permit = { request: WriteApproval; decision: WriteDecision; context: OpenStore }
+type Execution = { tenants: Set<string>; permits: Map<string, Permit>; inactive: Map<string, string | null> }
 type Store = { get(key: string): string | null; set(key: string, value: string): void }
 type Event = { action: string; tenant: string; account: string; actor: ApprovalActor; generation: number; requestId?: string; requester?: string; approver?: string }
 
@@ -56,6 +57,8 @@ const bindingSeenKey = (tenant: string, account: string) => `write-approval.seen
 const digestPattern = /^[a-f0-9]{64}$/
 const versionParts = (value: string) => /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/.exec(value)
 const actorValid = (actor: ApprovalActor | undefined) => actor && isGuid(actor.oid) && actor.oid === actor.oid.toLowerCase() && typeof actor.label === "string" && actor.label.length <= 200
+const retention = 30 * 24 * 60 * 60 * 1000
+const stringList = (value: unknown) => Array.isArray(value) && value.every(entry => typeof entry === "string")
 const validGeneration = (generation: number) => Number.isSafeInteger(generation) && generation > 0
 
 function atLeast(version: string, minimum: string): boolean {
@@ -87,6 +90,9 @@ function readRequest(blob: BlobRecord | null, tenant: string, account: string, i
     || !["pending", "stale", "cancelled", "claimed", "finished", "interrupted"].includes(r.state)
     || typeof r.summary?.kind !== "string" || !Number.isSafeInteger(r.summary.count) || !Array.isArray(r.summary.targets)
     || r.summary.targets.some(value => typeof value !== "string")
+    || (r.summary.operations !== undefined && (!Array.isArray(r.summary.operations) || r.summary.operations.some(operation =>
+      !operation || typeof operation.name !== "string" || (operation.id !== undefined && typeof operation.id !== "string")
+      || !stringList(operation.assignments) || !stringList(operation.fields) || !stringList(operation.sensitiveFields))))
     || (r.summary.reference !== undefined && typeof r.summary.reference !== "string")
     || (r.summary.assignments !== undefined && typeof r.summary.assignments !== "boolean")
     || (r.summary.fields !== undefined && (!Array.isArray(r.summary.fields) || r.summary.fields.some(value => typeof value !== "string")))
@@ -94,7 +100,7 @@ function readRequest(blob: BlobRecord | null, tenant: string, account: string, i
   return r
 }
 
-async function readDecision(context: OpenStore, request: WriteApproval): Promise<WriteDecision | undefined> {
+async function readDecision(context: StorageSession, request: WriteApproval): Promise<WriteDecision | undefined> {
   const blob = await context.blobs.get(decisionPath(context.tenant, request.id))
   if (!blob) return undefined
   const d = blob.value as WriteDecision | null
@@ -126,18 +132,29 @@ export class WriteApprovals {
     return createHmac("sha256", Buffer.from(key, "hex")).update(canonicalJson(value)).digest("hex")
   }
 
-  private async open(raw: string, expectedActor?: ApprovalActor): Promise<OpenStore | null> {
+  private async open(raw: string, expectedActor?: ApprovalActor, beforePolicy?: (session: StorageSession) => Promise<void>, cached?: OpenStore): Promise<OpenStore | null> {
     if (!isGuid(raw)) throw new WriteApprovalError("A valid destination tenant is required.")
     const tenant = raw.toLowerCase()
     const profile = this.deps.profile(tenant)
     const pinned = this.deps.store.get(bindingKey(tenant)) || null
-    if (!profile) throw new WriteApprovalError("Reconnect the destination tenant to verify its write approval policy.")
+    if (!profile) {
+      if (pinned) throw new WriteApprovalError("Reconnect the destination tenant to verify its write approval policy.")
+      return null
+    }
     if (pinned && pinned !== profile.storageAccountName.toLowerCase()) throw new WriteApprovalError(`This tenant is enrolled with ${pinned}. Reconnect that shared storage account before writing or changing its approval policy.`)
     const account = pinned ?? profile.storageAccountName.toLowerCase()
     if (isLocalAccount(account)) return null
     assertStorageAccountName(account)
     const { actor, blobs } = await this.deps.open(tenant, profile.clientId, account)
     if (!actorValid(actor) || (expectedActor && actor.oid !== expectedActor.oid)) throw new WriteApprovalError("The signed-in destination account changed. Sign in again and review the request.")
+    await beforePolicy?.({ tenant, account, actor, blobs })
+    if (cached?.etag && blobs.match) {
+      if (cached.tenant !== tenant || cached.account !== account) throw new WriteApprovalError(stateChanged)
+      const match = await blobs.match(policyPath(tenant), cached.etag)
+      if (match?.etag !== cached.etag) throw new WriteApprovalError(stateChanged)
+      this.checkActor(tenant, actor)
+      return { tenant, account, actor, blobs, policy: cached.policy, etag: match.etag, serverTime: match.serverTime }
+    }
     const blob = await blobs.get(policyPath(tenant))
     if (!this.deps.current(tenant, actor)) throw new WriteApprovalError("The destination account changed while checking approvals.")
     if (!blob) {
@@ -153,7 +170,30 @@ export class WriteApprovals {
     if (policy.enabled) this.deps.store.set(bindingKey(tenant), account)
     else if (pinned) this.deps.store.set(bindingKey(tenant), "")
     if (policy.enabled && !atLeast(this.deps.version, policy.minimumVersion)) throw new WriteApprovalError(`This tenant requires TenuVault ${policy.minimumVersion} or later.`)
-    return { tenant, account, actor, blobs, policy, etag: blob.etag }
+    return { tenant, account, actor, blobs, policy, etag: blob.etag, serverTime: blob.serverTime }
+  }
+
+  /** Verify the account being replaced while its old profile and delegated session still exist. */
+  async beforeStorageChange(tenant: string, nextAccount?: string): Promise<void> {
+    const previous = this.deps.profile(tenant)?.storageAccountName.toLowerCase()
+    const pinned = this.deps.store.get(bindingKey(tenant))
+    const next = nextAccount?.toLowerCase()
+    if (next === previous && (!pinned || next === pinned)) return
+    if (pinned && next === pinned) return
+    const context = await this.open(tenant)
+    if (context?.policy?.enabled && next) {
+      throw new WriteApprovalError(`This tenant is enrolled with ${context.account}. Ask another admin to approve disabling tenant write approval before changing storage.`)
+    }
+    // A disconnect can drop the profile, but open() has retained any enrollment independently.
+  }
+
+  private profileKey(tenant: string): string | null {
+    const profile = this.deps.profile(tenant)
+    return profile ? canonicalJson([profile.clientId, profile.storageAccountName.toLowerCase()]) : null
+  }
+
+  private inactiveForRun(tenant: string): boolean {
+    return !this.deps.store.get(bindingKey(tenant)) && this.execution.getStore()?.inactive.get(tenant) === this.profileKey(tenant)
   }
 
   async inbox(tenant: string): Promise<WriteApprovalInbox> {
@@ -163,14 +203,47 @@ export class WriteApprovals {
     const prefix = `${namespace(context.tenant)}requests/`
     const names = await blobs.list(prefix)
     const requests: WriteApprovalInbox["requests"] = []
-    for (const name of names) {
-      const id = name.slice(prefix.length).replace(/\.json$/, "")
-      if (!isGuid(id) || name !== requestPath(context.tenant, id)) continue
-      const request = readRequest(await blobs.get(name), context.tenant, account, id)
-      const decision = await readDecision(context, request)
-      requests.push({ request, decision, expired: this.now() >= request.expiresAt, local: this.isOrigin(request), superseded: request.generation !== policy?.generation })
+    let invalidRecords = 0
+    // Bound fan-out so a large shared inbox cannot exhaust Chromium's request queue.
+    for (let start = 0; start < names.length; start += 16) {
+      await Promise.all(names.slice(start, start + 16).map(async name => {
+        const id = name.slice(prefix.length).replace(/\.json$/, "")
+        if (!isGuid(id) || name !== requestPath(context.tenant, id)) { invalidRecords++; return }
+        const blob = await blobs.get(name)
+        if (!blob) return
+        let request: WriteApproval
+        let decision: WriteDecision | undefined
+        try {
+          request = readRequest(blob, context.tenant, account, id)
+          decision = await readDecision(context, request)
+        } catch (error) {
+          if (!(error instanceof WriteApprovalError)) throw error
+          invalidRecords++
+          return
+        }
+        const superseded = request.generation !== policy?.generation
+        const expired = this.time(blob, context) >= request.expiresAt
+        const terminal = request.state !== "claimed" && (request.state !== "pending" || expired || superseded || decision?.decision === "rejected")
+        if (blobs.delete && terminal && this.time(blob, context) >= Math.max(request.expiresAt, blob.modifiedAt ?? 0, decision?.at ?? 0) + retention) {
+          try {
+            if (await blobs.delete(name, blob.etag)) {
+              const path = decisionPath(context.tenant, id)
+              const decisionBlob = await blobs.get(path)
+              if (decisionBlob) await blobs.delete(path, decisionBlob.etag)
+            }
+            return
+          } catch (error) {
+            console.warn("[write approvals] Could not prune a finished approval request", error)
+          }
+        }
+        requests.push({ request, decision, expired, local: this.isOrigin(request), superseded })
+      }))
     }
-    return { available: true, enabled: policy?.enabled === true, minimumVersion: policy?.minimumVersion, actor, requests: requests.sort((a, b) => b.request.createdAt - a.request.createdAt) }
+    return { available: true, enabled: policy?.enabled === true, minimumVersion: policy?.minimumVersion, actor, invalidRecords, requests: requests.sort((a, b) => b.request.createdAt - a.request.createdAt) }
+  }
+
+  private time(blob?: BlobRecord | null, context?: OpenStore): number {
+    return Math.max(this.now(), context?.serverTime ?? 0, blob?.serverTime ?? 0, blob?.modifiedAt ?? 0)
   }
 
   private isOrigin(request: WriteApproval): boolean {
@@ -191,10 +264,12 @@ export class WriteApprovals {
     if (c.policy?.enabled) return
     const policy: Policy = { schema: 1, tenant: c.tenant, account: c.account, generation: (c.policy?.generation ?? 0) + 1, enabled: true, minimumVersion: this.deps.version, requester: c.actor.oid }
     if (!versionParts(policy.minimumVersion)) throw invalid()
-    await this.deps.audit({ action: "Tenant write approval enabled", tenant: c.tenant, account: c.account, actor: c.actor, generation: policy.generation, requester: c.actor.oid })
+    const event = { tenant: c.tenant, account: c.account, actor: c.actor, generation: policy.generation, requester: c.actor.oid }
+    await this.deps.audit({ ...event, action: "Tenant write approval enable requested" })
     this.checkActor(c.tenant, c.actor)
     if (!await c.blobs.put(policyPath(c.tenant), policy, c.etag)) throw new WriteApprovalError(stateChanged)
     this.deps.store.set(bindingKey(c.tenant), c.account)
+    await this.deps.audit({ ...event, action: "Tenant write approval enabled" })
   }
 
   async disable(tenant: string): Promise<void> {
@@ -203,10 +278,13 @@ export class WriteApprovals {
       if (!c?.policy?.enabled) return
       const permit = this.execution.getStore()?.permits.get(c.tenant)
       if (this.execution.getStore()?.permits.size !== 1 || !permit || permit.request.generation !== c.policy.generation || c.actor.oid !== permit.request.requester.oid) throw new WriteApprovalError(stateChanged)
-      await this.receipt(c, "Tenant write approval disabled", permit.request, permit.decision)
+      await this.receipt(c, "Tenant write approval disable requested", permit.request, permit.decision)
+      await this.authorize(c.tenant, c.actor)
+      this.checkDeadline(c.tenant)
       const policy: Policy = { ...c.policy, enabled: false, generation: c.policy.generation + 1, requester: c.actor.oid, approver: permit.decision.actor.oid, requestId: permit.request.id }
       if (!this.deps.current(c.tenant, c.actor) || !await c.blobs.put(policyPath(c.tenant), policy, c.etag)) throw new WriteApprovalError(stateChanged)
       this.deps.store.set(bindingKey(c.tenant), "")
+      await this.receipt(c, "Tenant write approval disabled", permit.request, permit.decision)
     })
   }
 
@@ -225,17 +303,17 @@ export class WriteApprovals {
       return
     }
     if (r.requester.oid === c.actor.oid) throw new WriteApprovalError("A different signed-in admin must decide this request.")
-    if (!c.policy?.enabled || r.generation !== c.policy.generation || this.now() >= r.expiresAt) throw new WriteApprovalError("This request has expired or its policy generation has changed.")
+    if (!c.policy?.enabled || r.generation !== c.policy.generation || this.time(blob, c) >= r.expiresAt) throw new WriteApprovalError("This request has expired or its policy generation has changed.")
     const decision: WriteDecision = {
       schema: 1, requestId: r.id, generation: r.generation, contentHash: r.contentHash, targetFingerprint: r.targetFingerprint,
-      actor: c.actor, at: this.now(), decision: action === "approve" ? "approved" : "rejected",
+      actor: c.actor, at: this.time(blob, c), decision: action === "approve" ? "approved" : "rejected",
     }
     if (!this.deps.current(c.tenant, c.actor) || !await c.blobs.put(decisionPath(c.tenant, id), decision)) throw new WriteApprovalError(stateChanged)
     await this.receipt(c, action === "approve" ? "Tenant write approved" : "Tenant write rejected", r, decision)
   }
 
   async run<T>(operations: ApprovalOperation[], work: () => Promise<T>): Promise<T> {
-    const execution: Execution = { tenants: new Set(), permits: new Map() }
+    const execution: Execution = { tenants: new Set(), permits: new Map(), inactive: new Map() }
     const ready: { context: OpenStore; request: WriteApproval; decision: WriteDecision; etag: string; operation: ApprovalOperation }[] = []
     const blockers: string[] = []
     const { tenants } = execution
@@ -243,23 +321,29 @@ export class WriteApprovals {
       const tenant = operation.tenant.toLowerCase()
       if (tenants.has(tenant)) throw new WriteApprovalError("Each destination must appear only once in an approval operation.")
       tenants.add(tenant)
+      const profile = this.profileKey(tenant)
       const context = await this.open(tenant)
-      if (!context?.policy?.enabled) continue
+      if (!context?.policy?.enabled) {
+        if (this.profileKey(tenant) === profile) execution.inactive.set(tenant, profile)
+        continue
+      }
       const { account, actor, policy, blobs } = context
       const slot = `write-approval.slot.${this.digest([tenant, account, actor.oid, operation.reference])}`
       const observed = await operation.observe()
       this.checkActor(tenant, actor)
       const contentHash = this.digest([operation.summary, observed.content])
       const targetFingerprint = this.digest(observed.target)
-      const id = this.deps.store.get(slot)
+      const slotValue = this.deps.store.get(slot)
+      const [id, storedExpiry] = slotValue?.split(":") ?? []
       const current = id ? await blobs.get(requestPath(tenant, id)) : null
       const prior = id && current ? readRequest(current, tenant, account, id) : null
-      if (id && (!prior || prior.requester.oid !== actor.oid || !this.isOrigin(prior))) throw invalid()
+      if (id && (prior ? prior.requester.oid !== actor.oid || !this.isOrigin(prior)
+        : !storedExpiry || this.time(current, context) < Number(storedExpiry) + retention)) throw invalid()
       if (prior && prior.generation === policy.generation && prior.state === "claimed") {
         blockers.push(`Request ${prior.id} has an uncertain apply outcome. Reconcile the operation in Intune before starting a fresh request.`)
         continue
       }
-      if (prior && prior.generation === policy.generation && prior.state === "pending" && this.now() < prior.expiresAt) {
+      if (prior && prior.generation === policy.generation && prior.state === "pending" && this.time(current, context) < prior.expiresAt) {
         const decision = await readDecision(context, prior)
         if (prior.contentHash !== contentHash || prior.targetFingerprint !== targetFingerprint || canonicalJson(prior.summary) !== canonicalJson(operation.summary)) {
           if (!await blobs.put(requestPath(tenant, prior.id), { ...prior, state: "stale" }, current!.etag)) throw new WriteApprovalError(stateChanged)
@@ -272,18 +356,18 @@ export class WriteApprovals {
         }
         continue
       }
-      const createdAt = this.now()
+      const createdAt = this.time(undefined, context)
       const request: WriteApproval = {
         schema: 1, tenant, account, id: randomUUID(), generation: policy.generation, requester: actor,
         summary: operation.summary, contentHash, targetFingerprint, createdAt, expiresAt: createdAt + WRITE_APPROVAL_LIFETIME, state: "pending",
       }
-      if (this.creating.has(slot) || this.deps.store.get(slot) !== id) throw new WriteApprovalError(stateChanged)
+      if (this.creating.has(slot) || this.deps.store.get(slot) !== slotValue) throw new WriteApprovalError(stateChanged)
       this.creating.add(slot)
       try {
         this.checkActor(tenant, actor)
         if (!await blobs.put(requestPath(tenant, request.id), request)) throw new WriteApprovalError(stateChanged)
         this.deps.store.set(`write-approval.origin.${request.id}`, actor.oid)
-        this.deps.store.set(slot, request.id)
+        this.deps.store.set(slot, `${request.id}:${request.expiresAt}`)
       } finally {
         this.creating.delete(slot)
       }
@@ -299,8 +383,8 @@ export class WriteApprovals {
         const { context: c, request: r, decision, etag } = entry
         const observed = await entry.operation.observe()
         if (r.contentHash !== this.digest([entry.operation.summary, observed.content]) || r.targetFingerprint !== this.digest(observed.target)) throw new WriteApprovalError(stateChanged)
-        const live = await this.open(c.tenant, c.actor)
-        if (!live?.policy?.enabled || live.policy.generation !== r.generation || this.now() >= r.expiresAt || this.applying.has(r.id)) throw new WriteApprovalError(stateChanged)
+        const live = await this.open(c.tenant, c.actor, undefined, c)
+        if (!live?.policy?.enabled || live.policy.generation !== r.generation || this.time(undefined, live) >= r.expiresAt || this.applying.has(r.id)) throw new WriteApprovalError(stateChanged)
         this.applying.add(r.id)
         try {
           if (!await live.blobs.put(requestPath(c.tenant, r.id), { ...r, state: "claimed" }, etag)) throw new WriteApprovalError(stateChanged)
@@ -309,7 +393,7 @@ export class WriteApprovals {
           throw error
         }
         claimed.push(entry)
-        execution.permits.set(c.tenant, { request: r, decision })
+        execution.permits.set(c.tenant, { request: r, decision, context: live })
         await this.receipt(c, "Tenant write approval claimed", r, decision)
       }
       const result = await this.execution.run(execution, work)
@@ -371,21 +455,33 @@ export class WriteApprovals {
   claimed(tenant: string): boolean { return this.execution.getStore()?.permits.has(tenant.toLowerCase()) === true }
 
   async active(tenant: string): Promise<boolean> {
-    return (await this.open(tenant))?.policy?.enabled === true
+    return !this.inactiveForRun(tenant.toLowerCase()) && (await this.open(tenant))?.policy?.enabled === true
   }
 
   async authorize(tenant: string, actor: ApprovalActor): Promise<void> {
-    const c = await this.open(tenant, actor)
+    tenant = tenant.toLowerCase()
+    if (this.inactiveForRun(tenant)) return
     const permit = this.execution.getStore()?.permits.get(tenant)
-    if (!c?.policy?.enabled && !permit) return
-    if (!c?.policy?.enabled || !permit || permit.request.generation !== c.policy.generation || permit.request.account !== c.account
-      || permit.request.requester.oid !== actor.oid || this.now() >= permit.request.expiresAt) throw new WriteApprovalError("A current tenant write approval is required from a different admin. Open Tenant approvals in Settings.")
-    const blob = await c.blobs.get(requestPath(tenant, permit.request.id))
-    const live = readRequest(blob, tenant, c.account, permit.request.id)
-    const decision = await readDecision(c, live)
-    if (live.state !== "claimed" || live.contentHash !== permit.request.contentHash || live.targetFingerprint !== permit.request.targetFingerprint
-      || live.requester.oid !== actor.oid || live.generation !== permit.request.generation || live.expiresAt !== permit.request.expiresAt
-      || decision?.decision !== "approved" || decision.actor.oid !== permit.decision.actor.oid) throw new WriteApprovalError(stateChanged)
+    if (!permit) {
+      if (!(await this.open(tenant, actor))?.policy?.enabled) return
+      throw new WriteApprovalError("A current tenant write approval is required from a different admin. Open Tenant approvals in Settings.")
+    }
+    const c = permit.context
+    if (permit.request.requester.oid !== actor.oid || this.time(undefined, c) >= permit.request.expiresAt) {
+      throw new WriteApprovalError("A current tenant write approval is required from a different admin. Open Tenant approvals in Settings.")
+    }
+    const policy = await this.open(tenant, actor, async session => {
+      if (session.account !== c.account) throw new WriteApprovalError(stateChanged)
+      const blob = await session.blobs.get(requestPath(tenant, permit.request.id))
+      const live = readRequest(blob, tenant, session.account, permit.request.id)
+      const decision = await readDecision(session, live)
+      if (live.state !== "claimed" || live.contentHash !== permit.request.contentHash || live.targetFingerprint !== permit.request.targetFingerprint
+        || live.requester.oid !== actor.oid || live.generation !== permit.request.generation || live.expiresAt !== permit.request.expiresAt
+        || this.time(blob, c) >= live.expiresAt || decision?.decision !== "approved" || decision.actor.oid !== permit.decision.actor.oid) {
+        throw new WriteApprovalError(stateChanged)
+      }
+    }, c)
+    if (!policy?.policy?.enabled || policy.etag !== c.etag || this.time(undefined, policy) >= permit.request.expiresAt) throw new WriteApprovalError(stateChanged)
     this.checkActor(tenant, actor)
   }
 }

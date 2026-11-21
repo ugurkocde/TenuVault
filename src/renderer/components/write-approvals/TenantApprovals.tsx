@@ -86,6 +86,7 @@ function ApprovalInbox({ tenant, highlight }: { tenant: string; highlight: strin
     </p>}
     {inbox?.available && !inbox.requests.length && <p className="text-sm text-muted-foreground">No tenant approval requests.</p>}
     {!!inbox?.requests.length && <ul className="divide-y rounded-lg border">
+      {!!inbox.invalidRecords && <p role="status" className="text-muted-foreground">{inbox.invalidRecords} approval records could not be read. Refresh after all installations use a compatible version.</p>}
       {inbox.requests.map(({ request, decision, expired, local, superseded }) => {
         const owner = request.requester.oid === inbox.actor?.oid
         const open = request.state === "pending" && !expired && !superseded
@@ -102,7 +103,14 @@ function ApprovalInbox({ tenant, highlight }: { tenant: string; highlight: strin
           <p>Requester {request.requester.label} <span className="break-all text-muted-foreground">({request.requester.oid})</span></p>
           <p>Decision {decision ? `${decision.decision} by ${decision.actor.label} (${decision.actor.oid})` : "pending"} · Status {request.state} · Expires {new Date(request.expiresAt).toLocaleString()}</p>
           {!!request.summary.targets.length && <details><summary className="cursor-pointer">Review targets and affected fields</summary>
-            <ul className="list-disc space-y-1 break-all pl-5">{request.summary.targets.map((target, index) => <li key={index}>{target}</li>)}</ul>
+            <ul className="list-disc space-y-1 break-all pl-5">{request.summary.operations?.length
+              ? request.summary.operations.map(({ name, id, assignments, fields, sensitiveFields }, index) => <li key={index}>
+                {name}{id && ` (${id})`}
+                {!!assignments.length && <p>{assignments.join(", ")}</p>}
+                {!!fields.length && <p>Affected fields {fields.join(", ")}</p>}
+                {!!sensitiveFields.length && <p>Sensitive fields {sensitiveFields.join(", ")}</p>}
+              </li>)
+              : request.summary.targets.map((target, index) => <li key={index}>{target}</li>)}</ul>
             <p>Assignments {request.summary.assignments ? "included" : "unchanged or unassigned"}</p>
             {!!request.summary.fields?.length && <p>Affected fields {request.summary.fields.join(", ")}</p>}
             {!!request.summary.mappings?.length && <ul className="list-disc space-y-1 break-all pl-5">{request.summary.mappings.map(mapping => <li key={mapping.sourceId}>{mapping.folder} from {mapping.sourceId} to {mapping.targetId}</li>)}</ul>}

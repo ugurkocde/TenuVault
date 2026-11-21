@@ -990,6 +990,40 @@ await check("several tenants get the overview, switcher and schedule tab", async
     await send("Emulation.clearDeviceMetricsOverride")
   }
 
+  await check("enabled tenant approvals show review details and the interrupted apply dialog at 1024px", async () => {
+    await evaluate(`(() => {
+      window.__approvalFetch = window.fetch;
+      const actor = { oid: '11111111-1111-4111-8111-111111111111', label: 'Smoke Admin' };
+      const request = { id: '22222222-2222-4222-8222-222222222222', state: 'claimed', requester: actor, expiresAt: Date.now() + 86400000,
+        summary: { kind: 'Restore policy copies', count: 1, targets: ['Smoke policy'], assignments: true,
+          operations: [{ name: 'Smoke policy', id: '33333333-3333-4333-8333-333333333333', assignments: ['Replace assignments (Pilot group)'], fields: ['password'], sensitiveFields: ['password'] }] } };
+      window.fetch = (input, init) => String(input) === '/api/tenant-write-approvals'
+        ? Promise.resolve(Response.json({ available: true, enabled: true, actor, invalidRecords: 1, requests: [{ request, local: true, expired: false, superseded: false }] }))
+        : window.__approvalFetch(input, init);
+    })()`)
+    await send("Emulation.setDeviceMetricsOverride", { width: 1024, height: 720, deviceScaleFactor: 1, mobile: false })
+    const card = "document.getElementById('tenant-approvals')"
+    const click = label => evaluate(`[...${card}.querySelectorAll('button,summary')].find(node => node.textContent.trim() === ${JSON.stringify(label)}).click()`)
+    try {
+      await click("Refresh approvals")
+      assert(await waitForText("Restore policy copies"), "the enabled inbox did not show the stored request")
+      await click("Review targets and affected fields")
+      assert(await waitForText("Sensitive fields password"), "the expanded review did not show field names")
+      assert(await waitForText("approval records could not be read"), "unreadable requests were not flagged")
+      await click("Close interrupted apply")
+      assert(await waitForText("Close interrupted apply?"), "the interrupted apply dialog did not open")
+      for (const theme of ["light", "dark"]) {
+        await evaluate(`document.documentElement.classList.toggle("dark", ${theme === "dark"})`)
+        assert(await evaluate(`${card}.scrollWidth <= ${card}.clientWidth && document.querySelector('[role=dialog]').getBoundingClientRect().right <= innerWidth`), `the enabled inbox overflowed in ${theme} mode`)
+        await screenshot(`tenant-approvals-enabled-1024-${theme}`)
+      }
+      await evaluate(`[...document.querySelectorAll('[role=dialog] button')].find(node => node.textContent.trim() === 'Cancel').click()`)
+    } finally {
+      await evaluate(`window.fetch = window.__approvalFetch; delete window.__approvalFetch; document.documentElement.classList.remove('dark')`)
+      await send("Emulation.clearDeviceMetricsOverride")
+    }
+  })
+
   await go("#/portal/backup", "Backup History")
   await evaluate(`[...document.querySelectorAll("button")].find(b => b.innerText.trim() === "Schedule")?.click()`)
   assert(await waitForText("Automatic backups"), "schedule panel missing")
@@ -1697,6 +1731,84 @@ await check("OpenIntuneBaseline has its own section and left the framework catal
   assert(unknown[0] === 400 && /Unknown OpenIntuneBaseline action/.test(unknown[1]), `unexpected response ${JSON.stringify(unknown)}`)
   assert(await evaluate(`typeof window.tenuvault.reports?.savePdf === "function"`), "PDF report bridge missing")
   assert(await evaluate(`typeof window.tenuvault.reports?.saveFile === "function"`), "export save bridge missing")
+})
+
+await check("restore and OpenIntuneBaseline show pending approval at 1024px in both themes", async () => {
+  const clickEnabled = async label => {
+    const button = `[...document.querySelectorAll('main button')].find(node => node.textContent.trim() === ${JSON.stringify(label)} && !node.disabled)`
+    assert(await waitForCondition(`Boolean(${button})`), `the ${label} button was unavailable`)
+    await evaluate(`${button}.click()`)
+  }
+  const captureApproval = async name => {
+    assert(await waitForText("Tenant approval required"), `${name} did not show its pending approval state`)
+    assert(await waitForText("22222222-2222-4222-8222-222222222222"), `${name} did not show the request ID`)
+    for (const theme of ["light", "dark"]) {
+      await evaluate(`document.documentElement.classList.toggle('dark', ${theme === "dark"})`)
+      assert(await evaluate("document.documentElement.scrollWidth <= innerWidth + 1"), `${name} overflowed in ${theme} mode`)
+      await screenshot(`${name}-approval-1024-${theme}`)
+    }
+  }
+  await evaluate(`(() => {
+    window.__approvalFlowFetch = window.fetch;
+    const id = 'smoke-approval';
+    const path = id + '/DeviceCategories/fixture.json';
+    const commit = 'a'.repeat(40);
+    const policy = { source: 'MACOS/NativeImport/Smoke.json', name: 'Smoke OIB policy', folder: 'ConfigurationPolicies', policyType: 'SettingsCatalog',
+      previousVersions: [], replacements: [], skuRequirements: '', licenseRequirements: '', status: 'active' };
+    const json = (value, status = 200) => Promise.resolve(Response.json(value, { status }));
+    const pending = () => json({ error: 'Tenant approval 22222222-2222-4222-8222-222222222222 is pending. Open Tenant approvals in Settings.' }, 409);
+    window.fetch = (input, init) => {
+      const url = String(input);
+      const body = typeof init?.body === 'string' ? JSON.parse(init.body) : {};
+      if (url === '/api/list-backups') return json({ backups: [{ id, timestamp: new Date().toISOString(), status: 'Success', totalPolicies: 1, size: 100 }] });
+      if (url === '/api/list-backup-contents') return json({ content: { groups: [{ folder: 'DeviceCategories', label: 'Device categories', area: 'Enrollment', policies: [{ path, displayName: 'Smoke restore category' }] }] } });
+      if (url === '/api/restore-preview') return json({ items: [{ path, name: 'Smoke restore category', snapshot: { displayName: 'Smoke restore category' } }] });
+      if (url === '/api/restore-backup') return body.approvalAction ? json({ enabled: false }) : pending();
+      if (url === '/api/oib') {
+        if (body.action === 'oib-versions') return json({ main: { commit }, platforms: [{ platform: 'macos', status: 'available' }], releases: [] });
+        if (body.action === 'oib-load') return json({ platform: 'macos', commit, reference: 'Smoke version', manifest: true, policies: [policy], deprecated: [] });
+        if (body.action === 'oib-compare') return json({ platform: 'macos', commit, tenantPolicyCount: 0, matches: [{ source: policy.source, status: 'missing' }], deprecated: [] });
+        if (body.action === 'oib-backup-options') return json({ recent: null });
+        if (body.action === 'oib-runs') return json({ runs: [] });
+        if (body.action === 'oib-progress') return json(null);
+        if (body.action === 'oib-deploy') return pending();
+      }
+      return window.__approvalFlowFetch(input, init);
+    };
+  })()`)
+  await send("Emulation.setDeviceMetricsOverride", { width: 1024, height: 720, deviceScaleFactor: 1, mobile: false })
+  try {
+    await go("#/portal/backup", "Backup History")
+    await clickEnabled("Refresh")
+    await go("#/portal/backup?tab=restore", "Choose a backup")
+    const option = "document.querySelector('[aria-label=Backups] [role=option]')"
+    assert(await waitForCondition(`Boolean(${option})`), "the restore fixture did not load")
+    await evaluate(`${option}.click()`)
+    const category = "[...document.querySelectorAll('main button[aria-expanded]')].find(node => node.textContent.trim().startsWith('Device categories'))"
+    assert(await waitForCondition(`Boolean(${category})`), "the device categories row was unavailable")
+    await evaluate(`if (${category}.getAttribute('aria-expanded') === 'false') ${category}.click()`)
+    const policy = "[...document.querySelectorAll('main label')].find(label => label.textContent.includes('Smoke restore category'))?.querySelector('[role=checkbox]')"
+    assert(await waitForCondition(`Boolean(${policy})`), "the fixture policy was unavailable")
+    await evaluate(`${policy}.click()`)
+    await clickEnabled("Next")
+    await clickEnabled("Review")
+    await clickEnabled("Restore 1 item")
+    await captureApproval("restore")
+    await go("#/portal/oib/new", "Select the operating systems")
+    const mac = "[...document.querySelectorAll('main button[aria-pressed]')].find(node => node.textContent.includes('macOS') && !node.disabled)"
+    assert(await waitForCondition(`Boolean(${mac})`), "the macOS platform was unavailable")
+    await evaluate(`${mac}.click()`)
+    await clickEnabled("Continue")
+    await clickEnabled("Continue")
+    await clickEnabled("Review deployment (1)")
+    await evaluate("document.querySelector('input[name=oib-backup][value=none]').click()")
+    await clickEnabled("Continue")
+    await clickEnabled("Deploy")
+    await captureApproval("oib")
+  } finally {
+    await evaluate("window.fetch = window.__approvalFlowFetch; delete window.__approvalFlowFetch; document.documentElement.classList.remove('dark')")
+    await send("Emulation.clearDeviceMetricsOverride")
+  }
 })
 
 await check("OpenIntuneBaseline action bar stays readable in dark mode", async () => {

@@ -1,3 +1,4 @@
+import { approvalGraphFixture } from "./helpers/write-approval-fixture"
 import { createHmac } from "node:crypto"
 import { describe, expect, it } from "vitest"
 import { routes } from "../src/main/features/notifications"
@@ -229,10 +230,12 @@ describe("editing and removing channels", () => {
 })
 
 describe("email delivery and group resolution", () => {
-  it("expands group recipients without guests and sends through Graph", async () => {
+  it.each([false, true])("expands group recipients and sends through Graph with tenant approval enabled=%s", async enabled => {
+    const guard = await approvalGraphFixture(TENANT_A, enabled)
     const graphCalls: Array<{ method: string; path: string; body?: unknown }> = []
     const w = world({
       graph: () => async (method: string, path: string, body?: unknown) => {
+        await guard(method, path)
         graphCalls.push({ method, path, body })
         if (path.startsWith("groups/")) {
           return { status: 200, body: { value: [

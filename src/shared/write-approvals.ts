@@ -2,10 +2,19 @@ export const WRITE_APPROVAL_POLICY_VERSION = 1
 export const WRITE_APPROVAL_LIFETIME = 7 * 24 * 60 * 60 * 1000
 
 export type ApprovalActor = { oid: string; label: string }
+export type WriteApprovalTarget = {
+  name: string
+  id?: string
+  assignments: string[]
+  fields: string[]
+  sensitiveFields: string[]
+}
+
 export type WriteApprovalSummary = {
   kind: string
   count: number
   targets: string[]
+  operations?: WriteApprovalTarget[]
   assignments?: boolean
   reference?: string
   fields?: string[]
@@ -44,5 +53,6 @@ export interface WriteApprovalInbox {
   enabled: boolean
   minimumVersion?: string
   actor?: ApprovalActor
+  invalidRecords?: number
   requests: Array<{ request: WriteApproval; decision?: WriteDecision; expired: boolean; local: boolean; superseded: boolean }>
 }

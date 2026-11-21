@@ -45,6 +45,9 @@ it("inventories mutation and network dispatch sites for tenant approval review",
         const indicator = literal(first)
         const transport = /(?:^|\.)(?:[A-Za-z]*fetch[A-Za-z]*|[A-Za-z]*graph[A-Za-z]*|request|dispatch)$/i.test(callee)
         if (indicator && methods.has(indicator)) inventory.push(`${path}: ${callee}(${indicator}, ${second ? text(second) : ""})`)
+        else if (first && second && !indicator && /(?:^|\.)(?:method|verb)$/i.test(text(first))) {
+          inventory.push(`${path}: ${callee}(${text(first)}, ${text(second)})`)
+        }
         else if (method && (transport || methods.has(literal(method) ?? ""))) {
           const destination = methodProperty(first) ? "" : first ? text(first) : ""
           inventory.push(`${path}: ${callee}(${destination}) method ${text(method)}`)
