@@ -546,6 +546,19 @@ describe("sidebar groups and Help", () => {
     expect(document.activeElement).toBe(help)
   })
 
+  it("still opens a chosen What's new when the sidebar leaves before it launches", async () => {
+    licenseStatus.current = statusFor("pro")
+    let go: (path: string) => void = () => undefined
+    function Navigator() { go = useNavigate(); return null }
+    const container = await render(createElement("div", null, createElement(Navigator), createElement(DesktopLayout)), "/license")
+    await openHelp(container)
+    await act(async () => { menuItem("What's new")!.click() })
+    await act(async () => go("/portal/onboarding"))
+    expect(container.querySelector("aside")).toBeNull()
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 80)) })
+    expect(whatsNewDialog.mock.lastCall?.[0].open).toBe(true)
+  })
+
   it("marks Help and What's new while an installed build is unseen", async () => {
     licenseStatus.current = statusFor("pro")
     selectTenant()

@@ -338,7 +338,7 @@ function afterPaint(run: () => void) {
  * work (for Share feedback, until the window is captured) Help does not open again, so the menu can
  * never be in the feedback screenshot.
  */
-function HelpMenu({ linkClass, onFeedback, onSupport, launching, busy, trigger }: {
+function HelpMenu({ linkClass, onWhatsNew, onFeedback, onSupport, launching, busy, trigger }: {
   linkClass: (active: boolean) => string
   /** Set while a chosen item launches. Owned by DesktopLayout, so it outlives a sidebar that unmounts meanwhile. */
   launching: RefObject<boolean>
@@ -346,12 +346,13 @@ function HelpMenu({ linkClass, onFeedback, onSupport, launching, busy, trigger }
   busy: () => boolean
   /** The Help button, owned by DesktopLayout so dialogs can return focus to the current one. */
   trigger: RefObject<HTMLButtonElement | null>
+  /** The items' actions and dialogs live in DesktopLayout too, so a queued item still runs if the sidebar unmounts first. */
+  onWhatsNew: (opener: HTMLElement | null) => void
   onFeedback: (opener: HTMLElement | null) => Promise<void>
   onSupport: (opener: HTMLElement | null) => void
 }) {
   const { state } = useWhatsNew()
   const [open, setOpen] = useState(false)
-  const [whatsNewOpen, setWhatsNewOpen] = useState(false)
   const pending = useRef<(() => void | Promise<void>) | null>(null)
   // The first item chosen wins: the closing menu stays on screen for its exit animation, and a second
   // choice made then (or while the first is still launching) is ignored.
@@ -389,7 +390,7 @@ function HelpMenu({ linkClass, onFeedback, onSupport, launching, busy, trigger }
           }}
         >
           <div className="space-y-px p-1.5">
-            <DropdownMenuItem onSelect={choose(() => setWhatsNewOpen(true))} className="gap-3 rounded-2xl px-3 py-2">
+            <DropdownMenuItem onSelect={choose(() => onWhatsNew(trigger.current))} className="gap-3 rounded-2xl px-3 py-2">
               <Sparkles className="h-4 w-4" aria-hidden="true" />
               What&apos;s new
               {unseen && <><span aria-hidden="true" className="ml-auto size-2 rounded-full bg-blue-600" /><span className="sr-only">, new changes since you last looked</span></>}
@@ -411,7 +412,6 @@ function HelpMenu({ linkClass, onFeedback, onSupport, launching, busy, trigger }
           </div>
         </DropdownMenuContent>
       </DropdownMenu>
-      <WhatsNewDialog open={whatsNewOpen} onOpenChange={setWhatsNewOpen} returnFocus={trigger} />
     </>
   )
 }
@@ -474,6 +474,8 @@ export function DesktopLayout() {
     : navigationGroups
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [supportOpen, setSupportOpen] = useState(false)
+  const [whatsNewOpen, setWhatsNewOpen] = useState(false)
+  const whatsNewReturn = useRef<HTMLElement | null>(null)
   const [feedback, setFeedback] = useState<{ open: boolean; snapshot: FeedbackSnapshot | null }>({ open: false, snapshot: null })
   const capturingFeedback = useRef(false)
   const helpLaunching = useRef(false)
@@ -618,7 +620,7 @@ export function DesktopLayout() {
             License
             <LicenseNavBadge />
           </Link>
-          <HelpMenu linkClass={linkClass} onFeedback={openFeedback} onSupport={openSupport} launching={helpLaunching} busy={() => helpLaunching.current || capturingFeedback.current} trigger={helpTrigger} />
+          <HelpMenu linkClass={linkClass} onFeedback={openFeedback} onSupport={openSupport} onWhatsNew={(opener) => { whatsNewReturn.current = opener; setWhatsNewOpen(true) }} launching={helpLaunching} busy={() => helpLaunching.current || capturingFeedback.current} trigger={helpTrigger} />
         </div>
       </aside>
       )}
@@ -644,6 +646,7 @@ export function DesktopLayout() {
       <FrameworkJobNotifier />
       <CisJobNotifier />
       <DriftScanNotifier />
+      <WhatsNewDialog open={whatsNewOpen} onOpenChange={setWhatsNewOpen} returnFocus={firstConnected(whatsNewReturn, helpTrigger)} />
       <SupportDialog open={supportOpen} onOpenChange={setSupportOpen} returnFocus={firstConnected(supportReturn, helpTrigger)} />
       <FeedbackDialog
         open={feedback.open}

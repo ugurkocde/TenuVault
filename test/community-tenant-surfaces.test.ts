@@ -89,7 +89,10 @@ describe("Community tenant surfaces", () => {
     state.status = community
     expect(render(createElement(TenantSwitcher))).not.toContain("Not licensed")
     state.status = uncovered
-    expect(render(createElement(TenantSwitcher))).toContain("Not licensed")
+    const markup = render(createElement(TenantSwitcher))
+    expect(markup).toContain("Not licensed")
+    // The switcher's accessible name says it too, not only the line under the name.
+    expect(markup).toMatch(/aria-label="Switch tenant\. Current: [^"]*, Not licensed"/)
   })
 
   it("shows no license notice for a signed-in Community tenant", () => {

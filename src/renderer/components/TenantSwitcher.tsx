@@ -53,6 +53,8 @@ export function TenantSwitcher() {
 
   const currentLicense = tenantLicense(status, selectedTenant?.credentials?.tenantId)
   const trialLabel = currentLicense?.entitled && currentLicense.trial ? tenantPlanName(currentLicense) : ""
+  // What the line under the name says, so a screen reader hears it too.
+  const stateLabel = unlicensed(selectedTenant?.credentials?.tenantId) ? "Not licensed" : trialLabel
 
   if (tenants.length === 0) {
     return (
@@ -72,8 +74,8 @@ export function TenantSwitcher() {
         <button
           type="button"
           className="flex w-full items-center gap-3 rounded-full bg-secondary py-1.5 pl-1.5 pr-3 text-left transition-colors hover:bg-accent"
-          aria-label={`Switch tenant. Current: ${selectedTenant?.name ?? "None"}, ${selectedTenant?.domain ?? ""}${trialLabel ? `, ${trialLabel}` : ""}`}
-          title={`${selectedTenant?.name ?? "Choose a tenant"} ${selectedTenant?.domain ?? ""}${trialLabel ? `, ${trialLabel}` : ""}`}
+          aria-label={`Switch tenant. Current: ${selectedTenant?.name ?? "None"}, ${selectedTenant?.domain ?? ""}${stateLabel ? `, ${stateLabel}` : ""}`}
+          title={`${selectedTenant?.name ?? "Choose a tenant"} ${selectedTenant?.domain ?? ""}${stateLabel ? `, ${stateLabel}` : ""}`}
         >
           <TenantBadge name={selectedTenant?.name} unlicensed={unlicensed(selectedTenant?.credentials?.tenantId)} />
           <span className="min-w-0 flex-1">
