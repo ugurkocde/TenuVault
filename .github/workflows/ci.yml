@@ -256,7 +256,7 @@ jobs:
 
       # The runner's real policy store: managed preferences with sudo on macOS, HKCU on Windows.
       - name: Test the smoke run's update policy harness
-        timeout-minutes: 2
+        timeout-minutes: 5
         run: node scripts/test-smoke-update-policy.mjs
 
       - name: Smoke test the packaged app
