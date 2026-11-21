@@ -1,3 +1,5 @@
+import { ApiHost } from "../src/main/api/host"
+import { createAuditRecorder } from "../src/main/api/audit"
 import { createHash } from "node:crypto"
 import { expect, it, vi } from "vitest"
 import { DirectoryRestoreService } from "../src/main/restore/directory-service"
@@ -1250,7 +1252,7 @@ it("confirms and discards an authenticated cancelled page without a journal or b
   expect(await service.cancel(tenant, page.runId)).toEqual({ cancelled: true })
   release(); expect(await operation).toEqual({ cancelled: true })
   // Saved confirmation has no backup reader or snapshot input.
-  expect(await service.saved(tenant, page.runId, "reconcile")).toMatchObject({ outcomes: [], rows: [], canDiscard: true })
+  expect(await service.saved(tenant, page.runId, "reconcile")).toMatchObject({ status: "nothing-sent", outcomes: [], rows: [], canDiscard: true })
   expect(await service.saved(tenant, page.runId, "discard")).toEqual({ discarded: true, canDiscard: false })
   expect(env.writes).toEqual([])
 })
@@ -1330,5 +1332,113 @@ it("merges a retained acknowledgement without replacing newer outcomes in the sa
   expect(await service.saved(tenant, page.runId, "reconcile")).toMatchObject({ outcomes: [{ state: "applied" }, { state: "applied" }], canDiscard: true })
   const entries = JSON.parse(env.data.get(journalKey)!).runs[page.runId].entries
   expect(entries.every((entry: { acknowledged?: boolean }) => entry.acknowledged)).toBe(true)
+  expect(entries.every((entry: { reason?: string }) => entry.reason === undefined)).toBe(true)
   expect(env.writes).toEqual([`POST groups/${resource}/members/$ref`, `POST groups/${resource}/members/$ref`])
+})
+
+it.each([resource, id(999)])("defers a running write for an unsaved concurrent preview deadline on %s", async previewSource => {
+  const env = world(), service = env.service(), original = env.fetcher.getMockImplementation()!
+  const request = { ...env.request, snapshot: { ...env.request.snapshot, description: "Saved" } }
+  const page = await service.prepare(tenant, request, options, env.read)
+  let entered!: () => void, release!: () => void, hold = true, throttle = false
+  const started = new Promise<void>(resolve => { entered = resolve }), gate = new Promise<void>(resolve => { release = resolve })
+  env.fetcher.mockImplementation(async (input, init) => {
+    const path = new URL(String(input)).pathname
+    if (throttle && path === "/v1.0/applications") return new Response(null, { status: 429, headers: { "Retry-After": "120" } })
+    if (hold && path === `/v1.0/groups/${resource}`) { hold = false; entered(); await gate }
+    return original(input, init)
+  })
+  vi.useFakeTimers()
+  try {
+    const deadline = Date.now() + 120_000
+    const execute = () => service.execute(tenant, { ...request, runId: page.runId }, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])))
+    const running = execute()
+    await started
+    const set = env.store.set
+    const spy = vi.spyOn(env.store, "set").mockImplementation((key, value) => {
+      if (key.includes(".coordinator.") && value.includes(String(deadline))) throw new Error("Deadline storage unavailable")
+      set(key, value)
+    })
+    throttle = true
+    const preview = { ...env.request, path: `backup/Groups/${previewSource}.json`, snapshot: { ...env.request.snapshot, id: previewSource } }
+    await expect(service.prepare(tenant, preview, options, env.read)).rejects.toThrow("retry deadline could not be saved")
+    throttle = false; spy.mockRestore(); release()
+    expect(await running).toMatchObject({ outcomes: [{ state: "deferred", retryAt: deadline }] })
+    expect(env.writes).toEqual([])
+    expect((await service.resume(tenant, { ...request, runId: page.runId })).selection).toEqual(page.rows.map(row => row.key))
+    await vi.advanceTimersByTimeAsync(119_999)
+    expect(env.writes).toEqual([])
+    await vi.advanceTimersByTimeAsync(1)
+    expect(await execute()).toMatchObject({ outcomes: [{ state: "applied" }] })
+    expect(env.writes).toEqual([`PATCH groups/${resource}`])
+  } finally { vi.useRealTimers() }
+})
+
+it.each([false, true])("transfers a concurrent source deadline to a recreated group with unsaved=%s", async unsaved => {
+  const env = world(0, true), service = env.service(), original = env.fetcher.getMockImplementation()!
+  const page = await service.prepare(tenant, env.request, options, env.read)
+  let entered!: () => void, release!: () => void, throttle = false
+  const started = new Promise<void>(resolve => { entered = resolve }), gate = new Promise<void>(resolve => { release = resolve })
+  env.fetcher.mockImplementation(async (input, init) => {
+    if (throttle && new URL(String(input)).pathname === "/v1.0/applications") return new Response(null, { status: 429, headers: { "Retry-After": "120" } })
+    if (init?.method === "POST") { entered(); await gate }
+    return original(input, init)
+  })
+  vi.useFakeTimers()
+  try {
+    const deadline = Date.now() + 120_000
+    const creating = service.execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])))
+    await started
+    const set = env.store.set
+    const spy = vi.spyOn(env.store, "set").mockImplementation((key, value) => {
+      if (unsaved && key.includes(".coordinator.") && value.includes(String(deadline))) throw new Error("Deadline storage unavailable")
+      set(key, value)
+    })
+    throttle = true
+    await expect(service.prepare(tenant, env.request, options, env.read)).rejects.toThrow(unsaved ? "retry deadline could not be saved" : "throttled")
+    throttle = false; spy.mockRestore(); release()
+    expect(await creating).toMatchObject({ outcomes: [{ state: "applied", targetId: id(900) }] })
+    const request = { ...env.request, snapshot: { ...env.request.snapshot, description: "Saved" } }
+    const update = await service.prepare(tenant, request, options, env.read)
+    const state = JSON.parse(env.data.get(`restore.directory.coordinator.${tenant}`)!)
+    expect(state.deadlines[id(900)]).toBe(deadline); expect(state.deadlines[resource]).toBeUndefined()
+    const execute = () => service.execute(tenant, { ...request, runId: update.runId }, update.fingerprint, Object.fromEntries(update.rows.map(row => [row.key, row.review.approvals])))
+    expect(await execute()).toMatchObject({ outcomes: [{ state: "deferred", retryAt: deadline }] })
+    expect(env.writes).toEqual(["POST groups"])
+    await vi.advanceTimersByTimeAsync(119_999)
+    expect(env.writes).toEqual(["POST groups"])
+    await vi.advanceTimersByTimeAsync(1)
+    expect(await execute()).toMatchObject({ outcomes: [{ state: "applied" }] })
+    expect(env.writes).toEqual(["POST groups", `PATCH groups/${id(900)}`])
+  } finally { vi.useRealTimers() }
+})
+
+it("audits the original authenticated admin when the account switches during a directory write", async () => {
+  const env = world(1), original = env.fetcher.getMockImplementation()!
+  let account = { username: "original@example.test", name: "Original admin" }
+  const service = new DirectoryRestoreService(env.store, new RecoveryAccounts(env.store), async () => ({ ...await env.connection(), auditActor: { ...account } }), env.fetcher, () => [], env.settings)
+  const page = await service.prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read)
+  let entered!: () => void, release!: () => void
+  const started = new Promise<void>(resolve => { entered = resolve }), gate = new Promise<void>(resolve => { release = resolve })
+  env.fetcher.mockImplementation(async (input, init) => {
+    if (init?.method === "POST") { entered(); await gate }
+    return original(input, init)
+  })
+  const entries: unknown[] = [], accountFor = vi.fn(() => ({ ...account, tenantId: tenant, clientId: app }))
+  const host = new ApiHost({
+    routes: { "/api/restore-directory": { POST: async () => {
+      const result = await service.execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])))
+      return Response.json({ ...result, success: true, directoryActor: { username: "spoof@example.test" }, details: { restoredCount: 1, failedCount: 0 } })
+    } } },
+    onHandled: createAuditRecorder(async request => { entries.push(await request.json()); return Response.json({ success: true }) }, accountFor),
+  })
+  const execution = host.dispatch(new Request("http://tenuvault.internal/api/restore-directory", { method: "POST", headers: { "content-type": "application/json", "x-directory-actor": "spoof@example.test" }, body: JSON.stringify({ tenantId: tenant, appId: app, clientSecret: "delegated", storageAccountName: "fixtureaccount", action: "restore", directoryActor: { username: "spoof@example.test" } }) }))
+  await started
+  account = { username: "replacement@example.test", name: "Replacement admin" }
+  release()
+  expect((await execution).ok).toBe(true)
+  await vi.waitFor(() => expect(entries).toHaveLength(1))
+  expect(entries[0]).toMatchObject({ user: { id: "original@example.test", email: "original@example.test", name: "Original admin" }, logEntry: { result: "SUCCESS" } })
+  expect(accountFor).not.toHaveBeenCalled()
+  expect(env.writes).toEqual([`POST groups/${resource}/members/$ref`])
 })

@@ -93,8 +93,9 @@ export function directoryObjectState(store: KeyValueStore, tenant: string, owner
         save(state)
       }
     },
-    recordThrottle: (step: Pick<GuardedStep, "sourceId" | "targetId">, retryAt: number, rejected?: Rejection) => {
-      const state = load(), id = object(step)
+    recordThrottle: (step: Pick<GuardedStep, "sourceId" | "targetId"> & { folder?: string }, retryAt: number, rejected?: Rejection) => {
+      const mapped = step.targetId ?? (step.folder ? store.get(directoryMappingKey(tenant, step.folder, step.sourceId)) : undefined)
+      const state = load(), id = object({ ...step, targetId: mapped ?? undefined })
       verify(state, id)
       state.deadlines[id] = Math.max(state.deadlines[id] ?? 0, retryAt)
       if (rejected) {

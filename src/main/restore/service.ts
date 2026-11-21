@@ -15,7 +15,7 @@ import { referenceMatches, REFERENCE_SCAN_EXCLUDED } from "./reference-scanner"
 import type { IdentityRestoreRequest } from "./dispatch"
 import type { RestoreOutcome } from "../../portal/lib/policies/graph-restore"
 
-export interface RestoreConnection { token: string; tenantId: string; clientId: string; userId: string }
+export interface RestoreConnection { auditActor?: { username: string; name?: string }; token: string; tenantId: string; clientId: string; userId: string }
 export class IdentityRestoreService {
   constructor(private readonly journal: GuardedRunJournal, private readonly recovery: RecoveryAccounts, private readonly connection: (tenant: string) => Promise<RestoreConnection>, private readonly fetchImpl: typeof fetch = fetch) {}
   private async context(tenant: string, readOnly = false, folder?: string, operation: GuardedStep["operation"] = "update") {

@@ -211,7 +211,7 @@ it("keeps restored directory identities out of audit, notifications and logs whi
   const privateValues = ["Restored User Private", "restored-upn@example.com", "restored-mail@example.com", "00000000-0000-4000-8000-000000000999", "Restored Group Private", "00000000-0000-4000-8000-000000000998"]
   for (const folder of ["Users", "Groups"]) {
     const restoredId = privateValues[folder === "Users" ? 3 : 5], restoredName = privateValues[folder === "Users" ? 0 : 4]
-    record(new Request("http://tenuvault.internal/api/restore-directory", { method: "POST" }), JSON.stringify({ ...credentials, action: "restore", stage: "object", backupId: "backup", path: `backup/${folder}/${restoredId}.json`, snapshot: { id: restoredId, displayName: restoredName, userPrincipalName: privateValues[1], mail: privateValues[2] } }), Response.json({ success: true, status: "complete", outcomes: [{ key: `${folder}:${restoredId}:update`, targetId: restoredId, state: "applied" }], details: { restoredCount: 1, failedCount: 0, partialCount: 0, duration: 0, results: [] } }))
+    record(new Request("http://tenuvault.internal/api/restore-directory", { method: "POST" }), JSON.stringify({ ...credentials, action: "restore", stage: "object", backupId: "backup", path: `backup/${folder}/${restoredId}.json`, snapshot: { id: restoredId, displayName: restoredName, userPrincipalName: privateValues[1], mail: privateValues[2] } }), Response.json({ success: true, status: "complete", outcomes: [{ key: `${folder}:${restoredId}:update`, targetId: restoredId, state: "applied" }], details: { restoredCount: 1, failedCount: 0, partialCount: 0, duration: 0, results: [] } }), { directoryActor: account })
   }
   await vi.waitFor(() => expect(entries).toHaveLength(2))
   expect(entries.every(entry => (entry as { user: unknown }).user && JSON.stringify(entry).includes(account.username))).toBe(true)
@@ -229,4 +229,13 @@ it("redacts directory object details from failed audit results and notification 
   await vi.waitFor(() => expect(entries).toHaveLength(1))
   expect(JSON.stringify([entries, notices])).not.toContain(secret)
   expect((entries[0] as { logEntry: { details: unknown } }).logEntry.details).toMatchObject({ restoredCount: 1, failedCount: 1, results: [] })
+})
+
+it("never derives a directory execution actor from the current account or untrusted payloads", async () => {
+  const entries: unknown[] = [], accountFor = vi.fn(() => ({ tenantId: TENANT, clientId: "fixture-app", username: "replacement@example.test", name: "Replacement admin" }))
+  const record = createAuditRecorder(async request => { entries.push(await request.json()); return Response.json({ success: true }) }, accountFor)
+  record(new Request("http://tenuvault.internal/api/restore-directory", { method: "POST", headers: { "x-directory-actor": "spoof@example.test" } }), JSON.stringify({ ...credentials, action: "restore", directoryActor: { username: "spoof@example.test" } }), Response.json({ success: false, directoryActor: { username: "spoof@example.test" } }))
+  await vi.waitFor(() => expect(entries).toHaveLength(1))
+  expect(entries[0]).toMatchObject({ user: { id: "unknown", email: "unknown", name: "Unknown user" } })
+  expect(accountFor).not.toHaveBeenCalled()
 })

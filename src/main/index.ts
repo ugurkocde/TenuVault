@@ -419,7 +419,7 @@ async function bootstrap(): Promise<void> {
     const token = await tokenFor(tenant, account.clientId, "https://graph.microsoft.com/.default", true)
     const claims = JSON.parse(Buffer.from(token.accessToken.split(".")[1] ?? "", "base64url").toString("utf8")) as { oid?: string }
     if (!claims.oid) throw new Error("A signed-in admin is required.")
-    return { tenantId: tenant, clientId: account.clientId, userId: claims.oid, token: token.accessToken }
+    return { tenantId: tenant, clientId: account.clientId, userId: claims.oid, token: token.accessToken, auditActor: { username: token.account?.username ?? claims.oid, name: token.account?.name } }
   }
   const identityRestore = new IdentityRestoreService(guardedRestoreJournal(), recoveryAccounts, restoreConnection, bridgedFetch)
   setDirectoryRestoreService(new DirectoryRestoreService(new DirectoryRestoreStore(join(userData, "directory-restore"), cipher), recoveryAccounts, restoreConnection, bridgedFetch, tenant => {

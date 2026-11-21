@@ -1,3 +1,4 @@
+import { executionMetadata, type ExecutionMetadata } from "./execution-metadata"
 import { assertStorageAccountName } from "../../shared/storage-account"
 import type { ApiRequest, ApiResponse } from "../../shared/ipc"
 import { INTERNAL_API_ORIGIN } from "../../shared/constants"
@@ -15,7 +16,7 @@ export interface ApiHostOptions {
   /** Returns a Response to short-circuit the request (for example when the license is not active). */
   guard?: (request: Request) => Response | null | Promise<Response | null>
   /** Called after every handled request, for example to write audit log entries. */
-  onHandled?: (request: Request, requestBody: string, response: Response) => void
+  onHandled?: (request: Request, requestBody: string, response: Response, metadata?: ExecutionMetadata) => void
   /** Streams large downloads to a native save destination before IPC can buffer them. */
   saveDownload?: (response: Response) => Promise<Response>
   /** Adjusts responses before they reach the caller. */
@@ -59,9 +60,10 @@ export class ApiHost {
     if (blocked) return blocked
 
     const body = request.method === "GET" || request.method === "HEAD" ? "" : await request.clone().text()
+    const metadata: ExecutionMetadata = {}
     let response: Response
     try {
-      response = await withRouteTenant(tenantId, () => handler(new NextRequest(request)), storageAccountName)
+      response = await executionMetadata.run(metadata, () => withRouteTenant(tenantId, () => handler(new NextRequest(request)), storageAccountName))
     } catch (error) {
       console.error(`[api] ${request.method} ${url.pathname} failed:`, error)
       response = Response.json(
@@ -71,7 +73,7 @@ export class ApiHost {
     }
     if (this.options.transform) response = await this.options.transform(response)
     try {
-      this.options.onHandled?.(request, body, response)
+      this.options.onHandled?.(request, body, response, metadata)
     } catch (error) {
       console.error(`[api] ${request.method} ${url.pathname} onHandled failed:`, error)
     }

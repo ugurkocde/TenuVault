@@ -299,3 +299,16 @@ describe("typed reference dependencies", () => {
     expect(dependencyOrder([{ key: "a", requires: ["missing"] }]).blocked.a).toContain("missing")
   })
 })
+
+it("preserves a newer same-attempt acknowledgement when publishing an older applied snapshot", () => {
+  const env = setup(1), entry = env.input.entries[0]!
+  entry.state = "applied"; entry.attempt = 1; entry.acknowledged = true; entry.acknowledgedAt = 100
+  entry.reason = "The write did not return a confirmed result. It must be read back before any retry."
+  const publish = env.journal.publication(env.input, entry)
+  entry.state = "uncertain"; entry.acknowledgedAt = 200
+  env.journal.save(env.input)
+  publish()
+  const saved = env.journal.load("tenant", "run")!.entries[0]!
+  expect(saved).toMatchObject({ state: "applied", attempt: 1, acknowledged: true, acknowledgedAt: 200 })
+  expect(saved.reason).toBeUndefined()
+})

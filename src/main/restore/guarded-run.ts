@@ -59,7 +59,7 @@ export interface GuardedIO {
   now?: () => number
   canReconcile?: (step: GuardedStep, targetId?: string) => boolean
   persistConfirmed?: (step: GuardedStep, save: () => void) => void
-  persistRetry?: (step: GuardedStep, saveJournal: () => void, saveCoordinator: () => void) => void
+  persistRetry?: (step: GuardedStep, saveJournal: () => void, saveCoordinator: () => void, retryAt: number) => void
   /** Directory pages retain live object ownership across deferred and uncertain steps. */
   prepareStep?: (step: GuardedStep) => number | undefined
   defer?: (step: GuardedStep, retryAt: number, rejected?: { step: string; attempt: number }) => void
@@ -143,10 +143,15 @@ export class GuardedRunJournal {
       if (sameAttempt && saved.state === "uncertain" && retryOnly && snapshot.state === "deferred") {
         saved.state = "deferred"; saved.reason = snapshot.reason
       }
+      const acknowledgedAt = sameAttempt && saved.acknowledged ? saved.acknowledgedAt : undefined
       if (!retryOnly && (saved.attempt ?? 0) <= (snapshot.attempt ?? 0) && saved.state !== "applied") Object.assign(saved, snapshot)
       if (snapshot.acknowledged && (snapshot.acknowledgedAt ?? 0) > (saved.acknowledgedAt ?? 0) && sameAttempt) {
         saved.acknowledged = true; saved.acknowledgedAt = snapshot.acknowledgedAt
       }
+      if (acknowledgedAt !== undefined && acknowledgedAt > (saved.acknowledgedAt ?? 0)) {
+        saved.acknowledged = true; saved.acknowledgedAt = acknowledgedAt
+      }
+      if (saved.state === "applied" && sameAttempt) delete saved.reason
       if (retryAt) saved.retryAt = retryAt
       if (!retryOnly && saved.state === "applied") for (const mapping of mappings) rememberMapping(current.mappings, mapping)
       this.save(current)
@@ -206,7 +211,7 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
       if (prerequisite && entry.state !== "uncertain") { entry.state = "blocked"; entry.reason = `Prerequisite ${prerequisite} did not complete.`; journal.save(run); continue }
       const defer = (retryAt: number, rejected?: { step: string; attempt: number }) => {
         entry.retryAt = Math.max(entry.retryAt ?? 0, retryAt)
-        const persist = io.persistRetry ? (journal: () => void, coordinator: () => void) => io.persistRetry!(step, journal, coordinator) : persistDirectoryRetry
+        const persist = io.persistRetry ? (journal: () => void, coordinator: () => void) => io.persistRetry!(step, journal, coordinator, entry.retryAt!) : persistDirectoryRetry
         const publish = step.directory ? journal.publication(run, entry, true) : () => journal.save(run)
         const deadline = entry.retryAt
         persist(publish, () => io.defer?.(step, deadline, rejected))
@@ -307,7 +312,7 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
         if (!isGraphId(id)) { entry.reason = "The write did not return an object ID. It must be read back before continuing."; journal.save(run); continue }
         entry.targetId = id
         rememberMapping(run.mappings, { kind: "objectId", folder: step.folder, source: step.sourceId, target: id })
-        entry.state = "applied"
+        entry.state = "applied"; delete entry.reason
         if (step.directory && typeof step.desired.present === "boolean") { entry.acknowledged = true; entry.acknowledgedAt = (io.now ?? Date.now)() }
         saveConfirmed(step)
       } catch (error) {

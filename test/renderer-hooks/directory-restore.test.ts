@@ -230,7 +230,7 @@ it.each(["preview", "resume", "reconcile", "next", "discard"])("hides Cancel for
 
 it.each([false, true])("offers discard after confirming a cancelled page with no journal and a deleted backup, saved-only=%s", async savedOnly => {
   let resolve!: (response: Response) => void
-  const empty = { runId: "run", rows: [], status: "complete", outcomes: [], canDiscard: true }
+  const empty = { runId: "run", rows: [], status: "nothing-sent", outcomes: [], canDiscard: true }
   const fetcher = vi.fn(async (_input: unknown, init?: RequestInit) => {
     const action = JSON.parse(String(init?.body)).action
     return action === "restore" ? new Promise<Response>(done => { resolve = done }) : Response.json(action === "preview" ? page : action === "cancel" ? { cancelled: true } : action === "discard" ? { discarded: true } : empty)
@@ -252,6 +252,8 @@ it.each([false, true])("offers discard after confirming a cancelled page with no
   }
   await click(savedOnly ? "Confirm saved page results" : "Confirm this page's results")
   expect(button("Discard saved restore")).toBeDefined()
+  expect(document.body.textContent).toContain("No directory changes were sent for this page.")
+  expect(document.body.textContent).not.toContain("Directory page completed")
   await click("Discard saved restore")
   expect(JSON.parse(String(fetcher.mock.calls.at(-1)![1]?.body))).toMatchObject({ action: "discard", runId: "run" })
   expect(document.body.textContent).toContain("This page can never send again.")

@@ -1,3 +1,4 @@
+import type { ExecutionMetadata } from "./execution-metadata"
 import { requiredFeatures } from "./plan-gates"
 import type { Feature } from "../../shared/plans"
 import { randomUUID } from "node:crypto"
@@ -44,7 +45,7 @@ export function createAuditRecorder(
   onRestore?: (notice: RestoreNotice) => void,
   onTrialUsage?: (tenant: string, feature: Feature) => void,
 ) {
-  return (request: Request, requestBody: string, response: Response): void => {
+  return (request: Request, requestBody: string, response: Response, metadata?: ExecutionMetadata): void => {
     const path = new URL(request.url).pathname
     if (path.startsWith("/api/audit")) return
     if (path === "/api/frameworks") {
@@ -60,7 +61,7 @@ export function createAuditRecorder(
 
     if (["/api/restore-configuration", "/api/restore-directory"].includes(path) && JSON.parse(requestBody).action !== "restore") return
     if (["/api/restore-directory", "/api/restore-configuration", "/api/restore-backup", "/api/revert-policy"].includes(path) && request.method === "POST") {
-      void recordRestore(requestBody, response.clone(), dispatch, accountFor, path === "/api/revert-policy", onRestore, onTrialUsage, path === "/api/restore-directory")
+      void recordRestore(requestBody, response.clone(), dispatch, accountFor, path === "/api/revert-policy", onRestore, onTrialUsage, path === "/api/restore-directory", metadata?.directoryActor)
         .catch((error: unknown) => console.error("[audit] Failed to record restore:", error))
       return
     }
@@ -120,7 +121,7 @@ export function createAuditRecorder(
 }
 
 /** Restore runs synchronously and can partially fail despite returning HTTP 200. */
-async function recordRestore(bodyText: string, response: Response, dispatch: (request: Request) => Promise<Response>, accountFor: (id: string) => SignedInAccount | null, policyCopy = false, onRestore?: (notice: RestoreNotice) => void, onTrialUsage?: (tenant: string, feature: Feature) => void, directory = false) {
+async function recordRestore(bodyText: string, response: Response, dispatch: (request: Request) => Promise<Response>, accountFor: (id: string) => SignedInAccount | null, policyCopy = false, onRestore?: (notice: RestoreNotice) => void, onTrialUsage?: (tenant: string, feature: Feature) => void, directory = false, executionActor?: ExecutionMetadata["directoryActor"]) {
   const body = JSON.parse(bodyText) as AuditBody & { backupId?: string; originalName?: string; action?: string; mode?: string; approvalAction?: string; approvalId?: string; restoreType?: string; selectedPolicies?: unknown[]; assignments?: boolean }
   if (typeof body?.tenantId !== "string" || !body.tenantId || !body.appId || !body.clientSecret || !body.storageAccountName) return
   if (["detect", "list", "dismiss"].includes(body.approvalAction ?? "")) return
@@ -169,7 +170,7 @@ async function recordRestore(bodyText: string, response: Response, dispatch: (re
       if (feature) onTrialUsage(body.tenantId, feature)
     } catch { /* A tally never changes the action's outcome. */ }
   }
-  const account = accountFor(body.tenantId)
+  const account = directory ? executionActor : accountFor(body.tenantId)
   const logEntry: CreateAuditLogInput = {
     eventType: approvalAction === "submit" || approvalAction === "withdraw" ? AuditEventType.CONFIG_UPDATED : policyCopy ? (body.action === "revert" ? AuditEventType.POLICY_REVERTED : AuditEventType.POLICY_RESTORED) : ok || partial ? AuditEventType.RESTORE_COMPLETED : AuditEventType.RESTORE_FAILED,
     action: approvalAction === "submit" ? "Restore submitted for approval" : approvalAction === "withdraw" ? "Approval request withdrawn" : approvalAction === "complete" ? "Complete approved restore item" : policyCopy
