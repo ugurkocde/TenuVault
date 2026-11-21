@@ -87,7 +87,7 @@ export interface IntuneType {
    * The backup file stores the real value so restore can send it again. It is readable to everyone
    * who can read the backup: in Azure, everyone with read access to the container.
    */
-  secrets?: (item: Item) => Array<{ path: string; apply: (value: string) => void }>
+  secrets?: (item: Item) => Array<{ path: string | null; apply: (value: string, masked?: boolean) => void }>
   /** Extra query for the list GET, for example a $filter. */
   listQuery?: string
   extras?: Extra[]
@@ -283,7 +283,12 @@ const CATEGORY_REF = (categoryId: string) => `https://graph.microsoft.com/beta/d
 const AOSP_PATCHABLE = ["displayName", "description", "wifiSsid", "wifiPassword", "wifiSecurityType", "wifiHidden", "deviceNameTemplate"]
 
 const MASKED_SECRET = "This backup holds a masked OMA-URI value (****). Create a new manual backup to restore it; restoring would send **** to devices."
-const hasMaskedSecret = (item: Item) => collection(item.omaSettings).some((setting) => setting.isEncrypted === true && setting.value === "****")
+// iOS, Windows, Android device owner and macOS Wi-Fi profiles return null for preSharedKey.
+export const encryptedOmaSetting = (setting: Item): boolean => setting.isEncrypted === true
+// Older backups stored the literal mask with no per-value hydration marker.
+const hasMaskedSecret = (item: Item) => collection(item.omaSettings).some((setting) =>
+  encryptedOmaSetting(setting) && (setting._tenuvaultOmaMasked === true || setting.value === "****"))
+
 
 /** Dependencies and superseded apps an app points to, in the shape updateRelationships expects. */
 const appLinks = (app: Item): Item[] =>
@@ -320,11 +325,12 @@ export const INTUNE_TYPES: IntuneType[] = [
     expand: "assignments",
     secrets: (item) =>
       collection(item.omaSettings)
-        .filter((setting) => setting.isEncrypted === true && typeof setting.secretReferenceValueId === "string")
+        .filter(encryptedOmaSetting)
         .map((setting) => ({
-          path: `deviceManagement/deviceConfigurations/${encodeURIComponent(str(item.id))}/getOmaSettingPlainTextValue(secretReferenceValueId='${encodeURIComponent(str(setting.secretReferenceValueId).replaceAll("'", "''"))}')`,
-          apply: (value: string) => {
+          path: typeof setting.secretReferenceValueId === "string" && setting.secretReferenceValueId ? `deviceManagement/deviceConfigurations/${encodeURIComponent(str(item.id))}/getOmaSettingPlainTextValue(secretReferenceValueId='${encodeURIComponent(str(setting.secretReferenceValueId).replaceAll("'", "''"))}')` : null,
+          apply: (value: string, masked?: boolean) => {
             setting.value = value
+            if (masked) setting._tenuvaultOmaMasked = true
           },
         })),
     restore: "create",
@@ -340,6 +346,7 @@ export const INTUNE_TYPES: IntuneType[] = [
       for (const setting of collection(payload.omaSettings)) {
         delete setting.secretReferenceValueId
         delete setting.isEncrypted
+        delete setting._tenuvaultOmaMasked
       }
       return payload
     },

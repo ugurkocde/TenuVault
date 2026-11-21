@@ -4,7 +4,7 @@ import type { Json } from "./registry"
  * Properties Intune changes on every write or read without the configuration changing: timestamps,
  * version counters, response annotations and the reference IDs of encrypted values.
  */
-const VOLATILE = new Set(["lastModifiedDateTime", "createdDateTime", "modifiedDateTime", "version", "secretReferenceValueId"])
+const VOLATILE = new Set(["lastModifiedDateTime", "createdDateTime", "modifiedDateTime", "version", "secretReferenceValueId", "_tenuvaultOmaMasked"])
 
 const volatile = (key: string) => VOLATILE.has(key) || key === "@odata.context" || key.endsWith("@odata.context") || key.endsWith("@odata.nextLink")
 

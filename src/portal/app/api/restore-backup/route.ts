@@ -49,9 +49,9 @@ async function readSnapshot(policyPath: string, storageAccountName: string, stor
 
 async function restoreSinglePolicy(restorer: Restorer, policyPath: string, storageAccountName: string, storageToken: string, expected?: ManifestEntry, repairToken?: string): Promise<RestoreOutcome> {
   try {
-    if (expected?.omitted) return { success: false, path: policyPath, retryable: false, error: OMISSION_BLOCKER }
-    const snapshot = await readSnapshot(policyPath, storageAccountName, storageToken, expected)
+    if (expected?.omitted) return { success: false, path: policyPath, action: "skipped", retryable: false, error: OMISSION_BLOCKER }
     if (repairToken) return await restorer.repair(policyPath, repairToken)
+    const snapshot = await readSnapshot(policyPath, storageAccountName, storageToken, expected)
     return await restorer.restore(policyPath, snapshot)
   } catch (error) {
     return { success: false, path: policyPath, error: error instanceof Error ? error.message : "Unknown error" }
@@ -171,27 +171,32 @@ export async function POST(request: NextRequest) {
       paths = policyFiles
     }
 
+    const checked = checkRestoreManifest(metadata, backupId, paths, restoreType !== 'selective')
+    if (!checked.ok) return NextResponse.json({ error: checked.error }, { status: 400 })
+    const manifest = checked.manifest
+    const omittedDependencies = new Map<string, string>()
+    if (restoreType !== "selective" && manifest) {
+      const omitted = [...manifest].filter(([, entry]) => entry.omitted)
+      paths = [...new Set([...paths, ...omitted.map(([path]) => path)])]
+      for (const [path, entry] of omitted) omittedDependencies.set(entry.id.toLowerCase(), path.split("/")[1]!)
+    }
+
     const targets: Array<{ restorer: Restorer; targetTenantId?: string }> = targetTenants
       ? await Promise.all((targetTenants as Array<{ tenantId: string; appId: string }>).map(async (target) => {
           const targetToken = await getAccessToken(target.tenantId, target.appId, clientSecret, "https://graph.microsoft.com/.default")
           return {
             targetTenantId: target.tenantId.toLowerCase(),
             restorer: new Restorer(graphCaller(targetToken, fetch, { tenant: target.tenantId, refreshToken: () => getAccessToken(target.tenantId, target.appId, clientSecret, "https://graph.microsoft.com/.default", true) }),
-              { mode: 'copy', assignments: false, prefix: '', crossTenant: true, repairScope: repairScope(target.tenantId), granted: grantedPermissions(targetToken) }),
+              { mode: 'copy', assignments: false, prefix: '', crossTenant: true, omittedDependencies, repairScope: repairScope(target.tenantId), granted: grantedPermissions(targetToken) }),
           }
         }))
-      : [{ restorer: new Restorer(graphCaller(graphToken, fetch, { tenant: tenantId, refreshToken: () => getAccessToken(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default", true) }), { mode, assignments, approvalContext: requesterContext(graphToken, tenantId, body.justification), repairScope: repairScope(tenantId), granted: grantedPermissions(graphToken) }) }]
+      : [{ restorer: new Restorer(graphCaller(graphToken, fetch, { tenant: tenantId, refreshToken: () => getAccessToken(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default", true) }), { mode, assignments, omittedDependencies, approvalContext: requesterContext(graphToken, tenantId, body.justification), repairScope: repairScope(tenantId), granted: grantedPermissions(graphToken) }) }]
     try {
       if (dependencyMappings.length) for (const { restorer } of targets) await restorer.mapDependencies(dependencyMappings)
     } catch (error) {
       if (error instanceof DependencyMappingError && error.status === 404) return NextResponse.json({ error: error.message }, { status: 400 })
       throw error
     }
-
-    const checked = checkRestoreManifest(metadata, backupId, paths, restoreType !== 'selective')
-    if (!checked.ok) return NextResponse.json({ error: checked.error }, { status: 400 })
-    const manifest = checked.manifest
-    if (restoreType !== "selective" && manifest) paths = [...new Set([...paths, ...[...manifest].filter(([, entry]) => entry.omitted).map(([path]) => path)])]
 
     const progress = progressId ? startProgress(progressId, paths.length * targets.length) : null
     try {

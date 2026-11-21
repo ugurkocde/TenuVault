@@ -515,8 +515,8 @@ export interface TenuVaultBridge {
     /** Throws with an actionable message when the admin cannot write backups to the account. */
     verifyAzureStorage: (tenantId: string, clientId: string, storageAccountName: string) => Promise<void>
     /** What the tenant backs up on schedule and by default. */
-    omission: (tenantId: string) => Promise<import("./intune/secret-omission").OmissionOptions & { migrationRequired?: true }>
-    setOmission: (tenantId: string, enabled: boolean, scripts: boolean) => Promise<void>
+    omission: (tenantId: string) => Promise<import("./intune/secret-omission").OmissionOptions & { migrationRequired?: true; cloudRunbook?: string; pending?: import("./intune/secret-omission").OmissionOptions }>
+    setOmission: (tenantId: string, enabled: boolean, scripts: boolean, cloudStopped?: boolean) => Promise<void>
     scope: (tenantId: string) => Promise<BackupScopeSetting>
     setScope: (tenantId: string, scope: BackupScope) => Promise<BackupScopeSetting>
     /** The tenant's failed backup attempts, newest first. */

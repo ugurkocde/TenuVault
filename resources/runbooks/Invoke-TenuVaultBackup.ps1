@@ -156,7 +156,7 @@ function Get-TvUniqueName {
 # ---------------------------------------------------------------------------
 
 $script:VolatileKeys = [System.Collections.Generic.HashSet[string]]::new(
-    [string[]]@("lastModifiedDateTime", "createdDateTime", "modifiedDateTime", "version", "secretReferenceValueId"))
+    [string[]]@("lastModifiedDateTime", "createdDateTime", "modifiedDateTime", "version", "secretReferenceValueId", "_tenuvaultOmaMasked"))
 
 function Test-TvVolatileKey {
     param([Parameter(Mandatory)][string]$Key)
@@ -437,10 +437,12 @@ function Invoke-TvHttp {
         [byte[]]$BodyBytes,
         [string]$ContentType,
         # A cap on the response body in bytes; 0 reads it whole. Over the cap: TvOversizedError.
-        [long]$MaxBytes = 0
+        [long]$MaxBytes = 0,
+        [DateTime]$DispatchDeadline = [DateTime]::MaxValue
     )
     $lastError = $null
     foreach ($attempt in 1..3) {
+        if ([DateTime]::UtcNow -ge $DispatchDeadline) { throw "The backup publication window expired." }
         $request = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::new($Method), $Uri)
         $request.Headers.Authorization = [System.Net.Http.Headers.AuthenticationHeaderValue]::new("Bearer", $Token)
         if ($Headers) { foreach ($name in $Headers.Keys) { [void]$request.Headers.TryAddWithoutValidation($name, [string]$Headers[$name]) } }
@@ -464,7 +466,7 @@ function Invoke-TvHttp {
             if ($MaxBytes -gt 0) {
                 if ($status -ge 200 -and $status -lt 300) {
                     $bytes = Read-TvCappedBody $response $MaxBytes
-                    return @{ Status = $status; Bytes = $bytes; Text = [Text.Encoding]::UTF8.GetString($bytes) }
+                    return @{ Status = $status; Bytes = $bytes; Text = [Text.Encoding]::UTF8.GetString($bytes); ETag = [string]$response.Headers.ETag }
                 }
                 # Only the error text is needed: the same reader with a small cap and the same
                 # deadline, so a stalled or large error body can neither hang nor exhaust the run.
@@ -474,7 +476,7 @@ function Invoke-TvHttp {
             } else {
                 $bytes = $response.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult()
                 if ($status -ge 200 -and $status -lt 300) {
-                    return @{ Status = $status; Bytes = $bytes; Text = [Text.Encoding]::UTF8.GetString($bytes) }
+                    return @{ Status = $status; Bytes = $bytes; Text = [Text.Encoding]::UTF8.GetString($bytes); ETag = [string]$response.Headers.ETag }
                 }
             }
         } finally {
@@ -522,7 +524,9 @@ function Set-TvBlob {
         [Parameter(Mandatory)][string]$BlobName,
         [Parameter(Mandatory)][string]$Body,
         [Parameter(Mandatory)][string]$Token,
-        [switch]$CreateOnly
+        [switch]$CreateOnly,
+        [string]$IfMatch,
+        [DateTime]$DispatchDeadline = [DateTime]::MaxValue
     )
     $target = Get-TvBlobTarget $Account $BlobName
     $headers = @{
@@ -531,7 +535,8 @@ function Set-TvBlob {
         "x-ms-date"      = [DateTime]::UtcNow.ToString("R", [Globalization.CultureInfo]::InvariantCulture)
     }
     if ($CreateOnly) { $headers["If-None-Match"] = "*" }
-    [void](Invoke-TvHttp -Uri $target.Uri -Token $Token -Method "Put" -Headers $headers -BodyBytes ([Text.Encoding]::UTF8.GetBytes($Body)) -ContentType "application/json")
+    if ($IfMatch) { $headers["If-Match"] = $IfMatch }
+    [void](Invoke-TvHttp -Uri $target.Uri -Token $Token -Method "Put" -Headers $headers -BodyBytes ([Text.Encoding]::UTF8.GetBytes($Body)) -ContentType "application/json" -DispatchDeadline $DispatchDeadline)
 }
 
 # ---------------------------------------------------------------------------
@@ -650,12 +655,18 @@ function Get-TvDetailPath {
 }
 
 # The encrypted OMA-URI settings of a device configuration profile, like the registry secrets.
+function Test-TvEncryptedOmaSetting {
+    param($Setting)
+    $encrypted = Get-TvProp $Setting "isEncrypted"
+    return $encrypted -is [bool] -and $encrypted
+}
+
 function Get-TvEncryptedOmaSettings {
     param([Parameter(Mandatory)][object]$Detail)
     $settings = Get-TvProp $Detail "omaSettings"
     if ($null -eq $settings) { return @() }
     return @($settings | Where-Object {
-        (Get-TvProp $_ "isEncrypted") -eq $true -and (Get-TvProp $_ "secretReferenceValueId") -is [string]
+        Test-TvEncryptedOmaSetting $_
     })
 }
 
@@ -685,7 +696,6 @@ $script:SecretRules = @'
 {
   "version": 1,
   "typedSecretSuffix": "SecretSettingValue",
-  "encryptedOmaSuffix": "omaSettingString",
   "androidFolder": "AndroidEnrollmentProfiles",
   "androidFields": ["tokenValue", "qrCodeContent", "qrCodeImage", "wifiPassword"],
   "credentials": [
@@ -729,14 +739,13 @@ function Protect-TvSnapshotFields {
         }
         if ($Value -isnot [System.Collections.IDictionary]) { return , $Value }
         $type = [string](Get-TvProp $Value "@odata.type")
-        $encrypted = $Folder -ceq "DeviceConfigurations" -and $Value.isEncrypted -is [bool] -and $Value.isEncrypted -and
-            ($type.EndsWith($rules.encryptedOmaSuffix, [StringComparison]::Ordinal) -or ($Oma -and -not $type))
+        $encrypted = $Folder -ceq "DeviceConfigurations" -and $Oma -and (Test-TvEncryptedOmaSetting $Value)
         $secret = $type.EndsWith($rules.typedSecretSuffix, [StringComparison]::OrdinalIgnoreCase)
         $copy = [ordered]@{}
         $keys = [string[]]@(Get-TvKeys $Value)
         [Array]::Sort($keys, [StringComparer]::Ordinal)
         foreach ($key in $keys) {
-            if (-not $Path -and $key -ceq "_tenuvaultOmitted") { continue }
+            if ((-not $Path -and $key -ceq "_tenuvaultOmitted") -or ($encrypted -and $key -ceq "_tenuvaultOmaMasked")) { continue }
             $property = $Value[$key]
             $pointer = "$Path/$($key.Replace('~', '~0').Replace('/', '~1'))"
             $reason = $null
@@ -750,7 +759,7 @@ function Protect-TvSnapshotFields {
             if ($reason -and ($null -eq $Reasons -or $Reasons.Contains($reason))) {
                 $fields.Add([ordered]@{ path = $pointer; reason = $reason })
             } else {
-                $copy[$key] = Visit-TvSnapshotField $property $pointer ($key -ceq "omaSettings")
+                $copy[$key] = Visit-TvSnapshotField $property $pointer (-not $Path -and $key -ceq "omaSettings")
             }
         }
         return , $copy
@@ -764,26 +773,70 @@ function Get-TvRawHash {
 }
 
 function Get-TvOmissionPolicy {
-    param([hashtable]$Context)
+    param([hashtable]$Context, [switch]$WithETag)
     $tenant = $Context.TenantId.ToLowerInvariant()
     $prefix = ".tenuvault-control/$tenant/secret-omission"
     try {
-        try { $policy = Read-TvPlainJson $Context "$prefix.json" }
+        try { $stored = Read-TvPlainJson $Context "$prefix.json" -WithETag }
         catch [TvHttpError] {
             if ($_.Exception.Status -ne 404) { throw }
             try { $null = Read-TvPlainJson $Context "$prefix-enrolled.json" }
             catch [TvHttpError] {
                 if ($_.Exception.Status -ne 404) { throw }
-                return @{ enabled = $false; scripts = $false; generation = "default" }
+                $default = [ordered]@{ version = 1; tenantId = $tenant; enabled = $false; scripts = $false; generation = "default" }
+                if ($WithETag) { return @{ Value = $default; ETag = $null } }
+                return $default
             }
             throw "An enrolled tenant is missing its policy."
         }
+        $policy = $stored.Value
         if (-not (Test-TvJsNumber $policy.version) -or $policy.version -ne 1 -or $policy.tenantId -isnot [string] -or
             $policy.tenantId -cne $tenant -or $policy.enabled -isnot [bool] -or $policy.scripts -isnot [bool] -or
-            $policy.generation -isnot [string] -or $policy.generation -cnotmatch '^[a-f0-9-]{36}$' -or
-            (-not $policy.enabled -and $policy.scripts)) { throw "Invalid omission policy." }
+            $policy.generation -isnot [string] -or ($policy.generation -cnotmatch '^[a-f0-9-]{36}$' -and ($policy.generation -cne "default" -or $policy.enabled)) -or
+            (-not $policy.enabled -and $policy.scripts) -or $policy.Contains("pending")) { throw "Invalid or pending omission policy." }
+        if ($policy.Contains("publishing") -and ($policy.publishing.id -isnot [string] -or
+            -not (Test-TvJsNumber $policy.publishing.until))) { throw "Invalid publication claim." }
+        if ($policy.generation -ceq "default") {
+            try {
+                $null = Read-TvPlainJson $Context "$prefix-enrolled.json"
+                throw "An enrolled tenant is missing its policy."
+            } catch [TvHttpError] {
+                if ($_.Exception.Status -ne 404) { throw }
+            }
+        }
+        if ($WithETag) {
+            if (-not $stored.ETag) { throw "The omission policy has no ETag." }
+            return $stored
+        }
         return $policy
     } catch { throw "The tenant's backup omission policy could not be verified. Check its storage and try again." }
+}
+
+function Start-TvBackupPublication {
+    param([hashtable]$Context, [string]$Generation, [string]$RunId, [DateTime]$Deadline)
+    $current = Get-TvOmissionPolicy $Context -WithETag
+    $etag = $current.ETag
+    $control = $current.Value
+    if ($control.generation -cne $Generation) { throw "The backup omission policy changed during this run. Run the backup again." }
+    if ($control.publishing -and $control.publishing.until -gt [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()) {
+        throw "Another backup is publishing for this tenant. Try again when it finishes."
+    }
+    $control["publishing"] = @{ id = $RunId; until = ([DateTimeOffset]$Deadline).AddMinutes(2).ToUnixTimeMilliseconds() }
+    $path = ".tenuvault-control/$($control.tenantId)/secret-omission.json"
+    Set-TvBlob $Context.StorageAccount $path ($control | ConvertTo-Json -Depth 6 -Compress) $Context.StorageToken -CreateOnly:(-not $etag) -IfMatch $etag -DispatchDeadline $Deadline
+}
+
+function Stop-TvBackupPublication {
+    param([hashtable]$Context, [string]$RunId)
+    try {
+        $current = Get-TvOmissionPolicy $Context -WithETag
+        $etag = $current.ETag
+        $control = $current.Value
+        if (-not $etag -or $control.publishing.id -cne $RunId) { return }
+        $control.Remove("publishing")
+        $path = ".tenuvault-control/$($control.tenantId)/secret-omission.json"
+        Set-TvBlob $Context.StorageAccount $path ($control | ConvertTo-Json -Depth 6 -Compress) $Context.StorageToken -IfMatch $etag
+    } catch { Write-Output "The backup publication claim could not be released. It will expire automatically." }
 }
 
 function Add-TvOmissionMetadata {
@@ -870,7 +923,14 @@ function Read-TvObject {
     if ($Outcome.OmitEncryptedOma) { Expand-TvNestedCollections $detail $Token ([System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)) }
     if ($Type.HasSecrets -and -not $Outcome.OmitEncryptedOma) {
         foreach ($setting in Get-TvEncryptedOmaSettings $detail) {
-            $reference = ([string](Get-TvProp $setting "secretReferenceValueId")).Replace("'", "''")
+            $ref = Get-TvProp $setting "secretReferenceValueId"
+            if ($ref -isnot [string] -or -not $ref) {
+                Set-TvProp $setting "value" "****"
+                Set-TvProp $setting "_tenuvaultOmaMasked" $true
+                $Outcome.Masked = $true
+                continue
+            }
+            $reference = $ref.Replace("'", "''")
             $secretPath = "deviceManagement/deviceConfigurations/$encodedId/getOmaSettingPlainTextValue(secretReferenceValueId='$([uri]::EscapeDataString($reference))')"
             try {
                 $plain = Invoke-TvGraphGet $secretPath $Token
@@ -881,6 +941,7 @@ function Read-TvObject {
                 if ($_.Exception.Status -ne 403) { throw }
                 # Microsoft refused the plain-text read: keep the masked value, like the Backup Reader.
                 Set-TvProp $setting "value" "****"
+                Set-TvProp $setting "_tenuvaultOmaMasked" $true
                 $Outcome.Masked = $true
             }
         }
@@ -1156,7 +1217,7 @@ function Get-TvReportSafe {
 # Comparison (mirror compareObjects, documentItem and redactedChanges in /api/detect-drifts)
 # ---------------------------------------------------------------------------
 
-$script:CompareSkipped = [System.Collections.Generic.HashSet[string]]::new([string[]]@('@odata.context', 'lastModifiedDateTime', 'createdDateTime', 'modifiedDateTime', 'id', 'version', 'description', 'settings@odata.context', 'secretReferenceValueId'))
+$script:CompareSkipped = [System.Collections.Generic.HashSet[string]]::new([string[]]@('@odata.context', 'lastModifiedDateTime', 'createdDateTime', 'modifiedDateTime', 'id', 'version', 'description', 'settings@odata.context', 'secretReferenceValueId', '_tenuvaultOmaMasked'))
 
 # skippedKey: fields the comparison leaves out, annotations included.
 function Test-TvSkippedKey {
@@ -2539,7 +2600,7 @@ $script:MaxBlobBytes = 33554432
 # buffered or parsed. A sealed blob throws TvSealedBlobError, a larger one TvOversizedError, a
 # missing one TvHttpError 404, and anything that is not a JSON object a plain error.
 function Read-TvPlainJson {
-    param([Parameter(Mandatory)][hashtable]$Context, [Parameter(Mandatory)][string]$BlobName, [string]$RawHash)
+    param([Parameter(Mandatory)][hashtable]$Context, [Parameter(Mandatory)][string]$BlobName, [string]$RawHash, [switch]$WithETag)
     $target = Get-TvBlobTarget $Context.StorageAccount $BlobName
     $file = ($BlobName -split "/")[-1]
     $tooLarge = "$file is larger than the 32 MiB TenuVault reads."
@@ -2551,6 +2612,7 @@ function Read-TvPlainJson {
     if (Test-TvSealedBlob $result.Bytes) { throw [TvSealedBlobError]::new("The backup file is sealed with a key from before plain Azure backups, which TenuVault in Azure does not have.") }
     try { $value = ConvertFrom-TvJson ([Text.Encoding]::UTF8.GetString($result.Bytes)) } catch { throw "The backup file is not valid JSON." }
     if ($value -isnot [System.Collections.IDictionary]) { throw "The backup file is not a JSON object." }
+    if ($WithETag) { return @{ Value = $value; ETag = $result.ETag } }
     return , $value
 }
 
@@ -2902,25 +2964,18 @@ function Invoke-TvBackup {
         }
     }
 
-    if ((Get-TvOmissionPolicy $context).generation -cne $policy.generation) { throw "The backup omission policy changed during this run. Run the backup again." }
-
-    # Claim the folder before writing any policy. The create-only write is atomic.
-    $backupFolder = "backup-$(ConvertTo-TvFolderTimestamp $started)"
-    $owner = [ordered]@{ Source = "TenuVault Cloud Backup"; TenantId = $tenantId.ToLowerInvariant(); RunId = $runId } | ConvertTo-Json -Compress
-    try {
-        Set-TvBlob $storageAccount "$backupFolder/.tenuvault-owner.json" $owner $storageToken -CreateOnly
-    } catch [TvHttpError] {
-        if ($_.Exception.Status -in @(409, 412)) {
-            throw "Backup folder $backupFolder is already in use by another backup for this tenant and storage. Nothing from this backup was written. Wait for the other backup to finish, then try again."
-        }
-        throw
-    }
     } catch {
         Set-TvCloudStatus $context "Failed" (Get-TvSafeError $_.Exception.Message) $null
         Send-TvBackupOutcome -Account $storageAccount -Token $storageToken -TenantId $tenantId -RunId $runId -Status "Failed" -BackupFolder $null -TotalPolicies $null -Failures $failures -FailedTypes @($failedTypes) -Trigger $runTrigger
         throw
     }
 
+    $backupFolder = "backup-$(ConvertTo-TvFolderTimestamp $started)"
+    $owner = [ordered]@{ Source = "TenuVault Cloud Backup"; TenantId = $tenantId.ToLowerInvariant(); RunId = $runId } | ConvertTo-Json -Compress
+    $publication = $false
+    $publicationAttempted = $false
+    $folderClaimed = $false
+    $staged = [System.Collections.Generic.List[object]]::new()
     $items = [ordered]@{}
     $maskedItems = [System.Collections.Generic.List[object]]::new()
     $omittedTypes = [System.Collections.Generic.HashSet[string]]::new()
@@ -2949,8 +3004,6 @@ function Invoke-TvBackup {
                     }
                     $body = $detail | ConvertTo-Json -Depth 100
                     if ($omitted) { $record.rawHash = Get-TvRawHash ([Text.Encoding]::UTF8.GetBytes($body)) }
-                    Set-TvBlob $storageAccount "$backupFolder/$relative" $body $storageToken
-                    if ($omitted) { [void]$omittedTypes.Add([string]$type.Folder) }
                     if ($type.AssignmentsFormerlyExpanded -and -not $omitted) {
                         $without = Copy-TvDeep $detail
                         Set-TvProp $without "assignments" @()
@@ -2958,12 +3011,11 @@ function Invoke-TvBackup {
                     }
                     $maskedView = if (-not $omitted) { Get-TvMaskedView $detail }
                     if ($maskedView) { $record.hashWithMaskedSecrets = Get-TvSnapshotHash $maskedView }
-                    if ($outcome.Masked) {
+                    $masked = if ($outcome.Masked) {
                         $record.secretsMasked = $true
-                        $maskedItems.Add([ordered]@{ Folder = [string]$type.Folder; Id = $id; Name = $displayName })
+                        [ordered]@{ Folder = [string]$type.Folder; Id = $id; Name = $displayName }
                     }
-                    $items["$($type.Folder)/$id"] = $record
-                    $counts[$type.Folder]++
+                    $staged.Add(@{ Relative = $relative; Body = $body; Record = $record; Folder = $type.Folder; Id = $id; Name = $displayName; Masked = $masked })
                 } catch [TvHttpError] {
                     if ($_.Exception.Status -eq 401) {
                         if ($policy.enabled) { throw "A backup service refused authentication (HTTP 401)." }
@@ -2981,7 +3033,37 @@ function Invoke-TvBackup {
                     Write-Output "Could not back up `"$displayName`": $reason"
                 }
             }
-            if ($list.Items.Count) { Write-Output "Backed up $($counts[$type.Folder]) $($type.Label)." }
+        }
+
+        $publicationAttempted = $true
+        $deadline = [DateTime]::UtcNow.AddMinutes(30)
+        Start-TvBackupPublication $context $policy.generation $runId $deadline
+        $publication = $true
+        try {
+            Set-TvBlob $storageAccount "$backupFolder/.tenuvault-owner.json" $owner $storageToken -CreateOnly -DispatchDeadline $deadline
+            $folderClaimed = $true
+        } catch [TvHttpError] {
+            if ($_.Exception.Status -in @(409, 412)) { throw "Backup folder $backupFolder is already in use. Nothing from this backup was written." }
+            throw
+        }
+
+        foreach ($entry in $staged) {
+            try {
+                Set-TvBlob $storageAccount "$backupFolder/$($entry.Relative)" $entry.Body $storageToken -DispatchDeadline $deadline
+                if ($entry.Record.omitted) { [void]$omittedTypes.Add([string]$entry.Folder) }
+                if ($entry.Masked) { $maskedItems.Add($entry.Masked) }
+                $items["$($entry.Folder)/$($entry.Id)"] = $entry.Record
+                $counts[$entry.Folder]++
+            } catch [TvHttpError] {
+                if ($_.Exception.Status -eq 401) { throw }
+                $failures++
+                $reason = if ($policy.enabled) { "Storage returned HTTP $($_.Exception.Status)." } else { Get-TvSafeError $_.Exception.Message }
+                Write-Output "Could not back up `"$($entry.Name)`": $reason"
+            }
+        }
+        $staged.Clear()
+        foreach ($type in $types) {
+            if ($lists[$type.Folder].Items.Count) { Write-Output "Backed up $($counts[$type.Folder]) $($type.Label)." }
         }
 
         $ended = [DateTime]::UtcNow
@@ -3023,10 +3105,11 @@ function Invoke-TvBackup {
         }
         if ($notReadable.Count) { $metadata.AppOnlyExcludedTypes = $notReadable }
         if ($maskedItems.Count) { $metadata.MaskedSecretItems = @($maskedItems) }
-        if ((Get-TvOmissionPolicy $context).generation -cne $policy.generation) { throw "The backup omission policy changed during this run. Run the backup again." }
         $metadata.Items = $sortedItems
         Add-TvOmissionMetadata $metadata $policy $skippedTypes $omittedTypes
-        Set-TvBlob $storageAccount "$backupFolder/metadata.json" ($metadata | ConvertTo-Json -Depth 100) $storageToken
+        Set-TvBlob $storageAccount "$backupFolder/metadata.json" ($metadata | ConvertTo-Json -Depth 100) $storageToken -DispatchDeadline $deadline
+        Stop-TvBackupPublication $context $runId
+        $publication = $false
         if ($omittedTypes.Count) { Write-Output "Left out values in $($omittedTypes.Count) policy type(s). Affected copies cannot be restored." }
         Write-Output "Backup completed: $totalPolicies policies in $($metadata.Duration) ($status). Older backups were kept: the cloud identity cannot delete. The next desktop backup made with an admin's sign-in applies retention."
         Set-TvCloudStatus $context $status "Backup $status, $totalPolicies policies." $backupFolder
@@ -3043,8 +3126,18 @@ function Invoke-TvBackup {
         }
     } catch {
         $reason = Get-TvSafeError $_.Exception.Message
-        # Record the claimed folder as a failed backup, create-only, like the desktop engine.
-        try {
+        # A capture failure can still leave a failed record, provided its generation can publish.
+        if (-not $publicationAttempted) {
+            try {
+                $deadline = [DateTime]::UtcNow.AddMinutes(1)
+                Start-TvBackupPublication $context $policy.generation $runId $deadline
+                $publication = $true
+                Set-TvBlob $storageAccount "$backupFolder/.tenuvault-owner.json" $owner $storageToken -CreateOnly -DispatchDeadline $deadline
+                $folderClaimed = $true
+            } catch { }
+        }
+        # Record only files that reached storage under this publication claim.
+        if ($publication -and $folderClaimed) { try {
             $ended = [DateTime]::UtcNow
             $seconds = [int][Math]::Round(($ended - $started).TotalSeconds)
             $itemCounts = [ordered]@{}
@@ -3068,8 +3161,10 @@ function Invoke-TvBackup {
             if ($notReadable.Count) { $failed.AppOnlyExcludedTypes = $notReadable }
             if ($maskedItems.Count) { $failed.MaskedSecretItems = @($maskedItems) }
             Add-TvOmissionMetadata $failed $policy $skippedTypes $omittedTypes
-            Set-TvBlob $storageAccount "$backupFolder/metadata.json" ($failed | ConvertTo-Json -Depth 100) $storageToken -CreateOnly
-        } catch { Write-Output "Could not record this backup as Failed: $(Get-TvSafeError $_.Exception.Message). It is listed as incomplete." }
+            Set-TvBlob $storageAccount "$backupFolder/metadata.json" ($failed | ConvertTo-Json -Depth 100) $storageToken -CreateOnly -DispatchDeadline $deadline
+        } catch { Write-Output "Could not record this backup as Failed: $(Get-TvSafeError $_.Exception.Message). It is listed as incomplete." } }
+        if ($publication) { Stop-TvBackupPublication $context $runId }
+        if (-not $folderClaimed) { $backupFolder = $null }
         Set-TvCloudStatus $context "Failed" $reason $backupFolder
         Send-TvBackupOutcome -Account $storageAccount -Token $storageToken -TenantId $tenantId -RunId $runId -Status "Failed" -BackupFolder $backupFolder -TotalPolicies $totalPolicies -Failures ([Math]::Max(1, $failures)) -FailedTypes @($failedTypes) -Trigger $runTrigger
         throw

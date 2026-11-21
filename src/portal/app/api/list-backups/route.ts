@@ -3,8 +3,8 @@ import { typeForFolder } from "../../../../shared/intune/registry"
 import { describeScope } from "../../../../shared/intune/scope"
 import { compareBackupFiles } from "~/lib/policies/compare-backups"
 import { compareObjects } from "../detect-drifts/route"
-import { omittedFolders } from "../../../../shared/intune/secret-omission"
-import { itemsOf, comparable, summarize, type BackupFingerprint, type ChangeSummary } from "../../../../shared/intune/backup-changes"
+import { backupManifest } from "~/lib/policies/backup-manifest"
+import { comparable, summarize, type BackupFingerprint, type ChangeSummary } from "../../../../shared/intune/backup-changes"
 import { blobPath } from "../../../../shared/security"
 import { BACKUP_OWNER_FILE, LOCAL_STORAGE_PREFIX, MAX_BACKUP_ARCHIVE_BYTES } from "../../../../shared/constants"
 import { mapLimit } from "../../../../shared/map-limit"
@@ -138,11 +138,23 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
   let files = 0
   const counts: Record<string, number> = {}
   const sizes: Record<string, number> = {}
+  let projected: ReturnType<typeof backupManifest> = null
+  if (metadata?.OmissionVersion !== undefined) {
+    try { projected = backupManifest(metadata, name) } catch { /* Invalid inventory cannot verify a projected file. */ }
+  }
+  let omittedPolicies = 0
   for (const match of filesText.matchAll(/<Blob>[\s\S]*?<Name>(.*?)<\/Name>[\s\S]*?<Content-Length>(\d+)<\/Content-Length>[\s\S]*?<\/Blob>/g)) {
-    const parts = decodeXml(match[1] ?? '').split('/')
+    let parts = decodeXml(match[1] ?? '').split('/')
     const bytes = parseInt(match[2]!)
     size += bytes
     files++
+    if (parts.length === 4 && parts[1] === ".omitted") {
+      const logical = [parts[0]!, parts[2]!, parts[3]!]
+      if (projected?.get(logical.join("/"))?.omitted) {
+        parts = logical
+        omittedPolicies++
+      }
+    }
     // Backups from older app versions stored compliance policies under this name.
     const type = parts.length === 3 ? typeForFolder(parts[1] === 'DeviceCompliancePolicies' ? 'CompliancePolicies' : parts[1]!) : undefined
     const folder = type?.folder ?? (parts.length === 3 && ['AppProtectionPolicies', 'ConditionalAccess'].includes(parts[1]!) ? parts[1] : undefined)
@@ -172,6 +184,7 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
     configs: files,
     policyCount,
     totalPolicies,
+    ...(omittedPolicies ? { omittedPolicies } : {}),
     counts,
     sizes,
     // Kept for the dashboard's breakdown.
@@ -350,6 +363,10 @@ export async function POST(request: NextRequest) {
     backups.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
     
     // Each backup is compared with the newest older backup that can be compared.
+    // Keep a history refresh bounded even when many older pairs have different projections.
+    // Opening a pair's comparison still does the full comparison.
+    let comparisonReadsLeft = 40
+    const reserveComparisonRead = () => comparisonReadsLeft-- > 0
     for (let i = 0; i < backups.length; i++) {
       const current = backups[i]!
       if (!current.fingerprint || !comparable(current.fingerprint)) continue
@@ -360,13 +377,13 @@ export async function POST(request: NextRequest) {
         { id: current.id, metadata: current.fingerprint },
         (path) => fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${path.split("/").map(encodeURIComponent).join("/")}`, { headers: storageHeaders(accessToken) }),
         compareObjects,
+        0, reserveComparisonRead,
       )
       current.changes = summarize(entries.map((entry) => entry.change))
       current.partialComparison = partial
       current.comparedWith = previous.id
     }
     for (const backup of backups) {
-      if (omittedFolders(backup.fingerprint?.Items).size) backup.omittedPolicies = Object.values(itemsOf(backup.fingerprint) ?? {}).filter((item) => item.omitted).length
       delete backup.fingerprint
       delete backup.ownerTenantId
       delete (backup as { ownerKind?: unknown }).ownerKind

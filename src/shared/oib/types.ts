@@ -297,6 +297,7 @@ export interface OibRecentBackup {
 
 export interface OibBackupOptions {
   recent: OibRecentBackup | null
+  omissionNotice?: string
 }
 
 /** oib-progress: what a running deployment, fix, undo or validation is doing; null when nothing runs. */

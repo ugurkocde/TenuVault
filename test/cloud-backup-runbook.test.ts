@@ -18,7 +18,7 @@ const pwsh = ["/usr/local/bin/pwsh", "/opt/homebrew/bin/pwsh", "/usr/bin/pwsh", 
 const runbook = readFileSync(new URL("../resources/runbooks/Invoke-TenuVaultBackup.ps1", import.meta.url), "utf8")
 const RUNBOOK_VERSION = /\$script:RunbookVersion = "([^"]+)"/.exec(runbook)?.[1]
 const setup = readFileSync(new URL("../resources/New-TenuVaultCloudBackup.ps1", import.meta.url), "utf8")
-type RunCall = { uri: string; method: string; contentType: string | null; ifNoneMatch: string | null; body: string | null }
+type RunCall = { uri: string; method: string; contentType: string | null; ifNoneMatch: string | null; ifMatch?: string | null; body: string | null }
 type Run = { calls: RunCall[]; error?: string | null; output?: string[] }
 let plainRuns: Run[] | undefined
 /** The scenarios of the plain-run fixture: a full run, an early failure, a failed manifest, and two runs with change reports on. */
@@ -183,7 +183,7 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
         expect(() => JSON.parse(put.body!), put.uri).not.toThrow()
       }
     }
-    const puts = run!.calls.filter((call) => call.method === "Put")
+    const puts = run!.calls.filter((call) => call.method === "Put" && !call.uri.includes("/.tenuvault-control/"))
     const backup = "https://stcontoso.blob.core.windows.net/intune-backups/"
     const names = puts.map((call) => call.uri.replace(/backup-\d{4}-\d{2}-\d{2}-\d{6}/, "backup-<time>"))
     expect(names).toEqual(expect.arrayContaining([
@@ -222,6 +222,16 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
     expect(JSON.stringify([active, missing, graphError])).not.toMatch(/omission-test-value|omission-test-secret-reference|getOmaSettingPlainTextValue/)
     expect(missing!.error).toContain("omission policy could not be verified")
     expect(missing!.calls.some(({ uri }) => uri.startsWith("https://graph.microsoft.com") || uri.includes("/intune-backups/backup-"))).toBe(false)
+  }, 60_000)
+
+  it.runIf(Boolean(pwsh))("never publishes a folder or manifest when the generation changes while reading Graph", () => {
+    const stopped = runPlainFixture()[10]!
+    expect(stopped.error).toContain("The backup omission policy changed during this run.")
+    expect([...writtenBlobs(stopped).keys()].some((path) => path.startsWith("backup-"))).toBe(false)
+    const completed = runPlainFixture()[0]!
+    const updates = completed.calls.filter((call) => call.method === "Put" && call.uri.endsWith("secret-omission.json"))
+    expect(updates[0]?.ifNoneMatch).toBe("*")
+    expect(updates[1]?.ifMatch).toBeTruthy()
   }, 60_000)
 
   it.runIf(Boolean(pwsh))("saves a list-only type from its list entry, with the desktop snapshot and fingerprint", () => {

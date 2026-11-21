@@ -179,7 +179,7 @@ Only one OpenIntuneBaseline deployment or undo can run per tenant at a time.
 
 Every deployment and drift fix is recorded on this device with the IDs of the objects it created and the previous version of every policy it updated. **Deployment history** on the section's start page lists the runs that can be undone for the selected tenant.
 
-When secret omission is enabled, the saved previous version leaves out classified values. The run identifies updates that cannot be undone automatically. Restore those policies from a backup that contains the values.
+When secret omission is enabled, the deployment review warns that some updates may be unavailable to Undo. The saved previous version leaves out classified values, and the run identifies affected updates. Restore those policies from a backup that contains the values.
 
 If the run list cannot load, it shows the error with a **Retry** button. Retry reloads the history. A load failure does not mean there are no runs to undo.
 

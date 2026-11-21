@@ -406,8 +406,9 @@ export function ProxySignInSettings() {
 
 function TenantOmissionSettings({ tenantId }: { tenantId: string }) {
   const { confirm, confirmDialog } = useConfirm()
-  const [options, setOptions] = useState<{ enabled: boolean; scripts: boolean; migrationRequired?: true } | null>(null)
+  const [options, setOptions] = useState<Awaited<ReturnType<typeof bridge.backups.omission>> | null>(null)
   const [busy, setBusy] = useState(true)
+  const [cloudStopped, setCloudStopped] = useState(false)
   const [error, setError] = useState("")
   useEffect(() => {
     let current = true
@@ -430,29 +431,47 @@ function TenantOmissionSettings({ tenantId }: { tenantId: string }) {
     setBusy(true)
     setError("")
     try {
-      await bridge.backups.setOmission(tenantId, enabled, scripts)
-      setOptions({ enabled, scripts })
+      await bridge.backups.setOmission(tenantId, enabled, scripts, cloudStopped)
+      setOptions({ enabled, scripts, cloudRunbook: options?.cloudRunbook })
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure))
+      const current = await bridge.backups.omission(tenantId).catch(() => null)
+      if (current) setOptions(current)
     } finally {
       setBusy(false)
     }
   }
 
+  const pending = options?.pending
+  const cloudNeedsConfirmation = Boolean(options?.cloudRunbook && !cloudStopped)
+  const controlsDisabled = busy || !options || Boolean(pending || options.migrationRequired)
   return (
     <div className="mt-3 space-y-2 text-sm">
       {confirmDialog}
+      {options?.cloudRunbook && <div className="space-y-2">
+        <p role="alert">Cloud runbook {options.cloudRunbook} does not honor this setting. Upgrade it and run a backup to refresh its status, or stop cloud backups before enabling omission.</p>
+        <label className="flex items-center gap-2">
+          <input type="checkbox" checked={cloudStopped} disabled={busy} onChange={(event) => setCloudStopped(event.target.checked)} />
+          I stopped cloud backups and waited for running jobs to finish.
+        </label>
+      </div>}
       <label className="flex items-center gap-2">
-        <input type="checkbox" checked={options?.enabled ?? false} disabled={busy || !options || options.migrationRequired} onChange={(event) => void change(event.target.checked, false)} />
+        <input type="checkbox" checked={options?.enabled ?? false} disabled={controlsDisabled || (!options?.enabled && cloudNeedsConfirmation)} onChange={(event) => void change(event.target.checked, false)} />
         Leave secret values out of policy backups
       </label>
       {options?.enabled && <label className="flex items-center gap-2 pl-5">
-        <input type="checkbox" checked={options.scripts} disabled={busy || options.migrationRequired} onChange={(event) => void change(true, event.target.checked)} />
+        <input type="checkbox" checked={options.scripts} disabled={controlsDisabled || cloudNeedsConfirmation} onChange={(event) => void change(true, event.target.checked)} />
         Also leave out script content
       </label>}
-      {options?.migrationRequired && <Button size="sm" variant="outline" disabled={busy} onClick={() => void change(options.enabled, options.scripts)}>
+      {options?.migrationRequired && <Button size="sm" variant="outline" disabled={busy || (options.enabled && cloudNeedsConfirmation)} onClick={() => void change(options.enabled, options.scripts)}>
         Apply policy to Azure backup storage
       </Button>}
+      {pending && <div className="space-y-2">
+        <p>The policy change is pending. Backups resume once the change is finished.</p>
+        <Button size="sm" variant="outline" disabled={busy || (pending.enabled && cloudNeedsConfirmation)} onClick={() => void change(pending.enabled, pending.scripts)}>
+          Finish policy change
+        </Button>
+      </div>}
       {error && <p role="alert" className="text-red-700">{error}</p>}
     </div>
   )

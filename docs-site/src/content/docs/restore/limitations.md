@@ -150,3 +150,5 @@ The journal keeps up to 1,000 records. When it is full, TenuVault removes comple
 ## Credential availability
 
 Policies with omitted values require another backup to be restored. Microsoft Graph returns null for pre-shared keys on iOS and Windows Wi-Fi configuration profiles, so a restore of those profiles does not bring the key back in either backup mode.
+
+A full restore also skips policies that reference an omitted dependency when that dependency cannot be verified in the destination tenant. For example, a policy set can depend on an omitted device configuration, and a Settings Catalog policy can depend on an omitted reusable setting. The result names the reference. Restore the dependency from a backup that includes its values before retrying the dependent policy.

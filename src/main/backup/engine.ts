@@ -1,4 +1,5 @@
-import { omissionBody, omittedFolders, OMISSION_VERSION, projectSecrets, snapshotPath, type OmissionOptions } from "../../shared/intune/secret-omission"
+import type { BackupOmissionPolicy } from "./omission-policy"
+import { omissionBody, omittedFolders, OMISSION_VERSION, projectSecrets, snapshotPath } from "../../shared/intune/secret-omission"
 export { assertStorageAccountName } from "../../shared/storage-account"
 export { ProtectedBlobError, isImmutabilityRefusal } from "./request"
 import { createHash, randomUUID } from "node:crypto"
@@ -103,7 +104,7 @@ export interface BackupEngineDeps {
   enabledModules?: (tenantId: string) => ModuleId[]
   /** Backups older than this many days are deleted after each backup; 0 keeps everything. */
   retentionDays?: (tenantId: string) => number
-  omissionPolicy?: (request: BackupRequest, tokens: RunTokens) => Promise<OmissionOptions & { generation: string }>
+  omissionPolicy?: (request: BackupRequest, tokens: RunTokens, signal: AbortSignal) => Promise<BackupOmissionPolicy>
   now?: () => Date
   /** Items read at the same time. Graph throttling (429) pauses every reader. */
   concurrency?: number
@@ -144,6 +145,8 @@ class BackupCancelledError extends Error {}
  * `committing` is set when the real manifest write starts, after which nothing else may write one.
  */
 interface StoppedRun {
+  releasePublication?: () => Promise<void>
+  publicationDeadline?: number
   manifest?: (status: "Failed" | "Cancelled", error: string) => Record<string, unknown>
   committing: boolean
   /** The service whose failures stopped the run, if one did. */
@@ -386,9 +389,10 @@ export class BackupEngine {
         if (!stopped.manifest || stopped.committing || stopped.stoppedBy?.() === "backup storage") return
         // The run is over, so a backup started while the manifest is written gets its own job instead of joining this one.
         if (this.running.get(tenantKey)?.job === job) this.running.delete(tenantKey)
-        await this.recordStopped(job, request, tokens, stopped.manifest(job.status, job.exception))
+        await this.recordStopped(job, request, tokens, stopped.manifest(job.status, job.exception), stopped.publicationDeadline)
       })
-      .finally(() => {
+      .finally(async () => {
+        await stopped.releasePublication?.()
         if (timer) clearTimeout(timer)
         controller.abort(new Error("Backup finished"))
         job.progress = 100
@@ -441,13 +445,13 @@ export class BackupEngine {
 
     const concurrency = this.deps.concurrency ?? CONCURRENCY
     const network = new NetworkCircuit(3 * concurrency, signal, deadline)
-    const policy = await this.deps.omissionPolicy?.(request, tokens)
+    const policy = await this.deps.omissionPolicy?.(request, tokens, network.signal)
     const storage = new BlobWriter(fetchImpl, request.storageAccountName, storageToken, network, policy?.enabled)
     // The Backup Reader cannot create containers; New-TenuVaultStorage.ps1 creates the backup container for it.
     if (local || tokens.mode === "delegated") await storage.ensureContainer()
 
     const checkPolicy = async () => {
-      if (policy && (await this.deps.omissionPolicy!(request, tokens)).generation !== policy.generation) {
+      if (policy && (await this.deps.omissionPolicy!(request, tokens, network.signal)).generation !== policy.generation) {
         throw new Error("The backup omission policy changed during this run. Run the backup again.")
       }
       network.signal.throwIfAborted()
@@ -557,16 +561,17 @@ export class BackupEngine {
 
     await checkPolicy()
 
-    // Claim the folder before writing any policy, even when retention currently keeps everything.
-    // The create-only write is atomic, so two writers that start in the same second cannot share
-    // one folder: the loser fails here and writes nothing else.
-    // The marker names this run, so the Dashboard can match a failed run to whatever folder storage holds for it.
-    try {
-      await storage.put(`${backupFolder}/${BACKUP_OWNER_FILE}`, JSON.stringify({ Source: "TenuVault Desktop", TenantId: request.tenantId.toLowerCase(), RunId: job.id }), undefined, true)
-    } catch (error) {
-      if (error instanceof BlobClaimError) throw new BackupFolderTakenError(backupFolder)
-      throw error
+    const claimFolder = async () => {
+      // The owner is created atomically, including when retention is off.
+      try {
+        await storage.put(`${backupFolder}/${BACKUP_OWNER_FILE}`, JSON.stringify({ Source: "TenuVault Desktop", TenantId: request.tenantId.toLowerCase(), RunId: job.id }), undefined, true)
+      } catch (error) {
+        if (error instanceof BlobClaimError) throw new BackupFolderTakenError(backupFolder)
+        throw error
+      }
     }
+    const staged = policy?.beginPublication ? new Array<() => Promise<void>>() : undefined
+    if (!staged) await claimFolder()
 
     // File names are chosen in list order, before the parallel reads, so they do not depend on timing.
     const work: Array<{ type: IntuneType; item: GraphItem; displayName: string; fileName: string }> = []
@@ -618,9 +623,26 @@ export class BackupEngine {
         ...extra,
       }
     }
-    // From here the folder is this run's, so a run that stops early records it as failed, or as cancelled when the user cancelled it.
-    stopped.manifest = (status, error) => manifest(status, this.now(), { Error: error })
-    stopped.stoppedBy = () => network.stoppedBy
+    const recordPartial = () => {
+      stopped.manifest = (status, error) => manifest(status, this.now(), { Error: error })
+      stopped.stoppedBy = () => network.stoppedBy
+    }
+    if (!staged) recordPartial()
+
+    const itemFailed = (error: unknown, type: IntuneType, displayName: string) => {
+      recordFailure(outcome, error)
+      network.signal.throwIfAborted()
+      countAuthFailure(error)
+      if (error instanceof TokenError || (error instanceof GraphError && error.status === 401)) throw error
+      failures++
+      const reason = policy?.enabled ? "The policy could not be read or saved. Check Graph and storage access." : error instanceof Error ? error.message : String(error)
+      const warning = `Could not back up "${displayName}": ${reason}`
+      if (error instanceof RequestTimeoutError) itemTimeoutWarnings.push(warning)
+      const entry = result(type.folder)
+      entry.failed++
+      if ((entry.errors ??= []).length < MAX_ITEM_ERRORS) entry.errors.push(`${displayName}: ${reason}`)
+      this.write(job, warning)
+    }
 
     await pool(work, concurrency, async ({ type, item, displayName, fileName }) => {
       job.progressMessage = `Backing up ${type.label}`
@@ -629,6 +651,7 @@ export class BackupEngine {
         // A list-only type's list entry already holds everything its snapshot keeps.
         const detail = type.listOnly ? listSnapshot(type, item as Item) : await readObject(type, item.id, reader, {
           omitEncryptedOma: policy?.enabled,
+          onMasked: () => { masked = true },
           ...(keepMasked ? { keepMasked: (error: unknown) => (masked = keepMasked(error)) } : {}),
         })
         const projected = policy?.enabled ? projectSecrets(type.folder, detail, policy.scripts) : null
@@ -641,33 +664,25 @@ export class BackupEngine {
           hash: snapshotHash(omitted ? projected!.snapshot : detail),
           ...(omitted ? { omitted, rawHash: createHash("sha256").update(body).digest("hex") } : {}),
         }
-        await storage.put(`${backupFolder}/${snapshotPath(type.folder, record)}`, body)
         const maskedView = omitted ? null : withMaskedSecrets(type, detail)
-        items[`${type.folder}/${item.id}`] = {
+        const entry = {
           ...record,
           ...(type.assignmentsFormerlyExpanded && !omitted ? { hashWithEmptyAssignments: snapshotHash({ ...detail, assignments: [] }) } : {}),
           ...(maskedView ? { hashWithMaskedSecrets: snapshotHash(maskedView) } : {}),
           ...(masked ? { secretsMasked: true as const } : {}),
         }
-        if (masked) maskedItems.push({ Folder: type.folder, Id: item.id, Name: displayName })
-        counts[type.folder]!++
-        result(type.folder).saved++
-        outcome.saved++
+        const publish = async () => {
+          await storage.put(`${backupFolder}/${snapshotPath(type.folder, record)}`, body)
+          items[`${type.folder}/${item.id}`] = entry
+          if (masked) maskedItems.push({ Folder: type.folder, Id: item.id, Name: displayName })
+          counts[type.folder]!++
+          result(type.folder).saved++
+          outcome.saved++
+        }
+        if (staged) staged.push(() => publish().catch((error: unknown) => itemFailed(error, type, displayName)))
+        else await publish()
       } catch (error) {
-        // Counted before any rethrow, so the job sees this cause whichever failure ends it.
-        recordFailure(outcome, error)
-        network.signal.throwIfAborted()
-        countAuthFailure(error)
-        // An expired sign-in fails every remaining item the same way, so it stops the backup once.
-        if (error instanceof TokenError || (error instanceof GraphError && error.status === 401)) throw error
-        failures++
-        const reason = policy?.enabled ? "The policy could not be read or saved. Check Graph and storage access." : error instanceof Error ? error.message : String(error)
-        const warning = `Could not back up "${displayName}": ${reason}`
-        if (error instanceof RequestTimeoutError) itemTimeoutWarnings.push(warning)
-        const entry = result(type.folder)
-        entry.failed++
-        if ((entry.errors ??= []).length < MAX_ITEM_ERRORS) entry.errors.push(`${displayName}: ${reason}`)
-        this.write(job, warning)
+        itemFailed(error, type, displayName)
       }
       done++
       job.progress = Math.round(10 + (done / Math.max(work.length, 1)) * 85)
@@ -675,11 +690,20 @@ export class BackupEngine {
       remaining.set(type.folder, left)
       if (left === 0) {
         result(type.folder).state = "saved"
-        this.write(job, `Backed up ${counts[type.folder]} ${type.label}.`)
+        if (!staged) this.write(job, `Backed up ${counts[type.folder]} ${type.label}.`)
       }
     }, network.signal)
 
-    await checkPolicy()
+    if (staged) {
+      job.progressMessage = "Saving backup..."
+      stopped.publicationDeadline = deadline + MANIFEST_COMMIT_GRACE_MS
+      stopped.releasePublication = await policy!.beginPublication!(job.id, stopped.publicationDeadline, network.signal)
+      await claimFolder()
+      recordPartial()
+      await pool(staged, concurrency, (publish) => publish(), network.signal)
+      staged.length = 0
+      for (const type of types) if (counts[type.folder]) this.write(job, `Backed up ${counts[type.folder]} ${type.label}.`)
+    } else await checkPolicy()
     const ended = this.now()
     const totalPolicies = policyCount(counts)
     const saved = Object.values(counts).reduce((sum, count) => sum + count, 0)
@@ -701,6 +725,8 @@ export class BackupEngine {
     } finally {
       clearTimeout(commitTimer)
     }
+    await stopped.releasePublication?.()
+    stopped.releasePublication = undefined
 
     // Only a complete backup may replace older ones: if policies could not be read (for
     // example after a permission change), keep every existing backup.
@@ -760,11 +786,11 @@ export class BackupEngine {
    * never replaces a manifest that is already there. It goes around the run's fetch, so it cannot
    * change how the failure was classified, and it gives up after FAILED_MANIFEST_GRACE_MS.
    */
-  private async recordStopped(job: BackupJob, request: BackupRequest, tokens: RunTokens, metadata: Record<string, unknown>): Promise<void> {
+  private async recordStopped(job: BackupJob, request: BackupRequest, tokens: RunTokens, metadata: Record<string, unknown>, publicationDeadline = Infinity): Promise<void> {
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(new RequestTimeoutError("The storage did not answer in time.")), FAILED_MANIFEST_GRACE_MS)
     timer.unref?.()
-    const deadline = Date.now() + FAILED_MANIFEST_GRACE_MS
+    const deadline = Math.min(Date.now() + FAILED_MANIFEST_GRACE_MS, publicationDeadline)
     const network = new NetworkCircuit(3, controller.signal, deadline)
     const token = isLocalAccount(request.storageAccountName) ? async () => "" : tokens.storage
     const storage = new BlobWriter(this.deps.fetch, request.storageAccountName, token, network, metadata.OmissionVersion !== undefined)

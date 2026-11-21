@@ -26,6 +26,9 @@ $script:failCompliance = $false
 $script:omit = $false
 $script:policyMissing = $false
 $script:failOmittedRead = $false
+$script:changeDuringCapture = $false
+$script:control = $null
+$script:etag = 0
 
 function Get-TvManagedIdentityToken {
     param([string]$Resource)
@@ -35,15 +38,27 @@ function Get-TvManagedIdentityToken {
 }
 
 function Invoke-TvHttp {
-    param([string]$Uri, [string]$Token, [string]$Method = "Get", [hashtable]$Headers, [byte[]]$BodyBytes, [string]$ContentType, [long]$MaxBytes = 0)
+    param([string]$Uri, [string]$Token, [string]$Method = "Get", [hashtable]$Headers, [byte[]]$BodyBytes, [string]$ContentType, [long]$MaxBytes = 0, [DateTime]$DispatchDeadline)
     if ($script:failReportList -and $Uri -like "*comp=list*") { throw [InvalidOperationException]::new("storage listing is unavailable") }
     if ($script:failCompliance -and $Uri -like "https://graph.microsoft.com/beta/deviceManagement/deviceCompliancePolicies*") { throw [TvHttpError]::new(500, "HTTP 500") }
     $body = if ($null -ne $BodyBytes) { [Text.Encoding]::UTF8.GetString($BodyBytes) } else { $null }
-    $script:calls.Add([pscustomobject]@{ uri = $Uri; method = $Method; contentType = $ContentType; ifNoneMatch = $Headers["If-None-Match"]; body = $body })
-    if ($Method -eq "Get" -and $Uri -like "*/.tenuvault-control/*") {
-        if (-not $script:omit -or ($script:policyMissing -and $Uri.EndsWith("secret-omission.json"))) { throw [TvHttpError]::new(404, "HTTP 404") }
-        $text = '{"version":1,"tenantId":"11111111-2222-3333-4444-555555555555","generation":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","enabled":true,"scripts":false}'
-        return @{ Status = 200; Bytes = [Text.Encoding]::UTF8.GetBytes($text); Text = $text }
+    $script:calls.Add([pscustomobject]@{ uri = $Uri; method = $Method; contentType = $ContentType; ifNoneMatch = $Headers["If-None-Match"]; ifMatch = $Headers["If-Match"]; body = $body })
+    if ($Uri -like "*/.tenuvault-control/*") {
+        if ($Uri.EndsWith("secret-omission.json")) {
+            if ($Method -eq "Put") {
+                if (($null -ne $script:control -and $Headers["If-None-Match"] -eq "*") -or
+                    ($Headers["If-Match"] -and $Headers["If-Match"] -ne [string]$script:etag)) { throw [TvHttpError]::new(412, "HTTP 412") }
+                $script:control = $body
+                $script:etag++
+                return @{ Status = 201 }
+            }
+            if ($null -eq $script:control) { throw [TvHttpError]::new(404, "HTTP 404") }
+            $text = $script:control
+        } else {
+            if (-not $script:omit) { throw [TvHttpError]::new(404, "HTTP 404") }
+            $text = '{}'
+        }
+        return @{ Status = 200; Bytes = [Text.Encoding]::UTF8.GetBytes($text); Text = $text; ETag = [string]$script:etag }
     }
     $text = '{"value":[]}'
     if ($Uri -eq "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations") {
@@ -52,6 +67,10 @@ function Invoke-TvHttp {
         # A list-only type: the entry is the snapshot, with status fields and secrets left out.
         $text = '{"value":[{"id":"ap-1","serialNumber":"SN-0001","manufacturer":"Contoso","model":"Laptop 7","groupTag":"Sales","displayName":null,"userPrincipalName":"","lastContactedDateTime":"2026-11-01T10:00:00Z","enrollmentState":"enrolled","deviceAccountPassword":"secret","productKey":"PK-1","managedDeviceId":"md-1"}]}'
     } elseif ($Uri -like "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations/cfg-1*") {
+        if ($script:changeDuringCapture) {
+            $script:control = '{"version":1,"tenantId":"11111111-2222-3333-4444-555555555555","generation":"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb","enabled":true,"scripts":false}'
+            $script:etag++
+        }
         if ($script:failDetail) { throw [TvHttpError]::new(401, "HTTP 401") }
         if ($script:failOmittedRead) { throw [TvHttpError]::new(400, "omission-test-value-397c6d") }
         $text = '{"@odata.context":"x","id":"cfg-1","displayName":"Baseline Wi-Fi","lastModifiedDateTime":"2026-11-01T10:00:00Z","assignments":[]}'
@@ -125,10 +144,23 @@ $script:omit = $true
 foreach ($case in @("on", "missing", "graphError")) {
     $script:calls.Clear()
     $script:OutcomeSent = $false
-    $script:policyMissing = $case -eq "missing"
+    $script:control = if ($case -ne "missing") { '{"version":1,"tenantId":"11111111-2222-3333-4444-555555555555","generation":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","enabled":true,"scripts":false}' }
+    $script:etag++
     $script:failOmittedRead = $case -eq "graphError"
     $errorText = $null
     $output = @()
     try { $output = @(Invoke-TvBackup) } catch { $errorText = $_.Exception.Message }
     Write-Output (@{ calls = @($script:calls.ToArray()); output = @($output); error = $errorText } | ConvertTo-Json -Compress -Depth 5)
 }
+
+
+# Switch policy after the old producer starts to read snapshots, before it can publish.
+$script:calls.Clear()
+$script:OutcomeSent = $false
+$script:omit = $false
+$script:failOmittedRead = $false
+$script:changeDuringCapture = $true
+$script:control = $null
+$errorText = $null
+try { $null = @(Invoke-TvBackup) } catch { $errorText = $_.Exception.Message }
+Write-Output (@{ calls = @($script:calls.ToArray()); error = $errorText } | ConvertTo-Json -Compress -Depth 5)

@@ -334,15 +334,17 @@ async function inspectBackup(body: RecordJson, tenant: string, backup: BackupLis
 async function backupOptions(body: RecordJson): Promise<OibBackupOptions> {
   const tenant = tenantOf(body.tenantId)
   const folders = foldersOf(body.folders)
-  if (!hasStorage(body)) return { recent: null }
+  const omission = await readOmissionPolicy?.(tenant)
+  const notice = omission?.enabled ? { omissionNotice: "Values left out of a saved previous version cannot be undone automatically. Keep a backup containing those values if you need to restore them." } : {}
+  if (!hasStorage(body)) return { recent: null, ...notice }
   // A failed or cancelled backup holds only part of the tenant, so it never hides an older finished one.
   const finished = (await tenantBackups(body, tenant)).filter((backup) => !["running", "incomplete", "failed", "cancelled"].includes(normalizeBackupStatus(backup)))
   for (const backup of finished.slice(0, RECENT_CANDIDATES)) {
     // A backup that cannot be read is passed over, like one recorded for another tenant.
     const recent = await inspectBackup(body, tenant, backup, folders).catch(() => null)
-    if (recent) return { recent }
+    if (recent) return { recent, ...notice }
   }
-  return { recent: null }
+  return { recent: null, ...notice }
 }
 
 /** Accepts a backup chosen for reuse only after checking it here; nothing the renderer says about it is trusted. */
@@ -442,7 +444,7 @@ async function deploy(body: RecordJson, kind: OibRun["kind"]): Promise<OibRun> {
       const existing = creates.length ? await inventory(graph, creates.map((item) => item.policy.folder)) : []
       const creator = new Restorer(graph, { mode: "copy", prefix: "", assignments: !!pilot })
       // A policy deleted after it was read is reported, never recreated under an ID the run would not record.
-      const replacer = new Restorer(graph, { mode: "replace", assignments: false, recreateMissing: false })
+      const replacer = new Restorer(graph, { mode: "replace", assignments: false, recreateMissing: false, readOptions: { omitEncryptedOma: omission?.enabled } })
       const assignments = pilot ? [{ target: { "@odata.type": "#microsoft.graph.groupAssignmentTarget", groupId: pilot } }] : []
       for (const [index, item] of chosen.entries()) {
         const { policy } = item
@@ -489,7 +491,7 @@ async function deploy(body: RecordJson, kind: OibRun["kind"]): Promise<OibRun> {
             const warnings = [...(outcome.warnings ?? [])]
             if (hasOmissions(before)) warnings.push("Values were left out of the saved previous version. This update cannot be undone automatically.")
             run.updated.push({ folder: policy.folder, id: item.targetId!, name: policy.name, previousName: typeof previous === "string" ? previous : item.targetId!, before,
-              ...(outcome.partial ? { partial: true } : {}), ...(outcome.warnings ? { warnings: outcome.warnings } : {}) })
+              ...(outcome.partial ? { partial: true } : {}), ...(warnings.length ? { warnings } : {}) })
             saveRun(run)
           }
           if (outcome.missing) run.failed.push({ name: policy.name, error: "The tenant policy no longer exists. Compare again." })

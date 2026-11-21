@@ -438,6 +438,24 @@ describe("change-set engine", () => {
     await expect(createChangeSet(context.deps, TENANT_A, { title: "x", operations: [{ folder: "ConfigurationPolicies", action: "create", proposed: { name: "x", secret: REDACTED } }] }, null)).rejects.toThrow(/redacted/)
   })
 
+  it("returns recovery instructions for an omitted capture alongside eligible rollback operations", async () => {
+    const context = setup()
+    context.deps.omissionPolicy = async () => ({ enabled: true, scripts: false, generation: "on" })
+    const { record, doomed } = await threeOperations(context)
+    doomed.settings = [{
+      settingInstance: { settingDefinitionId: "secret", simpleSettingValue: { "@odata.type": "#microsoft.graph.deviceManagementConfigurationSecretSettingValue", value: "operand" } },
+    }]
+    const review = await approve(context, record.id)
+    const applied = await context.post({ action: "apply", id: record.id, contentHash: review.contentHash, confirm: true })
+    expect(applied.body.changeSet.status).toBe("applied")
+    const preview = await previewRollback(context.deps, TENANT_A, record.id)
+    expect(preview.operations).toEqual([
+      expect.objectContaining({ key: "op-1", blocked: null }),
+      expect.objectContaining({ key: "op-2", blocked: null }),
+      expect.objectContaining({ key: "op-3", blocked: expect.stringContaining("Use a backup that includes them"), diff: [] }),
+    ])
+  })
+
   it("rolls back through a separately reviewed change set with read-back", async () => {
     const context = setup()
     const { record, existing, doomed } = await threeOperations(context)

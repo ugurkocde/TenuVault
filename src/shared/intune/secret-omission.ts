@@ -1,3 +1,4 @@
+import { encryptedOmaSetting } from "./registry"
 import rules from "./secret-rules.json"
 import type { Item, Json } from "./registry"
 
@@ -29,12 +30,11 @@ export function projectSecrets(folder: string, snapshot: Item, scripts: boolean,
     if (Array.isArray(value)) return value.map((entry, index) => visit(entry, `${path}/${index}`, oma))
     if (!value || typeof value !== "object") return value
     const type = String(value["@odata.type"] ?? "")
-    const encrypted = folder === "DeviceConfigurations" && value.isEncrypted === true &&
-      (type.endsWith(rules.encryptedOmaSuffix) || (oma && !type))
+    const encrypted = folder === "DeviceConfigurations" && oma && encryptedOmaSetting(value)
     const secret = type.toLowerCase().endsWith(rules.typedSecretSuffix.toLowerCase())
     const copy: Item = {}
     for (const key of Object.keys(value).sort()) {
-      if (key === OMISSION_MARKER && !path) continue
+      if ((key === OMISSION_MARKER && !path) || (encrypted && key === "_tenuvaultOmaMasked")) continue
       const property = value[key]!
       const pointer = `${path}/${escape(key)}`
       let reason: OmittedField["reason"] | undefined
@@ -46,7 +46,7 @@ export function projectSecrets(folder: string, snapshot: Item, scripts: boolean,
         else if (scriptFields.includes(key)) reason = "script"
       }
       if (reason && (!reasons || reasons.has(reason))) fields.push({ path: pointer, reason })
-      else Object.defineProperty(copy, key, { value: visit(property, pointer, key === "omaSettings"), enumerable: true, writable: true, configurable: true })
+      else Object.defineProperty(copy, key, { value: visit(property, pointer, path === "" && key === "omaSettings"), enumerable: true, writable: true, configurable: true })
     }
     return copy
   }

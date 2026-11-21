@@ -8,7 +8,7 @@ import { typeForFolder, type IntuneType, type Item, type Json, type Step } from 
 
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 import { buildRestorePlan, buildUpdatePlan, NotRestorableError, resolveStep, restoreBlocker } from "../../../shared/intune/restore-plan"
-import { assignmentsUnread, locateObject, readObject, type GraphReader } from "../../../shared/intune/read"
+import { assignmentsUnread, locateObject, readObject, type GraphReader, type ReadOptions } from "../../../shared/intune/read"
 import { comparableSnapshot, sameSnapshot } from "../../../shared/intune/compare"
 import { saveWrite, removeWrite, writeKey, writeRecords } from "../../../main/storage/restore-journal"
 import { moduleForFolder, restorePermissionBlocker, SERVICES_PAGE, type GrantedPermissions } from "../../../shared/services/modules"
@@ -51,6 +51,8 @@ export interface RestoreOptions {
    * restore permission is missing is reported before any write. Unknown permissions block nothing.
    */
   granted?: GrantedPermissions
+  omittedDependencies?: ReadonlyMap<string, string>
+  readOptions?: ReadOptions
 }
 
 export interface RestoreOutcome {
@@ -359,6 +361,8 @@ export class Restorer {
       includeAssignments: assignments,
     })
     const bodies = [plan.create, ...plan.steps, ...plan.assignments]
+    const omitted = await this.blockedByOmission(bodies)
+    if (omitted) return { success: false, path, action: "skipped", retryable: false, error: omitted }
     const unresolved = await this.unresolved(bodies.flatMap(step => dependencyReferences(step.body)))
     if (unresolved.length) return { success: false, path, retryable: false, error: this.options.crossTenant
       ? `Unresolved target dependencies (${unresolved.join(", ")}). Copy the dependencies first or reconcile this object in the target tenant.`
@@ -432,10 +436,27 @@ export class Restorer {
     return exists
   }
 
+  private async blockedByOmission(steps: { body: Item }[]): Promise<string | undefined> {
+    const dependencies = this.options.omittedDependencies
+    if (!dependencies?.size) return undefined
+    for (const step of steps) {
+      for (const reference of dependencyReferences(step.body, true)) {
+        const folder = dependencies.get(reference.id.toLowerCase())
+        const type = folder ? typeForFolder(folder) : undefined
+        if (type && (this.options.crossTenant || await this.existsLive(`${type.path}/${encodeURIComponent(reference.id)}`, reference.id) !== true)) {
+          return `The dependency at ${reference.path} was skipped because its backup leaves out values, and it could not be verified in the target tenant. Restore the dependency from a backup with its values first.`
+        }
+      }
+    }
+    return undefined
+  }
+
   private async update(type: IntuneType, path: string, source: Item, id: string, current: Item, assignments: boolean): Promise<RestoreOutcome> {
     const plan = buildUpdatePlan(type, source, id, { includeAssignments: assignments, current })
     // A type that writes only what differs may find nothing it can write, such as a value Intune would reject.
     if (!plan.length) return { success: true, path, policyId: id, policyName: type.singleton?.name, action: "unchanged", warnings: ["Nothing was written: what differs from the backup cannot be restored. Review it in Intune."] }
+    const omitted = await this.blockedByOmission(plan)
+    if (omitted) return { success: false, path, policyId: id, action: "skipped", retryable: false, error: omitted }
     const written = plan[0]!.body
     const references = await this.policyReferences(type, written)
     if (references.blocking.length) return { success: false, path, policyId: id, action: "skipped", retryable: false, error: references.blocking.join(" ") }
@@ -691,7 +712,7 @@ export class Restorer {
 
   /** The live object read like a backup, or undefined when it was deleted. */
   current(type: IntuneType, id: string): Promise<Item | undefined> {
-    return readLive(this.graph, type, id)
+    return readLive(this.graph, type, id, this.options.readOptions)
   }
 
   /** Reviewed mappings only rewrite dependency references, never configuration text. */
@@ -731,23 +752,32 @@ export function locateLive(graph: GraphCall, type: IntuneType, snapshot: Item): 
 }
 
 /** The live object read like a backup, or undefined when it was deleted. */
-export async function readLive(graph: GraphCall, type: IntuneType, id: string, options?: import("../../../shared/intune/read").ReadOptions): Promise<Item | undefined> {
+export async function readLive(graph: GraphCall, type: IntuneType, id: string, options?: ReadOptions): Promise<Item | undefined> {
   try {
-    return await readObject(type, id, liveReader(graph), options)
+    return await readObject(type, id, liveReader(graph, options?.statusOnlyErrors || options?.omitEncryptedOma), options)
   } catch (error) {
     if (error instanceof Gone) return undefined
+    if ((options?.statusOnlyErrors || options?.omitEncryptedOma) && !(error instanceof SafeGraphReadError)) {
+      throw new Error("Microsoft Graph could not complete the policy read.")
+    }
     throw error
   }
 }
 
 /** Reads through the restore's Graph caller; a deleted object reads as Gone. */
-function liveReader(graph: GraphCall): GraphReader {
+class SafeGraphReadError extends Error {
+  constructor(readonly status: number) {
+    super(`Microsoft Graph returned HTTP ${status}.`)
+  }
+}
+
+function liveReader(graph: GraphCall, statusOnly = false): GraphReader {
   const reader: GraphReader = {
     get: async (path) => {
       const response = await graph("GET", path)
       // Settings Catalog answers 400 ResourceNotFound for deleted policies instead of 404.
       if (response.status === 404 || (response.status === 400 && /ResourceNotFound/i.test(JSON.stringify(response.body)))) throw new Gone()
-      if (response.status >= 300) throw new Error(errorMessage(response.body, response.status))
+      if (response.status >= 300) throw statusOnly ? new SafeGraphReadError(response.status) : new Error(errorMessage(response.body, response.status))
       return response.body
     },
     list: async (start) => {

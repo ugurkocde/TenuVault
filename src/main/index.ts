@@ -1,5 +1,7 @@
+import { BlobWriter } from "./backup/blob-writer"
+import { cloudStatusBlobName, cloudRunbookLacksOmission, parseCloudStatus, requireCloudOmissionSupport } from "../shared/cloud-backup"
 import { requestWindowsContent } from "./app-backup/windows-helper"
-import { OmissionPolicyStore } from "./backup/omission-policy"
+import { configuredCloudPolicyAccount, OmissionPolicyStore } from "./backup/omission-policy"
 import { requireCaptureEnabled } from "./app-backup/capture-policy"
 import { checkCaptureMetadata } from "./app-backup/capture-preflight"
 import { restoreCapturedApp } from "./app-backup/restore"
@@ -39,7 +41,7 @@ import { createChromiumFetch } from "./chromium-fetch"
 import { ProxyAuth, ProxyPrompts, type ProxyAuthAttempt, type ProxyChallenge } from "./proxy-auth"
 import { basename, dirname, join } from "node:path"
 import type { ApiRequest, AppPreferences, ScheduleInput } from "../shared/ipc"
-import { DELEGATED_CLIENT_SECRET, INTERNAL_API_ORIGIN, RESOURCE_SCOPES } from "../shared/constants"
+import { DELEGATED_CLIENT_SECRET, INTERNAL_API_ORIGIN, RESOURCE_SCOPES, localStorageAccountName } from "../shared/constants"
 import { createAuditRecorder } from "./api/audit"
 import { setAuditOutboxStore } from "../portal/lib/audit/outbox"
 import { backupRoutes, surfaceTokenErrors } from "./api/desktop-routes"
@@ -435,12 +437,14 @@ async function bootstrap(): Promise<void> {
   const backupReader = new BackupReaderService(tokenStore, { fetch: bridgedFetch })
   const moduleSettings = new ModuleSettings(appStore)
   const omissionPolicies = new OmissionPolicyStore(appStore, bridgedFetch)
-  const cloudPolicyAccount = (tenantId: string): string | undefined => {
-    const raw = appStore.get(`${RENDERER_STORAGE_PREFIX}tenuvault_cloud_backup_${tenantId.toLowerCase()}`)
-    if (!raw) return undefined
-    const config = JSON.parse(raw) as { tenantId?: string; storageAccount?: string }
-    if (config.tenantId !== tenantId.toLowerCase() || !config.storageAccount) throw new Error("The tenant's cloud backup setup could not be read.")
-    return config.storageAccount
+  const cloudPolicyAccount = (tenantId: string) => configuredCloudPolicyAccount(
+    appStore.get(`${RENDERER_STORAGE_PREFIX}tenuvault_cloud_backup_${tenantId.toLowerCase()}`), tenantId,
+  )
+  const oldCloudRunbook = async (tenantId: string, account: string | undefined, token: () => Promise<string>) => {
+    if (!account) return undefined
+    const blobs = new BlobWriter(bridgedFetch, account, token, undefined, true, AbortSignal.timeout(10_000))
+    const status = parseCloudStatus(await blobs.readJson(cloudStatusBlobName(tenantId)), tenantId)
+    return status && cloudRunbookLacksOmission(status.runbookVersion) ? status.runbookVersion : undefined
   }
   const omissionAccess = (tenantId: unknown) => {
     if (!isGuid(tenantId)) throw new Error("Choose a tenant.")
@@ -454,12 +458,16 @@ async function bootstrap(): Promise<void> {
     }
   }
   const readOmissionForTenant = (tenant: string) => {
-    const { tenantId, destination, cloud, token } = omissionAccess(tenant)
-    return omissionPolicies.read(tenantId, destination, cloud, token)
+    const profile = tenantProfile(tenant)
+    return omissionPolicies.read(tenant, profile?.storageAccountName ?? localStorageAccountName(tenant), cloudPolicyAccount(tenant),
+      async () => (await tokenFor(tenant, profile?.clientId ?? signedInClient(tenant), "https://storage.azure.com/.default")).accessToken)
   }
   setOibOmissionPolicy(readOmissionForTenant)
   const engine = new BackupEngine({
-    omissionPolicy: (request, tokens) => omissionPolicies.read(request.tenantId, request.storageAccountName, cloudPolicyAccount(request.tenantId), tokens.storage),
+    omissionPolicy: (request, tokens, signal) => omissionPolicies.readForBackup(
+      request.tenantId, request.storageAccountName, tenantProfile(request.tenantId)?.storageAccountName,
+      cloudPolicyAccount(request.tenantId), tokens.storage, signal,
+    ),
     fetch: bridgedFetch,
     getToken: backupAccess.getToken,
     enabledModules: (tenantId) => moduleSettings.enabled(tenantId),
@@ -1391,14 +1399,22 @@ async function bootstrap(): Promise<void> {
     } finally { importingArchive = false }
   })
   handleTrusted("backups:settings", () => backupSettings())
-  handleTrusted("backups:omission", (_event, tenantId: unknown) => {
+  handleTrusted("backups:omission", async (_event, tenantId: unknown) => {
     const { tenantId: tenant, destination, cloud, token } = omissionAccess(tenantId)
-    return omissionPolicies.read(tenant, destination, cloud, token, true)
+    const [policy, cloudRunbook] = await Promise.all([
+      omissionPolicies.read(tenant, destination, cloud, token, true, AbortSignal.timeout(15_000)),
+      oldCloudRunbook(tenant, cloud, token).catch(() => undefined),
+    ])
+    const { enabled, scripts, generation, migrationRequired, pending } = policy
+    return { enabled, scripts, generation, migrationRequired, pending, cloudRunbook }
   })
-  handleTrusted("backups:setOmission", async (_event, tenantId: unknown, enabled: unknown, scripts: unknown) => {
+  handleTrusted("backups:setOmission", async (_event, tenantId: unknown, enabled: unknown, scripts: unknown, cloudStopped: unknown) => {
     const { tenantId: tenant, destination, cloud, token } = omissionAccess(tenantId)
     if (typeof enabled !== "boolean" || typeof scripts !== "boolean") throw new Error("Choose which backup values to leave out.")
     if (engine.liveRuns(tenant).length) throw new Error("Wait for this tenant's backups to finish before changing the omission policy.")
+    if (enabled && cloudStopped !== true) {
+      requireCloudOmissionSupport(await oldCloudRunbook(tenant, cloud, token), cloudStopped)
+    }
     await omissionPolicies.save(tenant, destination, cloud, token, { enabled, scripts })
   })
   handleTrusted("backups:inventoryProblem", (_event, tenantId: unknown) => {

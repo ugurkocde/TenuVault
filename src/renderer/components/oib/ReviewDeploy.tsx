@@ -37,16 +37,19 @@ const plural = (count: number, one: string, many: string) => `${count} ${count =
 
 /** The tenant's newest backup and whether it can stand in for a new one (complete, at most 24 hours old). */
 export function useRecentBackup(tenant: OibTenant | null, folders: string[]) {
-  const [state, setState] = useState<{ loading: boolean; recent: OibRecentBackup | null }>({ loading: true, recent: null })
+  const [state, setState] = useState<{ loading: boolean; recent: OibRecentBackup | null; omissionNotice?: string }>({ loading: true, recent: null })
   const key = folders.join("|")
+  const tenantId = tenant?.tenantId
+  const appId = tenant?.appId
+  const storageAccountName = tenant?.storageAccountName
   useEffect(() => {
-    if (!tenant?.storageAccountName || !folders.length) { setState({ loading: false, recent: null }); return }
+    if (!tenantId || !appId || !key) { setState({ loading: false, recent: null }); return }
     let live = true
     setState({ loading: true, recent: null })
-    oibRequest<OibBackupOptions>({ action: "oib-backup-options", tenantId: tenant.tenantId, appId: tenant.appId, storageAccountName: tenant.storageAccountName, folders })
-      .then(r => live && setState({ loading: false, recent: r.recent }), () => live && setState({ loading: false, recent: null }))
+    oibRequest<OibBackupOptions>({ action: "oib-backup-options", tenantId, appId, storageAccountName, folders: key.split("|") })
+      .then(r => live && setState({ loading: false, ...r }), () => live && setState({ loading: false, recent: null }))
     return () => { live = false }
-  }, [tenant?.tenantId, tenant?.storageAccountName, key])
+  }, [tenantId, appId, storageAccountName, key])
   const usable = !!state.recent && state.recent.complete && state.recent.ageMinutes <= OIB_BACKUP_REUSE_MINUTES
   const reason = state.recent && !usable ? state.recent.ageMinutes > OIB_BACKUP_REUSE_MINUTES ? "it is older than 24 hours." : state.recent.reason ?? (state.recent.missing.length ? `it does not cover ${listJoin(state.recent.missing)}.` : "it did not complete without errors.") : ""
   return { ...state, usable, reason }
@@ -208,6 +211,7 @@ export function ReviewDeploy({ batches: given, flow, kind = "deploy", onBack, ba
       {title}
       <ul className="mt-4 space-y-2 rounded-2xl bg-gray-50 p-5 text-sm text-gray-800">{sentences.map(s => <li key={s}>{s}</li>)}</ul>
       {notes && <div className="mt-4">{notes}</div>}
+      {updates.length > 0 && backup.omissionNotice && <p className="mt-4 text-sm text-amber-800 dark:text-amber-200">{backup.omissionNotice}</p>}
       {updates.length > 0 && <div className="mt-5"><Toggle checked={acknowledged} onChange={setAcknowledged} label={`I understand ${updates.length === 1 ? "1 existing policy is" : `${updates.length} existing policies are`} replaced with the OIB version`}>
         Settings added or changed in Intune since the policy was deployed are replaced.
       </Toggle></div>}
@@ -235,6 +239,7 @@ export function ReviewDeploy({ batches: given, flow, kind = "deploy", onBack, ba
       <Row label="Backup">{backup.loading ? "Checking the latest backup" : backupLabel}</Row>
     </dl>
     {notes && <div className="mt-4">{notes}</div>}
+    {updates.length > 0 && backup.omissionNotice && <p className="mt-4 text-sm text-amber-800 dark:text-amber-200">{backup.omissionNotice}</p>}
     <div className="mt-5 space-y-5">
       <fieldset>
         <legend className="text-sm font-medium text-gray-800">Backup before changes</legend>

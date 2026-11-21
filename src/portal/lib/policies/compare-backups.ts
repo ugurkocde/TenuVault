@@ -13,6 +13,7 @@ export async function compareBackupFiles(
   read: (path: string) => Promise<Response>,
   compare: (before: Item, after: Item) => unknown[],
   detailLimit = 0,
+  reserveComparisonRead?: () => boolean,
 ) {
   const before = itemsOf(older.metadata)
   const after = itemsOf(newer.metadata)
@@ -34,6 +35,10 @@ export async function compareBackupFiles(
     const mixed = older.metadata.OmissionVersion !== newer.metadata.OmissionVersion &&
       (older.metadata.OmissionVersion === OMISSION_VERSION || newer.metadata.OmissionVersion === OMISSION_VERSION)
     if (!projected && !mixed && index >= detailLimit) return { change }
+    if (reserveComparisonRead && !reserveComparisonRead()) {
+      partial = true
+      return null
+    }
     try {
       const [oldItem, newItem] = await Promise.all([
         readItem(older, change.folder, change.id, left),

@@ -125,7 +125,14 @@ export interface Observation {
 /** Reads what one operation would change in the target and fingerprints it. */
 export async function observe(graph: GraphCall, type: IntuneType, operation: { action: OperationAction; targetId: string | null; name: string }, memo?: ListingMemo, options?: ReadOptions): Promise<Observation> {
   if (operation.action === "create") {
-    const ids = await sameNameIds(graph, type, operation.name, memo)
+    let ids: string[]
+    try {
+      ids = await sameNameIds(graph, type, operation.name, memo)
+    } catch (error) {
+      if (!options?.omitEncryptedOma) throw error
+      const status = error instanceof GraphReadError ? error.status : 502
+      throw new GraphReadError(`Microsoft Graph returned HTTP ${status} while reading the target inventory.`, status)
+    }
     return { snapshot: null, redacted: false, sameNameIds: ids, fingerprint: operationFingerprint("create", { snapshot: null, sameNameIds: ids }) }
   }
   const live = await readCurrent(graph, type, operation.targetId!, options)

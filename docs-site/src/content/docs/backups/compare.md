@@ -79,3 +79,5 @@ To compare the tenant as it is right now with your last backup, run a new backup
 ## Compare backups with values left out
 
 When a value is unavailable in either copy, it is excluded from the comparison. Turning omission on or off does not count as a policy change. Changes to fields that both copies retained remain visible. The comparison displays **Some values could not be compared** when a copy has omissions. Older clients leave the affected policy types out of the comparison.
+
+For backups with omitted values, Backup History includes projected policies whose files are listed in the backup inventory. History limits the extra storage reads needed to compare different projections. Open **View Changes** for the full comparison of a pair.

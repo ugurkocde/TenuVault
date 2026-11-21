@@ -379,8 +379,8 @@ async function detectDrifts(
   const olderMap = new Map(olderPolicies.map(p => [relative(p), p]))
 
   // Items are matched by their Intune ID, as compareBackups (the backup list) does, so a renamed
-  // policy is one modified item rather than a deleted and an added file. Backups made before
-  // metadata recorded Items, and any file Items does not name, are matched by file path.
+  // policy is one modified item rather than a deleted and an added file. Legacy files use IDs
+  // from their bodies when only one inventory exists or a projection is involved.
   type Task = { name: string; change: Drift["changeType"]; newer?: PolicyFile; older?: PolicyFile }
   const tasks: Task[] = []
   const pairedNewer = new Set<string>()
@@ -390,6 +390,25 @@ async function detectDrifts(
   const olderItems = itemsByIdentity(olderBackup.metadata)
   const byPath = (items: typeof olderItems) => new Map([...(items ?? [])].map(([key, entry]) => [entry.path, { ...entry.item, id: key.slice(key.indexOf("/") + 1) }]))
   const records = new Map([[olderBackup.name, byPath(olderItems)], [newerBackup.name, byPath(newerItems)]])
+  const identifiedBodies = new Map<PolicyFile, PolicyContent>()
+  const read = async (file: PolicyFile, backup: string): Promise<PolicyContent | null> => {
+    const known = identifiedBodies.get(file)
+    if (known) return known
+    try {
+      const expected = records.get(backup)?.get(relative(file))
+      if (relative(file).startsWith(".omitted/")) {
+        if (!expected?.omitted) throw new Error("The projected backup file has no omission inventory.")
+        const response = await fetch(file.url, { headers: { "x-ms-version": "2021-12-02", Authorization: `Bearer ${accessToken}` }, signal })
+        if (!response.ok) throw new Error("The projected backup file could not be read.")
+        return await readProjectedSnapshot(response, expected) as PolicyContent
+      }
+      return await fetchPolicyContent(file.url, accessToken, signal)
+    } catch (error) {
+      if (signal?.aborted) throw error
+      warnings.push({ file: relative(file), backup, message: error instanceof Error ? error.message : 'The file could not be read.' })
+      return null
+    }
+  }
   const projectedPathsWithoutRecord = new Set<string>()
   for (const [files, backup] of [[olderPolicies, olderBackup], [newerPolicies, newerBackup]] as const) {
     for (const file of files) {
@@ -433,16 +452,63 @@ async function detectDrifts(
       tasks.push({ name: before.path, change: 'deleted', older })
     }
   }
-  for (const [name, newer] of newerMap) {
-    if (pairedNewer.has(name)) continue
-    const logical = name.replace(/^\.omitted\//, "")
-    const oldName = [name, logical, `.omitted/${logical}`].find((path) => !pairedOlder.has(path) && olderMap.has(path))
-    const older = oldName === undefined ? undefined : olderMap.get(oldName)
-    if (!oldName || !older) { tasks.push({ name, change: 'added', newer }); continue }
-    pairedOlder.add(oldName)
-    tasks.push({ name: oldName, change: 'modified', newer, older })
+  const identifyLegacy = !!omission || Boolean(newerItems) !== Boolean(olderItems)
+  if (identifyLegacy) {
+    // A legacy file can have a different name from the same policy in the manifest. Learn
+    // its identity before classifying additions or deletions, and keep failures indeterminate.
+    const indeterminate = new Set<string>()
+    const identify = async (files: typeof newerMap, backup: SelectedBackup, paired: Set<string>) => {
+      const entries = [...files].filter(([path]) => !paired.has(path))
+      const identified = await mapLimit(entries, READ_CONCURRENCY, async ([path, file]) => {
+        signal?.throwIfAborted()
+        const record = records.get(backup.name)?.get(path)
+        const folder = folderOf(path)
+        if (record) return { folder, id: record.id, path, file }
+        const content = await read(file, backup.name)
+        if (content && typeof content.id === "string" && content.id) {
+          identifiedBodies.set(file, content)
+          return { folder, id: content.id, path, file }
+        }
+        indeterminate.add(folder)
+        if (content) warnings.push({ file: path, backup: backup.name, message: "Could not determine the policy ID from the backup file." })
+        return null
+      })
+      const byId = new Map<string, { folder: string; path: string; file: PolicyFile }>()
+      const duplicates = new Set<string>()
+      for (const entry of identified) {
+        if (!entry) continue
+        const key = `${entry.folder}/${entry.id.toLowerCase()}`
+        if (byId.has(key) || duplicates.has(key)) {
+          duplicates.add(key)
+          byId.delete(key)
+          indeterminate.add(entry.folder)
+          warnings.push({ file: entry.path, backup: backup.name, message: "Could not pair policies with duplicate IDs in the backup." })
+        } else byId.set(key, entry)
+      }
+      return byId
+    }
+    const oldIds = await identify(olderMap, olderBackup, pairedOlder)
+    const newIds = await identify(newerMap, newerBackup, pairedNewer)
+    for (const [key, after] of newIds) {
+      const before = oldIds.get(key)
+      if (before) tasks.push({ name: before.path, change: "modified", newer: after.file, older: before.file })
+      else if (!indeterminate.has(after.folder)) tasks.push({ name: after.path, change: "added", newer: after.file })
+    }
+    for (const [key, before] of oldIds) {
+      if (!newIds.has(key) && !indeterminate.has(before.folder)) tasks.push({ name: before.path, change: "deleted", older: before.file })
+    }
+  } else {
+    for (const [name, newer] of newerMap) {
+      if (pairedNewer.has(name)) continue
+      const logical = name.replace(/^\.omitted\//, "")
+      const oldName = [name, logical, `.omitted/${logical}`].find((path) => !pairedOlder.has(path) && olderMap.has(path))
+      const older = oldName === undefined ? undefined : olderMap.get(oldName)
+      if (!oldName || !older) { tasks.push({ name, change: 'added', newer }); continue }
+      pairedOlder.add(oldName)
+      tasks.push({ name: oldName, change: 'modified', newer, older })
+    }
+    for (const [name, older] of olderMap) if (!pairedOlder.has(name)) tasks.push({ name, change: 'deleted', older })
   }
-  for (const [name, older] of olderMap) if (!pairedOlder.has(name)) tasks.push({ name, change: 'deleted', older })
 
   const base = {
     tenant: "Current Tenant",
@@ -465,26 +531,11 @@ async function detectDrifts(
   const results = await mapLimit(tasks, READ_CONCURRENCY, async (task): Promise<Omit<Drift, 'id'> | null> => {
     // Checked before every read, so a cancelled scan reads nothing further.
     signal?.throwIfAborted()
-    const read = async (file: PolicyFile, backup: string): Promise<PolicyContent | null> => {
-      try {
-        const expected = records.get(backup)?.get(relative(file))
-        if (relative(file).startsWith(".omitted/")) {
-          if (!expected?.omitted) throw new Error("The projected backup file has no omission inventory.")
-          const response = await fetch(file.url, { headers: { "x-ms-version": "2021-12-02", Authorization: `Bearer ${accessToken}` }, signal })
-          if (!response.ok) throw new Error("The projected backup file could not be read.")
-          return await readProjectedSnapshot(response, expected) as PolicyContent
-        }
-        return await fetchPolicyContent(file.url, accessToken, signal)
-      } catch (error) {
-        if (signal?.aborted) throw error
-        warnings.push({ file: relative(file), backup, message: error instanceof Error ? error.message : 'The file could not be read.' })
-        return null
-      }
-    }
     try {
       const policyType = getPolicyType(task.name)
       if (task.change === 'added') {
         const policyContent = await read(task.newer!, newerBackup.name)
+        if (identifyLegacy && !policyContent) return null
         const likelyRestoredCopy = [policyContent?.displayName, policyContent?.name].some(name => typeof name === 'string' && name.startsWith('[Restored]'))
         return {
           ...base,
@@ -502,6 +553,7 @@ async function detectDrifts(
       }
       if (task.change === 'deleted') {
         const policyContent = await read(task.older!, olderBackup.name)
+        if (identifyLegacy && !policyContent) return null
         return {
           ...base,
           severity: determineSeverity(policyType, "deleted", policyContent),

@@ -15,6 +15,7 @@ export class BlobWriter {
     private readonly token: () => Promise<string>,
     private readonly network?: NetworkCircuit,
     private readonly hideErrorDetails = false,
+    private readonly signal?: AbortSignal,
   ) {
     assertStorageAccountName(account)
   }
@@ -132,6 +133,7 @@ export class BlobWriter {
   private async request<T>(path: string, init: RequestInit, read: (response: Response, signal: AbortSignal, ambiguous: boolean) => Promise<T>, beforeCommit?: NetworkCircuit, onDispatch?: () => void): Promise<T> {
     let ambiguous = false
     for (let attempt = 0; ; attempt++) {
+      this.signal?.throwIfAborted()
       this.network?.signal.throwIfAborted()
       beforeCommit?.signal.throwIfAborted()
       let response: Response | undefined
@@ -140,7 +142,7 @@ export class BlobWriter {
         return await withRequestTimeout(async (signal) => {
           const token = beforeCommit
             ? await withAbort(this.token, AbortSignal.any([signal, beforeCommit.signal]))
-            : await this.token()
+            : await withAbort(this.token, signal)
           signal.throwIfAborted()
           beforeCommit?.signal.throwIfAborted()
           beforeCommit = undefined
@@ -163,8 +165,9 @@ export class BlobWriter {
           signal.throwIfAborted()
           if (response.ok) this.network?.succeeded("backup storage")
           return result
-        }, this.network?.signal, init.signal ?? undefined)
+        }, this.network?.signal, init.signal ?? undefined, this.signal)
       } catch (error) {
+        this.signal?.throwIfAborted()
         this.network?.signal.throwIfAborted()
         beforeCommit?.signal.throwIfAborted()
         if (response && (response.status === 401 || response.status === 403) && !(error instanceof ProtectedBlobError)) {
@@ -174,9 +177,8 @@ export class BlobWriter {
         if (!attempted && error instanceof RequestTimeoutError && attempt >= REQUEST_ATTEMPTS - 1) throw new TokenError(error.message, { cause: error })
         if (error instanceof FetchApplicationError || error instanceof TokenError || error instanceof StorageError || error instanceof ProtectedBlobError || init.signal?.aborted || attempt >= REQUEST_ATTEMPTS - 1) throw error
         ambiguous = true
-        const retrySignal = beforeCommit
-          ? AbortSignal.any([beforeCommit.signal, ...(this.network ? [this.network.signal] : [])])
-          : this.network?.signal
+        const retrySignal = AbortSignal.any([beforeCommit?.signal, this.network?.signal, init.signal, this.signal]
+          .filter((value): value is AbortSignal => !!value))
         await sleep(retryDelay(response, attempt), retrySignal)
       }
     }

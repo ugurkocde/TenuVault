@@ -51,7 +51,11 @@ To add or remove tenants, use **Tenants**. See [Manage tenants](/tenants/).
 
 In **Sign-in**, find the tenant in the **Tenants** card and turn on **Leave secret values out of policy backups**. The setting is off by default. Turn on **Also leave out script content** if you also want to exclude script bodies.
 
-Before changing either option, pause backup schedules and wait for active backups to finish on every computer and in Azure. Upgrade every desktop and cloud runbook that backs up the tenant. For tenants with Azure producers, the storage account used by the cloud runbook holds the shared policy, including when the desktop saves backups to this device. For tenants with only device storage, set the option on each installation that runs backups. If you move a device-only setting to Azure, select **Apply policy to Azure backup storage** after pausing the writers. Changes apply to future backups. [Backup coverage](/backups/coverage/#leave-secret-values-out-of-policy-backups)
+Before changing either option, pause backup schedules and wait for active backups to finish on every computer and in Azure. Upgrade every desktop and cloud runbook that backs up the tenant. Settings blocks enabling omission if the cloud status reports a runbook older than 1.6.0. Upgrade the runbook and run a backup to refresh its status, or confirm in Settings that cloud backups have stopped and their jobs have finished.
+
+Azure producers use the same storage account for the shared policy, including when the desktop saves backups to this device. A tenant with different desktop and cloud Azure accounts can keep running with omission off until it enrolls, provided TenuVault can verify the policy in both accounts. Before saving the policy, point both producers at the same account. For tenants with only device storage, set the option on each installation that runs backups. If you move a device-only setting to Azure, select **Apply policy to Azure backup storage** after pausing the writers.
+
+A policy change takes effect after the shared policy is saved. If a current producer is publishing a backup, wait for it to finish and save again. A backup still reading policies when another computer changes the setting stops before storing a backup. If a save stops while marked pending, use **Finish policy change** to complete it. Changes apply to future backups. [Backup coverage](/backups/coverage/#leave-secret-values-out-of-policy-backups)
 
 ## Services and permissions
 

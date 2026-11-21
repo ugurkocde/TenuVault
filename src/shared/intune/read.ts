@@ -22,6 +22,8 @@ export interface ReadOptions {
    * restorable (see the registry's restorable checks), so it can only record that the value exists.
    */
   omitEncryptedOma?: boolean
+  statusOnlyErrors?: boolean
+  onMasked?: () => void
   keepMasked?: (error: unknown) => boolean
 }
 
@@ -66,12 +68,18 @@ export async function readObject(type: IntuneType, id: string, graph: GraphReade
   }
   if (options.omitEncryptedOma) await expandNested(detail, graph, new Set())
   for (const secret of options.omitEncryptedOma ? [] : type.secrets?.(detail) ?? []) {
+    if (!secret.path) {
+      secret.apply(MASKED_VALUE, true)
+      options.onMasked?.()
+      continue
+    }
     let plain: Item
     try {
       plain = await graph.get(secret.path)
     } catch (error) {
       if (!options.keepMasked?.(error)) throw error
-      secret.apply(MASKED_VALUE)
+      secret.apply(MASKED_VALUE, true)
+      options.onMasked?.()
       continue
     }
     if (typeof plain.value !== "string") throw new Error("Microsoft Graph did not return an encrypted setting's value")

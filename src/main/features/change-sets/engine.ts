@@ -971,8 +971,12 @@ export async function previewRollback(deps: FeatureDeps, tenantId: string, id: s
   const operations: RollbackPreview["operations"] = []
   for (const input of inputs) {
     const type = typeOf(input.folder)
-    let live: Item | null = null
     const warnings = [...input.warnings]
+    if (input.blocked) {
+      operations.push({ key: input.key, action: input.action, name: input.name ?? String(input.proposed?.[type.nameKey] ?? ""), targetId: input.targetId ?? null, blocked: input.blocked, warnings, diff: [] })
+      continue
+    }
+    let live: Item | null = null
     try {
       live = input.targetId ? await readCurrent(graph, type, input.targetId) : null
     } catch (error) {

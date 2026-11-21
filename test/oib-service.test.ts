@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { handleOib, migrateLegacyOibRuns, OIB_BACKUP_POLLING, setOibStore } from "../src/main/oib/service"
+import { handleOib, migrateLegacyOibRuns, OIB_BACKUP_POLLING, setOibOmissionPolicy, setOibStore } from "../src/main/oib/service"
 import { packFolder, packItems, parsePackFile, resetOibSource } from "../src/main/oib/source"
 import type { OibBackupOptions, OibCatalog, OibComparison, OibProgress, OibRun, UndoResult, ValidationRun } from "../src/shared/oib/types"
 import { memoryStore } from "./helpers"
@@ -30,6 +30,8 @@ const manifest = { oibVersion: "3.8", policies: [
 interface Tenant {
   /** Settings Catalog policies the tenant has, returned by list and detail reads. */
   policies: Array<{ id: string; name: string; description?: string; value?: number; tags?: string[] }>
+  captureError?: { id: string; operand: string }
+  secret?: string
   backupOk?: boolean
   /** metadata.json of the backup the deployment takes (backup-1); complete when left out. */
   metadata?: Record<string, unknown> | null
@@ -88,12 +90,16 @@ function world(state: Tenant, writes: string[]) {
     const detail = /^deviceManagement\/configurationPolicies\/([^?/]+)(\/assignments)?(\?|$)/.exec(path)
     if (method === "GET" && detail) {
       const found = state.policies.find(p => p.id === decodeURIComponent(detail[1]!))
+      if (state.captureError && state.captureError.id === found?.id) return Response.json({ error: { message: state.captureError.operand } }, { status: 400 })
       if (!found) return Response.json({ error: { code: "ResourceNotFound", message: "Not found" } }, { status: 404 })
       if (detail[2]) return Response.json({ value: [{ id: "a1", target: { "@odata.type": "#microsoft.graph.groupAssignmentTarget", groupId: "prod" } }] })
-      return Response.json({ id: found.id, name: found.name, description: found.description ?? "", platforms: "windows10", technologies: "mdm", ...(found.tags ? { roleScopeTagIds: found.tags } : {}), settings: [setting(found.value ?? 1)] })
+      return Response.json({ id: found.id, name: found.name, description: found.description ?? "", platforms: "windows10", technologies: "mdm", ...(found.tags ? { roleScopeTagIds: found.tags } : {}), settings: [setting(found.value ?? 1), ...(state.secret ? [{ settingInstance: {
+        settingDefinitionId: "secret", simpleSettingValue: { "@odata.type": "#microsoft.graph.deviceManagementConfigurationSecretSettingValue", value: state.secret },
+      } }] : [])] })
     }
     writes.push(`${method} ${path}${init?.body ? ` ${String(init.body)}` : ""}`)
     if (method === "POST" && path === "deviceManagement/configurationPolicies") return Response.json({ id: CREATED, name: "created" })
+    if (state.captureError && method === "POST" && path === "deviceManagement/deviceCompliancePolicies") return Response.json({ id: CREATED, displayName: "Created compliance policy" })
     if (method === "PUT") {
       const id = path.split("/")[2]
       const body = JSON.parse(String(init!.body)) as { name: string; settings: Array<{ settingInstance: { simpleSettingValue: { value: number } } }> }
@@ -107,7 +113,7 @@ function world(state: Tenant, writes: string[]) {
 
 let store: ReturnType<typeof memoryStore>
 beforeEach(() => { store = memoryStore(); setOibStore(store); resetOibSource(); OIB_BACKUP_POLLING.intervalMs = 0 })
-afterEach(() => { vi.unstubAllGlobals(); setOibStore(null) })
+afterEach(() => { vi.unstubAllGlobals(); setOibStore(null); setOibOmissionPolicy(undefined) })
 
 async function source() {
   const { commit: resolved } = await handleOib({ action: "oib-source" }) as { commit: string }
@@ -269,6 +275,40 @@ describe("deployments", () => {
     expect(undone).toMatchObject({ run: null, results: [{ action: "restored", done: true, name: "Win - OIB - SC - Test - v3.1" }] })
     expect(state.policies[0]).toMatchObject({ name: "Win - OIB - SC - Test - v3.1", value: 7 })
     expect(await handleOib({ action: "oib-runs", tenantId })).toEqual({ runs: [] })
+  })
+
+  it("shows a pre-deploy omission notice and persists the warning with the projected capture", async () => {
+    const state: Tenant = {
+      policies: [{ id: EXISTING, name: "Old policy", value: 7 }],
+      secret: "secret operand present in raw OIB capture",
+    }
+    vi.stubGlobal("fetch", world(state, []))
+    setOibOmissionPolicy(async () => ({ enabled: true, scripts: false }))
+    expect(await handleOib({ ...base, action: "oib-backup-options", folders: ["ConfigurationPolicies"] })).toMatchObject({
+      omissionNotice: expect.stringContaining("cannot be undone automatically"),
+    })
+    await source()
+    const run = await handleOib({ ...base, action: "oib-deploy", commit, backup: { mode: "none" }, items: [{ source: SC, mode: "update", targetId: EXISTING }] }) as OibRun
+    const stored = store.get(`oib:runs:${tenantId}`)!
+    expect(stored).not.toContain(state.secret)
+    expect(stored).toContain("cannot be undone automatically")
+    expect(run.updated[0]?.warnings?.join(" ")).toContain("cannot be undone automatically")
+  })
+
+  it("does not persist operands Graph echoes while reading an OIB update", async () => {
+    const canary = "secret echoed by Graph in OIB capture"
+    const writes: string[] = []
+    vi.stubGlobal("fetch", world({ policies: [{ id: EXISTING, name: "Old policy" }], captureError: { id: EXISTING, operand: canary } }, writes))
+    setOibOmissionPolicy(async () => ({ enabled: true, scripts: false }))
+    await source()
+    const run = await handleOib({ ...base, action: "oib-deploy", commit, backup: { mode: "none" },
+      items: [{ source: SC, mode: "update", targetId: EXISTING }, { source: COMPLIANCE, mode: "create" }],
+    }) as OibRun
+    expect(run.failed[0]?.error).toContain("HTTP 400")
+    const stored = store.get(`oib:runs:${tenantId}`)!
+    expect(stored).toContain("HTTP 400")
+    expect(stored).not.toContain(canary)
+    expect(writes.some((write) => write.includes(EXISTING))).toBe(false)
   })
 
   it("undo leaves a policy the admin deleted since the run deleted and reports it, instead of recreating it", async () => {
