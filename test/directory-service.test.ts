@@ -1,6 +1,6 @@
 import { setDirectoryRestoreService } from "../src/main/restore/directory-dispatch"
 import { POST as restoreDirectory } from "../src/portal/app/api/restore-directory/route"
-import { RestoreWriteDeferredError } from "../src/shared/intune/restore-guards"
+import { RestoreSafetyError, RestoreWriteDeferredError } from "../src/shared/intune/restore-guards"
 import { DirectoryRetryPersistenceError } from "../src/main/restore/directory-retry"
 import { INTUNE_TYPES } from "../src/shared/intune/registry"
 import { backupNeed } from "../src/shared/services/modules"
@@ -408,7 +408,8 @@ it("locks a recreated live group ID across backups with different source IDs", a
 it("records cancellation while execute is awaiting its first connection and sends nothing", async () => {
   const env = world(), page = await env.service().prepare(tenant, { ...env.request, snapshot: { ...env.request.snapshot, description: "Saved" } }, options, env.read)
   let release!: () => void
-  const connection = () => new Promise<Awaited<ReturnType<typeof env.connection>>>(resolve => { release = () => { void env.connection().then(resolve) } })
+  let connections = 0
+  const connection = () => ++connections === 2 ? new Promise<Awaited<ReturnType<typeof env.connection>>>(resolve => { release = () => { void env.connection().then(resolve) } }) : env.connection()
   const service = new DirectoryRestoreService(env.store, new RecoveryAccounts(env.store), connection, env.fetcher, () => [], env.settings)
   const request = { ...env.request, snapshot: { ...env.request.snapshot, description: "Saved" }, runId: page.runId }
   expect(await service.cancel(tenant, page.runId)).toEqual({ cancelled: false })
@@ -1259,7 +1260,7 @@ it("confirms and discards an authenticated cancelled page without a journal or b
   expect(await service.cancel(tenant, page.runId)).toEqual({ cancelled: true })
   release(); expect(await operation).toEqual({ cancelled: true })
   // Saved confirmation has no backup reader or snapshot input.
-  expect(await service.saved(tenant, page.runId, "reconcile")).toMatchObject({ status: "nothing-sent", outcomes: [], rows: [], canDiscard: true })
+  expect(await service.saved(tenant, page.runId, "reconcile")).toMatchObject({ ...page, status: "nothing-sent", outcomes: [], canDiscard: true })
   expect(await service.saved(tenant, page.runId, "discard")).toEqual({ ...page, discarded: true, unresolved: false, canDiscard: false })
   expect(env.writes).toEqual([])
 })
@@ -2108,4 +2109,119 @@ it("defers a settled earlier inventory owner's lock and retries all 15 rows afte
   await service.saved(tenant, first.runId, "reconcile")
   expect(await execute()).toMatchObject({ status: "complete", failed: 0, unresolved: false, outcomes: next.rows.map(row => ({ key: row.key, state: "applied" })) })
   expect(env.writes).toHaveLength(65); expect(env.members.size).toBe(65)
+})
+
+
+it.each(["page", "cursor", "history", "coordinator"])("keeps page 2 resumable after one %s read failure looking up page 1's lock", async phase => {
+  const env = world(51), service = env.service(), relationshipOptions = { ...options, stage: "relationships" as const }
+  const first = await service.prepare(tenant, env.request, relationshipOptions, env.read)
+  await service.execute(tenant, { ...env.request, runId: first.runId }, first.fingerprint, Object.fromEntries(first.rows.map(row => [row.key, row.review.approvals])))
+  const next = await service.prepare(tenant, env.request, { ...relationshipOptions, previousRunId: first.runId }, env.read)
+  const coordinator = `restore.directory.coordinator.${tenant}`, state = JSON.parse(env.data.get(coordinator)!)
+  state.locks[resource] = { owner: first.runId, journal: directoryPagePrefix(tenant, first.runId) + "batch.2." }
+  env.store.set(coordinator, JSON.stringify(state))
+  const ownerKey = `restore.directory.review.${tenant}.${first.runId}`, prefix = directoryPagePrefix(tenant, first.runId), get = env.store.get
+  let lookingUpOwner = false, failures = 0
+  const failure = vi.spyOn(env.store, "get").mockImplementation(key => {
+    if (key === ownerKey) lookingUpOwner = true
+    const matches = phase === "page" ? key === ownerKey : phase === "cursor" ? key === prefix + "cursor" : phase === "history" ? key.startsWith(prefix) && key.includes("restore.guarded.") : key === coordinator
+    if (lookingUpOwner && matches && failures++ === 0) throw new Error("Owner storage unavailable")
+    return get(key)
+  })
+  const execute = () => service.execute(tenant, { ...env.request, runId: next.runId }, next.fingerprint, Object.fromEntries(next.rows.map(row => [row.key, row.review.approvals])))
+  try {
+    await expect(execute()).rejects.toBeInstanceOf(RestorePersistenceError)
+    expect(failures).toBe(1); expect(env.writes).toHaveLength(50)
+    const journal = JSON.parse(env.data.get(directoryPagePrefix(tenant, next.runId) + `batch.0.restore.guarded.${tenant}`)!)
+    expect(journal.runs[next.runId].entries[0].state).toBe("pending")
+    failure.mockRestore()
+    expect(await service.resume(tenant, { ...env.request, runId: next.runId })).toMatchObject({ unresolved: true, selection: next.rows.map(row => row.key) })
+    await service.saved(tenant, first.runId, "reconcile")
+    expect(await execute()).toMatchObject({ status: "complete", failed: 0, unresolved: false, outcomes: [{ key: next.rows[0]!.key, state: "applied" }] })
+    expect(env.writes).toHaveLength(51); expect(env.members.size).toBe(51)
+  } finally { failure.mockRestore() }
+})
+
+it("retries a coordinator read failure at the final send boundary without closing the row", async () => {
+  const env = world(1), service = env.service(), page = await service.prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read)
+  const get = env.store.get, journalKey = directoryPagePrefix(tenant, page.runId) + `batch.0.restore.guarded.${tenant}`
+  let failures = 0
+  const failure = vi.spyOn(env.store, "get").mockImplementation(key => {
+    const captured = env.data.get(journalKey)?.includes('"state":"captured"')
+    if (captured && key === `restore.directory.coordinator.${tenant}` && failures++ === 0) throw new Error("Final coordinator read unavailable")
+    return get(key)
+  })
+  const execute = () => service.execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, { [page.rows[0]!.key]: page.rows[0]!.review.approvals })
+  try {
+    await expect(execute()).rejects.toBeInstanceOf(RestorePersistenceError)
+    expect(failures).toBe(1); expect(env.writes).toEqual([])
+    expect(JSON.parse(env.data.get(journalKey)!).runs[page.runId].entries[0].state).toBe("captured")
+    failure.mockRestore()
+    expect(await execute()).toMatchObject({ status: "complete", failed: 0, outcomes: [{ state: "applied" }] })
+    expect(env.writes).toHaveLength(1)
+  } finally { failure.mockRestore() }
+})
+
+it.each(["backup loading", "throttling"])("authenticates cancel locally during %s and hides active state from another owner", async phase => {
+  const env = world(1), page = await env.service().prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read)
+  let current = await env.connection()
+  const service = new DirectoryRestoreService(env.store, new RecoveryAccounts(env.store), async () => current, env.fetcher, () => [], env.settings)
+  if (phase === "throttling") directoryObjectState(env.store, tenant, page.runId).recordThrottle({ sourceId: resource }, Date.now() + 120_000)
+  let release!: () => void, signal!: AbortSignal
+  const pending = service.operation(tenant, page.runId, async active => { signal = active; await new Promise<void>(resolve => { release = resolve }); return { cancelled: active.aborted } })
+  const reads = env.fetcher.mock.calls.length
+  try {
+    for (const changed of ["userId", "clientId", "tenantId"] as const) {
+      current = { ...await env.connection(), [changed]: id(800) }
+      current.token = `h.${Buffer.from(JSON.stringify({ tid: current.tenantId, oid: current.userId, appid: current.clientId, scp: "Group.ReadWrite.All" })).toString("base64url")}.s`
+      await expect(service.cancel(tenant, page.runId)).rejects.toThrow("Use the admin and connection that reviewed this page.")
+      expect(signal.aborted).toBe(false)
+    }
+    current = await env.connection()
+    expect(await service.cancel(tenant, page.runId)).toEqual({ cancelled: true })
+    expect(signal.aborted).toBe(true)
+    release(); expect(await pending).toEqual({ cancelled: true })
+    current = { ...current, userId: id(800), token: `h.${Buffer.from(JSON.stringify({ tid: tenant, oid: id(800), appid: app, scp: "Group.ReadWrite.All" })).toString("base64url")}.s` }
+    await expect(service.cancel(tenant, page.runId)).rejects.toThrow("Use the admin and connection that reviewed this page.")
+    current = await env.connection()
+    expect(await service.cancel(tenant, page.runId)).toEqual({ cancelled: false })
+    expect(env.fetcher).toHaveBeenCalledTimes(reads); expect(env.writes).toEqual([])
+  } finally { release(); await pending }
+})
+
+it("returns the saved review after failure before the first journal and executes it after recovery", async () => {
+  const env = world(1), service = env.service(), savedOptions = { ...options, stage: "relationships" as const, exactMembers: true, exactOwners: true }
+  const page = await service.prepare(tenant, env.request, savedOptions, env.read), set = env.store.set
+  const failure = vi.spyOn(env.store, "set").mockImplementation((key, value) => {
+    if (key === directoryPagePrefix(tenant, page.runId) + "cursor") throw new Error("First cursor save unavailable")
+    set(key, value)
+  })
+  const execute = () => service.execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, { [page.rows[0]!.key]: page.rows[0]!.review.approvals })
+  try {
+    await expect(execute()).rejects.toBeInstanceOf(RestorePersistenceError)
+    failure.mockRestore()
+    expect([...env.data.keys()].some(key => key.includes("restore.guarded."))).toBe(false)
+    expect(await service.saved(tenant, page.runId, "reconcile")).toMatchObject({ ...page, selection: [page.rows[0]!.key], status: "nothing-sent", unresolved: true, outcomes: [{ key: page.rows[0]!.key, state: "pending" }] })
+    expect(env.writes).toEqual([])
+    expect(await execute()).toMatchObject({ status: "complete", failed: 0, outcomes: [{ state: "applied" }] })
+    expect(env.writes).toHaveLength(1)
+  } finally { failure.mockRestore() }
+})
+
+it.each(["safety", "other terminal"])("preserves a %s error and its message during continuation cleanup", async kind => {
+  const env = world(51), service = env.service(), relationshipOptions = { ...options, stage: "relationships" as const }
+  const first = await service.prepare(tenant, env.request, relationshipOptions, env.read)
+  await service.execute(tenant, { ...env.request, runId: first.runId }, first.fingerprint, Object.fromEntries(first.rows.map(row => [row.key, row.review.approvals])))
+  const cursor = directoryPagePrefix(tenant, first.runId) + "cursor", state = JSON.parse(env.data.get(cursor)!)
+  if (kind === "safety") { state.binding = "changed"; env.store.set(cursor, JSON.stringify(state)) }
+  const get = env.store.get
+  let reads = 0
+  const failure = vi.spyOn(env.store, "get").mockImplementation(key => kind === "other terminal" && key === cursor && ++reads > 1 ? "{" : get(key))
+  let syntaxMessage = ""
+  try { JSON.parse("{") } catch (error) { syntaxMessage = (error as Error).message }
+  try {
+    await expect(service.prepare(tenant, env.request, { ...relationshipOptions, previousRunId: first.runId }, env.read)).rejects.toMatchObject({ constructor: kind === "safety" ? RestoreSafetyError : SyntaxError, message: kind === "safety" ? "The directory restore source or identity changed. Resume the original plan." : syntaxMessage })
+    expect([...env.data.keys()].filter(key => key.startsWith("restore.directory.review."))).toHaveLength(1)
+    expect(env.writes).toHaveLength(50)
+  } finally { failure.mockRestore() }
 })

@@ -123,7 +123,9 @@ it("confirms the displayed page even when the saved page input names a different
   await click("Confirm this page's results")
   expect(JSON.parse(String(fetcher.mock.calls[1]![1]?.body))).toMatchObject({ action: "reconcile", runId: "run" })
   await click("Resume saved page")
-  expect(JSON.parse(String(fetcher.mock.calls[2]![1]?.body))).toMatchObject({ action: "resume", runId: "different-page" })
+  expect(document.querySelector<HTMLInputElement>('input:not([type="checkbox"])')!.value).toBe("run")
+  expect((button("Resume saved page") as HTMLButtonElement).disabled).toBe(false)
+  expect(JSON.parse(String(fetcher.mock.calls[2]![1]?.body))).toMatchObject({ action: "resume", runId: "run" })
 })
 
 it("restores only the saved selection as checked approvals when resuming a page", async () => {
@@ -444,4 +446,37 @@ it("keeps all approved keys unresolved when fallback outcomes omit unstarted row
   const calls = fetcher.mock.calls.length
   await click("Preview next page")
   expect(fetcher.mock.calls).toHaveLength(calls)
+})
+
+it("retains review rows and enables Resume for the displayed page after confirmation without a first journal", async () => {
+  const savedOptions = { stage: "relationships", exactMembers: true, exactOwners: true }
+  const saved = { ...page, options: savedOptions, selection: ["member"], unresolved: true }
+  const fetcher = vi.fn(async (_input: unknown, init?: RequestInit) => {
+    const action = JSON.parse(String(init?.body)).action
+    return action === "restore" ? Response.json({ error: "First cursor save unavailable" }, { status: 500 }) : Response.json(action === "reconcile" ? { ...saved, status: "nothing-sent", outcomes: [{ key: "member", state: "pending" }], canDiscard: true } : saved)
+  })
+  vi.stubGlobal("fetch", fetcher)
+  root = createRoot(document.body.appendChild(document.createElement("div")))
+  await act(async () => root.render(createElement(DirectoryRestore, props)))
+  await click("Review directory restore"); await click("Preview directory changes")
+  await act(async () => [...document.querySelectorAll("label")].filter(label => label.textContent?.startsWith("Approve ")).forEach(label => label.querySelector<HTMLInputElement>("input")!.click()))
+  await click("Execute approved changes or resume page")
+  expect(document.body.textContent).toContain("First cursor save unavailable")
+  const input = document.querySelector<HTMLInputElement>('input:not([type="checkbox"])')!
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "stale-input")
+    input.dispatchEvent(new Event("input", { bubbles: true }))
+  })
+  await click("Confirm this page's results")
+  expect(JSON.parse(String(fetcher.mock.calls.at(-1)![1]?.body))).toMatchObject({ action: "reconcile", runId: "run" })
+  expect(document.body.textContent).toContain("Member (user): member on Team (group)")
+  expect(document.body.textContent).toContain("No directory changes were sent for this page.")
+  expect(input.value).toBe("run")
+  expect(document.querySelector<HTMLSelectElement>("select")!.value).toBe("relationships")
+  expect([...document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')].map(input => input.checked)).toEqual([true, true, true, true])
+  expect((button("Preview next page") as HTMLButtonElement).disabled).toBe(true)
+  expect((button("Resume saved page") as HTMLButtonElement).disabled).toBe(false)
+  await click("Resume saved page")
+  expect(JSON.parse(String(fetcher.mock.calls.at(-1)![1]?.body))).toMatchObject({ action: "resume", runId: "run", ...savedOptions })
+  expect((button("Execute approved changes or resume page") as HTMLButtonElement).disabled).toBe(false)
 })

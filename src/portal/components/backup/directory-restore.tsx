@@ -50,6 +50,7 @@ export function DirectoryRestore({ tenant, backupId = "", path = "" }: { tenant:
         setMessage("Directory restore cancelled. No further changes will be sent. Confirm any previously sent results before continuing.")
         return
       }
+      if (data.rows && data.runId) setResumeId(data.runId)
       if (data.rows && data.options) { setStage(data.options.stage); setExactMembers(data.options.exactMembers); setExactOwners(data.options.exactOwners) }
       setCanDiscard(data.canDiscard === true)
       if (action === "restore" || action === "reconcile" || action === "discard") setReview(previous => {

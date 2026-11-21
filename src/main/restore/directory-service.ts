@@ -23,7 +23,7 @@ import { directory9aIO, directoryAdmission } from "./directory-9a-io"
 import { directoryObjectStep, directoryRelationshipSteps, mappedDirectoryIds } from "./directory-9a-plan"
 import { approveDirectory, directoryReview, type DirectoryReview } from "./directory-9a"
 import { directoryMappedId, executeDirectoryBatches } from "./directory-9a-batches"
-import { isRestorePersistenceError, GuardedRunJournal, restoreFingerprint, type GuardedRun } from "./guarded-run"
+import { isRestorePersistenceError, GuardedRunJournal, restoreFingerprint, restorePersistence, type GuardedRun } from "./guarded-run"
 import { resolveRestoreActor, type RecoveryAccounts } from "./safety-resolvers"
 import { safetyReader } from "./safety-reader"
 import { requireRestoreActor } from "./restore-actor"
@@ -38,7 +38,10 @@ const key = (tenant: string, id: string) => `restore.directory.review.${tenant.t
 export class DirectoryRestoreService {
   private readonly pending = new DirectoryPendingPublications(() => this.now())
   private readonly running = new Map<string, AbortController>()
-  constructor(private readonly store: PartitionedRestoreStore, private readonly recovery: RecoveryAccounts, private readonly connection: (tenant: string) => Promise<RestoreConnection>, private readonly fetchImpl: typeof fetch = fetch, private readonly protectedAppIds: (tenant: string) => readonly string[] = () => [], private readonly settings?: Pick<ModuleSettings, "get">, private readonly now: () => number = () => Date.now()) {}
+  private readonly store: PartitionedRestoreStore
+  constructor(store: PartitionedRestoreStore, private readonly recovery: RecoveryAccounts, private readonly connection: (tenant: string) => Promise<RestoreConnection>, private readonly fetchImpl: typeof fetch = fetch, private readonly protectedAppIds: (tenant: string) => readonly string[] = () => [], private readonly settings?: Pick<ModuleSettings, "get">, private readonly now: () => number = () => Date.now()) {
+    this.store = { partitioned: store.partitioned, get: name => restorePersistence(() => store.get(name)), set: (name, value) => restorePersistence(() => store.set(name, value)), delete: name => restorePersistence(() => store.delete(name)) }
+  }
   private async context(tenant: string, onThrottled?: (retryAt: number) => void, validatedConnection?: RestoreConnection) {
     const connection = validatedConnection ?? await this.connection(tenant)
     if (connection.tenantId.toLowerCase() !== tenant.toLowerCase()) fail("The connection belongs to another tenant.")
@@ -80,11 +83,15 @@ export class DirectoryRestoreService {
   private persistRetry(tenant: string, retryAt: number, journal: () => void, coordinator: () => void) {
     this.pending.forTenant(tenant).retain(() => persistDirectoryRetry(journal, coordinator), retryAt)
   }
-  private async pageConnection(page: DirectoryPage) {
-    this.pending.forTenant(page.run.tenant).flush()
+  private async ownerConnection(page: DirectoryPage) {
     const connection = await this.connection(page.run.tenant)
     requireRestoreActor(connection.token, { ...connection, recoveryAccountIds: [] })
     if (connection.tenantId.toLowerCase() !== page.run.tenant.toLowerCase() || connection.tenantId.toLowerCase() !== page.run.actor.tenantId.toLowerCase() || connection.userId.toLowerCase() !== page.run.actor.userId.toLowerCase() || connection.clientId.toLowerCase() !== page.run.actor.clientId.toLowerCase()) fail("Use the admin and connection that reviewed this page.")
+    return connection
+  }
+  private async pageConnection(page: DirectoryPage) {
+    this.pending.forTenant(page.run.tenant).flush()
+    const connection = await this.ownerConnection(page)
     captureDirectoryExecutionActor(connection)
     return connection
   }
@@ -315,9 +322,10 @@ export class DirectoryRestoreService {
             const start = Number(cursor ?? 0), end = Math.min(entries.length, start + limit)
             return { entries: entries.slice(start, end), next: end < entries.length ? String(end) : null }
           } }, io, operation.signal, 20, true, this.retryableLock(page))
-          if (!JSON.parse(this.store.get(directoryPagePrefix(page.run.tenant, page.run.id) + "cursor")!).done) throw new Error("Cursor cleanup is incomplete")
+          if (!JSON.parse(this.store.get(directoryPagePrefix(page.run.tenant, page.run.id) + "cursor")!).done) throw new RestoreWriteDeferredError("Cursor cleanup is incomplete")
         }
-      } catch {
+      } catch (error) {
+        if (!isRestorePersistenceError(error) && !(error instanceof RestoreWriteDeferredError)) throw error
         throw new RestoreWriteDeferredError("The previous directory page could not finish its cursor and lock cleanup. Retry previewing the next page.")
       }
     } finally { operation.finish() }
@@ -461,7 +469,7 @@ export class DirectoryRestoreService {
         return this.view(page)
       }
       if (!this.history(page).length && !this.store.get(directoryPagePrefix(tenant, id) + "batch.0.plan")) {
-        return { ...this.view(page), rows: [], ...this.results(page, { status: "nothing-sent", batches: 0, failed: 0 }, []) }
+        return { ...this.view(page), ...this.results(page, { status: "nothing-sent", batches: 0, failed: 0 }, []) }
       }
       const entries = page.run.entries.filter(entry => page.selection?.includes(entry.step.key))
       if (!entries.length) fail("This saved page has no executed selection to reconcile.")
@@ -478,7 +486,7 @@ export class DirectoryRestoreService {
     } finally { this.running.delete(runningKey) }
   }
   async cancel(tenant: string, id: string) {
-    this.load(tenant, id)
+    await this.ownerConnection(this.load(tenant, id))
     const controller = this.running.get(key(tenant, id))
     controller?.abort()
     return { cancelled: !!controller?.signal.aborted }
