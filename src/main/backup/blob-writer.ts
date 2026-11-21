@@ -30,11 +30,10 @@ export class BlobWriter {
    * A create-only body must be unique to its writer (the engine includes the run id), so a retry
    * that finds identical bytes knows its own earlier attempt created the blob.
    */
-  async put(name: string, body: string, beforeCommit?: NetworkCircuit, createOnly = false, onDispatch?: () => void, commit?: { ambiguous: boolean; readbackStarted: boolean }): Promise<void> {
+  async put(name: string, body: string, beforeCommit?: NetworkCircuit, createOnly = false, onDispatch?: () => void, onUnconfirmed?: () => void): Promise<void> {
     const path = `${BACKUP_CONTAINER}/${name.split("/").map(encodeURIComponent).join("/")}`
     // The earlier PUT may have landed. Read it back and compare it with what this writer sent.
     const landed = async (response: Response, signal: AbortSignal) => {
-      if (commit) commit.readbackStarted = true
       const stored = await this.request(path, { method: "GET", signal }, async (readBack) => {
         if (!readBack.ok) throw new StorageError(await storageError(readBack, this.account))
         return readBack.text()
@@ -62,7 +61,7 @@ export class BlobWriter {
         if (await landed(response, signal)) return
       }
       throw new StorageError(await storageError(response, this.account))
-    }, beforeCommit, onDispatch, commit ? () => { commit.ambiguous = true } : undefined)
+    }, beforeCommit, onDispatch, onUnconfirmed)
   }
 
   /** Lists blob names and, with a delimiter, virtual folders under a prefix. */

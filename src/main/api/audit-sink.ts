@@ -135,6 +135,12 @@ export class AuditSink {
   async record(binding: AuditBinding, input: CreateAuditLogInput, stamp?: { id: string; timestamp: string }): Promise<void> {
     const entry = this.entry(binding, input, stamp)
     const checkpoint = { binding: { ...binding, user: entry.user }, entry }
+    if (isBackupCheckpoint(entry) && entry.job?.status === 'uncertain' && entry.job.reason === 'WRITE_UNCONFIRMED') {
+      // Let the backup audit recovery read the manifest before this event becomes immutable.
+      this.save({ ...this.checkpoints, [entry.id]: checkpoint })
+      this.interruptedBackups.add(entry.id)
+      return
+    }
     if (this.checkpoints[entry.id]) this.finishCheckpoint(checkpoint)
     else {
       try { queueEvent(binding.storageAccountName, entry) }

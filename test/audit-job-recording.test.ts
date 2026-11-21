@@ -546,6 +546,48 @@ it.each([
   expect(remote.blobs.size).toBe(1)
 })
 
+it("reconciles a lost manifest acknowledgement in audit after the Reader job fails", async () => {
+  const local = memoryStore()
+  setAuditOutboxStore(local)
+  const remote = storage()
+  const sink = new AuditSink({ store: local, bind: () => binding, transport: async () => remote.service })
+  const terminal: Promise<void>[] = []
+  let manifest: string | undefined
+  const readManifest = vi.fn(async () => new Response(manifest))
+  const engine = new BackupEngine({
+    getToken: async () => { throw new Error("No admin session") },
+    unattendedTokens: () => ({ mode: "app-only", registrationId: registration, graph: async () => "reader-graph", storage: async () => "reader-storage" }),
+    fetch: async (input, init) => {
+      if (String(input).endsWith("/metadata.json")) {
+        if (init?.method !== "PUT") return readManifest()
+        manifest = String(init.body)
+        throw new TypeError("Manifest acknowledgement lost")
+      }
+      return init?.method === "PUT" ? new Response(null, { status: 201 }) : Response.json({ value: [] })
+    },
+    onStarted: (active, request, tokens) => checkpointBackupAudit(sink, active, request, tokens, binding.user, "1.2.3"),
+    onFinished: (active, request, tokens) => {
+      if (tokens) terminal.push(recordBackupAudit(sink, active, request, tokens, binding.user, "1.2.3"))
+    },
+  })
+  const active = await engine.waitForJob(engine.start({ tenantId, storageAccountName, clientId: "admin", trigger: "scheduled" }))
+  await Promise.all(terminal)
+  expect(active).toMatchObject({ status: "Failed", commitUnconfirmed: true, exception: "Manifest acknowledgement lost" })
+  expect(readManifest).not.toHaveBeenCalled()
+  expect(sink.pending(tenantId, "backup-reader")).toBe(1)
+  expect(remote.blobs.size).toBe(0)
+  await sink.recoverBackups((original, entry) => {
+    expect(original).toMatchObject({ tenantId, storageAccountName })
+    expect(entry.job).toMatchObject({ runId: active.id, status: "uncertain", reason: "WRITE_UNCONFIRMED", registrationId: registration })
+    return reconcileBackupAudit(entry, readManifest)
+  })
+  await sink.retry()
+  expect(readManifest).toHaveBeenCalledTimes(1)
+  expect(sink.pending(tenantId, "backup-reader")).toBe(0)
+  expect(await remote.service.queryAllLogs(dateFilter)).toMatchObject([{ id: active.id, job: { status: "completed", producer: "backup-reader" } }])
+  expect(active.status).toBe("Failed")
+}, 10_000)
+
 it.each([403, 201])("only passes a Reader permission canary when overwrite and both deletes are denied (%s)", async overwriteStatus => {
   const calls: Array<{ method?: string; path: string; match: string | null }> = []
   let auditBody: BodyInit | null | undefined

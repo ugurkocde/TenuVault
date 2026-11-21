@@ -688,23 +688,15 @@ export class BackupEngine {
     commitTimer.unref?.()
     const commitNetwork = new NetworkCircuit(3 * concurrency, commitController.signal, commitDeadline)
     const commitStorage = new BlobWriter(fetchImpl, request.storageAccountName, storageToken, commitNetwork)
-    const commit = { ambiguous: false, readbackStarted: false }
+    let commitUnconfirmed = false
     try {
       // Once the PUT is sent it may land even when it reports a failure, so no failed manifest may follow it.
-      await commitStorage.put(`${backupFolder}/metadata.json`, JSON.stringify(metadata, null, 2), network, false, () => { stopped.committing = true }, commit)
+      await commitStorage.put(`${backupFolder}/metadata.json`, JSON.stringify(metadata, null, 2), network, false,
+        () => { stopped.committing = true }, () => { commitUnconfirmed = true })
     } catch (error) {
-      if (!commit.ambiguous) throw error
-      job.commitUnconfirmed = true
-      if (commit.readbackStarted || commitController.signal.aborted) throw error
-      // A lost acknowledgement may have opened the PUT circuit. Reconcile under a separate
-      // circuit while preserving the original commit deadline.
-      const readbackNetwork = new NetworkCircuit(3 * concurrency, commitController.signal, commitDeadline)
-      const reader = new BlobWriter(fetchImpl, request.storageAccountName, storageToken, readbackNetwork)
-      const saved = await reader.readJson(`${backupFolder}/metadata.json`).catch(() => null)
-      if (saved?.RunId !== job.id || saved.TenantId !== metadata.TenantId ||
-        saved.BackupFolder !== backupFolder || saved.Status !== metadata.Status) throw error
-      delete job.commitUnconfirmed
-      this.write(job, "Verified the saved backup manifest after storage did not confirm the write.")
+      // Keep the job failure and let audit reconcile the possible storage commit separately.
+      if (commitUnconfirmed) job.commitUnconfirmed = true
+      throw error
     } finally {
       clearTimeout(commitTimer)
     }

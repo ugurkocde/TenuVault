@@ -5,6 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it, vi } from "vitest"
 import { BackupEngine, CONSECUTIVE_AUTH_FAILURE_LIMIT, NetworkCircuit, safeFileName, verifyStorageAccess } from "../src/main/backup/engine"
+import { scheduledResult } from "../src/main/backup/scheduler"
 import { backupRoutes, jobStatus, surfaceTokenErrors } from "../src/main/api/desktop-routes"
 import { NextRequest } from "../src/main/api/next-server-shim"
 import { handleLocalBlobRequest, localAccountFromUrl } from "../src/main/storage/blob-emulator"
@@ -633,14 +634,16 @@ it('keeps decrypted OMA-URI secrets readable in plain Azure backups, so a restor
   expect(JSON.parse(secret.body.toString()).omaSettings[0].value).toBe('dummy-oma-secret')
 })
 
-it("reconciles a successful manifest when every PUT acknowledgement is lost", async () => {
+it("fails the backup when all three manifest PUT acknowledgements are lost", async () => {
   const { store } = setup()
   const account = localStorageAccountName(TENANT)
   const graph = fakeGraph()
   let puts = 0
   let readbacks = 0
+  const onFinished = vi.fn()
   const engine = new BackupEngine({
     getToken: async () => "token",
+    onFinished,
     fetch: async (input, init) => {
       const request = new Request(input, init)
       const url = new URL(request.url)
@@ -657,10 +660,12 @@ it("reconciles a successful manifest when every PUT acknowledgement is lost", as
     },
   })
   const job = await engine.waitForJob(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }))
-  expect(job.status).toBe("Completed")
-  expect(job.commitUnconfirmed).toBeUndefined()
+  expect(job).toMatchObject({ status: "Failed", exception: "Manifest acknowledgement lost" })
+  expect(scheduledResult(job).status).toBe("Failed")
+  expect(onFinished).toHaveBeenCalledTimes(1)
+  expect(onFinished.mock.calls[0]?.[0]).toMatchObject({ status: "Failed" })
   expect(puts).toBe(3)
-  expect(readbacks).toBe(1)
+  expect(readbacks).toBe(0)
   const { data } = await store.get(account, "intune-backups", `${job.backupFolder}/metadata.json`)
   expect(JSON.parse(data.toString())).toMatchObject({ RunId: job.id, TenantId: TENANT, Status: "Success" })
 })
