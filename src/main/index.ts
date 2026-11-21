@@ -2,7 +2,7 @@ import { checkpointBackupAudit, reconcileBackupAudit, recordBackupAudit } from "
 import { auditUserFromToken, AuditSink, setMainAuditSink } from "./api/audit-sink"
 import { AuditContainerMissingError, AuditStorageService } from "../portal/lib/audit/storage"
 import { type AuditJobItem } from "../portal/lib/audit/types"
-import { beginRestoreAudit } from "../portal/lib/audit/restore"
+import { beginRestoreAudit, restoreTokenWithAudit } from "../portal/lib/audit/restore"
 import { requestWindowsContent } from "./app-backup/windows-helper"
 import { requireCaptureEnabled } from "./app-backup/capture-policy"
 import { checkCaptureMetadata } from "./app-backup/capture-preflight"
@@ -475,7 +475,6 @@ async function bootstrap(): Promise<void> {
         void recordBackupAudit(auditSink, job, request, tokens, backupAuditActor(job.tenantId), app.getVersion())
           .catch(() => console.warn("[audit] Backup audit delivery requires attention"))
       }
-      if (job.authMode === "app-only") backupReader.recordRun(job.tenantId, job.status)
       failedAttempts.finished(job, request)
       // Manual backup outcomes notify here; scheduled and tray outcomes notify from the
       // scheduler path, which already suppresses repeated unreachable failures.
@@ -483,6 +482,7 @@ async function bootstrap(): Promise<void> {
       // Every trigger counts, until the first backup that works.
       diagnostics.record(firstBackupEvent(job))
       tallyBackup(job, request)
+      if (job.authMode === "app-only") backupReader.recordRun(job.tenantId, job.status, request.trigger)
     },
   })
 
@@ -1602,11 +1602,12 @@ async function bootstrap(): Promise<void> {
     loadRestoreSettings: async (tenant, appId) => readRestoreSnapshot(tenant, appId, (await auth.getAccessToken(tenant, signedInClient(tenant), RESOURCE_SCOPES.graph)).accessToken, bridgedFetch, "current-settings"),
     restore: (store, source, snapshot, target, name, signal, progress) => disclaimer.run([target], async () => {
       const getGraphToken = async () => (await auth.getAccessToken(target, signedInClient(target), RESOURCE_SCOPES.graph)).accessToken
-      const graphToken = await getGraphToken()
+      const preparation = { destination: target, sourceBackupId: source.id, operationId: randomUUID(),
+        runId: randomUUID(), action: "Restore app backup" }
+      const graphToken = await restoreTokenWithAudit(getGraphToken, preparation)
       const original: AuditJobItem = { folder: "Apps", sourceId: source.receipt.appId, outcome: "unattempted",
         planned: [{ operation: "create", field: "metadata" }, { operation: "publish", field: "content" }] }
-      const audit = beginRestoreAudit({ destination: target, graphToken, sourceBackupId: source.id,
-        operationId: randomUUID(), action: "Restore app backup", items: [original] })
+      const audit = beginRestoreAudit({ ...preparation, graphToken, items: [original] })
       audit?.started(0)
       let observed: AppRestoreAuditObservation | undefined
       try {

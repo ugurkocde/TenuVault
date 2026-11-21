@@ -121,7 +121,9 @@ foreach ($value in @("Manual", "Nightly")) {
 
 # 8. A readable profile with a secret whose plaintext is refused.
 $script:calls.Clear()
+$script:OutcomeSent = $false
 $script:maskOma = $true
+[Environment]::SetEnvironmentVariable("TenuVaultChangeReport", "names")
 $Trigger = "Manual"
 $errorText = $null
 $output = @()
@@ -130,6 +132,7 @@ Write-Output (@{ calls = @($script:calls.ToArray()); output = @($output | ForEac
 
 # 9. A successful backup still checks for an earlier backup for its report when the audit receipt is denied.
 $script:calls.Clear()
+$script:OutcomeSent = $false
 $script:maskOma = $false
 $script:failAuditReceipt = $true
 [Environment]::SetEnvironmentVariable("TenuVaultChangeReport", "names")

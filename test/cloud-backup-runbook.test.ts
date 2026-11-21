@@ -101,7 +101,7 @@ describe("Cloud audit contract", () => {
     expect(result.replay).toMatchObject({ Count: 3, More: false, OlderUnchecked: true })
     expect(result.replayAgain).toMatchObject({ Count: 0, More: false, OlderUnchecked: true })
     const lists = (result.calls as RunCall[]).filter(call => call.uri.includes("comp=list"))
-    expect(new Set(lists.map(call => new URL(call.uri).searchParams.get("prefix"))).size).toBe(14)
+    expect(new Set(lists.map(call => new URL(call.uri).searchParams.get("prefix")!).filter(prefix => prefix.startsWith("audit-receipts/"))).size).toBe(14)
     expect(lists.some(call => new URL(call.uri).searchParams.get("marker"))).toBe(true)
     expect((result.calls as RunCall[]).some(call => call.uri.includes("/audit-cursors/"))).toBe(true)
     expect((result.calls as RunCall[]).some(call => call.uri.includes("55555555-5555-5555-5555-555555555555.json"))).toBe(false)
@@ -111,6 +111,8 @@ describe("Cloud audit contract", () => {
   type RestartScenarios = Record<string, RestartRun> & {
     identity: { token: string; calls: number }
     transport: { budgeted: number; unbudgeted: number; remaining: number }
+    orphanReplay: { Count: number; More: boolean }
+    orphanBlobs: Record<string, string>
   }
   let restartRuns: RestartScenarios | undefined
   const runRestartFixture = () => {
@@ -153,7 +155,10 @@ describe("Cloud audit contract", () => {
   it.runIf(Boolean(pwsh))("recovers a committed Automation job before capture and replays its original terminal event", () => {
     const interrupted = restartRun("crash")
     const restarted = restartRun("crashRestart")
-    expect(auditFiles(interrupted)).toHaveLength(0)
+    expect(interrupted.error).toBeNull()
+    expect(interrupted.output!.join("\n")).toContain("could not checkpoint its terminal result")
+    expect(auditFiles(interrupted)).toHaveLength(1)
+    expect(Object.keys(interrupted.blobs).some(uri => uri.includes("/audit-receipts/"))).toBe(true)
     const [[, rawManifest]] = manifestFiles(interrupted) as [[string, string]]
     const manifest = JSON.parse(rawManifest)
     const start = interrupted.calls.findIndex(call => call.method === "Put" && call.uri.includes("/audit-runs/") && call.uri.endsWith("/start.json"))
@@ -220,7 +225,7 @@ describe("Cloud audit contract", () => {
     const lists = (result.calls as RunCall[]).filter(call => call.uri.includes("comp=list"))
     const markers = lists.map(call => Number(new URL(call.uri).searchParams.get("marker")))
     expect(Math.max(...markers)).toBeGreaterThan(150)
-    expect(new Set(lists.map(call => new URL(call.uri).searchParams.get("prefix"))).size).toBe(14)
+    expect(new Set(lists.map(call => new URL(call.uri).searchParams.get("prefix")!).filter(prefix => prefix.startsWith("audit-receipts/"))).size).toBe(14)
   }, 60_000)
 
   it.runIf(Boolean(pwsh))("retains known undelivered counts outside the automatic UTC window until operator replay", () => {
@@ -257,9 +262,10 @@ describe("Cloud audit contract", () => {
     expect(JSON.parse(outcomeFiles(run)[0]![1])).toMatchObject({ status: "Failed" })
   }, 60_000)
 
-  it.runIf(Boolean(pwsh))("runs the configured change report before surfacing an audit receipt error", () => {
+  it.runIf(Boolean(pwsh))("runs the configured change report and preserves the job result when the audit receipt is denied", () => {
     const run = runPlainFixture()[8]!
-    expect(run.error).toContain("audit receipt could not be persisted")
+    expect(run.error).toBeNull()
+    expect(run.output!.join("\n")).toContain("audit receipt could not be saved")
     const body = (fragment: string) => JSON.parse(run.calls.find(call => call.method === "Put" && call.uri.includes(fragment))!.body!)
     expect(body("/metadata.json").Status).toBe("Success")
     expect(body("/cloud-backup-outcomes/").status).toBe("Success")
@@ -267,15 +273,35 @@ describe("Cloud audit contract", () => {
     expect(run.output!.join("\n")).toContain("No earlier complete plain backup")
   }, 60_000)
 
-  it.runIf(Boolean(pwsh))("reports masked OMA values as warnings in every terminal surface", () => {
+  it.runIf(Boolean(pwsh))("completes a backup when the results container denies all requests", () => {
+    const run = restartRun("resultsDenied")
+    expect(run.error).toBeNull()
+    expect(run.output!.join("\n")).toContain("audit receipt could not be saved")
+    expect(JSON.parse(manifestFiles(run)[0]![1]).Status).toBe("Success")
+    const status = Object.entries(run.blobs).find(([uri]) => uri.includes("cloud-backup-status-"))![1]
+    expect(JSON.parse(status)).toMatchObject({ LastStatus: "Success", AuditReceiptFailed: true })
+    expect(outcomeFiles(run)).toHaveLength(0)
+  }, 60_000)
+
+  it.runIf(Boolean(pwsh))("ordinary replay recreates the missing receipt from a terminal checkpoint", () => {
+    const failed = restartRun("receiptDenied")
+    expect(Object.keys(failed.blobs).some(uri => uri.includes("/audit-receipts/"))).toBe(false)
+    const { orphanReplay, orphanBlobs } = runRestartFixture()
+    expect(orphanReplay).toMatchObject({ Count: 0, More: false })
+    const rawReceipt = Object.entries(orphanBlobs).find(([uri]) => uri.includes("/audit-receipts/"))?.[1]
+    expect(JSON.parse(rawReceipt!)).toMatchObject({ delivered: true, file: { entries: [{ job: { runId: "99999999-9999-4999-8999-999999999999", status: "completed" } }] } })
+  }, 60_000)
+
+  it.runIf(Boolean(pwsh))("keeps masked OMA values successful outside the audit log", () => {
     const run = runPlainFixture()[7]!
     expect(run.error).toBeNull()
     expect(run.calls.some(call => call.uri.includes("getOmaSettingPlainTextValue"))).toBe(true)
     const body = (fragment: string) => JSON.parse(run.calls.find(call => call.method === "Put" && call.uri.includes(fragment))!.body!)
-    expect(body("/metadata.json")).toMatchObject({ Status: "CompletedWithWarnings", MaskedSecretItems: expect.any(Array), Failures: 0 })
-    expect(body("/cloud-backup-status-")).toMatchObject({ LastStatus: "CompletedWithWarnings" })
-    expect(body("/cloud-backup-outcomes/")).toMatchObject({ status: "CompletedWithWarnings" })
+    expect(body("/metadata.json")).toMatchObject({ Status: "Success", MaskedSecretItems: expect.any(Array), Failures: 0 })
+    expect(body("/cloud-backup-status-")).toMatchObject({ LastStatus: "Success" })
+    expect(body("/cloud-backup-outcomes/")).toMatchObject({ status: "Success" })
     expect(body("/audit-logs/").entries[0].job).toMatchObject({ status: "warnings", reason: "BACKUP_WARNINGS" })
+    expect(run.calls.some(call => call.uri.includes("/intune-backups?") && call.uri.includes("comp=list"))).toBe(true)
   }, 60_000)
 
   it.runIf(Boolean(pwsh))("reports a Graph policy listing 401 at the correct stage", () => {
@@ -303,8 +329,8 @@ describe("Cloud audit contract", () => {
     bytes[6] = (bytes[6]! & 15) | 80
     bytes[8] = (bytes[8]! & 63) | 128
     const expected = [bytes.subarray(0, 4), bytes.subarray(4, 6), bytes.subarray(6, 8), bytes.subarray(8, 10), bytes.subarray(10, 16)].map(bytes => bytes.toString("hex")).join("-")
-    expect(lines).toHaveLength(2)
-    for (const line of lines) {
+    expect(lines).toHaveLength(3)
+    for (const line of lines.slice(0, 2)) {
       const run = JSON.parse(line)
       expect(run).toMatchObject({ created: expected, again: expected })
       expect(run.writes).toMatchObject([{ method: "Put", body: { properties: { roleName: `TenuVault Audit Writer ${expected}`, permissions: [{
@@ -315,6 +341,11 @@ describe("Cloud audit contract", () => {
       }] } } }])
       expect(run.writes[0].path).toContain(`/roleDefinitions/${expected}?`)
     }
+    const assignment = JSON.parse(lines[2]!)
+    expect(Object.keys(assignment.grants)).toHaveLength(2)
+    expect(assignment.writes.map((write: { body: { properties: { principalId: string } } }) => write.body.properties.principalId)).toEqual([
+      "22222222-2222-2222-2222-222222222222", "33333333-3333-3333-3333-333333333333",
+    ])
   })
 
   it("describes cloud audit records by runbook version in the history and replay sections", () => {
@@ -670,7 +701,7 @@ describe("New-TenuVaultCloudBackup.ps1", () => {
     expect(approved.actions).toEqual([
       "schedule enabled=False", "import probe", "publish probe", "canary propagation", "remove probe",
       "import confirm=False", "publish", "export Published", "canary published", "remove TenuVaultKeyVault-11111111",
-      "schedule enabled=True",
+      "schedule enabled=True", "remove TenuVaultAuditPausedSchedule-11111111",
     ])
     expect(setup.indexOf("-Name $scheduleName -IsEnabled $false")).toBeLessThan(setup.indexOf('Assign the create-only audit role to the managed identity'))
     const propagation = setupRun("propagation-denied")
@@ -680,6 +711,9 @@ describe("New-TenuVaultCloudBackup.ps1", () => {
     expect(canary).toMatchObject({ error: expect.stringContaining("Enable the schedule in Azure after AUDITCANARY passes"), enabled: false, link: true })
     expect(canary.actions).toContain("publish")
     expect(canary.actions).not.toContain("schedule enabled=True")
+    expect(setupRun("published-canary-denied-retry")).toMatchObject({ error: null, enabled: true, link: true })
+    expect(setupRun("published-canary-denied-retry").variables).not.toContain("TenuVaultAuditPausedSchedule-11111111")
+    expect(setupRun("intentionally-disabled")).toMatchObject({ error: null, enabled: false, link: true })
   }, 60_000)
 
   it.runIf(Boolean(pwsh))("keeps the Everything scope and existing exclusions when only account and tenant are supplied", () => {

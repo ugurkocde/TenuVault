@@ -5,14 +5,16 @@ import type { RestoreOutcome } from '../policies/graph-restore'
 import { auditId } from './projection'
 import { AuditEventType, AuditResult, AuditSeverity, type AuditJobItem, type AuditJobStage } from './types'
 
-export async function recordRestorePreparationFailure(input: {
+interface RestorePreparation {
   destination: string
   graphToken?: string
   sourceBackupId: string
   operationId: string
   runId: string
   action: string
-}): Promise<void> {
+}
+
+export async function recordRestorePreparationFailure(input: RestorePreparation): Promise<void> {
   const sink = mainAuditSink()
   const binding = sink?.bind(input.destination)
   if (!binding || !sink) return
@@ -26,6 +28,15 @@ export async function recordRestorePreparationFailure(input: {
       sourceBackupId: input.sourceBackupId, status: 'failed', counts: {}, reason: 'RESTORE_PREPARATION_FAILED',
     },
   })
+}
+
+export async function restoreTokenWithAudit(getToken: () => Promise<string>, input: Omit<RestorePreparation, 'graphToken'>): Promise<string> {
+  try {
+    return await getToken()
+  } catch (error) {
+    void recordRestorePreparationFailure(input).catch(() => console.warn('[audit] Restore preparation failure could not be recorded'))
+    throw error
+  }
 }
 
 export function restoreAuditItem(path: string, result?: RestoreOutcome, sourceId?: string): AuditJobItem {

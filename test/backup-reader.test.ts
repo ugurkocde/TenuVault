@@ -200,7 +200,8 @@ describe("BackupReaderService", () => {
     expect(reader.status(TENANT)!.exportedCertificate?.fileName).toBe("TenuVault Backup Reader ABCD.cer")
     await reader.verify(TENANT, READER)
     reader.recordTest(TENANT, { graph: true, storage: false, message: "no container" })
-    reader.recordRun(TENANT, "Completed")
+    reader.recordRun(TENANT, "Completed", "scheduled")
+    reader.recordRun(TENANT, "Failed", "manual")
     expect(reader.status(TENANT)!.lastTest).toMatchObject({ graph: true, storage: false })
     expect(reader.status(TENANT)!.lastRun?.status).toBe("Completed")
     expect(reader.status(TENANT)!.verifiedAt).toBeTruthy()
@@ -209,6 +210,19 @@ describe("BackupReaderService", () => {
     // A new (renewal) certificate hides the export record of the previous one.
     reader.prepare(TENANT, "LAPTOP-1")
     expect(reader.status(TENANT)!.exportedCertificate).toBeNull()
+  })
+
+  it("treats a scheduled run status write failure as advisory", () => {
+    const backing = store()
+    const reader = new BackupReaderService(backing, {})
+    reader.prepare(TENANT, "LAPTOP-1")
+    const save = vi.spyOn(backing, "set").mockImplementation(() => { throw new Error("Store unavailable") })
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined)
+    try {
+      expect(() => reader.recordRun(TENANT, "Completed", "scheduled")).not.toThrow()
+      expect(save).toHaveBeenCalledOnce()
+      expect(warn).toHaveBeenCalledWith("[backup-reader] Scheduled run status could not be saved")
+    } finally { save.mockRestore(); warn.mockRestore() }
   })
 
   it("verifies the active certificate again while a renewal waits, and keeps the renewal", async () => {

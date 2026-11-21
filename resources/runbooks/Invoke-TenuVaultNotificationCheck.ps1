@@ -1620,6 +1620,25 @@ function New-TenuVaultCloudOutcomeEvent {
         -Trigger $script:TvOutcomeTrigger[[string]$Outcome.trigger] -Message $script:TvOutcomeSummary[[string]$Outcome.status]
 }
 
+# Use the Schedule status in intune-backups even when the producer cannot write result notes.
+function Read-TvCloudAuditAlert {
+    param([string]$Account, [string]$Token, [string]$TenantId, [object]$TenantName, [DateTime]$Now = [DateTime]::UtcNow)
+    try {
+        $name = "cloud-backup-status-$($TenantId.Substring(0, 8).ToLowerInvariant()).json"
+        $status = ConvertFrom-TvNoteJson (Get-TvBlobText -Uri "https://$Account.blob.core.windows.net/intune-backups/$name" -Token $Token)
+        $receiptFailed = $status.AuditReceiptFailed -is [bool] -and $status.AuditReceiptFailed
+        $deliveryPending = $status.AuditDeliveryPending -is [bool] -and $status.AuditDeliveryPending
+        if ($status.TenantId -ne $TenantId -or $status.RunId -notmatch '^[a-f0-9-]{36}$' -or (-not $receiptFailed -and -not $deliveryPending)) { return }
+        $at = [string]$status.LastRunAt
+        $date = [DateTimeOffset]::MinValue
+        if (-not [DateTimeOffset]::TryParseExact($at, "yyyy-MM-dd'T'HH:mm:ss.fff'Z'", [Globalization.CultureInfo]::InvariantCulture,
+            [Globalization.DateTimeStyles]::AssumeUniversal, [ref]$date) -or $date.UtcDateTime -lt $Now.AddDays(-7)) { return }
+        return New-TvEnvelope -Type "backup.warning" -Severity "warning" -TenantId $TenantId -TenantName $TenantName `
+            -OccurredAt $at -NaturalKey "cloud-backup-audit:$($status.RunId)" -Title "Cloud backup audit needs attention" `
+            -Summary "The Automation job reported an audit delivery problem. See its job output and the Schedule tab for details."
+    } catch { Write-Verbose "Cloud backup audit status could not be checked." }
+}
+
 # ---------------------------------------------------------------------------
 # Library: Teams card layout, mirroring layout.ts and teamsWorkflowsPayload
 # ---------------------------------------------------------------------------
@@ -3284,6 +3303,8 @@ try {
     $outcomeRead = Read-TvBackupOutcomes -ContainerUri $resultsContainerUri -Token $storageToken -TenantId $tenantId -TenantName $tenantName `
         -RenewLease { Update-TvStateLease -LeaseQueryUri $leaseQueryUri -Token $storageToken -LeaseId $leaseId }
     foreach ($envelope in $outcomeRead.Envelopes) { $candidateEnvelopes.Add($envelope) }
+    $cloudAuditAlert = Read-TvCloudAuditAlert -Account $storageAccount -Token $storageToken -TenantId $tenantId -TenantName $tenantName
+    if ($cloudAuditAlert) { $candidateEnvelopes.Add($cloudAuditAlert) }
     foreach ($folder in $outcomeRead.FailedFolders) { if (-not $failedBackupFolders.Contains($folder)) { $failedBackupFolders.Add($folder) } }
     $processedOutcomeNames = $outcomeRead.Processed
     $ignoredOutcomes = $outcomeRead.Ignored

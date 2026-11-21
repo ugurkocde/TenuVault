@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto"
-import { beginRestoreAudit, restoreAuditItem } from "~/lib/audit/restore"
+import { beginRestoreAudit, recordRestorePreparationFailure, restoreAuditItem } from "~/lib/audit/restore"
 import { AuditEventType } from "~/lib/audit/types"
 import { readOwnedBackup, UNTAGGED_BACKUP } from "~/lib/policies/backup-owner"
 import { checkRestoreManifest, verifySnapshot } from "~/lib/policies/backup-manifest"
@@ -47,6 +47,7 @@ interface RevertMetadata {
 
 export async function POST(request: NextRequest) {
   let body: RevertPolicyRequest | null = null;
+  let preparationFailed: (() => void) | undefined
   
   try {
     body = await request.json() as RevertPolicyRequest
@@ -91,15 +92,26 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Invalid policy backup path' }, { status: 400 })
     }
 
+    const backupId = backupPath.split('/')[0] ?? ''
+    const operationId = randomUUID()
+    const auditAction = action === "revert" ? "Revert policy to the backed-up version in place" : "Restore policy as an unassigned copy"
+    let auditToken: string | undefined
+    preparationFailed = () => {
+      void recordRestorePreparationFailure({
+        destination: tenantId, graphToken: auditToken, sourceBackupId: backupId,
+        operationId, runId: operationId, action: auditAction,
+      }).catch(() => console.warn("[audit] Restore preparation failure could not be recorded"))
+    }
+
     // Get access tokens for both Azure Storage and Microsoft Graph
     const [storageToken, graphToken] = await Promise.all([
       getAccessToken(tenantId, appId, clientSecret, "https://storage.azure.com/.default"),
       getAccessToken(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default")
     ])
+    auditToken = graphToken
 
     // A shared container can hold other tenants' backups; never restore from one of those. Revert
     // and recreate change the live policy, so they need a backup that names this tenant.
-    const backupId = backupPath.split('/')[0] ?? ''
     const owned = await readOwnedBackup((name) => fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${name.split("/").map(encodeURIComponent).join("/")}`, {
       headers: { 'x-ms-version': '2021-12-02', 'Authorization': `Bearer ${storageToken}` },
     }), backupId, tenantId, storageAccountName)
@@ -148,10 +160,10 @@ export async function POST(request: NextRequest) {
     catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 }) }
     
     // Restore creates an unassigned copy; revert puts the existing policy back to the backed-up version.
-    const operationId = randomUUID()
+    preparationFailed = undefined
     const audit = beginRestoreAudit({
       destination: tenantId, graphToken, sourceBackupId: backupId, operationId,
-      action: action === "revert" ? "Revert policy to the backed-up version in place" : "Restore policy as an unassigned copy",
+      action: auditAction,
       eventType: action === "revert" ? AuditEventType.POLICY_REVERTED : AuditEventType.POLICY_RESTORED,
       items: [restoreAuditItem(backupPath, undefined, policyContent.id)],
     })
@@ -228,6 +240,8 @@ export async function POST(request: NextRequest) {
       { error: "Internal server error while reverting policy" },
       { status: 500 }
     )
+  } finally {
+    preparationFailed?.()
   }
 }
 

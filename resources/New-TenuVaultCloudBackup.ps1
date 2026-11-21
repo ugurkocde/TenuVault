@@ -165,6 +165,7 @@ $auditRunbookVersion = "1.5.0"
 $runbookPath = Join-Path $PSScriptRoot "runbooks/Invoke-TenuVaultBackup.ps1"
 $tenantKey = $TenantId.Substring(0, [Math]::Min(8, $TenantId.Length)).ToLowerInvariant()
 $scheduleName = "TenuVaultBackup-$tenantKey"
+$pausedScheduleVariable = "TenuVaultAuditPausedSchedule-$tenantKey"
 $writerRoleName = "TenuVault Backup Writer"
 
 $graphRoleNames = @(
@@ -178,6 +179,7 @@ if ($IncludeDeviceCategories) { $graphRoleNames += "DeviceManagementManagedDevic
 $appOnlyExcluded = if ($IncludeDeviceCategories) { "" } else { "DeviceCategories,DeviceCleanupRules" }
 
 $variableNames = @(
+    $pausedScheduleVariable
     "TenuVaultTenantId-$tenantKey", "TenuVaultStorageAccount-$tenantKey",
     "TenuVaultScope-$tenantKey", "TenuVaultExcludedFolders-$tenantKey", "TenuVaultAppOnlyExcluded-$tenantKey",
     "TenuVaultChangeReport-$tenantKey", "TenuVaultChangeReportActors-$tenantKey", "TenuVaultTenantName-$tenantKey"
@@ -760,12 +762,17 @@ $resumeSchedule = $false
 if ($upgradeLink -and -not $AuditRoleOnly -and -not $WhatIfPreference) {
     $schedule = Get-AzAutomationSchedule -ResourceGroupName $ResourceGroupName `
         -AutomationAccountName $AutomationAccountName -Name $scheduleName -ErrorAction Stop
-    $resumeSchedule = $schedule.IsEnabled -eq $true
-    if ($resumeSchedule) {
+    if ($schedule.IsEnabled -eq $true) {
         if (-not $PSCmdlet.ShouldProcess($scheduleName, "Pause scheduled backups during the audit upgrade")) { return }
+        Set-TenuVaultAutomationVariable -Name $pausedScheduleVariable -Value $scheduleName -Confirm:$false -ErrorAction Stop
         Set-AzAutomationSchedule -ResourceGroupName $ResourceGroupName -AutomationAccountName $AutomationAccountName `
             -Name $scheduleName -IsEnabled $false -ErrorAction Stop | Out-Null
-        Write-Host "Paused '$scheduleName'. If setup stops, fix the reported issue, rerun setup, then enable the schedule in Azure after the canary passes."
+        $resumeSchedule = $true
+        Write-Host "Paused '$scheduleName'. If setup stops, fix the reported issue and rerun setup to resume after the canary passes."
+    } else {
+        $listed = Get-TenuVaultAutomationVariables
+        if ($listed.Error) { Write-Warning "Could not check whether setup paused '$scheduleName'. It will stay disabled." }
+        else { $resumeSchedule = $listed.Variables[$pausedScheduleVariable] -ceq $scheduleName }
     }
 }
 
@@ -798,14 +805,15 @@ if ($principalId) {
     $auditRole = Get-TenuVaultAuditRole $storageGroupScope
     if ($auditRole) {
         $scope = "$($storageAccount.Id)/blobServices/default/containers/$auditContainer"
-        $existing = Get-AzRoleAssignment -ObjectId $principalId -RoleDefinitionName $auditRole.Name -Scope $scope |
+        $roleId = ([string]$auditRole.Id).Split("/")[-1]
+        $existing = Get-AzRoleAssignment -ObjectId $principalId -RoleDefinitionId $roleId -Scope $scope |
             Where-Object { $_.Scope -eq $scope }
         if (-not $existing -and $PSCmdlet.ShouldProcess($scope, "Assign the create-only audit role to the managed identity")) {
-            $relativeScope = "Microsoft.Storage/storageAccounts/$StorageAccountName/blobServices/default/containers/$auditContainer"
-            $assignmentId = Get-TenuVaultAuditGuid "$($relativeScope.ToLowerInvariant())-$($AutomationAccountName.ToLowerInvariant())-$($auditRole.Name)"
+            $assignmentKey = "$scope-$principalId-$roleId".ToLowerInvariant()
+            $assignmentId = Get-TenuVaultAuditGuid $assignmentKey
             $payload = @{ properties = @{
                 principalId = $principalId; principalType = "ServicePrincipal"
-                roleDefinitionId = "$storageGroupScope/providers/Microsoft.Authorization/roleDefinitions/$(([string]$auditRole.Id).Split("/")[-1])"
+                roleDefinitionId = "$storageGroupScope/providers/Microsoft.Authorization/roleDefinitions/$roleId"
             } } | ConvertTo-Json -Depth 5 -Compress
             $response = Invoke-AzRestMethod -Method Put -Path "$scope/providers/Microsoft.Authorization/roleAssignments/$assignmentId`?api-version=2022-04-01" -Payload $payload
             if ([int]$response.StatusCode -notin @(200, 201)) { throw "The audit role could not be assigned (Azure status $($response.StatusCode))." }
@@ -1100,16 +1108,20 @@ if ($GrantGraphRoles -or $GraphRolesGranted -or $linked) {
             [void](New-AzAutomationSchedule @scheduleParams)
         }
     }
-    if ($linked -and $resumeSchedule) {
-        Set-AzAutomationSchedule -ResourceGroupName $ResourceGroupName -AutomationAccountName $AutomationAccountName `
-            -Name $scheduleName -IsEnabled $true -ErrorAction Stop | Out-Null
-        Write-Host "Resumed '$scheduleName' after AUDITCANARY passed."
-    }
     if (-not $linked -and $PSCmdlet.ShouldProcess($runbookName, "Link runbook to schedule '$scheduleName'")) {
         Register-AzAutomationScheduledRunbook -ResourceGroupName $ResourceGroupName `
             -AutomationAccountName $AutomationAccountName -RunbookName $runbookName `
             -ScheduleName $scheduleName -Parameters @{ TenantKey = $tenantKey } | Out-Null
         $linked = $true
+    }
+    if ($linked -and $resumeSchedule) {
+        Set-AzAutomationSchedule -ResourceGroupName $ResourceGroupName -AutomationAccountName $AutomationAccountName `
+            -Name $scheduleName -IsEnabled $true -ErrorAction Stop | Out-Null
+        try {
+            Remove-AzAutomationVariable -ResourceGroupName $ResourceGroupName -AutomationAccountName $AutomationAccountName `
+                -Name $pausedScheduleVariable -Confirm:$false -ErrorAction Stop | Out-Null
+        } catch { Write-Warning "The schedule resumed, but setup could not remove its pause marker." }
+        Write-Host "Resumed '$scheduleName' after AUDITCANARY passed."
     }
 }
 

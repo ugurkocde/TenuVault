@@ -39,6 +39,7 @@ $runbookPath = Join-Path $repoRoot "resources/runbooks/Invoke-TenuVaultBackup.ps
 $TenantId = "11111111-2222-3333-4444-555555555555"
 $tenantKey = "11111111"
 $scheduleName = "TenuVaultBackup-$tenantKey"
+$pausedScheduleVariable = "TenuVaultAuditPausedSchedule-$tenantKey"
 $StorageAccountName = "stcontoso"
 $Scope = "policies"
 $ExcludedFolders = ""
@@ -289,7 +290,7 @@ foreach ($scenario in "rerun-keeps-report", "rerun-sets-report") {
 }
 
 # Simulate an upgrade of the already linked setup, with account and tenant parameters only.
-foreach ($scenario in "linked-upgrade", "propagation-denied", "published-canary-denied") {
+foreach ($scenario in "linked-upgrade", "propagation-denied", "published-canary-denied", "intentionally-disabled") {
     Reset-OldSetup
     $upgradeLink = $true
     $script:variables["TenuVaultScope-$tenantKey"] = "everything"
@@ -297,6 +298,7 @@ foreach ($scenario in "linked-upgrade", "propagation-denied", "published-canary-
     $script:variables["TenuVaultAppOnlyExcluded-$tenantKey"] = ""
     if ($scenario -eq "propagation-denied") { $script:failCanary = "propagation" }
     if ($scenario -eq "published-canary-denied") { $script:failCanary = "published" }
+    if ($scenario -eq "intentionally-disabled") { $script:enabled = $false }
     $runbook = $null
     $errorText = $null
     try {
@@ -305,6 +307,18 @@ foreach ($scenario in "linked-upgrade", "propagation-denied", "published-canary-
         $output += @(. $scheduleStep 3>&1 6>&1)
     } catch { $errorText = $_.Exception.Message }
     Write-Scenario -Name $scenario -Runbook $runbook -ErrorText $errorText -Output $output
+    if ($scenario -eq "published-canary-denied") {
+        $script:failCanary = $null
+        $script:actions.Clear()
+        $errorText = $null
+        $output = @()
+        try {
+            $output = @(. $pauseStep 3>&1 6>&1)
+            $output += @(. $upgradeStep 3>&1 6>&1)
+            $output += @(. $scheduleStep 3>&1 6>&1)
+        } catch { $errorText = $_.Exception.Message }
+        Write-Scenario -Name "$scenario-retry" -Runbook $runbook -ErrorText $errorText -Output $output
+    }
 }
 $upgradeLink = $false
 

@@ -677,7 +677,7 @@ export class BackupEngine {
     const totalPolicies = policyCount(counts)
     const saved = Object.values(counts).reduce((sum, count) => sum + count, 0)
     const inventory = Object.entries(counts).filter(([folder, count]) => count > 0 && typeForFolder(folder)?.inventory)
-    const metadata = manifest(failures > 0 && saved === 0 ? "Failed" : failures || maskedItems.length ? "CompletedWithWarnings" : "Success", ended)
+    const metadata = manifest(failures > 0 && saved === 0 ? "Failed" : failures ? "CompletedWithWarnings" : "Success", ended)
 
     // Detach cancellation at the first manifest PUT, after cancellable token acquisition.
     // Retention reads cannot delay the manifest, and a saved backup must not burn a retry slot.

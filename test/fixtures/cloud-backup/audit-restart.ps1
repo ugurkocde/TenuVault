@@ -38,6 +38,12 @@ $unbudgetedCalls = $script:transportCalls - $budgetedCalls
 function Invoke-TvHttp {
     param([string]$Uri, [string]$Token, [string]$Method, [hashtable]$Headers, [byte[]]$BodyBytes, [string]$ContentType, [long]$MaxBytes, [int]$BudgetMs)
     $script:calls.Add(@{ uri = $Uri; method = $Method; condition = $Headers["If-Match"] })
+    if ($script:scenario -eq "resultsDenied" -and $Uri -like "*/tenuvault-backup-results*") {
+        throw [TvHttpError]::new(403, "Results container denied")
+    }
+    if ($script:scenario -eq "receiptDenied" -and $Uri -like "*/audit-receipts/*") {
+        throw [TvHttpError]::new(403, "Receipt denied")
+    }
     if ($Uri.EndsWith("/start.json") -and ($script:scenario -eq "startReadDenied" -or
         ($Method -eq "Put" -and $script:scenario -eq "startWriteDenied"))) {
         throw [TvHttpError]::new(403, "Start checkpoint denied")
@@ -49,7 +55,12 @@ function Invoke-TvHttp {
         if ($script:scenario -eq "graph401") { throw [TvHttpError]::new(401, "Graph policy list refused") }
         $text = '{"value":[]}'
     } elseif ($Uri -like "*comp=list*") {
-        $text = "<EnumerationResults><Blobs /><NextMarker /></EnumerationResults>"
+        $prefix = [Uri]::UnescapeDataString([regex]::Match($Uri, '[?&]prefix=([^&]*)').Groups[1].Value)
+        $items = foreach ($key in $script:blobs.Keys) {
+            $name = $key -replace '^.*/tenuvault-backup-results/', ''
+            if ($name.StartsWith($prefix)) { "<Blob><Name>$name</Name></Blob>" }
+        }
+        $text = "<EnumerationResults><Blobs>$($items -join '')</Blobs><NextMarker /></EnumerationResults>"
     } elseif ($Method -eq "Delete") {
         if ($script:scenario -ne "excessive") { throw [TvHttpError]::new(403, "Delete denied") }
         $script:blobs.Remove($Uri)
@@ -95,7 +106,7 @@ $results = @{
     identity = @{ token = $identityToken; calls = $script:identityCalls }
     transport = @{ budgeted = $budgetedCalls; unbudgeted = $unbudgetedCalls; remaining = $budget.Requests }
 }
-foreach ($caseName in @("lostAck", "crash", "graph401", "terminalGap", "uncertain", "startReadDenied", "startWriteDenied")) {
+foreach ($caseName in @("lostAck", "crash", "graph401", "terminalGap", "uncertain", "startReadDenied", "startWriteDenied", "resultsDenied", "receiptDenied")) {
     $script:blobs.Clear()
     $script:scenario = $caseName
     $results[$caseName] = Run-Scenario
@@ -106,6 +117,12 @@ foreach ($caseName in @("lostAck", "crash", "graph401", "terminalGap", "uncertai
     if ($caseName -eq "crash") {
         $script:scenario = "terminalReadDenied"
         $results.terminalReadDenied = Run-Scenario
+    }
+    if ($caseName -eq "receiptDenied") {
+        $script:scenario = "restart"
+        $context = @{ TenantId = $env:TenuVaultTenantId; StorageAccount = $env:TenuVaultStorageAccount; StorageToken = "token" }
+        $results.orphanReplay = Invoke-TvAuditReplay $context
+        $results.orphanBlobs = $script:blobs.Clone()
     }
 }
 $AuditCanary = $true

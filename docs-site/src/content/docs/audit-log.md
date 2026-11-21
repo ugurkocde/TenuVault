@@ -101,6 +101,8 @@ Cross-tenant restores appear under each destination. If preparation fails, for e
 
 The cards, table and exports all follow the date range and filters. Picker dates are converted once from your local day to UTC instants. Stored paths and day listings use UTC, and entries are filtered by their event timestamp, so events near midnight are included correctly in every time zone. Older files grouped by local day remain readable.
 
+Large restores checkpoint progress before each group of 25 policies and again at completion. If the app stops during a group, up to 25 policies may be reported as uncertain. The audit recovery does not replay policy writes.
+
 Audit listings and event reads share a limit of six at a time per storage account, across log searches, totals and exports. The dashboard requests only its latest 20 matching events on Pro or MSP and skips audit history on Community. New event files carry their timestamp in the storage listing so the app can stop reading once the requested page is complete. Older files need an initial bounded read to establish event order; unchanged files are cached for subsequent refreshes. The event read cache keeps only the latest observed ETag for each file, counts serialized content and cache key bytes against a 32 MiB budget, and evicts the least recently used files. Search filters can require additional reads to find matching events. Exports and totals still include every match in the selected range.
 
 ## Export the audit log

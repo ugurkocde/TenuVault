@@ -5,6 +5,7 @@ import { approvalFingerprint, Restorer, type GraphCall } from "../src/portal/lib
 import { restoreApprovals, saveRestoreApproval, setRestoreApprovalStore, dismissRestoreApproval } from "../src/main/storage/restore-approvals"
 import { saveWrite, setRestoreJournalStore, writeKey, writeRecords } from "../src/main/storage/restore-journal"
 import { AuditSink, setMainAuditSink } from "../src/main/api/audit-sink"
+import { createAuditRecorder } from "../src/main/api/audit"
 import { pendingEvents, setAuditOutboxStore } from "../src/portal/lib/audit/outbox"
 import { memoryStore } from "./helpers"
 import { requiredFeatures } from "../src/main/api/plan-gates"
@@ -270,9 +271,14 @@ it.each([400, 403])("records definitive Graph refusal %s after dispatch with the
     }
     return original(input, init)
   }))
-  const refusal = await POST(request({ approvalAction: "complete", approvalId: code }))
-  expect(refusal.status).toBe(status)
+  const attempt = request({ approvalAction: "complete", approvalId: code, storageAccountName: account })
+  const notice = vi.fn()
+  const requestBody = await attempt.clone().text()
+  const refusal = await POST(attempt)
+  createAuditRecorder(vi.fn(), () => null, notice)(attempt, requestBody, refusal)
+  expect(refusal.status).toBe(409)
   expect(await refusal.json()).toMatchObject({ code: "APPROVAL_COMPLETION_REFUSED" })
+  await vi.waitFor(() => expect(notice).toHaveBeenCalledWith(expect.objectContaining({ status: "Failed", restored: 0, failed: 1 })))
   expect(pendingEvents(account)[0]?.job).toMatchObject({ status: "failed", items: [{
     outcome: "failed", reason: "APPROVAL_COMPLETION_REFUSED", approval: { requestId: code },
   }] })

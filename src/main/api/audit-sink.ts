@@ -61,6 +61,7 @@ interface RestoreReceipt {
 
 const JOURNAL = 'audit.restore-jobs'
 const RECEIPTS = 'audit.restore-receipts'
+const RESTORE_CHECKPOINT_ITEMS = 25
 const warning = () => console.warn('[audit] Audit delivery requires attention')
 const isBackupCheckpoint = (entry: AuditLogEntry) =>
   entry.eventType === AuditEventType.BACKUP_COMPLETED || entry.eventType === AuditEventType.BACKUP_FAILED ||
@@ -79,10 +80,33 @@ export class AuditSink {
   private readonly retryOffsets = new Map<string, number>()
 
   constructor(private readonly options: AuditSinkOptions) {
-    this.checkpoints = JSON.parse(options.store?.get(JOURNAL) ?? '{}')
-    this.receipts = JSON.parse(options.store?.get(RECEIPTS) ?? '{}')
+    this.checkpoints = this.load(JOURNAL, (value): value is Checkpoint => {
+      const checkpoint = value as Partial<Checkpoint> | null
+      return typeof checkpoint?.binding?.storageAccountName === 'string' && typeof checkpoint.entry?.id === 'string' &&
+        !!checkpoint.entry.job && !!checkpoint.entry.user
+    })
+    this.receipts = this.load(RECEIPTS, (value): value is RestoreReceipt => typeof (value as RestoreReceipt | null)?.at === 'number')
     this.interruptedBackups = new Set(Object.entries(this.checkpoints)
       .filter(([, checkpoint]) => !checkpoint.finished && isBackupCheckpoint(checkpoint.entry)).map(([id]) => id))
+  }
+
+  private load<T>(key: string, isRecord: (value: unknown) => value is T): Record<string, T> {
+    let raw: string | null | undefined
+    try {
+      raw = this.options.store?.get(key)
+      const value = JSON.parse(raw ?? '{}')
+      if (value && typeof value === 'object' && !Array.isArray(value) && Object.values(value).every(isRecord)) return value
+      throw new Error('Invalid audit checkpoint data')
+    } catch {
+      warning()
+      if (raw != null) {
+        try {
+          this.options.store?.set(`${key}.quarantine`, raw)
+          this.options.store?.delete(key)
+        } catch { warning() }
+      }
+      return {}
+    }
   }
 
   bind(tenant: string): AuditBinding | undefined {
@@ -107,7 +131,7 @@ export class AuditSink {
 
   async record(binding: AuditBinding, input: CreateAuditLogInput, stamp?: { id: string; timestamp: string }): Promise<void> {
     const entry = this.entry(binding, input, stamp)
-    if (this.checkpoints[entry.id]) this.finishBackupCheckpoint(entry.id, entry)
+    if (this.checkpoints[entry.id]) this.finishCheckpoint({ binding: { ...binding, user: entry.user }, entry })
     else queueEvent(binding.storageAccountName, entry)
     await this.deliver(binding.storageAccountName, entry)
   }
@@ -146,14 +170,20 @@ export class AuditSink {
     const bound = { ...binding, user: entry.user }
     let finished = false
     let ready = false
-    const persist = (finished = false) => {
-      this.save({ ...this.checkpoints, [entry.id]: { binding: bound, entry, finished, ready, completionId, correlation: options.correlation } })
+    let batchEnd = 0
+    const checkpoint = (snapshot = entry): Checkpoint => ({
+      binding: bound, entry: snapshot, ready, completionId, correlation: options.correlation,
+    })
+    const persist = (snapshot = entry) => {
+      this.save({ ...this.checkpoints, [entry.id]: checkpoint(snapshot) })
     }
     try { persist() } catch { warning() }
     const storeItem = (index: number, item: AuditJobItem) => {
       if (finished) return
       entry.job!.items![index] = projectItem(item)
-      try { persist() } catch { warning() }
+      if (index >= batchEnd) {
+        try { persist() } catch { warning() }
+      }
     }
     return {
       correlate: operationId => {
@@ -161,7 +191,17 @@ export class AuditSink {
         entry.context.correlationId = operationId
         try { persist() } catch { warning() }
       },
-      started: index => storeItem(index, { ...entry.job!.items![index]!, outcome: 'uncertain', reason: 'PROCESS_INTERRUPTED' }),
+      started: index => {
+        const items = entry.job!.items!
+        const interrupted = (item: AuditJobItem): AuditJobItem => ({ ...item, outcome: 'uncertain', reason: 'PROCESS_INTERRUPTED' })
+        if (items.length > RESTORE_CHECKPOINT_ITEMS && index >= batchEnd) {
+          const end = index + RESTORE_CHECKPOINT_ITEMS
+          // Write ahead for this window so a restart never treats a possible write as unattempted.
+          const snapshot = { ...entry, job: { ...entry.job!, items: items.map((item, i) => i >= index && i < end ? interrupted(item) : item) } }
+          try { persist(snapshot); batchEnd = end } catch { warning() }
+        }
+        storeItem(index, interrupted(items[index]!))
+      },
       item: storeItem,
       ready: (index, item) => {
         entry.job!.items![index] = projectItem(item)
@@ -184,8 +224,7 @@ export class AuditSink {
         if (!completionId) entry.timestamp = new Date().toISOString()
         this.finalize(entry, uncertain)
         try {
-          persist(true)
-          this.enqueueCheckpoint(entry.id)
+          this.finishCheckpoint(checkpoint())
           void this.deliver(bound.storageAccountName, entry).catch(warning)
         } catch { warning() }
       },
@@ -232,9 +271,20 @@ export class AuditSink {
     this.save({ ...this.checkpoints, [entry.id]: { binding: { ...binding, user: entry.user }, entry } })
   }
 
-  private finishBackupCheckpoint(id: string, input: AuditLogEntry): void {
-    const checkpoint = this.checkpoints[id]!
-    this.save({ ...this.checkpoints, [id]: { ...checkpoint, entry: projectEntry(input), finished: true } })
+  private finishCheckpoint(checkpoint: Checkpoint): void {
+    const { entry, binding } = checkpoint
+    const id = entry.id
+    // A failed journal write must not leave an uncertain start in place of a known result.
+    this.checkpoints = { ...this.checkpoints, [id]: { ...checkpoint, finished: true } }
+    try { this.save(this.checkpoints) }
+    catch {
+      warning()
+      // Backups have no restore correlation receipt to persist before entering the outbox.
+      if (isBackupCheckpoint(entry)) {
+        try { queueEvent(binding.storageAccountName, entry) } catch { warning() }
+      }
+      this.save(this.checkpoints)
+    }
     this.enqueueCheckpoint(id)
   }
 
@@ -246,8 +296,14 @@ export class AuditSink {
         continue
       }
       try {
-        const entry = await reconcile(checkpoint.binding, checkpoint.entry)
-        this.finishBackupCheckpoint(id, entry)
+        // The outbox can already contain the true terminal outcome if the journal write failed.
+        let queued: AuditLogEntry | undefined
+        try {
+          queued = pendingEvents(checkpoint.binding.storageAccountName).find(entry =>
+            entry.id === id && isBackupCheckpoint(entry) && entry.user.tenantId === checkpoint.entry.user.tenantId)
+        } catch { warning() }
+        const entry = queued ?? await reconcile(checkpoint.binding, checkpoint.entry)
+        if (this.checkpoints[id] === checkpoint) this.finishCheckpoint({ ...checkpoint, entry: projectEntry(entry) })
         this.interruptedBackups.delete(id)
       } catch { warning() }
     }
@@ -284,6 +340,8 @@ export class AuditSink {
         const offset = (this.retryOffsets.get(account) ?? 0) % Math.max(1, pending.length)
         this.retryOffsets.set(account, offset + 10)
         for (const entry of pending.slice(offset, offset + 10)) {
+          // Keep outbox evidence until any stale on-disk checkpoint has been removed.
+          if (this.checkpoints[entry.id]) continue
           try { await this.deliver(account, entry) } catch { /* A pending event cannot block the next tenant. */ }
         }
       }

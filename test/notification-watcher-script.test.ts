@@ -27,6 +27,23 @@ const desktopApp = readFileSync(new URL("../resources/New-TenuVaultDesktopApp.ps
 const pwsh = ["/usr/local/bin/pwsh", "/opt/homebrew/bin/pwsh", "/usr/bin/pwsh", ...(process.env.HOME ? [`${process.env.HOME}/.local/bin/pwsh`] : [])].find((candidate) => existsSync(candidate))
 
 describe("Azure notification watcher scripts", () => {
+  it.runIf(Boolean(pwsh))("uses the backup container to alert separately about a receipt denial", () => {
+    const source = fileURLToPath(new URL("../resources/runbooks/Invoke-TenuVaultNotificationCheck.ps1", import.meta.url))
+    const output = execFileSync(pwsh!, ["-NoProfile", "-Command", `
+      $ErrorActionPreference = 'Stop'
+      . $env:TV_FIXTURE_WATCHER -LibraryOnly
+      $tenant = '11111111-2222-3333-4444-555555555555'
+      function Get-TvBlobText {
+        param($Uri, $Token)
+        if ($Uri -ne 'https://stcontoso.blob.core.windows.net/intune-backups/cloud-backup-status-11111111.json') { throw "Wrong status path" }
+        @{ TenantId = $tenant; RunId = '99999999-9999-4999-8999-999999999999'; LastRunAt = '2026-11-20T12:00:00.000Z'; LastStatus = 'Success'; AuditReceiptFailed = $true } | ConvertTo-Json
+      }
+      $event = Read-TvCloudAuditAlert -Account stcontoso -Token test -TenantId $tenant -Now ([datetime]'2026-11-20T12:05:00Z')
+      $event | ConvertTo-Json -Compress -Depth 10
+    `], { encoding: "utf8", timeout: 15_000, env: { ...process.env, TV_FIXTURE_WATCHER: source } })
+    expect(JSON.parse(output)).toMatchObject({ type: "backup.warning", severity: "warning", title: "Cloud backup audit needs attention" })
+  })
+
   it("never reads audit request bodies, and touches property values only to name changed settings", () => {
     expect(runbook).not.toContain("requestBody")
     expect(runbook).toContain("id,displayName,componentName,actor,activity,activityDateTime,activityType,activityOperationType,activityResult,category,resources")

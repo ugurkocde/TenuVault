@@ -29,9 +29,9 @@ function stub(blobs: Record<string, unknown>) {
   return graph
 }
 
-const revert = () => revertPolicy(new NextRequest('http://tenuvault.internal/api/revert-policy', {
+const revert = (action = 'revert') => revertPolicy(new NextRequest('http://tenuvault.internal/api/revert-policy', {
   method: 'POST',
-  body: JSON.stringify({ tenantId: TENANT, appId: 'app', clientSecret: 'placeholder', storageAccountName: 'storage', action: 'revert', policyId: 'original', policyType: 'Device Configuration', backupPath }),
+  body: JSON.stringify({ tenantId: TENANT, appId: 'app', clientSecret: 'placeholder', storageAccountName: 'storage', action, policyId: 'original', policyType: 'Device Configuration', backupPath }),
 }))
 
 describe('revert and recreate from a backup', () => {
@@ -79,6 +79,26 @@ describe('revert and recreate from a backup', () => {
     expect((await revert()).status).toBe(403)
     expect(graph).toEqual([])
   })
+})
+
+it.each(['revert', 'restore'])('records a safe preparation failure for %s when the snapshot is missing', async action => {
+  const { AuditSink, setMainAuditSink } = await import('../src/main/api/audit-sink')
+  const { pendingEvents, setAuditOutboxStore } = await import('../src/portal/lib/audit/outbox')
+  const graph = stub({ [`${backupId}/metadata.json`]: manifest(snapshot) })
+  const log = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+  setAuditOutboxStore()
+  setMainAuditSink(new AuditSink({
+    bind: () => ({ tenantId: TENANT, storageAccountName: 'storage', user: { id: TENANT, name: 'Admin', email: '' } }),
+    transport: async () => { throw new Error('Offline') },
+  }))
+  try {
+    const response = await revert(action)
+    expect(response.status).toBe(404)
+    expect(await response.json()).toEqual({ error: 'Policy backup file not found' })
+    expect(graph).toEqual([])
+    expect(pendingEvents('storage')).toMatchObject([{ job: { status: 'failed', sourceBackupId: backupId, reason: 'RESTORE_PREPARATION_FAILED' } }])
+    expect(pendingEvents('storage')).toHaveLength(1)
+  } finally { setMainAuditSink(undefined); setAuditOutboxStore(); log.mockRestore() }
 })
 
 it("finishes the revert audit if restore execution throws after it started", async () => {

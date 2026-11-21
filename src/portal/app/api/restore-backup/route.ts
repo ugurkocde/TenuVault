@@ -432,7 +432,7 @@ async function approvalAction(body: any): Promise<Response> {
       else audit?.item(0, { ...initialItem, outcome: "uncertain", reason: "WRITE_UNCONFIRMED" })
     }
     if (error instanceof ApprovalCompletionRefused) {
-      return NextResponse.json({ error: error.message, code: "APPROVAL_COMPLETION_REFUSED" }, { status: error.status })
+      return NextResponse.json({ error: error.message, code: "APPROVAL_COMPLETION_REFUSED" }, { status: 409 })
     }
     return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 409 })
   } finally {

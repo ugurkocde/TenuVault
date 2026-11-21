@@ -49,7 +49,7 @@ function fakeGraph(overrides: Record<string, Response | (() => Response)> = {}) 
   }
 }
 
-function setup(graph = fakeGraph(), concurrency?: number) {
+function setup(graph = fakeGraph(), concurrency?: number, unattendedTokens?: ConstructorParameters<typeof BackupEngine>[0]["unattendedTokens"]) {
   const store = new LocalBlobStore(mkdtempSync(join(tmpdir(), "tv-engine-")), [randomBytes(32)])
   const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init)
@@ -59,7 +59,7 @@ function setup(graph = fakeGraph(), concurrency?: number) {
     throw new Error(`unexpected ${url}`)
   }) as unknown as typeof fetch
   const getToken = vi.fn(async () => "token")
-  const engine = new BackupEngine({ fetch: fetchImpl, getToken, ...(concurrency === undefined ? {} : { concurrency }) })
+  const engine = new BackupEngine({ fetch: fetchImpl, getToken, unattendedTokens, ...(concurrency === undefined ? {} : { concurrency }) })
   return { engine, store, getToken, account: localStorageAccountName(TENANT) }
 }
 
@@ -402,6 +402,21 @@ describe("retention after incomplete backups", () => {
     expect((await read("GroupPolicyConfigurations/ADMX.json")).definitionValues).toEqual([{ id: "dv1", enabled: true, presentationValues: [{ id: "pv1", value: "x" }] }])
     const fetched = (engine as unknown as { deps: { fetch: { mock: { calls: unknown[][] } } } }).deps.fetch.mock.calls.map((call) => decodeURIComponent(String(call[0])))
     expect(fetched.some((url) => url.includes("reusablePolicySettings/r1?$select=id,displayName,description,settingDefinitionId,settingInstance"))).toBe(true)
+  })
+
+  it("keeps a backup with masked OMA values and no failures eligible as a successful backup", async () => {
+    const { engine, store, account } = setup(fakeGraph({
+      "/beta/deviceManagement/deviceConfigurations": Response.json({ value: [{ id: "dc1", displayName: "Masked" }] }),
+      "/beta/deviceManagement/deviceConfigurations/dc1?$expand=assignments": Response.json({
+        id: "dc1", displayName: "Masked",
+        omaSettings: [{ omaUri: "./x", isEncrypted: true, secretReferenceValueId: "s1", value: "****" }],
+      }),
+      "/beta/deviceManagement/deviceConfigurations/dc1/getOmaSettingPlainTextValue(secretReferenceValueId='s1')": Response.json({}, { status: 403 }),
+    }), undefined, () => ({ mode: "app-only", graph: async () => "reader-token", storage: async () => "reader-token" }))
+    const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account, trigger: "scheduled" }).id)
+    const metadata = JSON.parse((await store.get(account, "intune-backups", `${job.backupFolder}/metadata.json`)).data.toString())
+    expect(metadata).toMatchObject({ Status: "Success", Failures: 0, MaskedSecretItems: [expect.objectContaining({ Id: "dc1" })] })
+    expect(job.results?.warnings).toBe(1)
   })
 
   it("skips a newly supported type the app registration has no permission for, without blocking retention", async () => {

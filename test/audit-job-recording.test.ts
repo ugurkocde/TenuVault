@@ -1,17 +1,17 @@
 import { randomUUID } from "node:crypto"
 import { afterEach, expect, it, vi } from "vitest"
-import { AuditSink } from "../src/main/api/audit-sink"
+import { AuditSink, setMainAuditSink } from "../src/main/api/audit-sink"
 import { checkpointBackupAudit, reconcileBackupAudit, recordBackupAudit } from "../src/main/backup/audit"
 import { BackupEngine } from "../src/main/backup/engine"
 import { AuditContainerMissingError, AuditStorageService } from "../src/portal/lib/audit/storage"
 import { auditExportCSV, auditExportJSON } from "../src/portal/lib/audit/export"
 import { pendingEvents, setAuditOutboxStore } from "../src/portal/lib/audit/outbox"
 import { createAuditLogger } from "../src/portal/lib/audit/logger"
-import { AuditEventType, type AuditJob, type AuditLogEntry } from "../src/portal/lib/audit/types"
+import { AuditEventType, AuditResult, AuditSeverity, type AuditJob, type AuditLogEntry } from "../src/portal/lib/audit/types"
 import { Restorer, type GraphCall } from "../src/portal/lib/policies/graph-restore"
 import { projectItem } from "../src/portal/lib/audit/projection"
 import { auditChanges } from "../src/portal/lib/audit/restore-changes"
-import { restoreAuditItem } from "../src/portal/lib/audit/restore"
+import { restoreAuditItem, restoreTokenWithAudit } from "../src/portal/lib/audit/restore"
 import { clearSettingNames } from "../src/portal/lib/drift/setting-names"
 import { typeForFolder, type Item } from "../src/shared/intune/registry"
 import { memoryStore } from "./helpers"
@@ -33,7 +33,7 @@ const input = (value: AuditJob) => ({
 })
 const dateFilter = { startDate: new Date(Date.now() - 86400_000), endDate: new Date(Date.now() + 86400_000), tenantId }
 const meta = { tenantId, exportedAt: new Date().toISOString(), filter: dateFilter, pendingCount: 0 }
-afterEach(() => { setAuditOutboxStore(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
+afterEach(() => { setMainAuditSink(undefined); setAuditOutboxStore(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
 function storage() {
   const blobs = new Map<string, { body: string; timestamp: string | null }>()
@@ -104,6 +104,56 @@ it("recovers completed, partial, in-flight and unattempted items after a restart
     counts: { unchanged: 1, partial: 1, uncertain: 1, unattempted: 1 },
     items: [{ outcome: "unchanged" }, { outcome: "partial", applied: [{ field: "description" }] }, { outcome: "uncertain" }, { outcome: "unattempted" }],
   })
+})
+
+it("checkpoints large restores once per group and marks only one group uncertain after a crash", async () => {
+  const local = memoryStore()
+  setAuditOutboxStore(local)
+  const save = vi.spyOn(local, "set")
+  const remote = storage()
+  const options = { store: local, bind: () => binding, transport: async () => remote.service }
+  const entry = job(Array.from({ length: 60 }, () => ({ folder: "DeviceConfigurations", outcome: "unattempted" })))
+  const restore = new AuditSink(options).begin(binding, input(entry))
+  for (let index = 0; index < 40; index++) {
+    restore.started(index)
+    restore.item(index, { folder: "DeviceConfigurations", outcome: "updated" })
+  }
+  expect(save.mock.calls.filter(([key]) => key === "audit.restore-jobs")).toHaveLength(3)
+  const restarted = new AuditSink(options)
+  restarted.recover()
+  await restarted.retry()
+  expect(await remote.service.queryAllLogs(dateFilter)).toMatchObject([{
+    job: { status: "uncertain", counts: { updated: 25, uncertain: 25, unattempted: 10 } },
+  }])
+})
+
+it("quarantines corrupt audit state and allows new audit events", async () => {
+  const local = memoryStore()
+  setAuditOutboxStore(local)
+  vi.spyOn(console, "warn").mockImplementation(() => undefined)
+  local.set("audit.restore-jobs", "{invalid")
+  local.set("audit.restore-receipts", '{"id":null}')
+  const remote = storage()
+  const sink = new AuditSink({ store: local, bind: () => binding, transport: async () => remote.service })
+  expect(local.get("audit.restore-jobs.quarantine")).toBe("{invalid")
+  expect(local.get("audit.restore-receipts.quarantine")).toBe('{"id":null}')
+  expect(local.get("audit.restore-jobs")).toBeNull()
+  await sink.record(binding, input(job()))
+  expect(remote.blobs.size).toBe(1)
+})
+
+it("audits a rejected App Backup destination token without changing the restore error", async () => {
+  const local = memoryStore()
+  setAuditOutboxStore(local)
+  vi.spyOn(console, "warn").mockImplementation(() => undefined)
+  setMainAuditSink(new AuditSink({ store: local, bind: () => binding, transport: async () => { throw new Error("Offline") } }))
+  const failure = new Error(canary)
+  const runId = randomUUID()
+  await expect(restoreTokenWithAudit(async () => { throw failure }, {
+    destination: tenantId, sourceBackupId: randomUUID(), operationId: randomUUID(), runId, action: "Restore app backup",
+  })).rejects.toBe(failure)
+  expect(pendingEvents(storageAccountName)).toMatchObject([{ action: "Restore app backup", job: { runId, status: "failed", reason: "RESTORE_PREPARATION_FAILED" } }])
+  expect(local.get("audit.pending-events")).not.toContain(canary)
 })
 
 it("keeps a job count of one and exports every item when a detail page loses its acknowledgement", async () => {
@@ -313,6 +363,41 @@ it("still captures and records the Reader terminal result when the encrypted che
   expect(fetcher.mock.calls.some(([url, init]) => String(url).endsWith("/metadata.json") && init?.method === "PUT")).toBe(true)
   expect(log).toHaveBeenCalledWith("[audit] Backup audit checkpoint could not be saved")
   expect(await remote.service.queryAllLogs(dateFilter)).toMatchObject([{ id: active.id, job: { status: "completed", producer: "backup-reader" } }])
+})
+
+it.each([false, true])("retains a known early backup failure when the terminal journal write fails (persistent: %s)", async persistent => {
+  const local = memoryStore()
+  setAuditOutboxStore(local)
+  vi.spyOn(console, "warn").mockImplementation(() => undefined)
+  const remote = storage()
+  remote.deny()
+  const options = { store: local, bind: () => binding, transport: async () => remote.service }
+  const sink = new AuditSink(options)
+  const stamp = { id: randomUUID(), timestamp: new Date().toISOString() }
+  const started = input({ ...job(), runId: stamp.id, producer: "backup-reader" })
+  sink.checkpointBackup(binding, { ...started, eventType: AuditEventType.BACKUP_COMPLETED }, stamp)
+  const save = local.set
+  let fail = true
+  const write = vi.spyOn(local, "set").mockImplementation((key, value) => {
+    if (key === "audit.restore-jobs" && fail) {
+      fail = persistent
+      throw new Error("Journal unavailable")
+    }
+    save(key, value)
+  })
+  await expect(sink.record(binding, {
+    ...started, eventType: AuditEventType.BACKUP_FAILED, result: AuditResult.FAILURE, severity: AuditSeverity.ERROR,
+    job: { ...started.job, status: "failed", reason: "BACKUP_FAILED" },
+  }, stamp)).rejects.toThrow()
+  expect(pendingEvents(storageAccountName)).toMatchObject([{ id: stamp.id, job: { status: "failed" } }])
+  write.mockRestore()
+  remote.allow()
+  const restarted = new AuditSink(options)
+  const reconcile = vi.fn(async (_binding, entry: AuditLogEntry) => entry)
+  await restarted.recoverBackups(reconcile)
+  await restarted.retry()
+  expect(reconcile).not.toHaveBeenCalled()
+  expect(await remote.service.queryAllLogs(dateFilter)).toMatchObject([{ id: stamp.id, job: { status: "failed" } }])
 })
 
 it.each([
