@@ -146,3 +146,21 @@ it("keeps a saved Intune request and requires separate review for submission and
   expect(await (await complete()).json()).toMatchObject({ outcome: { success: true, intuneApprover: { user: { id: reviewer.oid, displayName: "Reviewer", upn: "reviewer@example.invalid" } } } })
   expect(mutations).toBe(2)
 })
+
+it("offers withdrawal of a legacy continuation after enrollment without repeating its completed step", async () => {
+  await seed()
+  const record = restoreApprovals(tenantId)[0]!
+  saveRestoreApproval({ ...record, status: "approved", continuationPending: true, objectId: reviewer.oid })
+  const { service } = writeApprovalFixture().profile()
+  await service.enable(tenantId)
+  setWriteApprovals(service)
+  const fetcher = network()
+  const complete = await POST(request({ approvalAction: "complete", approvalId: code }))
+  expect(complete.status).toBe(409)
+  expect(await complete.json()).toMatchObject({ error: expect.stringContaining("predates tenant write approval") })
+  const list = await POST(request({ approvalAction: "list", refresh: true }))
+  expect(await list.json()).toMatchObject({ records: [{ legacyContinuation: true, canComplete: true }] })
+  expect((await POST(request({ approvalAction: "withdraw", approvalId: code }))).status).toBe(200)
+  expect(restoreApprovals(tenantId)[0]?.status).toBe("cancelled")
+  expect(fetcher.mock.calls.map(([input]) => String(input)).filter(url => url.includes("graph.microsoft.com"))).toEqual([])
+})

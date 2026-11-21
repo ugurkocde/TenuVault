@@ -164,7 +164,7 @@ By default, items are restored to the tenant selected at the top of **Backup & R
 
 If the destination requires a second admin, select the restore mode, policies and assignment option before requesting approval. Changing any of those options requires a fresh review.
 
-Open **Settings > Storage and recovery > Tenant approvals** and select the destination tenant. A different signed-in admin reviews the request there. After approval, return to the operation on the original installation and apply the same selection within seven days.
+Open **Settings > Storage and recovery > Tenant approvals** and select the destination tenant. A different signed-in admin reviews the request there. After approval, return to the operation on the original installation and apply the same selection before it expires. The deadline is seven days from request creation. The Tenant approvals inbox shows the expiry.
 
 ## Related pages
 

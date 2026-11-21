@@ -142,7 +142,7 @@ The journal keeps up to 1,000 records. When it is full, TenuVault removes comple
 
 If the destination requires a second admin, a restore that stops after Graph may have accepted a request needs reconciliation before it is retried. A claimed approval cannot be replayed.
 
-Open **Settings > Storage and recovery > Tenant approvals** and select the destination tenant. A different signed-in admin reviews the request there. After approval, return to the operation on the original installation and apply the same selection within seven days.
+Open **Settings > Storage and recovery > Tenant approvals** and select the destination tenant. A different signed-in admin reviews the request there. After approval, return to the operation on the original installation and apply the same selection before it expires. The deadline is seven days from request creation. The Tenant approvals inbox shows the expiry.
 
 ## Related pages
 

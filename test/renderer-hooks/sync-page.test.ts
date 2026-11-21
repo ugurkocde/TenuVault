@@ -128,6 +128,7 @@ function server(tenantId: string, action: string, body: Record<string, unknown>)
       ;(target.changeSet as Record<string, unknown>).status = "approved"
       return { status: 200, body: { promotion: target.promotion, changeSet: target.changeSet } }
     }
+    case "apply-batch": return { status: 200, body: { legacy: true } }
     case "apply":
     case "retry": {
       const target = findTarget()

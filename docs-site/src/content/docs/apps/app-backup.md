@@ -217,7 +217,7 @@ If a folder cannot be read, check its location and import the matching key. Afte
 
 If the destination requires a second admin, **Restore to tenant** requests approval for the reviewed settings and installer in that destination. TenuVault checks the destination draft and content references when continuing an interrupted restore. The restored app is unassigned.
 
-Open **Settings > Storage and recovery > Tenant approvals** and select the destination tenant. A different signed-in admin reviews the request there. After approval, return to the operation on the original installation and apply the same selection within seven days.
+Open **Settings > Storage and recovery > Tenant approvals** and select the destination tenant. A different signed-in admin reviews the request there. After approval, return to the operation on the original installation and apply the same selection before it expires. The deadline is seven days from request creation. The Tenant approvals inbox shows the expiry.
 
 ## Related pages
 

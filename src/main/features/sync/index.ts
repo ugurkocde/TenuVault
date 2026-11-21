@@ -1,3 +1,4 @@
+import { approvalsEnabled, withWriteApproval } from "../../write-approvals/service"
 import type { RouteModule } from "../../api/host"
 import { allows, type Plan } from "../../../shared/plans"
 import type { FeatureDeps } from "../deps"
@@ -8,7 +9,7 @@ import { tenantWriteLabel, withTenantWrite } from "../write-lock"
 import type { ChangeSetRecord } from "../change-sets/model"
 import { applyChangeSet, approveChangeSet, createRollbackChangeSet, previewChangeSet, previewRollback, rejectChangeSet } from "../change-sets/engine"
 import { policies } from "../promotion"
-import { approvePromotion, previewPromotion, promotionChangeSet, promotionRollback, PROMOTION_FOLDER, syncPromotion, type PromotionRecord } from "../promotion/engine"
+import { approvePromotion, preparePromotionApply, previewPromotion, promotionChangeSet, promotionRollback, PROMOTION_FOLDER, syncPromotion, type PromotionRecord } from "../promotion/engine"
 import { parseMappings, type Mapping } from "../promotion/mapping"
 import { mappableObjects } from "../promotion/targets"
 import { applySync, planSync, syncCheck, type SyncRunRecord } from "./engine"
@@ -44,6 +45,27 @@ function syncTarget(deps: FeatureDeps, tenantId: string, body: Body): Stored<Pro
   const record = deps.records.get<PromotionRecord>(DOMAINS.promotions, tenantId, recordId(body, "Sync target"))
   if (!record?.sync) throw new FeatureError("This Sync target does not exist for this tenant.", 404)
   return record
+}
+
+async function approveSyncTarget(deps: FeatureDeps, tenantId: string, body: Body, actor: string | null) {
+  const target = syncTarget(deps, tenantId, body)
+  await requireRunTenants(deps, tenantId, target)
+  const backup = approvedBackup(body)
+  // Under the tenant write that an apply claims under, so an apply never claims a choice in
+  // between this check and the store below: an overlapping apply is refused instead.
+  return withTenantWrite(tenantId, "Sync approval", async () => {
+    // Once an apply started, the approval keeps the choice it bound, so the target stays retryable.
+    const latest = syncTarget(deps, tenantId, body)
+    // A discard that completed while this request waited for the tenant write is final.
+    const run = runOf(deps, latest)
+    if (run) requireNotDiscarded(run)
+    const claimed = claimedBackup(deps, tenantId, latest)
+    if (claimed && claimed !== backup) throw new FeatureError(`This sync was already started ${claimed === "none" ? "without a backup" : "with a backup"}. Approve it with the same choice.`, 409)
+    const changeSet = await approvePromotion(deps, tenantId, target.id, { contentHash: hashField(body, "contentHash"), targetFingerprint: hashField(body, "targetFingerprint"), reviewer: null, note: null, check: syncCheck(deps, tenantId, target.id) }, actor)
+    // Stored with the approval, so the apply and every retry use it whoever sends them later.
+    deps.records.update<PromotionRecord>(DOMAINS.promotions, tenantId, target.id, (current) => ({ ...current, sync: { ...current.sync!, backup } }), { actor, reason: backup === "none" ? "Approved to apply without a pre-change backup" : "Approved to apply after a pre-change backup" })
+    return { promotion: syncPromotion(deps, tenantId, target.id), changeSet }
+  })
 }
 
 /** The backup choice a Sync approval must name; the target's apply and retries are bound to it. */
@@ -279,25 +301,45 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
       await requireRunTenants(deps, tenantId, target)
       return previewPromotion(deps, tenantId, target.id, syncCheck(deps, tenantId, target.id))
     },
-    approve: async ({ tenantId, body, actor }) => {
-      const target = syncTarget(deps, tenantId, body)
-      await requireRunTenants(deps, tenantId, target)
-      const backup = approvedBackup(body)
-      // Under the tenant write that an apply claims under, so an apply never claims a choice in
-      // between this check and the store below: an overlapping apply is refused instead.
-      return withTenantWrite(tenantId, "Sync approval", async () => {
-        // Once an apply started, the approval keeps the choice it bound, so the target stays retryable.
-        const latest = syncTarget(deps, tenantId, body)
-        // A discard that completed while this request waited for the tenant write is final.
-        const run = runOf(deps, latest)
-        if (run) requireNotDiscarded(run)
-        const claimed = claimedBackup(deps, tenantId, latest)
-        if (claimed && claimed !== backup) throw new FeatureError(`This sync was already started ${claimed === "none" ? "without a backup" : "with a backup"}. Approve it with the same choice.`, 409)
-        const changeSet = await approvePromotion(deps, tenantId, target.id, { contentHash: hashField(body, "contentHash"), targetFingerprint: hashField(body, "targetFingerprint"), reviewer: null, note: null, check: syncCheck(deps, tenantId, target.id) }, actor)
-        // Stored with the approval, so the apply and every retry use it whoever sends them later.
-        deps.records.update<PromotionRecord>(DOMAINS.promotions, tenantId, target.id, (current) => ({ ...current, sync: { ...current.sync!, backup } }), { actor, reason: backup === "none" ? "Approved to apply without a pre-change backup" : "Approved to apply after a pre-change backup" })
-        return { promotion: syncPromotion(deps, tenantId, target.id), changeSet }
+    approve: ({ tenantId, body, actor }) => approveSyncTarget(deps, tenantId, body, actor),
+    "apply-batch": async ({ tenantId, body }) => {
+      const run = syncRun(deps, tenantId, body)
+      requireNotDiscarded(run)
+      if (!Array.isArray(body.destinations) || body.destinations.length < 2 || body.destinations.length > run.targets.length) {
+        throw new FeatureError("Select at least two targets from this Sync run.")
+      }
+      const selected = new Set<string>()
+      const destinations = body.destinations.map((entry: unknown) => {
+        if (!entry || typeof entry !== "object" || Array.isArray(entry)) throw new FeatureError("Invalid Sync destination.")
+        const request = entry as Body
+        const id = recordId(request, "Sync target")
+        const target = run.targets.find(candidate => candidate.promotionId === id)
+        if (!target || selected.has(target.targetTenantId)) throw new FeatureError("Select each destination from this Sync run once.")
+        selected.add(target.targetTenantId)
+        return { id, tenant: target.targetTenantId, request: { ...request, backup: approvedBackup(body) } as Body }
       })
+      const controlled = await Promise.all(destinations.map(destination => approvalsEnabled(destination.tenant)))
+      if (!controlled.some(Boolean)) return { legacy: true }
+      await requireSyncTenants(deps, tenantId, run.targets.map(target => target.targetTenantId))
+      const prepared: Array<Awaited<ReturnType<typeof preparePromotionApply>> & { id: string }> = []
+      for (const [index, { id, tenant, request }] of destinations.entries()) {
+        const actor = deps.actor(tenant)?.name ?? null
+        await approveSyncTarget(deps, tenant, request, actor)
+        const apply = await preparePromotionApply(deps, tenant, id, {
+          contentHash: hashField(request, "contentHash"), confirmed: body.confirm === true,
+          resolveBackup: () => boundBackup(syncTarget(deps, tenant, request), request),
+          check: syncCheck(deps, tenant, id),
+          onSettled: () => { recordSyncLinks(deps, tenant, tenantId) },
+        }, actor)
+        if (!controlled[index]) await apply.operation.observe()
+        prepared.push({ id, ...apply })
+      }
+      return withWriteApproval(prepared.map(entry => entry.operation), async () => ({
+        results: await Promise.all(prepared.map(async ({ id, work }) => {
+          try { await work(); return { id } }
+          catch (error) { return { id, error: error instanceof Error ? error.message : String(error) } }
+        })),
+      }))
     },
     reject: async ({ tenantId, body, actor }) => {
       const target = syncTarget(deps, tenantId, body)

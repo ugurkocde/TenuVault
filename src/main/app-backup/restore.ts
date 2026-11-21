@@ -246,11 +246,16 @@ async function restoreOwnedApp(store: AppSourceStore, source: CapturedAppSource,
       let sas = String(file.azureStorageUri ?? ""), renewed = Date.now()
       const ids: string[] = [], block = Buffer.alloc(4 * 1024 ** 2)
       let used = 0, uploaded = 0
+      let checkedUploadAt = -Infinity
+      const checkUpload = async () => {
+        if (performance.now() - checkedUploadAt < 15_000) return
+        await checkpoint()
+        checkedUploadAt = performance.now()
+      }
       const put = async (query: Record<string, string>, bytes: Buffer | string) => {
         const dispatch = () => putRestoreBlock(sas, query, bytes, fetchImpl, signal, target)
         if (expected) {
-          await checkpoint()
-          await withWriteCheckpoint(checkpoint, dispatch)
+          await withWriteCheckpoint(checkUpload, dispatch)
         } else await dispatch()
       }
       const upload = async () => {
@@ -264,6 +269,7 @@ async function restoreOwnedApp(store: AppSourceStore, source: CapturedAppSource,
         await put({ comp: "block", blockid: id }, block.subarray(0, used))
         ids.push(id); uploaded += used; used = 0; report("uploading", uploaded)
       }
+      if (expected) await checkUpload()
       report("uploading")
       const second: { profile?: ContentEncryption } = {}
       for await (const bytes of encryptRestoreContent(store.content(source.tenantId, source.id, signal), record.secrets, source, second, encryption.profile)) {

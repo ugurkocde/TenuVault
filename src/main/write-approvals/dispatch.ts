@@ -5,10 +5,10 @@ import type { ApprovalActor } from "../../shared/write-approvals"
 
 type Check = () => Promise<void>
 const checkpoint = new AsyncLocalStorage<Check>()
-const exemptCaller = new AsyncLocalStorage<"registration" | "watcher-roles" | "email">()
+const exemptCaller = new AsyncLocalStorage<"registration" | "watcher-roles" | "email" | "restore-withdraw">()
 
 /** Only main's provisioning and delivery adapters can mark their own dispatches exempt. */
-export function withExemptGraphCaller<T>(caller: "registration" | "watcher-roles" | "email", send: () => Promise<T>): Promise<T> {
+export function withExemptGraphCaller<T>(caller: "registration" | "watcher-roles" | "email" | "restore-withdraw", send: () => Promise<T>): Promise<T> {
   return exemptCaller.run(caller, send)
 }
 let uploadGuard: ((tenant: string) => Promise<void>) | undefined
@@ -36,12 +36,7 @@ export async function authorizeRestoreUpload(tenant: string | undefined): Promis
 }
 
 const graphHosts = new Set(["graph.microsoft.com", "graph.microsoft.us", "dod-graph.microsoft.us", "microsoftgraph.chinacloudapi.cn", "graph.microsoft.de"])
-const withdraw = /^\/beta\/deviceManagement\/operationApprovalRequests\/cancelMyRequest$/i
 const getOnly = new Set(["GET", "HEAD", "OPTIONS"])
-
-function requiresApproval(method: string, url: URL): boolean {
-  return !getOnly.has(method) && !(method === "POST" && withdraw.test(url.pathname))
-}
 
 function batchTargets(body: unknown, version: string, graphOrigin: string): Array<{ method: string; url: URL }> {
   if (!body || typeof body !== "object" || !("requests" in body) || !Array.isArray(body.requests) || !body.requests.length || body.requests.length > 20) {
@@ -72,7 +67,7 @@ export function graphDispatchGuard(
       : [{ method, url }]
     if (!batch && exemptCaller.getStore()) return
     for (const child of targets) {
-      if (!requiresApproval(child.method, child.url)) continue
+      if (getOnly.has(child.method)) continue
       const token = /^Bearer (.+)$/i.exec(request.headers.get("authorization") ?? "")?.[1]
       const session = token && sessionFor(token)
       if (!session || !session.current()) throw new WriteApprovalError("A signed-in delegated destination account is required for this Graph write.")

@@ -101,6 +101,7 @@ src/main/index.ts: bridgedFetch(`https://${profile.storageAccountName}.blob.core
 src/main/index.ts: bridgedFetchImpl(input, init)
 src/main/index.ts: chromiumFetch("https://graph.microsoft.com/beta/deviceManagement/deviceCompliancePolicies?$top=1&$select=id", { headers: { Authorization: `Bearer ${await tokens.graph()}` }, signal: AbortSignal.timeout(15_000),)
 src/main/index.ts: chromiumFetch(`https://${profile.storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&maxresults=1`, { headers: { Authorization: `Bearer ${await tokens.storage()}`, "x-ms-version": "2023-11-03" }, sign)
+src/main/index.ts: chromiumFetch(input, init)
 src/main/index.ts: createBridgedFetch({ dispatch: (request) => host.dispatch(request), // Azure backups are written as plain JSON; backups sealed by earlier versions open with the device keyring. fetch: legacyAzureReader(withNetworkErrors(chromiumFetch), () => backupKeys.keyring()), authorizeTenant, authorizeGraph: graphDispatchGuard(writeApprovals, token => graphSessions.get(tokenKey(token))), handleLocalBlob: (request) => handleLocalBlobRequest(getLocalStore(), request), getDelegatedToken: async (tenant, clientId, scope, forceRefresh) => { const result = await tokenFor(tenant, clientId, scope, forceRefresh) return { accessToken: result.accessToken, expiresOn: result.expiresOn } }, })
 src/main/index.ts: createChromiumFetch((options) => net.request(options), () => proxyAuth?.attempt() ?? NO_PROXY_AUTH)
 src/main/index.ts: graphDispatchGuard(writeApprovals, token => graphSessions.get(tokenKey(token)))
@@ -128,14 +129,13 @@ src/main/storage/azure-seal.ts: fetchImpl(input, init)
 src/main/whats-new.ts: this.fetchImpl(`https://api.github.com/repos/${repository}/releases?per_page=${MAX_RELEASES}`, { headers: { Accept: "application/vnd.github+json", "User-Agent": `TenuVault/${this.options.currentV)
 src/main/write-approvals/audit.ts: Request(`${INTERNAL_API_ORIGIN}/api/audit/log`) method "POST"
 src/main/write-approvals/audit.ts: dispatch(new Request(`${INTERNAL_API_ORIGIN}/api/audit/log`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tenantId: tenant, storageAccountName: account, appId: client(tenant), clientSecret: DELEGATED_CLIENT_SECRET, user: { id: actor.oid, email: "", name: actor.label }, logEntry: { eventType: AuditEventType.CONFIG_UPDATED, action, resource: { type: "tenant-write-approval", id: event.requestId ?? tenant, name: "Tenant write approval" }, result: AuditResult.SUCCESS, severity: AuditSeverity.INFO, details, }, }), }))
-src/main/write-approvals/blob.ts: fetchImpl(target, { ...init, redirect: "error", signal: AbortSignal.timeout(15_000), headers: { ...headers, ...init?.h)
+src/main/write-approvals/blob.ts: fetchImpl(target, { ...init, cache: "no-store", redirect: "error", signal: AbortSignal.timeout(15_000), headers: { ...)
 src/main/write-approvals/blob.ts: request(`${root}?${query}`)
-src/main/write-approvals/blob.ts: request(url(name))
 src/main/write-approvals/blob.ts: request(url(name)) method "DELETE"
 src/main/write-approvals/blob.ts: request(url(name)) method "HEAD"
 src/main/write-approvals/blob.ts: request(url(name)) method "PUT"
+src/main/write-approvals/blob.ts: request(url(name), etag ? { headers: { "if-none-match": etag } } : undefined)
 src/main/write-approvals/dispatch.ts: Request(input instanceof Request ? input.clone() : input, init)
-src/main/write-approvals/dispatch.ts: requiresApproval(child.method, child.url)
 src/portal/app/api/audit/cleanup/route.ts: fetch(`https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`) method "POST"
 src/portal/app/api/audit/export/route.ts: fetch(`https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`) method "POST"
 src/portal/app/api/audit/log/route.ts: fetch(`https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`) method "POST"

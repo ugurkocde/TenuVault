@@ -1,5 +1,7 @@
 import type { Item } from "../intune/registry"
 
+export const OIB_REVIEWED_BATCH_LIMIT = 100
+
 export const OIB_REPO = "SkipToTheEndpoint/OpenIntuneBaseline"
 export const OIB_LICENSE = "GPL-3.0 · SkipToTheEndpoint and contributors"
 

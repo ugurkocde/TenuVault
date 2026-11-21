@@ -49,9 +49,15 @@ TenuVault versions before plain Azure backups encrypted each Azure backup with t
 
 For a tenant on shared Azure storage, anyone signed in as a delegated admin can initiate a covered operation. If **Require a second admin** is enabled, another admin signs in to the destination tenant and approves in **Settings > Storage and recovery > Tenant approvals**. The requester applies from the original installation. TenuVault identifies both admins by their tenant-local Microsoft object IDs. Account labels are for display.
 
-Requests expire after seven days. The inbox shares policy references, decisions and review details. Payloads stay in their existing backup or workspace. TenuVault does not store access tokens or sign-in assertions with the requests.
+Requests expire seven days after creation. The Tenant approvals inbox shows the expiry. The inbox shares policy references, decisions and review details. Payloads stay in their existing backup or workspace. TenuVault does not store access tokens or sign-in assertions with the requests.
 
 Anyone who can write to the shared backup container is trusted like an Intune admin. Older or unmanaged installations, the Intune admin center and other tools can still write to Intune. Coordinate the [managed cutover](/deploy/) before enabling this setting. See [Settings reference](/settings/#tenant-approvals) for turn-off and recovery steps.
+
+### Known limits for tenant approvals
+
+- Two separately approved creates for the same absent object can both succeed if both final reads find it absent and Graph has no write precondition for that endpoint.
+- TenuVault cannot detect a change to a masked or write-only field when Microsoft Graph does not return the value.
+- With approvals on, each protected write checks Azure with one HEAD and two GET requests. Large jobs make these reads for each Graph mutation. App Backup checks the draft before upload and periodically during block uploads.
 
 ## Related pages
 

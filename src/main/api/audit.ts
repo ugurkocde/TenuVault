@@ -223,10 +223,11 @@ async function recordOibBatches(
   const { batches } = JSON.parse(bodyText) as { batches: Array<{ tenantId: string; platform: string }> }
   const { results } = await response.json() as { results?: Array<{ tenant: string; platform: string; batchIndex?: number; run?: unknown; error?: string }> }
   if (!results) return
-  await Promise.all(results.map(result => {
+  const outcomes = await Promise.allSettled(results.map(result => {
     const batch = result.batchIndex === undefined ? undefined : batches[result.batchIndex]
     if (batch) return recordOib(JSON.stringify(batch), Response.json(result.run ?? { error: result.error }, { status: result.run ? 200 : 500 }), dispatch, accountFor, onTrialUsage)
   }))
+  for (const outcome of outcomes) if (outcome.status === "rejected") console.error("[audit] Could not record an OpenIntuneBaseline batch", outcome.reason)
 }
 
 /** One entry per OpenIntuneBaseline deployment, drift fix or undo, with the counts, rather than one per policy. */

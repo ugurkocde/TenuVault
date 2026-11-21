@@ -75,7 +75,7 @@ function ApprovalInbox({ tenant, highlight }: { tenant: string; highlight: strin
       <Button variant="outline" disabled={busy} onClick={() => void call()}>Refresh approvals</Button>
       {inbox?.available && !inbox.enabled && <Button disabled={busy} onClick={() => setConfirm(true)}>Require a second admin</Button>}
       {inbox?.enabled && <Button variant="outline" disabled={busy} onClick={() => void call("disable")}>
-        {inbox.requests.some(({ request, decision, expired, local, superseded }) => local && !expired && !superseded && request.state === "pending" && request.summary.kind === "Disable tenant write approval" && decision?.decision === "approved")
+        {inbox.requests.some(({ request, decision, expired, local, superseded, invalidDecisionTime }) => local && !invalidDecisionTime && !expired && !superseded && request.state === "pending" && request.summary.kind === "Disable tenant write approval" && decision?.decision === "approved")
           ? "Apply approved disable" : "Request to turn off"}
       </Button>}
     </div>
@@ -84,16 +84,17 @@ function ApprovalInbox({ tenant, highlight }: { tenant: string; highlight: strin
       {!inbox.available ? "Use shared Azure storage to request approval from another admin."
         : inbox.enabled ? `On. This tenant requires TenuVault ${inbox.minimumVersion} or later.` : "Off for this tenant."}
     </p>}
-    {inbox?.available && !inbox.requests.length && <p className="text-sm text-muted-foreground">No tenant approval requests.</p>}
+    {inbox?.available && !inbox.requests.length && !inbox.invalidRecords && <p className="text-sm text-muted-foreground">No tenant approval requests.</p>}
+    {!!inbox?.invalidRecords && <p role="status" className="text-muted-foreground">{inbox.invalidRecords} approval records could not be read. Refresh to try again.</p>}
     {!!inbox?.requests.length && <ul className="divide-y rounded-lg border">
-      {!!inbox.invalidRecords && <p role="status" className="text-muted-foreground">{inbox.invalidRecords} approval records could not be read. Refresh after all installations use a compatible version.</p>}
-      {inbox.requests.map(({ request, decision, expired, local, superseded }) => {
+      {inbox.requests.map(({ request, decision, expired, local, superseded, invalidDecisionTime }) => {
         const owner = request.requester.oid === inbox.actor?.oid
         const open = request.state === "pending" && !expired && !superseded
         const blocker = request.state === "claimed" ? "The apply is running or its outcome needs verification in Intune."
           : request.state === "stale" ? "The source, options or destination changed. Request approval again."
           : request.state === "interrupted" ? "Review any changes in Intune before requesting a new approval."
           : request.state !== "pending" ? null
+          : invalidDecisionTime ? "The decision predates this request. Cancel it and request approval again."
           : expired ? "This request expired." : superseded ? "The policy generation changed."
           : decision?.decision === "approved" && owner ? local ? "Return to the operation and apply the same reviewed selection." : "Apply from the installation that requested approval." : null
         return <li key={request.id} className={`space-y-2 break-words p-4 text-sm ${highlight.includes(request.id) ? "bg-blue-50" : ""}`}>
@@ -101,11 +102,11 @@ function ApprovalInbox({ tenant, highlight }: { tenant: string; highlight: strin
           <p className="text-muted-foreground">Request ID <span className="break-all font-mono">{request.id}</span></p>
           {request.summary.reference && <p className="break-all text-muted-foreground">Source or operation reference {request.summary.reference}</p>}
           <p>Requester {request.requester.label} <span className="break-all text-muted-foreground">({request.requester.oid})</span></p>
-          <p>Decision {decision ? `${decision.decision} by ${decision.actor.label} (${decision.actor.oid})` : "pending"} · Status {request.state} · Expires {new Date(request.expiresAt).toLocaleString()}</p>
+          <p>Decision {invalidDecisionTime ? "invalid timestamp" : decision ? `${decision.decision} by ${decision.actor.label} (${decision.actor.oid})` : "pending"} · Status {request.state} · Expires {new Date(request.expiresAt).toLocaleString()}</p>
           {!!request.summary.targets.length && <details><summary className="cursor-pointer">Review targets and affected fields</summary>
             <ul className="list-disc space-y-1 break-all pl-5">{request.summary.operations?.length
-              ? request.summary.operations.map(({ name, id, assignments, fields, sensitiveFields }, index) => <li key={index}>
-                {name}{id && ` (${id})`}
+              ? request.summary.operations.map(({ name, id, verb, assignments, fields, sensitiveFields }, index) => <li key={index}>
+                {verb && `${verb} `}{name}{id && ` (${id})`}
                 {!!assignments.length && <p>{assignments.join(", ")}</p>}
                 {!!fields.length && <p>Affected fields {fields.join(", ")}</p>}
                 {!!sensitiveFields.length && <p>Sensitive fields {sensitiveFields.join(", ")}</p>}

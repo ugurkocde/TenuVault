@@ -290,7 +290,7 @@ Conflicts with other policy families are not evaluated. Profile selection and ap
 
 If the destination requires a second admin, creating unassigned Settings Catalog policies from framework recommendations requests approval for the selected settings. If an assessment expires while you are waiting, compare again and repeat the same selection. A changed destination requires a fresh review.
 
-Open **Settings > Storage and recovery > Tenant approvals** and select the destination tenant. A different signed-in admin reviews the request there. After approval, return to the operation on the original installation and apply the same selection within seven days.
+Open **Settings > Storage and recovery > Tenant approvals** and select the destination tenant. A different signed-in admin reviews the request there. After approval, return to the operation on the original installation and apply the same selection before it expires. The deadline is seven days from request creation. The Tenant approvals inbox shows the expiry.
 
 ## Related pages
 

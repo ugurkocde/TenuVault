@@ -114,7 +114,7 @@ For Dev to Prod promotion, select the production tenant and open **Changes** > *
 
 TenuVault checks all destinations before dispatching the first write. Each enrolled destination needs its own approval from a different delegated admin in that tenant. The source tenant’s sign-in cannot approve destination writes.
 
-Open **Settings > Storage and recovery > Tenant approvals** and select the destination tenant. A different signed-in admin reviews the request there. After approval, return to the operation on the original installation and apply the same selection within seven days.
+Open **Settings > Storage and recovery > Tenant approvals** and select the destination tenant. A different signed-in admin reviews the request there. After approval, return to the operation on the original installation and apply the same selection before it expires. The deadline is seven days from request creation. The Tenant approvals inbox shows the expiry.
 
 ## Related pages
 

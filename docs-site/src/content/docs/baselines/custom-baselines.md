@@ -58,4 +58,4 @@ For a customized OIB baseline, **OIB updates** offers the platform's latest OIB 
 
 If the destination requires a second admin, applying a custom baseline change set requests approval in that destination. Creating and comparing a custom baseline do not change Intune.
 
-Open **Settings > Storage and recovery > Tenant approvals** and select the destination tenant. A different signed-in admin reviews the request there. After approval, return to the operation on the original installation and apply the same selection within seven days.
+Open **Settings > Storage and recovery > Tenant approvals** and select the destination tenant. A different signed-in admin reviews the request there. After approval, return to the operation on the original installation and apply the same selection before it expires. The deadline is seven days from request creation. The Tenant approvals inbox shows the expiry.

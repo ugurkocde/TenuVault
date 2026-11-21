@@ -1,3 +1,4 @@
+import { withTenantWrite } from "../src/main/features/write-lock"
 import { setWriteApprovals } from "../src/main/write-approvals/service"
 import { approvalAccount, requester, reviewer, secondTenant, unenrolledApprovals, writeApprovalFixture } from "./helpers/write-approval-fixture"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
@@ -552,6 +553,8 @@ it("requires approval for deployment, pilot, fix and undo", async () => {
       const body = JSON.parse(String(init.body))
       state.policies.push({ id: CREATED, name: body.name, description: body.description })
       created = { ...body, id: CREATED, assignments: [] }
+      await graph(input, init)
+      return Response.json(created, { status: 201 })
     }
     if (created && init?.method === "GET" && url.includes(`/configurationPolicies/${CREATED}`)) {
       if (url.includes("/assignments")) return Response.json({ value: [] })
@@ -589,7 +592,7 @@ it("requires approval for deployment, pilot, fix and undo", async () => {
 })
 
 
-it("runs the reviewed OIB route through Graph transport and records the outcome of each batch", async () => {
+it.each([false, true])("records every reviewed OIB outcome through Graph transport when a later lock is held: %s", async held => {
   const { profile } = writeApprovalFixture()
   const first = profile(), second = profile(reviewer)
   setWriteApprovals(first.service)
@@ -627,8 +630,12 @@ it("runs the reviewed OIB route through Graph transport and records the outcome 
     expect((await run()).status).toBe(409)
     expect(writes).toEqual([])
     await approve(secondTenant)
-    expect(await run()).toMatchObject({ status: 200, body: { results: [{ tenant: tenantId, run: { created: [expect.anything()] } }, { tenant: secondTenant, run: { created: [expect.anything()] } }] } })
-    expect(writes).toHaveLength(2)
+    const result = held ? await withTenantWrite(secondTenant, "another job", run) : await run()
+    expect(result).toMatchObject({ status: 200, body: { results: [
+      { tenant: tenantId, run: { created: [expect.anything()] } },
+      held ? { tenant: secondTenant, error: expect.stringContaining("another job") } : { tenant: secondTenant, run: { created: [expect.anything()] } },
+    ] } })
+    expect(writes).toHaveLength(held ? 1 : 2)
     await vi.waitFor(() => expect(audit).toHaveBeenCalledTimes(2))
   } finally { setWriteApprovals(undefined) }
 })
@@ -668,4 +675,48 @@ it.each(["pilot", "collision"])("stops a protected OIB deployment when the %s ch
   expect(await run()).toMatchObject({ created: [] })
   expect(backupDone).toBe(true)
   expect(writes).toEqual([])
+})
+
+it("checks enrollment before limiting grouped OIB batches", async () => {
+  const { service } = writeApprovalFixture().profile()
+  setWriteApprovals(service)
+  const batches = Array.from({ length: 101 }, () => ({ ...base, action: "oib-deploy" }))
+  const admit = vi.fn(async () => null)
+  const post = () => reviewedOibRoute(admit)(new Request("http://local", { method: "POST", body: JSON.stringify({ tenantId, batches }) }))
+  expect(await (await post()).json()).toEqual({ legacy: true })
+  await service.enable(tenantId)
+  expect(await (await post()).json()).toMatchObject({ error: expect.stringContaining("at most 100") })
+  expect(admit).not.toHaveBeenCalled()
+})
+
+it("shows Loading the OIB pack while acquiring the deployment token", async () => {
+  const network = world({ policies: [] }, [])
+  let observed: OibProgress | undefined
+  vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).includes("oauth2")) observed = await handleOib({ action: "oib-progress", tenantId }) as OibProgress
+    return network(input, init)
+  })
+  await source()
+  await handleOib({ ...base, action: "oib-deploy", commit, backup: { mode: "none" }, items: [{ source: SC, mode: "create" }] })
+  expect(observed?.stage).toBe("Loading the OIB pack")
+})
+
+it("keeps the legacy no-storage skip for an unenrolled destination in a reviewed group", async () => {
+  const { profile } = writeApprovalFixture()
+  const first = profile(), second = profile(reviewer)
+  setWriteApprovals(first.service)
+  await first.service.enable(tenantId)
+  const writes: string[] = []
+  vi.stubGlobal("fetch", world({ policies: [] }, writes))
+  await source()
+  const firstBatch = { ...base, action: "oib-deploy", commit, backup: { mode: "none" }, items: [{ source: SC, mode: "create" }] }
+  const batches = [firstBatch, { ...firstBatch, tenantId: secondTenant, storageAccountName: undefined, backup: { mode: "new" } }]
+  const post = () => reviewedOibRoute(async () => null)(new Request("http://local", { method: "POST", body: JSON.stringify({ tenantId, batches }) }))
+  expect(await (await post()).json()).toMatchObject({ error: expect.stringContaining("pending") })
+  await second.service.decide(tenantId, (await second.service.inbox(tenantId)).requests[0]!.request.id, "approve")
+  expect(await (await post()).json()).toMatchObject({ results: [
+    { batchIndex: 0, run: { created: [expect.anything()] } },
+    { batchIndex: 1, error: expect.stringContaining("no backup storage") },
+  ] })
+  expect(writes).toHaveLength(1)
 })

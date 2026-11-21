@@ -148,7 +148,7 @@ Exports are built on this device from the saved assessment, without reading the 
 
 If the destination requires a second admin, applying, retrying or rolling back a CIS remediation change set needs tenant approval. Read-only comparisons and assessments continue as before.
 
-Open **Settings > Storage and recovery > Tenant approvals** and select the destination tenant. A different signed-in admin reviews the request there. After approval, return to the operation on the original installation and apply the same selection within seven days.
+Open **Settings > Storage and recovery > Tenant approvals** and select the destination tenant. A different signed-in admin reviews the request there. After approval, return to the operation on the original installation and apply the same selection before it expires. The deadline is seven days from request creation. The Tenant approvals inbox shows the expiry.
 
 ## Related pages
 

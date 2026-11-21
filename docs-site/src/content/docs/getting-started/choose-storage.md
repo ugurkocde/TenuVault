@@ -110,3 +110,5 @@ If the license no longer covers the tenant, the tenant is not saved and TenuVaul
 ## Moving storage for an enrolled tenant
 
 Enable tenant approval only with shared Azure storage. Keep the enrolled account connected while approval is on. Turning it off requires approval from another admin. See [Tenant approvals](/settings/#tenant-approvals).
+
+If TenuVault cannot read the prior Azure storage account and this installation has no known approval binding, you can confirm a storage change or tenant removal. TenuVault remembers the unverified account and checks it again before the tenant's next configuration write. If the prior account has approvals enabled, reconnect it and follow the approval process there. Signing out or releasing a license does not require a storage check.

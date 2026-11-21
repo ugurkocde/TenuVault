@@ -17,6 +17,7 @@ interface ApprovalRow {
   stepNumber: number
   totalSteps: number
   canComplete: boolean
+  legacyContinuation?: boolean
   requesterName?: string
 }
 const STATUS_LABELS: Record<string, string> = {
@@ -79,12 +80,13 @@ export function RestoreApprovals({ tenant, revision = 0, openRevision = 0, enabl
       <ul className="divide-y">{records.map(record => <li key={record.id} className="space-y-2 break-words py-3 text-sm">
         <p className="font-medium">{record.label}</p>
         <p>{OPERATION_LABELS[record.operation] ?? record.operation}, Step {record.stepNumber} of {record.totalSteps}: {STATUS_LABELS[record.status] ?? record.status}</p>
+        {record.legacyContinuation && <p>This Intune request predates tenant write approval. Withdraw it and submit the restore again.</p>}
         {record.approverNote && <p>Approver note: {record.approverNote}</p>}
         {record.expiresAt && ["needsApproval", "approved"].includes(record.status) && <p title={record.expiresAt}>{Math.max(0, Math.ceil((Date.parse(record.expiresAt) - Date.now()) / 3_600_000))} hours left</p>}
         {record.requesterName && <p>Requester: {record.requesterName}</p>}
         {!record.canComplete && <p>The original requester ({record.requesterName ?? "signed-in requester"}) must complete or withdraw this request.</p>}
         <div className="flex flex-wrap gap-2">
-          {record.status === "approved" && record.canComplete && <Button disabled={busy} onClick={() => void act("complete", record.id)}>Complete</Button>}
+          {record.status === "approved" && record.canComplete && !record.legacyContinuation && <Button disabled={busy} onClick={() => void act("complete", record.id)}>Complete</Button>}
           {record.status === "justification-required" && record.canComplete && <Button disabled={busy || !justification.trim()} onClick={() => void act("submit", record.id)}>Submit for approval</Button>}
           {["needsApproval", "approved", "stale"].includes(record.status) && record.canComplete && <Button variant="outline" disabled={busy} onClick={() => void act("withdraw", record.id)}>Withdraw</Button>}
           {["justification-required", "stale", "rejected", "cancelled", "expired", "completed"].includes(record.status) && (record.canComplete || record.status === "justification-required") && <Button variant="outline" disabled={busy} onClick={() => void act("dismiss", record.id)}>Dismiss</Button>}

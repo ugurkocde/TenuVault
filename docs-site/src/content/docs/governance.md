@@ -212,7 +212,7 @@ The **Adoption across customers** section shows the adopted version, pending upg
 
 Drafts, comparisons and governance reviews work without tenant write approval. Applying a change set from a golden standard, baseline or other governance workflow requests a second admin’s decision when the destination has enabled the setting.
 
-Open **Settings > Storage and recovery > Tenant approvals** and select the destination tenant. A different signed-in admin reviews the request there. After approval, return to the operation on the original installation and apply the same selection within seven days.
+Open **Settings > Storage and recovery > Tenant approvals** and select the destination tenant. A different signed-in admin reviews the request there. After approval, return to the operation on the original installation and apply the same selection before it expires. The deadline is seven days from request creation. The Tenant approvals inbox shows the expiry.
 
 ## Related pages
 

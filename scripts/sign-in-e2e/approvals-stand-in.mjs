@@ -59,7 +59,8 @@ export function approvalEndpoints(tenant, issued, json) {
         else response.writeHead(200, { etag: existing.etag }).end()
       } else if (request.method === "GET") {
         const existing = blobs.get(name)
-        if (existing) response.writeHead(200, { etag: existing.etag, "content-type": "application/json" }).end(existing.body)
+        if (existing && request.headers["if-none-match"] === existing.etag) response.writeHead(304, { etag: existing.etag }).end()
+        else if (existing) response.writeHead(200, { etag: existing.etag, "content-type": "application/json" }).end(existing.body)
         else response.writeHead(404, { "x-ms-error-code": "BlobNotFound" }).end()
       } else if (request.method === "PUT") {
         const chunks = []

@@ -8,6 +8,7 @@ import { useLicense, useTenantPlan } from "../lib/license"
 import { showFeaturePlanError } from "../lib/plan-dialog"
 import { formatDate } from "../features/shared/change-set"
 import {
+  applySyncBatch,
   applySyncTarget,
   approveSyncTarget,
   discardSyncRun,
@@ -317,10 +318,21 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
     })
     setNotes(left)
     setStep(4)
-    // Every target is approved and applied on its own, at the same time; backups queue in the engine.
+    const batch = ready.length > 1 ? applySyncBatch(source, forRun, ready.map(target => {
+      const { contentHash, targetFingerprint } = reviews[target.targetTenantId]!.preview!.changeSet
+      return { id: target.promotionId!, contentHash, targetFingerprint }
+    }), backup).then(result => ({ result, error: undefined }), error => ({ result: undefined, error })) : undefined
     for (const target of ready) {
       const preview = reviews[target.targetTenantId]!.preview!.changeSet
       void work(forRun, target, async (tenant, id) => {
+        const response = await batch
+        if (response?.error) throw response.error
+        const prepared = response?.result
+        if (prepared && !prepared.legacy) {
+          const result = prepared.results?.find(item => item.id === id)
+          if (!result || result.error) throw new Error(result?.error ?? "No result was returned for this destination.")
+          return
+        }
         await approveSyncTarget(tenant, id, preview, backup)
         await applySyncTarget(tenant, id, preview.contentHash, backup)
       })
@@ -448,7 +460,7 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
               retrying={shownActive.size > 0}
               tenantOf={tenantOf}
               onChanged={() => { void run.refetch(); void runs.refetch(); refreshStatus() }}
-              onContinue={runTargets.some(awaitingReview) && runId ? () => void continueReview(runId) : undefined}
+              onContinue={(runTargets.some(awaitingReview) || runTargets.length > 1 && Object.values(shownErrors).some(error => /tenant approval .* pending/i.test(error))) && runId ? () => void continueReview(runId) : undefined}
               onDiscard={runId && runTargets.length > 0 && discardable(runTargets) && !shownActive.size ? () => void discardRun(runId) : undefined}
               discard={discarding}
             />

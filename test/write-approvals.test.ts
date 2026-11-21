@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs"
 import { graphCaller } from "../src/portal/lib/policies/graph-restore"
 import { afterEach, expect, it, vi } from "vitest"
 import { ApiHost } from "../src/main/api/host"
@@ -187,6 +188,7 @@ it("survives a restart after dispatch without replaying a claimed request", asyn
 it.each([
   { route: "/api/restore-backup", action: { backupId: "fixture", restoreType: "selective", selectedPolicies: [{ path: "fixture/DeviceCategories/source.json" }] } },
   { route: "/api/revert-policy", action: { action: "restore", policyId: requester.oid, policyType: "DeviceCategories", backupPath: "fixture/DeviceCategories/source.json" } },
+  { route: "/api/revert-policy", action: { action: "revert", policyId: requester.oid, policyType: "DeviceCategories", backupPath: "fixture/DeviceCategories/source.json" } },
 ])("requires review across two profiles through IPC for $route", async ({ route, action }) => {
   const { profile } = writeApprovalFixture()
   const first = profile(), second = profile(reviewer)
@@ -202,6 +204,10 @@ it.each([
       if (req.method === "POST") { writes++; return Response.json({ id: reviewer.oid }) }
     }
     if (new URL(req.url).hostname.endsWith(".blob.core.windows.net")) return new Response(null, { status: req.method === "PUT" ? 201 : 404 })
+    if ("action" in action && action.action === "revert" && req.url.includes("graph.microsoft.com")) {
+      if (req.method === "PATCH") writes++
+      return Response.json({ id: requester.oid, displayName: clash ? "Concurrent edit" : "Current" })
+    }
     return Response.json({ id: reviewer.oid, displayName: "[Restored] Source" })
   }
   const host = new ApiHost({ routes: { ...writeApprovalRoutes(first.service), "/api/restore-backup": { POST: restoreRoute }, "/api/revert-policy": { POST: driftRoute } } })
@@ -309,12 +315,12 @@ it("exempts a real-format permission grant only for the provisioning caller", as
   expect(network).toHaveBeenCalledTimes(1)
 })
 
-it("reads a disabled or absent policy once per admitted run", async () => {
+it("rechecks absence at each dispatch after admitting the run", async () => {
   const { profile, state } = writeApprovalFixture()
   const { service } = profile()
   const { graph, dispatch } = runTransport(service)
   await service.run([prepare().operation], async () => { await graph(); await graph() })
-  expect(state.policyReads).toBe(1)
+  expect(state.policyReads).toBe(3)
   expect(dispatch).toHaveBeenCalledTimes(2)
 })
 
@@ -458,7 +464,7 @@ it("binds the resolved Autopilot device and its actual update steps even though 
   expect(writes).toBe(0)
 })
 
-it("persists approved repair steps across restarts and reports a changed item without aborting other items", async () => {
+it.each(["changed", "deleted", "unreadable"])("reports a %s repair without aborting other items", async condition => {
   const { setApprovedRestoreRepairStore } = await import("../src/portal/lib/policies/graph-restore")
   const { memoryStore } = await import("./helpers")
   const repairStore = memoryStore()
@@ -473,6 +479,7 @@ it("persists approved repair steps across restarts and reports a changed item wi
     const snapshot = { id: requester.oid, displayName: "Example", description: "Reviewed", assignments: [{ target: { "@odata.type": "#microsoft.graph.groupAssignmentTarget", groupId: secondTenant } }] }
     let live: Record<string, unknown> | undefined
     let refuseAssignment = true
+    let liveStatus = 200
     let writes = 0
     const transport = createBridgedFetch({
       dispatch: async () => new Response(null, { status: 404 }),
@@ -485,7 +492,7 @@ it("persists approved repair steps across restarts and reports a changed item wi
         if (url.pathname.endsWith("other.json")) return Response.json({ displayName: "Other" })
         if (url.pathname.endsWith(`groups/${secondTenant}`)) return Response.json({ id: secondTenant })
         if (request.method === "GET") {
-          if (url.pathname.endsWith(reviewer.oid)) return Response.json(live)
+          if (url.pathname.endsWith(reviewer.oid)) return Response.json(live ?? {}, { status: liveStatus })
           if (url.pathname.endsWith("/assignments")) return Response.json({ value: [] })
           return Response.json({ value: live && url.pathname.endsWith("deviceConfigurations") ? [live] : [] })
         }
@@ -523,14 +530,15 @@ it("persists approved repair steps across restarts and reports a changed item wi
     expect(JSON.parse(persisted.get(`write-approval.restore-repair.${repair}`)!).expectedCurrent.description).toBe("Reviewed")
     setApprovedRestoreRepairStore({ get: key => persisted.get(key) ?? null, set: (key, value) => { persisted.set(key, value) }, delete: key => { persisted.delete(key) }, keys: () => [...persisted.keys()] })
     refuseAssignment = false
+    if (condition !== "changed") liveStatus = condition === "deleted" ? 404 : 403
     const retry = () => run([{ path, repairToken: repair }, { path: other }])
     expect((await retry()).status).toBe(409)
     expect(writes).toBe(2)
     await approve()
-    state.beforeAudit = event => { if (event.action.endsWith("claimed")) live!.description = "Later edit" }
+    if (condition === "changed") state.beforeAudit = event => { if (event.action.endsWith("claimed")) live!.description = "Later edit" }
     const outcome = await (await retry()).json()
     expect(outcome.details.results).toEqual(expect.arrayContaining([
-      expect.objectContaining({ path, success: false, retryable: false, error: expect.stringContaining("changed after review") }),
+      expect.objectContaining({ path, success: false, retryable: false, error: expect.stringContaining(condition === "changed" ? "changed after review" : condition === "deleted" ? "missing" : "could not be verified") }),
       expect.objectContaining({ path: other, success: true }),
     ]))
     expect(writes).toBe(3)
@@ -551,4 +559,162 @@ it("audits a disable intent before CAS and refuses an approval that expired duri
   expect((await first.service.inbox(tenant)).enabled).toBe(true)
   expect(audits.map(event => event.action)).toContain("Tenant write approval disable requested")
   expect(audits.map(event => event.action)).not.toContain("Tenant write approval disabled")
+})
+
+it("allows a tenant with no backup container and fails closed if an enrolled container disappears", async () => {
+  const { profile, state } = writeApprovalFixture()
+  const { service } = profile()
+  const { graph, dispatch } = runTransport(service)
+  state.containerMissing = true
+  expect(await service.inbox(tenant)).toMatchObject({ enabled: false, requests: [] })
+  await service.run([prepare().operation], () => graph())
+  state.containerMissing = false
+  await service.enable(tenant)
+  state.containerMissing = true
+  await expect(graph()).rejects.toThrow("enrolled tenant approval policy is missing")
+  expect(dispatch).toHaveBeenCalledTimes(1)
+})
+
+it.each([undefined, "anotheraccount"])("requires confirmation to leave unreadable storage and verifies it before writes, next account %s", async next => {
+  const { profile, state } = writeApprovalFixture()
+  const origin = profile(), other = profile(reviewer)
+  const { graph, dispatch } = runTransport(origin.service)
+  state.blockedAccounts.add(approvalAccount)
+  const refused = vi.fn(async () => false)
+  await expect(origin.service.beforeStorageChange(tenant, next, refused)).rejects.toThrow("cancelled")
+  expect(refused).toHaveBeenCalledWith(approvalAccount)
+  await origin.service.beforeStorageChange(tenant, next, async () => true)
+  state.account = next ?? localStorageAccountName(tenant)
+  await expect(graph()).rejects.toThrow("could not be verified")
+  state.blockedAccounts.clear()
+  const account = state.account
+  state.account = approvalAccount
+  await other.service.enable(tenant)
+  state.account = account
+  await expect(graph()).rejects.toThrow("enrolled with")
+  expect(dispatch).not.toHaveBeenCalled()
+})
+
+it("serializes an account move with approval activation", async () => {
+  const { profile, state } = writeApprovalFixture()
+  const { service } = profile()
+  const starting = service.enable(tenant)
+  const move = service.withStorageProfiles(async () => {
+    await service.beforeStorageChange(tenant, "anotheraccount")
+    state.account = "anotheraccount"
+  })
+  await starting
+  await expect(move).rejects.toThrow("before changing storage")
+  expect(state.account).toBe(approvalAccount)
+})
+
+it.each([false, true])("refuses dispatch after another desktop enables or re-enables approval, previously disabled %s", async disabled => {
+  const { profile, state } = writeApprovalFixture()
+  const first = profile(), second = profile(reviewer)
+  if (disabled) {
+    await first.service.enable(tenant)
+    await expect(first.service.disable(tenant)).rejects.toThrow("pending")
+    await second.service.decide(tenant, (await second.service.inbox(tenant)).requests[0]!.request.id, "approve")
+    await first.service.disable(tenant)
+  }
+  const { graph, dispatch } = runTransport(first.service)
+  await expect(first.service.run([prepare().operation], async () => {
+    await graph()
+    await second.service.enable(tenant)
+    await graph()
+  })).rejects.toThrow("current tenant write approval")
+  expect(dispatch).toHaveBeenCalledTimes(1)
+  expect(state.conditionalReads).toBe(disabled ? 2 : 0)
+})
+
+it("uses Azure time and displays invalid legacy decisions alongside readable inbox records", async () => {
+  const { profile, state, values } = writeApprovalFixture()
+  const first = profile(), second = profile(reviewer)
+  state.serverTime = Date.UTC(2026, 10, 20)
+  vi.spyOn(Date, "now").mockReturnValue(state.serverTime + 31 * 86_400_000)
+  try {
+    await first.service.enable(tenant)
+    const { operation } = prepare()
+    const run = () => first.service.run([operation], async () => undefined)
+    await expect(run()).rejects.toThrow("pending")
+    const { request } = (await second.service.inbox(tenant)).requests[0]!
+    expect(request.createdAt).toBe(state.serverTime)
+    expect(request.expiresAt).toBe(state.serverTime + WRITE_APPROVAL_LIFETIME)
+    state.serverTime += 60_000
+    await second.service.decide(tenant, request.id, "approve")
+    expect((await first.service.inbox(tenant)).requests[0]!.decision?.at).toBe(state.serverTime)
+    const [key, value] = [...values].find(([key]) => key.includes("/decisions/"))!
+    values.set(key, { ...value, body: JSON.stringify({ ...JSON.parse(value.body), at: request.createdAt - 1000 }) })
+    expect((await first.service.inbox(tenant)).requests[0]).toMatchObject({ invalidDecisionTime: true })
+    await expect(run()).rejects.toThrow("record is invalid")
+    state.failedReads.add(key)
+    expect(await first.service.inbox(tenant)).toMatchObject({ invalidRecords: 1, requests: [] })
+  } finally { vi.restoreAllMocks() }
+})
+
+it("requires the caller-bound exemption to withdraw an Intune request", async () => {
+  const { service } = writeApprovalFixture().profile()
+  await service.enable(tenant)
+  const { graph, dispatch } = runTransport(service)
+  const send = () => graph("issuer-observed", "deviceManagement/operationApprovalRequests/cancelMyRequest")
+  await expect(send()).rejects.toThrow("current tenant write approval")
+  expect((await withExemptGraphCaller("restore-withdraw", send)).ok).toBe(true)
+  expect(dispatch).toHaveBeenCalledTimes(1)
+})
+
+it.each([false, true])("resolves a named location from its approved creation, with an intervening edit: %s", async edited => {
+  const { profile } = writeApprovalFixture()
+  const origin = profile(), second = profile(reviewer)
+  setWriteApprovals(origin.service)
+  await origin.service.enable(tenant)
+  const location = { id: requester.oid, "@odata.type": "#microsoft.graph.ipNamedLocation", displayName: "Office", ipRanges: [] }
+  const policy = { id: tenant, displayName: "Require MFA", state: "disabled", conditions: { locations: { includeLocations: [requester.oid] } } }
+  const writes: Record<string, unknown>[] = []
+  let created: Record<string, unknown> | undefined
+  const transport = createBridgedFetch({
+    dispatch: async () => new Response(null, { status: 404 }),
+    getDelegatedToken: async () => ({ accessToken: "fixture", expiresOn: null }),
+    authorizeGraph: graphDispatchGuard(origin.service, () => ({ tenant, actor: requester, current: () => true })),
+    fetch: async (input, init) => {
+      const request = new Request(input, init)
+      const path = new URL(request.url).pathname
+      if (path.endsWith("metadata.json")) return Response.json({ TenantId: tenant, Status: "Success", Failures: 0 })
+      if (path.endsWith("office.json")) return Response.json(location)
+      if (path.endsWith("mfa.json")) return Response.json(policy)
+      if (request.method === "GET") {
+        if (path.endsWith(reviewer.oid) && created) return Response.json(created)
+        if (path.endsWith("/namedLocations") || path.endsWith("/policies")) return Response.json({ value: [] })
+        return Response.json({ error: { code: "ResourceNotFound" } }, { status: 404 })
+      }
+      const body = await request.json() as Record<string, unknown>
+      writes.push(body)
+      if (path.endsWith("/namedLocations")) {
+        const response = { ...body, id: reviewer.oid }
+        created = edited ? { ...response, isTrusted: true } : response
+        return Response.json(response, { status: 201 })
+      }
+      return Response.json({ ...body, id: secondTenant }, { status: 201 })
+    },
+  })
+  vi.stubGlobal("fetch", transport)
+  const host = new ApiHost({ routes: { "/api/restore-backup": { POST: restoreRoute } } })
+  const run = () => host.dispatch(new Request(`${INTERNAL_API_ORIGIN}/api/restore-backup`, { method: "POST", body: JSON.stringify({
+    tenantId: tenant, appId: requester.oid, clientSecret: DELEGATED_CLIENT_SECRET, storageAccountName: approvalAccount,
+    backupId: "fixture", restoreType: "selective",
+    selectedPolicies: [{ path: "fixture/ConditionalAccessPolicies/mfa.json" }, { path: "fixture/NamedLocations/office.json" }],
+  }) }))
+  expect((await run()).status).toBe(409)
+  await second.service.decide(tenant, (await second.service.inbox(tenant)).requests[0]!.request.id, "approve")
+  const result = await (await run()).json()
+  expect(result.success).toBe(!edited)
+  expect(writes).toHaveLength(edited ? 1 : 2)
+  if (!edited) expect(writes[1]).toMatchObject({ conditions: { locations: { includeLocations: [reviewer.oid] } } })
+})
+
+
+it("documents request creation as the start of the seven-day deadline", () => {
+  for (const doc of ["apps/app-backup.md", "changes.md", "sync.md", "restore/index.md", "baselines/quick-start.md"]) {
+    const guide = readFileSync(new URL(`../docs-site/src/content/docs/${doc}`, import.meta.url), "utf8")
+    expect(guide).toContain("The deadline is seven days from request creation. The Tenant approvals inbox shows the expiry.")
+  }
 })

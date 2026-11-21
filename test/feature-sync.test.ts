@@ -1368,3 +1368,32 @@ it("binds Sync apply to the destination's approval and reviewed backup choice", 
   expect((await apply()).status).toBe(200)
   expect(context.targets[TENANT_B]!.writeCount()).toBe(1)
 })
+
+it("preflights all Sync destinations and sends zero mutations if one is pending", async () => {
+  const context = setup({ plans: MSP })
+  const { profile } = writeApprovalFixture()
+  const first = profile(), second = profile(reviewer)
+  setWriteApprovals(first.service)
+  await first.service.enable(TENANT_B)
+  await first.service.enable(TENANT_C)
+  const { run, targets } = await planned(context, [TENANT_B, TENANT_C])
+  const destinations = await Promise.all(targets.map(async target => {
+    const id = target.promotion!.id
+    const { body: { changeSet } } = await context.post({ tenantId: target.targetTenantId, action: "preview", id })
+    return { id, contentHash: changeSet.contentHash, targetFingerprint: changeSet.targetFingerprint }
+  }))
+  const apply = () => context.post({ tenantId: TENANT_A, action: "apply-batch", id: run.id, destinations, backup: "none", confirm: true })
+  expect((await apply()).status).toBe(409)
+  const approveTenant = async (tenant: string) => {
+    const { request } = (await second.service.inbox(tenant)).requests[0]!
+    await second.service.decide(tenant, request.id, "approve")
+  }
+  await approveTenant(TENANT_B)
+  expect(await apply()).toMatchObject({ status: 409, body: { error: expect.stringContaining("pending") } })
+  expect(context.targets[TENANT_B]!.writeCount()).toBe(0)
+  expect(context.targets[TENANT_C]!.writeCount()).toBe(0)
+  await approveTenant(TENANT_C)
+  expect(await apply()).toMatchObject({ status: 200, body: { results: destinations.map(({ id }) => ({ id })) } })
+  expect(context.targets[TENANT_B]!.writeCount()).toBe(1)
+  expect(context.targets[TENANT_C]!.writeCount()).toBe(1)
+})

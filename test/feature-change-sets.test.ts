@@ -561,3 +561,40 @@ it("rechecks the reviewed destination after the pre-change backup", async () => 
   expect((await apply()).status).toBe(409)
   expect(context.tenant.writeCount()).toBe(0)
 })
+
+it("shows assignment targets and filters with the operation verb in the approval summary", async () => {
+  const context = setup()
+  const { service } = writeApprovalFixture().profile()
+  setWriteApprovals(service)
+  await service.enable(TENANT_A)
+  const group = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+  const filter = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+  const record = await createChangeSet(context.deps, TENANT_A, {
+    title: "Assign Defender", operations: [{
+      folder: "ConfigurationPolicies", action: "create",
+      proposed: { name: "Defender", platforms: "windows10", technologies: "mdm" },
+      assignments: [{ target: { "@odata.type": "#microsoft.graph.groupAssignmentTarget", groupId: group, deviceAndAppManagementAssignmentFilterId: filter, deviceAndAppManagementAssignmentFilterType: "include" } }],
+    }],
+  }, "Admin")
+  const preview = await approve(context, record.id)
+  await expect(context.post({ action: "apply", id: record.id, contentHash: preview.contentHash, confirm: true })).rejects.toThrow("pending")
+  const { requests } = await service.inbox(TENANT_A)
+  expect(requests[0]!.request.summary.operations).toEqual([expect.objectContaining({
+    verb: "create", assignments: expect.arrayContaining([expect.stringContaining(group), expect.stringContaining(filter)]),
+  })])
+})
+
+it("compares a saved post-step hash before reconciling an uncertain change set", async () => {
+  const context = setup()
+  const { record } = await threeOperations(context)
+  const preview = await approve(context, record.id)
+  context.tenant.failWrite = method => method === "POST" ? "lost" : undefined
+  const first = (await context.post({ action: "apply", id: record.id, contentHash: preview.contentHash, confirm: true })).body.changeSet as ChangeSetRecord
+  expect(first.results["op-2"]?.status).toBe("uncertain")
+  context.deps.records.update<ChangeSetRecord>(DOMAINS.changeSets, TENANT_A, record.id, current => ({
+    ...current, results: { ...current.results, "op-2": { ...current.results["op-2"]!, verifiedPostStepHash: "0".repeat(64) } },
+  }), { actor: "Admin", reason: "Persist the prior verified post-step state" })
+  const retried = (await context.post({ action: "retry", id: record.id, contentHash: preview.contentHash, confirm: true })).body.changeSet as ChangeSetRecord
+  expect(retried.results["op-2"]).toMatchObject({ status: "uncertain", message: expect.stringContaining("changed after the last verified step") })
+  expect(context.tenant.writeCount(entry => entry.method === "POST")).toBe(1)
+})

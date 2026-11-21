@@ -482,9 +482,13 @@ it("binds the content version on App Backup IPC resume and checks uploads throug
   const f = await fixture(), d = destination()
   const { profile, state } = writeApprovalFixture()
   const first = profile(), second = profile(reviewer)
+  const uploadReadCounts: number[] = []
   const network = async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init), url = new URL(request.url)
-    if (url.hostname.endsWith(".blob.core.windows.net")) return d.fetcher(input, init)
+    if (url.hostname.endsWith(".blob.core.windows.net")) {
+      uploadReadCounts.push(d.calls.filter(([method]) => method === "GET").length)
+      return d.fetcher(input, init)
+    }
     const method = request.method as Parameters<RestoreGraph>[0]
     const body = request.body ? await request.json() as Record<string, unknown> : undefined
     return Response.json(await d.graph(method, url.href, body))
@@ -532,5 +536,6 @@ it("binds the content version on App Backup IPC resume and checks uploads throug
     await expect(run()).resolves.toMatchObject({ appId: d.app!.id, contentVersion: "1" })
     expect(d.calls.filter(([method, url]) => method === "POST" && url.endsWith("/contentVersions"))).toHaveLength(1)
     expect(d.fetcher).toHaveBeenCalledTimes(2)
+    expect(uploadReadCounts[1]).toBe(uploadReadCounts[0])
   } finally { setRestoreUploadGuard(undefined); setWriteApprovals(undefined) }
 })

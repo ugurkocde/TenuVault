@@ -5,7 +5,7 @@ import { AlertTriangle, CheckCircle2, Rocket, RotateCcw, XCircle } from "lucide-
 import { useTenants } from "~/contexts/TenantContext"
 import { settingsHref } from "../../lib/settings-section"
 import { cn } from "~/lib/utils"
-import { OIB_BACKUP_REUSE_MINUTES, OIB_PLATFORMS, type OibBackupOptions, type OibRecentBackup, type OibPlatform, type OibRun } from "../../../shared/oib/types"
+import { OIB_BACKUP_REUSE_MINUTES, OIB_PLATFORMS, OIB_REVIEWED_BATCH_LIMIT, type OibBackupOptions, type OibRecentBackup, type OibPlatform, type OibRun } from "../../../shared/oib/types"
 import { PlanBadge } from "../UpgradeNote"
 import { button, errorText, GUID, listJoin, minutesAgo, oibRequest, primary, Toggle, useOibTenant, versionsLabel, type OibTenant } from "./common"
 import { batchFolders, deployItem, deployToTenant, type BackupRequest, type BatchOutcome, type DeployBatch } from "./deploy-sequence"
@@ -137,14 +137,17 @@ export function ReviewDeploy({ batches: given, flow, kind = "deploy", onBack, ba
       void startJob<DeployOutcome[]>({ tenantId: tenant!.tenantId, tenantName: tenant!.name, kind, flow, label: kind === "fix" ? `Fixing drift in ${tenant!.name}` : `Deploying to ${targets.length > 1 ? `${targets.length} tenants` : tenant!.name}` }, async context => {
         const outcomes: DeployOutcome[] = []
         if (kind === "deploy" && targets.length * batches.length > 1) {
+          context.poll(tenant!.tenantId)
           const payload = targets.flatMap((target, index) => batches.map(batch => ({
             action: "oib-deploy", tenantId: target.tenantId, appId: target.appId, storageAccountName: target.storageAccountName,
             platform: batch.platform, commit: batch.commit, tag: batch.tag, items: batch.items.map(deployItem),
             backup: index === 0 || request.mode === "none" ? request : { mode: "new" },
             pilotGroupId: index === 0 ? pilot.trim() || undefined : undefined,
           })))
+          // Large selections only need to identify destinations before main decides whether the reviewed batch limit applies.
+          const candidates = payload.length > OIB_REVIEWED_BATCH_LIMIT ? payload.map(({ action, tenantId }) => ({ action, tenantId })) : payload
           const response = await fetch("/api/oib-reviewed-batches", {
-            method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tenantId: tenant!.tenantId, batches: payload }),
+            method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tenantId: tenant!.tenantId, batches: candidates }),
           })
           const result = await response.json() as { legacy?: boolean; error?: string; results?: Array<{ tenant: string; platform: OibPlatform; run?: OibRun; error?: string }> }
           if (!response.ok) throw new Error(result.error || "The deployment could not be verified.")

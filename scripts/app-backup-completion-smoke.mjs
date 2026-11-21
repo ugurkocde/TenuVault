@@ -63,9 +63,9 @@ export async function checkAppBackupCompletion({ check, evaluate, waitForConditi
       assert(await waitForCondition(`${doc}.documentElement.scrollWidth <= window.__appCompletionFrame.contentWindow.innerWidth + 1`), "selected backup overflows at minimum width")
       await screenshot("09e-app-backup-selected-narrow")
       await evaluate(`${control("View all backups")}.click()`)
-      assert(await waitForCondition(`${catalog}.innerText.includes('PowerShell-older-capture.zip')`), "view all did not restore other backups")
+      assert(await waitForCondition(`${catalog}.textContent.includes('PowerShell-older-capture.zip')`), "view all did not restore other backups")
       await send("Emulation.clearDeviceMetricsOverride")
-      await evaluate(`${control("Restore to tenant…")}.click()`)
+      await evaluate(`[...${catalog}.querySelectorAll("li")].find(row => row.textContent.includes("PowerShell-capture.zip")).querySelector("button").click()`)
       assert(await waitForCondition(`Boolean(${doc}.getElementById('restore-target'))`), "restore review did not load")
       const select = `${doc}.getElementById('restore-target')`
       const choose = tenantId => evaluate(`(() => { const select = ${doc}.getElementById('restore-target'); select.value = ${JSON.stringify(tenantId)}; select.dispatchEvent(new window.__appCompletionFrame.contentWindow.Event('change', {bubbles:true})); })()`)
@@ -100,7 +100,7 @@ export async function checkAppBackupCompletion({ check, evaluate, waitForConditi
       await send("Emulation.clearDeviceMetricsOverride")
       await evaluate(`${control("Restore unassigned app")}.click()`)
       assert(await waitForCondition(`Boolean(${control("Open restored app")})`), "restore completion action missing")
-      assert(await evaluate(`window.__appCompletion.restored.sourceTenant === window.__appCompletion.source.tenantId && window.__appCompletion.restored.targetTenant === window.__appCompletion.source.tenantId`), "restore used the wrong tenant")
+      assert(await evaluate(`window.__appCompletion.restored.sourceTenant === window.__appCompletion.source.tenantId && window.__appCompletion.restored.targetTenant === window.__appCompletion.source.tenantId && window.__appCompletion.restored.sourceId === window.__appCompletion.source.id`), "restore used the wrong backup or tenant")
       await screenshot("09h-app-restore-complete")
     } finally {
       await send("Emulation.clearDeviceMetricsOverride")

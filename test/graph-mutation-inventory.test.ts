@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync } from "node:fs"
-import { join } from "node:path"
+import { join, win32 } from "node:path"
 import { parse } from "@babel/parser"
 import type { Node } from "@babel/types"
 import { expect, it } from "vitest"
@@ -7,9 +7,11 @@ import { expect, it } from "vitest"
 const methods = new Set(["POST", "PATCH", "PUT", "DELETE"])
 const roots = ["src/main", "src/portal/app/api", "src/portal/lib", "src/shared/intune"]
 
+const inventoryPath = (path: string) => path.replaceAll("\\", "/")
+
 function files(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
-    const path = join(dir, entry.name)
+    const path = inventoryPath(join(dir, entry.name))
     return entry.isDirectory() ? files(path) : entry.name.endsWith(".ts") && !entry.name.endsWith(".d.ts") ? [path] : []
   })
 }
@@ -63,4 +65,9 @@ it("inventories mutation and network dispatch sites for tenant approval review",
     visit(file)
   }
   await expect(inventory.sort().join("\n") + "\n").toMatchFileSnapshot("./fixtures/write-approval-dispatch-inventory.txt")
+})
+
+
+it("uses the same inventory keys on Windows", () => {
+  expect(inventoryPath(win32.join("src", "main", "write-approvals", "dispatch.ts"))).toBe("src/main/write-approvals/dispatch.ts")
 })

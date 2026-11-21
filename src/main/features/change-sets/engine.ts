@@ -1,4 +1,4 @@
-import { hasWriteApproval, withWriteApproval } from "../../write-approvals/service"
+import { hasWriteApproval, withWriteApproval, type ApprovalOperation } from "../../write-approvals/service"
 import { sameObservation, withWriteCheckpoint } from "../../write-approvals/dispatch"
 import { AuditEventType, AuditResult, AuditSeverity, type CreateAuditLogInput } from "../../../portal/lib/audit/types"
 import { verifiedMutation, type GraphCall } from "../../../portal/lib/policies/graph-restore"
@@ -664,6 +664,9 @@ async function reconcile(graph: GraphCall, type: IntuneType, operation: ChangeOp
       }
       const live = await readCurrent(graph, type, id)
       if (!live) return { decision: "stop", status: "uncertain", message: "The created object no longer exists. Check Intune before retrying.", objectId: id }
+      if (result.verifiedPostStepHash && result.verifiedPostStepHash !== snapshotHash(type, live)) return {
+        decision: "stop", status: "uncertain", message: "The live object changed after the last verified step. Review it in Intune.", objectId: id,
+      }
       if (matchesProposed(type, entry.body ?? {}, live) && (entry.assignments === null || sameAssignments(entry.assignments, live.assignments))) return { decision: "verified", objectId: id, readBack: "match", readBackHash: snapshotHash(type, live) }
       return { decision: "stop", status: "uncertain", message: "An object was created but it does not match the proposed configuration. Review it in Intune.", objectId: id }
     }
@@ -672,6 +675,9 @@ async function reconcile(graph: GraphCall, type: IntuneType, operation: ChangeOp
       if (!live) return { decision: "verified", objectId: operation.targetId!, readBack: "missing" }
     } else {
       if (!live) return { decision: "stop", status: "failed", message: "The object no longer exists in the tenant. An earlier attempt may have written to it before it was deleted; check Intune.", objectId: operation.targetId }
+      if (result.verifiedPostStepHash && result.verifiedPostStepHash !== snapshotHash(type, live)) return {
+        decision: "stop", status: "uncertain", message: "The live object changed after the last verified step. Review it in Intune.", objectId: operation.targetId,
+      }
       if (matchesProposed(type, entry.body ?? {}, live) && (entry.assignments === null || sameAssignments(entry.assignments, live.assignments))) return { decision: "verified", objectId: operation.targetId!, readBack: "match", readBackHash: snapshotHash(type, live) }
     }
     const sanitized = sanitizeSnapshot(type, live!).snapshot
@@ -727,6 +733,94 @@ function checkedObservation(state: Observation) {
   return [state.fingerprint, state.revision]
 }
 
+function assignmentLabels(assignments: Item[] | null | undefined, direction: string): string[] {
+  return assignmentTargets(assignments ?? undefined).map(assignment => {
+    const target = assignment.target as Item | undefined
+    const group = typeof target?.groupId === "string" ? `group ${target.groupId}` : String(target?.["@odata.type"] ?? "assignment").split(".").pop()
+    const filter = target?.deviceAndAppManagementAssignmentFilterId
+    const verb = String(target?.["@odata.type"] ?? "").includes("exclusion") ? "exclude" : "include"
+    return `${direction}: ${verb} ${group}${typeof filter === "string" && filter ? `, filter ${filter} (${target?.deviceAndAppManagementAssignmentFilterType ?? "unspecified"})` : ""}`
+  })
+}
+
+export async function prepareChangeSetApply(deps: FeatureDeps, tenant: string, id: string, input: ApplyInput, actor: Actor) {
+  if (input.confirmed !== true) throw new FeatureError("Confirm the change, including its irreversible steps, before applying.")
+  const record = getChangeSet(deps, tenant, id)
+  const requested = input.resolveBackup ? input.resolveBackup() : input.backup
+  if (requested !== undefined && requested !== "new" && requested !== "none") throw new FeatureError("backup must be \"new\" or \"none\".")
+  if (requested === "none" && !(record.origin.workflow === "sync" && record.kind === "change")) throw new FeatureError("Only Sync changes may skip the pre-change backup.")
+  // The first claimed apply fixes the backup choice. A change set attempted before the choice was
+  // stored counts as backed up, unless its capture shows the backup was skipped.
+  const stored = record.backupChoice ?? (record.preChange ? (record.preChange.backupFolder === null ? "none" : "new") : record.attempts > 0 ? "new" : null)
+  if (stored && requested !== undefined && requested !== stored) throw new FeatureError(`This sync was first applied ${stored === "none" ? "without a backup" : "with a backup"}. Retry it with the same choice.`, 409)
+  const backupChoice = stored ?? requested ?? "new"
+  // A retry reuses the first attempt's capture; whether that attempt backed up decides the record.
+  const backupSkipped = record.preChange ? record.preChange.backupFolder === null : backupChoice === "none"
+  const recovery = isRecovery(record)
+  requireCisChangeSetEnabled(record.origin.workflow, tenant, recovery)
+  if (record.status === "stale") throw new FeatureError(STALE, 409)
+  if (["in-review", "rejected"].includes(record.status)) throw new FeatureError("This change set needs an approval of its current content and target state.", 409)
+  if (record.status === "applied") throw new FeatureError("This change set was already applied and verified.", 409)
+  const review = record.review
+  if (!review || review.decision !== "approved") throw new FeatureError("This change set is not approved.", 409)
+  if (input.contentHash !== record.contentHash || review.contentHash !== record.contentHash) markStale(deps, tenant, id, "The content changed after approval.", actor)
+  const { entries, problem } = integrity(deps, tenant, record)
+  if (problem) markStale(deps, tenant, id, problem, actor)
+  requireCisChangeSetEnabled(record.origin.workflow, tenant, recovery)
+  const staleBefore = (await input.dependencyCheck?.()) ?? []
+  if (staleBefore.length) markStale(deps, tenant, id, staleBefore.join(" "), actor)
+
+  const approvedTargets = new Map<string, unknown>()
+  const approval: ApprovalOperation = {
+    tenant,
+    reference: ["change-set", id],
+    summary: { kind: record.kind === "rollback" ? "Roll back a change set" : "Apply a change set", count: record.operations.length, reference: record.id,
+      targets: record.operations.map(operation => `${operation.action} ${operation.name}`),
+      assignments: record.operations.some(operation => operation.setsAssignments),
+      operations: record.operations.map(operation => {
+        const fields = [...new Set(operation.diff.map(change => change.definitionId ?? change.path))]
+        return {
+          verb: operation.action, name: operation.name, id: operation.targetId ?? undefined, fields,
+          sensitiveFields: fields.filter(field => /password|secret|token|privatekey|certificate|scriptcontent/i.test(field)),
+          assignments: operation.setsAssignments ? [
+            "Replace reviewed assignments",
+            ...assignmentLabels(entries[operation.key]?.assignments, "After"),
+          ] : [],
+        }
+      }),
+    },
+    observe: async () => {
+      const graph = await reader(deps, tenant, recoveryScope(record))
+      const dependencyErrors = (await input.dependencyCheck?.()) ?? []
+      if (dependencyErrors.length) throw new FeatureError(dependencyErrors.join(" "), 409)
+      const listing = createListingMemo()
+      const observations = []
+      for (const [index, operation] of record.operations.entries()) {
+        const result = record.results[operation.key]
+        if (result?.status === "verified" || (result?.status === "approval" && result.partial)) continue
+        const observed = await observe(graph, typeOf(operation.folder), operation, listing, true)
+        const checked = checkedObservation(observed)
+        if (operation.setsAssignments) {
+          const summary = approval.summary.operations![index]!
+          const previous = observed.snapshot?.assignments
+          summary.assignments = [
+            "Replace reviewed assignments",
+            ...assignmentLabels(Array.isArray(previous) ? previous as Item[] : [], "Before"),
+            ...assignmentLabels(entries[operation.key]?.assignments, "After"),
+          ]
+        }
+        approvedTargets.set(operation.key, checked)
+        observations.push([operation.key, checked, observed.snapshot, observed.sameNameIds])
+        if (!record.preChange && observed.fingerprint !== review.operationFingerprints[operation.key]) markStale(deps, tenant, id, `${operation.name} changed in the target tenant after review.`, actor)
+      }
+      return { content: [record.contentHash, record.origin, backupChoice, entries, record.dependencies, review.targetFingerprint], target: observations }
+    },
+  }
+  return { record, review, backupChoice, backupSkipped, recovery, entries, approvedTargets, operation: approval }
+}
+
+export type PreparedChangeSetApply = Awaited<ReturnType<typeof prepareChangeSetApply>>
+
 /**
  * Applies an approved change set, or retries one that ended partial, failed or uncertain.
  *
@@ -736,7 +830,7 @@ function checkedObservation(state: Observation) {
  * journaled Graph caller and reads it back. Retry: never repeats a verified operation,
  * reconciles uncertain ones from live state first, and re-checks the fingerprint of the rest.
  */
-export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: string, input: ApplyInput, actor: Actor): Promise<Stored_> {
+export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: string, input: ApplyInput, actor: Actor, prepared?: PreparedChangeSetApply): Promise<Stored_> {
   if (input.confirmed !== true) throw new FeatureError("Confirm the change, including its irreversible steps, before applying.")
   const tenant = tenantId.toLowerCase()
   // Set once the apply is claimed; from then on every exit records exactly one audit entry.
@@ -755,65 +849,11 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
   }
   try {
     return await withTenantWrite(tenant, "Change set apply", () => settle(async () => {
-    const record = getChangeSet(deps, tenant, id)
-    const requested = input.resolveBackup ? input.resolveBackup() : input.backup
-    if (requested !== undefined && requested !== "new" && requested !== "none") throw new FeatureError("backup must be \"new\" or \"none\".")
-    if (requested === "none" && !(record.origin.workflow === "sync" && record.kind === "change")) throw new FeatureError("Only Sync changes may skip the pre-change backup.")
-    // The first claimed apply fixes the backup choice. A change set attempted before the choice was
-    // stored counts as backed up, unless its capture shows the backup was skipped.
-    const stored = record.backupChoice ?? (record.preChange ? (record.preChange.backupFolder === null ? "none" : "new") : record.attempts > 0 ? "new" : null)
-    if (stored && requested !== undefined && requested !== stored) throw new FeatureError(`This sync was first applied ${stored === "none" ? "without a backup" : "with a backup"}. Retry it with the same choice.`, 409)
-    const backupChoice = stored ?? requested ?? "new"
-    // A retry reuses the first attempt's capture; whether that attempt backed up decides the record.
-    backupSkipped = record.preChange ? record.preChange.backupFolder === null : backupChoice === "none"
-    const recovery = isRecovery(record)
-    requireCisChangeSetEnabled(record.origin.workflow, tenantId, recovery)
-    if (record.status === "stale") throw new FeatureError(STALE, 409)
-    if (["in-review", "rejected"].includes(record.status)) throw new FeatureError("This change set needs an approval of its current content and target state.", 409)
-    if (record.status === "applied") throw new FeatureError("This change set was already applied and verified.", 409)
-    const review = record.review
-    if (!review || review.decision !== "approved") throw new FeatureError("This change set is not approved.", 409)
-    if (input.contentHash !== record.contentHash || review.contentHash !== record.contentHash) markStale(deps, tenant, id, "The content changed after approval.", actor)
-    const { entries, problem } = integrity(deps, tenant, record)
-    if (problem) markStale(deps, tenant, id, problem, actor)
-    requireCisChangeSetEnabled(record.origin.workflow, tenantId, recovery)
-    const staleBefore = (await input.dependencyCheck?.()) ?? []
-    if (staleBefore.length) markStale(deps, tenant, id, staleBefore.join(" "), actor)
-
-    const approvedTargets = new Map<string, unknown>()
-    return withWriteApproval([{
-      tenant,
-      reference: ["change-set", id],
-      summary: { kind: record.kind === "rollback" ? "Roll back a change set" : "Apply a change set", count: record.operations.length, reference: record.id,
-        targets: record.operations.map(operation => `${operation.action} ${operation.name}`),
-        assignments: record.operations.some(operation => operation.setsAssignments),
-        operations: record.operations.map(operation => {
-          const fields = [...new Set(operation.diff.map(change => change.definitionId ?? change.path))]
-          return {
-            name: operation.name, id: operation.targetId ?? undefined, fields,
-            sensitiveFields: fields.filter(field => /password|secret|token|privatekey|certificate|scriptcontent/i.test(field)),
-            assignments: operation.setsAssignments ? ["Replace reviewed assignments"] : [],
-          }
-        }),
-      },
-      observe: async () => {
-        const graph = await reader(deps, tenant, recoveryScope(record))
-        const dependencyErrors = (await input.dependencyCheck?.()) ?? []
-        if (dependencyErrors.length) throw new FeatureError(dependencyErrors.join(" "), 409)
-        const listing = createListingMemo()
-        const observations = []
-        for (const operation of record.operations) {
-          const result = record.results[operation.key]
-          if (result?.status === "verified" || (result?.status === "approval" && result.partial)) continue
-          const observed = await observe(graph, typeOf(operation.folder), operation, listing, true)
-          const checked = checkedObservation(observed)
-          approvedTargets.set(operation.key, checked)
-          observations.push([operation.key, checked, observed.snapshot, observed.sameNameIds])
-          if (!record.preChange && observed.fingerprint !== review.operationFingerprints[operation.key]) markStale(deps, tenant, id, `${operation.name} changed in the target tenant after review.`, actor)
-        }
-        return { content: [record.contentHash, record.origin, backupChoice, entries, record.dependencies, review.targetFingerprint], target: observations }
-      },
-    }], async () => {
+    const { record, review, backupChoice, backupSkipped: skip, recovery, entries, approvedTargets, operation } =
+      prepared ?? await prepareChangeSetApply(deps, tenant, id, input, actor)
+    if (prepared && input.resolveBackup && (input.resolveBackup() ?? backupChoice) !== backupChoice) throw new FeatureError("The pre-change backup choice changed after review.", 409)
+    backupSkipped = skip
+    const work = async () => {
     // Claim the change set before anything slow, so approve, reject and revise refuse it
     // while the backup runs, and a change made in between is detected instead of overwritten.
     const claimedFrom = record.status
@@ -976,7 +1016,8 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
     auditRecorded = true
     await recordApplyAudit(deps, tenant, updated, status, actor, undefined, claimedAttempt!, backupSkipped)
     return updated
-    })
+    }
+    return prepared ? work() : withWriteApproval([operation], work)
     }))
   } catch (error) {
     // A throw from the write loop or the final update: writes may have happened, so the

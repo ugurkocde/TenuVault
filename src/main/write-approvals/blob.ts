@@ -4,6 +4,7 @@ export type BlobVersion = { etag: string; serverTime?: number; modifiedAt?: numb
 export type BlobRecord = BlobVersion & { value: unknown }
 export interface ApprovalBlobs {
   get(name: string): Promise<BlobRecord | null>
+  revalidate?(name: string, etag: string): Promise<BlobRecord | null>
   match?(name: string, etag: string): Promise<BlobVersion | null>
   put(name: string, value: unknown, etag?: string): Promise<boolean>
   list(prefix: string): Promise<string[]>
@@ -20,11 +21,11 @@ export function approvalBlobs(account: string, token: string, fetchImpl: typeof 
   const url = (name: string) => `${root}/${name.split("/").map(encodeURIComponent).join("/")}`
   const headers = { authorization: `Bearer ${token}`, "x-ms-version": "2023-11-03" }
   const request = (target: string, init?: RequestInit) => fetchImpl(target, {
-    ...init, redirect: "error", signal: AbortSignal.timeout(15_000), headers: { ...headers, ...init?.headers },
+    ...init, cache: "no-store", redirect: "error", signal: AbortSignal.timeout(15_000), headers: { ...headers, ...init?.headers },
   })
   const fail = (status: number) => new Error(`The tenant approval store could not be verified (HTTP ${status}).`)
-  const version = (response: Response): BlobVersion => {
-    const etag = response.headers.get("etag")
+  const version = (response: Response, cachedEtag?: string): BlobVersion => {
+    const etag = response.headers.get("etag") ?? cachedEtag
     if (!etag) throw fail(response.status)
     const time = (header: string) => {
       const parsed = Date.parse(response.headers.get(header) ?? "")
@@ -32,19 +33,23 @@ export function approvalBlobs(account: string, token: string, fetchImpl: typeof 
     }
     return { etag, serverTime: time("date"), modifiedAt: time("last-modified") }
   }
+  const missing = (response: Response) => response.status === 404 && ["BlobNotFound", "ContainerNotFound"].includes(response.headers.get("x-ms-error-code") ?? "")
+  const get = async (name: string, etag?: string): Promise<BlobRecord | null> => {
+    const response = await request(url(name), etag ? { headers: { "if-none-match": etag } } : undefined)
+    if (response.status === 304 && etag) return { ...version(response, etag), value: undefined }
+    if (missing(response)) {
+      await response.body?.cancel()
+      return null
+    }
+    if (!response.ok) throw fail(response.status)
+    return { ...version(response), value: await response.json().catch(() => null) }
+  }
   return {
-    async get(name) {
-      const response = await request(url(name))
-      if (response.status === 404 && response.headers.get("x-ms-error-code") === "BlobNotFound") {
-        await response.body?.cancel()
-        return null
-      }
-      if (!response.ok) throw fail(response.status)
-      return { ...version(response), value: await response.json().catch(() => null) }
-    },
+    get,
+    revalidate: get,
     async match(name, etag) {
       const response = await request(url(name), { method: "HEAD", headers: { "if-match": etag } })
-      if (response.status === 412 || response.status === 404 && response.headers.get("x-ms-error-code") === "BlobNotFound") return null
+      if (response.status === 412 || missing(response)) return null
       if (!response.ok) throw fail(response.status)
       return version(response)
     },
@@ -77,6 +82,7 @@ export function approvalBlobs(account: string, token: string, fetchImpl: typeof 
       do {
         const query = new URLSearchParams({ restype: "container", comp: "list", prefix, marker })
         const response = await request(`${root}?${query}`)
+        if (missing(response)) { await response.body?.cancel(); return [] }
         if (!response.ok) throw fail(response.status)
         const xml = await response.text()
         if (!xml.includes("<EnumerationResults") || !xml.includes("</EnumerationResults>")) throw new Error("The tenant approval list is invalid.")

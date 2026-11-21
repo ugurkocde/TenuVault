@@ -358,7 +358,7 @@ async function bootstrap(): Promise<void> {
   const graphSessions = new Map<string, NonNullable<ReturnType<AuthManager["approvalSession"]>> & { expires: number }>()
   const tokenKey = (token: string) => createHash("sha256").update(token).digest("hex")
   const observeGraphToken = (tenantId: string, token: Awaited<ReturnType<AuthManager["getAccessToken"]>>) => {
-    const identity = auth.approvalSession(tenantId)
+    const identity = auth.tokenApprovalSession(token)
     if (identity?.current() && identity.actor?.oid === delegatedApprovalActor(token, tenantId)?.oid) {
       const time = Date.now()
       for (const [key, entry] of graphSessions) if (entry.expires <= time) graphSessions.delete(key)
@@ -390,9 +390,12 @@ async function bootstrap(): Promise<void> {
     profile: tenant => tenantProfile(tenant),
     open: async (tenant, client, account) => {
       const token = await tokenFor(tenant, client, RESOURCE_SCOPES.storage)
-      const session = auth.approvalSession(tenant)
+      const session = auth.tokenApprovalSession(token)
       if (!session?.actor || !session.current()) throw new WriteApprovalError("Sign in with a delegated tenant account to verify shared write approvals.")
-      return { actor: session.actor, blobs: approvalBlobs(account, token.accessToken, chromiumFetch) }
+      return { actor: session.actor, blobs: approvalBlobs(account, token.accessToken, (input, init) => {
+        if (!session.current()) throw new WriteApprovalError("The signed-in destination account changed before accessing approvals.")
+        return chromiumFetch(input, init)
+      }) }
     },
     current: (tenant, actor) => {
       const session = auth.approvalSession(tenant)
@@ -1264,7 +1267,6 @@ async function bootstrap(): Promise<void> {
     return account
   })
   handleTrusted("auth:signOut", async (_event, tenantId: string) => {
-    if (isGuid(tenantId) && tenantProfile(tenantId)) await writeApprovals.beforeStorageChange(tenantId.toLowerCase())
     await auth.signOut(tenantId)
     // The Backup Reader's private key goes with the tenant's sign-in on this computer.
     backupReader.remove(tenantId)
@@ -1354,7 +1356,6 @@ async function bootstrap(): Promise<void> {
   handleTrusted("license:releaseTenant", (_event, tenantId: unknown) => {
     if (!isTenantId(tenantId)) throw new Error("Unknown tenant.")
     return withStatus(async () => {
-      if (tenantProfile(tenantId)) await writeApprovals.beforeStorageChange(tenantId.toLowerCase())
       scheduler.remove(tenantId)
       await license
         .releaseTenant(tenantId)
@@ -1394,7 +1395,6 @@ async function bootstrap(): Promise<void> {
     }
   })
   const tenantStorageKey = `${RENDERER_STORAGE_PREFIX}tenuvault_tenants`
-  let profileUpdate = Promise.resolve()
   const updateTenantProfiles = (next: string | null) => {
     const read = (serialized: string | null) => {
       const profiles = new Map<string, string | undefined>()
@@ -1413,17 +1413,24 @@ async function bootstrap(): Promise<void> {
       }
       return profiles
     }
-    const work = profileUpdate.then(async () => {
+    return writeApprovals.withStorageProfiles(async () => {
       const before = read(appStore.get(tenantStorageKey))
       const after = read(next)
-      await Promise.all([...new Set([...before.keys(), ...after.keys()])].map(tenant =>
-        writeApprovals.beforeStorageChange(tenant, after.get(tenant))))
+      for (const tenant of new Set([...before.keys(), ...after.keys()])) {
+        await writeApprovals.beforeStorageChange(tenant, after.get(tenant), async account => {
+          const result = await dialog.showMessageBox(mainWindow!, {
+            type: "warning", title: "Confirm storage change",
+            message: `TenuVault could not verify tenant approvals in ${account}.`,
+            detail: "Continue with the storage change? TenuVault will check this account again before allowing tenant configuration writes.",
+            buttons: ["Cancel", "Continue with storage change"], defaultId: 0, cancelId: 0,
+          })
+          return result.response === 1
+        })
+      }
       if (next === null) appStore.delete(tenantStorageKey)
       else appStore.set(tenantStorageKey, next)
       if (!before.size && after.size) diagnostics.record({ name: "tenant_added" })
     })
-    profileUpdate = work.catch(() => undefined)
-    return work
   }
   handleTrusted("storage:set", (_event, key: unknown, value: unknown) => {
     const name = RENDERER_STORAGE_PREFIX + rendererStorageKey(key)

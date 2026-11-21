@@ -1,5 +1,5 @@
-import { hasWriteApproval, verifyApprovalSource, withWriteApproval, WriteApprovalError } from "../../../../main/write-approvals/service"
-import { sameObservation } from "../../../../main/write-approvals/dispatch"
+import { approvalsEnabled, hasWriteApproval, verifyApprovalSource, withWriteApproval, WriteApprovalError } from "../../../../main/write-approvals/service"
+import { sameObservation, withExemptGraphCaller } from "../../../../main/write-approvals/dispatch"
 import { restoreApprovals, dismissRestoreApproval, saveRestoreApproval } from "../../../../main/storage/restore-approvals"
 import { parseDependencyMappings } from "../../../../shared/intune/recovery"
 import { randomUUID } from "node:crypto"
@@ -219,12 +219,16 @@ export async function POST(request: NextRequest) {
           observe: async () => {
             verifyApprovalSource(tenantId, storageAccountName)
             const observed = []
+            const planned = new Map<string, { creation: string; sourceId: string }>()
             for (const path of ordered) {
               const snapshot = repairs.get(path) ? {} : await readSnapshot(path, storageAccountName, storageToken, manifest?.get(path))
-              const state = await observePath(path, snapshot)
+              const state = await target.restorer.approvalObservation(path, snapshot, repairs.get(path), planned)
+              if (state.creates) planned.set(state.creates.graphPath.toLowerCase(), { creation: path, sourceId: state.creates.sourceId })
               snapshots.set(path, { snapshot, state })
               observed.push(state)
             }
+            const referenced = new Set(observed.flatMap(state => state.usesCreations ?? []))
+            for (const [path, { state }] of snapshots) state.verifyCreation = referenced.has(path)
             summary.operations = observed.map(state => state.review)
             return {
               content: [tenantId, storageAccountName, backupId, mode, assignments, dependencyMappings, body.justification, observed.map(state => state.content)],
@@ -245,7 +249,7 @@ export async function POST(request: NextRequest) {
             const active = hasWriteApproval(targetTenantId ?? tenantId)
             const check = active && expected && repair ? sameObservation(expected.state, () => observePath(path, expected.snapshot)) : undefined
             const result = active && expected
-              ? repair ? await restorer.repair(path, repair, check, expected.state.target) : await restorer.restore(path, expected.snapshot, undefined, expected.state)
+              ? expected.state.failure ?? (repair ? await restorer.repair(path, repair, check, expected.state.target) : await restorer.restore(path, expected.snapshot, undefined, expected.state))
               : await restoreSinglePolicy(restorer, path, storageAccountName, storageToken, manifest?.get(path), repair)
             const entry = targetTenantId ? { ...result, targetTenantId } : result
             results.push(entry)
@@ -336,7 +340,9 @@ async function approvalAction(body: any): Promise<Response> {
     const refreshed = await Promise.all(records.map(async record => {
       try { return body.refresh ? await restorer.refreshApproval(record) : record } catch { return record }
     }))
-    return NextResponse.json({ records: refreshed.map(record => approvalRow(record, record.requesterId.toLowerCase() === context.requesterId.toLowerCase())) })
+    const protectedContinuations = refreshed.some(record => record.continuationPending && !record.continuationFingerprint)
+      && await approvalsEnabled(tenantId).catch(() => false)
+    return NextResponse.json({ records: refreshed.map(record => approvalRow(record, record.requesterId.toLowerCase() === context.requesterId.toLowerCase(), protectedContinuations)) })
   }
   const record = restoreApprovals(tenantId).find(entry => entry.id === approvalId)
   if (!record) return NextResponse.json({ error: "Request not found" }, { status: 404 })
@@ -372,8 +378,10 @@ async function approvalAction(body: any): Promise<Response> {
     else if (action === "withdraw") {
       if (record.requesterId.toLowerCase() !== context.requesterId.toLowerCase()) throw new Error("Only the original requester can withdraw this request")
       try {
-        const response = await graph("POST", "deviceManagement/operationApprovalRequests/cancelMyRequest", { id: record.id })
-        if (response.status !== 204) throw new Error("Withdraw refused")
+        if (!record.continuationPending || record.continuationFingerprint || !await approvalsEnabled(tenantId).catch(() => false)) {
+          const response = await withExemptGraphCaller("restore-withdraw", () => graph("POST", "deviceManagement/operationApprovalRequests/cancelMyRequest", { id: record.id }))
+          if (response.status !== 204) throw new Error("Withdraw refused")
+        }
       } catch {
         const latest = await restorer.refreshApproval(record)
         throw new Error(`Intune refused to withdraw this request. Current status: ${latest.status}`)
@@ -385,6 +393,6 @@ async function approvalAction(body: any): Promise<Response> {
   finally { approvalLocks.delete(key) }
 }
 
-function approvalRow(record: import("../../../../main/storage/restore-approvals").RestoreApproval, canComplete: boolean) {
-  return { id: record.id, label: record.label, operation: record.operation, status: record.status, approverNote: record.approverNote, expiresAt: record.expiresAt, stepNumber: record.stepNumber, totalSteps: record.totalSteps, canComplete, requesterName: record.requesterName }
+function approvalRow(record: import("../../../../main/storage/restore-approvals").RestoreApproval, canComplete: boolean, protectedContinuations = false) {
+  return { id: record.id, label: record.label, operation: record.operation, status: record.status, approverNote: record.approverNote, expiresAt: record.expiresAt, stepNumber: record.stepNumber, totalSteps: record.totalSteps, canComplete, legacyContinuation: protectedContinuations && record.continuationPending && !record.continuationFingerprint, requesterName: record.requesterName }
 }

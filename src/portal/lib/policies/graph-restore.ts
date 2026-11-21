@@ -284,11 +284,23 @@ type RestorePlanForItem =
   | { kind: "unchanged"; id: string; live: Item; recreated?: boolean }
   | { kind: "update"; id: string; live: Item; recreated?: boolean; steps: Step[] }
   | { kind: "create"; plan: RestorePlan }
-export type RestoreObservation = { content: unknown; target: unknown; review: WriteApprovalTarget }
+type PlannedDependency = { creation: string; sourceId: string }
+export type RestoreObservation = {
+  content: unknown
+  target: unknown
+  review: WriteApprovalTarget
+  creates?: { graphPath: string; sourceId: string }
+  usesCreations?: string[]
+  verifyCreation?: boolean
+  failure?: RestoreOutcome
+}
+
+export const LEGACY_CONTINUATION = "This Intune request predates tenant write approval. Withdraw it and submit the restore again."
 
 export class Restorer {
   /** Old object ID to new object ID, for objects recreated during this restore. */
   private readonly remapped = new Map<string, string>()
+  private readonly verifiedCreates = new Map<string, { id: string; fingerprint: string }>()
   private readonly reviewed = new Map<string, string>()
   /** Live dependency checks by Graph path, so a shared dependency is read once per restore. */
   private readonly liveDependencies = new Map<string, boolean>()
@@ -324,22 +336,48 @@ export class Restorer {
     if (!type) return { success: false, path, error: "This backup file is not an Intune type TenuVault can restore." }
     const unpermitted = restorePermissionBlocker(type.folder, this.options.granted)
     if (unpermitted) return { success: false, path, action: "skipped", retryable: false, error: unpermitted }
-    const { source, assignments, unread } = this.restoreSource(type, snapshot)
-    const withNote = (outcome: RestoreOutcome): RestoreOutcome => unread && outcome.success
-      ? { ...outcome, warnings: [...(outcome.warnings ?? []), "Assignments were not restored: this backup was made by an earlier TenuVault version that could not read them. Assign the policy in Intune."] }
-      : outcome
     try {
       await check?.()
+      const resolveReview = async () => {
+        const remaps = new Map<string, string>()
+        const [target, dependencies] = reviewed?.target as [unknown, Array<[string, string | null | PlannedDependency]>] ?? [null, []]
+        const resolved = await Promise.all(dependencies.map(async ([graphPath, expected]) => {
+          if (!expected || typeof expected !== "object") return [graphPath, expected]
+          const created = this.verifiedCreates.get(expected.creation)
+          if (!created) throw new WriteApprovalError("The approved dependency creation did not finish. Restore that dependency before retrying.")
+          const destination = graphPath.slice(0, graphPath.lastIndexOf("/") + 1) + encodeURIComponent(created.id)
+          const { status, body } = await this.graph("GET", destination)
+          if (status !== 200 || body.id !== created.id || approvalFingerprint(body) !== created.fingerprint) {
+            throw new WriteApprovalError("The created dependency changed. Request a new approval.")
+          }
+          remaps.set(expected.sourceId, created.id)
+          return [destination, created.fingerprint]
+        }))
+        return { remaps, target: [target, resolved.sort(([a], [b]) => String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0)] }
+      }
+      const bound = reviewed ? await resolveReview() : undefined
+      const { source, assignments, unread } = this.restoreSource(type, snapshot, bound?.remaps)
+      const withNote = (outcome: RestoreOutcome): RestoreOutcome => unread && outcome.success
+        ? { ...outcome, warnings: [...(outcome.warnings ?? []), "Assignments were not restored: this backup was made by an earlier TenuVault version that could not read them. Assign the policy in Intune."] }
+        : outcome
       const plan = await this.planRestore(type, snapshot, source, assignments)
       const beforeDispatch = reviewed ? async () => {
         await check?.()
-        const current = await this.approvalObservation(path, snapshot)
-        const content = this.approvalContent(path, snapshot, plan, assignments)
-        if (canonicalJson(content) !== canonicalJson(reviewed.content)
-          || canonicalJson(current) !== canonicalJson(reviewed)) {
+        const latest = await resolveReview()
+        const current = await this.approvalObservation(path, snapshot, undefined, undefined, latest.remaps)
+        const expected = reviewed.content as [string, Item, RestorePlanForItem, boolean]
+        const original = expected[2]
+        const remapStep = <T extends { body: Item }>(step: T): T => ({ ...step, body: this.remap(step.body, latest.remaps, false, true) })
+        const shape = original.kind === "create" ? { ...original, plan: { ...original.plan, create: remapStep(original.plan.create), steps: original.plan.steps.map(remapStep), assignments: original.plan.assignments.map(remapStep) } }
+          : original.kind === "update" ? { ...original, steps: original.steps.map(remapStep) } : original
+        const content = [expected[0], expected[1], shape, expected[3]]
+        if (canonicalJson(this.approvalContent(path, snapshot, plan, assignments)) !== canonicalJson(content)
+          || canonicalJson(current.content) !== canonicalJson(content)
+          || canonicalJson(current.target) !== canonicalJson(latest.target)) {
           throw new WriteApprovalError("The destination or restore steps changed after review. Request a new approval.")
         }
       } : check
+      const resolvedReview = reviewed && bound ? { ...reviewed, target: bound.target } : undefined
       switch (plan.kind) {
         case "blocked": return { success: false, path, action: "skipped", ...(plan.missing ? { missing: true, retryable: false, policyId: typeof snapshot.id === "string" ? snapshot.id : undefined } : {}), error: plan.error }
         case "unchanged":
@@ -351,19 +389,19 @@ export class Restorer {
             const name = type.singleton?.name ?? live[type.nameKey] ?? live.displayName ?? live.name
             return withNote({ success: true, path, policyId: id, policyName: typeof name === "string" ? name : undefined, action: "unchanged" })
           }
-          const outcome = await this.update(type, path, source, id, live, plan.steps, beforeDispatch, reviewed)
+          const outcome = await this.update(type, path, source, id, live, plan.steps, beforeDispatch, resolvedReview)
           if (recreated && typeof snapshot.id === "string" && !this.reviewed.has(snapshot.id.toLowerCase())) this.remapped.set(snapshot.id, id)
           return withNote(outcome)
         }
-        case "create": return withNote(await this.create(type, path, source, snapshot, plan.plan, beforeDispatch, reviewed))
+        case "create": return withNote(await this.create(type, path, source, snapshot, plan.plan, beforeDispatch, resolvedReview))
       }
     } catch (error) {
       return { success: false, path, retryable: false, error: error instanceof Error ? error.message : String(error) }
     }
   }
 
-  private restoreSource(type: IntuneType, snapshot: Item) {
-    const source = this.remap(this.options.crossTenant ? forOtherTenant(snapshot) : snapshot)
+  private restoreSource(type: IntuneType, snapshot: Item, remaps?: Map<string, string>) {
+    const source = this.remap(this.options.crossTenant ? forOtherTenant(snapshot) : snapshot, remaps, true, remaps !== undefined)
     // A backup that could not read the assignments must not clear them.
     const unread = this.options.assignments && !this.options.crossTenant && assignmentsUnread(type, snapshot)
     return { source, unread, assignments: this.options.assignments && !this.options.crossTenant && !unread }
@@ -399,26 +437,39 @@ export class Restorer {
   }
 
   /** Resolve the same destination and verify the write plan that a restore will use. */
-  async approvalObservation(path: string, snapshot: Item, repairToken?: string): Promise<RestoreObservation> {
+  async approvalObservation(path: string, snapshot: Item, repairToken?: string, planned?: Map<string, PlannedDependency>, remaps?: Map<string, string>): Promise<RestoreObservation> {
     if (repairToken) {
       const entry = repairFor(repairToken)
-      if (!entry || entry.expires < Date.now() || entry.path !== path || entry.scope !== (this.options.repairScope ?? this.instanceScope)) throw new WriteApprovalError("The restore repair is unavailable or has expired.")
-      const live = await this.current(entry.type, entry.id)
-      if (!live) throw new WriteApprovalError("The object to repair is missing.")
-      return { content: [entry.id, entry.steps, entry.expectedCurrent], target: [approvalFingerprint(live), await this.approvalDependencies(entry.type, entry.steps.map(step => step.body))], review: this.reviewTarget(entry.type, live, entry.steps, entry.id) }
+      const failed = (error: string, missing = false): RestoreObservation => ({
+        content: [path, repairToken, entry?.id, "unavailable"], target: null,
+        review: { name: path, id: entry?.id, verb: "Repair", assignments: [], fields: [], sensitiveFields: [] },
+        failure: { success: false, path, policyId: entry?.id, missing, retryable: false, error },
+      })
+      if (!entry || entry.expires < Date.now() || entry.path !== path || entry.scope !== (this.options.repairScope ?? this.instanceScope)) return failed("The restore repair is unavailable or has expired.")
+      try {
+        const live = await this.current(entry.type, entry.id)
+        if (!live) return failed("The object to repair is missing.", true)
+        return { content: [entry.id, entry.steps, entry.expectedCurrent], target: [approvalFingerprint(live), await this.approvalDependencies(entry.type, entry.steps.map(step => step.body))], review: this.reviewTarget(entry.type, live, entry.steps, entry.id) }
+      } catch (error) {
+        return failed(`The object to repair could not be verified: ${error instanceof Error ? error.message : String(error)}`)
+      }
     }
     const folder = path.split("/")[1] ?? ""
     const type = typeForFolder(folder === "DeviceCompliancePolicies" ? "CompliancePolicies" : folder)
     if (!type) throw new WriteApprovalError("This restore policy type cannot be verified.")
-    const { source, assignments } = this.restoreSource(type, snapshot)
+    const { source, assignments } = this.restoreSource(type, snapshot, remaps)
     const plan = await this.planRestore(type, snapshot, source, assignments)
     const steps: Step[] = plan.kind === "create" ? [{ ...plan.plan.create, kind: "content" }, ...plan.plan.steps, ...plan.plan.assignments]
       : plan.kind === "update" ? plan.steps : []
-    const dependencies = await this.approvalDependencies(type, steps.map(step => step.body ?? {}))
+    const dependencies = await this.approvalDependencies(type, steps.map(step => step.body ?? {}), planned)
     const target = plan.kind === "update" || plan.kind === "unchanged" ? [plan.id, approvalFingerprint(plan.live)]
       : plan.kind === "create" ? await this.approvalCreateTarget(type, plan.plan.create.body) : null
     const item = plan.kind === "create" ? plan.plan.create.body : "live" in plan ? plan.live : snapshot
-    return { content: this.approvalContent(path, snapshot, plan, assignments), target: [target, dependencies], review: this.reviewTarget(type, item, steps, "id" in plan ? plan.id : undefined) }
+    const sourceId = snapshot.id
+    const creates = plan.kind === "create" && typeof sourceId === "string" && GUID.test(sourceId) && !this.reviewed.has(sourceId.toLowerCase())
+      ? { graphPath: `${type.path}/${encodeURIComponent(sourceId)}`, sourceId } : undefined
+    const usesCreations = dependencies.flatMap(([, dependency]) => dependency && typeof dependency === "object" ? [dependency.creation] : [])
+    return { content: this.approvalContent(path, snapshot, plan, assignments), target: [target, dependencies], creates, usesCreations, review: this.reviewTarget(type, item, steps, "id" in plan ? plan.id : undefined) }
   }
 
   private approvalContent(path: string, snapshot: Item, plan: RestorePlanForItem, assignments: boolean) {
@@ -450,6 +501,7 @@ export class Restorer {
   }
 
   async pendingApprovalObservation(record: RestoreApproval, action: "submit" | "complete"): Promise<RestoreObservation> {
+    if (record.continuationPending && !record.continuationFingerprint) throw new WriteApprovalError(LEGACY_CONTINUATION)
     const type = typeForFolder(record.folder)!
     const { status: _status, approverNote: _note, expiresAt: _expiry, requesterName: _name, approver: _approver, ...step } = record
     let intuneApproval: unknown
@@ -487,7 +539,7 @@ export class Restorer {
     }).map(row => [row.id, approvalFingerprint(row)]).sort((a, b) => String(a[0]).localeCompare(String(b[0])))
   }
 
-  private async approvalDependencies(type: IntuneType, bodies: Item[]): Promise<unknown[]> {
+  private async approvalDependencies(type: IntuneType, bodies: Item[], planned?: Map<string, PlannedDependency>): Promise<Array<[string, string | null | PlannedDependency]>> {
     const paths = new Set<string>()
     for (const body of bodies) {
       for (const reference of dependencyReferences(body)) {
@@ -502,6 +554,8 @@ export class Restorer {
       }
     }
     return Promise.all([...paths].sort().map(async path => {
+      const prior = planned?.get(path.toLowerCase())
+      if (prior) return [path, prior]
       const { status, body } = await this.graph("GET", path)
       if (status === 404) return [path, null]
       if (status !== 200 || typeof body.id !== "string") throw new WriteApprovalError("A destination dependency could not be verified.")
@@ -553,18 +607,21 @@ export class Restorer {
     if (created.status >= 300) return { success: false, path, retryable: created.status < 500 && created.status !== 408, error: writeError(type, created.body, created.status) }
     const id = String(created.body.id ?? "")
     if (!id) return { success: false, path, retryable: false, error: "Microsoft Graph did not return an ID. Check Intune before retrying." }
-    if (typeof snapshot.id === "string" && !this.reviewed.has(snapshot.id.toLowerCase())) this.remapped.set(snapshot.id, id)
+    const protectedWrite = this.options.writeApprovalTenant && hasWriteApproval(this.options.writeApprovalTenant)
     // Graph may answer with only the ID, so the body sent (with the [Restored] name) fills the gaps.
     const remaining = [...plan.steps, ...plan.assignments]
     let baseline: Item | undefined
-    if (this.options.writeApprovalTenant && hasWriteApproval(this.options.writeApprovalTenant) && remaining.length) {
+    if (protectedWrite && (remaining.length || reviewed?.verifyCreation)) {
       try {
         baseline = await this.verifiedState(type, id, { ...plan.create, kind: "content" }, created.body)
       } catch (error) {
         return { success: false, path, partial: true, policyId: id, action: "created", retryable: false, error: error instanceof Error ? error.message : String(error) }
       }
     }
-    const outcome = await this.complete(type, path, id, { ...plan.create.body, ...created.body }, "created", remaining, baseline, 1, undefined, reviewed?.target)
+    if (!protectedWrite && typeof snapshot.id === "string" && !this.reviewed.has(snapshot.id.toLowerCase())) this.remapped.set(snapshot.id, id)
+    const finish = reviewed?.verifyCreation ? (live: Item) => this.verifiedCreates.set(path, { id, fingerprint: approvalFingerprint(live) }) : undefined
+    const outcome = await this.complete(type, path, id, { ...plan.create.body, ...created.body }, "created", remaining, baseline, 1, undefined, reviewed?.target, finish)
+    if (protectedWrite && outcome.success && reviewed?.verifyCreation && reviewed.creates) this.remapped.set(reviewed.creates.sourceId, id)
     if (plan.assignments.length && type.assignmentWarning) outcome.warnings = [...(outcome.warnings ?? []), type.assignmentWarning]
     return this.withWarnings(outcome, type, source, plan.create.body, references.warnings)
   }
@@ -740,7 +797,7 @@ export class Restorer {
     }
   }
 
-  private async complete(type: IntuneType, path: string, id: string, body: Item, action: "created" | "updated", steps: Step[], baseline?: Item, priorSteps = action === "created" ? 1 : 0, firstCheck?: () => Promise<void>, reviewedTarget?: unknown): Promise<RestoreOutcome> {
+  private async complete(type: IntuneType, path: string, id: string, body: Item, action: "created" | "updated", steps: Step[], baseline?: Item, priorSteps = action === "created" ? 1 : 0, firstCheck?: () => Promise<void>, reviewedTarget?: unknown, finish?: (live: Item) => void): Promise<RestoreOutcome> {
     const name = type.singleton?.name ?? body[type.nameKey] ?? body.displayName ?? body.name
     const base = { path, policyId: id, policyName: typeof name === "string" ? name : undefined, action }
     const resolved = steps.map((step) => resolveStep(step, id))
@@ -772,7 +829,7 @@ export class Restorer {
         }, dispatch) : await dispatch()
         if (!response.approval) {
           if (response.status < 300) {
-            if (protectedWrite && index < resolved.length - 1) {
+            if (protectedWrite && (index < resolved.length - 1 || finish)) {
               expected = await this.verifiedState(type, id, step, response.body, expected)
             }
             continue
@@ -781,6 +838,9 @@ export class Restorer {
           safeToRetry = response.status < 500 && response.status !== 408
         }
       } catch (error) {
+        if (!response && error instanceof FetchPreconditionError) {
+          return { ...base, success: false, partial: priorSteps > 0 || index > 0, retryable: false, error: `Write not sent: ${error.message}` }
+        }
         message = `Write outcome unknown: ${error instanceof Error ? error.message : String(error)}. Check Intune before retrying.`
       }
       if (response?.approval) {
@@ -806,6 +866,7 @@ export class Restorer {
       }
       return { ...base, success: false, partial: true, retryable: safeToRetry, repairToken, error: message, warnings: [message!] }
     }
+    if (expected) finish?.(expected)
     return { ...base, success: true }
   }
 
@@ -887,7 +948,9 @@ export class Restorer {
 
   async completeApproval(record: RestoreApproval, check?: () => Promise<void>, reviewedTarget?: unknown): Promise<RestoreOutcome> {
     this.checkApprovalOwner(record)
-    if (record.continuationPending && record.objectId) {
+    if (record.continuationPending) {
+      if (hasWriteApproval(record.tenantId) && !record.continuationFingerprint) throw new WriteApprovalError(LEGACY_CONTINUATION)
+      if (!record.objectId) throw new WriteApprovalError("The completed Intune step has no saved object ID. Check Intune before continuing.")
       await check?.()
       return this.resumeApproval(record, { id: record.objectId }, [], undefined, reviewedTarget)
     }
@@ -952,21 +1015,24 @@ export class Restorer {
   }
 
   /** Reviewed mappings only rewrite dependency references, never configuration text. */
-  private remap(snapshot: Item): Item {
-    const guids = [...this.remapped].filter(([from]) => GUID.test(from) && !this.reviewed.has(from.toLowerCase()))
+  private remap(snapshot: Item, remapped = this.remapped, includeReviewed = true, strict = false): Item {
+    const guids = [...remapped].filter(([from]) => GUID.test(from) && !this.reviewed.has(from.toLowerCase()))
     const walk = (value: Json, key = "", parent = ""): Json => {
       if (typeof value === "string") {
         const reference = /(?:Id|Ids)$/.test(key) || (key === "id" && parent === "categories")
         const binding = key === "@odata.id" || key.endsWith("@odata.bind")
         if (reference) {
           const reviewed = this.reviewed.get(value.toLowerCase())
-          if (reviewed) return reviewed
+          if (includeReviewed && reviewed) return reviewed
         }
         if (binding && value.startsWith("https://graph.microsoft.com/beta/")) {
-          return value.replace(/[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}/gi, id => this.reviewed.get(id.toLowerCase()) ?? this.remapped.get(id) ?? id)
+          return value.replace(/[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}/gi, id => (includeReviewed ? this.reviewed.get(id.toLowerCase()) : undefined) ?? remapped.get(id) ?? id)
         }
-        const exact = this.reviewed.has(value.toLowerCase()) ? undefined : this.remapped.get(value)
+        const policyReference = /^(includeLocations|excludeLocations)$/.test(key) || key === "id" && parent === "authenticationStrength"
+        if (strict && !reference && !policyReference) return value
+        const exact = this.reviewed.has(value.toLowerCase()) ? undefined : remapped.get(value)
         if (exact) return exact
+        if (strict) return guids.find(([from]) => from.toLowerCase() === value.toLowerCase())?.[1] ?? value
         return guids.reduce((text, [from, to]) => text.replace(new RegExp(from, "gi"), to), value)
       }
       if (Array.isArray(value)) return value.map(entry => walk(entry, key, parent))
@@ -1075,8 +1141,14 @@ export function verifiedMutation(type: IntuneType, id: string, method: string, p
     if (!(key in actual) && (key === "@odata.type" || revisionMatches)) continue
     if (!sameSnapshot(value, actual[key])) return false
   }
-  if (!unchanged) return true
   const extras = new Set([...COMMON_READ_ONLY, ...(type.readOnly ?? [])])
+  if (!unchanged) {
+    const returned = comparable(response)
+    return Object.entries(actual).every(([key, value]) =>
+      key in desired || extras.has(key) || key === "assignments" && Array.isArray(value) && !value.length
+      || (key in returned ? sameSnapshot(returned[key], value) : revisionMatches))
+      && Object.entries(returned).every(([key, value]) => extras.has(key) || sameSnapshot(actual[key], value))
+  }
   return Object.entries(unchanged).every(([key, value]) => key in desired || sameSnapshot(value, actual[key]))
     && Object.keys(actual).every(key => key in desired || key in unchanged || extras.has(key))
 }

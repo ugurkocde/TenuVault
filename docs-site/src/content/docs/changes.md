@@ -129,4 +129,4 @@ Settings documented under [Governance](/governance/) organization customizations
 
 When the destination requires a second admin, the first apply attempt requests that approval. A reviewer name entered in the change set is a note. It cannot authorize a write. The destination check covers the proposed operations, dependency mappings, assignments and pre-change backup choice.
 
-Open **Settings > Storage and recovery > Tenant approvals** and select the destination tenant. A different signed-in admin reviews the request there. After approval, return to the operation on the original installation and apply the same selection within seven days.
+Open **Settings > Storage and recovery > Tenant approvals** and select the destination tenant. A different signed-in admin reviews the request there. After approval, return to the operation on the original installation and apply the same selection before it expires. The deadline is seven days from request creation. The Tenant approvals inbox shows the expiry.

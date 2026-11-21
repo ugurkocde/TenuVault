@@ -13,7 +13,7 @@ import { extractOibId } from "../../shared/oib/manifest"
 import { compareToTenant } from "../../shared/oib/match"
 import { definitionIdsOf, describePolicy, policyChanges, type OibPolicyChanges, type OibPolicySettings } from "../../shared/oib/policy-settings"
 import { replaceTenantVariables } from "../../shared/oib/variables"
-import { isFullValidation, OIB_BACKUP_REUSE_MINUTES, OIB_PLATFORMS, type DeployItem, type OibBackupChoice, type OibBackupOptions, type OibComparison, type OibPlatform, type OibProgress, type OibRecentBackup, type OibRun, type PolicyValidation, type TenantPolicy, type UndoResult, type ValidationRun } from "../../shared/oib/types"
+import { isFullValidation, OIB_BACKUP_REUSE_MINUTES, OIB_PLATFORMS, OIB_REVIEWED_BATCH_LIMIT, type DeployItem, type OibBackupChoice, type OibBackupOptions, type OibComparison, type OibPlatform, type OibProgress, type OibRecentBackup, type OibRun, type PolicyValidation, type TenantPolicy, type UndoResult, type ValidationRun } from "../../shared/oib/types"
 import { backupGaps, describeMissing, describeStatus, folderLabel } from "../backup/completeness"
 import { apiBody } from "../features/deps"
 import { withTenantWrite } from "../features/write-lock"
@@ -395,7 +395,7 @@ function deployItems(value: unknown, kind: OibRun["kind"]): DeployItem[] {
   })
 }
 
-async function prepareDeployment(body: RecordJson, kind: OibRun["kind"]) {
+async function prepareDeployment(body: RecordJson, kind: OibRun["kind"], reportLoading?: ReturnType<typeof tracker>) {
   const platform = platformOf(body.platform)
   const tenant = tenantOf(body.tenantId)
   const items = deployItems(body.items, kind)
@@ -404,6 +404,7 @@ async function prepareDeployment(body: RecordJson, kind: OibRun["kind"]) {
   const backup = backupChoice(body.backup)
   if (backup.mode !== "none" && !hasStorage(body)) throw new FrameworkError("Choose where backups for this tenant are stored in Settings first, or skip the backup.")
   requireStore()
+  reportLoading?.({ stage: "Loading the OIB pack" })
   const pack = await loadPack(platform, body.commit, body.tag)
   const chosen = items.map((item) => {
     const policy = pack.items.get(item.source)
@@ -550,8 +551,12 @@ async function prepareDeployment(body: RecordJson, kind: OibRun["kind"]) {
 async function deploy(body: RecordJson, kind: OibRun["kind"]): Promise<OibRun> {
   const tenant = tenantOf(body.tenantId)
   return withTenantWrite(tenant, kind === "fix" ? "OpenIntuneBaseline drift fix" : "OpenIntuneBaseline deployment", async () => {
-    const prepared = await prepareDeployment(body, kind)
-    return withWriteApproval([prepared.operation], prepared.work)
+    try {
+      const prepared = await prepareDeployment(body, kind, tracker(tenant, kind))
+      return await withWriteApproval([prepared.operation], prepared.work)
+    } finally {
+      progress.delete(tenant)
+    }
   })
 }
 
@@ -569,21 +574,30 @@ export function reviewedOibRoute(admit: (child: RecordJson) => Promise<Response 
 
 /** Preflight all protected destinations before dispatching any batch. Each child uses its existing access rules. */
 export async function deployReviewedBatches(body: RecordJson, admit: (child: RecordJson) => Promise<Response | null>): Promise<Response> {
-  if (!Array.isArray(body.batches) || body.batches.length < 2 || body.batches.length > 100 || body.batches.some(child => !record(child) || child.action !== "oib-deploy")) {
+  if (!Array.isArray(body.batches) || body.batches.length < 2 || body.batches.some(child => !record(child) || child.action !== "oib-deploy")) {
     throw new FrameworkError("Choose the deployment batches.")
   }
   const batches = body.batches as RecordJson[]
   if (tenantOf(body.tenantId) !== tenantOf(batches[0]!.tenantId)) throw new FrameworkError("Choose a primary deployment tenant.")
   const tenants = [...new Set(batches.map(child => tenantOf(child.tenantId)))]
-  const policies = await Promise.all(tenants.map(approvalsEnabled))
-  if (!policies.some(Boolean)) return Response.json({ legacy: true })
-  const prepared = new Map<string, Awaited<ReturnType<typeof prepareDeployment>>[]>()
-  for (const child of batches) {
+  const enrolled = new Set((await Promise.all(tenants.map(approvalsEnabled))).flatMap((enabled, index) => enabled ? [tenants[index]!] : []))
+  if (!enrolled.size) return Response.json({ legacy: true })
+  if (batches.length > OIB_REVIEWED_BATCH_LIMIT) throw new FrameworkError(`Select at most ${OIB_REVIEWED_BATCH_LIMIT} deployment batches when tenant approval is enabled.`)
+  const results: Array<{ tenant: string; platform: unknown; batchIndex: number; run?: OibRun; error?: string }> = []
+  const stopped = new Map<string, string>()
+  const prepared = new Map<string, Array<Awaited<ReturnType<typeof prepareDeployment>> & { batchIndex: number }>>()
+  for (const [batchIndex, child] of batches.entries()) {
     const tenant = tenantOf(child.tenantId)
+    if (!enrolled.has(tenant) && (stopped.has(tenant) || backupChoice(child.backup).mode !== "none" && !hasStorage(child))) {
+      const error = stopped.get(tenant) ?? "Skipped: no backup storage is chosen for this tenant in Settings."
+      stopped.set(tenant, error)
+      results.push({ tenant, platform: child.platform, batchIndex, error })
+      continue
+    }
     const blocked = await admit({ ...child, bulk: tenant !== tenants[0] })
     if (blocked) return blocked
     const list = prepared.get(tenant) ?? []
-    list.push(await prepareDeployment(child, "deploy"))
+    list.push({ ...await prepareDeployment(child, "deploy"), batchIndex })
     prepared.set(tenant, list)
   }
   const operations = [...prepared].map(([tenant, entries]): ApprovalOperation => {
@@ -600,18 +614,25 @@ export async function deployReviewedBatches(body: RecordJson, admit: (child: Rec
     return operation
   })
   return withWriteApproval(operations, async () => {
-    const results: Array<{ tenant: string; platform: unknown; batchIndex: number; run?: OibRun; error?: string }> = []
     for (const [tenant, entries] of prepared) {
-      await withTenantWrite(tenant, "OpenIntuneBaseline deployment", async () => {
-        for (const [index, entry] of entries.entries()) {
-          const indexes = batches.flatMap((child, batchIndex) => tenantOf(child.tenantId) === tenant ? [batchIndex] : [])
-          const batchIndex = indexes[index]!
-          const platform = batches[batchIndex]!.platform
-          try { results.push({ tenant, platform, batchIndex, run: await entry.work() }) }
-          catch (error) { results.push({ tenant, platform, batchIndex, error: message(error) }); break }
-        }
-      })
+      let index = 0
+      let failure: string | undefined
+      try {
+        await withTenantWrite(tenant, "OpenIntuneBaseline deployment", async () => {
+          for (; index < entries.length; index++) {
+            const entry = entries[index]!
+            const platform = batches[entry.batchIndex]!.platform
+            results.push({ tenant, platform, batchIndex: entry.batchIndex, run: await entry.work() })
+          }
+        })
+      } catch (error) {
+        failure = message(error)
+      }
+      if (failure) for (const entry of entries.slice(index)) {
+        results.push({ tenant, platform: batches[entry.batchIndex]!.platform, batchIndex: entry.batchIndex, error: failure })
+      }
     }
+    results.sort((a, b) => a.batchIndex - b.batchIndex)
     return Response.json({ results })
   })
 }
