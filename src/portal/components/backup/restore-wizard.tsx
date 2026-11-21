@@ -1,7 +1,7 @@
-import { TenantApprovals } from "../../../renderer/components/write-approvals/TenantApprovals"
-import { isApprovalBlocker } from "../../../renderer/lib/write-approvals"
 "use client"
 
+import { TenantApprovals } from "../../../renderer/components/write-approvals/TenantApprovals"
+import { isApprovalBlocker } from "../../../renderer/lib/write-approvals"
 import { RestoreApprovals } from "./restore-approvals"
 import { reviewedDependencyMappings, type RecoveryReadiness } from "../../../shared/intune/recovery"
 import { settingDefinitionIds, type DeprecatedSettingHit } from "../../../shared/intune/settings-catalog"
