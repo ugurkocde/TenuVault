@@ -150,9 +150,11 @@ checks:
   in?" with No, and checks the app shows "Signed in as" the test user and holds an account whose
   tenant, user and app registration all match. No license key is used.
 
-Both harnesses run with the `DisableAutoUpdate` policy set (as managed deployments use it) and
-check after every start that the running app is the nightly under test, so a newer release the
-app would otherwise update to is never what gets verified.
+Both harnesses run with the `DisableAutoUpdate` policy set (as managed deployments use it; on
+macOS the workflow writes it to `/Library/Managed Preferences/com.tenuvault.desktop.plist`, where
+configuration profiles put it) and check after every start that the running app is the nightly
+under test and reports updates as managed, so a newer release the app would otherwise update to
+is never what gets verified.
 
 ### The canary key and its activations
 
@@ -255,7 +257,10 @@ plan records events; Community sees a locked preview on the Audit Log page.
 
 Put these in the next stable release's notes, then remove them here.
 
-None yet.
+- macOS: the `DisableAutoUpdate` and `DisableSetupDiagnostics` policies are read only from a
+  configuration profile (`/Library/Managed Preferences`). A value written with `defaults write`
+  to a user's own preferences no longer locks updates or diagnostics. Admins who set them that
+  way deploy a profile instead (see the deploy page).
 
 ## Cutting a stable release
 

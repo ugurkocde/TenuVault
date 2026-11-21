@@ -213,6 +213,12 @@ export async function launch(appPath, profile, shotsDir, { checkVersion = true }
       child.kill()
       throw new Error(`The running app is version ${version ?? "unknown"}, not the nightly under test ${expected}.`)
     }
+    // And the policy the workflow set is the one the app sees, so it cannot update itself.
+    const managed = (await evaluate("window.tenuvault?.preferences?.get?.()").catch(() => null))?.autoUpdateManaged
+    if (managed !== true) {
+      child.kill()
+      throw new Error(`The app does not report updates as managed by the DisableAutoUpdate policy (autoUpdateManaged is ${managed}).`)
+    }
   }
   return { evaluate, waitFor, waitForText, screenshot, click, fill, close, log: () => log, send }
 }
