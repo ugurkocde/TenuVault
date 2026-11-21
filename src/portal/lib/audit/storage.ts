@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { auditId, projectEntry, projectItem } from './projection'
 import { acknowledgeEvent, acknowledgeEvents, pendingEvents, queueEvent } from './outbox'
 import { BlobListError, decodeXml, listBlobPages } from '../storage/list'
@@ -136,16 +137,20 @@ export class AuditStorageService {
   }
 
   async testProducerAccess(tenantId: string): Promise<boolean> {
-    const name = `producer-tests/${tenantId.toLowerCase()}/backup-reader.json`
-    const receipt = { tenantId, type: 'audit-access-test' }
-    const auditUrl = this.blobUrl(name)
-    const backupUrl = `${this.getBaseUrl()}/intune-backups/${blobPath(name)}`
+    const prefix = `producer-tests/${tenantId.toLowerCase()}/backup-reader`
+    const auditUrl = this.blobUrl(`${prefix}-${randomUUID()}.json`)
+    const backupUrl = `${this.getBaseUrl()}/intune-backups/${blobPath(`${prefix}.json`)}`
+    const canary = JSON.stringify({ tenantId, type: 'audit-access-test' })
     const request = (url: string, method: string, headers?: HeadersInit, body?: string) =>
       this.fetch(url, { method, headers: { ...this.getHeaders(), ...headers }, body, signal: AbortSignal.timeout(15000) })
-    const created = await this.putImmutable(name, receipt, existing => existing?.tenantId === tenantId && existing.type === receipt.type)
+    // Only an ambiguous response to this fresh conditional create can be verified by readback.
+    const created = await request(auditUrl, 'PUT', { 'x-ms-blob-type': 'BlockBlob', 'If-None-Match': '*' }, canary)
+      .catch(() => undefined)
+    if (created && !created.ok && created.status !== 0 && created.status !== 408 && created.status < 500) {
+      throw new Error(`Audit storage test could not create a blob (${created.status})`)
+    }
     const read = await request(auditUrl, 'GET')
-    if (!read.ok || (await read.json()).tenantId !== tenantId) throw new Error('Audit storage test could not be verified')
-    const canary = JSON.stringify(receipt)
+    if (!read.ok || await read.text() !== canary) throw new Error('Audit storage test could not be verified')
     const backup = await request(backupUrl, 'PUT', { 'x-ms-blob-type': 'BlockBlob' }, canary)
     if (!backup.ok) throw new Error('Could not write the backup permission test blob')
     const probes = await Promise.all([
@@ -156,7 +161,7 @@ export class AuditStorageService {
     probes.push(await request(auditUrl, 'DELETE'))
     if (probes.some(result => result.ok)) throw new Error('The Backup Reader has excessive Azure Storage permissions. Remove grants that allow audit overwrite or blob deletion.')
     if (probes.some(result => result.status !== 403)) throw new Error('Azure Storage did not confirm that audit overwrite and blob deletion are denied.')
-    return created
+    return true
   }
 
   async writeLog(input: AuditLogEntry): Promise<void> {

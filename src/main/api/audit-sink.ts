@@ -62,6 +62,9 @@ interface RestoreReceipt {
 const JOURNAL = 'audit.restore-jobs'
 const RECEIPTS = 'audit.restore-receipts'
 const warning = () => console.warn('[audit] Audit delivery requires attention')
+const isBackupCheckpoint = (entry: AuditLogEntry) =>
+  entry.eventType === AuditEventType.BACKUP_COMPLETED || entry.eventType === AuditEventType.BACKUP_FAILED ||
+  entry.eventType === AuditEventType.BACKUP_CANCELLED
 
 /**
  * Main process API for jobs, approval stages and policy events. Obtain the destination binding
@@ -71,12 +74,15 @@ const warning = () => console.warn('[audit] Audit delivery requires attention')
 export class AuditSink {
   private checkpoints: Record<string, Checkpoint>
   private receipts: Record<string, RestoreReceipt>
+  private readonly interruptedBackups: Set<string>
   private retrying = false
   private readonly retryOffsets = new Map<string, number>()
 
   constructor(private readonly options: AuditSinkOptions) {
     this.checkpoints = JSON.parse(options.store?.get(JOURNAL) ?? '{}')
     this.receipts = JSON.parse(options.store?.get(RECEIPTS) ?? '{}')
+    this.interruptedBackups = new Set(Object.entries(this.checkpoints)
+      .filter(([, checkpoint]) => !checkpoint.finished && isBackupCheckpoint(checkpoint.entry)).map(([id]) => id))
   }
 
   bind(tenant: string): AuditBinding | undefined {
@@ -233,11 +239,16 @@ export class AuditSink {
   }
 
   async recoverBackups(reconcile: (binding: AuditBinding, entry: AuditLogEntry) => Promise<AuditLogEntry>): Promise<void> {
-    for (const [id, checkpoint] of Object.entries(this.checkpoints)) {
-      if (checkpoint.finished || checkpoint.entry.job?.producer !== 'backup-reader') continue
+    for (const id of this.interruptedBackups) {
+      const checkpoint = this.checkpoints[id]
+      if (!checkpoint || checkpoint.finished) {
+        this.interruptedBackups.delete(id)
+        continue
+      }
       try {
         const entry = await reconcile(checkpoint.binding, checkpoint.entry)
         this.finishBackupCheckpoint(id, entry)
+        this.interruptedBackups.delete(id)
       } catch { warning() }
     }
   }
@@ -247,7 +258,7 @@ export class AuditSink {
     for (const [id, checkpoint] of Object.entries(this.checkpoints)) {
       try {
         if (!checkpoint.finished) {
-          if (checkpoint.entry.job?.producer === 'backup-reader') continue
+          if (isBackupCheckpoint(checkpoint.entry)) continue
           if ((checkpoint.completionId || checkpoint.completion) && !checkpoint.ready) {
             checkpoint.entry.job!.reason = 'PROCESS_INTERRUPTED'
           }
@@ -306,8 +317,8 @@ export class AuditSink {
   pending(tenant: string, producer: AuditJob['producer']): number {
     const matches = (entry: AuditLogEntry) => entry.user.tenantId === tenant.toLowerCase() && entry.job?.producer === producer
     const ids = new Set(queuedAccounts().flatMap(account => pendingEvents(account).filter(matches).map(entry => entry.id)))
-    for (const checkpoint of Object.values(this.checkpoints)) {
-      if ((checkpoint.finished || ((checkpoint.completionId || checkpoint.completion) && !checkpoint.ready)) &&
+    for (const [id, checkpoint] of Object.entries(this.checkpoints)) {
+      if ((checkpoint.finished || this.interruptedBackups.has(id) || ((checkpoint.completionId || checkpoint.completion) && !checkpoint.ready)) &&
         matches(checkpoint.entry)) ids.add(checkpoint.entry.id)
     }
     return ids.size

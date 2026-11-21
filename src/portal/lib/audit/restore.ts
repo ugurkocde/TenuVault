@@ -3,7 +3,30 @@ import { auditUserFromToken, mainAuditSink } from '../../../main/api/audit-sink'
 import { typeForFolder } from '../../../shared/intune/registry'
 import type { RestoreOutcome } from '../policies/graph-restore'
 import { auditId } from './projection'
-import { AuditEventType, type AuditJobItem, type AuditJobStage } from './types'
+import { AuditEventType, AuditResult, AuditSeverity, type AuditJobItem, type AuditJobStage } from './types'
+
+export async function recordRestorePreparationFailure(input: {
+  destination: string
+  graphToken?: string
+  sourceBackupId: string
+  operationId: string
+  runId: string
+  action: string
+}): Promise<void> {
+  const sink = mainAuditSink()
+  const binding = sink?.bind(input.destination)
+  if (!binding || !sink) return
+  const user = input.graphToken && auditUserFromToken(input.graphToken, input.destination)
+  await sink.record(user ? { ...binding, user } : binding, {
+    eventType: AuditEventType.RESTORE_FAILED, action: input.action,
+    resource: { type: 'backup', id: input.sourceBackupId, name: 'Restore backup' },
+    result: AuditResult.FAILURE, severity: AuditSeverity.ERROR,
+    job: {
+      operationId: input.operationId, runId: input.runId, stage: 'terminal', producer: 'desktop',
+      sourceBackupId: input.sourceBackupId, status: 'failed', counts: {}, reason: 'RESTORE_PREPARATION_FAILED',
+    },
+  })
+}
 
 export function restoreAuditItem(path: string, result?: RestoreOutcome, sourceId?: string): AuditJobItem {
   const folder = path.split('/')[1] ?? ''

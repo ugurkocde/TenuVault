@@ -649,3 +649,23 @@ it("reconciles a successful manifest when every PUT acknowledgement is lost", as
   const { data } = await store.get(account, "intune-backups", `${job.backupFolder}/metadata.json`)
   expect(JSON.parse(data.toString())).toMatchObject({ RunId: job.id, TenantId: TENANT, Status: "Success" })
 })
+
+it("reports a definitively rejected desktop manifest as failed without attempting a second manifest", async () => {
+  const { store, account } = setup()
+  const graph = fakeGraph()
+  const manifestPuts = vi.fn(() => new Response(null, { status: 403 }))
+  const engine = new BackupEngine({
+    getToken: async () => "token",
+    fetch: async (input, init) => {
+      const request = new Request(input, init)
+      const url = new URL(request.url)
+      if (url.hostname === "graph.microsoft.com") return graph(url)
+      if (request.method === "PUT" && url.pathname.endsWith("/metadata.json")) return manifestPuts()
+      return handleLocalBlobRequest(store, request)
+    },
+  })
+  const job = await engine.waitForJob(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }))
+  expect(job.status).toBe("Failed")
+  expect(job.commitUnconfirmed).toBeUndefined()
+  expect(manifestPuts).toHaveBeenCalledTimes(1)
+})

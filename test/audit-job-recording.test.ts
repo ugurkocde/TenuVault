@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto"
 import { afterEach, expect, it, vi } from "vitest"
 import { AuditSink } from "../src/main/api/audit-sink"
-import { backupAudit, reconcileBackupAudit, recordBackupAudit } from "../src/main/backup/audit"
+import { checkpointBackupAudit, reconcileBackupAudit, recordBackupAudit } from "../src/main/backup/audit"
 import { BackupEngine } from "../src/main/backup/engine"
 import { AuditContainerMissingError, AuditStorageService } from "../src/portal/lib/audit/storage"
 import { auditExportCSV, auditExportJSON } from "../src/portal/lib/audit/export"
@@ -284,21 +284,58 @@ it("records only changed top-level schema paths for a Windows configuration", as
   expect(changes).toEqual([{ operation: "update", field: "omaSettings" }])
 })
 
-it.each(["Success", "foreign", "missing"])("recovers a Reader checkpoint using the original binding when its manifest is %s", async status => {
+it("still captures and records the Reader terminal result when the encrypted checkpoint cannot be written", async () => {
+  const local = memoryStore()
+  const save = local.set
+  const write = vi.spyOn(local, "set").mockImplementation((key, value) => {
+    if (key === "audit.restore-jobs") throw new Error(canary)
+    save(key, value)
+  })
+  const log = vi.spyOn(console, "warn").mockImplementation(() => undefined)
+  const remote = storage()
+  const sink = new AuditSink({ store: local, bind: () => binding, transport: async () => remote.service })
+  const terminal: Promise<void>[] = []
+  const fetcher = vi.fn<typeof fetch>(async (_url, init) =>
+    init?.method === "PUT" ? new Response(null, { status: 201 }) : Response.json({ value: [] }))
+  const engine = new BackupEngine({
+    fetch: fetcher,
+    getToken: async () => { throw new Error("No admin session") },
+    unattendedTokens: () => ({ mode: "app-only", registrationId: registration, graph: async () => "reader-graph", storage: async () => "reader-storage" }),
+    onStarted: (active, request, tokens) => checkpointBackupAudit(sink, active, request, tokens, binding.user, "1.2.3"),
+    onFinished: (active, request, tokens) => {
+      if (tokens) terminal.push(recordBackupAudit(sink, active, request, tokens, binding.user, "1.2.3"))
+    },
+  })
+  const active = await engine.waitForJob(engine.start({ tenantId, storageAccountName, clientId: "admin", trigger: "scheduled" }))
+  await Promise.all(terminal)
+  expect(write).toHaveBeenCalledWith("audit.restore-jobs", expect.any(String))
+  expect(active.status).toBe("Completed")
+  expect(fetcher.mock.calls.some(([url, init]) => String(url).endsWith("/metadata.json") && init?.method === "PUT")).toBe(true)
+  expect(log).toHaveBeenCalledWith("[audit] Backup audit checkpoint could not be saved")
+  expect(await remote.service.queryAllLogs(dateFilter)).toMatchObject([{ id: active.id, job: { status: "completed", producer: "backup-reader" } }])
+})
+
+it.each([
+  ["app-only", "Success"], ["app-only", "foreign"], ["app-only", "missing"], ["app-only", "offline"],
+  ["app-only", "throttled"], ["delegated", "Success"], ["delegated", "wrong run"],
+] as const)("recovers a %s checkpoint using the original binding when its manifest is %s", async (mode, status) => {
   const local = memoryStore()
   setAuditOutboxStore(local)
   const remote = storage()
   const opts = { store: local, bind: () => binding, transport: async (_account: string, entry: AuditLogEntry) => {
-    expect(entry.job?.registrationId).toBe(registration)
+    expect(entry.job?.registrationId).toBe(mode === "app-only" ? registration : undefined)
     return remote.service
   } }
   const first = new AuditSink(opts)
   let committed: Record<string, unknown> | undefined
   const engine = new BackupEngine({
-    getToken: async () => { throw new Error("No admin session") },
+    getToken: async () => {
+      if (mode === "app-only") throw new Error("No admin session")
+      return "admin-token"
+    },
     unattendedTokens: () => ({ mode: "app-only", registrationId: registration, graph: async () => "reader-graph", storage: async () => "reader-storage" }),
     fetch: vi.fn(async (input, init) => {
-      expect(local.get("audit.restore-jobs")).toContain(registration)
+      expect(local.get("audit.restore-jobs")).toContain(mode === "app-only" ? registration : binding.user.email)
       const url = new URL(String(input))
       if (init?.method === "PUT") {
         if (url.pathname.endsWith("/metadata.json")) committed = JSON.parse(String(init.body))
@@ -307,27 +344,37 @@ it.each(["Success", "foreign", "missing"])("recovers a Reader checkpoint using t
       if (url.pathname === "/beta/deviceManagement/deviceConfigurations") return Response.json({ value: [{ id: "first", displayName: "Example" }] })
       return Response.json({ id: "first", value: [] })
     }),
-    onStarted: (active, request, tokens) => {
-      const { binding, input, stamp } = backupAudit(active, request, tokens, opts.bind().user, "1.2.3")
-      first.checkpointBackup(binding, input, stamp)
-    },
+    onStarted: (active, request, tokens) => checkpointBackupAudit(first, active, request, tokens, binding.user, "1.2.3"),
   })
-  const active = engine.start({ tenantId, storageAccountName, clientId: "admin", trigger: "scheduled" })
+  const active = engine.start({ tenantId, storageAccountName, clientId: "admin", trigger: mode === "app-only" ? "scheduled" : "manual" })
   await engine.waitForJob(active)
   expect(committed).toMatchObject({ TenantId: tenantId, RunId: active.id, Status: "Success" })
   expect(local.get("audit.restore-jobs")).toContain(active.id)
   const restarted = new AuditSink(opts)
   restarted.recover()
-  await restarted.recoverBackups((original, entry) => {
-    expect(original).toMatchObject({ tenantId, storageAccountName, user: { id: registration } })
+  const recover = () => restarted.recoverBackups((original, entry) => {
+    expect(original).toMatchObject({ tenantId, storageAccountName, user: { id: mode === "app-only" ? registration : binding.user.id } })
     expect(entry.resource.id).toBe(active.backupFolder)
     return reconcileBackupAudit(entry, async () => status === "missing" ? new Response(null, { status: 404 })
-      : Response.json({ ...committed, TenantId: status === "foreign" ? registration : tenantId }))
+      : Response.json({ ...committed, TenantId: status === "foreign" ? registration : tenantId,
+        RunId: status === "wrong run" ? "different-run" : active.id }))
   })
+  if (status === "offline" || status === "throttled") {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined)
+    await restarted.recoverBackups((_, entry) => reconcileBackupAudit(entry, async () => {
+      if (status === "offline") throw new TypeError("Network is temporarily unreachable")
+      return new Response(null, { status: 429 })
+    }))
+    await restarted.retry()
+    expect(restarted.pending(tenantId, "backup-reader")).toBe(1)
+    expect(remote.blobs.size).toBe(0)
+    expect(local.get("audit.restore-jobs")).toContain(active.id)
+  }
+  await recover()
   await restarted.retry()
   const [event] = await remote.service.queryAllLogs(dateFilter)
   expect(event?.id).toBe(active.id)
-  expect(event?.job?.status).toBe(status === "Success" ? "completed" : "uncertain")
+  expect(event?.job?.status).toBe(["Success", "offline", "throttled"].includes(status) ? "completed" : "uncertain")
   if (status === "Success") expect(event?.job?.counts.saved).toBe(active.totalPolicies)
   const last = new AuditSink(opts)
   last.recover()
@@ -338,13 +385,17 @@ it.each(["Success", "foreign", "missing"])("recovers a Reader checkpoint using t
 
 it.each([403, 201])("only passes a Reader permission canary when overwrite and both deletes are denied (%s)", async overwriteStatus => {
   const calls: Array<{ method?: string; path: string; match: string | null }> = []
+  let auditBody: BodyInit | null | undefined
   const service = new AuditStorageService({ ...credentials, fetch: async (url, init) => {
     const path = new URL(String(url)).pathname
     const match = new Headers(init?.headers).get("if-match")
     calls.push({ path, method: init?.method, match })
     if (init?.method === "DELETE") return new Response(null, { status: overwriteStatus === 403 ? 403 : 202 })
-    if (init?.method === "PUT") return new Response(null, { status: match ? overwriteStatus : 201 })
-    return Response.json({ tenantId })
+    if (init?.method === "PUT") {
+      if (path.startsWith("/audit-logs/") && !match) auditBody = init.body
+      return new Response(null, { status: match ? overwriteStatus : 201 })
+    }
+    return new Response(auditBody)
   } })
   if (overwriteStatus === 403) await expect(service.testProducerAccess(tenantId)).resolves.toBe(true)
   else await expect(service.testProducerAccess(tenantId)).rejects.toThrow("excessive Azure Storage permissions")
@@ -435,9 +486,13 @@ it.each(["new", "reader saved", "admin response lost"])("recovers a replaced Rea
   }
 })
 
-it("reuses the Reader canary names and reports fresh creation only once", async () => {
+it("requires fresh Reader audit creation even when the last canary remains readable", async () => {
   const blobs = new Map<string, string>()
   const checks: string[] = []
+  const auditCreates: string[] = []
+  const reads: string[] = []
+  let canCreate = true
+  let loseAck = false
   const service = new AuditStorageService({ ...credentials, fetch: async (url, init) => {
     const path = new URL(String(url)).pathname
     const headers = new Headers(init?.headers)
@@ -446,14 +501,26 @@ it("reuses the Reader canary names and reports fresh creation only once", async 
       return new Response(null, { status: 403 })
     }
     if (init?.method === "PUT") {
-      if (headers.get("if-none-match") && blobs.has(path)) return new Response(null, { status: 412 })
+      if (path.startsWith("/audit-logs/")) {
+        expect(headers.get("if-none-match")).toBe("*")
+        auditCreates.push(path)
+        if (!canCreate) return new Response(null, { status: 403 })
+        if (blobs.has(path)) return new Response(null, { status: 412 })
+      }
       blobs.set(path, String(init.body))
+      if (loseAck && path.startsWith("/audit-logs/")) throw new TypeError("Acknowledgement lost")
       return new Response(null, { status: 201 })
     }
+    reads.push(path)
     return new Response(blobs.get(path), { status: blobs.has(path) ? 200 : 404 })
   } })
   await expect(service.testProducerAccess(tenantId)).resolves.toBe(true)
-  await expect(service.testProducerAccess(tenantId)).resolves.toBe(false)
-  expect([...blobs.keys()]).toEqual(["audit-logs", "intune-backups"].map(container => `/${container}/producer-tests/${tenantId}/backup-reader.json`))
-  expect([...new Set(checks)].map(check => check.split("/").slice(0, 2).join("/")).sort()).toEqual(["DELETE /audit-logs", "DELETE /intune-backups", "PUT /audit-logs"])
+  loseAck = true
+  await expect(service.testProducerAccess(tenantId)).resolves.toBe(true)
+  canCreate = false
+  await expect(service.testProducerAccess(tenantId)).rejects.toThrow("could not create a blob (403)")
+  expect(new Set(auditCreates).size).toBe(3)
+  expect(reads).toEqual(auditCreates.slice(0, 2))
+  expect(blobs.size).toBe(3)
+  expect([...new Set(checks.map(check => check.split("/").slice(0, 2).join("/")))].sort()).toEqual(["DELETE /audit-logs", "DELETE /intune-backups", "PUT /audit-logs"])
 })

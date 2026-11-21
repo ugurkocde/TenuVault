@@ -381,7 +381,6 @@ export class BackupEngine {
     // An unqueued backup begins synchronously inside start(), as it did before the queue existed.
     const done = (queued ? waitForTurn().then(execute) : execute())
       .catch(async (error: unknown) => {
-        if (stopped.committing) job.commitUnconfirmed = true
         job.status = error instanceof BackupCancelledError ? "Cancelled" : "Failed"
         job.exception = error instanceof Error ? error.message : String(error)
         // Classified before the failed manifest is written, which goes around the run's fetch and cannot change it.
@@ -439,7 +438,12 @@ export class BackupEngine {
     const fetchImpl = answeredFetch(this.deps.fetch, outcome, local ? `${request.storageAccountName.toLowerCase()}.blob.core.windows.net` : null)
     const backupFolder = `backup-${folderTimestamp(started)}`
     job.backupFolder = backupFolder
-    this.deps.onStarted?.(job, request, tokens)
+    try {
+      this.deps.onStarted?.(job, request, tokens)
+    } catch {
+      console.warn("[audit] Backup audit checkpoint could not be saved")
+      this.write(job, "The audit checkpoint could not be saved. Terminal audit recording will still be attempted.", "warning")
+    }
     this.write(job, `Backing up tenant ${request.tenantId} to ${local ? "this device (encrypted)" : `storage account ${request.storageAccountName}`}.`)
     this.write(job, `Backup folder: ${backupFolder}`)
     if (tokens.mode === "app-only") this.write(job, "Reading as the tenant's Backup Reader (app-only, read-only).")
@@ -689,7 +693,9 @@ export class BackupEngine {
       // Once the PUT is sent it may land even when it reports a failure, so no failed manifest may follow it.
       await commitStorage.put(`${backupFolder}/metadata.json`, JSON.stringify(metadata, null, 2), network, false, () => { stopped.committing = true }, commit)
     } catch (error) {
-      if (!commit.ambiguous || commit.readbackStarted || commitController.signal.aborted) throw error
+      if (!commit.ambiguous) throw error
+      job.commitUnconfirmed = true
+      if (commit.readbackStarted || commitController.signal.aborted) throw error
       // A lost acknowledgement may have opened the PUT circuit. Reconcile under a separate
       // circuit while preserving the original commit deadline.
       const readbackNetwork = new NetworkCircuit(3 * concurrency, commitController.signal, commitDeadline)
@@ -697,6 +703,7 @@ export class BackupEngine {
       const saved = await reader.readJson(`${backupFolder}/metadata.json`).catch(() => null)
       if (saved?.RunId !== job.id || saved.TenantId !== metadata.TenantId ||
         saved.BackupFolder !== backupFolder || saved.Status !== metadata.Status) throw error
+      delete job.commitUnconfirmed
       this.write(job, "Verified the saved backup manifest after storage did not confirm the write.")
     } finally {
       clearTimeout(commitTimer)

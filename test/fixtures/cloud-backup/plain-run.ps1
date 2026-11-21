@@ -24,6 +24,7 @@ $script:failDetail = $false
 $script:failReportList = $false
 $script:failCompliance = $false
 $script:maskOma = $false
+$script:failAuditReceipt = $false
 
 function Get-TvManagedIdentityToken {
     param([string]$Resource)
@@ -38,6 +39,7 @@ function Invoke-TvHttp {
     if ($script:failCompliance -and $Uri -like "https://graph.microsoft.com/beta/deviceManagement/deviceCompliancePolicies*") { throw [TvHttpError]::new(500, "HTTP 500") }
     $body = if ($null -ne $BodyBytes) { [Text.Encoding]::UTF8.GetString($BodyBytes) } else { $null }
     $script:calls.Add([pscustomobject]@{ uri = $Uri; method = $Method; contentType = $ContentType; ifNoneMatch = $Headers["If-None-Match"]; body = $body })
+    if ($script:failAuditReceipt -and $Uri -like "*/tenuvault-backup-results/audit-receipts/*") { throw [TvHttpError]::new(403, "Audit receipt denied") }
     $text = '{"value":[]}'
     if ($Uri -like "*/tenuvault-backup-results?*comp=list*") {
         $text = "<EnumerationResults><Blobs /><NextMarker /></EnumerationResults>"
@@ -125,3 +127,13 @@ $errorText = $null
 $output = @()
 try { $output = @(Invoke-TvBackup) } catch { $errorText = $_.Exception.Message }
 Write-Output (@{ calls = @($script:calls.ToArray()); output = @($output | ForEach-Object { [string]$_ }); error = $errorText } | ConvertTo-Json -Compress -Depth 5)
+
+# 9. A successful backup still checks for an earlier backup for its report when the audit receipt is denied.
+$script:calls.Clear()
+$script:maskOma = $false
+$script:failAuditReceipt = $true
+[Environment]::SetEnvironmentVariable("TenuVaultChangeReport", "names")
+$errorText = $null
+$output = [System.Collections.Generic.List[string]]::new()
+try { Invoke-TvBackup 2>&1 | ForEach-Object { $output.Add([string]$_) } } catch { $errorText = $_.Exception.Message }
+Write-Output (@{ calls = @($script:calls.ToArray()); output = $output.ToArray(); error = $errorText } | ConvertTo-Json -Compress -Depth 5)

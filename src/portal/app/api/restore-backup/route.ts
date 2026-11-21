@@ -1,6 +1,6 @@
 import { auditUserFromToken, mainAuditSink } from "../../../../main/api/audit-sink"
 import { AuditEventType, type AuditJobItem } from "~/lib/audit/types"
-import { beginRestoreAudit, restoreAuditItem } from "~/lib/audit/restore"
+import { beginRestoreAudit, recordRestorePreparationFailure, restoreAuditItem } from "~/lib/audit/restore"
 import { restoreApprovals, dismissRestoreApproval, saveRestoreApproval } from "../../../../main/storage/restore-approvals"
 import { parseDependencyMappings } from "../../../../shared/intune/recovery"
 import { createHash, randomUUID } from "node:crypto"
@@ -60,6 +60,7 @@ async function restoreSinglePolicy(restorer: Restorer, policyPath: string, stora
 
 export async function POST(request: NextRequest) {
   let body: any
+  let preparationFailed: (() => void) | undefined
   try {
     body = await request.json()
     if (body.approvalAction) return await approvalAction(body)
@@ -114,11 +115,25 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Repair requests must select one target and valid repair tokens' }, { status: 400 })
     }
 
+    const jobId = randomUUID()
+    const destinations: string[] = targetTenants?.map((target: { tenantId: string }) => target.tenantId.toLowerCase()) ?? [tenantId.toLowerCase()]
+    const action = mode === 'replace' ? 'Restore backup in place' : 'Restore backup as policy copies'
+    const destinationTokens = new Map<string, string>()
+    let correlated: string = jobId
+    preparationFailed = () => {
+      for (const destination of destinations) {
+        void recordRestorePreparationFailure({
+          destination, graphToken: destinationTokens.get(destination), sourceBackupId: backupId, operationId: correlated, runId: jobId, action,
+        }).catch(() => console.warn('[audit] Restore preparation failure could not be recorded'))
+      }
+    }
+
     // Get access tokens for both Storage and Graph API
     const [storageToken, graphToken] = await Promise.all([
       getAccessToken(tenantId, appId, clientSecret, "https://storage.azure.com/.default"),
       getAccessToken(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default")
     ])
+    if (!targetTenants) destinationTokens.set(destinations[0]!, graphToken)
 
     // A shared container can hold other tenants' backups; never restore one of those. Everyone who
     // can write to the backup container is trusted like an Intune admin, so every backup that names
@@ -130,13 +145,11 @@ export async function POST(request: NextRequest) {
     const metadata = owned.metadata
 
     // Correlate the completed operation with its desktop audit event.
-    const jobId = randomUUID()
     const actor = auditUserFromToken(graphToken, tenantId)?.id.toLowerCase()
     const repairScope = (target: string) => JSON.stringify([tenantId, storageAccountName, backupId, target.toLowerCase(), mode, assignments, dependencyMappings, actor])
     const correlationSource = JSON.stringify([String(tenantId).toLowerCase(), storageAccountName, backupId])
-    const destinations: string[] = targetTenants?.map((target: { tenantId: string }) => target.tenantId.toLowerCase()) ?? [tenantId.toLowerCase()]
     const prior = actor && typeof body.retryOf === "string" && guid.test(body.retryOf) ? mainAuditSink()?.restoreCorrelation(body.retryOf) : undefined
-    const correlated = prior?.actor === actor && prior?.source === correlationSource && destinations.every(id => prior.destinations.includes(id))
+    correlated = prior?.actor === actor && prior?.source === correlationSource && destinations.every(id => prior.destinations.includes(id))
       && Date.now() - prior.at < 60 * 60_000 ? prior.operationId : jobId
 
     // Start the restore process
@@ -182,6 +195,7 @@ export async function POST(request: NextRequest) {
       ? await Promise.all((targetTenants as Array<{ tenantId: string; appId: string }>).map(async (target) => {
           const targetToken = await getAccessToken(target.tenantId, target.appId, clientSecret, "https://graph.microsoft.com/.default").catch(() => undefined)
           if (!targetToken) return { targetTenantId: target.tenantId.toLowerCase() }
+          destinationTokens.set(target.tenantId.toLowerCase(), targetToken)
           return {
             targetTenantId: target.tenantId.toLowerCase(), graphToken: targetToken,
             restorer: new Restorer(graphCaller(targetToken, fetch, { tenant: target.tenantId, refreshToken: () => getAccessToken(target.tenantId, target.appId, clientSecret, "https://graph.microsoft.com/.default", true) }),
@@ -201,6 +215,7 @@ export async function POST(request: NextRequest) {
     const manifest = checked.manifest
 
     const progress = progressId ? startProgress(progressId, paths.length * targets.length) : null
+    preparationFailed = undefined
     try {
       const ordered = restoreOrder(paths)
       for (const { restorer, targetTenantId, graphToken: targetToken } of targets) {
@@ -209,7 +224,7 @@ export async function POST(request: NextRequest) {
         const audit = beginRestoreAudit({
           destination: targetTenantId ?? tenantId, graphToken: targetToken, sourceBackupId: backupId, operationId, runId: jobId,
           correlation: actor ? { actor, source: correlationSource, destinations, operationId: correlated, at: Date.now() } : undefined,
-          action: mode === 'replace' ? 'Restore backup in place' : 'Restore backup as policy copies',
+          action,
           items: ordered.map(path => restoreAuditItem(path, undefined, manifest?.get(path)?.id)),
         })
         const submitted: AuditJobItem[] = []
@@ -291,6 +306,8 @@ export async function POST(request: NextRequest) {
       { error: error instanceof Error ? error.message : "Internal server error while restoring" },
       { status: 500 }
     )
+  } finally {
+    preparationFailed?.()
   }
 }
 

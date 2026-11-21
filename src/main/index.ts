@@ -1,4 +1,4 @@
-import { backupAudit, reconcileBackupAudit, recordBackupAudit } from "./backup/audit"
+import { checkpointBackupAudit, reconcileBackupAudit, recordBackupAudit } from "./backup/audit"
 import { auditUserFromToken, AuditSink, setMainAuditSink } from "./api/audit-sink"
 import { AuditContainerMissingError, AuditStorageService } from "../portal/lib/audit/storage"
 import { type AuditJobItem } from "../portal/lib/audit/types"
@@ -438,6 +438,10 @@ async function bootstrap(): Promise<void> {
   // portal route, so no restore, revert or other change can ever run with them.
   const backupReader = new BackupReaderService(tokenStore, { fetch: bridgedFetch })
   const moduleSettings = new ModuleSettings(appStore)
+  const backupAuditActor = (tenantId: string) => {
+    const account = accounts.get(tenantId)
+    return { id: account?.username ?? "unknown", email: account?.username ?? "", name: account?.name ?? account?.username ?? "Unknown user" }
+  }
   const engine = new BackupEngine({
     fetch: bridgedFetch,
     getToken: backupAccess.getToken,
@@ -464,15 +468,11 @@ async function bootstrap(): Promise<void> {
     },
     retentionDays: backupAccess.retentionDays,
     onStarted: (job, request, tokens) => {
-      if (tokens.mode !== "app-only") return
-      const { binding, input, stamp } = backupAudit(job, request, tokens, { id: "unknown", email: "", name: "Unknown user" }, app.getVersion())
-      auditSink.checkpointBackup(binding, input, stamp)
+      checkpointBackupAudit(auditSink, job, request, tokens, backupAuditActor(job.tenantId), app.getVersion())
     },
     onFinished: (job, request, tokens) => {
       if (tokens) {
-        const account = accounts.get(job.tenantId)
-        const actor = { id: account?.username ?? "unknown", email: account?.username ?? "", name: account?.name ?? account?.username ?? "Unknown user" }
-        void recordBackupAudit(auditSink, job, request, tokens, actor, app.getVersion())
+        void recordBackupAudit(auditSink, job, request, tokens, backupAuditActor(job.tenantId), app.getVersion())
           .catch(() => console.warn("[audit] Backup audit delivery requires attention"))
       }
       if (job.authMode === "app-only") backupReader.recordRun(job.tenantId, job.status)
@@ -715,10 +715,13 @@ async function bootstrap(): Promise<void> {
 
   const missingReaderAuditContainers = new Set<string>()
   const readerAuditKey = (tenantId: string, account: string) => `${tenantId.toLowerCase()}:${account}`
-  const readerAuditToken = async (tenantId: string, storageAccountName: string, registrationId?: string) => {
-    const clientId = tenantProfile(tenantId)?.clientId
-    const tokens = clientId && backupReader.tokens({ tenantId, clientId, storageAccountName, trigger: "scheduled" })
-    if (!tokens || tokens.registrationId !== registrationId) throw new Error("The original Backup Reader is unavailable")
+  const originalReaderTokens = (tenantId: string, clientId: string, storageAccountName: string, registrationId?: string) => {
+    const tokens = backupReader.tokens({ tenantId, clientId, storageAccountName, trigger: "scheduled" })
+    return tokens?.registrationId === registrationId ? tokens : null
+  }
+  const readerAuditToken = async (tenantId: string, clientId: string, storageAccountName: string, registrationId?: string) => {
+    const tokens = originalReaderTokens(tenantId, clientId, storageAccountName, registrationId)
+    if (!tokens) throw new Error("The original Backup Reader is unavailable")
     return tokens.storage()
   }
   const fetchLocalAudit = (tenantId: string, account: string): typeof fetch =>
@@ -744,7 +747,7 @@ async function bootstrap(): Promise<void> {
       const clientId = profile?.clientId
       if (!clientId) throw new Error("Audit tenant is unavailable")
       if (entry.job?.producer === "backup-reader") {
-        const accessToken = await readerAuditToken(tenantId, storageAccountName, entry.job.registrationId)
+        const accessToken = await readerAuditToken(tenantId, clientId, storageAccountName, entry.job.registrationId)
         return new AuditStorageService({ storageAccountName, accessToken, provisionContainer: false, fetch: bridgedFetch })
       }
       const accessToken = (await auth.getAccessToken(tenantId, clientId, RESOURCE_SCOPES.storage)).accessToken
@@ -759,11 +762,10 @@ async function bootstrap(): Promise<void> {
   })
   setMainAuditSink(auditSink)
   auditSink.recover()
-  const retryAudit = () => void auditSink.retry().catch(() => console.warn("[audit] Queued audit events could not be retried"))
-  void auditSink.recoverBackups((binding, entry) => reconcileBackupAudit(entry, async () => {
+  const recoverBackupAudits = () => auditSink.recoverBackups((binding, entry) => reconcileBackupAudit(entry, async () => {
     const { tenantId, storageAccountName } = binding
     const folder = entry.resource.id
-    if (!/^backup-\d{4}-\d{2}-\d{2}-\d{6}$/.test(folder)) throw new Error("Invalid backup folder")
+    if (!/^backup-\d{4}-\d{2}-\d{2}-\d{6}$/.test(folder)) return new Response(null, { status: 404 })
     assertStorageAccountName(storageAccountName)
     const url = `https://${storageAccountName}.blob.core.windows.net/intune-backups/${folder}/metadata.json`
     const signal = AbortSignal.timeout(15_000)
@@ -771,9 +773,33 @@ async function bootstrap(): Promise<void> {
       if (storageAccountName !== localStorageAccountName(tenantId)) throw new Error("Audit storage belongs to another tenant")
       return fetchLocalAudit(tenantId, storageAccountName)(url, { signal })
     }
-    const token = await readerAuditToken(tenantId, storageAccountName, entry.job?.registrationId)
+    const clientId = tenantProfile(tenantId)?.clientId
+    if (!clientId) throw new Error("Audit tenant is unavailable")
+    let token: string
+    if (entry.job?.producer === "backup-reader") {
+      const tokens = originalReaderTokens(tenantId, clientId, storageAccountName, entry.job.registrationId)
+      // Allow the existing administrator delivery flow when the original registration is gone.
+      if (!tokens) return new Response(null, { status: 403 })
+      token = await tokens.storage()
+    } else {
+      token = (await auth.getAccessToken(tenantId, clientId, RESOURCE_SCOPES.storage)).accessToken
+    }
     return bridgedFetch(url, { signal, headers: { Authorization: `Bearer ${token}`, "x-ms-version": "2021-12-02" } })
-  })).then(retryAudit)
+  }))
+  let retryingAudit = false
+  const retryAudit = async () => {
+    if (retryingAudit) return
+    retryingAudit = true
+    try {
+      await recoverBackupAudits()
+      await auditSink.retry()
+    } catch {
+      console.warn("[audit] Queued audit events could not be retried")
+    } finally {
+      retryingAudit = false
+    }
+  }
+  void retryAudit()
   setInterval(retryAudit, 60_000)
 
   // Tenants connected by an older version, or whose license check never completed, are

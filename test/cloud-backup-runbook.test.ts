@@ -82,7 +82,7 @@ describe("Cloud audit contract", () => {
 
   it.runIf(Boolean(pwsh))("replays a denied audit write and verifies a lost acknowledgement without overwriting", () => {
     const script = fileURLToPath(new URL("./fixtures/cloud-backup/audit-replay.ps1", import.meta.url))
-    const result = JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8" }))
+    const result = JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8", timeout: 50_000 }))
     expect(result.pending).toBe(1)
     expect(result.replay).toMatchObject({ Count: 0, More: false })
     const entries = Object.entries(result.blobs).filter(([url]) => url.includes("/audit-logs/"))
@@ -93,7 +93,7 @@ describe("Cloud audit contract", () => {
     expect(result.calls.filter((call: RunCall) => call.uri.includes("/audit-logs/")).map((call: RunCall) => call.method)).toEqual(["Put", "Get", "Put", "Get"])
     expect(JSON.stringify(result)).not.toContain("secretCanaryAclMessage")
     expect(JSON.stringify(result)).not.toContain("tokenCanary")
-  })
+  }, 60_000)
 
   it.runIf(Boolean(pwsh))("counts all recent receipt pages and checkpoints the scan", () => {
     const script = fileURLToPath(new URL("./fixtures/cloud-backup/audit-replay.ps1", import.meta.url))
@@ -108,14 +108,47 @@ describe("Cloud audit contract", () => {
   }, 60_000)
 
   type RestartRun = Run & { blobs: Record<string, string> }
-  let restartRuns: Record<string, RestartRun> | undefined
-  const restartRun = (name: string) => {
-    const script = fileURLToPath(new URL("./fixtures/cloud-backup/audit-restart.ps1", import.meta.url))
-    restartRuns ??= JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8", timeout: 50_000 })) as Record<string, RestartRun>
-    return restartRuns[name]!
+  type RestartScenarios = Record<string, RestartRun> & {
+    identity: { token: string; calls: number }
+    transport: { budgeted: number; unbudgeted: number; remaining: number }
   }
+  let restartRuns: RestartScenarios | undefined
+  const runRestartFixture = () => {
+    const script = fileURLToPath(new URL("./fixtures/cloud-backup/audit-restart.ps1", import.meta.url))
+    return restartRuns ??= JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8", timeout: 50_000 })) as RestartScenarios
+  }
+  const restartRun = (name: string) => runRestartFixture()[name]!
   const auditFiles = (run: RestartRun) => Object.entries(run.blobs).filter(([uri]) => uri.includes("/audit-logs/"))
   const manifestFiles = (run: RestartRun) => Object.entries(run.blobs).filter(([uri]) => uri.endsWith("/metadata.json"))
+  const outcomeFiles = (run: RestartRun) => Object.entries(run.blobs).filter(([uri]) => uri.includes("/cloud-backup-outcomes/"))
+
+  it.runIf(Boolean(pwsh))("recovers when the managed identity endpoint succeeds on the third attempt", () => {
+    expect(runRestartFixture().identity).toEqual({ token: "token", calls: 3 })
+  }, 60_000)
+
+  it.runIf(Boolean(pwsh))("charges each transport attempt to the replay budget", () => {
+    expect(runRestartFixture().transport).toEqual({ budgeted: 1, unbudgeted: 3, remaining: 0 })
+  }, 60_000)
+
+  it.runIf(Boolean(pwsh)).each(["startReadDenied", "startWriteDenied"])("captures even when the audit start checkpoint is unavailable (%s)", name => {
+    const run = restartRun(name)
+    expect(run.error).toBeNull()
+    expect(run.output!.join("\n")).toContain("could not verify or save its start checkpoint")
+    expect(run.calls.some(call => call.uri.includes("graph.microsoft.com"))).toBe(true)
+    expect(JSON.parse(manifestFiles(run)[0]![1]).Status).toBe("Success")
+    expect(JSON.parse(outcomeFiles(run)[0]![1]).status).toBe("Success")
+    expect(JSON.parse(auditFiles(run)[0]![1]).entries[0].job.status).toBe("completed")
+  }, 60_000)
+
+  it.runIf(Boolean(pwsh))("verifies the interrupted run's manifest when its terminal checkpoint cannot be read", () => {
+    const run = restartRun("terminalReadDenied")
+    expect(run.error).toBeNull()
+    expect(run.output!.join("\n")).toContain("could not verify its terminal checkpoint")
+    expect(run.calls.some(call => call.uri.includes("graph.microsoft.com"))).toBe(false)
+    expect(run.calls.some(call => call.method === "Get" && call.uri.endsWith("/metadata.json"))).toBe(true)
+    expect(manifestFiles(run)).toEqual(manifestFiles(restartRun("crash")))
+    expect(auditFiles(run)).toEqual(auditFiles(restartRun("crashRestart")))
+  }, 60_000)
 
   it.runIf(Boolean(pwsh))("recovers a committed Automation job before capture and replays its original terminal event", () => {
     const interrupted = restartRun("crash")
@@ -152,16 +185,23 @@ describe("Cloud audit contract", () => {
     expect(JSON.parse(note[1]).status).toBe("Success")
   }, 60_000)
 
-  it.runIf(Boolean(pwsh))("detects excessive rights and reuses cloud canary blobs", () => {
+  it.runIf(Boolean(pwsh))("requires fresh cloud audit creation on each canary and detects excessive rights", () => {
     const scoped = restartRun("scoped")
     const excessive = restartRun("excessive")
     expect(scoped.error).toBeNull()
     expect(scoped.output).toContain("Cloud backup canary passed. Audit canary created and read. Azure denied audit overwrite and audit and backup deletion.")
     const again = restartRun("scopedAgain")
     expect(again.error).toBeNull()
-    expect(again.output).toContain("Cloud backup canary passed. Audit canary read. Azure denied audit overwrite and audit and backup deletion.")
-    expect(Object.keys(again.blobs)).toEqual(Object.keys(scoped.blobs))
+    expect(again.output).toContain("Cloud backup canary passed. Audit canary created and read. Azure denied audit overwrite and audit and backup deletion.")
+    expect(auditFiles(again)).toHaveLength(2)
     expect(Object.keys(scoped.blobs)).toHaveLength(2)
+    const revoked = restartRun("revokedCreate")
+    expect(revoked.error).toBe("Audit create revoked")
+    expect(revoked.calls).toMatchObject([{ method: "Put", uri: expect.stringContaining("/audit-logs/") }])
+    expect(revoked.calls[0]!.uri).not.toBe(auditFiles(scoped)[0]![0])
+    const lostAck = restartRun("canaryLostAck")
+    expect(lostAck.error).toBeNull()
+    expect(lostAck.calls.slice(0, 2)).toMatchObject([{ method: "Put" }, { method: "Get", uri: lostAck.calls[0]!.uri }])
     expect(excessive.error).toContain("permission limits failed")
     expect(excessive.output!.join("\n")).toContain("excessive Azure Storage permissions")
     for (const run of [scoped, excessive]) {
@@ -213,6 +253,18 @@ describe("Cloud audit contract", () => {
     expect(JSON.parse(auditFiles(run)[0]![1]).entries[0]).toMatchObject({
       eventType: "BACKUP_FAILED", severity: "WARNING", job: { status: "uncertain" },
     })
+    expect(outcomeFiles(run)).toHaveLength(1)
+    expect(JSON.parse(outcomeFiles(run)[0]![1])).toMatchObject({ status: "Failed" })
+  }, 60_000)
+
+  it.runIf(Boolean(pwsh))("runs the configured change report before surfacing an audit receipt error", () => {
+    const run = runPlainFixture()[8]!
+    expect(run.error).toContain("audit receipt could not be persisted")
+    const body = (fragment: string) => JSON.parse(run.calls.find(call => call.method === "Put" && call.uri.includes(fragment))!.body!)
+    expect(body("/metadata.json").Status).toBe("Success")
+    expect(body("/cloud-backup-outcomes/").status).toBe("Success")
+    expect(run.calls.some(call => call.uri.includes("/intune-backups?") && call.uri.includes("comp=list"))).toBe(true)
+    expect(run.output!.join("\n")).toContain("No earlier complete plain backup")
   }, 60_000)
 
   it.runIf(Boolean(pwsh))("reports masked OMA values as warnings in every terminal surface", () => {
