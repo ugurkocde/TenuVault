@@ -131,6 +131,38 @@ describe("Cloud audit contract", () => {
   const manifestFiles = (run: RestartRun) => Object.entries(run.blobs).filter(([uri]) => uri.endsWith("/metadata.json"))
   const outcomeFiles = (run: RestartRun) => Object.entries(run.blobs).filter(([uri]) => uri.includes("/cloud-backup-outcomes/"))
 
+  it.runIf(Boolean(pwsh))("captures fresh when the previous manifest exists but cannot be read on restart", () => {
+    const script = fileURLToPath(new URL("./fixtures/cloud-backup/audit-restart.ps1", import.meta.url))
+    const { first, restarted, oldManifestUri } = JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", script, "-TransientManifestRestart"], { encoding: "utf8", timeout: 50_000 })) as {
+      first: RestartRun; restarted: RestartRun; oldManifestUri: string
+    }
+    expect(restarted.error).toBeNull()
+    expect(restarted.calls.some(call => call.method === "Get" && call.uri === oldManifestUri)).toBe(true)
+    expect(restarted.calls.some(call => call.uri.includes("graph.microsoft.com"))).toBe(true)
+    expect(manifestFiles(restarted)).toHaveLength(2)
+    const [old, fresh] = [true, false].map(isOld => JSON.parse(manifestFiles(restarted).find(([uri]) => (uri === oldManifestUri) === isOld)![1]))
+    expect(old.Status).toBe("Success")
+    expect(fresh).toMatchObject({ Status: "Success", ItemCounts: { TotalPolicies: 1 } })
+    expect(fresh.RunId).not.toBe(old.RunId)
+    expect(fresh.BackupFolder).not.toBe(old.BackupFolder)
+    const statusUri = `${BACKUP_CONTAINER_URL}cloud-backup-status-11111111.json`
+    expect(restarted.calls.filter(call => call.method === "Put" && call.uri === statusUri)).toHaveLength(1)
+    expect(JSON.parse(restarted.blobs[statusUri]!)).toMatchObject({
+      RunId: fresh.RunId, BackupFolder: fresh.BackupFolder, LastStatus: "Success",
+    })
+    const noteWrites = restarted.calls.filter(call => call.method === "Put" && call.uri.includes("/cloud-backup-outcomes/"))
+    expect(noteWrites.map(call => call.uri)).toEqual([
+      `https://stcontoso.blob.core.windows.net/tenuvault-backup-results/cloud-backup-outcomes/${fresh.BackupFolder}.json`,
+    ])
+    expect(outcomeFiles(restarted).map(([, raw]) => JSON.parse(raw))).toMatchObject([
+      { runId: fresh.RunId, backupFolder: fresh.BackupFolder, status: "Success" },
+    ])
+    const [[oldAuditUri, oldAudit]] = auditFiles(first) as [[string, string]]
+    expect(JSON.parse(oldAudit).entries[0].job).toMatchObject({ runId: old.RunId, status: "uncertain" })
+    expect(restarted.blobs[oldAuditUri]).toBe(oldAudit)
+    expect(auditFiles(restarted)).toHaveLength(2)
+  }, 60_000)
+
   it.runIf(Boolean(pwsh))("restarts an interrupted claimed capture in a new folder and publishes only its new backup result", () => {
     const script = fileURLToPath(new URL("./fixtures/cloud-backup/audit-restart.ps1", import.meta.url))
     const { first, again, oldRunId, oldFolder } = JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", script, "-ClaimedRestart"], { encoding: "utf8", timeout: 50_000 })) as {

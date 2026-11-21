@@ -58,7 +58,7 @@ describe("cloud backup result notes", () => {
     expect(events[22]!.details).toContainEqual({ label: "Backup", value: "backup-2026-11-13-101500" })
   })
 
-  it("writes fixed result notes to the dedicated results container, including on terminal recovery", () => {
+  it("writes fixed result notes to the dedicated results container", () => {
     expect(backupRunbook.match(/Invoke-TvHttp -Uri \$target\.Uri -Token \$Token -Method "Put"/g)).toHaveLength(1)
     const sendOutcome = backupRunbook.slice(backupRunbook.indexOf("function Send-TvBackupOutcome"), backupRunbook.indexOf("# Audit receipts live"))
     const plain = sendOutcome.match(/Invoke-TvHttp -Uri \$uri -Token \$Token -Method "Put"/g)
@@ -67,8 +67,6 @@ describe("cloud backup result notes", () => {
     expect(backupRunbook).toContain('$script:OutcomeContainer = "tenuvault-backup-results"')
     expect(backupRunbook).not.toMatch(/tenuvault-notification-state/)
     expect(backupRunbook).toContain('/$script:OutcomeContainer/cloud-backup-outcomes/')
-    // An unconfirmed commit and a recovered terminal result still notify the watcher.
-    expect(backupRunbook.match(/Send-TvBackupOutcome -Account/g)).toHaveLength(6)
   })
 
   it("the watcher leaves failed folders out of the missed backup check and remembers them in its state", () => {

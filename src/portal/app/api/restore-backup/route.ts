@@ -191,10 +191,9 @@ export async function POST(request: NextRequest) {
     const auditProgress: { save?: (result: RestoreOutcome) => void; submitted?: (result: RestoreOutcome) => void } = {}
     const onProgress = (result: RestoreOutcome) => auditProgress.save?.(result)
     const onSubmitted = (result: RestoreOutcome) => auditProgress.submitted?.(result)
-    const targets: Array<{ restorer?: Restorer; graphToken?: string; targetTenantId?: string }> = targetTenants
+    const targets: Array<{ restorer: Restorer; graphToken: string; targetTenantId?: string }> = targetTenants
       ? await Promise.all((targetTenants as Array<{ tenantId: string; appId: string }>).map(async (target) => {
-          const targetToken = await getAccessToken(target.tenantId, target.appId, clientSecret, "https://graph.microsoft.com/.default").catch(() => undefined)
-          if (!targetToken) return { targetTenantId: target.tenantId.toLowerCase() }
+          const targetToken = await getAccessToken(target.tenantId, target.appId, clientSecret, "https://graph.microsoft.com/.default")
           destinationTokens.set(target.tenantId.toLowerCase(), targetToken)
           return {
             targetTenantId: target.tenantId.toLowerCase(), graphToken: targetToken,
@@ -204,7 +203,7 @@ export async function POST(request: NextRequest) {
         }))
       : [{ graphToken, restorer: new Restorer(graphCaller(graphToken, fetch, { tenant: tenantId, refreshToken: () => getAccessToken(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default", true) }), { mode, assignments, approvalContext: requesterContext(graphToken, tenantId, body.justification), repairScope: repairScope(tenantId), granted: grantedPermissions(graphToken), operationId: correlated, auditProgress: onProgress, auditSubmitted: onSubmitted }) }]
     try {
-      if (dependencyMappings.length) for (const { restorer } of targets) await restorer?.mapDependencies(dependencyMappings)
+      if (dependencyMappings.length) for (const { restorer } of targets) await restorer.mapDependencies(dependencyMappings)
     } catch (error) {
       if (error instanceof DependencyMappingError && error.status === 404) return NextResponse.json({ error: error.message }, { status: 400 })
       throw error
@@ -220,7 +219,7 @@ export async function POST(request: NextRequest) {
       const ordered = restoreOrder(paths)
       for (const { restorer, targetTenantId, graphToken: targetToken } of targets) {
         const firstRepair = repairSelections[0]
-        const operationId = (firstRepair && restorer?.repairOperationId(firstRepair.path, firstRepair.repairToken)) || correlated
+        const operationId = (firstRepair && restorer.repairOperationId(firstRepair.path, firstRepair.repairToken)) || correlated
         const audit = beginRestoreAudit({
           destination: targetTenantId ?? tenantId, sourceTenantId: tenantId, graphToken: targetToken, sourceBackupId: backupId, operationId, runId: jobId,
           correlation: actor ? { actor, source: correlationSource, destinations, operationId: correlated, at: Date.now() } : undefined,
@@ -231,7 +230,7 @@ export async function POST(request: NextRequest) {
           for (const [index, path] of ordered.entries()) {
             if (progress) progress.current = path
             const sourceId = manifest?.get(path)?.id
-            if (restorer) audit?.started(index)
+            audit?.started(index)
             auditProgress.save = result => audit?.item(index, restoreAuditItem(path, result, sourceId))
             auditProgress.submitted = result => {
               const item: AuditJobItem = restoreAuditItem(path, result, sourceId)
@@ -242,9 +241,7 @@ export async function POST(request: NextRequest) {
                 eventType: AuditEventType.CONFIG_UPDATED, items: [item],
               })?.finish()
             }
-            const result = restorer
-              ? await restoreSinglePolicy(restorer, path, storageAccountName, storageToken, manifest?.get(path), repairSelections.find((p: any) => p.path === path)?.repairToken)
-              : { success: false, path, error: "Could not sign in to the destination tenant." }
+            const result = await restoreSinglePolicy(restorer, path, storageAccountName, storageToken, manifest?.get(path), repairSelections.find((p: any) => p.path === path)?.repairToken)
             auditProgress.save(result)
             auditProgress.save = undefined
             auditProgress.submitted = undefined

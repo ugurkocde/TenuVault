@@ -36,8 +36,9 @@ describe("free App Backup account read", () => {
     const main = await readFile("src/main/index.ts", "utf8")
     const start = main.indexOf("    restore: (store, source, snapshot")
     const execution = main.slice(start, main.indexOf("    ensureKeys:", start))
-    expect(execution).toMatch(/const preparation = \{[^}]*sourceTenantId: source\.receipt\.tenantId[^}]*\}\s+const graphToken = await restoreTokenWithAudit\(getGraphToken, preparation\)/)
-    expect(execution).toContain("beginRestoreAudit({ ...preparation, graphToken, items: [original] })")
+    expect(execution).toMatch(/const preparation = \{[^}]*sourceTenantId: source\.receipt\.tenantId/)
+    expect(execution).toMatch(/const graph = restoreGraph\(async \(\) => \{[\s\S]*const execution = \{ \.\.\.preparation,[^}]*\}\s+const graphToken = await restoreTokenWithAudit\(getGraphToken, execution\)/)
+    expect(execution).toContain("beginRestoreAudit({ ...execution, graphToken, items: [original] })")
   })
   it("keeps App Backup independent of billing without exempting other routes or privileged API access", async () => {
     for (const path of ["/portal/app-backup", "/portal/app-backup/versions"]) expect(isAppBackupPath(path)).toBe(true)

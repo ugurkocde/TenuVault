@@ -4,7 +4,7 @@ import { POST } from '../src/portal/app/api/restore-backup/route'
 import { NextRequest } from '../src/main/api/next-server-shim'
 import { AuditSink, setMainAuditSink } from '../src/main/api/audit-sink'
 import { AuditStorageService } from '../src/portal/lib/audit/storage'
-import { setAuditOutboxStore } from '../src/portal/lib/audit/outbox'
+import { pendingEvents, setAuditOutboxStore } from '../src/portal/lib/audit/outbox'
 import { AuditEventType } from '../src/portal/lib/audit/types'
 import { Restorer, type GraphCall } from '../src/portal/lib/policies/graph-restore'
 import { comparableSnapshot } from '../src/shared/intune/compare'
@@ -19,11 +19,14 @@ afterEach(() => { vi.unstubAllGlobals(); setMainAuditSink(undefined); setAuditOu
 const snapshotHash = (snapshot: Item) => createHash('sha256').update(JSON.stringify(comparableSnapshot(snapshot))).digest('base64').slice(0, 22)
 
 /** Stubs token, blob and Graph fetches. `blobs` maps blob names to JSON bodies. */
-function stubFetch(blobs: Record<string, Item>, options: { list?: string[]; token?: string } = {}) {
+function stubFetch(blobs: Record<string, Item>, options: { list?: string[]; token?: string; failedSignIn?: string } = {}) {
   const graphWrites: string[] = []
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input))
-    if (url.hostname === 'login.microsoftonline.com') return Response.json({ access_token: options.token ?? 'test' })
+    if (url.hostname === 'login.microsoftonline.com') {
+      if (url.pathname.startsWith(`/${options.failedSignIn}/`)) return new Response(null, { status: 401 })
+      return Response.json({ access_token: options.token ?? 'test' })
+    }
     if (url.hostname.endsWith('.blob.core.windows.net')) {
       if (url.searchParams.get('comp') === 'list') {
         const names = (options.list ?? []).map((name) => `<Blob><Name>${name}</Name></Blob>`).join('')
@@ -44,6 +47,31 @@ function stubFetch(blobs: Record<string, Item>, options: { list?: string[]; toke
 }
 
 describe('Restore manifest checks', () => {
+  it('fails preflight with zero Graph writes when any destination cannot sign in', async () => {
+    const source = '11111111-1111-1111-1111-111111111111'
+    const reachable = '22222222-2222-2222-2222-222222222222'
+    const blocked = '33333333-3333-3333-3333-333333333333'
+    const appId = '44444444-4444-4444-4444-444444444444'
+    const snapshot: Item = { id: 'original', displayName: 'Example', '@odata.type': '#microsoft.graph.windows10CustomConfiguration', omaSettings: [] }
+    const graphWrites = stubFetch({ [policyPath]: snapshot, [`${backupId}/.tenuvault-owner.json`]: { TenantId: source } }, { failedSignIn: blocked })
+    setMainAuditSink(new AuditSink({
+      bind: tenantId => tenantId === source ? { tenantId, storageAccountName: baseBody.storageAccountName,
+        user: { id: 'storage-user', email: '', name: 'Storage user' } } : undefined,
+      transport: async () => { throw new Error('Audit storage unavailable') },
+    }))
+    const response = await POST(request({ ...baseBody, tenantId: source, restoreType: 'selective',
+      selectedPolicies: [{ path: policyPath }], targetTenants: [reachable, blocked].map(tenantId => ({ tenantId, appId })) }))
+    expect(response.status).toBe(500)
+    expect(graphWrites).toEqual([])
+    const entries = pendingEvents(baseBody.storageAccountName)
+    expect(entries.map(entry => entry.job?.destinationTenantId).sort()).toEqual([reachable, blocked])
+    expect(new Set(entries.map(entry => entry.job?.operationId)).size).toBe(1)
+    for (const entry of entries) {
+      expect(entry).toMatchObject({ eventType: AuditEventType.RESTORE_FAILED, job: { status: 'failed', reason: 'RESTORE_PREPARATION_FAILED' } })
+    }
+    expect(await response.json()).toEqual({ error: 'Failed to get access token' })
+  })
+
   it.each([false, true])('records a cross-tenant copy with its executing identity (destination storage configured: %s)', async (hasDestinationStorage) => {
     const source = '11111111-1111-1111-1111-111111111111'
     const destination = '22222222-2222-2222-2222-222222222222'

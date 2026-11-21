@@ -3189,6 +3189,7 @@ function Invoke-TvBackup {
     $backupFolder = "backup-$(ConvertTo-TvFolderTimestamp $started)"
     $nextRunId = $null
     $attempts = [System.Collections.Generic.HashSet[string]]::new()
+    $attemptIdPattern = '^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$'
     while ($jobId) {
         if ($nextRunId) {
             $runId = $nextRunId
@@ -3213,128 +3214,100 @@ function Invoke-TvBackup {
             if ($receipt) {
                 $entry = $receipt.file.entries[0]
                 if ($entry.job.runId -cne $runId -or $entry.user.tenantId -ne $tenantId -or
-                    $entry.timestamp -notmatch '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$') { throw "Invalid terminal checkpoint identity." }
-                $status = switch ($entry.job.status) {
-                    "completed" { "Success" } "warnings" { "CompletedWithWarnings" } "uncertain" { "Uncertain" }
-                    "failed" { "Failed" } default { throw "Invalid terminal checkpoint status." }
-                }
-                if ($status -eq "CompletedWithWarnings" -and $receipt.backupStatus -ceq "Success") { $status = "Success" }
-                if ($receipt.nextRunId -and ($status -ne "Uncertain" -or
-                    $receipt.nextRunId -cnotmatch '^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$' -or
-                    $attempts.Contains([string]$receipt.nextRunId))) { throw "Invalid continuation checkpoint." }
+                    $entry.timestamp -notmatch '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$' -or
+                    $entry.job.status -notin @("completed", "warnings", "uncertain", "failed")) { throw "Invalid terminal checkpoint." }
             }
         } catch {
             $receipt = $null
             $terminalUnreadable = $true
             Write-Error "Cloud backup audit could not verify its terminal checkpoint. Checking the backup folder." -ErrorAction Continue
         }
+
+        $folder = $null
+        $priorTrigger = $runInfo.Trigger
+        $continuationUnreadable = $false
+        $continuationPath = "$($context.RunCheckpointPath)/continuation.json"
         if ($receipt) {
             $folder = if ($entry.resource.id -match '^backup-\d{4}-\d{2}-\d{2}-\d{6}$') { $entry.resource.id }
-            $runTrigger = if ($entry.job.trigger -eq "manual") { "manual" } else { "scheduled" }
-            $total = [int]$entry.job.counts.saved
+            $priorTrigger = if ($entry.job.trigger -eq "manual") { "manual" } else { "scheduled" }
             Save-TvAuditReceipt $context $receipt
-            $nextRunId = [string]$receipt.nextRunId
-            if ($status -eq "Uncertain" -and $folder -and -not $nextRunId) {
-                # The terminal receipt is immutable. Save a separate link if a fresh attempt is needed.
-                $continuationPath = "$($context.RunCheckpointPath)/continuation.json"
-                try { $nextRunId = [string](Read-TvAuditRecord $context $continuationPath).nextRunId }
-                catch { Write-Warning "Cloud backup could not read its continuation checkpoint." }
-                if (-not $nextRunId) {
-                    $manifest = $null
-                    $manifestChecked = $false
-                    try {
-                        $manifest = Get-TvRunManifest $context $folder $runId
-                        $manifestChecked = $true
-                    } catch { Write-Warning "Cloud backup could not verify the previous manifest." }
-                    if ($manifest) {
-                        $context.AuditTerminalRecorded = $true
-                        Complete-TvCloudBackup $context $runId $manifest $runTrigger
-                        if ($manifest.Status -eq "Success") { Resume-TvChangeReport $context $folder $runId $runTrigger $manifest }
-                        return
-                    }
-                    if ($manifestChecked) {
-                        $nextRunId = [guid]::NewGuid().ToString()
-                        try {
-                            Set-TvAuditImmutable $context $script:OutcomeContainer $continuationPath (@{ nextRunId = $nextRunId } | ConvertTo-Json -Compress)
-                        } catch {
-                            # A competing restart may have saved its link first.
-                            $saved = $null
-                            try { $saved = Read-TvAuditRecord $context $continuationPath } catch { }
-                            if ($saved.nextRunId) { $nextRunId = [string]$saved.nextRunId }
-                            else {
-                                $context.AuditScanIncomplete = $true
-                                Write-Warning "Cloud backup could not save its continuation checkpoint."
-                            }
-                        }
-                    }
+            try {
+                $nextRunId = [string]$receipt.nextRunId
+                if (-not $nextRunId) { $nextRunId = [string](Read-TvAuditRecord $context $continuationPath).nextRunId }
+                if ($nextRunId -and ($nextRunId -cnotmatch $attemptIdPattern -or $attempts.Contains($nextRunId))) {
+                    throw "Invalid continuation checkpoint."
                 }
+            } catch {
+                $nextRunId = $null
+                $continuationUnreadable = $true
+                $context.AuditScanIncomplete = $true
+                Write-Warning "Cloud backup could not verify its continuation checkpoint."
             }
             if ($nextRunId) {
-                if ($nextRunId -cnotmatch '^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$' -or
-                    $attempts.Contains($nextRunId)) { throw "Invalid continuation checkpoint." }
-                $backupFolder = $folder
+                if ($folder) { $backupFolder = $folder }
                 continue
             }
-            Set-TvCloudStatus $context $status "Backup $status, $total policies." $folder $entry.timestamp
-            $noteStatus = if ($status -eq "Uncertain") { "Failed" } else { $status }
-            Send-TvBackupOutcome -Account $storageAccount -Token $storageToken -TenantId $tenantId -RunId $runId -Status $noteStatus -BackupFolder $folder -TotalPolicies $total -Failures ([int]$entry.job.counts.failures) -FailedTypes @($receipt.failedTypes | Where-Object { $_ -match "^[A-Za-z]{1,50}$" }) -Trigger $runTrigger -FinishedAt $entry.timestamp
-            Write-Output "Reconciled the existing result for this Automation job."
-            if ($status -in @("Failed", "Uncertain")) { throw "This Automation job already ended without a confirmed successful backup." }
-            if ($status -eq "Success" -and $folder) { Resume-TvChangeReport $context $folder $runId $runTrigger }
-            return
+        } else {
+            $checkpointPath = "$($context.RunCheckpointPath)/start.json"
+            try {
+                $checkpoint = Read-TvAuditRecord $context $checkpointPath
+                if ($checkpoint) {
+                    [void](Get-TvStartCheckpointTime $checkpoint $runId $jobId)
+                    $folder = [string]$checkpoint.folder
+                    $priorTrigger = [string]$checkpoint.trigger
+                } else {
+                    if ($terminalUnreadable) { throw "The previous run could not be verified." }
+                    $startedAt = $started.ToString("o", [Globalization.CultureInfo]::InvariantCulture)
+                    $checkpoint = [ordered]@{ jobId = $jobId; runId = $runId; folder = $backupFolder; startedAt = $startedAt; trigger = $runTrigger
+                        principalId = Get-TvAuditPrincipal $storageToken $tenantId }
+                    Set-TvAuditImmutable $context $script:OutcomeContainer $checkpointPath ($checkpoint | ConvertTo-Json -Compress)
+                    break
+                }
+            } catch {
+                $context.Remove("RunCheckpointPath")
+                $context.AuditScanIncomplete = $true
+                $runId = [guid]::NewGuid().ToString()
+                $context.RunId = $runId
+                Write-Error "Cloud backup audit could not verify or save its start checkpoint. Check access to the backup results container." -ErrorAction Continue
+                break
+            }
         }
 
-        $checkpointPath = "$($context.RunCheckpointPath)/start.json"
-        $resuming = $false
-        try {
-            $checkpoint = Read-TvAuditRecord $context $checkpointPath
-            if ($checkpoint) {
-                $started = Get-TvStartCheckpointTime $checkpoint $runId $jobId
-                $backupFolder = [string]$checkpoint.folder
-                $runTrigger = [string]$checkpoint.trigger
-                $resuming = $true
-            } else {
-                if ($terminalUnreadable) { throw "The previous run could not be verified." }
-                $startedAt = $started.ToString("o", [Globalization.CultureInfo]::InvariantCulture)
-                $checkpoint = [ordered]@{ jobId = $jobId; runId = $runId; folder = $backupFolder; startedAt = $startedAt; trigger = $runTrigger
-                    principalId = Get-TvAuditPrincipal $storageToken $tenantId }
-                Set-TvAuditImmutable $context $script:OutcomeContainer $checkpointPath ($checkpoint | ConvertTo-Json -Compress)
-            }
-        } catch {
-            $context.Remove("RunCheckpointPath")
-            $context.AuditScanIncomplete = $true
-            $runId = [guid]::NewGuid().ToString()
-            $context.RunId = $runId
-            Write-Error "Cloud backup audit could not verify or save its start checkpoint. Check access to the backup results container." -ErrorAction Continue
-        }
-        if ($resuming) {
-            if ($terminalUnreadable) { $context.Remove("RunCheckpointPath") }
-            $couldNotVerify = $false
+        # Only a verified terminal manifest can stand in for a fresh capture.
+        if ($folder -and -not $continuationUnreadable) {
             $manifest = $null
-            try {
-                $manifest = Get-TvRunManifest $context $backupFolder $runId
-                # A claimed folder may contain partial snapshots or a manifest request still
-                # in flight. Reusing it could mix two captures. An unclaimed run can start.
-                $owner = $null
-                if (-not $manifest) {
-                    try { $owner = Read-TvPlainJson $context "$backupFolder/.tenuvault-owner.json" }
-                    catch [TvHttpError] { if ($_.Exception.Status -ne 404) { throw } }
-                }
-            } catch { $couldNotVerify = $true }
+            try { $manifest = Get-TvRunManifest $context $folder $runId }
+            catch { Write-Warning "Cloud backup could not verify the previous manifest." }
             if ($manifest) {
-                Complete-TvCloudBackup $context $runId $manifest $runTrigger
-                if ($manifest.Status -eq "Success") { Resume-TvChangeReport $context $backupFolder $runId $runTrigger $manifest }
+                if ($receipt) { $context.AuditTerminalRecorded = $true }
+                if ($terminalUnreadable) { $context.Remove("RunCheckpointPath") }
+                Complete-TvCloudBackup $context $runId $manifest $priorTrigger
+                if ($manifest.Status -eq "Success") { Resume-TvChangeReport $context $folder $runId $priorTrigger $manifest }
                 return
             }
-            if ($owner -or $couldNotVerify) {
-                # Link the fresh attempt from the interrupted receipt so another restart can
-                # find its start or result. Only the fresh capture publishes a backup outcome.
-                $nextRunId = [guid]::NewGuid().ToString()
-                Write-TvTerminalAudit $context $runId "Uncertain" $backupFolder 0 0 $runTrigger "WRITE_UNCONFIRMED" -NextRunId $nextRunId
-                continue
-            }
         }
-        break
+
+        # The prior attempt is unconfirmed. Preserve its audit record and link a fresh
+        # attempt. Only a verified manifest or the new capture publishes a backup result.
+        $nextRunId = [guid]::NewGuid().ToString()
+        if ($folder) { $backupFolder = $folder }
+        if ($receipt) {
+            try {
+                Set-TvAuditImmutable $context $script:OutcomeContainer $continuationPath (@{ nextRunId = $nextRunId } | ConvertTo-Json -Compress)
+            } catch {
+                # A competing restart may have saved its link first.
+                $savedId = $null
+                try { $savedId = [string](Read-TvAuditRecord $context $continuationPath).nextRunId } catch { }
+                if ($savedId -cmatch $attemptIdPattern -and -not $attempts.Contains($savedId)) { $nextRunId = $savedId }
+                else {
+                    $context.AuditScanIncomplete = $true
+                    Write-Warning "Cloud backup could not save its continuation checkpoint."
+                }
+            }
+        } else {
+            if ($terminalUnreadable) { $context.Remove("RunCheckpointPath") }
+            Write-TvTerminalAudit $context $runId "Uncertain" $folder 0 0 $priorTrigger "WRITE_UNCONFIRMED" -NextRunId $nextRunId
+        }
     }
     Write-Output "Backing up tenant $tenantId to storage account $storageAccount (runbook $script:RunbookVersion, run $runId)."
     try {

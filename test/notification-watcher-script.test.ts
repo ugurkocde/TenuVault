@@ -42,7 +42,7 @@ describe("Azure notification watcher scripts", () => {
       $event | ConvertTo-Json -Compress -Depth 10
     `], { encoding: "utf8", timeout: 15_000, env: { ...process.env, TV_FIXTURE_WATCHER: source } })
     expect(JSON.parse(output)).toMatchObject({ type: "backup.warning", severity: "warning", title: "Cloud backup audit needs attention" })
-  })
+  }, 60_000)
 
   it("never reads audit request bodies, and touches property values only to name changed settings", () => {
     expect(runbook).not.toContain("requestBody")

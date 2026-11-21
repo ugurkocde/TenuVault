@@ -1,4 +1,4 @@
-param([string]$RunbookPath = (Join-Path $PSScriptRoot "../../../resources/runbooks/Invoke-TenuVaultBackup.ps1"), [switch]$Baseline, [switch]$ClaimedRestart, [switch]$UncertainRestart)
+param([string]$RunbookPath = (Join-Path $PSScriptRoot "../../../resources/runbooks/Invoke-TenuVaultBackup.ps1"), [switch]$Baseline, [switch]$ClaimedRestart, [switch]$UncertainRestart, [switch]$TransientManifestRestart)
 $ErrorActionPreference = "Stop"
 . $RunbookPath -LibraryOnly
 
@@ -34,7 +34,7 @@ $script:HttpClient | Add-Member ScriptMethod SendAsync {
     $script:transportCalls++
     throw "Transport unavailable"
 }
-if (-not ($Baseline -or $ClaimedRestart -or $UncertainRestart)) {
+if (-not ($Baseline -or $ClaimedRestart -or $UncertainRestart -or $TransientManifestRestart)) {
     $budget = @{ Clock = [System.Diagnostics.Stopwatch]::StartNew(); Seconds = 1; Requests = 1 }
     $budgetContext = @{ StorageAccount = "stcontoso"; StorageToken = "token"; AuditBudget = $budget }
     try { Invoke-TvAuditStorage $budgetContext "audit-logs" "/test.json" } catch { }
@@ -59,13 +59,16 @@ function Invoke-TvHttp {
     if ($Uri.EndsWith("/terminal.json") -and $script:scenario -eq "terminalReadDenied" -and $Method -eq "Get") {
         throw [TvHttpError]::new(403, "Terminal checkpoint denied")
     }
+    if ($script:scenario -eq "manifestReadUnavailable" -and $Method -eq "Get" -and $Uri -eq $script:unconfirmedManifest.uri) {
+        throw [TvHttpError]::new(503, "Previous manifest read temporarily unavailable")
+    }
     if ($Uri -like "https://graph.microsoft.com/*") {
         if ($script:scenario -eq "graph401") { throw [TvHttpError]::new(401, "Graph policy list refused") }
         $text = '{"value":[]}'
-        if (($ClaimedRestart -or $UncertainRestart) -and $Uri -like "*/deviceManagement/deviceCategories") {
+        if (($ClaimedRestart -or $UncertainRestart -or $TransientManifestRestart) -and $Uri -like "*/deviceManagement/deviceCategories") {
             $text = '{"value":[{"id":"11111111-1111-1111-1111-111111111111","displayName":"Example"}]}'
         }
-        if (($ClaimedRestart -or $UncertainRestart) -and $Uri -like "*/deviceManagement/deviceCategories/*") {
+        if (($ClaimedRestart -or $UncertainRestart -or $TransientManifestRestart) -and $Uri -like "*/deviceManagement/deviceCategories/*") {
             $text = '{"id":"11111111-1111-1111-1111-111111111111","displayName":"Example"}'
         }
     } elseif ($Uri -like "*/intune-backups?*comp=list*") {
@@ -141,6 +144,19 @@ function Run-Scenario {
         output = @($output | ForEach-Object { [string]$_ })
         blobs = $script:blobs.Clone()
     }
+}
+if ($TransientManifestRestart) {
+    Remove-Item Function:Start-Sleep
+    $env:TenuVaultExcludedFolders = (Get-TvTypes | Where-Object { $_.Folder -ne "DeviceCategories" }).Folder -join ","
+    $script:scenario = "outage"
+    $first = Run-Scenario
+    # The original manifest lands after its write could not be confirmed.
+    $script:blobs[$script:unconfirmedManifest.uri] = $script:unconfirmedManifest.body
+    Start-Sleep -Seconds 1
+    $script:scenario = "manifestReadUnavailable"
+    $restarted = Run-Scenario
+    [Console]::WriteLine((@{ first = $first; restarted = $restarted; oldManifestUri = $script:unconfirmedManifest.uri } | ConvertTo-Json -Compress -Depth 9))
+    return
 }
 if ($UncertainRestart) {
     Remove-Item Function:Start-Sleep
