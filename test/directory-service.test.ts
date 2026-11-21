@@ -1,3 +1,5 @@
+import { planGuard } from "../src/main/api/plan-gates"
+import { DirectoryPendingPublications } from "../src/main/restore/directory-pending-publications"
 import { setDirectoryRestoreService } from "../src/main/restore/directory-dispatch"
 import { POST as restoreDirectory } from "../src/portal/app/api/restore-directory/route"
 import { RestoreSafetyError, RestoreWriteDeferredError } from "../src/shared/intune/restore-guards"
@@ -2431,4 +2433,80 @@ it.each(["resume", "execute"])("requires a fresh matching connection after local
   expect(localOwner).toHaveBeenCalledTimes(2); expect(connection).toHaveBeenCalledOnce()
   expect(env.data).toEqual(before); expect(env.fetcher).toHaveBeenCalledTimes(calls); expect(env.writes).toEqual([])
   expect(await service.cancel(tenant, page.runId)).toEqual({ cancelled: false })
+})
+
+it.each(["community", "stale entitlement"].flatMap(plan => ["cancel", "discard"].map(action => ({ plan, action }))))("allows local $action through the desktop host with $plan without plan or network requests", async ({ plan, action }) => {
+  const env = world(1), page = await env.service().prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read)
+  const connection = vi.fn(async () => { throw new Error("Token refresh unavailable") }), localOwner = vi.fn(env.connection)
+  const graph = vi.fn(async () => { throw new Error("Graph unavailable") })
+  const service = new DirectoryRestoreService(env.store, new RecoveryAccounts(env.store), connection, localOwner, graph, () => [], env.settings)
+  setDirectoryRestoreService(service)
+  const planOf = vi.fn(() => plan === "community" ? Promise.resolve("community" as const) : new Promise<never>(() => {}))
+  const host = new ApiHost({ routes: { "/api/restore-directory": { POST: restoreDirectory } }, guard: planGuard(planOf) })
+  const network = vi.fn(async () => { throw new Error("No network access") })
+  vi.stubGlobal("fetch", network)
+  let release!: () => void, entered!: () => void, signal: AbortSignal | undefined
+  const started = new Promise<void>(resolve => { entered = resolve })
+  const pending = action === "cancel" ? service.operation(tenant, page.runId, async active => { signal = active; entered(); await new Promise<void>(resolve => { release = resolve }); return { cancelled: active.aborted } }) : undefined
+  if (pending) await started
+  try {
+    const response = await host.dispatch(new Request("http://tenuvault.internal/api/restore-directory", { method: "POST", body: JSON.stringify({ tenantId: tenant, appId: app, clientSecret: "delegated", runId: page.runId, action }) }))
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject(action === "cancel" ? { cancelled: true } : { runId: page.runId, discarded: true, canDiscard: false })
+    if (action === "cancel") expect(signal?.aborted).toBe(true)
+    else expect(JSON.parse(env.data.get(`restore.directory.coordinator.${tenant}`)!).discarded[page.runId]).toBe(true)
+    expect(localOwner).toHaveBeenCalledTimes(action === "cancel" ? 2 : 1)
+    expect(planOf).not.toHaveBeenCalled(); expect(connection).not.toHaveBeenCalled(); expect(graph).not.toHaveBeenCalled(); expect(network).not.toHaveBeenCalled(); expect(env.writes).toEqual([])
+  } finally { release?.(); await pending; vi.unstubAllGlobals() }
+})
+
+it.each(["userId", "tenantId", "clientId"] as const)("checks the cached %s before any next-page publication retry or Graph read", async changed => {
+  const env = world(51), page = await env.service().prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read)
+  const localOwner = vi.fn(async () => ({ ...await env.connection(), [changed]: id(800) })), connection = vi.fn(env.connection)
+  const service = new DirectoryRestoreService(env.store, new RecoveryAccounts(env.store), connection, localOwner, env.fetcher, () => [], env.settings)
+  const publications = vi.spyOn(DirectoryPendingPublications.prototype, "forTenant"), get = vi.spyOn(env.store, "get"), before = new Map(env.data), calls = env.fetcher.mock.calls.length, read = vi.fn(env.read)
+  try {
+    await expect(service.prepare(tenant, env.request, { ...options, stage: "relationships", previousRunId: page.runId }, read)).rejects.toThrow("Use the admin and connection that reviewed this page.")
+    expect(get.mock.calls).toEqual([[`restore.directory.review.${tenant}.${page.runId}`]])
+    expect(publications).not.toHaveBeenCalled(); expect(connection).not.toHaveBeenCalled(); expect(read).not.toHaveBeenCalled()
+    expect(env.fetcher).toHaveBeenCalledTimes(calls); expect(env.data).toEqual(before); expect(env.writes).toEqual([])
+  } finally { publications.mockRestore(); get.mockRestore() }
+})
+
+it.each(["token", "metadata", "snapshot"])("checks the next-page owner before backup loading and again after an account switch during %s loading", async phase => {
+  const env = world(51), page = await env.service().prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read)
+  const localOwner = vi.fn(env.connection), connection = vi.fn(env.connection)
+  const service = new DirectoryRestoreService(env.store, new RecoveryAccounts(env.store), connection, localOwner, env.fetcher, () => [], env.settings)
+  setDirectoryRestoreService(service)
+  let entered!: () => void, release!: () => void
+  const started = new Promise<void>(resolve => { entered = resolve }), gate = new Promise<void>(resolve => { release = resolve })
+  const storage = vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input), part = url.includes("oauth2") ? "token" : url.endsWith("metadata.json") ? "metadata" : "snapshot"
+    if (part === phase) { entered(); await gate }
+    return Response.json(part === "token" ? { access_token: "storage-token" } : part === "metadata" ? { TenantId: tenant } : env.request.snapshot)
+  })
+  vi.stubGlobal("fetch", storage)
+  const request = () => new Request("http://localhost/api/restore-directory", { method: "POST", body: JSON.stringify({ tenantId: tenant, appId: app, clientSecret: "delegated", storageAccountName: "fixtureaccount", backupId: "backup", path: env.request.path, previousRunId: page.runId, stage: "relationships", action: "preview" }) }) as Parameters<typeof restoreDirectory>[0]
+  const publications = vi.spyOn(DirectoryPendingPublications.prototype, "forTenant"), get = vi.spyOn(env.store, "get"), before = new Map(env.data), calls = env.fetcher.mock.calls.length
+  let pending: ReturnType<typeof restoreDirectory> | undefined
+  try {
+    localOwner.mockImplementation(async () => ({ ...await env.connection(), userId: id(800) }))
+    expect(await (await restoreDirectory(request())).json()).toEqual({ error: "Use the admin and connection that reviewed this page." })
+    expect(storage).not.toHaveBeenCalled(); expect(publications).not.toHaveBeenCalled()
+    expect(get.mock.calls).toEqual([[`restore.directory.review.${tenant}.${page.runId}`]])
+    localOwner.mockImplementation(env.connection); get.mockClear()
+    pending = restoreDirectory(request())
+    await started
+    expect(localOwner).toHaveBeenCalledTimes(2)
+    expect(get.mock.calls).toEqual([[`restore.directory.review.${tenant}.${page.runId}`]])
+    localOwner.mockImplementation(async () => ({ ...await env.connection(), userId: id(800) }))
+    release()
+    const response = await pending
+    expect(response.status).toBe(409)
+    expect(await response.json()).toEqual({ error: "Use the admin and connection that reviewed this page." })
+    expect(localOwner).toHaveBeenCalledTimes(3)
+    expect(get.mock.calls).toEqual(Array.from({ length: 2 }, () => [`restore.directory.review.${tenant}.${page.runId}`]))
+    expect(publications).not.toHaveBeenCalled(); expect(connection).not.toHaveBeenCalled()
+    expect(env.fetcher).toHaveBeenCalledTimes(calls); expect(env.data).toEqual(before); expect(env.writes).toEqual([])
+  } finally { release(); await pending; publications.mockRestore(); get.mockRestore(); vi.unstubAllGlobals() }
 })

@@ -4,7 +4,7 @@ import { backupStoragePath } from "../../../../shared/backup-storage"
 import { typeForFolder, restoreCapability, type Item } from "../../../../shared/intune/registry"
 import { readOwnedBackup } from "~/lib/policies/backup-owner"
 import { validPolicyPath } from "~/lib/policies/restore"
-import { directoryRestoreOperation, directoryRestoreRequest } from "../../../../main/restore/directory-dispatch"
+import { directoryRestoreOperation, directoryRestoreRequest, directoryRestoreVerifyOwner } from "../../../../main/restore/directory-dispatch"
 
 async function token(tenantId: string, appId: string, clientSecret: string, scope: string) {
   const response = await fetch(`https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ client_id: appId, client_secret: clientSecret, scope, grant_type: "client_credentials" }) })
@@ -63,6 +63,7 @@ export async function POST(request: NextRequest) {
       const result = await directoryRestoreOperation(tenantId, body.runId, perform)
       return result instanceof Response ? result : NextResponse.json(result)
     }
+    if (action === "preview" && typeof body.previousRunId === "string") await directoryRestoreVerifyOwner(tenantId, body.previousRunId)
     return await perform()
   } catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "This directory restore could not finish." }, { status: 409 }) }
 }

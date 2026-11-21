@@ -2,6 +2,10 @@ import type { DirectoryRestoreService, DirectoryOptions } from "./directory-serv
 import type { IdentityRestoreRequest } from "./dispatch"
 let service: DirectoryRestoreService | undefined
 export function setDirectoryRestoreService(value: DirectoryRestoreService) { service = value }
+export function directoryRestoreVerifyOwner(tenant: string, id: string) {
+  if (!service) throw new Error("A signed-in desktop connection is required.")
+  return service.verifySavedOwner(tenant, id)
+}
 export function directoryRestoreOperation<T>(tenant: string, id: string, work: (signal: AbortSignal) => Promise<T>) {
   if (!service) throw new Error("A signed-in desktop connection is required.")
   return service.operation(tenant, id, work)

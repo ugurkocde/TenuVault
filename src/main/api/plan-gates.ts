@@ -44,7 +44,7 @@ export function requiredFeatures(pathname: string, body: Record<string, unknown>
       return features
     }
     case "/api/restore-directory":
-      return ["replaceRestore"]
+      return body.action === "cancel" || body.action === "discard" ? [] : ["replaceRestore"]
     case "/api/restore-configuration":
       return body.operation === "update" ? ["replaceRestore"] : []
     case "/api/restore-validate":

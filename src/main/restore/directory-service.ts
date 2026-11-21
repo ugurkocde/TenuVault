@@ -87,6 +87,7 @@ export class DirectoryRestoreService {
     if (connection.tenantId.toLowerCase() !== page.run.tenant.toLowerCase() || connection.tenantId.toLowerCase() !== page.run.actor.tenantId.toLowerCase() || connection.userId.toLowerCase() !== page.run.actor.userId.toLowerCase() || connection.clientId.toLowerCase() !== page.run.actor.clientId.toLowerCase()) fail("Use the admin and connection that reviewed this page.")
   }
   private async verifyLocalOwner(page: DirectoryPage) { this.verifyOwner(page, await this.localOwner(page.run.tenant)) }
+  async verifySavedOwner(tenant: string, id: string) { await this.verifyLocalOwner(this.load(tenant, id)) }
   private async ownerConnection(page: DirectoryPage) {
     const connection = await this.connection(page.run.tenant)
     requireRestoreActor(connection.token, { ...connection, recoveryAccountIds: [] })
@@ -115,6 +116,7 @@ export class DirectoryRestoreService {
   }
   private save(page: DirectoryPage) { this.store.set(key(page.run.tenant, page.run.id), JSON.stringify(page)) }
   async prepare(tenant: string, request: IdentityRestoreRequest, options: DirectoryOptions, read: (path: string) => Promise<unknown>) {
+    if (options.previousRunId !== undefined) await this.verifySavedOwner(tenant, options.previousRunId)
     this.pending.forTenant(tenant).flush(options.previousRunId)
     try { return await this.preparePage(tenant, request, options, read) }
     catch (error) {
