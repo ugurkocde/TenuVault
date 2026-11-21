@@ -1,3 +1,4 @@
+import { snapshotPath } from "../../shared/intune/secret-omission"
 import { createCipheriv, createDecipheriv, createHmac, hkdfSync, randomBytes } from "node:crypto"
 import type { BigIntStats } from "node:fs"
 import { link, mkdir, open, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises"
@@ -913,7 +914,7 @@ export class LocalBlobStore {
         const type = key.split("/")[0]
         const file = (item as { file?: unknown } | null)?.file
         if (!type || typeof file !== "string" || !file || file.includes("/") || file.includes("\\")) { valid = false; break }
-        const name = `${prefix}${type}/${file}`
+        const name = prefix + snapshotPath(type, { file, omitted: (item as { omitted?: unknown } | null)?.omitted })
         traced.set(name, folder)
         if (!entries.has(name)) missing++
       }

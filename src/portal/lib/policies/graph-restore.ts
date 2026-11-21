@@ -1,13 +1,14 @@
 import { approvalSignal, approvalMessage, type ApprovalSignal } from "../../../shared/intune/approval"
 import { restoreApprovals, saveRestoreApproval, removeRestoreApproval, type RestoreApproval, type ApprovalStep } from "../../../main/storage/restore-approvals"
 import { parseDependencyMappings } from "../../../shared/intune/recovery"
+import { hasOmissions, OMISSION_BLOCKER } from "../../../shared/intune/secret-omission"
 import { dependencyReferences, type DependencyReference } from "../../../shared/intune/dependencies"
 import { createHash, randomUUID } from "node:crypto"
-import { typeForFolder, type IntuneType, type Item, type Json, type Step } from "../../../shared/intune/registry"
+import { hydratedOmaMasks, rememberHydratedOmaMasks, typeForFolder, type IntuneType, type Item, type Json, type Step } from "../../../shared/intune/registry"
 
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 import { buildRestorePlan, buildUpdatePlan, NotRestorableError, resolveStep, restoreBlocker } from "../../../shared/intune/restore-plan"
-import { assignmentsUnread, locateObject, readObject, type GraphReader } from "../../../shared/intune/read"
+import { assignmentsUnread, locateObject, readObject, type GraphReader, type ReadOptions } from "../../../shared/intune/read"
 import { comparableSnapshot, sameSnapshot } from "../../../shared/intune/compare"
 import { saveWrite, removeWrite, writeKey, writeRecords } from "../../../main/storage/restore-journal"
 import { moduleForFolder, restorePermissionBlocker, SERVICES_PAGE, type GrantedPermissions } from "../../../shared/services/modules"
@@ -50,6 +51,9 @@ export interface RestoreOptions {
    * restore permission is missing is reported before any write. Unknown permissions block nothing.
    */
   granted?: GrantedPermissions
+  omittedDependencies?: ReadonlyMap<string, string>
+  readOptions?: ReadOptions
+  statusOnlyWriteErrors?: boolean
 }
 
 export interface RestoreOutcome {
@@ -271,12 +275,14 @@ export class Restorer {
   }
 
   private async restoreOnce(path: string, snapshot: Item): Promise<RestoreOutcome> {
+    if (hasOmissions(snapshot) || path.split("/")[1] === ".omitted") return { success: false, path, action: "skipped", retryable: false, error: OMISSION_BLOCKER }
     const folder = path.split("/")[1] ?? ""
     const type = typeForFolder(folder === "DeviceCompliancePolicies" ? "CompliancePolicies" : folder)
     if (!type) return { success: false, path, error: "This backup file is not an Intune type TenuVault can restore." }
     const unpermitted = restorePermissionBlocker(type.folder, this.options.granted)
     if (unpermitted) return { success: false, path, action: "skipped", retryable: false, error: unpermitted }
     const source = this.remap(this.options.crossTenant ? forOtherTenant(snapshot) : snapshot)
+    if (source !== snapshot) rememberHydratedOmaMasks(source, hydratedOmaMasks(snapshot))
     // A backup that could not read the assignments must not replace the live ones with an empty list.
     const unread = this.options.assignments && !this.options.crossTenant && assignmentsUnread(type, snapshot)
     const assignments = this.options.assignments && !this.options.crossTenant && !unread
@@ -317,8 +323,12 @@ export class Restorer {
       if (blocker) return { success: false, path, action: "skipped", error: blocker }
       return withNote(await this.create(type, path, source, snapshot, assignments))
     } catch (error) {
-      return { success: false, path, retryable: false, error: error instanceof Error ? error.message : String(error) }
+      return { success: false, path, retryable: false, error: this.options.statusOnlyWriteErrors && !(error instanceof SafeGraphReadError) ? "Microsoft Graph could not complete the operation. Check Intune before retrying." : error instanceof Error ? error.message : String(error) }
     }
+  }
+
+  private writeFailure(type: IntuneType, body: Item, status: number): string {
+    return this.options.statusOnlyWriteErrors ? `Microsoft Graph returned HTTP ${status}.` : writeError(type, body, status)
   }
 
   /**
@@ -357,6 +367,8 @@ export class Restorer {
       includeAssignments: assignments,
     })
     const bodies = [plan.create, ...plan.steps, ...plan.assignments]
+    const omitted = await this.blockedByOmission(bodies)
+    if (omitted) return { success: false, path, action: "skipped", retryable: false, error: omitted }
     const unresolved = await this.unresolved(bodies.flatMap(step => dependencyReferences(step.body)))
     if (unresolved.length) return { success: false, path, retryable: false, error: this.options.crossTenant
       ? `Unresolved target dependencies (${unresolved.join(", ")}). Copy the dependencies first or reconcile this object in the target tenant.`
@@ -365,7 +377,7 @@ export class Restorer {
     if (references.blocking.length) return { success: false, path, action: "skipped", retryable: false, error: references.blocking.join(" ") }
     const created = await this.graph("POST", plan.create.path, plan.create.body, { sourceId: typeof snapshot.id === "string" ? snapshot.id : undefined })
     if (created.approval) return this.pauseApproval(type, path, { ...plan.create, kind: "content" }, [...plan.steps, ...plan.assignments], source, "created", created.approval, undefined, undefined, typeof snapshot.id === "string" ? snapshot.id : undefined)
-    if (created.status >= 300) return { success: false, path, retryable: created.status < 500 && created.status !== 408, error: writeError(type, created.body, created.status) }
+    if (created.status >= 300) return { success: false, path, retryable: created.status < 500 && created.status !== 408, error: this.writeFailure(type, created.body, created.status) }
     const id = String(created.body.id ?? "")
     if (!id) return { success: false, path, retryable: false, error: "Microsoft Graph did not return an ID. Check Intune before retrying." }
     if (typeof snapshot.id === "string" && !this.reviewed.has(snapshot.id.toLowerCase())) this.remapped.set(snapshot.id, id)
@@ -413,9 +425,9 @@ export class Restorer {
    * clearly, "forbidden" when the app registration may not read it, and undefined for any other
    * unclear answer (such as a server error), so a failed check never masquerades as a missing dependency.
    */
-  private async existsLive(path: string, id: string): Promise<boolean | "forbidden" | undefined> {
+  private async existsLive(path: string, id: string, fresh = false): Promise<boolean | "forbidden" | undefined> {
     const cached = this.liveDependencies.get(path)
-    if (cached !== undefined) return cached
+    if (!fresh && cached !== undefined) return cached
     let exists: boolean | "forbidden" | undefined
     try {
       const response = await this.graph("GET", path)
@@ -430,10 +442,26 @@ export class Restorer {
     return exists
   }
 
+  private async blockedByOmission(steps: { body: Item }[], dependencies = this.options.omittedDependencies): Promise<string | undefined> {
+    if (!dependencies?.size) return undefined
+    for (const step of steps) {
+      for (const reference of dependencyReferences(step.body, true)) {
+        const folder = dependencies.get(reference.id.toLowerCase())
+        const type = folder ? typeForFolder(folder) : undefined
+        if (type && (this.options.crossTenant || await this.existsLive(`${type.path}/${encodeURIComponent(reference.id)}`, reference.id, true) !== true)) {
+          return `The dependency at ${reference.path} was skipped because its backup leaves out values, and it could not be verified in the target tenant. Restore the dependency from a backup with its values first.`
+        }
+      }
+    }
+    return undefined
+  }
+
   private async update(type: IntuneType, path: string, source: Item, id: string, current: Item, assignments: boolean): Promise<RestoreOutcome> {
     const plan = buildUpdatePlan(type, source, id, { includeAssignments: assignments, current })
     // A type that writes only what differs may find nothing it can write, such as a value Intune would reject.
     if (!plan.length) return { success: true, path, policyId: id, policyName: type.singleton?.name, action: "unchanged", warnings: ["Nothing was written: what differs from the backup cannot be restored. Review it in Intune."] }
+    const omitted = await this.blockedByOmission(plan)
+    if (omitted) return { success: false, path, policyId: id, action: "skipped", retryable: false, error: omitted }
     const written = plan[0]!.body
     const references = await this.policyReferences(type, written)
     if (references.blocking.length) return { success: false, path, policyId: id, action: "skipped", retryable: false, error: references.blocking.join(" ") }
@@ -501,6 +529,7 @@ export class Restorer {
   /** A repair replays only rejected/unattempted steps against the object already created. */
   async repair(path: string, token: string): Promise<RestoreOutcome> {
     const body = repairs.get(token)?.body ?? {}
+    if (hasOmissions(body) || path.split("/")[1] === ".omitted") return { success: false, path, action: "skipped", retryable: false, error: OMISSION_BLOCKER }
     return withAdminLink(path, await this.repairOnce(path, token), body)
   }
 
@@ -524,6 +553,8 @@ export class Restorer {
     } else if (await this.parentGone(entry.type, entry.id)) {
       return gone
     }
+    const omitted = await this.blockedByOmission([{ body: entry.body }, ...entry.steps])
+    if (omitted) return { success: false, path, partial: true, policyId: entry.id, retryable: false, error: omitted }
     return this.complete(entry.type, path, entry.id, entry.body, entry.action, entry.steps, entry.expectedCurrent)
   }
 
@@ -547,6 +578,8 @@ export class Restorer {
     const base = { path, policyId: id, policyName: typeof name === "string" ? name : undefined, action }
     const resolved = steps.map((step) => resolveStep(step, id))
     for (const [index, step] of resolved.entries()) {
+      const omitted = await this.blockedByOmission([step])
+      if (omitted) return { ...base, success: false, partial: priorSteps + index > 0, retryable: false, error: omitted }
       let message: string | undefined
       let safeToRetry = false
       let response: Awaited<ReturnType<GraphCall>> | undefined
@@ -554,11 +587,13 @@ export class Restorer {
         response = await this.graph(step.method, step.path, step.body)
         if (!response.approval) {
           if (response.status < 300) continue
-          message = `${step.kind === "assignments" ? "Assignments" : "Settings"} could not be restored: ${writeError(type, response.body, response.status)}`
+          message = `${step.kind === "assignments" ? "Assignments" : "Settings"} could not be restored: ${this.writeFailure(type, response.body, response.status)}`
           safeToRetry = response.status < 500 && response.status !== 408
         }
       } catch (error) {
-        message = `Write outcome unknown: ${error instanceof Error ? error.message : String(error)}. Check Intune before retrying.`
+        message = this.options.statusOnlyWriteErrors
+          ? "Microsoft Graph did not confirm the write. Check Intune before retrying."
+          : `Write outcome unknown: ${error instanceof Error ? error.message : String(error)}. Check Intune before retrying.`
       }
       if (response?.approval) {
         let live = index === 0 ? baseline : undefined
@@ -592,7 +627,7 @@ export class Restorer {
     if (action === "updated" && !baseline && signal.kind !== "pending") return { ...base, error: `${base.error} The live object could not be fingerprinted. Review it before submitting.` }
     const exact = (entry: Step): ApprovalStep => ({ method: entry.method, path: entry.path, kind: entry.kind, body: entry.body ? JSON.stringify(entry.body) : undefined })
     const name = source[type.nameKey] ?? source.displayName ?? source.name
-    const record: RestoreApproval = { id: signal.kind === "pending" ? signal.code : randomUUID(), tenantId: context.tenantId, requesterId: context.requesterId, requesterName: context.requesterName, origin: "restore", backupPath: path, snapshotId, repairScope: this.options.repairScope,
+    const record: RestoreApproval = { id: signal.kind === "pending" ? signal.code : randomUUID(), tenantId: context.tenantId, requesterId: context.requesterId, requesterName: context.requesterName, origin: "restore", backupPath: path, snapshotId, repairScope: this.options.repairScope, omittedDependencies: this.options.omittedDependencies ? [...this.options.omittedDependencies] : undefined,
       label: typeof name === "string" ? name : type.label, folder: type.folder, operation: step.kind === "assignments" ? "assign" : action === "created" && !objectId ? "create" : "update",
       step: exact(step), remaining: remaining.map(exact), objectId, fingerprint: baseline ? approvalFingerprint(baseline, this.options.assignments) : undefined, submittedAt: new Date().toISOString(), status: signal.kind === "pending" ? "needsApproval" : "justification-required", justification: context.justification ?? "", stepNumber, totalSteps, action, source, assignments: this.options.assignments, mode: this.options.mode }
     if (signal.kind === "pending" && restoreApprovals(context.tenantId).some(entry => entry.id === signal.code)) return { ...base, approvalId: signal.code, approvalState: "submitted", error: "Already submitted for approval" }
@@ -621,10 +656,19 @@ export class Restorer {
     if (requester && (!context.requesterId || context.requesterId.toLowerCase() !== record.requesterId.toLowerCase())) throw new Error("Only the original requester can complete or withdraw this request")
   }
 
+  private async checkApprovalOmissions(record: RestoreApproval, steps: ApprovalStep[]): Promise<void> {
+    if (hasOmissions(record.source) || record.backupPath.split("/")[1] === ".omitted") throw new Error(OMISSION_BLOCKER)
+    const dependencies = record.omittedDependencies ? new Map(record.omittedDependencies) : this.options.omittedDependencies
+    const bodies = steps.flatMap(step => step.body ? [{ body: JSON.parse(step.body) as Item }] : [])
+    const omitted = await this.blockedByOmission([{ body: record.source }, ...bodies], dependencies)
+    if (omitted) throw new Error(omitted)
+  }
+
   async submitApproval(record: RestoreApproval, justification = record.justification): Promise<RestoreOutcome> {
     this.checkApprovalOwner(record)
     if (record.status !== "justification-required") throw new Error("This item was already submitted")
     if (!justification.trim() || justification.length > 700) throw new Error("Enter a justification of 1 to 700 characters")
+    await this.checkApprovalOmissions(record, [record.step, ...record.remaining])
     const response = await this.graph(record.step.method, record.step.path, record.step.body ? JSON.parse(record.step.body) as Item : undefined, { exactBody: record.step.body, justification })
     if (response.approval?.kind === "pending") {
       const draftId = record.id
@@ -658,6 +702,7 @@ export class Restorer {
         throw new Error("The live object changed after submission. Review it and start a fresh restore.")
       }
     }
+    await this.checkApprovalOmissions(record, [record.step, ...record.remaining])
     const bodies = [record.step, ...record.remaining].flatMap(step => step.body ? [JSON.parse(step.body) as Item] : [])
     const unresolved = await this.unresolved(bodies.flatMap(body => dependencyReferences(body)))
     if (unresolved.length) throw new Error(`Unresolved dependencies (${unresolved.join(", ")}). Restore them before completing this request.`)
@@ -677,7 +722,8 @@ export class Restorer {
     const id = record.objectId ?? (typeof response.id === "string" ? response.id : undefined)
     if (!id) throw new Error("Microsoft Graph did not return an object ID. Check Intune before continuing.")
     saveRestoreApproval({ ...record, objectId: id, status: "approved", continuationPending: true })
-    const next = new Restorer(this.graph, { ...this.options, mode: record.mode, assignments: record.assignments, repairScope: record.repairScope, approvalContext: { ...this.options.approvalContext!, justification: `${record.justification.slice(0, 686)} (${record.remaining[0]?.kind ?? "content"})` } })
+    await this.checkApprovalOmissions(record, record.remaining)
+    const next = new Restorer(this.graph, { ...this.options, omittedDependencies: record.omittedDependencies ? new Map(record.omittedDependencies) : this.options.omittedDependencies, mode: record.mode, assignments: record.assignments, repairScope: record.repairScope, approvalContext: { ...this.options.approvalContext!, justification: `${record.justification.slice(0, 686)} (${record.remaining[0]?.kind ?? "content"})` } })
     const steps = record.remaining.map(step => ({ ...step, body: step.body ? JSON.parse(step.body) as Item : {} }))
     const baseline = record.action === "updated" ? await this.current(type, id) : undefined
     const outcome = await next.complete(type, record.backupPath, id, record.source, record.action, steps, baseline, record.stepNumber)
@@ -688,7 +734,7 @@ export class Restorer {
 
   /** The live object read like a backup, or undefined when it was deleted. */
   current(type: IntuneType, id: string): Promise<Item | undefined> {
-    return readLive(this.graph, type, id)
+    return readLive(this.graph, type, id, this.options.readOptions)
   }
 
   /** Reviewed mappings only rewrite dependency references, never configuration text. */
@@ -728,23 +774,32 @@ export function locateLive(graph: GraphCall, type: IntuneType, snapshot: Item): 
 }
 
 /** The live object read like a backup, or undefined when it was deleted. */
-export async function readLive(graph: GraphCall, type: IntuneType, id: string): Promise<Item | undefined> {
+export async function readLive(graph: GraphCall, type: IntuneType, id: string, options?: ReadOptions): Promise<Item | undefined> {
   try {
-    return await readObject(type, id, liveReader(graph))
+    return await readObject(type, id, liveReader(graph, options?.statusOnlyErrors || options?.omitEncryptedOma), options)
   } catch (error) {
     if (error instanceof Gone) return undefined
+    if ((options?.statusOnlyErrors || options?.omitEncryptedOma) && !(error instanceof SafeGraphReadError)) {
+      throw new Error("Microsoft Graph could not complete the policy read.")
+    }
     throw error
   }
 }
 
 /** Reads through the restore's Graph caller; a deleted object reads as Gone. */
-function liveReader(graph: GraphCall): GraphReader {
+class SafeGraphReadError extends Error {
+  constructor(readonly status: number) {
+    super(`Microsoft Graph returned HTTP ${status}.`)
+  }
+}
+
+function liveReader(graph: GraphCall, statusOnly = false): GraphReader {
   const reader: GraphReader = {
     get: async (path) => {
       const response = await graph("GET", path)
       // Settings Catalog answers 400 ResourceNotFound for deleted policies instead of 404.
       if (response.status === 404 || (response.status === 400 && /ResourceNotFound/i.test(JSON.stringify(response.body)))) throw new Gone()
-      if (response.status >= 300) throw new Error(errorMessage(response.body, response.status))
+      if (response.status >= 300) throw statusOnly ? new SafeGraphReadError(response.status) : new Error(errorMessage(response.body, response.status))
       return response.body
     },
     list: async (start) => {

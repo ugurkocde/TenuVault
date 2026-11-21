@@ -35,11 +35,15 @@ it('retains the created ID and blocks replay when a follow-up response is lost',
 it('reports a partial API operation and repairs across requests without another creation', async () => {
   let reject = true
   let creates = 0
+  let snapshotReads = 0
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input))
     if (url.hostname === 'login.microsoftonline.com') return Response.json({ access_token: 'test' })
     if (url.pathname.endsWith('/metadata.json') || url.pathname.endsWith('/.tenuvault-owner.json')) return new Response('', { status: 404 })
-    if (url.hostname.endsWith('.blob.core.windows.net')) return Response.json(snapshot)
+    if (url.hostname.endsWith('.blob.core.windows.net')) {
+      snapshotReads++
+      return reject ? Response.json(snapshot) : new Response(null, { status: 404 })
+    }
     if (url.pathname.endsWith('localizedNotificationMessages')) return reject ? Response.json({ error: { message: 'No' } }, { status: 400 }) : new Response(null, { status: 204 })
     // The repair reads the copy back first to confirm it still exists.
     if ((init?.method ?? 'GET') === 'GET') return Response.json({ id: 'created', displayName: '[Restored] Message' })
@@ -54,6 +58,7 @@ it('reports a partial API operation and repairs across requests without another 
   const second = await (await POST(request({ ...body, selectedPolicies: [{ path, repairToken: first.details.results[0].repairToken }] }))).json()
   expect(second).toMatchObject({ success: true, status: 'Completed' })
   expect(creates).toBe(1)
+  expect(snapshotReads).toBe(1)
 })
 it('rejects a replacement repair when live state changed after the failure', async () => {
   let liveName = 'Before'

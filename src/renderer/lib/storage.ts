@@ -1,5 +1,6 @@
 import type { Tenant } from "~/contexts/TenantContext"
 import { DELEGATED_CLIENT_SECRET, LOCAL_STORAGE_PREFIX, localStorageAccountName } from "../../shared/constants"
+import type { TenuVaultBridge } from "../../shared/ipc"
 
 /** Where a tenant's backups are stored. */
 export type StorageChoice =
@@ -60,6 +61,13 @@ export function changeTenantStorage(tenant: Tenant, choice: StorageChoice): Part
     previousAzureStorage: previous ? { ...previous } : undefined,
     resources: returning ? { ...previous } : { ...tenant.resources, ...storageResources(tenant.credentials!.tenantId, choice), subscriptionName: tenant.resources?.subscriptionName ?? "", automationAccountName: tenant.resources?.automationAccountName ?? "" },
   }
+}
+
+export async function saveTenantStorage(tenant: Tenant, choice: StorageChoice, changeAccount: TenuVaultBridge["storage"]["changeTenantAccount"], updateTenant: (id: number, updates: Partial<Tenant>) => void): Promise<boolean> {
+  const updates = changeTenantStorage(tenant, choice)
+  const saved = await changeAccount(tenant.credentials!.tenantId, tenant.resources?.storageAccountName ?? "", updates.resources!)
+  if (saved) updateTenant(tenant.id, updates)
+  return saved
 }
 
 export const LOCAL_SWITCH_CONFIRMATION = {

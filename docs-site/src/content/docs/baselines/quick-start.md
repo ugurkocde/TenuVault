@@ -3,7 +3,7 @@ title: "OpenIntuneBaseline"
 description: Deploy, compare and validate OpenIntuneBaseline policies from the latest published release or a version you choose, with a backup first and undo per run.
 ---
 
-The **OpenIntuneBaseline** section deploys, compares and validates [OpenIntuneBaseline](https://github.com/SkipToTheEndpoint/OpenIntuneBaseline) (OIB) policies in a tenant. It offers three workflows: **New Deployment**, **Existing Deployment** and **Policy Validation**. Every write can be undone per run.
+The **OpenIntuneBaseline** section deploys, compares and validates [OpenIntuneBaseline](https://github.com/SkipToTheEndpoint/OpenIntuneBaseline) (OIB) policies in a tenant. It offers three workflows: **New Deployment**, **Existing Deployment** and **Policy Validation**. Deployment history records what each run can undo.
 
 OpenIntuneBaseline is published by SkipToTheEndpoint and contributors under the GPL-3.0 license. TenuVault downloads the policy files from the upstream GitHub repository when you use them; they are not bundled with the app.
 
@@ -178,6 +178,8 @@ Only one OpenIntuneBaseline deployment or undo can run per tenant at a time.
 ### Undo
 
 Every deployment and drift fix is recorded on this device with the IDs of the objects it created and the previous version of every policy it updated. **Deployment history** on the section's start page lists the runs that can be undone for the selected tenant.
+
+When secret omission is enabled, the deployment review warns that some updates may be unavailable to Undo. The saved previous version leaves out classified values, and the run identifies affected updates. Restore those policies from a backup that contains the values.
 
 If the run list cannot load, it shows the error with a **Retry** button. Retry reloads the history. A load failure does not mean there are no runs to undo.
 

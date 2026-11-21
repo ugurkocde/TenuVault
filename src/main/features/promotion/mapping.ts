@@ -1,3 +1,4 @@
+import { REFERENCE_SETTING_VALUE } from "../../../shared/intune/dependencies"
 import type { IntuneType, Item, Json } from "../../../shared/intune/registry"
 import { cleanAssignment } from "../../../shared/intune/registry"
 import { isGraphId } from "../../../shared/security"
@@ -60,7 +61,6 @@ export interface TargetReads {
   groupIds: string[]
 }
 
-const REFERENCE_VALUE = "#microsoft.graph.deviceManagementConfigurationReferenceSettingValue"
 const SECRET_VALUE = /SecretSettingValue$/i
 
 const TARGET_KINDS: Record<string, { target: "group" | "allDevices" | "allLicensedUsers"; intent: "include" | "exclude" }> = {
@@ -93,7 +93,7 @@ export function extractReferences(snapshot: Item, includeAssignments: boolean): 
   }
   for (const tag of Array.isArray(snapshot.roleScopeTagIds) ? snapshot.roleScopeTagIds : []) add("scopeTag", str(tag))
   visit(snapshot.settings ?? null, (object) => {
-    if (object["@odata.type"] === REFERENCE_VALUE) add("reusableSetting", str(object.value))
+    if (object["@odata.type"] === REFERENCE_SETTING_VALUE) add("reusableSetting", str(object.value))
   })
   if (includeAssignments) {
     for (const assignment of directAssignments(snapshot)) {
@@ -224,7 +224,7 @@ export function translate(
     }
   }
   visit(body.settings ?? null, (object) => {
-    if (object["@odata.type"] !== REFERENCE_VALUE) return
+    if (object["@odata.type"] !== REFERENCE_SETTING_VALUE) return
     const value = str(object.value)
     const mapped = value ? usable("reusableSetting", value) : null
     if (!mapped) unresolved = true

@@ -187,3 +187,7 @@ TenuVault compares each tenant's two newest complete backups, one tenant after a
 * [Intune drift detection](https://www.tenuvault.com/intune-drift-detection): what drift detection catches, on the product site
 * [Roll back an Intune policy change](https://www.tenuvault.com/guides/roll-back-intune-policy-change)
 * [Intune audit logs and diffs or drift detection](https://www.tenuvault.com/compare/intune-drift-audit-logs-vs-backup-comparison): when audit logs are enough, on the product site
+
+## Backups with omitted values
+
+Drift detection compares values available in both copies. It can detect changes to retained fields, while a change to the backup setting on its own does not create a drift. The scan lists incomplete comparison coverage in its warnings. Revert and recreate require a source backup that includes the values needed for that policy.

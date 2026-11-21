@@ -14,6 +14,7 @@ export class GraphSession {
     private readonly fetchImpl: typeof fetch,
     private readonly token: () => Promise<string>,
     private readonly network: NetworkCircuit,
+    private readonly safeErrors = false,
   ) {}
 
   async list(url: string): Promise<GraphItem[]> {
@@ -50,12 +51,15 @@ export class GraphSession {
           attempted = true
           response = await this.fetchImpl(url, { signal, headers: { Authorization: `Bearer ${token}` } })
           if (response.ok) {
-            const result = (await response.json()) as T
+            const result = (await response.json().catch((error: unknown) => {
+              if (this.safeErrors) throw new Error("Microsoft Graph returned invalid JSON.")
+              throw error
+            })) as T
             signal.throwIfAborted()
             this.network.succeeded("Microsoft Graph")
             return result
           }
-          throw new GraphError(await graphError(response), response.status)
+          throw new GraphError(this.safeErrors ? `Microsoft Graph returned HTTP ${response.status}.` : await graphError(response), response.status)
         }, this.network.signal)
       } catch (error) {
         this.network.signal.throwIfAborted()

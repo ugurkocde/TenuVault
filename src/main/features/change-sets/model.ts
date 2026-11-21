@@ -123,6 +123,9 @@ export interface ChangeSetReview {
   /** Target state the reviewer saw: combined fingerprint and one per operation. */
   targetFingerprint: string
   operationFingerprints: Record<string, string>
+  omission?: ChangeSetContent["omission"]
+  /** An off-mode review also fingerprints what remains observable after enabling omission. */
+  projectedFingerprints?: Record<string, { secrets: string; scripts: string }>
   observedAt: string
   reviewer: string | null
   actor: string | null
@@ -186,6 +189,7 @@ export interface ChangeSetContent {
   status: "frozen"
   summary: string
   kind: "proposal" | "capture"
+  omission?: { enabled: boolean; scripts: boolean; generation: string }
   changeSetId: string | null
   /** Per operation key. Proposal: proposed body and assignments. Capture: pre-change snapshot. */
   entries: Record<string, { body: Item | null; assignments: Item[] | null }>

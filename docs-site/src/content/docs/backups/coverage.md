@@ -163,3 +163,13 @@ Some backed-up items cannot be restored in full, for example apps that need an i
 
 * [Intune backup](https://www.tenuvault.com/intune-backup): coverage and plans, on the product site
 * [Your own Intune export script or a backup app](https://www.tenuvault.com/compare/intune-export-script-vs-backup-app): what a Graph script has to read and restore, on the product site
+
+## Leave secret values out of policy backups
+
+In **Settings**, under **Sign-in**, you can turn this on for a tenant. It leaves out all encrypted OMA-URI values and secret references, including String, StringXml and Base64, typed Settings Catalog secret values and value states in any registry type, Android Enterprise enrollment tokens, QR content and images, and Wi-Fi passwords on those enrollment profiles. The checked-in classification lists additional credential properties on particular VPN, email, certificate and enrollment profiles. Settings such as password length and authentication mode remain available.
+
+**Also leave out script content** is off by default. Turning it on also leaves out PowerShell, shell, custom attribute, compliance and remediation script bodies. Custom XML, plists, app configuration key and value payloads and EAP XML stay in the backup. Those payloads and retained scripts can hold values an administrator entered. Restrict access to backup storage and ZIP exports.
+
+Microsoft Graph returns a null pre-shared key for iOS, Windows, Android device owner and macOS Wi-Fi configuration profiles. Android device owner profiles can also report whether a key is set. Backups preserve that indicator. They contain no pre-shared key in either mode, and you must re-enter the key after a restore.
+
+A projected policy stays visible in Backup History and restore preview. Use a backup that contains the omitted values to restore that policy. Turning the setting on does not change older backups, blob versions or ZIPs.

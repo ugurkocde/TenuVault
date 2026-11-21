@@ -152,3 +152,5 @@ Exports are built on this device from the saved assessment, without reading the 
 * [Checking CIS Benchmarks in a spreadsheet or automatically](https://www.tenuvault.com/compare/cis-benchmark-spreadsheet-vs-automated-assessment): when a spreadsheet is enough, on the product site
 
 CIS, CIS Benchmarks and CIS Controls are trademarks of the Center for Internet Security, Inc.
+
+When secret omission is enabled, rollback captures leave out the classified values. The rollback preview identifies the policies that need another recovery source. [Backup coverage](/backups/coverage/#leave-secret-values-out-of-policy-backups)

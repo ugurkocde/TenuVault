@@ -12,6 +12,7 @@ export interface RestoreApproval {
   backupPath: string
   snapshotId?: string
   repairScope?: string
+  omittedDependencies?: Array<[string, string]>
   label: string
   folder: string
   operation: "create" | "update" | "assign" | "delete"

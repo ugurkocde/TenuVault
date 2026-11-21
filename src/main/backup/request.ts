@@ -46,15 +46,19 @@ export class StorageError extends Error {}
 export class InventoryDamagedError extends StorageError {}
 
 /** The error for a failed storage response, keeping the local store's damage refusals apart. */
-export async function storageFailure(response: Response, account: string): Promise<StorageError> {
+export async function storageFailure(response: Response, account: string, hideDetails = false, detectImmutability = false): Promise<StorageError | ProtectedBlobError> {
   const code = response.headers.get("x-ms-error-code")
+  if (detectImmutability && (response.status === 409 || response.status === 403)) {
+    const storageCode = code ?? /<Code>([^<]+)<\/Code>/.exec(await response.clone().text())?.[1] ?? ""
+    if (isImmutabilityRefusal(response.status, storageCode)) return new ProtectedBlobError(storageCode)
+  }
   if (code === "InventoryIncomplete" || code === "BackupUnavailable") {
-    const text = await response.text()
+    const text = hideDetails ? "" : await response.text()
     const message = /<Message>([^<]+)<\/Message>/.exec(text)?.[1]
     const decoded = (message ?? "Files in the backup folder could not be read.").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&amp;/g, "&")
     return new InventoryDamagedError(decoded)
   }
-  return new StorageError(await storageError(response, account))
+  return new StorageError(await storageError(response, account, hideDetails))
 }
 /** The create-only claim for a backup folder found the marker already there. */
 export class BlobClaimError extends StorageError {}
@@ -130,9 +134,9 @@ export async function graphError(response: Response): Promise<string> {
 }
 
 /** The message for a failed storage response. A network error response rejects with a StorageUnreachableError instead. */
-export async function storageError(response: Response, account: string): Promise<string> {
+export async function storageError(response: Response, account: string, hideDetails = false): Promise<string> {
   if (response.status === 0 || response.type === "error") throw new StorageUnreachableError(`Storage account ${account} could not be reached.`)
-  const text = await response.text()
+  const text = hideDetails ? "" : await response.text()
   const code = /<Code>([^<]+)<\/Code>/.exec(text)?.[1] ?? response.headers.get("x-ms-error-code") ?? ""
   // AuthorizationFailure is the storage firewall or network rules rejecting this computer, not a missing role.
   if (code === "AuthorizationFailure") {
@@ -141,6 +145,7 @@ export async function storageError(response: Response, account: string): Promise
   if (response.status === 403 || code.startsWith("Authorization")) {
     return `You do not have write access to storage account ${account}. Ask an Azure administrator for the "Storage Blob Data Contributor" role on it. New role assignments can take a few minutes to apply.`
   }
+  if (hideDetails) return `Storage account ${account} returned HTTP ${response.status}.`
   const message = /<Message>([^<]+)<\/Message>/.exec(text)?.[1]
   return `Storage account ${account} returned ${response.status}${code ? ` (${code})` : ""}${message ? `: ${message.split("\n")[0]}` : ""}`
 }

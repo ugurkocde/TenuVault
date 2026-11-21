@@ -166,3 +166,5 @@ By default, items are restored to the tenant selected at the top of **Backup & R
 * [Restore Intune policies](/restore/)
 * [What cannot be restored and restore write history](/restore/limitations/)
 * [Plans and features](/licensing/)
+
+A policy with omitted values is unavailable in both restore modes. Choose a different snapshot that contains those values before creating a copy or replacing it in place. [Restore preview](/restore/#policies-with-values-left-out)

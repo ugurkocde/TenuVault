@@ -37,6 +37,8 @@ function tenantIds(serialized: string | null): Set<string> | null {
 
 const cache = new Map<string, string | null>()
 const cachedTenantIds = new Map<string, Set<string> | null>()
+const pendingSaves = new Map<string, Promise<void>>()
+let savedTenantIds: Set<string> | null = null
 let preservationWarningShown = false
 
 async function releaseOrphanedTenants(saved: Set<string>): Promise<void> {
@@ -54,6 +56,7 @@ export const tenantStorage = {
       cache.set(key, value)
       if (key === TENANTS_KEY) {
         const saved = tenantIds(value)
+        savedTenantIds = saved
         cachedTenantIds.set(key, saved)
         if (saved) void releaseOrphanedTenants(saved).catch((error) => console.error("Could not release orphaned tenants:", error))
       }
@@ -64,28 +67,50 @@ export const tenantStorage = {
     return cache.get(key) ?? null
   },
   setItem(key: string, value: string): void {
+    let next: Set<string> | null | undefined
     if (key === TENANTS_KEY) {
-      const next = tenantIds(value)
+      next = tenantIds(value)
       tenantStorage.getItem(key)
-      const previous = cachedTenantIds.get(key)
-      if (previous === null && (next === null || next.size === 0)) {
+      if (cachedTenantIds.get(key) === null && (next === null || next.size === 0)) {
         if (!preservationWarningShown) {
           console.error("The saved tenant list is being preserved for recovery. An empty replacement was not saved.")
           preservationWarningShown = true
         }
         return
       }
-      if (next && previous) for (const id of previous) {
-        if (!next.has(id)) void bridge.license.releaseTenant(id).catch((error) => console.error("Could not release removed tenant:", error))
-      }
       cachedTenantIds.set(key, next)
     }
     cache.set(key, value)
-    void bridge.storage.setItem(key, value)
+    const save = bridge.storage.setItem(key, value)
+    pendingSaves.set(key, save)
+    void save.then(() => {
+      if (pendingSaves.get(key) === save) pendingSaves.delete(key)
+      if (next === undefined) return
+      const previous = savedTenantIds
+      savedTenantIds = next
+      if (next && previous) for (const id of previous) {
+        if (!next.has(id)) void bridge.license.releaseTenant(id).catch((error) => console.error("Could not release removed tenant:", error))
+      }
+    }, (error) => {
+      if (pendingSaves.get(key) === save) {
+        pendingSaves.delete(key)
+        const saved = bridge.storage.getItemSync(key)
+        cache.set(key, saved)
+        if (key === TENANTS_KEY) {
+          savedTenantIds = tenantIds(saved)
+          cachedTenantIds.set(key, savedTenantIds)
+        }
+      }
+      console.error("Could not save desktop storage:", error)
+    })
   },
   removeItem(key: string): void {
+    pendingSaves.delete(key)
     cache.set(key, null)
-    if (key === TENANTS_KEY) cachedTenantIds.set(key, new Set())
+    if (key === TENANTS_KEY) {
+      savedTenantIds = new Set()
+      cachedTenantIds.set(key, savedTenantIds)
+    }
     void bridge.storage.removeItem(key)
   },
 }

@@ -23,12 +23,48 @@ $script:failGraphToken = $false
 $script:failDetail = $false
 $script:failReportList = $false
 $script:failCompliance = $false
+$script:omit = $false
+$script:binding = ""
+$script:failOmittedRead = $false
+$script:changeDuringCapture = $false
+$script:control = $null
+$script:policyStatus = 404
+$script:policyCode = "BlobNotFound"
+$script:omaParity = $false
+$script:enrollmentRead = ""
+$script:emptyOma = ""
+$script:binding = ""
+$script:writeOnce = $false
+$script:written = @{}
+
+Add-Type -TypeDefinition @'
+namespace Automation.Sandbox.AssetManagement.Cmdlets.AssetManagementClient {
+    public class AssetManagementClientException : System.Exception {
+        public AssetManagementClientException(string message) : base(message) { }
+    }
+}
+'@
+function Get-AutomationVariable {
+    [CmdletBinding()]
+    param($Name)
+    if ($Name -ne "TenuVaultOmissionAccount-11111111") { return }
+    if ($script:enrollmentRead -eq "unavailable") { throw "Automation enrollment read timed out" }
+    if ($script:enrollmentRead -eq "missing") {
+        $exception = [Automation.Sandbox.AssetManagement.Cmdlets.AssetManagementClient.AssetManagementClientException]::new("Variable not found. To create this Variable, navigate to the Variables blade and create a Variable named: $Name.")
+        throw [System.Management.Automation.ErrorRecord]::new($exception,
+            "1,Automation.Sandbox.AssetManagement.Cmdlets.AssetCmdlets.GetAutomationVariableCmdlet",
+            [System.Management.Automation.ErrorCategory]::ObjectNotFound, $Name)
+    }
+    return $script:binding
+}
+function Set-AutomationVariable { param($Name, $Value) if ($Name -eq "TenuVaultOmissionAccount-11111111") { $script:binding = $Value } }
 
 function Get-TvManagedIdentityToken {
     param([string]$Resource)
     $script:calls.Add([pscustomobject]@{ uri = "token:$Resource"; method = "Token"; contentType = $null; ifNoneMatch = $null; body = $null })
     if ($script:failGraphToken -and $Resource -like "https://graph.microsoft.com*") { throw "Could not get a managed identity token for $Resource." }
-    return "token"
+    if ($Resource -like "https://storage.azure.com*") { return "stcontoso" }
+    return "graph-token"
 }
 
 function Invoke-TvHttp {
@@ -36,16 +72,50 @@ function Invoke-TvHttp {
     if ($script:failReportList -and $Uri -like "*comp=list*") { throw [InvalidOperationException]::new("storage listing is unavailable") }
     if ($script:failCompliance -and $Uri -like "https://graph.microsoft.com/beta/deviceManagement/deviceCompliancePolicies*") { throw [TvHttpError]::new(500, "HTTP 500") }
     $body = if ($null -ne $BodyBytes) { [Text.Encoding]::UTF8.GetString($BodyBytes) } else { $null }
-    $script:calls.Add([pscustomobject]@{ uri = $Uri; method = $Method; contentType = $ContentType; ifNoneMatch = $Headers["If-None-Match"]; body = $body })
+    $script:calls.Add([pscustomobject]@{ uri = $Uri; method = $Method; contentType = $ContentType; ifNoneMatch = $Headers["If-None-Match"]; ifMatch = $Headers["If-Match"]; body = $body })
+    if ($Uri -like "*.blob.core.windows.net/*" -and (-not $Uri.StartsWith("https://$Token.blob.core.windows.net/"))) {
+        throw [TvHttpError]::new(403, "HTTP 403")
+    }
+    if ($Uri -like "*/.tenuvault-control/*") {
+        if ($Method -ne "Get") { throw "A producer must not write omission policy." }
+        if ($null -eq $script:control) {
+            $errorResponse = [TvHttpError]::new($script:policyStatus, "HTTP $script:policyStatus")
+            $errorResponse.ServiceCode = $script:policyCode
+            throw $errorResponse
+        }
+        return @{ Status = 200; Bytes = [Text.Encoding]::UTF8.GetBytes($script:control); Text = $script:control }
+    }
+    if ($script:writeOnce -and $Method -eq "Put") {
+        if ($script:written.ContainsKey($Uri)) { throw [TvHttpError]::new(409, "HTTP 409 BlobImmutableDueToPolicy") }
+        $script:written[$Uri] = $true
+    }
     $text = '{"value":[]}'
     if ($Uri -eq "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations") {
-        $text = '{"value":[{"id":"cfg-1","displayName":"Baseline Wi-Fi"}]}'
+        $text = if ($script:failDetail) { '{"value":[{"id":"cfg-0","displayName":"First"},{"id":"cfg-1","displayName":"Baseline Wi-Fi"}]}' } else { '{"value":[{"id":"cfg-1","displayName":"Baseline Wi-Fi"}]}' }
     } elseif ($Uri -eq "https://graph.microsoft.com/beta/deviceManagement/windowsAutopilotDeviceIdentities") {
         # A list-only type: the entry is the snapshot, with status fields and secrets left out.
         $text = '{"value":[{"id":"ap-1","serialNumber":"SN-0001","manufacturer":"Contoso","model":"Laptop 7","groupTag":"Sales","displayName":null,"userPrincipalName":"","lastContactedDateTime":"2026-11-01T10:00:00Z","enrollmentState":"enrolled","deviceAccountPassword":"secret","productKey":"PK-1","managedDeviceId":"md-1"}]}'
+    } elseif ($Uri -like "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations/cfg-0*") {
+        $text = '{"id":"cfg-0","displayName":"First","assignments":[]}'
+    } elseif ($script:emptyOma -and $Uri -like "*getOmaSettingPlainTextValue*") {
+        if ($script:emptyOma -eq "emptyOmaFailure") { throw [TvHttpError]::new(400, "Empty OMA reference refused") }
+        $text = '{"value":"Hydrated empty reference"}'
+    } elseif ($script:omaParity -and $Uri -like "*getOmaSettingPlainTextValue*") {
+        $text = '{"value":"****"}'
     } elseif ($Uri -like "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations/cfg-1*") {
+        if ($script:changeDuringCapture) {
+            $script:control = '{"version":1,"tenantId":"11111111-2222-3333-4444-555555555555","generation":"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb","enabled":true,"scripts":false}'
+        }
         if ($script:failDetail) { throw [TvHttpError]::new(401, "HTTP 401") }
+        if ($script:failOmittedRead) { throw [TvHttpError]::new(400, "omission-test-value-397c6d") }
         $text = '{"@odata.context":"x","id":"cfg-1","displayName":"Baseline Wi-Fi","lastModifiedDateTime":"2026-11-01T10:00:00Z","assignments":[]}'
+        if ($script:emptyOma) {
+            $text = '{"id":"cfg-1","displayName":"Baseline Wi-Fi","omaSettings":[{"isEncrypted":true,"secretReferenceValueId":"","value":"From Graph"}]}'
+        } elseif ($script:omaParity) {
+            $text = '{"id":"cfg-1","displayName":"Baseline Wi-Fi","omaSettings":[{"isEncrypted":true,"value":"Graph value"},{"isEncrypted":true,"secretReferenceValueId":"ref","value":"masked"}],"nested":{"children":[1],"children@odata.nextLink":"https://graph.microsoft.com/beta/next"}}'
+        } elseif ($script:omit) {
+            $text = '{"id":"cfg-1","displayName":"Baseline Wi-Fi","omaSettings":[{"@odata.type":"#microsoft.graph.omaSettingString","isEncrypted":true,"value":"omission-test-value-397c6d","secretReferenceValueId":"omission-test-secret-reference","omaUri":"./Secret"}],"settings":[{"@odata.type":"#microsoft.graph.deviceManagementConfigurationSecretSettingValue","value":"omission-test-value-397c6d"}]}'
+        }
     }
     return @{ Status = 200; Bytes = [Text.Encoding]::UTF8.GetBytes($text); Text = $text }
 }
@@ -105,4 +175,91 @@ foreach ($value in @("Manual", "Nightly")) {
     $output = @()
     try { $output = @(Invoke-TvBackup) } catch { $errorText = $_.Exception.Message }
     Write-Output (@{ calls = @($script:calls.ToArray()); output = @($output | ForEach-Object { [string]$_ }); error = $errorText } | ConvertTo-Json -Compress -Depth 5)
+}
+
+
+# Exercise the cloud producer with omission, a missing enrolled policy, and an error with an operand.
+$script:omit = $true
+foreach ($case in @("on", "missing", "graphError")) {
+    $script:calls.Clear()
+    $script:OutcomeSent = $false
+    $script:control = if ($case -ne "missing") { '{"version":1,"tenantId":"11111111-2222-3333-4444-555555555555","generation":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","enabled":true,"scripts":false}' }
+    $script:failOmittedRead = $case -eq "graphError"
+    $errorText = $null
+    $output = @()
+    try { $output = @(Invoke-TvBackup) } catch { $errorText = $_.Exception.Message }
+    Write-Output (@{ calls = @($script:calls.ToArray()); output = @($output); error = $errorText } | ConvertTo-Json -Compress -Depth 5)
+}
+
+
+# Switch policy after the old producer starts to read snapshots.
+$script:calls.Clear()
+$script:OutcomeSent = $false
+$script:omit = $false
+$script:binding = ""
+$script:failOmittedRead = $false
+$script:changeDuringCapture = $true
+$script:control = $null
+$errorText = $null
+try { $null = @(Invoke-TvBackup) } catch { $errorText = $_.Exception.Message }
+Write-Output (@{ calls = @($script:calls.ToArray()); error = $errorText } | ConvertTo-Json -Compress -Depth 5)
+
+
+# Two default-off runs with an immutable archive. The best-effort status blob can fail on run two.
+$script:changeDuringCapture = $false
+$script:control = $null
+$script:writeOnce = $true
+foreach ($run in @(1, 2)) {
+    if ($run -eq 2) { Start-Sleep -Milliseconds 1100 }
+    $script:calls.Clear()
+    $script:OutcomeSent = $false
+    $errorText = $null
+    try { $output = @(Invoke-TvBackup) } catch { $errorText = $_.Exception.Message }
+    Write-Output (@{ calls = @($script:calls.ToArray()); error = $errorText } | ConvertTo-Json -Compress -Depth 5)
+}
+
+$script:writeOnce = $false
+foreach ($case in @("forbidden", "ambiguous404", "unavailable", "malformed", "arrayTenant", "containerMissing")) {
+    $script:calls.Clear()
+    $script:OutcomeSent = $false
+    $script:policyStatus = switch ($case) { "forbidden" { 403 }; "unavailable" { 503 }; default { 404 } }
+    $script:policyCode = if ($case -eq "containerMissing") { "ContainerNotFound" } else { "" }
+    $script:control = switch ($case) {
+        "malformed" { "invalid JSON" }
+        "arrayTenant" { '{"version":1,"tenantId":["11111111-2222-3333-4444-555555555555"],"generation":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","enabled":false,"scripts":false}' }
+        default { $null }
+    }
+    $script:omaParity = $case -eq "containerMissing"
+    $errorText = $null
+    try { $null = @(Invoke-TvBackup) } catch { $errorText = $_.Exception.Message }
+    Write-Output (@{ scenario = $case; calls = @($script:calls.ToArray()); error = $errorText } | ConvertTo-Json -Compress -Depth 5)
+}
+
+$script:omaParity = $false
+$script:policyCode = "BlobNotFound"
+foreach ($case in @("unreadableEnrollment", "missingEnrollment", "movedWithoutPolicy", "movedWithOffPolicy", "movedWithOnPolicy", "emptyOmaSuccess", "emptyOmaFailure")) {
+    $script:calls.Clear()
+    $script:OutcomeSent = $false
+    $script:binding = if ($case -eq "unreadableEnrollment") { "stcontoso" } elseif ($case -like "moved*") { "stprevious" } else { "" }
+    $script:control = if ($case -in @("movedWithOffPolicy", "movedWithOnPolicy")) {
+        '{"version":1,"tenantId":"11111111-2222-3333-4444-555555555555","generation":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","enabled":' +
+            ($case -eq "movedWithOnPolicy").ToString().ToLowerInvariant() + ',"scripts":false}'
+    }
+    $script:omit = $case -eq "movedWithOnPolicy"
+    $script:enrollmentRead = switch ($case) { "unreadableEnrollment" { "unavailable" }; "missingEnrollment" { "missing" }; default { "" } }
+    $script:emptyOma = if ($case -like "emptyOma*") { $case } else { "" }
+    $errorText = $null
+    try { $null = @(Invoke-TvBackup) } catch { $errorText = $_.Exception.Message }
+    Write-Output (@{ scenario = $case; calls = @($script:calls.ToArray()); error = $errorText } | ConvertTo-Json -Compress -Depth 5)
+}
+
+Remove-Item Function:Get-AutomationVariable, Function:Set-AutomationVariable
+$script:emptyOma = ""
+foreach ($case in @("environmentUnset", "environmentEmpty", "environmentEnrolled")) {
+    $script:calls.Clear()
+    $script:OutcomeSent = $false
+    $env:TENUVAULT_OMISSION_ACCOUNT = switch ($case) { "environmentEmpty" { "" }; "environmentEnrolled" { "stcontoso" }; default { $null } }
+    $errorText = $null
+    try { $null = @(Invoke-TvBackup) } catch { $errorText = $_.Exception.Message }
+    Write-Output (@{ scenario = $case; calls = @($script:calls.ToArray()); error = $errorText } | ConvertTo-Json -Compress -Depth 5)
 }
