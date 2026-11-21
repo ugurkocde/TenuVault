@@ -116,6 +116,8 @@ export function directoryObjectState(store: KeyValueStore, tenant: string, owner
         }
         save(publicationState)
         store.set(mappingKey, mapping.target)
+        const step = { folder: mapping.folder, sourceId: mapping.source }
+        if (createJournal(step) === journalPrefix) store.delete(createJournalKey(step))
       }
     }
     return uncertainCreates

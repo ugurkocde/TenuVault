@@ -294,7 +294,7 @@ it.each((["Users", "Groups"] as const).flatMap(folder => ["success", "503", "tim
   expect(await pending).toMatchObject({ status: "partial", failed: 0, outcomes: [{ state: "deferred" }] })
   expect(env.writes).toEqual([])
   const restarted = env.service()
-  expect(await restarted.resume(tenant, saved)).toEqual({ ...page, selection: page.rows.map(row => row.key) })
+  expect(await restarted.resume(tenant, saved)).toEqual({ ...page, unresolved: true, selection: page.rows.map(row => row.key) })
   expect(await restarted.execute(tenant, saved, page.fingerprint, approvals)).toMatchObject({ status: "complete", failed: 0, outcomes: [{ state: "applied" }] })
   await env.service().execute(tenant, saved, page.fingerprint, approvals)
   expect(env.writes).toEqual([`PATCH ${target}`])
@@ -1818,7 +1818,7 @@ it("refuses an add when an uppercase saved principal mapping changes during fina
   expect(env.writes).toEqual([])
 })
 
-it.each(["execute", "saved confirmation"].flatMap(action => ["read", "Retry-After wait"].map(phase => ({ action, phase }))))("cancels uncertain user-create lookup during $phase via $action without another POST", async ({ action, phase }) => {
+it.each(["execute", "saved confirmation"])("cancels uncertain user-create lookup via %s without another POST", async action => {
   const env = world(), service = env.service(), original = env.fetcher.getMockImplementation()!, source = id(100), target = id(900)
   const request: IdentityRestoreRequest = { origin: "restore", path: `backup/Users/${source}.json`, snapshot: { id: source, userType: "Member", displayName: "Saved user", userPrincipalName: "saved@example.test", mailNickname: "saved", accountEnabled: false } }
   let created = false, confirming = false, lookupSignal: AbortSignal | undefined
@@ -1832,7 +1832,6 @@ it.each(["execute", "saved confirmation"].flatMap(action => ["read", "Retry-Afte
       if (!confirming) return Response.json({ value: created ? [{ ...request.snapshot, id: target }] : [] })
       lookupSignal = init?.signal ?? undefined
       reached()
-      if (phase === "Retry-After wait") return new Response(null, { status: 429, headers: { "Retry-After": "60" } })
       return new Promise<Response>((_resolve, reject) => {
         lookupSignal?.addEventListener("abort", () => reject(lookupSignal!.reason), { once: true })
       })
@@ -1845,7 +1844,6 @@ it.each(["execute", "saved confirmation"].flatMap(action => ["read", "Retry-Afte
   confirming = true
   const pending = action === "execute" ? execute() : service.saved(tenant, page.runId, "reconcile")
   await lookup
-  if (phase === "Retry-After wait") await vi.waitFor(() => expect(JSON.parse(env.data.get(`restore.directory.coordinator.${tenant}`)!).deadlines[source]).toBeGreaterThan(Date.now()))
   expect(lookupSignal).toBeDefined()
   expect(await service.cancel(tenant, page.runId)).toEqual({ cancelled: true })
   expect(await pending).toMatchObject({ outcomes: [{ state: "uncertain" }] })
@@ -1853,13 +1851,118 @@ it.each(["execute", "saved confirmation"].flatMap(action => ["read", "Retry-Afte
   expect(env.writes).toEqual(["POST users"])
   const history = JSON.parse(env.data.get(`restore.directory.${tenant}.${page.runId}.batch.0.restore.guarded.${tenant}`)!)
   expect(history.runs[page.runId].entries[0].state).toBe("uncertain")
-  if (phase === "Retry-After wait") {
-    const deadline = history.runs[page.runId].entries[0].retryAt
-    expect(deadline).toBeGreaterThan(Date.now())
-    expect(await env.service().saved(tenant, page.runId, "reconcile")).toMatchObject({ outcomes: [{ state: "uncertain", retryAt: deadline }] })
-  } else {
-    confirming = false
-    expect(await env.service().saved(tenant, page.runId, "reconcile")).toMatchObject({ outcomes: [{ state: "applied", targetId: target }] })
-  }
+  confirming = false
+  expect(await env.service().saved(tenant, page.runId, "reconcile")).toMatchObject({ outcomes: [{ state: "applied", targetId: target }] })
   expect(env.writes).toEqual(["POST users"])
+})
+
+
+it.each(["refusal", "unsent marker"].flatMap(failure => ["resume", "reconcile", "discard"].map(action => ({ failure, action }))))("retains a known $failure through journal failure before $action and allows discard", async ({ failure, action }) => {
+  const env = world(0, true), service = env.service()
+  const page = await service.prepare(tenant, env.request, options, env.read), original = env.fetcher.getMockImplementation()!
+  const request = { ...env.request, runId: page.runId }, approvals = Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals]))
+  const journalKey = `restore.directory.${tenant}.${page.runId}.batch.0.restore.guarded.${tenant}`
+  let unavailable = false, posts = 0
+  env.fetcher.mockImplementation((input, init) => {
+    if (init?.method === "POST") { posts++; unavailable = true; return Promise.resolve(new Response(null, { status: 403 })) }
+    return original(input, init)
+  })
+  const set = env.store.set
+  const spy = vi.spyOn(env.store, "set").mockImplementation((key, value) => {
+    if (key === journalKey && failure === "unsent marker" && value.includes('"state":"uncertain"')) {
+      set(key, value) // The rename succeeded before directory sync failed.
+      unavailable = true
+      throw new Error("Send marker directory sync failed")
+    }
+    if (key === journalKey && unavailable) throw new Error("Journal storage unavailable")
+    set(key, value)
+  })
+  try {
+    await expect(service.execute(tenant, request, page.fingerprint, approvals)).rejects.toBeInstanceOf(RestorePersistenceError)
+    expect(posts).toBe(failure === "refusal" ? 1 : 0)
+    const marker = JSON.parse(env.data.get(journalKey)!).runs[page.runId].entries[0]
+    expect(marker).toMatchObject({ state: "uncertain", attempt: 1, step: { key: page.rows[0]!.key } })
+    if (action === "resume") await expect(service.resume(tenant, request)).rejects.toBeInstanceOf(RestorePersistenceError)
+    else await expect(service.saved(tenant, page.runId, action as "reconcile" | "discard")).rejects.toBeInstanceOf(RestorePersistenceError)
+    unavailable = false
+    spy.mockRestore()
+    if (action === "resume") expect(await service.resume(tenant, request)).toMatchObject({ canDiscard: true, unresolved: failure === "unsent marker" })
+    else if (action === "reconcile") expect(await service.saved(tenant, page.runId, "reconcile")).toMatchObject({ canDiscard: true, failed: failure === "refusal" ? 1 : 0, outcomes: [{ state: failure === "refusal" ? "failed" : "captured" }] })
+    if (action === "discard") expect(await service.saved(tenant, page.runId, "discard")).toMatchObject({ discarded: true })
+    const recovered = JSON.parse(env.data.get(journalKey)!).runs[page.runId].entries[0]
+    expect(recovered).toMatchObject({ state: failure === "refusal" ? "failed" : "captured", attempt: 1, step: { key: marker.step.key } })
+    expect(await service.saved(tenant, page.runId, "discard")).toMatchObject({ discarded: true })
+    await expect(service.execute(tenant, request, page.fingerprint, approvals)).rejects.toThrow("discarded")
+    expect(posts).toBe(failure === "refusal" ? 1 : 0)
+  } finally { spy.mockRestore() }
+})
+
+it("reports saved failure totals when confirmation returns during Retry-After", async () => {
+  const env = world(2), service = env.service(), original = env.fetcher.getMockImplementation()!
+  const page = await service.prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read)
+  let posts = 0
+  env.fetcher.mockImplementation((input, init) => init?.method === "POST" ? Promise.resolve(new Response(null, { status: ++posts === 1 ? 403 : 429, headers: { "Retry-After": "120" } })) : original(input, init))
+  const result = await service.execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])))
+  expect(result).toMatchObject({ failed: 1, outcomes: [{ state: "failed" }, { state: "deferred" }] })
+  const reads = env.fetcher.mock.calls.length
+  const confirmed = await service.saved(tenant, page.runId, "reconcile")
+  expect(confirmed).toMatchObject({ status: "partial", failed: 1, outcomes: [{ state: "failed" }, { state: "deferred", retryAt: result.outcomes[1]!.retryAt }] })
+  expect(env.fetcher.mock.calls).toHaveLength(reads)
+  expect(posts).toBe(2)
+})
+
+it("deletes the create journal reference only after confirmed mapping publication recovers", async () => {
+  const env = world(0, true), service = env.service(), page = await service.prepare(tenant, env.request, options, env.read)
+  const journalKey = `restore.directory.create-journal.${tenant}.Groups.${resource}`, set = env.store.set
+  const publication = vi.spyOn(env.store, "set").mockImplementation((key, value) => {
+    if (key.startsWith("restore.directory.mapping.")) throw new Error("Mapping publication unavailable")
+    set(key, value)
+  })
+  try {
+    await expect(service.execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])))).rejects.toThrow("Mapping publication unavailable")
+    expect(env.data.get(journalKey)).toBe(`restore.directory.${tenant}.${page.runId}.batch.0.`)
+    expect(directoryMappedId(env.store, tenant, "Groups", resource)).toBeUndefined()
+    publication.mockRestore()
+    await service.prepare(tenant, env.request, options, env.read)
+    expect(directoryMappedId(env.store, tenant, "Groups", resource)).toBe(id(900))
+    expect(env.data.has(journalKey)).toBe(false)
+    expect(env.writes).toEqual(["POST groups"])
+  } finally { publication.mockRestore() }
+})
+
+it.each(["execute", "saved confirmation"])("defers uncertain user-create confirmation via %s on one raw throttled read without waiting", async action => {
+  const env = world(), service = env.service(), original = env.fetcher.getMockImplementation()!, source = id(100), target = id(900)
+  const request: IdentityRestoreRequest = { origin: "restore", path: `backup/Users/${source}.json`, snapshot: { id: source, userType: "Member", displayName: "Saved user", userPrincipalName: "saved@example.test", mailNickname: "saved", accountEnabled: false } }
+  let confirming = false, throttled = true, posts = 0, lookups = 0
+  env.fetcher.mockImplementation(async (input, init) => {
+    const path = new URL(String(input)).pathname
+    if (path === "/v1.0/users" && init?.method === "POST") { posts++; throw new Error("Create response lost") }
+    if (path === `/v1.0/users/${source}`) return new Response(null, { status: 404 })
+    if (path === "/v1.0/users") {
+      if (!confirming) return Response.json({ value: [] })
+      lookups++
+      return throttled ? new Response(null, { status: 429, headers: { "Retry-After": "60" } }) : Response.json({ value: [{ ...request.snapshot, id: target }] })
+    }
+    return original(input, init)
+  })
+  const page = await service.prepare(tenant, request, options, env.read)
+  const execute = () => service.execute(tenant, { ...request, runId: page.runId }, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])))
+  expect(await execute()).toMatchObject({ outcomes: [{ state: "uncertain" }], canDiscard: false })
+  confirming = true
+  vi.useFakeTimers()
+  try {
+    const deadline = Date.now() + 60_000
+    const result = await (action === "execute" ? execute() : service.saved(tenant, page.runId, "reconcile"))
+    expect(result).toMatchObject({ outcomes: [{ state: "uncertain", retryAt: deadline }], canDiscard: false })
+    expect(lookups).toBe(1); expect(posts).toBe(1)
+    expect(vi.getTimerCount()).toBe(0)
+    expect(await service.cancel(tenant, page.runId)).toEqual({ cancelled: false })
+    await expect(service.saved(tenant, page.runId, "discard")).rejects.toThrow("Confirm the uncertain result")
+    expect(await env.service().saved(tenant, page.runId, "reconcile")).toMatchObject({ outcomes: [{ state: "uncertain", retryAt: deadline }] })
+    expect(lookups).toBe(1)
+    throttled = false
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(await service.saved(tenant, page.runId, "reconcile")).toMatchObject({ outcomes: [{ state: "applied", targetId: target }], canDiscard: true })
+    expect(lookups).toBe(2); expect(posts).toBe(1)
+  } finally { vi.useRealTimers() }
 })

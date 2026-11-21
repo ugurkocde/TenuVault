@@ -252,7 +252,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
       return deleted ? { action: "recycle", current: { ...deleted, restored: false } } : { action: "create", current: null }
     },
     findCreated: async (step, sent, readSignal) => {
-      if (readSignal && readSignal !== signal) return directory9aIO(token, actor, safety, fetchImpl, scan, wait, readSignal, retryReads, onReadThrottled).findCreated(step, sent, readSignal)
+      if (retryReads || (readSignal && readSignal !== signal)) return directory9aIO(token, actor, safety, fetchImpl, scan, wait, readSignal ?? signal, false, onReadThrottled).findCreated(step, sent, readSignal)
       if (step.directory?.action === "license") return []
       return (await find(step)).map(item => step.directory?.action === "invite" ? { id: item.id!, ...sent } : item)
     },

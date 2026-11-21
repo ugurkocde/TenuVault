@@ -7,7 +7,7 @@ import type { BackupTenant } from "./types"
 import type { ReplacedReference } from "../../../shared/intune/restore-references"
 import type { DirectoryReview } from "../../../main/restore/directory-9a"
 
-interface Review { runId: string; fingerprint: string; more: boolean; selection?: string[]; rows: Array<{ key: string; review: DirectoryReview }> }
+interface Review { runId: string; fingerprint: string; more: boolean; unresolved?: boolean; selection?: string[]; rows: Array<{ key: string; review: DirectoryReview }> }
 const approvalLabel: Record<string, string> = { "directory-item": "Approve this individual change", "privileged-relationship": "Approve this privileged relationship", "security-response": "Approve undoing the apparent security response", "recycle-relationships": "Approve recovered relationships and account state", "exact-group": "Approve this removal for this group" }
 /** A bounded page of explicit approvals, outside restore all and row selection. */
 export function DirectoryRestore({ tenant, backupId = "", path = "" }: { tenant: BackupTenant; backupId?: string; path?: string }) {
@@ -35,6 +35,7 @@ export function DirectoryRestore({ tenant, backupId = "", path = "" }: { tenant:
     const run = action === "cancel" ? generation.current : ++generation.current
     const pageId = action === "resume" ? resumeId : action === "cancel" ? activeRestore : action === "reconcile" || action === "discard" ? (review?.runId ?? resumeId) : review?.runId
     if (action !== "cancel") { setBusy(true); setActiveRestore(action === "restore" ? pageId ?? null : null) }
+    if (action === "restore") { setOutcomes([]); setReview(previous => previous && { ...previous, unresolved: true }) }
     setMessage("")
     try {
       const response = await fetch("/api/restore-directory", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...tenant.credentials, storageAccountName: tenant.storageAccountName, backupId, path, action: action === "next" ? "preview" : action, ...(action === "next" ? { previousRunId: review?.runId } : {}), stage, exactMembers, exactOwners, approvals, runId: pageId, fingerprint: review?.fingerprint, mode: "replace", restoreType: "selective", selectedPolicies: [path] }) })
@@ -48,6 +49,7 @@ export function DirectoryRestore({ tenant, backupId = "", path = "" }: { tenant:
         return
       }
       setCanDiscard(data.canDiscard === true)
+      if (action === "restore") setReview(previous => previous && { ...previous, unresolved: (data.outcomes ?? []).some((row: { state: string }) => ["pending", "captured", "deferred", "uncertain"].includes(row.state)) })
       if (action === "reconcile" && data.rows) setReview(data)
       if (action === "preview" || action === "resume" || action === "next") { setReview(data); if (data.options) { setStage(data.options.stage); setExactMembers(data.options.exactMembers); setExactOwners(data.options.exactOwners) } setApprovals(action === "resume" ? Object.fromEntries((data.rows as Review["rows"]).filter(row => data.selection?.includes(row.key)).map(row => [row.key, row.review.approvals])) : {}); setOutcomes([]); setReferences([]); setMessage(data.rows.length ? "Review each row separately." : "No relationship differences remain in this page.") }
       else if (action === "cancel") setMessage(data.cancelled ? "Cancellation requested. In-flight results will be confirmed before continuing." : "No active restore was cancelled.")
@@ -65,6 +67,7 @@ export function DirectoryRestore({ tenant, backupId = "", path = "" }: { tenant:
   </div>
   const applications = ["Applications", "ServicePrincipals", "OAuth2PermissionGrants"].includes(path.split("/")[1]!)
   const selected = review?.rows.some(row => !row.review.blocker && row.review.approvals.every(kind => approvals[row.key]?.includes(kind)))
+  const unresolved = outcomes.length ? outcomes.some(row => ["pending", "captured", "deferred", "uncertain"].includes(row.state)) : review?.unresolved
   return <div className="px-4 pb-3 pl-11 text-sm" data-no-select>
     <Button size="sm" variant="outline" disabled={busy} aria-expanded={open} onClick={() => { setOpen(!open); invalidate() }}>Review directory restore</Button>
     {open && <div className="mt-2 space-y-3 rounded-lg border border-blue-200 bg-blue-50 p-3 text-gray-900">
@@ -88,7 +91,7 @@ export function DirectoryRestore({ tenant, backupId = "", path = "" }: { tenant:
           {row.changes.map(change => <div key={change.property} className="break-all"><strong>{change.property}</strong><p>Current: {JSON.stringify(change.before)}</p><p>Restore: {JSON.stringify(change.after)}</p></div>)}
           {row.blocker ? <p role="status">Blocked: {row.blocker}</p> : row.approvals.map(kind => <label key={kind} className="flex items-start gap-2"><input type="checkbox" disabled={busy} checked={approvals[key]?.includes(kind) ?? false} onChange={event => setApprovals(previous => ({ ...previous, [key]: event.target.checked ? [...(previous[key] ?? []), kind] : (previous[key] ?? []).filter(value => value !== kind) }))} />{approvalLabel[kind] ?? kind}</label>)}
         </div>)}</div>
-        {review.more && <div className="space-y-2"><p>More changes remain. Completed differences are omitted. Blocked rows do not prevent reviewing the next page.</p><Button size="sm" variant="outline" disabled={busy} onClick={() => void send("next")}>Preview next page</Button></div>}
+        {review.more && <div className="space-y-2"><p>{unresolved ? "Resolve or discard this saved page before previewing the next page. Unresolved changes keep their objects locked." : "More changes remain. Completed differences are omitted. Blocked rows do not prevent reviewing the next page."}</p><Button size="sm" variant="outline" disabled={busy || unresolved} onClick={() => void send("next")}>Preview next page</Button></div>}
         <div className="flex flex-wrap gap-2"><Button size="sm" disabled={busy || !selected} onClick={() => void send("restore")}>Execute approved changes or resume page</Button>{busy && activeRestore === review.runId && <Button size="sm" variant="outline" onClick={() => void send("cancel")}>Cancel directory restore</Button>}</div>
       </>}
       {resultRows}

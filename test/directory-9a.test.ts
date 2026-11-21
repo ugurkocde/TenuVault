@@ -391,3 +391,14 @@ it.each(["Users", "Groups"] as const)("never resends an unconfirmed %s 503 PATCH
   for (let restart = 0; restart < 4; restart++) expect(await executeGuardedRun(journal, run, io)).toMatchObject({ status: "partial", run: { entries: [{ state: "uncertain" }] } })
   expect(fetcher.mock.calls.filter(([, init]) => init?.method === "PATCH")).toHaveLength(1)
 })
+
+
+it("propagates one raw create lookup throttle without a signal or internal retry", async () => {
+  const step = stepFor("create", "Users")
+  step.desired = directoryPayload("Users", "create", user)
+  const fetcher = vi.fn(async () => new Response(null, { status: 429, headers: { "Retry-After": "1" } })), wait = vi.fn(async () => {})
+  const io = directory9aIO(token(), actor, refs, fetcher, undefined, wait)
+  await expect(io.findCreated(step, step.desired)).rejects.toMatchObject({ retryAt: expect.any(Number) })
+  expect(fetcher).toHaveBeenCalledTimes(1)
+  expect(wait).not.toHaveBeenCalled()
+})

@@ -323,3 +323,16 @@ it("uses the current run when the advisory publication journal is unavailable", 
   expect(await executeGuardedRun(env.journal, env.input, env.io)).toMatchObject({ status: "complete", run: { replacedReferences: [], entries: [{ state: "applied" }] } })
   expect(env.writes()).toBe(1)
 })
+
+
+it.each(["captured", "failed"] as const)("binds retained %s publication to its exact step and never replaces a later attempt", state => {
+  const env = setup(2), entry = env.input.entries[0]!
+  entry.state = state; entry.attempt = 1
+  const publish = env.journal.publication(env.input, entry)
+  entry.state = "uncertain"; entry.attempt = 2
+  const other = env.input.entries[1]!
+  other.state = "uncertain"; other.attempt = 1
+  env.journal.save(env.input)
+  publish()
+  expect(env.journal.load("tenant", "run")!.entries).toMatchObject([{ state: "uncertain", attempt: 2 }, { state: "uncertain", attempt: 1 }])
+})

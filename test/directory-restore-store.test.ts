@@ -6,6 +6,8 @@ import { join } from "node:path"
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto"
 import { afterEach, it, expect, vi } from "vitest"
 import { executeDirectoryBatches } from "../src/main/restore/directory-9a-batches"
+import { DirectoryPendingPublications } from "../src/main/restore/directory-pending-publications"
+import { directoryObjectState } from "../src/main/restore/directory-object-state"
 import { directory9aIO } from "../src/main/restore/directory-9a-io"
 import { approveDirectory } from "../src/main/restore/directory-9a"
 import { GuardedRunJournal, RestorePersistenceError, restoreFingerprint, type GuardedRun, type GuardedStep } from "../src/main/restore/guarded-run"
@@ -69,7 +71,7 @@ it("starts and atomically saves on win32 without opening directory handles", asy
   } finally { vi.restoreAllMocks(); rmSync(root, { recursive: true, force: true }) }
 })
 
-it.each(["file", "directory"])("retries a create without POST after EIO syncing the send marker %s", async failure => {
+it.each(["file", "directory", "directory and rollback"])("recovers a create without POST after EIO syncing the send marker %s", async failure => {
   const root = mkdtempSync(join(tmpdir(), "tv-directory-barrier-"))
   const actual = await vi.importActual<typeof import("node:fs")>("node:fs")
   const store = new DirectoryRestoreStore(root, { encrypt: text => Buffer.from(text), decrypt: bytes => bytes.toString() })
@@ -86,13 +88,17 @@ it.each(["file", "directory"])("retries a create without POST after EIO syncing 
     return new Response(null, { status: 404 })
   }, async () => [])
   for (const kind of (await io.review(step)).approvals) approveDirectory(step, run, kind)
-  let sendMarker = false
+  const pending = new DirectoryPendingPublications().forTenant(run.tenant)
+  io.persistConfirmed = (_step, save) => pending.retain(save)
+  let sendMarker = false, failedMarker = false
   const write = vi.spyOn(fs, "writeFileSync").mockImplementation((...args) => {
-    sendMarker = JSON.parse(String(args[1])).value.includes('"state":"uncertain"')
+    const record = JSON.parse(String(args[1]))
+    if (failure === "directory and rollback" && failedMarker && record.key.includes("restore.guarded.")) throw new Error("Rollback storage unavailable")
+    sendMarker = record.value.includes('"state":"uncertain"')
     return actual.writeFileSync(...args)
   })
   const sync = vi.spyOn(fs, "fsyncSync").mockImplementation(handle => {
-    if (sendMarker && fstatSync(handle).isDirectory() === (failure === "directory")) throw Object.assign(new Error("Send marker sync failed"), { code: "EIO" })
+    if (sendMarker && fstatSync(handle).isDirectory() === (failure !== "file")) { failedMarker = true; throw Object.assign(new Error("Send marker sync failed"), { code: "EIO" }) }
     actual.fsyncSync(handle)
   })
   const source = { fingerprint: "source", page: async () => ({ entries: run.entries, next: null }) }
@@ -101,9 +107,21 @@ it.each(["file", "directory"])("retries a create without POST after EIO syncing 
   try {
     await expect(executeDirectoryBatches(store, run, source, io)).rejects.toBeInstanceOf(RestorePersistenceError)
     expect(posts).not.toHaveBeenCalled()
-    expect(journal.load(run.tenant, run.id)!.entries[0]!.state).toBe("captured")
+    expect(journal.load(run.tenant, run.id)!.entries[0]!).toMatchObject({ state: failure === "directory and rollback" ? "uncertain" : "captured", attempt: 1 })
     expect(readdirSync(root).some(file => file.endsWith(".tmp"))).toBe(false)
     sync.mockRestore(); write.mockRestore()
+    pending.flush()
+    expect(journal.load(run.tenant, run.id)!.entries[0]!).toMatchObject({ state: "captured", attempt: 1 })
+    if (failure === "directory and rollback") {
+      expect(await executeDirectoryBatches(store, run, source, io, undefined, 20, true)).toMatchObject({ status: "partial" })
+      expect(journal.load(run.tenant, run.id)!.entries[0]!.state).toBe("captured")
+      const objects = directoryObjectState(store, run.tenant, run.id)
+      objects.release(true)
+      expect(objects.discarded()).toBe(true)
+      await expect(executeDirectoryBatches(store, run, source, io)).rejects.toThrow("discarded")
+      expect(posts).not.toHaveBeenCalled()
+      return
+    }
     expect(await executeDirectoryBatches(store, run, source, io)).toMatchObject({ status: "complete" })
     expect(posts).toHaveBeenCalledTimes(1)
   } finally { vi.restoreAllMocks(); rmSync(root, { recursive: true, force: true }) }

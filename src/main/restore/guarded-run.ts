@@ -189,7 +189,7 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
     for (const mapping of journal.mappings(run.tenant)) rememberMapping(run.mappings, mapping)
     if (run.actor.tenantId.toLowerCase() !== run.tenant.toLowerCase()) throw new RestoreSafetyError("The restore belongs to another tenant.")
     journal.save(run)
-    // A confirmed result must never enter safety-failure handling. Retry its atomic
+    // A known outcome must never enter safety-failure handling. Retry its atomic
     // publication once; if storage stays unavailable the durable send marker remains.
     const saveConfirmed = (step: GuardedStep) => {
       const publish = step.directory ? journal.publication(run, run.entries.find(entry => entry.step.key === step.key)!) : () => journal.save(run)
@@ -293,7 +293,7 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
                 entry.state = "captured"; entry.retryAt = retryAt
                 // Rename may have published the marker before directory sync failed.
                 // No request was sent, so restore the resumable pre-send state as well.
-                try { journal.save(run) } catch { /* Preserve the original persistence failure. */ }
+                try { saveConfirmed(step) } catch { /* Retain the known unsent outcome and preserve the original failure. */ }
               }
               throw error
             }
@@ -312,7 +312,9 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
           } else if (error instanceof RestoreWriteRefusedError) {
             entry.state = "failed"; entry.reason = error.message
           } else entry.reason = "The write did not return a confirmed result. It must be read back before any retry."
-          journal.save(run); continue
+          if (step.directory && ["captured", "deferred", "failed", "failed-before-send"].includes(entry.state)) saveConfirmed(step)
+          else journal.save(run)
+          continue
         }
         const id = result.id ?? entry.targetId
         if (!isGraphId(id)) { entry.reason = "The write did not return an object ID. It must be read back before continuing."; journal.save(run); continue }
