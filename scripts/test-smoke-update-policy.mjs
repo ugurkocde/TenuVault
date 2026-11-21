@@ -325,24 +325,24 @@ try {
     }
   })
 
-  await check("--clean waits while the app of a killed smoke run still runs", async () => {
+  await check("--clean leaves the policy while the app of a killed smoke run still runs", async () => {
     const child = await holder()
     await kill(child)
     assert(managed(), "the killed holder took the policy away, so the test proves nothing")
-    // Stands in for the packaged app the killed run started: same profile folder argument.
-    const app = spawn(process.execPath, ["-e", "setTimeout(() => {}, 3000)", "--", `--user-data-dir=${join(work, "tenuvault-smoke-app")}`], { stdio: "ignore" })
+    // Stands in for the packaged app the killed run started: same kind of profile folder, with a
+    // space in its path as a temp folder can have. It stays up until --clean has refused.
+    const app = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", "--", `--user-data-dir=${join(work, "with space", "tenuvault-smoke-app")}`], { stdio: "ignore" })
     holders.add(app)
     app.on("exit", () => holders.delete(app))
-    const appExited = new Promise((resolve) => app.once("exit", resolve))
-    const cleaning = spawn(process.execPath, [SCRIPT, "--clean"], { stdio: ["ignore", "pipe", "pipe"] })
-    let output = ""
-    cleaning.stdout.on("data", (data) => (output += data))
-    cleaning.stderr.on("data", (data) => (output += data))
-    const cleaned = new Promise((resolve) => cleaning.once("exit", resolve))
-    await new Promise((resolve) => setTimeout(resolve, 1000))
-    assert(managed(), "--clean removed the policy while the app was still running")
-    await appExited
-    assert((await cleaned) === 0, `--clean failed: ${output}`)
+    try {
+      const refused = run(process.execPath, [SCRIPT, "--clean"])
+      assert(refused.status === 1 && refused.stderr.includes(String(app.pid)), `--clean did not refuse naming the app: ${refused.status} ${refused.stderr || refused.stdout}`)
+      assert(managed(), "--clean removed the policy while the app was still running")
+    } finally {
+      await kill(app)
+    }
+    const cleaned = run(process.execPath, [SCRIPT, "--clean"])
+    assert(cleaned.status === 0, `--clean failed after the app quit: ${cleaned.stderr || cleaned.stdout}`)
     assert(snapshot() === null, "--clean left the policy after the app quit")
   })
 

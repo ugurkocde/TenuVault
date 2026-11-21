@@ -11,7 +11,7 @@
  * renderer-to-main API bridge and the per tenant license gate. No tenant is signed in, so
  * the licensing service is never called. Screenshots are written to screenshot-dir.
  */
-import { spawn } from "node:child_process"
+import { spawn, spawnSync } from "node:child_process"
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { createRequire } from "node:module"
 import { tmpdir } from "node:os"
@@ -34,8 +34,36 @@ const packagedApp = process.env.TENUVAULT_SMOKE_APP
 let updatePolicy = null
 let app = null
 process.on("exit", () => {
-  if (updatePolicy && !updatePolicy.restore()) process.exitCode = 1
+  if (!updatePolicy) return
+  // The app reads the policy as it starts, so the policy goes only once the app is gone.
+  if (!appStopped()) {
+    console.warn("The app under test did not quit, so its update policy stays. The next smoke run or `node scripts/smoke-update-policy.mjs --clean` removes it once the app has quit.")
+    process.exitCode = 1
+    return
+  }
+  if (!updatePolicy.restore()) process.exitCode = 1
 })
+
+/** Stops the app if it still runs and waits until it is gone, synchronously (for the exit handler). */
+function appStopped() {
+  if (!app?.pid || app.exitCode !== null || app.signalCode !== null) return true
+  // An exited child is reaped only by the event loop, which no longer runs here: ps tells a
+  // zombie (state Z, finished) from a running process. Windows has no zombies.
+  const running = () => {
+    if (process.platform === "win32") {
+      try { process.kill(app.pid, 0); return true } catch { return false }
+    }
+    const state = spawnSync("/bin/ps", ["-o", "stat=", "-p", String(app.pid)], { encoding: "utf8" }).stdout?.trim() ?? ""
+    return state !== "" && !state.startsWith("Z")
+  }
+  const pause = () => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200)
+  for (const signal of ["SIGTERM", "SIGKILL"]) {
+    if (!running()) return true
+    try { app.kill(signal) } catch {}
+    for (let i = 0; i < 50 && running(); i++) pause()
+  }
+  return !running()
+}
 for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.once(signal, () => { app?.kill(); process.exit(1) })
 updatePolicy = packagedApp ? await disableAutoUpdate() : null
 if (updatePolicy?.error) {

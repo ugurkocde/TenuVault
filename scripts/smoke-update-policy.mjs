@@ -80,7 +80,7 @@ function waitForWriters(list, describe) {
 
 /**
  * The app of a killed smoke run can outlive it, and it reads the policy as it starts. A smoke run
- * starts it with a profile folder named tenuvault-smoke-..., so recovery waits until no such app
+ * starts it with a profile folder named tenuvault-smoke-... (the path may contain spaces), so recovery waits until no such app
  * runs before it removes anything: otherwise the app could start without the policy and update the
  * build under test. Returns why it cannot go on, or null.
  */
@@ -158,7 +158,7 @@ function macosSmokeApps() {
   if (listed.status !== 0 || listed.stderr.trim() || !listed.stdout.trim()) return null
   return listed.stdout.split("\n").flatMap((line) => {
     const [, pid, stat = "", command = ""] = /^\s*(\d+)\s+(\S+)\s+(.*)$/.exec(line) ?? []
-    return pid && !stat.startsWith("Z") && /--user-data-dir=\S*tenuvault-smoke-/.test(command) ? [pid] : []
+    return pid && !stat.startsWith("Z") && /--user-data-dir=.*tenuvault-smoke-/.test(command) ? [pid] : []
   })
 }
 
