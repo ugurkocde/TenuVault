@@ -49,12 +49,22 @@ function appStopped() {
   if (!app?.pid || app.exitCode !== null || app.signalCode !== null) return true
   // An exited child is reaped only by the event loop, which no longer runs here: ps tells a
   // zombie (state Z, finished) from a running process. Windows has no zombies.
+  // Gone only when confirmed: an unknown state (a probe that failed) counts as still running.
   const running = () => {
     if (process.platform === "win32") {
-      try { process.kill(app.pid, 0); return true } catch { return false }
+      try {
+        process.kill(app.pid, 0)
+        return true
+      } catch (error) {
+        return error.code !== "ESRCH"
+      }
     }
-    const state = spawnSync("/bin/ps", ["-o", "stat=", "-p", String(app.pid)], { encoding: "utf8" }).stdout?.trim() ?? ""
-    return state !== "" && !state.startsWith("Z")
+    // ps exits 1 with no output when no process has the ID; anything else is a failed probe.
+    const probe = spawnSync("/bin/ps", ["-o", "stat=", "-p", String(app.pid)], { encoding: "utf8", timeout: 5000 })
+    const state = probe.stdout?.trim() ?? ""
+    if (probe.error || probe.signal) return true
+    if (probe.status === 1 && state === "") return false
+    return probe.status !== 0 || !state.startsWith("Z")
   }
   const pause = () => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200)
   for (const signal of ["SIGTERM", "SIGKILL"]) {

@@ -168,6 +168,7 @@ function holder() {
 }
 
 async function kill(child) {
+  if (child.exitCode !== null || child.signalCode !== null) return
   const exited = new Promise((resolve) => child.once("exit", resolve))
   child.kill("SIGKILL")
   await exited
@@ -334,16 +335,25 @@ try {
     const app = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", "--", `--user-data-dir=${join(work, "with space", "tenuvault-smoke-app")}`], { stdio: "ignore" })
     holders.add(app)
     app.on("exit", () => holders.delete(app))
+    // An unrelated process whose other argument mentions tenuvault-smoke- must not count.
+    const decoy = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", "--", `--user-data-dir=${join(work, "chrome")}`, `--log-file=${join(work, "tenuvault-smoke-debug.log")}`], { stdio: "ignore" })
+    holders.add(decoy)
+    decoy.on("exit", () => holders.delete(decoy))
     try {
       const refused = run(process.execPath, [SCRIPT, "--clean"])
       assert(refused.status === 1 && refused.stderr.includes(String(app.pid)), `--clean did not refuse naming the app: ${refused.status} ${refused.stderr || refused.stdout}`)
+      assert(!refused.stderr.includes(String(decoy.pid)), "--clean counted an unrelated process as a smoke app")
       assert(managed(), "--clean removed the policy while the app was still running")
     } finally {
       await kill(app)
     }
-    const cleaned = run(process.execPath, [SCRIPT, "--clean"])
-    assert(cleaned.status === 0, `--clean failed after the app quit: ${cleaned.stderr || cleaned.stdout}`)
-    assert(snapshot() === null, "--clean left the policy after the app quit")
+    try {
+      const cleaned = run(process.execPath, [SCRIPT, "--clean"])
+      assert(cleaned.status === 0, `--clean failed after the app quit, with only the unrelated process left: ${cleaned.stderr || cleaned.stdout}`)
+      assert(snapshot() === null, "--clean left the policy after the app quit")
+    } finally {
+      await kill(decoy)
+    }
   })
 
   await check("--clean refuses while a run holds the policy", async () => {

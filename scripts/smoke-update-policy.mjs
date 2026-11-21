@@ -152,13 +152,19 @@ function macosWriters() {
   })
 }
 
+/**
+ * The --user-data-dir argument of an app a smoke run started. The path may contain spaces, but the
+ * match stops at the next argument, so a later --log-file=...tenuvault-smoke-... does not count.
+ */
+const SMOKE_PROFILE = /--user-data-dir=(?:(?! --).)*[\\/]tenuvault-smoke-[^\\/\s]*(?: |$)/
+
 /** Process IDs of apps a smoke run started, or null when ps fails. */
 function macosSmokeApps() {
   const listed = run("/bin/ps", ["-axww", "-o", "pid=,stat=,command="], { timeout: 5000 })
   if (listed.status !== 0 || listed.stderr.trim() || !listed.stdout.trim()) return null
   return listed.stdout.split("\n").flatMap((line) => {
     const [, pid, stat = "", command = ""] = /^\s*(\d+)\s+(\S+)\s+(.*)$/.exec(line) ?? []
-    return pid && !stat.startsWith("Z") && /--user-data-dir=.*tenuvault-smoke-/.test(command) ? [pid] : []
+    return pid && !stat.startsWith("Z") && SMOKE_PROFILE.test(command) ? [pid] : []
   })
 }
 
@@ -305,7 +311,8 @@ Remove-ItemProperty -LiteralPath ${quote(HKCU)} -Name '${MARK}'`)
 
 /** Process IDs of apps a smoke run started, or null when the listing fails. */
 function windowsSmokeApps() {
-  const result = powershell(`@(Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -like '*--user-data-dir=*tenuvault-smoke-*' -and $_.CommandLine -notlike '*Get-CimInstance*' } | ForEach-Object { $_.ProcessId }) -join ','`)
+  // The same match as SMOKE_PROFILE, and quoted paths as Windows command lines carry them.
+  const result = powershell(`@(Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -match '--user-data-dir=(?:(?! --).)*[\\\\/]tenuvault-smoke-[^\\\\/\\s"]*(?:[ "]|$)' -and $_.CommandLine -notlike '*Get-CimInstance*' } | ForEach-Object { $_.ProcessId }) -join ','`)
   const ids = result.stdout?.trim() ?? ""
   return result.status === 0 && /^(\d+(,\d+)*)?$/.test(ids) ? ids.split(",").filter(Boolean) : null
 }
