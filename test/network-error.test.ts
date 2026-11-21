@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { networkFailure, ProxyAuthRequiredError, rejectProxyAuthResponses, withNetworkErrors } from "../src/main/api/network-error"
+import { isProxyAuthResponse, networkFailure, ProxyAuthRequiredError, rejectProxyAuthResponses, withNetworkErrors } from "../src/main/api/network-error"
 
 const failing = (error: unknown): typeof fetch => async () => { throw error }
 
@@ -63,4 +63,16 @@ describe("proxy authentication", () => {
     const response = new Response("denied", { status: 401 })
     expect(await rejectProxyAuthResponses(async () => response)("https://graph.microsoft.com/")).toBe(response)
   })
+})
+
+// Transport hints cannot prove that a Graph write stayed on this device.
+it("recognizes only explicit proxy responses through network wrappers as known unsent", async () => {
+  const response = withNetworkErrors(rejectProxyAuthResponses(async () => new Response(null, { status: 407 })))
+  const failure = await response("https://graph.microsoft.com/v1.0/groups").catch(error => error)
+  expect(isProxyAuthResponse(failure)).toBe(true)
+  expect(isProxyAuthResponse(new ProxyAuthRequiredError())).toBe(true)
+  for (const error of [new Error("HTTP 407"), new Error("net::ERR_PROXY_CONNECTION_FAILED"), new Error("net::ERR_PROXY_AUTH_REQUESTED"), new DOMException("Timeout", "TimeoutError"), new TypeError("fetch failed")]) {
+    expect(isProxyAuthResponse(error)).toBe(false)
+    expect(isProxyAuthResponse(await withNetworkErrors(async () => { throw error })("https://graph.microsoft.com/").catch(cause => cause))).toBe(false)
+  }
 })

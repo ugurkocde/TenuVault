@@ -581,3 +581,30 @@ it("resets a saved-only input's discard refusal when its page ID changes", async
   await click("Discard entered page")
   expect(JSON.parse(String(fetcher.mock.calls.at(-1)![1]?.body))).toMatchObject({ action: "discard", runId: "page-B" })
 })
+
+
+it("shows saved applied, failed, deferred and uncertain outcomes with retry times immediately on Resume", async () => {
+  const retryAt = Date.now() + 120_000
+  const outcomes = [
+    { key: "applied", state: "applied", targetId: "saved-target" },
+    { key: "failed", state: "failed", reason: "Saved refusal" },
+    { key: "deferred", state: "deferred", retryAt, reason: "Saved throttle" },
+    { key: "uncertain", state: "uncertain", retryAt, reason: "Saved unanswered write" },
+  ]
+  const rows = outcomes.map(outcome => ({ ...page.rows[0]!, key: outcome.key }))
+  const fetcher = vi.fn(async (_input: unknown, init?: RequestInit) => Response.json(JSON.parse(String(init?.body)).action === "resume" ? { ...page, rows, selection: outcomes.map(row => row.key), unresolved: true, outcomes } : page))
+  vi.stubGlobal("fetch", fetcher)
+  root = createRoot(document.body.appendChild(document.createElement("div")))
+  await act(async () => root.render(createElement(DirectoryRestore, props)))
+  await click("Review directory restore"); await click("Preview directory changes")
+  await click("Resume saved page")
+  const results = document.querySelector('[aria-label="Directory page results"]')!
+  expect(results.textContent).toContain("applied. Target ID: saved-target.")
+  expect(results.textContent).toContain("failed. Saved refusal")
+  expect(results.textContent).toContain(`Throttled by Microsoft Graph. Earliest retry: ${new Date(retryAt).toLocaleString()}. Saved throttle`)
+  expect(results.textContent).toContain(`The result is being confirmed. Earliest retry: ${new Date(retryAt).toLocaleString()}. Saved unanswered write`)
+  expect(button("Preview next page").disabled).toBe(true)
+  expect(fetcher.mock.calls.map(([, init]) => JSON.parse(String(init?.body)).action)).toEqual(["preview", "resume"])
+  await click("Preview directory changes")
+  expect(document.querySelector('[aria-label="Directory page results"]')).toBeNull()
+})

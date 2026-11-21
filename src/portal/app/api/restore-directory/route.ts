@@ -12,7 +12,7 @@ async function token(tenantId: string, appId: string, clientSecret: string, scop
   return (await response.json()).access_token as string
 }
 function outcomeResponse(result: Awaited<ReturnType<typeof directoryRestoreRequest>>) {
-  if (!("outcomes" in result)) return NextResponse.json(result)
+  if (!("status" in result)) return NextResponse.json(result)
   const restoredCount = result.outcomes.filter(row => row.state === "applied").length
   const partialCount = result.outcomes.filter(row => ["pending", "captured", "deferred", "uncertain"].includes(row.state)).length
   return NextResponse.json({ ...result, success: result.status === "complete", partial: result.status === "partial", details: { restoredCount, partialCount, failedCount: result.failed, duration: 0, results: [] } })

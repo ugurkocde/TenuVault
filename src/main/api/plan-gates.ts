@@ -43,8 +43,6 @@ export function requiredFeatures(pathname: string, body: Record<string, unknown>
       if (body.assignments === true) features.push("restoreAssignments")
       return features
     }
-    case "/api/restore-directory":
-      return body.action === "cancel" || body.action === "discard" ? [] : ["replaceRestore"]
     case "/api/restore-configuration":
       return body.operation === "update" ? ["replaceRestore"] : []
     case "/api/restore-validate":

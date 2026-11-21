@@ -339,8 +339,8 @@ export class DirectoryRestoreService {
     } finally { operation.finish() }
   }
   private view(page: DirectoryPage) {
-    const entries = this.history(page).flatMap(({ run }) => run.entries)
-    return { ...this.pageState(page, entries), canDiscard: !directoryObjectState(this.store, page.run.tenant, page.run.id).discarded() && !entries.some(entry => entry.state === "uncertain"), runId: page.run.id, selection: page.selection, fingerprint: restoreFingerprint({ source: page.run.source!, rows: page.rows as unknown as Item["rows"], options: page.options as unknown as Item, ...(page.inventory?.principalMappings ? { principalMappings: page.inventory.principalMappings.fingerprint } : {}) }), rows: page.rows, more: page.more, options: page.options }
+    const runs = this.history(page), entries = runs.flatMap(({ run }) => run.entries)
+    return { outcomes: this.outcomes(page, runs), ...this.pageState(page, entries), canDiscard: !directoryObjectState(this.store, page.run.tenant, page.run.id).discarded() && !entries.some(entry => entry.state === "uncertain"), runId: page.run.id, selection: page.selection, fingerprint: restoreFingerprint({ source: page.run.source!, rows: page.rows as unknown as Item["rows"], options: page.options as unknown as Item, ...(page.inventory?.principalMappings ? { principalMappings: page.inventory.principalMappings.fingerprint } : {}) }), rows: page.rows, more: page.more, options: page.options }
   }
   private pageState(page: DirectoryPage, entries: GuardedRun["entries"]) {
     const discarded = directoryObjectState(this.store, page.run.tenant, page.run.id).discarded()
@@ -441,11 +441,15 @@ export class DirectoryRestoreService {
     }
     return runs
   }
-  private results(page: DirectoryPage, result: { status: "complete" | "partial" | "nothing-sent"; batches: number; failed: number }, runs = this.history(page)) {
+  private outcomes(page: DirectoryPage, runs = this.history(page)) {
     const outcomes = new Map(runs.flatMap(({ run }) => run.entries.map(entry => [entry.step.key, { key: entry.step.key, state: entry.state, reason: entry.reason, targetId: entry.targetId, retryAt: entry.retryAt }] as const)))
     for (const entry of page.run.entries) if (page.selection?.includes(entry.step.key) && !outcomes.has(entry.step.key)) outcomes.set(entry.step.key, { key: entry.step.key, state: "pending", reason: undefined, targetId: undefined, retryAt: undefined })
-    return { ...result, ...this.pageState(page, runs.flatMap(({ run }) => run.entries)), failed: [...outcomes.values()].filter(entry => ["blocked", "failed", "failed-before-send"].includes(entry.state)).length, canDiscard: !runs.some(({ run }) => run.entries.some(entry => entry.state === "uncertain")) && !directoryObjectState(this.store, page.run.tenant, page.run.id).discarded(),
-      outcomes: [...outcomes.values()],
+    return [...outcomes.values()]
+  }
+  private results(page: DirectoryPage, result: { status: "complete" | "partial" | "nothing-sent"; batches: number; failed: number }, runs = this.history(page)) {
+    const outcomes = this.outcomes(page, runs)
+    return { ...result, ...this.pageState(page, runs.flatMap(({ run }) => run.entries)), failed: outcomes.filter(entry => ["blocked", "failed", "failed-before-send"].includes(entry.state)).length, canDiscard: !runs.some(({ run }) => run.entries.some(entry => entry.state === "uncertain")) && !directoryObjectState(this.store, page.run.tenant, page.run.id).discarded(),
+      outcomes,
       replacedReferences: runs.flatMap(({ run }) => run.replacedReferences ?? []), warnings: [...new Set(runs.flatMap(({ run }) => run.referenceWarning ? [run.referenceWarning] : []))] }
   }
   /** Saved-page actions trust only durable identity and journal data, never renderer snapshots. */

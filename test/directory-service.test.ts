@@ -1,3 +1,4 @@
+import { rejectProxyAuthResponses, withNetworkErrors } from "../src/main/api/network-error"
 import { planGuard } from "../src/main/api/plan-gates"
 import { DirectoryPendingPublications } from "../src/main/restore/directory-pending-publications"
 import { setDirectoryRestoreService } from "../src/main/restore/directory-dispatch"
@@ -302,7 +303,7 @@ it.each((["Users", "Groups"] as const).flatMap(folder => ["success", "503", "tim
   expect(await pending).toMatchObject({ status: "partial", failed: 0, outcomes: [{ state: "deferred" }] })
   expect(env.writes).toEqual([])
   const restarted = env.service()
-  expect(await restarted.resume(tenant, saved)).toEqual({ ...page, unresolved: true, selection: page.rows.map(row => row.key) })
+  expect(await restarted.resume(tenant, saved)).toEqual({ ...page, unresolved: true, selection: page.rows.map(row => row.key), outcomes: [{ key: page.rows[0]!.key, state: "deferred", reason: "The directory write was cancelled before sending.", retryAt: undefined, targetId: request.snapshot.id }] })
   expect(await restarted.execute(tenant, saved, page.fingerprint, approvals)).toMatchObject({ status: "complete", failed: 0, outcomes: [{ state: "applied" }] })
   await env.service().execute(tenant, saved, page.fingerprint, approvals)
   expect(env.writes).toEqual([`PATCH ${target}`])
@@ -1223,7 +1224,7 @@ it("keeps an in-flight member add applied when resume meets actor throttling and
   env.fetcher.mockImplementation((input, init) => new URL(String(input)).pathname.includes(`/members/${id(100)}`) ? Promise.resolve(new Response(null, { status: 404 })) : original(input, init))
   expect(await service.saved(tenant, page.runId, "reconcile")).toMatchObject({ outcomes: [{ state: "applied" }], canDiscard: true })
   expect(env.writes).toEqual([`POST groups/${resource}/members/$ref`])
-  expect(await service.saved(tenant, page.runId, "discard")).toEqual({ ...page, selection: page.rows.map(row => row.key), discarded: true, unresolved: false, canDiscard: false })
+  expect(await service.saved(tenant, page.runId, "discard")).toEqual({ ...page, selection: page.rows.map(row => row.key), discarded: true, unresolved: false, canDiscard: false, outcomes: [{ key: page.rows[0]!.key, state: "applied", targetId: resource, reason: undefined, retryAt: undefined }] })
 })
 
 it("retains a preview policy deadline after one failed save before a description PATCH", async () => {
@@ -1325,7 +1326,7 @@ it("merges a retained actor deadline without overwriting a result confirmed by a
     env.members.clear()
     expect(await service.saved(tenant, page.runId, "reconcile")).toMatchObject({ outcomes: [{ state: "applied", retryAt: deadline }], canDiscard: true })
     expect(env.writes).toEqual([`POST groups/${resource}/members/$ref`])
-    expect(await service.saved(tenant, page.runId, "discard")).toEqual({ ...page, selection: page.rows.map(row => row.key), discarded: true, unresolved: false, canDiscard: false })
+    expect(await service.saved(tenant, page.runId, "discard")).toEqual({ ...page, selection: page.rows.map(row => row.key), discarded: true, unresolved: false, canDiscard: false, outcomes: [{ key: page.rows[0]!.key, state: "applied", targetId: resource, reason: undefined, retryAt: deadline }] })
   } finally { vi.useRealTimers() }
 })
 
@@ -1995,7 +1996,7 @@ it.each(["execute", "discard"])("keeps all 50 approved rows unresolved after con
   expect(await service.saved(tenant, page.runId, "reconcile")).toMatchObject({ unresolved: true, outcomes: [...Array.from({ length: 20 }, () => ({ state: "applied" })), ...Array.from({ length: 30 }, () => ({ state: "pending" }))] })
   expect(env.data.has(directoryPagePrefix(tenant, page.runId) + "batch.1.plan")).toBe(false)
   const resumed = await env.service().resume(tenant, request)
-  expect(resumed).toEqual({ ...page, selection, unresolved: true })
+  expect(resumed).toEqual({ ...page, selection, unresolved: true, outcomes: page.rows.map((row, index) => ({ key: row.key, state: index < 20 ? "applied" : "pending", reason: undefined, retryAt: undefined, targetId: index < 20 ? resource : undefined })) })
   await expect(env.service().prepare(tenant, env.request, { ...relationshipOptions, previousRunId: page.runId }, env.read)).rejects.toThrow("Resolve or discard this saved page")
   expect(posts).toBe(20)
   if (action === "discard") {
@@ -2509,4 +2510,119 @@ it.each(["token", "metadata", "snapshot"])("checks the next-page owner before ba
     expect(publications).not.toHaveBeenCalled(); expect(connection).not.toHaveBeenCalled()
     expect(env.fetcher).toHaveBeenCalledTimes(calls); expect(env.data).toEqual(before); expect(env.writes).toEqual([])
   } finally { release(); await pending; publications.mockRestore(); get.mockRestore(); vi.unstubAllGlobals() }
+})
+
+
+it.each(["raw", "wrapped"].flatMap(transport => ["recovered", "role revoked", "object appeared"].map(recovery => ({ transport, recovery }))))("durably defers a $transport proxy 407 group create and repeats safety checks after $recovery", async ({ transport, recovery }) => {
+  const env = world(0, true), original = env.fetcher.getMockImplementation()!
+  const graph = transport === "wrapped" ? withNetworkErrors(rejectProxyAuthResponses(env.fetcher)) : env.fetcher
+  const service = () => new DirectoryRestoreService(env.store, new RecoveryAccounts(env.store), env.connection, env.connection, graph, () => [], env.settings)
+  const page = await service().prepare(tenant, env.request, options, env.read)
+  const request = { ...env.request, runId: page.runId }, approvals = Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals]))
+  let proxy = true, posts = 0, roleReads = 0
+  env.fetcher.mockImplementation((input, init) => {
+    const path = new URL(String(input)).pathname
+    if (path === "/v1.0/groups" && init?.method === "POST") {
+      posts++
+      if (proxy) return Promise.resolve(new Response("Proxy authentication required", { status: 407 }))
+    }
+    if (path === "/v1.0/roleManagement/directory/roleAssignments") {
+      roleReads++
+      if (!proxy && recovery === "role revoked") return Promise.resolve(Response.json({ value: [] }))
+    }
+    if (!proxy && recovery === "object appeared" && path === `/v1.0/groups/${resource}`) return Promise.resolve(Response.json(env.group))
+    return original(input, init)
+  })
+  const result = await service().execute(tenant, request, page.fingerprint, approvals)
+  expect(result).toMatchObject({ status: "partial", failed: 0, canDiscard: true, unresolved: true, outcomes: [{ state: "deferred", reason: expect.stringContaining("proxy requires authentication") }] })
+  const journalKey = `restore.directory.${tenant}.${page.runId}.batch.0.restore.guarded.${tenant}`
+  const entry = JSON.parse(env.data.get(journalKey)!).runs[page.runId].entries[0]
+  expect(entry).toMatchObject({ state: "deferred", attempt: 1, retryAt: expect.any(Number) })
+  const coordinator = JSON.parse(env.data.get(`restore.directory.coordinator.${tenant}`)!)
+  expect(coordinator.locks[resource]).toMatchObject({ owner: page.runId, rejected: { step: page.rows[0]!.key, attempt: 1 } })
+  expect(coordinator.deadlines[resource]).toBe(entry.retryAt)
+  expect(posts).toBe(1); expect(env.writes).toEqual([])
+  proxy = false
+  const resumed = await service().resume(tenant, request)
+  expect(resumed.outcomes).toEqual(result.outcomes)
+  expect(posts).toBe(1)
+  const reads = roleReads
+  const settled = await service().execute(tenant, request, page.fingerprint, approvals)
+  expect(settled).toMatchObject(recovery === "recovered" ? { status: "partial", failed: 0, warnings: [expect.stringContaining("reference scan did not complete")], outcomes: [{ state: "applied", targetId: id(900) }] } : { status: "partial", failed: 1, outcomes: [{ state: "blocked" }] })
+  if (recovery === "recovered") {
+    expect(roleReads).toBeGreaterThan(reads)
+    expect(env.writes).toEqual(["POST groups"]); expect(posts).toBe(2)
+    await service().execute(tenant, request, page.fingerprint, approvals)
+    expect(env.writes).toEqual(["POST groups"]); expect(posts).toBe(2)
+  } else { expect(env.writes).toEqual([]); expect(posts).toBe(1) }
+})
+
+it.each(["timeout", "proxy transport", "proxy auth hint", "503"])("keeps a group create uncertain after ambiguous $0 failure without another POST", async failure => {
+  const env = world(0, true), service = env.service(), page = await service.prepare(tenant, env.request, options, env.read), original = env.fetcher.getMockImplementation()!
+  let posts = 0
+  env.fetcher.mockImplementation((input, init) => {
+    if (new URL(String(input)).pathname === "/v1.0/groups" && init?.method === "POST") {
+      posts++
+      if (failure === "503") return Promise.resolve(new Response(null, { status: 503 }))
+      return Promise.reject(failure === "timeout" ? new DOMException("Timeout", "TimeoutError") : new Error(failure === "proxy transport" ? "net::ERR_PROXY_CONNECTION_FAILED" : "net::ERR_PROXY_AUTH_REQUESTED"))
+    }
+    return original(input, init)
+  })
+  const request = { ...env.request, runId: page.runId }, approvals = Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals]))
+  expect(await service.execute(tenant, request, page.fingerprint, approvals)).toMatchObject({ canDiscard: false, outcomes: [{ state: "uncertain" }] })
+  expect(await env.service().resume(tenant, request)).toMatchObject({ canDiscard: false, outcomes: [{ state: "uncertain" }] })
+  expect(await env.service().execute(tenant, request, page.fingerprint, approvals)).toMatchObject({ outcomes: [{ state: "uncertain" }] })
+  expect(posts).toBe(1); expect(env.writes).toEqual([])
+})
+
+it("returns all saved outcomes and retry times on Resume including unstarted approved rows", async () => {
+  const env = world(25), service = env.service(), page = await service.prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read), original = env.fetcher.getMockImplementation()!
+  let posts = 0
+  env.fetcher.mockImplementation((input, init) => {
+    if (init?.method === "POST") {
+      const status = { 1: 403, 3: 429 }[++posts]
+      if (status) return Promise.resolve(new Response(null, { status, headers: { "Retry-After": "120" } }))
+    }
+    return original(input, init)
+  })
+  const request = { ...env.request, runId: page.runId }
+  const result = await service.execute(tenant, request, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])))
+  expect(result.outcomes).toHaveLength(25)
+  expect(result.outcomes.slice(0, 3)).toMatchObject([{ state: "failed", reason: expect.any(String) }, { state: "applied", targetId: resource }, { state: "deferred", retryAt: expect.any(Number) }])
+  expect(result.outcomes.slice(20)).toEqual(page.rows.slice(20).map(row => ({ key: row.key, state: "pending" })))
+  const sends = posts, saved = new Map(env.data)
+  const resumed = await env.service().resume(tenant, request)
+  expect(resumed.outcomes).toEqual(result.outcomes)
+  expect(resumed).toMatchObject({ unresolved: true, canDiscard: true, selection: page.rows.map(row => row.key) })
+  expect(posts).toBe(sends); expect(env.data).toEqual(saved)
+})
+
+it.each(["journal", "coordinator"])("recovers a known-unsent proxy 407 create after a failed %s publication", async record => {
+  const env = world(0, true), service = env.service(), page = await service.prepare(tenant, env.request, options, env.read), original = env.fetcher.getMockImplementation()!
+  const request = { ...env.request, runId: page.runId }, approvals = Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals]))
+  const journalKey = `restore.directory.${tenant}.${page.runId}.batch.0.restore.guarded.${tenant}`, coordinatorKey = `restore.directory.coordinator.${tenant}`
+  let proxy = true, unavailable = false, posts = 0
+  env.fetcher.mockImplementation((input, init) => {
+    if (new URL(String(input)).pathname === "/v1.0/groups" && init?.method === "POST") {
+      posts++
+      if (proxy) { unavailable = true; return Promise.resolve(new Response(null, { status: 407 })) }
+    }
+    return original(input, init)
+  })
+  const set = env.store.set, spy = vi.spyOn(env.store, "set").mockImplementation((key, value) => {
+    if (unavailable && key === (record === "journal" ? journalKey : coordinatorKey)) throw new Error("Restore publication unavailable")
+    set(key, value)
+  })
+  try {
+    await expect(service.execute(tenant, request, page.fingerprint, approvals)).rejects.toBeInstanceOf(DirectoryRetryPersistenceError)
+    if (record === "journal") {
+      expect(JSON.parse(env.data.get(journalKey)!).runs[page.runId].entries[0].state).toBe("uncertain")
+      expect(JSON.parse(env.data.get(coordinatorKey)!).locks[resource].rejected).toEqual({ step: page.rows[0]!.key, attempt: 1 })
+    } else expect(JSON.parse(env.data.get(journalKey)!).runs[page.runId].entries[0]).toMatchObject({ state: "deferred", attempt: 1 })
+    expect(env.writes).toEqual([]); expect(posts).toBe(1)
+    unavailable = false; proxy = false; spy.mockRestore()
+    expect(await service.resume(tenant, request)).toMatchObject({ outcomes: [{ state: "deferred" }], canDiscard: true })
+    expect(await env.service().execute(tenant, request, page.fingerprint, approvals)).toMatchObject({ failed: 0, outcomes: [{ state: "applied", targetId: id(900) }] })
+    expect(env.writes).toEqual(["POST groups"]); expect(posts).toBe(2)
+  } finally { spy.mockRestore() }
 })

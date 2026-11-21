@@ -1,3 +1,4 @@
+import { rejectProxyAuthResponses, withNetworkErrors } from "../src/main/api/network-error"
 import { afterEach, expect, it, vi } from "vitest"
 import { DirectoryRestoreService } from "../src/main/restore/directory-service"
 import { setDirectoryRestoreService } from "../src/main/restore/directory-dispatch"
@@ -10,7 +11,7 @@ const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")
 const tenant = id(1), clientId = id(2), userId = id(3), targetId = id(10), appId = id(11)
 const options = { stage: "object" as const, exactMembers: false, exactOwners: false }
 const folders = ["Applications", "Users", "Groups"] as const
-function world(folder: typeof folders[number]) {
+function world(folder: typeof folders[number], wrapped = false) {
   const data = new Map<string, string>()
   const store = { partitioned: true as const, get: (key: string) => data.get(key) ?? null, set: (key: string, value: string) => { data.set(key, value) }, delete: (key: string) => { data.delete(key) } }
   const settings = new ModuleSettings(store)
@@ -35,7 +36,7 @@ function world(folder: typeof folders[number]) {
     if (path.startsWith("identity/conditionalAccess/") || path.endsWith("/memberOf")) return Response.json({ value: [] })
     return new Response(null, { status: 404 })
   })
-  const service = () => new DirectoryRestoreService(store, new RecoveryAccounts(store), async () => ({ token, tenantId: tenant, clientId, userId }), async () => ({ tenantId: tenant, clientId, userId }), graph, () => [], settings)
+  const service = () => new DirectoryRestoreService(store, new RecoveryAccounts(store), async () => ({ token, tenantId: tenant, clientId, userId }), async () => ({ tenantId: tenant, clientId, userId }), wrapped ? withNetworkErrors(rejectProxyAuthResponses(graph)) : graph, () => [], settings)
   const request = (backup = "backup", value = "Saved") => ({ path: `${backup}/${folder}/${targetId}.json`, origin: "restore" as const, snapshot: { ...live, [field]: value } })
   const prepare = async (requestValue = request()) => service().prepare(tenant, requestValue, options, async () => requestValue.snapshot)
   type Page = Awaited<ReturnType<typeof prepare>>
@@ -442,4 +443,26 @@ it.each(folders)("keeps uncertain %s writes locked on local discard without Grap
   const confirmedCalls = env.graph.mock.calls.length
   expect(await env.service().saved(tenant, page.runId, "discard")).toMatchObject({ discarded: true })
   expect(env.graph).toHaveBeenCalledTimes(confirmedCalls); expect(sends).toBe(1)
+})
+
+
+it.each(folders.flatMap(folder => [false, true].map(wrapped => ({ folder, wrapped }))))("resumes a known-unsent $folder proxy 407 PATCH with wrapped=$wrapped and exactly one Graph write", async ({ folder, wrapped }) => {
+  const env = world(folder, wrapped), request = env.request(), page = await env.prepare(request), original = env.graph.getMockImplementation()!
+  let proxy = true, attempts = 0
+  env.graph.mockImplementation((input, init) => {
+    if (init?.method === "PATCH") {
+      attempts++
+      if (proxy) return Promise.resolve(new Response(null, { status: 407 }))
+    }
+    return original(input, init)
+  })
+  const result = await env.execute(page, request)
+  expect(result).toMatchObject({ failed: 0, canDiscard: true, outcomes: [{ state: "deferred", reason: expect.stringContaining("proxy requires authentication") }] })
+  expect(env.entry(page)).toMatchObject({ state: "deferred", attempt: 1 })
+  expect(env.locks()).toHaveLength(1); expect(env.writes).toEqual([]); expect(attempts).toBe(1)
+  proxy = false
+  expect((await env.service().resume(tenant, { ...request, runId: page.runId })).outcomes).toEqual(result.outcomes)
+  expect(await env.execute(page, request)).toMatchObject({ status: "complete", outcomes: [{ state: "applied" }] })
+  await env.execute(page, request)
+  expect(env.writes).toEqual([{ [env.field]: "Saved" }]); expect(attempts).toBe(2); expect(env.locks()).toEqual([])
 })

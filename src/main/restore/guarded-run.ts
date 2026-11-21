@@ -1,3 +1,4 @@
+import { isProxyAuthResponse } from "../api/network-error"
 import { DirectoryRetryPersistenceError, persistDirectoryRetry, waitForDirectoryRetry } from "./directory-retry"
 import { requireConfigurationApproval } from "./entra-configuration"
 import { isGraphId } from "../../shared/security"
@@ -213,6 +214,7 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
       if (reconcileOnly && entry.state !== "uncertain") continue
       const prerequisite = dependencies(step).find(required => run.entries.find(entry => entry.step.key === required)?.state !== "applied")
       if (prerequisite && entry.state !== "uncertain") { entry.state = "blocked"; entry.reason = `Prerequisite ${prerequisite} did not complete.`; journal.save(run); continue }
+      const rejectedAttempt = () => entry.state === "uncertain" && entry.attempt !== undefined ? { step: step.key, attempt: entry.attempt } : undefined
       const defer = (retryAt: number, rejected?: { step: string; attempt: number }) => {
         entry.retryAt = Math.max(entry.retryAt ?? 0, retryAt)
         const persist = io.persistRetry ? (journal: () => void, coordinator: () => void) => io.persistRetry!(step, journal, coordinator, entry.retryAt!) : persistDirectoryRetry
@@ -301,12 +303,17 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
               throw error
             }
           }, run, signal, retryAt => {
-            const rejected = entry.state === "uncertain" && entry.attempt !== undefined ? { step: step.key, attempt: entry.attempt } : undefined
+            const rejected = rejectedAttempt()
             entry.state = step.directory ? "deferred" : "captured"; delete entry.reason; defer(retryAt, rejected)
           })
         } catch (error) {
           if (isRestorePersistenceError(error)) throw error
-          if (error instanceof RestoreWriteDeferredError || (["captured", "deferred"].includes(entry.state) && signal?.aborted)) {
+          if (step.directory && isProxyAuthResponse(error)) {
+            const rejected = rejectedAttempt()
+            entry.state = "deferred"; entry.reason = "The proxy requires authentication. No directory write reached Microsoft Graph. Resume to repeat the safety checks after proxy recovery."
+            // Publish known-unsent evidence to both records, including its exact send attempt.
+            defer(Date.now(), rejected)
+          } else if (error instanceof RestoreWriteDeferredError || (["captured", "deferred"].includes(entry.state) && signal?.aborted)) {
             entry.state = step.directory ? "deferred" : "captured"; entry.reason = error instanceof RestoreWriteDeferredError ? error.message : "The directory write was cancelled before sending."
             if (error instanceof RestoreWriteDeferredError && error.retryAt !== undefined) { defer(error.retryAt) }
           } else if (["captured", "deferred"].includes(entry.state)) {

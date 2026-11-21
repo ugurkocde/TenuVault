@@ -1,3 +1,4 @@
+import { rejectProxyAuthResponses } from "../api/network-error"
 import { DirectoryReadDeferredError, DirectoryThrottledError, retryDirectoryWrite } from "./directory-retry"
 import { typeForFolder, type Item } from "../../shared/intune/registry"
 import { graphContinuation } from "../../shared/graph-continuation"
@@ -19,9 +20,10 @@ const collection = (folder: string) => {
 /** Application operations plug into the existing directory journal, batching and approval service. */
 export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typeof fetch = fetch, protectedAppIds: () => readonly string[] = () => [], settings: () => ModuleSetting | undefined = () => undefined, wait?: (ms: number) => Promise<void>, onReadThrottled?: (retryAt: number) => void) {
   requireRestoreActor(token, actor)
+  const fetchRequest = rejectProxyAuthResponses(fetchImpl)
   const request = async (path: string, method = "GET", body?: Item, signal?: AbortSignal): Promise<Item | null> => {
     if (signal?.aborted) throw new RestoreWriteDeferredError("The application request was cancelled before sending.")
-    const response = await fetchImpl(root + path, { method, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, ...(body ? { body: JSON.stringify(body) } : {}), signal: method === "GET" && signal ? AbortSignal.any([signal, AbortSignal.timeout(60_000)]) : AbortSignal.timeout(60_000) }).catch(error => {
+    const response = await fetchRequest(root + path, { method, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, ...(body ? { body: JSON.stringify(body) } : {}), signal: method === "GET" && signal ? AbortSignal.any([signal, AbortSignal.timeout(60_000)]) : AbortSignal.timeout(60_000) }).catch(error => {
       if (isRestorePersistenceError(error)) throw error
       if (method === "GET" && signal?.aborted) throw new RestoreWriteDeferredError("The application read was cancelled before sending a write.")
       if (method === "GET") throw new DirectoryReadDeferredError()

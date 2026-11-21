@@ -376,20 +376,18 @@ it.each(["save", "delete"])("blocks Community Azure metadata %s before its handl
   expect(write).toHaveBeenCalledTimes(2)
 })
 
-it("exempts only directory cancel and discard from replacement plan lookup", async () => {
+it("allows every directory action on Community without any plan lookup", async () => {
   const body = { tenantId: TENANT, mode: "replace", restoreType: "full" }
   const planOf = vi.fn(async () => "community" as const), guard = planGuard(planOf)
-  for (const action of ["cancel", "discard"]) {
-    expect(requiredFeatures("/api/restore-directory", { ...body, action })).toEqual([])
-    expect(await guard(new Request("http://tenuvault.internal/api/restore-directory/", { method: "POST", body: JSON.stringify({ ...body, action }) }))).toBeNull()
+  for (const action of ["preview", "restore", "resume", "reconcile", "cancel", "discard", "unknown", undefined]) {
+    for (const suffix of ["", "/"]) {
+      expect(requiredFeatures("/api/restore-directory", { ...body, action })).toEqual([])
+      expect(await guard(new Request(`http://tenuvault.internal/api/restore-directory${suffix}`, { method: "POST", body: JSON.stringify({ ...body, action }) }))).toBeNull()
+    }
   }
   expect(planOf).not.toHaveBeenCalled()
-  for (const action of ["preview", "restore", "resume", "reconcile", "unknown", undefined]) {
-    expect(requiredFeatures("/api/restore-directory", { ...body, action })).toEqual(["replaceRestore"])
-    expect((await guard(new Request("http://tenuvault.internal/api/restore-directory", { method: "POST", body: JSON.stringify({ ...body, action }) })))?.status).toBe(402)
-  }
   for (const action of ["cancel", "discard"]) {
     expect((await guard(new Request("http://tenuvault.internal/api/restore-backup", { method: "POST", body: JSON.stringify({ ...body, action }) })))?.status).toBe(402)
   }
-  expect(planOf).toHaveBeenCalledTimes(8)
+  expect(planOf).toHaveBeenCalledTimes(2)
 })

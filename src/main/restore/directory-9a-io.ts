@@ -1,3 +1,4 @@
+import { rejectProxyAuthResponses } from "../api/network-error"
 import { DIRECTORY_RETRIES, DirectoryReadDeferredError, DirectoryThrottledError, directoryRetryAt, retryDirectoryWrite, waitForDirectoryRetry } from "./directory-retry"
 import { typeForFolder, restoreCapability, type Item } from "../../shared/intune/registry"
 import { restoreMatrixRow } from "../../shared/intune/restore-matrix"
@@ -35,6 +36,7 @@ export function directoryPermissions(step: GuardedStep): string[] {
 /** The same operation evidence gates the preview and the final transport. */
 export function directory9aIO(token: string, actor: RestoreActor, safety: GuardedIO["references"], fetchImpl: typeof fetch = fetch, scan?: GuardedIO["replacedReferences"], wait?: (ms: number) => Promise<void>, signal?: AbortSignal, retryReads = true, onReadThrottled?: (retryAt: number) => void): GuardedIO & { review: (step: GuardedStep, preimage?: Item | null) => Promise<ReturnType<typeof directoryReview>>; ids: (id: string, kind: "members" | "owners") => AsyncIterable<string>; locate: (folder: "Users" | "Groups", sourceId: string) => Promise<{ action: "update" | "recycle" | "create"; current: Item | null }> } {
   requireRestoreActor(token, actor)
+  const fetchRequest = rejectProxyAuthResponses(fetchImpl)
   // Preview inventories can retry individual reads. Journalled execution uses raw
   // reads so every throttle reaches its durable entry or restarts the whole writer.
   const request = async (path: string, method = "GET", body?: Item, validateSend?: () => Promise<void>, beforeSend?: () => void): Promise<Item | null> => {
@@ -55,7 +57,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
       const requestSignal = method === "GET" && signal ? AbortSignal.any([signal, AbortSignal.timeout(60_000)]) : AbortSignal.timeout(60_000)
       beforeSend?.()
       if (method !== "GET" && signal?.aborted) throw new RestoreWriteDeferredError("The directory write was cancelled before sending.")
-      const response = await fetchImpl(url.href, { method, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, ...(body ? { body: JSON.stringify(body) } : {}), signal: requestSignal }).catch(error => {
+      const response = await fetchRequest(url.href, { method, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, ...(body ? { body: JSON.stringify(body) } : {}), signal: requestSignal }).catch(error => {
         if (isRestorePersistenceError(error)) throw error
         if (method === "GET" && signal?.aborted) throw new RestoreWriteDeferredError("The directory read was cancelled before sending a write.")
         if (method === "GET") throw new DirectoryReadDeferredError()
