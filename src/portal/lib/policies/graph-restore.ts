@@ -134,7 +134,7 @@ export function graphCaller(token: string, fetchImpl: typeof fetch = fetch, opti
     const createsObject = method === "POST" && (path.split("/").length === 2 || path.endsWith("/createInstance"))
     const name = body?.displayName ?? body?.name
     const label = typeof name === "string" ? name.replace(/[\r\n\t]/g, " ").slice(0, 240) : undefined
-    const key = options.tenant && method !== "GET" && path !== "$batch" ? writeKey(options.tenant, method, path, body) : undefined
+    const key = options.tenant && method !== "GET" ? writeKey(options.tenant, method, path, body) : undefined
     if (key) {
       const previous = writeRecords().find(entry => entry.key === key)
       if (previous?.state === "uncertain") throw new RestoreReconcileRequired()
@@ -174,23 +174,14 @@ export function graphCaller(token: string, fetchImpl: typeof fetch = fetch, opti
         if (method === "GET" && attempt < 3) { await sleep(1000 * 2 ** attempt); continue }
         throw error
       }
-      const rejected = response.status >= 400 && response.status < 500 && response.status !== 408
-      if (key && rejected) removeWrite(key)
-      const text = await response.text().catch(error => {
-        if (rejected && callOptions.approvalCode) return ""
-        throw error
-      })
+      const text = await response.text()
       let parsed: Item = {}
       try { parsed = text ? JSON.parse(text) as Item : {} } catch { /* An unreadable success remains uncertain. */ }
+      const rejected = response.status >= 400 && response.status < 500 && response.status !== 408
+      if (key && rejected) removeWrite(key)
       if (response.status === 401 && options.refreshToken && !refreshed && attempt < 3) {
         beforeAttempt?.()
-        refreshed = true
-        try { token = await options.refreshToken() }
-        catch (error) {
-          if (callOptions.approvalCode) return { status: response.status, body: parsed }
-          throw error
-        }
-        continue
+        refreshed = true; token = await options.refreshToken(); continue
       }
       const retry = response.status === 429 || (method === "GET" && [408, 500, 502, 503, 504].includes(response.status))
       if (retry && attempt < 3) {
@@ -418,7 +409,7 @@ export class Restorer {
     if (!id) return { success: false, path, retryable: false, auditPlanned: planned, auditUncertain: true, error: "Microsoft Graph did not return an ID. Check Intune before retrying." }
     if (typeof snapshot.id === "string" && !this.reviewed.has(snapshot.id.toLowerCase())) this.remapped.set(snapshot.id, id)
     // Graph may answer with only the ID, so the body sent (with the [Restored] name) fills the gaps.
-    const outcome = await this.complete(type, path, id, { ...plan.create.body, ...created.body }, "created", [...plan.steps, ...plan.assignments], undefined, 1, primary)
+    const outcome = await this.complete(type, path, id, { ...plan.create.body, ...created.body }, "created", [...plan.steps, ...plan.assignments], undefined, 1, { priorChanges: primary })
     if (plan.assignments.length && type.assignmentWarning) outcome.warnings = [...(outcome.warnings ?? []), type.assignmentWarning]
     return this.withWarnings(outcome, type, source, plan.create.body, references.warnings)
   }
@@ -577,8 +568,7 @@ export class Restorer {
     } else if (await this.parentGone(entry.type, entry.id)) {
       return gone
     }
-    const restorer = new Restorer(this.graph, { ...this.options, operationId: entry.operationId ?? this.options.operationId })
-    return restorer.complete(entry.type, path, entry.id, entry.body, entry.action, entry.steps, entry.expectedCurrent)
+    return this.complete(entry.type, path, entry.id, entry.body, entry.action, entry.steps, entry.expectedCurrent, undefined, { operationId: entry.operationId })
   }
 
   /**
@@ -596,7 +586,12 @@ export class Restorer {
     }
   }
 
-  private async complete(type: IntuneType, path: string, id: string, body: Item, action: "created" | "updated", steps: Step[], baseline?: Item, priorSteps = action === "created" ? 1 : 0, priorChanges: AuditChange[] = [], approvedStep?: AuditRestoreStep): Promise<RestoreOutcome> {
+  private async complete(type: IntuneType, path: string, id: string, body: Item, action: "created" | "updated", steps: Step[], baseline?: Item, priorSteps = action === "created" ? 1 : 0, audit: {
+    operationId?: string
+    priorChanges?: AuditChange[]
+    approvedStep?: AuditRestoreStep
+  } = {}): Promise<RestoreOutcome> {
+    const { operationId = this.options.operationId, priorChanges = [], approvedStep } = audit
     const name = type.singleton?.name ?? body[type.nameKey] ?? body.displayName ?? body.name
     const applied = [...priorChanges]
     const plannedByStep = steps.map(step => this.auditStep(type, step, baseline))
@@ -637,7 +632,7 @@ export class Restorer {
         if (action === "updated" && !live && this.options.approvalContext && response.approval.kind !== "locked-by-other") {
           try { live = await this.current(type, id) } catch { /* Retain the pending code even if the read fails. */ }
         }
-        return { ...await this.pauseApproval(type, path, step, resolved.slice(index + 1), body, action, response.approval, id, live, undefined, priorSteps > 0 || index > 0, priorSteps + index + 1, priorSteps + resolved.length, plannedByStep[index]), auditPlanned: base.auditPlanned, auditApplied: applied, auditSteps: stepResults }
+        return { ...await this.pauseApproval(type, path, step, resolved.slice(index + 1), body, action, response.approval, id, live, undefined, priorSteps > 0 || index > 0, priorSteps + index + 1, priorSteps + resolved.length, plannedByStep[index], operationId), auditPlanned: base.auditPlanned, auditApplied: applied, auditSteps: stepResults }
       }
       let repairToken: string | undefined
       let expectedCurrent: Item | undefined
@@ -650,7 +645,7 @@ export class Restorer {
         if (repairs.size >= 1000) repairs.delete(repairs.keys().next().value!)
         repairToken = randomUUID()
         repairs.set(repairToken, { scope: this.options.repairScope ?? this.instanceScope, path, type, id, body, action,
-          steps: resolved.slice(index), expectedCurrent, operationId: this.options.operationId, expires: Date.now() + 60 * 60 * 1000 })
+          steps: resolved.slice(index), expectedCurrent, operationId, expires: Date.now() + 60 * 60 * 1000 })
       }
       const uncertain = response ? response.status >= 500 || response.status === 408 : dispatched
       if (stepResults) stepResults[index + 1]!.outcome = uncertain ? "uncertain" : "failed"
@@ -659,14 +654,14 @@ export class Restorer {
     return { ...base, success: true }
   }
 
-  private async pauseApproval(type: IntuneType, path: string, step: Step, remaining: Step[], source: Item, action: "created" | "updated", signal: ApprovalSignal, objectId?: string, baseline?: Item, snapshotId?: string, partial = false, stepNumber = partial ? 2 : 1, totalSteps = stepNumber + remaining.length, auditPlanned?: AuditChange[]): Promise<RestoreOutcome> {
+  private async pauseApproval(type: IntuneType, path: string, step: Step, remaining: Step[], source: Item, action: "created" | "updated", signal: ApprovalSignal, objectId?: string, baseline?: Item, snapshotId?: string, partial = false, stepNumber = partial ? 2 : 1, totalSteps = stepNumber + remaining.length, auditPlanned?: AuditChange[], operationId = this.options.operationId): Promise<RestoreOutcome> {
     const context = this.options.approvalContext
     const base: RestoreOutcome = { success: false, path, policyId: objectId, partial, retryable: false, approval: signal, auditPlanned, error: approvalMessage(signal, type.label, partial ? `The ${action === "created" ? `object was created (${objectId})` : "earlier update steps were written"}.` : undefined) }
     if (!context || this.options.crossTenant || signal.kind === "locked-by-other") return base
     if (action === "updated" && !baseline && signal.kind !== "pending") return { ...base, error: `${base.error} The live object could not be fingerprinted. Review it before submitting.` }
     const exact = (entry: Step): ApprovalStep => ({ method: entry.method, path: entry.path, kind: entry.kind, body: entry.body ? JSON.stringify(entry.body) : undefined })
     const name = source[type.nameKey] ?? source.displayName ?? source.name
-    const record: RestoreApproval = { id: signal.kind === "pending" ? signal.code : randomUUID(), tenantId: context.tenantId, requesterId: context.requesterId, requesterName: context.requesterName, origin: "restore", operationId: this.options.operationId, auditPlanned, backupPath: path, snapshotId, repairScope: this.options.repairScope,
+    const record: RestoreApproval = { id: signal.kind === "pending" ? signal.code : randomUUID(), tenantId: context.tenantId, requesterId: context.requesterId, requesterName: context.requesterName, origin: "restore", operationId, auditPlanned, backupPath: path, snapshotId, repairScope: this.options.repairScope,
       label: typeof name === "string" ? name : type.label, folder: type.folder, operation: step.kind === "assignments" ? "assign" : action === "created" && !objectId ? "create" : "update",
       step: exact(step), remaining: remaining.map(exact), objectId, fingerprint: baseline ? approvalFingerprint(baseline, this.options.assignments) : undefined, submittedAt: new Date().toISOString(), status: signal.kind === "pending" ? "needsApproval" : "justification-required", justification: context.justification ?? "", stepNumber, totalSteps, action, source, assignments: this.options.assignments, mode: this.options.mode }
     if (signal.kind === "pending" && restoreApprovals(context.tenantId).some(entry => entry.id === signal.code)) return { ...base, approvalId: signal.code, approvalState: "submitted", error: "Already submitted for approval" }
@@ -782,7 +777,7 @@ export class Restorer {
       approvalContext: { ...this.options.approvalContext!, justification: `${record.justification.slice(0, 686)} (${record.remaining[0]?.kind ?? "content"})` } })
     const steps = record.remaining.map(step => ({ ...step, body: step.body ? JSON.parse(step.body) as Item : {} }))
     const baseline = record.action === "updated" ? await this.current(type, id) : undefined
-    const outcome = await next.complete(type, record.backupPath, id, record.source, record.action, steps, baseline, record.stepNumber, confirmed, approvedStep)
+    const outcome = await next.complete(type, record.backupPath, id, record.source, record.action, steps, baseline, record.stepNumber, { priorChanges: confirmed, approvedStep })
     this.options.auditApprovalCompleted?.({ ...outcome, auditApprover: approval })
     saveRestoreApproval({ ...record, objectId: id, status: "completed", continuationPending: false })
     if (record.assignments && type.assignmentWarning) outcome.warnings = [...(outcome.warnings ?? []), type.assignmentWarning]

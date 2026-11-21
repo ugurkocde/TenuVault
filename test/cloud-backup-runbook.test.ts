@@ -883,6 +883,26 @@ describe("New-TenuVaultCloudBackup.ps1", () => {
     }
   }, 60_000)
 
+  it.runIf(Boolean(pwsh))("gives both required cloud backup grants priority when Azure RBAC quota is tight", () => {
+    const script = fileURLToPath(new URL("./fixtures/cloud-backup/setup-upgrade.ps1", import.meta.url))
+    const run = (...args: string[]) => JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", script, "-RbacQuota", ...args], {
+      encoding: "utf8", timeout: auditSetupTimeout,
+    })) as { actions: string[]; published: boolean; schedule: boolean; linked: boolean; output: string[] }
+    const { actions, output, ...result } = run()
+    expect(result).toEqual({ published: true, schedule: true, linked: true })
+    expect(actions).toEqual([
+      "grant intune-backups", "grant tenuvault-backup-results", "import confirm=False", "publish", "export Published",
+      "create schedule", "link", "grant audit-logs",
+    ])
+    expect(output).toContainEqual(expect.stringContaining("RoleAssignmentLimitExceeded"))
+    const main = process.env.TENUVAULT_TEST_MAIN_WORKTREE
+    if (main) {
+      const { output: _output, ...baseline } = run("-SetupPath", join(main, "resources/New-TenuVaultCloudBackup.ps1"))
+      expect({ actions: actions.slice(0, -1), ...result }).toEqual(baseline)
+    }
+    expect(run("-AuditRoleOnly")).toMatchObject({ actions: ["grant audit-logs"], published: false, schedule: false, linked: false })
+  }, 60_000)
+
   it("documents audit availability by producer version and the Backup Writer's overwrite rights", () => {
     const storage = readFileSync(new URL("../docs-site/src/content/docs/backups/storage.md", import.meta.url), "utf8")
     const schedules = readFileSync(new URL("../docs-site/src/content/docs/backups/schedules.mdx", import.meta.url), "utf8")

@@ -168,18 +168,13 @@ export class AuditSink {
       ?? this.receipts[`restore:${runId}`]?.correlation
   }
 
-  approvalCompletionReady(eventId: string): boolean {
-    return !!(this.checkpoints[eventId]?.ready || this.receipts[eventId]?.ready)
-      || Object.values(this.checkpoints).some(checkpoint => checkpoint.completionId === eventId && checkpoint.ready)
-  }
-
   begin(binding: AuditBinding, input: CreateAuditLogInput & { job: AuditJob }): AuditProgress
   begin(binding: AuditBinding, input: CreateAuditLogInput & { job: AuditJob }, options: RestoreAuditOptions): AuditProgress | undefined
   begin(binding: AuditBinding, input: CreateAuditLogInput & { job: AuditJob }, options: RestoreAuditOptions = {}): AuditProgress | undefined {
     let completionId = options.eventId
-    if (completionId && this.approvalCompletionReady(completionId)) return undefined
-    // Preserve interrupted attempts while keeping the request's receipt key for deduplication.
-    const previous = completionId && (this.checkpoints[completionId] || this.receipts[completionId])
+    // Each execution gets its own audit event, even if it resumes a previously recorded approval.
+    const previous = completionId && (this.receipts[completionId] ||
+      Object.values(this.checkpoints).some(checkpoint => checkpoint.completionId === completionId || checkpoint.entry.id === completionId))
     const id = previous ? randomUUID() : completionId
     const entry = this.entry(binding, input, id ? { id, timestamp: new Date().toISOString() } : undefined)
     if (previous) entry.job!.runId = entry.id

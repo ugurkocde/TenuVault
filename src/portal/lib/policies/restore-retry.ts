@@ -21,10 +21,11 @@ export function retryBatches(outcomes: RetryOutcome[]): RetryBatch[] {
   for (const outcome of outcomes) {
     if (outcome.success || outcome.action === 'skipped' || outcome.retryable === false) continue
     const tenant = outcome.targetTenantId?.toLowerCase() ?? ''
-    const groupId = `${tenant}\n${outcome.retryJobId ?? ''}`
-    const group = groups.get(groupId) ?? { ...(tenant ? { targetTenantId: tenant } : {}), ...(outcome.retryJobId ? { retryOf: outcome.retryJobId } : {}), paths: [] }
+    const group = groups.get(tenant) ?? { ...(tenant ? { targetTenantId: tenant } : {}), ...(outcome.retryJobId ? { retryOf: outcome.retryJobId } : {}), paths: [] }
+    // Mixed jobs still share the tenant's retry request. Only name a common audit parent.
+    if (group.retryOf !== outcome.retryJobId) delete group.retryOf
     if (!group.paths.includes(outcome.path)) group.paths.push(outcome.path)
-    groups.set(groupId, group)
+    groups.set(tenant, group)
   }
   return [...groups.values()]
 }

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import { POST } from "../src/portal/app/api/restore-backup/route"
 import { NextRequest } from "../src/main/api/next-server-shim"
 import { approvalFingerprint, Restorer, type GraphCall } from "../src/portal/lib/policies/graph-restore"
-import { restoreApprovals, saveRestoreApproval, setRestoreApprovalStore, dismissRestoreApproval } from "../src/main/storage/restore-approvals"
+import { restoreApprovals, saveRestoreApproval, setRestoreApprovalStore, dismissRestoreApproval, type RestoreApproval } from "../src/main/storage/restore-approvals"
 import { saveWrite, setRestoreJournalStore, writeKey, writeRecords } from "../src/main/storage/restore-journal"
 import { AuditSink, setMainAuditSink } from "../src/main/api/audit-sink"
 import { createAuditRecorder } from "../src/main/api/audit"
@@ -252,13 +252,14 @@ it.each([
   }] })
 })
 
-it.each([[400, "failed"], [503, "uncertain"]] as const)("audits a %s assignment after the approved create and deduplicates on restart", async (status, stepOutcome) => {
+it.each([[400, "failed"], [503, "uncertain"]] as const)("continues a %s assignment on restart according to the write journal", async (status, stepOutcome) => {
   await seed()
   const record = restoreApprovals(tenantId)[0]!
   const objectId = "99999999-9999-4999-8999-999999999999"
-  saveRestoreApproval({ ...record, totalSteps: 2, remaining: [{
+  const pending: RestoreApproval = { ...record, totalSteps: 2, remaining: [{
     method: "POST", kind: "assignments", path: `deviceManagement/deviceCategories/${objectId}/assign`, body: '{"assignments":[]}',
-  }] })
+  }] }
+  saveRestoreApproval(pending)
   const account = "approvalaudit"
   const local = memoryStore()
   setAuditOutboxStore(local)
@@ -270,11 +271,12 @@ it.each([[400, "failed"], [503, "uncertain"]] as const)("audits a %s assignment 
   setMainAuditSink(new AuditSink(opts))
   const original = network()
   const writes = vi.fn()
+  let resumed = false
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     if (String(input).includes("operationApprovalRequests/")) return Response.json({ status: "approved" })
     if (String(input).endsWith("/assign")) {
       writes("assign")
-      return Response.json({}, { status })
+      return resumed ? new Response(null, { status: 204 }) : Response.json({}, { status })
     }
     if (new Headers(init?.headers).get("x-msft-approval-code") === code) {
       writes("create")
@@ -290,14 +292,22 @@ it.each([[400, "failed"], [503, "uncertain"]] as const)("audits a %s assignment 
     applied: expect.arrayContaining([{ operation: "create", field: "displayName" }]),
     steps: [{ kind: "content", outcome: "applied" }, { kind: "assignments", outcome: stepOutcome }],
   }] })
-  // The receipt was durably handed to the outbox, but the approval record still needs reconciliation.
-  saveRestoreApproval({ ...record, objectId, status: "approved", continuationPending: true })
+  // A crash leaves the approval continuation pending even though an audit receipt exists.
+  saveRestoreApproval({ ...pending, objectId, status: "approved", continuationPending: true })
   const restarted = new AuditSink(opts)
   restarted.recover()
   setMainAuditSink(restarted)
-  await POST(request({ approvalAction: "complete", approvalId: code }))
-  expect(pendingEvents(account).map(item => item.id)).toEqual([entry?.id])
-  expect(writes.mock.calls).toEqual([["create"], ["assign"]])
+  resumed = true
+  const continuation = await POST(request({ approvalAction: "complete", approvalId: code }))
+  expect(continuation.status).toBe(200)
+  expect(await continuation.json()).toMatchObject({ outcome: { success: status === 400, policyId: objectId } })
+  expect(restoreApprovals(tenantId)[0]).toMatchObject({ status: "completed", continuationPending: false })
+  const events = pendingEvents(account)
+  expect(events).toHaveLength(2)
+  expect(events[0]?.id).toBe(entry?.id)
+  expect(events[1]?.id).not.toBe(entry?.id)
+  expect(events[1]?.job).toMatchObject({ stage: "approval-complete", operationId: entry?.job?.operationId, status: status === 400 ? "completed" : "warnings" })
+  expect(writes.mock.calls).toEqual(status === 400 ? [["create"], ["assign"], ["assign"]] : [["create"], ["assign"]])
 })
 
 it.each([400, 403])("records definitive Graph refusal %s after dispatch with the original approval ID", async status => {
@@ -414,9 +424,10 @@ it.each([false, true])("audits the retry of an approved create after reconciliat
   expect(entries).toHaveLength(interrupted ? 3 : 2)
   expect(new Set(entries.map(entry => entry.id)).size).toBe(entries.length)
   expect(new Set(entries.map(entry => entry.job?.runId)).size).toBe(entries.length)
-  saveRestoreApproval({ ...record, objectId, status: "approved", continuationPending: true })
   setMainAuditSink(new AuditSink(opts))
-  expect((await complete()).status).toBe(409)
+  const alreadyCompleted = await complete()
+  expect(alreadyCompleted.status).toBe(409)
+  expect(await alreadyCompleted.json()).toEqual({ error: "This request is not approved" })
   expect(pendingEvents(account)).toEqual(entries)
   expect(writes.mock.calls).toEqual([["create"], ["assign"]])
 })

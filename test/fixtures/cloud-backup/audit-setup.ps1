@@ -51,9 +51,10 @@ foreach ($file in @("New-TenuVaultStorage.ps1", "New-TenuVaultCloudBackup.ps1"))
     [Console]::WriteLine((@{ created = $created.Id; again = $again.Id; writes = $script:writes } | ConvertTo-Json -Depth 8 -Compress))
 }
 
-$grantAst = $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.IfStatementAst] -and
-    $node.Extent.Text.StartsWith('if ($principalId) {') -and $node.Extent.Text.Contains('Assign the create-only audit role') }, $false)
-$grantStep = [scriptblock]::Create($grantAst[0].Extent.Text)
+$auditSetup = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+    $node.Name -eq 'Initialize-TenuVaultAuditAccess' }, $false)
+. ([scriptblock]::Create($auditSetup.Extent.Text))
+function Get-AzStorageContainer { param($Name, $Context, $ErrorAction) @{ Name = $Name } }
 function Grant-AuditRole {
     [CmdletBinding(SupportsShouldProcess)]
     param([string]$ResourceGroupName, [string]$principalId)
@@ -61,9 +62,11 @@ function Grant-AuditRole {
     $StorageAccountName = "stcontoso"
     $storageGroupScope = $groupScope
     $storageAccount = @{ Id = "$groupScope/providers/Microsoft.Storage/storageAccounts/$StorageAccountName" }
+    $storageContext = @{}
     $auditContainer = "audit-logs"
     $backupContainer = "intune-backups"
-    . $grantStep
+    $writerRoleName = "TenuVault Backup Writer"
+    Initialize-TenuVaultAuditAccess
 }
 $script:grants = @{}
 $script:writes.Clear()

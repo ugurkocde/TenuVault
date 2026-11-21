@@ -121,6 +121,7 @@ async function restoreOwnedApp(store: AppSourceStore, source: CapturedAppSource,
   const report = (phase: AppRestoreProgress["phase"], uploadedBytes = 0) => progress({ phase, uploadedBytes, totalBytes })
   signal.throwIfAborted()
   report("verifying")
+  await graph("GET", `${BASE}?$select=id&$top=1`)
   let record = await store.readRestoreRecord<RestoreRecord>(source.tenantId, source.id, target)
   if (record) {
     if (record.schema !== 1 || !GUID.test(record.id) || record.sourceId !== source.id || record.target !== target || record.settingsHash !== settingsHash || record.name !== name.trim()) throw new Error("An earlier restore exists for this backup and destination with different settings. Use its original app name to reconcile it.")
@@ -136,15 +137,12 @@ async function restoreOwnedApp(store: AppSourceStore, source: CapturedAppSource,
     options.audit?.({ ...observed })
   }
   const write = async <T>(run: () => Promise<T>, evidence: Partial<AppRestoreAuditObservation> = {}): Promise<T> => {
-    signal.throwIfAborted()
     if (!observed.dispatched) audit({ dispatched: true })
     const value = await run()
     if (!observed.wrote || Object.keys(evidence).length) audit({ wrote: true, ...evidence })
     return value
   }
-  // A retry already knows its operation ID. Prove access before writing to either journal or Graph.
   audit()
-  await graph("GET", `${BASE}?$select=id&$top=1`)
   const save = () => store.writeRestoreRecord(source.tenantId, source.id, target, record)
   const marker = `[TenuVault restore ${record.id}]`
   body.notes = [typeof body.notes === "string" ? body.notes : "", marker].filter(Boolean).join("\n")

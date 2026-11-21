@@ -146,7 +146,7 @@ export async function POST(request: NextRequest) {
 
     // Correlate the completed operation with its desktop audit event.
     const actor = auditUserFromToken(graphToken, tenantId)?.id.toLowerCase()
-    const repairScope = (target: string) => JSON.stringify([tenantId, storageAccountName, backupId, target.toLowerCase(), mode, assignments, dependencyMappings, actor])
+    const repairScope = (target: string) => JSON.stringify([tenantId, storageAccountName, backupId, target.toLowerCase(), mode, assignments, dependencyMappings])
     const correlationSource = JSON.stringify([String(tenantId).toLowerCase(), storageAccountName, backupId])
     const prior = actor && typeof body.retryOf === "string" && guid.test(body.retryOf) ? mainAuditSink()?.restoreCorrelation(body.retryOf) : undefined
     correlated = prior?.actor === actor && prior?.source === correlationSource && destinations.every(id => prior.destinations.includes(id))
@@ -222,7 +222,7 @@ export async function POST(request: NextRequest) {
         const operationId = (firstRepair && restorer.repairOperationId(firstRepair.path, firstRepair.repairToken)) || correlated
         const audit = beginRestoreAudit({
           destination: targetTenantId ?? tenantId, sourceTenantId: tenantId, graphToken: targetToken, sourceBackupId: backupId, operationId, runId: jobId,
-          correlation: actor ? { actor, source: correlationSource, destinations, operationId: correlated, at: Date.now() } : undefined,
+          correlation: actor ? { actor, source: correlationSource, destinations, operationId, at: Date.now() } : undefined,
           action,
           items: ordered.map(path => restoreAuditItem(path, undefined, manifest?.get(path)?.id)),
         })
@@ -342,10 +342,6 @@ async function approvalAction(body: any): Promise<Response> {
   const record = restoreApprovals(tenantId).find(entry => entry.id === approvalId)
   if (!record) return NextResponse.json({ error: "Request not found" }, { status: 404 })
   const completion = action === "complete"
-  if (completion && record.requesterId.toLowerCase() !== context.requesterId.toLowerCase()) {
-    return NextResponse.json({ error: "Only the original requester can complete this request" }, { status: 409 })
-  }
-  if (completion && record.status === "completed" && !record.continuationPending) return NextResponse.json({ error: "This request was already completed" }, { status: 409 })
   const key = `${tenantId.toLowerCase()}:${record.id}`
   if (approvalLocks.has(key)) return NextResponse.json({ error: "This request is already being processed" }, { status: 409 })
   approvalLocks.add(key)
@@ -353,7 +349,8 @@ async function approvalAction(body: any): Promise<Response> {
   const eventId = completion ? createHash("sha256").update(`approval-complete:${tenantId.toLowerCase()}:${record.id.toLowerCase()}`).digest("hex") : undefined
   const approval = record.auditApprover ?? { system: "intune" as const, requestId: record.id }
   const initialItem = { ...restoreAuditItem(record.backupPath, undefined, record.snapshotId), ...(completion ? { approval } : {}) }
-  const audit = ["submit", "complete", "withdraw"].includes(action) ? beginRestoreAudit({
+  const recordAttempt = completion ? record.continuationPending || record.status !== "completed" : ["submit", "withdraw"].includes(action)
+  const audit = recordAttempt ? beginRestoreAudit({
     destination: tenantId, graphToken: token, sourceBackupId: record.backupPath.split("/")[0]!,
     operationId: record.operationId ?? record.id, stage, eventId, runId: eventId,
     eventType: action === "complete" ? AuditEventType.RESTORE_COMPLETED : AuditEventType.CONFIG_UPDATED,
@@ -401,13 +398,7 @@ async function approvalAction(body: any): Promise<Response> {
       dismissRestoreApproval(tenantId, record.id)
     }
     else if (action === "submit") return NextResponse.json({ outcome: capture(await restorer.submitApproval(record, body.justification)) })
-    else if (completion) {
-      if (record.status === "completed" || (eventId && mainAuditSink()?.approvalCompletionReady(eventId))) {
-        if (record.continuationPending) saveRestoreApproval({ ...record, status: "completed", continuationPending: false })
-        return NextResponse.json({ error: "This request was already completed" }, { status: 409 })
-      }
-      return NextResponse.json({ outcome: await restorer.completeApproval(record) })
-    }
+    else if (completion) return NextResponse.json({ outcome: await restorer.completeApproval(record) })
     else if (action === "withdraw") {
       if (record.requesterId.toLowerCase() !== context.requesterId.toLowerCase()) throw new Error("Only the original requester can withdraw this request")
       try {

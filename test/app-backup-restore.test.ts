@@ -267,21 +267,16 @@ describe("cross-tenant restore engine", () => {
   })
 })
 
-it.each(["cancelled", "failed"] as const)("queues one %s preparation outcome under the operation ID read from the journal", async status => {
-  const f = await fixture(), controller = new AbortController(), journalOperation = randomUUID()
+it.each(["cancelled", "failed"] as const)("queues one %s preflight outcome without reading the restore journal", async status => {
+  const f = await fixture(), controller = new AbortController(), operationId = randomUUID()
   await f.store.writeRestoreRecord(tenant, f.source.id, target, {
-    schema: 1, id: journalOperation, sourceId: f.source.id, target, name: "Restored", settingsHash: snapshotHash(snapshot),
+    schema: 1, id: randomUUID(), sourceId: f.source.id, target, name: "Restored", settingsHash: snapshotHash(snapshot),
     secrets: newRestoreSecrets(), creationStarted: false,
   })
   let release!: () => void, entered!: () => void
-  const reading = new Promise<void>(resolve => { entered = resolve })
+  const signingIn = new Promise<void>(resolve => { entered = resolve })
   const gate = new Promise<void>(resolve => { release = resolve })
-  const read = f.store.readRestoreRecord.bind(f.store)
-  vi.spyOn(f.store, "readRestoreRecord").mockImplementation(async <T>(sourceTenant: string, id: string, destination: string) => {
-    entered()
-    await gate
-    return read<T>(sourceTenant, id, destination)
-  })
+  const read = vi.spyOn(f.store, "readRestoreRecord")
   const journal = memoryStore(), account = "apprestoretest"
   setAuditOutboxStore(journal)
   setMainAuditSink(new AuditSink({
@@ -290,22 +285,27 @@ it.each(["cancelled", "failed"] as const)("queues one %s preparation outcome und
     transport: async () => { throw new Error("Offline") },
   }))
   const privateError = "private Microsoft sign-in error"
-  const getGraphToken = vi.fn(async () => { throw new Error(privateError) })
+  const getGraphToken = vi.fn(async () => {
+    entered()
+    await gate
+    throw new Error(privateError)
+  })
   const fetch = vi.fn()
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
   try {
     const operation = restoreAppWithAudit(f.store, f.source, snapshot, target, "Restored", {
-      operationId: randomUUID(), getGraphToken, fetch, signal: controller.signal, progress: vi.fn(),
+      operationId, getGraphToken, fetch, signal: controller.signal, progress: vi.fn(),
     })
-    await reading
+    await signingIn
     if (status === "cancelled") controller.abort()
     release()
     await expect(operation).rejects.toThrow(status === "cancelled" ? "aborted" : "destination request was interrupted")
-    expect(getGraphToken).toHaveBeenCalledTimes(status === "cancelled" ? 0 : 1)
+    expect(getGraphToken).toHaveBeenCalledOnce()
+    expect(read).not.toHaveBeenCalled()
     expect(fetch).not.toHaveBeenCalled()
     expect(pendingEvents(account)).toMatchObject([{
       action: "Restore app backup",
-      job: { operationId: journalOperation, sourceBackupId: f.source.id, status, reason: "RESTORE_PREPARATION_FAILED" },
+      job: { operationId, sourceBackupId: f.source.id, status, reason: "RESTORE_PREPARATION_FAILED" },
     }])
     expect(journal.get("audit.pending-events")).not.toContain(privateError)
   } finally {

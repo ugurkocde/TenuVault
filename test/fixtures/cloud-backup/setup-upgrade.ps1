@@ -5,7 +5,7 @@
     content, and writes one JSON line per scenario.
 #>
 [CmdletBinding(SupportsShouldProcess)]
-param([string]$SetupPath)
+param([string]$SetupPath, [switch]$RbacQuota, [switch]$AuditRoleOnly)
 
 $ErrorActionPreference = "Stop"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "../../..")).Path
@@ -25,11 +25,6 @@ $start = $text.IndexOf("# Runbook import and publish")
 $end = $text.IndexOf("# Failure alert")
 if ($start -lt 0 -or $end -le $start) { throw "The upgrade step markers were not found." }
 $upgradeStep = [scriptblock]::Create($text.Substring($start, $end - $start))
-$auditStart = $text.IndexOf('# Audit grants are optional for publishing and running backups.')
-$auditEnd = $text.IndexOf('if ($AuditRoleOnly)', $auditStart + 1)
-$auditStep = if ($auditStart -ge 0 -and $auditEnd -gt $auditStart) {
-    [scriptblock]::Create($text.Substring($auditStart, $auditEnd - $auditStart))
-}
 $scheduleStart = $text.IndexOf('# Schedule and link.')
 $scheduleEnd = $text.IndexOf('# Summary and next steps.')
 $scheduleParameters = @'
@@ -201,17 +196,40 @@ function Register-AzAutomationScheduledRunbook {
     $script:link = $true
     $script:actions.Add("link")
 }
-function Get-AzStorageContainer { param($Name, $Context, $ErrorAction) }
+function Get-AzStorageContainer {
+    param($Name, $Context, $ErrorAction)
+    if ($Name -ne "audit-logs") { return @{ Name = $Name } }
+}
 function New-AzStorageContainer {
     param($Name, $Context, $Permission)
     if ($script:auditFailure -eq "container") { throw "Audit container creation denied" }
 }
-function Get-AzRoleDefinition { param($Name, $ErrorAction) }
+function Get-AzRoleDefinition {
+    param($Name, $ErrorAction)
+    if ($Name -eq $writerRoleName) {
+        return @{ Id = "existing-writer-role"; AssignableScopes = @($storageGroupScope); Actions = @(); DataActions = @(
+            "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read",
+            "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write",
+            "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/add/action"
+        ) }
+    }
+}
 function Get-AzRoleAssignment { param($ObjectId, $RoleDefinitionId, $Scope, $ErrorAction) }
+function Add-MockedRoleAssignment([string]$Container) {
+    $script:actions.Add("grant $Container")
+    if ($script:roleSlots -le 0) { throw "RoleAssignmentLimitExceeded" }
+    $script:roleSlots--
+}
+function New-AzRoleAssignment {
+    param($ObjectId, $RoleDefinitionId, $Scope)
+    Add-MockedRoleAssignment (($Scope -split "/")[-1])
+}
 function Invoke-AzRestMethod {
     param($Method, $Path, $Payload)
+    if ($Method -eq "Get") { return @{ StatusCode = 200; Content = '{"value":[{"actions":["*"],"notActions":[]}]}' } }
     if ($Path -match '/roleDefinitions/' -and $script:auditFailure -eq "role-definition") { return @{ StatusCode = 403 } }
     if ($Path -match '/roleAssignments/' -and $script:auditFailure -eq "role-assignment") { return @{ StatusCode = 403 } }
+    if ($RbacQuota -and $Path -match '/audit-logs/.*/roleAssignments/') { Add-MockedRoleAssignment "audit-logs" }
     return @{ StatusCode = 201 }
 }
 
@@ -266,6 +284,25 @@ function Write-Scenario {
         link = $script:link
         output = @($Output | ForEach-Object { [string]$_ })
     } | ConvertTo-Json -Compress -Depth 5)
+}
+
+if ($RbacQuota) {
+    # Run the full setup against a new tenant setup with just enough quota for main's grants.
+    function Get-Module { param([switch]$ListAvailable, $Name) $true }
+    function Get-AzContext { @{ Subscription = @{ Name = "Demo"; Id = "demo" }; Tenant = @{ Id = $TenantId } } }
+    function Get-AzResourceGroup { param($Name, $ErrorAction) @{ Location = "westus" } }
+    function Get-AzStorageAccount {
+        param($ResourceGroupName, $Name, $ErrorAction)
+        @{ Id = "/subscriptions/demo/resourceGroups/$ResourceGroupName/providers/Microsoft.Storage/storageAccounts/$Name" }
+    }
+    function New-AzStorageContext { param($StorageAccountName, [switch]$UseConnectedAccount) @{} }
+    $script:roleSlots = 2
+    $arguments = @{ TenantId = $TenantId; StorageAccountName = $StorageAccountName; GraphRolesGranted = $true; NoFailureAlert = $true }
+    if ($AuditRoleOnly) { $arguments.AuditRoleOnly = $true }
+    $output = @(. $SetupPath @arguments 3>&1 6>&1)
+    @{ actions = @($script:actions); published = [bool]$script:published; schedule = $script:schedule; linked = $script:link
+        output = @($output | ForEach-Object { [string]$_ }) } | ConvertTo-Json -Compress
+    return
 }
 
 # Upgrade runs: approved, the outer step declined, the import's own prompt declined with an old
@@ -326,7 +363,6 @@ function Invoke-LinkedUpgrade {
     $errorText = $null
     $output = @()
     try {
-        if ($auditStep) { $output += @(. $auditStep 3>&1 6>&1) }
         $output += @(. $upgradeStep 3>&1 6>&1)
         $output += @(& $scheduleStep @ScheduleArguments 3>&1 6>&1)
     } catch { $errorText = $_.Exception.Message }
