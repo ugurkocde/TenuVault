@@ -40,3 +40,20 @@ it("expires unsaved deadlines using the injected service clock", () => {
   now = 200
   expect(() => tenant.beforeSend()).not.toThrow()
 })
+
+it("retains expired publication failures for their page without blocking other pages or losing the deadline", () => {
+  let now = 100, unavailable = true
+  const tenant = new DirectoryPendingPublications(() => now).forTenant("tenant")
+  const save = vi.fn(() => { if (unavailable) throw new Error("Unavailable") })
+  expect(() => tenant.retain(save, 200, "owner")).toThrow("Unavailable")
+  expect(() => tenant.flush("other")).toThrow("Unavailable")
+  now = 200
+  expect(() => tenant.beforeSend()).not.toThrow()
+  expect(() => tenant.flush("other")).not.toThrow()
+  expect(() => tenant.flush()).not.toThrow()
+  expect(() => tenant.flush("owner")).toThrow("Unavailable")
+  expect(save).toHaveBeenCalledTimes(5)
+  unavailable = false; tenant.flush("owner")
+  expect(save).toHaveBeenCalledTimes(6)
+  tenant.flush(); expect(save).toHaveBeenCalledTimes(6)
+})

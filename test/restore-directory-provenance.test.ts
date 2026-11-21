@@ -29,7 +29,7 @@ function world(folder: string) {
     if (path === "identity/conditionalAccess/policies") return Response.json({ value: [] })
     throw new Error(`Unexpected Graph read: ${path}`)
   })
-  const service = () => new DirectoryRestoreService(store, new RecoveryAccounts(store), async () => ({ token, tenantId: tenant, userId: admin, clientId: appId }), graph, () => [], settings)
+  const service = () => new DirectoryRestoreService(store, new RecoveryAccounts(store), async () => ({ token, tenantId: tenant, userId: admin, clientId: appId }), async () => ({ tenantId: tenant, userId: admin, clientId: appId }), graph, () => [], settings)
   setDirectoryRestoreService(service())
   let metadata = () => Response.json({ TenantId: tenant })
   const storage = vi.fn(async (input: RequestInfo | URL) => {

@@ -35,7 +35,7 @@ function world(folder: typeof folders[number]) {
     if (path.startsWith("identity/conditionalAccess/") || path.endsWith("/memberOf")) return Response.json({ value: [] })
     return new Response(null, { status: 404 })
   })
-  const service = () => new DirectoryRestoreService(store, new RecoveryAccounts(store), async () => ({ token, tenantId: tenant, clientId, userId }), graph, () => [], settings)
+  const service = () => new DirectoryRestoreService(store, new RecoveryAccounts(store), async () => ({ token, tenantId: tenant, clientId, userId }), async () => ({ tenantId: tenant, clientId, userId }), graph, () => [], settings)
   const request = (backup = "backup", value = "Saved") => ({ path: `${backup}/${folder}/${targetId}.json`, origin: "restore" as const, snapshot: { ...live, [field]: value } })
   const prepare = async (requestValue = request()) => service().prepare(tenant, requestValue, options, async () => requestValue.snapshot)
   type Page = Awaited<ReturnType<typeof prepare>>
@@ -331,7 +331,7 @@ it.each(["journal", "coordinator"])("recovers the deadline from the surviving %s
   expect(sends).toBe(1)
 })
 
-it.each(folders.flatMap(folder => ["preview", "execute", "resume", "reconcile", "discard"].map(action => ({ folder, action }))))("persists $folder $action actor-read throttles and never sends before the deadline", async ({ folder, action }) => {
+it.each(folders.flatMap(folder => ["preview", "execute", "resume", "reconcile"].map(action => ({ folder, action }))))("persists $folder $action actor-read throttles and never sends before the deadline", async ({ folder, action }) => {
   const env = world(folder), request = env.request(), page = await env.prepare(request), original = env.graph.getMockImplementation()!
   let throttle = false, sends = 0
   env.graph.mockImplementation((input, init) => {
@@ -339,15 +339,15 @@ it.each(folders.flatMap(folder => ["preview", "execute", "resume", "reconcile", 
     if (init?.method === "PATCH") { sends++; return Promise.resolve(new Response(null, { status: 503 })) }
     return original(input, init)
   })
-  if (action === "reconcile" || action === "discard") expect(await env.execute(page, request)).toMatchObject({ outcomes: [{ state: "uncertain" }] })
+  if (action === "reconcile") expect(await env.execute(page, request)).toMatchObject({ outcomes: [{ state: "uncertain" }] })
   vi.useFakeTimers()
   const deadline = Date.now() + 120_000
   throttle = true
-  await expect(action === "preview" ? env.prepare(request) : action === "execute" ? env.execute(page, request) : action === "resume" ? env.service().resume(tenant, { ...request, runId: page.runId }) : env.service().saved(tenant, page.runId, action as "reconcile" | "discard")).rejects.toThrow("throttled")
+  await expect(action === "preview" ? env.prepare(request) : action === "execute" ? env.execute(page, request) : action === "resume" ? env.service().resume(tenant, { ...request, runId: page.runId }) : env.service().saved(tenant, page.runId, "reconcile")).rejects.toThrow("throttled")
   expect(JSON.parse(env.data.get(`restore.directory.coordinator.${tenant}`)!).deadlines[targetId]).toBe(deadline)
-  if (action === "reconcile" || action === "discard") expect(env.entry(page)).toMatchObject({ state: "uncertain", retryAt: deadline, targetId })
+  if (action === "reconcile") expect(env.entry(page)).toMatchObject({ state: "uncertain", retryAt: deadline, targetId })
   throttle = false
-  if (action === "reconcile" || action === "discard") {
+  if (action === "reconcile") {
     env.live[env.field] = "Saved"
     const calls = env.graph.mock.calls.length
     expect(await env.service().saved(tenant, page.runId, "reconcile")).toMatchObject({ outcomes: [{ state: "uncertain", retryAt: deadline }] })
@@ -360,7 +360,7 @@ it.each(folders.flatMap(folder => ["preview", "execute", "resume", "reconcile", 
   }
   const newerRequest = env.request("newer", "Newer"), newer = await env.prepare(newerRequest)
   expect(await env.execute(newer, newerRequest)).toMatchObject({ outcomes: [{ state: "deferred", retryAt: deadline }] })
-  expect(sends).toBe(action === "reconcile" || action === "discard" ? 1 : 0)
+  expect(sends).toBe(action === "reconcile" ? 1 : 0)
 })
 
 it.each(folders)("retains the attempt-bound %s retry in memory when both durable records fail", async folder => {
@@ -420,4 +420,26 @@ it.each(["preview", "execute", "resume", "reconcile"].flatMap(action => folders.
   if (action === "reconcile") env.live[env.field] = "Saved"
   expect(await execute()).toMatchObject({ outcomes: [{ state: "applied" }] })
   expect(env.writes).toHaveLength(action === "reconcile" ? 0 : 1)
+})
+
+
+it.each(folders)("keeps uncertain %s writes locked on local discard without Graph reads", async folder => {
+  const env = world(folder), request = env.request(), page = await env.prepare(request), original = env.graph.getMockImplementation()!
+  let sends = 0
+  env.graph.mockImplementation((input, init) => {
+    if (init?.method === "PATCH") { sends++; return Promise.resolve(new Response(null, { status: 503 })) }
+    return original(input, init)
+  })
+  expect(await env.execute(page, request)).toMatchObject({ outcomes: [{ state: "uncertain" }] })
+  const state = env.data.get(`restore.directory.coordinator.${tenant}`), calls = env.graph.mock.calls.length
+  env.graph.mockImplementation(async () => new Response(null, { status: 403 }))
+  await expect(env.service().saved(tenant, page.runId, "discard")).rejects.toThrow("Confirm the uncertain result before discarding")
+  expect(env.graph).toHaveBeenCalledTimes(calls)
+  expect(env.data.get(`restore.directory.coordinator.${tenant}`)).toBe(state)
+  expect(env.entry(page)).toMatchObject({ state: "uncertain", targetId })
+  env.graph.mockImplementation(original); env.live[env.field] = "Saved"
+  expect(await env.service().saved(tenant, page.runId, "reconcile")).toMatchObject({ outcomes: [{ state: "applied" }] })
+  const confirmedCalls = env.graph.mock.calls.length
+  expect(await env.service().saved(tenant, page.runId, "discard")).toMatchObject({ discarded: true })
+  expect(env.graph).toHaveBeenCalledTimes(confirmedCalls); expect(sends).toBe(1)
 })

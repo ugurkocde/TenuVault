@@ -39,10 +39,10 @@ export class DirectoryRestoreService {
   private readonly pending = new DirectoryPendingPublications(() => this.now())
   private readonly running = new Map<string, AbortController>()
   private readonly store: PartitionedRestoreStore
-  constructor(store: PartitionedRestoreStore, private readonly recovery: RecoveryAccounts, private readonly connection: (tenant: string) => Promise<RestoreConnection>, private readonly fetchImpl: typeof fetch = fetch, private readonly protectedAppIds: (tenant: string) => readonly string[] = () => [], private readonly settings?: Pick<ModuleSettings, "get">, private readonly now: () => number = () => Date.now()) {
+  constructor(store: PartitionedRestoreStore, private readonly recovery: RecoveryAccounts, private readonly connection: (tenant: string) => Promise<RestoreConnection>, private readonly localOwner: (tenant: string) => Promise<Pick<RestoreConnection, "tenantId" | "userId" | "clientId">>, private readonly fetchImpl: typeof fetch = fetch, private readonly protectedAppIds: (tenant: string) => readonly string[] = () => [], private readonly settings?: Pick<ModuleSettings, "get">, private readonly now: () => number = () => Date.now()) {
     this.store = { partitioned: store.partitioned, get: name => restorePersistence(() => store.get(name)), set: (name, value) => restorePersistence(() => store.set(name, value)), delete: name => restorePersistence(() => store.delete(name)) }
   }
-  private async context(tenant: string, onThrottled?: (retryAt: number) => void, validatedConnection?: RestoreConnection) {
+  private async context(tenant: string, onThrottled?: (retryAt: number) => void, validatedConnection?: RestoreConnection, pageId?: string) {
     const connection = validatedConnection ?? await this.connection(tenant)
     if (connection.tenantId.toLowerCase() !== tenant.toLowerCase()) fail("The connection belongs to another tenant.")
     requireRestoreActor(connection.token, { ...connection, recoveryAccountIds: [] })
@@ -75,22 +75,26 @@ export class DirectoryRestoreService {
     const applicationIO = directory9bIO(connection.token, actor, this.fetchImpl, () => this.protectedAppIds(tenant), () => this.settings?.get(tenant).entra, undefined, onThrottled)
     for (const adapter of [io, applicationIO]) {
       adapter.now = this.now
-      adapter.persistRetry = (_step, journal, coordinator, retryAt) => this.persistRetry(tenant, retryAt, journal, coordinator)
-      adapter.persistConfirmed = (_step, save) => this.pending.forTenant(tenant).retain(save)
+      adapter.persistRetry = (_step, journal, coordinator, retryAt) => this.persistRetry(tenant, retryAt, journal, coordinator, pageId)
+      adapter.persistConfirmed = (_step, save) => this.pending.forTenant(tenant).retain(save, undefined, pageId)
     }
     return { actor, io, applicationIO }
   }
-  private persistRetry(tenant: string, retryAt: number, journal: () => void, coordinator: () => void) {
-    this.pending.forTenant(tenant).retain(() => persistDirectoryRetry(journal, coordinator), retryAt)
+  private persistRetry(tenant: string, retryAt: number, journal: () => void, coordinator: () => void, pageId?: string) {
+    this.pending.forTenant(tenant).retain(() => persistDirectoryRetry(journal, coordinator), retryAt, pageId)
   }
+  private verifyOwner(page: DirectoryPage, connection: Pick<RestoreConnection, "tenantId" | "userId" | "clientId">) {
+    if (connection.tenantId.toLowerCase() !== page.run.tenant.toLowerCase() || connection.tenantId.toLowerCase() !== page.run.actor.tenantId.toLowerCase() || connection.userId.toLowerCase() !== page.run.actor.userId.toLowerCase() || connection.clientId.toLowerCase() !== page.run.actor.clientId.toLowerCase()) fail("Use the admin and connection that reviewed this page.")
+  }
+  private async verifyLocalOwner(page: DirectoryPage) { this.verifyOwner(page, await this.localOwner(page.run.tenant)) }
   private async ownerConnection(page: DirectoryPage) {
     const connection = await this.connection(page.run.tenant)
     requireRestoreActor(connection.token, { ...connection, recoveryAccountIds: [] })
-    if (connection.tenantId.toLowerCase() !== page.run.tenant.toLowerCase() || connection.tenantId.toLowerCase() !== page.run.actor.tenantId.toLowerCase() || connection.userId.toLowerCase() !== page.run.actor.userId.toLowerCase() || connection.clientId.toLowerCase() !== page.run.actor.clientId.toLowerCase()) fail("Use the admin and connection that reviewed this page.")
+    this.verifyOwner(page, connection)
     return connection
   }
   private async pageConnection(page: DirectoryPage) {
-    this.pending.forTenant(page.run.tenant).flush()
+    this.pending.forTenant(page.run.tenant).flush(page.run.id)
     const connection = await this.ownerConnection(page)
     captureDirectoryExecutionActor(connection)
     return connection
@@ -109,7 +113,7 @@ export class DirectoryRestoreService {
   }
   private save(page: DirectoryPage) { this.store.set(key(page.run.tenant, page.run.id), JSON.stringify(page)) }
   async prepare(tenant: string, request: IdentityRestoreRequest, options: DirectoryOptions, read: (path: string) => Promise<unknown>) {
-    this.pending.forTenant(tenant).flush()
+    this.pending.forTenant(tenant).flush(options.previousRunId)
     try { return await this.preparePage(tenant, request, options, read) }
     catch (error) {
       if (isRestorePersistenceError(error)) throw error
@@ -343,7 +347,7 @@ export class DirectoryRestoreService {
     try {
       const page = this.load(tenant, request.runId!)
       const connection = await this.pageConnection(page)
-      const { actor } = await this.context(tenant, retryAt => this.recordPageThrottle(page, retryAt), connection)
+      const { actor } = await this.context(tenant, retryAt => this.recordPageThrottle(page, retryAt), connection, page.run.id)
       if (request.origin !== "restore" || page.run.origin !== request.origin || page.run.source?.path !== request.path || page.run.source.fingerprint !== restoreFingerprint(request.snapshot) || actor.userId !== page.run.actor.userId || actor.clientId !== page.run.actor.clientId) fail("Resume the original backup with the admin and connection that reviewed it.")
       return this.view(page)
     } finally { operation.finish() }
@@ -377,7 +381,7 @@ export class DirectoryRestoreService {
     const selection = page.rows.filter(row => !row.review.blocker && row.review.approvals.every(kind => approvals[row.key]?.includes(kind))).map(row => row.key)
     if (!selection.length || (page.selection && JSON.stringify(page.selection) !== JSON.stringify(selection))) fail("Approve each selected row separately. A resumed page must keep its original selection.")
     page.selection = selection; this.save(page)
-    const context = await this.context(tenant, retryAt => this.recordPageThrottle(page, retryAt), connection), actor = context.actor
+    const context = await this.context(tenant, retryAt => this.recordPageThrottle(page, retryAt), connection, page.run.id), actor = context.actor
     const rawIO = DIRECTORY_9B_FOLDERS.includes(request.path.split("/")[1]!) ? context.applicationIO : context.io
     const principalValidation = page.inventory ? new DirectoryPrincipalMappings(this.store, tenant, page.inventory.id) : undefined
     const io = { ...rawIO, write: ((step, body, targetId, beforeSend, run, signal, onUnapplied) => rawIO.write(step, body, targetId, () => {
@@ -416,7 +420,7 @@ export class DirectoryRestoreService {
       const runs = this.history(page)
       const steps = runs.length ? runs.flatMap(({ run }) => run.entries.map(entry => ({ ...entry.step, targetId: entry.targetId ?? entry.step.targetId }))) : page.run.entries.map(({ step }) => step)
       for (const step of steps) objects.recordThrottle(step, retryAt)
-    })
+    }, page.run.id)
   }
   private history(page: DirectoryPage) {
     const prefix = directoryPagePrefix(page.run.tenant, page.run.id)
@@ -439,12 +443,21 @@ export class DirectoryRestoreService {
   /** Saved-page actions trust only durable identity and journal data, never renderer snapshots. */
   async saved(tenant: string, id: string, action: "reconcile" | "discard") {
     const page = this.load(tenant, id), runningKey = key(tenant, id)
+    await this.verifyLocalOwner(page)
     if (this.running.has(runningKey)) fail("This directory page is already running.")
     const controller = new AbortController()
     this.running.set(runningKey, controller)
     try {
-      const connection = await this.pageConnection(page)
       const state = directoryObjectState(this.store, tenant, id)
+      if (action === "discard") {
+        this.pending.forTenant(tenant).flush(page.run.id)
+        state.recoverMappings(page.run.entries.map(entry => entry.step))
+        if (this.history(page).some(({ run }) => run.entries.some(entry => entry.state === "uncertain"))) fail("Confirm the uncertain result before discarding this saved restore.")
+        state.release(true)
+        if (!state.discarded()) fail("The discard marker could not be verified. This page remains saved.")
+        return this.view(page)
+      }
+      const connection = await this.pageConnection(page)
       if (action === "reconcile") {
         const runs = this.history(page)
         const target = (entry: GuardedRun["entries"][number]) => (entry.targetId ?? entry.step.targetId ?? directoryMappedId(this.store, tenant, entry.step.folder, entry.step.sourceId) ?? entry.step.sourceId).toLowerCase()
@@ -459,15 +472,8 @@ export class DirectoryRestoreService {
         for (const entry of entries) if (deadlines.get(target(entry))) entry.retryAt = deadlines.get(target(entry))
         if (entries.some(entry => (entry.retryAt ?? 0) > Date.now()) && !entries.some(entry => entry.state === "uncertain" && (entry.retryAt ?? 0) <= Date.now())) return { ...this.view(page), ...this.results(page, { status: "partial", batches: 0, failed: 0 }, runs) }
       }
-      const context = await this.context(tenant, retryAt => this.recordPageThrottle(page, retryAt), connection)
+      const context = await this.context(tenant, retryAt => this.recordPageThrottle(page, retryAt), connection, page.run.id)
       if (context.actor.userId !== page.run.actor.userId || context.actor.clientId !== page.run.actor.clientId) fail("Use the admin and connection that reviewed this page.")
-      if (action === "discard") {
-        state.recoverMappings(page.run.entries.map(entry => entry.step))
-        if (this.history(page).some(({ run }) => run.entries.some(entry => entry.state === "uncertain"))) fail("Confirm the uncertain result before discarding this saved restore.")
-        state.release(true)
-        if (!state.discarded()) fail("The discard marker could not be verified. This page remains saved.")
-        return this.view(page)
-      }
       if (!this.history(page).length && !this.store.get(directoryPagePrefix(tenant, id) + "batch.0.plan")) {
         return { ...this.view(page), ...this.results(page, { status: "nothing-sent", batches: 0, failed: 0 }, []) }
       }
@@ -486,7 +492,7 @@ export class DirectoryRestoreService {
     } finally { this.running.delete(runningKey) }
   }
   async cancel(tenant: string, id: string) {
-    await this.ownerConnection(this.load(tenant, id))
+    await this.verifyLocalOwner(this.load(tenant, id))
     const controller = this.running.get(key(tenant, id))
     controller?.abort()
     return { cancelled: !!controller?.signal.aborted }

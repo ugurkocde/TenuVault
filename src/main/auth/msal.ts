@@ -255,6 +255,15 @@ export class AuthManager {
     return this.host.accountStore.list()
   }
 
+  /** Reads the signed-in tenant identity from the same local MSAL account used for tokens. */
+  async cachedAccountIdentity(tenantId: string): Promise<{ tenantId: string; clientId: string; userId: string }> {
+    const tenant = tenantId.toLowerCase(), stored = this.host.accountStore.get(tenant)
+    const account = stored ? await this.findAccount(this.app(stored.clientId), stored.homeAccountId) : null
+    const profile = account?.tenantId.toLowerCase() === tenant ? account : [...(account?.tenantProfiles?.values() ?? [])].find(profile => profile.tenantId.toLowerCase() === tenant)
+    if (!stored || stored.tenantId.toLowerCase() !== tenant || !profile?.localAccountId) throw new SignInRequiredError(tenantId, stored?.clientId ?? "", "Sign in to this tenant before managing saved directory restores.")
+    return { tenantId: profile.tenantId, clientId: stored.clientId, userId: profile.localAccountId }
+  }
+
   /**
    * Returns an access token for `scope` in `tenantId` from the cache or with the refresh
    * token. Throws SignInRequiredError when the admin has to sign in again.

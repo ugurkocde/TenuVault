@@ -422,7 +422,7 @@ async function bootstrap(): Promise<void> {
     return { tenantId: tenant, clientId: account.clientId, userId: claims.oid, token: token.accessToken, auditActor: { username: token.account?.username ?? claims.oid, name: token.account?.name } }
   }
   const identityRestore = new IdentityRestoreService(guardedRestoreJournal(), recoveryAccounts, restoreConnection, bridgedFetch)
-  setDirectoryRestoreService(new DirectoryRestoreService(new DirectoryRestoreStore(join(userData, "directory-restore"), cipher), recoveryAccounts, restoreConnection, bridgedFetch, tenant => {
+  setDirectoryRestoreService(new DirectoryRestoreService(new DirectoryRestoreStore(join(userData, "directory-restore"), cipher), recoveryAccounts, restoreConnection, tenant => auth.cachedAccountIdentity(tenant), bridgedFetch, tenant => {
     const id = backupReader.status(tenant)?.clientId
     return id ? [id] : []
   }, moduleSettings))

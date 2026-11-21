@@ -98,7 +98,10 @@ export class RestorePersistenceError extends Error {}
 export const isRestorePersistenceError = (error: unknown): boolean => error instanceof RestorePersistenceError || error instanceof DirectoryRetryPersistenceError
 export function restorePersistence<T>(work: () => T): T {
   try { return work() }
-  catch (error) { throw new RestorePersistenceError(error instanceof Error ? error.message : "Restore history persistence failed. Resume to repeat safety checks.", { cause: error }) }
+  catch (error) {
+    if (error instanceof RestoreSafetyError) throw error
+    throw new RestorePersistenceError(error instanceof Error ? error.message : "Restore history persistence failed. Resume to repeat safety checks.", { cause: error })
+  }
 }
 
 /** All runs for a tenant share one atomic encrypted value, including unresolved earlier writes. */

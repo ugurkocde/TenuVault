@@ -131,7 +131,7 @@ it("refuses gallery guessing and ambiguous app ID lookups", async () => {
 it("uses saved page resume while refusing unapproved execution and imported origins", async () => {
   const env = world(), data = new Map<string, string>()
   const store = { partitioned: true as const, get: (key: string) => data.get(key) ?? null, set: (key: string, value: string) => { data.set(key, value) }, delete: (key: string) => { data.delete(key) } }
-  const service = () => new DirectoryRestoreService(store, new RecoveryAccounts(store), async () => ({ token, ...actor }), env.fetcher, () => [], env.settings)
+  const service = () => new DirectoryRestoreService(store, new RecoveryAccounts(store), async () => ({ token, ...actor }), async () => actor, env.fetcher, () => [], env.settings)
   const request = { path: `backup/Applications/${app.id}.json`, snapshot: { ...app, displayName: "Saved" }, origin: "restore" as const }
   const options = { stage: "object" as const, exactMembers: false, exactOwners: false }
   const page = await service().prepare(actor.tenantId, request, options, async () => app)
@@ -188,7 +188,7 @@ it("persists bounded application relationship pages and advances beyond unresolv
   const env = world(), ids = Array.from({ length: 65 }, (_, n) => id(100+n)), data = new Map<string, string>()
   const snapshot = { ...app, owners: { format: "sorted-id-shards-v1", complete: true, count: ids.length, shards: 1, hash: createHash("sha256").update(ids.map(value => JSON.stringify(value)+"\n").join("")).digest("hex") } }
   const store = { partitioned: true as const, get: (key: string) => data.get(key) ?? null, set: (key: string, value: string) => { data.set(key, value) }, delete: (key: string) => { data.delete(key) } }
-  const service = () => new DirectoryRestoreService(store, new RecoveryAccounts(store), async () => ({ token, ...actor }), env.fetcher, () => [], env.settings)
+  const service = () => new DirectoryRestoreService(store, new RecoveryAccounts(store), async () => ({ token, ...actor }), async () => actor, env.fetcher, () => [], env.settings)
   const request = { path: `backup/Applications/${app.id}.json`, snapshot, origin: "restore" as const }
   const options = { stage: "relationships" as const, exactMembers: false, exactOwners: false }
   const first = await service().prepare(actor.tenantId, request, options, async () => ids)
@@ -210,7 +210,7 @@ it("refuses principal-specific consent instead of replaying a raw saved user ID"
 it.each(["Applications"])("executes admitted %s metadata through the durable production service", async folder => {
   const env = world(), data = new Map<string, string>()
   const store = { partitioned: true as const, get: (key: string) => data.get(key) ?? null, set: (key: string, value: string) => { data.set(key, value) }, delete: (key: string) => { data.delete(key) } }
-  const service = () => new DirectoryRestoreService(store, new RecoveryAccounts(store), async () => ({ token, ...actor }), env.fetcher, () => [], env.settings)
+  const service = () => new DirectoryRestoreService(store, new RecoveryAccounts(store), async () => ({ token, ...actor }), async () => actor, env.fetcher, () => [], env.settings)
   const saved = { ...app, displayName: "Saved", description: "Saved description" }
   const request = { path: `backup/${folder}/${app.id}.json`, snapshot: saved, origin: "restore" as const }
   const page = await service().prepare(actor.tenantId, request, { stage: "object", exactMembers: false, exactOwners: false }, async () => saved)
@@ -227,7 +227,7 @@ it.each(["Applications"])("executes admitted %s metadata through the durable pro
 it.each([false, true])("keeps tenant-wide consent blocked through the production service, existing grant %s", async existing => {
   const env = world(), data = new Map<string, string>()
   const store = { partitioned: true as const, get: (key: string) => data.get(key) ?? null, set: (key: string, value: string) => { data.set(key, value) }, delete: (key: string) => { data.delete(key) } }
-  const service = new DirectoryRestoreService(store, new RecoveryAccounts(store), async () => ({ token, ...actor }), env.fetcher, () => [], env.settings)
+  const service = new DirectoryRestoreService(store, new RecoveryAccounts(store), async () => ({ token, ...actor }), async () => actor, env.fetcher, () => [], env.settings)
   const saved = { id: "A".repeat(43), clientId: client.id, resourceId: app.id, consentType: "AllPrincipals", principalId: null, scope: "Test.Read" }
   if (existing) env.grants.push({ ...saved, scope: "Existing.Read" })
   const request = { path: `backup/OAuth2PermissionGrants/${saved.id}.json`, snapshot: saved, origin: "restore" as const }
@@ -252,7 +252,7 @@ it("refuses null metadata clearing and a synchronized or protected enterprise ap
 it("keeps saved app roles blocked after the lab recreation refusal despite all approvals", async () => {
   const env = world(), data = new Map<string, string>()
   const store = { partitioned: true as const, get: (key: string) => data.get(key) ?? null, set: (key: string, value: string) => { data.set(key, value) }, delete: (key: string) => { data.delete(key) } }
-  const service = new DirectoryRestoreService(store, new RecoveryAccounts(store), async () => ({ token, ...actor }), env.fetcher, () => [], env.settings)
+  const service = new DirectoryRestoreService(store, new RecoveryAccounts(store), async () => ({ token, ...actor }), async () => actor, env.fetcher, () => [], env.settings)
   const assignment = { id: "A".repeat(43), principalId: client.id, resourceId: app.id, appRoleId: id(90) }
   const declare = (rows: unknown[], ids = false) => ({ format: ids ? "sorted-id-shards-v1" : "sorted-object-shards-v1", count: rows.length, shards: rows.length ? 1 : 0, complete: true, hash: createHash("sha256").update(rows.map(row => JSON.stringify(row)+"\n").join("")).digest("hex") })
   const saved = { ...client, owners: declare([], true), appRoleAssignments: declare([assignment]), appRoleAssignedTo: declare([]) }
@@ -284,7 +284,7 @@ function runFor(candidate: GuardedStep): GuardedRun {
 function persisted(env = world(), protectedIds: string[] = []) {
   const data = new Map<string, string>()
   const store = { partitioned: true as const, get: (key: string) => data.get(key) ?? null, set: (key: string, value: string) => { data.set(key, value) }, delete: (key: string) => { data.delete(key) } }
-  const service = () => new DirectoryRestoreService(store, new RecoveryAccounts(store), async () => ({ token, ...actor }), env.fetcher, () => protectedIds, env.settings)
+  const service = () => new DirectoryRestoreService(store, new RecoveryAccounts(store), async () => ({ token, ...actor }), async () => actor, env.fetcher, () => protectedIds, env.settings)
   return { ...env, store, data, service }
 }
 const options = { stage: "object" as const, exactMembers: false, exactOwners: false }
@@ -313,7 +313,7 @@ it("refuses preview and send when no saved settings provider is supplied", async
   await expect(io.write(candidate, candidate.desired, candidate.targetId, () => {}, runFor(candidate))).rejects.toThrow("Backup and restore access")
   const data = new Map<string, string>()
   const store = { partitioned: true as const, get: (key: string) => data.get(key) ?? null, set: (key: string, value: string) => { data.set(key, value) }, delete: (key: string) => { data.delete(key) } }
-  const service = new DirectoryRestoreService(store, new RecoveryAccounts(store), async () => ({ token, ...actor }), env.fetcher)
+  const service = new DirectoryRestoreService(store, new RecoveryAccounts(store), async () => ({ token, ...actor }), async () => actor, env.fetcher)
   await expect(service.prepare(actor.tenantId, metadataRequest(), options, async () => app)).rejects.toThrow("Backup and restore access")
   expect(env.writes).toEqual([])
 })
