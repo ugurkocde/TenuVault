@@ -82,7 +82,7 @@ Below the cards, the table lists the events, newest first, with **Timestamp**, *
 
 Open **Job details** on a restore to see its operation and run IDs, source backup, destination tenant and per-item outcomes. Created and updated items show the recorded fields for planned, applied or verified steps. Partial and pending items can have earlier applied steps. An unchanged item required no write. A skipped or unattempted item had no write dispatched. An uncertain item needs review in Intune. **Change details unavailable** appears when the event lacks evidence for a diff, including older restore entries.
 
-Cross-tenant restores appear under each destination. Retry attempts have their own run IDs. Their operation ID relates them to the original restore, including Intune approval submission and completion. The approver is shown when Microsoft returns their identity. Raw justification text stays in Intune.
+Cross-tenant restores appear under each destination. Retry attempts have their own run IDs. Their operation ID relates them to the original restore. A retry linked to its original job keeps that operation ID across restarts. Intune approval submission and completion use the same operation ID. Refused completion attempts are recorded with the Intune request ID. An approval completion lists the applied approved step and the outcomes of subsequent content or assignment steps. The approver is shown when Microsoft returns their identity. Raw justification text stays in Intune.
 
 **Auto-refresh** is on by default and reloads the page every 30 seconds; the time of the last reload is shown next to it. **Refresh** reloads right away.
 
@@ -114,7 +114,7 @@ The export holds every matching event of the selected tenant, not just the curre
 * **CSV** columns: Timestamp, Operation, Event type, Actor, Affected scope, Outcome, Severity, Correlation ID and Details. Actor shows “Not recorded” when the identity was unavailable. The job detail includes the producer, specific status and every item where recorded.
 * **JSON** contains the notice, the filter used and every event with its details.
 
-Exports include field names and setting definition IDs. Policy values, payloads, raw error messages, scripts, decision notes and request bodies are omitted. New events use the same daily format as earlier releases. Large jobs store detail pages with the root event so the job is counted once.
+Exports include field names and setting definition IDs. Policy values, payloads, raw error messages, scripts, decision notes and request bodies are omitted. New events use the same daily format as earlier releases. Large jobs store detail pages with the root event so the job is counted once. Retention ages those pages with the root. When a page is missing, history and exports retain the row and mark the item details incomplete.
 
 ## Plan requirements
 

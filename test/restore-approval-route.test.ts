@@ -143,17 +143,18 @@ it("records the completed request and the next submission with separate IDs unde
   saveRestoreApproval({ ...record, operationId, remaining: [{
     method: "POST", kind: "assignments", path: `deviceManagement/deviceCategories/${objectId}/assign`, body: '{"assignments":[]}',
   }], totalSteps: 2 })
+  const local = memoryStore()
   const original = network()
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     if (String(input).includes("operationApprovalRequests/")) return Response.json({ status: "approved" })
     if (String(input).endsWith("/assign")) {
-      expect(pendingEvents(account)[0]?.job?.items?.[0]?.approval?.requestId).toBe(code)
+      expect(pendingEvents(account)).toHaveLength(0)
+      expect(local.get("audit.restore-jobs")).toContain(code)
       return Response.json({}, { status: 412, headers: { "x-msft-approval-code": nextId } })
     }
     if (new Headers(init?.headers).get("x-msft-approval-code") === code) return Response.json({ id: objectId }, { status: 201 })
     return original(input, init)
   }))
-  const local = memoryStore()
   setAuditOutboxStore(local)
   setMainAuditSink(new AuditSink({
     store: local,
@@ -163,8 +164,8 @@ it("records the completed request and the next submission with separate IDs unde
   const response = await POST(request({ approvalAction: "complete", approvalId: code }))
   expect(await response.json()).toMatchObject({ outcome: { approvalId: nextId } })
   expect(pendingEvents(account).map(item => item.job)).toMatchObject([
-    { operationId, stage: "approval-complete", status: "completed", items: [{ outcome: "created", approval: { requestId: code } }] },
     { operationId, stage: "approval-submit", status: "pending", items: [{ outcome: "pending", approval: { requestId: nextId } }] },
+    { operationId, stage: "approval-complete", status: "warnings", items: [{ outcome: "pending", approval: { requestId: code } }] },
   ])
   expect(restoreApprovals(tenantId).find(item => item.id === nextId)?.operationId).toBe(operationId)
 })
@@ -187,7 +188,140 @@ it("records a refusal before dispatch as failed with a stable reason", async () 
   }))
   expect((await POST(request({ approvalAction: "complete", approvalId: code }))).status).toBe(409)
   expect(calls.mock.calls.filter(([url, init]) => String(url).includes("graph.microsoft.com") && init?.method !== "GET")).toHaveLength(0)
-  expect(pendingEvents(account)[0]?.job).toMatchObject({ status: "failed", stage: "approval-complete", items: [{
+  expect(pendingEvents(account)[0]?.job).toMatchObject({ status: "failed", stage: "approval-attempt", items: [{
     outcome: "failed", reason: "APPROVAL_COMPLETION_REFUSED", approval: { requestId: code },
   }] })
+})
+
+it.each([[400, "failed"], [503, "uncertain"]] as const)("audits a %s assignment after the approved create and deduplicates on restart", async (status, stepOutcome) => {
+  await seed()
+  const record = restoreApprovals(tenantId)[0]!
+  const objectId = "99999999-9999-4999-8999-999999999999"
+  saveRestoreApproval({ ...record, totalSteps: 2, remaining: [{
+    method: "POST", kind: "assignments", path: `deviceManagement/deviceCategories/${objectId}/assign`, body: '{"assignments":[]}',
+  }] })
+  const account = "approvalaudit"
+  const local = memoryStore()
+  setAuditOutboxStore(local)
+  const opts = {
+    store: local,
+    bind: () => ({ tenantId, storageAccountName: account, user: { id: requesterId, name: "Requester", email: "" } }),
+    transport: async () => { throw new Error("Offline") },
+  }
+  setMainAuditSink(new AuditSink(opts))
+  const original = network()
+  const writes = vi.fn()
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).includes("operationApprovalRequests/")) return Response.json({ status: "approved" })
+    if (String(input).endsWith("/assign")) {
+      writes("assign")
+      return Response.json({}, { status })
+    }
+    if (new Headers(init?.headers).get("x-msft-approval-code") === code) {
+      writes("create")
+      return Response.json({ id: objectId }, { status: 201 })
+    }
+    return original(input, init)
+  }))
+  const response = await POST(request({ approvalAction: "complete", approvalId: code }))
+  expect(await response.json()).toMatchObject({ outcome: { success: false, partial: true, auditUncertain: status === 503 } })
+  const [entry] = pendingEvents(account)
+  expect(entry?.job).toMatchObject({ status: "warnings", stage: "approval-complete", items: [{
+    targetId: objectId, outcome: "partial", approval: { requestId: code },
+    applied: expect.arrayContaining([{ operation: "create", field: "displayName" }]),
+    steps: [{ kind: "content", outcome: "applied" }, { kind: "assignments", outcome: stepOutcome }],
+  }] })
+  // The receipt was durably handed to the outbox, but the approval record still needs reconciliation.
+  saveRestoreApproval({ ...record, objectId, status: "approved", continuationPending: true })
+  const restarted = new AuditSink(opts)
+  restarted.recover()
+  setMainAuditSink(restarted)
+  await POST(request({ approvalAction: "complete", approvalId: code }))
+  expect(pendingEvents(account).map(item => item.id)).toEqual([entry?.id])
+  expect(writes.mock.calls).toEqual([["create"], ["assign"]])
+})
+
+it.each([400, 403])("records definitive Graph refusal %s after dispatch with the original approval ID", async status => {
+  await seed()
+  const account = "approvaldenied"
+  const local = memoryStore()
+  setAuditOutboxStore(local)
+  setMainAuditSink(new AuditSink({
+    store: local,
+    bind: () => ({ tenantId, storageAccountName: account, user: { id: requesterId, name: "Requester", email: "" } }),
+    transport: async () => { throw new Error("Offline") },
+  }))
+  const original = network()
+  let graphStatus = status
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).includes("operationApprovalRequests/")) return Response.json({ status: "approved" })
+    if (new Headers(init?.headers).get("x-msft-approval-code") === code) {
+      expect(local.get("audit.restore-jobs")).toContain(code)
+      return graphStatus === 201 ? Response.json({ id: requesterId }, { status: 201 }) : Response.json({ error: { message: "Denied" } }, { status: graphStatus })
+    }
+    return original(input, init)
+  }))
+  const refusal = await POST(request({ approvalAction: "complete", approvalId: code }))
+  expect(refusal.status).toBe(status)
+  expect(await refusal.json()).toMatchObject({ code: "APPROVAL_COMPLETION_REFUSED" })
+  expect(pendingEvents(account)[0]?.job).toMatchObject({ status: "failed", items: [{
+    outcome: "failed", reason: "APPROVAL_COMPLETION_REFUSED", approval: { requestId: code },
+  }] })
+  graphStatus = 201
+  expect((await POST(request({ approvalAction: "complete", approvalId: code }))).status).toBe(200)
+  expect(pendingEvents(account).map(entry => [entry.job?.stage, entry.job?.status])).toEqual([
+    ["approval-attempt", "failed"], ["approval-complete", "completed"],
+  ])
+})
+
+it("records a read failure before any restore write as failed", async () => {
+  const graph: GraphCall = vi.fn(async () => { throw new Error("Preflight read failed") })
+  const outcome = await new Restorer(graph, { mode: "replace", assignments: false })
+    .restore("backup/DeviceCategories/test.json", { id: "test", displayName: "Test" })
+  expect(outcome).toMatchObject({ success: false, auditUncertain: false })
+})
+
+it("correlates a retry after main restarts only for the original actor, source and destination", async () => {
+  const local = memoryStore()
+  const account = "restorecorrelation"
+  const foreignTenant = "88888888-8888-4888-8888-888888888888"
+  const opts = {
+    store: local,
+    bind: (destination: string) => ({ tenantId: destination, storageAccountName: account, user: { id: requesterId, name: "Requester", email: "" } }),
+    transport: async () => { throw new Error("Offline") },
+  }
+  setAuditOutboxStore(local)
+  let actor = requesterId
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const url = new URL(String(input))
+    if (url.hostname === "login.microsoftonline.com") return Response.json({
+      access_token: `header.${Buffer.from(JSON.stringify({ oid: actor, tid: url.pathname.split("/")[1], scp: "DeviceManagementConfiguration.ReadWrite.All" })).toString("base64url")}.signature`,
+    })
+    if (url.pathname.endsWith("/metadata.json")) return Response.json({ TenantId: tenantId, Status: "Success" })
+    if (url.pathname.endsWith("/test.json")) return Response.json({ displayName: "Test" })
+    if (url.hostname === "graph.microsoft.com") return Response.json({}, { status: 400 })
+    return new Response(null, { status: 404 })
+  }))
+  const run = async (backupId: string, retryOf?: string, target?: string) => {
+    const response = await POST(request({
+      storageAccountName: account, backupId, retryOf, restoreType: "selective",
+      selectedPolicies: [{ path: `${backupId}/DeviceCategories/test.json` }],
+      ...(target ? { targetTenants: [{ tenantId: target, appId: requesterId }] } : {}),
+    }))
+    expect(response.status).toBe(200)
+    const { jobId, details } = await response.json()
+    expect(details.results[0].retryJobId).toBe(jobId)
+    return jobId as string
+  }
+  setMainAuditSink(new AuditSink(opts))
+  const original = await run("backup")
+  setMainAuditSink(new AuditSink(opts))
+  const retry = await run("backup", original)
+  const differentSource = await run("other", original)
+  const differentDestination = await run("backup", original, foreignTenant)
+  actor = foreignTenant
+  const differentActor = await run("backup", original)
+  const operations = new Map(pendingEvents(account).map(entry => [entry.job?.runId, entry.job?.operationId]))
+  expect(operations.get(retry)).toBe(original)
+  for (const id of [differentSource, differentDestination, differentActor]) expect(operations.get(id)).toBe(id)
 })

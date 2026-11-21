@@ -1,4 +1,4 @@
-param([switch]$Paged)
+param([switch]$Paged, [switch]$Budgeted, [switch]$Aged)
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "../../../resources/runbooks/Invoke-TenuVaultBackup.ps1") -LibraryOnly
 
@@ -10,13 +10,20 @@ $context = @{ TenantId = $tenantId; StorageAccount = "stcontoso"; StorageToken =
 $script:blobs = @{}
 $script:loseAuditResponse = $true
 $script:denied = $true
+$script:syntheticPages = 0
 $script:calls = [System.Collections.Generic.List[object]]::new()
 function Invoke-TvHttp {
-    param([string]$Uri, [string]$Token, [string]$Method = "Get", [hashtable]$Headers, [byte[]]$BodyBytes, [string]$ContentType, [long]$MaxBytes)
+    param([string]$Uri, [string]$Token, [string]$Method = "Get", [hashtable]$Headers, [byte[]]$BodyBytes, [string]$ContentType, [long]$MaxBytes, [int]$BudgetMs)
     $script:calls.Add(@{ uri = $Uri; method = $Method; condition = $Headers["If-None-Match"] })
     if ($Uri -like "*comp=list*") {
         $prefix = [uri]::UnescapeDataString([regex]::Match($Uri, 'prefix=([^&]*)').Groups[1].Value)
         $marker = [uri]::UnescapeDataString([regex]::Match($Uri, 'marker=([^&]*)').Groups[1].Value)
+        if ($Budgeted -and $prefix.EndsWith([DateTime]::UtcNow.ToString("yyyy-MM-dd") + "-")) {
+            $script:syntheticPages++
+            $page = if ($marker) { [int]$marker + 1 } else { 1 }
+            $next = if ($page -lt 1400) { $page }
+            return @{ Text = "<EnumerationResults><Blobs /><NextMarker>$next</NextMarker></EnumerationResults>" }
+        }
         $names = @($script:blobs.Keys | Where-Object { $_ -like "*/tenuvault-backup-results/*" } | ForEach-Object { ([uri]$_).AbsolutePath.Substring("/tenuvault-backup-results/".Length) } |
             Where-Object { $_.StartsWith($prefix, [StringComparison]::Ordinal) } | Sort-Object)
         if ($marker) { $names = @($names | Where-Object { [string]::CompareOrdinal($_, $marker) -gt 0 }) }
@@ -41,7 +48,18 @@ function Invoke-TvHttp {
 $runId = "33333333-3333-3333-3333-333333333333"
 $output = @(Write-TvTerminalAudit $context $runId "CompletedWithWarnings" "backup-2026-11-20-120000" 10 1 "scheduled" "BACKUP_WARNINGS" 3>&1)
 $pending = $context.AuditPending
-if ($Paged) {
+if ($Budgeted -or $Aged) {
+    $script:calls.Clear()
+    $replay = Invoke-TvAuditReplay $context 3>$null
+    $firstRequests = $script:calls.Count
+    $script:calls.Clear()
+    $replayAgain = if ($Aged) { Invoke-TvAuditReplay $context -Today ([DateTime]::UtcNow.Date.AddDays(15)) 3>$null }
+        else { Invoke-TvAuditReplay $context 3>$null }
+    if ($Aged) {
+        $script:denied = $false
+        $operator = Invoke-TvAuditReplay $context -Today ([DateTime]::UtcNow.Date.AddDays(15)) -IncludeOlder 3>$null
+    }
+} elseif ($Paged) {
     foreach ($number in 1..4) {
         $additional = "44444444-4444-4444-4444-44444444444$number"
         $file = New-TvAuditFile $context $additional "Success" "" 0 0 "scheduled"
@@ -60,5 +78,5 @@ if ($Paged) {
 }
 [Console]::WriteLine((@{
     blobs = $script:blobs; calls = $script:calls; pending = $pending
-    replay = $replay; replayAgain = $replayAgain; output = @($output | ForEach-Object { [string]$_ })
+    replay = $replay; replayAgain = $replayAgain; firstRequests = $firstRequests; operator = $operator; output = @($output | ForEach-Object { [string]$_ })
 } | ConvertTo-Json -Compress -Depth 8))

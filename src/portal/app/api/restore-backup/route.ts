@@ -1,12 +1,13 @@
+import { auditUserFromToken, mainAuditSink } from "../../../../main/api/audit-sink"
 import { AuditEventType, type AuditJobItem } from "~/lib/audit/types"
 import { beginRestoreAudit, restoreAuditItem } from "~/lib/audit/restore"
 import { restoreApprovals, dismissRestoreApproval, saveRestoreApproval } from "../../../../main/storage/restore-approvals"
 import { parseDependencyMappings } from "../../../../shared/intune/recovery"
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import { checkRestoreManifest, verifySnapshot, type ManifestEntry } from "~/lib/policies/backup-manifest"
 import { readOwnedBackup, UNTAGGED_BACKUP } from "~/lib/policies/backup-owner"
 import { validPolicyPath } from "~/lib/policies/restore"
-import { graphCaller, Restorer, DependencyMappingError, type RestoreOutcome } from "~/lib/policies/graph-restore"
+import { graphCaller, Restorer, ApprovalCompletionRefused, DependencyMappingError, type RestoreOutcome } from "~/lib/policies/graph-restore"
 import { PROGRESS_ID, startProgress } from "~/lib/policies/restore-progress"
 import { restoreOrder, type Item } from "../../../../shared/intune/registry"
 import { grantedPermissions } from "../../../../shared/services/token"
@@ -56,9 +57,6 @@ async function restoreSinglePolicy(restorer: Restorer, policyPath: string, stora
     return { success: false, path: policyPath, error: error instanceof Error ? error.message : "Unknown error" }
   }
 }
-
-// Retry links are issued by main and bound to the original source and destinations.
-const correlations = new Map<string, { source: string; destinations: string[]; operationId: string; at: number }>()
 
 export async function POST(request: NextRequest) {
   let body: any
@@ -115,7 +113,6 @@ export async function POST(request: NextRequest) {
       (repairSelections.length && (restoreType !== 'selective' || targetTenants?.length > 1))) {
       return NextResponse.json({ error: 'Repair requests must select one target and valid repair tokens' }, { status: 400 })
     }
-    const repairScope = (target: string) => JSON.stringify([tenantId, storageAccountName, backupId, target.toLowerCase(), mode, assignments, dependencyMappings])
 
     // Get access tokens for both Storage and Graph API
     const [storageToken, graphToken] = await Promise.all([
@@ -134,10 +131,12 @@ export async function POST(request: NextRequest) {
 
     // Correlate the completed operation with its desktop audit event.
     const jobId = randomUUID()
-    const correlationSource = JSON.stringify([String(tenantId).toLowerCase(), storageAccountName, backupId, requesterContext(graphToken, tenantId)?.requesterId])
+    const actor = auditUserFromToken(graphToken, tenantId)?.id.toLowerCase()
+    const repairScope = (target: string) => JSON.stringify([tenantId, storageAccountName, backupId, target.toLowerCase(), mode, assignments, dependencyMappings, actor])
+    const correlationSource = JSON.stringify([String(tenantId).toLowerCase(), storageAccountName, backupId])
     const destinations: string[] = targetTenants?.map((target: { tenantId: string }) => target.tenantId.toLowerCase()) ?? [tenantId.toLowerCase()]
-    const prior = typeof body.retryOf === "string" ? correlations.get(body.retryOf) : undefined
-    const correlated = prior?.source === correlationSource && destinations.every(id => prior.destinations.includes(id))
+    const prior = actor && typeof body.retryOf === "string" && guid.test(body.retryOf) ? mainAuditSink()?.restoreCorrelation(body.retryOf) : undefined
+    const correlated = prior?.actor === actor && prior?.source === correlationSource && destinations.every(id => prior.destinations.includes(id))
       && Date.now() - prior.at < 60 * 60_000 ? prior.operationId : jobId
 
     // Start the restore process
@@ -200,8 +199,6 @@ export async function POST(request: NextRequest) {
     const checked = checkRestoreManifest(metadata, backupId, paths, restoreType !== 'selective')
     if (!checked.ok) return NextResponse.json({ error: checked.error }, { status: 400 })
     const manifest = checked.manifest
-    if (correlations.size >= 1000) correlations.delete(correlations.keys().next().value!)
-    correlations.set(jobId, { source: correlationSource, destinations, operationId: correlated, at: Date.now() })
 
     const progress = progressId ? startProgress(progressId, paths.length * targets.length) : null
     try {
@@ -211,6 +208,7 @@ export async function POST(request: NextRequest) {
         const operationId = (firstRepair && restorer?.repairOperationId(firstRepair.path, firstRepair.repairToken)) || correlated
         const audit = beginRestoreAudit({
           destination: targetTenantId ?? tenantId, graphToken: targetToken, sourceBackupId: backupId, operationId, runId: jobId,
+          correlation: actor ? { actor, source: correlationSource, destinations, operationId: correlated, at: Date.now() } : undefined,
           action: mode === 'replace' ? 'Restore backup in place' : 'Restore backup as policy copies',
           items: ordered.map(path => restoreAuditItem(path, undefined, manifest?.get(path)?.id)),
         })
@@ -225,10 +223,10 @@ export async function POST(request: NextRequest) {
             const result = restorer
               ? await restoreSinglePolicy(restorer, path, storageAccountName, storageToken, manifest?.get(path), repairSelections.find((p: any) => p.path === path)?.repairToken)
               : { success: false, path, error: "Could not sign in to the destination tenant." }
-            if (restorer) auditProgress.save(result)
+            auditProgress.save(result)
             auditProgress.save = undefined
             auditProgress.submitted = undefined
-            const entry = targetTenantId ? { ...result, targetTenantId } : result
+            const entry = { ...result, targetTenantId, retryJobId: jobId }
             results.push(entry)
             if (result.partial) partialCount++
             if (result.action === 'unchanged') unchangedCount++
@@ -329,32 +327,46 @@ async function approvalAction(body: any): Promise<Response> {
   }
   const record = restoreApprovals(tenantId).find(entry => entry.id === approvalId)
   if (!record) return NextResponse.json({ error: "Request not found" }, { status: 404 })
+  const completion = action === "complete"
+  if (completion && record.requesterId.toLowerCase() !== context.requesterId.toLowerCase()) {
+    return NextResponse.json({ error: "Only the original requester can complete this request" }, { status: 409 })
+  }
+  if (completion && record.status === "completed" && !record.continuationPending) return NextResponse.json({ error: "This request was already completed" }, { status: 409 })
   const key = `${tenantId.toLowerCase()}:${record.id}`
   if (approvalLocks.has(key)) return NextResponse.json({ error: "This request is already being processed" }, { status: 409 })
   approvalLocks.add(key)
   const stage = action === "submit" ? "approval-submit" : action === "complete" ? "approval-complete" : "approval-withdraw"
+  const eventId = completion ? createHash("sha256").update(`approval-complete:${tenantId.toLowerCase()}:${record.id.toLowerCase()}`).digest("hex") : undefined
+  const approval = record.auditApprover ?? { system: "intune" as const, requestId: record.id }
+  const initialItem = { ...restoreAuditItem(record.backupPath, undefined, record.snapshotId), ...(completion ? { approval } : {}) }
   const audit = ["submit", "complete", "withdraw"].includes(action) ? beginRestoreAudit({
     destination: tenantId, graphToken: token, sourceBackupId: record.backupPath.split("/")[0]!,
-    operationId: record.operationId ?? record.id, stage,
+    operationId: record.operationId ?? record.id, stage, eventId, runId: eventId,
     eventType: action === "complete" ? AuditEventType.RESTORE_COMPLETED : AuditEventType.CONFIG_UPDATED,
     action: action === "submit" ? "Restore submitted for approval" : action === "complete" ? "Complete approved restore item" : "Approval request withdrawn",
-    items: [restoreAuditItem(record.backupPath, undefined, record.snapshotId)],
+    items: [initialItem],
   }) : undefined
-  audit?.started(0)
+  if (!completion) audit?.started(0)
   const capture = (outcome: RestoreOutcome) => {
     audit?.item(0, restoreAuditItem(record.backupPath, outcome, record.snapshotId))
     return outcome
   }
   let completionDispatched = false
-  let completionRecorded = false
+  let completionProgress: RestoreOutcome | undefined
   const restorer = new Restorer(graph, {
     mode: "copy", assignments: false, approvalContext: context, operationId: record.operationId ?? record.id,
-    auditApprovalDispatched: () => { completionDispatched = true },
-    auditApprovalCompleted: outcome => {
-      if (action !== "complete") return
+    auditApprovalDispatched: () => {
+      completionDispatched = true
+      audit?.started(0)
+    },
+    auditProgress: outcome => {
+      if (!completion) return
+      completionProgress = outcome
       capture(outcome)
-      audit?.finish()
-      completionRecorded = true
+    },
+    auditApprovalCompleted: outcome => {
+      if (!completion) return
+      audit?.ready(0, restoreAuditItem(record.backupPath, outcome, record.snapshotId))
     },
     auditSubmitted: outcome => {
       if (action === "submit") {
@@ -362,7 +374,7 @@ async function approvalAction(body: any): Promise<Response> {
         audit?.finish()
         return
       }
-      beginRestoreAudit({
+      if (completion) beginRestoreAudit({
         destination: tenantId, graphToken: token, sourceBackupId: record.backupPath.split("/")[0]!,
         operationId: record.operationId ?? record.id, stage: "approval-submit", action: "Restore submitted for approval",
         eventType: AuditEventType.CONFIG_UPDATED, items: [restoreAuditItem(record.backupPath, outcome, record.snapshotId)],
@@ -375,7 +387,13 @@ async function approvalAction(body: any): Promise<Response> {
       dismissRestoreApproval(tenantId, record.id)
     }
     else if (action === "submit") return NextResponse.json({ outcome: capture(await restorer.submitApproval(record, body.justification)) })
-    else if (action === "complete") return NextResponse.json({ outcome: await restorer.completeApproval(record) })
+    else if (completion) {
+      if (record.status === "completed" || (eventId && mainAuditSink()?.approvalCompletionReady(eventId))) {
+        if (record.continuationPending) saveRestoreApproval({ ...record, status: "completed", continuationPending: false })
+        return NextResponse.json({ error: "This request was already completed" }, { status: 409 })
+      }
+      return NextResponse.json({ outcome: await restorer.completeApproval(record) })
+    }
     else if (action === "withdraw") {
       if (record.requesterId.toLowerCase() !== context.requesterId.toLowerCase()) throw new Error("Only the original requester can withdraw this request")
       try {
@@ -390,9 +408,13 @@ async function approvalAction(body: any): Promise<Response> {
     } else return NextResponse.json({ error: "Unknown approval action" }, { status: 400 })
     return NextResponse.json({ success: true })
   } catch (error) {
-    if (action === "complete" && !completionDispatched && !completionRecorded) {
-      audit?.item(0, { ...restoreAuditItem(record.backupPath, undefined, record.snapshotId),
-        outcome: "failed", reason: "APPROVAL_COMPLETION_REFUSED", approval: { system: "intune", requestId: record.id } })
+    if (completion && !completionProgress) {
+      const refused = !completionDispatched || error instanceof ApprovalCompletionRefused
+      if (refused) audit?.refuse(0, { ...initialItem, outcome: "failed", reason: "APPROVAL_COMPLETION_REFUSED" })
+      else audit?.item(0, { ...initialItem, outcome: "uncertain", reason: "WRITE_UNCONFIRMED" })
+    }
+    if (error instanceof ApprovalCompletionRefused) {
+      return NextResponse.json({ error: error.message, code: "APPROVAL_COMPLETION_REFUSED" }, { status: error.status })
     }
     return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 409 })
   } finally {

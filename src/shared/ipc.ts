@@ -21,6 +21,7 @@ export interface BackupReaderTestResult {
   /** The reader could list the backup container; null when backups stay on this device. */
   storage: boolean | null
   audit?: boolean | null
+  auditCreated?: boolean
   /** Why a part failed, in words the card can show. */
   message?: string
 }
@@ -61,6 +62,7 @@ export interface BackupReaderState {
   available: boolean
   reader: BackupReaderStatus | null
   auditPending?: number | null
+  auditStuck?: number
   auditSetupRequired?: boolean
   /** The tenant's Azure backup storage account; omitted when backups stay on this device. */
   storageAccountName?: string
@@ -609,6 +611,7 @@ export interface TenuVaultBridge {
   /** The optional read-only Backup Reader for scheduled backups, per tenant. */
   backupReader: {
     status: (tenantId: string) => Promise<BackupReaderState>
+    deliverAudit: (tenantId: string) => Promise<BackupReaderState>
     /** Creates the certificate to upload (setup or renewal). Rejects with a plan error without Pro or MSP. */
     prepare: (tenantId: string) => Promise<BackupReaderState>
     /** Saves the public certificate for the setup script. */

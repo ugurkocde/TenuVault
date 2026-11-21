@@ -617,3 +617,35 @@ it('keeps decrypted OMA-URI secrets readable in plain Azure backups, so a restor
   const secret = uploads.find(item => item.url.pathname.endsWith('/DeviceConfigurations/Secret.json'))!
   expect(JSON.parse(secret.body.toString()).omaSettings[0].value).toBe('dummy-oma-secret')
 })
+
+it("reconciles a successful manifest when every PUT acknowledgement is lost", async () => {
+  const { store } = setup()
+  const account = localStorageAccountName(TENANT)
+  const graph = fakeGraph()
+  let puts = 0
+  let readbacks = 0
+  const engine = new BackupEngine({
+    getToken: async () => "token",
+    fetch: async (input, init) => {
+      const request = new Request(input, init)
+      const url = new URL(request.url)
+      if (url.hostname === "graph.microsoft.com") return graph(url)
+      if (url.pathname.endsWith("/metadata.json")) {
+        if (request.method === "PUT") {
+          puts++
+          await handleLocalBlobRequest(store, request)
+          throw new TypeError("Manifest acknowledgement lost")
+        }
+        readbacks++
+      }
+      return handleLocalBlobRequest(store, request)
+    },
+  })
+  const job = await engine.waitForJob(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }))
+  expect(job.status).toBe("Completed")
+  expect(job.commitUnconfirmed).toBeUndefined()
+  expect(puts).toBe(3)
+  expect(readbacks).toBe(1)
+  const { data } = await store.get(account, "intune-backups", `${job.backupFolder}/metadata.json`)
+  expect(JSON.parse(data.toString())).toMatchObject({ RunId: job.id, TenantId: TENANT, Status: "Success" })
+})

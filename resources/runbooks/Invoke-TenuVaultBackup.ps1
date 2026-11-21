@@ -62,7 +62,8 @@ param(
     # hand passes "Manual" (TRIGGER in the portal's Start pane) to be recorded as manual.
     [string]$Trigger = "",
     [switch]$ReplayOlderAudit,
-    [switch]$AuditCanary
+    [switch]$AuditCanary,
+    [switch]$AuditCanaryWait
 )
 
 $script:RunbookVersion = "1.5.0"
@@ -298,14 +299,14 @@ function Get-TvManagedIdentityToken {
         $uri = "http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=$([uri]::EscapeDataString($Resource))"
     }
     $lastError = $null
-    foreach ($attempt in 1..3) {
+    foreach ($attempt in 1..$attempts) {
         try {
             $response = Invoke-RestMethod -Uri $uri -Headers $headers -Method Get -TimeoutSec 30
             if (-not $response.access_token) { throw "The identity endpoint returned no access token." }
             return [string]$response.access_token
         } catch {
             $lastError = $_
-            if ($attempt -lt 3) { Start-Sleep -Seconds (2 * $attempt) }
+            if ($attempt -lt $attempts) { Start-Sleep -Seconds (2 * $attempt) }
         }
     }
     throw "Could not get a managed identity token for $Resource. $(Get-TvSafeError $lastError.Exception.Message)"
@@ -389,11 +390,11 @@ $script:ErrorBodyMaxBytes = 65536
 # cancelled and the response disposed, which ends the pending read. All of these exist in .NET
 # Framework 4.7.2 and in .NET for PowerShell 7.
 function Read-TvCappedBody {
-    param([Parameter(Mandatory)][System.Net.Http.HttpResponseMessage]$Response, [Parameter(Mandatory)][long]$MaxBytes)
+    param([Parameter(Mandatory)][System.Net.Http.HttpResponseMessage]$Response, [Parameter(Mandatory)][long]$MaxBytes, [int]$TimeoutMs = $script:BodyReadSeconds * 1000)
     $declared = $Response.Content.Headers.ContentLength
     if ($null -ne $declared -and $declared -gt $MaxBytes) { throw [TvOversizedError]::new("The response is larger than $MaxBytes bytes.") }
     $clock = [System.Diagnostics.Stopwatch]::StartNew()
-    $deadline = [TimeSpan]::FromSeconds($script:BodyReadSeconds)
+    $deadline = [TimeSpan]::FromMilliseconds($TimeoutMs)
     $cancel = [System.Threading.CancellationTokenSource]::new()
     $stream = $Response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
     $buffer = [byte[]]::new(81920)
@@ -433,8 +434,11 @@ function Invoke-TvHttp {
         [byte[]]$BodyBytes,
         [string]$ContentType,
         # A cap on the response body in bytes; 0 reads it whole. Over the cap: TvOversizedError.
-        [long]$MaxBytes = 0
+        [long]$MaxBytes = 0,
+        [int]$BudgetMs = 0
     )
+    $clock = [System.Diagnostics.Stopwatch]::StartNew()
+    $attempts = if ($BudgetMs) { 1 } else { 3 }
     $lastError = $null
     foreach ($attempt in 1..3) {
         $request = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::new($Method), $Uri)
@@ -447,23 +451,32 @@ function Invoke-TvHttp {
         }
         $response = $null
         $completion = if ($MaxBytes -gt 0) { [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead } else { [System.Net.Http.HttpCompletionOption]::ResponseContentRead }
-        try { $response = $script:HttpClient.SendAsync($request, $completion).GetAwaiter().GetResult() }
+        $cancel = if ($BudgetMs) { [System.Threading.CancellationTokenSource]::new($BudgetMs) }
+        try {
+            $response = if ($cancel) { $script:HttpClient.SendAsync($request, $completion, $cancel.Token).GetAwaiter().GetResult() }
+                else { $script:HttpClient.SendAsync($request, $completion).GetAwaiter().GetResult() }
+        }
         catch {
             $lastError = $_
             if ($attempt -lt 3) { Start-Sleep -Seconds $attempt; continue }
+            if ($cancel -and $cancel.IsCancellationRequested) { throw [TvAuditBudgetError]::new() }
             throw [TvHttpError]::new(0, (Get-TvSafeError $_.Exception.Message))
+        } finally {
+            if ($cancel) { $cancel.Dispose() }
+            $request.Dispose()
         }
         $status = [int]$response.StatusCode
         $retryAfter = if ($response.Headers.RetryAfter -and $response.Headers.RetryAfter.Delta) { $response.Headers.RetryAfter.Delta } else { $null }
+        $bodyMs = if ($BudgetMs) { [Math]::Max(1, $BudgetMs - [int]$clock.ElapsedMilliseconds) } else { $script:BodyReadSeconds * 1000 }
         try {
             if ($MaxBytes -gt 0) {
                 if ($status -ge 200 -and $status -lt 300) {
-                    $bytes = Read-TvCappedBody $response $MaxBytes
-                    return @{ Status = $status; Bytes = $bytes; Text = [Text.Encoding]::UTF8.GetString($bytes) }
+                    $bytes = Read-TvCappedBody $response $MaxBytes $bodyMs
+                    return @{ Status = $status; Bytes = $bytes; Text = [Text.Encoding]::UTF8.GetString($bytes); ETag = [string]$response.Headers.ETag }
                 }
                 # Only the error text is needed: the same reader with a small cap and the same
                 # deadline, so a stalled or large error body can neither hang nor exhaust the run.
-                try { $bytes = Read-TvCappedBody $response $script:ErrorBodyMaxBytes }
+                try { $bytes = Read-TvCappedBody $response $script:ErrorBodyMaxBytes $bodyMs }
                 catch [TvOversizedError] { $bytes = [byte[]]@() }
                 catch [TvReadTimeoutError] { $bytes = [byte[]]@() }
             } else {
@@ -472,6 +485,9 @@ function Invoke-TvHttp {
                     return @{ Status = $status; Bytes = $bytes; Text = [Text.Encoding]::UTF8.GetString($bytes) }
                 }
             }
+        } catch [TvReadTimeoutError] {
+            if ($BudgetMs) { throw [TvAuditBudgetError]::new() }
+            throw
         } finally {
             $response.Dispose()
         }
@@ -488,7 +504,7 @@ function Invoke-TvHttp {
             if ($code) { $message = "HTTP $status $code" }
         }
         $lastError = [TvHttpError]::new($status, (Get-TvSafeError $message))
-        if ($retryable -and $attempt -lt 3) {
+        if ($retryable -and $attempt -lt $attempts) {
             $delay = $attempt
             if ($retryAfter) { $delay = [Math]::Ceiling($retryAfter.TotalSeconds) }
             if ($delay -gt 300) { throw $lastError }
@@ -556,7 +572,8 @@ function Send-TvBackupOutcome {
         [int]$Failures = 0,
         [string[]]$FailedTypes = @(),
         # How the run started (Get-TvRunTrigger), so the watcher's alert names a run started by hand.
-        [ValidateSet("scheduled", "manual")][string]$Trigger = "scheduled"
+        [ValidateSet("scheduled", "manual")][string]$Trigger = "scheduled",
+        [string]$FinishedAt
     )
     # One note per run: the failure path can follow a Failed result that was already noted.
     if ($script:OutcomeSent) { return }
@@ -567,7 +584,7 @@ function Send-TvBackupOutcome {
         runId         = $RunId
         status        = $Status
         backupFolder  = if ($BackupFolder) { $BackupFolder } else { $null }
-        finishedAt    = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", [Globalization.CultureInfo]::InvariantCulture)
+        finishedAt    = if ($FinishedAt) { $FinishedAt } else { [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", [Globalization.CultureInfo]::InvariantCulture) }
         totalPolicies = if ($null -ne $TotalPolicies) { [int]$TotalPolicies } else { $null }
         failures      = [int]$Failures
         failedTypes   = @($FailedTypes | Where-Object { $_ } | Select-Object -First 10 | ForEach-Object { [string]$_ })
@@ -620,7 +637,7 @@ function New-TvAuditFile {
     $principalId = Get-TvAuditPrincipal $Context.StorageToken $tenant
     $entry = [ordered]@{
         id = $eventId; timestamp = $timestamp
-        eventType = if ($statusName -eq "failed") { "BACKUP_FAILED" } else { "BACKUP_COMPLETED" }
+        eventType = if ($statusName -in @("failed", "uncertain")) { "BACKUP_FAILED" } else { "BACKUP_COMPLETED" }
         severity = switch ($statusName) { "completed" { "INFO" } "warnings" { "WARNING" } "uncertain" { "WARNING" } default { "ERROR" } }
         user = [ordered]@{ id = $principalId; email = ""; name = "Cloud backup managed identity"; tenantId = $tenant }
         action = "Complete backup"
@@ -640,22 +657,37 @@ function New-TvAuditFile {
     }
 }
 
+class TvAuditBudgetError : System.Exception {
+    TvAuditBudgetError() : base("The audit replay reached its request or time budget.") { }
+}
+
 function Invoke-TvAuditStorage {
     param([hashtable]$Context, [string]$Container, [string]$Path, [string]$Method = "Get", [string]$Body, [hashtable]$Options = @{})
     $uri = "https://$($Context.StorageAccount).blob.core.windows.net/$Container$Path"
     $headers = @{ "x-ms-version" = "2021-12-02"; "x-ms-date" = [DateTime]::UtcNow.ToString("R") }
     foreach ($key in $Options.Keys) { $headers[$key] = $Options[$key] }
+    $requestBudget = @{}
+    if ($Context.AuditBudget) {
+        $budget = $Context.AuditBudget
+        $left = [int]($budget.Seconds * 1000 - $budget.Clock.ElapsedMilliseconds)
+        if ($budget.Requests -le 0 -or $left -le 0) { throw [TvAuditBudgetError]::new() }
+        $budget.Requests--
+        $requestBudget.BudgetMs = $left
+    }
     if ($Method -eq "Put") {
         $headers["x-ms-blob-type"] = "BlockBlob"
-        return Invoke-TvHttp -Uri $uri -Token $Context.StorageToken -Method $Method -Headers $headers -BodyBytes ([Text.Encoding]::UTF8.GetBytes($Body)) -ContentType "application/json" -MaxBytes 32768
+        return Invoke-TvHttp -Uri $uri -Token $Context.StorageToken -Method $Method -Headers $headers -BodyBytes ([Text.Encoding]::UTF8.GetBytes($Body)) -ContentType "application/json" -MaxBytes 32768 @requestBudget
     }
-    return Invoke-TvHttp -Uri $uri -Token $Context.StorageToken -Method $Method -Headers $headers -MaxBytes 32768
+    return Invoke-TvHttp -Uri $uri -Token $Context.StorageToken -Method $Method -Headers $headers -MaxBytes 32768 @requestBudget
 }
 
 function Set-TvAuditImmutable {
-    param([hashtable]$Context, [string]$Container, [string]$Path, [string]$Body, [hashtable]$Options = @{})
+    param([hashtable]$Context, [string]$Container, [string]$Path, [string]$Body, [hashtable]$Options = @{}, [ref]$Created)
     $Options["If-None-Match"] = "*"
-    try { [void](Invoke-TvAuditStorage $Context $Container $Path "Put" $Body $Options) }
+    try {
+        [void](Invoke-TvAuditStorage $Context $Container $Path "Put" $Body $Options)
+        if ($Created) { $Created.Value = $true }
+    }
     catch [TvHttpError] {
         if ($_.Exception.Status -notin @(0, 403, 409, 412, 500, 502, 503, 504)) { throw }
         $existing = Invoke-TvAuditStorage $Context $Container $Path
@@ -684,6 +716,8 @@ function Publish-TvAuditReceipt {
     $safeEntry.user.id = if ($entry.user.id -match $guid) { $entry.user.id } else { "unknown" }
     $safeEntry.job.registrationId = if ($entry.user.id -match $guid) { $entry.user.id } else { $null }
     $safeEntry.job.producerVersion = if ($job.producerVersion -match '^\d{1,4}\.\d{1,4}\.\d{1,4}$') { $job.producerVersion } else { $script:RunbookVersion }
+    # Keep the type of an event already written by 1.5.0 if its receipt acknowledgement was lost.
+    if ($status -eq "Uncertain" -and $entry.eventType -eq "BACKUP_COMPLETED") { $safeEntry.eventType = "BACKUP_COMPLETED" }
     $safeEntry.timestamp = $entry.timestamp; $safe.date = $entry.timestamp.Substring(0, 10)
     $safe.metadata.createdAt = $entry.timestamp; $safe.metadata.lastModified = $entry.timestamp
     $day = $safe.date -replace "-", "/"
@@ -703,7 +737,7 @@ function Read-TvAuditRecord {
 
 function Read-TvAuditPage {
     param([hashtable]$Context, [string]$Prefix, [string]$Marker, [string]$BeforeDate = "")
-    $query = "?restype=container&comp=list&maxresults=20&prefix=$([uri]::EscapeDataString($Prefix))&marker=$([uri]::EscapeDataString($Marker))"
+    $query = "?restype=container&comp=list&maxresults=5&prefix=$([uri]::EscapeDataString($Prefix))&marker=$([uri]::EscapeDataString($Marker))"
     [xml]$listing = (Invoke-TvAuditStorage $Context $script:OutcomeContainer $query).Text
     $remaining = 0
     $reachedRecent = $false
@@ -718,56 +752,111 @@ function Read-TvAuditPage {
         try {
             $receipt = Read-TvAuditRecord $Context "/$name"
             if ($receipt -and -not $receipt.delivered) { Publish-TvAuditReceipt $Context "/$name" $receipt }
-        } catch { $remaining++; Write-Warning "A cloud backup audit receipt is waiting for delivery." }
+        } catch [TvAuditBudgetError] { throw }
+        catch { $remaining++; Write-Warning "A cloud backup audit receipt is waiting for delivery." }
     }
     $next = if (-not $reachedRecent) { [string]$listing.EnumerationResults.NextMarker } else { "" }
+    if ($next -and $next -ceq $Marker) { throw "Storage returned a repeated audit receipt cursor." }
     return @{ Count = $remaining; Next = $next }
 }
 
+function Read-TvAuditCursor {
+    param([hashtable]$Context, [string]$Path)
+    try {
+        $response = Invoke-TvAuditStorage $Context $script:OutcomeContainer $Path
+        return @{ State = ConvertFrom-TvJson $response.Text; ETag = $response.ETag; StateLoaded = $true }
+    } catch [TvHttpError] {
+        if ($_.Exception.Status -ne 404) { throw }
+        return @{ State = @{ days = @{}; olderCount = 0 } }
+    }
+}
+
+function Save-TvAuditCursor {
+    param([hashtable]$Context, [string]$Path, [hashtable]$Cursor)
+    $options = if ($Cursor.ETag) { @{ "If-Match" = $Cursor.ETag } }
+        elseif (-not $Cursor.StateLoaded) { @{ "If-None-Match" = "*" } }
+        else { @{} }
+    [void](Invoke-TvAuditStorage $Context $script:OutcomeContainer $Path "Put" ($Cursor.State | ConvertTo-Json -Depth 8 -Compress) $options)
+}
+
 function Invoke-TvAuditReplay {
-    param([hashtable]$Context, [switch]$IncludeOlder)
+    param([hashtable]$Context, [switch]$IncludeOlder, [datetime]$Today = [DateTime]::UtcNow.Date)
     $tenant = $Context.TenantId.ToLowerInvariant()
     $prefix = "audit-receipts/$tenant/"
-    $today = [DateTime]::UtcNow.Date
-    $cutoff = $today.AddDays(-13).ToString("yyyy-MM-dd")
-    $remaining = 0
-    $more = $false
-
-    if ($IncludeOlder) {
-        $cursor = "/audit-cursors/$tenant-history.json"
-        try {
-            $previous = Read-TvAuditRecord $Context $cursor
-            $page = Read-TvAuditPage $Context $prefix ([string]$previous.marker) $cutoff
-            $remaining = $page.Count + $(if ($previous.marker) { [int]$previous.count } else { 0 })
-            $more = [bool]$page.Next
-            [void](Invoke-TvAuditStorage $Context $script:OutcomeContainer $cursor "Put" (@{ marker = $page.Next; count = $remaining } | ConvertTo-Json -Compress))
-        } catch {
-            Write-Warning "Older cloud backup audit receipts could not be checked."
-            $more = $true
+    $path = "/audit-cursors/$tenant.json"
+    $cutoff = $Today.AddDays(-13).ToString("yyyy-MM-dd")
+    $budget = @{ Clock = [System.Diagnostics.Stopwatch]::StartNew(); Seconds = 22; Requests = 127 }
+    $Context.AuditBudget = $budget
+    $incomplete = $false
+    $state = $null
+    try {
+        $cursor = Read-TvAuditCursor $Context $path
+        $state = $cursor.State
+        foreach ($date in @($state.days.Keys)) {
+            if ([string]::CompareOrdinal($date, $cutoff) -ge 0) { continue }
+            $state.olderCount += [int]$state.days[$date].count
+            $state.days.Remove($date)
         }
-        return @{ Count = $remaining; More = $more }
-    }
-
-    # Start at today's receipts, independent of the volume or the cursor of older history.
-    for ($daysAgo = 0; $daysAgo -lt 14; $daysAgo++) {
-        $date = $today.AddDays(-$daysAgo).ToString("yyyy-MM-dd")
-        $marker = ""
-        $seen = [System.Collections.Generic.HashSet[string]]::new()
-        try {
-            do {
-                $page = Read-TvAuditPage $Context "$prefix$date-" $marker
-                $remaining += $page.Count
-                $marker = $page.Next
-                if ($marker -and (-not $seen.Add($marker) -or $seen.Count -ge 1000)) {
-                    throw "The receipt listing did not complete."
+        if ($IncludeOlder) {
+            # Keep the last known count until a full pass can replace it. The cutoff is fixed
+            # during that pass, even if the operator resumes it on a later UTC day.
+            if (-not $state.historyCutoff) { $state.historyCutoff = $cutoff }
+            $page = Read-TvAuditPage $Context $prefix ([string]$state.historyMarker) $state.historyCutoff
+            $state.historyCount = [int]$state.historyCount + $page.Count
+            $state.historyMarker = $page.Next
+            if (-not $page.Next) {
+                if ($state.historyCutoff -ceq $cutoff) { $state.olderCount = $state.historyCount }
+                $state.checkedThrough = $state.historyCutoff
+                $state.historyCutoff = $null
+                $state.historyCount = 0
+            }
+        } else {
+            $dates = @(0..13 | ForEach-Object { $Today.AddDays(-$_).ToString("yyyy-MM-dd") })
+            # One page per day per pass. A busy date can never consume every run's budget.
+            $offset = [int]$state.nextDay % $dates.Count
+            $dates = @(0..13 | ForEach-Object { $dates[($_ + $offset) % $dates.Count] })
+            while ($dates.Count) {
+                $moreDates = @()
+                foreach ($date in $dates) {
+                    if ($budget.Requests -lt 22 -or $budget.Clock.Elapsed.TotalSeconds -ge $budget.Seconds) { throw [TvAuditBudgetError]::new() }
+                    $day = $state.days[$date]
+                    if (-not $day) { $day = @{ count = 0 }; $state.days[$date] = $day }
+                    $page = Read-TvAuditPage $Context "$prefix$date-" ([string]$day.marker)
+                    $day.passCount = [int]$day.passCount + $page.Count
+                    $day.marker = $page.Next
+                    if ($page.Next) {
+                        $day.count = [Math]::Max([int]$day.count, $day.passCount)
+                        $moreDates += $date
+                    } else {
+                        $day.count = $day.passCount
+                        $day.passCount = 0
+                    }
+                    $state.nextDay = ($Today - [datetime]::ParseExact($date, "yyyy-MM-dd", [Globalization.CultureInfo]::InvariantCulture)).Days + 1
                 }
-            } while ($marker)
+                $dates = $moreDates
+            }
+        }
+    } catch [TvAuditBudgetError] { $incomplete = $true }
+    catch {
+        $incomplete = $true
+        Write-Warning "Cloud backup audit receipt history could not be fully checked."
+    }
+    if ($state) {
+        try {
+            # Reserve one final request and three seconds to checkpoint the scan.
+            $budget.Requests = 1
+            $budget.Seconds = 25
+            Save-TvAuditCursor $Context $path $cursor
         } catch {
-            Write-Warning "Pending cloud backup audit receipts could not be fully checked for $date."
-            $more = $true
+            $incomplete = $true
+            Write-Warning "Cloud backup could not save its audit receipt cursor. The next run will retry."
         }
     }
-    return @{ Count = $remaining; More = $more }
+    $Context.Remove("AuditBudget")
+    $older = [Math]::Max([int]$state.olderCount, [int]$state.historyCount)
+    $remaining = $older
+    if ($state.days) { foreach ($day in $state.days.Values) { $remaining += [int]$day.count } }
+    return @{ Count = $remaining; Older = $older; More = $incomplete -or [bool]@($state.days.Values | Where-Object { $_.marker }).Count; OlderUnchecked = $state.checkedThrough -cne $cutoff }
 }
 
 function Save-TvAuditReceipt {
@@ -775,11 +864,15 @@ function Save-TvAuditReceipt {
     $file = $Receipt.file
     $runId = $file.entries[0].job.runId
     $path = "/audit-receipts/$($Context.TenantId.ToLowerInvariant())/$($file.date)-$runId.json"
+    $created = $false
     try {
         $existing = Read-TvAuditRecord $Context $path
         if ($existing.delivered) { return }
         if ($existing) { $Receipt = $existing }
-        else { Set-TvAuditImmutable $Context $script:OutcomeContainer $path ($Receipt | ConvertTo-Json -Depth 12 -Compress) }
+        else {
+            Set-TvAuditImmutable $Context $script:OutcomeContainer $path ($Receipt | ConvertTo-Json -Depth 12 -Compress)
+            $created = $true
+        }
     } catch {
         $Context.AuditPending++
         $Context.AuditReceiptFailed = $true
@@ -789,16 +882,30 @@ function Save-TvAuditReceipt {
     try { Publish-TvAuditReceipt $Context $path $Receipt }
     catch {
         $Context.AuditPending++
+        if ($created) { Register-TvPendingReceipt $Context $file.date }
         Write-Warning "Cloud backup audit delivery is pending. The backup result is recorded separately."
     }
 }
 
+function Register-TvPendingReceipt {
+    param([hashtable]$Context, [string]$Date)
+    $path = "/audit-cursors/$($Context.TenantId.ToLowerInvariant()).json"
+    try {
+        $cursor = Read-TvAuditCursor $Context $path
+        $day = $cursor.State.days[$Date]
+        if (-not $day) { $day = @{ count = 0 }; $cursor.State.days[$Date] = $day }
+        $day.count++
+        Save-TvAuditCursor $Context $path $cursor
+    } catch { Write-Warning "A pending audit receipt was saved but could not be added to the receipt count." }
+}
+
 function Write-TvTerminalAudit {
-    param([hashtable]$Context, [string]$RunId, [string]$Status, [string]$BackupFolder, [int]$Saved, [int]$Failures, [string]$Trigger, [string]$Reason, [string]$Timestamp)
+    param([hashtable]$Context, [string]$RunId, [string]$Status, [string]$BackupFolder, [int]$Saved, [int]$Failures, [string]$Trigger, [string]$Reason, [string]$Timestamp, [string[]]$FailedTypes = @())
     if ($Context.AuditTerminalRecorded) { return }
     $Context.AuditTerminalRecorded = $true
     $file = New-TvAuditFile $Context $RunId $Status $BackupFolder $Saved $Failures $Trigger $Reason $Timestamp
-    $receipt = [ordered]@{ delivered = $false; file = $file }
+    $Context.TerminalTimestamp = $file.entries[0].timestamp
+    $receipt = [ordered]@{ delivered = $false; file = $file; failedTypes = @($FailedTypes | Where-Object { $_ -match "^[A-Za-z]{1,50}$" } | Select-Object -First 10) }
     if ($Context.RunCheckpointPath) {
         try {
             Set-TvAuditImmutable $Context $script:OutcomeContainer "$($Context.RunCheckpointPath)/terminal.json" ($receipt | ConvertTo-Json -Depth 12 -Compress)
@@ -857,29 +964,43 @@ function Complete-TvCloudBackup {
     $total = [int]$Metadata.ItemCounts.TotalPolicies
     $failures = [int]$Metadata.Failures
     $reason = if ($status -eq "CompletedWithWarnings") { "BACKUP_WARNINGS" } elseif ($status -eq "Failed") { "BACKUP_FAILED" }
-    Write-TvTerminalAudit $Context $RunId $status $folder $total $failures $Trigger $reason $Metadata.CompletedAt
-    Set-TvCloudStatus $Context $status "Backup $status, $total policies." $folder
-    Send-TvBackupOutcome -Account $Context.StorageAccount -Token $Context.StorageToken -TenantId $Context.TenantId -RunId $RunId -Status $status -BackupFolder $folder -TotalPolicies $total -Failures $failures -FailedTypes @($Metadata.FailedTypes) -Trigger $Trigger
+    Write-TvTerminalAudit $Context $RunId $status $folder $total $failures $Trigger $reason $Metadata.CompletedAt @($Metadata.FailedTypes)
+    Set-TvCloudStatus $Context $status "Backup $status, $total policies." $folder $Metadata.CompletedAt
+    Send-TvBackupOutcome -Account $Context.StorageAccount -Token $Context.StorageToken -TenantId $Context.TenantId -RunId $RunId -Status $status -BackupFolder $folder -TotalPolicies $total -Failures $failures -FailedTypes @($Metadata.FailedTypes) -Trigger $Trigger -FinishedAt $Metadata.CompletedAt
     if ($Context.AuditReceiptFailed) { throw "The backup result was saved, but its audit receipt could not be persisted." }
     if ($status -eq "Failed") { throw "The backup saved no policies. See the runbook output above." }
 }
 
 function Test-TvProducerAuditAccess {
     param([hashtable]$Context)
-    $path = "/producer-tests/$($Context.TenantId.ToLowerInvariant())/$([guid]::NewGuid()).json"
-    $body = @{ tenantId = $Context.TenantId.ToLowerInvariant(); type = "audit-access-test" } | ConvertTo-Json -Compress
-    Set-TvAuditImmutable $Context "audit-logs" $path $body
-    if ((Invoke-TvAuditStorage $Context "audit-logs" $path).Text -cne $body) { throw "Cloud backup audit create and read test failed." }
-    Set-TvAuditImmutable $Context $script:Container $path $body
+    $path = "/producer-tests/$($Context.TenantId.ToLowerInvariant())/cloud-runbook.json"
+    $auditPath = if ($AuditCanaryWait) { $path.Replace("cloud-runbook.json", "cloud-runbook-propagation.json") } else { $path }
+    $body = [ordered]@{ tenantId = $Context.TenantId.ToLowerInvariant(); type = "audit-access-test" } | ConvertTo-Json -Compress
+    $created = $false
+    $deadline = [System.Diagnostics.Stopwatch]::StartNew()
+    if ($AuditCanaryWait) { $Context.AuditBudget = @{ Clock = $deadline; Seconds = 300; Requests = 64 } }
+    try {
+        do {
+            try {
+                Set-TvAuditImmutable $Context "audit-logs" $auditPath $body -Created ([ref]$created)
+                break
+            } catch [TvHttpError] {
+                if (-not $AuditCanaryWait -or $_.Exception.Status -notin @(403, 404) -or $deadline.Elapsed.TotalSeconds -ge 290) { throw }
+                Start-Sleep -Seconds 10
+            }
+        } while ($true)
+    } finally { $Context.Remove("AuditBudget") }
+    if ((Invoke-TvAuditStorage $Context "audit-logs" $auditPath).Text -cne $body) { throw "Cloud backup audit create and read test failed." }
+    [void](Invoke-TvAuditStorage $Context $script:Container $path "Put" $body)
     $excessive = $false
     $inconclusive = $false
     foreach ($probe in @(
-        @{ Container = "audit-logs"; Method = "Put"; Options = @{ "If-Match" = "*" } },
-        @{ Container = "audit-logs"; Method = "Delete"; Options = @{} },
-        @{ Container = $script:Container; Method = "Delete"; Options = @{} }
+        @{ Container = "audit-logs"; Path = $auditPath; Method = "Put"; Options = @{ "If-Match" = "*" } },
+        @{ Container = "audit-logs"; Path = $auditPath; Method = "Delete"; Options = @{} },
+        @{ Container = $script:Container; Path = $path; Method = "Delete"; Options = @{} }
     )) {
         try {
-            [void](Invoke-TvAuditStorage $Context $probe.Container $path $probe.Method '{"overwriteTest":true}' $probe.Options)
+            [void](Invoke-TvAuditStorage $Context $probe.Container $probe.Path $probe.Method $body $probe.Options)
             $excessive = $true
         } catch [TvHttpError] { if ($_.Exception.Status -ne 403) { $inconclusive = $true } }
         catch { $inconclusive = $true }
@@ -889,7 +1010,8 @@ function Test-TvProducerAuditAccess {
         throw "Cloud backup audit permission limits failed."
     }
     if ($inconclusive) { throw "Azure Storage did not confirm that audit overwrite and blob deletion are denied." }
-    Write-Output "Cloud backup audit access and permission limits verified."
+    $checked = if ($created) { "created and read" } else { "read" }
+    Write-Output "Cloud backup canary passed. Audit canary $checked. Azure denied audit overwrite and audit and backup deletion."
 }
 
 # ---------------------------------------------------------------------------
@@ -2858,10 +2980,15 @@ function Set-TvCloudStatus {
         [Parameter(Mandatory)][hashtable]$Context,
         [Parameter(Mandatory)][string]$Status,
         [Parameter(Mandatory)][string]$Message,
-        [AllowNull()][string]$BackupFolder
+        [AllowNull()][string]$BackupFolder,
+        [string]$FinishedAt
     )
+    if (-not $FinishedAt) { $FinishedAt = $Context.TerminalTimestamp }
+    if (-not $FinishedAt) { $FinishedAt = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", [Globalization.CultureInfo]::InvariantCulture) }
+    $path = "/$script:StatusBlobPrefix$($Context.TenantId.Substring(0, 8).ToLowerInvariant()).json"
     $body = [ordered]@{
-        LastRunAt      = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", [Globalization.CultureInfo]::InvariantCulture)
+        RunId          = $Context.RunId
+        LastRunAt      = $FinishedAt
         LastStatus     = $Status
         LastMessage    = $Message
         BackupFolder   = $BackupFolder
@@ -2871,9 +2998,21 @@ function Set-TvCloudStatus {
         AuditCapability = $true
         AuditPending = [int]$Context.AuditPending
         AuditScanIncomplete = [bool]$Context.AuditScanIncomplete
+        AuditOlderPending = [int]$Context.AuditOlderPending
+        AuditOlderUnchecked = [bool]$Context.AuditOlderUnchecked
         AuditReceiptFailed = [bool]$Context.AuditReceiptFailed
     } | ConvertTo-Json
-    try { Set-TvBlob $Context.StorageAccount "$script:StatusBlobPrefix$($Context.TenantId.Substring(0, 8).ToLowerInvariant()).json" $body $Context.StorageToken }
+    try {
+        $options = @{ "If-None-Match" = "*" }
+        try {
+            $response = Invoke-TvAuditStorage $Context $script:Container $path
+            $previous = ConvertFrom-TvJson $response.Text
+            if ($previous.TenantId -ne $Context.TenantId) { throw "The previous Schedule status belongs to a different tenant." }
+            if ($previous.RunId -ne $Context.RunId -and [string]::CompareOrdinal([string]$previous.LastRunAt, $FinishedAt) -gt 0) { return }
+            $options = if ($response.ETag) { @{ "If-Match" = $response.ETag } } else { @{} }
+        } catch [TvHttpError] { if ($_.Exception.Status -ne 404) { throw } }
+        [void](Invoke-TvAuditStorage $Context $script:Container $path "Put" $body $options)
+    }
     catch { Write-Output "Could not record the cloud backup status: $(Get-TvSafeError $_.Exception.Message)" }
 }
 
@@ -2902,18 +3041,20 @@ function Invoke-TvBackup {
     # is reported by the Azure Monitor alert on failed jobs.
     try { $storageToken = Get-TvManagedIdentityToken "https://storage.azure.com/" }
     catch { throw "Cloud backup could not acquire a storage token. No audit receipt was saved." }
-    $context = @{ TenantId = $tenantId; StorageAccount = $storageAccount; StorageToken = $storageToken; AuditPending = 0 }
+    $context = @{ TenantId = $tenantId; StorageAccount = $storageAccount; StorageToken = $storageToken; RunId = $runId; AuditPending = 0 }
     if ($AuditCanary) {
         Test-TvProducerAuditAccess $context
         return
     }
     $auditReplay = Invoke-TvAuditReplay $context -IncludeOlder:$ReplayOlderAudit
     if ($ReplayOlderAudit) {
-        Write-Output "Older audit replay checked one page. Pending across checked pages: $($auditReplay.Count). More pages: $($auditReplay.More)."
+        Write-Output "Older audit replay checked one page. Pending across checked pages: $($auditReplay.Count). Older receipts still unchecked: $($auditReplay.OlderUnchecked)."
         return
     }
     $context.AuditPending = $auditReplay.Count
     $context.AuditScanIncomplete = $auditReplay.More
+    $context.AuditOlderPending = $auditReplay.Older
+    $context.AuditOlderUnchecked = $auditReplay.OlderUnchecked
     $backupFolder = "backup-$(ConvertTo-TvFolderTimestamp $started)"
     if ($jobId) {
         $context.RunCheckpointPath = "/audit-runs/$($tenantId.ToLowerInvariant())/$jobId"
@@ -2934,7 +3075,18 @@ function Invoke-TvBackup {
             $receipt = Read-TvAuditRecord $context "$($context.RunCheckpointPath)/terminal.json"
             if ($receipt) {
                 if ($receipt.file.entries[0].job.runId -cne $runId) { throw "Cloud backup could not verify its terminal checkpoint." }
+                $entry = $receipt.file.entries[0]
+                if ($entry.user.tenantId -ne $tenantId -or $entry.timestamp -notmatch '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$') { throw "Invalid terminal checkpoint identity." }
+                $status = switch ($entry.job.status) {
+                    "completed" { "Success" } "warnings" { "CompletedWithWarnings" } "uncertain" { "Uncertain" }
+                    "failed" { "Failed" } default { throw "Invalid terminal checkpoint status." }
+                }
+                $folder = if ($entry.resource.id -ceq $backupFolder) { $backupFolder }
+                $total = [int]$entry.job.counts.saved
                 Save-TvAuditReceipt $context $receipt
+                Set-TvCloudStatus $context $status "Backup $status, $total policies." $folder $entry.timestamp
+                $noteStatus = if ($status -eq "Uncertain") { "Failed" } else { $status }
+                Send-TvBackupOutcome -Account $storageAccount -Token $storageToken -TenantId $tenantId -RunId $runId -Status $noteStatus -BackupFolder $folder -TotalPolicies $total -Failures ([int]$entry.job.counts.failures) -FailedTypes @($receipt.failedTypes | Where-Object { $_ -match "^[A-Za-z]{1,50}$" }) -Trigger $runTrigger -FinishedAt $entry.timestamp
                 if ($context.AuditReceiptFailed) { throw "Cloud backup could not replay its audit receipt." }
                 Write-Output "Reconciled the existing result for this Automation job."
                 if ($receipt.file.entries[0].job.status -in @("failed", "uncertain")) { throw "This Automation job already ended without a confirmed successful backup." }
@@ -2975,7 +3127,7 @@ function Invoke-TvBackup {
     } catch {
         Write-TvTerminalAudit $context $runId "Failed" "" 0 1 $runTrigger "GRAPH_START_FAILED"
         Set-TvCloudStatus $context "Failed" "Microsoft Graph or backup scope could not be initialized." $null
-        Send-TvBackupOutcome -Account $storageAccount -Token $storageToken -TenantId $tenantId -RunId $runId -Status "Failed" -BackupFolder $null -TotalPolicies $null -Trigger $runTrigger
+        Send-TvBackupOutcome -Account $storageAccount -Token $storageToken -TenantId $tenantId -RunId $runId -Status "Failed" -BackupFolder $null -TotalPolicies $null -Trigger $runTrigger -FinishedAt $context.TerminalTimestamp
         throw "Could not get a managed identity token for Microsoft Graph or initialize the backup scope."
     }
     if ($excluded.Count) { Write-Output "Leaving out $($excluded.Count) of $($known.Count) types: $($excluded -join ', ')." }
@@ -3045,7 +3197,7 @@ function Invoke-TvBackup {
         Write-TvTerminalAudit $context $runId "Failed" "" 0 ([Math]::Max(1, $failures)) $runTrigger $startFailure
         $startMessage = if ($startFailure -eq "GRAPH_LIST_FAILED") { "Microsoft Graph policy listing did not finish." } else { "The backup folder could not be claimed." }
         Set-TvCloudStatus $context "Failed" $startMessage $null
-        Send-TvBackupOutcome -Account $storageAccount -Token $storageToken -TenantId $tenantId -RunId $runId -Status "Failed" -BackupFolder $null -TotalPolicies $null -Failures $failures -FailedTypes @($failedTypes) -Trigger $runTrigger
+        Send-TvBackupOutcome -Account $storageAccount -Token $storageToken -TenantId $tenantId -RunId $runId -Status "Failed" -BackupFolder $null -TotalPolicies $null -Failures $failures -FailedTypes @($failedTypes) -Trigger $runTrigger -FinishedAt $context.TerminalTimestamp
         throw $startMessage
     }
 
@@ -3110,7 +3262,7 @@ function Invoke-TvBackup {
         $itemCounts.TotalPolicies = $totalPolicies
         $sortedItems = [ordered]@{}
         foreach ($key in @($items.Keys | Sort-Object)) { $sortedItems[$key] = $items[$key] }
-        $status = if ($failures -gt 0) { if ($saved -eq 0) { "Failed" } else { "CompletedWithWarnings" } } else { "Success" }
+        $status = if ($failures -gt 0 -and $saved -eq 0) { "Failed" } elseif ($failures -gt 0 -or $maskedItems.Count) { "CompletedWithWarnings" } else { "Success" }
         $metadata = [ordered]@{
             BackupDate     = ConvertTo-TvFolderTimestamp $started
             BackupFolder   = $backupFolder
@@ -3188,7 +3340,7 @@ function Invoke-TvBackup {
             Write-TvTerminalAudit $context $runId "Failed" $backupFolder $totalPolicies ([Math]::Max(1, $failures)) $runTrigger "BACKUP_FAILED"
             Set-TvCloudStatus $context "Failed" "The backup did not finish." $backupFolder
         }
-        Send-TvBackupOutcome -Account $storageAccount -Token $storageToken -TenantId $tenantId -RunId $runId -Status "Failed" -BackupFolder $backupFolder -TotalPolicies $totalPolicies -Failures ([Math]::Max(1, $failures)) -FailedTypes @($failedTypes) -Trigger $runTrigger
+        Send-TvBackupOutcome -Account $storageAccount -Token $storageToken -TenantId $tenantId -RunId $runId -Status "Failed" -BackupFolder $backupFolder -TotalPolicies $totalPolicies -Failures ([Math]::Max(1, $failures)) -FailedTypes @($failedTypes) -Trigger $runTrigger -FinishedAt $context.TerminalTimestamp
         throw $reason
     }
 }

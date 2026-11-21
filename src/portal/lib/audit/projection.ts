@@ -93,6 +93,10 @@ export function projectItem(item: AuditJobItem): AuditJobItem {
     reason: fixedReasons.has(item.reason ?? '') ? item.reason : undefined,
     planned: changes(item.planned), applied: changes(item.applied), verified: changes(item.verified),
     approval: approval(item.approval),
+    steps: Array.isArray(item.steps) ? item.steps.slice(0, 1000).filter(step =>
+      step && ['content', 'assignments'].includes(step.kind) &&
+      ['applied', 'failed', 'uncertain', 'pending', 'unattempted'].includes(step.outcome)
+    ).map(({ kind, outcome }) => ({ kind, outcome })) : undefined,
   }
 }
 
@@ -104,14 +108,16 @@ export function projectJob(job: AuditJob): AuditJob {
   }
   return {
     operationId: auditId(job.operationId) ?? 'unknown', runId: auditId(job.runId) ?? 'unknown',
-    stage: ['terminal', 'approval-submit', 'approval-complete', 'approval-withdraw', 'policy'].includes(job.stage) ? job.stage : 'terminal',
+    stage: ['terminal', 'approval-submit', 'approval-attempt', 'approval-complete', 'approval-withdraw', 'policy'].includes(job.stage) ? job.stage : 'terminal',
     producer: ['desktop', 'backup-reader', 'cloud-runbook'].includes(job.producer) ? job.producer : 'desktop',
     status: ['completed', 'warnings', 'failed', 'cancelled', 'pending', 'uncertain'].includes(job.status) ? job.status : 'uncertain',
     sourceBackupId: auditId(job.sourceBackupId), registrationId: auditId(job.registrationId),
+    producerPrincipalId: auditId(job.producerPrincipalId),
     trigger: job.trigger && ['manual', 'scheduled', 'tray', 'unknown'].includes(job.trigger) ? job.trigger : undefined,
     producerVersion: /^\d+\.\d+\.\d+$/.test(job.producerVersion ?? '') ? job.producerVersion : undefined,
     reason: fixedReasons.has(job.reason ?? '') ? job.reason : undefined,
     counts, items: Array.isArray(job.items) ? job.items.map(projectItem) : undefined,
+    detailsIncomplete: job.detailsIncomplete === true || undefined,
     detailPages: Number.isSafeInteger(job.detailPages) && job.detailPages! > 0 ? job.detailPages : undefined,
   }
 }

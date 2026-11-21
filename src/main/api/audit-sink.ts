@@ -20,13 +20,45 @@ interface AuditSinkOptions {
   onDelivery?: (account: string, entry: AuditLogEntry, error?: unknown) => void
 }
 
+export interface RestoreCorrelation {
+  actor: string
+  source: string
+  destinations: string[]
+  operationId: string
+  at: number
+}
+
 interface Checkpoint {
   binding: AuditBinding
   entry: AuditLogEntry
   finished?: boolean
+  completion?: boolean
+  ready?: boolean
+  correlation?: RestoreCorrelation
+}
+
+interface RestoreAuditOptions {
+  eventId?: string
+  correlation?: RestoreCorrelation
+}
+
+interface AuditProgress {
+  correlate(operationId: string): void
+  started(index: number): void
+  item(index: number, item: AuditJobItem): void
+  ready(index: number, item: AuditJobItem): void
+  refuse(index: number, item: AuditJobItem): void
+  finish(uncertain?: boolean): void
+}
+
+interface RestoreReceipt {
+  at: number
+  ready?: boolean
+  correlation?: RestoreCorrelation
 }
 
 const JOURNAL = 'audit.restore-jobs'
+const RECEIPTS = 'audit.restore-receipts'
 const warning = () => console.warn('[audit] Audit delivery requires attention')
 
 /**
@@ -36,11 +68,13 @@ const warning = () => console.warn('[audit] Audit delivery requires attention')
  */
 export class AuditSink {
   private checkpoints: Record<string, Checkpoint>
+  private receipts: Record<string, RestoreReceipt>
   private retrying = false
   private readonly retryOffsets = new Map<string, number>()
 
   constructor(private readonly options: AuditSinkOptions) {
     this.checkpoints = JSON.parse(options.store?.get(JOURNAL) ?? '{}')
+    this.receipts = JSON.parse(options.store?.get(RECEIPTS) ?? '{}')
   }
 
   bind(tenant: string): AuditBinding | undefined {
@@ -81,16 +115,27 @@ export class AuditSink {
     this.options.onDelivery?.(account, entry)
   }
 
-  begin(binding: AuditBinding, input: CreateAuditLogInput & { job: AuditJob }): {
-    correlate(operationId: string): void
-    started(index: number): void
-    item(index: number, item: AuditJobItem): void
-    finish(uncertain?: boolean): void
-  } {
-    const entry = this.entry(binding, input)
+  restoreCorrelation(runId: string): RestoreCorrelation | undefined {
+    return Object.values(this.checkpoints).find(checkpoint => checkpoint.entry.job?.runId === runId && checkpoint.correlation)?.correlation
+      ?? this.receipts[`restore:${runId}`]?.correlation
+  }
+
+  approvalCompletionReady(eventId: string): boolean {
+    return !!(this.checkpoints[eventId]?.ready || this.receipts[eventId]?.ready)
+  }
+
+  begin(binding: AuditBinding, input: CreateAuditLogInput & { job: AuditJob }): AuditProgress
+  begin(binding: AuditBinding, input: CreateAuditLogInput & { job: AuditJob }, options: RestoreAuditOptions): AuditProgress | undefined
+  begin(binding: AuditBinding, input: CreateAuditLogInput & { job: AuditJob }, options: RestoreAuditOptions = {}): AuditProgress | undefined {
+    const old = options.eventId ? this.checkpoints[options.eventId] : undefined
+    if (options.eventId && (old?.finished || this.receipts[options.eventId])) return undefined
+    const entry = old?.entry ?? this.entry(binding, input, options.eventId ? { id: options.eventId, timestamp: new Date().toISOString() } : undefined)
+    const bound = old?.binding ?? { ...binding, user: entry.user }
     let finished = false
+    let completion = !!options.eventId
+    let ready = old?.ready ?? false
     const persist = (finished = false) => {
-      this.save({ ...this.checkpoints, [entry.id]: { binding: { ...binding, user: entry.user }, entry, finished } })
+      this.save({ ...this.checkpoints, [entry.id]: { binding: bound, entry, finished, ready, completion, correlation: options.correlation } })
     }
     try { persist() } catch { warning() }
     const storeItem = (index: number, item: AuditJobItem) => {
@@ -106,15 +151,30 @@ export class AuditSink {
       },
       started: index => storeItem(index, { ...entry.job!.items![index]!, outcome: 'uncertain', reason: 'PROCESS_INTERRUPTED' }),
       item: storeItem,
+      ready: (index, item) => {
+        entry.job!.items![index] = projectItem(item)
+        ready = true
+        try { persist() } catch { warning() }
+      },
+      refuse: (index, item) => {
+        if (!completion || finished) return
+        const { [entry.id]: _completion, ...remaining } = this.checkpoints
+        const attemptId = randomUUID()
+        entry.id = entry.job!.runId = attemptId
+        entry.job!.stage = 'approval-attempt'
+        entry.job!.items![index] = projectItem(item)
+        completion = false
+        try { this.save({ ...remaining, [attemptId]: { binding: bound, entry } }) } catch { warning() }
+      },
       finish: (uncertain = false) => {
         if (finished) return
         finished = true
-        entry.timestamp = new Date().toISOString()
+        if (!completion) entry.timestamp = new Date().toISOString()
         this.finalize(entry, uncertain)
         try {
           persist(true)
           this.enqueueCheckpoint(entry.id)
-          void this.deliver(binding.storageAccountName, entry).catch(warning)
+          void this.deliver(bound.storageAccountName, entry).catch(warning)
         } catch { warning() }
       },
     }
@@ -140,6 +200,15 @@ export class AuditSink {
 
   private enqueueCheckpoint(id: string): void {
     const checkpoint = this.checkpoints[id]!
+    if (checkpoint.completion || checkpoint.correlation) {
+      const now = Date.now()
+      const receipts = Object.fromEntries(Object.entries(this.receipts).filter(([key, receipt]) =>
+        !key.startsWith('restore:') || now - receipt.at < 60 * 60_000))
+      const key = checkpoint.correlation ? `restore:${checkpoint.entry.job!.runId}` : id
+      receipts[key] = { at: now, ready: checkpoint.ready, correlation: checkpoint.correlation }
+      this.options.store?.set(RECEIPTS, JSON.stringify(receipts))
+      this.receipts = receipts
+    }
     queueEvent(checkpoint.binding.storageAccountName, checkpoint.entry)
     const { [id]: _checkpoint, ...remaining } = this.checkpoints
     this.save(remaining)
@@ -172,7 +241,8 @@ export class AuditSink {
       try {
         if (!checkpoint.finished) {
           if (checkpoint.entry.job?.producer === 'backup-reader') continue
-          this.finalize(checkpoint.entry, true)
+          if (checkpoint.completion && !checkpoint.ready) continue
+          this.finalize(checkpoint.entry, !checkpoint.ready)
           this.save({ ...this.checkpoints, [id]: { ...checkpoint, finished: true } })
         }
         this.enqueueCheckpoint(id)
@@ -202,6 +272,28 @@ export class AuditSink {
     }
   }
 
+  private stuckReaderEvents(tenant: string, currentRegistrationId?: string) {
+    return queuedAccounts().flatMap(account => pendingEvents(account)
+      .filter(entry => entry.user.tenantId === tenant.toLowerCase() && entry.job?.producer === 'backup-reader' &&
+        (!currentRegistrationId || entry.job.registrationId?.toLowerCase() !== currentRegistrationId.toLowerCase()))
+      .map(entry => ({ account, entry })))
+  }
+
+  stuckReaderCount(tenant: string, currentRegistrationId?: string): number {
+    return this.stuckReaderEvents(tenant, currentRegistrationId).length
+  }
+
+  async deliverStuckReader(
+    tenant: string, currentRegistrationId: string | undefined, admin: AuditUser,
+    storage: (account: string) => AuditStorageService,
+  ): Promise<void> {
+    let failed = 0
+    for (const { account, entry } of this.stuckReaderEvents(tenant, currentRegistrationId).slice(0, 20)) {
+      try { await storage(account).deliverReaderAsAdmin(entry, admin) } catch { failed++ }
+    }
+    if (failed) throw new Error(`Could not deliver ${failed} audit event(s). Check your Azure storage access and try again.`)
+  }
+
   pending(tenant: string, producer: AuditJob['producer']): number {
     const matches = (entry: AuditLogEntry) => entry.user.tenantId === tenant.toLowerCase() && entry.job?.producer === producer
     const ids = new Set(queuedAccounts().flatMap(account => pendingEvents(account).filter(matches).map(entry => entry.id)))
@@ -216,10 +308,10 @@ let sink: AuditSink | undefined
 export function setMainAuditSink(value: AuditSink | undefined): void { sink = value }
 export function mainAuditSink(): AuditSink | undefined { return sink }
 
-export function auditUserFromToken(token: string, tenant: string): AuditUser | undefined {
+export function auditUserFromToken(token: string, tenant: string, requireDelegated = false): AuditUser | undefined {
   try {
     const claims = JSON.parse(Buffer.from(token.split('.')[1]!, 'base64url').toString('utf8'))
-    if (claims.tid?.toLowerCase() !== tenant.toLowerCase() || !isGuid(claims.oid)) return undefined
+    if (claims.tid?.toLowerCase() !== tenant.toLowerCase() || !isGuid(claims.oid) || (requireDelegated && !claims.scp)) return undefined
     return {
       id: claims.oid,
       email: claims.scp ? claims.preferred_username ?? claims.upn ?? '' : '',

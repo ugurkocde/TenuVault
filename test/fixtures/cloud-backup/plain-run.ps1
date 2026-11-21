@@ -23,6 +23,7 @@ $script:failGraphToken = $false
 $script:failDetail = $false
 $script:failReportList = $false
 $script:failCompliance = $false
+$script:maskOma = $false
 
 function Get-TvManagedIdentityToken {
     param([string]$Resource)
@@ -40,16 +41,21 @@ function Invoke-TvHttp {
     $text = '{"value":[]}'
     if ($Uri -like "*/tenuvault-backup-results?*comp=list*") {
         $text = "<EnumerationResults><Blobs /><NextMarker /></EnumerationResults>"
-    } elseif ($Uri -like "*/tenuvault-backup-results/audit-*/*" -and $Method -eq "Get") {
+    } elseif (($Uri -like "*/tenuvault-backup-results/audit-*/*" -or $Uri -like "*/intune-backups/cloud-backup-status-*") -and $Method -eq "Get") {
         throw [TvHttpError]::new(404, "HTTP 404")
     } elseif ($Uri -eq "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations") {
         $text = '{"value":[{"id":"cfg-1","displayName":"Baseline Wi-Fi"}]}'
     } elseif ($Uri -eq "https://graph.microsoft.com/beta/deviceManagement/windowsAutopilotDeviceIdentities") {
         # A list-only type: the entry is the snapshot, with status fields and secrets left out.
         $text = '{"value":[{"id":"ap-1","serialNumber":"SN-0001","manufacturer":"Contoso","model":"Laptop 7","groupTag":"Sales","displayName":null,"userPrincipalName":"","lastContactedDateTime":"2026-11-01T10:00:00Z","enrollmentState":"enrolled","deviceAccountPassword":"secret","productKey":"PK-1","managedDeviceId":"md-1"}]}'
+    } elseif ($Uri -like "*getOmaSettingPlainTextValue*") {
+        throw [TvHttpError]::new(403, "No access to plaintext")
     } elseif ($Uri -like "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations/cfg-1*") {
         if ($script:failDetail) { throw [TvHttpError]::new(401, "HTTP 401") }
         $text = '{"@odata.context":"x","id":"cfg-1","displayName":"Baseline Wi-Fi","lastModifiedDateTime":"2026-11-01T10:00:00Z","assignments":[]}'
+        if ($script:maskOma -and $Uri -match "/cfg-1(?:\?|$)") {
+            $text = '{"id":"cfg-1","displayName":"Baseline Wi-Fi","omaSettings":[{"@odata.type":"#microsoft.graph.omaSettingString","isEncrypted":true,"value":"****","secretReferenceValueId":"sample"}],"assignments":[]}'
+        }
     }
     return @{ Status = 200; Bytes = [Text.Encoding]::UTF8.GetBytes($text); Text = $text }
 }
@@ -110,3 +116,12 @@ foreach ($value in @("Manual", "Nightly")) {
     try { $output = @(Invoke-TvBackup) } catch { $errorText = $_.Exception.Message }
     Write-Output (@{ calls = @($script:calls.ToArray()); output = @($output | ForEach-Object { [string]$_ }); error = $errorText } | ConvertTo-Json -Compress -Depth 5)
 }
+
+# 8. A readable profile with a secret whose plaintext is refused.
+$script:calls.Clear()
+$script:maskOma = $true
+$Trigger = "Manual"
+$errorText = $null
+$output = @()
+try { $output = @(Invoke-TvBackup) } catch { $errorText = $_.Exception.Message }
+Write-Output (@{ calls = @($script:calls.ToArray()); output = @($output | ForEach-Object { [string]$_ }); error = $errorText } | ConvertTo-Json -Compress -Depth 5)

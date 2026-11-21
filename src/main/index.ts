@@ -1,5 +1,5 @@
 import { backupAudit, reconcileBackupAudit, recordBackupAudit } from "./backup/audit"
-import { AuditSink, setMainAuditSink } from "./api/audit-sink"
+import { auditUserFromToken, AuditSink, setMainAuditSink } from "./api/audit-sink"
 import { AuditContainerMissingError, AuditStorageService } from "../portal/lib/audit/storage"
 import { type AuditJobItem } from "../portal/lib/audit/types"
 import { beginRestoreAudit } from "../portal/lib/audit/restore"
@@ -1022,12 +1022,15 @@ async function bootstrap(): Promise<void> {
     const profile = tenantProfile(tenantId)
     const azureStorage = profile && !isLocalAccount(profile.storageAccountName) ? profile.storageAccountName : undefined
     const reader = backupReader.status(tenantId)
+    let auditStuck: number | undefined
+    try { auditStuck = auditSink.stuckReaderCount(tenantId, reader?.state === "verified" ? reader.clientId : undefined) } catch { /* Pending count already reports the read failure. */ }
     // Types of services turned off for the tenant are left out of every backup, so the reader does not miss them.
     const off = new Set(disabledFolders(moduleSettings.enabled(tenantId)))
     return {
       supported: readerSupported,
       available: !!plan && allows(plan, "backupReader"),
       auditPending: pendingReaderAudit(tenantId),
+      auditStuck,
       auditSetupRequired: !!azureStorage && missingReaderAuditContainers.has(readerAuditKey(tenantId, azureStorage)),
       reader: reader && { ...reader, excludedTypes: reader.excludedTypes.filter((folder) => !off.has(folder)) },
       ...(azureStorage ? { storageAccountName: azureStorage } : {}),
@@ -1099,11 +1102,12 @@ async function bootstrap(): Promise<void> {
     }
     let audit: boolean | null = null
     let auditWarning: string | undefined
+    let auditCreated: boolean | undefined
     if (azure) {
       try {
         assertStorageAccountName(profile.storageAccountName)
         const service = new AuditStorageService({ storageAccountName: profile.storageAccountName, accessToken: await tokens.storage(), provisionContainer: false, fetch: bridgedFetch })
-        await service.testProducerAccess(tenantId)
+        auditCreated = await service.testProducerAccess(tenantId)
         audit = true
         missingReaderAuditContainers.delete(readerAuditKey(tenantId, profile.storageAccountName))
       } catch (error) {
@@ -1114,7 +1118,7 @@ async function bootstrap(): Promise<void> {
       }
     }
     const message = [graph ? undefined : graphMessage, warning, auditWarning].filter(Boolean).join(" ") || undefined
-    backupReader.recordTest(tenantId, { graph, storage, audit, ...(message ? { message } : {}) })
+    backupReader.recordTest(tenantId, { graph, storage, audit, auditCreated, ...(message ? { message } : {}) })
     return message ? { warning: message } : {}
   }
   const requireReaderPlan = async (tenantId: string) => {
@@ -1123,6 +1127,25 @@ async function bootstrap(): Promise<void> {
     if (!allows(plan, "backupReader")) throw new PlanRequired("backupReader")
   }
   handleTrusted("backupReader:status", (_event, tenantId: unknown) => readerState(readerTenant(tenantId)))
+  handleTrusted("backupReader:deliverAudit", async (_event, tenantId: unknown) => {
+    const id = readerTenant(tenantId)
+    const profile = tenantProfile(id)!
+    const reader = backupReader.status(id)
+    const registrationId = reader?.state === "verified" ? reader.clientId : undefined
+    if (!auditSink.stuckReaderCount(id, registrationId)) return readerState(id)
+    const { accessToken } = await auth.getAccessToken(id, profile.clientId, RESOURCE_SCOPES.storage)
+    const admin = auditUserFromToken(accessToken, id, true)
+    if (!admin) throw new Error("Sign in as an administrator to deliver these audit events.")
+    await auditSink.deliverStuckReader(id, registrationId, admin, account => {
+      assertStorageAccountName(account)
+      if (isLocalAccount(account)) {
+        if (account !== localStorageAccountName(id)) throw new Error("Audit storage belongs to another tenant")
+        return new AuditStorageService({ storageAccountName: account, accessToken: "", fetch: fetchLocalAudit(id, account) })
+      }
+      return new AuditStorageService({ storageAccountName: account, accessToken, fetch: bridgedFetch })
+    })
+    return readerState(id)
+  })
   handleTrusted("backupReader:prepare", (_event, tenantId: unknown) => withPlanError(async () => {
     const tenant = readerTenant(tenantId)
     await requireReaderPlan(tenant)

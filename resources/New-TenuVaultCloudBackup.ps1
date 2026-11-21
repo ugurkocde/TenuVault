@@ -212,9 +212,6 @@ if ($AlertEmail -and $AlertEmail -notmatch "^[^@\s]+@[^@\s]+$") {
 if ($AlertEmail -and $NoFailureAlert) {
     throw "-AlertEmail and -NoFailureAlert contradict each other. Pass only one of them."
 }
-if (-not $Remove -and -not $AlertEmail -and -not $NoFailureAlert) {
-    throw "Decide how failed cloud backups will be noticed before anything is created: pass -AlertEmail <address> to create an Azure Monitor failure alert, or -NoFailureAlert to explicitly accept that failed runs are only visible in the Automation job list and in TenuVault. Nothing was written."
-}
 if ($GrantGraphRoles -and $GraphRolesGranted) {
     throw "-GrantGraphRoles and -GraphRolesGranted contradict each other. Pass only one of them."
 }
@@ -494,6 +491,38 @@ function Publish-TenuVaultRunbook {
     return @{ Plain = $true; Version = $version; Reason = $null }
 }
 
+function Invoke-TenuVaultAuditCanary {
+    param([string]$Name, [switch]$WaitForRole)
+    $parameters = @{ TenantKey = $tenantKey; AuditCanary = $true }
+    if ($WaitForRole) { $parameters.AuditCanaryWait = $true }
+    try {
+        $result = Start-AzAutomationRunbook -ResourceGroupName $ResourceGroupName -AutomationAccountName $AutomationAccountName `
+            -Name $Name -Parameters $parameters -Wait -MaxWaitSeconds 420 -ErrorAction Stop
+        if (($result -join "`n") -notmatch "Cloud backup canary passed") { throw "The job did not report a passing canary." }
+        Write-Host ($result -join "`n")
+    } catch {
+        throw "AUDITCANARY failed for '$Name'. The schedule is paused. Check the Automation job output and managed identity grants, then rerun setup. Enable the schedule in Azure after AUDITCANARY passes. $($_.Exception.Message)"
+    }
+}
+
+function Wait-TenuVaultAuditPropagation {
+    # Run the probe with the Automation identity even when the production runbook is too old
+    # to have AUDITCANARY. Keep the production link and published slot intact during the wait.
+    $probe = "$runbookName-AuditProbe-$tenantKey"
+    if (-not $PSCmdlet.ShouldProcess($probe, "Check effective storage grants before publishing")) {
+        throw "Audit access was not checked. The schedule is paused."
+    }
+    try {
+        Import-AzAutomationRunbook -ResourceGroupName $ResourceGroupName -AutomationAccountName $AutomationAccountName `
+            -Name $probe -Path $runbookPath -Type PowerShell72 -Description "TenuVault audit permission probe" -Force -Confirm:$false | Out-Null
+        Publish-AzAutomationRunbook -ResourceGroupName $ResourceGroupName -AutomationAccountName $AutomationAccountName -Name $probe | Out-Null
+        Invoke-TenuVaultAuditCanary -Name $probe -WaitForRole
+    } finally {
+        Remove-AzAutomationRunbook -ResourceGroupName $ResourceGroupName -AutomationAccountName $AutomationAccountName `
+            -Name $probe -Force -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
+    }
+}
+
 # Drops the Key Vault variable of a setup before runbook 1.2.0, but only once the published runbook
 # was read back as one that no longer reads it: an older published runbook still needs the variable.
 function Remove-TenuVaultLegacyKeyVaultVariable {
@@ -663,6 +692,14 @@ if ($Remove) {
     return
 }
 
+$automationAccount = Get-AzAutomationAccount -ResourceGroupName $ResourceGroupName -Name $AutomationAccountName -ErrorAction SilentlyContinue
+$upgradeLink = if ($automationAccount) {
+    Get-AzAutomationScheduledRunbook -ResourceGroupName $ResourceGroupName -AutomationAccountName $AutomationAccountName `
+        -RunbookName $runbookName -ScheduleName $scheduleName -ErrorAction SilentlyContinue
+}
+if (-not $AuditRoleOnly -and -not $upgradeLink -and -not $AlertEmail -and -not $NoFailureAlert) {
+    throw "Decide how failed cloud backups will be noticed before anything is created: pass -AlertEmail <address> to create an Azure Monitor failure alert, or -NoFailureAlert to explicitly accept that failed runs are only visible in the Automation job list and in TenuVault. Nothing was written."
+}
 # ---------------------------------------------------------------------------
 # Resource group and Automation account
 # ---------------------------------------------------------------------------
@@ -681,7 +718,6 @@ if (-not $resourceGroup) {
 }
 if (-not $Location) { $Location = $resourceGroup.Location }
 
-$automationAccount = Get-AzAutomationAccount -ResourceGroupName $ResourceGroupName -Name $AutomationAccountName -ErrorAction SilentlyContinue
 if (-not $automationAccount) {
     Write-Host "Creating Automation account '$AutomationAccountName' in $Location with a system assigned identity..."
     if ($PSCmdlet.ShouldProcess($AutomationAccountName, "Create Automation account with system assigned identity")) {
@@ -719,6 +755,19 @@ if (-not $principalId -and -not $WhatIfPreference) {
     throw "The system assigned identity of '$AutomationAccountName' did not appear within five minutes. Run the script again."
 }
 if ($principalId) { Write-Host "Managed identity object (principal) id: $principalId" }
+
+$resumeSchedule = $false
+if ($upgradeLink -and -not $AuditRoleOnly -and -not $WhatIfPreference) {
+    $schedule = Get-AzAutomationSchedule -ResourceGroupName $ResourceGroupName `
+        -AutomationAccountName $AutomationAccountName -Name $scheduleName -ErrorAction Stop
+    $resumeSchedule = $schedule.IsEnabled -eq $true
+    if ($resumeSchedule) {
+        if (-not $PSCmdlet.ShouldProcess($scheduleName, "Pause scheduled backups during the audit upgrade")) { return }
+        Set-AzAutomationSchedule -ResourceGroupName $ResourceGroupName -AutomationAccountName $AutomationAccountName `
+            -Name $scheduleName -IsEnabled $false -ErrorAction Stop | Out-Null
+        Write-Host "Paused '$scheduleName'. If setup stops, fix the reported issue, rerun setup, then enable the schedule in Azure after the canary passes."
+    }
+}
 
 # ---------------------------------------------------------------------------
 # Storage: container and the container scoped writer role (no delete)
@@ -772,6 +821,11 @@ if ($principalId) {
             ($assignment.Scope -eq $backupScope -and $assignment.RoleDefinitionName -eq $writerRoleName)) { continue }
         Write-Warning "The managed identity also has '$($assignment.RoleDefinitionName)' at $($assignment.Scope). Check its effective backup and audit access."
     }
+}
+
+if ($AuditRoleOnly) {
+    Write-Host "The audit role was applied. Rerun setup without AuditRoleOnly to upgrade the runbook and check access."
+    return
 }
 
 if ($principalId) {
@@ -839,24 +893,29 @@ if ($principalId) {
     }
 }
 
-if ($AuditRoleOnly) {
-    Write-Host "Allow time for the audit role to propagate, then rerun setup without AuditRoleOnly before running the canary."
-    return
-}
-
 # ---------------------------------------------------------------------------
 # Runbook import and publish. A rerun is the upgrade path.
 # ---------------------------------------------------------------------------
 
-Write-Warning "This setup publishes without waiting for Azure role propagation. For an existing schedule, pause it before upgrading and resume only after AUDITCANARY passes. Use AuditRoleOnly to grant audit access first."
-$runbook = Publish-TenuVaultRunbook
+if ($WhatIfPreference) { return }
 
 Write-Host "Writing Automation variables for this tenant (suffix -$tenantKey)..."
 Set-TenuVaultAutomationVariable -Name "TenuVaultTenantId-$tenantKey" -Value $TenantId
 Set-TenuVaultAutomationVariable -Name "TenuVaultStorageAccount-$tenantKey" -Value $StorageAccountName
-Set-TenuVaultAutomationVariable -Name "TenuVaultScope-$tenantKey" -Value $Scope
-Set-TenuVaultAutomationVariable -Name "TenuVaultExcludedFolders-$tenantKey" -Value $ExcludedFolders
-Set-TenuVaultAutomationVariable -Name "TenuVaultAppOnlyExcluded-$tenantKey" -Value $appOnlyExcluded
+$storedVariables = Get-TenuVaultAutomationVariables
+foreach ($setting in @(
+    @{ Name = "TenuVaultScope-$tenantKey"; Parameter = "Scope"; Default = $Scope },
+    @{ Name = "TenuVaultExcludedFolders-$tenantKey"; Parameter = "ExcludedFolders"; Default = $ExcludedFolders },
+    @{ Name = "TenuVaultAppOnlyExcluded-$tenantKey"; Parameter = "IncludeDeviceCategories"; Default = $appOnlyExcluded }
+)) {
+    if ($PSBoundParameters.ContainsKey($setting.Parameter) -or
+        (-not $storedVariables.Error -and -not $storedVariables.Variables.ContainsKey($setting.Name))) {
+        Set-TenuVaultAutomationVariable -Name $setting.Name -Value $setting.Default
+    }
+}
+if (-not $PSBoundParameters.ContainsKey("Scope") -and $storedVariables.Variables.ContainsKey("TenuVaultScope-$tenantKey")) { $Scope = $storedVariables.Variables["TenuVaultScope-$tenantKey"] }
+if (-not $PSBoundParameters.ContainsKey("ExcludedFolders") -and $storedVariables.Variables.ContainsKey("TenuVaultExcludedFolders-$tenantKey")) { $ExcludedFolders = $storedVariables.Variables["TenuVaultExcludedFolders-$tenantKey"] }
+if (-not $PSBoundParameters.ContainsKey("IncludeDeviceCategories") -and $storedVariables.Variables.ContainsKey("TenuVaultAppOnlyExcluded-$tenantKey")) { $appOnlyExcluded = $storedVariables.Variables["TenuVaultAppOnlyExcluded-$tenantKey"] }
 if ($changeReportPassed) { Set-TenuVaultAutomationVariable -Name "TenuVaultChangeReport-$tenantKey" -Value $ChangeReport.ToLowerInvariant() }
 if ($tenantNamePassed) {
     # Cleared to the tenant id, never to an empty value, which the runbook would skip for an
@@ -870,6 +929,15 @@ if ($tenantNamePassed) {
     Set-TenuVaultAutomationVariable -Name "TenuVaultTenantName-$tenantKey" -Value $savedName
 }
 if ($changeReportActorsPassed) { Set-TenuVaultAutomationVariable -Name "TenuVaultChangeReportActors-$tenantKey" -Value $(if ($ChangeReportWithoutActors) { "false" } else { "true" }) }
+
+if ($upgradeLink) { Wait-TenuVaultAuditPropagation }
+$runbook = Publish-TenuVaultRunbook
+if ($upgradeLink) {
+    if (-not $runbook.Version -or [version]$runbook.Version -lt [version]$auditRunbookVersion) {
+        throw "The audit-capable runbook could not be verified. The schedule is paused. Rerun setup and check AUDITCANARY before enabling it."
+    }
+    Invoke-TenuVaultAuditCanary -Name $runbookName
+}
 
 # Upgrade from a setup before runbook 1.2.0: name the old Key Vault, then drop its variable once
 # the published runbook was read back as one that no longer reads it.
@@ -1032,6 +1100,11 @@ if ($GrantGraphRoles -or $GraphRolesGranted -or $linked) {
             [void](New-AzAutomationSchedule @scheduleParams)
         }
     }
+    if ($linked -and $resumeSchedule) {
+        Set-AzAutomationSchedule -ResourceGroupName $ResourceGroupName -AutomationAccountName $AutomationAccountName `
+            -Name $scheduleName -IsEnabled $true -ErrorAction Stop | Out-Null
+        Write-Host "Resumed '$scheduleName' after AUDITCANARY passed."
+    }
     if (-not $linked -and $PSCmdlet.ShouldProcess($runbookName, "Link runbook to schedule '$scheduleName'")) {
         Register-AzAutomationScheduledRunbook -ResourceGroupName $ResourceGroupName `
             -AutomationAccountName $AutomationAccountName -RunbookName $runbookName `
@@ -1054,7 +1127,7 @@ if ($WhatIfPreference) {
 Write-Host "  Automation account:  $AutomationAccountName (resource group $ResourceGroupName, $Location)"
 Write-Host "  Runbook:             $runbookName ($(if ($runbook.Plain) { "published, version $($runbook.Version)" } else { $runbook.Reason }))"
 Write-Host "  Storage account:     $StorageAccountName (container '$backupContainer', writer role has no delete)"
-Write-Host "  Audit history:      $auditContainer. After role propagation, start the runbook with AUDITCANARY to verify access."
+Write-Host "  Audit history:      $auditContainer. Run AUDITCANARY to check access after storage permissions change."
 Write-Host "  Backup results:      '$outcomeContainer' (result notes for the notification watcher, same writer role)"
 Write-Host "  Encryption:          Azure encryption at rest; backups are plain JSON, readable by whoever your role assignments allow"
 $changeReportSummary = if (-not $changeReportPassed) { "unchanged (as an earlier setup chose; off when none did)" } else { switch ($ChangeReport) { 'Off' { 'off' } 'Names' { 'names only, sent by the notification watcher' } default { 'with setting values, sent by the notification watcher' } } }

@@ -58,7 +58,7 @@ export function BackupReaderSettings() {
   const [tenantId, setTenantId] = useState(tenants[0]?.credentials?.tenantId ?? "")
   const [state, setState] = useState<BackupReaderState | null>(null)
   const [appId, setAppId] = useState("")
-  const [busy, setBusy] = useState<"prepare" | "export" | "script" | "verify" | "test" | "remove" | null>(null)
+  const [busy, setBusy] = useState<"prepare" | "export" | "script" | "verify" | "test" | "remove" | "audit" | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [copied, setCopied] = useState<string | null>(null)
 
@@ -135,12 +135,22 @@ export function BackupReaderSettings() {
         {tenants.length > 1 && (
           <div className="flex items-center gap-3">
             <label htmlFor={ids.tenant}>Tenant</label>
-            <select id={ids.tenant} className="h-10 rounded-full border border-gray-300 bg-white px-4" value={tenantId} onChange={(event) => setTenantId(event.target.value)}>
+            <select id={ids.tenant} disabled={!!busy} className="h-10 rounded-full border border-gray-300 bg-white px-4" value={tenantId} onChange={(event) => setTenantId(event.target.value)}>
               {tenants.map((tenant) => <option key={tenant.id} value={tenant.credentials!.tenantId}>{tenant.name}</option>)}
             </select>
           </div>
         )}
         {!state && !error && <p className="flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> Loading...</p>}
+
+        {!!state?.auditStuck && (
+          <div className="space-y-2 rounded-xl border border-gray-200 p-4">
+            <p role="status">{state.auditStuck} audit event(s) are waiting for a Backup Reader registration that is no longer available.</p>
+            <p>Deliver them using your administrator sign-in. Each event keeps its original run ID and Backup Reader registration.</p>
+            <Button variant="outline" disabled={!!busy} onClick={() => void run("audit", () => bridge.backupReader.deliverAudit(tenantId))}>
+              {busy === "audit" ? "Delivering audit events" : "Deliver audit events as administrator"}
+            </Button>
+          </div>
+        )}
 
         {state && !reader && (
           <div className="space-y-3 rounded-xl border border-gray-200 p-4">
@@ -186,7 +196,7 @@ export function BackupReaderSettings() {
                   {reader.lastTest?.message ? `: ${reader.lastTest.message}` : ""}
                 </CheckLine>
                 <CheckLine state={reader.lastTest?.audit === true ? "ok" : reader.lastTest?.audit === false ? "fail" : storageAccountName ? "unknown" : "ok"}>
-                  {storageAccountName ? reader.lastTest?.audit === true ? "Audit storage access and permission limits verified" : reader.lastTest?.audit === false ? "Audit storage access needs attention. Rerun the Azure storage setup for this Backup Reader." : "Audit storage access test pending" : "Audit uses encrypted storage on this device"}
+                  {storageAccountName ? reader.lastTest?.audit === true ? `Audit canary ${reader.lastTest.auditCreated ? "created and read" : "read"}. Azure denied audit overwrite and audit and backup deletion.` : reader.lastTest?.audit === false ? "Audit storage access needs attention. Rerun the Azure storage setup for this Backup Reader." : "Audit storage access test pending" : "Audit uses encrypted storage on this device"}
                 </CheckLine>
                 <CheckLine state={reader.lastRun ? (reader.lastRun.status === "Completed" ? "ok" : reader.lastRun.status === "Cancelled" ? "unknown" : "fail") : "unknown"}>
                   {reader.lastRun ? `Last scheduled backup with the reader: ${reader.lastRun.status.toLowerCase()}, ${day(reader.lastRun.at)}` : "No scheduled backup has run with the reader yet"}

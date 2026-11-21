@@ -146,7 +146,7 @@ export interface AuditDetails {
 }
 
 export type AuditItemOutcome = 'created' | 'updated' | 'unchanged' | 'skipped' | 'failed' | 'partial' | 'pending' | 'unattempted' | 'uncertain'
-export type AuditJobStage = 'terminal' | 'approval-submit' | 'approval-complete' | 'approval-withdraw' | 'policy'
+export type AuditJobStage = 'terminal' | 'approval-submit' | 'approval-attempt' | 'approval-complete' | 'approval-withdraw' | 'policy'
 export type AuditProducer = 'desktop' | 'backup-reader' | 'cloud-runbook'
 export type AuditJobStatus = 'completed' | 'warnings' | 'failed' | 'cancelled' | 'pending' | 'uncertain'
 
@@ -169,6 +169,11 @@ export interface AuditChange {
   catalogVerified?: true
 }
 
+export interface AuditRestoreStep {
+  kind: 'content' | 'assignments'
+  outcome: 'applied' | 'failed' | 'uncertain' | 'pending' | 'unattempted'
+}
+
 export interface AuditJobItem {
   folder: string
   sourceId?: string
@@ -179,6 +184,7 @@ export interface AuditJobItem {
   applied?: AuditChange[]
   verified?: AuditChange[]
   approval?: AuditApproval
+  steps?: AuditRestoreStep[]
 }
 
 export interface AuditJob {
@@ -189,12 +195,14 @@ export interface AuditJob {
   status: AuditJobStatus
   sourceBackupId?: string
   registrationId?: string
+  producerPrincipalId?: string
   trigger?: 'manual' | 'scheduled' | 'tray' | 'unknown'
   producerVersion?: string
   reason?: string
   counts: Partial<Record<AuditItemOutcome | 'saved' | 'failures', number>>
   items?: AuditJobItem[]
   detailPages?: number
+  detailsIncomplete?: boolean
 }
 
 export interface AuditLogEntry {

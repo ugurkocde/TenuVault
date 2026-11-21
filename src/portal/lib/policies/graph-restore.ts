@@ -1,5 +1,5 @@
 import { auditChanges } from "../audit/restore-changes"
-import type { AuditApproval, AuditChange } from "../audit/types"
+import type { AuditApproval, AuditChange, AuditRestoreStep } from "../audit/types"
 import { approvalSignal, approvalMessage, type ApprovalSignal } from "../../../shared/intune/approval"
 import { restoreApprovals, saveRestoreApproval, removeRestoreApproval, type RestoreApproval, type ApprovalStep } from "../../../main/storage/restore-approvals"
 import { parseDependencyMappings } from "../../../shared/intune/recovery"
@@ -65,6 +65,7 @@ export interface RestoreOutcome {
   auditApplied?: AuditChange[]
   auditApprover?: AuditApproval
   auditUncertain?: boolean
+  auditSteps?: AuditRestoreStep[]
   approval?: ApprovalSignal
   approvalId?: string
   approvalState?: "required" | "submitted"
@@ -173,14 +174,23 @@ export function graphCaller(token: string, fetchImpl: typeof fetch = fetch, opti
         if (method === "GET" && attempt < 3) { await sleep(1000 * 2 ** attempt); continue }
         throw error
       }
-      const text = await response.text()
-      let parsed: Item = {}
-      try { parsed = text ? JSON.parse(text) as Item : {} } catch { /* An unreadable success remains uncertain. */ }
       const rejected = response.status >= 400 && response.status < 500 && response.status !== 408
       if (key && rejected) removeWrite(key)
+      const text = await response.text().catch(error => {
+        if (rejected && callOptions.approvalCode) return ""
+        throw error
+      })
+      let parsed: Item = {}
+      try { parsed = text ? JSON.parse(text) as Item : {} } catch { /* An unreadable success remains uncertain. */ }
       if (response.status === 401 && options.refreshToken && !refreshed && attempt < 3) {
         beforeAttempt?.()
-        refreshed = true; token = await options.refreshToken(); continue
+        refreshed = true
+        try { token = await options.refreshToken() }
+        catch (error) {
+          if (callOptions.approvalCode) return { status: response.status, body: parsed }
+          throw error
+        }
+        continue
       }
       const retry = response.status === 429 || (method === "GET" && [408, 500, 502, 503, 504].includes(response.status))
       if (retry && attempt < 3) {
@@ -253,7 +263,17 @@ export class DependencyMappingError extends Error {
   constructor(message: string, readonly status: number) { super(message) }
 }
 
+export class ApprovalCompletionRefused extends Error {
+  constructor(message: string, readonly status: number) { super(message) }
+}
+
 export class Restorer {
+  private writeDispatched = false
+
+  private trackWrite(): Pick<NonNullable<Parameters<GraphCall>[3]>, "onWriteDispatched"> {
+    return { onWriteDispatched: () => { this.writeDispatched = true } }
+  }
+
   /** Old object ID to new object ID, for objects recreated during this restore. */
   private readonly remapped = new Map<string, string>()
   private readonly reviewed = new Map<string, string>()
@@ -282,6 +302,7 @@ export class Restorer {
   }
 
   async restore(path: string, snapshot: Item): Promise<RestoreOutcome> {
+    this.writeDispatched = false
     return withAdminLink(path, { ...await this.restoreOnce(path, snapshot), auditSourceId: typeof snapshot.id === "string" ? snapshot.id : undefined }, snapshot)
   }
 
@@ -332,7 +353,7 @@ export class Restorer {
       if (blocker) return { success: false, path, action: "skipped", error: blocker }
       return withNote(await this.create(type, path, source, snapshot, assignments))
     } catch (error) {
-      return { success: false, path, retryable: false, auditUncertain: true, error: error instanceof Error ? error.message : String(error) }
+      return { success: false, path, retryable: false, auditUncertain: this.writeDispatched, error: error instanceof Error ? error.message : String(error) }
     }
   }
 
@@ -368,7 +389,7 @@ export class Restorer {
 
   private auditStep(type: IntuneType, step: Step, baseline?: Item, create = false): Promise<AuditChange[]> {
     if (step.kind === "assignments") return Promise.resolve([{ operation: "assign", field: "assignments" }])
-    const recording = this.options.auditProgress || this.options.auditSubmitted || this.options.auditApprovalCompleted
+    const recording = this.options.auditProgress || this.options.auditSubmitted
     return auditChanges(type, create ? "create" : "update", step.body, baseline, recording ? this.graph : undefined)
   }
 
@@ -386,7 +407,7 @@ export class Restorer {
     if (references.blocking.length) return { success: false, path, action: "skipped", retryable: false, error: references.blocking.join(" ") }
     const primary = await this.auditStep(type, { ...plan.create, kind: "content" }, undefined, true)
     const planned = [...primary, ...(await Promise.all([...plan.steps, ...plan.assignments].map(step => this.auditStep(type, step)))).flat()]
-    const created = await this.graph("POST", plan.create.path, plan.create.body, { sourceId: typeof snapshot.id === "string" ? snapshot.id : undefined })
+    const created = await this.graph("POST", plan.create.path, plan.create.body, { ...this.trackWrite(), sourceId: typeof snapshot.id === "string" ? snapshot.id : undefined })
     if (created.approval) return { ...await this.pauseApproval(type, path, { ...plan.create, kind: "content" }, [...plan.steps, ...plan.assignments], source, "created", created.approval, undefined, undefined, typeof snapshot.id === "string" ? snapshot.id : undefined, false, 1, bodies.length, primary), auditPlanned: planned }
     if (created.status >= 300) return { success: false, path, retryable: created.status < 500 && created.status !== 408, auditPlanned: planned, auditUncertain: created.status >= 500 || created.status === 408, error: writeError(type, created.body, created.status) }
     const id = String(created.body.id ?? "")
@@ -571,12 +592,15 @@ export class Restorer {
     }
   }
 
-  private async complete(type: IntuneType, path: string, id: string, body: Item, action: "created" | "updated", steps: Step[], baseline?: Item, priorSteps = action === "created" ? 1 : 0, priorChanges: AuditChange[] = []): Promise<RestoreOutcome> {
+  private async complete(type: IntuneType, path: string, id: string, body: Item, action: "created" | "updated", steps: Step[], baseline?: Item, priorSteps = action === "created" ? 1 : 0, priorChanges: AuditChange[] = [], approvedStep?: AuditRestoreStep): Promise<RestoreOutcome> {
     const name = type.singleton?.name ?? body[type.nameKey] ?? body.displayName ?? body.name
     const applied = [...priorChanges]
     const plannedByStep = await Promise.all(steps.map(step => this.auditStep(type, step, baseline)))
+    const stepResults: AuditRestoreStep[] | undefined = approvedStep && [
+      approvedStep, ...steps.map(step => ({ kind: step.kind, outcome: "unattempted" as const })),
+    ]
     const base = { path, policyId: id, policyName: typeof name === "string" ? name : undefined, action,
-      auditPlanned: [...priorChanges, ...plannedByStep.flat()], auditApplied: applied }
+      auditPlanned: [...priorChanges, ...plannedByStep.flat()], auditApplied: applied, auditSteps: stepResults }
     const checkpoint = () => this.options.auditProgress?.({ ...base, success: false, partial: true })
     if (applied.length) checkpoint()
     const resolved = steps.map((step) => resolveStep(step, id))
@@ -584,10 +608,15 @@ export class Restorer {
       let message: string | undefined
       let safeToRetry = false
       let response: Awaited<ReturnType<GraphCall>> | undefined
+      let dispatched = false
       try {
-        response = await this.graph(step.method, step.path, step.body)
+        response = await this.graph(step.method, step.path, step.body, { onWriteDispatched: () => {
+          dispatched = this.writeDispatched = true
+          if (stepResults) { stepResults[index + 1]!.outcome = "uncertain"; checkpoint() }
+        } })
         if (!response.approval) {
           if (response.status < 300) {
+            if (stepResults) stepResults[index + 1]!.outcome = "applied"
             applied.push(...plannedByStep[index]!)
             checkpoint()
             continue
@@ -599,11 +628,12 @@ export class Restorer {
         message = `Write outcome unknown: ${error instanceof Error ? error.message : String(error)}. Check Intune before retrying.`
       }
       if (response?.approval) {
+        if (stepResults) stepResults[index + 1]!.outcome = "pending"
         let live = index === 0 ? baseline : undefined
         if (action === "updated" && !live && this.options.approvalContext && response.approval.kind !== "locked-by-other") {
           try { live = await this.current(type, id) } catch { /* Retain the pending code even if the read fails. */ }
         }
-        return { ...await this.pauseApproval(type, path, step, resolved.slice(index + 1), body, action, response.approval, id, live, undefined, priorSteps > 0 || index > 0, priorSteps + index + 1, priorSteps + resolved.length, plannedByStep[index]), auditPlanned: base.auditPlanned, auditApplied: applied }
+        return { ...await this.pauseApproval(type, path, step, resolved.slice(index + 1), body, action, response.approval, id, live, undefined, priorSteps > 0 || index > 0, priorSteps + index + 1, priorSteps + resolved.length, plannedByStep[index]), auditPlanned: base.auditPlanned, auditApplied: applied, auditSteps: stepResults }
       }
       let repairToken: string | undefined
       let expectedCurrent: Item | undefined
@@ -618,7 +648,9 @@ export class Restorer {
         repairs.set(repairToken, { scope: this.options.repairScope ?? this.instanceScope, path, type, id, body, action,
           steps: resolved.slice(index), expectedCurrent, operationId: this.options.operationId, expires: Date.now() + 60 * 60 * 1000 })
       }
-      return { ...base, success: false, partial: true, auditUncertain: !response || response.status >= 500 || response.status === 408, retryable: safeToRetry, repairToken, error: message, warnings: [message!] }
+      const uncertain = response ? response.status >= 500 || response.status === 408 : dispatched
+      if (stepResults) stepResults[index + 1]!.outcome = uncertain ? "uncertain" : "failed"
+      return { ...base, success: false, partial: true, auditUncertain: uncertain, retryable: safeToRetry, repairToken, error: message, warnings: [message!] }
     }
     return { ...base, success: true }
   }
@@ -717,9 +749,13 @@ export class Restorer {
     const response = await this.graph(record.step.method, record.step.path, record.step.body ? JSON.parse(record.step.body) as Item : undefined, { exactBody: record.step.body, approvalCode: record.id, sourceId: record.snapshotId, onWriteDispatched: this.options.auditApprovalDispatched })
     if (response.status === 403) {
       try { await this.refreshApproval(record) } catch { /* Preserve the completion error. */ }
-      throw new Error("Intune refused to complete this request. It may have expired, been changed, or been completed already. Check it in the Intune admin center.")
+      throw new ApprovalCompletionRefused("Intune refused to complete this request. It may have expired, been changed, or been completed already. Check it in the Intune admin center.", response.status)
     }
-    if (response.status >= 300) throw new Error(errorMessage(response.body, response.status))
+    if (response.status >= 300) {
+      const message = errorMessage(response.body, response.status)
+      if (response.status >= 400 && response.status < 500 && response.status !== 408) throw new ApprovalCompletionRefused(message, response.status)
+      throw new Error(message)
+    }
     return this.resumeApproval(record, response.body, references.warnings)
   }
 
@@ -730,16 +766,20 @@ export class Restorer {
       ? { operation: "assign", field: "assignments" } as const
       : { operation: record.operation === "create" ? "create" : "update" } as const]
     const approval = record.auditApprover ?? { system: "intune" as const, requestId: record.id }
-    this.options.auditApprovalCompleted?.({
-      path: record.backupPath, success: true, action: record.action, policyId: id, auditApprover: approval,
-      auditPlanned: confirmed, auditApplied: confirmed,
+    const approvedStep: AuditRestoreStep = { kind: record.step.kind, outcome: "applied" }
+    this.options.auditProgress?.({
+      path: record.backupPath, success: false, partial: true, action: record.action, policyId: id, auditApprover: approval,
+      auditPlanned: confirmed, auditApplied: confirmed, auditSteps: [approvedStep],
     })
     if (!id) throw new Error("Microsoft Graph did not return an object ID. Check Intune before continuing.")
     saveRestoreApproval({ ...record, objectId: id, status: "approved", continuationPending: true })
-    const next = new Restorer(this.graph, { ...this.options, mode: record.mode, assignments: record.assignments, repairScope: record.repairScope, operationId: record.operationId ?? this.options.operationId ?? record.id, approvalContext: { ...this.options.approvalContext!, justification: `${record.justification.slice(0, 686)} (${record.remaining[0]?.kind ?? "content"})` } })
+    const next = new Restorer(this.graph, { ...this.options, mode: record.mode, assignments: record.assignments, repairScope: record.repairScope, operationId: record.operationId ?? this.options.operationId ?? record.id,
+      auditProgress: outcome => this.options.auditProgress?.({ ...outcome, auditApprover: approval }),
+      approvalContext: { ...this.options.approvalContext!, justification: `${record.justification.slice(0, 686)} (${record.remaining[0]?.kind ?? "content"})` } })
     const steps = record.remaining.map(step => ({ ...step, body: step.body ? JSON.parse(step.body) as Item : {} }))
     const baseline = record.action === "updated" ? await this.current(type, id) : undefined
-    const outcome = await next.complete(type, record.backupPath, id, record.source, record.action, steps, baseline, record.stepNumber, confirmed)
+    const outcome = await next.complete(type, record.backupPath, id, record.source, record.action, steps, baseline, record.stepNumber, confirmed, approvedStep)
+    this.options.auditApprovalCompleted?.({ ...outcome, auditApprover: approval })
     saveRestoreApproval({ ...record, objectId: id, status: "completed", continuationPending: false })
     if (record.assignments && type.assignmentWarning) outcome.warnings = [...(outcome.warnings ?? []), type.assignmentWarning]
     return withAdminLink(record.backupPath, { ...next.withWarnings(outcome, type, record.source, record.step.body ? JSON.parse(record.step.body) as Item : {}, warnings), auditApprover: outcome.approvalId ? undefined : approval }, record.source)

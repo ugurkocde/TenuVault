@@ -58,16 +58,17 @@ describe("cloud backup result notes", () => {
     expect(events[22]!.details).toContainEqual({ label: "Backup", value: "backup-2026-11-13-101500" })
   })
 
-  it("is the only write outside the backup container, to the watcher's container and with fixed fields", () => {
+  it("writes fixed result notes to the dedicated results container, including on terminal recovery", () => {
     expect(backupRunbook.match(/Invoke-TvHttp -Uri \$target\.Uri -Token \$Token -Method "Put"/g)).toHaveLength(1)
-    const plain = backupRunbook.match(/Invoke-TvHttp -Uri \$uri -Token \$Token -Method "Put"/g)
+    const sendOutcome = backupRunbook.slice(backupRunbook.indexOf("function Send-TvBackupOutcome"), backupRunbook.indexOf("# Audit receipts live"))
+    const plain = sendOutcome.match(/Invoke-TvHttp -Uri \$uri -Token \$Token -Method "Put"/g)
     expect(plain).toHaveLength(1)
     // Its own container: never the watcher's state container, which this identity could otherwise rewrite.
     expect(backupRunbook).toContain('$script:OutcomeContainer = "tenuvault-backup-results"')
     expect(backupRunbook).not.toMatch(/tenuvault-notification-state/)
     expect(backupRunbook).toContain('/$script:OutcomeContainer/cloud-backup-outcomes/')
     // Every path that ends a run leaves a note: tokens and scope, listing, write phase and the result.
-    expect(backupRunbook.match(/Send-TvBackupOutcome -Account/g)).toHaveLength(4)
+    expect(backupRunbook.match(/Send-TvBackupOutcome -Account/g)).toHaveLength(5)
   })
 
   it("the watcher leaves failed folders out of the missed backup check and remembers them in its state", () => {

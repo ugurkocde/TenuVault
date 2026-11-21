@@ -37,6 +37,7 @@ afterEach(() => { setAuditOutboxStore(); vi.restoreAllMocks(); vi.unstubAllGloba
 
 function storage() {
   const blobs = new Map<string, { body: string; timestamp: string | null }>()
+  const ages = new Map<string, string>()
   let loseResponse = false
   let denied = false
   const fetcher: typeof fetch = async (input, init) => {
@@ -44,7 +45,7 @@ function storage() {
     if (url.searchParams.get("comp") === "list") {
       const prefix = url.searchParams.get("prefix") ?? ""
       return new Response(`<EnumerationResults><Blobs>${[...blobs].filter(([key]) => key.slice(1).startsWith(prefix)).map(([key, data]) =>
-        `<Blob><Name>${key.slice(1)}</Name>${data.timestamp ? `<Metadata><audit_timestamp>${data.timestamp}</audit_timestamp><audit_entries>1</audit_entries></Metadata>` : ""}</Blob>`).join("")}</Blobs></EnumerationResults>`)
+        `<Blob><Name>${key.slice(1)}</Name><Properties><Last-Modified>${ages.get(key) ?? new Date().toUTCString()}</Last-Modified></Properties>${data.timestamp ? `<Metadata><audit_timestamp>${data.timestamp}</audit_timestamp><audit_entries>1</audit_entries></Metadata>` : ""}</Blob>`).join("")}</Blobs></EnumerationResults>`)
     }
     const name = url.pathname.replace("/audit-logs", "")
     if (init?.method === "PUT") {
@@ -54,10 +55,11 @@ function storage() {
       if (loseResponse) { loseResponse = false; throw new Error(canary) }
       return new Response(null, { status: 201 })
     }
+    if (init?.method === "DELETE") return new Response(null, { status: blobs.delete(name) ? 202 : 404 })
     return blobs.has(name) ? new Response(blobs.get(name)!.body) : new Response(null, { status: 404 })
   }
   vi.stubGlobal("fetch", fetcher)
-  return { blobs, service: new AuditStorageService(credentials), lose: () => { loseResponse = true }, deny: () => { denied = true }, allow: () => { denied = false } }
+  return { blobs, ages, service: new AuditStorageService(credentials), lose: () => { loseResponse = true }, deny: () => { denied = true }, allow: () => { denied = false } }
 }
 
 it("writes only allowlisted metadata to the logger, encrypted outbox and legacy exports", async () => {
@@ -344,7 +346,7 @@ it.each([403, 201])("only passes a Reader permission canary when overwrite and b
     if (init?.method === "PUT") return new Response(null, { status: match ? overwriteStatus : 201 })
     return Response.json({ tenantId })
   } })
-  if (overwriteStatus === 403) await expect(service.testProducerAccess(tenantId)).resolves.toBeUndefined()
+  if (overwriteStatus === 403) await expect(service.testProducerAccess(tenantId)).resolves.toBe(true)
   else await expect(service.testProducerAccess(tenantId)).rejects.toThrow("excessive Azure Storage permissions")
   expect(calls.filter(call => call.method === "DELETE").map(call => call.path.split("/")[1]).sort()).toEqual(["audit-logs", "intune-backups"])
   expect(calls.every(call => call.path.includes("/producer-tests/"))).toBe(true)
@@ -369,4 +371,80 @@ it("drops an unsupported legacy Intune decision timestamp at the export boundary
     approval: { system: "intune" as const, requestId: registration, decisionAt: "2026-11-20T12:00:00Z" } }
   expect(projectItem(item).approval).toMatchObject({ requestId: registration, decisionAt: undefined })
   expect(projectItem({ ...item, approval: { ...item.approval, system: "tenuvault" } }).approval?.decisionAt).toBe("2026-11-20T12:00:00.000Z")
+})
+
+it("keeps old detail pages until their root expires and preserves incomplete rows in history and exports", async () => {
+  const remote = storage()
+  const value = job(Array.from({ length: 105 }, () => ({ folder: "DeviceConfigurations", outcome: "updated" })))
+  const sink = new AuditSink({ bind: () => binding, transport: async () => remote.service })
+  await sink.record(binding, input(value))
+  const [first, second] = [...remote.blobs.keys()].filter(name => name.startsWith("/job-details/"))
+  const root = [...remote.blobs.keys()].find(name => name.includes("-event-"))!
+  expect(first).toBeDefined()
+  expect(second).toBeDefined()
+  remote.ages.set(first!, new Date(0).toUTCString())
+  remote.ages.set(second!, new Date(0).toUTCString())
+  expect(await remote.service.cleanupOldLogs(tenantId)).toEqual({ deleted: 0, kept: 0 })
+  expect(remote.blobs.has(first!)).toBe(true)
+  remote.blobs.delete(second!)
+  const [history] = await remote.service.queryLogs({ ...dateFilter, limit: 10 })
+  expect(history?.job).toMatchObject({ detailsIncomplete: true, detailPages: 2 })
+  expect(history?.job?.items).toHaveLength(100)
+  const exported = await remote.service.queryAllLogs(dateFilter)
+  expect(JSON.parse(auditExportJSON(exported, meta)).logs[0].job.detailsIncomplete).toBe(true)
+  expect(auditExportCSV(exported, meta)).toContain("detailsIncomplete")
+  remote.ages.set(root, new Date(0).toUTCString())
+  expect(await remote.service.cleanupOldLogs(tenantId)).toEqual({ deleted: 2, kept: 0 })
+  expect(remote.blobs.size).toBe(0)
+})
+
+it.each([false, true])("recovers a replaced Reader explicitly as admin without duplicating an earlier save (%s)", async alreadySaved => {
+  const local = memoryStore()
+  setAuditOutboxStore(local)
+  const remote = storage()
+  const service = remote.service
+  const reader = { id: registration, email: "", name: "Backup Reader service principal" }
+  const value = { ...job(), producer: "backup-reader" as const, status: "completed" as const, registrationId: registration }
+  const opts = { store: local, bind: () => binding, transport: async () => service }
+  if (alreadySaved) remote.lose()
+  else remote.deny()
+  await expect(new AuditSink(opts).record({ ...binding, user: reader }, input(value))).rejects.toThrow()
+  remote.allow()
+  const restarted = new AuditSink(opts)
+  expect(restarted.stuckReaderCount(tenantId, registration)).toBe(0)
+  expect(restarted.stuckReaderCount(tenantId, randomUUID())).toBe(1)
+  expect(restarted.stuckReaderCount(randomUUID())).toBe(0)
+  await restarted.deliverStuckReader(tenantId, randomUUID(), binding.user, account => {
+    expect(account).toBe(storageAccountName)
+    return service
+  })
+  expect(restarted.pending(tenantId, "backup-reader")).toBe(0)
+  const [saved] = await service.queryAllLogs(dateFilter)
+  expect(remote.blobs.size).toBe(1)
+  expect(saved?.user.id).toBe(alreadySaved ? reader.id : binding.user.id)
+  expect(saved?.job).toMatchObject({ runId: value.runId, producer: "backup-reader", registrationId: registration })
+  if (!alreadySaved) expect(saved?.job?.producerPrincipalId).toBe(reader.id)
+})
+
+it("reuses the Reader canary names and reports fresh creation only once", async () => {
+  const blobs = new Map<string, string>()
+  const checks: string[] = []
+  const service = new AuditStorageService({ ...credentials, fetch: async (url, init) => {
+    const path = new URL(String(url)).pathname
+    const headers = new Headers(init?.headers)
+    if (init?.method === "DELETE" || headers.get("if-match")) {
+      checks.push(`${init?.method} ${path}`)
+      return new Response(null, { status: 403 })
+    }
+    if (init?.method === "PUT") {
+      if (headers.get("if-none-match") && blobs.has(path)) return new Response(null, { status: 412 })
+      blobs.set(path, String(init.body))
+      return new Response(null, { status: 201 })
+    }
+    return new Response(blobs.get(path), { status: blobs.has(path) ? 200 : 404 })
+  } })
+  await expect(service.testProducerAccess(tenantId)).resolves.toBe(true)
+  await expect(service.testProducerAccess(tenantId)).resolves.toBe(false)
+  expect([...blobs.keys()]).toEqual(["audit-logs", "intune-backups"].map(container => `/${container}/producer-tests/${tenantId}/backup-reader.json`))
+  expect([...new Set(checks)].map(check => check.split("/").slice(0, 2).join("/")).sort()).toEqual(["DELETE /audit-logs", "DELETE /intune-backups", "PUT /audit-logs"])
 })

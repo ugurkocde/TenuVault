@@ -63,7 +63,9 @@ function AuditJobDetails({ entry }: { entry: AuditLogEntry }) {
         <p>Run ID {job.runId}</p>
         {job.sourceBackupId && <p>Source backup {job.sourceBackupId}</p>}
         {entry.user.tenantId && <p>Destination tenant {entry.user.tenantId}</p>}
-        {job.registrationId && <p>Producer identity {job.registrationId}</p>}
+        {job.registrationId && <p>Producer registration {job.registrationId}</p>}
+        {job.producerPrincipalId && <p>Original producer identity {job.producerPrincipalId}</p>}
+        {job.detailsIncomplete && <p role="status">Some audit item details are unavailable.</p>}
         <p>{job.stage.replaceAll("-", " ")} · {auditStatus[job.status]}{job.trigger ? ` · ${job.trigger}` : ""}</p>
         {job.reason && <p>{job.reason.toLowerCase().replaceAll("_", " ")}</p>}
         <p>{Object.entries(job.counts).map(([name, count]) => `${name}: ${count}`).join(" · ")}</p>
@@ -74,6 +76,7 @@ function AuditJobDetails({ entry }: { entry: AuditLogEntry }) {
             {item.targetId && <p>Destination item {item.targetId}</p>}
             {item.reason && <p>{item.reason.toLowerCase().replaceAll("_", " ")}</p>}
             {item.approval && <p>{item.approval.system === "intune" ? "Intune" : "TenuVault"} approval {item.approval.requestId} · {item.approval.displayName || item.approval.upn || item.approval.principalId || item.approval.applicationId || "Approver unavailable"}{item.approval.decisionAt ? ` · ${new Date(item.approval.decisionAt).toLocaleString()}` : " · Decision time unavailable"}{item.approval.justificationPresent ? " · Justification recorded" : ""}</p>}
+            {item.steps?.map((step, index) => <p key={index}>{step.kind === "assignments" ? "Assignments" : "Content"} step {index + 1} · {step.outcome}</p>)}
             {(["planned", "applied", "verified"] as const).map(phase => item[phase]?.length ? (
               <p key={phase}><span className="capitalize">{phase}</span> {item[phase].map(change => [change.operation, change.field ?? change.settingDefinitionId].filter(Boolean).join(" ")).join(", ")}</p>
             ) : null)}

@@ -153,6 +153,7 @@ interface Outcome {
   warnings?: string[]
   targetTenantId?: string
   retryable?: boolean
+  retryJobId?: string
   partial?: boolean
   policyId?: string
   repairToken?: string
@@ -513,15 +514,13 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
   }
 
   const progressId = useRef("")
-  const auditJob = useRef<string | undefined>(undefined)
   const run = async (paths: string[], retry = false) => {
     if (!backupId || !paths.length) return
     let dependencyMappings
     try { dependencyMappings = copying ? reviewedDependencyMappings(mappingJson, mappingsConfirmed, copyTargets.length) : undefined }
     catch (error) { setReviewError(error instanceof Error ? error.message : String(error)); setStep("review"); return }
-    if (!retry) auditJob.current = undefined
     const previous = retry ? result?.results ?? [] : []
-    const batches = retry ? retryBatches(previous) : [{ paths }]
+    const batches: ReturnType<typeof retryBatches> = retry ? retryBatches(previous) : [{ paths }]
     if (!batches.length) return
     const completed: Outcome[] = []
     const attempted: typeof batches = []
@@ -562,12 +561,11 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
           mode: copying ? "copy" : mode,
           assignments: copying ? false : assignments,
           progressId: id,
-          retryOf: retry ? auditJob.current : undefined,
+          retryOf: batch.retryOf,
           ...(copying
             ? { targetTenants: targets.map((target) => ({ tenantId: target.tenantId, appId: target.appId })) }
             : {}),
         })
-        auditJob.current ??= data.jobId
         completed.push(...(data.details?.results ?? []))
       }
       const outcomes = mergeOutcomes(previous, completed)

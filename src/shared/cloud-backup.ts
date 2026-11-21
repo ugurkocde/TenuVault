@@ -39,6 +39,8 @@ export interface CloudBackupStatus {
   auditCapability?: boolean
   auditPending?: number
   auditScanIncomplete?: boolean
+  auditOlderPending?: number
+  auditOlderUnchecked?: boolean
   auditReceiptFailed?: boolean
 }
 
@@ -123,6 +125,9 @@ export function parseCloudStatus(value: unknown, tenantId: string): CloudBackupS
       auditCapability: true,
       auditPending: typeof record.AuditPending === "number" && Number.isSafeInteger(record.AuditPending) && record.AuditPending >= 0 ? record.AuditPending : undefined,
       auditScanIncomplete: record.AuditScanIncomplete === true,
+      ...(typeof record.AuditOlderPending === "number" && Number.isSafeInteger(record.AuditOlderPending) && record.AuditOlderPending >= 0
+        ? { auditOlderPending: record.AuditOlderPending } : {}),
+      ...(record.AuditOlderUnchecked === true ? { auditOlderUnchecked: true } : {}),
       auditReceiptFailed: record.AuditReceiptFailed === true,
     } : {}),
   }

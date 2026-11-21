@@ -18,7 +18,7 @@ export function restoreAuditItem(path: string, result?: RestoreOutcome, sourceId
   return {
     folder: typeForFolder(folder)?.folder ?? (folder === 'DeviceCompliancePolicies' ? 'CompliancePolicies' : 'Policy'),
     sourceId: result?.auditSourceId ?? sourceId ?? auditId(path), targetId: result?.policyId, outcome, reason,
-    planned: result?.auditPlanned, applied: result?.auditApplied,
+    planned: result?.auditPlanned, applied: result?.auditApplied, steps: result?.auditSteps,
     approval: result?.auditApprover ?? (result?.approvalId ? { system: 'intune', requestId: result.approvalId } : undefined),
   }
 }
@@ -30,6 +30,8 @@ export function beginRestoreAudit(input: {
   items: AuditJobItem[]
   operationId: string
   runId?: string
+  eventId?: string
+  correlation?: import('../../../main/api/audit-sink').RestoreCorrelation
   stage?: AuditJobStage
   action: string
   eventType?: AuditEventType
@@ -44,7 +46,7 @@ export function beginRestoreAudit(input: {
       resource: { type: 'backup', id: input.sourceBackupId, name: 'Restore backup' },
       job: { operationId: input.operationId, runId: input.runId ?? randomUUID(), stage: input.stage ?? 'terminal',
         producer: 'desktop', status: 'uncertain', sourceBackupId: input.sourceBackupId, counts: {}, items: input.items },
-    })
+    }, { eventId: input.eventId, correlation: input.correlation })
   } catch {
     console.warn('[audit] Restore audit could not be started')
     return undefined

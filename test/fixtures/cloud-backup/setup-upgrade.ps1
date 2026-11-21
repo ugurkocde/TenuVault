@@ -4,7 +4,7 @@
     before runbook 1.2.0, against mocked Az cmdlets that keep the runbook's draft and published
     content, and writes one JSON line per scenario.
 #>
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess)]
 param([string]$SetupPath)
 
 $ErrorActionPreference = "Stop"
@@ -25,6 +25,12 @@ $start = $text.IndexOf("# Runbook import and publish")
 $end = $text.IndexOf("# Failure alert")
 if ($start -lt 0 -or $end -le $start) { throw "The upgrade step markers were not found." }
 $upgradeStep = [scriptblock]::Create($text.Substring($start, $end - $start))
+$pauseStart = $text.IndexOf('$resumeSchedule = $false')
+$pauseEnd = $text.IndexOf('# Storage: container')
+$pauseStep = [scriptblock]::Create($text.Substring($pauseStart, $pauseEnd - $pauseStart))
+$scheduleStart = $text.IndexOf('# Schedule and link.')
+$scheduleEnd = $text.IndexOf('# Summary and next steps.')
+$scheduleStep = [scriptblock]::Create($text.Substring($scheduleStart, $scheduleEnd - $scheduleStart))
 
 $ResourceGroupName = "rg-tenuvault-backups"
 $AutomationAccountName = "aa-tenuvault"
@@ -53,6 +59,11 @@ $variableNames = @(
 $legacyKeyVaultVariable = "TenuVaultKeyVault-$tenantKey"
 $plainRunbookVersion = "1.2.0"
 $triggerRunbookVersion = "1.4.0"
+$auditRunbookVersion = "1.5.0"
+$TimeZone = "UTC"
+$Time = "02:00"
+$Frequency = "Daily"
+$WeekDay = [DayOfWeek]::Sunday
 $oldRunbook = '$script:RunbookVersion = "1.1.0"'
 
 # Az.Automation reports a missing resource as this exception type, written as a non-terminating error.
@@ -83,6 +94,7 @@ $script:translatedVariable = $null
 function Import-AzAutomationRunbook {
     [CmdletBinding(SupportsShouldProcess)]
     param($ResourceGroupName, $AutomationAccountName, $Name, $Path, $Type, $Description, [switch]$Force)
+    if ($Name -like "*AuditProbe*") { $script:actions.Add("import probe"); return }
     $script:actions.Add("import confirm=$(if ($PSBoundParameters.ContainsKey('Confirm')) { [bool]$PSBoundParameters['Confirm'] } else { 'unset' })")
     # The cmdlet asks for its own confirmation; a declined one imports nothing.
     if ($script:declineImport) { return }
@@ -90,6 +102,7 @@ function Import-AzAutomationRunbook {
 }
 function Publish-AzAutomationRunbook {
     param($ResourceGroupName, $AutomationAccountName, $Name)
+    if ($Name -like "*AuditProbe*") { $script:actions.Add("publish probe"); return }
     $script:actions.Add("publish")
     if ($script:publishBehavior -eq "throw") { throw "Publishing the runbook failed." }
     if ($script:publishBehavior -eq "nothing") { return }
@@ -149,7 +162,9 @@ function Get-AzAutomationSchedule {
     [CmdletBinding()]
     param($ResourceGroupName, $AutomationAccountName, $Name)
     if ($script:failLookups) { Write-MockError $PSCmdlet (New-OutageException); return }
-    if ($script:schedule) { return [pscustomobject]@{ Name = $Name } }
+    if ($script:schedule) {
+        return [pscustomobject]@{ Name = $Name; IsEnabled = $script:enabled; TimeZone = "UTC"; StartTime = [DateTimeOffset]::UtcNow; Frequency = "Day" }
+    }
     Write-MockError $PSCmdlet ([ResourceNotFoundException]::new("Schedule $Name not found."))
 }
 function Remove-AzAutomationSchedule {
@@ -157,6 +172,25 @@ function Remove-AzAutomationSchedule {
     param($ResourceGroupName, $AutomationAccountName, $Name, [switch]$Force)
     $script:actions.Add("remove schedule")
     $script:schedule = $false
+}
+
+function Set-AzAutomationSchedule {
+    param($ResourceGroupName, $AutomationAccountName, $Name, [bool]$IsEnabled, $ErrorAction)
+    $script:enabled = $IsEnabled
+    $script:actions.Add("schedule enabled=$IsEnabled")
+}
+function Start-AzAutomationRunbook {
+    param($ResourceGroupName, $AutomationAccountName, $Name, $Parameters, [switch]$Wait, $MaxWaitSeconds, $ErrorAction)
+    if ($script:enabled -or -not $Parameters.AuditCanary -or -not $Wait -or $MaxWaitSeconds -gt 420) { throw "Canary was not isolated or bounded." }
+    $phase = if ($Parameters.AuditCanaryWait) { "propagation" } else { "published" }
+    $script:actions.Add("canary $phase")
+    if ($script:failCanary -eq $phase) { throw "Canary denied" }
+    return "Cloud backup canary passed"
+}
+function Remove-AzAutomationRunbook {
+    [CmdletBinding(SupportsShouldProcess)]
+    param($ResourceGroupName, $AutomationAccountName, $Name, [switch]$Force)
+    $script:actions.Add("remove probe")
 }
 
 # A setup from before 1.2.0: its published runbook (and an older draft) read the vault through the variable.
@@ -167,6 +201,8 @@ function Reset-OldSetup {
     $script:draft = $oldRunbook
     $script:published = $oldRunbook
     $script:schedule = $true
+    $script:enabled = $true
+    $script:failCanary = $null
     $script:link = $true
     $script:declineImport = $false
     $script:publishBehavior = "publish"
@@ -191,7 +227,11 @@ function Write-Scenario {
         changeReportActors = $script:variables["TenuVaultChangeReportActors-$tenantKey"]
         tenantName = $script:variables["TenuVaultTenantName-$tenantKey"]
         variables = @($script:variables.Keys | Sort-Object)
+        scope = $script:variables["TenuVaultScope-$tenantKey"]
+        exclusions = $script:variables["TenuVaultExcludedFolders-$tenantKey"]
+        appOnlyExcluded = $script:variables["TenuVaultAppOnlyExcluded-$tenantKey"]
         schedule = $script:schedule
+        enabled = $script:enabled
         link = $script:link
         output = @($Output | ForEach-Object { [string]$_ })
     } | ConvertTo-Json -Compress -Depth 5)
@@ -247,6 +287,26 @@ foreach ($scenario in "rerun-keeps-report", "rerun-sets-report") {
     $ChangeReport = "Off"
     Write-Scenario -Name $scenario -Runbook $runbook -ErrorText $errorText -Output $output
 }
+
+# Simulate an upgrade of the already linked setup, with account and tenant parameters only.
+foreach ($scenario in "linked-upgrade", "propagation-denied", "published-canary-denied") {
+    Reset-OldSetup
+    $upgradeLink = $true
+    $script:variables["TenuVaultScope-$tenantKey"] = "everything"
+    $script:variables["TenuVaultExcludedFolders-$tenantKey"] = "ConfigurationPolicies,Apps"
+    $script:variables["TenuVaultAppOnlyExcluded-$tenantKey"] = ""
+    if ($scenario -eq "propagation-denied") { $script:failCanary = "propagation" }
+    if ($scenario -eq "published-canary-denied") { $script:failCanary = "published" }
+    $runbook = $null
+    $errorText = $null
+    try {
+        $output = @(. $pauseStep 3>&1 6>&1)
+        $output += @(. $upgradeStep 3>&1 6>&1)
+        $output += @(. $scheduleStep 3>&1 6>&1)
+    } catch { $errorText = $_.Exception.Message }
+    Write-Scenario -Name $scenario -Runbook $runbook -ErrorText $errorText -Output $output
+}
+$upgradeLink = $false
 
 # -Remove runs: complete, -WhatIf, one variable's own confirmation declined, -WhatIf while every
 # lookup fails, a complete removal whose variable list fails, and tenant B still on the vault.

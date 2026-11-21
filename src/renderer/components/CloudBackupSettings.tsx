@@ -247,6 +247,8 @@ export function CloudBackupSettings({ tenant, community, cloud, scopeVersion = 0
             {cloud.status && !cloud.status.auditCapability && <p className="text-sm text-gray-700">Run the cloud setup again to enable audit recording for future runs.</p>}
             {!!cloud.status?.auditPending && <p role="status" className="text-sm text-amber-800">At least {cloud.status.auditPending} cloud audit event(s) are pending delivery.</p>}
             {cloud.status?.auditScanIncomplete && <p className="text-sm text-gray-700">The latest cloud run checked part of the audit receipt history.</p>}
+            {!!cloud.status?.auditOlderPending && <p role="status" className="text-sm text-amber-800">{cloud.status.auditOlderPending} older audit receipts need operator replay with REPLAYOLDERAUDIT.</p>}
+            {cloud.status?.auditOlderUnchecked && <p role="status" className="text-sm text-gray-700">Older audit receipts remain unchecked. Run REPLAYOLDERAUDIT to check them.</p>}
             {cloud.status?.auditReceiptFailed && <p role="alert" className="text-sm text-amber-800">The last cloud backup audit receipt could not be saved. Check the Automation job output.</p>}
             {!config.linked && (
               <p className="rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900">

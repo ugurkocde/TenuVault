@@ -11,7 +11,7 @@ $script:scenario = ""
 
 function Get-TvManagedIdentityToken { param([string]$Resource) return "token" }
 function Invoke-TvHttp {
-    param([string]$Uri, [string]$Token, [string]$Method, [hashtable]$Headers, [byte[]]$BodyBytes, [string]$ContentType, [long]$MaxBytes)
+    param([string]$Uri, [string]$Token, [string]$Method, [hashtable]$Headers, [byte[]]$BodyBytes, [string]$ContentType, [long]$MaxBytes, [int]$BudgetMs)
     $script:calls.Add(@{ uri = $Uri; method = $Method; condition = $Headers["If-Match"] })
     if ($Uri -like "https://graph.microsoft.com/*") {
         if ($script:scenario -eq "graph401") { throw [TvHttpError]::new(401, "Graph policy list refused") }
@@ -23,6 +23,10 @@ function Invoke-TvHttp {
         $script:blobs.Remove($Uri)
         return @{ Status = 202 }
     } elseif ($Method -eq "Put") {
+        if ($script:scenario -eq "terminalGap" -and ($Uri -like "*/cloud-backup-status-*" -or $Uri -like "*/cloud-backup-outcomes/*")) {
+            throw [TvHttpError]::new(503, "Interrupted after terminal checkpoint")
+        }
+        if ($Uri.EndsWith("/metadata.json") -and $script:scenario -eq "uncertain") { throw [TvHttpError]::new(503, "Write unconfirmed") }
         if ($Uri -like "*/audit-runs/*/terminal.json" -and $script:scenario -eq "crash") { throw [TvHttpError]::new(403, "Power lost before receipt") }
         if ($script:blobs.ContainsKey($Uri)) {
             if ($Headers["If-None-Match"] -eq "*") { throw [TvHttpError]::new(412, "Existing blob") }
@@ -50,11 +54,11 @@ function Run-Scenario {
     }
 }
 $results = @{}
-foreach ($caseName in @("lostAck", "crash", "graph401")) {
+foreach ($caseName in @("lostAck", "crash", "graph401", "terminalGap", "uncertain")) {
     $script:blobs.Clear()
     $script:scenario = $caseName
     $results[$caseName] = Run-Scenario
-    if ($caseName -ne "graph401") {
+    if ($caseName -in @("lostAck", "crash", "terminalGap")) {
         $script:scenario = "restart"
         $results["${caseName}Restart"] = Run-Scenario
     }
@@ -64,5 +68,6 @@ foreach ($caseName in @("scoped", "excessive")) {
     $script:blobs.Clear()
     $script:scenario = $caseName
     $results[$caseName] = Run-Scenario
+    if ($caseName -eq "scoped") { $results.scopedAgain = Run-Scenario }
 }
 [Console]::WriteLine(($results | ConvertTo-Json -Compress -Depth 9))
