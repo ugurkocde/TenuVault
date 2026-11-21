@@ -1,4 +1,5 @@
 import { isGuid } from "../../../../../shared/security"
+import { mainAuditSink } from "../../../../../main/api/audit-sink"
 import { pendingEvents, auditOutboxIsDurable } from "~/lib/audit/outbox"
 import { type NextRequest, NextResponse } from "next/server"
 import { AuditStorageService, AuditRangeError } from "~/lib/audit/storage"
@@ -86,7 +87,8 @@ export async function POST(request: NextRequest) {
     }
 
     // Query logs
-    const pendingCount = await storageService.retryPending(tenantId)
+    const queued = await storageService.retryPending(tenantId)
+    const pendingCount = mainAuditSink()?.pendingForStorage(account, tenant) ?? queued
     const logs = await storageService.queryLogs(auditFilter)
 
     return NextResponse.json({
@@ -102,7 +104,10 @@ export async function POST(request: NextRequest) {
     if (error instanceof AuditRangeError) return NextResponse.json({ error: error.message }, { status: 400 })
     console.error("Audit history could not be read")
     let pendingCount: number | null = null
-    try { if (account) pendingCount = pendingEvents(account).filter(entry => !entry.user.tenantId || entry.user.tenantId === tenant).length } catch { /* Preserve unknown pending state. */ }
+    try {
+      if (account) pendingCount = mainAuditSink()?.pendingForStorage(account, tenant) ??
+        pendingEvents(account).filter(entry => !entry.user.tenantId || entry.user.tenantId === tenant).length
+    } catch { /* Preserve unknown pending state. */ }
     return NextResponse.json(
       { error: "Internal server error while querying audit logs", pendingCount, pendingDurable: auditOutboxIsDurable() },
       { status: 500 }

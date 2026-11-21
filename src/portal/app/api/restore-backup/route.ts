@@ -123,7 +123,7 @@ export async function POST(request: NextRequest) {
     preparationFailed = () => {
       for (const destination of destinations) {
         void recordRestorePreparationFailure({
-          destination, graphToken: destinationTokens.get(destination), sourceBackupId: backupId, operationId: correlated, runId: jobId, action,
+          destination, sourceTenantId: tenantId, graphToken: destinationTokens.get(destination), sourceBackupId: backupId, operationId: correlated, runId: jobId, action,
         }).catch(() => console.warn('[audit] Restore preparation failure could not be recorded'))
       }
     }
@@ -222,7 +222,7 @@ export async function POST(request: NextRequest) {
         const firstRepair = repairSelections[0]
         const operationId = (firstRepair && restorer?.repairOperationId(firstRepair.path, firstRepair.repairToken)) || correlated
         const audit = beginRestoreAudit({
-          destination: targetTenantId ?? tenantId, graphToken: targetToken, sourceBackupId: backupId, operationId, runId: jobId,
+          destination: targetTenantId ?? tenantId, sourceTenantId: tenantId, graphToken: targetToken, sourceBackupId: backupId, operationId, runId: jobId,
           correlation: actor ? { actor, source: correlationSource, destinations, operationId: correlated, at: Date.now() } : undefined,
           action,
           items: ordered.map(path => restoreAuditItem(path, undefined, manifest?.get(path)?.id)),
@@ -237,7 +237,7 @@ export async function POST(request: NextRequest) {
               const item: AuditJobItem = restoreAuditItem(path, result, sourceId)
               audit?.item(index, item, true)
               beginRestoreAudit({
-                destination: targetTenantId ?? tenantId, graphToken: targetToken, sourceBackupId: backupId,
+                destination: targetTenantId ?? tenantId, sourceTenantId: tenantId, graphToken: targetToken, sourceBackupId: backupId,
                 operationId, runId: jobId, stage: "approval-submit", action: "Restore submitted for approval",
                 eventType: AuditEventType.CONFIG_UPDATED, items: [item],
               })?.finish()

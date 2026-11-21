@@ -53,6 +53,7 @@ function AuditJobDetails({ entry }: { entry: AuditLogEntry }) {
   const [page, setPage] = useState(0)
   const job = entry.job
   if (!job) return null
+  const destination = job.destinationTenantId ?? entry.user.tenantId
   const items = job.items ?? []
   const pageSize = 25
   return (
@@ -62,7 +63,7 @@ function AuditJobDetails({ entry }: { entry: AuditLogEntry }) {
         <p>Operation ID {job.operationId}</p>
         <p>Run ID {job.runId}</p>
         {job.sourceBackupId && <p>Source backup {job.sourceBackupId}</p>}
-        {entry.user.tenantId && <p>Destination tenant {entry.user.tenantId}</p>}
+        {destination && <p>Destination tenant {destination}</p>}
         {job.registrationId && <p>Producer registration {job.registrationId}</p>}
         {job.producerPrincipalId && <p>Original producer identity {job.producerPrincipalId}</p>}
         {job.detailsIncomplete && <p role="status">Some audit item details are unavailable.</p>}

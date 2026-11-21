@@ -1,4 +1,4 @@
-param([string]$RunbookPath = (Join-Path $PSScriptRoot "../../../resources/runbooks/Invoke-TenuVaultBackup.ps1"), [switch]$Baseline)
+param([string]$RunbookPath = (Join-Path $PSScriptRoot "../../../resources/runbooks/Invoke-TenuVaultBackup.ps1"), [switch]$Baseline, [switch]$ClaimedRestart)
 $ErrorActionPreference = "Stop"
 . $RunbookPath -LibraryOnly
 
@@ -34,7 +34,7 @@ $script:HttpClient | Add-Member ScriptMethod SendAsync {
     $script:transportCalls++
     throw "Transport unavailable"
 }
-if (-not $Baseline) {
+if (-not ($Baseline -or $ClaimedRestart)) {
     $budget = @{ Clock = [System.Diagnostics.Stopwatch]::StartNew(); Seconds = 1; Requests = 1 }
     $budgetContext = @{ StorageAccount = "stcontoso"; StorageToken = "token"; AuditBudget = $budget }
     try { Invoke-TvAuditStorage $budgetContext "audit-logs" "/test.json" } catch { }
@@ -62,6 +62,12 @@ function Invoke-TvHttp {
     if ($Uri -like "https://graph.microsoft.com/*") {
         if ($script:scenario -eq "graph401") { throw [TvHttpError]::new(401, "Graph policy list refused") }
         $text = '{"value":[]}'
+        if ($ClaimedRestart -and $Uri -like "*/deviceManagement/deviceCategories") {
+            $text = '{"value":[{"id":"11111111-1111-1111-1111-111111111111","displayName":"Example"}]}'
+        }
+        if ($ClaimedRestart -and $Uri -like "*/deviceManagement/deviceCategories/*") {
+            $text = '{"id":"11111111-1111-1111-1111-111111111111","displayName":"Example"}'
+        }
     } elseif ($Uri -like "*/intune-backups?*comp=list*") {
         $text = "<EnumerationResults><Blobs><BlobPrefix><Name>$script:baselineFolder/</Name></BlobPrefix></Blobs><NextMarker /></EnumerationResults>"
     } elseif ($Uri -like "*comp=list*") {
@@ -124,6 +130,18 @@ function Run-Scenario {
         output = @($output | ForEach-Object { [string]$_ })
         blobs = $script:blobs.Clone()
     }
+}
+if ($ClaimedRestart) {
+    $env:TenuVaultExcludedFolders = (Get-TvTypes | Where-Object { $_.Folder -ne "DeviceCategories" }).Folder -join ","
+    $older = [DateTime]::UtcNow.AddMinutes(-1)
+    $folder = "backup-$(ConvertTo-TvFolderTimestamp $older)"
+    $run = $script:jobId.ToString()
+    $path = "https://stcontoso.blob.core.windows.net/tenuvault-backup-results/audit-runs/$env:TenuVaultTenantId/$run/start.json"
+    $script:blobs[$path] = @{ jobId = $run; runId = $run; folder = $folder; startedAt = $older.ToString("o"); trigger = "scheduled" } | ConvertTo-Json -Compress
+    $script:blobs["$script:backupBase/$folder/.tenuvault-owner.json"] = @{ TenantId = $env:TenuVaultTenantId; RunId = $run } | ConvertTo-Json -Compress
+    $first = Run-Scenario
+    [Console]::WriteLine((@{ first = $first; again = Run-Scenario; oldFolder = $folder; oldRunId = $run } | ConvertTo-Json -Compress -Depth 9))
+    return
 }
 if ($Baseline) {
     $env:TenuVaultChangeReport = "names"

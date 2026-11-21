@@ -987,9 +987,10 @@ function Register-TvPendingReceipt {
 }
 
 function Write-TvTerminalAudit {
-    param([hashtable]$Context, [string]$RunId, [string]$Status, [string]$BackupFolder, [int]$Saved, [int]$Failures, [string]$Trigger, [string]$Reason, [string]$Timestamp, [string[]]$FailedTypes = @(), [string]$BackupStatus = $Status)
+    param([hashtable]$Context, [string]$RunId, [string]$Status, [string]$BackupFolder, [int]$Saved, [int]$Failures, [string]$Trigger, [string]$Reason, [string]$Timestamp, [string[]]$FailedTypes = @(), [string]$BackupStatus = $Status, [string]$NextRunId)
     $file = New-TvAuditFile $Context $RunId $Status $BackupFolder $Saved $Failures $Trigger $Reason $Timestamp
     $receipt = [ordered]@{ delivered = $false; file = $file; backupStatus = $BackupStatus; failedTypes = @($FailedTypes | Where-Object { $_ -match "^[A-Za-z]{1,50}$" } | Select-Object -First 10) }
+    if ($NextRunId) { $receipt.nextRunId = $NextRunId }
     Write-TvTerminalReceipt $Context $receipt
 }
 
@@ -1017,9 +1018,10 @@ function Get-TvAutomationJobId {
 }
 
 function Get-TvStartCheckpointTime {
-    param([object]$Checkpoint, [string]$JobId)
+    param([object]$Checkpoint, [string]$RunId, [string]$JobId)
     $start = [DateTime]::Parse([string]$Checkpoint.startedAt, [Globalization.CultureInfo]::InvariantCulture).ToUniversalTime()
-    if ($Checkpoint.jobId -cne $JobId -or $Checkpoint.runId -cne $JobId -or
+    if ($Checkpoint.runId -cne $RunId -or $Checkpoint.jobId -cnotmatch '^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$' -or
+        ($JobId -and $Checkpoint.jobId -cne $JobId) -or
         $Checkpoint.folder -cne "backup-$(ConvertTo-TvFolderTimestamp $start)" -or $Checkpoint.trigger -notin @("manual", "scheduled")) {
         throw "Cloud backup could not verify its Automation job checkpoint."
     }
@@ -3185,22 +3187,41 @@ function Invoke-TvBackup {
     $context.AuditOlderPending = $auditReplay.Older
     $context.AuditOlderUnchecked = $auditReplay.OlderUnchecked
     $backupFolder = "backup-$(ConvertTo-TvFolderTimestamp $started)"
-    if ($jobId) {
-        $context.RunCheckpointPath = "/audit-runs/$($tenantId.ToLowerInvariant())/$jobId"
+    $nextRunId = $null
+    $attempts = [System.Collections.Generic.HashSet[string]]::new()
+    while ($jobId) {
+        if ($nextRunId) {
+            $runId = $nextRunId
+            $nextRunId = $null
+            $context.RunId = $runId
+            $context.Remove("AuditTerminalRecorded")
+            $context.Remove("TerminalTimestamp")
+            $started = [DateTime]::UtcNow
+            if ($backupFolder -ceq "backup-$(ConvertTo-TvFolderTimestamp $started)") {
+                Start-Sleep -Seconds 1
+                $started = [DateTime]::UtcNow
+            }
+            $backupFolder = "backup-$(ConvertTo-TvFolderTimestamp $started)"
+        }
+        [void]$attempts.Add($runId)
+        $context.RunCheckpointPath = "/audit-runs/$($tenantId.ToLowerInvariant())/$runId"
         $receipt = $null
         $terminalUnreadable = $false
         try {
-            # The terminal result is keyed by the Automation job, independently of start.json.
+            # The terminal result is keyed by the attempt, independently of start.json.
             $receipt = Read-TvAuditRecord $context "$($context.RunCheckpointPath)/terminal.json"
             if ($receipt) {
                 $entry = $receipt.file.entries[0]
-                if ($entry.job.runId -cne $jobId -or $entry.user.tenantId -ne $tenantId -or
+                if ($entry.job.runId -cne $runId -or $entry.user.tenantId -ne $tenantId -or
                     $entry.timestamp -notmatch '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$') { throw "Invalid terminal checkpoint identity." }
                 $status = switch ($entry.job.status) {
                     "completed" { "Success" } "warnings" { "CompletedWithWarnings" } "uncertain" { "Uncertain" }
                     "failed" { "Failed" } default { throw "Invalid terminal checkpoint status." }
                 }
                 if ($status -eq "CompletedWithWarnings" -and $receipt.backupStatus -ceq "Success") { $status = "Success" }
+                if ($receipt.nextRunId -and ($status -ne "Uncertain" -or
+                    $receipt.nextRunId -cnotmatch '^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$' -or
+                    $attempts.Contains([string]$receipt.nextRunId))) { throw "Invalid continuation checkpoint." }
             }
         } catch {
             $receipt = $null
@@ -3212,6 +3233,11 @@ function Invoke-TvBackup {
             $runTrigger = if ($entry.job.trigger -eq "manual") { "manual" } else { "scheduled" }
             $total = [int]$entry.job.counts.saved
             Save-TvAuditReceipt $context $receipt
+            if ($receipt.nextRunId) {
+                $nextRunId = [string]$receipt.nextRunId
+                $backupFolder = $folder
+                continue
+            }
             Set-TvCloudStatus $context $status "Backup $status, $total policies." $folder $entry.timestamp
             $noteStatus = if ($status -eq "Uncertain") { "Failed" } else { $status }
             Send-TvBackupOutcome -Account $storageAccount -Token $storageToken -TenantId $tenantId -RunId $runId -Status $noteStatus -BackupFolder $folder -TotalPolicies $total -Failures ([int]$entry.job.counts.failures) -FailedTypes @($receipt.failedTypes | Where-Object { $_ -match "^[A-Za-z]{1,50}$" }) -Trigger $runTrigger -FinishedAt $entry.timestamp
@@ -3226,7 +3252,7 @@ function Invoke-TvBackup {
         try {
             $checkpoint = Read-TvAuditRecord $context $checkpointPath
             if ($checkpoint) {
-                $started = Get-TvStartCheckpointTime $checkpoint $jobId
+                $started = Get-TvStartCheckpointTime $checkpoint $runId $jobId
                 $backupFolder = [string]$checkpoint.folder
                 $runTrigger = [string]$checkpoint.trigger
                 $resuming = $true
@@ -3264,12 +3290,14 @@ function Invoke-TvBackup {
                 return
             }
             if ($owner -or $couldNotVerify) {
-                Write-TvTerminalAudit $context $runId "Uncertain" $backupFolder 0 0 $runTrigger "WRITE_UNCONFIRMED"
-                Set-TvCloudStatus $context "Uncertain" "This Automation job was interrupted and its manifest could not be verified." $backupFolder
-                Send-TvBackupOutcome -Account $storageAccount -Token $storageToken -TenantId $tenantId -RunId $runId -Status "Failed" -BackupFolder $backupFolder -TotalPolicies 0 -Failures 0 -Trigger $runTrigger -FinishedAt $context.TerminalTimestamp
-                throw "The interrupted cloud backup could not be verified."
+                # Link the fresh attempt from the interrupted receipt so another restart can
+                # find its start or result. Only the fresh capture publishes a backup outcome.
+                $nextRunId = [guid]::NewGuid().ToString()
+                Write-TvTerminalAudit $context $runId "Uncertain" $backupFolder 0 0 $runTrigger "WRITE_UNCONFIRMED" -NextRunId $nextRunId
+                continue
             }
         }
+        break
     }
     Write-Output "Backing up tenant $tenantId to storage account $storageAccount (runbook $script:RunbookVersion, run $runId)."
     try {

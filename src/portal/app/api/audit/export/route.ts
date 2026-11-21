@@ -1,4 +1,5 @@
 import { isGuid } from "../../../../../shared/security"
+import { mainAuditSink } from "../../../../../main/api/audit-sink"
 import { type NextRequest, NextResponse } from "next/server"
 import { AuditStorageService, AuditRangeError } from "~/lib/audit/storage"
 import { AuditLogFilter, AuditEventType, AuditSeverity, AuditResult, type AuditLogEntry } from "~/lib/audit/types"
@@ -149,7 +150,9 @@ export async function POST(request: NextRequest) {
     // Every matching entry of this tenant only, independent of UI pagination.
     const logs = await storageService.queryAllLogs(auditFilter)
     let pendingCount: number | null = null
-    try { pendingCount = storageService.pendingCount(tenantId) } catch { /* Reported as unknown in the export. */ }
+    try {
+      pendingCount = mainAuditSink()?.pendingForStorage(storageAccountName, tenantId) ?? storageService.pendingCount(tenantId)
+    } catch { /* Reported as unknown in the export. */ }
     const meta = { tenantId, exportedAt: new Date().toISOString(), filter: auditFilter, pendingCount }
 
     // Generate export based on format

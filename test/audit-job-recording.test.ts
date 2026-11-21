@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto"
 import { afterEach, expect, it, vi } from "vitest"
 import { AuditSink, setMainAuditSink } from "../src/main/api/audit-sink"
+import { NextRequest } from "../src/main/api/next-server-shim"
 import { checkpointBackupAudit, reconcileBackupAudit, recordBackupAudit } from "../src/main/backup/audit"
 import { BackupEngine } from "../src/main/backup/engine"
+import { POST as auditLogs } from "../src/portal/app/api/audit/logs/route"
 import { AuditContainerMissingError, AuditStorageService } from "../src/portal/lib/audit/storage"
 import { auditExportCSV, auditExportJSON } from "../src/portal/lib/audit/export"
 import { pendingEvents, setAuditOutboxStore } from "../src/portal/lib/audit/outbox"
@@ -156,6 +158,51 @@ it("audits a rejected App Backup destination token without changing the restore 
   })).rejects.toBe(failure)
   expect(pendingEvents(storageAccountName)).toMatchObject([{ action: "Restore app backup", job: { runId, status: "failed", reason: "RESTORE_PREPARATION_FAILED" } }])
   expect(local.get("audit.pending-events")).not.toContain(canary)
+})
+
+it("journals an App Backup preparation failure when the outbox cannot be written and delivers it on retry", async () => {
+  const local = memoryStore()
+  setAuditOutboxStore(local)
+  const save = local.set.bind(local)
+  let outboxUnavailable = true
+  vi.spyOn(local, "set").mockImplementation((key, value) => {
+    if (outboxUnavailable && key === "audit.pending-events") throw new Error("Outbox temporarily unavailable")
+    save(key, value)
+  })
+  vi.spyOn(console, "warn").mockImplementation(() => undefined)
+  const remote = storage()
+  const fetchAuditBlob = globalThis.fetch
+  vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) =>
+    new URL(String(input)).hostname === "login.microsoftonline.com"
+      ? Promise.resolve(Response.json({ access_token: "test" }))
+      : fetchAuditBlob(input, init))
+  const transport = vi.fn(async () => remote.service)
+  const options = { store: local, bind: () => binding, transport }
+  const sink = new AuditSink(options)
+  setMainAuditSink(sink)
+  const failure = new Error(canary)
+  const runId = randomUUID()
+  await expect(restoreTokenWithAudit(async () => { throw failure }, {
+    destination: tenantId, sourceBackupId: randomUUID(), operationId: randomUUID(), runId, action: "Restore app backup",
+  })).rejects.toBe(failure)
+  expect(sink.pending(tenantId, "desktop")).toBe(1)
+  expect(local.get("audit.restore-jobs")).toContain('"finished":true')
+  expect(local.get("audit.restore-jobs")).not.toContain(canary)
+  expect(transport).not.toHaveBeenCalled()
+  const logs = await auditLogs(new NextRequest("http://tenuvault.internal/api/audit/logs", {
+    method: "POST", body: JSON.stringify({ tenantId, storageAccountName, appId: registration, clientSecret: "test" }),
+  }))
+  expect(await logs.json()).toMatchObject({ success: true, pendingCount: 1 })
+
+  outboxUnavailable = false
+  const restarted = new AuditSink(options)
+  await restarted.retry()
+  await restarted.retry()
+  expect(restarted.pending(tenantId, "desktop")).toBe(0)
+  expect(await remote.service.queryAllLogs(dateFilter)).toMatchObject([
+    { eventType: AuditEventType.RESTORE_FAILED, action: "Restore app backup", job: { runId, status: "failed", reason: "RESTORE_PREPARATION_FAILED" } },
+  ])
+  expect(transport).toHaveBeenCalledTimes(1)
 })
 
 it("keeps a job count of one and exports every item when a detail page loses its acknowledgement", async () => {

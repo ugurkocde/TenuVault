@@ -66,6 +66,9 @@ const warning = () => console.warn('[audit] Audit delivery requires attention')
 const isBackupCheckpoint = (entry: AuditLogEntry) =>
   entry.eventType === AuditEventType.BACKUP_COMPLETED || entry.eventType === AuditEventType.BACKUP_FAILED ||
   entry.eventType === AuditEventType.BACKUP_CANCELLED
+const isStandaloneTerminal = (entry: AuditLogEntry) => isBackupCheckpoint(entry) ||
+  (entry.eventType === AuditEventType.RESTORE_FAILED && entry.job?.stage === 'terminal' &&
+    entry.job.reason === 'RESTORE_PREPARATION_FAILED')
 
 /**
  * Main process API for jobs, approval stages and policy events. Obtain the destination binding
@@ -136,7 +139,7 @@ export class AuditSink {
     else {
       try { queueEvent(binding.storageAccountName, entry) }
       catch (error) {
-        if (!isBackupCheckpoint(entry)) throw error
+        if (!isStandaloneTerminal(entry)) throw error
         this.finishCheckpoint(checkpoint)
       }
     }
@@ -290,8 +293,8 @@ export class AuditSink {
     try { this.save(this.checkpoints) }
     catch {
       warning()
-      // Backups have no restore correlation receipt to persist before entering the outbox.
-      if (isBackupCheckpoint(entry)) {
+      // These terminal events have no restore correlation receipt to persist before entering the outbox.
+      if (isStandaloneTerminal(entry)) {
         try { queueEvent(binding.storageAccountName, entry) } catch { warning() }
       }
       this.save(this.checkpoints)
@@ -383,14 +386,23 @@ export class AuditSink {
     if (failed) throw new Error(`Could not deliver ${failed} audit event(s). Check your Azure storage access and try again.`)
   }
 
-  pending(tenant: string, producer: AuditJob['producer']): number {
-    const matches = (entry: AuditLogEntry) => entry.user.tenantId === tenant.toLowerCase() && entry.job?.producer === producer
-    const ids = new Set(queuedAccounts().flatMap(account => pendingEvents(account).filter(matches).map(entry => entry.id)))
+  private countPending(accounts: string[], matches: (entry: AuditLogEntry, account: string) => boolean): number {
+    const ids = new Set(accounts.flatMap(account => pendingEvents(account)
+      .filter(entry => matches(entry, account)).map(entry => entry.id)))
     for (const [id, checkpoint] of Object.entries(this.checkpoints)) {
       if ((checkpoint.finished || this.interruptedBackups.has(id) || ((checkpoint.completionId || checkpoint.completion) && !checkpoint.ready)) &&
-        matches(checkpoint.entry)) ids.add(checkpoint.entry.id)
+        matches(checkpoint.entry, checkpoint.binding.storageAccountName)) ids.add(checkpoint.entry.id)
     }
     return ids.size
+  }
+
+  pending(tenant: string, producer: AuditJob['producer']): number {
+    return this.countPending(queuedAccounts(), entry => entry.user.tenantId === tenant.toLowerCase() && entry.job?.producer === producer)
+  }
+
+  pendingForStorage(account: string, tenant: string): number {
+    return this.countPending([account], (entry, boundAccount) => boundAccount === account &&
+      (!entry.user.tenantId || entry.user.tenantId.toLowerCase() === tenant.toLowerCase()))
   }
 }
 

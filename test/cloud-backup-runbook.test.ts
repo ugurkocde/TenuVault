@@ -131,6 +131,34 @@ describe("Cloud audit contract", () => {
   const manifestFiles = (run: RestartRun) => Object.entries(run.blobs).filter(([uri]) => uri.endsWith("/metadata.json"))
   const outcomeFiles = (run: RestartRun) => Object.entries(run.blobs).filter(([uri]) => uri.includes("/cloud-backup-outcomes/"))
 
+  it.runIf(Boolean(pwsh))("restarts an interrupted claimed capture in a new folder and publishes only its new backup result", () => {
+    const script = fileURLToPath(new URL("./fixtures/cloud-backup/audit-restart.ps1", import.meta.url))
+    const { first, again, oldRunId, oldFolder } = JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", script, "-ClaimedRestart"], { encoding: "utf8", timeout: 50_000 })) as {
+      first: RestartRun; again: RestartRun; oldRunId: string; oldFolder: string
+    }
+    expect(first.error).toBeNull()
+    expect(manifestFiles(first)).toHaveLength(1)
+    const manifest = JSON.parse(manifestFiles(first)[0]![1])
+    expect(manifest).toMatchObject({ Status: "Success", ItemCounts: { TotalPolicies: 1 } })
+    expect(manifest.RunId).not.toBe(oldRunId)
+    expect(manifest.BackupFolder).not.toBe(oldFolder)
+    expect(JSON.parse(first.blobs[`${BACKUP_CONTAINER_URL}cloud-backup-status-11111111.json`]!)).toMatchObject({
+      RunId: manifest.RunId, BackupFolder: manifest.BackupFolder, LastStatus: "Success",
+    })
+    expect(outcomeFiles(first).map(([, raw]) => JSON.parse(raw))).toMatchObject([
+      { runId: manifest.RunId, backupFolder: manifest.BackupFolder, status: "Success" },
+    ])
+    expect(auditFiles(first).map(([, raw]) => JSON.parse(raw).entries[0].job)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ runId: oldRunId, status: "uncertain", reason: "WRITE_UNCONFIRMED" }),
+      expect.objectContaining({ runId: manifest.RunId, status: "completed" }),
+    ]))
+    expect(again.error).toBeNull()
+    expect(again.calls.some(call => call.uri.includes("graph.microsoft.com"))).toBe(false)
+    expect(manifestFiles(again)).toEqual(manifestFiles(first))
+    expect(outcomeFiles(again)).toEqual(outcomeFiles(first))
+    expect(auditFiles(again)).toEqual(auditFiles(first))
+  }, 60_000)
+
   it.runIf(Boolean(pwsh))("recovers when the managed identity endpoint succeeds on the third attempt", () => {
     expect(runRestartFixture().identity).toEqual({ token: "token", calls: 3 })
   }, 60_000)

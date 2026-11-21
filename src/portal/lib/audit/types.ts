@@ -194,6 +194,7 @@ export interface AuditJob {
   producer: AuditProducer
   status: AuditJobStatus
   sourceBackupId?: string
+  destinationTenantId?: string
   registrationId?: string
   producerPrincipalId?: string
   deliveredByPrincipalId?: string

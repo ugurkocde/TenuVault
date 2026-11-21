@@ -112,6 +112,7 @@ export function projectJob(job: AuditJob): AuditJob {
     producer: ['desktop', 'backup-reader', 'cloud-runbook'].includes(job.producer) ? job.producer : 'desktop',
     status: ['completed', 'warnings', 'failed', 'cancelled', 'pending', 'uncertain'].includes(job.status) ? job.status : 'uncertain',
     sourceBackupId: auditId(job.sourceBackupId), registrationId: auditId(job.registrationId),
+    destinationTenantId: isGuid(job.destinationTenantId) ? job.destinationTenantId.toLowerCase() : undefined,
     producerPrincipalId: auditId(job.producerPrincipalId),
     deliveredByPrincipalId: auditId(job.deliveredByPrincipalId),
     trigger: job.trigger && ['manual', 'scheduled', 'tray', 'unknown'].includes(job.trigger) ? job.trigger : undefined,
