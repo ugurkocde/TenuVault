@@ -19,7 +19,7 @@ import { join, resolve } from "node:path"
 import { checkSchedulePanel } from "./schedule-panel-smoke.mjs"
 import { checkBackupCancel } from "./backup-cancel-smoke.mjs"
 import { checkAppBackupCompletion } from "./app-backup-completion-smoke.mjs"
-import { disableAutoUpdate } from "./smoke-update-policy.mjs"
+import { disableAutoUpdate, RUN_SWITCH } from "./smoke-update-policy.mjs"
 
 const require = createRequire(import.meta.url)
 const desktopDir = resolve(import.meta.dirname, "..")
@@ -63,7 +63,7 @@ function appStopped() {
     const probe = spawnSync("/bin/ps", ["-o", "stat=", "-p", String(app.pid)], { encoding: "utf8", timeout: 5000 })
     const state = probe.stdout?.trim() ?? ""
     if (probe.error || probe.signal) return true
-    if (probe.status === 1 && state === "") return false
+    if (probe.status === 1 && state === "" && !probe.stderr?.trim()) return false
     return probe.status !== 0 || !state.startsWith("Z")
   }
   const pause = () => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200)
@@ -89,6 +89,8 @@ mkdirSync(shotsDir, { recursive: true })
 
 const args = [...(packagedApp ? [] : [desktopDir]), `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`]
 if (!packagedApp) args.push(`--inspect=127.0.0.1:${inspectorPort}`)
+// The policy's mark, so recovery after a killed run can tell this app is still running.
+if (updatePolicy?.token) args.push(`${RUN_SWITCH}=${updatePolicy.token}`)
 if (process.platform === "linux") args.push("--no-sandbox")
 // On a Wayland desktop the compositor stops sending frame callbacks to a window it does not draw
 // (an idle or locked screen, another workspace), so CSS animations stall and a dialog's exit

@@ -78,15 +78,20 @@ function waitForWriters(list, describe) {
   return `${describe} is still running after 10 seconds`
 }
 
+/** The mark a smoke run writes, and the token it passes the app it starts: pid@ISO time. */
+const MARK_FORMAT = /^\d+@\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/
+export const RUN_SWITCH = "--tenuvault-smoke-run"
+
 /**
  * The app of a killed smoke run can outlive it, and it reads the policy as it starts. A smoke run
- * starts it with a profile folder named tenuvault-smoke-... (the path may contain spaces), so recovery waits until no such app
- * runs before it removes anything: otherwise the app could start without the policy and update the
- * build under test. Returns why it cannot go on, or null.
+ * passes it `--tenuvault-smoke-run=<mark>`, so before recovery removes a marked policy it waits
+ * until no process carries that mark's token: otherwise the app could start without the policy and
+ * update the build under test. The app starts only once the policy is complete, so a half-written
+ * one needs no wait. Returns why recovery cannot go on, or null.
  */
-function smokeAppsGone(list) {
+function appGone(mark, list) {
   for (let attempt = 0; attempt < 50; attempt++) {
-    const apps = list()
+    const apps = list(`${RUN_SWITCH}=${mark}`)
     if (apps === null) return "could not list running processes to check for a smoke run's app"
     if (apps.length === 0) return null
     if (attempt === 49) return `the app of a killed smoke run is still running (process ${apps.join(", ")}); quit it, then start again`
@@ -132,7 +137,8 @@ function inspectMark(file) {
     return error.code === "ENOENT" || error.code === "EACCES" ? { mark: null } : { error: `could not check ${file}: ${error.message}` }
   }
   const result = run("/usr/bin/plutil", ["-extract", MARK, "raw", "-expect", "string", "-o", "-", file], { timeout: 10_000 })
-  if (result.status === 0) return { mark: result.stdout.trim() }
+  // Only a string in the smoke run's own format is its mark; any other value is someone else's key.
+  if (result.status === 0) return { mark: MARK_FORMAT.test(result.stdout.trim()) ? result.stdout.trim() : null }
   // Exit 1 is plutil's answer for a missing key, another type or a file that is no plist.
   if (result.status === 1 && !result.error && !result.signal) return { mark: null }
   return { error: `could not read ${file}: ${failed(result)}` }
@@ -152,19 +158,13 @@ function macosWriters() {
   })
 }
 
-/**
- * The --user-data-dir argument of an app a smoke run started. The path may contain spaces, but the
- * match stops at the next argument, so a later --log-file=...tenuvault-smoke-... does not count.
- */
-const SMOKE_PROFILE = /--user-data-dir=(?:(?! --).)*[\\/]tenuvault-smoke-[^\\/\s]*(?: |$)/
-
-/** Process IDs of apps a smoke run started, or null when ps fails. */
-function macosSmokeApps() {
+/** Process IDs whose command line carries token as a whole argument, or null when ps fails. */
+function macosProcessesWith(token) {
   const listed = run("/bin/ps", ["-axww", "-o", "pid=,stat=,command="], { timeout: 5000 })
   if (listed.status !== 0 || listed.stderr.trim() || !listed.stdout.trim()) return null
   return listed.stdout.split("\n").flatMap((line) => {
     const [, pid, stat = "", command = ""] = /^\s*(\d+)\s+(\S+)\s+(.*)$/.exec(line) ?? []
-    return pid && !stat.startsWith("Z") && SMOKE_PROFILE.test(command) ? [pid] : []
+    return pid && !stat.startsWith("Z") && ` ${command} `.includes(` ${token} `) ? [pid] : []
   })
 }
 
@@ -179,7 +179,7 @@ function macosRecover() {
   if (inspected.error) return inspected.error
   const leftovers = [...(stage === "present" ? [STAGE] : []), ...(inspected.mark ? [FILE] : [])]
   if (leftovers.length === 0) return null
-  const running = smokeAppsGone(macosSmokeApps)
+  const running = inspected.mark ? appGone(inspected.mark, macosProcessesWith) : null
   if (running) return running
   const removed = sudo(["/bin/rm", "-f", ...leftovers])
   if (removed.status !== 0) return `could not remove ${leftovers.join(" and ")}, which a killed smoke run left: ${failed(removed)}. ${SUDO_HINT}`
@@ -266,15 +266,20 @@ function windowsRead() {
   if (-not (Test-Path -LiteralPath $path)) { return $null }
   $key = Get-Item -LiteralPath $path
   $kind = if (@($key.GetValueNames()) -contains '${NAME}') { [string]$key.GetValueKind('${NAME}') } else { $null }
-  [pscustomobject]@{ values = $key.ValueCount; subkeys = $key.SubKeyCount; kind = $kind; disable = $key.GetValue('${NAME}', $null); mark = $key.GetValue('${MARK}', $null) }
+  $markKind = if (@($key.GetValueNames()) -contains '${MARK}') { [string]$key.GetValueKind('${MARK}') } else { $null }
+  [pscustomobject]@{ values = $key.ValueCount; subkeys = $key.SubKeyCount; kind = $kind; disable = $key.GetValue('${NAME}', $null); mark = $key.GetValue('${MARK}', $null); markKind = $markKind }
 }
 [pscustomobject]@{ hklm = Read-Key ${quote(HKLM)}; hkcu = Read-Key ${quote(HKCU)} } | ConvertTo-Json -Compress -Depth 3`)
   if (result.status !== 0) return { error: `could not read the ${NAME} policy: ${failed(result)}` }
+  let keys
   try {
-    return JSON.parse(result.stdout)
+    keys = JSON.parse(result.stdout)
   } catch {
     return { error: `could not read the ${NAME} policy: ${result.stdout.trim()}` }
   }
+  // Only a string in the smoke run's own format is its mark; any other value is someone else's.
+  for (const key of [keys.hklm, keys.hkcu]) if (key && !(key.markKind === "String" && MARK_FORMAT.test(String(key.mark)))) key.mark = null
+  return keys
 }
 
 const dwordOne = (key) => key?.kind === "DWord" && key.disable === 1
@@ -309,10 +314,10 @@ Remove-ItemProperty -LiteralPath ${quote(HKCU)} -Name '${MARK}'`)
   return result.status === 0 ? null : failed(result)
 }
 
-/** Process IDs of apps a smoke run started, or null when the listing fails. */
-function windowsSmokeApps() {
-  // The same match as SMOKE_PROFILE, and quoted paths as Windows command lines carry them.
-  const result = powershell(`@(Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -match '--user-data-dir=(?:(?! --).)*[\\\\/]tenuvault-smoke-[^\\\\/\\s"]*(?:[ "]|$)' -and $_.CommandLine -notlike '*Get-CimInstance*' } | ForEach-Object { $_.ProcessId }) -join ','`)
+/** Process IDs whose command line carries token as a whole argument, or null when the listing fails. */
+function windowsProcessesWith(token) {
+  const pattern = `(^|[\\s"])${token.replace(/[.]/g, "\\.")}([\\s"]|$)`
+  const result = powershell(`@(Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -match ${quote(pattern)} -and $_.CommandLine -notlike '*Get-CimInstance*' } | ForEach-Object { $_.ProcessId }) -join ','`)
   const ids = result.stdout?.trim() ?? ""
   return result.status === 0 && /^(\d+(,\d+)*)?$/.test(ids) ? ids.split(",").filter(Boolean) : null
 }
@@ -322,8 +327,8 @@ function windowsRecover() {
   if (waited) return waited
   const now = windowsRead()
   if (now.error) return now.error
-  if (now.hkcu && (now.hkcu.mark != null || (now.hkcu.values === 0 && now.hkcu.subkeys === 0))) {
-    const running = smokeAppsGone(windowsSmokeApps)
+  if (now.hkcu?.mark != null) {
+    const running = appGone(String(now.hkcu.mark), windowsProcessesWith)
     if (running) return running
   }
   if (now.hkcu && now.hkcu.mark == null && now.hkcu.values === 0 && now.hkcu.subkeys === 0) {
@@ -427,7 +432,8 @@ export async function disableAutoUpdate(platform = process.platform) {
     return result
   }
   const error = change.apply()
-  return error ? { error, restore } : { restore }
+  // token: what the run passes the app it starts (RUN_SWITCH), so recovery can tell it is running.
+  return error ? { error, restore } : { restore, token: id }
 }
 
 const entry = (() => {

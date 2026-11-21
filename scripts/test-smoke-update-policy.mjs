@@ -230,6 +230,19 @@ try {
     }
   })
 
+  await check("leaves a key named like the smoke mark that is not a smoke run's, and refuses", async () => {
+    try {
+      // A profile or key that happens to use the name TenuVaultSmokeRun, but not the smoke's format.
+      await locked(() => (platform === "darwin" ? plant(FILE, "<key>DisableAutoUpdate</key><false/><key>TenuVaultSmokeRun</key><string>managed-fleet</string>") : plantKey({ TenuVaultSmokeRun: ["DWord", 1] })))
+      await refuses(/does not edit/)
+      const cleaned = run(process.execPath, [SCRIPT, "--clean"])
+      assert(cleaned.status === 0, `--clean failed: ${cleaned.stderr || cleaned.stdout}`)
+      assert(snapshot() !== null && /managed-fleet|TenuVaultSmokeRun=DWord/.test(platform === "darwin" ? run("/usr/bin/plutil", ["-extract", "TenuVaultSmokeRun", "raw", "-o", "-", FILE]).stdout : snapshot()), "--clean removed a store that is not a smoke run's")
+    } finally {
+      await clear()
+    }
+  })
+
   await check("refuses when another policy for TenuVault applies, even where it would not write", async () => {
     try {
       // A user profile that leaves updates on (macOS); a key with another policy only (Windows).
@@ -330,13 +343,15 @@ try {
     const child = await holder()
     await kill(child)
     assert(managed(), "the killed holder took the policy away, so the test proves nothing")
-    // Stands in for the packaged app the killed run started: same kind of profile folder, with a
-    // space in its path as a temp folder can have. It stays up until --clean has refused.
-    const app = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", "--", `--user-data-dir=${join(work, "with space", "tenuvault-smoke-app")}`], { stdio: "ignore" })
+    // Stands in for the packaged app the killed run started, which carries the run's mark as its
+    // token. It stays up until --clean has refused.
+    const mark = currentMark()
+    assert(/^\d+@/.test(mark ?? ""), "the killed run's policy carries no mark")
+    const app = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", "--", `--user-data-dir=${join(work, "a -- b", "tenuvault-smoke-app")}`, `--tenuvault-smoke-run=${mark}`], { stdio: "ignore" })
     holders.add(app)
     app.on("exit", () => holders.delete(app))
-    // An unrelated process whose other argument mentions tenuvault-smoke- must not count.
-    const decoy = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", "--", `--user-data-dir=${join(work, "chrome")}`, `--log-file=${join(work, "tenuvault-smoke-debug.log")}`], { stdio: "ignore" })
+    // A process with another run's token (and a smoke-like profile folder) must not count.
+    const decoy = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", "--", `--user-data-dir=${join(work, "tenuvault-smoke-other")}`, "--tenuvault-smoke-run=1@2000-01-01T00:00:00.000Z"], { stdio: "ignore" })
     holders.add(decoy)
     decoy.on("exit", () => holders.delete(decoy))
     try {
