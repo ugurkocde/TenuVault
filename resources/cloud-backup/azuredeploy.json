@@ -248,8 +248,7 @@
       "name": "[concat(parameters('automationAccountName'), '/', variables('runbookName'))]",
       "location": "[parameters('location')]",
       "dependsOn": [
-        "[resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName'))]",
-        "[extensionResourceId(resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('storageAccountName'), 'default', variables('auditContainer')), 'Microsoft.Authorization/roleAssignments', variables('auditAssignmentId'))]"
+        "[resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName'))]"
       ],
       "properties": {
         "description": "TenuVault scheduled Intune backup in Azure",
@@ -311,7 +310,7 @@
   ],
   "outputs": {
     "auditContainer": { "type": "string", "value": "[variables('auditContainer')]" },
-    "auditCapability": { "type": "string", "value": "Runbook 1.5.0 or later records audit events. Start with AUDITCANARY after role propagation." },
+    "auditCapability": { "type": "string", "value": "Runbook 1.5.0 or later records audit events. Check Schedule or the Automation job output for delivery status." },
     "managedIdentityPrincipalId": {
       "type": "string",
       "value": "[reference(resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName')), '2023-11-01', 'full').identity.principalId]",

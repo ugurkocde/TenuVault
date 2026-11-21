@@ -1620,34 +1620,6 @@ function New-TenuVaultCloudOutcomeEvent {
         -Trigger $script:TvOutcomeTrigger[[string]$Outcome.trigger] -Message $script:TvOutcomeSummary[[string]$Outcome.status]
 }
 
-$script:TvCloudAuditAlertTitle = "Cloud backup audit needs attention"
-
-# Match audit health to the run that published the Schedule status.
-function Read-TvCloudAuditAlert {
-    param([string]$Account, [string]$Token, [string]$TenantId, [object]$TenantName, [DateTime]$Now = [DateTime]::UtcNow)
-    try {
-        $name = "cloud-backup-status-$($TenantId.Substring(0, 8).ToLowerInvariant()).json"
-        $status = ConvertFrom-TvNoteJson (Get-TvBlobText -Uri "https://$Account.blob.core.windows.net/intune-backups/$name" -Token $Token -TimeoutSec 5)
-        if ($status.TenantId -ne $TenantId -or $status.RunId -notmatch '^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$') { return }
-        $at = [string]$status.LastRunAt
-        $date = [DateTimeOffset]::MinValue
-        if (-not [DateTimeOffset]::TryParseExact($at, "yyyy-MM-dd'T'HH:mm:ss.fff'Z'", [Globalization.CultureInfo]::InvariantCulture,
-            [Globalization.DateTimeStyles]::AssumeUniversal, [ref]$date) -or $date.UtcDateTime -lt $Now.AddDays(-7)) { return }
-        $auditStatus = $status
-        if ($status.AuditStatusInResults -eq $true) {
-            $path = "audit-status/$($TenantId.ToLowerInvariant())/$($status.RunId).json"
-            $auditStatus = ConvertFrom-TvNoteJson (Get-TvBlobText -Uri "https://$Account.blob.core.windows.net/tenuvault-backup-results/$path" -Token $Token -TimeoutSec 5)
-            if ($auditStatus.TenantId -ne $TenantId -or $auditStatus.RunId -ne $status.RunId) { return }
-        }
-        $receiptFailed = $auditStatus.AuditReceiptFailed -is [bool] -and $auditStatus.AuditReceiptFailed
-        $deliveryPending = $auditStatus.AuditDeliveryPending -is [bool] -and $auditStatus.AuditDeliveryPending
-        if (-not $receiptFailed -and -not $deliveryPending) { return }
-        return New-TvEnvelope -Type "backup.warning" -Severity "warning" -TenantId $TenantId -TenantName $TenantName `
-            -OccurredAt $at -NaturalKey "cloud-backup-audit:$($status.RunId)" -Title $script:TvCloudAuditAlertTitle `
-            -Summary "The Automation job reported an audit delivery problem. See its job output and the Schedule tab for details."
-    } catch { Write-Verbose "Cloud backup audit status could not be checked." }
-}
-
 # ---------------------------------------------------------------------------
 # Library: Teams card layout, mirroring layout.ts and teamsWorkflowsPayload
 # ---------------------------------------------------------------------------
@@ -2052,8 +2024,7 @@ function Invoke-TvStorageRequest {
         [Parameter(Mandatory)][string]$Token,
         [hashtable]$Headers,
         [byte[]]$BodyBytes,
-        [string]$ContentType,
-        [int]$TimeoutSec = 60
+        [string]$ContentType
     )
     $requestHeaders = @{
         Authorization = "Bearer $Token"
@@ -2063,7 +2034,7 @@ function Invoke-TvStorageRequest {
     if ($Headers) { foreach ($key in $Headers.Keys) { $requestHeaders[$key] = $Headers[$key] } }
     $params = @{
         Uri = $Uri; Method = $Method; Headers = $requestHeaders
-        UseBasicParsing = $true; TimeoutSec = $TimeoutSec
+        UseBasicParsing = $true; TimeoutSec = 60
     }
     if ($null -ne $BodyBytes) { $params.Body = $BodyBytes }
     if ($ContentType) { $params.ContentType = $ContentType }
@@ -2071,9 +2042,9 @@ function Invoke-TvStorageRequest {
 }
 
 function Get-TvBlobText {
-    param([Parameter(Mandatory)][string]$Uri, [Parameter(Mandatory)][string]$Token, [int]$TimeoutSec = 60)
+    param([Parameter(Mandatory)][string]$Uri, [Parameter(Mandatory)][string]$Token)
     try {
-        $response = Invoke-TvStorageRequest -Uri $Uri -Method Get -Token $Token -TimeoutSec $TimeoutSec
+        $response = Invoke-TvStorageRequest -Uri $Uri -Method Get -Token $Token
         return [string]$response.Content
     } catch {
         if ($_.Exception.Response -and [int]$_.Exception.Response.StatusCode -eq 404) { return $null }
@@ -3032,8 +3003,6 @@ try {
         $existingStateText = Get-TvBlobText -Uri $stateBlobUri -Token $storageToken
     }
 
-    # A slow audit status read must finish before the delivery lease starts.
-    $cloudAuditAlert = Read-TvCloudAuditAlert -Account $storageAccount -Token $storageToken -TenantId $tenantId -TenantName $tenantName
     $leaseId = [Guid]::NewGuid().ToString()
     try {
         Invoke-TvStorageRequest -Uri $leaseQueryUri -Method Put -Token $storageToken -Headers @{
@@ -3387,16 +3356,15 @@ try {
     foreach ($pendingEntry in $pendingEnvelopes) { $knownEventIds[[string](Get-TvProp (Get-TvProp $pendingEntry "envelope") "eventId")] = $true }
     foreach ($deadEntry in $deadEnvelopes) { $knownEventIds[[string](Get-TvProp (Get-TvProp $deadEntry "envelope") "eventId")] = $true }
     foreach ($sentId in $sentEventIds) { $knownEventIds[[string]$sentId] = $true }
-    $enqueue = {
-        param($candidate)
+    foreach ($candidate in $candidateEnvelopes) {
         $candidateId = [string](Get-TvProp $candidate "eventId")
-        if ($knownEventIds.ContainsKey($candidateId)) { return }
+        if ($knownEventIds.ContainsKey($candidateId)) { continue }
         $knownEventIds[$candidateId] = $true
         $intendedChannels = [System.Collections.Generic.List[string]]::new()
         $wanted = Get-TvIntendedDestinations -Alerts $watcherAlerts -Envelope $candidate -Planned $plannedDestinations[$candidateId] -Configured @($configuredDestinations.ToArray())
         foreach ($channelName in $wanted) { $intendedChannels.Add([string]$channelName) }
         # With alerts, an envelope no alert takes (or whose destinations are not set up here) is owed nothing.
-        if ($null -ne $watcherAlerts -and $intendedChannels.Count -eq 0) { return }
+        if ($null -ne $watcherAlerts -and $intendedChannels.Count -eq 0) { continue }
         $pendingEnvelopes.Add([pscustomobject][ordered]@{
             envelope = $candidate
             attempts = 0
@@ -3407,7 +3375,6 @@ try {
             lastError = $null
         })
     }
-    foreach ($candidate in $candidateEnvelopes) { & $enqueue $candidate }
     foreach ($change in $newChanges) {
         $recentById[[string](Get-TvProp $change "auditId")] = [string](Get-TvProp $change "at")
     }
@@ -3445,13 +3412,11 @@ try {
     if ($teamsWebhookUrl) { $eligibleDestinations.Add("teams") }
     if ($mailEnabled) { $eligibleDestinations.Add("mail") }
 
-    $deliverPending = {
-        param([switch]$AuditOnly)
+    if ($pendingEnvelopes.Count -gt 0 -and $eligibleDestinations.Count -eq 0) {
+        Write-Output "No delivery channel is currently eligible. $($pendingEnvelopes.Count) envelope(s) remain in the outbox."
+    } else {
         foreach ($pendingEntry in @($pendingEnvelopes.ToArray())) {
             $envelope = Get-TvProp $pendingEntry "envelope"
-            # Older pending audit warnings have the same title and type.
-            $isCloudAudit = $envelope.type -ceq "backup.warning" -and $envelope.title -ceq $script:TvCloudAuditAlertTitle
-            if ($isCloudAudit -ne [bool]$AuditOnly) { continue }
             $eventIdValue = [string](Get-TvProp $envelope "eventId")
             if ($sentEventIds.Contains($eventIdValue)) {
                 [void]$pendingEnvelopes.Remove($pendingEntry)
@@ -3484,9 +3449,9 @@ try {
                 } else {
                     $channelAttempts = Add-TvDeliveryFailure -Entry $pendingEntry -Destination $destination `
                         -ErrorText $sendError.Exception.Message
-                    if (-not $AuditOnly -and $channelAttempts -eq 5) { $newlyExhausted.Add("${destination}: $(Get-TvSafeError $sendError.Exception.Message)") }
+                    if ($channelAttempts -eq 5) { $newlyExhausted.Add("${destination}: $(Get-TvSafeError $sendError.Exception.Message)") }
                     Write-Output "Delivery to $destination failed for event $($eventIdValue.Substring(0, 12)) attempt ${channelAttempts}: $($pendingEntry.lastError)"
-                    if (-not $AuditOnly -and -not $lastError) { $lastError = $pendingEntry.lastError }
+                    if (-not $lastError) { $lastError = $pendingEntry.lastError }
                     & $saveState
                 }
             }
@@ -3498,25 +3463,18 @@ try {
                 [void]$pendingEnvelopes.Remove($pendingEntry)
                 $deadEnvelopes.Add($pendingEntry)
                 while ($deadEnvelopes.Count -gt 50) { $deadEnvelopes.RemoveAt(0) }
-                $deadMessage = "Event $($eventIdValue.Substring(0, 12)) moved to deadEnvelopes: every intended destination is dead and none delivered. Last error: $($pendingEntry.lastError)"
-                if ($AuditOnly) { Write-Output $deadMessage } else { $lastError = $deadMessage }
+                $lastError = "Event $($eventIdValue.Substring(0, 12)) moved to deadEnvelopes: every intended destination is dead and none delivered. Last error: $($pendingEntry.lastError)"
                 & $saveState
             } elseif ($terminalState -eq "sent") {
                 [void]$pendingEnvelopes.Remove($pendingEntry)
                 $sentEventIds.Add($eventIdValue)
                 $eventsSent++
-                if (-not $AuditOnly -and $pendingEntry.deadChannels.Count -gt 0) {
+                if ($pendingEntry.deadChannels.Count -gt 0) {
                     $lastError = "Event $($eventIdValue.Substring(0, 12)) completed with dead destination(s): $($pendingEntry.deadChannels -join ', '). Last error: $($pendingEntry.lastError)"
                 }
                 & $saveState
             }
         }
-    }
-
-    if ($pendingEnvelopes.Count -gt 0 -and $eligibleDestinations.Count -eq 0) {
-        Write-Output "No delivery channel is currently eligible. $($pendingEnvelopes.Count) envelope(s) remain in the outbox."
-    } else {
-        . $deliverPending
     }
 
     # --- Change reports left by cloud backups ---------------------------------------
@@ -3527,13 +3485,6 @@ try {
         -GraphToken $graphToken -RenewLease $renewLease -Now $runAt -Delivered $deliveredReports -SaveState $saveState
     foreach ($message in $reportRun.Messages) { Write-Output $message }
     if ($reportRun.Error -and -not $lastError) { $lastError = $reportRun.Error }
-
-    # Audit warnings, including retries, go after notifications and change reports.
-    if ($cloudAuditAlert) {
-        & $enqueue $cloudAuditAlert
-        & $saveState
-    }
-    if ($eligibleDestinations.Count -gt 0) { . $deliverPending -AuditOnly }
 
     # --- Persist final state and heartbeat ------------------------------------------
     & $saveState

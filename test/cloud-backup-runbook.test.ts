@@ -114,7 +114,7 @@ describe("Cloud audit contract", () => {
     expect((result.calls as RunCall[]).some(call => call.uri.includes("55555555-5555-5555-5555-555555555555.json"))).toBe(false)
   }, 60_000)
 
-  type RestartRun = Run & { blobs: Record<string, string> }
+  type RestartRun = Run & { blobs: Record<string, string>; jobErrors: string[] }
   type ParityProbe = "corruptCursor" | "manifest503" | "statusRestart" | "watcherRestart"
   type RestartScenarios = Record<ParityProbe, RestartRun[]> & {
     interrupted: RestartRun[]
@@ -122,11 +122,7 @@ describe("Cloud audit contract", () => {
     startDenied: RestartRun
     resultsDenied: RestartRun
     graph401: RestartRun
-    scoped: RestartRun
-    scopedAgain: RestartRun
-    excessive: RestartRun
-    revokedCreate: RestartRun
-    canaryLostAck: RestartRun
+    auditWriteDenied: RestartRun
     identity: { token: string; calls: number }
     transport: { budgeted: number; unbudgeted: number }
     orphanReplay: { Count: number; More: boolean }
@@ -301,30 +297,13 @@ describe("Cloud audit contract", () => {
     expect(restartCases().transport).toEqual({ budgeted: 1, unbudgeted: 3 })
   }, 60_000)
 
-  it.runIf(Boolean(pwsh))("requires fresh cloud audit creation on each canary and detects excessive rights", () => {
-    const scoped = restartCases().scoped
-    const excessive = restartCases().excessive
-    expect(scoped.error).toBeNull()
-    expect(scoped.output).toContain("Cloud backup canary passed. Audit canary created and read. Azure denied audit overwrite and audit and backup deletion.")
-    const again = restartCases().scopedAgain
-    expect(again.error).toBeNull()
-    expect(again.output).toContain("Cloud backup canary passed. Audit canary created and read. Azure denied audit overwrite and audit and backup deletion.")
-    expect(auditFiles(again)).toHaveLength(2)
-    expect(Object.keys(scoped.blobs)).toHaveLength(2)
-    const revoked = restartCases().revokedCreate
-    expect(revoked.error).toBe("HTTP 403")
-    expect(revoked.calls).toMatchObject([{ method: "Put", uri: expect.stringContaining("/audit-logs/") }])
-    expect(revoked.calls[0]!.uri).not.toBe(auditFiles(scoped)[0]![0])
-    const lostAck = restartCases().canaryLostAck
-    expect(lostAck.error).toBeNull()
-    expect(lostAck.calls.slice(0, 2)).toMatchObject([{ method: "Put" }, { method: "Get", uri: lostAck.calls[0]!.uri }])
-    expect(excessive.error).toContain("permission limits failed")
-    expect(excessive.output!.join("\n")).toContain("excessive Azure Storage permissions")
-    for (const run of [scoped, excessive]) {
-      expect(run.calls.every(call => call.uri.includes("/producer-tests/"))).toBe(true)
-      expect(run.calls.filter(call => call.method === "Delete").map(call => new URL(call.uri).pathname.split("/")[1])).toEqual(["audit-logs", "intune-backups"])
-      expect(run.calls.filter(call => call.method === "Put" && call.ifNoneMatch === "*")).toHaveLength(1)
-    }
+  it.runIf(Boolean(pwsh))("reports audit write denial in the error stream and completes the backup", () => {
+    const run = restartCases().auditWriteDenied
+    expect(run.error).toBeNull()
+    expect(run.jobErrors).toContain("Cloud backup audit delivery is pending. The backup result is recorded separately.")
+    expect(JSON.parse(run.blobs[statusUri]!)).toMatchObject({ LastStatus: "Success" })
+    expect(auditStatus(run)).toMatchObject({ AuditDeliveryPending: true })
+    expect(auditFiles(run)).toHaveLength(0)
   }, 60_000)
 
   it.runIf(Boolean(pwsh))("bounds replay requests and resumes the saved receipt cursor", () => {
@@ -400,10 +379,12 @@ describe("Cloud audit contract", () => {
   }, 60_000)
 
   it("offers an ARM upgrade that leaves a PowerShell setup's backup writer, variables and schedule in place", () => {
-    const resources = template.resources as Array<{ type: string; name: string; condition?: string }>
+    const resources = template.resources as Array<{ type: string; name: string; condition?: string; dependsOn?: string[] }>
     const audit = resources.filter(resource => resource.name.includes("audit"))
     expect(audit).toHaveLength(3)
     expect(audit.every(resource => !resource.condition)).toBe(true)
+    const existingDependencies = resources.filter(resource => !audit.includes(resource)).flatMap(resource => resource.dependsOn ?? [])
+    expect(existingDependencies.filter(dependency => /audit/i.test(dependency))).toEqual([])
     expect(resources.filter(resource => !audit.includes(resource)).every(resource => resource.condition?.includes("not(parameters('auditOnly'))"))).toBe(true)
     expect(template.outputs.pasteIntoTenuVault).toMatchObject({ condition: "[not(parameters('auditOnly'))]" })
     expect(template.parameters.auditOnly).toMatchObject({ type: "bool", defaultValue: false })
@@ -412,7 +393,7 @@ describe("Cloud audit contract", () => {
     const main = process.env.TENUVAULT_TEST_MAIN_WORKTREE
     if (main) {
       const base = JSON.parse(readFileSync(join(main, "resources/cloud-backup/azuredeploy.json"), "utf8")) as typeof template
-      for (const kind of ["schedules", "jobSchedules"]) {
+      for (const kind of ["runbooks", "schedules", "jobSchedules"]) {
         const current = resources.find(resource => resource.type.endsWith("/" + kind))!
         const { condition, ...definition } = current
         expect(condition).toBe("[not(parameters('auditOnly'))]")
@@ -465,7 +446,7 @@ describe("Cloud audit contract", () => {
     const guide = readFileSync(new URL("../docs-site/src/content/docs/backups/cloud.md", import.meta.url), "utf8")
     expect(guide).toMatch(/Audit Log.*starting with runbook 1\.5\.0/)
     expect(guide).not.toMatch(/audit log.*gets no entries/i)
-    expect(guide).toContain("the matching run's audit delivery status before taking its delivery lease")
+    expect(guide).toContain("the latest run's audit delivery health")
   })
 
   it("provisions private audit storage with container-scoped read and add only in both setup paths", () => {
@@ -768,7 +749,7 @@ describe("New-TenuVaultCloudBackup.ps1", () => {
     expect(setup).toContain('$legacyKeyVaultVariable = "TenuVaultKeyVault-$tenantKey"')
     // A rerun drops the variable the runbook no longer reads, after the current variables are written.
     const removal = setup.indexOf("Remove-TenuVaultLegacyKeyVaultVariable -Runbook $runbook")
-    expect(removal).toBeGreaterThan(setup.indexOf('Name = "TenuVaultAppOnlyExcluded-$tenantKey"'))
+    expect(removal).toBeGreaterThan(setup.indexOf('-Name "TenuVaultAppOnlyExcluded-$tenantKey"'))
     expect(removal).toBeGreaterThan(setup.indexOf("$runbook = Publish-TenuVaultRunbook"))
     expect(setup).toContain("Publish-AzAutomationRunbook")
     // -Remove deletes it too and, like a rerun, names the old vault before it is gone.
@@ -790,7 +771,8 @@ describe("New-TenuVaultCloudBackup.ps1", () => {
   type SetupScenario = {
     scenario: string; plain: boolean; reason: string | null; error: string | null; actions: string[]
     legacyVariableKept: boolean; changeReport?: string | null; changeReportActors?: string | null; tenantName?: string | null
-    variables: string[]; schedule: boolean; enabled: boolean; link: boolean; output: string[]
+    variables: string[]; variableWrites: string[]; scope: string; exclusions: string; appOnlyExcluded: string
+    schedule: boolean; enabled: boolean; link: boolean; output: string[]
     scheduleSettings: { timeZone: string; frequency: string; time: string; days: string[] }
   }
   const readSetupScenarios = (setupPath?: string) => {
@@ -801,6 +783,11 @@ describe("New-TenuVaultCloudBackup.ps1", () => {
   }
   let setupScenarios: Map<string, SetupScenario> | undefined
   const setupRun = (name: string) => (setupScenarios ??= readSetupScenarios()).get(name)!
+  let mainSetupScenarios: Map<string, SetupScenario> | undefined
+  const mainSetup = () => {
+    const main = process.env.TENUVAULT_TEST_MAIN_WORKTREE
+    if (main) return mainSetupScenarios ??= readSetupScenarios(join(main, "resources/New-TenuVaultCloudBackup.ps1"))
+  }
   const DELETE_ADVICE = "Delete the vault once no"
 
   it.runIf(Boolean(pwsh))("keeps the change report level and actors on a rerun without their parameters, and sets them when passed", () => {
@@ -814,13 +801,12 @@ describe("New-TenuVaultCloudBackup.ps1", () => {
 
   it.runIf(Boolean(pwsh))("follows main for disabled schedules, including stale markers and partial overrides", () => {
     expect(setup).not.toContain("TenuVaultAuditPausedSchedule")
-    const main = process.env.TENUVAULT_TEST_MAIN_WORKTREE
-    const baseline = main ? readSetupScenarios(join(main, "resources/New-TenuVaultCloudBackup.ps1")) : undefined
+    const baseline = mainSetup()
     const scheduleResult = ({ error, schedule, enabled, link, scheduleSettings, actions }: SetupScenario) => ({
       error, schedule, enabled, link, scheduleSettings,
       scheduleWrites: actions.filter((action) => /schedule|^(un)?link$/.test(action)),
     })
-    for (const scenario of ["disabled-canary-denied", "disabled-stale-marker", "disabled-time-override"]) {
+    for (const scenario of ["disabled-stale-marker", "disabled-time-override"]) {
       const actual = setupRun(scenario)
       const result = scheduleResult(actual)
       expect(result).toEqual({
@@ -830,8 +816,6 @@ describe("New-TenuVaultCloudBackup.ps1", () => {
       expect(actual.variables).toContain("TenuVaultAuditPausedSchedule-11111111")
       if (baseline) expect(result).toEqual(scheduleResult(baseline.get(scenario)!))
     }
-    expect(setupRun("disabled-canary-denied").output).toContainEqual(expect.stringContaining("AUDITCANARY could not verify audit access"))
-    expect(setupRun("disabled-stale-marker").output).toContain("Cloud backup canary passed")
 
     // Explicit Graph confirmation still requests the replacement that main performs.
     const scenario = "disabled-explicit-replacement"
@@ -844,10 +828,27 @@ describe("New-TenuVaultCloudBackup.ps1", () => {
     if (baseline) expect(result).toEqual(scheduleResult(baseline.get(scenario)!))
   }, 60_000)
 
-  it.runIf(Boolean(pwsh))("keeps the Everything scope and existing exclusions when only account and tenant are supplied", () => {
-    expect(setupRun("linked-upgrade")).toMatchObject({
-      scope: "everything", exclusions: "ConfigurationPolicies,Apps", appOnlyExcluded: "",
+  it.runIf(Boolean(pwsh))("writes the main scope defaults on a linked rerun without scope arguments", () => {
+    const scenario = "linked-upgrade"
+    const variableResult = ({ scope, exclusions, appOnlyExcluded, variableWrites }: SetupScenario) => ({
+      scope, exclusions, appOnlyExcluded, variableWrites,
     })
+    const result = variableResult(setupRun(scenario))
+    expect(result).toEqual({
+      scope: "policies", exclusions: "", appOnlyExcluded: "DeviceCategories,DeviceCleanupRules",
+      variableWrites: ["TenantId", "StorageAccount", "Scope", "ExcludedFolders", "AppOnlyExcluded"].map(name => `TenuVault${name}-11111111`),
+    })
+    const baseline = mainSetup()
+    if (baseline) expect(result).toEqual(variableResult(baseline.get(scenario)!))
+  }, 60_000)
+
+  it.runIf(Boolean(pwsh))("publishes, creates and links the schedule when audit provisioning is denied", () => {
+    for (const failure of ["container", "role-definition", "role-assignment"]) {
+      const run = setupRun(`audit-${failure}-denied`)
+      expect(run).toMatchObject({ error: null, plain: true, schedule: true, enabled: true, link: true })
+      expect(run.output).toContainEqual(expect.stringContaining("Could not provision cloud backup audit access"))
+      expect(run.output).toContainEqual(expect.stringContaining("assign it to the Automation account"))
+    }
   }, 60_000)
 
   it("documents audit availability by producer version and the Backup Writer's overwrite rights", () => {

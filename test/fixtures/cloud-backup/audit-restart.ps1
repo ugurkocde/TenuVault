@@ -94,11 +94,6 @@ $script:HttpClient | Add-Member ScriptMethod SendAsync {
         $items = ($names | Select-Object -First $limit | ForEach-Object { "<Blob><Name>$_</Name></Blob>" }) -join ""
         return New-Response 200 "<EnumerationResults><Blobs>$items</Blobs><NextMarker>$next</NextMarker></EnumerationResults>"
     }
-    if ($method -eq "Delete") {
-        if ($script:scenario -ne "excessive") { return New-Response 403 "Delete denied" }
-        $script:blobs.Remove($uri)
-        return New-Response 202 ""
-    }
     if ($uri.EndsWith("/metadata.json") -and $script:scenario -eq "manifest503") {
         if ($method -eq "Get") { return New-Response 503 "Manifest read-back unavailable" }
         # Only the normal PUT fails. Main exhausts its retries and leaves a create-only Failed manifest.
@@ -110,12 +105,11 @@ $script:HttpClient | Add-Member ScriptMethod SendAsync {
     if ($method -eq "Put") {
         if ($uri -eq $script:statusUri -and $script:scenario -eq "status503") { return New-Response 503 "Schedule status storage unavailable" }
         if ($uri -like "*/audit-logs/*") {
-            if ($script:scenario -eq "revokedCreate") { return New-Response 403 "Audit create revoked" }
-            if ($script:scenario -ne "excessive" -and -not $ifNoneMatch) { return New-Response 403 "Overwrite denied" }
+            if ($script:scenario -eq "auditWriteDenied") { return New-Response 403 "Audit create denied" }
+            if (-not $ifNoneMatch) { return New-Response 403 "Overwrite denied" }
         }
         if ($ifNoneMatch -eq "*" -and $script:blobs.ContainsKey($uri)) { return New-Response 412 "Already exists" }
         $script:blobs[$uri] = $body
-        if ($uri -like "*/audit-logs/*" -and $script:scenario -eq "canaryLostAck") { return New-Response 503 "Response lost" }
         return New-Response 201 ""
     }
     if (-not $script:blobs.ContainsKey($uri)) { return New-Response 404 "Blob not found" }
@@ -130,8 +124,14 @@ function Invoke-Probe {
     $script:OutcomeSent = $false
     $message = $null
     $output = [System.Collections.Generic.List[string]]::new()
-    try { Invoke-TvBackup 2>&1 3>&1 | ForEach-Object { $output.Add([string]$_) } } catch { $message = $_.Exception.Message }
-    return @{ calls = $script:calls.ToArray(); error = $message; output = $output.ToArray(); blobs = $script:blobs.Clone() }
+    $jobErrors = [System.Collections.Generic.List[string]]::new()
+    try {
+        Invoke-TvBackup 2>&1 3>&1 | ForEach-Object {
+            if ($_ -is [System.Management.Automation.ErrorRecord]) { $jobErrors.Add([string]$_) }
+            $output.Add([string]$_)
+        }
+    } catch { $message = $_.Exception.Message }
+    return @{ calls = $script:calls.ToArray(); error = $message; jobErrors = $jobErrors.ToArray(); output = $output.ToArray(); blobs = $script:blobs.Clone() }
 }
 
 if ($TimingOnly) {
@@ -173,7 +173,7 @@ if (-not $ParityOnly) {
     $script:blobs = $interrupted.Clone()
     $results.terminalReadDenied = Invoke-Probe "terminalReadDenied" -Restart
 
-    foreach ($name in @("startDenied", "resultsDenied", "graph401", "receiptDenied")) {
+    foreach ($name in @("startDenied", "resultsDenied", "graph401", "receiptDenied", "auditWriteDenied")) {
         $script:blobs.Clear()
         $results[$name] = Invoke-Probe $name
     }
@@ -201,15 +201,5 @@ if (-not $ParityOnly) {
     $budgetedCalls = $script:calls.Count
     try { [void](Invoke-TvHttp -Uri "https://stcontoso.blob.core.windows.net/audit-logs/test.json" -Token "token") } catch { }
     $results.transport = @{ budgeted = $budgetedCalls; unbudgeted = ($script:calls.Count - $budgetedCalls) }
-
-    $AuditCanary = $true
-    foreach ($name in @("scoped", "excessive", "canaryLostAck")) {
-        $script:blobs.Clear()
-        $results[$name] = Invoke-Probe $name
-        if ($name -eq "scoped") {
-            $results.scopedAgain = Invoke-Probe $name
-            $results.revokedCreate = Invoke-Probe "revokedCreate"
-        }
-    }
 }
 [Console]::WriteLine(($results | ConvertTo-Json -Compress -Depth 10))

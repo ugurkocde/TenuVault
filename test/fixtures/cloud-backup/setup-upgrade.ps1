@@ -25,6 +25,11 @@ $start = $text.IndexOf("# Runbook import and publish")
 $end = $text.IndexOf("# Failure alert")
 if ($start -lt 0 -or $end -le $start) { throw "The upgrade step markers were not found." }
 $upgradeStep = [scriptblock]::Create($text.Substring($start, $end - $start))
+$auditStart = $text.IndexOf('# Audit grants are optional for publishing and running backups.')
+$auditEnd = $text.IndexOf('if ($AuditRoleOnly)', $auditStart + 1)
+$auditStep = if ($auditStart -ge 0 -and $auditEnd -gt $auditStart) {
+    [scriptblock]::Create($text.Substring($auditStart, $auditEnd - $auditStart))
+}
 $scheduleStart = $text.IndexOf('# Schedule and link.')
 $scheduleEnd = $text.IndexOf('# Summary and next steps.')
 $scheduleParameters = @'
@@ -60,7 +65,13 @@ $variableNames = @(
 $legacyKeyVaultVariable = "TenuVaultKeyVault-$tenantKey"
 $plainRunbookVersion = "1.2.0"
 $triggerRunbookVersion = "1.4.0"
-$auditRunbookVersion = "1.5.0"
+$auditContainer = "audit-logs"
+$writerRoleName = "TenuVault Backup Writer"
+$backupContainer = "intune-backups"
+$storageGroupScope = "/subscriptions/demo/resourceGroups/$ResourceGroupName"
+$storageAccount = @{ Id = "$storageGroupScope/providers/Microsoft.Storage/storageAccounts/$StorageAccountName" }
+$storageContext = @{}
+$principalId = "00000000-0000-0000-0000-00000000aaaa"
 $TimeZone = "UTC"
 $Frequency = "Daily"
 $WeekDay = [DayOfWeek]::Sunday
@@ -80,6 +91,7 @@ function New-OutageException { [System.Net.Http.HttpRequestException]::new("The 
 # Mocked Azure state.
 $script:variables = @{}
 $script:actions = [System.Collections.Generic.List[string]]::new()
+$script:variableWrites = [System.Collections.Generic.List[string]]::new()
 $script:draft = $null
 $script:published = $null
 $script:schedule = $false
@@ -127,8 +139,8 @@ function Get-AzAutomationVariable {
     if ($script:variables.ContainsKey($Name)) { return [pscustomobject]@{ Name = $Name; Value = $script:variables[$Name] } }
     Write-MockError $PSCmdlet ([ResourceNotFoundException]::new("Variable $Name not found."))
 }
-function Set-AzAutomationVariable { param($ResourceGroupName, $AutomationAccountName, $Name, $Encrypted, $Value) $script:variables[$Name] = $Value }
-function New-AzAutomationVariable { param($ResourceGroupName, $AutomationAccountName, $Name, $Encrypted, $Value) $script:variables[$Name] = $Value }
+function Set-AzAutomationVariable { param($ResourceGroupName, $AutomationAccountName, $Name, $Encrypted, $Value) $script:variableWrites.Add($Name); $script:variables[$Name] = $Value }
+function New-AzAutomationVariable { param($ResourceGroupName, $AutomationAccountName, $Name, $Encrypted, $Value) $script:variableWrites.Add($Name); $script:variables[$Name] = $Value }
 function Remove-AzAutomationVariable {
     [CmdletBinding(SupportsShouldProcess)]
     param($ResourceGroupName, $AutomationAccountName, $Name)
@@ -189,12 +201,18 @@ function Register-AzAutomationScheduledRunbook {
     $script:link = $true
     $script:actions.Add("link")
 }
-function Start-AzAutomationRunbook {
-    param($ResourceGroupName, $AutomationAccountName, $Name, $Parameters, [switch]$Wait, $MaxWaitSeconds, $ErrorAction)
-    if (-not $Parameters.AuditCanary -or -not $Wait -or $MaxWaitSeconds -gt 420) { throw "Canary was not isolated or bounded." }
-    $script:actions.Add("canary published")
-    if ($script:failCanary) { throw "Canary denied" }
-    return "Cloud backup canary passed"
+function Get-AzStorageContainer { param($Name, $Context, $ErrorAction) }
+function New-AzStorageContainer {
+    param($Name, $Context, $Permission)
+    if ($script:auditFailure -eq "container") { throw "Audit container creation denied" }
+}
+function Get-AzRoleDefinition { param($Name, $ErrorAction) }
+function Get-AzRoleAssignment { param($ObjectId, $RoleDefinitionId, $Scope, $ErrorAction) }
+function Invoke-AzRestMethod {
+    param($Method, $Path, $Payload)
+    if ($Path -match '/roleDefinitions/' -and $script:auditFailure -eq "role-definition") { return @{ StatusCode = 403 } }
+    if ($Path -match '/roleAssignments/' -and $script:auditFailure -eq "role-assignment") { return @{ StatusCode = 403 } }
+    return @{ StatusCode = 201 }
 }
 
 # A setup from before 1.2.0: its published runbook (and an older draft) read the vault through the variable.
@@ -202,12 +220,13 @@ function Reset-OldSetup {
     $script:variables = @{ $legacyKeyVaultVariable = "kv-tenuvault-abc123" }
     foreach ($name in $variableNames) { $script:variables[$name] = "x" }
     $script:actions.Clear()
+    $script:variableWrites.Clear()
     $script:draft = $oldRunbook
     $script:published = $oldRunbook
     $script:schedule = $true
     $script:scheduleSettings = @{ Name = $scheduleName; IsEnabled = $true; TimeZone = "Europe/Berlin"
         StartTime = [DateTimeOffset]::Parse("2026-11-25T09:00:00+01:00"); Frequency = "Week"; DaysOfWeek = @("Wednesday") }
-    $script:failCanary = $null
+    $script:auditFailure = $null
     $script:link = $true
     $script:declineImport = $false
     $script:publishBehavior = "publish"
@@ -232,6 +251,7 @@ function Write-Scenario {
         changeReportActors = $script:variables["TenuVaultChangeReportActors-$tenantKey"]
         tenantName = $script:variables["TenuVaultTenantName-$tenantKey"]
         variables = @($script:variables.Keys | Sort-Object)
+        variableWrites = $script:variableWrites.ToArray()
         scope = $script:variables["TenuVaultScope-$tenantKey"]
         exclusions = $script:variables["TenuVaultExcludedFolders-$tenantKey"]
         appOnlyExcluded = $script:variables["TenuVaultAppOnlyExcluded-$tenantKey"]
@@ -306,11 +326,9 @@ function Invoke-LinkedUpgrade {
     $errorText = $null
     $output = @()
     try {
-        $output = @(. $upgradeStep 3>&1 6>&1)
+        if ($auditStep) { $output += @(. $auditStep 3>&1 6>&1) }
+        $output += @(. $upgradeStep 3>&1 6>&1)
         $output += @(& $scheduleStep @ScheduleArguments 3>&1 6>&1)
-        if (Get-Command Test-TenuVaultPublishedAudit -ErrorAction SilentlyContinue) {
-            $output += @(Test-TenuVaultPublishedAudit -Runbook $runbook 3>&1 6>&1)
-        }
     } catch { $errorText = $_.Exception.Message }
     Write-Scenario -Name $Scenario -Runbook $runbook -ErrorText $errorText -Output $output
 }
@@ -324,15 +342,19 @@ Invoke-LinkedUpgrade -Scenario "linked-upgrade"
 Reset-OldSetup
 $script:scheduleSettings.IsEnabled = $false
 $script:variables["TenuVaultAuditPausedSchedule-$tenantKey"] = $scheduleName
-$script:failCanary = $true
-Invoke-LinkedUpgrade -Scenario "disabled-canary-denied"
-$script:failCanary = $false
-$script:actions.Clear()
 Invoke-LinkedUpgrade -Scenario "disabled-stale-marker"
 $script:actions.Clear()
 Invoke-LinkedUpgrade -Scenario "disabled-time-override" -ScheduleArguments @{ Time = "10:00" }
 $script:actions.Clear()
 Invoke-LinkedUpgrade -Scenario "disabled-explicit-replacement" -ScheduleArguments @{ Time = "10:00"; GraphRolesGranted = $true }
+
+foreach ($failure in "container", "role-definition", "role-assignment") {
+    Reset-OldSetup
+    $script:schedule = $false
+    $script:link = $false
+    $script:auditFailure = $failure
+    Invoke-LinkedUpgrade -Scenario "audit-$failure-denied" -ScheduleArguments @{ GraphRolesGranted = $true }
+}
 
 # -Remove runs: complete, -WhatIf, one variable's own confirmation declined, -WhatIf while every
 # lookup fails, a complete removal whose variable list fails, and tenant B still on the vault.

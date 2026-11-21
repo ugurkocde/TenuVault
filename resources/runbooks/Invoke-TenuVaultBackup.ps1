@@ -61,9 +61,7 @@ param(
     # schedule link does not pass it, so a run without it counts as scheduled. A run started by
     # hand passes "Manual" (TRIGGER in the portal's Start pane) to be recorded as manual.
     [string]$Trigger = "",
-    [switch]$ReplayOlderAudit,
-    [switch]$AuditCanary,
-    [switch]$AuditCanaryWait
+    [switch]$ReplayOlderAudit
 )
 
 $script:RunbookVersion = "1.5.0"
@@ -690,16 +688,13 @@ function Invoke-TvAuditStorage {
 }
 
 function Set-TvAuditImmutable {
-    param([hashtable]$Context, [string]$Container, [string]$Path, [string]$Body, [hashtable]$Options = @{}, [switch]$Fresh)
+    param([hashtable]$Context, [string]$Container, [string]$Path, [string]$Body, [hashtable]$Options = @{})
     $Options["If-None-Match"] = "*"
     try {
         [void](Invoke-TvAuditStorage $Context $Container $Path "Put" $Body $Options)
     }
     catch [TvHttpError] {
-        $status = $_.Exception.Status
-        if ($Fresh) {
-            if ($status -notin @(0, 408) -and $status -lt 500) { throw }
-        } elseif ($status -notin @(0, 403, 409, 412, 500, 502, 503, 504)) { throw }
+        if ($_.Exception.Status -notin @(0, 403, 409, 412, 500, 502, 503, 504)) { throw }
         $existing = Invoke-TvAuditStorage $Context $Container $Path
         if ($existing.Text -cne $Body) { throw "The audit event could not be confirmed." }
     }
@@ -780,13 +775,13 @@ function Read-TvAuditPage {
         catch {
             $remaining++
             $Context.AuditReplayIncomplete = $true
-            Write-Warning -WarningAction Continue "A cloud backup audit receipt could not be checked."
+            Write-Error -ErrorAction Continue "A cloud backup audit receipt could not be checked."
             continue
         }
         if (-not $receipt.delivered) {
             try { Publish-TvAuditReceipt $Context "/$name" $receipt }
             catch [TvAuditBudgetError] { throw }
-            catch { $remaining++; Write-Warning -WarningAction Continue "A cloud backup audit receipt is waiting for delivery." }
+            catch { $remaining++; Write-Error -ErrorAction Continue "A cloud backup audit receipt is waiting for delivery." }
         }
     }
     $next = if (-not $reachedRecent) { [string]$listing.EnumerationResults.NextMarker } else { "" }
@@ -874,7 +869,7 @@ function Restore-TvAuditReceipts {
         } catch [TvAuditBudgetError] { throw }
         catch {
             $Context.AuditReplayIncomplete = $true
-            Write-Warning -WarningAction Continue "A cloud backup audit checkpoint could not be checked."
+            Write-Error -ErrorAction Continue "A cloud backup audit checkpoint could not be checked."
         }
     }
     $next = [string]$listing.EnumerationResults.NextMarker
@@ -937,7 +932,7 @@ function Invoke-TvAuditReplay {
                 if ($receipt) { Write-TvTerminalReceipt $Context $receipt }
             } catch {
                 $incomplete = $true
-                Write-Warning -WarningAction Continue "Cloud backup audit could not check the interrupted attempt."
+                Write-Error -ErrorAction Continue "Cloud backup audit could not check the interrupted attempt."
             }
         }
         $cursor = Read-TvAuditCursor $Context $path
@@ -967,7 +962,7 @@ function Invoke-TvAuditReplay {
                 $state.checkpointMarker = Restore-TvAuditReceipts $Context ([string]$state.checkpointMarker) $cutoff
             } catch {
                 $incomplete = $true
-                Write-Warning -WarningAction Continue "Cloud backup audit checkpoints could not be fully checked."
+                Write-Error -ErrorAction Continue "Cloud backup audit checkpoints could not be fully checked."
             }
             if ($Context.RecoveredOlderReceipts -gt 0) {
                 $state.olderCount += $Context.RecoveredOlderReceipts
@@ -1001,7 +996,7 @@ function Invoke-TvAuditReplay {
     } catch [TvAuditBudgetError] { $incomplete = $true }
     catch {
         $incomplete = $true
-        Write-Warning -WarningAction Continue "Cloud backup audit receipt history could not be fully checked."
+        Write-Error -ErrorAction Continue "Cloud backup audit receipt history could not be fully checked."
     }
     if ($state) {
         try {
@@ -1011,7 +1006,7 @@ function Invoke-TvAuditReplay {
             Save-TvAuditCursor $Context $path $cursor
         } catch {
             $incomplete = $true
-            Write-Warning -WarningAction Continue "Cloud backup could not save its audit receipt cursor. The next run will retry."
+            Write-Error -ErrorAction Continue "Cloud backup could not save its audit receipt cursor. The next run will retry."
         }
     }
     $Context.Remove("AuditBudget")
@@ -1049,7 +1044,7 @@ function Save-TvAuditReceipt {
     catch {
         $Context.AuditPending++
         if ($created) { Register-TvPendingReceipt $Context $file.date }
-        Write-Warning -WarningAction Continue "Cloud backup audit delivery is pending. The backup result is recorded separately."
+        Write-Error -ErrorAction Continue "Cloud backup audit delivery is pending. The backup result is recorded separately."
     }
 }
 
@@ -1064,7 +1059,7 @@ function Register-TvPendingReceipt {
         Save-TvAuditCursor $Context $path $cursor
     } catch {
         $Context.AuditScanIncomplete = $true
-        Write-Warning -WarningAction Continue "A pending audit receipt was saved but could not be added to the receipt count."
+        Write-Error -ErrorAction Continue "A pending audit receipt was saved but could not be added to the receipt count."
     }
 }
 
@@ -1082,7 +1077,7 @@ function Write-TvTerminalReceipt {
         Set-TvAuditImmutable $Context $script:OutcomeContainer "/audit-runs/$tenant/$id/terminal.json" ($Receipt | ConvertTo-Json -Depth 12 -Compress)
     } catch {
         $Context.AuditScanIncomplete = $true
-        Write-Warning -WarningAction Continue "Cloud backup audit could not checkpoint its terminal result."
+        Write-Error -ErrorAction Continue "Cloud backup audit could not checkpoint its terminal result."
     }
     Save-TvAuditReceipt $Context $Receipt
 }
@@ -1130,13 +1125,13 @@ function Write-TvAuditStart {
                 }
             } catch {
                 $Context.AuditScanIncomplete = $true
-                Write-Warning -WarningAction Continue "Cloud backup audit could not check the previous attempt for this job."
+                Write-Error -ErrorAction Continue "Cloud backup audit could not check the previous attempt for this job."
             }
             [void](Invoke-TvAuditStorage $Context $script:OutcomeContainer $path "Put" (@{ runId = $run } | ConvertTo-Json -Compress))
         }
     } catch {
         $Context.AuditScanIncomplete = $true
-        Write-Warning -WarningAction Continue "Cloud backup audit could not save its start checkpoint or job index."
+        Write-Error -ErrorAction Continue "Cloud backup audit could not save its start checkpoint or job index."
     } finally { $Context.Remove("AuditBudget") }
 }
 
@@ -1147,7 +1142,7 @@ function Complete-TvAuditRun {
         Write-TvTerminalAudit $Context $Context.RunId $Status $BackupFolder $Saved $Failures $Trigger $Reason
     } catch {
         $Context.AuditScanIncomplete = $true
-        Write-Warning -WarningAction Continue "Cloud backup audit could not record its terminal result."
+        Write-Error -ErrorAction Continue "Cloud backup audit could not record its terminal result."
     } finally { $Context.Remove("AuditBudget") }
 
     try {
@@ -1159,7 +1154,7 @@ function Complete-TvAuditRun {
     } catch {
         $Context.AuditScanIncomplete = $true
         $Context.AuditOlderUnchecked = $true
-        Write-Warning -WarningAction Continue "Cloud backup audit receipt history could not be fully checked."
+        Write-Error -ErrorAction Continue "Cloud backup audit receipt history could not be fully checked."
     }
 
     # Schedule already published. A separate record for this run cannot replace a concurrent run's result.
@@ -1177,49 +1172,8 @@ function Complete-TvAuditRun {
         } | ConvertTo-Json -Compress
         [void](Invoke-TvAuditStorage $Context $script:OutcomeContainer "/audit-status/$tenant/$($Context.RunId).json" "Put" $body)
     } catch {
-        Write-Warning -WarningAction Continue "Cloud backup audit status could not be published. Check the Automation job output."
+        Write-Error -ErrorAction Continue "Cloud backup audit status could not be published. Check the Automation job output."
     }
-}
-
-function Test-TvProducerAuditAccess {
-    param([hashtable]$Context)
-    $path = "/producer-tests/$($Context.TenantId.ToLowerInvariant())/cloud-runbook.json"
-    $auditPath = $path.Replace("cloud-runbook.json", "cloud-runbook-$([guid]::NewGuid()).json")
-    $body = [ordered]@{ tenantId = $Context.TenantId.ToLowerInvariant(); type = "audit-access-test" } | ConvertTo-Json -Compress
-    $deadline = [System.Diagnostics.Stopwatch]::StartNew()
-    $Context.AuditBudget = @{ Clock = $deadline; Seconds = $(if ($AuditCanaryWait) { 300 } else { 30 }); Requests = 64 }
-    try {
-        do {
-            try {
-                Set-TvAuditImmutable $Context "audit-logs" $auditPath $body -Fresh
-                break
-            } catch [TvHttpError] {
-                if (-not $AuditCanaryWait -or $_.Exception.Status -notin @(403, 404) -or $deadline.Elapsed.TotalSeconds -ge 290) { throw }
-                Start-Sleep -Seconds 10
-            }
-        } while ($true)
-    } finally { $Context.Remove("AuditBudget") }
-    if ((Invoke-TvAuditStorage $Context "audit-logs" $auditPath).Text -cne $body) { throw "Cloud backup audit create and read test failed." }
-    [void](Invoke-TvAuditStorage $Context $script:Container $path "Put" $body)
-    $excessive = $false
-    $inconclusive = $false
-    foreach ($probe in @(
-        @{ Container = "audit-logs"; Path = $auditPath; Method = "Put"; Options = @{ "If-Match" = "*" } },
-        @{ Container = "audit-logs"; Path = $auditPath; Method = "Delete"; Options = @{} },
-        @{ Container = $script:Container; Path = $path; Method = "Delete"; Options = @{} }
-    )) {
-        try {
-            [void](Invoke-TvAuditStorage $Context $probe.Container $probe.Path $probe.Method $body $probe.Options)
-            $excessive = $true
-        } catch [TvHttpError] { if ($_.Exception.Status -ne 403) { $inconclusive = $true } }
-        catch { $inconclusive = $true }
-    }
-    if ($excessive) {
-        Write-Warning "The cloud backup identity has excessive Azure Storage permissions. Remove grants that allow audit overwrite or blob deletion."
-        throw "Cloud backup audit permission limits failed."
-    }
-    if ($inconclusive) { throw "Azure Storage did not confirm that audit overwrite and blob deletion are denied." }
-    Write-Output "Cloud backup canary passed. Audit canary created and read. Azure denied audit overwrite and audit and backup deletion."
 }
 
 # ---------------------------------------------------------------------------
@@ -3230,10 +3184,6 @@ function Invoke-TvBackup {
     # is reported by the Azure Monitor alert on failed jobs.
     $storageToken = Get-TvManagedIdentityToken "https://storage.azure.com/"
     $context = @{ TenantId = $tenantId; StorageAccount = $storageAccount; StorageToken = $storageToken; RunId = $runId; AuditPending = 0; AuditOlderPending = 0 }
-    if ($AuditCanary) {
-        Test-TvProducerAuditAccess $context
-        return
-    }
     if ($ReplayOlderAudit) {
         $auditReplay = Invoke-TvAuditReplay $context -IncludeOlder
         Write-Output "Older audit replay checked one page. Pending across checked pages: $($auditReplay.Count). Older receipts still unchecked: $($auditReplay.OlderUnchecked)."
