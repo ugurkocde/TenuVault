@@ -18,7 +18,7 @@ import { LicenseService } from "../src/main/license/service"
 import { memoryStore } from "./helpers"
 import { PlanRequired, type Plan } from "../src/shared/plans"
 import { ingestContent, type ContentEncryption } from "../src/main/app-backup/content-stream"
-import { appRestoreAuditItem, restoreCapturedApp, type AppRestoreAuditObservation } from "../src/main/app-backup/restore"
+import { appRestoreAuditItem, restoreAppWithAudit, restoreCapturedApp, type AppRestoreAuditObservation } from "../src/main/app-backup/restore"
 import { restoreGraph, putRestoreBlock, type RestoreGraph } from "../src/main/app-backup/restore-graph"
 import { assertRestoredSettings, readRestoreSnapshot, restoreBody, snapshotHash, type AppRestoreSnapshot } from "../src/main/app-backup/restore-snapshot"
 import { encryptRestoreContent, newRestoreSecrets } from "../src/main/app-backup/restore-encryption"
@@ -265,6 +265,54 @@ describe("cross-tenant restore engine", () => {
     await expect(restoreCapturedApp(f.store, f.source, snapshot, target, "Restored", options(d))).rejects.toThrow()
     expect(d.calls.every(([method]) => method === "GET")).toBe(true)
   })
+})
+
+it.each(["cancelled", "failed"] as const)("queues one %s preparation outcome under the operation ID read from the journal", async status => {
+  const f = await fixture(), controller = new AbortController(), journalOperation = randomUUID()
+  await f.store.writeRestoreRecord(tenant, f.source.id, target, {
+    schema: 1, id: journalOperation, sourceId: f.source.id, target, name: "Restored", settingsHash: snapshotHash(snapshot),
+    secrets: newRestoreSecrets(), creationStarted: false,
+  })
+  let release!: () => void, entered!: () => void
+  const reading = new Promise<void>(resolve => { entered = resolve })
+  const gate = new Promise<void>(resolve => { release = resolve })
+  const read = f.store.readRestoreRecord.bind(f.store)
+  vi.spyOn(f.store, "readRestoreRecord").mockImplementation(async <T>(sourceTenant: string, id: string, destination: string) => {
+    entered()
+    await gate
+    return read<T>(sourceTenant, id, destination)
+  })
+  const journal = memoryStore(), account = "apprestoretest"
+  setAuditOutboxStore(journal)
+  setMainAuditSink(new AuditSink({
+    store: journal,
+    bind: tenantId => tenantId === target ? { tenantId, storageAccountName: account, user: { id: appId, name: "Admin", email: "" } } : undefined,
+    transport: async () => { throw new Error("Offline") },
+  }))
+  const privateError = "private Microsoft sign-in error"
+  const getGraphToken = vi.fn(async () => { throw new Error(privateError) })
+  const fetch = vi.fn()
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+  try {
+    const operation = restoreAppWithAudit(f.store, f.source, snapshot, target, "Restored", {
+      operationId: randomUUID(), getGraphToken, fetch, signal: controller.signal, progress: vi.fn(),
+    })
+    await reading
+    if (status === "cancelled") controller.abort()
+    release()
+    await expect(operation).rejects.toThrow(status === "cancelled" ? "aborted" : "destination request was interrupted")
+    expect(getGraphToken).toHaveBeenCalledTimes(status === "cancelled" ? 0 : 1)
+    expect(fetch).not.toHaveBeenCalled()
+    expect(pendingEvents(account)).toMatchObject([{
+      action: "Restore app backup",
+      job: { operationId: journalOperation, sourceBackupId: f.source.id, status, reason: "RESTORE_PREPARATION_FAILED" },
+    }])
+    expect(journal.get("audit.pending-events")).not.toContain(privateError)
+  } finally {
+    warn.mockRestore()
+    setMainAuditSink(undefined)
+    setAuditOutboxStore()
+  }
 })
 
 it.each([true, false])("binds service restore to both configured tenants and the reviewed settings hash (destination storage: %s)", async (destinationHasStorage) => {

@@ -13,7 +13,7 @@ import { AuditEventType, AuditResult, AuditSeverity, type AuditJob, type AuditLo
 import { Restorer, type GraphCall } from "../src/portal/lib/policies/graph-restore"
 import { projectItem } from "../src/portal/lib/audit/projection"
 import { auditChanges } from "../src/portal/lib/audit/restore-changes"
-import { restoreAuditItem, restoreTokenWithAudit } from "../src/portal/lib/audit/restore"
+import { recordRestorePreparationFailure, restoreAuditItem } from "../src/portal/lib/audit/restore"
 import { clearSettingNames } from "../src/portal/lib/drift/setting-names"
 import { typeForFolder, type Item } from "../src/shared/intune/registry"
 import { memoryStore } from "./helpers"
@@ -146,20 +146,6 @@ it("quarantines corrupt audit state and allows new audit events", async () => {
   expect(remote.blobs.size).toBe(1)
 })
 
-it("audits a rejected App Backup destination token without changing the restore error", async () => {
-  const local = memoryStore()
-  setAuditOutboxStore(local)
-  vi.spyOn(console, "warn").mockImplementation(() => undefined)
-  setMainAuditSink(new AuditSink({ store: local, bind: () => binding, transport: async () => { throw new Error("Offline") } }))
-  const failure = new Error(canary)
-  const runId = randomUUID()
-  await expect(restoreTokenWithAudit(async () => { throw failure }, {
-    destination: tenantId, sourceBackupId: randomUUID(), operationId: randomUUID(), runId, action: "Restore app backup",
-  })).rejects.toBe(failure)
-  expect(pendingEvents(storageAccountName)).toMatchObject([{ action: "Restore app backup", job: { runId, status: "failed", reason: "RESTORE_PREPARATION_FAILED" } }])
-  expect(local.get("audit.pending-events")).not.toContain(canary)
-})
-
 it("journals an App Backup preparation failure when the outbox cannot be written and delivers it on retry", async () => {
   const local = memoryStore()
   setAuditOutboxStore(local)
@@ -180,11 +166,10 @@ it("journals an App Backup preparation failure when the outbox cannot be written
   const options = { store: local, bind: () => binding, transport }
   const sink = new AuditSink(options)
   setMainAuditSink(sink)
-  const failure = new Error(canary)
   const runId = randomUUID()
-  await expect(restoreTokenWithAudit(async () => { throw failure }, {
+  await expect(recordRestorePreparationFailure({
     destination: tenantId, sourceBackupId: randomUUID(), operationId: randomUUID(), runId, action: "Restore app backup",
-  })).rejects.toBe(failure)
+  })).rejects.toThrow("Outbox temporarily unavailable")
   expect(sink.pending(tenantId, "desktop")).toBe(1)
   expect(local.get("audit.restore-jobs")).toContain('"finished":true')
   expect(local.get("audit.restore-jobs")).not.toContain(canary)

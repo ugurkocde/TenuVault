@@ -131,6 +131,28 @@ describe("Cloud audit contract", () => {
   const manifestFiles = (run: RestartRun) => Object.entries(run.blobs).filter(([uri]) => uri.endsWith("/metadata.json"))
   const outcomeFiles = (run: RestartRun) => Object.entries(run.blobs).filter(([uri]) => uri.includes("/cloud-backup-outcomes/"))
 
+  it.runIf(Boolean(pwsh))("publishes fresh Schedule status when its read fails on restart and skips an unverified replay", () => {
+    const script = fileURLToPath(new URL("./fixtures/cloud-backup/audit-restart.ps1", import.meta.url))
+    const { first, fresh, replayed } = JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", script, "-TransientScheduleRestart"], { encoding: "utf8", timeout: 50_000 })) as Record<"first" | "fresh" | "replayed", RestartRun>
+    const statusUri = `${BACKUP_CONTAINER_URL}cloud-backup-status-11111111.json`
+    expect(first.error).toBeTruthy()
+    expect(JSON.parse(first.blobs[statusUri]!)).toMatchObject({ LastStatus: "Failed" })
+    expect(fresh.error).toBeNull()
+    expect(fresh.calls.some(call => call.method === "Get" && call.uri === statusUri)).toBe(true)
+    expect(fresh.calls.filter(call => call.method === "Put" && call.uri === statusUri)).toEqual([
+      expect.objectContaining({ condition: null, ifNoneMatch: null }),
+    ])
+    const manifest = JSON.parse(manifestFiles(fresh)[0]![1])
+    expect(manifest).toMatchObject({ Status: "Success", ItemCounts: { TotalPolicies: 1 } })
+    expect(JSON.parse(fresh.blobs[statusUri]!)).toMatchObject({ RunId: manifest.RunId, BackupFolder: manifest.BackupFolder, LastStatus: "Success" })
+    expect(outcomeFiles(fresh).map(([, raw]) => JSON.parse(raw))).toMatchObject([
+      { runId: manifest.RunId, backupFolder: manifest.BackupFolder, status: "Success" },
+    ])
+    expect(replayed.error).toBeNull()
+    expect(replayed.calls.some(call => call.method === "Get" && call.uri === statusUri)).toBe(true)
+    expect(replayed.calls.some(call => call.method === "Put" && call.uri === statusUri)).toBe(false)
+  }, 60_000)
+
   it.runIf(Boolean(pwsh))("captures fresh when the previous manifest exists but cannot be read on restart", () => {
     const script = fileURLToPath(new URL("./fixtures/cloud-backup/audit-restart.ps1", import.meta.url))
     const { first, restarted, oldManifestUri } = JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", script, "-TransientManifestRestart"], { encoding: "utf8", timeout: 50_000 })) as {
@@ -260,15 +282,22 @@ describe("Cloud audit contract", () => {
     expect(auditFiles(restarted)).toEqual(auditFiles(original))
   }, 60_000)
 
-  it.runIf(Boolean(pwsh))("replaces sealed Schedule status and rereads a concurrent writer's ETag", () => {
+  it.runIf(Boolean(pwsh)).each(["sealedStatus", "corruptStatus", "unknownStatus", "mismatchedStatus"])("replaces unusable Schedule status without a precondition (%s)", scenario => {
     const uri = `${BACKUP_CONTAINER_URL}cloud-backup-status-11111111.json`
-    for (const scenario of ["sealedStatus", "statusOlderConflict"]) {
-      const run = restartRun(scenario)
-      expect(run.error).toBeNull()
-      expect(JSON.parse(run.blobs[uri]!)).toMatchObject({ TenantId: TENANT, LastStatus: "Success" })
-      const put = run.calls.filter(call => call.uri === uri && call.method === "Put")
-      expect(put.map(call => call.condition)).toEqual(scenario === "sealedStatus" ? ['"legacy"'] : ['"legacy"', '"concurrent"'])
-    }
+    const run = restartRun(scenario)
+    expect(run.error).toBeNull()
+    expect(JSON.parse(run.blobs[uri]!)).toMatchObject({ TenantId: TENANT, LastStatus: "Success" })
+    expect(run.calls.filter(call => call.uri === uri && call.method === "Put")).toEqual([
+      expect.objectContaining({ condition: null, ifNoneMatch: null }),
+    ])
+  }, 60_000)
+
+  it.runIf(Boolean(pwsh))("rereads a concurrent writer's Schedule status and ETag", () => {
+    const uri = `${BACKUP_CONTAINER_URL}cloud-backup-status-11111111.json`
+    const older = restartRun("statusOlderConflict")
+    expect(older.error).toBeNull()
+    expect(JSON.parse(older.blobs[uri]!)).toMatchObject({ TenantId: TENANT, LastStatus: "Success" })
+    expect(older.calls.filter(call => call.uri === uri && call.method === "Put").map(call => call.condition)).toEqual(['"legacy"', '"concurrent"'])
     const newest = restartRun("statusNewerConflict")
     expect(JSON.parse(newest.blobs[uri]!)).toMatchObject({ RunId: "other-job", LastStatus: "Failed" })
     expect(newest.calls.filter(call => call.uri === uri && call.method === "Get")).toHaveLength(2)

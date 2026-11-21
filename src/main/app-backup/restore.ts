@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto"
 import { setTimeout as delay } from "node:timers/promises"
+import { beginRestoreAudit, recordRestorePreparationFailure } from "../../portal/lib/audit/restore"
 import type { AppRestoreProgress, AppRestoreResult, CapturedAppSource } from "../../shared/app-sources/types"
 import type { AuditJobItem } from "~/lib/audit/types"
 import type { AppSourceStore } from "../app-sources/store"
 import type { ContentEncryption } from "./content-stream"
 import { encryptRestoreContent, newRestoreSecrets, type RestoreSecrets } from "./restore-encryption"
-import { putRestoreBlock, type RestoreGraph } from "./restore-graph"
+import { putRestoreBlock, restoreGraph, type RestoreGraph } from "./restore-graph"
 import { assertRestoredSettings, restoreBody, snapshotHash, type AppRestoreSnapshot } from "./restore-snapshot"
 
 const BASE = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps"
@@ -32,6 +33,46 @@ export interface AppRestoreAuditObservation {
   unchanged?: boolean
   dispatched?: boolean
   wrote?: boolean
+}
+
+export async function restoreAppWithAudit(store: AppSourceStore, source: CapturedAppSource, snapshot: AppRestoreSnapshot, target: string, name: string, options: {
+  getGraphToken: () => Promise<string>; fetch: typeof fetch; signal: AbortSignal; progress: RestoreOptions["progress"]; operationId: string
+}): Promise<AppRestoreResult> {
+  const { getGraphToken, fetch, signal, progress, operationId } = options
+  const preparation = { destination: target, sourceTenantId: source.receipt.tenantId, sourceBackupId: source.id, operationId,
+    runId: randomUUID(), action: "Restore app backup" }
+  const original: AuditJobItem = { folder: "Apps", sourceId: source.receipt.appId, outcome: "unattempted",
+    planned: [{ operation: "create", field: "metadata" }, { operation: "publish", field: "content" }] }
+  let audit: ReturnType<typeof beginRestoreAudit>
+  let observed: AppRestoreAuditObservation | undefined
+  let authenticated = false
+  const graph = restoreGraph(async () => {
+    if (authenticated) return getGraphToken()
+    // Use the existing first Graph read for sign-in, after local restore validation.
+    const graphToken = await getGraphToken()
+    authenticated = true
+    audit = beginRestoreAudit({ ...preparation, operationId: observed?.operationId ?? operationId, graphToken, items: [original] })
+    audit?.started(0)
+    return graphToken
+  }, fetch, signal)
+  try {
+    return await restoreCapturedApp(store, source, snapshot, target, name, {
+      graph, fetch, signal, progress,
+      audit: state => {
+        if (observed?.operationId !== state.operationId) audit?.correlate(state.operationId)
+        observed = state
+        audit?.item(0, appRestoreAuditItem(original, state))
+      },
+    })
+  } catch (error) {
+    if (audit) {
+      audit.item(0, appRestoreAuditItem(original, observed, true))
+    } else {
+      void recordRestorePreparationFailure({ ...preparation, operationId: observed?.operationId ?? operationId }, signal.aborted)
+        .catch(() => console.warn("[audit] Restore preparation failure could not be recorded"))
+    }
+    throw error
+  } finally { audit?.finish() }
 }
 
 export function appRestoreAuditItem(original: AuditJobItem, state: AppRestoreAuditObservation | undefined, failed = false): AuditJobItem {

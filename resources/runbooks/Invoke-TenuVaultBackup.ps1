@@ -1070,13 +1070,13 @@ function New-TvManifestAuditReceipt {
 }
 
 function Complete-TvCloudBackup {
-    param([hashtable]$Context, [string]$RunId, [object]$Metadata, [string]$Trigger)
+    param([hashtable]$Context, [string]$RunId, [object]$Metadata, [string]$Trigger, [switch]$Replay)
     $status = [string]$Metadata.Status
     $folder = [string]$Metadata.BackupFolder
     $total = [int]$Metadata.ItemCounts.TotalPolicies
     $failures = [int]$Metadata.Failures
     Write-TvTerminalReceipt $Context (New-TvManifestAuditReceipt $Context $RunId $Metadata $Trigger)
-    Set-TvCloudStatus $Context $status "Backup $status, $total policies." $folder $Metadata.CompletedAt
+    Set-TvCloudStatus $Context $status "Backup $status, $total policies." $folder $Metadata.CompletedAt -Replay:$Replay
     Send-TvBackupOutcome -Account $Context.StorageAccount -Token $Context.StorageToken -TenantId $Context.TenantId -RunId $RunId -Status $status -BackupFolder $folder -TotalPolicies $total -Failures $failures -FailedTypes @($Metadata.FailedTypes) -Trigger $Trigger -FinishedAt $Metadata.CompletedAt
     if ($status -eq "Failed") { throw "The backup saved no policies. See the runbook output above." }
 }
@@ -3102,11 +3102,13 @@ function Set-TvCloudStatus {
         [Parameter(Mandatory)][string]$Status,
         [Parameter(Mandatory)][string]$Message,
         [AllowNull()][string]$BackupFolder,
-        [string]$FinishedAt
+        [string]$FinishedAt,
+        [switch]$Replay
     )
     if (-not $FinishedAt) { $FinishedAt = $Context.TerminalTimestamp }
     if (-not $FinishedAt) { $FinishedAt = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", [Globalization.CultureInfo]::InvariantCulture) }
-    $path = "/$script:StatusBlobPrefix$($Context.TenantId.Substring(0, 8).ToLowerInvariant()).json"
+    $blobName = "$script:StatusBlobPrefix$($Context.TenantId.Substring(0, 8).ToLowerInvariant()).json"
+    $path = "/$blobName"
     $body = [ordered]@{
         RunId          = $Context.RunId
         LastRunAt      = $FinishedAt
@@ -3129,13 +3131,24 @@ function Set-TvCloudStatus {
             $options = @{ "If-None-Match" = "*" }
             try {
                 $response = Invoke-TvAuditStorage $Context $script:Container $path
-                if (-not (Test-TvSealedBlob $response.Bytes)) {
-                    $previous = ConvertFrom-TvJson $response.Text
-                    if ($previous.TenantId -ne $Context.TenantId) { throw "The previous Schedule status belongs to a different tenant." }
-                    if ($previous.RunId -ne $Context.RunId -and [string]::CompareOrdinal([string]$previous.LastRunAt, $FinishedAt) -gt 0) { return }
+                $previous = ConvertFrom-TvJson $response.Text
+                if (-not $response.ETag -or $previous -isnot [System.Collections.IDictionary] -or
+                    $previous.TenantId -isnot [string] -or $previous.TenantId -ne $Context.TenantId -or
+                    ($null -ne $previous.RunId -and $previous.RunId -isnot [string]) -or
+                    $previous.LastStatus -notin @("Success", "CompletedWithWarnings", "Failed", "Uncertain")) {
+                    throw "The previous Schedule status could not be verified."
                 }
-                $options = if ($response.ETag) { @{ "If-Match" = $response.ETag } } else { @{} }
-            } catch [TvHttpError] { if ($_.Exception.Status -ne 404) { throw } }
+                [void][DateTime]::ParseExact([string]$previous.LastRunAt, "yyyy-MM-ddTHH:mm:ss.fffZ", [Globalization.CultureInfo]::InvariantCulture)
+                if ($previous.RunId -ne $Context.RunId -and [string]::CompareOrdinal($previous.LastRunAt, $FinishedAt) -gt 0) { return }
+                $options = @{ "If-Match" = $response.ETag }
+            } catch {
+                if ($_.Exception -isnot [TvHttpError] -or $_.Exception.Status -ne 404) {
+                    # A fresh capture uses the normal status write when the read cannot verify a prior result.
+                    if ($Replay) { throw }
+                    Set-TvBlob $Context.StorageAccount $blobName $body $Context.StorageToken
+                    return
+                }
+            }
             try {
                 [void](Invoke-TvAuditStorage $Context $script:Container $path "Put" $body $options)
                 return
@@ -3281,7 +3294,7 @@ function Invoke-TvBackup {
             if ($manifest) {
                 if ($receipt) { $context.AuditTerminalRecorded = $true }
                 if ($terminalUnreadable) { $context.Remove("RunCheckpointPath") }
-                Complete-TvCloudBackup $context $runId $manifest $priorTrigger
+                Complete-TvCloudBackup $context $runId $manifest $priorTrigger -Replay
                 if ($manifest.Status -eq "Success") { Resume-TvChangeReport $context $folder $runId $priorTrigger $manifest }
                 return
             }

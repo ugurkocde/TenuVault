@@ -1,4 +1,4 @@
-param([string]$RunbookPath = (Join-Path $PSScriptRoot "../../../resources/runbooks/Invoke-TenuVaultBackup.ps1"), [switch]$Baseline, [switch]$ClaimedRestart, [switch]$UncertainRestart, [switch]$TransientManifestRestart)
+param([string]$RunbookPath = (Join-Path $PSScriptRoot "../../../resources/runbooks/Invoke-TenuVaultBackup.ps1"), [switch]$Baseline, [switch]$ClaimedRestart, [switch]$UncertainRestart, [switch]$TransientManifestRestart, [switch]$TransientScheduleRestart)
 $ErrorActionPreference = "Stop"
 . $RunbookPath -LibraryOnly
 
@@ -34,7 +34,7 @@ $script:HttpClient | Add-Member ScriptMethod SendAsync {
     $script:transportCalls++
     throw "Transport unavailable"
 }
-if (-not ($Baseline -or $ClaimedRestart -or $UncertainRestart -or $TransientManifestRestart)) {
+if (-not ($Baseline -or $ClaimedRestart -or $UncertainRestart -or $TransientManifestRestart -or $TransientScheduleRestart)) {
     $budget = @{ Clock = [System.Diagnostics.Stopwatch]::StartNew(); Seconds = 1; Requests = 1 }
     $budgetContext = @{ StorageAccount = "stcontoso"; StorageToken = "token"; AuditBudget = $budget }
     try { Invoke-TvAuditStorage $budgetContext "audit-logs" "/test.json" } catch { }
@@ -62,13 +62,16 @@ function Invoke-TvHttp {
     if ($script:scenario -eq "manifestReadUnavailable" -and $Method -eq "Get" -and $Uri -eq $script:unconfirmedManifest.uri) {
         throw [TvHttpError]::new(503, "Previous manifest read temporarily unavailable")
     }
+    if ($script:scenario -eq "statusReadUnavailable" -and $Method -eq "Get" -and $Uri -eq $script:statusUri) {
+        throw [TvHttpError]::new(503, "Schedule status read temporarily unavailable")
+    }
     if ($Uri -like "https://graph.microsoft.com/*") {
         if ($script:scenario -eq "graph401") { throw [TvHttpError]::new(401, "Graph policy list refused") }
         $text = '{"value":[]}'
-        if (($ClaimedRestart -or $UncertainRestart -or $TransientManifestRestart) -and $Uri -like "*/deviceManagement/deviceCategories") {
+        if (($ClaimedRestart -or $UncertainRestart -or $TransientManifestRestart -or $TransientScheduleRestart) -and $Uri -like "*/deviceManagement/deviceCategories") {
             $text = '{"value":[{"id":"11111111-1111-1111-1111-111111111111","displayName":"Example"}]}'
         }
-        if (($ClaimedRestart -or $UncertainRestart -or $TransientManifestRestart) -and $Uri -like "*/deviceManagement/deviceCategories/*") {
+        if (($ClaimedRestart -or $UncertainRestart -or $TransientManifestRestart -or $TransientScheduleRestart) -and $Uri -like "*/deviceManagement/deviceCategories/*") {
             $text = '{"id":"11111111-1111-1111-1111-111111111111","displayName":"Example"}'
         }
     } elseif ($Uri -like "*/intune-backups?*comp=list*") {
@@ -144,6 +147,20 @@ function Run-Scenario {
         output = @($output | ForEach-Object { [string]$_ })
         blobs = $script:blobs.Clone()
     }
+}
+if ($TransientScheduleRestart) {
+    Remove-Item Function:Start-Sleep
+    $env:TenuVaultExcludedFolders = (Get-TvTypes | Where-Object { $_.Folder -ne "DeviceCategories" }).Folder -join ","
+    $script:blobs[$script:statusUri] = @{ TenantId = $env:TenuVaultTenantId; LastStatus = "Failed"; LastRunAt = "2025-01-01T00:00:00.000Z" } | ConvertTo-Json -Compress
+    $script:scenario = "outage"
+    $first = Run-Scenario
+    Start-Sleep -Seconds 1
+    $script:scenario = "statusReadUnavailable"
+    $fresh = Run-Scenario
+    Start-Sleep -Seconds 1
+    $replayed = Run-Scenario
+    [Console]::WriteLine((@{ first = $first; fresh = $fresh; replayed = $replayed } | ConvertTo-Json -Compress -Depth 9))
+    return
 }
 if ($TransientManifestRestart) {
     Remove-Item Function:Start-Sleep
@@ -224,12 +241,20 @@ foreach ($caseName in @("lostAck", "crash", "graph401", "terminalGap", "uncertai
         $results.orphanBlobs = $script:blobs.Clone()
     }
 }
-foreach ($caseName in @("sealedStatus", "statusOlderConflict", "statusNewerConflict")) {
+$previousStatus = @{
+    sealedStatus = "TVAZ1`nsealed payload"
+    corruptStatus = "{"
+    unknownStatus = (@{ TenantId = $env:TenuVaultTenantId; LastStatus = "Failed" } | ConvertTo-Json -Compress)
+    mismatchedStatus = (@{ TenantId = "11111111-2222-3333-4444-555555555556"; LastStatus = "Failed"; LastRunAt = "2099-01-01T00:00:00.000Z" } | ConvertTo-Json -Compress)
+    statusOlderConflict = (@{ TenantId = $env:TenuVaultTenantId; LastStatus = "Failed"; LastRunAt = "2025-01-01T00:00:00.000Z" } | ConvertTo-Json -Compress)
+}
+$previousStatus.statusNewerConflict = $previousStatus.statusOlderConflict
+foreach ($caseName in $previousStatus.Keys) {
     $script:blobs.Clear()
     $script:scenario = $caseName
     $script:statusETag = '"legacy"'
     $script:statusAttempts = 0
-    $script:blobs[$script:statusUri] = "TVAZ1`nsealed payload"
+    $script:blobs[$script:statusUri] = $previousStatus[$caseName]
     $results[$caseName] = Run-Scenario
 }
 $script:blobs.Clear()

@@ -1,14 +1,11 @@
 import { checkpointBackupAudit, reconcileBackupAudit, recordBackupAudit } from "./backup/audit"
 import { auditUserFromToken, AuditSink, setMainAuditSink } from "./api/audit-sink"
 import { AuditContainerMissingError, AuditStorageService } from "../portal/lib/audit/storage"
-import { type AuditJobItem } from "../portal/lib/audit/types"
-import { beginRestoreAudit, recordRestorePreparationFailure, restoreTokenWithAudit } from "../portal/lib/audit/restore"
 import { requestWindowsContent } from "./app-backup/windows-helper"
 import { requireCaptureEnabled } from "./app-backup/capture-policy"
 import { checkCaptureMetadata } from "./app-backup/capture-preflight"
-import { appRestoreAuditItem, restoreCapturedApp, type AppRestoreAuditObservation } from "./app-backup/restore"
+import { restoreAppWithAudit } from "./app-backup/restore"
 import { restoreDestinationPlan } from "./app-backup/restore-plan"
-import { restoreGraph } from "./app-backup/restore-graph"
 import { readRestoreSnapshot, sameRestoreSettings } from "./app-backup/restore-snapshot"
 import { downloadCapturedContent } from "./app-backup/capture-download"
 import { AppSourceService } from "./app-sources/service"
@@ -1600,40 +1597,12 @@ async function bootstrap(): Promise<void> {
       pushLicense()
     },
     loadRestoreSettings: async (tenant, appId) => readRestoreSnapshot(tenant, appId, (await auth.getAccessToken(tenant, signedInClient(tenant), RESOURCE_SCOPES.graph)).accessToken, bridgedFetch, "current-settings"),
-    restore: (store, source, snapshot, target, name, signal, progress, operationId) => disclaimer.run([target], async () => {
-      const getGraphToken = async () => (await auth.getAccessToken(target, signedInClient(target), RESOURCE_SCOPES.graph)).accessToken
-      const preparation = { destination: target, sourceTenantId: source.receipt.tenantId, sourceBackupId: source.id, operationId,
-        runId: randomUUID(), action: "Restore app backup" }
-      const original: AuditJobItem = { folder: "Apps", sourceId: source.receipt.appId, outcome: "unattempted",
-        planned: [{ operation: "create", field: "metadata" }, { operation: "publish", field: "content" }] }
-      let audit: ReturnType<typeof beginRestoreAudit>
-      let observed: AppRestoreAuditObservation | undefined
-      let authenticated = false
-      const graph = restoreGraph(async () => {
-        if (authenticated) return getGraphToken()
-        // Use the existing first Graph read for sign-in, after local restore validation.
-        const execution = { ...preparation, operationId: observed?.operationId ?? operationId }
-        const graphToken = await restoreTokenWithAudit(getGraphToken, execution)
-        authenticated = true
-        audit = beginRestoreAudit({ ...execution, graphToken, items: [original] })
-        audit?.started(0)
-        return graphToken
-      }, bridgedFetch, signal)
-      try {
-        return await restoreCapturedApp(store, source, snapshot, target, name, {
-          graph, fetch: bridgedFetch, signal, progress,
-          audit: state => {
-            if (observed?.operationId !== state.operationId) audit?.correlate(state.operationId)
-            observed = state
-            audit?.item(0, appRestoreAuditItem(original, state))
-          },
-        })
-      } catch (error) {
-        audit?.item(0, appRestoreAuditItem(original, observed, true))
-        if (!observed) void recordRestorePreparationFailure(preparation).catch(() => console.warn("[audit] Restore preparation failure could not be recorded"))
-        throw error
-      } finally { audit?.finish() }
-    }),
+    restore: (store, source, snapshot, target, name, signal, progress, operationId) => disclaimer.run([target], () =>
+      restoreAppWithAudit(store, source, snapshot, target, name, {
+        getGraphToken: async () => (await auth.getAccessToken(target, signedInClient(target), RESOURCE_SCOPES.graph)).accessToken,
+        fetch: bridgedFetch, signal, progress, operationId,
+      })
+    ),
     ensureKeys: () => { backupKeys.keyring() },
     capture: async (tenant, appId, jobId, store, signal, progress) => {
       if (process.platform !== "win32") throw new Error("Back up Win32 installers on a Windows PC enrolled in this Intune tenant.")

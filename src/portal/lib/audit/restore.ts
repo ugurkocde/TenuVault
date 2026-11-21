@@ -28,7 +28,7 @@ function restoreBinding(sink: AuditSink, input: RestoreDestination) {
   return { binding: { ...binding, user }, destinationTenantId: destination ? undefined : input.destination }
 }
 
-export async function recordRestorePreparationFailure(input: RestorePreparation): Promise<void> {
+export async function recordRestorePreparationFailure(input: RestorePreparation, cancelled = false): Promise<void> {
   const sink = mainAuditSink()
   if (!sink) return
   const target = restoreBinding(sink, input)
@@ -36,22 +36,13 @@ export async function recordRestorePreparationFailure(input: RestorePreparation)
   await sink.record(target.binding, {
     eventType: AuditEventType.RESTORE_FAILED, action: input.action,
     resource: { type: 'backup', id: input.sourceBackupId, name: 'Restore backup' },
-    result: AuditResult.FAILURE, severity: AuditSeverity.ERROR,
+    result: AuditResult.FAILURE, severity: cancelled ? AuditSeverity.INFO : AuditSeverity.ERROR,
     job: {
       operationId: input.operationId, runId: input.runId, stage: 'terminal', producer: 'desktop',
       sourceBackupId: input.sourceBackupId, destinationTenantId: target.destinationTenantId,
-      status: 'failed', counts: {}, reason: 'RESTORE_PREPARATION_FAILED',
+      status: cancelled ? 'cancelled' : 'failed', counts: {}, reason: 'RESTORE_PREPARATION_FAILED',
     },
   })
-}
-
-export async function restoreTokenWithAudit(getToken: () => Promise<string>, input: Omit<RestorePreparation, 'graphToken'>): Promise<string> {
-  try {
-    return await getToken()
-  } catch (error) {
-    void recordRestorePreparationFailure(input).catch(() => console.warn('[audit] Restore preparation failure could not be recorded'))
-    throw error
-  }
 }
 
 export function restoreAuditItem(path: string, result?: RestoreOutcome, sourceId?: string): AuditJobItem {
