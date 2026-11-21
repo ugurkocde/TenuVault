@@ -5,6 +5,11 @@ export class DirectoryReadDeferredError extends RestoreWriteDeferredError {
   constructor() { super("A temporary Microsoft Graph read failure deferred this row. Resume to repeat its safety checks.") }
 }
 
+/** The signed-in admin can resume after activating the required Entra role. */
+export class DirectoryRoleDeferredError extends RestoreWriteDeferredError {
+  constructor() { super("The signed-in admin lacks the Entra role for this change. Activate the required role, then resume to repeat permission and approval checks.") }
+}
+
 export class DirectoryThrottledError extends RestoreWriteDeferredError {
   constructor(readonly response: Response) { super("The directory request was throttled and was not applied.", directoryRetryAt(response, 0)) }
 }
@@ -13,6 +18,10 @@ export async function retryDirectoryWrite<T>(attemptWrite: () => Promise<T>, onU
   for (let attempt = 0; ; attempt++) {
     try { return await attemptWrite() }
     catch (error) {
+      if (error instanceof DirectoryRoleDeferredError) {
+        onUnapplied?.(Date.now())
+        throw error
+      }
       if (!(error instanceof DirectoryThrottledError)) throw error
       const retryAt = directoryRetryAt(error.response, attempt)
       onUnapplied?.(retryAt)

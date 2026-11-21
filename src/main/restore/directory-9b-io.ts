@@ -1,7 +1,8 @@
 import { rejectProxyAuthResponses } from "../api/network-error"
 import { DirectoryReadDeferredError, DirectoryThrottledError, retryDirectoryWrite } from "./directory-retry"
 import { typeForFolder, type Item } from "../../shared/intune/registry"
-import { graphContinuation } from "../../shared/graph-continuation"
+import { directoryContinuation } from "./directory-read-shape"
+import { directoryWriteAuthorization, directoryWriteResponse } from "./directory-write-response"
 import { directoryPermissionBlocker } from "./directory-permissions"
 import { directoryReadAbsent, directoryReadShape } from "./directory-read-shape"
 import { RestoreSafetyError, RestoreWriteDeferredError, RestoreWriteRefusedError, guardRestoreItem, type RestoreActor } from "../../shared/intune/restore-guards"
@@ -31,6 +32,7 @@ export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typ
       throw error
     })
     if (response.status === 404 && method === "GET") return directoryReadAbsent(response, new URL(root + path))
+    if (method !== "GET") await directoryWriteAuthorization(response)
     if (!response.ok) {
       if (response.status === 429) {
         const error = new DirectoryThrottledError(response)
@@ -43,6 +45,7 @@ export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typ
       if (method === "PATCH" && (response.status === 408 || response.status >= 500)) throw new Error("The application write has an unconfirmed result.")
       throw new RestoreWriteRefusedError(response.status)
     }
+    if (method !== "GET") return directoryWriteResponse(response, method, new URL(root + path))
     if (method === "GET" && !/^application\/(?:[\w.+-]+\+)?json(?:\s*;|$)/i.test(response.headers.get("Content-Type") ?? "")) throw new DirectoryReadDeferredError()
     if (response.status === 204) {
       if (method === "GET") throw new DirectoryReadDeferredError()
@@ -67,7 +70,7 @@ export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typ
     const start = root + path, seen = new Set<string>()
     let next: string | undefined = start
     while (next) {
-      const page = await request(graphContinuation(start, next, seen).slice(root.length), "GET", undefined, signal)
+      const page = await request(directoryContinuation(start, next, seen).slice(root.length), "GET", undefined, signal)
       if (!Array.isArray(page?.value)) throw new RestoreSafetyError("Application reference collection is incomplete.")
       for (const item of page.value) {
         if (!item || typeof item !== "object" || Array.isArray(item)) throw new RestoreSafetyError("Application reference collection is malformed.")
@@ -123,7 +126,7 @@ export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typ
     const action = step.directory!.action
     if (action === "consent" || action === "app-role") {
       const { resource, client, principal } = await endpoints(step, signal)
-      const path = action === "consent" ? `oauth2PermissionGrants?$filter=${encodeURIComponent(`clientId eq '${appIdentity(client!.id)}'`)}` : `servicePrincipals/${appIdentity(principal.id)}/appRoleAssignments`
+      const path = action === "consent" ? `oauth2PermissionGrants?$filter=${encodeURIComponent(`clientId eq '${appIdentity(client!.id)}'`)}` : `${principal["@odata.type"] === "#microsoft.graph.user" ? "users" : "servicePrincipals"}/${appIdentity(principal.id)}/appRoleAssignments`
       let match: Item | null = null
       for await (const item of list(path, signal)) {
         if (item.resourceId !== resource.id) continue

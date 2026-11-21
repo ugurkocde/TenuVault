@@ -1,3 +1,4 @@
+import { graphWorkloadPolicy } from "./fixtures/directory-graph-v1"
 import { unsetUserFields, unsetGroupFields } from "./fixtures/directory-response"
 import { rejectProxyAuthResponses, withNetworkErrors } from "../src/main/api/network-error"
 import { afterEach, expect, it, vi } from "vitest"
@@ -623,4 +624,50 @@ it.each(folders)("keeps well-formed wrong %s identity evidence as a safety refus
   env.graph.mockImplementation((input, init) => new URL(String(input)).pathname === `/v1.0/${env.targetPath}` && init?.method === "GET" ? Promise.resolve(Response.json({ ...env.live, id: id(900) })) : original(input, init))
   expect(await env.execute(page, request)).toMatchObject({ failed: 1, outcomes: [{ state: "blocked", reason: expect.stringMatching(/identity changed|changed after this preview/) }] })
   expect(env.writes).toEqual([])
+})
+
+it.each(folders)("keeps an unexpected %s PATCH success uncertain until read-back without replay", async folder => {
+  const env = world(folder), request = env.request(), page = await env.prepare(request), original = env.graph.getMockImplementation()!
+  let sends = 0
+  env.graph.mockImplementation((input, init) => {
+    if (init?.method === "PATCH") { sends++; return Promise.resolve(Response.json({ id: targetId })) }
+    return original(input, init)
+  })
+  expect(await env.execute(page, request)).toMatchObject({ status: "partial", failed: 0, outcomes: [{ state: "uncertain" }] })
+  expect(env.entry(page).acknowledged).toBeUndefined()
+  expect(await env.execute(page, request)).toMatchObject({ outcomes: [{ state: "uncertain" }] })
+  Object.assign(env.live, { [env.field]: "Saved" })
+  expect(await env.service().saved(tenant, page.runId, "reconcile")).toMatchObject({ status: "complete", outcomes: [{ state: "applied" }] })
+  expect(env.entry(page).acknowledged).toBeUndefined()
+  expect(sends).toBe(1); expect(env.writes).toEqual([])
+})
+it.each(folders)("resumes a known unapplied %s Graph role denial with fresh permission and approval checks", async folder => {
+  const env = world(folder), request = env.request(), page = await env.prepare(request), original = env.graph.getMockImplementation()!
+  let denied = true, sends = 0
+  env.graph.mockImplementation((input, init) => {
+    if (init?.method === "PATCH") { sends++; if (denied) return Promise.resolve(Response.json({ error: { code: "Authorization_RequestDenied", message: "Never retain this Graph body" } }, { status: 403 })) }
+    return original(input, init)
+  })
+  expect(await env.execute(page, request)).toMatchObject({ status: "partial", failed: 0, outcomes: [{ state: "deferred", reason: expect.stringContaining("lacks the Entra role") }] })
+  expect([...env.data.values()].join()).not.toContain("Never retain this Graph body")
+  expect(env.entry(page).acknowledged).toBeUndefined()
+  env.setScopes("User.Read.All Group.Read.All Application.Read.All Policy.Read.All")
+  expect(await env.execute(page, request)).toMatchObject({ outcomes: [{ state: "deferred" }] })
+  expect(sends).toBe(1)
+  env.setScopes("Application.Read.All Application.ReadWrite.All User.ReadUpdate.All User.Read.All Group.ReadWrite.All Group.Read.All Policy.Read.All")
+  await expect(env.service().execute(tenant, { ...request, runId: page.runId }, page.fingerprint, {})).rejects.toThrow("Approve each selected row separately")
+  expect(sends).toBe(1)
+  denied = false
+  expect(await env.execute(page, request)).toMatchObject({ status: "complete", outcomes: [{ state: "applied" }] })
+  await env.execute(page, request)
+  expect(sends).toBe(2); expect(env.writes).toEqual([{ [env.field]: "Saved" }])
+})
+
+it("finishes a user name preview and restore when Conditional Access targets only workloads", async () => {
+  const env = world("Users"), original = env.graph.getMockImplementation()!
+  env.graph.mockImplementation((input, init) => String(input).includes("conditionalAccess") ? Promise.resolve(Response.json({ value: [graphWorkloadPolicy] })) : original(input, init))
+  const request = env.request(), page = await env.prepare(request)
+  expect(page.rows[0]!.review.blocker).toBeUndefined()
+  expect(await env.execute(page, request)).toMatchObject({ status: "complete", outcomes: [{ state: "applied" }] })
+  expect(env.writes).toEqual([{ displayName: "Saved" }])
 })

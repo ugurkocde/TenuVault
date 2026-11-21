@@ -1,3 +1,4 @@
+import { graphAssignment } from "./fixtures/directory-graph-v1"
 import { graphNotFound } from "./fixtures/directory-response"
 import { approveDirectory } from "../src/main/restore/directory-9a"
 import { executeDirectoryBatches } from "../src/main/restore/directory-9a-batches"
@@ -34,7 +35,7 @@ function world() {
       if (method === "PATCH" && objects.has(path)) Object.assign(objects.get(path)!, body)
       if (path === "oauth2PermissionGrants") { const grant = { ...body, id: "A".repeat(43) }; grants.push(grant); return Response.json(grant, { status: 201 }) }
       if (path.startsWith("oauth2PermissionGrants/") && method === "PATCH") Object.assign(grants.find(grant => grant.id === path.split("/")[1])!, body)
-      if (path.endsWith("/appRoleAssignments")) { const role = { ...body, id: id(80) }; roles.push(role); return Response.json(role, { status: 201 }) }
+      if (path.endsWith("/appRoleAssignments")) { const role = { ...graphAssignment, ...body }; roles.push(role); return Response.json(role, { status: 201 }) }
       return new Response(null, { status: 204 })
     }
     if (path === "applications" && url.searchParams.get("$filter")?.includes(id(3))) return Response.json({ value: [{ id: id(4), appId: id(3) }] })
@@ -891,4 +892,36 @@ it.each(["appId", "appOwnerOrganizationId"])("resumes application metadata after
   expect((await executeGuardedRun(journal, run, env.io)).run.entries[0]!.state).toBe("applied")
   await executeGuardedRun(journal, run, env.io)
   expect(env.writes).toEqual([`applications/${app.id}`])
+})
+
+it("reads a user's opaque app role assignment from the users endpoint", async () => {
+  const env = world(), userId = id(60)
+  env.objects.set(`users/${userId}`, { id: userId, displayName: "Sample user", onPremisesSyncEnabled: null })
+  const assignment = { ...graphAssignment, principalId: userId, principalType: "User", resourceId: app.id, appRoleId: id(90) }
+  env.roles.push(assignment)
+  const candidate = step("app-role")
+  candidate.directory = { action: "app-role", resourceAppId: app.appId, principalId: userId }
+  candidate.desired = { appRoleId: id(90) }
+  expect(await env.io.read(candidate)).toEqual(assignment)
+  const paths = env.fetcher.mock.calls.map(([input]) => new URL(String(input)).pathname)
+  expect(paths).toContain(`/v1.0/users/${userId}/appRoleAssignments`)
+  expect(paths).not.toContain(`/v1.0/servicePrincipals/${userId}/appRoleAssignments`)
+  expect(env.writes).toEqual([])
+})
+it("finishes normal application metadata preview without reading app role assignments", async () => {
+  const env = world()
+  expect(await env.io.preview(step("update"))).toMatchObject({ changes: [{ property: "displayName", before: "API", after: "Saved" }] })
+  expect(env.fetcher.mock.calls.every(([input]) => !String(input).includes("appRoleAssignments"))).toBe(true)
+  expect(env.writes).toEqual([])
+})
+it("defers a repeated application nextLink before fetching it again", async () => {
+  const env = world(), original = env.fetcher.getMockImplementation()!
+  const next = "https://graph.microsoft.com/v1.0/servicePrincipals?$skiptoken=repeat"
+  let reads = 0
+  env.fetcher.mockImplementation((input, init) => {
+    if (new URL(String(input)).pathname === "/v1.0/servicePrincipals") { reads++; return Promise.resolve(Response.json({ value: [], "@odata.nextLink": next })) }
+    return original(input, init)
+  })
+  await expect(async () => { for await (const _item of env.io.list("servicePrincipals")) {} }).rejects.toThrow("temporary Microsoft Graph read failure")
+  expect(reads).toBe(2); expect(env.writes).toEqual([])
 })

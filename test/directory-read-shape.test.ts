@@ -1,5 +1,6 @@
 import { expect, it } from "vitest"
-import { directoryReadAbsent, directoryReadShape } from "../src/main/restore/directory-read-shape"
+import { graphAssignment, graphUser, graphApplication, graphServicePrincipal, graphGroup, graphUserPolicy, graphWorkloadPolicy } from "./fixtures/directory-graph-v1"
+import { directoryContinuation, directoryReadAbsent, directoryReadShape } from "../src/main/restore/directory-read-shape"
 import { DirectoryReadDeferredError } from "../src/main/restore/directory-retry"
 import { RestoreSafetyError } from "../src/shared/intune/restore-guards"
 import { graphNotFound } from "./fixtures/directory-response"
@@ -17,7 +18,7 @@ it.each(["users", "servicePrincipals", "identity/conditionalAccess/policies", "r
   for (const value of [{}, { value: null }, { value: {} }, { value: [null] }, { value: [[]] }, { value: [], "@odata.nextLink": 4 }]) expect(() => directoryReadShape(value, url(path))).toThrow(DirectoryReadDeferredError)
   expect(directoryReadShape({ value: [] }, url(path))).toEqual({ value: [] })
 })
-it.each(["groups/target/members", "groups/target/owners", "groups/target/memberOf", "applications/target/owners", "groups/target/members/$ref", "servicePrincipals/target/appRoleAssignments"])("requires GUID IDs in relationship evidence for %s", path => {
+it.each(["groups/target/members", "groups/target/owners", "groups/target/memberOf", "applications/target/owners", "groups/target/members/$ref"])("requires GUID IDs in relationship evidence for %s", path => {
   for (const value of [{}, { value: [{}] }, { value: [{ id: null }] }, { value: [{ id: "malformed" }] }, { value: ["target"] }]) expect(() => directoryReadShape(value, url(path))).toThrow(DirectoryReadDeferredError)
   expect(directoryReadShape({ value: [{ id }] }, url(path))).toEqual({ value: [{ id }] })
 })
@@ -41,4 +42,37 @@ it.each([`users/${id}`, `groups/${id}`, `applications/${id}`, `servicePrincipals
 })
 it.each(["users", `groups/${id}/members`, "identity/conditionalAccess/policies", `roleManagement/directory/roleDefinitions/${id}`])("defers Graph 404 on required endpoint %s", async path => {
   await expect(directoryReadAbsent(graphNotFound(), url(path))).rejects.toThrow(DirectoryReadDeferredError)
+})
+
+it.each(["users", "groups", "servicePrincipals"])("accepts opaque assignment IDs and requires GUID assignment endpoints for %s", collection => {
+  const path = url(`${collection}/${graphAssignment.principalId}/appRoleAssignments`)
+  expect(directoryReadShape({ value: [graphAssignment] }, path).value).toEqual([graphAssignment])
+  for (const id of ["", " ", null, 4]) expect(() => directoryReadShape({ value: [{ ...graphAssignment, id }] }, path)).toThrow(DirectoryReadDeferredError)
+  for (const field of ["principalId", "resourceId", "appRoleId"]) expect(() => directoryReadShape({ value: [{ ...graphAssignment, [field]: "malformed" }] }, path)).toThrow(DirectoryReadDeferredError)
+})
+it("accepts selected object, null, manager and paging shapes observed in Graph v1.0", () => {
+  for (const [collection, item] of [["users", graphUser], ["applications", graphApplication], ["servicePrincipals", graphServicePrincipal], ["groups", graphGroup]] as const) {
+    expect(directoryReadShape({ value: [item] }, url(`${collection}?$select=${Object.keys(item).join(",")}`)).value).toEqual([item])
+    expect(directoryReadShape(item, url(`${collection}/${item.id}?$select=${Object.keys(item).join(",")}`))).toEqual(item)
+  }
+  expect(directoryReadShape({ value: [graphUserPolicy] }, url("identity/conditionalAccess/policies")).value).toEqual([graphUserPolicy])
+  expect(directoryReadShape({ ...graphUser, "@odata.type": "#microsoft.graph.user" }, url(`users/${otherId}/manager`)).id).toBe(graphUser.id)
+  const start = "https://graph.microsoft.com/v1.0/users?$top=1&$select=id,displayName,userType"
+  expect(directoryContinuation(start, start.replace("id,displayName,userType", "id%2cdisplayName%2cuserType") + "&$skiptoken=opaque", new Set())).toContain("%2c")
+})
+it.each([null, undefined])("accepts a validated workload-only Conditional Access policy with users %j", users => {
+  const policy = { conditions: { ...graphWorkloadPolicy.conditions, users } }
+  expect(directoryReadShape({ value: [policy] }, url("identity/conditionalAccess/policies")).value).toEqual([policy])
+})
+it.each([null, {}, [], { includeServicePrincipals: [] }, { includeServicePrincipals: [], excludeServicePrincipals: [] }, { includeServicePrincipals: ["invalid"], excludeServicePrincipals: [] }, { includeServicePrincipals: [otherId], excludeServicePrincipals: null }, { includeServicePrincipals: [otherId], excludeServicePrincipals: [], servicePrincipalFilter: {} }])("defers incomplete workload-only targeting %j", clientApplications => {
+  expect(() => directoryReadShape({ value: [{ conditions: { users: null, clientApplications } }] }, url("identity/conditionalAccess/policies"))).toThrow(DirectoryReadDeferredError)
+})
+it.each(["All", "None", "GuestsOrExternalUsers"])("accepts the documented includeUsers keyword %s", keyword => {
+  const policy = { conditions: { users: { includeUsers: [keyword], includeGroups: [], excludeGroups: [] } } }
+  expect(directoryReadShape({ value: [policy] }, url("identity/conditionalAccess/policies")).value).toEqual([policy])
+})
+it("defers repeated or invalid directory continuations before fetching another page", () => {
+  const start = "https://graph.microsoft.com/v1.0/users", seen = new Set<string>()
+  expect(directoryContinuation(start, start, seen)).toBe(start)
+  for (const next of [start, "bad", "https://evil.example/v1.0/users", "https://graph.microsoft.com/v1.0/groups"]) expect(() => directoryContinuation(start, next, seen)).toThrow(DirectoryReadDeferredError)
 })

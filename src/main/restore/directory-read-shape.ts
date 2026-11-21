@@ -1,3 +1,4 @@
+import { graphContinuation } from "../../shared/graph-continuation"
 import type { Item } from "../../shared/intune/registry"
 import { isGuid } from "../../shared/security"
 import { RestoreSafetyError } from "../../shared/intune/restore-guards"
@@ -22,10 +23,11 @@ export function directoryReadShape(value: unknown, url: URL): Item {
   if (!object(value)) throw new DirectoryReadDeferredError()
   const path = url.pathname.replace(/^\/(?:v1\.0|beta)\//, "")
   const selected = (url.searchParams.get("$select") ?? "").split(",").filter(Boolean)
+  const appRoles = /\/appRoleAssignments$/.test(path)
   const relationship = /\/(?:members|owners|memberOf|appRoleAssignments)(?:\/\$ref)?$/.test(path)
   const collection = relationship || /^(?:users|groups|applications|servicePrincipals|oauth2PermissionGrants|identity\/conditionalAccess\/policies|roleManagement\/directory\/roleAssignments)$/.test(path)
   if (collection) {
-    if (!Array.isArray(value.value) || value.value.some(item => !object(item) || relationship && !isGuid(item.id))) throw new DirectoryReadDeferredError()
+    if (!Array.isArray(value.value) || value.value.some(item => !object(item) || relationship && (appRoles ? typeof item.id !== "string" || !item.id.trim() || ["principalId", "resourceId", "appRoleId"].some(field => !isGuid(item[field])) : !isGuid(item.id)))) throw new DirectoryReadDeferredError()
     if (Object.hasOwn(value, "@odata.nextLink")) {
       const next = value["@odata.nextLink"]
       let parsed: URL
@@ -34,6 +36,7 @@ export function directoryReadShape(value: unknown, url: URL): Item {
     }
     for (const item of value.value as Item[]) {
       if (path === "identity/conditionalAccess/policies") {
+        if (directoryWorkloadOnly(item)) continue
         if (!object(item.conditions) || !object(item.conditions.users)) throw new DirectoryReadDeferredError()
         const users = item.conditions.users
         for (const field of ["includeGroups", "excludeGroups"]) if (Object.hasOwn(users, field) && (!Array.isArray(users[field]) || users[field].some(id => !isGuid(id)))) throw new DirectoryReadDeferredError()
@@ -51,4 +54,21 @@ export function directoryReadShape(value: unknown, url: URL): Item {
     if (isGuid(keyed) && value.id.toLowerCase() !== keyed.toLowerCase()) throw new RestoreSafetyError("The directory object identity changed: the response did not match the requested ID.")
   }
   return value
+}
+
+/** Directory paging failures are retryable without changing other Graph callers. */
+export function directoryContinuation(start: string, next: string, seen: Set<string>): string {
+  try { return graphContinuation(start, next, seen) }
+  catch { throw new DirectoryReadDeferredError() }
+}
+
+/** Workload-only targeting has no user or group beneficiaries. Incomplete shapes do not qualify. */
+export function directoryWorkloadOnly(policy: Item): boolean {
+  if (!object(policy.conditions) || policy.conditions.users != null) return false
+  const clients = policy.conditions.clientApplications
+  if (!object(clients) || !Array.isArray(clients.includeServicePrincipals) || !Array.isArray(clients.excludeServicePrincipals)) return false
+  if (clients.includeServicePrincipals.some(id => id !== "ServicePrincipalsInMyTenant" && !isGuid(id)) || clients.excludeServicePrincipals.some(id => !isGuid(id))) return false
+  const filter = clients.servicePrincipalFilter
+  if (filter != null && (!object(filter) || !["include", "exclude"].includes(String(filter.mode)) || typeof filter.rule !== "string" || !filter.rule.trim())) return false
+  return clients.includeServicePrincipals.length > 0 || object(filter)
 }

@@ -1,3 +1,4 @@
+import { graphWorkloadPolicy } from "./fixtures/directory-graph-v1"
 import { graphNotFound, unsetUserFields, unsetGroupFields } from "./fixtures/directory-response"
 import { rejectProxyAuthResponses, withNetworkErrors } from "../src/main/api/network-error"
 import { planGuard } from "../src/main/api/plan-gates"
@@ -45,7 +46,7 @@ function world(count = 0, missing = false, now: () => number = () => Date.now(),
     const url = new URL(String(input)), path = url.pathname.replace(/^\/(v1\.0|beta)\//, ""), method = init?.method ?? "GET"
     if (method !== "GET") {
       writes.push(method + " " + path)
-      if (path === "groups") { target = id(900); group.id = target; Object.assign(group, JSON.parse(String(init?.body))); return Response.json({ id: target }, { status: 201 }) }
+      if (path === "groups") { target = id(900); group.id = target; Object.assign(group, JSON.parse(String(init?.body))); return Response.json({ ...group, id: target }, { status: 201 }) }
       if (path.endsWith("/members/$ref")) members.add(JSON.parse(String(init?.body))["@odata.id"].split("/").at(-1))
       else if (path.includes("/members/")) members.delete(path.split("/")[3]!)
       else if (path === `groups/${resource}`) Object.assign(group, JSON.parse(String(init?.body)))
@@ -1476,7 +1477,7 @@ it.each(["before preview", "after preview"])("recovers a recreated user's journa
     if (path === "/v1.0/users" && init?.method === "POST") {
       env.members.add(target); env.writes.push("POST users"); entered()
       if (recovery === "after preview") await responseGate
-      return Response.json({ id: target }, { status: 201 })
+      return Response.json({ ...userRequest.snapshot, id: target }, { status: 201 })
     }
     if (path === "/v1.0/users") return Response.json({ value: [] })
     if (path === `/v1.0/users/${source}`) return graphNotFound()
@@ -2954,14 +2955,14 @@ async function queueUnpublishedCleanup(env: ReturnType<typeof world>, service: D
 }
 
 
-it.each(["empty nextLink", "null excludeGroups"])("defers approved exact removal for %s and resumes with one DELETE after healthy evidence", async malformed => {
+it.each(["empty nextLink", "null excludeGroups", "repeated nextLink", "wrong collection nextLink"])("defers approved exact removal for %s and resumes with one DELETE after healthy evidence", async malformed => {
   const env = world(), original = env.fetcher.getMockImplementation()!
   env.members.add(id(100)); env.members.add(id(101))
   const page = await env.service().prepare(tenant, env.request, { ...options, stage: "relationships", exactMembers: true }, env.read)
   const request = { ...env.request, runId: page.runId }, row = page.rows.find(row => row.review.principal?.id === id(100))!
   expect(row.review.blocker).toBeUndefined()
   const approvals = { [row.key]: row.review.approvals }
-  env.fetcher.mockImplementation((input, init) => String(input).includes("conditionalAccess") ? Promise.resolve(Response.json(malformed === "empty nextLink" ? { value: [], "@odata.nextLink": "" } : { value: [{ conditions: { users: { includeGroups: [], excludeGroups: null } } }] })) : original(input, init))
+  env.fetcher.mockImplementation((input, init) => String(input).includes("conditionalAccess") ? Promise.resolve(Response.json(malformed.includes("nextLink") ? { value: [], "@odata.nextLink": malformed === "empty nextLink" ? "" : `https://graph.microsoft.com/v1.0/${malformed === "repeated nextLink" ? "identity/conditionalAccess/policies?$skiptoken=repeated" : "users?$skiptoken=wrong"}` } : { value: [{ conditions: { users: { includeGroups: [], excludeGroups: null } } }] })) : original(input, init))
   expect(await env.service().execute(tenant, request, page.fingerprint, approvals)).toMatchObject({ status: "partial", failed: 0, outcomes: [{ state: "deferred", reason: expect.stringContaining("temporary Microsoft Graph read failure") }] })
   expect(env.writes).toEqual([]); expect(env.members.has(id(100))).toBe(true)
   env.fetcher.mockImplementation(original)
@@ -3000,4 +3001,51 @@ it("refuses a well-formed wrong group ID during preview before any PATCH", async
   await expect(env.service().prepare(tenant, request, options, env.read)).rejects.toThrow(RestoreSafetyError)
   expect([...env.data.keys()].some(key => key.startsWith(`restore.directory.review.${tenant}.`))).toBe(false)
   expect(env.writes).toEqual([])
+})
+
+it.each([false, true])("skips workload-only policies and still refuses removal from a user-targeted CA group: %s", async targeted => {
+  const env = world(), original = env.fetcher.getMockImplementation()!
+  env.members.add(id(100)); env.members.add(id(101))
+  const policies = [graphWorkloadPolicy, ...(targeted ? [{ conditions: { users: { includeGroups: [resource], excludeGroups: [] } } }] : [])]
+  env.fetcher.mockImplementation((input, init) => String(input).includes("conditionalAccess") ? Promise.resolve(Response.json({ value: policies })) : original(input, init))
+  const page = await env.service().prepare(tenant, env.request, { ...options, stage: "relationships", exactMembers: true }, env.read)
+  const row = page.rows.find(row => row.review.principal?.id === id(100))!
+  if (targeted) { expect(row.review.blocker).toContain("does not remove members"); expect(env.writes).toEqual([]); return }
+  expect(row.review.blocker).toBeUndefined()
+  expect(await env.service().execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, { [row.key]: row.review.approvals })).toMatchObject({ status: "complete", outcomes: [{ state: "applied" }] })
+  expect(env.writes).toEqual([`DELETE groups/${resource}/members/${id(100)}/$ref`])
+  expect(env.members.has(id(100))).toBe(false); expect(env.members.has(id(101))).toBe(true)
+})
+
+it.each(["wrong status", "wrong type", "missing ID"])("keeps group creation uncertain after a %s success response and never resends", async failure => {
+  const env = world(0, true), original = env.fetcher.getMockImplementation()!
+  const page = await env.service().prepare(tenant, env.request, options, env.read)
+  let sends = 0
+  env.fetcher.mockImplementation((input, init) => {
+    if (new URL(String(input)).pathname === "/v1.0/groups" && init?.method === "POST") {
+      sends++
+      return Promise.resolve(Response.json(failure === "missing ID" ? { ...env.group, id: null } : failure === "wrong type" ? { id: id(900), displayName: "User", userPrincipalName: "user@example.com", "@odata.type": "#microsoft.graph.user" } : { ...env.group, id: id(900) }, { status: failure === "wrong status" ? 200 : 201 }))
+    }
+    return original(input, init)
+  })
+  const request = { ...env.request, runId: page.runId }, approvals = { [page.rows[0]!.key]: page.rows[0]!.review.approvals }
+  expect(await env.service().execute(tenant, request, page.fingerprint, approvals)).toMatchObject({ outcomes: [{ state: "uncertain" }] })
+  expect(await env.service().execute(tenant, request, page.fingerprint, approvals)).toMatchObject({ outcomes: [{ state: "uncertain" }] })
+  expect(sends).toBe(1); expect(env.writes).toEqual([])
+})
+it.each([false, true])("requires read-back after an unexpected group member $ref success, removing: %s", async removing => {
+  const env = world(removing ? 0 : 1), original = env.fetcher.getMockImplementation()!
+  if (removing) env.members.add(id(100))
+  const page = await env.service().prepare(tenant, env.request, { ...options, stage: "relationships", exactMembers: removing }, env.read)
+  let sends = 0
+  env.fetcher.mockImplementation((input, init) => {
+    if (init?.method !== "GET" && String(input).includes("/members/")) { sends++; return Promise.resolve(Response.json({ id: resource })) }
+    return original(input, init)
+  })
+  const request = { ...env.request, runId: page.runId }, approvals = { [page.rows[0]!.key]: page.rows[0]!.review.approvals }
+  expect(await env.service().execute(tenant, request, page.fingerprint, approvals)).toMatchObject({ outcomes: [{ state: "uncertain" }] })
+  expect(await env.service().execute(tenant, request, page.fingerprint, approvals)).toMatchObject({ outcomes: [{ state: "uncertain" }] })
+  if (removing) env.members.delete(id(100)); else env.members.add(id(100))
+  expect(await env.service().saved(tenant, page.runId, "reconcile")).toMatchObject({ outcomes: [{ state: "applied" }] })
+  expect(sends).toBe(1); expect(env.writes).toEqual([])
 })

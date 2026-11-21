@@ -4,9 +4,10 @@ import { typeForFolder, restoreCapability, type Item } from "../../shared/intune
 import { restoreMatrixRow } from "../../shared/intune/restore-matrix"
 import { RestoreSafetyError, RestoreWriteDeferredError, RestoreWriteRefusedError, guardRestoreItem, type RestoreActor } from "../../shared/intune/restore-guards"
 import { isGuid } from "../../shared/security"
-import { graphContinuation } from "../../shared/graph-continuation"
+import { directoryContinuation } from "./directory-read-shape"
+import { directoryWriteAuthorization, directoryWriteResponse } from "./directory-write-response"
 import { directoryPermissionBlocker } from "./directory-permissions"
-import { directoryReadAbsent, directoryReadShape } from "./directory-read-shape"
+import { directoryReadAbsent, directoryReadShape, directoryWorkloadOnly } from "./directory-read-shape"
 import { requireRestoreActor } from "./restore-actor"
 import { directoryPayload, directoryReview, disabledUserBody, requireDirectoryApprovals, cloudObject, DIRECTORY_9A_BLOCKER } from "./directory-9a"
 import { isRestorePersistenceError, guardedProtections, restoreFingerprint, type GuardedIO, type GuardedStep } from "./guarded-run"
@@ -75,9 +76,11 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
         continue
       }
       if (method === "GET" && response.status === 404) return directoryReadAbsent(response, url)
+      if (method !== "GET") await directoryWriteAuthorization(response)
       if (method !== "GET" && response.status >= 400 && response.status < 500 && response.status !== 408) throw new RestoreWriteRefusedError(response.status)
       if (method === "GET" && (response.status === 408 || response.status >= 500)) throw new DirectoryReadDeferredError()
       if (!response.ok) throw new Error("Directory request was not confirmed. No response body is retained.")
+      if (method !== "GET" && (method !== "POST" || /^(?:users|groups)$|\/\$ref$/.test(url.pathname.replace(/^\/v1\.0\//, "")))) return directoryWriteResponse(response, method, url)
       if (method === "GET" && !/^application\/(?:[\w.+-]+\+)?json(?:\s*;|$)/i.test(response.headers.get("Content-Type") ?? "")) throw new DirectoryReadDeferredError()
       if (response.status === 204) {
         if (method === "GET") throw new DirectoryReadDeferredError()
@@ -109,7 +112,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
     let next: string | undefined = start
     const seen = new Set<string>()
     while (next) {
-      const page = await request(graphContinuation(start, next, seen))
+      const page = await request(directoryContinuation(start, next, seen))
       if (!Array.isArray(page?.value)) throw new RestoreSafetyError("Invalid relationship collection.")
       for (const item of page.value as Item[]) yield identity(item?.id)
       if (page["@odata.nextLink"] !== undefined && typeof page["@odata.nextLink"] !== "string") throw new RestoreSafetyError("Invalid relationship continuation.")
@@ -120,7 +123,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
     const start = root + path, seen = new Set<string>()
     let next: string | undefined = start
     while (next) {
-      const page = await request(graphContinuation(start, next, seen).slice(root.length))
+      const page = await request(directoryContinuation(start, next, seen).slice(root.length))
       if (!Array.isArray(page?.value)) throw new RestoreSafetyError("A directory collection was incomplete.")
       for (const item of page.value) {
         if (!item || typeof item !== "object" || Array.isArray(item)) throw new RestoreSafetyError("A directory collection was malformed.")
@@ -213,6 +216,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
     let excluded = false, included = false, inherited = false, indirectUserChange = false, targetingUnknown = false
     if (step.folder === "Users" && (intent.action === "manager" || (intent.action === "update" && step.desired.displayName !== undefined && step.desired.displayName !== resource?.displayName))) {
       for await (const policy of list("identity/conditionalAccess/policies?$select=id,conditions")) {
+        if (directoryWorkloadOnly(policy)) continue
         const users = (policy.conditions as Item | undefined)?.users as Item | undefined
         if (!users || !Array.isArray(users.includeGroups) || !Array.isArray(users.excludeGroups) || users.includeGroups.length || users.excludeGroups.length) indirectUserChange = true
       }
@@ -222,6 +226,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
       if (["member", "owner"].includes(intent.action)) for await (const parent of list(`groups/${identity(step.targetId ?? step.sourceId)}/memberOf?$select=id`)) { if (parent) { inherited = true; break } }
       try {
         for await (const policy of list("identity/conditionalAccess/policies?$select=id,conditions")) {
+          if (directoryWorkloadOnly(policy)) continue
           const users = (policy.conditions as Item | undefined)?.users as Item | undefined
           if (!users || !Array.isArray(users.includeGroups) || !Array.isArray(users.excludeGroups) || [...users.includeGroups, ...users.excludeGroups].some(id => !isGuid(id))) throw new DirectoryReadDeferredError()
           if (users.excludeGroups.some(id => String(id).toLowerCase() === (step.targetId ?? step.sourceId).toLowerCase())) excluded = true

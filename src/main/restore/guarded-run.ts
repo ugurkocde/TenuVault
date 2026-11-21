@@ -2,7 +2,7 @@ import { restoreTenantKey } from "./restore-tenant-key"
 import { isProxyAuthResponse } from "../api/network-error"
 import { DirectoryRetryPersistenceError, persistDirectoryRetry, waitForDirectoryRetry } from "./directory-retry"
 import { requireConfigurationApproval } from "./entra-configuration"
-import { isGraphId } from "../../shared/security"
+import { isGraphId, isGuid } from "../../shared/security"
 import { operationProtections, restoreMatrixRow } from "../../shared/intune/restore-matrix"
 import { requireRestoreActor } from "./restore-actor"
 import { createHash } from "node:crypto"
@@ -335,7 +335,7 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
           continue
         }
         const id = result.id ?? entry.targetId
-        if (!isGraphId(id)) { entry.reason = "The write did not return an object ID. It must be read back before continuing."; journal.save(run); continue }
+        if (!isGraphId(id) || (step.directory && ["Users", "Groups", "Applications"].includes(step.folder) && !isGuid(id))) { entry.reason = "The write did not return an object ID. It must be read back before continuing."; journal.save(run); continue }
         entry.targetId = id
         rememberMapping(run.mappings, { kind: "objectId", folder: step.folder, source: step.sourceId, target: id })
         entry.state = "applied"; delete entry.reason

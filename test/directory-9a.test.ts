@@ -93,7 +93,7 @@ for (const action of ["create", "update", "recycle", "invite", "member", "owner"
         else if (action === "license") licensed = true
         else live = { ...base, ...body }
         if (outcome === "timeout") throw new Error("The answer was lost after commit")
-        return Response.json(action === "invite" ? { invitedUser: { id: user.id } } : { id: base.id })
+        return action === "create" ? Response.json(live, { status: 201 }) : ["update", "member", "owner", "manager"].includes(action) ? new Response(null, { status: 204 }) : Response.json(action === "invite" ? { invitedUser: { id: user.id } } : { id: base.id })
       }
       if (path.endsWith("/memberOf")) return Response.json({ value: [] })
       if (path.startsWith("identity/conditionalAccess/")) return Response.json({ value: [] })
@@ -244,7 +244,7 @@ it("closes both relationship streams when the preview page ends", async () => {
 it("does not widen a Conditional Access excluded group's membership permission to role management", async () => admitted(async () => {
   const step = stepFor("member"); step.directory!.principalId = principal.id; step.desired = { principalId: principal.id, present: true }; step.properties = Object.keys(step.desired)
   const fetcher = vi.fn(async (input: RequestInfo | URL, options?: RequestInit) => {
-    if (options?.method !== "GET") return Response.json({ id: group.id })
+    if (options?.method !== "GET") return new Response(null, { status: 204 })
     if (String(input).includes("/memberOf")) return Response.json({ value: [] })
     if (String(input).includes("conditionalAccess")) return Response.json({ value: [{ conditions: { users: { includeGroups: [], excludeGroups: [group.id] } } }] })
     if (new URL(String(input)).pathname.endsWith("users/" + principal.id) || new URL(String(input)).pathname.endsWith("members/" + principal.id)) return Response.json(principal)
