@@ -189,7 +189,7 @@ A `code` is only ever one of these: a Microsoft error code such as `AADSTS53003`
 **Turn it off for your organization.** Set the policy `DisableSetupDiagnostics`. TenuVault then never asks, sends no events, and the toggle in **Settings** is locked off. An install that was already sharing stops, deletes its random ID and queue, and sends the one erase request above. TenuVault reads the policy when it starts.
 
 * **Windows:** a DWORD value `DisableSetupDiagnostics` = `1` under `HKEY_LOCAL_MACHINE\SOFTWARE\Policies\TenuVault` (all users) or `HKEY_CURRENT_USER\SOFTWARE\Policies\TenuVault` (one user). Deploy it like `DisableAutoUpdate`, see [Deploy TenuVault in your organization](/deploy/#turn-off-setup-diagnostics).
-* **macOS:** the managed preference `DisableSetupDiagnostics` = `true` (boolean) for the preference domain `com.tenuvault.desktop`.
+* **macOS:** the managed preference `DisableSetupDiagnostics` = `true` (boolean) for the preference domain `com.tenuvault.desktop`, from a configuration profile. A value in the user's own preferences (`defaults write`) is ignored.
 
 **Firewall.** Setup diagnostics use `www.tenuvault.com`, which the allow list below already contains. If your proxy filters by path, `https://www.tenuvault.com/api/desktop-events` and `https://www.tenuvault.com/api/desktop-events/erase` may stay blocked: nothing else depends on them, and the queued events are dropped after 7 days.
 

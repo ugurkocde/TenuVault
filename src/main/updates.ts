@@ -1,8 +1,9 @@
 import { execFile } from "node:child_process"
 import { existsSync } from "node:fs"
+import { userInfo } from "node:os"
 import { basename, dirname, join } from "node:path"
 import { promisify } from "node:util"
-import { app, systemPreferences } from "electron"
+import { app } from "electron"
 import electronUpdater, { CancellationToken } from "electron-updater"
 import type { UpdateStatus } from "../shared/ipc"
 import { RELEASE_FEED, ReleaseProvider } from "./update-provider"
@@ -10,13 +11,46 @@ import { RELEASE_FEED, ReleaseProvider } from "./update-provider"
 const { autoUpdater } = electronUpdater
 const CHECK_EVERY_MS = 6 * 60 * 60 * 1000
 
+type PolicyName = "DisableAutoUpdate" | "DisableSetupDiagnostics"
+
+/** Where macOS keeps the preferences that configuration profiles (MDM) enforce. Only root can write here. */
+export const MANAGED_PREFERENCES = "/Library/Managed Preferences"
+
+/**
+ * True when a configuration profile sets <name> to true for com.tenuvault.desktop, for the whole
+ * device or for this user. A value in the user's own defaults (`defaults write`) is not a policy:
+ * any process of the user can write it, and a test run that was killed can leave one behind.
+ */
+export async function managedPreferenceEnabled(name: PolicyName, root = MANAGED_PREFERENCES, user = currentUser()): Promise<boolean> {
+  const files = [join(root, "com.tenuvault.desktop.plist")]
+  if (user) files.push(join(root, user, "com.tenuvault.desktop.plist"))
+  for (const file of files) {
+    try {
+      // plutil reads XML and binary property lists. By absolute path, like reg.exe below.
+      const { stdout } = await promisify(execFile)("/usr/bin/plutil", ["-extract", name, "raw", "-o", "-", file])
+      if (/^(true|1)$/i.test(stdout.trim())) return true
+    } catch {
+      // No profile, or the profile does not set this key.
+    }
+  }
+  return false
+}
+
+function currentUser(): string | null {
+  try {
+    return userInfo().username || null
+  } catch {
+    return null
+  }
+}
+
 /**
  * True when an administrator set a TenuVault policy for managed deployments:
  *   Windows: DWORD <name> = 1 under HKLM or HKCU\SOFTWARE\Policies\TenuVault
- *   macOS:   managed preference <name> = true for com.tenuvault.desktop
+ *   macOS:   managed preference <name> = true for com.tenuvault.desktop, from a configuration profile
  */
-export async function policyEnabled(name: "DisableAutoUpdate" | "DisableSetupDiagnostics"): Promise<boolean> {
-  if (process.platform === "darwin") return systemPreferences.getUserDefault(name, "boolean") === true
+export async function policyEnabled(name: PolicyName): Promise<boolean> {
+  if (process.platform === "darwin") return managedPreferenceEnabled(name)
   if (process.platform !== "win32") return false
   // By absolute path, so a reg.exe earlier on PATH or in the working directory is never run.
   const reg = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "reg.exe")

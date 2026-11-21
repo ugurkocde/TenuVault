@@ -254,6 +254,11 @@ jobs:
       - name: Verify packaged security fuses
         run: node scripts/check-fuses.cjs "${{ matrix.app }}"
 
+      # The runner's real policy store: managed preferences with sudo on macOS, HKCU on Windows.
+      - name: Test the smoke run's update policy harness
+        timeout-minutes: 2
+        run: node scripts/test-smoke-update-policy.mjs
+
       - name: Smoke test the packaged app
         timeout-minutes: 5
         shell: bash

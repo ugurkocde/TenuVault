@@ -52,7 +52,7 @@ delete env.ELECTRON_RUN_AS_NODE
 let updatePolicy = null
 let app = null
 process.on("exit", () => updatePolicy?.restore())
-for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, () => { app?.kill(); process.exit(1) })
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.once(signal, () => { app?.kill(); process.exit(1) })
 updatePolicy = packagedApp ? disableAutoUpdate() : null
 if (updatePolicy?.error) {
   console.error(`Could not turn automatic updates off for this run, so the packaged app is not started: ${updatePolicy.error}`)
@@ -252,6 +252,13 @@ await check("first run shows the welcome screen", async () => {
     }
   }
 })
+
+if (packagedApp && (process.platform === "darwin" || process.platform === "win32")) {
+  await check("the packaged app reports that the DisableAutoUpdate policy manages updates", async () => {
+    const preferences = await evaluate(`window.tenuvault.preferences.get()`)
+    assert(preferences?.autoUpdateManaged === true, `autoUpdateManaged is ${preferences?.autoUpdateManaged}`)
+  })
+}
 
 await check("the welcome screen opens the free setup call page in the browser, named after the screen", async () => {
   try {

@@ -174,7 +174,7 @@ have their own authentication, licensing, and storage requirements.
 
 Admins can disable automatic updates in Settings or with the `DisableAutoUpdate` policy
 (Windows: HKLM/HKCU `SOFTWARE\Policies\TenuVault`, DWORD `1`; macOS: managed preference
-`com.tenuvault.desktop`, boolean `true`). Development builds do not auto-update.
+`com.tenuvault.desktop`, boolean `true`, from a configuration profile). Development builds do not auto-update.
 GitHub may change asset redirect hosts; validate the redirect chain for the release being
 deployed when maintaining a strict proxy allowlist. See GitHub's
 [release asset download documentation](https://docs.github.com/en/rest/releases/assets).
@@ -319,7 +319,14 @@ the auto-update feed to this repository's GitHub releases.
 The app checks for updates every 6 hours and installs them on restart. Admins can turn this off in
 Settings, or for managed devices by policy: the DWORD `DisableAutoUpdate` = 1 under
 `HKLM\SOFTWARE\Policies\TenuVault` (or HKCU) on Windows, or the managed preference
-`DisableAutoUpdate` = true for `com.tenuvault.desktop` on macOS. macOS updates require signed builds.
+`DisableAutoUpdate` = true for `com.tenuvault.desktop` on macOS, from a configuration profile in
+`/Library/Managed Preferences` (a value in the user's own defaults is ignored). macOS updates
+require signed builds.
+
+A packaged smoke run (`TENUVAULT_SMOKE_APP`) sets the same policy so the build under test never
+updates itself, and puts the earlier state back when it ends. On macOS that file is root's, so
+run `sudo -v` first (CI runners have passwordless sudo). A run that was killed leaves a marker in
+`~/.tenuvault-smoke/update-policy`, and the next run restores the earlier state before it starts.
 
 Signing turns on when these repository secrets exist, and release tags fail without them:
 
