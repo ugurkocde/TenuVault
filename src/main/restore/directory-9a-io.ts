@@ -1,3 +1,4 @@
+import { DIRECTORY_RETRIES, directoryRetryAt, waitForDirectoryRetry } from "./directory-retry"
 import { typeForFolder, restoreCapability, type Item } from "../../shared/intune/registry"
 import { restoreMatrixRow } from "../../shared/intune/restore-matrix"
 import { RestoreSafetyError, RestoreWriteDeferredError, RestoreWriteRefusedError, guardRestoreItem, type RestoreActor } from "../../shared/intune/restore-guards"
@@ -34,19 +35,7 @@ export function directoryPermissions(step: GuardedStep): string[] {
 /** The same operation evidence gates the preview and the final transport. */
 export function directory9aIO(token: string, actor: RestoreActor, safety: GuardedIO["references"], fetchImpl: typeof fetch = fetch, scan?: GuardedIO["replacedReferences"], wait?: (ms: number) => Promise<void>, signal?: AbortSignal): GuardedIO & { review: (step: GuardedStep) => Promise<ReturnType<typeof directoryReview>>; ids: (id: string, kind: "members" | "owners") => AsyncIterable<string>; locate: (folder: "Users" | "Groups", sourceId: string) => Promise<{ action: "update" | "recycle" | "create"; current: Item | null }> } {
   requireRestoreActor(token, actor)
-  const pause = (ms: number) => new Promise<void>((resolve, reject) => {
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const finish = (error?: unknown) => {
-      clearTimeout(timer); signal?.removeEventListener("abort", abort)
-      if (error) reject(error); else resolve()
-    }
-    const abort = () => finish(signal?.reason)
-    if (signal?.aborted) { abort(); return }
-    signal?.addEventListener("abort", abort, { once: true })
-    if (wait) void wait(ms).then(() => finish(), finish)
-    else timer = setTimeout(() => finish(), ms)
-  })
-  const request = async (path: string, method = "GET", body?: Item, validateSend?: () => Promise<void>, beforeSend?: () => void): Promise<Item | null> => {
+  const request = async (path: string, method = "GET", body?: Item, validateSend?: () => Promise<void>, beforeSend?: () => void, onUnapplied?: (retryAt: number) => void): Promise<Item | null> => {
     for (let attempt = 0; ; attempt++) {
       const url = new URL(path.startsWith("https://") ? path : root + path)
       if (method === "GET" && /^(users|groups)\/[0-9a-f-]+$/i.test(path)) url.searchParams.set("$select", path.startsWith("users/") ? "id,displayName,userPrincipalName,mailNickname,userType,accountEnabled,givenName,surname,jobTitle,department,officeLocation,usageLocation,assignedLicenses,onPremisesSyncEnabled,onPremisesImmutableId,onPremisesLastSyncDateTime" : "id,displayName,description,mailNickname,groupTypes,mailEnabled,securityEnabled,isAssignableToRole,membershipRule,membershipRuleProcessingState,onPremisesSyncEnabled")
@@ -57,7 +46,6 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
           signal?.throwIfAborted()
         } catch (error) {
           if (signal?.aborted) throw new RestoreWriteDeferredError("The directory write was cancelled before sending.")
-          if (attempt) throw new RestoreWriteRefusedError(429)
           throw error
         }
       } else if (signal?.aborted) throw new RestoreWriteDeferredError("The directory read was cancelled before sending a write.")
@@ -68,15 +56,11 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
         if (method === "GET" && signal?.aborted) throw new RestoreWriteDeferredError("The directory read was cancelled before sending a write.")
         throw error
       })
-      if (response.status === 429 && attempt < 4) {
-        const retryAfter = response.headers.get("Retry-After")
-        const delay = retryAfter && !Number.isFinite(Number(retryAfter)) ? Date.parse(retryAfter) - Date.now() : Number(retryAfter) * 1000
-        try { await pause(Math.min(60_000, Math.max(1000, delay || 1000))) }
-        catch (error) {
-          if (method !== "GET") throw new RestoreWriteDeferredError("The throttled directory write was not applied. Resume to continue.")
-          if (signal?.aborted) throw new RestoreWriteDeferredError("The directory read was cancelled before sending a write.")
-          throw error
-        }
+      if (response.status === 429) {
+        const retryAt = directoryRetryAt(response, attempt)
+        if (method !== "GET") onUnapplied?.(retryAt)
+        if (attempt >= DIRECTORY_RETRIES) throw new RestoreWriteDeferredError("The throttled directory request was not applied. Resume to continue.")
+        await waitForDirectoryRetry(retryAt, signal, wait)
         continue
       }
       if (method === "GET" && response.status === 404) return null
@@ -240,7 +224,8 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
   }
   return {
     ids,
-    token, type: folder => typeForFolder(folder)!, ...(scan ? { replacedReferences: scan } : {}), read, review,
+    token, type: folder => typeForFolder(folder)!, ...(scan ? { replacedReferences: scan } : {}), review,
+    read: (step, id, readSignal) => readSignal && readSignal !== signal ? directory9aIO(token, actor, safety, fetchImpl, scan, wait, readSignal).read(step, id, readSignal) : read(step, id),
     locate: async (folder, sourceId) => {
       const path = `${folder === "Users" ? "users" : "groups"}/${identity(sourceId)}`
       const current = await request(path)
@@ -252,15 +237,16 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
       if (step.directory?.action === "license") return []
       return (await find(step)).map(item => step.directory?.action === "invite" ? { id: item.id!, ...sent } : item)
     },
-    references: async (step, current, desired) => {
+    references: async (step, current, desired, readSignal) => {
+      if (readSignal && readSignal !== signal) return directory9aIO(token, actor, safety, fetchImpl, scan, wait, readSignal).references(step, current, desired, readSignal)
       const result = await review(step)
       if (result.blocker) throw new RestoreSafetyError(result.blocker)
       const refs = await safety(step, current, desired)
       if (step.directory?.principalId) refs.principals = [...refs.principals, step.directory.principalId]
       return refs
     },
-    write: async (step, body, targetId, beforeSend, run, writeSignal) => {
-      if (writeSignal && writeSignal !== signal) return directory9aIO(token, actor, safety, fetchImpl, scan, wait, writeSignal).write(step, body, targetId, beforeSend, run, writeSignal)
+    write: async (step, body, targetId, beforeSend, run, writeSignal, onUnapplied) => {
+      if (writeSignal && writeSignal !== signal) return directory9aIO(token, actor, safety, fetchImpl, scan, wait, writeSignal).write(step, body, targetId, beforeSend, run, writeSignal, onUnapplied)
       if (signal?.aborted) throw new RestoreWriteDeferredError("The directory write was cancelled before sending.")
       requireRestoreActor(token, actor)
       if (restoreFingerprint(body) !== restoreFingerprint(step.desired)) throw new RestoreSafetyError("The directory write no longer matches its approved difference.")
@@ -320,7 +306,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
         const references = await safety(step, current, body)
         if (step.directory?.principalId) references.principals = [...references.principals, step.directory.principalId]
         guardRestoreItem(actor, step.folder, targetId, references, step.allowRemoval === true, guardedProtections(step))
-      }, beforeSend)
+      }, beforeSend, onUnapplied)
       const id = action === "invite" ? (response?.invitedUser as Item | undefined)?.id : response?.id ?? targetId
       return { id: identity(id) }
     },

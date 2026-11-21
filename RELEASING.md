@@ -253,7 +253,7 @@ plan records events; Community sees a locked preview on the Audit Log page.
 
 ## Compatibility notes for the next release
 
-- Application registration name and description restore is available through individual directory review for nonempty changes. Enterprise app metadata, creation, consent, owners, app roles, policy bindings and recycle recovery remain blocked. Recreation changes the app ID and breaks clients using the old ID; recycle recovery requires complete credential and access verification. SSO and provisioning must be configured again.
+- Application registration name and description restore is available through individual directory review for nonempty changes. Enterprise app metadata, creation, consent, owners, app roles, policy bindings and recycle recovery remain blocked. Recreation changes the app ID and breaks clients using the old ID; recycle recovery requires complete credential and access verification. SSO and provisioning need to be configured again only when rebuilding a missing app or recovering missing configuration. Name and description updates do not require this.
 
 - Directory exact membership preserves at least one member in Conditional Access target groups and refuses unreadable policy dependencies. Synced and formerly synced users and groups remain blocked. Throttle waits can be cancelled and safely resumed, relationship previews reuse a saved bounded difference, and Windows startup keeps file flushes without requiring directory handles.
 

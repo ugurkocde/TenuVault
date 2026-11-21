@@ -1,3 +1,4 @@
+import { waitForDirectoryRetry } from "./directory-retry"
 import { requireConfigurationApproval } from "./entra-configuration"
 import { isGraphId } from "../../shared/security"
 import { operationProtections, restoreMatrixRow } from "../../shared/intune/restore-matrix"
@@ -28,6 +29,8 @@ export interface GuardedStep {
 export interface GuardedEntry {
   step: GuardedStep
   state: "pending" | "captured" | "uncertain" | "applied" | "blocked" | "failed" | "failed-before-send"
+  /** Earliest retry of a confirmed, unapplied throttle, preserved across cancellation/restart. */
+  retryAt?: number
   before?: Item | null
   sent?: Item
   targetId?: string
@@ -51,11 +54,11 @@ export interface GuardedIO {
   replacedReferences?: (mappings: readonly RestoreMapping[], signal?: AbortSignal) => Promise<ReplacedReference[]>
   type: (folder: string) => IntuneType
   /** Reads through the descriptor's singleton, fixed key or object ID rule. */
-  read: (step: GuardedStep, targetId?: string) => Promise<Item | null>
+  read: (step: GuardedStep, targetId?: string, signal?: AbortSignal) => Promise<Item | null>
   /** Complete descriptor-based lookup. Must reject an incomplete list, never match a guessed name. */
   findCreated: (step: GuardedStep, sent: Item) => Promise<Item[]>
-  references: (step: GuardedStep, current: Item | null, desired: Item) => Promise<SafetyReferences>
-  write: (step: GuardedStep, body: Item, targetId: string | undefined, beforeSend: () => void, run?: GuardedRun, signal?: AbortSignal) => Promise<{ id?: string }>
+  references: (step: GuardedStep, current: Item | null, desired: Item, signal?: AbortSignal) => Promise<SafetyReferences>
+  write: (step: GuardedStep, body: Item, targetId: string | undefined, beforeSend: () => void, run?: GuardedRun, signal?: AbortSignal, onUnapplied?: (retryAt: number) => void) => Promise<{ id?: string }>
 }
 /** The closed directory adapter refuses privileged links and state changes at its final send boundary.
  * Other writers retain the full descriptor protections, including remaining administrators. */
@@ -153,7 +156,8 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
       if (prerequisite) { entry.state = "blocked"; entry.reason = `Prerequisite ${prerequisite} did not complete.`; journal.save(run); continue }
       try {
         if (entry.state === "uncertain") {
-          // Absence after an unanswered create is not proof of failure: Graph may be eventually consistent.
+          // Neither absence nor repeated old values prove an unanswered write failed: Graph may be eventually consistent.
+          // Only a matching read-back can settle it. Confirmed throttles never enter this path.
           const matches = step.operation === "create" ? await io.findCreated(step, entry.sent!) : [await io.read(step, entry.targetId)].filter((item): item is Item => item !== null)
           if (matches.length !== 1 || restoreFingerprint(writableSnapshot(matches[0]!, Object.keys(entry.sent!))) !== restoreFingerprint(entry.sent!)) {
             entry.reason = "The unanswered write could not be uniquely reconciled. Review this item before continuing."
@@ -165,6 +169,7 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
           rememberMapping(run.mappings, { kind: "objectId", folder: step.folder, source: step.sourceId, target: id })
           entry.state = "applied"; delete entry.reason; journal.save(run); continue
         }
+        if (entry.retryAt !== undefined) await waitForDirectoryRetry(entry.retryAt, signal)
         const type = io.type(step.folder)
         if (["none", "metadata"].includes(restoreCapability(type)) || (restoreCapability(type) === "singleton" && step.operation === "create")) throw new RestoreSafetyError(type.limitation ?? "This type cannot be restored.")
         requireConfigurationApproval(step, run)
@@ -173,7 +178,7 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
         if (journal.hasEarlierUnanswered(run, step)) throw new RestoreSafetyError("An earlier restore has an unanswered write for this object. Resume that run before starting another.")
         const mapped = mappedReference(run.mappings, "objectId", step.folder, step.sourceId)
         if (mapped && step.targetId && mapped.toLowerCase() !== step.targetId.toLowerCase()) throw new RestoreSafetyError("The target mapping changed after this preview. Preview this item again.")
-        const current = await io.read(step, entry.targetId ?? step.targetId ?? mapped)
+        const current = await io.read(step, entry.targetId ?? step.targetId ?? mapped, signal)
         if (restoreFingerprint(current) !== step.preview) throw new RestoreSafetyError("The tenant changed after this preview. Preview this item again.")
         if (step.operation === "create" && mapped && current === null) throw new RestoreSafetyError("The previously mapped object is missing. Review its mapping before recreating it again.")
         if (step.operation === "create" && current !== null) throw new RestoreSafetyError("The object already exists. Preview it as an update.")
@@ -198,7 +203,7 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
           if (typeof desired.scope !== "string" || (current && typeof current.scope !== "string")) throw new RestoreSafetyError("Consent scopes could not be resolved.")
           desired.scope = mergeConsentScopes(current?.scope as string ?? "", desired.scope, step.allowRemoval)
         }
-        const refs = await io.references(step, current, desired)
+        const refs = await io.references(step, current, desired, signal)
         guardRestoreItem(run.actor, step.folder, entry.targetId ?? step.targetId ?? mapped, refs, step.allowRemoval === true, guardedProtections(step))
         // Only touched objects are captured, never a whole service. A failed save prevents the write.
         entry.before = current; entry.sent = desired; entry.targetId = entry.targetId ?? step.targetId ?? mapped; entry.state = "captured"; journal.save(run)
@@ -206,10 +211,12 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
         let result: { id?: string }
         try {
           result = await io.write(step, desired, entry.targetId, () => {
-            entry.state = "uncertain"; journal.save(run)
-          }, run, signal)
+            entry.state = "uncertain"; delete entry.retryAt; journal.save(run)
+          }, run, signal, retryAt => {
+            entry.state = "captured"; entry.retryAt = retryAt; delete entry.reason; journal.save(run)
+          })
         } catch (error) {
-          if (error instanceof RestoreWriteDeferredError) {
+          if (error instanceof RestoreWriteDeferredError || (entry.state === "captured" && signal?.aborted)) {
             entry.state = "captured"; delete entry.reason
           } else if (entry.state === "captured") {
             entry.state = "failed-before-send"
@@ -225,6 +232,9 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
         rememberMapping(run.mappings, { kind: "objectId", folder: step.folder, source: step.sourceId, target: id })
         entry.state = "applied"; journal.save(run)
       } catch (error) {
+        if (entry.state !== "uncertain" && (error instanceof RestoreWriteDeferredError || signal?.aborted)) {
+          delete entry.reason; journal.save(run); continue
+        }
         // Never persist service error bodies: they may contain credential values or submitted payloads.
         if (entry.state !== "uncertain") { if (entry.state !== "failed") entry.state = "blocked"; entry.reason = error instanceof RestoreSafetyError ? error.message : "This item failed a restore safety check. Preview and resolve its prerequisites before continuing." }
         journal.save(run)

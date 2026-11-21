@@ -13,7 +13,7 @@ import { RecoveryAccounts } from "../src/main/restore/safety-resolvers"
 import { MICROSOFT_ORGANIZATION_ID } from "../src/shared/intune/entra-directory"
 import { graphPermissions } from "../src/shared/services/manifest"
 import { restoreCapability, typeForFolder, type Item } from "../src/shared/intune/registry"
-import { restoreFingerprint, GuardedRunJournal, type GuardedRun, type GuardedStep } from "../src/main/restore/guarded-run"
+import { executeGuardedRun, restoreFingerprint, GuardedRunJournal, type GuardedRun, type GuardedStep } from "../src/main/restore/guarded-run"
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12,"0")}`
 const actor = { tenantId: id(1), userId: id(2), clientId: id(3), applicationObjectId: id(4), servicePrincipalId: id(5), recoveryAccountIds: [id(6)] }
 const app = { id: id(10), appId: id(11), displayName: "API", appOwnerOrganizationId: id(1), servicePrincipalType: "Application", appRoles: [{ id: id(90), displayName: "Test role", isEnabled: true, allowedMemberTypes: ["Application"] }], oauth2PermissionScopes: [{ value: "Test.Read", isEnabled: true }] }
@@ -344,7 +344,7 @@ it.each(optOutVariants)("reconciles a sent but uncertain write after %s opt-out 
   expect(await env.service().execute(actor.tenantId, { ...request, runId: page.runId }, page.fingerprint, approvals)).toMatchObject({ status: "complete", outcomes: [{ state: "applied" }] })
   expect(env.writes).toHaveLength(1)
 })
-it.each([408, 429, 500, 502, 504])("reconciles a committed PATCH followed by HTTP %s after restart with exactly one send", async status => {
+it.each([408, 500, 502, 503, 504])("reconciles a committed PATCH followed by HTTP %s after restart with exactly one send", async status => {
   const env = persisted(), original = env.fetcher.getMockImplementation()!
   env.fetcher.mockImplementation(async (url, init) => {
     const response = await original(url, init)
@@ -667,7 +667,7 @@ it("refuses a metadata write without the expected appId from its saved plan", as
   expect(env.writes).toEqual([])
 })
 
-it("keeps cancellation during the final application read resumable with exactly one PATCH", async () => {
+it.each(["success", "503", "timeout"])("keeps cancellation plus %s during the final application read resumable with exactly one PATCH", async failure => {
   const env = persisted(), service = env.service(), request = metadataRequest()
   const page = await service.prepare(actor.tenantId, request, options, async () => request.snapshot)
   const original = env.fetcher.getMockImplementation()!
@@ -677,6 +677,9 @@ it("keeps cancellation during the final application read resumable with exactly 
     // Capture, reference review and final writer read each resolve the application twice.
     if (new URL(String(input)).pathname === `/v1.0/applications/${app.id}` && (!init?.method || init.method === "GET") && ++reads === 6) {
       reached(); await new Promise<void>(resolve => { release = resolve })
+      expect(init?.signal?.aborted).toBe(true)
+      if (failure === "503") return new Response(null, { status: 503 })
+      if (failure === "timeout") throw new DOMException("Read timed out", "TimeoutError")
     }
     return original(input, init)
   })
@@ -691,4 +694,102 @@ it("keeps cancellation during the final application read resumable with exactly 
   await env.service().execute(actor.tenantId, saved, page.fingerprint, approvals)
   expect(env.fetcher.mock.calls.filter(([, init]) => init?.method === "PATCH")).toHaveLength(1)
   expect(env.writes).toEqual([`applications/${app.id}`])
+})
+
+it("persists a confirmed 429 as unapplied and repeats final reads before exactly one retry", async () => {
+  const env = persisted(), request = metadataRequest()
+  const page = await env.service().prepare(actor.tenantId, request, options, async () => request.snapshot)
+  const original = env.fetcher.getMockImplementation()!
+  let sends = 0
+  env.fetcher.mockClear().mockImplementation((url, init) => init?.method === "PATCH" && ++sends === 1 ? Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "2" } })) : original(url, init))
+  vi.useFakeTimers()
+  try {
+    const pending = env.service().execute(actor.tenantId, { ...request, runId: page.runId }, page.fingerprint, { [page.rows[0]!.key]: page.rows[0]!.review.approvals })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(sends).toBe(1)
+    const journal = [...env.data.entries()].find(([key]) => key.includes("batch.0.restore.guarded."))!
+    const entry = JSON.parse(journal[1]).runs[page.runId].entries[0]
+    expect(entry.state).toBe("captured")
+    expect(entry.retryAt).toBe(Date.now() + 2000)
+    await vi.advanceTimersByTimeAsync(1999)
+    expect(sends).toBe(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(await pending).toMatchObject({ status: "complete", failed: 0, outcomes: [{ state: "applied" }] })
+    expect(sends).toBe(2)
+    expect(env.fetcher.mock.calls.filter(([url, init]) => new URL(String(url)).pathname === `/v1.0/applications/${app.id}` && init?.method === "GET")).toHaveLength(8)
+    expect(env.fetcher.mock.calls.filter(([url]) => new URL(String(url)).pathname === "/v1.0/servicePrincipals" && new URL(String(url)).searchParams.get("$filter")?.includes(app.appId))).toHaveLength(4)
+    expect(env.writes).toEqual([`applications/${app.id}`])
+    expect([...env.data.keys()].some(key => key.startsWith("restore.directory.unanswered."))).toBe(false)
+  } finally { vi.useRealTimers() }
+})
+it("cancels a 429 backoff and resumes the saved page without violating Retry-After", async () => {
+  const env = persisted(), request = metadataRequest(), service = env.service()
+  const page = await service.prepare(actor.tenantId, request, options, async () => request.snapshot)
+  const original = env.fetcher.getMockImplementation()!
+  let sends = 0
+  env.fetcher.mockImplementation((url, init) => init?.method === "PATCH" && ++sends === 1 ? Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "2" } })) : original(url, init))
+  const saved = { ...request, runId: page.runId }, approvals = { [page.rows[0]!.key]: page.rows[0]!.review.approvals }
+  vi.useFakeTimers()
+  try {
+    const pending = service.execute(actor.tenantId, saved, page.fingerprint, approvals)
+    await vi.advanceTimersByTimeAsync(0)
+    await service.cancel(actor.tenantId, page.runId)
+    expect(await pending).toMatchObject({ status: "partial", failed: 0, outcomes: [{ state: "captured" }] })
+    expect(sends).toBe(1); expect(env.writes).toEqual([])
+    const restarted = env.service()
+    expect(await restarted.resume(actor.tenantId, saved)).toEqual(page)
+    const resumed = restarted.execute(actor.tenantId, saved, page.fingerprint, approvals)
+    await vi.advanceTimersByTimeAsync(1999)
+    expect(sends).toBe(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(await resumed).toMatchObject({ status: "complete", failed: 0, outcomes: [{ state: "applied" }] })
+    await env.service().execute(actor.tenantId, saved, page.fingerprint, approvals)
+    expect(sends).toBe(2); expect(env.writes).toEqual([`applications/${app.id}`])
+  } finally { vi.useRealTimers() }
+})
+it.each(["opt-in", "origin", "identity", "protected", "drift", "approval"])("rechecks %s before retrying a confirmed application throttle", async change => {
+  const env = world(), protectedIds: string[] = []
+  const wait = vi.fn(async () => {
+    if (change === "opt-in") optOut(env.settings, "area")
+    if (change === "origin") run.origin = "import"
+    if (change === "identity") env.objects.get(`applications/${app.id}`)!.appId = client.appId
+    if (change === "protected") protectedIds.push(app.appId)
+    if (change === "drift") env.objects.get(`applications/${app.id}`)!.displayName = "Changed during backoff"
+    if (change === "approval") delete candidate.directoryApprovals
+  })
+  const io = directory9bIO(token, actor, env.fetcher, () => protectedIds, () => env.settings.get(actor.tenantId).entra, wait)
+  const candidate = await applicationObjectStep("Applications", { ...app, displayName: "Saved" }, io, async () => app)
+  await io.preview(candidate)
+  const run = runFor(candidate), original = env.fetcher.getMockImplementation()!, beforeSend = vi.fn(), unapplied = vi.fn()
+  env.fetcher.mockImplementation((url, init) => init?.method === "PATCH" ? Promise.resolve(new Response(null, { status: 429 })) : original(url, init))
+  await expect(io.write(candidate, candidate.desired, candidate.targetId, beforeSend, run, undefined, unapplied)).rejects.toThrow()
+  expect(beforeSend).toHaveBeenCalledOnce(); expect(unapplied).toHaveBeenCalledOnce(); expect(wait).toHaveBeenCalledOnce()
+  expect(env.fetcher.mock.calls.filter(([, init]) => init?.method === "PATCH")).toHaveLength(1)
+  expect(env.writes).toEqual([])
+})
+it.each([503, "timeout", "network"])("keeps an unapplied but unconfirmed %s PATCH uncertain across consistent old reads", async failure => {
+  const env = persisted(), request = metadataRequest(), original = env.fetcher.getMockImplementation()!
+  env.fetcher.mockImplementation((url, init) => {
+    if (init?.method !== "PATCH") return original(url, init)
+    if (failure === "timeout") return Promise.reject(new DOMException("Timed out", "TimeoutError"))
+    if (failure === "network") return Promise.reject(new TypeError("Network unavailable"))
+    return Promise.resolve(new Response(null, { status: Number(failure) }))
+  })
+  const page = await env.service().prepare(actor.tenantId, request, options, async () => request.snapshot)
+  for (let restart = 0; restart < 4; restart++) expect(await env.service().execute(actor.tenantId, { ...request, runId: page.runId }, page.fingerprint, { [page.rows[0]!.key]: page.rows[0]!.review.approvals })).toMatchObject({ status: "partial", outcomes: [{ state: "uncertain" }] })
+  expect(env.fetcher.mock.calls.filter(([, init]) => init?.method === "PATCH")).toHaveLength(1)
+  expect(env.writes).toEqual([])
+})
+it.each(["120", "1"])("defers a confirmed application throttle at Retry-After %s when the retry budget ends", async header => {
+  const env = persisted(), wait = vi.fn(async (_ms: number) => {})
+  const io = directory9bIO(token, actor, env.fetcher, () => [], () => env.settings.get(actor.tenantId).entra, wait)
+  const candidate = await applicationObjectStep("Applications", { ...app, displayName: "Saved" }, io, async () => app)
+  await io.preview(candidate)
+  const run = runFor(candidate), original = env.fetcher.getMockImplementation()!
+  env.fetcher.mockImplementation((url, init) => init?.method === "PATCH" ? Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": header } })) : original(url, init))
+  const result = await executeGuardedRun(new GuardedRunJournal(env.store), run, io)
+  expect(result).toMatchObject({ status: "partial", run: { entries: [{ state: "captured", retryAt: expect.any(Number) }] } })
+  expect(env.fetcher.mock.calls.filter(([, init]) => init?.method === "PATCH")).toHaveLength(header === "120" ? 1 : 5)
+  expect(wait).toHaveBeenCalledTimes(header === "120" ? 0 : 4)
+  expect(env.writes).toEqual([])
 })

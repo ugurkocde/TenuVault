@@ -131,17 +131,20 @@ it("uses operation-specific least privileges and never requests excluded directo
   expect(directoryPermissions(stepFor("owner"))).toEqual(["Group.ReadWrite.All"])
 })
 it("retries bounded throttles and rejects hostile continuations before attaching credentials", async () => {
-  let calls = 0
-  const wait = vi.fn(async () => {})
-  const io = directory9aIO(token(), actor, refs, vi.fn(async () => ++calls < 3 ? new Response(null, { status: 429, headers: { "Retry-After": "2" } }) : new Response(null, { status: 404 })), undefined, wait)
-  expect((await io.locate("Users", user.id)).action).toBe("create")
-  expect(wait.mock.calls).toEqual([[2000], [2000]])
-  const fetcher = vi.fn(async (_input: RequestInfo | URL) => Response.json({ value: [], "@odata.nextLink": "https://evil.example/users" }))
-  const bad = directory9aIO(token(), actor, refs, fetcher)
-  const collect = async () => { for await (const _ of bad.ids(group.id, "members")) { /* Fully follow the relationship inventory. */ } }
-  await expect(collect()).rejects.toThrow()
-  expect(fetcher).toHaveBeenCalledTimes(1)
-  expect(String(fetcher.mock.calls[0]![0])).toContain(`/beta/groups/${group.id}/members`)
+  const date = vi.spyOn(Date, "now").mockReturnValue(100_000)
+  try {
+    let calls = 0
+    const wait = vi.fn(async () => {})
+    const io = directory9aIO(token(), actor, refs, vi.fn(async () => ++calls < 3 ? new Response(null, { status: 429, headers: { "Retry-After": "2" } }) : new Response(null, { status: 404 })), undefined, wait)
+    expect((await io.locate("Users", user.id)).action).toBe("create")
+    expect(wait.mock.calls).toEqual([[2000], [2000]])
+    const fetcher = vi.fn(async (_input: RequestInfo | URL) => Response.json({ value: [], "@odata.nextLink": "https://evil.example/users" }))
+    const bad = directory9aIO(token(), actor, refs, fetcher)
+    const collect = async () => { for await (const _ of bad.ids(group.id, "members")) { /* Fully follow the relationship inventory. */ } }
+    await expect(collect()).rejects.toThrow()
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    expect(String(fetcher.mock.calls[0]![0])).toContain(`/beta/groups/${group.id}/members`)
+  } finally { date.mockRestore() }
 })
 it("streams 50,000 membership differences and loads only a bounded preview", async () => {
   let loaded = 0
@@ -385,4 +388,46 @@ it("blocks removals if a later CA policy or membership page cannot be read compl
     expect((await executeGuardedRun(new GuardedRunJournal(storage()), run, io)).status).toBe("partial")
     expect(env.attempts()).toBe(0)
   }
+})
+
+it.each(["Users", "Groups"] as const)("records a confirmed %s PATCH throttle as unapplied and repeats safety checks before success", async folder => {
+  let live: Item = folder === "Users" ? { ...user } : { ...group, description: "Old" }
+  let attempts = 0
+  const step = stepFor("update", folder)
+  step.desired = folder === "Users" ? { displayName: "Saved" } : { description: "Saved" }; step.properties = Object.keys(step.desired)
+  const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (init?.method === "PATCH") {
+      if (++attempts === 1) return new Response(null, { status: 429, headers: { "Retry-After": "2" } })
+      live = { ...live, ...JSON.parse(String(init.body)) }; return new Response(null, { status: 204 })
+    }
+    if (String(input).includes("conditionalAccess")) return Response.json({ value: [] })
+    return Response.json(live)
+  })
+  const safety = vi.fn(refs), store = storage(), journal = new GuardedRunJournal(store), waits: number[] = []
+  const io = directory9aIO(token(), actor, safety, fetcher, undefined, async ms => {
+    waits.push(ms)
+    expect(journal.load(actor.tenantId, "run")!.entries[0]).toMatchObject({ state: "captured", retryAt: expect.any(Number) })
+    expect(attempts).toBe(1)
+  })
+  step.preview = restoreFingerprint(await io.read(step))
+  const run = runFor(step)
+  for (const approval of (await io.review(step)).approvals) approveDirectory(step, run, approval)
+  const date = vi.spyOn(Date, "now").mockReturnValue(100_000)
+  try {
+    expect(await executeGuardedRun(journal, run, io)).toMatchObject({ status: "complete", run: { entries: [{ state: "applied" }] } })
+    expect(attempts).toBe(2); expect(waits).toEqual([2000]); expect(safety).toHaveBeenCalledTimes(3)
+    expect(fetcher.mock.calls.filter(([, init]) => init?.method === "PATCH")).toHaveLength(2)
+  } finally { date.mockRestore() }
+})
+it.each(["Users", "Groups"] as const)("never resends an unconfirmed %s 503 PATCH after repeated old-value reads", async folder => {
+  const live = folder === "Users" ? user : { ...group, description: "Old" }
+  const step = stepFor("update", folder)
+  step.desired = folder === "Users" ? { displayName: "Saved" } : { description: "Saved" }; step.properties = Object.keys(step.desired)
+  const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => init?.method === "PATCH" ? new Response(null, { status: 503 }) : String(input).includes("conditionalAccess") ? Response.json({ value: [] }) : Response.json(live))
+  const io = directory9aIO(token(), actor, refs, fetcher), journal = new GuardedRunJournal(storage())
+  step.preview = restoreFingerprint(await io.read(step))
+  const run = runFor(step)
+  for (const approval of (await io.review(step)).approvals) approveDirectory(step, run, approval)
+  for (let restart = 0; restart < 4; restart++) expect(await executeGuardedRun(journal, run, io)).toMatchObject({ status: "partial", run: { entries: [{ state: "uncertain" }] } })
+  expect(fetcher.mock.calls.filter(([, init]) => init?.method === "PATCH")).toHaveLength(1)
 })

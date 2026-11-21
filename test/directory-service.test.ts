@@ -265,15 +265,22 @@ it("cancels the production adapter's throttle wait and resumes after restart", a
     return original(input, init)
   })
   const request = { ...env.request, runId: page.runId }, approvals = { [page.rows[0]!.key]: page.rows[0]!.review.approvals }
-  const pending = service.execute(tenant, request, page.fingerprint, approvals)
-  await throttled; await service.cancel(tenant, page.runId)
-  expect(await pending).toMatchObject({ status: "partial", outcomes: [{ state: "captured" }] })
-  expect(attempts).toBe(1); expect(env.writes).toEqual([])
-  expect(await env.service().execute(tenant, request, page.fingerprint, approvals)).toMatchObject({ status: "complete" })
-  expect(attempts).toBe(2); expect(env.writes).toHaveLength(1)
+  vi.useFakeTimers()
+  try {
+    const pending = service.execute(tenant, request, page.fingerprint, approvals)
+    await throttled; await service.cancel(tenant, page.runId)
+    expect(await pending).toMatchObject({ status: "partial", outcomes: [{ state: "captured" }] })
+    expect(attempts).toBe(1); expect(env.writes).toEqual([])
+    const resumed = env.service().execute(tenant, request, page.fingerprint, approvals)
+    await vi.advanceTimersByTimeAsync(59_999)
+    expect(attempts).toBe(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(await resumed).toMatchObject({ status: "complete" })
+    expect(attempts).toBe(2); expect(env.writes).toHaveLength(1)
+  } finally { vi.useRealTimers() }
 })
 
-it.each(["Users", "Groups"] as const)("keeps cancellation during the final %s read resumable with exactly one PATCH", async folder => {
+it.each((["Users", "Groups"] as const).flatMap(folder => ["success", "503", "timeout"].map(failure => ({ folder, failure }))))("keeps cancellation plus $failure during the final $folder read resumable with exactly one PATCH", async ({ folder, failure }) => {
   const env = world(), service = env.service()
   const request: IdentityRestoreRequest = folder === "Groups" ? { ...env.request, snapshot: { ...env.request.snapshot, description: "Saved description" } } : { path: `backup/Users/${id(100)}.json`, origin: "restore" as const, snapshot: { id: id(100), displayName: "Saved name", userType: "Member" } }
   const page = await service.prepare(tenant, request, options, env.read)
@@ -285,6 +292,9 @@ it.each(["Users", "Groups"] as const)("keeps cancellation during the final %s re
     // Groups rebuild the payload with one extra GET before the final validation reads.
     if (new URL(String(input)).pathname === `/v1.0/${target}` && (!init?.method || init.method === "GET") && ++reads === (folder === "Groups" ? 6 : 5)) {
       reached(); await new Promise<void>(resolve => { release = resolve })
+      expect(init?.signal?.aborted).toBe(true)
+      if (failure === "503") return new Response(null, { status: 503 })
+      if (failure === "timeout") throw new DOMException("Read timed out", "TimeoutError")
     }
     return original(input, init)
   })

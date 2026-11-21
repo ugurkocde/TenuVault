@@ -39,11 +39,11 @@ export async function executeDirectoryBatches(store: PartitionedRestoreStore, id
     }
     const lockKey = (step: GuardedRun["entries"][number]["step"]) => `restore.directory.unanswered.${encodeURIComponent(identity.tenant.toLowerCase())}.${step.folder}.${step.sourceId.toLowerCase()}`
     const owner = batchKey
-    const guardedIO: GuardedIO = { ...io, write: async (step, body, targetId, beforeSend, currentRun, writeSignal) => {
+    const guardedIO: GuardedIO = { ...io, write: async (step, body, targetId, beforeSend, currentRun, writeSignal, onUnapplied) => {
       const lock = store.get(lockKey(step))
       if (lock && lock !== owner) throw new RestoreSafetyError("An earlier directory batch has an unanswered write for this object. Resume that run first.")
       store.set(lockKey(step), owner)
-      return io.write(step, body, targetId, beforeSend, currentRun, writeSignal)
+      return io.write(step, body, targetId, beforeSend, currentRun, writeSignal, onUnapplied)
     } }
     const result = await executeGuardedRun(journal, run, guardedIO, signal)
     // Publish confirmed mappings before releasing conflict locks, including cancelled batches.
