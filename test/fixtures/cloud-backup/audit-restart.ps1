@@ -1,6 +1,7 @@
 param(
     [string]$RunbookPath = (Join-Path $PSScriptRoot "../../../resources/runbooks/Invoke-TenuVaultBackup.ps1"),
-    [switch]$ParityOnly
+    [switch]$ParityOnly,
+    [switch]$TimingOnly
 )
 $ErrorActionPreference = "Stop"
 . $RunbookPath -LibraryOnly
@@ -39,6 +40,13 @@ function Get-RequestHeader {
     if ($Request.Headers.Contains($Name)) { return [string]::Join(",", $Request.Headers.GetValues($Name)) }
 }
 
+function Publish-OtherRun {
+    if ($script:otherRunPublished) { return }
+    $script:otherRunPublished = $true
+    $script:notesAtOtherWrite = @($script:blobs.Keys | Where-Object { $_ -like "*/cloud-backup-outcomes/*" }).Count
+    $script:blobs[$script:statusUri] = '{"LastStatus":"Failed","BackupFolder":"backup-other-run"}'
+}
+
 $script:HttpClient.Dispose()
 $script:HttpClient = [pscustomobject]@{}
 $script:HttpClient | Add-Member ScriptMethod SendAsync {
@@ -48,6 +56,20 @@ $script:HttpClient | Add-Member ScriptMethod SendAsync {
     $ifNoneMatch = Get-RequestHeader $Request "If-None-Match"
     $body = if ($Request.Content) { $Request.Content.ReadAsStringAsync().GetAwaiter().GetResult() }
     $script:calls.Add(@{ uri = $uri; method = $method; condition = Get-RequestHeader $Request "If-Match"; ifNoneMatch = $ifNoneMatch; body = $body })
+    if ($script:scenario -eq "stalledTerminal" -and $method -eq "Put" -and $uri.EndsWith("/terminal.json")) {
+        Publish-OtherRun
+        if ($Cancellation -and $Cancellation.CanBeCanceled) {
+            [System.Threading.Tasks.Task]::Delay(8000, $Cancellation).GetAwaiter().GetResult()
+        }
+        throw "Terminal audit request timed out"
+    }
+    if ($script:scenario -eq "stalledStart" -and $method -eq "Put" -and $uri.EndsWith("/start.json")) {
+        if (-not $Cancellation -or -not $Cancellation.CanBeCanceled) { throw "Start checkpoint had no deadline" }
+        [System.Threading.Tasks.Task]::Delay(8000, $Cancellation).GetAwaiter().GetResult()
+    }
+    if ($script:scenario -eq "stalledStart" -and $uri -like "*/deviceManagement/deviceCategories") {
+        $script:graphAtMs = $script:captureClock.ElapsedMilliseconds
+    }
     if ($script:scenario -eq "transportDown") { throw "Transport unavailable" }
     if ($script:scenario -eq "resultsDenied" -and $uri.StartsWith($script:resultBase)) { return New-Response 403 "Results container denied" }
     if ($script:scenario -eq "receiptDenied" -and $uri -like "*/audit-receipts/*") { return New-Response 403 "Receipt denied" }
@@ -112,6 +134,22 @@ function Invoke-Probe {
     return @{ calls = $script:calls.ToArray(); error = $message; output = $output.ToArray(); blobs = $script:blobs.Clone() }
 }
 
+if ($TimingOnly) {
+    $script:captureClock = [Diagnostics.Stopwatch]::StartNew()
+    $capture = Invoke-Probe "stalledStart"
+    $script:blobs.Clear()
+    $schedule = Invoke-Probe "stalledTerminal"
+    # Main has no terminal audit request. Simulate the second run after the first run's publication.
+    Publish-OtherRun
+    $result = @{
+        capture = @{ error = $capture.error; graphAtMs = $script:graphAtMs; calls = $capture.calls }
+        schedule = @{ error = $schedule.error; notesAtOtherWrite = $script:notesAtOtherWrite
+            status = ($script:blobs[$script:statusUri] | ConvertFrom-Json); calls = $schedule.calls }
+    }
+    [Console]::WriteLine(($result | ConvertTo-Json -Compress -Depth 10))
+    return
+}
+
 $cursorUri = "$script:resultBase/audit-cursors/$env:TenuVaultTenantId.json"
 $script:blobs[$cursorUri] = '{"olderCount":"invalid","days":{}}'
 $results = @{ corruptCursor = @(Invoke-Probe "normal") }
@@ -128,7 +166,7 @@ if (-not $ParityOnly) {
     $script:blobs.Clear()
     $first = Invoke-Probe "normal"
     foreach ($uri in @($script:blobs.Keys)) {
-        if ($uri.EndsWith("/terminal.json") -or $uri -like "*/audit-receipts/*" -or $uri -like "*/audit-logs/*") { $script:blobs.Remove($uri) }
+        if ($uri.EndsWith("/terminal.json") -or $uri -like "*/audit-receipts/*" -or $uri -like "*/audit-logs/*" -or $uri -like "*/audit-status/*") { $script:blobs.Remove($uri) }
     }
     $interrupted = $script:blobs.Clone()
     $results.interrupted = @($first, (Invoke-Probe "normal" -Restart))

@@ -245,6 +245,7 @@ export function CloudBackupSettings({ tenant, community, cloud, scopeVersion = 0
               </p>
             )}
             {cloud.status && !cloud.status.auditCapability && <p className="text-sm text-gray-700">Run the cloud setup again to enable audit recording for future runs.</p>}
+            {cloud.status?.auditStatusUnavailable && <p role="status" className="text-sm text-gray-700">Audit delivery status is unavailable for this run. Check the Automation job output.</p>}
             {!!cloud.status?.auditPending && <p role="status" className="text-sm text-amber-800">At least {cloud.status.auditPending} cloud audit event(s) are pending delivery.</p>}
             {cloud.status?.auditScanIncomplete && <p className="text-sm text-gray-700">The latest cloud run checked part of the audit receipt history.</p>}
             {!!cloud.status?.auditOlderPending && <p role="status" className="text-sm text-amber-800">{cloud.status.auditOlderPending} older audit receipts need operator replay with REPLAYOLDERAUDIT.</p>}

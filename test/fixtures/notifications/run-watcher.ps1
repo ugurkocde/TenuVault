@@ -5,11 +5,12 @@
 param(
     [Parameter(Mandatory)][string]$AlertsBlobPath,
     [Parameter(Mandatory)][string]$AlertsVariablePath,
-    [switch]$AlertsReadFails
+    [switch]$AlertsReadFails,
+    [switch]$AuditStatusStalls,
+    [string]$RunbookPath = (Join-Path $PSScriptRoot "../../../resources/runbooks/Invoke-TenuVaultNotificationCheck.ps1")
 )
 
 $ErrorActionPreference = "Stop"
-$runbook = Join-Path $PSScriptRoot "../../../resources/runbooks/Invoke-TenuVaultNotificationCheck.ps1"
 $fixture = Get-Content (Join-Path $PSScriptRoot "alert-live.json") -Raw | ConvertFrom-Json
 
 class TvHttpError : System.Exception {
@@ -32,9 +33,13 @@ $global:TvRunBlobs = @{}
 $blobText = Get-Content -LiteralPath $AlertsBlobPath -Raw
 if ($blobText) { $global:TvRunBlobs["tenuvault-notification-state/alerts.json"] = $blobText }
 $global:TvRunAlertsReadFails = [bool]$AlertsReadFails
+$global:TvAuditStatusStalls = [bool]$AuditStatusStalls
 $global:PSPrivateMetadata = @{ JobId = [guid]"55555555-5555-4555-8555-555555555555" }
 $global:TvRunPosts = [System.Collections.Generic.List[object]]::new()
 $global:TvRunAudit = $fixture.intune
+$global:TvSimTime = 0
+$global:TvLeaseExpiry = 0
+$global:TvAuditStatusReads = [System.Collections.Generic.List[object]]::new()
 
 function global:Get-AutomationVariable { param([string]$Name) if ($global:TvRunVariables.ContainsKey($Name)) { return $global:TvRunVariables[$Name] } throw "Variable $Name not found." }
 function global:Start-Sleep { }
@@ -56,7 +61,17 @@ function global:Invoke-WebRequest {
     if ($Uri -like "https://tvlab.blob.core.windows.net/*") {
         $path = ([uri]$Uri).AbsolutePath.TrimStart("/")
         $query = ([uri]$Uri).Query
-        if ($query -like "*comp=lease*") { return (& $response 201 "") }
+        if ($global:TvAuditStatusStalls -and $Method -eq "Get" -and $path -like "intune-backups/cloud-backup-status-*.json") {
+            $global:TvAuditStatusReads.Add(@{ timeout = $TimeoutSec; duringLease = $global:TvSimTime -lt $global:TvLeaseExpiry })
+            $global:TvSimTime += $TimeoutSec
+            throw "Audit status request timed out"
+        }
+        if ($query -like "*comp=lease*") {
+            $action = $Headers["x-ms-lease-action"]
+            if ($action -ne "acquire" -and $global:TvSimTime -ge $global:TvLeaseExpiry) { throw [TvHttpError]::new(412) }
+            $global:TvLeaseExpiry = if ($action -eq "release") { 0 } else { $global:TvSimTime + 60 }
+            return (& $response 201 "")
+        }
         if ($query -like "*comp=list*") { return (& $response 200 '<?xml version="1.0" encoding="utf-8"?><EnumerationResults><Blobs></Blobs></EnumerationResults>') }
         if ($Method -eq "Put") {
             $global:TvRunBlobs[$path] = [Text.Encoding]::UTF8.GetString([byte[]]$Body)
@@ -75,7 +90,7 @@ function global:Invoke-WebRequest {
     throw "Unexpected web request to $Uri"
 }
 
-$output = & $runbook *>&1 | ForEach-Object { [string]$_ }
+$output = & $RunbookPath *>&1 | ForEach-Object { [string]$_ }
 $titles = foreach ($post in $global:TvRunPosts) {
     $parsed = $post.body | ConvertFrom-Json
     $title = if ($parsed.title) { $parsed.title } elseif ($parsed.attachments) { $parsed.attachments[0].content.body[0].text } else { "?" }
@@ -84,6 +99,7 @@ $titles = foreach ($post in $global:TvRunPosts) {
 $heartbeat = $global:TvRunBlobs["tenuvault-notification-state/heartbeat.json"] | ConvertFrom-Json
 Write-Output (ConvertTo-Json -Depth 6 -Compress ([ordered]@{
     posts = @($titles)
+    auditStatusReads = $global:TvAuditStatusReads.ToArray()
     heartbeat = $heartbeat
     output = @($output)
 }))

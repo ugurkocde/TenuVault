@@ -27,22 +27,42 @@ const desktopApp = readFileSync(new URL("../resources/New-TenuVaultDesktopApp.ps
 const pwsh = ["/usr/local/bin/pwsh", "/opt/homebrew/bin/pwsh", "/usr/bin/pwsh", ...(process.env.HOME ? [`${process.env.HOME}/.local/bin/pwsh`] : [])].find((candidate) => existsSync(candidate))
 
 describe("Azure notification watcher scripts", () => {
-  it.runIf(Boolean(pwsh))("uses the backup container to alert separately about a receipt denial", () => {
+  it.runIf(Boolean(pwsh))("alerts on a receipt denial for the run referenced by Schedule status", () => {
     const source = fileURLToPath(new URL("../resources/runbooks/Invoke-TenuVaultNotificationCheck.ps1", import.meta.url))
     const output = execFileSync(pwsh!, ["-NoProfile", "-Command", `
       $ErrorActionPreference = 'Stop'
       . $env:TV_FIXTURE_WATCHER -LibraryOnly
       $tenant = '11111111-2222-3333-4444-555555555555'
+      $run = '99999999-9999-4999-8999-999999999999'
       function Get-TvBlobText {
-        param($Uri, $Token)
-        if ($Uri -ne 'https://stcontoso.blob.core.windows.net/intune-backups/cloud-backup-status-11111111.json') { throw "Wrong status path" }
-        @{ TenantId = $tenant; RunId = '99999999-9999-4999-8999-999999999999'; LastRunAt = '2026-11-20T12:00:00.000Z'; LastStatus = 'Success'; AuditReceiptFailed = $true } | ConvertTo-Json
+        param($Uri, $Token, $TimeoutSec)
+        if ($TimeoutSec -ne 5) { throw "Audit status read exceeded its timeout" }
+        if ($Uri -eq 'https://stcontoso.blob.core.windows.net/intune-backups/cloud-backup-status-11111111.json') {
+          return @{ TenantId = $tenant; RunId = $run; LastRunAt = '2026-11-20T12:00:00.000Z'; AuditStatusInResults = $true } | ConvertTo-Json
+        }
+        if ($Uri -eq "https://stcontoso.blob.core.windows.net/tenuvault-backup-results/audit-status/$tenant/$run.json") {
+          return @{ TenantId = $tenant; RunId = $run; AuditReceiptFailed = $true } | ConvertTo-Json
+        }
+        throw "Wrong status path"
       }
       $event = Read-TvCloudAuditAlert -Account stcontoso -Token test -TenantId $tenant -Now ([datetime]'2026-11-20T12:05:00Z')
       $event | ConvertTo-Json -Compress -Depth 10
     `], { encoding: "utf8", timeout: 15_000, env: { ...process.env, TV_FIXTURE_WATCHER: source } })
     expect(JSON.parse(output)).toMatchObject({ type: "backup.warning", severity: "warning", title: "Cloud backup audit needs attention" })
   }, 60_000)
+
+  it.runIf(Boolean(pwsh))("sends all four notifications when the audit status read stalls", () => {
+    const empty = join(mkdtempSync(join(tmpdir(), "tv-watcher-stall-")), "empty.json")
+    writeFileSync(empty, "")
+    const script = fileURLToPath(new URL("./fixtures/notifications/run-watcher.ps1", import.meta.url))
+    const result = JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", script,
+      "-AlertsBlobPath", empty, "-AlertsVariablePath", empty, "-AuditStatusStalls"], { encoding: "utf8", timeout: 15_000 }))
+    expect(result.auditStatusReads).toEqual([{ timeout: 5, duringLease: false }])
+    expect(result.heartbeat).toMatchObject({ eventsSent: 2, lastError: null })
+    expect(result.posts.map((post: { host: string }) => post.host)).toEqual([
+      "hooks.example.test", "contoso.webhook.office.com", "hooks.example.test", "contoso.webhook.office.com",
+    ])
+  }, 20_000)
 
   it("never reads audit request bodies, and touches property values only to name changed settings", () => {
     expect(runbook).not.toContain("requestBody")

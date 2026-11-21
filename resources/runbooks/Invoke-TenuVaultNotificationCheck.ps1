@@ -1620,19 +1620,26 @@ function New-TenuVaultCloudOutcomeEvent {
         -Trigger $script:TvOutcomeTrigger[[string]$Outcome.trigger] -Message $script:TvOutcomeSummary[[string]$Outcome.status]
 }
 
-# Use the Schedule status in intune-backups even when the producer cannot write result notes.
+# Match audit health to the run that published the Schedule status.
 function Read-TvCloudAuditAlert {
     param([string]$Account, [string]$Token, [string]$TenantId, [object]$TenantName, [DateTime]$Now = [DateTime]::UtcNow)
     try {
         $name = "cloud-backup-status-$($TenantId.Substring(0, 8).ToLowerInvariant()).json"
-        $status = ConvertFrom-TvNoteJson (Get-TvBlobText -Uri "https://$Account.blob.core.windows.net/intune-backups/$name" -Token $Token)
-        $receiptFailed = $status.AuditReceiptFailed -is [bool] -and $status.AuditReceiptFailed
-        $deliveryPending = $status.AuditDeliveryPending -is [bool] -and $status.AuditDeliveryPending
-        if ($status.TenantId -ne $TenantId -or $status.RunId -notmatch '^[a-f0-9-]{36}$' -or (-not $receiptFailed -and -not $deliveryPending)) { return }
+        $status = ConvertFrom-TvNoteJson (Get-TvBlobText -Uri "https://$Account.blob.core.windows.net/intune-backups/$name" -Token $Token -TimeoutSec 5)
+        if ($status.TenantId -ne $TenantId -or $status.RunId -notmatch '^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$') { return }
         $at = [string]$status.LastRunAt
         $date = [DateTimeOffset]::MinValue
         if (-not [DateTimeOffset]::TryParseExact($at, "yyyy-MM-dd'T'HH:mm:ss.fff'Z'", [Globalization.CultureInfo]::InvariantCulture,
             [Globalization.DateTimeStyles]::AssumeUniversal, [ref]$date) -or $date.UtcDateTime -lt $Now.AddDays(-7)) { return }
+        $auditStatus = $status
+        if ($status.AuditStatusInResults -eq $true) {
+            $path = "audit-status/$($TenantId.ToLowerInvariant())/$($status.RunId).json"
+            $auditStatus = ConvertFrom-TvNoteJson (Get-TvBlobText -Uri "https://$Account.blob.core.windows.net/tenuvault-backup-results/$path" -Token $Token -TimeoutSec 5)
+            if ($auditStatus.TenantId -ne $TenantId -or $auditStatus.RunId -ne $status.RunId) { return }
+        }
+        $receiptFailed = $auditStatus.AuditReceiptFailed -is [bool] -and $auditStatus.AuditReceiptFailed
+        $deliveryPending = $auditStatus.AuditDeliveryPending -is [bool] -and $auditStatus.AuditDeliveryPending
+        if (-not $receiptFailed -and -not $deliveryPending) { return }
         return New-TvEnvelope -Type "backup.warning" -Severity "warning" -TenantId $TenantId -TenantName $TenantName `
             -OccurredAt $at -NaturalKey "cloud-backup-audit:$($status.RunId)" -Title "Cloud backup audit needs attention" `
             -Summary "The Automation job reported an audit delivery problem. See its job output and the Schedule tab for details."
@@ -2043,7 +2050,8 @@ function Invoke-TvStorageRequest {
         [Parameter(Mandatory)][string]$Token,
         [hashtable]$Headers,
         [byte[]]$BodyBytes,
-        [string]$ContentType
+        [string]$ContentType,
+        [int]$TimeoutSec = 60
     )
     $requestHeaders = @{
         Authorization = "Bearer $Token"
@@ -2053,7 +2061,7 @@ function Invoke-TvStorageRequest {
     if ($Headers) { foreach ($key in $Headers.Keys) { $requestHeaders[$key] = $Headers[$key] } }
     $params = @{
         Uri = $Uri; Method = $Method; Headers = $requestHeaders
-        UseBasicParsing = $true; TimeoutSec = 60
+        UseBasicParsing = $true; TimeoutSec = $TimeoutSec
     }
     if ($null -ne $BodyBytes) { $params.Body = $BodyBytes }
     if ($ContentType) { $params.ContentType = $ContentType }
@@ -2061,9 +2069,9 @@ function Invoke-TvStorageRequest {
 }
 
 function Get-TvBlobText {
-    param([Parameter(Mandatory)][string]$Uri, [Parameter(Mandatory)][string]$Token)
+    param([Parameter(Mandatory)][string]$Uri, [Parameter(Mandatory)][string]$Token, [int]$TimeoutSec = 60)
     try {
-        $response = Invoke-TvStorageRequest -Uri $Uri -Method Get -Token $Token
+        $response = Invoke-TvStorageRequest -Uri $Uri -Method Get -Token $Token -TimeoutSec $TimeoutSec
         return [string]$response.Content
     } catch {
         if ($_.Exception.Response -and [int]$_.Exception.Response.StatusCode -eq 404) { return $null }
@@ -3022,6 +3030,8 @@ try {
         $existingStateText = Get-TvBlobText -Uri $stateBlobUri -Token $storageToken
     }
 
+    # A slow audit status read must finish before the delivery lease starts.
+    $cloudAuditAlert = Read-TvCloudAuditAlert -Account $storageAccount -Token $storageToken -TenantId $tenantId -TenantName $tenantName
     $leaseId = [Guid]::NewGuid().ToString()
     try {
         Invoke-TvStorageRequest -Uri $leaseQueryUri -Method Put -Token $storageToken -Headers @{
@@ -3303,7 +3313,6 @@ try {
     $outcomeRead = Read-TvBackupOutcomes -ContainerUri $resultsContainerUri -Token $storageToken -TenantId $tenantId -TenantName $tenantName `
         -RenewLease { Update-TvStateLease -LeaseQueryUri $leaseQueryUri -Token $storageToken -LeaseId $leaseId }
     foreach ($envelope in $outcomeRead.Envelopes) { $candidateEnvelopes.Add($envelope) }
-    $cloudAuditAlert = Read-TvCloudAuditAlert -Account $storageAccount -Token $storageToken -TenantId $tenantId -TenantName $tenantName
     if ($cloudAuditAlert) { $candidateEnvelopes.Add($cloudAuditAlert) }
     foreach ($folder in $outcomeRead.FailedFolders) { if (-not $failedBackupFolders.Contains($folder)) { $failedBackupFolders.Add($folder) } }
     $processedOutcomeNames = $outcomeRead.Processed
