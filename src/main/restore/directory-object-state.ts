@@ -1,6 +1,6 @@
 import type { KeyValueStore } from "../storage/secure-store"
 import { RestoreSafetyError, RestoreWriteDeferredError } from "../../shared/intune/restore-guards"
-import { GuardedRunJournal, type GuardedRun, type GuardedStep } from "./guarded-run"
+import { GuardedRunJournal, RestorePersistenceError, type GuardedRun, type GuardedStep } from "./guarded-run"
 
 type Rejection = { step: string; attempt: number }
 type State = { locks: Record<string, { owner: string; journal: string; rejected?: Rejection }>; deadlines: Record<string, number>; discarded: Record<string, true>; invalid?: boolean }
@@ -40,7 +40,7 @@ export function directoryObjectState(store: KeyValueStore, tenant: string, owner
   const acquire = (state: State, id: string, journal: string) => {
     const lock = state.locks[id.toLowerCase()]
     if (lock && lock.owner !== owner) throw new RestoreSafetyError("Another saved directory page owns this object. Resolve or discard that page first.")
-    state.locks[id.toLowerCase()] = { owner, journal }
+    state.locks[id.toLowerCase()] = { owner, journal, ...(lock?.journal === journal && lock.rejected ? { rejected: lock.rejected } : {}) }
   }
   // A throttle can reach either atomic record first. Recover the journal half before
   // ownership is released, and let prepare publish the coordinator half on resume.
@@ -84,6 +84,15 @@ export function directoryObjectState(store: KeyValueStore, tenant: string, owner
       const lock = state.locks[id]
       return lock?.owner === owner && lock.journal === journal && lock.rejected?.step === step.key && lock.rejected.attempt === attempt
     },
+    clearRejected: (step: GuardedStep, journal: string, attempt: number | undefined) => {
+      const state = load(), id = object(step)
+      verify(state, id)
+      const lock = state.locks[id]
+      if (lock?.owner === owner && lock.journal === journal && lock.rejected?.step === step.key && attempt !== undefined && attempt > lock.rejected.attempt) {
+        delete lock.rejected
+        save(state)
+      }
+    },
     recordThrottle: (step: Pick<GuardedStep, "sourceId" | "targetId">, retryAt: number, rejected?: Rejection) => {
       const state = load(), id = object(step)
       verify(state, id)
@@ -110,7 +119,7 @@ export function directoryObjectState(store: KeyValueStore, tenant: string, owner
         const journal = new GuardedRunJournal({ get: name => store.get(journalPrefix + name), set: () => { throw new Error("Read-only history") }, delete: () => { throw new Error("Read-only history") } })
         const runs = (() => {
           try { return journal.list(tenant) }
-          catch { return invalid([...ids].find(id => state.locks[id]?.journal === journalPrefix)!) }
+          catch (error) { if (error instanceof RestorePersistenceError) throw error; return invalid([...ids].find(id => state.locks[id]?.journal === journalPrefix)!) }
         })()
         for (const run of runs) for (const mapping of run.mappings) {
           // Only a confirmed create in this exact journal can publish its replacement.

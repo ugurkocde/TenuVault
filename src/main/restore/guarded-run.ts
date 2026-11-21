@@ -87,11 +87,18 @@ function canonical(value: unknown): string {
 export const restoreFingerprint = (value: Item | null): string => createHash("sha256").update(canonical(value)).digest("hex")
 const tenantKey = (tenant: string) => `restore.guarded.${encodeURIComponent(tenant.toLowerCase())}`
 
+/** Storage failures must escape safety and transport failure classification. */
+export class RestorePersistenceError extends Error {}
+export function restorePersistence<T>(work: () => T): T {
+  try { return work() }
+  catch (error) { throw new RestorePersistenceError(error instanceof Error ? error.message : "Restore history persistence failed. Resume to repeat safety checks.", { cause: error }) }
+}
+
 /** All runs for a tenant share one atomic encrypted value, including unresolved earlier writes. */
 export class GuardedRunJournal {
   constructor(private readonly store: KeyValueStore) {}
   private history(tenant: string): { version: 2; runs: Record<string, GuardedRun>; mappings: RestoreMapping[] } {
-    const raw = this.store.get(tenantKey(tenant))
+    const raw = restorePersistence(() => this.store.get(tenantKey(tenant)))
     if (raw === null) return { version: 2, runs: {}, mappings: [] }
     let parsed
     try { parsed = JSON.parse(raw) } catch { throw new RestoreSafetyError("Restore history could not be verified. Nothing was written.") }
@@ -115,7 +122,7 @@ export class GuardedRunJournal {
     for (const previous of Object.values(history.runs)) for (const mapping of previous.mappings) rememberMapping(history.mappings, mapping)
     const settled = Object.values(history.runs).filter(previous => previous.entries.every(entry => ["applied", "blocked", "failed", "failed-before-send"].includes(entry.state)))
     for (const previous of settled.filter(previous => previous.id !== run.id).slice(0, Math.max(0, settled.length - 1000))) delete history.runs[previous.id]
-    this.store.set(tenantKey(run.tenant), JSON.stringify(history))
+    restorePersistence(() => this.store.set(tenantKey(run.tenant), JSON.stringify(history)))
   }
   mappings(tenant: string): RestoreMapping[] {
     const history = this.history(tenant)
@@ -247,7 +254,7 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
             entry.state = step.directory ? "deferred" : "captured"; delete entry.reason; defer(retryAt, rejected)
           })
         } catch (error) {
-          if (error instanceof DirectoryRetryPersistenceError) throw error
+          if (error instanceof DirectoryRetryPersistenceError || error instanceof RestorePersistenceError) throw error
           if (error instanceof RestoreWriteDeferredError || (["captured", "deferred"].includes(entry.state) && signal?.aborted)) {
             entry.state = step.directory ? "deferred" : "captured"; entry.reason = error instanceof RestoreWriteDeferredError ? error.message : "The directory write was cancelled before sending."
             if (error instanceof RestoreWriteDeferredError && error.retryAt !== undefined) { defer(error.retryAt) }
@@ -267,7 +274,7 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
         if (step.directory && step.desired.present === true) entry.acknowledged = true
         saveConfirmed()
       } catch (error) {
-        if (entry.state === "applied" || error instanceof DirectoryRetryPersistenceError) throw error
+        if (entry.state === "applied" || error instanceof DirectoryRetryPersistenceError || error instanceof RestorePersistenceError) throw error
         if (entry.state === "uncertain" && error instanceof RestoreWriteDeferredError && error.retryAt !== undefined) {
           defer(error.retryAt)
           entry.reason = "Microsoft Graph deferred confirmation of this unanswered write. Retry after the saved deadline."
@@ -288,7 +295,7 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
         if (!io.replacedReferences) throw new Error("Reference scan unavailable")
         run.replacedReferences = await io.replacedReferences(replacements, signal)
         delete run.referenceWarning
-      } catch { run.referenceWarning = "The Intune and Conditional Access reference scan did not complete. Review references to replaced IDs before activating restored policies." }
+      } catch (error) { if (error instanceof RestorePersistenceError) throw error; run.referenceWarning = "The Intune and Conditional Access reference scan did not complete. Review references to replaced IDs before activating restored policies." }
       journal.save(run)
     }
     return { status: run.entries.every(entry => entry.state === "applied") && !run.referenceWarning ? "complete" : "partial", run }

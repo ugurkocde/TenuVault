@@ -214,7 +214,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
         if (error instanceof RestoreWriteDeferredError) throw error
         throw new RestoreWriteDeferredError("A complete membership read could not establish a remaining member. Resume to repeat safety checks.")
       }
-      if (!survivor && removed.size) throw new RestoreWriteDeferredError("Saved removals leave no verified member in this Conditional Access target group. Resume after its membership is resolved.")
+      if (!survivor && removed.size) throw new RestoreWriteDeferredError("Saved removals leave no verified member in this Conditional Access target group. Confirm membership in Entra, then run a fresh preview to review the remaining removal.")
       emptiesTarget = !survivor
     }
     const compared = ["member", "owner", "manager", "license"].includes(intent.action) ? { ...resource, ...(preimage === undefined ? await read(step, step.targetId) : preimage) } : resource

@@ -308,7 +308,7 @@ it.each((["Users", "Groups"] as const).flatMap(folder => ["success", "503", "tim
   expect(await pending).toMatchObject({ status: "partial", failed: 0, outcomes: [{ state: "deferred" }] })
   expect(env.writes).toEqual([])
   const restarted = env.service()
-  expect(await restarted.resume(tenant, saved)).toEqual(page)
+  expect(await restarted.resume(tenant, saved)).toEqual({ ...page, selection: page.rows.map(row => row.key) })
   expect(await restarted.execute(tenant, saved, page.fingerprint, approvals)).toMatchObject({ status: "complete", failed: 0, outcomes: [{ state: "applied" }] })
   await env.service().execute(tenant, saved, page.fingerprint, approvals)
   expect(env.writes).toEqual([`PATCH ${target}`])
@@ -521,7 +521,10 @@ it("does not mark a write uncertain when saving its send marker fails", async ()
     if (!failed && key.includes("restore.guarded.") && value.includes('"state":"uncertain"')) { failed = true; throw new Error("Disk unavailable") }
     set(key, value)
   })
-  expect(await env.service().execute(tenant, { ...request, runId: page.runId }, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])))).toMatchObject({ outcomes: [{ state: "failed-before-send" }], canDiscard: true })
+  await expect(env.service().execute(tenant, { ...request, runId: page.runId }, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])))).rejects.toThrow("Disk unavailable")
+  expect((await env.service().resume(tenant, { ...request, runId: page.runId })).canDiscard).toBe(true)
+  const journal = JSON.parse(env.data.get(`restore.directory.${tenant}.${page.runId}.batch.0.restore.guarded.${tenant}`)!)
+  expect(journal.runs[page.runId].entries[0].state).toBe("captured")
   expect(failed).toBe(true); expect(env.writes).toEqual([])
   expect(await env.service().saved(tenant, page.runId, "discard")).toMatchObject({ discarded: true })
 })
@@ -841,6 +844,7 @@ it("keeps a removed survivor excluded when a failed re-add is confirmed only by 
   const journal = JSON.parse(env.data.get(`restore.directory.${tenant}.${addB.runId}.batch.0.restore.guarded.${tenant}`)!)
   expect(journal.runs[addB.runId].entries[0].acknowledged).toBeUndefined()
   expect(await execute(removeA, empty, id(100))).toMatchObject({ failed: 0, outcomes: [{ state: "deferred", reason: expect.stringContaining("Saved removals leave no verified member") }] })
+  expect((await execute(removeA, empty, id(100))).outcomes[0]!.reason).toContain("Confirm membership in Entra, then run a fresh preview")
   expect(adds).toBe(1)
   expect(env.writes).toEqual([`DELETE groups/${resource}/members/${id(101)}/$ref`])
   expect([...env.members]).toEqual([id(100)])
@@ -903,5 +907,132 @@ it("preserves batch numbers across a journal gap when saving an actor throttle",
     const after = JSON.parse(env.data.get(second)!).runs[page.runId]
     expect(after).toEqual({ ...before, entries: before.entries.map((entry: object) => ({ ...entry, retryAt: deadline })) })
     expect(env.writes).toHaveLength(21)
+  } finally { vi.useRealTimers() }
+})
+
+it("creates the next approved batch only on execution after confirming member 20", async () => {
+  const env = world(21), page = await env.service().prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read), original = env.fetcher.getMockImplementation()!
+  let posts = 0
+  env.fetcher.mockImplementation(async (input, init) => {
+    const response = await original(input, init)
+    return init?.method === "POST" && ++posts === 20 ? new Response(null, { status: 503 }) : response
+  })
+  const request = { ...env.request, runId: page.runId }, approvals = Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals]))
+  const execute = () => env.service().execute(tenant, request, page.fingerprint, approvals)
+  expect(await execute()).toMatchObject({ status: "partial", outcomes: [...Array.from({ length: 19 }, () => ({ state: "applied" })), { state: "uncertain" }] })
+  expect(posts).toBe(20)
+  expect(await env.service().saved(tenant, page.runId, "reconcile")).toMatchObject({ status: "partial", outcomes: Array.from({ length: 20 }, () => ({ state: "applied" })) })
+  expect(env.data.has(`restore.directory.${tenant}.${page.runId}.batch.1.plan`)).toBe(false)
+  expect(posts).toBe(20)
+  expect((await env.service().resume(tenant, request)).selection).toEqual(page.rows.map(row => row.key))
+  expect(await execute()).toMatchObject({ status: "complete", failed: 0, outcomes: Array.from({ length: 21 }, () => ({ state: "applied" })) })
+  await execute()
+  expect(posts).toBe(21); expect(env.writes).toHaveLength(21); expect(env.members).toEqual(new Set(env.saved))
+})
+
+it.each(["capture", "send marker", "coordinator", "relationship history"])("retries approved rows after a %s storage failure without terminalizing them", async phase => {
+  const env = world(1), page = await env.service().prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read), set = env.store.set
+  const request = { ...env.request, runId: page.runId }, approvals = Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals]))
+  let failures = 0
+  const spy = vi.spyOn(env.store, "set").mockImplementation((key, value) => {
+    const matches = phase === "coordinator" ? key.includes(".coordinator.") : phase === "relationship history" ? key.includes(".relationship-history.") : key.includes(".restore.guarded.") && value.includes(`"state":"${phase === "capture" ? "captured" : "uncertain"}"`)
+    if (!failures && matches) { failures++; throw new Error("Injected storage failure") }
+    set(key, value)
+  })
+  await expect(env.service().execute(tenant, request, page.fingerprint, approvals)).rejects.toThrow("Injected storage failure")
+  expect(failures).toBe(1); expect(env.writes).toEqual([])
+  const journal = JSON.parse(env.data.get(`restore.directory.${tenant}.${page.runId}.batch.0.restore.guarded.${tenant}`)!)
+  expect(journal.runs[page.runId].entries[0].state).toBe(phase === "send marker" ? "captured" : "pending")
+  spy.mockRestore()
+  expect((await env.service().resume(tenant, request)).selection).toEqual([page.rows[0]!.key])
+  const reads = env.fetcher.mock.calls.length
+  expect(await env.service().execute(tenant, request, page.fingerprint, approvals)).toMatchObject({ status: "complete", outcomes: [{ state: "applied" }] })
+  expect(env.fetcher.mock.calls.length).toBeGreaterThan(reads)
+  await env.service().execute(tenant, request, page.fingerprint, approvals)
+  expect(env.writes).toEqual([`POST groups/${resource}/members/$ref`])
+})
+
+it.each(["user", "client", "tenant"].flatMap(identity => ["reconcile", "resume", "discard"].map(action => ({ identity, action }))))("refuses saved $action data for a different $identity before Graph reads during Retry-After", async ({ identity, action }) => {
+  const env = world(1), page = await env.service().prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read), original = env.fetcher.getMockImplementation()!
+  env.fetcher.mockImplementation((input, init) => init?.method === "POST" ? Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
+  expect(await env.service().execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])))).toMatchObject({ outcomes: [{ state: "deferred" }] })
+  const connection = { ...await env.connection(), ...(identity === "tenant" ? { tenantId: id(990) } : identity === "client" ? { clientId: id(991) } : { userId: id(992) }) }
+  connection.token = `h.${Buffer.from(JSON.stringify({ tid: connection.tenantId, oid: connection.userId, appid: connection.clientId, scp: "GroupMember.ReadWrite.All" })).toString("base64url")}.s`
+  const other = new DirectoryRestoreService(env.store, new RecoveryAccounts(env.store), async () => connection, env.fetcher, () => [], env.settings)
+  const before = new Map(env.data), calls = env.fetcher.mock.calls.length
+  const result = action === "resume" ? other.resume(tenant, { ...env.request, runId: page.runId }) : other.saved(tenant, page.runId, action as "reconcile" | "discard")
+  await expect(result).rejects.toThrow("admin and connection that reviewed")
+  expect(env.fetcher).toHaveBeenCalledTimes(calls); expect(env.data).toEqual(before); expect(env.writes).toEqual([])
+})
+
+it("returns and enforces the original row selection when resuming a partial page", async () => {
+  const env = world(3), page = await env.service().prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read), original = env.fetcher.getMockImplementation()!
+  const selected = [page.rows[0]!, page.rows[2]!], approvals = Object.fromEntries(selected.map(row => [row.key, row.review.approvals])), request = { ...env.request, runId: page.runId }
+  env.fetcher.mockImplementation((input, init) => init?.method === "POST" ? Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
+  vi.useFakeTimers()
+  try {
+    expect(await env.service().execute(tenant, request, page.fingerprint, approvals)).toMatchObject({ outcomes: [{ state: "deferred" }, { state: "deferred" }] })
+    expect((await env.service().resume(tenant, request)).selection).toEqual(selected.map(row => row.key))
+    await expect(env.service().execute(tenant, request, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])))).rejects.toThrow("original selection")
+    expect(env.writes).toEqual([])
+    await vi.advanceTimersByTimeAsync(120_000)
+    env.fetcher.mockImplementation(original)
+    expect(await env.service().execute(tenant, request, page.fingerprint, approvals)).toMatchObject({ status: "complete" })
+    expect(env.members).toEqual(new Set([id(100), id(102)])); expect(env.writes).toHaveLength(2)
+  } finally { vi.useRealTimers() }
+})
+
+it.each([false, true])("confirms an elapsed uncertain entry alongside a future deferred deadline with same object %s", async sameObject => {
+  const env = world(2), page = await env.service().prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read), original = env.fetcher.getMockImplementation()!
+  env.fetcher.mockImplementation(async (input, init) => {
+    const response = await original(input, init)
+    return init?.method === "POST" ? new Response(null, { status: 503 }) : response
+  })
+  expect(await env.service().execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])))).toMatchObject({ outcomes: [{ state: "uncertain" }, { state: "deferred" }] })
+  const journalKey = `restore.directory.${tenant}.${page.runId}.batch.0.restore.guarded.${tenant}`, journal = JSON.parse(env.data.get(journalKey)!)
+  const [uncertain, deferred] = journal.runs[page.runId].entries
+  uncertain.retryAt = Date.now() - 1000
+  deferred.retryAt = Date.now() + 120_000
+  if (!sameObject) {
+    // The journal fixture includes a deferred entry for a different object in the saved batch.
+    deferred.step.targetId = deferred.targetId = id(999)
+    const planKey = `restore.directory.${tenant}.${page.runId}.batch.0.plan`, plan = JSON.parse(env.data.get(planKey)!)
+    plan.entries[1].step.targetId = id(999)
+    env.data.set(planKey, JSON.stringify(plan))
+  }
+  env.data.set(journalKey, JSON.stringify(journal))
+  const calls = env.fetcher.mock.calls.length
+  expect(await env.service().saved(tenant, page.runId, "reconcile")).toMatchObject({ outcomes: [{ state: sameObject ? "uncertain" : "applied" }, { state: "deferred" }] })
+  if (sameObject) expect(env.fetcher).toHaveBeenCalledTimes(calls)
+  else expect(env.fetcher.mock.calls.length).toBeGreaterThan(calls)
+  expect(env.writes).toEqual([`POST groups/${resource}/members/$ref`])
+})
+
+it.each(["within writer", "after resume"])("clears a step's rejected marker after success %s while the page stays locked", async mode => {
+  const env = world(2), page = await env.service().prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read), original = env.fetcher.getMockImplementation()!
+  let posts = 0
+  env.fetcher.mockImplementation((input, init) => {
+    if (init?.method === "POST" && ++posts !== 2) return Promise.resolve(new Response(null, { status: posts === 1 ? 429 : 503, headers: { "Retry-After": mode === "within writer" ? "1" : "120" } }))
+    return original(input, init)
+  })
+  const execute = () => env.service().execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])))
+  vi.useFakeTimers()
+  try {
+    const pending = execute()
+    await vi.advanceTimersByTimeAsync(0)
+    const coordinator = `restore.directory.coordinator.${tenant}`
+    expect(posts).toBe(1)
+    expect(JSON.parse(env.data.get(coordinator)!).locks[resource].rejected).toEqual({ step: page.rows[0]!.key, attempt: 1 })
+    if (mode === "after resume") {
+      expect(await pending).toMatchObject({ outcomes: [{ state: "deferred" }, { state: "deferred" }] })
+      await vi.advanceTimersByTimeAsync(120_000)
+      expect(await execute()).toMatchObject({ outcomes: [{ state: "applied" }, { state: "uncertain" }] })
+    } else {
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(await pending).toMatchObject({ outcomes: [{ state: "applied" }, { state: "uncertain" }] })
+    }
+    expect(JSON.parse(env.data.get(coordinator)!).locks[resource]).toMatchObject({ owner: page.runId })
+    expect(JSON.parse(env.data.get(coordinator)!).locks[resource].rejected).toBeUndefined()
+    expect(posts).toBe(3); expect(env.writes).toHaveLength(1)
   } finally { vi.useRealTimers() }
 })

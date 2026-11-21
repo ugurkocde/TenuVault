@@ -120,3 +120,22 @@ it("confirms the displayed page even when the saved page input names a different
   await click("Resume saved page")
   expect(JSON.parse(String(fetcher.mock.calls[2]![1]?.body))).toMatchObject({ action: "resume", runId: "different-page" })
 })
+
+it("restores only the saved selection as checked approvals when resuming a page", async () => {
+  const rows = [page.rows[0]!, { ...page.rows[0]!, key: "unselected" }]
+  const fetcher = vi.fn(async (_input: unknown, init?: RequestInit) => Response.json(JSON.parse(String(init?.body)).action === "resume" ? { ...page, rows, selection: ["member"] } : { status: "complete" }))
+  vi.stubGlobal("fetch", fetcher)
+  root = createRoot(document.body.appendChild(document.createElement("div")))
+  await act(async () => root.render(createElement(DirectoryRestore, props)))
+  await click("Review directory restore")
+  await act(async () => {
+    const input = document.querySelector<HTMLInputElement>('input:not([type="checkbox"])')!
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "run")
+    input.dispatchEvent(new Event("input", { bubbles: true }))
+  })
+  await click("Resume saved page")
+  expect([...document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')].map(input => input.checked)).toEqual([true, true, false, false])
+  expect((button("Execute approved changes or resume page") as HTMLButtonElement).disabled).toBe(false)
+  await click("Execute approved changes or resume page")
+  expect(JSON.parse(String(fetcher.mock.calls[1]![1]?.body))).toMatchObject({ action: "restore", runId: "run", approvals: { member: ["directory-item", "security-response"] } })
+})

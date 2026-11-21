@@ -6,7 +6,7 @@ import type { BackupTenant } from "./types"
 import type { ReplacedReference } from "../../../shared/intune/restore-references"
 import type { DirectoryReview } from "../../../main/restore/directory-9a"
 
-interface Review { runId: string; fingerprint: string; more: boolean; rows: Array<{ key: string; review: DirectoryReview }> }
+interface Review { runId: string; fingerprint: string; more: boolean; selection?: string[]; rows: Array<{ key: string; review: DirectoryReview }> }
 const approvalLabel: Record<string, string> = { "directory-item": "Approve this individual change", "privileged-relationship": "Approve this privileged relationship", "security-response": "Approve undoing the apparent security response", "recycle-relationships": "Approve recovered relationships and account state", "exact-group": "Approve this removal for this group" }
 /** A bounded page of explicit approvals, outside restore all and row selection. */
 export function DirectoryRestore({ tenant, backupId = "", path = "" }: { tenant: BackupTenant; backupId?: string; path?: string }) {
@@ -32,7 +32,7 @@ export function DirectoryRestore({ tenant, backupId = "", path = "" }: { tenant:
       if (!response.ok) throw new Error(data.error ?? "Directory restore could not finish.")
       setCanDiscard(data.canDiscard === true)
       if (action === "reconcile" && data.rows) setReview(data)
-      if (action === "preview" || action === "resume" || action === "next") { setReview(data); if (data.options) { setStage(data.options.stage); setExactMembers(data.options.exactMembers); setExactOwners(data.options.exactOwners) } setApprovals({}); setOutcomes([]); setReferences([]); setMessage(data.rows.length ? "Review each row separately." : "No relationship differences remain in this page.") }
+      if (action === "preview" || action === "resume" || action === "next") { setReview(data); if (data.options) { setStage(data.options.stage); setExactMembers(data.options.exactMembers); setExactOwners(data.options.exactOwners) } setApprovals(action === "resume" ? Object.fromEntries((data.rows as Review["rows"]).filter(row => data.selection?.includes(row.key)).map(row => [row.key, row.review.approvals])) : {}); setOutcomes([]); setReferences([]); setMessage(data.rows.length ? "Review each row separately." : "No relationship differences remain in this page.") }
       else if (action === "cancel") setMessage(data.cancelled ? "Cancellation requested. In-flight results will be confirmed before continuing." : "No active restore was cancelled.")
       else if (action === "discard") { setCanDiscard(false); setReview(null); setOutcomes([]); setMessage("Saved restore discarded. This page can never send again.") }
       else { setOutcomes(data.outcomes ?? []); setReferences(data.replacedReferences ?? []); setMessage(data.status === "complete" ? "Directory page completed. Preview again for remaining differences." : `Directory restore is partial. Applied changes are retained. Review the results and warnings. Resume throttled steps after the retry time. Confirm uncertain results before continuing. ${(data.warnings ?? []).join(" ")}`) }

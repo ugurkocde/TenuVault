@@ -35,8 +35,8 @@ const key = (tenant: string, id: string) => `restore.directory.review.${tenant.t
 export class DirectoryRestoreService {
   private readonly running = new Map<string, AbortController>()
   constructor(private readonly store: PartitionedRestoreStore, private readonly recovery: RecoveryAccounts, private readonly connection: (tenant: string) => Promise<RestoreConnection>, private readonly fetchImpl: typeof fetch = fetch, private readonly protectedAppIds: (tenant: string) => readonly string[] = () => [], private readonly settings?: Pick<ModuleSettings, "get">) {}
-  private async context(tenant: string, onThrottled?: (retryAt: number) => void) {
-    const connection = await this.connection(tenant)
+  private async context(tenant: string, onThrottled?: (retryAt: number) => void, validatedConnection?: RestoreConnection) {
+    const connection = validatedConnection ?? await this.connection(tenant)
     if (connection.tenantId.toLowerCase() !== tenant.toLowerCase()) fail("The connection belongs to another tenant.")
     requireRestoreActor(connection.token, { ...connection, recoveryAccountIds: [] })
     const actorFetch: typeof fetch = async (input, init) => {
@@ -62,6 +62,12 @@ export class DirectoryRestoreService {
       return referenceMatches(connection.token, mappings, this.fetchImpl, { signal })
     }, undefined, undefined, true, (target, kind) => directoryRelationshipHistory(this.store, tenant, target).removed(kind))
     return { actor, io, applicationIO: directory9bIO(connection.token, actor, this.fetchImpl, () => this.protectedAppIds(tenant), () => this.settings?.get(tenant).entra) }
+  }
+  private async pageConnection(page: DirectoryPage) {
+    const connection = await this.connection(page.run.tenant)
+    requireRestoreActor(connection.token, { ...connection, recoveryAccountIds: [] })
+    if (connection.tenantId.toLowerCase() !== page.run.tenant.toLowerCase() || connection.tenantId.toLowerCase() !== page.run.actor.tenantId.toLowerCase() || connection.userId.toLowerCase() !== page.run.actor.userId.toLowerCase() || connection.clientId.toLowerCase() !== page.run.actor.clientId.toLowerCase()) fail("Use the admin and connection that reviewed this page.")
+    return connection
   }
   private requireAccess(tenant: string, folder: string) {
     const setting = this.settings?.get(tenant).entra
@@ -246,11 +252,12 @@ export class DirectoryRestoreService {
     return this.view(page)
   }
   private view(page: DirectoryPage) {
-    return { canDiscard: !directoryObjectState(this.store, page.run.tenant, page.run.id).discarded() && !this.history(page).some(({ run }) => run.entries.some(entry => entry.state === "uncertain")), runId: page.run.id, fingerprint: restoreFingerprint({ source: page.run.source!, rows: page.rows as unknown as Item["rows"], options: page.options as unknown as Item }), rows: page.rows, more: page.more, options: page.options }
+    return { canDiscard: !directoryObjectState(this.store, page.run.tenant, page.run.id).discarded() && !this.history(page).some(({ run }) => run.entries.some(entry => entry.state === "uncertain")), runId: page.run.id, selection: page.selection, fingerprint: restoreFingerprint({ source: page.run.source!, rows: page.rows as unknown as Item["rows"], options: page.options as unknown as Item }), rows: page.rows, more: page.more, options: page.options }
   }
   async resume(tenant: string, request: IdentityRestoreRequest) {
     const page = this.load(tenant, request.runId!)
-    const { actor } = await this.context(tenant, retryAt => this.recordPageThrottle(page, retryAt))
+    const connection = await this.pageConnection(page)
+    const { actor } = await this.context(tenant, retryAt => this.recordPageThrottle(page, retryAt), connection)
     if (request.origin !== "restore" || page.run.origin !== request.origin || page.run.source?.path !== request.path || page.run.source.fingerprint !== restoreFingerprint(request.snapshot) || actor.userId !== page.run.actor.userId || actor.clientId !== page.run.actor.clientId) fail("Resume the original backup with the admin and connection that reviewed it.")
     return this.view(page)
   }
@@ -275,7 +282,8 @@ export class DirectoryRestoreService {
     }
     const page = this.load(tenant, request.runId!)
     if (request.origin !== "restore" || page.run.origin !== request.origin || page.run.source?.path !== request.path || page.run.source.fingerprint !== restoreFingerprint(request.snapshot) || this.view(page).fingerprint !== fingerprint) fail("The backup or preview changed. Preview this object again.")
-    const context = await this.context(tenant, retryAt => this.recordPageThrottle(page, retryAt)), actor = context.actor
+    const connection = await this.pageConnection(page)
+    const context = await this.context(tenant, retryAt => this.recordPageThrottle(page, retryAt), connection), actor = context.actor
     const rawIO = DIRECTORY_9B_FOLDERS.includes(request.path.split("/")[1]!) ? context.applicationIO : context.io
     const io = { ...rawIO, write: ((step, body, targetId, beforeSend, run, signal, onUnapplied) => rawIO.write(step, body, targetId, () => {
       this.requireAccess(tenant, step.folder)
@@ -329,16 +337,23 @@ export class DirectoryRestoreService {
     const controller = new AbortController()
     this.running.set(runningKey, controller)
     try {
+      const connection = await this.pageConnection(page)
       const state = directoryObjectState(this.store, tenant, id)
       if (action === "reconcile") {
         const runs = this.history(page)
+        const target = (entry: GuardedRun["entries"][number]) => (entry.targetId ?? entry.step.targetId ?? directoryMappedId(this.store, tenant, entry.step.folder, entry.step.sourceId) ?? entry.step.sourceId).toLowerCase()
+        const deadlines = new Map<string, number>()
         for (const { run } of runs) for (const entry of run.entries) {
-          const retryAt = state.retryDeadline({ ...entry.step, targetId: entry.targetId ?? entry.step.targetId ?? directoryMappedId(this.store, tenant, entry.step.folder, entry.step.sourceId) })
-          if (retryAt !== undefined) entry.retryAt = Math.max(entry.retryAt ?? 0, retryAt)
+          const id = target(entry), retryAt = state.retryDeadline({ sourceId: id })
+          const deadline = Math.max(deadlines.get(id) ?? 0, entry.retryAt ?? 0, retryAt ?? 0)
+          deadlines.set(id, deadline)
+          if (deadline > (retryAt ?? 0)) state.recordThrottle({ sourceId: id }, deadline)
         }
-        if (runs.some(({ run }) => run.entries.some(entry => (entry.retryAt ?? 0) > Date.now()))) return { ...this.view(page), ...this.results(page, { status: "partial", batches: 0, failed: 0 }, runs) }
+        const entries = runs.flatMap(({ run }) => run.entries)
+        for (const entry of entries) if (deadlines.get(target(entry))) entry.retryAt = deadlines.get(target(entry))
+        if (entries.some(entry => (entry.retryAt ?? 0) > Date.now()) && !entries.some(entry => entry.state === "uncertain" && (entry.retryAt ?? 0) <= Date.now())) return { ...this.view(page), ...this.results(page, { status: "partial", batches: 0, failed: 0 }, runs) }
       }
-      const context = await this.context(tenant, retryAt => this.recordPageThrottle(page, retryAt))
+      const context = await this.context(tenant, retryAt => this.recordPageThrottle(page, retryAt), connection)
       if (context.actor.userId !== page.run.actor.userId || context.actor.clientId !== page.run.actor.clientId) fail("Use the admin and connection that reviewed this page.")
       if (action === "discard") {
         state.recoverMappings(page.run.entries.map(entry => entry.step))

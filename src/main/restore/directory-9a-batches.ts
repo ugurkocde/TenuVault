@@ -1,7 +1,7 @@
 import { directoryRelationshipHistory } from "./directory-relationship-history"
 import type { PartitionedRestoreStore } from "../storage/directory-restore-store"
 import type { KeyValueStore } from "../storage/secure-store"
-import { GuardedRunJournal, executeGuardedRun, restoreFingerprint, type GuardedRun, type GuardedIO } from "./guarded-run"
+import { GuardedRunJournal, executeGuardedRun, restoreFingerprint, restorePersistence, type GuardedRun, type GuardedIO } from "./guarded-run"
 import { directoryMappingKey, directoryPagePrefix, directoryObjectState } from "./directory-object-state"
 import { RestoreSafetyError, RestoreWriteDeferredError } from "../../shared/intune/restore-guards"
 import type { Item } from "../../shared/intune/registry"
@@ -20,7 +20,8 @@ export async function executeDirectoryBatches(store: PartitionedRestoreStore, id
   if (store.partitioned !== true) throw new RestoreSafetyError("Directory restores require partitioned durable storage, not the whole app-state store.")
   if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new RestoreSafetyError("The directory batch budget must be 1 to 100 steps.")
   const prefix = directoryPagePrefix(identity.tenant, identity.id)
-  const objectState = directoryObjectState(store, identity.tenant, identity.id)
+  const durableStore: KeyValueStore = { get: key => restorePersistence(() => store.get(key)), set: (key, value) => restorePersistence(() => store.set(key, value)), delete: key => restorePersistence(() => store.delete(key)) }
+  const objectState = directoryObjectState(durableStore, identity.tenant, identity.id)
   objectState.assertActive()
   const binding = restoreFingerprint({ ...identity, actor: { ...identity.actor, recoveryAccountIds: [] }, sourceFingerprint: source.fingerprint } as unknown as Item)
   const saved = store.get(prefix + "cursor")
@@ -35,6 +36,7 @@ export async function executeDirectoryBatches(store: PartitionedRestoreStore, id
     const journal = new GuardedRunJournal(partition)
     // Persist the exact next cursor and reviewed plan before any write. Never refetch a mutable page on restart.
     const raw = store.get(batchKey + "plan")
+    if (reconcileOnly && !raw) return { status: "partial", batches: state.batch, failed: state.failed }
     const page = raw ? JSON.parse(raw) as Awaited<ReturnType<DirectoryBatchSource["page"]>> : await source.page(state.cursor, limit)
     if (page.entries.length > limit || (!page.entries.length && page.next !== null) || (page.next !== null && page.next === state.cursor)) throw new RestoreSafetyError("Invalid directory batch page.")
     if (!raw) store.set(batchKey + "plan", JSON.stringify(page))
@@ -49,7 +51,7 @@ export async function executeDirectoryBatches(store: PartitionedRestoreStore, id
       if (journal.load(identity.tenant, identity.id)?.entries.some(entry => entry.state === "uncertain" && (entry.targetId ?? entry.step.targetId ?? entry.step.sourceId).toLowerCase() === (effective(step).targetId ?? step.sourceId).toLowerCase())) throw new RestoreWriteDeferredError("This page has an unanswered write for this object. Confirm its result first.")
       objectState.recoverMappings([effective(step)])
       const retryAt = objectState.prepare(effective(step), batchKey)
-      if (["member", "owner"].includes(step.directory?.action ?? "")) directoryRelationshipHistory(store, identity.tenant, effective(step).targetId ?? step.sourceId).track(batchKey)
+      if (["member", "owner"].includes(step.directory?.action ?? "")) directoryRelationshipHistory(durableStore, identity.tenant, effective(step).targetId ?? step.sourceId).track(batchKey)
       return retryAt
     }, defer: (step, retryAt, rejected) => objectState.recordThrottle(effective(step), retryAt, rejected),
       write: (step, body, targetId, beforeSend, currentRun, writeSignal, onUnapplied) =>
@@ -71,6 +73,7 @@ export async function executeDirectoryBatches(store: PartitionedRestoreStore, id
       if (changed) journal.save(persisted)
     }
     const result = await executeGuardedRun(journal, run, guardedIO, signal, reconcileOnly)
+    for (const entry of result.run.entries.filter(entry => entry.state === "applied")) objectState.clearRejected(effective(entry.step), batchKey, entry.attempt)
     objectState.recoverMappings(result.run.entries.filter(entry => entry.step.operation === "create" && entry.state === "applied").map(entry => entry.step))
     // A confirmed create is resolved once both identities and its mapping are durable.
     const created = result.run.entries.filter(entry => entry.step.operation === "create" && entry.state === "applied").flatMap(entry => [entry.step.sourceId, entry.targetId!])
