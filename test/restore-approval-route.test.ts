@@ -4,7 +4,13 @@ import { NextRequest } from "../src/main/api/next-server-shim"
 import { Restorer, type GraphCall } from "../src/portal/lib/policies/graph-restore"
 import { restoreApprovals, saveRestoreApproval, setRestoreApprovalStore, dismissRestoreApproval } from "../src/main/storage/restore-approvals"
 import { requiredFeatures } from "../src/main/api/plan-gates"
+import { createBridgedFetch } from "../src/main/api/fetch-bridge"
+import { graphDispatchGuard } from "../src/main/write-approvals/dispatch"
+import { setWriteApprovals } from "../src/main/write-approvals/service"
+import { reviewer, unenrolledApprovals, writeApprovalFixture } from "./helpers/write-approval-fixture"
 import { resultSummary, statusFromResults, emptyResult } from "../src/main/features/change-sets/model"
+
+beforeEach(() => setWriteApprovals(unenrolledApprovals("azure")))
 
 const tenantId = "44444444-4444-4444-8444-444444444444"
 const requesterId = "33333333-3333-4333-8333-333333333333"
@@ -16,7 +22,7 @@ beforeEach(() => {
   storage = new Map()
   setRestoreApprovalStore({ get: key => storage.get(key) ?? null, set: (key, value) => { storage.set(key, value) }, delete: key => { storage.delete(key) } })
 })
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => { setWriteApprovals(undefined); vi.unstubAllGlobals() })
 async function seed() {
   const graph: GraphCall = async method => method === "GET" ? { status: 200, body: { status: "approved" } } : { status: 412, body: {} as never, approval: { kind: "pending", code } }
   await new Restorer(graph, { mode: "copy", assignments: false, approvalContext: { tenantId, requesterId } }).restore("backup/DeviceCategories/test.json", { displayName: "Example" })
@@ -85,4 +91,76 @@ it("refreshes and reports status after withdrawal is refused", async () => {
   expect(response.status).toBe(409)
   expect((await response.json()).error).toContain("Current status: rejected")
   expect(restoreApprovals(tenantId)[0]?.status).toBe("rejected")
+})
+
+
+it("keeps a saved Intune request and requires separate review for submission and completion", async () => {
+  const { profile } = writeApprovalFixture()
+  const origin = profile({ oid: requesterId, label: "Requester" }), second = profile(reviewer)
+  const draftGraph: GraphCall = async method => {
+    if (method === "GET") return { status: 200, body: { value: [] } }
+    return { status: 412, body: {} as Record<string, never>, approval: { kind: "justification-required" } }
+  }
+  const start = new Restorer(draftGraph, {
+    mode: "copy", assignments: false, approvalContext: { tenantId, requesterId },
+  })
+  const path = "backup/DeviceCategories/test.json"
+  await start.restore(path, { displayName: "Example" })
+  const draft = restoreApprovals(tenantId)[0]!
+  setWriteApprovals(origin.service)
+  await origin.service.enable(tenantId)
+  let mutations = 0
+  const token = `header.${Buffer.from(JSON.stringify({ oid: requesterId, tid: tenantId, scp: "DeviceManagementConfiguration.ReadWrite.All" })).toString("base64url")}.signature`
+  const fetcher = createBridgedFetch({
+    dispatch: async () => new Response(null, { status: 404 }),
+    getDelegatedToken: async () => ({ accessToken: token, expiresOn: null }),
+    authorizeGraph: graphDispatchGuard(origin.service, value => value === token ? { tenant: tenantId, actor: { oid: requesterId, label: "Requester" }, current: () => true } : undefined),
+    fetch: async (input, init) => {
+      const req = new Request(input, init)
+      const url = req.url
+      if (url.includes("login.microsoftonline.com")) return Response.json({ access_token: token })
+      if (url.endsWith("cancelMyRequest")) return new Response(null, { status: 204 })
+      if (url.includes("operationApprovalRequests/")) return Response.json({ status: "approved", approver: { user: { id: reviewer.oid, displayName: "Reviewer", Upn: "reviewer@example.invalid" } } })
+      if (req.method === "GET") return Response.json({ value: [] })
+      mutations++
+      if (req.headers.has("x-msft-approval-justification")) return new Response("{}", { status: 412, headers: { "x-msft-approval-code": code } })
+      expect(req.headers.get("x-msft-approval-code")).toBe(code)
+      return Response.json({ id: code })
+    },
+  })
+  vi.stubGlobal("fetch", fetcher)
+  const approve = async () => {
+    const row = (await second.service.inbox(tenantId)).requests.find(item => item.request.state === "pending" && !item.decision)
+    await second.service.decide(tenantId, row!.request.id, "approve")
+  }
+  const submit = () => POST(request({ approvalAction: "submit", approvalId: draft.id, justification: "Restore the approved category" }))
+  expect((await submit()).status).toBe(409)
+  expect(mutations).toBe(0)
+  await approve()
+  expect(await (await submit()).json()).toMatchObject({ outcome: { approvalState: "submitted", approvalId: code } })
+  expect(mutations).toBe(1)
+  const complete = () => POST(request({ approvalAction: "complete", approvalId: code }))
+  expect((await complete()).status).toBe(409)
+  expect(mutations).toBe(1)
+  await approve()
+  expect(await (await complete()).json()).toMatchObject({ outcome: { success: true, intuneApprover: { user: { id: reviewer.oid, displayName: "Reviewer", upn: "reviewer@example.invalid" } } } })
+  expect(mutations).toBe(2)
+})
+
+it("offers withdrawal of a legacy continuation after enrollment without repeating its completed step", async () => {
+  await seed()
+  const record = restoreApprovals(tenantId)[0]!
+  saveRestoreApproval({ ...record, status: "approved", continuationPending: true, objectId: reviewer.oid })
+  const { service } = writeApprovalFixture().profile()
+  await service.enable(tenantId)
+  setWriteApprovals(service)
+  const fetcher = network()
+  const complete = await POST(request({ approvalAction: "complete", approvalId: code }))
+  expect(complete.status).toBe(409)
+  expect(await complete.json()).toMatchObject({ error: expect.stringContaining("predates tenant write approval") })
+  const list = await POST(request({ approvalAction: "list", refresh: true }))
+  expect(await list.json()).toMatchObject({ records: [{ legacyContinuation: true, canComplete: true }] })
+  expect((await POST(request({ approvalAction: "withdraw", approvalId: code }))).status).toBe(200)
+  expect(restoreApprovals(tenantId)[0]?.status).toBe("cancelled")
+  expect(fetcher.mock.calls.map(([input]) => String(input)).filter(url => url.includes("graph.microsoft.com"))).toEqual([])
 })

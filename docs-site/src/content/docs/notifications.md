@@ -300,3 +300,7 @@ Plan for Exchange propagation: a brand-new access policy and scope group can tak
 | Watcher output says mail delivery is skipped | Mail was never verified for this sender, the sender changed, or the verification is older than 90 days. Run the runbook once with `VerifyMailOnly`. |
 | Automation account creation fails with `Conflict` | Regional Automation account quota or name taken. Retry setup with another `-Location` or `-AutomationAccountName`. |
 | Azure Monitor reports failed watcher jobs | Open the newest job in the Automation account. The exception names the step; `heartbeat.json` in the state container shows the last error and watermark. |
+
+## Tenant approval and notifications
+
+Deploying the watcher, granting its Graph roles and sending notification email through Graph are outside tenant write approval. Apply your existing controls to watcher deployment and delivery.

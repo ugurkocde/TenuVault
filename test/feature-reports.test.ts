@@ -1,3 +1,4 @@
+import { approvalGraphFixture } from "./helpers/write-approval-fixture"
 import { describe, expect, it } from "vitest"
 import { afterScheduledBackup, MAX_AUDIT_EVENTS, MAX_REPORTS, readAudit, retentionStart, routes } from "../src/main/features/reports"
 import { DOMAINS } from "../src/main/features/domains"
@@ -25,7 +26,7 @@ function driftResult(comparison = "backup-2026-11-06-020000"): DriftResult {
   }
 }
 
-function world(options: { drift?: DriftResult | { status: number; error: string }; auditStatus?: number; pdf?: Buffer; mailStatus?: number } = {}) {
+function world(options: { drift?: DriftResult | { status: number; error: string }; auditStatus?: number; pdf?: Buffer; mailStatus?: number; guard?: Awaited<ReturnType<typeof approvalGraphFixture>> } = {}) {
   const apiCalls: Array<{ path: string; body: Record<string, unknown> | undefined }> = []
   const graphCalls: Array<{ method: string; path: string; body: any }> = []
   const deps = fakeDeps({
@@ -38,6 +39,7 @@ function world(options: { drift?: DriftResult | { status: number; error: string 
       return Response.json(drift)
     },
     graph: (() => async (method: string, path: string, body?: unknown) => {
+      await options.guard?.(method, path)
       graphCalls.push({ method, path, body })
       if (path.startsWith("deviceManagement/auditEvents")) {
         if (options.auditStatus) return { status: options.auditStatus, body: { error: { message: "Forbidden" } } }
@@ -187,8 +189,8 @@ describe("change reports route", () => {
     expect(status.body.reports[0].lastSend).toMatchObject({ ok: true, recipients: 1, attachment: "pdf" })
   })
 
-  it("attaches Markdown instead of a PDF too large for one request", async () => {
-    const w = world({ pdf: Buffer.concat([PDF, Buffer.alloc(3_000_000)]) })
+  it.each([false, true])("sends Markdown through Graph with tenant approval enabled=%s", async enabled => {
+    const w = world({ guard: await approvalGraphFixture(TENANT_A, enabled), pdf: Buffer.concat([PDF, Buffer.alloc(3_000_000)]) })
     const report = await generate(w)
     await call(w.routes, PATH, { tenantId: TENANT_A, action: "save-settings", recipients: [{ type: "address", address: "auditor@fabrikam.test" }] })
     await call(w.routes, PATH, { tenantId: TENANT_A, action: "send", reportId: report.id })

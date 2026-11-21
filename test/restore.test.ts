@@ -1,8 +1,10 @@
+import { Restorer, type GraphCall } from "../src/portal/lib/policies/graph-restore"
+import { FetchPreconditionError } from "../src/main/api/network-error"
 import { createAuditRecorder } from "../src/main/api/audit"
 import { parseBackupFolders } from "../src/portal/app/api/detect-drifts/route"
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { validPolicyPath } from '../src/portal/lib/policies/restore'
-import { typeForFolder } from '../src/shared/intune/registry'
+import { typeForFolder, type Item } from '../src/shared/intune/registry'
 import { buildRestorePlan } from '../src/shared/intune/restore-plan'
 
 const copyOf = (folder: string, policy: object) => buildRestorePlan(typeForFolder(folder)!, policy as never, { prefix: '[Restored]' }).create.body as any
@@ -279,4 +281,16 @@ it('allows legacy snapshot copies through the drift restore action', async () =>
   expect(response.status).toBe(200)
   expect(writes).toContain('POST')
   expect(writes).not.toContain('PATCH')
+})
+
+it.each(["copy", "replace"] as const)("reports a refused %s step as unsent, with partial only if an earlier step wrote", async mode => {
+  const existing = { id: "a", displayName: "Live", description: "live" }
+  const snapshot = { id: "a", displayName: "Backup", description: "restored", assignments: [{ target: { "@odata.type": "#microsoft.graph.allDevicesAssignmentTarget" } }] }
+  const graph: GraphCall = async (method, path): Promise<{ status: number; body: Item }> => {
+    if (method === "GET") return { status: 200, body: path.endsWith("/assignments") ? { value: [] } : existing }
+    if (method === "POST" && path === "deviceManagement/deviceConfigurations") return { status: 201, body: { id: "b" } }
+    throw new FetchPreconditionError(new Error("Policy changed"))
+  }
+  const result = await new Restorer(graph, { mode, assignments: true }).restore("backup/DeviceConfigurations/a.json", snapshot)
+  expect(result).toMatchObject({ success: false, partial: mode === "copy", error: "Write not sent: Policy changed" })
 })

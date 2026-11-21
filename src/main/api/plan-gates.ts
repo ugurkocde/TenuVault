@@ -133,7 +133,13 @@ export function planGuard(planOf: (tenantId: string) => Promise<Plan | null>) {
     // here and is never left to the request; saved results stay readable and exportable.
     const newCisAssessment = pathname === "/api/frameworks" && (body.action === "assess" || body.action === "assess-start") && typeof body.frameworkId === "string" && CIS_FRAMEWORKS.has(body.frameworkId)
     const metadataWrite = pathname === "/api/tenant-metadata/save" || pathname === "/api/tenant-metadata/delete"
-    for (const tenantId of [body.tenantId, ...targets]) {
+    // A credentialless restore retry entry participates in the local enrollment check only.
+    // The route refuses to write to the group unless every destination supplies credentials.
+    const writeTargets = pathname === "/api/restore-backup" && Array.isArray(body.targetTenants)
+      ? body.targetTenants.filter((target: { appId?: unknown; selectedPolicies?: unknown }) => target?.appId !== undefined || target.selectedPolicies === undefined)
+        .map((target: { tenantId: string }) => target.tenantId)
+      : targets
+    for (const tenantId of [body.tenantId, ...writeTargets]) {
       const plan = await planOf(tenantId)
       // Single tenant calls leave an unusable tenant to the request itself. A bulk run must be
       // refused as a whole before any work starts, so an unusable tenant refuses it here.

@@ -1,3 +1,11 @@
+import { setApprovedRestoreRepairStore } from "../portal/lib/policies/graph-restore"
+import { reviewedOibRoute } from "./oib/service"
+import { graphTokenSessions } from "./write-approvals/graph-sessions"
+import { WriteApprovals, setWriteApprovals, WriteApprovalError } from "./write-approvals/service"
+import { graphDispatchGuard, setRestoreUploadGuard } from "./write-approvals/dispatch"
+import { approvalBlobs } from "./write-approvals/blob"
+import { approvalAudit } from "./write-approvals/audit"
+import { writeApprovalRoutes } from "./write-approvals/routes"
 import { requestWindowsContent } from "./app-backup/windows-helper"
 import { requireCaptureEnabled } from "./app-backup/capture-policy"
 import { checkCaptureMetadata } from "./app-backup/capture-preflight"
@@ -7,6 +15,7 @@ import { restoreGraph } from "./app-backup/restore-graph"
 import { readRestoreSnapshot, sameRestoreSettings } from "./app-backup/restore-snapshot"
 import { downloadCapturedContent } from "./app-backup/capture-download"
 import { AppSourceService } from "./app-sources/service"
+import { appSourceRestoreHandler } from "./app-sources/restore-ipc"
 import { checkRecoveryDevice } from "./app-backup/device-check"
 import { readAppBackupAccount } from "./app-backup/account"
 import { appBackupClientId } from "./app-backup/sign-in"
@@ -47,7 +56,7 @@ import { createBridgedFetch } from "./api/fetch-bridge"
 import { rejectProxyAuthResponses, withNetworkErrors } from "./api/network-error"
 import { ApiHost } from "./api/host"
 import { routes } from "./api/routes"
-import { AuthManager, SignInRequiredError } from "./auth/msal"
+import { AuthManager, delegatedApprovalActor, SignInRequiredError } from "./auth/msal"
 import { BackupEngine, verifyStorageAccess, type BackupJob } from "./backup/engine"
 import { BackupScheduler, reportsResult, runUnattended, scheduledResult } from "./backup/scheduler"
 import { runTrayBackups } from "./backup/tray-backup"
@@ -335,6 +344,7 @@ async function bootstrap(): Promise<void> {
   const backupKeys = new BackupKeys(appStore)
   setRestoreJournalStore(appStore)
   setRestoreApprovalStore(appStore)
+  setApprovedRestoreRepairStore(appStore)
   const localFolder = () => appStore.get(LOCAL_FOLDER_KEY) ?? join(app.getPath("documents"), "TenuVault Backups")
   let localStore: LocalBlobStore | null = null
   const getLocalStore = () => (localStore ??= new LocalBlobStore(localFolder(), backupKeys.keyring()))
@@ -346,9 +356,17 @@ async function bootstrap(): Promise<void> {
 
   // Background requests never open a sign-in window; the renderer shows a prompt instead.
   const lastPrompt = new Map<string, number>()
+  const observeGraphToken = (tenantId: string, token: Awaited<ReturnType<AuthManager["getAccessToken"]>>) => {
+    const identity = auth.tokenApprovalSession(token)
+    if (identity?.current() && identity.actor?.oid === delegatedApprovalActor(token, tenantId)?.oid) {
+      graphTokenSessions.remember(token.accessToken, identity, token.expiresOn)
+    }
+    return token.accessToken
+  }
   const tokenFor = async (tenantId: string, clientId: string, scope: string, forceRefresh = false) => {
     try {
       const token = await auth.getAccessToken(tenantId, clientId, scope, forceRefresh)
+      if (scope.startsWith("https://graph.microsoft.com/")) observeGraphToken(tenantId, token)
       if (scope.includes("storage.azure.com")) registerStorageToken(token.accessToken, tenantId)
       return token
     } catch (error) {
@@ -363,11 +381,41 @@ async function bootstrap(): Promise<void> {
     }
   }
 
+  const writeApprovals = new WriteApprovals({
+    version: app.getVersion(),
+    store: appStore,
+    profile: tenant => tenantProfile(tenant),
+    open: async (tenant, client, account) => {
+      const token = await tokenFor(tenant, client, RESOURCE_SCOPES.storage)
+      const session = auth.tokenApprovalSession(token)
+      if (!session?.actor || !session.current()) throw new WriteApprovalError("Sign in with a delegated tenant account to verify shared write approvals.")
+      return { actor: session.actor, blobs: approvalBlobs(account, token.accessToken, (input, init) => {
+        if (!session.current()) throw new WriteApprovalError("The signed-in destination account changed before accessing approvals.")
+        return chromiumFetch(input, init)
+      }) }
+    },
+    current: (tenant, actor) => {
+      const session = auth.approvalSession(tenant)
+      return session?.actor?.oid === actor.oid && session.current()
+    },
+    audit: approvalAudit(tenant => signedInClient(tenant), request => host.dispatch(request),
+      async (tenant, client) => (await tokenFor(tenant, client, RESOURCE_SCOPES.storage)).accessToken),
+  })
+  setWriteApprovals(writeApprovals)
+  setRestoreUploadGuard(async tenant => {
+    writeApprovals.checkDestination(tenant)
+    const session = auth.approvalSession(tenant)
+    if (!session?.current()) throw new WriteApprovalError("The installer upload requires a verified delegated destination account.")
+    if (session.actor) await writeApprovals.authorize(tenant, session.actor)
+    else if (await writeApprovals.active(tenant)) throw new WriteApprovalError("The installer upload requires a verified delegated destination account.")
+  })
+
   const bridgedFetch = createBridgedFetch({
     dispatch: (request) => host.dispatch(request),
     // Azure backups are written as plain JSON; backups sealed by earlier versions open with the device keyring.
     fetch: legacyAzureReader(withNetworkErrors(chromiumFetch), () => backupKeys.keyring()),
     authorizeTenant,
+    authorizeGraph: graphDispatchGuard(writeApprovals, token => graphTokenSessions.get(token)),
     handleLocalBlob: (request) => handleLocalBlobRequest(getLocalStore(), request),
     getDelegatedToken: async (tenant, clientId, scope, forceRefresh) => {
       const result = await tokenFor(tenant, clientId, scope, forceRefresh)
@@ -637,7 +685,12 @@ async function bootstrap(): Promise<void> {
     },
   })
   const host: ApiHost = new ApiHost({
-    routes: { ...routes, ...backupRoutes(engine, (tenantId) => scopes.get(tenantId).scope), ...featureRoutes(featureDeps), ...driftScanRoutes(driftJobs) },
+    routes: { ...routes, ...backupRoutes(engine, (tenantId) => scopes.get(tenantId).scope), ...featureRoutes(featureDeps), ...driftScanRoutes(driftJobs), ...writeApprovalRoutes(writeApprovals),
+      "/api/oib-reviewed-batches": { POST: reviewedOibRoute(async child => {
+        const check = new Request(`${INTERNAL_API_ORIGIN}/api/oib`, { method: "POST", body: JSON.stringify(child) })
+        return (await checkPlan(check)) ?? checkDisclaimer(check)
+      }) },
+    },
     transform: surfaceTokenErrors,
     // Disabled CIS routes refuse before any licensing work. The plan comes next, so the
     // disclaimer is never accepted for a change the plan refuses anyway.
@@ -664,7 +717,7 @@ async function bootstrap(): Promise<void> {
         credentials?: { tenantId?: string; appId?: string }
         resources?: { storageAccountName?: string; subscriptionId?: string; resourceGroupName?: string; resourceGroupLocation?: string; automationAccountName?: string }
       }>
-      const tenant = tenants.find((t) => t.credentials?.tenantId?.toLowerCase() === tenantId.toLowerCase())
+      const tenant = tenants.find(t => typeof t?.credentials?.tenantId === "string" && t.credentials.tenantId.toLowerCase() === tenantId.toLowerCase())
       if (!tenant?.credentials?.appId || !tenant.resources?.storageAccountName) return null
       return {
         name: backupTenantLabel(tenant),
@@ -1333,15 +1386,57 @@ async function bootstrap(): Promise<void> {
       event.returnValue = null
     }
   })
+  const tenantStorageKey = `${RENDERER_STORAGE_PREFIX}tenuvault_tenants`
+  const updateTenantProfiles = (next: string | null) => {
+    const read = (serialized: string | null) => {
+      const profiles = new Map<string, string | undefined>()
+      if (!serialized) return profiles
+      const tenants = JSON.parse(serialized) as Array<{ credentials?: { tenantId?: string; appId?: string }; resources?: { storageAccountName?: string } }>
+      if (!Array.isArray(tenants)) throw new Error("The tenant profile list is invalid.")
+      for (const tenant of tenants) {
+        const id = tenant?.credentials?.tenantId
+        if (!isGuid(id)) continue
+        const normalized = id.toLowerCase()
+        // The first matching profile is the one used to resolve delegated storage access.
+        if (profiles.has(normalized)) continue
+        const account = tenant.credentials?.appId ? tenant.resources?.storageAccountName : undefined
+        if (account !== undefined && typeof account !== "string") throw new Error("The tenant storage account is invalid.")
+        profiles.set(normalized, account)
+      }
+      return profiles
+    }
+    return writeApprovals.withStorageProfiles(async () => {
+      const before = read(appStore.get(tenantStorageKey))
+      const after = read(next)
+      for (const tenant of new Set([...before.keys(), ...after.keys()])) {
+        await writeApprovals.beforeStorageChange(tenant, after.get(tenant), async (account, recheck) => {
+          const result = await dialog.showMessageBox(mainWindow!, {
+            type: "warning", title: "Confirm storage change",
+            message: `TenuVault could not verify tenant approvals in ${account}.`,
+            detail: recheck
+              ? "Continue with the storage change? TenuVault will check this account again before allowing tenant configuration writes."
+              : "Continue with the storage change?",
+            buttons: ["Cancel", "Continue with storage change"], defaultId: 0, cancelId: 0,
+          })
+          return result.response === 1
+        }, Boolean(accounts.get(tenant)))
+      }
+      if (next === null) appStore.delete(tenantStorageKey)
+      else appStore.set(tenantStorageKey, next)
+      if (!before.size && after.size) diagnostics.record({ name: "tenant_added" })
+    })
+  }
   handleTrusted("storage:set", (_event, key: unknown, value: unknown) => {
-    const name = rendererStorageKey(key)
+    const name = RENDERER_STORAGE_PREFIX + rendererStorageKey(key)
     const text = rendererStorageValue(value)
-    // The first tenant saved on this computer is the end of the setup.
-    const firstTenant = name === "tenuvault_tenants" && connectedTenantIds().length === 0
-    appStore.set(RENDERER_STORAGE_PREFIX + name, text)
-    if (firstTenant && connectedTenantIds().length > 0) diagnostics.record({ name: "tenant_added" })
+    if (name === tenantStorageKey) return updateTenantProfiles(text)
+    appStore.set(name, text)
   })
-  handleTrusted("storage:remove", (_event, key: unknown) => appStore.delete(RENDERER_STORAGE_PREFIX + rendererStorageKey(key)))
+  handleTrusted("storage:remove", (_event, key: unknown) => {
+    const name = RENDERER_STORAGE_PREFIX + rendererStorageKey(key)
+    if (name === tenantStorageKey) return updateTenantProfiles(null)
+    appStore.delete(name)
+  })
 
   let importingArchive = false
   handleTrusted("backups:importArchive", async () => {
@@ -1480,10 +1575,10 @@ async function bootstrap(): Promise<void> {
       pushLicense()
     },
     loadRestoreSettings: async (tenant, appId) => readRestoreSnapshot(tenant, appId, (await auth.getAccessToken(tenant, signedInClient(tenant), RESOURCE_SCOPES.graph)).accessToken, bridgedFetch, "current-settings"),
-    restore: (store, source, snapshot, target, name, signal, progress) => disclaimer.run([target], () => restoreCapturedApp(store, source, snapshot, target, name, {
-      graph: restoreGraph(async () => (await auth.getAccessToken(target, signedInClient(target), RESOURCE_SCOPES.graph)).accessToken, bridgedFetch, signal),
+    restore: (store, source, snapshot, target, name, signal, progress) => disclaimer.run([target], () => graphTokenSessions.run(() => restoreCapturedApp(store, source, snapshot, target, name, {
+      graph: restoreGraph(async () => observeGraphToken(target, await auth.getAccessToken(target, signedInClient(target), RESOURCE_SCOPES.graph)), bridgedFetch, signal),
       fetch: bridgedFetch, signal, progress,
-    })),
+    }))),
     ensureKeys: () => { backupKeys.keyring() },
     capture: async (tenant, appId, jobId, store, signal, progress) => {
       if (process.platform !== "win32") throw new Error("Back up Win32 installers on a Windows PC enrolled in this Intune tenant.")
@@ -1547,7 +1642,7 @@ async function bootstrap(): Promise<void> {
   handleTrusted("appSources:cancelDeviceSignIn", (_event, tenant: unknown) => appSources.cancelDeviceSignIn(tenant))
   handleTrusted("appSources:restoreReview", (_event, tenant: unknown, source: unknown) => appSources.restoreReview(tenant, source))
   handleTrusted("appSources:loadRestoreSettings", (_event, tenant: unknown, source: unknown) => appSources.loadRestoreSettings(tenant, source))
-  handleTrusted("appSources:restore", (_event, tenant: unknown, operation: unknown, source: unknown, target: unknown, name: unknown, settingsHash: unknown) => withPlanError(() => appSources.restore(tenant, operation, source, target, name, settingsHash)))
+  handleTrusted("appSources:restore", appSourceRestoreHandler(appSources))
   handleTrusted("appSources:restoreProgress", (_event, tenant: unknown, operation: unknown) => appSources.restoreProgress(tenant, operation))
   handleTrusted("appSources:capture", (_event, tenant: unknown, operation: unknown, id: unknown) => appSources.capture(tenant, operation, id))
   handleTrusted("appSources:assignments", (_event, tenant: unknown, id: unknown) => appSources.assignments(tenant, id))

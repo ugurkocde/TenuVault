@@ -1,4 +1,8 @@
-import { afterEach, beforeAll, afterAll, describe, expect, it, vi } from "vitest"
+import { createBridgedFetch } from "../src/main/api/fetch-bridge"
+import { graphDispatchGuard, setRestoreUploadGuard } from "../src/main/write-approvals/dispatch"
+import { setWriteApprovals } from "../src/main/write-approvals/service"
+import { requester, reviewer, unenrolledApprovals, writeApprovalFixture } from "./helpers/write-approval-fixture"
+import { afterEach, beforeEach, beforeAll, afterAll, describe, expect, it, vi } from "vitest"
 import { createCipheriv, createHash, createHmac, randomBytes, randomUUID } from "node:crypto"
 import { mkdtemp, readFile, rm, writeFile, readdir, mkdir } from "node:fs/promises"
 import { readFileSync } from "node:fs"
@@ -10,6 +14,7 @@ import { spawn } from "node:child_process"
 import { once } from "node:events"
 import { AppSourceStore } from "../src/main/app-sources/store"
 import { AppSourceService } from "../src/main/app-sources/service"
+import { appSourceRestoreHandler } from "../src/main/app-sources/restore-ipc"
 import { restoreDestinationPlan } from "../src/main/app-backup/restore-plan"
 import { withPlanError } from "../src/shared/plan-errors"
 import { LicenseService } from "../src/main/license/service"
@@ -20,6 +25,9 @@ import { restoreCapturedApp } from "../src/main/app-backup/restore"
 import { restoreGraph, putRestoreBlock, type RestoreGraph } from "../src/main/app-backup/restore-graph"
 import { assertRestoredSettings, readRestoreSnapshot, restoreBody, snapshotHash, type AppRestoreSnapshot } from "../src/main/app-backup/restore-snapshot"
 import { encryptRestoreContent, newRestoreSecrets } from "../src/main/app-backup/restore-encryption"
+
+beforeEach(() => setWriteApprovals(unenrolledApprovals("device")))
+afterEach(() => setWriteApprovals(undefined))
 
 const tenant = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", target = "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff", appId = "33333333-3333-3333-3333-333333333333"
 const identity = { tenantId: tenant, appId, contentVersion: "1", contentFileId: `sha256:${"a".repeat(64)}`, appType: "#microsoft.graph.win32LobApp" as const }
@@ -131,6 +139,103 @@ describe("cross-tenant restore engine", () => {
     expect(await f.store.readRestoreRecord(tenant, f.source.id, target)).toMatchObject({ creationStarted: false })
     await restoreCapturedApp(new AppSourceStore(f.root, () => [f.master]), f.source, snapshot, target, "Restored", options(d))
     expect(d.calls.filter(([m, p]) => m === "POST" && p.endsWith("/mobileApps"))).toHaveLength(1)
+  })
+  it("keeps the creation journal clear if the preliminary approval check refuses the first POST", async () => {
+    const f = await fixture(), d = destination()
+    const { profile, state } = writeApprovalFixture()
+    const first = profile(), second = profile(reviewer)
+    setWriteApprovals(first.service)
+    await first.service.enable(target)
+    let readsAfterClaim: number | undefined
+    state.beforeAudit = event => { if (event.action.endsWith("claimed")) readsAfterClaim = 0 }
+    const opts = options(d)
+    opts.graph = async (method, url, body) => {
+      if (method === "GET" && readsAfterClaim !== undefined && ++readsAfterClaim === 2) throw new Error("Destination read was refused")
+      return d.graph(method, url, body)
+    }
+    const run = () => restoreCapturedApp(f.store, f.source, snapshot, target, "Restored", opts)
+    await expect(run()).rejects.toThrow("pending")
+    await second.service.decide(target, (await second.service.inbox(target)).requests[0]!.request.id, "approve")
+    await expect(run()).rejects.toThrow("Destination read was refused")
+    expect(await f.store.readRestoreRecord(tenant, f.source.id, target)).toMatchObject({ creationStarted: false })
+    expect(d.calls.every(([method]) => method === "GET")).toBe(true)
+    await expect(run()).rejects.toThrow("pending")
+  })
+
+  it("clears the creation flag after a sign-in failure before Graph dispatch", async () => {
+    const f = await fixture(), d = destination()
+    const opts = options(d)
+    const send = vi.fn()
+    const blocked = restoreGraph(async () => { throw new Error("Sign in again") }, send, opts.signal)
+    opts.graph = (method, url, body) => method === "POST" ? blocked(method, url, body) : d.graph(method, url, body)
+    await expect(restoreCapturedApp(f.store, f.source, snapshot, target, "Restored", opts)).rejects.toThrow("Sign in again")
+    expect(send).not.toHaveBeenCalled()
+    expect(await f.store.readRestoreRecord(tenant, f.source.id, target)).toMatchObject({ creationStarted: false })
+  })
+
+  it.each([403, 408, 503])("only clears an app create flag after a definitive HTTP refusal (%s)", async status => {
+    const f = await fixture(), d = destination()
+    const opts = options(d)
+    const denied = restoreGraph(async () => "token", async () => new Response(null, { status }), opts.signal)
+    opts.graph = (method, url, body) => method === "POST" ? denied(method, url, body) : d.graph(method, url, body)
+    const run = (configuration: typeof opts) => restoreCapturedApp(f.store, f.source, snapshot, target, "Restored", configuration)
+    await expect(run(opts)).rejects.toThrow(`HTTP ${status}`)
+    expect(await f.store.readRestoreRecord(tenant, f.source.id, target)).toMatchObject({ creationStarted: status !== 403 })
+    if (status === 403) {
+      await run(options(d))
+      expect(d.app).toMatchObject({ publishingState: "published" })
+    } else {
+      await expect(run(options(d))).rejects.toThrow("earlier app creation could not be confirmed")
+      expect(d.calls.every(([method]) => method === "GET")).toBe(true)
+    }
+  })
+
+  it("checks approval once before an unenrolled upload and does not recheck subsequent blocks", async () => {
+    const f = await fixture(snapshot, true), d = destination()
+    const { profile, state } = writeApprovalFixture()
+    const { service } = profile()
+    setWriteApprovals(service)
+    const guard = vi.fn(async tenant => { await service.authorize(tenant, requester) })
+    setRestoreUploadGuard(guard)
+    try {
+      await restoreCapturedApp(f.store, f.source, snapshot, target, "Restored", options(d))
+      expect(d.fetcher.mock.calls.length).toBeGreaterThan(2)
+      expect(guard).not.toHaveBeenCalled()
+      expect(state.policyReads).toBe(2)
+    } finally { setRestoreUploadGuard(undefined) }
+  })
+
+  it("stops before the first SAS PUT if approval was enabled after draft creation and resumes the same draft with approval", async () => {
+    const f = await fixture(), d = destination()
+    const { profile } = writeApprovalFixture()
+    const first = profile(), second = profile(reviewer)
+    setWriteApprovals(first.service)
+    setRestoreUploadGuard(tenant => first.service.authorize(tenant, requester))
+    const run = () => restoreCapturedApp(f.store, f.source, snapshot, target, "Restored", opts)
+    const opts = options(d)
+    let activated = false
+    opts.graph = async (method, url, body) => {
+      const response = await d.graph(method, url, body)
+      if (!activated && method === "GET" && response.uploadState === "azureStorageUriRequestSuccess") {
+        activated = true
+        await first.service.enable(target)
+      }
+      return response
+    }
+    try {
+      await expect(run()).rejects.toThrow("Write not sent: tenant approval is now enabled")
+      expect(d.fetcher).not.toHaveBeenCalled()
+      const draft = await f.store.readRestoreRecord(tenant, f.source.id, target)
+      const draftId = d.app!.id
+      expect(draft).toMatchObject({ appId: draftId, version: "1", fileId: expect.any(String) })
+      await expect(run()).rejects.toThrow("pending")
+      expect(d.fetcher).not.toHaveBeenCalled()
+      const row = (await second.service.inbox(target)).requests[0]!
+      await second.service.decide(target, row.request.id, "approve")
+      await run()
+      expect(d.app).toMatchObject({ id: draftId, publishingState: "published" })
+      expect(d.calls.filter(([method, path]) => method === "POST" && path.endsWith("/mobileApps"))).toHaveLength(1)
+    } finally { setRestoreUploadGuard(undefined) }
   })
   it("refuses changed settings on a completed retry without rewriting the app", async () => {
     const f = await fixture(), d = destination()
@@ -446,4 +551,88 @@ describe("restore ownership across processes", () => {
     await expect(f.store.withRestoreLock(tenant, f.source.id, target, new AbortController().signal, action)).rejects.toThrow("owns this restore")
     expect(action).not.toHaveBeenCalled(); expect(await readdir(directory)).toHaveLength(kind === "empty" ? 0 : 1)
   })
+})
+
+
+it("binds the verified App Backup source before writes and retains the requested draft across restart", async () => {
+  const { profile } = writeApprovalFixture()
+  const origin = profile(), second = profile(reviewer)
+  setWriteApprovals(origin.service)
+  const f = await fixture(), d = destination()
+  const apply = () => restoreCapturedApp(f.store, f.source, snapshot, target, "Restored", options(d))
+  try {
+    await origin.service.enable(target)
+    await expect(apply()).rejects.toThrow("pending")
+    expect(d.calls.filter(([method]) => method !== "GET")).toHaveLength(0)
+    expect(d.fetcher).not.toHaveBeenCalled()
+    await second.service.decide(target, (await second.service.inbox(target)).requests[0]!.request.id, "approve")
+    const reload = profile(undefined, origin.store)
+    setWriteApprovals(reload.service)
+    expect(await apply()).toMatchObject({ tenantId: target, name: "Restored" })
+    expect(d.calls.filter(([method, path]) => method === "POST" && path.endsWith("/mobileApps"))).toHaveLength(1)
+    expect(d.fetcher).toHaveBeenCalled()
+  } finally { setWriteApprovals(undefined) }
+})
+
+
+it("binds the content version on App Backup IPC resume and checks uploads through the production transports", async () => {
+  const f = await fixture(), d = destination()
+  const { profile, state } = writeApprovalFixture()
+  const first = profile(), second = profile(reviewer)
+  const uploadReadCounts: number[] = []
+  const network = async (input: RequestInfo | URL, init?: RequestInit) => {
+    const request = new Request(input, init), url = new URL(request.url)
+    if (url.hostname.endsWith(".blob.core.windows.net")) {
+      uploadReadCounts.push(d.calls.filter(([method]) => method === "GET").length)
+      return d.fetcher(input, init)
+    }
+    const method = request.method as Parameters<RestoreGraph>[0]
+    const body = request.body ? await request.json() as Record<string, unknown> : undefined
+    return Response.json(await d.graph(method, url.href, body))
+  }
+  const transport = createBridgedFetch({
+    dispatch: async () => new Response(null, { status: 404 }), getDelegatedToken: async () => ({ accessToken: "token", expiresOn: null }),
+    authorizeGraph: graphDispatchGuard(first.service, () => ({ tenant: target, actor: requester, current: () => true })),
+    fetch: network,
+  })
+  setRestoreUploadGuard(tenantId => first.service.authorize(tenantId, requester))
+  const service = new AppSourceService({
+    restore: (store, source, configuration, destination, name, signal, progress) => restoreCapturedApp(store, source, configuration, destination, name, {
+      graph: restoreGraph(async () => "token", transport, signal), fetch: transport, signal, progress, wait: async () => {},
+    }),
+    restorePlan: async () => "pro", knownTenant: id => [tenant, target].includes(id), folder: () => f.root, keys: () => [f.master],
+    setFolder: vi.fn(), pickFolder: vi.fn(), pickExport: vi.fn(), openFolder: vi.fn(), confirmNewStore: vi.fn(), checkDevice: vi.fn(), signIn: vi.fn(),
+    details: vi.fn(), apps: vi.fn(), printDetails: vi.fn(), downloadScript: vi.fn(),
+  })
+  const handler = appSourceRestoreHandler(service)
+  const run = () => handler(undefined, tenant, randomUUID(), f.source.id, target, "Restored", snapshotHash(snapshot))
+  try {
+    // Start an owned draft in the earlier, unprotected flow and lose the create response.
+    d.loseCreate()
+    await expect(run()).rejects.toThrow("interrupted")
+    expect(d.calls.filter(([method]) => method !== "GET")).toHaveLength(1)
+    setWriteApprovals(first.service)
+    await first.service.enable(target)
+    await expect(run()).rejects.toThrow("pending")
+    expect(d.calls.filter(([method]) => method !== "GET")).toHaveLength(1)
+    const row = (await second.service.inbox(target)).requests[0]!
+    await second.service.decide(target, row.request.id, "approve")
+    const base = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps"
+    let changed: Promise<unknown> | undefined
+    state.beforeAudit = event => {
+      if (event.action.endsWith("claimed")) changed = d.graph("POST", `${base}/${d.app!.id}/microsoft.graph.win32LobApp/contentVersions`, {})
+    }
+    await expect(run()).rejects.toThrow("destination changed after review")
+    await changed
+    expect(d.calls.filter(([method]) => method !== "GET")).toHaveLength(2)
+    expect(d.fetcher).not.toHaveBeenCalled()
+    state.beforeAudit = undefined
+    await expect(run()).rejects.toThrow("pending")
+    const pending = (await second.service.inbox(target)).requests.find(row => row.request.state === "pending")!
+    await second.service.decide(target, pending.request.id, "approve")
+    await expect(run()).resolves.toMatchObject({ appId: d.app!.id, contentVersion: "1" })
+    expect(d.calls.filter(([method, url]) => method === "POST" && url.endsWith("/contentVersions"))).toHaveLength(1)
+    expect(d.fetcher).toHaveBeenCalledTimes(2)
+    expect(uploadReadCounts[1]).toBe(uploadReadCounts[0])
+  } finally { setRestoreUploadGuard(undefined); setWriteApprovals(undefined) }
 })

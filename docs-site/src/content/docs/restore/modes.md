@@ -160,6 +160,12 @@ On the **Review** step, **Overwrite the current version** lists each property th
 
 By default, items are restored to the tenant selected at the top of **Backup & Restore**. On MSP, **Copy to other tenants instead** sends copies to other connected tenants. Copies to other tenants always use **Create copies**, keep their original names, get the Default scope tag and are never assigned. See [Restore to another tenant](/restore/cross-tenant/).
 
+## Tenant approval in each mode
+
+If the destination requires a second admin, select the restore mode, policies and assignment option before requesting approval. Changing any of those options requires a fresh review.
+
+Open **Settings > Storage and recovery > Tenant approvals** and select the destination tenant. A different signed-in admin reviews the request there. After approval, return to the operation on the original installation and apply the same selection before it expires. The deadline is seven days from request creation. The Tenant approvals inbox shows the expiry.
+
 ## Related pages
 
 * [Intune restore](https://www.tenuvault.com/intune-restore): restore modes and plans, on the product site

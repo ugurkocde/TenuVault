@@ -326,7 +326,7 @@ export function SyncFlowchart({ source, policies, policyCount, targets, errors, 
  * and rollback) of one target, and for a run planned but never approved, the way back to its
  * review or to discard it.
  */
-export function SyncResult({ source, policies = [], policyCount, entries, errors, notes, platforms, onRetry, retrying, tenantOf, onChanged, onContinue, onDiscard, discard }: {
+export function SyncResult({ source, policies = [], policyCount, entries, errors, notes, platforms, onRetry, retrying, tenantOf, onChanged, onContinue, onContinueGrouped, onDiscard, discard }: {
   source: { name: string; domain: string }
   /** Names of the selected policies, in run order. */
   policies?: string[]
@@ -341,6 +341,7 @@ export function SyncResult({ source, policies = [], policyCount, entries, errors
   onChanged: () => void
   /** Reopens this run at Review; offered while a target is still in review and none was approved. */
   onContinue?: () => void
+  onContinueGrouped?: () => void
   /** Discards this run; offered while no target was approved or applied. */
   onDiscard?: () => void
   discard?: { busy: boolean; error: string | null }
@@ -433,6 +434,12 @@ export function SyncResult({ source, policies = [], policyCount, entries, errors
             <div role="progressbar" aria-label="Sync progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={overall} className="h-1 max-w-md overflow-hidden rounded-full bg-secondary">
               <div className="sync-fill h-full rounded-full bg-coral-500" style={{ width: `${Math.max(4, overall)}%` }} />
             </div>
+          )}
+          {!running && onContinueGrouped && (
+            <Button type="button" disabled={retrying} onClick={onContinueGrouped}>
+              Continue to review
+              <ArrowRight className="h-4 w-4" aria-hidden="true" />
+            </Button>
           )}
           {!running && !involved.length && onDiscard && (
             <div className="flex flex-wrap items-center gap-3">

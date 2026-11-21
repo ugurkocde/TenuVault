@@ -1,5 +1,8 @@
+import { hasWriteApproval, withWriteApproval, type ApprovalOperation } from "../../write-approvals/service"
+import { sameObservation, withWriteCheckpoint } from "../../write-approvals/dispatch"
 import { AuditEventType, AuditResult, AuditSeverity, type CreateAuditLogInput } from "../../../portal/lib/audit/types"
-import type { GraphCall } from "../../../portal/lib/policies/graph-restore"
+import { verifiedMutation, type GraphCall } from "../../../portal/lib/policies/graph-restore"
+import { dependencyReferences } from "../../../shared/intune/dependencies"
 import { typeForFolder, type IntuneType, type Item } from "../../../shared/intune/registry"
 import { isGraphId } from "../../../shared/security"
 import { replaceTenantVariables } from "../../../shared/oib/variables"
@@ -9,10 +12,11 @@ import { recordGovernanceAudit } from "../governance-audit"
 import { DOMAINS } from "../domains"
 import type { Stored } from "../records"
 import { FeatureError } from "../route"
+import { targetStateHash } from "../promotion/targets"
 import { withTenantWrite } from "../write-lock"
 import { cisBenchmarksAllowed } from "../../frameworks/service"
 import { requirePreChangeBackup } from "./backup"
-import { createListingMemo, GraphReadError, observe, readBack, readCurrent, sameNameIds, writeOperation, type Observation } from "./graph"
+import { changeOperationPlan, createListingMemo, GraphReadError, observe, observeCurrent, readBack, readCurrent, sameNameIds, writeOperation, type Observation } from "./graph"
 import {
   assignmentTargets,
   combinedFingerprint,
@@ -662,6 +666,9 @@ async function reconcile(graph: GraphCall, type: IntuneType, operation: ChangeOp
       }
       const live = await readCurrent(graph, type, id)
       if (!live) return { decision: "stop", status: "uncertain", message: "The created object no longer exists. Check Intune before retrying.", objectId: id }
+      if (result.verifiedPostStepHash && result.verifiedPostStepHash !== snapshotHash(type, live)) return {
+        decision: "stop", status: "uncertain", message: "The live object changed after the last verified step. Review it in Intune.", objectId: id,
+      }
       if (matchesProposed(type, entry.body ?? {}, live) && (entry.assignments === null || sameAssignments(entry.assignments, live.assignments))) return { decision: "verified", objectId: id, readBack: "match", readBackHash: snapshotHash(type, live) }
       return { decision: "stop", status: "uncertain", message: "An object was created but it does not match the proposed configuration. Review it in Intune.", objectId: id }
     }
@@ -670,6 +677,9 @@ async function reconcile(graph: GraphCall, type: IntuneType, operation: ChangeOp
       if (!live) return { decision: "verified", objectId: operation.targetId!, readBack: "missing" }
     } else {
       if (!live) return { decision: "stop", status: "failed", message: "The object no longer exists in the tenant. An earlier attempt may have written to it before it was deleted; check Intune.", objectId: operation.targetId }
+      if (result.verifiedPostStepHash && result.verifiedPostStepHash !== snapshotHash(type, live)) return {
+        decision: "stop", status: "uncertain", message: "The live object changed after the last verified step. Review it in Intune.", objectId: operation.targetId,
+      }
       if (matchesProposed(type, entry.body ?? {}, live) && (entry.assignments === null || sameAssignments(entry.assignments, live.assignments))) return { decision: "verified", objectId: operation.targetId!, readBack: "match", readBackHash: snapshotHash(type, live) }
     }
     const sanitized = sanitizeSnapshot(type, live!).snapshot
@@ -682,6 +692,164 @@ async function reconcile(graph: GraphCall, type: IntuneType, operation: ChangeOp
   }
 }
 
+/** The next approved step checks the original observation, then the last verified live state. */
+function guardedOperationWriter(operation: ChangeOperation, type: IntuneType, reader: GraphCall, writer: GraphCall, expected: unknown, checkDependencies: (body: Item | undefined) => Promise<void>, saveStep: (hash: string) => void): GraphCall {
+  let id = operation.targetId
+  let prior: Item | undefined
+  const targetState = async () => {
+    const live = id ? await readCurrent(reader, type, id) : null
+    if (!live) return { live: undefined, fingerprint: null }
+    const revision = live["@odata.etag"] ?? live.lastModifiedDateTime
+    if (sanitizeSnapshot(type, live).redacted && typeof revision !== "string") throw new FeatureError("The target has unreadable settings and no revision marker.", 409)
+    return { live, fingerprint: [snapshotHash(type, live), revision] }
+  }
+  let check = async () => {
+    await sameObservation(expected, async () => {
+      if (!id) return checkedObservation(await observe(reader, type, operation, undefined, true))
+      prior = (await targetState()).live
+      return checkedObservation(observeCurrent(type, operation.action, prior ?? null))
+    })()
+  }
+  return async (method, path, body, options) => {
+    const response = await withWriteCheckpoint(async () => {
+      await check()
+      await checkDependencies(body)
+    }, () => writer(method, path, body, options))
+    if (response.status < 300 && method !== "DELETE") {
+      if (!id && typeof response.body.id === "string") id = response.body.id
+      let verified = false
+      if (id) {
+        const next = await targetState().catch(() => null)
+        if (next?.live && verifiedMutation(type, id, method, path, body, response.body, next.live, prior)) {
+          prior = next.live
+          saveStep(snapshotHash(type, prior))
+          check = sameObservation(next.fingerprint, async () => (await targetState()).fingerprint)
+          verified = true
+        }
+      }
+      if (!verified) check = async () => { throw new FeatureError("The preceding write could not be verified. Review the live object before continuing.", 409) }
+    }
+    return response
+  }
+}
+
+function checkedObservation(state: Observation) {
+  if (state.redacted && !state.revision) throw new FeatureError("The target has unreadable settings and no revision marker.", 409)
+  return [state.fingerprint, state.revision]
+}
+
+function assignmentLabels(assignments: Item[] | null | undefined, direction: string): string[] {
+  return assignmentTargets(assignments ?? undefined).map(assignment => {
+    const target = assignment.target as Item | undefined
+    const group = typeof target?.groupId === "string" ? `group ${target.groupId}` : String(target?.["@odata.type"] ?? "assignment").split(".").pop()
+    const filter = target?.deviceAndAppManagementAssignmentFilterId
+    const verb = String(target?.["@odata.type"] ?? "").includes("exclusion") ? "exclude" : "include"
+    return `${direction}: ${verb} ${group}${typeof filter === "string" && filter ? `, filter ${filter} (${target?.deviceAndAppManagementAssignmentFilterType ?? "unspecified"})` : ""}`
+  })
+}
+
+const scopeTagsIn = (body: Item): string[] => dependencyReferences(body)
+  .filter(ref => ref.key === "roleScopeTagIds").map(ref => ref.id.toLowerCase())
+
+export async function prepareChangeSetApply(deps: FeatureDeps, tenant: string, id: string, input: ApplyInput, actor: Actor) {
+  if (input.confirmed !== true) throw new FeatureError("Confirm the change, including its irreversible steps, before applying.")
+  const record = getChangeSet(deps, tenant, id)
+  const requested = input.resolveBackup ? input.resolveBackup() : input.backup
+  if (requested !== undefined && requested !== "new" && requested !== "none") throw new FeatureError("backup must be \"new\" or \"none\".")
+  if (requested === "none" && !(record.origin.workflow === "sync" && record.kind === "change")) throw new FeatureError("Only Sync changes may skip the pre-change backup.")
+  // The first claimed apply fixes the backup choice. A change set attempted before the choice was
+  // stored counts as backed up, unless its capture shows the backup was skipped.
+  const stored = record.backupChoice ?? (record.preChange ? (record.preChange.backupFolder === null ? "none" : "new") : record.attempts > 0 ? "new" : null)
+  if (stored && requested !== undefined && requested !== stored) throw new FeatureError(`This sync was first applied ${stored === "none" ? "without a backup" : "with a backup"}. Retry it with the same choice.`, 409)
+  const backupChoice = stored ?? requested ?? "new"
+  // A retry reuses the first attempt's capture; whether that attempt backed up decides the record.
+  const backupSkipped = record.preChange ? record.preChange.backupFolder === null : backupChoice === "none"
+  const recovery = isRecovery(record)
+  requireCisChangeSetEnabled(record.origin.workflow, tenant, recovery)
+  if (record.status === "stale") throw new FeatureError(STALE, 409)
+  if (["in-review", "rejected"].includes(record.status)) throw new FeatureError("This change set needs an approval of its current content and target state.", 409)
+  if (record.status === "applied") throw new FeatureError("This change set was already applied and verified.", 409)
+  const review = record.review
+  if (!review || review.decision !== "approved") throw new FeatureError("This change set is not approved.", 409)
+  if (input.contentHash !== record.contentHash || review.contentHash !== record.contentHash) markStale(deps, tenant, id, "The content changed after approval.", actor)
+  const { entries, problem } = integrity(deps, tenant, record)
+  if (problem) markStale(deps, tenant, id, problem, actor)
+  requireCisChangeSetEnabled(record.origin.workflow, tenant, recovery)
+  const staleBefore = (await input.dependencyCheck?.()) ?? []
+  if (staleBefore.length) markStale(deps, tenant, id, staleBefore.join(" "), actor)
+
+  const approvedTargets = new Map<string, unknown>()
+  const mapped = (kind: ChangeSetRecord["dependencies"][number]["kind"]) =>
+    [...new Set(record.dependencies.flatMap(ref => ref.kind === kind && ref.targetId ? [ref.targetId.toLowerCase()] : []))].sort()
+  const dependencyReads = { policyId: null, filterIds: mapped("filter"), reusableSettingIds: mapped("reusableSetting"), groupIds: mapped("group") }
+  const observeDependencies = async (graph: GraphCall, scopeTagIds: string[]) => {
+    const dependencyErrors = (await input.dependencyCheck?.()) ?? []
+    if (dependencyErrors.length) markStale(deps, tenant, id, dependencyErrors.join(" "), actor)
+    return targetStateHash(graph, { ...dependencyReads, scopeTagIds }, undefined, undefined, true)
+  }
+  let approvedDependencies: { scopeTagIds: string[]; hash: string }
+  const checkDependencies = async (graph: GraphCall, body: Item | undefined) => {
+    const { scopeTagIds, hash } = approvedDependencies
+    if (body && scopeTagsIn(body).some(id => !scopeTagIds.includes(id))) throw new FeatureError("The outbound scope tags changed after review.", 409)
+    await sameObservation(hash, () => observeDependencies(graph, scopeTagIds))()
+  }
+  const approval: ApprovalOperation = {
+    tenant,
+    reference: ["change-set", id],
+    summary: { kind: record.kind === "rollback" ? "Roll back a change set" : "Apply a change set", count: record.operations.length, reference: record.id,
+      targets: record.operations.map(operation => `${operation.action} ${operation.name}`),
+      assignments: record.operations.some(operation => operation.setsAssignments),
+      operations: record.operations.map(operation => {
+        const fields = [...new Set(operation.diff.map(change => change.definitionId ?? change.path))]
+        return {
+          verb: operation.action, name: operation.name, id: operation.targetId ?? undefined, fields,
+          sensitiveFields: fields.filter(field => /password|secret|token|privatekey|certificate|scriptcontent/i.test(field)),
+          assignments: operation.setsAssignments ? [
+            "Replace reviewed assignments",
+            ...assignmentLabels(entries[operation.key]?.assignments, "After"),
+          ] : [],
+        }
+      }),
+    },
+    observe: async () => {
+      const graph = await reader(deps, tenant, recoveryScope(record))
+      const scopeTags = new Set(mapped("scopeTag"))
+      const listing = createListingMemo()
+      const observations = []
+      for (const [index, operation] of record.operations.entries()) {
+        const result = record.results[operation.key]
+        if (result?.status === "verified" || (result?.status === "approval" && result.partial)) continue
+        const type = typeOf(operation.folder)
+        const observed = await observe(graph, type, operation, listing, true)
+        const checked = checkedObservation(observed)
+        const entry = entries[operation.key]!
+        const { create, steps } = changeOperationPlan(type, operation.action, operation.targetId, entry.body, observed.snapshot)
+        const bodies = create ? [create.body, ...steps.map(step => step.body)] : steps.map(step => step.body)
+        if (operation.action !== "delete" && type.assign && type.assign !== "post") bodies.push(...entry.assignments ?? [])
+        for (const body of bodies) for (const tag of scopeTagsIn(body)) scopeTags.add(tag)
+        if (operation.setsAssignments) {
+          const summary = approval.summary.operations![index]!
+          const previous = observed.snapshot?.assignments
+          summary.assignments = [
+            "Replace reviewed assignments",
+            ...assignmentLabels(Array.isArray(previous) ? previous as Item[] : [], "Before"),
+            ...assignmentLabels(entries[operation.key]?.assignments, "After"),
+          ]
+        }
+        approvedTargets.set(operation.key, checked)
+        observations.push([operation.key, checked, observed.snapshot, observed.sameNameIds])
+        if (!record.preChange && observed.fingerprint !== review.operationFingerprints[operation.key]) markStale(deps, tenant, id, `${operation.name} changed in the target tenant after review.`, actor)
+      }
+      const scopeTagIds = [...scopeTags].sort()
+      approvedDependencies = { scopeTagIds, hash: await observeDependencies(graph, scopeTagIds) }
+      return { content: [record.contentHash, record.origin, backupChoice, entries, record.dependencies, review.targetFingerprint], target: [approvedDependencies.hash, observations] }
+    },
+  }
+  return { record, review, backupChoice, backupSkipped, recovery, entries, approvedTargets, checkDependencies, operation: approval }
+}
+
+export type PreparedChangeSetApply = Awaited<ReturnType<typeof prepareChangeSetApply>>
+
 /**
  * Applies an approved change set, or retries one that ended partial, failed or uncertain.
  *
@@ -691,7 +859,7 @@ async function reconcile(graph: GraphCall, type: IntuneType, operation: ChangeOp
  * journaled Graph caller and reads it back. Retry: never repeats a verified operation,
  * reconciles uncertain ones from live state first, and re-checks the fingerprint of the rest.
  */
-export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: string, input: ApplyInput, actor: Actor): Promise<Stored_> {
+export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: string, input: ApplyInput, actor: Actor, prepared?: PreparedChangeSetApply): Promise<Stored_> {
   if (input.confirmed !== true) throw new FeatureError("Confirm the change, including its irreversible steps, before applying.")
   const tenant = tenantId.toLowerCase()
   // Set once the apply is claimed; from then on every exit records exactly one audit entry.
@@ -710,31 +878,11 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
   }
   try {
     return await withTenantWrite(tenant, "Change set apply", () => settle(async () => {
-    const record = getChangeSet(deps, tenant, id)
-    const requested = input.resolveBackup ? input.resolveBackup() : input.backup
-    if (requested !== undefined && requested !== "new" && requested !== "none") throw new FeatureError("backup must be \"new\" or \"none\".")
-    if (requested === "none" && !(record.origin.workflow === "sync" && record.kind === "change")) throw new FeatureError("Only Sync changes may skip the pre-change backup.")
-    // The first claimed apply fixes the backup choice. A change set attempted before the choice was
-    // stored counts as backed up, unless its capture shows the backup was skipped.
-    const stored = record.backupChoice ?? (record.preChange ? (record.preChange.backupFolder === null ? "none" : "new") : record.attempts > 0 ? "new" : null)
-    if (stored && requested !== undefined && requested !== stored) throw new FeatureError(`This sync was first applied ${stored === "none" ? "without a backup" : "with a backup"}. Retry it with the same choice.`, 409)
-    const backupChoice = stored ?? requested ?? "new"
-    // A retry reuses the first attempt's capture; whether that attempt backed up decides the record.
-    backupSkipped = record.preChange ? record.preChange.backupFolder === null : backupChoice === "none"
-    const recovery = isRecovery(record)
-    requireCisChangeSetEnabled(record.origin.workflow, tenantId, recovery)
-    if (record.status === "stale") throw new FeatureError(STALE, 409)
-    if (["in-review", "rejected"].includes(record.status)) throw new FeatureError("This change set needs an approval of its current content and target state.", 409)
-    if (record.status === "applied") throw new FeatureError("This change set was already applied and verified.", 409)
-    const review = record.review
-    if (!review || review.decision !== "approved") throw new FeatureError("This change set is not approved.", 409)
-    if (input.contentHash !== record.contentHash || review.contentHash !== record.contentHash) markStale(deps, tenant, id, "The content changed after approval.", actor)
-    const { entries, problem } = integrity(deps, tenant, record)
-    if (problem) markStale(deps, tenant, id, problem, actor)
-    requireCisChangeSetEnabled(record.origin.workflow, tenantId, recovery)
-    const staleBefore = (await input.dependencyCheck?.()) ?? []
-    if (staleBefore.length) markStale(deps, tenant, id, staleBefore.join(" "), actor)
-
+    const { record, review, backupChoice, backupSkipped: skip, recovery, entries, approvedTargets, checkDependencies, operation } =
+      prepared ?? await prepareChangeSetApply(deps, tenant, id, input, actor)
+    if (prepared && input.resolveBackup && (input.resolveBackup() ?? backupChoice) !== backupChoice) throw new FeatureError("The pre-change backup choice changed after review.", 409)
+    backupSkipped = skip
+    const work = async () => {
     // Claim the change set before anything slow, so approve, reject and revise refuse it
     // while the backup runs, and a change made in between is detected instead of overwritten.
     const claimedFrom = record.status
@@ -861,10 +1009,17 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
         }
       }
       if (stopIfCisRevoked()) break operations
-      const attempt: OperationResult = { ...current, status: "writing", attempts: current.attempts + 1, message: null, readBack: null, at: at() }
+      const { writeNotSent: _previousRefusal, ...previous } = current
+      const attempt: OperationResult = { ...previous, status: "writing", attempts: current.attempts + 1, message: null, readBack: null, at: at() }
       saveResult(deps, tenant, id, operation.key, attempt, actor, `Writing ${operation.name}`)
-      const outcome = await writeOperation(writer, type, { action: operation.action, targetId: operation.targetId, proposed: entry.body, assignments: entry.assignments, current: captured[operation.key]?.body ?? null }, (createdId) => {
-        saveResult(deps, tenant, id, operation.key, { ...attempt, objectId: createdId }, actor, `Created ${operation.name}`)
+      const protectedWrite = hasWriteApproval(tenant)
+      const resultWriter = protectedWrite ? guardedOperationWriter(operation, type, gated, writer, approvedTargets.get(operation.key), body => checkDependencies(gated, body), hash => {
+        attempt.verifiedPostStepHash = hash
+        saveResult(deps, tenant, id, operation.key, attempt, actor, `Verified a step for ${operation.name}`)
+      }) : writer
+      const outcome = await writeOperation(resultWriter, type, { action: operation.action, targetId: operation.targetId, proposed: entry.body, assignments: entry.assignments, current: captured[operation.key]?.body ?? null }, (createdId) => {
+        attempt.objectId = createdId
+        saveResult(deps, tenant, id, operation.key, attempt, actor, `Created ${operation.name}`)
       })
       if (outcome.state === "approval") {
         saveResult(deps, tenant, id, operation.key, { ...attempt, status: "approval", partial: outcome.partial, objectId: outcome.objectId, message: outcome.message, at: at() }, actor, `${operation.name} needs Multi Admin Approval`)
@@ -872,6 +1027,13 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
       }
       if (outcome.state === "rejected") {
         saveResult(deps, tenant, id, operation.key, { ...attempt, status: "failed", objectId: outcome.objectId, message: `Microsoft Graph rejected the write; nothing was changed. ${outcome.message}`, at: at() }, actor, `${operation.name} was rejected`)
+        continue
+      }
+      if (outcome.state === "not-sent") {
+        saveResult(deps, tenant, id, operation.key, {
+          ...attempt, status: "failed", objectId: outcome.objectId, partial: outcome.partial, writeNotSent: true,
+          message: `Write not sent: ${outcome.message}${outcome.partial ? " (Earlier steps were sent.)" : ""}`, at: at(),
+        }, actor, `Write not sent for ${operation.name}`)
         continue
       }
       if (outcome.state === "unknown") {
@@ -891,6 +1053,8 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
     auditRecorded = true
     await recordApplyAudit(deps, tenant, updated, status, actor, undefined, claimedAttempt!, backupSkipped)
     return updated
+    }
+    return prepared ? work() : withWriteApproval([operation], work)
     }))
   } catch (error) {
     // A throw from the write loop or the final update: writes may have happened, so the
@@ -925,7 +1089,7 @@ function inverseOperations(deps: FeatureDeps, tenantId: string, record: ChangeSe
     const result = record.results[operation.key] ?? emptyResult()
     const object = record.preChange.objects.find((entry) => entry.key === operation.key)
     const snapshot = captured[operation.key]?.body ?? null
-    if (result.status === "pending" || result.status === "failed") continue
+    if (result.status === "pending" || (result.status === "failed" && !result.partial)) continue
     const warnings = result.status === "verified" ? [] : [`The outcome of "${operation.name}" was ${result.status}; the rollback is based on the captured state and live state is re-read at review.`]
     const source = { tenantId: record.targetTenantId, objectId: operation.targetId, version: record.preChange.capturedAt, label: `Pre-change capture of "${record.title}"` }
     if (operation.action === "create") {

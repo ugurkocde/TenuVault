@@ -59,6 +59,7 @@ interface Scenario {
   holdPreview?: { tenantIds: string[]; released: Promise<void> }
   /** Holds the first apply of a target until the test releases it. */
   hold?: { tenantId: string; released: Promise<void> }
+  grouped?: boolean
 }
 
 let scenario: Scenario
@@ -127,6 +128,21 @@ function server(tenantId: string, action: string, body: Record<string, unknown>)
       ;(target.promotion as Record<string, unknown>).sync = { runId: "r", backup: body.backup }
       ;(target.changeSet as Record<string, unknown>).status = "approved"
       return { status: 200, body: { promotion: target.promotion, changeSet: target.changeSet } }
+    }
+    case "apply-batch": {
+      if (!scenario.grouped) return { status: 200, body: { legacy: true } }
+      const entry = runs.get(body.id as string)!
+      if (body.destinations) {
+        entry.run.groupedApply = { destinations: body.destinations, backup: body.backup }
+        for (const target of entry.targets) (target.changeSet as Record<string, unknown>).status = "approved"
+        return { status: 409, body: { error: "Tenant approval is pending." } }
+      }
+      const group = entry.run.groupedApply as { destinations: Array<{ id: string }>; backup: string }
+      delete entry.run.groupedApply
+      for (const target of entry.targets) {
+        server(target.targetTenantId as string, "apply", { id: target.promotionId, backup: group.backup })
+      }
+      return { status: 200, body: { results: group.destinations.map(({ id }) => ({ id })) } }
     }
     case "apply":
     case "retry": {
@@ -826,4 +842,25 @@ describe("Sync runs planned and never approved", () => {
     expect(time.getAttribute("title")).toMatch(/2026/)
     expect(time.textContent).toMatch(/ago|yesterday|just now|last|in /)
   })
+})
+
+it("continues an already reviewed group using the saved destinations and backup choice", async () => {
+  scenario.grouped = true
+  const container = await render()
+  await toReview(container, ["Contoso Germany", "Contoso France"])
+  await click(container.querySelector<HTMLInputElement>('section[aria-label="Review"] input[value="none"]')!)
+  await click(button(container, "Approve and sync to 2 tenants"))
+  await until(() => !!button(container, "Continue to review"), "grouped resume")
+  await click(button(container, "Continue to review"))
+  expect(container.textContent).toContain("Sync without a pre-change backup.")
+  expect(calls.filter(call => call.action === "apply-batch")).toHaveLength(1)
+  await click(button(container, "Apply reviewed sync"))
+  await until(() => node(container, "Contoso Germany")?.className.includes("border-green-600") === true, "grouped result")
+  expect(calls.filter(call => call.action === "apply-batch").map(call => call.body)).toEqual([
+    expect.objectContaining({ backup: "none", destinations: [expect.objectContaining({ id: `pr-${B}` }), expect.objectContaining({ id: `pr-${C}` })] }),
+    { id: expect.any(String), confirm: true },
+  ])
+  const resumed = calls.filter(call => call.action === "apply-batch")[1]!.body
+  expect(resumed).not.toHaveProperty("destinations")
+  expect(resumed).not.toHaveProperty("backup")
 })

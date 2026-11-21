@@ -108,3 +108,7 @@ Backups are Intune configuration as JSON files, so most tenants store a modest a
 1. Tell the Intune administrators the storage account name.
 2. Each administrator chooses **Your Azure storage account** during tenant setup or in **Settings** > **Sign-in** > **Change storage**, picks the account and selects **Check access**. See [Choose where backups are stored](/getting-started/choose-storage/).
 3. Every administrator in the group then sees, compares and restores the same backups. No recovery key is handed over. See [Work with other admins in one tenant](/getting-started/multiple-admins/).
+
+## Shared storage for tenant approvals
+
+Tenant approval uses the connected Azure backup container. Anyone with write access to that container is trusted like an Intune admin. Keep the same tenant and account on each writing installation.

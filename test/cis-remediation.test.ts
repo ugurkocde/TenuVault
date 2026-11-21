@@ -1,3 +1,5 @@
+import { setWriteApprovals } from "../src/main/write-approvals/service"
+import { reviewer, unenrolledApprovals, writeApprovalFixture } from "./helpers/write-approval-fixture"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { applyCisRemediation, approveCisRemediation, createCisRollback, listCisRemediations, OFFLINE_PREVIEW_NOTICE, planCisRemediation, previewCisRemediation, previewCisRollback, RECOMPARE_NOTICE } from "../src/main/features/cis-remediation/engine"
 import { applyChangeSet, approveChangeSet, previewChangeSet } from "../src/main/features/change-sets/engine"
@@ -9,6 +11,8 @@ import { routes as cisRoutes } from "../src/main/features/cis-remediation/index"
 import { FakeTenant, setting, wire } from "./feature-change-sets-fakes"
 import type { Item } from "../src/shared/intune/registry"
 import { rootMatches, type Json } from "../src/shared/frameworks/policies"
+
+beforeEach(() => setWriteApprovals(unenrolledApprovals("device")))
 
 const DEF_A = "fakebook_setting_alpha"
 const DEF_B = "fakebook_setting_beta"
@@ -41,7 +45,7 @@ let cisPlan: Plan | null = "pro"
 // The synthetic packs here are not delivered by the service, so these tests hold the internal
 // claim; cis-delivered.test.ts covers the delivered-pack check without it.
 beforeEach(() => { cisPlan = "pro"; setCisBenchmarksPlanProvider(() => cisPlan); setInternalCisBenchmarksEnabled(true) })
-afterEach(() => { setCisBenchmarksPlanProvider(null); setInternalCisBenchmarksEnabled(null) })
+afterEach(() => { setWriteApprovals(undefined); setCisBenchmarksPlanProvider(null); setInternalCisBenchmarksEnabled(null) })
 const PLAN_ENDED = { feature: "baselineAllPlatforms", message: upgradeMessage("baselineAllPlatforms") }
 
 describe("CIS remediation deploy", () => {
@@ -493,4 +497,26 @@ describe("CIS remediation deploy", () => {
       .rejects.toThrow("at most 25")
     expect(context.tenant.calls).toEqual([])
   })
+})
+
+
+it("requests destination approval through the CIS remediation apply route", async () => {
+  const context = setup()
+  const { profile } = writeApprovalFixture()
+  const origin = profile(), second = profile(reviewer)
+  setWriteApprovals(origin.service)
+  await origin.service.enable(TENANT_A)
+  const deployment = await planCisRemediation(context.deps, TENANT_A, {
+    title: "Deploy", reference: "synthetic 1.0", policies,
+    findings: [finding({ key: "0:0", policyIndex: 0, settingIndex: 0, status: "Missing" })], selectedFindingKeys: ["0:0"],
+  }, "Admin")
+  const { preview } = await approveFlow(context, deployment.id)
+  const apply = () => call(cisRoutes(context.deps), "/api/cis-remediation", {
+    tenantId: TENANT_A, action: "apply", id: deployment.id, contentHash: preview.changeSet.contentHash, confirm: true,
+  })
+  expect(await apply()).toMatchObject({ status: 409, body: { error: expect.stringContaining("pending") } })
+  expect(context.tenant.writeCount()).toBe(0)
+  await second.service.decide(TENANT_A, (await second.service.inbox(TENANT_A)).requests[0]!.request.id, "approve")
+  expect((await apply()).status).toBe(200)
+  expect(context.tenant.writeCount()).toBe(1)
 })

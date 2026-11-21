@@ -1,8 +1,13 @@
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { setWriteApprovals } from "../src/main/write-approvals/service"
+import { reviewer, unenrolledApprovals, writeApprovalFixture } from "./helpers/write-approval-fixture"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { comparePolicies, parsePolicies, remediationPayload } from "../src/shared/frameworks/policies"
 import { frameworks, searchFrameworks } from "../src/shared/frameworks/catalog"
 import { collectGraph, handleFramework } from "../src/main/frameworks/service"
 import { setFrameworkStore } from "../src/main/frameworks/workspaces"
+
+beforeEach(() => setWriteApprovals(unenrolledApprovals("none")))
+afterEach(() => setWriteApprovals(undefined))
 
 const type = "#microsoft.graph.deviceManagementConfigurationChoiceSettingInstance"
 const policy = (value = "enabled") => ({ name: "Workstation baseline", platforms: "windows10", technologies: "mdm", description: "Approved profile",
@@ -241,4 +246,27 @@ describe("Graph reads and tenant-bound remediation", () => {
     expect(fetcher.mock.calls.filter(([url, init]) => !url.includes("oauth2") && init?.method === "POST")).toHaveLength(1)
   })
 
+})
+
+
+it("requires tenant approval before creating framework policies", async () => {
+  const writes: unknown[] = []
+  const { profile } = writeApprovalFixture()
+  const origin = profile(), second = profile(reviewer)
+  setWriteApprovals(origin.service)
+  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+    if (url.includes("oauth2")) return Response.json({ access_token: "fixture" })
+    if (init?.method === "POST") { writes.push(JSON.parse(String(init.body))); return Response.json({ id: liveId }) }
+    return Response.json({ value: [] })
+  }))
+  try {
+    await origin.service.enable(tenantId)
+    const assessment = await handleFramework({ action: "assess", tenantId, appId, frameworkId: "custom", reference: "r1", policies: [policy()] }) as { runId: string }
+    const create = () => handleFramework({ action: "create", tenantId, appId, runId: assessment.runId, keys: ["0:0"], confirmUnassigned: true })
+    await expect(create()).rejects.toThrow("pending")
+    expect(writes).toHaveLength(0)
+    await second.service.decide(tenantId, (await second.service.inbox(tenantId)).requests[0]!.request.id, "approve")
+    expect(await create()).toMatchObject({ success: true })
+    expect(writes).toHaveLength(1)
+  } finally { setWriteApprovals(undefined); vi.unstubAllGlobals() }
 })

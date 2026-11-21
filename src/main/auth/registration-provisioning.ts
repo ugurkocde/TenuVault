@@ -1,3 +1,4 @@
+import { withExemptGraphCaller } from "../write-approvals/dispatch"
 import { CONSENT_ROLES_TEXT, DESKTOP_APP_PERMISSIONS } from "../../shared/app-registration"
 import { OPTIONAL_PERMISSIONS } from "../../shared/services/optional-permissions"
 import type { RegistrationResult, SetupProgress } from "../../shared/ipc"
@@ -86,14 +87,14 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
       const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS)
       let response: Response
       try {
-        response = await request(url.href, {
+        response = await withExemptGraphCaller("registration", () => request(url.href, {
           // A cancel never cuts a POST off (only the timeout does): Microsoft may already have
           // carried it out, and the ID in its answer is what the cleanup needs. A cancel is
           // noticed right after it.
           method, redirect: "error", signal: !cleanup && signal && repeatable ? AbortSignal.any([signal, timeout]) : timeout,
           headers: { Authorization: `Bearer ${options.token}`, "Content-Type": "application/json" },
           ...(body ? { body: JSON.stringify(body) } : {}),
-        })
+        }))
       } catch (error) {
         if (!cleanup) checkCancelled()
         if (repeatable && attempt < attempts) { await (cleanup ? sleep(3000) : wait(3000)); continue }

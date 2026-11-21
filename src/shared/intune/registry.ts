@@ -248,7 +248,7 @@ const GROUP_POLICY_DEFINITIONS = "https://graph.microsoft.com/beta/deviceManagem
 const definitionId = (value: Item) => str((value.definition as Item | undefined)?.id)
 
 /** An ADMX setting in the shape updateDefinitionValues expects in `added`. */
-function groupPolicyValue(value: Item): Item {
+export function groupPolicyValue(value: Item): Item {
   const definition = definitionId(value)
   return {
     enabled: value.enabled ?? false,

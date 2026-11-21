@@ -16,6 +16,7 @@
  * when the request carries the harness cookie. Any other browser on the machine (the app also
  * opens the system default browser) gets a page that does nothing.
  */
+import { approvalEndpoints, BLOB_HOST, GRAPH_HOST } from "./approvals-stand-in.mjs"
 import { createServer } from "node:https"
 import { createHash, generateKeyPairSync, randomBytes, randomUUID, sign } from "node:crypto"
 
@@ -56,8 +57,12 @@ export async function startStandIn({ key, cert, port = 443, tenantId, clientId, 
   const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 })
   const kid = randomBytes(8).toString("hex")
   const jwk = { ...publicKey.export({ format: "jwk" }), kid, kty: "RSA", use: "sig", alg: "RS256" }
-  const oid = randomUUID()
-  const clientInfo = b64url(JSON.stringify({ uid: oid, utid: tenantId }))
+  const identity = value => ({ ...value, oid: randomUUID() })
+  let activeAccount = identity(account)
+  const clientInfo = actor => b64url(JSON.stringify({ uid: actor.oid, utid: tenantId }))
+  const refreshTokens = new Map()
+  const issued = new Map()
+  const approvals = approvalEndpoints(tenantId, issued, (response, status, body) => json(response, status, body))
 
   const jwt = (claims) => {
     const header = b64url(JSON.stringify({ typ: "JWT", alg: "RS256", kid }))
@@ -131,8 +136,8 @@ export async function startStandIn({ key, cert, port = 443, tenantId, clientId, 
       Object.assign(fields, { error: "access_denied", error_description: "AADSTS65004: User declined to consent to access the app." })
     } else {
       const code = randomBytes(32).toString("base64url")
-      codes.set(code, { challenge: params.get("code_challenge"), redirectUri, nonce: params.get("nonce"), scope: params.get("scope") ?? "" })
-      Object.assign(fields, { code, client_info: clientInfo, session_state: randomUUID() })
+      codes.set(code, { challenge: params.get("code_challenge"), redirectUri, nonce: params.get("nonce"), scope: params.get("scope") ?? "", actor: activeAccount })
+      Object.assign(fields, { code, client_info: clientInfo(activeAccount), session_state: randomUUID() })
       if (mode === "wrong-state") fields.state = randomBytes(32).toString("base64url")
     }
     record(`authorize answered (${mode}) to ${redirectUri}`)
@@ -145,14 +150,24 @@ export async function startStandIn({ key, cert, port = 443, tenantId, clientId, 
     const chunks = []
     for await (const chunk of request) chunks.push(chunk)
     const body = new URLSearchParams(Buffer.concat(chunks).toString("utf8"))
-    if (body.get("grant_type") !== "authorization_code") return tokenError(response, "unsupported_grant_type", "AADSTS70003: The app requested an unsupported grant type.")
     if (body.get("client_id") !== clientId) return tokenError(response, "unauthorized_client", "AADSTS700016: Application not found in the directory.")
-    const entry = codes.get(body.get("code") ?? "")
-    codes.delete(body.get("code") ?? "")
-    if (!entry) return tokenError(response, "invalid_grant", "AADSTS70008: The provided authorization code is invalid or has expired.")
-    if (body.get("redirect_uri") !== entry.redirectUri) return tokenError(response, "invalid_grant", "AADSTS50148: The redirect_uri does not match the one used in the authorization request.")
-    const verifier = body.get("code_verifier") ?? ""
-    if (createHash("sha256").update(verifier).digest("base64url") !== entry.challenge) return tokenError(response, "invalid_grant", "AADSTS501481: The Code_Verifier does not match the code_challenge supplied in the authorization request.")
+    const grant = body.get("grant_type")
+    let entry
+    if (grant === "refresh_token") {
+      const actor = refreshTokens.get(body.get("refresh_token"))
+      if (!actor) return tokenError(response, "invalid_grant", "AADSTS70008: The refresh token is invalid.")
+      entry = { scope: body.get("scope") ?? "", actor }
+    } else if (grant === "authorization_code") {
+      entry = codes.get(body.get("code") ?? "")
+      codes.delete(body.get("code") ?? "")
+      if (!entry) return tokenError(response, "invalid_grant", "AADSTS70008: The provided authorization code is invalid or has expired.")
+      if (body.get("redirect_uri") !== entry.redirectUri) return tokenError(response, "invalid_grant", "AADSTS50148: The redirect_uri does not match the one used in the authorization request.")
+      const verifier = body.get("code_verifier") ?? ""
+      if (createHash("sha256").update(verifier).digest("base64url") !== entry.challenge) return tokenError(response, "invalid_grant", "AADSTS501481: The Code_Verifier does not match the code_challenge supplied in the authorization request.")
+    } else return tokenError(response, "unsupported_grant_type", "AADSTS70003: The app requested an unsupported grant type.")
+    const { actor } = entry
+    const { oid, name, username } = actor
+    const audience = entry.scope.includes("https://storage.azure.com/") ? "https://storage.azure.com" : `https://${GRAPH_HOST}`
     const now = Math.floor(Date.now() / 1000)
     const common = { iat: now, nbf: now, exp: now + 3600, tid: tenantId, oid, sub: oid }
     const idToken = jwt({
@@ -160,21 +175,24 @@ export async function startStandIn({ key, cert, port = 443, tenantId, clientId, 
       aud: clientId,
       iss: `https://${LOGIN_HOST}/${tenantId}/v2.0`,
       ...(entry.nonce ? { nonce: entry.nonce } : {}),
-      name: account.name,
-      preferred_username: account.username,
+      name,
+      preferred_username: username,
       ver: "2.0",
     })
-    const accessToken = jwt({ ...common, aud: "https://graph.microsoft.com", iss: `https://sts.windows.net/${tenantId}/`, scp: "openid profile", upn: account.username, appid: clientId, ver: "1.0" })
-    record("token issued for an authorization code with a matching PKCE verifier")
+    const accessToken = jwt({ ...common, aud: audience, iss: `https://sts.windows.net/${tenantId}/`, scp: "openid profile", upn: username, appid: clientId, ver: "1.0" })
+    issued.set(accessToken, { audience, oid })
+    const refresh = randomBytes(48).toString("base64url")
+    refreshTokens.set(refresh, actor)
+    record(grant === "authorization_code" ? "token issued for an authorization code with a matching PKCE verifier" : "refreshed delegated fixture token")
     json(response, 200, {
       token_type: "Bearer",
       scope: entry.scope.split(" ").filter((scope) => !["openid", "profile", "offline_access"].includes(scope)).join(" "),
       expires_in: 3599,
       ext_expires_in: 3599,
       access_token: accessToken,
-      refresh_token: randomBytes(48).toString("base64url"),
+      refresh_token: refresh,
       id_token: idToken,
-      client_info: clientInfo,
+      client_info: clientInfo(actor),
     })
   }
 
@@ -200,6 +218,7 @@ export async function startStandIn({ key, cert, port = 443, tenantId, clientId, 
     const rest = segments.slice(1).join("/")
     Promise.resolve().then(async () => {
       const host = request.headers.host?.split(":")[0]
+      if (host === GRAPH_HOST || host === BLOB_HOST) return approvals.handle(host, url, request, response)
       if (host === LICENSE_HOST) return licensing(url, request, response)
       if (host !== LOGIN_HOST) return json(response, 421, { error: "misdirected_request" })
       if (request.method === "GET" && tenant === "common" && rest === "discovery/instance") {
@@ -232,6 +251,8 @@ export async function startStandIn({ key, cert, port = 443, tenantId, clientId, 
     record,
     /** The cookie a harness browser sends so that the authorize page answers. */
     cookie: { name: HARNESS_COOKIE, value: secret, domain: LOGIN_HOST, path: "/", secure: true, httpOnly: true, sameSite: "None" },
+    approvals,
+    setAccount: (value) => { activeAccount = identity(value) },
     setMode: (next) => { mode = next },
     // Browsers keep connections open; closing waits for none of them.
     close: () => new Promise((resolve) => {

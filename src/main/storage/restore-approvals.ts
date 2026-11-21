@@ -2,12 +2,16 @@ import type { KeyValueStore } from "./secure-store"
 import type { Item, Step } from "../../shared/intune/registry"
 
 export interface ApprovalStep { method: Step["method"]; path: string; body?: string; kind: Step["kind"] }
+type IntuneIdentity = { id?: string; displayName?: string; upn?: string }
+
 export interface RestoreApproval {
   id: string
   tenantId: string
   requesterId: string
   requesterName?: string
   continuationPending?: boolean
+  continuationFingerprint?: string
+  approver?: { user?: IntuneIdentity; application?: IntuneIdentity } | null
   origin: "restore"
   backupPath: string
   snapshotId?: string

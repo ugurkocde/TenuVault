@@ -169,6 +169,16 @@ If the linked policy was deleted in the target, the next sync creates it again a
 * Assignments and secret values are not synced.
 * Sync is one way and runs only when you start it.
 
+## Second admin approval
+
+When the destination requires a second admin, request approval from each destination’s apply screen. The approval is tied to that destination’s change set and the selected backup choice.
+
+Open **Settings > Storage and recovery > Tenant approvals** and select the destination tenant. A different signed-in admin reviews the request there. After approval, return to the operation on the original installation and apply the same selection before it expires. The deadline is seven days from request creation. The Tenant approvals inbox shows the expiry.
+
+For a grouped sync, TenuVault checks all selected destinations before sending writes. Once the decisions are recorded, select **Continue to review** in the sync result. Confirm the saved destinations and backup choice, then select **Apply reviewed sync** to repeat the checks. Retries for individual destinations remain available after the grouped apply.
+
+If a saved approval group becomes stale, TenuVault clears the saved selection. Plan the affected destinations again and request approval for the new plan.
+
 ## Related pages
 
 * [Changes](/changes/)

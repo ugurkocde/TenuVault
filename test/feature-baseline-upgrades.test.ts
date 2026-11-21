@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest"
+import { FetchPreconditionError } from "../src/main/api/network-error"
+import { graphDispatchGuard } from "../src/main/write-approvals/dispatch"
+import { setWriteApprovals } from "../src/main/write-approvals/service"
+import { requester, reviewer, writeApprovalFixture } from "./helpers/write-approval-fixture"
 import { routes } from "../src/main/features/baseline-upgrades"
 import { comparePolicy, comparePolicySets, mergePolicy, policyMatchKey } from "../src/main/features/baseline-upgrades/merge"
 import { offeredOver, resolveRunCommit, type BaselineSources } from "../src/main/features/baseline-upgrades/sources"
@@ -243,6 +247,55 @@ describe("/api/baseline-upgrades", () => {
     expect(source.kind).toBe("source")
     expect(JSON.stringify(source.policies)).not.toContain(context.defender.id as string)
     expect((await context.post({ action: "record-install", origin: "quickstart", runId: context.run.runId })).status).toBe(409)
+  })
+
+  it.each(["before apply", "after claim"])("refuses a baseline upgrade when the scope tag assignment changes %s", async timing => {
+    const context = setup()
+    context.tenant.policies.get(context.firewall.id as string)!.roleScopeTagIds = ["12"]
+    const { profile, state } = writeApprovalFixture()
+    const first = profile(), second = profile(reviewer)
+    await first.service.enable(TENANT_A)
+    setWriteApprovals(first.service)
+    let groupId = TENANT_A
+    const guard = graphDispatchGuard(first.service, () => ({ tenant: TENANT_A, actor: requester, current: () => true }))
+    const graph = context.deps.graph
+    context.deps.graph = async (tenant, options) => {
+      const inner = await graph(tenant, options)
+      return async (method, path, body, callOptions) => {
+        if (path === "deviceManagement/roleScopeTags/12") return { status: 200, body: { id: "12", displayName: "Pilot" } }
+        if (path === "deviceManagement/roleScopeTags/12/assignments") return { status: 200, body: { value: [{ target: { groupId } }] } }
+        if (method !== "GET") {
+          try { await guard(`https://graph.microsoft.com/beta/${path}`, { method, headers: { authorization: "Bearer fixture" } }) }
+          catch (error) { throw new FetchPreconditionError(error) }
+        }
+        return inner(method, path, body, callOptions)
+      }
+    }
+    try {
+      const installed = await install(context)
+      const { body: { upgrade } } = await context.post({ action: "compare", installId: installed.id, commit: NEW })
+      const defender = upgrade.policies.find((entry: { name: string }) => entry.name.includes("Defender")).key
+      const firewall = upgrade.policies.find((entry: { name: string }) => entry.name.includes("Firewall")).key
+      await context.post({ action: "resolve", id: upgrade.id, settings: [{ policyKey: defender, settingKey: "c", choice: "local" }] })
+      const { body: { changeSet } } = await context.post({ action: "create-change-set", id: upgrade.id, policyKeys: [firewall] })
+      expect(changeSet.dependencies).toEqual([])
+      const scope = { id: upgrade.id, changeSetId: changeSet.id }
+      const { body: { contentHash, targetFingerprint } } = await context.post({ action: "change-preview", ...scope })
+      expect((await context.post({ action: "change-approve", ...scope, contentHash, targetFingerprint })).status).toBe(200)
+      const apply = () => context.post({ action: "change-apply", ...scope, contentHash, confirm: true })
+      expect((await apply()).body).toMatchObject({ error: expect.stringContaining("pending") })
+      await second.service.decide(TENANT_A, (await second.service.inbox(TENANT_A)).requests[0]!.request.id, "approve")
+      if (timing === "before apply") {
+        groupId = TENANT_B
+        expect((await apply()).body).toMatchObject({ error: expect.stringContaining("changed after request") })
+      } else {
+        state.beforeAudit = event => { if (event.action.endsWith("claimed")) groupId = TENANT_B }
+        expect((await apply()).body.changeSet.results["op-1"]).toMatchObject({ writeNotSent: true, message: expect.stringContaining("changed after review") })
+      }
+      expect(context.tenant.writeCount()).toBe(0)
+    } finally {
+      setWriteApprovals(undefined)
+    }
   })
 
   it("upgrades while preserving customizations, stops on conflicts and records resolutions and versions", async () => {

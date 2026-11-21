@@ -1,8 +1,9 @@
 import { approvalMessage, type ApprovalSignal } from "../../../shared/intune/approval"
 import { readLive, type GraphCall } from "../../../portal/lib/policies/graph-restore"
-import { buildRestorePlan, buildUpdatePlan, resolveStep } from "../../../shared/intune/restore-plan"
+import { buildRestorePlan, buildUpdatePlan, resolveStep, type RestorePlan } from "../../../shared/intune/restore-plan"
 import type { IntuneType, Item, Json, Step } from "../../../shared/intune/registry"
 import { isGraphId } from "../../../shared/security"
+import { FetchPreconditionError } from "../../api/network-error"
 import { matchesProposed, operationFingerprint, sameAssignments, sanitizeSnapshot, type OperationAction } from "./model"
 
 /**
@@ -107,8 +108,9 @@ export async function readCurrent(graph: GraphCall, type: IntuneType, id: string
 }
 
 /** IDs of objects of a type whose name equals `name` (case-insensitive). */
-export async function sameNameIds(graph: GraphCall, type: IntuneType, name: string, memo?: ListingMemo): Promise<string[]> {
-  const items = await listAll(graph, `${type.path}?$select=id,${type.nameKey}`, memo)
+export async function sameNameIds(graph: GraphCall, type: IntuneType, name: string, memo?: ListingMemo, filtered = false): Promise<string[]> {
+  const filter = filtered && name ? `&$filter=${encodeURIComponent(`${type.nameKey} eq '${name.trim().replaceAll("'", "''")}'`)}` : ""
+  const items = await listAll(graph, `${type.path}?$select=id,${type.nameKey}${filter}`, memo)
   const wanted = name.trim().toLowerCase()
   return items.filter((item) => typeof item[type.nameKey] === "string" && (item[type.nameKey] as string).trim().toLowerCase() === wanted && typeof item.id === "string").map((item) => item.id as string)
 }
@@ -119,18 +121,24 @@ export interface Observation {
   redacted: boolean
   sameNameIds: string[]
   fingerprint: string
+  revision?: string
 }
 
 /** Reads what one operation would change in the target and fingerprints it. */
-export async function observe(graph: GraphCall, type: IntuneType, operation: { action: OperationAction; targetId: string | null; name: string }, memo?: ListingMemo): Promise<Observation> {
+export async function observe(graph: GraphCall, type: IntuneType, operation: { action: OperationAction; targetId: string | null; name: string }, memo?: ListingMemo, filtered = false): Promise<Observation> {
   if (operation.action === "create") {
-    const ids = await sameNameIds(graph, type, operation.name, memo)
+    const ids = await sameNameIds(graph, type, operation.name, memo, filtered)
     return { snapshot: null, redacted: false, sameNameIds: ids, fingerprint: operationFingerprint("create", { snapshot: null, sameNameIds: ids }) }
   }
   const live = await readCurrent(graph, type, operation.targetId!)
+  return observeCurrent(type, operation.action, live)
+}
+
+export function observeCurrent(type: IntuneType, action: OperationAction, live: Item | null): Observation {
   if (!live) return { snapshot: null, redacted: false, sameNameIds: [], fingerprint: "missing" }
   const { snapshot, redacted } = sanitizeSnapshot(type, live)
-  return { snapshot, redacted, sameNameIds: [], fingerprint: operationFingerprint(operation.action, { snapshot, sameNameIds: [] }) }
+  const marker = live["@odata.etag"] ?? live.lastModifiedDateTime
+  return { snapshot, redacted, sameNameIds: [], ...(redacted && typeof marker === "string" && marker ? { revision: marker } : {}), fingerprint: operationFingerprint(action, { snapshot, sameNameIds: [] }) }
 }
 
 export type WriteOutcome =
@@ -139,10 +147,11 @@ export type WriteOutcome =
   | { state: "written"; objectId: string }
   /** Graph rejected the first request, so nothing was written; safe to fix and retry. */
   | { state: "rejected"; objectId: string | null; message: string }
+  | { state: "not-sent"; objectId: string | null; message: string; partial: boolean }
   /** A request may or may not have completed, or a follow-up step failed after a write. */
   | { state: "unknown"; objectId: string | null; message: string }
 
-type Sent = { ok: true; body: Item } | { ok: false; rejected: boolean; message: string; approval?: ApprovalSignal }
+type Sent = { ok: true; body: Item } | { ok: false; rejected: boolean; message: string; approval?: ApprovalSignal; notSent?: boolean }
 
 async function send(graph: GraphCall, method: Step["method"], path: string, body?: Item): Promise<Sent> {
   try {
@@ -154,8 +163,23 @@ async function send(graph: GraphCall, method: Step["method"], path: string, body
     const rejected = response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429
     return { ok: false, rejected, message: graphMessage(response.body, response.status) }
   } catch (error) {
+    if (error instanceof FetchPreconditionError) return { ok: false, rejected: true, notSent: true, message: error.message }
     return { ok: false, rejected: false, message: `Write outcome unknown: ${error instanceof Error ? error.message : String(error)}` }
   }
+}
+
+/** Builds the content requests shared by approval observation and dispatch. */
+export function changeOperationPlan(
+  type: IntuneType,
+  action: OperationAction,
+  targetId: string | null,
+  proposed: Item | null,
+  current: Item | null,
+): { create: RestorePlan["create"] | null; steps: Step[] } {
+  if (action === "delete") return { create: null, steps: [] }
+  const { assignments: _ignored, ...body } = proposed ?? {}
+  if (action === "create") return buildRestorePlan(type, body, { includeAssignments: false })
+  return { create: null, steps: buildUpdatePlan(type, body, targetId!, { includeAssignments: false, current: current ?? {} }) }
 }
 
 /**
@@ -169,6 +193,7 @@ export async function writeOperation(
   onCreated: (id: string) => void,
 ): Promise<WriteOutcome> {
   const blocked = (sent: Extract<Sent, { ok: false }>, objectId: string | null, partial = false): WriteOutcome => ({ state: "approval", objectId, partial, message: approvalMessage(sent.approval!, type.label, partial ? "The configuration was written, but assignments or a follow-up step need approval." : undefined) })
+  const unsent = (sent: Extract<Sent, { ok: false }>, objectId: string | null, partial = false): WriteOutcome => ({ state: "not-sent", objectId, partial, message: sent.message })
   const assign = async (id: string): Promise<Sent> => {
     if (!input.assignments) return { ok: true, body: {} }
     if (!type.assign || type.assign === "post") return { ok: false, rejected: true, message: `Assignments cannot be set for ${type.label} by a change set.` }
@@ -177,39 +202,43 @@ export async function writeOperation(
   if (input.action === "delete") {
     const sent = await send(graph, "DELETE", `${type.path}/${encodeURIComponent(input.targetId!)}`)
     if (!sent.ok && sent.approval) return blocked(sent, input.targetId)
+    if (!sent.ok && sent.notSent) return unsent(sent, input.targetId)
     if (!sent.ok) return sent.rejected ? { state: "rejected", objectId: input.targetId, message: sent.message } : { state: "unknown", objectId: input.targetId, message: sent.message }
     return { state: "written", objectId: input.targetId! }
   }
-  const { assignments: _ignored, ...proposed } = input.proposed ?? {}
-  if (input.action === "create") {
-    const plan = buildRestorePlan(type, proposed as Item, { includeAssignments: false })
-    const created = await send(graph, "POST", plan.create.path, plan.create.body)
+  const { create, steps } = changeOperationPlan(type, input.action, input.targetId, input.proposed, input.current)
+  if (create) {
+    const created = await send(graph, create.method, create.path, create.body)
     if (!created.ok && created.approval) return blocked(created, null)
+    if (!created.ok && created.notSent) return unsent(created, null)
     if (!created.ok) return created.rejected ? { state: "rejected", objectId: null, message: created.message } : { state: "unknown", objectId: null, message: created.message }
     const id = created.body.id
     if (!isGraphId(id)) return { state: "unknown", objectId: null, message: "Microsoft Graph did not return a valid ID for the created object. Check Intune before retrying." }
     onCreated(id)
-    for (const step of plan.steps.map((entry) => resolveStep(entry, id))) {
+    for (const step of steps.map((entry) => resolveStep(entry, id))) {
       const sent = await send(graph, step.method, step.path, step.body)
       if (!sent.ok && sent.approval) return blocked(sent, id, true)
+      if (!sent.ok && sent.notSent) return unsent(sent, id, true)
       if (!sent.ok) return { state: "unknown", objectId: id, message: `The object was created but a follow-up step failed: ${sent.message}` }
     }
     const assigned = await assign(id)
     if (!assigned.ok && assigned.approval) return blocked(assigned, id, true)
+    if (!assigned.ok && assigned.notSent) return unsent(assigned, id, true)
     if (!assigned.ok) return { state: "unknown", objectId: id, message: `The object was created but its reviewed assignments failed: ${assigned.message}` }
     return { state: "written", objectId: id }
   }
-  const steps = buildUpdatePlan(type, proposed as Item, input.targetId!, { includeAssignments: false, current: input.current ?? {} })
   for (const [index, step] of steps.entries()) {
     const sent = await send(graph, step.method, step.path, step.body)
     if (!sent.ok) {
       if (sent.approval) return blocked(sent, input.targetId, index > 0)
+      if (sent.notSent) return unsent(sent, input.targetId, index > 0)
       if (index === 0 && sent.rejected) return { state: "rejected", objectId: input.targetId, message: sent.message }
       return { state: "unknown", objectId: input.targetId, message: index === 0 ? sent.message : `Part of the update was written before a step failed: ${sent.message}` }
     }
   }
   const assigned = await assign(input.targetId!)
   if (!assigned.ok && assigned.approval) return blocked(assigned, input.targetId, true)
+  if (!assigned.ok && assigned.notSent) return unsent(assigned, input.targetId, steps.length > 0)
   if (!assigned.ok) return { state: "unknown", objectId: input.targetId, message: `The configuration was written but the reviewed assignments failed: ${assigned.message}` }
   return { state: "written", objectId: input.targetId! }
 }

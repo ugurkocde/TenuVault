@@ -1,5 +1,6 @@
+import { WriteApprovalError } from "../write-approvals/service"
 import { allows, PlanRequired, type Plan } from "../../shared/plans"
-import { featureRouteFeatures, type FeatureRoutePath } from "../../shared/feature-routes"
+import { defersFeatureCheck, featureRouteFeatures, type FeatureRoutePath } from "../../shared/feature-routes"
 import { isGuid } from "../../shared/security"
 import type { RouteModule } from "../api/host"
 import type { NextRequest } from "../api/next-server-shim"
@@ -55,7 +56,7 @@ export function featureRoute(path: FeatureRoutePath, deps: FeatureDeps, handlers
           // no feature requirement, so community is the safe stand-in for them.
           let plan: Awaited<ReturnType<FeatureDeps["plan"]>>
           try {
-            plan = await deps.plan(tenantId)
+            plan = defersFeatureCheck(path, action) ? "community" : await deps.plan(tenantId)
           } catch (error) {
             if (features.length > 0) throw error
             plan = "community"
@@ -74,6 +75,7 @@ export function featureRoute(path: FeatureRoutePath, deps: FeatureDeps, handlers
           return Response.json(result ?? { ok: true })
         } catch (error) {
           if (error instanceof PlanRequired) return Response.json({ error: error.message, upgrade: error.feature }, { status: 402 })
+          if (error instanceof WriteApprovalError) return Response.json({ error: error.message }, { status: 409 })
           if (error instanceof FeatureError || error instanceof TenantWriteConflict) return Response.json({ error: error.message }, { status: error.status })
           throw error
         }

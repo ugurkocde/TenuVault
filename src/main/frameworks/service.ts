@@ -1,3 +1,5 @@
+import { hasWriteApproval, withWriteApproval } from "../write-approvals/service"
+import { sameObservation, withWriteCheckpoint } from "../write-approvals/dispatch"
 import { approvalSignal, approvalMessage } from "../../shared/intune/approval"
 import { assignmentEvidence, type AssignmentEvidence } from "../../shared/frameworks/evidence"
 import { loadWorkspace, saveWorkspace, deleteWorkspace, keepReadLists, pruneHistory, recordAssessment, recordCreation, workspaceCapacity, workspaceView, type FrameworkWorkspace } from "./workspaces"
@@ -807,6 +809,18 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
     const current = await landscape(token, undefined, () => requireEnabledFramework(run.assessment.frameworkId))
     requireEnabledFramework(run.assessment.frameworkId)
     if (fingerprint(current) !== run.fingerprint) throw new FrameworkError("The tenant policy landscape changed. Compare again before creating policies.", 409)
+    const payloads = [...new Set(selected.map(f => f.policyIndex))].map(policyIndex => {
+      const policy = run.policies[policyIndex]!
+      return remediationPayload(policy, selected.filter(f => f.policyIndex === policyIndex).map(f => policy.settings[f.settingIndex]!), run.assessment.reference)
+    })
+    const createdIds = new Set<string>()
+    const target = async () => fingerprint((await landscape(token, undefined, () => requireEnabledFramework(run.assessment.frameworkId))).filter(policy => !createdIds.has(policy.id)))
+    return withWriteApproval([{
+      tenant, reference: ["framework-create", run.assessment.frameworkId, run.assessment.reference, [...keys].sort()],
+      summary: { kind: "Create unassigned framework policies", count: payloads.length, targets: payloads.map(payload => payload.name), assignments: false,
+        fields: selected.map(finding => finding.settingId) },
+      observe: async () => ({ content: [run.assessment.frameworkId, run.assessment.reference, [...keys].sort(), payloads], target: await target() }),
+    }], async () => {
     run.consumed = true // A network failure may hide a successful write. Never blindly repeat it.
     const results: { name: string; id?: string; error?: string }[] = []
     // A failed workspace save is reported, never allowed to stop the remaining creations or hide created IDs.
@@ -815,13 +829,13 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
       try { recordCreation(run.assessment, { success: results.every(r => !r.error), results }); saveError = undefined }
       catch (error) { saveError = error instanceof Error ? error.message : String(error) }
     }
-    for (const policyIndex of new Set(selected.map(f => f.policyIndex))) {
+    for (const payload of payloads) {
       requireEnabledFramework(run.assessment.frameworkId)
-      const policy = run.policies[policyIndex]!
-      const payload = remediationPayload(policy, selected.filter(f => f.policyIndex === policyIndex).map(f => policy.settings[f.settingIndex]!), run.assessment.reference)
       try {
-        const created = await jsonFetch(GRAPH, { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify(payload) })
+        const send = () => jsonFetch(GRAPH, { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify(payload) })
+        const created = hasWriteApproval(tenant) ? await withWriteCheckpoint(sameObservation(run.fingerprint, target), send) : await send()
         if (typeof created.id !== "string") throw new FrameworkError("No policy ID was returned. Check Intune before retrying.", 502)
+        createdIds.add(created.id)
         results.push({ name: payload.name, id: created.id })
       } catch (error) {
         results.push({ name: payload.name, error: error instanceof Error ? error.message : "Creation failed; check Intune before retrying." })
@@ -830,5 +844,6 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
     }
     save()
     return { success: results.every(r => !r.error), results, ...(saveError ? { warning: `The results could not be saved to the workspace, so note the created policy IDs: ${saveError}` } : {}) }
+    })
   })
 }

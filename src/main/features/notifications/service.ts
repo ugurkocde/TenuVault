@@ -1,3 +1,4 @@
+import { withExemptGraphCaller } from "../../write-approvals/dispatch"
 import { createHmac } from "node:crypto"
 import { canonicalJson, SEVERITY_RANK, watcherStaleEvent, type NotificationEnvelope } from "../../../shared/notifications/envelope"
 import { emailHtml, emailSubject, localText, teamsWorkflowsPayload } from "../../../shared/notifications/render"
@@ -338,7 +339,7 @@ async function deliverEmail(deps: FeatureDeps, tenantId: string, channel: Channe
     body: { contentType: "HTML", content: emailHtml(envelope) },
     toRecipients: recipients.addresses.map((address) => ({ emailAddress: { address } })),
   }
-  const response = await graph("POST", "me/sendMail", { message, saveToSentItems: false } as unknown as Parameters<typeof graph>[2])
+  const response = await withExemptGraphCaller("email", () => graph("POST", "me/sendMail", { message, saveToSentItems: false } as unknown as Parameters<typeof graph>[2]))
   if (response.status >= 200 && response.status < 300) return { ...base, ok: true, attempts: 1, status: response.status, error: null }
   return { ...base, ok: false, attempts: 1, status: response.status, error: brief(graphError(response.body as GraphItem, response.status)) }
 }

@@ -52,6 +52,11 @@ export function createAuditRecorder(
         .catch((error: unknown) => console.error("[audit] Failed to record baseline creation:", error))
       return
     }
+    if (path === "/api/oib-reviewed-batches") {
+      void recordOibBatches(requestBody, response.clone(), dispatch, accountFor, onTrialUsage)
+        .catch((error: unknown) => console.error("[audit] Failed to record OpenIntuneBaseline batches:", error))
+      return
+    }
     if (path === "/api/oib") {
       void recordOib(requestBody, response.clone(), dispatch, accountFor, onTrialUsage)
         .catch((error: unknown) => console.error("[audit] Failed to record OpenIntuneBaseline change:", error))
@@ -124,10 +129,11 @@ async function recordRestore(bodyText: string, response: Response, dispatch: (re
   if (typeof body?.tenantId !== "string" || !body.tenantId || !body.appId || !body.clientSecret || !body.storageAccountName) return
   if (["detect", "list", "dismiss"].includes(body.approvalAction ?? "")) return
   const data = await response.json().catch(() => ({})) as {
-    outcome?: { success: boolean; partial?: boolean; approval?: unknown; approvalState?: string; policyId?: string; path: string; error?: string }
-    success?: boolean; jobId?: string; policyId?: string; status?: string; error?: string; partial?: boolean
+    outcome?: { success: boolean; partial?: boolean; approval?: unknown; approvalState?: string; policyId?: string; path: string; error?: string; intuneApprover?: import("../storage/restore-approvals").RestoreApproval["approver"] }
+    legacy?: boolean; success?: boolean; jobId?: string; policyId?: string; status?: string; error?: string; partial?: boolean
     details?: { restoredCount: number; partialCount?: number; failedCount: number; approvalCount?: number; duration: number; results: { path: string; success: boolean; policyId?: string; error?: string }[] }
   }
+  if (data.legacy) return
   const approvalAction = body.approvalAction
   if (approvalAction && data.outcome) {
     data.success = data.outcome.success || (approvalAction === "submit" && data.outcome.approvalState === "submitted")
@@ -168,7 +174,7 @@ async function recordRestore(bodyText: string, response: Response, dispatch: (re
     resource: { type: policyCopy ? "policy" : "backup", id: data.policyId ?? body.approvalId ?? data.jobId ?? body.policyId ?? body.backupId ?? body.tenantId, name: body.originalName ?? body.backupId ?? "Restore backup" },
     result: ok ? AuditResult.SUCCESS : partial ? AuditResult.PARTIAL : AuditResult.FAILURE,
     severity: ok ? AuditSeverity.INFO : partial ? AuditSeverity.WARNING : AuditSeverity.ERROR,
-    details: { source: "desktop", statusCode: response.status, status: data.status, backupId: body.backupId, ...data.details,
+    details: { source: "desktop", statusCode: response.status, status: data.status, backupId: body.backupId, ...data.details, intuneApprover: data.outcome?.intuneApprover,
       error: data.error ? { code: "RESTORE_FAILED", message: data.error } : undefined },
   }
   const logged = await dispatch(new Request(`${INTERNAL_API_ORIGIN}/api/audit/log`, {
@@ -205,6 +211,24 @@ async function recordFrameworkCreation(bodyText: string, response: Response, dis
     }))
     if (!logged.ok) throw new Error(`Audit write failed (${logged.status})`)
   }
+}
+
+async function recordOibBatches(
+  bodyText: string,
+  response: Response,
+  dispatch: (request: Request) => Promise<Response>,
+  accountFor: (id: string) => SignedInAccount | null,
+  onTrialUsage?: (tenant: string, feature: Feature) => void,
+) {
+  if (!response.ok) return
+  const { batches } = JSON.parse(bodyText) as { batches: Array<{ tenantId: string; platform: string }> }
+  const { results } = await response.json() as { results?: Array<{ tenant: string; platform: string; batchIndex?: number; run?: unknown; error?: string }> }
+  if (!results) return
+  const outcomes = await Promise.allSettled(results.map(result => {
+    const batch = result.batchIndex === undefined ? undefined : batches[result.batchIndex]
+    if (batch) return recordOib(JSON.stringify(batch), Response.json(result.run ?? { error: result.error }, { status: result.run ? 200 : 500 }), dispatch, accountFor, onTrialUsage)
+  }))
+  for (const outcome of outcomes) if (outcome.status === "rejected") console.error("[audit] Could not record an OpenIntuneBaseline batch", outcome.reason)
 }
 
 /** One entry per OpenIntuneBaseline deployment, drift fix or undo, with the counts, rather than one per policy. */

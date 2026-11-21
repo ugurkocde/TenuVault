@@ -144,6 +144,12 @@ Every CIS export, including the saved assessments JSON and the coverage export, 
 
 Exports are built on this device from the saved assessment, without reading the tenant again, and saved where you choose. Pro and MSP can brand the PDF in [Settings](/settings/#pdf-branding). Under **Saved assessments** each earlier assessment is marked **CIS Certified** or **Not certified**, and you can view it read-only or delete it. The assessment the results show is marked **Shown**, and its **View read-only** is unavailable because it is already on screen. **Export saved assessments JSON** exports them all. **Run again** on a saved assessment assesses the pack of that assessment and makes it the loaded pack; when another pack is loaded, the page names the pack it replaces before you run. On MSP, the **Portfolio** card compares the readiness of your customer tenants on one benchmark, from the newest saved assessment of each tenant. It is collapsed until you open it; click **Load portfolio** to read the saved assessments of the tenants.
 
+## Second admin approval for remediation
+
+If the destination requires a second admin, applying, retrying or rolling back a CIS remediation change set needs tenant approval. Read-only comparisons and assessments continue as before.
+
+Open **Settings > Storage and recovery > Tenant approvals** and select the destination tenant. A different signed-in admin reviews the request there. After approval, return to the operation on the original installation and apply the same selection before it expires. The deadline is seven days from request creation. The Tenant approvals inbox shows the expiry.
+
 ## Related pages
 
 * [Framework coverage](/baselines/frameworks/)

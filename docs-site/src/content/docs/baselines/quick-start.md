@@ -181,7 +181,7 @@ Every deployment and drift fix is recorded on this device with the IDs of the ob
 
 If the run list cannot load, it shows the error with a **Retry** button. Retry reloads the history. A load failure does not mean there are no runs to undo.
 
-Undo deletes the objects the run created and puts the previous versions of updated policies back. It does not touch anything else. To go back further, restore from the backup taken before the run. See [Restore Intune policies](/restore/).
+Undo deletes the objects the run created and puts the previous versions of updated policies back. Undo uses the object IDs recorded by the deployment. With tenant write approval on, undo reports a missing updated policy as not undone and leaves replacement policies alone. With approval off, undo can restore a replacement recorded in the restore write history. If there is no recorded replacement and the policy is missing, undo closes the item with a note. If an undo stops partway through, the result and audit log show what succeeded and what remains. To go back further, restore from the backup taken before the run. See [Restore Intune policies](/restore/).
 
 Failed writes follow the same safety rules as restores. A write with an unknown outcome is not repeated automatically; resolve it in **Settings** > **Storage and recovery** > **Restore write history**. See [Restore write history](/restore/limitations/#restore-write-history).
 
@@ -223,6 +223,12 @@ If the old OpenIntuneBaseline framework page saved policy pack comparisons for t
 ## License and attribution
 
 OpenIntuneBaseline content is by SkipToTheEndpoint and contributors and licensed under [GPL-3.0](https://github.com/SkipToTheEndpoint/OpenIntuneBaseline/blob/main/LICENSE). Keep that attribution and license when you share policy content from OIB.
+
+## Second admin approval for OpenIntuneBaseline
+
+If the destination requires a second admin, deployment, pilot assignment, drift fix and undo need tenant approval. A deployment to several tenants checks their approvals before its first write.
+
+Open **Settings > Storage and recovery > Tenant approvals** and select the destination tenant. A different signed-in admin reviews the request there. After approval, return to the operation on the original installation and apply the same selection before it expires. The deadline is seven days from request creation. The Tenant approvals inbox shows the expiry.
 
 ## Related pages
 

@@ -1,3 +1,4 @@
+import { approvalGraphFixture } from "./helpers/write-approval-fixture"
 import { describe, expect, it, vi } from "vitest"
 import { routes } from "../src/main/features/notifications"
 import { DOMAINS } from "../src/main/features/domains"
@@ -391,8 +392,13 @@ describe("watcher deployment engine", () => {
     expect(auditWatchOf(w.deps, TENANT_A)?.externalWatcher).toBe(false)
   })
 
-  it("grants only the missing Graph roles when the admin approved it", async () => {
-    const w = await world({ graph: graphGranting() })
+  it.each([false, true])("grants only missing watcher roles with tenant approval enabled=%s", async enabled => {
+    const guard = await approvalGraphFixture(TENANT_A, enabled)
+    const graph = graphGranting()
+    const w = await world({ graph: () => async (method: string, path: string) => {
+      await guard(method, path)
+      return graph()(method, path)
+    } })
     await startDeploy(w, { destinationConfirmed: true, copyDestinationKinds: [], grantRoles: true, rolesConfirmed: false })
     const view = await drive(w)
     expect(view).toMatchObject({ state: "complete", graphRoleStatus: "verified" })
