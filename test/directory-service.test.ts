@@ -11,8 +11,9 @@ import { DirectoryRestoreService } from "../src/main/restore/directory-service"
 import { ModuleSettings } from "../src/main/services/settings"
 import { RecoveryAccounts } from "../src/main/restore/safety-resolvers"
 import { directoryMappedId } from "../src/main/restore/directory-9a-batches"
+import { directoryObjectState, directoryPagePrefix, directoryMappingKey } from "../src/main/restore/directory-object-state"
 import { DIRECTORY_REPLICATION_WINDOW_MS } from "../src/main/restore/directory-relationship-history"
-import { restoreFingerprint, RestorePersistenceError } from "../src/main/restore/guarded-run"
+import { GuardedRunJournal, restoreFingerprint, RestorePersistenceError } from "../src/main/restore/guarded-run"
 import { LARGE_SHARD_ITEMS } from "../src/shared/large-backup"
 import type { Item } from "../src/shared/intune/registry"
 import type { IdentityRestoreRequest } from "../src/main/restore/dispatch"
@@ -740,7 +741,7 @@ it.each(["throw", "drop"])("reports discard only after its marker is durably sav
   expect(env.data.get(`restore.directory.coordinator.${tenant}`)).toBeUndefined()
   expect((await env.service().resume(tenant, { ...request, runId: page.runId })).canDiscard).toBe(true)
   spy.mockRestore()
-  expect(await env.service().saved(tenant, page.runId, "discard")).toEqual({ discarded: true, canDiscard: false })
+  expect(await env.service().saved(tenant, page.runId, "discard")).toEqual({ ...page, discarded: true, unresolved: false, canDiscard: false })
   expect(JSON.parse(env.data.get(`restore.directory.coordinator.${tenant}`)!).discarded[page.runId]).toBe(true)
   expect(env.writes).toEqual([])
 })
@@ -1213,7 +1214,7 @@ it("keeps an in-flight member add applied when resume meets actor throttling and
   env.fetcher.mockImplementation((input, init) => new URL(String(input)).pathname.includes(`/members/${id(100)}`) ? Promise.resolve(new Response(null, { status: 404 })) : original(input, init))
   expect(await service.saved(tenant, page.runId, "reconcile")).toMatchObject({ outcomes: [{ state: "applied" }], canDiscard: true })
   expect(env.writes).toEqual([`POST groups/${resource}/members/$ref`])
-  expect(await service.saved(tenant, page.runId, "discard")).toEqual({ discarded: true, canDiscard: false })
+  expect(await service.saved(tenant, page.runId, "discard")).toEqual({ ...page, selection: page.rows.map(row => row.key), discarded: true, unresolved: false, canDiscard: false })
 })
 
 it("retains a preview policy deadline after one failed save before a description PATCH", async () => {
@@ -1258,7 +1259,7 @@ it("confirms and discards an authenticated cancelled page without a journal or b
   release(); expect(await operation).toEqual({ cancelled: true })
   // Saved confirmation has no backup reader or snapshot input.
   expect(await service.saved(tenant, page.runId, "reconcile")).toMatchObject({ status: "nothing-sent", outcomes: [], rows: [], canDiscard: true })
-  expect(await service.saved(tenant, page.runId, "discard")).toEqual({ discarded: true, canDiscard: false })
+  expect(await service.saved(tenant, page.runId, "discard")).toEqual({ ...page, discarded: true, unresolved: false, canDiscard: false })
   expect(env.writes).toEqual([])
 })
 
@@ -1315,7 +1316,7 @@ it("merges a retained actor deadline without overwriting a result confirmed by a
     env.members.clear()
     expect(await service.saved(tenant, page.runId, "reconcile")).toMatchObject({ outcomes: [{ state: "applied", retryAt: deadline }], canDiscard: true })
     expect(env.writes).toEqual([`POST groups/${resource}/members/$ref`])
-    expect(await service.saved(tenant, page.runId, "discard")).toEqual({ discarded: true, canDiscard: false })
+    expect(await service.saved(tenant, page.runId, "discard")).toEqual({ ...page, selection: page.rows.map(row => row.key), discarded: true, unresolved: false, canDiscard: false })
   } finally { vi.useRealTimers() }
 })
 
@@ -1965,4 +1966,79 @@ it.each(["execute", "saved confirmation"])("defers uncertain user-create confirm
     expect(await service.saved(tenant, page.runId, "reconcile")).toMatchObject({ outcomes: [{ state: "applied", targetId: target }], canDiscard: true })
     expect(lookups).toBe(2); expect(posts).toBe(1)
   } finally { vi.useRealTimers() }
+})
+
+
+it.each(["execute", "discard"])("keeps all 50 approved rows unresolved after confirming member 20 until %s", async action => {
+  const env = world(65), service = env.service(), relationshipOptions = { ...options, stage: "relationships" as const }
+  const page = await service.prepare(tenant, env.request, relationshipOptions, env.read), original = env.fetcher.getMockImplementation()!
+  expect(page).toMatchObject({ more: true, unresolved: false, discarded: false })
+  expect(page.rows).toHaveLength(50)
+  let posts = 0
+  env.fetcher.mockImplementation(async (input, init) => {
+    const response = await original(input, init)
+    return init?.method === "POST" && ++posts === 20 ? new Response(null, { status: 503 }) : response
+  })
+  const request = { ...env.request, runId: page.runId }, selection = page.rows.map(row => row.key)
+  const approvals = Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals]))
+  expect(await service.execute(tenant, request, page.fingerprint, approvals)).toMatchObject({ unresolved: true, outcomes: [...Array.from({ length: 19 }, () => ({ state: "applied" })), { state: "uncertain" }, ...Array.from({ length: 30 }, () => ({ state: "pending" }))] })
+  await expect(service.prepare(tenant, env.request, { ...relationshipOptions, previousRunId: page.runId }, env.read)).rejects.toThrow("Resolve or discard this saved page")
+  expect(await service.saved(tenant, page.runId, "reconcile")).toMatchObject({ unresolved: true, outcomes: [...Array.from({ length: 20 }, () => ({ state: "applied" })), ...Array.from({ length: 30 }, () => ({ state: "pending" }))] })
+  expect(env.data.has(directoryPagePrefix(tenant, page.runId) + "batch.1.plan")).toBe(false)
+  const resumed = await env.service().resume(tenant, request)
+  expect(resumed).toEqual({ ...page, selection, unresolved: true })
+  await expect(env.service().prepare(tenant, env.request, { ...relationshipOptions, previousRunId: page.runId }, env.read)).rejects.toThrow("Resolve or discard this saved page")
+  expect(posts).toBe(20)
+  if (action === "discard") {
+    const discarded = { ...resumed, discarded: true, unresolved: false, canDiscard: false }
+    expect(await service.saved(tenant, page.runId, "discard")).toEqual(discarded)
+    expect(await env.service().resume(tenant, request)).toEqual(discarded)
+    await expect(service.execute(tenant, request, page.fingerprint, approvals)).rejects.toThrow("discarded")
+  } else {
+    expect(await env.service().execute(tenant, request, page.fingerprint, approvals)).toMatchObject({ status: "complete", unresolved: false, outcomes: Array.from({ length: 50 }, () => ({ state: "applied" })) })
+  }
+  const next = await env.service().prepare(tenant, env.request, { ...relationshipOptions, previousRunId: page.runId }, env.read)
+  expect(next.rows).toHaveLength(15)
+  expect(next).toMatchObject({ more: false, discarded: false, unresolved: false })
+  expect(next.rows.map(row => row.key)).toEqual(expect.arrayContaining(env.saved.slice(50).map(principal => expect.stringContaining(principal))))
+  expect(posts).toBe(action === "discard" ? 20 : 50)
+})
+
+it("publishes later create mappings after reference cleanup fails and retries cleanup after lock release", async () => {
+  const env = world(0, true), service = env.service(), page = await service.prepare(tenant, env.request, options, env.read)
+  const set = env.store.set, failure = vi.spyOn(env.store, "set").mockImplementation((key, value) => {
+    if (key.startsWith("restore.directory.mapping.")) throw new Error("Mapping unavailable")
+    set(key, value)
+  })
+  await expect(service.execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])))).rejects.toThrow("Mapping unavailable")
+  failure.mockRestore()
+  const prefix = directoryPagePrefix(tenant, page.runId) + "batch.0."
+  const journal = new GuardedRunJournal({ get: key => env.store.get(prefix + key), set: (key, value) => env.store.set(prefix + key, value), delete: key => env.store.delete(prefix + key) })
+  const run = journal.load(tenant, page.runId)!, first = run.entries[0]!, secondSource = id(11), secondTarget = id(901)
+  run.entries.push({ ...first, step: { ...first.step, key: "second-create", sourceId: secondSource }, targetId: secondTarget })
+  run.mappings.push({ kind: "objectId", folder: "Groups", source: secondSource, target: secondTarget })
+  journal.save(run)
+  const coordinatorKey = `restore.directory.coordinator.${tenant}`, state = JSON.parse(env.data.get(coordinatorKey)!)
+  state.locks[secondSource] = { owner: page.runId, journal: prefix }
+  env.store.set(coordinatorKey, JSON.stringify(state))
+  const reference = (source: string) => `restore.directory.create-journal.${tenant}.Groups.${source}`
+  env.store.set(reference(secondSource), prefix)
+  const remove = env.store.delete, cleanup = vi.spyOn(env.store, "delete").mockImplementation(key => {
+    if (key === reference(resource)) throw new Error("Cleanup unavailable")
+    remove(key)
+  })
+  try {
+    const objects = directoryObjectState(env.store, tenant, page.runId), steps = run.entries.map(entry => entry.step)
+    expect(() => objects.recoverMappings(steps)).not.toThrow()
+    expect(env.store.get(directoryMappingKey(tenant, "Groups", resource))).toBe(id(900))
+    expect(env.store.get(directoryMappingKey(tenant, "Groups", secondSource))).toBe(secondTarget)
+    expect(env.store.get(reference(resource))).toBe(prefix)
+    expect(env.store.get(reference(secondSource))).toBeNull()
+    objects.release()
+    cleanup.mockRestore()
+    objects.recoverMappings(steps)
+    expect(env.store.get(reference(resource))).toBeNull()
+    expect(JSON.parse(env.data.get(coordinatorKey)!).locks).toEqual({})
+    expect(env.writes).toEqual(["POST groups"])
+  } finally { cleanup.mockRestore() }
 })

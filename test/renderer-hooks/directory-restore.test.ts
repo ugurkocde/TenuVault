@@ -312,3 +312,80 @@ it("keeps next-page preview disabled after a restore persistence error until sav
   await click("Confirm this page's results")
   expect(button("Preview next page").disabled).toBe(false)
 })
+
+it("keeps next-page preview disabled for unstarted approved batches after confirmation and resume", async () => {
+  const rows = Array.from({ length: 50 }, (_, index) => ({ ...page.rows[0]!, key: `member-${index}` }))
+  const selection = rows.map(row => row.key), outcomes = selection.slice(0, 20).map(key => ({ key, state: "applied" }))
+  const fetcher = vi.fn(async (_input: unknown, init?: RequestInit) => {
+    const action = JSON.parse(String(init?.body)).action
+    return Response.json(action === "preview" ? { ...page, rows, unresolved: false } : action === "resume" ? { ...page, rows, selection, unresolved: true } : { status: "partial", unresolved: true, outcomes })
+  })
+  vi.stubGlobal("fetch", fetcher)
+  root = createRoot(document.body.appendChild(document.createElement("div")))
+  await act(async () => root.render(createElement(DirectoryRestore, props)))
+  await click("Review directory restore"); await click("Preview directory changes")
+  await act(async () => document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]').forEach(input => input.click()))
+  await click("Execute approved changes or resume page")
+  expect(button("Preview next page").disabled).toBe(true)
+  expect(document.body.textContent).toContain("applied.")
+  await click("Confirm this page's results")
+  expect(button("Preview next page").disabled).toBe(true)
+  await act(async () => {
+    const input = document.querySelector<HTMLInputElement>('input:not([type="checkbox"])')!
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "run")
+    input.dispatchEvent(new Event("input", { bubbles: true }))
+  })
+  await click("Resume saved page")
+  expect(button("Preview next page").disabled).toBe(true)
+  expect([...document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')].every(input => input.checked)).toBe(true)
+  const calls = fetcher.mock.calls.length
+  await click("Preview next page")
+  expect(fetcher.mock.calls).toHaveLength(calls)
+})
+
+it.each(["discard", "resume"])("keeps discarded inventory continuation with execution disabled after %s", async action => {
+  const discarded = { ...page, discarded: true, unresolved: false, canDiscard: false, selection: ["member"] }
+  const fetcher = vi.fn(async (_input: unknown, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body))
+    return Response.json(body.previousRunId ? { ...page, runId: "next-run", more: false, discarded: false } : body.action === "discard" || body.action === "resume" ? discarded : { ...page, canDiscard: true })
+  })
+  vi.stubGlobal("fetch", fetcher)
+  root = createRoot(document.body.appendChild(document.createElement("div")))
+  await act(async () => root.render(createElement(DirectoryRestore, props)))
+  await click("Review directory restore"); await click("Preview directory changes")
+  await act(async () => document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]').forEach(input => input.click()))
+  if (action === "resume") {
+    await act(async () => {
+      const input = document.querySelector<HTMLInputElement>('input:not([type="checkbox"])')!
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "run")
+      input.dispatchEvent(new Event("input", { bubbles: true }))
+    })
+    await click("Resume saved page")
+  } else await click("Discard saved restore")
+  expect(document.body.textContent).toContain("Saved page: run")
+  expect(document.body.textContent).toContain("This page can never send again.")
+  expect(button("Discard saved restore")).toBeUndefined()
+  expect(button("Execute approved changes or resume page").disabled).toBe(true)
+  expect([...document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')].every(input => input.disabled)).toBe(true)
+  expect(button("Preview next page").disabled).toBe(false)
+  const calls = fetcher.mock.calls.length
+  await click("Execute approved changes or resume page")
+  expect(fetcher.mock.calls).toHaveLength(calls)
+  await click("Preview next page")
+  expect(JSON.parse(String(fetcher.mock.calls.at(-1)![1]?.body))).toMatchObject({ action: "preview", previousRunId: "run" })
+  expect(document.body.textContent).toContain("Saved page: next-run")
+  expect(document.body.textContent).not.toContain("This page can never send again.")
+})
+
+it("uses an explicit settled server flag instead of stale unresolved outcomes", async () => {
+  const fetcher = vi.fn(async (_input: unknown, init?: RequestInit) => Response.json(JSON.parse(String(init?.body)).action === "preview" ? page : { unresolved: false, status: "complete", outcomes: [{ key: "member", state: "pending" }] }))
+  vi.stubGlobal("fetch", fetcher)
+  root = createRoot(document.body.appendChild(document.createElement("div")))
+  await act(async () => root.render(createElement(DirectoryRestore, props)))
+  await click("Review directory restore"); await click("Preview directory changes")
+  await act(async () => document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]').forEach(input => input.click()))
+  await click("Execute approved changes or resume page")
+  expect(button("Preview next page").disabled).toBe(false)
+  await click("Confirm this page's results")
+  expect(button("Preview next page").disabled).toBe(false)
+})

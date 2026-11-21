@@ -15,6 +15,7 @@ import { grantedPermissions } from "../../shared/services/token"
 import { referenceMatches, REFERENCE_SCAN_EXCLUDED } from "./reference-scanner"
 import { isGuid } from "../../shared/security"
 import { directoryObjectId } from "../../shared/intune/entra-directory"
+import { directoryPageUnresolved } from "../../shared/intune/directory-page-state"
 import { RestoreSafetyError, RestoreWriteDeferredError } from "../../shared/intune/restore-guards"
 import { relationPath, LARGE_SHARD_ITEMS } from "../../shared/large-backup"
 import type { PartitionedRestoreStore } from "../storage/directory-restore-store"
@@ -143,6 +144,7 @@ export class DirectoryRestoreService {
       const previous = this.load(tenant, options.previousRunId)
       if (folder !== "Groups" || options.stage !== "relationships" || previous.run.source?.path !== request.path || previous.run.source.fingerprint !== run.source!.fingerprint || previous.options.exactMembers !== options.exactMembers || previous.options.exactOwners !== options.exactOwners || previous.run.actor.userId !== actor.userId || previous.run.actor.clientId !== actor.clientId) fail("Continue the original group's relationship preview and exact choices.")
       if (!previous.inventory) fail("Preview this group again to create its relationship inventory.")
+      if (this.view(previous).unresolved) fail("Resolve or discard this saved page before previewing the next page.")
       inventory = { ...previous.inventory!, offset: previous.inventory!.offset + previous.run.entries.length }
       if (inventory.targetId !== object.targetId) fail("The restored group mapping changed. Preview its relationships again.")
     }
@@ -253,6 +255,7 @@ export class DirectoryRestoreService {
       if (options.previousRunId) {
         const previous = this.load(tenant, options.previousRunId)
         if (!previous.inventory || previous.run.source?.path !== request.path || previous.run.source.fingerprint !== run.source!.fingerprint || previous.run.actor.userId !== actor.userId || previous.run.actor.clientId !== actor.clientId || previous.inventory.targetId !== object.targetId) fail("Continue the original application's relationship preview.")
+        if (this.view(previous).unresolved) fail("Resolve or discard this saved page before previewing the next page.")
         inventory = { ...previous.inventory!, offset: previous.inventory!.offset + previous.run.entries.length }
       } else {
         inventory = { id: run.id, count: 0, offset: 0, targetId: object.targetId! }
@@ -293,7 +296,11 @@ export class DirectoryRestoreService {
   }
   private view(page: DirectoryPage) {
     const entries = this.history(page).flatMap(({ run }) => run.entries)
-    return { unresolved: entries.some(entry => ["pending", "captured", "deferred", "uncertain"].includes(entry.state)), canDiscard: !directoryObjectState(this.store, page.run.tenant, page.run.id).discarded() && !entries.some(entry => entry.state === "uncertain"), runId: page.run.id, selection: page.selection, fingerprint: restoreFingerprint({ source: page.run.source!, rows: page.rows as unknown as Item["rows"], options: page.options as unknown as Item, ...(page.inventory?.principalMappings ? { principalMappings: page.inventory.principalMappings.fingerprint } : {}) }), rows: page.rows, more: page.more, options: page.options }
+    return { ...this.pageState(page, entries), canDiscard: !directoryObjectState(this.store, page.run.tenant, page.run.id).discarded() && !entries.some(entry => entry.state === "uncertain"), runId: page.run.id, selection: page.selection, fingerprint: restoreFingerprint({ source: page.run.source!, rows: page.rows as unknown as Item["rows"], options: page.options as unknown as Item, ...(page.inventory?.principalMappings ? { principalMappings: page.inventory.principalMappings.fingerprint } : {}) }), rows: page.rows, more: page.more, options: page.options }
+  }
+  private pageState(page: DirectoryPage, entries: GuardedRun["entries"]) {
+    const discarded = directoryObjectState(this.store, page.run.tenant, page.run.id).discarded()
+    return { discarded, unresolved: directoryPageUnresolved(discarded, page.selection ?? [], entries.map(entry => ({ key: entry.step.key, state: entry.state }))) }
   }
   async resume(tenant: string, request: IdentityRestoreRequest) {
     const operation = this.register(tenant, request.runId!)
@@ -389,7 +396,7 @@ export class DirectoryRestoreService {
   private results(page: DirectoryPage, result: { status: "complete" | "partial" | "nothing-sent"; batches: number; failed: number }, runs = this.history(page)) {
     const outcomes = new Map(runs.flatMap(({ run }) => run.entries.map(entry => [entry.step.key, { key: entry.step.key, state: entry.state, reason: entry.reason, targetId: entry.targetId, retryAt: entry.retryAt }] as const)))
     for (const entry of page.run.entries) if (page.selection?.includes(entry.step.key) && !outcomes.has(entry.step.key)) outcomes.set(entry.step.key, { key: entry.step.key, state: "pending", reason: undefined, targetId: undefined, retryAt: undefined })
-    return { ...result, failed: [...outcomes.values()].filter(entry => ["blocked", "failed", "failed-before-send"].includes(entry.state)).length, canDiscard: !runs.some(({ run }) => run.entries.some(entry => entry.state === "uncertain")) && !directoryObjectState(this.store, page.run.tenant, page.run.id).discarded(),
+    return { ...result, ...this.pageState(page, runs.flatMap(({ run }) => run.entries)), failed: [...outcomes.values()].filter(entry => ["blocked", "failed", "failed-before-send"].includes(entry.state)).length, canDiscard: !runs.some(({ run }) => run.entries.some(entry => entry.state === "uncertain")) && !directoryObjectState(this.store, page.run.tenant, page.run.id).discarded(),
       outcomes: [...outcomes.values()],
       replacedReferences: runs.flatMap(({ run }) => run.replacedReferences ?? []), warnings: [...new Set(runs.flatMap(({ run }) => run.referenceWarning ? [run.referenceWarning] : []))] }
   }
@@ -423,7 +430,7 @@ export class DirectoryRestoreService {
         if (this.history(page).some(({ run }) => run.entries.some(entry => entry.state === "uncertain"))) fail("Confirm the uncertain result before discarding this saved restore.")
         state.release(true)
         if (!state.discarded()) fail("The discard marker could not be verified. This page remains saved.")
-        return { discarded: true, canDiscard: false }
+        return this.view(page)
       }
       if (!this.history(page).length && !this.store.get(directoryPagePrefix(tenant, id) + "batch.0.plan")) {
         return { ...this.view(page), rows: [], ...this.results(page, { status: "nothing-sent", batches: 0, failed: 0 }, []) }

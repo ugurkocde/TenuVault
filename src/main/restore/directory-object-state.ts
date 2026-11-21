@@ -68,6 +68,11 @@ export function directoryObjectState(store: KeyValueStore, tenant: string, owner
     if (prefix !== null && (!prefix.startsWith(`restore.directory.${encodeURIComponent(tenant)}.`) || !/\.batch\.\d+\.$/.test(prefix))) invalid(step.sourceId)
     return prefix
   }
+  const clearCreateJournal = (step: Pick<GuardedStep, "folder" | "sourceId">, prefix: string) => {
+    if (createJournal(step) !== prefix) return
+    try { store.delete(createJournalKey(step)) }
+    catch { /* The mapping is durable. Retain the reference for cleanup on the next pass. */ }
+  }
   /** Replay confirmed mapping publication only for requested identities. */
   const recoverMappings = (steps: Array<Pick<GuardedStep, "folder" | "sourceId" | "targetId">>, state = load(), history?: Map<string, GuardedRun[]>) => {
     const ids = new Set(steps.flatMap(step => [step.sourceId, step.targetId, store.get(directoryMappingKey(tenant, step.folder, step.sourceId))].filter((id): id is string => !!id).map(id => id.toLowerCase())))
@@ -106,7 +111,10 @@ export function directoryObjectState(store: KeyValueStore, tenant: string, owner
         const mappingKey = directoryMappingKey(tenant, mapping.folder, mapping.source), previous = store.get(mappingKey)
         const sourceLock = publicationState.locks[source] ?? (!previous && createJournal({ folder: mapping.folder, sourceId: mapping.source }) === journalPrefix ? { owner: run.id, journal: journalPrefix } : undefined)
         const targetLock = publicationState.locks[target]
-        if (sourceLock?.journal !== journalPrefix) continue
+        if (sourceLock?.journal !== journalPrefix) {
+          if (previous?.toLowerCase() === target) clearCreateJournal({ folder: mapping.folder, sourceId: mapping.source }, journalPrefix)
+          continue
+        }
         if ((previous && previous.toLowerCase() !== target) || (targetLock && targetLock.owner !== sourceLock.owner)) throw new RestoreSafetyError(`The stored mapping or ownership conflicts for directory object ${source}. Review this object's saved restore state.`)
         publicationState.locks[source] = sourceLock
         publicationState.locks[target] = sourceLock
@@ -117,7 +125,7 @@ export function directoryObjectState(store: KeyValueStore, tenant: string, owner
         save(publicationState)
         store.set(mappingKey, mapping.target)
         const step = { folder: mapping.folder, sourceId: mapping.source }
-        if (createJournal(step) === journalPrefix) store.delete(createJournalKey(step))
+        clearCreateJournal(step, journalPrefix)
       }
     }
     return uncertainCreates

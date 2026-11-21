@@ -6,8 +6,9 @@ import { Button } from "~/components/ui/button"
 import type { BackupTenant } from "./types"
 import type { ReplacedReference } from "../../../shared/intune/restore-references"
 import type { DirectoryReview } from "../../../main/restore/directory-9a"
+import { directoryPageUnresolved } from "../../../shared/intune/directory-page-state"
 
-interface Review { runId: string; fingerprint: string; more: boolean; unresolved?: boolean; selection?: string[]; rows: Array<{ key: string; review: DirectoryReview }> }
+interface Review { runId: string; fingerprint: string; more: boolean; discarded?: boolean; unresolved?: boolean; selection?: string[]; rows: Array<{ key: string; review: DirectoryReview }> }
 const approvalLabel: Record<string, string> = { "directory-item": "Approve this individual change", "privileged-relationship": "Approve this privileged relationship", "security-response": "Approve undoing the apparent security response", "recycle-relationships": "Approve recovered relationships and account state", "exact-group": "Approve this removal for this group" }
 /** A bounded page of explicit approvals, outside restore all and row selection. */
 export function DirectoryRestore({ tenant, backupId = "", path = "" }: { tenant: BackupTenant; backupId?: string; path?: string }) {
@@ -49,11 +50,15 @@ export function DirectoryRestore({ tenant, backupId = "", path = "" }: { tenant:
         return
       }
       setCanDiscard(data.canDiscard === true)
-      if (action === "restore") setReview(previous => previous && { ...previous, unresolved: (data.outcomes ?? []).some((row: { state: string }) => ["pending", "captured", "deferred", "uncertain"].includes(row.state)) })
-      if (action === "reconcile" && data.rows) setReview(data)
+      if (action === "restore" || action === "reconcile" || action === "discard") setReview(previous => {
+        const current: Review | null = data.rows ? data : previous
+        if (!current) return null
+        const discarded = data.discarded ?? current.discarded ?? false
+        return { ...current, discarded, unresolved: discarded ? false : data.unresolved ?? directoryPageUnresolved(false, current.selection ?? (data.outcomes ?? []).map((row: { key: string }) => row.key), data.outcomes ?? []) }
+      })
       if (action === "preview" || action === "resume" || action === "next") { setReview(data); if (data.options) { setStage(data.options.stage); setExactMembers(data.options.exactMembers); setExactOwners(data.options.exactOwners) } setApprovals(action === "resume" ? Object.fromEntries((data.rows as Review["rows"]).filter(row => data.selection?.includes(row.key)).map(row => [row.key, row.review.approvals])) : {}); setOutcomes([]); setReferences([]); setMessage(data.rows.length ? "Review each row separately." : "No relationship differences remain in this page.") }
       else if (action === "cancel") setMessage(data.cancelled ? "Cancellation requested. In-flight results will be confirmed before continuing." : "No active restore was cancelled.")
-      else if (action === "discard") { setCanDiscard(false); setReview(null); setOutcomes([]); setMessage("Saved restore discarded. This page can never send again.") }
+      else if (action === "discard") { setCanDiscard(false); setOutcomes([]); setMessage("Saved restore discarded. This page can never send again.") }
       else { setOutcomes(data.outcomes ?? []); setReferences(data.replacedReferences ?? []); setMessage(data.status === "nothing-sent" ? "No directory changes were sent for this page. You can discard the saved restore." : data.status === "complete" ? "Directory page completed. Preview again for remaining differences." : `Directory restore is partial. Applied changes are retained. Review the results and warnings. Resume throttled steps after the retry time. Confirm uncertain results before continuing. ${(data.warnings ?? []).join(" ")}`) }
     } catch (error) { if (generation.current === run) setMessage(error instanceof Error ? error.message : "Directory restore could not finish.") }
     finally { if (action !== "cancel" && generation.current === run) { setBusy(false); setActiveRestore(null) } }
@@ -67,7 +72,7 @@ export function DirectoryRestore({ tenant, backupId = "", path = "" }: { tenant:
   </div>
   const applications = ["Applications", "ServicePrincipals", "OAuth2PermissionGrants"].includes(path.split("/")[1]!)
   const selected = review?.rows.some(row => !row.review.blocker && row.review.approvals.every(kind => approvals[row.key]?.includes(kind)))
-  const unresolved = outcomes.length ? outcomes.some(row => ["pending", "captured", "deferred", "uncertain"].includes(row.state)) : review?.unresolved
+  const unresolved = review?.discarded ? false : review?.unresolved ?? directoryPageUnresolved(false, review?.selection ?? outcomes.map(row => row.key), outcomes)
   return <div className="px-4 pb-3 pl-11 text-sm" data-no-select>
     <Button size="sm" variant="outline" disabled={busy} aria-expanded={open} onClick={() => { setOpen(!open); invalidate() }}>Review directory restore</Button>
     {open && <div className="mt-2 space-y-3 rounded-lg border border-blue-200 bg-blue-50 p-3 text-gray-900">
@@ -84,15 +89,16 @@ export function DirectoryRestore({ tenant, backupId = "", path = "" }: { tenant:
       <div className="flex flex-wrap items-end gap-2"><label className="min-w-0">Saved page ID<input className="block w-full rounded border bg-white p-1 text-gray-900" disabled={busy} value={resumeId} onChange={event => setResumeId(event.target.value)} /></label><Button size="sm" variant="outline" disabled={busy || !resumeId} onClick={() => void send("resume")}>Resume saved page</Button><Button size="sm" variant="outline" disabled={busy || !(review?.runId ?? resumeId)} onClick={() => void send("reconcile")}>Confirm this page's results</Button>{canDiscard && <Button size="sm" variant="outline" disabled={busy} onClick={() => void send("discard")}>Discard saved restore</Button>}</div>
       {!review && resumeId && <p>Saved page: <span className="break-all">{resumeId}</span>. Resume or confirm this page before discarding it.</p>}
       {review && <><p>Saved page: <span className="break-all">{review.runId}</span>. Up to 50 changes per page, executed in batches of 20.</p>
+        {review.discarded && <p>Saved restore discarded. This page can never send again.</p>}
         <div className="max-h-96 space-y-3 overflow-auto">{review.rows.map(({ key, review: row }) => <div key={key} className="space-y-2 rounded border bg-white p-3 text-gray-900">
           <p className="break-words"><strong>{row.principal ? `${row.principal.name} (${row.principal.type})` : row.resource.name}</strong>: {row.privilege} on {row.resource.name} ({row.resource.type})</p>
           <p className="break-all">Scope: {row.scope}</p>
           {row.notices.map(notice => <p key={notice}>{notice}</p>)}
           {row.changes.map(change => <div key={change.property} className="break-all"><strong>{change.property}</strong><p>Current: {JSON.stringify(change.before)}</p><p>Restore: {JSON.stringify(change.after)}</p></div>)}
-          {row.blocker ? <p role="status">Blocked: {row.blocker}</p> : row.approvals.map(kind => <label key={kind} className="flex items-start gap-2"><input type="checkbox" disabled={busy} checked={approvals[key]?.includes(kind) ?? false} onChange={event => setApprovals(previous => ({ ...previous, [key]: event.target.checked ? [...(previous[key] ?? []), kind] : (previous[key] ?? []).filter(value => value !== kind) }))} />{approvalLabel[kind] ?? kind}</label>)}
+          {row.blocker ? <p role="status">Blocked: {row.blocker}</p> : row.approvals.map(kind => <label key={kind} className="flex items-start gap-2"><input type="checkbox" disabled={busy || review.discarded} checked={approvals[key]?.includes(kind) ?? false} onChange={event => setApprovals(previous => ({ ...previous, [key]: event.target.checked ? [...(previous[key] ?? []), kind] : (previous[key] ?? []).filter(value => value !== kind) }))} />{approvalLabel[kind] ?? kind}</label>)}
         </div>)}</div>
         {review.more && <div className="space-y-2"><p>{unresolved ? "Resolve or discard this saved page before previewing the next page. Unresolved changes keep their objects locked." : "More changes remain. Completed differences are omitted. Blocked rows do not prevent reviewing the next page."}</p><Button size="sm" variant="outline" disabled={busy || unresolved} onClick={() => void send("next")}>Preview next page</Button></div>}
-        <div className="flex flex-wrap gap-2"><Button size="sm" disabled={busy || !selected} onClick={() => void send("restore")}>Execute approved changes or resume page</Button>{busy && activeRestore === review.runId && <Button size="sm" variant="outline" onClick={() => void send("cancel")}>Cancel directory restore</Button>}</div>
+        <div className="flex flex-wrap gap-2"><Button size="sm" disabled={busy || review.discarded || !selected} onClick={() => void send("restore")}>Execute approved changes or resume page</Button>{busy && activeRestore === review.runId && <Button size="sm" variant="outline" onClick={() => void send("cancel")}>Cancel directory restore</Button>}</div>
       </>}
       {resultRows}
       {references.length > 0 && <div className="max-h-64 space-y-2 overflow-auto"><p>Policies that still reference old IDs need review:</p>{references.map((reference, index) => <p className="break-all" key={index}>{reference.path}, {reference.property}. Old ID: {reference.mapping.source}. New ID: {reference.mapping.target}.</p>)}</div>}
