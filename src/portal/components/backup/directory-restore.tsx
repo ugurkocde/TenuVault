@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
+import { bridge } from "../../../renderer/lib/bridge"
 import { Button } from "~/components/ui/button"
 import type { BackupTenant } from "./types"
 import type { ReplacedReference } from "../../../shared/intune/restore-references"
@@ -19,7 +20,15 @@ export function DirectoryRestore({ tenant, backupId = "", path = "" }: { tenant:
   const [canDiscard, setCanDiscard] = useState(false)
   const [resumeId, setResumeId] = useState("")
   const generation = useRef(0)
-  useEffect(() => () => { generation.current++ }, [tenant.credentials.tenantId, tenant.credentials.appId, backupId, path])
+  useEffect(() => {
+    const clear = () => {
+      generation.current++; setBusy(false); setCanDiscard(false); setReview(null); setApprovals({}); setOutcomes([]); setReferences([]); setMessage(""); setResumeId("")
+      setStage("object"); setExactMembers(false); setExactOwners(false)
+    }
+    clear()
+    const unsubscribe = bridge.auth?.onAccountsChanged?.(changed => { if (changed.toLowerCase() === tenant.credentials.tenantId.toLowerCase()) clear() })
+    return () => { generation.current++; unsubscribe?.() }
+  }, [tenant.credentials.tenantId, tenant.credentials.appId, backupId, path])
   const invalidate = () => { generation.current++; setCanDiscard(false); setReview(null); setApprovals({}); setOutcomes([]); setReferences([]); setMessage("") }
   const send = async (action: "preview" | "restore" | "cancel" | "resume" | "next" | "reconcile" | "discard") => {
     const run = action === "cancel" ? generation.current : ++generation.current
@@ -30,6 +39,11 @@ export function DirectoryRestore({ tenant, backupId = "", path = "" }: { tenant:
       const data = await response.json()
       if (generation.current !== run) return
       if (!response.ok) throw new Error(data.error ?? "Directory restore could not finish.")
+      if (data.cancelled === true && action !== "cancel") {
+        setCanDiscard(false); setReview(null); setApprovals({}); setOutcomes([]); setReferences([])
+        setMessage("Directory restore cancelled. No further changes will be sent. Confirm any previously sent results before continuing.")
+        return
+      }
       setCanDiscard(data.canDiscard === true)
       if (action === "reconcile" && data.rows) setReview(data)
       if (action === "preview" || action === "resume" || action === "next") { setReview(data); if (data.options) { setStage(data.options.stage); setExactMembers(data.options.exactMembers); setExactOwners(data.options.exactOwners) } setApprovals(action === "resume" ? Object.fromEntries((data.rows as Review["rows"]).filter(row => data.selection?.includes(row.key)).map(row => [row.key, row.review.approvals])) : {}); setOutcomes([]); setReferences([]); setMessage(data.rows.length ? "Review each row separately." : "No relationship differences remain in this page.") }

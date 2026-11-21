@@ -4,6 +4,7 @@ import { DirectoryRestoreService } from "../src/main/restore/directory-service"
 import { ModuleSettings } from "../src/main/services/settings"
 import { RecoveryAccounts } from "../src/main/restore/safety-resolvers"
 import { directoryMappedId } from "../src/main/restore/directory-9a-batches"
+import { DIRECTORY_REPLICATION_WINDOW_MS } from "../src/main/restore/directory-relationship-history"
 import { restoreFingerprint } from "../src/main/restore/guarded-run"
 import { LARGE_SHARD_ITEMS } from "../src/shared/large-backup"
 import type { Item } from "../src/shared/intune/registry"
@@ -11,7 +12,7 @@ import type { IdentityRestoreRequest } from "../src/main/restore/dispatch"
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`
 const tenant = id(1), app = id(2), admin = id(3), resource = id(10)
 const options = { stage: "object" as const, exactMembers: false, exactOwners: false }
-function world(count = 0, missing = false) {
+function world(count = 0, missing = false, now: () => number = Date.now) {
   let target = missing ? "" : resource
   const data = new Map<string, string>(), members = new Set<string>(), writes: string[] = []
   const store = { partitioned: true as const, get: (key: string) => data.get(key) ?? null, set: (key: string, value: string) => { data.set(key, value) }, delete: (key: string) => { data.delete(key) } }
@@ -45,7 +46,7 @@ function world(count = 0, missing = false) {
     return new Response(null, { status: 404 })
   })
   const connection = async () => ({ token, tenantId: tenant, clientId: app, userId: admin })
-  const service = () => new DirectoryRestoreService(store, new RecoveryAccounts(store), connection, fetcher, () => [], settings)
+  const service = () => new DirectoryRestoreService(store, new RecoveryAccounts(store), connection, fetcher, () => [], settings, now)
   const request = { path: `backup/Groups/${resource}.json`, snapshot, origin: "restore" as const }
   const read = async (name: string) => { const part = Number(name.match(/(\d+)\.json$/)?.[1] ?? 0); return saved.slice(part * LARGE_SHARD_ITEMS, (part + 1) * LARGE_SHARD_ITEMS) }
   return { service, settings, store, connection, request, group, saved, read, data, writes, members, fetcher }
@@ -814,8 +815,9 @@ it("counts a confirmed re-added member as a survivor after an earlier restore re
   expect(env.writes).toEqual([`DELETE groups/${resource}/members/${id(101)}/$ref`, `POST groups/${resource}/members/$ref`, `DELETE groups/${resource}/members/${id(100)}/$ref`])
 })
 
-it("keeps a removed survivor excluded when a failed re-add is confirmed only by stale read-back", async () => {
-  const env = world(2), original = env.fetcher.getMockImplementation()!
+it("keeps an approved add uncertain while read-back may predate our acknowledged removal", async () => {
+  let now = Date.now()
+  const env = world(2, false, () => now), original = env.fetcher.getMockImplementation()!
   env.members.add(id(100)); env.members.add(id(101))
   let stale = false, adds = 0
   env.fetcher.mockImplementation((input, init) => {
@@ -828,9 +830,8 @@ it("keeps a removed survivor excluded when a failed re-add is confirmed only by 
   })
   const empty = { ...env.request, snapshot: { ...env.request.snapshot, members: { ...env.request.snapshot.owners } } }
   const exact = { ...options, stage: "relationships" as const, exactMembers: true }
-  const removeA = await env.service().prepare(tenant, empty, exact, async () => [])
   const removeB = await env.service().prepare(tenant, empty, exact, async () => [])
-  const execute = (page: typeof removeA, request: typeof env.request, principal: string) => {
+  const execute = (page: typeof removeB, request: typeof env.request, principal: string) => {
     const row = page.rows.find(row => row.review.principal?.id === principal)!
     expect(row.review.blocker).toBeUndefined()
     return env.service().execute(tenant, { ...request, runId: page.runId }, page.fingerprint, { [row.key]: row.review.approvals })
@@ -840,11 +841,14 @@ it("keeps a removed survivor excluded when a failed re-add is confirmed only by 
   expect(await execute(addB, env.request, id(101))).toMatchObject({ outcomes: [{ state: "uncertain" }] })
   expect([...env.members]).toEqual([id(100)])
   stale = true
-  expect(await env.service().saved(tenant, addB.runId, "reconcile")).toMatchObject({ outcomes: [{ state: "applied" }] })
+  expect(await env.service().saved(tenant, addB.runId, "reconcile")).toMatchObject({ outcomes: [{ state: "uncertain", reason: expect.stringContaining("recent acknowledged removal") }] })
   const journal = JSON.parse(env.data.get(`restore.directory.${tenant}.${addB.runId}.batch.0.restore.guarded.${tenant}`)!)
   expect(journal.runs[addB.runId].entries[0].acknowledged).toBeUndefined()
-  expect(await execute(removeA, empty, id(100))).toMatchObject({ failed: 0, outcomes: [{ state: "deferred", reason: expect.stringContaining("Saved removals leave no verified member") }] })
-  expect((await execute(removeA, empty, id(100))).outcomes[0]!.reason).toContain("Confirm membership in Entra, then run a fresh preview")
+  expect(journal.runs[addB.runId].entries[0].state).toBe("uncertain")
+  now += DIRECTORY_REPLICATION_WINDOW_MS - 1
+  expect(await env.service().saved(tenant, addB.runId, "reconcile")).toMatchObject({ outcomes: [{ state: "uncertain" }] })
+  now++
+  expect(await env.service().saved(tenant, addB.runId, "reconcile")).toMatchObject({ outcomes: [{ state: "applied" }] })
   expect(adds).toBe(1)
   expect(env.writes).toEqual([`DELETE groups/${resource}/members/${id(101)}/$ref`])
   expect([...env.members]).toEqual([id(100)])
@@ -1034,5 +1038,145 @@ it.each(["within writer", "after resume"])("clears a step's rejected marker afte
     expect(JSON.parse(env.data.get(coordinator)!).locks[resource]).toMatchObject({ owner: page.runId })
     expect(JSON.parse(env.data.get(coordinator)!).locks[resource].rejected).toBeUndefined()
     expect(posts).toBe(3); expect(env.writes).toHaveLength(1)
+  } finally { vi.useRealTimers() }
+})
+
+it("uses fresh survivor reads without extra checks for concurrent admin membership changes", async () => {
+  const env = world(), original = env.fetcher.getMockImplementation()!
+  env.members.add(id(100)); env.members.add(id(101))
+  env.fetcher.mockImplementation((input, init) => {
+    const path = new URL(String(input)).pathname
+    if (path.includes("conditionalAccess")) return Promise.resolve(Response.json({ value: [{ conditions: { users: { includeGroups: [resource], excludeGroups: [] } } }] }))
+    if (path === `/beta/groups/${resource}/members`) return Promise.resolve(Response.json({ value: [id(100), id(101)].map(id => ({ id })) }))
+    return original(input, init)
+  })
+  const service = env.service(), page = await service.prepare(tenant, env.request, { ...options, stage: "relationships", exactMembers: true }, env.read)
+  const row = page.rows.find(row => row.review.principal?.id === id(100))!
+  // Another admin removes B, while Graph's fresh list still reports B as a survivor.
+  env.members.delete(id(101))
+  const calls = env.fetcher.mock.calls.length
+  expect(await service.execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, { [row.key]: row.review.approvals })).toMatchObject({ outcomes: [{ state: "applied" }] })
+  expect(env.fetcher.mock.calls.slice(calls).some(([input]) => new URL(String(input)).pathname === `/beta/groups/${resource}/members`)).toBe(true)
+  expect(env.writes).toEqual([`DELETE groups/${resource}/members/${id(100)}/$ref`])
+  expect(env.members.size).toBe(0)
+})
+
+it("keeps survivor deferrals on their row and trusts an Entra re-add after the replication window", async () => {
+  let now = Date.now()
+  const env = world(3, false, () => now), original = env.fetcher.getMockImplementation()!
+  env.members.add(id(100)); env.members.add(id(101))
+  let stale = false
+  env.fetcher.mockImplementation((input, init) => {
+    const path = new URL(String(input)).pathname
+    if (path.includes("conditionalAccess")) return Promise.resolve(Response.json({ value: [{ conditions: { users: { includeGroups: [resource], excludeGroups: [] } } }] }))
+    if (stale && path === `/beta/groups/${resource}/members`) return Promise.resolve(Response.json({ value: [id(100), id(101)].map(id => ({ id })) }))
+    return original(input, init)
+  })
+  const exact = { ...options, stage: "relationships" as const, exactMembers: true }
+  const empty = { ...env.request, snapshot: { ...env.request.snapshot, members: { ...env.request.snapshot.owners } } }
+  const first = await env.service().prepare(tenant, empty, exact, async () => [])
+  const removeB = first.rows.find(row => row.review.principal?.id === id(101))!
+  expect(await env.service().execute(tenant, { ...empty, runId: first.runId }, first.fingerprint, { [removeB.key]: removeB.review.approvals })).toMatchObject({ outcomes: [{ state: "applied" }] })
+  stale = true
+  // Backup C needs an add; the same preview also contains the deferred removal of A.
+  const onlyC = [id(102)]
+  const members = { ...env.request.snapshot.members, count: 1, shards: 1, hash: createHash("sha256").update(JSON.stringify(onlyC[0]) + "\n").digest("hex") }
+  const request = { ...env.request, snapshot: { ...env.request.snapshot, members } }
+  const page = await env.service().prepare(tenant, request, exact, async () => onlyC)
+  const removeA = page.rows.find(row => row.review.principal?.id === id(100))!
+  expect(removeA.review.blocker).toContain("30 minute replication window")
+  expect(removeA.review.resource.name).toBe("Group")
+  expect(page.rows.find(row => row.review.principal?.id === id(102))!.review.blocker).toBeUndefined()
+  expect(page.rows).toHaveLength(3)
+  expect(env.writes).toHaveLength(1)
+  // An admin re-adds B in Entra. During the window its journalled removal still wins.
+  env.members.add(id(101))
+  now += DIRECTORY_REPLICATION_WINDOW_MS - 1
+  const waiting = await env.service().prepare(tenant, empty, exact, async () => [])
+  expect(waiting.rows.find(row => row.review.principal?.id === id(100))!.review.blocker).toContain("30 minute replication window")
+  now++; stale = false
+  const ready = await env.service().prepare(tenant, empty, exact, async () => [])
+  const row = ready.rows.find(row => row.review.principal?.id === id(100))!
+  expect(row.review.blocker).toBeUndefined()
+  expect(await env.service().execute(tenant, { ...empty, runId: ready.runId }, ready.fingerprint, { [row.key]: row.review.approvals })).toMatchObject({ outcomes: [{ state: "applied" }] })
+  expect([...env.members]).toEqual([id(101)])
+  expect(env.writes).toEqual([`DELETE groups/${resource}/members/${id(101)}/$ref`, `DELETE groups/${resource}/members/${id(100)}/$ref`])
+})
+
+it.each(["same session", "restart"])("retains a rejected group create through loss of both retry records in %s", async mode => {
+  const env = world(0, true), service = env.service(), original = env.fetcher.getMockImplementation()!
+  const page = await service.prepare(tenant, env.request, options, env.read)
+  let posts = 0
+  env.fetcher.mockImplementation((input, init) => init?.method === "POST" && ++posts === 1 ? Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
+  vi.useFakeTimers()
+  try {
+    const deadline = Date.now() + 120_000, set = env.store.set
+    const spy = vi.spyOn(env.store, "set").mockImplementation((key, value) => {
+      if (value.includes(String(deadline))) throw new Error("Storage unavailable")
+      set(key, value)
+    })
+    const request = { ...env.request, runId: page.runId }, approvals = Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals]))
+    await expect(service.execute(tenant, request, page.fingerprint, approvals)).rejects.toThrow("retry deadline could not be saved")
+    expect(posts).toBe(1)
+    const journalKey = `restore.directory.${tenant}.${page.runId}.batch.0.restore.guarded.${tenant}`
+    const entry = JSON.parse(env.data.get(journalKey)!).runs[page.runId].entries[0]
+    expect(entry).toMatchObject({ state: "uncertain", attempt: 1 })
+    expect(JSON.parse(env.data.get(`restore.directory.coordinator.${tenant}`)!).deadlines).toEqual({})
+    const calls = env.fetcher.mock.calls.length
+    if (mode === "same session") {
+      await expect(service.saved(tenant, page.runId, "reconcile")).rejects.toThrow("retry deadline could not be saved")
+      expect(env.fetcher).toHaveBeenCalledTimes(calls)
+    }
+    spy.mockRestore()
+    const current = mode === "same session" ? service : env.service()
+    expect(await current.saved(tenant, page.runId, "reconcile")).toMatchObject({ outcomes: [{ state: mode === "same session" ? "deferred" : "uncertain" }] })
+    if (mode === "same session") {
+      expect(env.fetcher).toHaveBeenCalledTimes(calls)
+      const state = JSON.parse(env.data.get(`restore.directory.coordinator.${tenant}`)!)
+      expect(state.deadlines[resource]).toBe(deadline)
+      expect(state.locks[resource].rejected).toEqual({ step: entry.step.key, attempt: 1 })
+    }
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(await current.execute(tenant, request, page.fingerprint, approvals)).toMatchObject({ outcomes: [{ state: mode === "same session" ? "applied" : "uncertain" }] })
+    expect(posts).toBe(mode === "same session" ? 2 : 1)
+    expect(env.writes).toEqual(mode === "same session" ? ["POST groups"] : [])
+  } finally { vi.useRealTimers() }
+})
+
+it("persists the first validated selection before a throttled actor lookup", async () => {
+  const env = world(3), service = env.service(), page = await service.prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read)
+  const original = env.fetcher.getMockImplementation()!, rows = page.rows.slice(0, 2), request = { ...env.request, runId: page.runId }
+  const approvals = Object.fromEntries(rows.map(row => [row.key, row.review.approvals]))
+  env.fetcher.mockImplementation((input, init) => new URL(String(input)).pathname === "/v1.0/applications" ? Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
+  vi.useFakeTimers()
+  try {
+    await expect(service.execute(tenant, request, page.fingerprint, approvals)).rejects.toThrow("throttled")
+    expect(JSON.parse(env.data.get(`restore.directory.review.${tenant}.${page.runId}`)!).selection).toEqual(rows.map(row => row.key))
+    expect(env.writes).toEqual([])
+    await vi.advanceTimersByTimeAsync(120_000)
+    env.fetcher.mockImplementation(original)
+    expect(await env.service().resume(tenant, request)).toMatchObject({ selection: rows.map(row => row.key) })
+    await expect(env.service().execute(tenant, request, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])))).rejects.toThrow("original selection")
+    expect(await env.service().execute(tenant, request, page.fingerprint, approvals)).toMatchObject({ status: "complete", outcomes: [{ state: "applied" }, { state: "applied" }] })
+    expect([...env.members]).toEqual(env.saved.slice(0, 2))
+    expect(env.writes).toHaveLength(2)
+  } finally { vi.useRealTimers() }
+})
+
+it("retains a review row's throttle deadline when deferring its preview", async () => {
+  const env = world(), original = env.fetcher.getMockImplementation()!
+  env.members.add(id(100)); env.members.add(id(101))
+  env.fetcher.mockImplementation((input, init) => String(input).includes("conditionalAccess") ? Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
+  vi.useFakeTimers()
+  try {
+    const deadline = Date.now() + 120_000
+    const page = await env.service().prepare(tenant, env.request, { ...options, stage: "relationships", exactMembers: true }, env.read)
+    expect(page.rows).toHaveLength(2)
+    expect(page.rows.every(row => row.review.blocker?.includes("Resume after Retry-After"))).toBe(true)
+    expect(JSON.parse(env.data.get(`restore.directory.coordinator.${tenant}`)!).deadlines[resource]).toBe(deadline)
+    env.fetcher.mockImplementation(original)
+    const fresh = await env.service().prepare(tenant, env.request, { ...options, stage: "relationships", exactMembers: true }, env.read)
+    expect(await env.service().execute(tenant, { ...env.request, runId: fresh.runId }, fresh.fingerprint, Object.fromEntries(fresh.rows.map(row => [row.key, row.review.approvals])))).toMatchObject({ outcomes: [{ state: "deferred", retryAt: deadline }, { state: "deferred", retryAt: deadline }] })
+    expect(env.writes).toEqual([])
   } finally { vi.useRealTimers() }
 })

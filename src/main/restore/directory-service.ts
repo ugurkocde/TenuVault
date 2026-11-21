@@ -18,7 +18,7 @@ import { relationPath, LARGE_SHARD_ITEMS } from "../../shared/large-backup"
 import type { PartitionedRestoreStore } from "../storage/directory-restore-store"
 import { directory9aIO, directoryAdmission } from "./directory-9a-io"
 import { directoryObjectStep, directoryRelationshipSteps, mappedDirectoryIds } from "./directory-9a-plan"
-import { approveDirectory, type DirectoryReview } from "./directory-9a"
+import { approveDirectory, directoryReview, type DirectoryReview } from "./directory-9a"
 import { directoryMappedId, executeDirectoryBatches } from "./directory-9a-batches"
 import { GuardedRunJournal, restoreFingerprint, type GuardedRun } from "./guarded-run"
 import { resolveRestoreActor, type RecoveryAccounts } from "./safety-resolvers"
@@ -34,7 +34,9 @@ const key = (tenant: string, id: string) => `restore.directory.review.${tenant.t
 /** Owned backup readers are supplied by the authenticated route, never by the renderer. */
 export class DirectoryRestoreService {
   private readonly running = new Map<string, AbortController>()
-  constructor(private readonly store: PartitionedRestoreStore, private readonly recovery: RecoveryAccounts, private readonly connection: (tenant: string) => Promise<RestoreConnection>, private readonly fetchImpl: typeof fetch = fetch, private readonly protectedAppIds: (tenant: string) => readonly string[] = () => [], private readonly settings?: Pick<ModuleSettings, "get">) {}
+  // Retain both atomic publications, including the exact rejected attempt, until a same-object operation flushes them.
+  private readonly pendingRetries = new Map<string, () => void>()
+  constructor(private readonly store: PartitionedRestoreStore, private readonly recovery: RecoveryAccounts, private readonly connection: (tenant: string) => Promise<RestoreConnection>, private readonly fetchImpl: typeof fetch = fetch, private readonly protectedAppIds: (tenant: string) => readonly string[] = () => [], private readonly settings?: Pick<ModuleSettings, "get">, private readonly now: () => number = Date.now) {}
   private async context(tenant: string, onThrottled?: (retryAt: number) => void, validatedConnection?: RestoreConnection) {
     const connection = validatedConnection ?? await this.connection(tenant)
     if (connection.tenantId.toLowerCase() !== tenant.toLowerCase()) fail("The connection belongs to another tenant.")
@@ -60,13 +62,28 @@ export class DirectoryRestoreService {
       // Unrelated policy reads are advisory and never add a permission to directory restore.
       if (!granted || INTUNE_TYPES.some(type => type.restoreSafety !== "identity" && !type.singleton && !type.staticIds && !REFERENCE_SCAN_EXCLUDED.has(type.folder) && !canBackUp(type.folder, granted))) throw new Error("Reference scan read access is unavailable")
       return referenceMatches(connection.token, mappings, this.fetchImpl, { signal })
-    }, undefined, undefined, true, (target, kind) => directoryRelationshipHistory(this.store, tenant, target).removed(kind))
+    }, undefined, undefined, true, (target, kind) => directoryRelationshipHistory(this.store, tenant, target, this.now).removed(kind))
+    io.now = this.now
+    io.persistRetry = (step, journal, coordinator) => this.persistRetry(tenant, step, journal, coordinator)
     return { actor, io, applicationIO: directory9bIO(connection.token, actor, this.fetchImpl, () => this.protectedAppIds(tenant), () => this.settings?.get(tenant).entra) }
+  }
+  private retryKey(tenant: string, step: Pick<GuardedStep, "folder" | "sourceId" | "targetId">) {
+    return `${tenant.toLowerCase()}.${(step.targetId ?? directoryMappedId(this.store, tenant, step.folder, step.sourceId) ?? step.sourceId).toLowerCase()}`
+  }
+  private persistRetry(tenant: string, step: GuardedStep, journal: () => void, coordinator: () => void) {
+    const key = this.retryKey(tenant, step)
+    const flush = () => { persistDirectoryRetry(journal, coordinator); this.pendingRetries.delete(key) }
+    this.pendingRetries.set(key, flush)
+    flush()
+  }
+  private flushRetries(tenant: string, steps: Array<Pick<GuardedStep, "folder" | "sourceId" | "targetId">>) {
+    for (const step of steps) this.pendingRetries.get(this.retryKey(tenant, step))?.()
   }
   private async pageConnection(page: DirectoryPage) {
     const connection = await this.connection(page.run.tenant)
     requireRestoreActor(connection.token, { ...connection, recoveryAccountIds: [] })
     if (connection.tenantId.toLowerCase() !== page.run.tenant.toLowerCase() || connection.tenantId.toLowerCase() !== page.run.actor.tenantId.toLowerCase() || connection.userId.toLowerCase() !== page.run.actor.userId.toLowerCase() || connection.clientId.toLowerCase() !== page.run.actor.clientId.toLowerCase()) fail("Use the admin and connection that reviewed this page.")
+    this.flushRetries(page.run.tenant, page.run.entries.map(entry => entry.step))
     return connection
   }
   private requireAccess(tenant: string, folder: string) {
@@ -83,6 +100,7 @@ export class DirectoryRestoreService {
   }
   private save(page: DirectoryPage) { this.store.set(key(page.run.tenant, page.run.id), JSON.stringify(page)) }
   async prepare(tenant: string, request: IdentityRestoreRequest, options: DirectoryOptions, read: (path: string) => Promise<unknown>) {
+    this.flushRetries(tenant, [{ folder: request.path.split("/")[1]!, sourceId: String(request.snapshot.id) }])
     try { return await this.preparePage(tenant, request, options, read) }
     catch (error) {
       if (error instanceof RestoreWriteDeferredError && error.retryAt !== undefined) {
@@ -179,7 +197,14 @@ export class DirectoryRestoreService {
       if (page.rows.length === 50) { page.more = true; break }
       const current = await io.read(step, step.targetId)
       step.preview = restoreFingerprint(current)
-      const review = await io.review(step, current)
+      let review: DirectoryReview
+      try { review = await io.review(step, current) }
+      catch (error) {
+        if (!(error instanceof RestoreWriteDeferredError)) throw error
+        if (error.retryAt !== undefined) directoryObjectState(this.store, tenant, "").recordThrottle(step, error.retryAt)
+        review = directoryReview(step, { ...(current?.resource as Item | undefined), ...current }, (current?.principal as Item | null) ?? null, actor, false)
+        review.blocker = error.message
+      }
       if (step.operation !== "create" && !review.changes.length) review.blocker ??= "This row already matches the desired state. No write is needed."
       const blocker = directoryAdmission(step)
       if (blocker) review.blocker ??= blocker
@@ -283,6 +308,9 @@ export class DirectoryRestoreService {
     const page = this.load(tenant, request.runId!)
     if (request.origin !== "restore" || page.run.origin !== request.origin || page.run.source?.path !== request.path || page.run.source.fingerprint !== restoreFingerprint(request.snapshot) || this.view(page).fingerprint !== fingerprint) fail("The backup or preview changed. Preview this object again.")
     const connection = await this.pageConnection(page)
+    const selection = page.rows.filter(row => !row.review.blocker && row.review.approvals.every(kind => approvals[row.key]?.includes(kind))).map(row => row.key)
+    if (!selection.length || (page.selection && JSON.stringify(page.selection) !== JSON.stringify(selection))) fail("Approve each selected row separately. A resumed page must keep its original selection.")
+    page.selection = selection; this.save(page)
     const context = await this.context(tenant, retryAt => this.recordPageThrottle(page, retryAt), connection), actor = context.actor
     const rawIO = DIRECTORY_9B_FOLDERS.includes(request.path.split("/")[1]!) ? context.applicationIO : context.io
     const io = { ...rawIO, write: ((step, body, targetId, beforeSend, run, signal, onUnapplied) => rawIO.write(step, body, targetId, () => {
@@ -291,9 +319,6 @@ export class DirectoryRestoreService {
       beforeSend()
     }, run, signal, onUnapplied)) as typeof rawIO.write }
     if (actor.userId !== page.run.actor.userId || actor.clientId !== page.run.actor.clientId) fail("Resume with the admin and connection that reviewed this page.")
-    const selection = page.rows.filter(row => !row.review.blocker && row.review.approvals.every(kind => approvals[row.key]?.includes(kind))).map(row => row.key)
-    if (!selection.length || (page.selection && JSON.stringify(page.selection) !== JSON.stringify(selection))) fail("Approve each selected row separately. A resumed page must keep its original selection.")
-    page.selection = selection; this.save(page)
     const entries = page.run.entries.filter(entry => selection.includes(entry.step.key))
     for (const entry of entries) for (const kind of page.rows.find(row => row.key === entry.step.key)!.review.approvals) approveDirectory(entry.step, page.run, kind)
     const { entries: _entries, mappings: _mappings, ...identity } = page.run

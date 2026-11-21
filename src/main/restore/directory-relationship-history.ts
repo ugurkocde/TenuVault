@@ -4,8 +4,11 @@ import { RestoreWriteDeferredError } from "../../shared/intune/restore-guards"
 import { GuardedRunJournal } from "./guarded-run"
 import { directoryPagePrefix } from "./directory-object-state"
 
+/** Covers Microsoft Entra replication delay after our own acknowledged relationship writes. */
+export const DIRECTORY_REPLICATION_WINDOW_MS = 30 * 60 * 1000
+
 /** Bounded journal links outlive page locks, so a lagging replica cannot resurrect a removed survivor. */
-export function directoryRelationshipHistory(store: KeyValueStore, tenant: string, target: string) {
+export function directoryRelationshipHistory(store: KeyValueStore, tenant: string, target: string, now: () => number = Date.now) {
   const key = `restore.directory.relationship-history.${tenant.toLowerCase()}.${target.toLowerCase()}`
   const deferred = (): never => { throw new RestoreWriteDeferredError("Saved relationship results could not establish a remaining member. Resume after reviewing this group's restore history.") }
   const load = (name: string): string | null => {
@@ -41,11 +44,11 @@ export function directoryRelationshipHistory(store: KeyValueStore, tenant: strin
             if (!isGuid(step.directory.principalId)) return deferred()
             const principal = step.directory.principalId.toLowerCase()
             if (settled.has(principal)) continue
-            if (entry.state === "applied" || entry.state === "uncertain" && step.desired.present === false) {
+            if (entry.state === "applied") {
               if (typeof step.desired.present !== "boolean") return deferred()
               // A stale matching read-back cannot undo a journalled removal.
               if (step.desired.present && !entry.acknowledged) continue
-              if (!step.desired.present) removed.add(principal)
+              if (!step.desired.present && entry.acknowledged && Number.isFinite(entry.acknowledgedAt) && now() < entry.acknowledgedAt! + DIRECTORY_REPLICATION_WINDOW_MS) removed.add(principal)
               settled.add(principal)
             }
           }

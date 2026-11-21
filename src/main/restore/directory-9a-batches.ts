@@ -47,7 +47,13 @@ export async function executeDirectoryBatches(store: PartitionedRestoreStore, id
     }
     const resolved = new Map(page.entries.map(({ step }) => [step.key, { ...step, targetId: step.targetId ?? directoryMappedId(store, identity.tenant, step.folder, step.sourceId) }]))
     const effective = (step: typeof page.entries[number]["step"]) => resolved.get(step.key)!
-    const guardedIO: GuardedIO = { ...io, prepareStep: step => {
+    const guardedIO: GuardedIO = { ...io,
+      canReconcile: (step, targetId) => {
+        if (step.desired.present !== true || !["member", "owner"].includes(step.directory?.action ?? "")) return true
+        const history = directoryRelationshipHistory(durableStore, identity.tenant, targetId ?? effective(step).targetId ?? step.sourceId, io.now)
+        return !history.removed(step.directory?.action === "member" ? "members" : "owners").has(step.directory!.principalId!.toLowerCase())
+      },
+      prepareStep: step => {
       if (journal.load(identity.tenant, identity.id)?.entries.some(entry => entry.state === "uncertain" && (entry.targetId ?? entry.step.targetId ?? entry.step.sourceId).toLowerCase() === (effective(step).targetId ?? step.sourceId).toLowerCase())) throw new RestoreWriteDeferredError("This page has an unanswered write for this object. Confirm its result first.")
       objectState.recoverMappings([effective(step)])
       const retryAt = objectState.prepare(effective(step), batchKey)

@@ -33,8 +33,10 @@ export interface GuardedEntry {
   retryAt?: number
   /** Durable send attempt, also binds a confirmed throttle in the directory coordinator. */
   attempt?: number
-  /** Only a successful write response, never reconciliation, acknowledges an addition. */
+  /** Only a successful write response, never reconciliation, acknowledges a relationship write. */
   acknowledged?: true
+  /** Time of our successful relationship write response, never a matching read-back. */
+  acknowledgedAt?: number
   before?: Item | null
   sent?: Item
   targetId?: string
@@ -54,6 +56,9 @@ export interface GuardedRun {
 }
 export interface GuardedIO {
   token: string
+  now?: () => number
+  canReconcile?: (step: GuardedStep, targetId?: string) => boolean
+  persistRetry?: (step: GuardedStep, saveJournal: () => void, saveCoordinator: () => void) => void
   /** Directory pages retain live object ownership across deferred and uncertain steps. */
   prepareStep?: (step: GuardedStep) => number | undefined
   defer?: (step: GuardedStep, retryAt: number, rejected?: { step: string; attempt: number }) => void
@@ -176,7 +181,8 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
       if (prerequisite && entry.state !== "uncertain") { entry.state = "blocked"; entry.reason = `Prerequisite ${prerequisite} did not complete.`; journal.save(run); continue }
       const defer = (retryAt: number, rejected?: { step: string; attempt: number }) => {
         entry.retryAt = Math.max(entry.retryAt ?? 0, retryAt)
-        persistDirectoryRetry(() => journal.save(run), () => io.defer?.(step, entry.retryAt!, rejected))
+        const persist = io.persistRetry ? (journal: () => void, coordinator: () => void) => io.persistRetry!(step, journal, coordinator) : persistDirectoryRetry
+        persist(() => journal.save(run), () => io.defer?.(step, entry.retryAt!, rejected))
       }
       try {
         if (entry.state === "uncertain" && (entry.retryAt ?? 0) > Date.now()) throw new RestoreWriteDeferredError("Microsoft Graph Retry-After has not elapsed. Confirm after the saved deadline.", entry.retryAt)
@@ -186,6 +192,10 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
           const matches = step.operation === "create" ? await io.findCreated(step, entry.sent!) : [await io.read(step, entry.targetId)].filter((item): item is Item => item !== null)
           if (matches.length !== 1 || restoreFingerprint(writableSnapshot(matches[0]!, Object.keys(entry.sent!))) !== restoreFingerprint(entry.sent!)) {
             entry.reason = "The unanswered write could not be uniquely reconciled. Review this item before continuing."
+            journal.save(run); continue
+          }
+          if (io.canReconcile?.(step, entry.targetId) === false) {
+            entry.reason = "A recent acknowledged removal means this read may predate that removal. Confirm again after the 30 minute replication window, or after an acknowledged write settles this relationship."
             journal.save(run); continue
           }
           const id = step.operation === "create" ? matches[0]!.id : entry.targetId
@@ -242,7 +252,7 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
             if (signal?.aborted) throw new RestoreWriteDeferredError("The directory write was cancelled before sending.")
             const retryAt = entry.retryAt
             if (step.directory) entry.attempt = (entry.attempt ?? 0) + 1
-            delete entry.acknowledged
+            delete entry.acknowledged; delete entry.acknowledgedAt
             entry.state = "uncertain"; delete entry.retryAt
             try { journal.save(run) }
             catch (error) {
@@ -271,7 +281,7 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
         entry.targetId = id
         rememberMapping(run.mappings, { kind: "objectId", folder: step.folder, source: step.sourceId, target: id })
         entry.state = "applied"
-        if (step.directory && step.desired.present === true) entry.acknowledged = true
+        if (step.directory && typeof step.desired.present === "boolean") { entry.acknowledged = true; entry.acknowledgedAt = (io.now ?? Date.now)() }
         saveConfirmed()
       } catch (error) {
         if (entry.state === "applied" || error instanceof DirectoryRetryPersistenceError || error instanceof RestorePersistenceError) throw error

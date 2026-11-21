@@ -2,6 +2,8 @@ import { act, createElement } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, expect, it, vi } from "vitest"
 import { DirectoryRestore } from "../../src/portal/components/backup/directory-restore"
+const accounts = vi.hoisted(() => ({ changed: null as null | ((tenantId: string) => void) }))
+vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { auth: { onAccountsChanged: (listener: (tenantId: string) => void) => { accounts.changed = listener; return () => { accounts.changed = null } } } } }))
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 let root: Root
 const tenant = { name: "Contoso", credentials: { tenantId: "tenant", appId: "app", clientSecret: "placeholder" }, storageAccountName: "local" }
@@ -138,4 +140,63 @@ it("restores only the saved selection as checked approvals when resuming a page"
   expect((button("Execute approved changes or resume page") as HTMLButtonElement).disabled).toBe(false)
   await click("Execute approved changes or resume page")
   expect(JSON.parse(String(fetcher.mock.calls[1]![1]?.body))).toMatchObject({ action: "restore", runId: "run", approvals: { member: ["directory-item", "security-response"] } })
+})
+
+it.each(["preview", "restore", "reconcile"])("clears account data and ignores an old account's in-flight %s response", async action => {
+  let resolve!: (response: Response) => void
+  let pending = false
+  const fetcher = vi.fn(async (_input: unknown, init?: RequestInit) => {
+    const sent = JSON.parse(String(init?.body)).action
+    if (pending && sent === action) return new Promise<Response>(done => { resolve = done })
+    return Response.json(sent === "preview" ? { ...page, canDiscard: true } : { ...page, canDiscard: true, status: "complete", outcomes: [{ key: "member", state: "applied", targetId: "old-account-target" }], replacedReferences: [{ path: "old-policy", property: "groupId", mapping: { source: "old", target: "new" } }] })
+  })
+  vi.stubGlobal("fetch", fetcher)
+  root = createRoot(document.body.appendChild(document.createElement("div")))
+  await act(async () => root.render(createElement(DirectoryRestore, props)))
+  await click("Review directory restore"); await click("Preview directory changes")
+  await act(async () => { for (const input of document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')) input.click() })
+  await click("Execute approved changes or resume page")
+  expect(document.body.textContent).toContain("old-account-target")
+  expect(button("Discard saved restore")).toBeDefined()
+  await act(async () => accounts.changed!("another-tenant"))
+  expect(document.body.textContent).toContain("old-account-target")
+  pending = true
+  await click(action === "preview" ? "Preview directory changes" : action === "restore" ? "Execute approved changes or resume page" : "Confirm this page's results")
+  await act(async () => accounts.changed!("TENANT"))
+  expect(document.body.textContent).not.toContain("Member (user)")
+  expect(document.body.textContent).not.toContain("old-account-target")
+  expect(document.body.textContent).not.toContain("old-policy")
+  expect(button("Discard saved restore")).toBeUndefined()
+  expect(button("Execute approved changes or resume page")).toBeUndefined()
+  expect(document.querySelectorAll('input[type="checkbox"]')).toHaveLength(0)
+  expect((button("Preview directory changes") as HTMLButtonElement).disabled).toBe(false)
+  await act(async () => resolve(Response.json({ ...page, canDiscard: true, status: "complete", outcomes: [{ key: "member", state: "applied", targetId: "late-target" }] })))
+  expect(document.body.textContent).not.toContain("Saved page: run")
+  expect(document.body.textContent).not.toContain("late-target")
+  pending = false
+  await click("Preview directory changes")
+  expect([...document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')].every(input => !input.checked)).toBe(true)
+  expect((button("Execute approved changes or resume page") as HTMLButtonElement).disabled).toBe(true)
+})
+
+it("handles a cancelled response while the backup is loading", async () => {
+  let resolve!: (response: Response) => void
+  const fetcher = vi.fn(async (_input: unknown, init?: RequestInit) => JSON.parse(String(init?.body)).action === "resume" ? new Promise<Response>(done => { resolve = done }) : Response.json(JSON.parse(String(init?.body)).action === "cancel" ? { cancelled: true } : { ...page, selection: ["member"] }))
+  vi.stubGlobal("fetch", fetcher)
+  root = createRoot(document.body.appendChild(document.createElement("div")))
+  await act(async () => root.render(createElement(DirectoryRestore, props)))
+  await click("Review directory restore"); await click("Preview directory changes")
+  await act(async () => {
+    const input = document.querySelector<HTMLInputElement>('input:not([type="checkbox"])')!
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "run")
+    input.dispatchEvent(new Event("input", { bubbles: true }))
+  })
+  await click("Resume saved page")
+  await click("Cancel directory restore")
+  await act(async () => resolve(Response.json({ cancelled: true })))
+  expect(document.body.textContent).toContain("Directory restore cancelled.")
+  expect(document.body.textContent).not.toContain("Directory restore is partial")
+  expect(document.body.textContent).not.toContain("Saved page: run")
+  expect(button("Execute approved changes or resume page")).toBeUndefined()
+  expect((button("Preview directory changes") as HTMLButtonElement).disabled).toBe(false)
 })
