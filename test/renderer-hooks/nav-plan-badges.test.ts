@@ -1,6 +1,6 @@
 import { act, createElement } from "react"
 import { createRoot, type Root } from "react-dom/client"
-import { MemoryRouter } from "react-router-dom"
+import { MemoryRouter, useNavigate } from "react-router-dom"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -484,6 +484,27 @@ describe("sidebar groups and Help", () => {
     const props = supportDialog.mock.lastCall?.[0] as { open: boolean; returnFocus?: { current: HTMLElement | null } }
     expect(props.open).toBe(true)
     expect(props.returnFocus?.current).toBe(trigger)
+  })
+
+  it("keeps Help closed while a capture is pending, also after the sidebar left and came back", async () => {
+    // No tenants: the sidebar shows on License and gives way to the guided setup on the onboarding route.
+    licenseStatus.current = statusFor("pro")
+    let finishCapture: () => void = () => undefined
+    feedbackCapture.mockImplementationOnce(() => new Promise((resolve) => { finishCapture = () => resolve(null) }))
+    let go: (path: string) => void = () => undefined
+    function Navigator() { go = useNavigate(); return null }
+    const container = await render(createElement("div", null, createElement(Navigator), createElement(DesktopLayout)), "/license")
+    await openHelp(container)
+    await act(async () => { menuItem("Share feedback")!.click() })
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 80)) })
+    expect(feedbackCapture).toHaveBeenCalledTimes(1)
+    await act(async () => go("/portal/onboarding"))
+    expect(container.querySelector("aside")).toBeNull()
+    await act(async () => go("/license"))
+    expect(container.querySelector("aside")).not.toBeNull()
+    await openHelp(container)
+    expect(document.querySelector('[role="menu"]')).toBeNull()
+    await act(async () => { finishCapture(); await new Promise((resolve) => setTimeout(resolve, 0)) })
   })
 
   it("marks Help and What's new while an installed build is unseen", async () => {

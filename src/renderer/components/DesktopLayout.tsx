@@ -5,7 +5,7 @@ import { openCheckout } from "../lib/purchase"
 import { TenantTrialNotices, TrialActions, TrialUsage, TrialChanges, trialEndVisible } from "./TenantTrial"
 import { CommunityChoiceBanner } from "./CommunityTenantPicker"
 import { isAppBackupPath, desktopRouteBoundaryKey } from "../lib/app-backup-route"
-import { useEffect, useRef, useState, type ComponentType, type ReactNode } from "react"
+import { useEffect, useRef, useState, type ComponentType, type ReactNode, type RefObject } from "react"
 import { Link, Outlet, useLocation } from "react-router-dom"
 import {
   Activity,
@@ -337,8 +337,10 @@ function afterPaint(run: () => void) {
  * work (for Share feedback, until the window is captured) Help does not open again, so the menu can
  * never be in the feedback screenshot.
  */
-function HelpMenu({ linkClass, onFeedback, onSupport }: {
+function HelpMenu({ linkClass, onFeedback, onSupport, launching }: {
   linkClass: (active: boolean) => string
+  /** Set while a chosen item launches. Owned by DesktopLayout, so it outlives a sidebar that unmounts meanwhile. */
+  launching: RefObject<boolean>
   onFeedback: (opener: HTMLElement | null) => Promise<void>
   onSupport: (opener: HTMLElement | null) => void
 }) {
@@ -347,7 +349,6 @@ function HelpMenu({ linkClass, onFeedback, onSupport }: {
   const [whatsNewOpen, setWhatsNewOpen] = useState(false)
   const helpRef = useRef<HTMLButtonElement>(null)
   const pending = useRef<(() => void | Promise<void>) | null>(null)
-  const launching = useRef(false)
   // The first item chosen wins: the closing menu stays on screen for its exit animation, and a second
   // choice made then (or while the first is still launching) is ignored.
   const choose = (run: () => void | Promise<void>) => (event: Event) => {
@@ -471,6 +472,7 @@ export function DesktopLayout() {
   const [supportOpen, setSupportOpen] = useState(false)
   const [feedback, setFeedback] = useState<{ open: boolean; snapshot: FeedbackSnapshot | null }>({ open: false, snapshot: null })
   const capturingFeedback = useRef(false)
+  const helpLaunching = useRef(false)
   // Dialogs opened from Help or the first-run header hand focus back to the control that opened them.
   const supportReturn = useRef<HTMLElement | null>(null)
   const feedbackReturn = useRef<HTMLElement | null>(null)
@@ -611,7 +613,7 @@ export function DesktopLayout() {
             License
             <LicenseNavBadge />
           </Link>
-          <HelpMenu linkClass={linkClass} onFeedback={openFeedback} onSupport={openSupport} />
+          <HelpMenu linkClass={linkClass} onFeedback={openFeedback} onSupport={openSupport} launching={helpLaunching} />
         </div>
       </aside>
       )}

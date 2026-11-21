@@ -95,7 +95,7 @@ export function TenantSwitcher() {
             const notLicensed = unlicensed(tenant.credentials?.tenantId)
             const trial = tenantLicense(status, tenant.credentials?.tenantId)?.trial
             return (
-              <DropdownMenuItem key={tenant.id} onSelect={() => setSelectedTenantId(tenant.id)} className="gap-3 rounded-2xl px-2 py-1.5">
+              <DropdownMenuItem key={tenant.id} textValue={tenant.name} onSelect={() => setSelectedTenantId(tenant.id)} className="gap-3 rounded-2xl px-2 py-1.5">
                 <TenantBadge name={tenant.name} unlicensed={notLicensed} small />
                 <span className="min-w-0 flex-1">
                   <span className="block truncate font-medium">{tenant.name}</span>

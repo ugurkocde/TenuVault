@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { Link, NavLink, useLocation } from "react-router-dom"
+import { Link, NavLink, useLocation, useMatch } from "react-router-dom"
 import { ChevronDown, LoaderCircle, ShieldCheck } from "lucide-react"
 import { isCisBenchmarksPath, navigationFrameworks } from "../../shared/frameworks/cis-internal"
 import { useFrameworkJobs } from "../lib/framework-jobs"
@@ -18,7 +18,8 @@ export function FrameworkNavigation() {
   useEffect(() => { if (active) setOpen(true) }, [active])
   const running = new Map(useFrameworkJobs().filter(job => job.status === "running").map(job => [job.frameworkId, job]))
   // One filled entry at a time, like the rest of the sidebar: the catalog itself, or the framework beneath it.
-  const overview = pathname === "/portal/frameworks"
+  // An exact route match, so /portal/frameworks/ counts as the catalog too.
+  const overview = useMatch({ path: "/portal/frameworks", end: true }) !== null
   const tone = overview ? "bg-primary text-primary-foreground" : active ? "text-foreground hover:bg-secondary" : "text-muted-foreground hover:bg-secondary hover:text-foreground"
   const entry = (selected: boolean) => `flex min-h-8 flex-col justify-center rounded-full px-3 py-1.5 text-sm font-medium leading-5 ${selected ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-secondary hover:text-foreground"}`
   return <div>
