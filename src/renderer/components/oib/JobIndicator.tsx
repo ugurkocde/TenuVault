@@ -25,7 +25,7 @@ export function OibJobCard({ job, onDismiss }: { job: OibJob; onDismiss?: () => 
   const progress = jobProgress(job)
   const Icon = !job.finishedAt ? LoaderCircle : job.error ? AlertTriangle : CheckCircle2
   return <div className="flex items-start gap-2 rounded-2xl bg-secondary p-3 text-xs">
-    <Icon className={`mt-0.5 h-4 w-4 shrink-0 ${!job.finishedAt ? "animate-spin text-blue-700" : job.error ? "text-red-700" : "text-green-700"}`} aria-hidden="true" />
+    <Icon className={`mt-0.5 h-4 w-4 shrink-0 ${!job.finishedAt ? "motion-safe:animate-spin text-blue-700" : job.error ? "text-red-700" : "text-green-700"}`} aria-hidden="true" />
     <button type="button" onClick={() => open(job)} className="min-w-0 flex-1 text-left">
       <span className="block font-medium text-foreground">{jobTitle(job)}</span>
       <span className="mt-0.5 block text-muted-foreground">{progress ? progressText(progress) : job.error ? "Open to see what happened" : "Open to see the result"}</span>

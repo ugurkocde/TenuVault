@@ -486,6 +486,40 @@ describe("sidebar groups and Help", () => {
     expect(props.returnFocus?.current).toBe(trigger)
   })
 
+  it("ignores a choice made in a dismissed menu while it animates out", async () => {
+    // jsdom applies no stylesheets: give the menu its exit animation, so it stays mounted after Escape
+    // until the animation ends, as it does in the app.
+    const real = window.getComputedStyle.bind(window)
+    const styles = vi.spyOn(window, "getComputedStyle").mockImplementation((element, pseudo) => {
+      const style = real(element, pseudo)
+      if (!(element as Element).classList?.contains("tv-pop")) return style
+      // Radix reads the same style object again as the menu closes, so the name follows data-state.
+      const animationName = () => (element as Element).getAttribute("data-state") === "closed" ? "tv-pop-out" : "tv-pop-in"
+      return new Proxy(style, { get: (target, key) => key === "animationName" ? animationName() : Reflect.get(target, key) })
+    })
+    try {
+      licenseStatus.current = statusFor("pro")
+      selectTenant()
+      const container = await render(createElement(DesktopLayout))
+      await openHelp(container)
+      const feedback = menuItem("Share feedback")!
+      await act(async () => { feedback.focus() })
+      await act(async () => { feedback.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })) })
+      const menu = document.querySelector('[role="menu"]')!
+      expect(menu.getAttribute("data-state")).toBe("closed")
+      await act(async () => { feedback.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })) })
+      await act(async () => { menu.dispatchEvent(Object.assign(new Event("animationend"), { animationName: "tv-pop-out" })) })
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 80)) })
+      expect(document.querySelector('[role="menu"]')).toBeNull()
+      expect(feedbackCapture).not.toHaveBeenCalled()
+      // Help opens again, since nothing was launched.
+      await openHelp(container)
+      expect(document.querySelector('[role="menu"]')?.getAttribute("data-state")).toBe("open")
+    } finally {
+      styles.mockRestore()
+    }
+  })
+
   it("keeps Help closed while a capture is pending, also after the sidebar left and came back", async () => {
     // No tenants: the sidebar shows on License and gives way to the guided setup on the onboarding route.
     licenseStatus.current = statusFor("pro")

@@ -22,10 +22,10 @@ Below **Dashboard** and **Tenants**, the sidebar groups its pages under **Protec
 
 The Dashboard, Backup & Restore, Drift Detection and Audit Log pages work on one tenant at a time: the tenant selected in the switcher at the top of the sidebar.
 
-1. Click the tenant switcher. It shows the selected tenant's name and domain. With the menu open, you can also type the start of a tenant's name to jump to it.
+1. Click the tenant switcher. It shows the selected tenant's name and, below it, the tenant's domain. During a trial that line shows the trial's plan instead, and for a tenant your license does not cover it shows **Not licensed**. With the menu open, you can also type the start of a tenant's name to jump to it.
 2. Under **Tenants**, select the tenant you want. A check mark shows the current one.
 
-Each tenant shows its initials. Tenants your license does not cover right now have amber initials and **Not licensed** under their name, in the menu and under the selected tenant. The menu also has **All tenants** (when two or more tenants are connected) and, at the bottom, **Connect a tenant**.
+Each tenant shows its initials. Tenants your license does not cover right now have amber initials and **Not licensed** under their name, in the menu and under the selected tenant. A tenant in a trial shows **Pro trial** under its name in the menu. The menu also has **All tenants** (when two or more tenants are connected) and, at the bottom, **Connect a tenant**.
 
 The **Backup & Restore** page has its own **Select tenant** list. Choosing a tenant there changes the same selection.
 

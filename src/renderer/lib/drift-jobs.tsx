@@ -179,7 +179,7 @@ export function onDriftScanFinished(listener: (job: DriftJob, result: DriftResul
 export function DriftScanIndicator() {
   const running = useDriftJobs().filter((job) => job.status === "running")
   if (!running.length) return null
-  return <LoaderCircle className="ml-auto h-4 w-4 shrink-0 animate-spin" aria-label={`${running.length} drift scan${running.length === 1 ? "" : "s"} running`} />
+  return <LoaderCircle className="ml-auto h-4 w-4 shrink-0 motion-safe:animate-spin" aria-label={`${running.length} drift scan${running.length === 1 ? "" : "s"} running`} />
 }
 
 /** Mounted once in the layout: announces finished drift scans on whichever page is open. */

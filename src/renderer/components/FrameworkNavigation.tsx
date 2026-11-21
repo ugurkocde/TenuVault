@@ -28,7 +28,7 @@ export function FrameworkNavigation() {
         <ShieldCheck className="h-[18px] w-[18px] shrink-0" aria-hidden="true" /><span className="flex-1 text-left">Frameworks</span>
         {/* The open page is inside the folded list: mark it the way a folded sidebar group is marked. */}
         {!open && active && !overview && <><span aria-hidden="true" className="size-1.5 rounded-full bg-coral-500" /><span className="sr-only">, holds the open page</span></>}
-        {running.size > 0 && <LoaderCircle className="h-4 w-4 animate-spin" aria-label={`${running.size} comparison${running.size === 1 ? "" : "s"} running`} />}
+        {running.size > 0 && <LoaderCircle className="h-4 w-4 motion-safe:animate-spin" aria-label={`${running.size} comparison${running.size === 1 ? "" : "s"} running`} />}
       </Link>
       <button type="button" aria-expanded={open} aria-controls="framework-navigation" aria-label={open ? "Collapse framework list" : "Expand framework list"} onClick={() => setOpen(!open)} className="mr-1 flex size-7 min-h-7 shrink-0 items-center justify-center rounded-full">
         <ChevronDown className={`h-4 w-4 motion-safe:transition-transform ${open ? "rotate-180" : ""}`} aria-hidden="true" />
@@ -41,7 +41,7 @@ export function FrameworkNavigation() {
         : <NavLink key={f.id} to={`/portal/frameworks/${f.id}`} data-nav-row="" className={({ isActive }) => entry(isActive)}>
             {({ isActive }) => <>
               {f.name}
-              {running.has(f.id) && <span className={`mt-0.5 flex items-center gap-1.5 text-xs font-normal ${isActive ? "text-primary-foreground/80" : "text-muted-foreground"}`}><LoaderCircle className="h-3 w-3 animate-spin" aria-hidden="true" />Comparing · {running.get(f.id)!.percent}%</span>}
+              {running.has(f.id) && <span className={`mt-0.5 flex items-center gap-1.5 text-xs font-normal ${isActive ? "text-primary-foreground/80" : "text-muted-foreground"}`}><LoaderCircle className="h-3 w-3 motion-safe:animate-spin" aria-hidden="true" />Comparing · {running.get(f.id)!.percent}%</span>}
             </>}
           </NavLink>)}
     </div></Fold>

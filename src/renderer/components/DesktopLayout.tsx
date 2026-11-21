@@ -355,9 +355,10 @@ function HelpMenu({ linkClass, onWhatsNew, onFeedback, onSupport, launching, bus
   const [open, setOpen] = useState(false)
   const pending = useRef<(() => void | Promise<void>) | null>(null)
   // The first item chosen wins: the closing menu stays on screen for its exit animation, and a second
-  // choice made then (or while the first is still launching) is ignored.
+  // choice made then (or while the first is still launching) is ignored. So is a choice in a menu that
+  // was dismissed (Escape, a click outside) and is only still on screen while it animates out.
   const choose = (run: () => void | Promise<void>) => (event: Event) => {
-    if (busy()) {
+    if (!open || busy()) {
       event.preventDefault()
       return
     }

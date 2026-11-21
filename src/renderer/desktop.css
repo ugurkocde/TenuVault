@@ -220,6 +220,10 @@ html:has([data-flow-shell]) {
 .tv-pill[data-shown="true"] { opacity: 1; }
 .tv-nav[data-pills="on"] [data-nav-row] { position: relative; z-index: 1; }
 .tv-nav[data-pills="on"] [data-nav-row]:not(.bg-primary) { background-color: transparent; }
+/* A row the pill is leaving has its muted label back while the pill still slides out from under it. In
+   the light theme the muted shade is a little deeper here, so labels keep 4.5:1 on the card and on the
+   pill alike; the dark theme's muted shade already does. */
+:root:not(.dark) .tv-nav { --muted-foreground: #6b665f; }
 
 /* Sidebar menus (tenant switcher, Help): fade and scale in from the edge they open from, after the
    AccessGrid navigation panel. */
