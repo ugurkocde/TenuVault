@@ -3,7 +3,7 @@ import { DirectoryReadDeferredError, DirectoryThrottledError, retryDirectoryWrit
 import { typeForFolder, type Item } from "../../shared/intune/registry"
 import { graphContinuation } from "../../shared/graph-continuation"
 import { directoryPermissionBlocker } from "./directory-permissions"
-import { directoryReadShape } from "./directory-read-shape"
+import { directoryReadAbsent, directoryReadShape } from "./directory-read-shape"
 import { RestoreSafetyError, RestoreWriteDeferredError, RestoreWriteRefusedError, guardRestoreItem, type RestoreActor } from "../../shared/intune/restore-guards"
 import { requireRestoreActor } from "./restore-actor"
 import { requireDirectoryApprovals } from "./directory-9a"
@@ -30,7 +30,7 @@ export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typ
       if (method === "GET") throw new DirectoryReadDeferredError()
       throw error
     })
-    if (response.status === 404 && method === "GET") return null
+    if (response.status === 404 && method === "GET") return directoryReadAbsent(response, new URL(root + path))
     if (!response.ok) {
       if (response.status === 429) {
         const error = new DirectoryThrottledError(response)
@@ -59,7 +59,7 @@ export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typ
       return method === "GET" ? directoryReadShape(value, new URL(root + path)) : value as Item
     }
     catch (error) {
-      if (method === "GET") throw new DirectoryReadDeferredError()
+      if (method === "GET" && !(error instanceof RestoreSafetyError)) throw new DirectoryReadDeferredError()
       throw error
     }
   }
@@ -107,7 +107,7 @@ export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typ
   }
   const resolveUser = async (id: string, signal?: AbortSignal): Promise<Item> => {
     const user = await request(`users/${appIdentity(id)}?$select=id,displayName,onPremisesSyncEnabled`, "GET", undefined, signal)
-    if (!user || user.id !== id) throw new RestoreSafetyError("The user principal is unresolved.")
+    if (!user || String(user.id).toLowerCase() !== id.toLowerCase()) throw new RestoreSafetyError("The user principal is unresolved.")
     return { ...user, "@odata.type": "#microsoft.graph.user" }
   }
   const endpoints = async (step: GuardedStep, signal?: AbortSignal) => {

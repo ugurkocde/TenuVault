@@ -1,3 +1,4 @@
+import { graphNotFound } from "./fixtures/directory-response"
 import { expect, it, vi } from "vitest"
 import { directory9aLab, type DirectoryLabIntent } from "./helpers/directory-9a-lab"
 import { LAB_8C_APP, LAB_8C_TENANT } from "./helpers/configuration-8c-lab"
@@ -22,9 +23,9 @@ function setup(mode: "normal" | "lost-create" | "cleanup-refused" | "throttle" =
       if (path === "users") return Response.json({ value: [...active.values()] })
       if (path === "groups" || path.endsWith("microsoft.graph.group")) return Response.json({ value: [] })
       if (path.endsWith("microsoft.graph.user")) return Response.json({ value: [...deleted.values()] })
-      if (path.endsWith("/manager")) return managerId ? Response.json({ id: managerId }) : new Response(null, { status: 404 })
+      if (path.endsWith("/manager")) return managerId ? Response.json({ id: managerId }) : graphNotFound()
       const value = (path.startsWith("directory/") ? deleted : active).get(path.split("/").at(-1)!)
-      return value ? Response.json(value) : new Response(null, { status: 404 })
+      return value ? Response.json(value) : graphNotFound()
     }
     if (method === "PATCH") { Object.assign(active.get(id)!, JSON.parse(String(options?.body))); return new Response(null, { status: 204 }) }
     if (method === "DELETE") {
@@ -96,8 +97,8 @@ it("verifies the prepared group lifecycle, membership and owner round trip under
       if (parts[2] === "memberOf") return Response.json({ value: [] })
       if (parts.length === 1) return Response.json({ value: [...active.values()].filter(value => value.fixtureFolder === path) })
       if (path.endsWith("microsoft.graph.user") || path.endsWith("microsoft.graph.group")) return Response.json({ value: [...deleted.values()].filter(value => value.fixtureFolder === (path.endsWith(".user") ? "users" : "groups")) })
-      if (parts.length === 4) return links.has(path) ? Response.json({ id: parts[3] }) : new Response(null, { status: 404 })
-      const value = parts[0] === "directory" ? deleted.get(parts[2]!) : active.get(parts[1]!); return value ? Response.json(value) : new Response(null, { status: 404 })
+      if (parts.length === 4) return links.has(path) ? Response.json({ id: parts[3] }) : graphNotFound()
+      const value = parts[0] === "directory" ? deleted.get(parts[2]!) : active.get(parts[1]!); return value ? Response.json(value) : graphNotFound()
     }
     if (method === "POST" && ["users", "groups"].includes(path)) {
       const objectId = `00000000-0000-4000-8000-${String(next++).padStart(12, "0")}`

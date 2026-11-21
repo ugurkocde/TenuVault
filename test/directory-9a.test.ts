@@ -1,4 +1,4 @@
-import { unsetUserFields, unsetGroupFields } from "./fixtures/directory-response"
+import { graphNotFound, unsetUserFields, unsetGroupFields } from "./fixtures/directory-response"
 import { describe, it, expect, vi } from "vitest"
 import { directoryPayload, directoryReview, approveDirectory, requireDirectoryApprovals, relationshipDifference, previewDirectoryPage, NEVER_RESTORED } from "../src/main/restore/directory-9a"
 import { directory9aIO, directoryPermissions } from "../src/main/restore/directory-9a-io"
@@ -98,10 +98,10 @@ for (const action of ["create", "update", "recycle", "invite", "member", "owner"
       if (path.endsWith("/memberOf")) return Response.json({ value: [] })
       if (path.startsWith("identity/conditionalAccess/")) return Response.json({ value: [] })
       if (path === `users/${principal.id}`) return Response.json(principal)
-      if (path.startsWith("directory/deletedItems/")) return deleted ? Response.json(base) : new Response(null, { status: 404 })
+      if (path.startsWith("directory/deletedItems/")) return deleted ? Response.json(base) : graphNotFound()
       if (url.searchParams.has("$filter")) return Response.json({ value: live ? [live] : [] })
-      if (/\/(members|owners)\//.test(path) || path.endsWith("/manager")) return related ? Response.json(principal) : new Response(null, { status: 404 })
-      return live ? Response.json({ ...live, ...(action === "license" ? { assignedLicenses: licensed ? step.desired.assignedLicenses : [] } : {}) }) : new Response(null, { status: 404 })
+      if (/\/(members|owners)\//.test(path) || path.endsWith("/manager")) return related ? Response.json(principal) : graphNotFound()
+      return live ? Response.json({ ...live, ...(action === "license" ? { assignedLicenses: licensed ? step.desired.assignedLicenses : [] } : {}) }) : graphNotFound()
     })
     const io = directory9aIO(token(), actor, refs, fetcher, async () => [], async () => {})
     step.preview = restoreFingerprint(await io.read(step, step.targetId))
@@ -121,7 +121,7 @@ for (const action of ["create", "update", "recycle", "invite", "member", "owner"
 })
 
 it("locates the recycle bin before proposing creation and refuses bypassing it", async () => {
-  const fetcher = vi.fn(async (url: RequestInfo | URL) => String(url).includes("deletedItems") ? Response.json(user) : new Response(null, { status: 404 }))
+  const fetcher = vi.fn(async (url: RequestInfo | URL) => String(url).includes("deletedItems") ? Response.json(user) : graphNotFound())
   const io = directory9aIO(token(), actor, refs, fetcher)
   expect((await io.locate("Users", user.id)).action).toBe("recycle")
   await expect(io.read({ ...stepFor("create", "Users"), targetId: undefined })).rejects.toThrow("recycle bin")
@@ -137,7 +137,7 @@ it("retries bounded throttles and rejects hostile continuations before attaching
   try {
     let calls = 0
     const wait = vi.fn(async () => {})
-    const io = directory9aIO(token(), actor, refs, vi.fn(async () => ++calls < 3 ? new Response(null, { status: 429, headers: { "Retry-After": "2" } }) : new Response(null, { status: 404 })), undefined, wait)
+    const io = directory9aIO(token(), actor, refs, vi.fn(async () => ++calls < 3 ? new Response(null, { status: 429, headers: { "Retry-After": "2" } }) : graphNotFound()), undefined, wait)
     expect((await io.locate("Users", user.id)).action).toBe("create")
     expect(wait.mock.calls).toEqual([[2000], [2000]])
     const fetcher = vi.fn(async (_input: RequestInfo | URL) => Response.json({ value: [], "@odata.nextLink": "https://evil.example/users" }))
@@ -207,8 +207,8 @@ for (const operation of ["create", "update"] as const) it(`group ${operation}: r
       return Response.json({ id: uuid(50), templateId: "fdd7a751-b60b-444a-984c-02652fe8fa1c" })
     }
     if (options?.method !== "GET") { writes++; live = { ...group, ...step.desired }; throw new Error("Lost create response") }
-    if (String(_url).includes("deletedItems")) return new Response(null, { status: 404 })
-    return live ? Response.json(live) : new Response(null, { status: 404 })
+    if (String(_url).includes("deletedItems")) return graphNotFound()
+    return live ? Response.json(live) : graphNotFound()
   })
   const io = directory9aIO(token(), actor, refs, fetcher, async () => [])
   step.preview = restoreFingerprint(await io.read(step, step.targetId))
@@ -247,7 +247,7 @@ it("does not widen a Conditional Access excluded group's membership permission t
     if (options?.method !== "GET") return Response.json({ id: group.id })
     if (String(input).includes("/memberOf")) return Response.json({ value: [] })
     if (String(input).includes("conditionalAccess")) return Response.json({ value: [{ conditions: { users: { includeGroups: [], excludeGroups: [group.id] } } }] })
-    if (new URL(String(input)).pathname.endsWith("users/" + principal.id)) return Response.json(principal)
+    if (new URL(String(input)).pathname.endsWith("users/" + principal.id) || new URL(String(input)).pathname.endsWith("members/" + principal.id)) return Response.json(principal)
     return Response.json(group)
   })
   const io = directory9aIO(token(["GroupMember.ReadWrite.All", "Group.Read.All", "User.Read.All", "Policy.Read.All"]), actor, refs, fetcher)
@@ -309,7 +309,7 @@ function retryWorld(removal = false) {
     if (path.endsWith("/memberOf")) return Response.json({ value: [] })
     if (path.includes("conditionalAccess")) return Response.json({ value: [{ conditions: { users: { includeGroups: included ? [group.id] : [], excludeGroups: [] } } }] })
     if (path === `groups/${group.id}/members`) return Response.json({ value: [...members].map(id => ({ id })) })
-    if (path.includes("/members/")) return members.has(principal.id) ? Response.json(principal) : new Response(null, { status: 404 })
+    if (path.includes("/members/")) return members.has(principal.id) ? Response.json(principal) : graphNotFound()
     return Response.json(principal)
   })
   const configure = (next: string, ca = false) => { mode = next; included = ca }
@@ -415,4 +415,13 @@ it.each(["saved", "current"])("closes relationship streams when the initial %s r
   await expect(previewDirectoryPage(relationshipDifference(stream("saved"), stream("current")))).rejects.toThrow("Initial read unavailable")
   expect(closed).toContain("saved")
   if (side === "current") expect(closed.sort()).toEqual(["current", "saved"])
+})
+
+
+it("defers an empty continuation in the relationship inventory before treating the page as complete", async () => {
+  const fetcher = vi.fn(async () => Response.json({ value: [], "@odata.nextLink": "" }))
+  const io = directory9aIO(token(), actor, refs, fetcher)
+  const collect = async () => { for await (const _ of io.ids(group.id, "members")) { /* Consume inventory. */ } }
+  await expect(collect()).rejects.toThrow("temporary Microsoft Graph read failure")
+  expect(fetcher).toHaveBeenCalledTimes(1)
 })

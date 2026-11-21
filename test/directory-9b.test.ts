@@ -1,3 +1,4 @@
+import { graphNotFound } from "./fixtures/directory-response"
 import { approveDirectory } from "../src/main/restore/directory-9a"
 import { executeDirectoryBatches } from "../src/main/restore/directory-9a-batches"
 import { setDirectoryRestoreService } from "../src/main/restore/directory-dispatch"
@@ -45,7 +46,7 @@ function world() {
     if (path.endsWith("/appRoleAssignments")) return Response.json({ value: roles })
     if (path.endsWith("/owners")) return Response.json({ value: [] })
     if (objects.has(path)) return Response.json(objects.get(path))
-    return new Response(null, { status: 404 })
+    return graphNotFound()
   })
   const data = new Map<string, string>()
   const settings = new ModuleSettings({ get: key => data.get(key) ?? null, set: (key, value) => { data.set(key, value) }, delete: key => { data.delete(key) } })
@@ -626,7 +627,7 @@ it.each(["misfiled", "saved-appId", "live-objectId", "preview-appId"])('rejects 
   await ownedMetadataRoute(env, snapshot, async call => {
     const response = await call({ action: "preview" }), result = await response.json()
     expect(response.status).toBe(409)
-    expect(result.error).toContain(variant === "misfiled" ? "filename does not match" : variant === "live-objectId" ? "target identity changed" : "app ID does not match")
+    expect(result.error).toContain(variant === "misfiled" ? "filename does not match" : variant === "live-objectId" ? "directory object identity changed" : "app ID does not match")
     expect([...env.data.keys()].some(key => key.startsWith("restore.directory."))).toBe(false)
     expect(env.writes).toEqual([])
   })
@@ -869,4 +870,25 @@ it.each([false, true])("keeps application cleanup queued across a failed review 
   await service.prepare(actor.tenantId, request, { stage: "object", exactMembers: false, exactOwners: false }, async () => ids)
   for (const [key, value] of records) expect(data.get(key)).toBe(published ? value : undefined)
   expect(env.writes).toEqual([])
+})
+
+
+it("defers an empty application continuation before accepting the reference list", async () => {
+  const env = world(), original = env.fetcher.getMockImplementation()!
+  env.fetcher.mockImplementation((input, init) => new URL(String(input)).pathname === "/v1.0/servicePrincipals" ? Promise.resolve(Response.json({ value: [app], "@odata.nextLink": "" })) : original(input, init))
+  await expect(env.io.preview(step("update"))).rejects.toThrow("temporary Microsoft Graph read failure")
+  expect(env.writes).toEqual([])
+})
+it.each(["appId", "appOwnerOrganizationId"])("resumes application metadata after malformed %s ownership evidence without duplicate PATCH", async field => {
+  const env = persisted(), candidate = await applicationObjectStep("Applications", { ...app, displayName: "Saved" }, env.io, async () => app)
+  await env.io.preview(candidate)
+  const run = runFor(candidate), journal = new GuardedRunJournal(env.store), original = env.fetcher.getMockImplementation()!
+  approveDirectory(candidate, run, "directory-item")
+  env.fetcher.mockImplementation((input, init) => new URL(String(input)).pathname === "/v1.0/servicePrincipals" ? Promise.resolve(Response.json({ value: [{ ...app, [field]: "invalid" }] })) : original(input, init))
+  expect((await executeGuardedRun(journal, run, env.io)).run.entries[0]!.state).toBe("deferred")
+  expect(env.writes).toEqual([])
+  env.fetcher.mockImplementation(original)
+  expect((await executeGuardedRun(journal, run, env.io)).run.entries[0]!.state).toBe("applied")
+  await executeGuardedRun(journal, run, env.io)
+  expect(env.writes).toEqual([`applications/${app.id}`])
 })

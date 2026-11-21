@@ -573,7 +573,7 @@ it.each(folders)("refuses a JWT in an unchanged live %s field during preview bef
   expect(env.writes).toEqual([])
 })
 
-it.each(folders.flatMap(folder => ["initial", "final"].flatMap(phase => ["empty object", "missing selected field", "non-string id"].map(shape => ({ folder, phase, shape })))))("resumes $folder after $phase evidence has $shape and sends the approved write once", async ({ folder, phase, shape }) => {
+it.each(folders.flatMap(folder => ["initial", "final"].flatMap(phase => ["empty object", "missing selected field", "non-string id", "malformed GUID id"].map(shape => ({ folder, phase, shape })))))("resumes $folder after $phase evidence has $shape and sends the approved write once", async ({ folder, phase, shape }) => {
   const env = world(folder), request = env.request(), page = await env.prepare(request), original = env.graph.getMockImplementation()!
   let reads = 0, malformed = false
   const failureRead = phase === "initial" ? 1 : folder === "Users" ? 4 : 5
@@ -583,6 +583,7 @@ it.each(folders.flatMap(folder => ["initial", "final"].flatMap(phase => ["empty 
       const value = shape === "empty object" ? {} : { ...env.live }
       if (shape === "missing selected field") delete value.displayName
       if (shape === "non-string id") value.id = 42
+      if (shape === "malformed GUID id") value.id = "malformed"
       return Promise.resolve(Response.json(value))
     }
     return original(input, init)

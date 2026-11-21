@@ -1,3 +1,4 @@
+import { graphNotFound } from "./fixtures/directory-response"
 import { expect, it, vi } from "vitest"
 import { directory9bLab, type AppLabIntent } from "./helpers/directory-9b-lab"
 import { LAB_8C_APP, LAB_8C_TENANT } from "./helpers/configuration-8c-lab"
@@ -22,7 +23,7 @@ function world() {
     const item = path.startsWith("directory/deletedItems/") ? deleted.get(parts[2]!) : active.get(path)
     if (method === "DELETE") { if (item) { if (path.startsWith("directory")) deleted.delete(parts[2]!); else { active.delete(path); if (item.folder) deleted.set(String(item.id), item) } } return new Response(null, { status: 204 }) }
     if (method === "PATCH" && item) { Object.assign(item, body); return new Response(null, { status: 204 }) }
-    return item ? Response.json(item) : new Response(null, { status: 404 })
+    return item ? Response.json(item) : graphNotFound()
   })
   const recovery = { save: (intent: AppLabIntent) => { intents.set(intent.folder+":"+intent.name, { ...intent }) }, load: () => [...intents.values()], clear: () => { intents.clear() }, evidence: vi.fn() }
   const lab = directory9bLab(token, LAB_8C_TENANT, LAB_8C_APP, recovery, id(3), fetcher, async () => {})

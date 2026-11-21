@@ -6,7 +6,7 @@ import { RestoreSafetyError, RestoreWriteDeferredError, RestoreWriteRefusedError
 import { isGuid } from "../../shared/security"
 import { graphContinuation } from "../../shared/graph-continuation"
 import { directoryPermissionBlocker } from "./directory-permissions"
-import { directoryReadShape } from "./directory-read-shape"
+import { directoryReadAbsent, directoryReadShape } from "./directory-read-shape"
 import { requireRestoreActor } from "./restore-actor"
 import { directoryPayload, directoryReview, disabledUserBody, requireDirectoryApprovals, cloudObject, DIRECTORY_9A_BLOCKER } from "./directory-9a"
 import { isRestorePersistenceError, guardedProtections, restoreFingerprint, type GuardedIO, type GuardedStep } from "./guarded-run"
@@ -74,7 +74,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
         } catch { throw new RestoreWriteDeferredError("The throttled directory read was not applied. Resume after Retry-After.", retryAt) }
         continue
       }
-      if (method === "GET" && response.status === 404) return null
+      if (method === "GET" && response.status === 404) return directoryReadAbsent(response, url)
       if (method !== "GET" && response.status >= 400 && response.status < 500 && response.status !== 408) throw new RestoreWriteRefusedError(response.status)
       if (method === "GET" && (response.status === 408 || response.status >= 500)) throw new DirectoryReadDeferredError()
       if (!response.ok) throw new Error("Directory request was not confirmed. No response body is retained.")
@@ -94,7 +94,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
         return method === "GET" ? directoryReadShape(value, url) : value as Item
       }
       catch (error) {
-        if (method === "GET") throw new DirectoryReadDeferredError()
+        if (method === "GET" && !(error instanceof RestoreSafetyError)) throw new DirectoryReadDeferredError()
         throw error
       }
     }
@@ -146,11 +146,11 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
   const resolvePrincipal = async (id: string): Promise<Item | null> => {
     const user = await request(`users/${identity(id)}`)
     if (user) {
-      if (user.id !== id) throw new RestoreSafetyError("The user identity did not match its reference.")
+      if (String(user.id).toLowerCase() !== id.toLowerCase()) throw new RestoreSafetyError("The user identity did not match its reference.")
       return { ...user, "@odata.type": "#microsoft.graph.user" }
     }
     const group = await request(`groups/${identity(id)}`)
-    if (group?.id !== id && group !== null) throw new RestoreSafetyError("The group identity did not match its reference.")
+    if (group !== null && String(group.id).toLowerCase() !== id.toLowerCase()) throw new RestoreSafetyError("The group identity did not match its reference.")
     return group ? { ...group, "@odata.type": "#microsoft.graph.group" } : null
   }
   const read = async (step: GuardedStep, id?: string): Promise<Item | null> => {
@@ -223,7 +223,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
       try {
         for await (const policy of list("identity/conditionalAccess/policies?$select=id,conditions")) {
           const users = (policy.conditions as Item | undefined)?.users as Item | undefined
-          if (!users || !Array.isArray(users.includeGroups) || !Array.isArray(users.excludeGroups) || [...users.includeGroups, ...users.excludeGroups].some(id => !isGuid(id))) throw new RestoreSafetyError("Conditional Access dependencies could not be resolved.")
+          if (!users || !Array.isArray(users.includeGroups) || !Array.isArray(users.excludeGroups) || [...users.includeGroups, ...users.excludeGroups].some(id => !isGuid(id))) throw new DirectoryReadDeferredError()
           if (users.excludeGroups.some(id => String(id).toLowerCase() === (step.targetId ?? step.sourceId).toLowerCase())) excluded = true
           if (users.includeGroups.some(id => String(id).toLowerCase() === (step.targetId ?? step.sourceId).toLowerCase())) included = true
         }

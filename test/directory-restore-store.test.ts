@@ -1,5 +1,6 @@
 vi.mock("node:fs", { spy: true })
 import * as fs from "node:fs"
+import { graphNotFound } from "./fixtures/directory-response"
 import { fstatSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -85,7 +86,7 @@ it.each(["file", "directory", "directory and rollback"])("recovers a create with
   const io = directory9aIO(token, actor, async () => ({ principals: [], applications: [], complete: true }), async (input, init) => {
     if (init?.method === "POST") { posts(); return Response.json({ id: id(30) }, { status: 201 }) }
     if (new URL(String(input)).pathname === "/v1.0/users") return Response.json({ value: [] })
-    return new Response(null, { status: 404 })
+    return graphNotFound()
   }, async () => [])
   for (const kind of (await io.review(step)).approvals) approveDirectory(step, run, kind)
   const pending = new DirectoryPendingPublications().forTenant(run.tenant)

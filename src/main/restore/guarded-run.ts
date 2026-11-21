@@ -81,7 +81,7 @@ export interface GuardedIO {
 export const guardedProtections = (step: GuardedStep) => step.directory && ["Users", "Groups"].includes(step.folder) ? ["identity-references"] as const : operationProtections(step.folder, step.operation)
 const secretKey = /^(?:passwordProfile|password|passwordCredentials|keyCredentials|clientSecret|privateKey|sharedSecret|secretKey|tokenSeed|seed|tunnelKey|secret|accessToken|refreshToken|clientAssertion|pfx|pkcs12|secretText|authenticationConfiguration|certificateData|deploymentAccessKey)$/i
 export function assertNoSecrets(value: unknown): void {
-  if (typeof value === "string" && /-----BEGIN .*PRIVATE KEY-----|\b(?:Bearer|Basic)\s+[A-Za-z0-9+/_-]{32,}={0,2}|[A-Za-z0-9_~.-]{3}\dQ~[A-Za-z0-9_~.-]{31,34}|\beyJ[\w-]+\.[\w-]+\.[\w-]+/i.test(value)) throw new RestoreSafetyError("Credential values cannot be saved in restore history.")
+  if (typeof value === "string" && (/\bBasic\s+[A-Za-z0-9+/]{32,}={0,2}(?![A-Za-z0-9+/=_-])/.test(value) || /-----BEGIN .*PRIVATE KEY-----|\bBearer\s+[A-Za-z0-9+/_-]{32,}={0,2}|[A-Za-z0-9_~.-]{3}\dQ~[A-Za-z0-9_~.-]{31,34}|\beyJ[\w-]+\.[\w-]+\.[\w-]+/i.test(value))) throw new RestoreSafetyError("Credential values cannot be saved in restore history.")
   if (!value || typeof value !== "object") return
   for (const [key, child] of Object.entries(value)) {
     if (secretKey.test(key)) throw new RestoreSafetyError("Credential properties cannot be saved in restore history.")
