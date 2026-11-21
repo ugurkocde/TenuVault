@@ -21,7 +21,7 @@ export async function executeDirectoryBatches(store: PartitionedRestoreStore, id
   if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new RestoreSafetyError("The directory batch budget must be 1 to 100 steps.")
   const prefix = directoryPagePrefix(identity.tenant, identity.id)
   const durableStore: KeyValueStore = { get: key => restorePersistence(() => store.get(key)), set: (key, value) => restorePersistence(() => store.set(key, value)), delete: key => restorePersistence(() => store.delete(key)) }
-  const objectState = directoryObjectState(durableStore, identity.tenant, identity.id)
+  const objectState = directoryObjectState(durableStore, identity.tenant, identity.id, io.now)
   objectState.assertActive()
   const binding = restoreFingerprint({ ...identity, actor: { ...identity.actor, recoveryAccountIds: [] }, sourceFingerprint: source.fingerprint } as unknown as Item)
   const saved = store.get(prefix + "cursor")

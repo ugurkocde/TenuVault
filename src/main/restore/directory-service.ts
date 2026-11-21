@@ -22,7 +22,7 @@ import { directory9aIO, directoryAdmission } from "./directory-9a-io"
 import { directoryObjectStep, directoryRelationshipSteps, mappedDirectoryIds } from "./directory-9a-plan"
 import { approveDirectory, directoryReview, type DirectoryReview } from "./directory-9a"
 import { directoryMappedId, executeDirectoryBatches } from "./directory-9a-batches"
-import { GuardedRunJournal, restoreFingerprint, type GuardedRun } from "./guarded-run"
+import { isRestorePersistenceError, GuardedRunJournal, restoreFingerprint, type GuardedRun } from "./guarded-run"
 import { resolveRestoreActor, type RecoveryAccounts } from "./safety-resolvers"
 import { safetyReader } from "./safety-reader"
 import { requireRestoreActor } from "./restore-actor"
@@ -37,7 +37,7 @@ const key = (tenant: string, id: string) => `restore.directory.review.${tenant.t
 export class DirectoryRestoreService {
   private readonly pending = new DirectoryPendingPublications(() => this.now())
   private readonly running = new Map<string, AbortController>()
-  constructor(private readonly store: PartitionedRestoreStore, private readonly recovery: RecoveryAccounts, private readonly connection: (tenant: string) => Promise<RestoreConnection>, private readonly fetchImpl: typeof fetch = fetch, private readonly protectedAppIds: (tenant: string) => readonly string[] = () => [], private readonly settings?: Pick<ModuleSettings, "get">, private readonly now: () => number = Date.now) {}
+  constructor(private readonly store: PartitionedRestoreStore, private readonly recovery: RecoveryAccounts, private readonly connection: (tenant: string) => Promise<RestoreConnection>, private readonly fetchImpl: typeof fetch = fetch, private readonly protectedAppIds: (tenant: string) => readonly string[] = () => [], private readonly settings?: Pick<ModuleSettings, "get">, private readonly now: () => number = () => Date.now()) {}
   private async context(tenant: string, onThrottled?: (retryAt: number) => void, validatedConnection?: RestoreConnection) {
     const connection = validatedConnection ?? await this.connection(tenant)
     if (connection.tenantId.toLowerCase() !== tenant.toLowerCase()) fail("The connection belongs to another tenant.")
@@ -84,6 +84,7 @@ export class DirectoryRestoreService {
     const connection = await this.connection(page.run.tenant)
     requireRestoreActor(connection.token, { ...connection, recoveryAccountIds: [] })
     if (connection.tenantId.toLowerCase() !== page.run.tenant.toLowerCase() || connection.tenantId.toLowerCase() !== page.run.actor.tenantId.toLowerCase() || connection.userId.toLowerCase() !== page.run.actor.userId.toLowerCase() || connection.clientId.toLowerCase() !== page.run.actor.clientId.toLowerCase()) fail("Use the admin and connection that reviewed this page.")
+    captureDirectoryExecutionActor(connection)
     return connection
   }
   private requireAccess(tenant: string, folder: string) {
@@ -103,6 +104,7 @@ export class DirectoryRestoreService {
     this.pending.forTenant(tenant).flush()
     try { return await this.preparePage(tenant, request, options, read) }
     catch (error) {
+      if (isRestorePersistenceError(error)) throw error
       if (error instanceof RestoreWriteDeferredError && error.retryAt !== undefined) {
         const folder = request.path.split("/")[1]!, sourceId = String(request.snapshot.id)
         if (directoryObjectId(folder, sourceId)) {
@@ -169,7 +171,7 @@ export class DirectoryRestoreService {
       }
       const empty = async function* () {}
       steps = directoryRelationshipSteps(folder as "Users" | "Groups", sourceId as string, target, snapshot, io, {
-        members: { saved: folder === "Groups" ? mappedDirectoryIds(saved("members"), mapPrincipal) : empty(), current: folder === "Groups" ? mappedDirectoryIds(io.ids(target, "members"), async id => { principalMappings.capture(id); return id }) : empty() },
+        members: { saved: folder === "Groups" ? mappedDirectoryIds(saved("members"), async id => principalMappings.capture(id, true)) : empty(), current: folder === "Groups" ? mappedDirectoryIds(io.ids(target, "members"), async id => { principalMappings.capture(id); return id }) : empty() },
         owners: { saved: folder === "Groups" ? mappedDirectoryIds(saved("owners"), mapPrincipal) : empty(), current: folder === "Groups" ? mappedDirectoryIds(io.ids(target, "owners"), async id => { principalMappings.capture(id); return id }) : empty() },
         exactMembers: options.exactMembers, exactOwners: options.exactOwners, mapPrincipal, savedIdsAreTargets: true,
       }, false)
@@ -200,13 +202,15 @@ export class DirectoryRestoreService {
       page.inventory = inventory
       page.more = inventory.offset + chunk.length < inventory.count
     }
+    const principalValidation = inventory?.principalMappings ? new DirectoryPrincipalMappings(this.store, tenant, inventory.id) : undefined
     for await (const step of steps) {
       if (page.rows.length === 50) { page.more = true; break }
       const current = await io.read(step, step.targetId)
       step.preview = restoreFingerprint(current)
       let review: DirectoryReview
-      try { review = await io.review(step, current) }
+      try { review = await io.review(step, current); principalValidation?.validate(inventory!.principalMappings!, step) }
       catch (error) {
+        if (isRestorePersistenceError(error)) throw error
         if (!(error instanceof RestoreWriteDeferredError)) throw error
         if (error.retryAt !== undefined) {
           const retryAt = error.retryAt
@@ -274,6 +278,7 @@ export class DirectoryRestoreService {
       let review: DirectoryReview
       try { await io.hydrate(step); review = await io.preview(step) }
       catch (error) {
+        if (isRestorePersistenceError(error)) throw error
         // An admitted update must resolve to the saved identity before any preview is persisted.
         if (error instanceof RestoreWriteDeferredError || !applicationAdmission(step)) throw error
         review = applicationReview(step, null, { id: snapshot.id!, displayName: snapshot.displayName ?? "Unresolved application" }, null, actor)
@@ -309,7 +314,11 @@ export class DirectoryRestoreService {
   async operation<T>(tenant: string, id: string, work: (signal: AbortSignal) => Promise<T>): Promise<T | { cancelled: true }> {
     const operation = this.register(tenant, id)
     try { return await work(operation.signal) }
-    catch (error) { if (operation.signal.aborted) return { cancelled: true }; throw error }
+    catch (error) {
+      if (isRestorePersistenceError(error)) throw error
+      if (operation.signal.aborted) return { cancelled: true }
+      throw error
+    }
     finally { operation.finish() }
   }
   async execute(tenant: string, request: IdentityRestoreRequest, fingerprint: string, approvals: Record<string, string[]>, operationSignal?: AbortSignal): Promise<ReturnType<DirectoryRestoreService["results"]>> {
@@ -326,16 +335,16 @@ export class DirectoryRestoreService {
     page.selection = selection; this.save(page)
     const context = await this.context(tenant, retryAt => this.recordPageThrottle(page, retryAt), connection), actor = context.actor
     const rawIO = DIRECTORY_9B_FOLDERS.includes(request.path.split("/")[1]!) ? context.applicationIO : context.io
+    const principalValidation = page.inventory ? new DirectoryPrincipalMappings(this.store, tenant, page.inventory.id) : undefined
     const io = { ...rawIO, write: ((step, body, targetId, beforeSend, run, signal, onUnapplied) => rawIO.write(step, body, targetId, () => {
       this.requireAccess(tenant, step.folder)
       if (signal?.aborted) throw new RestoreWriteDeferredError("The directory write was cancelled before sending.")
       if (page.inventory) {
         if (!page.inventory.principalMappings) fail("Preview these relationships again to verify their principal mappings.")
-        new DirectoryPrincipalMappings(this.store, tenant, page.inventory.id).validate(page.inventory.principalMappings!)
+        principalValidation!.validate(page.inventory.principalMappings!, step)
       }
       this.pending.forTenant(tenant).beforeSend()
       beforeSend()
-      captureDirectoryExecutionActor(connection)
     }, run, signal, onUnapplied)) as typeof rawIO.write }
     if (actor.userId !== page.run.actor.userId || actor.clientId !== page.run.actor.clientId) fail("Resume with the admin and connection that reviewed this page.")
     const entries = page.run.entries.filter(entry => selection.includes(entry.step.key))
@@ -377,8 +386,10 @@ export class DirectoryRestoreService {
     return runs
   }
   private results(page: DirectoryPage, result: { status: "complete" | "partial" | "nothing-sent"; batches: number; failed: number }, runs = this.history(page)) {
+    const outcomes = new Map(runs.flatMap(({ run }) => run.entries.map(entry => [entry.step.key, { key: entry.step.key, state: entry.state, reason: entry.reason, targetId: entry.targetId, retryAt: entry.retryAt }] as const)))
+    for (const entry of page.run.entries) if (page.selection?.includes(entry.step.key) && !outcomes.has(entry.step.key)) outcomes.set(entry.step.key, { key: entry.step.key, state: "pending", reason: undefined, targetId: undefined, retryAt: undefined })
     return { ...result, canDiscard: !runs.some(({ run }) => run.entries.some(entry => entry.state === "uncertain")) && !directoryObjectState(this.store, page.run.tenant, page.run.id).discarded(),
-      outcomes: runs.flatMap(({ run }) => run.entries.map(entry => ({ key: entry.step.key, state: entry.state, reason: entry.reason, targetId: entry.targetId, retryAt: entry.retryAt }))),
+      outcomes: [...outcomes.values()],
       replacedReferences: runs.flatMap(({ run }) => run.replacedReferences ?? []), warnings: [...new Set(runs.flatMap(({ run }) => run.referenceWarning ? [run.referenceWarning] : []))] }
   }
   /** Saved-page actions trust only durable identity and journal data, never renderer snapshots. */

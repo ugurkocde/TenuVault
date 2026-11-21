@@ -1,13 +1,13 @@
 import type { KeyValueStore } from "../storage/secure-store"
 import { RestoreSafetyError, RestoreWriteDeferredError } from "../../shared/intune/restore-guards"
-import { GuardedRunJournal, RestorePersistenceError, type GuardedRun, type GuardedStep } from "./guarded-run"
+import { isRestorePersistenceError, GuardedRunJournal, type GuardedRun, type GuardedStep } from "./guarded-run"
 
 type Rejection = { step: string; attempt: number }
 type State = { locks: Record<string, { owner: string; journal: string; rejected?: Rejection }>; deadlines: Record<string, number>; discarded: Record<string, true>; invalid?: boolean }
 export const directoryPagePrefix = (tenant: string, id: string) => `restore.directory.${encodeURIComponent(tenant)}.${encodeURIComponent(id)}.`
 export const directoryMappingKey = (tenant: string, folder: string, source: string) => `restore.directory.mapping.${encodeURIComponent(tenant.toLowerCase())}.objectId.${folder}.${source.toLowerCase()}`
 /** One atomic value arbitrates page ownership and discard. All mutations are synchronous. */
-export function directoryObjectState(store: KeyValueStore, tenant: string, owner: string) {
+export function directoryObjectState(store: KeyValueStore, tenant: string, owner: string, now: () => number = Date.now) {
   const key = `restore.directory.coordinator.${tenant.toLowerCase()}`
   const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value)
   const load = (): State => {
@@ -62,6 +62,50 @@ export function directoryObjectState(store: KeyValueStore, tenant: string, owner
       }
     }
   }
+  /** Replay confirmed mapping publication only for requested identities. */
+  const recoverMappings = (steps: Array<Pick<GuardedStep, "folder" | "sourceId" | "targetId">>, state = load(), history?: Map<string, GuardedRun[]>) => {
+    const ids = new Set(steps.flatMap(step => [step.sourceId, step.targetId, store.get(directoryMappingKey(tenant, step.folder, step.sourceId))].filter((id): id is string => !!id).map(id => id.toLowerCase())))
+    const uncertainCreates = new Set<string>()
+    for (const id of ids) verify(state, id)
+    const journals = new Set([...ids].flatMap(id => state.locks[id] ? [state.locks[id].journal] : []))
+    for (const journalPrefix of journals) {
+      const journal = new GuardedRunJournal({ get: name => store.get(journalPrefix + name), set: () => { throw new Error("Read-only history") }, delete: () => { throw new Error("Read-only history") } })
+      const runs = (() => {
+        try {
+          const runs = history?.get(journalPrefix) ?? journal.list(tenant)
+          history?.set(journalPrefix, runs)
+          return runs
+        }
+        catch (error) {
+          if (isRestorePersistenceError(error)) throw error
+          return invalid([...ids].find(id => state.locks[id]?.journal === journalPrefix)!)
+        }
+      })()
+      for (const run of runs) for (const entry of run.entries) {
+        if (entry.state === "uncertain" && entry.step.operation === "create" && ids.has(entry.step.sourceId.toLowerCase())) uncertainCreates.add(entry.step.sourceId.toLowerCase())
+      }
+      for (const run of runs) for (const mapping of run.mappings) {
+        // Only a confirmed create in this exact journal can publish its replacement.
+        if (!ids.has(mapping.source.toLowerCase()) && !ids.has(mapping.target.toLowerCase())) continue
+        if (!run.entries.some(entry => entry.step.operation === "create" && entry.state === "applied" && entry.step.folder === mapping.folder && entry.step.sourceId === mapping.source && entry.targetId === mapping.target)) continue
+        const publicationState = history ? load() : state
+        const source = mapping.source.toLowerCase(), target = mapping.target.toLowerCase()
+        verify(publicationState, source); verify(publicationState, target)
+        const sourceLock = publicationState.locks[source], targetLock = publicationState.locks[target]
+        if (sourceLock?.journal !== journalPrefix) continue
+        const mappingKey = directoryMappingKey(tenant, mapping.folder, mapping.source), previous = store.get(mappingKey)
+        if ((previous && previous.toLowerCase() !== target) || (targetLock && targetLock.owner !== sourceLock.owner)) throw new RestoreSafetyError(`The stored mapping or ownership conflicts for directory object ${source}. Review this object's saved restore state.`)
+        publicationState.locks[target] = sourceLock
+        if (publicationState.deadlines[source]) {
+          publicationState.deadlines[target] = Math.max(publicationState.deadlines[target] ?? 0, publicationState.deadlines[source])
+          delete publicationState.deadlines[source]
+        }
+        save(publicationState)
+        store.set(mappingKey, mapping.target)
+      }
+    }
+    return uncertainCreates
+  }
   return {
     assertActive,
     discarded: () => !!load().discarded[owner],
@@ -108,39 +152,13 @@ export function directoryObjectState(store: KeyValueStore, tenant: string, owner
       const state = load(); assertActive(state)
       verify(state, object(step))
       if (state.locks[object(step)]?.owner !== owner) throw new RestoreSafetyError("This page no longer owns the directory object.")
-      if ((state.deadlines[object(step)] ?? 0) > Date.now()) throw new RestoreWriteDeferredError("Microsoft Graph Retry-After has not elapsed. Resume to repeat safety checks.", state.deadlines[object(step)])
+      if ((state.deadlines[object(step)] ?? 0) > now()) throw new RestoreWriteDeferredError("Microsoft Graph Retry-After has not elapsed. Resume to repeat safety checks.", state.deadlines[object(step)])
     },
-    /** Replay journal publication before planning or releasing a page, including after a failed mapping save. */
-    recoverMappings: (steps: Array<Pick<GuardedStep, "folder" | "sourceId" | "targetId">>) => {
-      const state = load()
-      const ids = new Set(steps.flatMap(step => [step.sourceId, step.targetId, store.get(directoryMappingKey(tenant, step.folder, step.sourceId))].filter((id): id is string => !!id).map(id => id.toLowerCase())))
-      for (const id of ids) verify(state, id)
-      const journals = new Set([...ids].flatMap(id => state.locks[id] ? [state.locks[id].journal] : []))
-      for (const journalPrefix of journals) {
-        const journal = new GuardedRunJournal({ get: name => store.get(journalPrefix + name), set: () => { throw new Error("Read-only history") }, delete: () => { throw new Error("Read-only history") } })
-        const runs = (() => {
-          try { return journal.list(tenant) }
-          catch (error) { if (error instanceof RestorePersistenceError) throw error; return invalid([...ids].find(id => state.locks[id]?.journal === journalPrefix)!) }
-        })()
-        for (const run of runs) for (const mapping of run.mappings) {
-          // Only a confirmed create in this exact journal can publish its replacement.
-          if (!ids.has(mapping.source.toLowerCase()) && !ids.has(mapping.target.toLowerCase())) continue
-          if (!run.entries.some(entry => entry.step.operation === "create" && entry.state === "applied" && entry.step.folder === mapping.folder && entry.step.sourceId === mapping.source && entry.targetId === mapping.target)) continue
-          const source = mapping.source.toLowerCase(), target = mapping.target.toLowerCase()
-          verify(state, target)
-          const sourceLock = state.locks[source], targetLock = state.locks[target]
-          if (sourceLock?.journal !== journalPrefix) continue
-          const mappingKey = directoryMappingKey(tenant, mapping.folder, mapping.source), previous = store.get(mappingKey)
-          if ((previous && previous.toLowerCase() !== target) || (targetLock && targetLock.owner !== sourceLock.owner)) throw new RestoreSafetyError(`The stored mapping or ownership conflicts for directory object ${source}. Review this object's saved restore state.`)
-          state.locks[target] = sourceLock
-          if (state.deadlines[source]) {
-            state.deadlines[target] = Math.max(state.deadlines[target] ?? 0, state.deadlines[source])
-            delete state.deadlines[source]
-          }
-          save(state)
-          store.set(mappingKey, mapping.target)
-        }
-      }
+    recoverMappings,
+    /** One read-only capture snapshot; only requested principals and journals are examined. */
+    mappingCapture: () => {
+      const state = load(), history = new Map<string, GuardedRun[]>()
+      return (steps: Array<Pick<GuardedStep, "folder" | "sourceId" | "targetId">>) => recoverMappings(steps, state, history)
     },
     releaseCreated: (ids: string[]) => {
       const state = load()

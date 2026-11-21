@@ -6,7 +6,7 @@ import { RestoreSafetyError, RestoreWriteDeferredError, RestoreWriteRefusedError
 import { requireRestoreActor } from "./restore-actor"
 import { requireDirectoryApprovals } from "./directory-9a"
 import { appIdentity, applicationAdmission, applicationPermissions, applicationReview, restorableApp, requireApplicationRestoreAccess } from "./directory-9b"
-import { restoreFingerprint, type GuardedIO, type GuardedStep } from "./guarded-run"
+import { isRestorePersistenceError, restoreFingerprint, type GuardedIO, type GuardedStep } from "./guarded-run"
 import type { ModuleSetting } from "../services/settings"
 
 const root = "https://graph.microsoft.com/v1.0/"
@@ -22,6 +22,7 @@ export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typ
   const request = async (path: string, method = "GET", body?: Item, signal?: AbortSignal): Promise<Item | null> => {
     if (signal?.aborted) throw new RestoreWriteDeferredError("The application request was cancelled before sending.")
     const response = await fetchImpl(root + path, { method, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, ...(body ? { body: JSON.stringify(body) } : {}), signal: method === "GET" && signal ? AbortSignal.any([signal, AbortSignal.timeout(60_000)]) : AbortSignal.timeout(60_000) }).catch(error => {
+      if (isRestorePersistenceError(error)) throw error
       if (method === "GET" && signal?.aborted) throw new RestoreWriteDeferredError("The application read was cancelled before sending a write.")
       if (method === "GET") throw new DirectoryReadDeferredError()
       throw error
@@ -41,6 +42,7 @@ export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typ
     }
     if (response.status === 204) return {}
     const text = await response.text().catch(error => {
+      if (isRestorePersistenceError(error)) throw error
       if (method === "GET" && signal?.aborted) throw new RestoreWriteDeferredError("The application read was cancelled before sending a write.")
       if (method === "GET") throw new DirectoryReadDeferredError()
       throw error
@@ -207,6 +209,7 @@ export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typ
           await request(path, "PATCH", payload, signal)
           return { id: targetId }
         } catch (error) {
+          if (isRestorePersistenceError(error)) throw error
           if (!(error instanceof DirectoryThrottledError) && !dispatched && signal?.aborted) throw new RestoreWriteDeferredError("The application write was cancelled before sending.")
           throw error
         }

@@ -4,7 +4,7 @@ import { LARGE_SHARD_ITEMS, relationPath } from "../../shared/large-backup"
 import { directoryObjectId } from "../../shared/intune/entra-directory"
 import { RestoreSafetyError } from "../../shared/intune/restore-guards"
 import { appIdentity, appPayload, APP_POLICY_REFERENCES, restorableApp } from "./directory-9b"
-import { restoreFingerprint, type GuardedStep } from "./guarded-run"
+import { isRestorePersistenceError, restoreFingerprint, type GuardedStep } from "./guarded-run"
 import type { directory9bIO } from "./directory-9b-io"
 
 type IO = ReturnType<typeof directory9bIO>
@@ -77,7 +77,10 @@ export async function* applicationRelationshipSteps(path: string, snapshot: Item
       step.desired = { appRoleId: appIdentity(saved.appRoleId) }; step.properties = Object.keys(step.desired)
       // Resolve live endpoints only for the current review page. Inventory storage retains app IDs.
       step.sourceId = String(saved.id); step.operation = "create"; delete step.targetId
-    } catch (error) { step.directory!.unresolved = error instanceof RestoreSafetyError ? error.message : "A saved principal is unresolved. This item is blocked." }
+    } catch (error) {
+      if (isRestorePersistenceError(error)) throw error
+      step.directory!.unresolved = error instanceof RestoreSafetyError ? error.message : "A saved principal is unresolved. This item is blocked."
+    }
     yield step
   }
   for (const [kind, dependency] of Object.entries(APP_POLICY_REFERENCES)) {

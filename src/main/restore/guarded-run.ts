@@ -95,6 +95,7 @@ const tenantKey = (tenant: string) => `restore.guarded.${encodeURIComponent(tena
 
 /** Storage failures must escape safety and transport failure classification. */
 export class RestorePersistenceError extends Error {}
+export const isRestorePersistenceError = (error: unknown): boolean => error instanceof RestorePersistenceError || error instanceof DirectoryRetryPersistenceError
 export function restorePersistence<T>(work: () => T): T {
   try { return work() }
   catch (error) { throw new RestorePersistenceError(error instanceof Error ? error.message : "Restore history persistence failed. Resume to repeat safety checks.", { cause: error }) }
@@ -296,7 +297,7 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
             entry.state = step.directory ? "deferred" : "captured"; delete entry.reason; defer(retryAt, rejected)
           })
         } catch (error) {
-          if (error instanceof DirectoryRetryPersistenceError || error instanceof RestorePersistenceError) throw error
+          if (isRestorePersistenceError(error)) throw error
           if (error instanceof RestoreWriteDeferredError || (["captured", "deferred"].includes(entry.state) && signal?.aborted)) {
             entry.state = step.directory ? "deferred" : "captured"; entry.reason = error instanceof RestoreWriteDeferredError ? error.message : "The directory write was cancelled before sending."
             if (error instanceof RestoreWriteDeferredError && error.retryAt !== undefined) { defer(error.retryAt) }
@@ -316,7 +317,7 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
         if (step.directory && typeof step.desired.present === "boolean") { entry.acknowledged = true; entry.acknowledgedAt = (io.now ?? Date.now)() }
         saveConfirmed(step)
       } catch (error) {
-        if (entry.state === "applied" || error instanceof DirectoryRetryPersistenceError || error instanceof RestorePersistenceError) throw error
+        if (entry.state === "applied" || isRestorePersistenceError(error)) throw error
         if (entry.state === "uncertain" && error instanceof RestoreWriteDeferredError && error.retryAt !== undefined) {
           defer(error.retryAt)
           entry.reason = "Microsoft Graph deferred confirmation of this unanswered write. Retry after the saved deadline."
@@ -337,8 +338,14 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
         if (!io.replacedReferences) throw new Error("Reference scan unavailable")
         run.replacedReferences = await io.replacedReferences(replacements, signal)
         delete run.referenceWarning
-      } catch (error) { if (error instanceof RestorePersistenceError) throw error; run.referenceWarning = "The Intune and Conditional Access reference scan did not complete. Review references to replaced IDs before activating restored policies." }
-      journal.save(run)
+      } catch (error) { if (isRestorePersistenceError(error)) throw error; run.referenceWarning = "The Intune and Conditional Access reference scan did not complete. Review references to replaced IDs before activating restored policies." }
+      // Advisory reads can publish a deadline into this journal. Keep their newer evidence.
+      if (run.entries.some(entry => entry.step.directory)) {
+        const current = journal.load(run.tenant, run.id)!
+        current.replacedReferences = run.replacedReferences
+        current.referenceWarning = run.referenceWarning
+        journal.save(current); Object.assign(run, current)
+      } else journal.save(run)
     }
     return { status: run.entries.every(entry => entry.state === "applied") && !run.referenceWarning ? "complete" : "partial", run }
   } finally { active.delete(key) }

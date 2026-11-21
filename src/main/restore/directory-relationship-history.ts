@@ -1,7 +1,7 @@
 import { isGuid } from "../../shared/security"
 import type { KeyValueStore } from "../storage/secure-store"
 import { RestoreWriteDeferredError } from "../../shared/intune/restore-guards"
-import { GuardedRunJournal, type GuardedStep } from "./guarded-run"
+import { isRestorePersistenceError, GuardedRunJournal, type GuardedStep } from "./guarded-run"
 import { directoryPagePrefix } from "./directory-object-state"
 
 /** Covers Microsoft Entra replication delay after our own acknowledged relationship writes. */
@@ -16,7 +16,7 @@ export function directoryRelationshipHistory(store: KeyValueStore, tenant: strin
       const raw = store.get(name), prefix: unknown = raw === null ? null : JSON.parse(raw)
       if (prefix !== null && (typeof prefix !== "string" || !prefix.startsWith(`restore.directory.${encodeURIComponent(tenant)}.`) || !/\.batch\.\d+\.$/.test(prefix))) return deferred()
       return prefix
-    } catch { return deferred() }
+    } catch (error) { if (isRestorePersistenceError(error)) throw error; return deferred() }
   }
   return {
     track: (journal: string) => {
@@ -52,7 +52,7 @@ export function directoryRelationshipHistory(store: KeyValueStore, tenant: strin
           if (store.get(link) === null) return deferred()
           prefix = load(link)
         }
-      } catch { return deferred() }
+      } catch (error) { if (isRestorePersistenceError(error)) throw error; return deferred() }
       return true
     },
   }

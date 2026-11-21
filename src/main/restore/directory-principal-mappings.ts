@@ -1,48 +1,73 @@
 import { createHash } from "node:crypto"
 import type { KeyValueStore } from "../storage/secure-store"
-import { RestoreSafetyError } from "../../shared/intune/restore-guards"
+import { RestoreSafetyError, RestoreWriteDeferredError } from "../../shared/intune/restore-guards"
+import { restorePersistence, type GuardedStep } from "./guarded-run"
 import { directoryMappingKey, directoryObjectState } from "./directory-object-state"
 
-/** Bind the whole relationship difference, including unchanged principals, in bounded records. */
+type Principal = [id: string, user: string | null, group: string | null, savedMember: boolean]
+/** Bind relationship principals in bounded records, including unchanged saved members. */
 export class DirectoryPrincipalMappings {
-  private ids: string[] = []
+  private records: Principal[] = []
   private parts = 0
   private readonly hash = createHash("sha256")
-  constructor(private readonly store: KeyValueStore, private readonly tenant: string, private readonly inventory: string) {}
-  private key(part: number) { return `restore.directory.principals.${this.tenant.toLowerCase()}.${this.inventory}.${part}` }
-  private state(id: string) {
-    return ["Users", "Groups"].map(folder => this.store.get(directoryMappingKey(this.tenant, folder, id)))
+  private captureMappings?: ReturnType<ReturnType<typeof directoryObjectState>["mappingCapture"]>
+  private inventory?: Principal[]
+  private readonly byPrincipal = new Map<string, Principal[]>()
+  private savedMembers: Principal[] = []
+  private readonly store: KeyValueStore
+  constructor(store: KeyValueStore, private readonly tenant: string, private readonly inventoryId: string) {
+    this.store = { get: key => restorePersistence(() => store.get(key)), set: (key, value) => restorePersistence(() => store.set(key, value)), delete: key => restorePersistence(() => store.delete(key)) }
   }
-  capture(id: string): string {
-    directoryObjectState(this.store, this.tenant, "").recoverMappings(["Users", "Groups"].map(folder => ({ folder, sourceId: id })))
+  private key(part: number) { return `restore.directory.principals.${this.tenant.toLowerCase()}.${this.inventoryId}.${part}` }
+  private state(id: string): [string | null, string | null] {
+    return [this.store.get(directoryMappingKey(this.tenant, "Users", id)), this.store.get(directoryMappingKey(this.tenant, "Groups", id))]
+  }
+  capture(id: string, savedMember = false): string {
+    // Load one coordinator snapshot and cache only the requested principals' journals.
+    this.captureMappings ??= directoryObjectState(this.store, this.tenant, "").mappingCapture()
+    this.captureMappings(["Users", "Groups"].map(folder => ({ folder, sourceId: id })))
     const mappings = this.state(id)
-    this.hash.update(JSON.stringify([id, ...mappings]) + "\n")
-    this.ids.push(id)
-    if (this.ids.length === 1000) this.flush()
+    const record: Principal = [id, ...mappings, savedMember]
+    this.hash.update(JSON.stringify(record) + "\n")
+    this.records.push(record)
+    if (this.records.length === 1000) this.flush()
     return mappings[0] ?? mappings[1] ?? id
   }
   private flush() {
-    if (!this.ids.length) return
-    this.store.set(this.key(this.parts), JSON.stringify(this.ids))
-    this.parts++; this.ids = []
+    if (!this.records.length) return
+    this.store.set(this.key(this.parts), JSON.stringify(this.records))
+    this.parts++; this.records = []
   }
-  finish() {
-    this.flush()
-    return { parts: this.parts, fingerprint: this.hash.digest("hex") }
-  }
-  discard() {
-    for (let part = 0; part < this.parts; part++) this.store.delete(this.key(part))
-  }
-  /** Synchronous final validation prevents a mapping publication racing the send marker. */
-  validate(expected: { parts: number; fingerprint: string }) {
-    const hash = createHash("sha256")
-    for (let part = 0; part < expected.parts; part++) {
-      const raw = this.store.get(this.key(part))
-      if (!raw) throw new RestoreSafetyError("The principal mapping inventory is unavailable. Preview these relationships again.")
-      const ids: string[] = JSON.parse(raw)
-      directoryObjectState(this.store, this.tenant, "").recoverMappings(ids.flatMap(sourceId => ["Users", "Groups"].map(folder => ({ folder, sourceId }))))
-      for (const id of ids) hash.update(JSON.stringify([id, ...this.state(id)]) + "\n")
+  finish() { this.flush(); return { parts: this.parts, fingerprint: this.hash.digest("hex") } }
+  discard() { for (let part = 0; part < this.parts; part++) this.store.delete(this.key(part)) }
+  /** Load and authenticate once per page; synchronous row validation still follows final safety reads. */
+  validate(expected: { parts: number; fingerprint: string }, step: GuardedStep) {
+    if (!this.inventory) {
+      const hash = createHash("sha256"), records: Principal[] = []
+      for (let part = 0; part < expected.parts; part++) {
+        const raw = this.store.get(this.key(part))
+        if (!raw) throw new RestoreSafetyError("The principal mapping inventory is unavailable. Preview these relationships again.")
+        const chunk: Principal[] = JSON.parse(raw)
+        if (chunk.some(record => !Array.isArray(record) || record.length !== 4)) throw new RestoreSafetyError("Preview these relationships again to verify their principal mappings.")
+        for (const record of chunk) { hash.update(JSON.stringify(record) + "\n"); records.push(record) }
+      }
+      if (hash.digest("hex") !== expected.fingerprint) throw new RestoreSafetyError("The principal mapping inventory changed. Preview these relationships again.")
+      this.inventory = records
+      this.savedMembers = records.filter(record => record[3])
+      for (const record of records) for (const id of new Set(record.slice(0, 3))) if (typeof id === "string") {
+        const key = id.toLowerCase(), involved = this.byPrincipal.get(key) ?? []
+        involved.push(record); this.byPrincipal.set(key, involved)
+      }
     }
-    if (hash.digest("hex") !== expected.fingerprint) throw new RestoreSafetyError("A principal mapping changed. Preview these relationships again.")
+    const removal = step.directory?.exact && step.desired.present === false
+    // Every saved member can become the target of an exact removal after recreation.
+    const involved = [...new Set([...(removal ? this.savedMembers : []), ...(this.byPrincipal.get(step.directory?.principalId?.toLowerCase() ?? "") ?? [])])]
+    const uncertain = directoryObjectState(this.store, this.tenant, "").recoverMappings(involved.flatMap(([sourceId]) => ["Users", "Groups"].map(folder => ({ folder, sourceId }))))
+    const unconfirmed = involved.find(([id, , , saved]) => removal && saved && uncertain.has(id.toLowerCase()))
+    if (unconfirmed) throw new RestoreWriteDeferredError(`The create for saved member ${unconfirmed[0]} is unconfirmed. Confirm that create, then preview this group's relationships again before exact removal.`)
+    for (const [id, user, group] of involved) {
+      const current = this.state(id)
+      if (current[0] !== user || current[1] !== group) throw new RestoreSafetyError("A principal mapping changed. Preview these relationships again.")
+    }
   }
 }

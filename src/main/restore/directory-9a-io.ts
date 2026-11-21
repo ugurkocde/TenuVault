@@ -7,7 +7,7 @@ import { graphContinuation } from "../../shared/graph-continuation"
 import { grantedPermissions } from "../../shared/services/token"
 import { requireRestoreActor } from "./restore-actor"
 import { directoryPayload, directoryReview, disabledUserBody, requireDirectoryApprovals, cloudObject, DIRECTORY_9A_BLOCKER } from "./directory-9a"
-import { guardedProtections, restoreFingerprint, type GuardedIO, type GuardedStep } from "./guarded-run"
+import { isRestorePersistenceError, guardedProtections, restoreFingerprint, type GuardedIO, type GuardedStep } from "./guarded-run"
 
 const root = "https://graph.microsoft.com/v1.0/"
 const identity = (id: unknown): string => {
@@ -47,6 +47,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
           await validateSend?.()
           signal?.throwIfAborted()
         } catch (error) {
+          if (isRestorePersistenceError(error)) throw error
           if (!(error instanceof DirectoryThrottledError) && signal?.aborted) throw new RestoreWriteDeferredError("The directory write was cancelled before sending.")
           throw error
         }
@@ -55,6 +56,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
       beforeSend?.()
       if (method !== "GET" && signal?.aborted) throw new RestoreWriteDeferredError("The directory write was cancelled before sending.")
       const response = await fetchImpl(url.href, { method, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, ...(body ? { body: JSON.stringify(body) } : {}), signal: requestSignal }).catch(error => {
+        if (isRestorePersistenceError(error)) throw error
         if (method === "GET" && signal?.aborted) throw new RestoreWriteDeferredError("The directory read was cancelled before sending a write.")
         if (method === "GET") throw new DirectoryReadDeferredError()
         throw error
@@ -75,6 +77,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
       if (!response.ok) throw new Error("Directory request was not confirmed. No response body is retained.")
       if (response.status === 204) return {}
       const text = await response.text().catch(error => {
+        if (isRestorePersistenceError(error)) throw error
         if (method === "GET" && signal?.aborted) throw new RestoreWriteDeferredError("The directory read was cancelled before sending a write.")
         if (method === "GET") throw new DirectoryReadDeferredError()
         throw error
@@ -206,6 +209,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
           if (users.includeGroups.some(id => String(id).toLowerCase() === (step.targetId ?? step.sourceId).toLowerCase())) included = true
         }
       } catch (error) {
+        if (isRestorePersistenceError(error)) throw error
         if (intent.action !== "member" || step.desired.present !== false) throw error
         // Keep the row visible while refusing removal if any policy page is unreadable.
         if (error instanceof RestoreWriteDeferredError) throw new RestoreWriteDeferredError("Conditional Access group targeting could not be determined. TenuVault cannot remove this member. Review the policies and remove the member in Microsoft Entra. " + error.message, error.retryAt)
