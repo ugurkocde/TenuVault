@@ -89,7 +89,10 @@ describe("Community tenant surfaces", () => {
     state.status = community
     expect(render(createElement(TenantSwitcher))).not.toContain("Not licensed")
     state.status = uncovered
-    expect(render(createElement(TenantSwitcher))).toContain("Not licensed")
+    const markup = render(createElement(TenantSwitcher))
+    expect(markup).toContain("Not licensed")
+    // The switcher's accessible name says it too, not only the line under the name.
+    expect(markup).toMatch(/aria-label="Switch tenant\. Current: [^"]*, Not licensed"/)
   })
 
   it("shows no license notice for a signed-in Community tenant", () => {
@@ -105,5 +108,17 @@ describe("Community tenant surfaces", () => {
     expect(render(createElement(BackupSchedulePanel, props))).not.toContain("does not cover")
     state.status = uncovered
     expect(render(createElement(BackupSchedulePanel, props))).toContain("does not cover")
+  })
+})
+
+describe("tenant initials", () => {
+  it("takes the first letters of the first two words, or two letters of a single word", async () => {
+    const { tenantInitials } = await import("../src/renderer/components/TenantSwitcher")
+    expect(tenantInitials("Contoso Ltd")).toBe("CL")
+    expect(tenantInitials("  fabrikam  ")).toBe("FA")
+    expect(tenantInitials("Ugur Koc Lab")).toBe("UK")
+    expect(tenantInitials("(Test) Ärzte GmbH")).toBe("TÄ")
+    expect(tenantInitials("")).toBe("?")
+    expect(tenantInitials(undefined)).toBe("?")
   })
 })

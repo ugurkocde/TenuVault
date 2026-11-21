@@ -17,7 +17,7 @@ export function CisBenchmarksNavigation({ linkClass }: { linkClass: (active: boo
   const { pathname } = useLocation()
   const active = isCisBenchmarksPath(pathname)
   return (
-    <Link to={CIS_BENCHMARKS_ROUTE} aria-current={active ? "page" : undefined} className={linkClass(active)}>
+    <Link to={CIS_BENCHMARKS_ROUTE} aria-current={active ? "page" : undefined} data-nav-row="" className={linkClass(active)}>
       <ListChecks className="h-[18px] w-[18px]" aria-hidden="true" />
       <span className="truncate">CIS Benchmarks</span>
       <NavPlanBadge features={["baselineAllPlatforms"]} className="ml-auto" />

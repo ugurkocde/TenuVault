@@ -292,6 +292,13 @@ describe("CIS Benchmarks top-level sidebar entry", () => {
 })
 
 describe("FrameworkNavigation", () => {
+  it.each(["/portal/frameworks", "/portal/frameworks/"])("fills the Frameworks entry on the catalog at %s", async (route) => {
+    appInfo.mockResolvedValue({ internalCisBenchmarks: false })
+    const container = render(createElement(MemoryRouter, { initialEntries: [route] }, createElement(FrameworkNavigation)))
+    await flush()
+    expect(container.querySelector('a[href="/portal/frameworks"]')?.getAttribute("aria-current")).toBe("page")
+  })
+
   it("lists CIS Controls as Coming soon and leaves CIS Benchmarks to its own entry", async () => {
     appInfo.mockResolvedValue({ internalCisBenchmarks: false })
     const container = render(

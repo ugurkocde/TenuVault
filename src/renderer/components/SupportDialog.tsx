@@ -1,3 +1,5 @@
+import type { RefObject } from "react"
+import { returnFocusTo } from "../lib/return-focus"
 import { BookOpen, Github, Mail } from "lucide-react"
 import { Button } from "~/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "~/components/ui/dialog"
@@ -7,7 +9,7 @@ import { hasPaidLicense, useLicense } from "../lib/license"
 import { SetupCallLink } from "./SetupCallLink"
 
 /** Docs and the free setup call for everyone; email support for Pro and MSP, a GitHub issue for Community. */
-export function SupportDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+export function SupportDialog({ open, onOpenChange, returnFocus }: { open: boolean; onOpenChange: (open: boolean) => void; returnFocus?: RefObject<HTMLElement | null> }) {
   const { status } = useLicense()
   const licensed = status ? hasPaidLicense(status) : false
   const openLink = (url: string) => {
@@ -17,7 +19,7 @@ export function SupportDialog({ open, onOpenChange }: { open: boolean; onOpenCha
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-md" onCloseAutoFocus={returnFocusTo(returnFocus)}>
         <DialogHeader>
           <DialogTitle>Support</DialogTitle>
           <DialogDescription>
