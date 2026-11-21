@@ -20,7 +20,9 @@
  *   never exists without the mark.
  * - Before it looks at the store, a run waits until no process from a killed run is still
  *   writing it. The next run that holds the lock removes a marked store, and on Windows an empty
- *   policy key (a run killed right after creating it), before anything else.
+ *   policy key a run was killed right after creating (its pending record under
+ *   HKCU\SOFTWARE\TenuVaultSmoke says so), before anything else. An empty key without that
+ *   record is someone else's and stays.
  *
  * Out of scope (owner decision, 2026-11-21): a configuration profile or Group Policy for TenuVault
  * delivered for the first time while a smoke run holds the policy, from its check of the store to
@@ -251,15 +253,25 @@ function macosChange(id) {
 
 const HKCU = "HKCU:\\SOFTWARE\\Policies\\TenuVault"
 const HKLM = "HKLM:\\SOFTWARE\\Policies\\TenuVault"
+// The smoke's own key, outside the policy keys. Before a run creates the policy key it writes its
+// mark here, so an empty policy key that a kill left right after its creation can be told from
+// someone else's empty key. The record goes once the policy key carries the mark itself.
+const PENDING = "HKCU:\\SOFTWARE\\TenuVaultSmoke"
+const PENDING_VALUE = "PendingPolicy"
 const WRITER = "tenuvault-smoke-policy-write"
 // By absolute path, as the app does, so a powershell.exe earlier on PATH is never run.
 const powershell = (script) =>
   run(join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe"), ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", `$ErrorActionPreference = 'Stop'\n${script}`])
 const quote = (text) => `'${text.replaceAll("'", "''")}'`
+/** PowerShell that removes the pending record, and the smoke's own key once it holds nothing else. */
+const removePending = `Remove-ItemProperty -LiteralPath ${quote(PENDING)} -Name '${PENDING_VALUE}' -ErrorAction SilentlyContinue
+$record = Get-Item -LiteralPath ${quote(PENDING)} -ErrorAction SilentlyContinue
+if ($null -ne $record -and $record.ValueCount -eq 0 -and $record.SubKeyCount -eq 0) { Remove-Item -LiteralPath ${quote(PENDING)} }`
 
 /**
  * Both policy keys, read through the registry API (no localized reg.exe messages): { hklm, hkcu },
- * each null when the key is absent, else { values, subkeys, kind, disable, mark }.
+ * each null when the key is absent, else { values, subkeys, kind, disable, mark }, and pending: the
+ * mark of a run that was about to create the HKCU policy key, or null.
  */
 function windowsRead() {
   const result = powershell(`function Read-Key($path) {
@@ -269,7 +281,13 @@ function windowsRead() {
   $markKind = if (@($key.GetValueNames()) -contains '${MARK}') { [string]$key.GetValueKind('${MARK}') } else { $null }
   [pscustomobject]@{ values = $key.ValueCount; subkeys = $key.SubKeyCount; kind = $kind; disable = $key.GetValue('${NAME}', $null); mark = $key.GetValue('${MARK}', $null); markKind = $markKind }
 }
-[pscustomobject]@{ hklm = Read-Key ${quote(HKLM)}; hkcu = Read-Key ${quote(HKCU)} } | ConvertTo-Json -Compress -Depth 3`)
+$pending = $null
+$pendingKind = $null
+if (Test-Path -LiteralPath ${quote(PENDING)}) {
+  $record = Get-Item -LiteralPath ${quote(PENDING)}
+  if (@($record.GetValueNames()) -contains '${PENDING_VALUE}') { $pending = $record.GetValue('${PENDING_VALUE}'); $pendingKind = [string]$record.GetValueKind('${PENDING_VALUE}') }
+}
+[pscustomobject]@{ hklm = Read-Key ${quote(HKLM)}; hkcu = Read-Key ${quote(HKCU)}; pending = $pending; pendingKind = $pendingKind } | ConvertTo-Json -Compress -Depth 3`)
   if (result.status !== 0) return { error: `could not read the ${NAME} policy: ${failed(result)}` }
   let keys
   try {
@@ -279,6 +297,7 @@ function windowsRead() {
   }
   // Only a string in the smoke run's own format is its mark; any other value is someone else's.
   for (const key of [keys.hklm, keys.hkcu]) if (key && !(key.markKind === "String" && MARK_FORMAT.test(String(key.mark)))) key.mark = null
+  if (!(keys.pendingKind === "String" && MARK_FORMAT.test(String(keys.pending)))) keys.pending = null
   return keys
 }
 
@@ -331,19 +350,20 @@ function windowsRecover() {
     const running = appGone(String(now.hkcu.mark), windowsProcessesWith)
     if (running) return running
   }
-  if (now.hkcu && now.hkcu.mark == null && now.hkcu.values === 0 && now.hkcu.subkeys === 0) {
-    // An empty policy key holds no policy: what a run killed right after creating it leaves.
-    const removed = powershell(`# ${WRITER}
-$key = Get-Item -LiteralPath ${quote(HKCU)} -ErrorAction SilentlyContinue
-if ($null -ne $key -and $key.ValueCount -eq 0 -and $key.SubKeyCount -eq 0) { Remove-Item -LiteralPath ${quote(HKCU)} }`)
-    if (removed.status !== 0) return `could not remove the empty key ${HKCU}: ${failed(removed)}`
-    console.log(`Removed the empty key ${HKCU} a killed smoke run left.`)
-    return null
+  if (now.hkcu?.mark != null) {
+    const failure = windowsRemove(String(now.hkcu.mark))
+    if (failure) return `could not remove the ${NAME} policy a killed smoke run left: ${failure}`
+    console.log(`Removed the ${NAME} policy a killed smoke run left under ${HKCU}.`)
   }
-  if (now.hkcu?.mark == null) return null
-  const failure = windowsRemove(String(now.hkcu.mark))
-  if (failure) return `could not remove the ${NAME} policy a killed smoke run left: ${failure}`
-  console.log(`Removed the ${NAME} policy a killed smoke run left under ${HKCU}.`)
+  if (now.pending == null) return null
+  // A pending record says a run was about to create the policy key: an empty key is then the one it
+  // created. Without the record an empty key is someone else's and stays (the run then refuses).
+  const removed = powershell(`# ${WRITER}
+$key = Get-Item -LiteralPath ${quote(HKCU)} -ErrorAction SilentlyContinue
+if ($null -ne $key -and $key.ValueCount -eq 0 -and $key.SubKeyCount -eq 0) { Remove-Item -LiteralPath ${quote(HKCU)} }
+${removePending}`)
+  if (removed.status !== 0) return `could not remove what a smoke run killed while creating ${HKCU} left: ${failed(removed)}`
+  console.log(`Removed what a smoke run killed while creating ${HKCU} left.`)
   return null
 }
 
@@ -356,20 +376,30 @@ function windowsChange(id) {
   }
   return {
     apply() {
-      // New-Item fails when the key appeared meanwhile, so an administrator's key is never taken
-      // over. The mark goes in first. When a later step fails, only the mark is taken back, and
-      // the key only while it is empty, so a value someone else added meanwhile stays.
+      // The pending record goes in first, so a kill right after New-Item leaves a key known to be
+      // this run's. New-Item fails when the key appeared meanwhile, so an administrator's key is
+      // never taken over, and the record is then dropped without claiming it. The mark goes in
+      // next. When a later step fails, only the mark is taken back, and the key only while it is
+      // empty, so a value someone else added meanwhile stays.
       const result = powershell(`# ${WRITER}
-New-Item -Path ${quote(HKCU)} | Out-Null
+New-Item -Path ${quote(PENDING)} -Force | Out-Null
+New-ItemProperty -LiteralPath ${quote(PENDING)} -Name '${PENDING_VALUE}' -PropertyType String -Value ${quote(id)} -Force | Out-Null
+$created = $false
 try {
+  New-Item -Path ${quote(HKCU)} | Out-Null
+  $created = $true
   New-ItemProperty -LiteralPath ${quote(HKCU)} -Name '${MARK}' -PropertyType String -Value ${quote(id)} | Out-Null
   New-ItemProperty -LiteralPath ${quote(HKCU)} -Name '${NAME}' -PropertyType DWord -Value 1 | Out-Null
 } catch {
-  $key = Get-Item -LiteralPath ${quote(HKCU)} -ErrorAction SilentlyContinue
-  if ($null -ne $key -and [string]$key.GetValue('${MARK}', '') -eq ${quote(id)} -and $null -eq $key.GetValue('${NAME}', $null)) { Remove-ItemProperty -LiteralPath ${quote(HKCU)} -Name '${MARK}' }
-  $key = Get-Item -LiteralPath ${quote(HKCU)} -ErrorAction SilentlyContinue
-  if ($null -ne $key -and $key.ValueCount -eq 0 -and $key.SubKeyCount -eq 0) { Remove-Item -LiteralPath ${quote(HKCU)} }
+  if ($created) {
+    $key = Get-Item -LiteralPath ${quote(HKCU)} -ErrorAction SilentlyContinue
+    if ($null -ne $key -and [string]$key.GetValue('${MARK}', '') -eq ${quote(id)} -and $null -eq $key.GetValue('${NAME}', $null)) { Remove-ItemProperty -LiteralPath ${quote(HKCU)} -Name '${MARK}' }
+    $key = Get-Item -LiteralPath ${quote(HKCU)} -ErrorAction SilentlyContinue
+    if ($null -ne $key -and $key.ValueCount -eq 0 -and $key.SubKeyCount -eq 0) { Remove-Item -LiteralPath ${quote(HKCU)} }
+  }
   throw
+} finally {
+  ${removePending}
 }`)
       return result.status === 0 ? null : failed(result)
     },
