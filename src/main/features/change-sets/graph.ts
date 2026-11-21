@@ -119,6 +119,7 @@ export interface Observation {
   redacted: boolean
   sameNameIds: string[]
   fingerprint: string
+  revision?: string
 }
 
 /** Reads what one operation would change in the target and fingerprints it. */
@@ -130,7 +131,8 @@ export async function observe(graph: GraphCall, type: IntuneType, operation: { a
   const live = await readCurrent(graph, type, operation.targetId!)
   if (!live) return { snapshot: null, redacted: false, sameNameIds: [], fingerprint: "missing" }
   const { snapshot, redacted } = sanitizeSnapshot(type, live)
-  return { snapshot, redacted, sameNameIds: [], fingerprint: operationFingerprint(operation.action, { snapshot, sameNameIds: [] }) }
+  const marker = live["@odata.etag"] ?? live.lastModifiedDateTime
+  return { snapshot, redacted, sameNameIds: [], ...(redacted && typeof marker === "string" && marker ? { revision: marker } : {}), fingerprint: operationFingerprint(operation.action, { snapshot, sameNameIds: [] }) }
 }
 
 export type WriteOutcome =

@@ -7,7 +7,7 @@ description: Every control on the Settings page, what it does and when to use it
 
 Choose a section in the list on the left to open it: **Sign-in**, **Services and permissions**, **Storage and recovery**, **Background runner**, **Notifications**, **PDF branding**, **Updates**, **Appearance** and **About**. One section shows at a time, starting with **Sign-in**. When no tenant on this computer is on Pro or MSP, **Notifications** and **PDF branding** carry a **Pro** badge in the list; both sections still open. **Notifications** links to the [Alerts](/notifications/) page in the sidebar, where alerts, channels, change watching and deliveries are set up. On a narrow window the list becomes a row above the section.
 
-Settings apply to this computer only. Other admins who use TenuVault have their own settings.
+Most settings apply to this computer. The tenant approval policy and inbox are shared through the tenant’s Azure backup account.
 
 ## Appearance
 
@@ -94,6 +94,20 @@ When local backup files exist or a tenant uses local storage, **Settings** and *
 :::caution
 Without the recovery key, backups on this device can only be read on this computer by this user account. Save it in your password manager and delete the file. See [Encryption and recovery key](/security/encryption/).
 :::
+
+### Tenant approvals
+
+Choose the tenant in **Settings > Storage and recovery > Tenant approvals**. **Require a second admin** is off by default. It is available when the tenant uses shared Azure storage. With device storage, the card shows **Use shared Azure storage to request approval from another admin**.
+
+Before turning approval on, update every TenuVault installation that writes to the tenant to this version or later. Connect them to the same Azure account and finish or replace in-progress jobs. The policy records the minimum client version. Older or unmanaged installations, the Intune admin center and other tools can still write directly. See [Managed deployment](/deploy/) for the cutover.
+
+1. Start a covered operation and confirm the selection. If approval is on, TenuVault creates a request and shows its ID without writing to Intune.
+2. A second admin signs in to the destination tenant on their installation, opens **Tenant approvals**, selects **Refresh approvals** and reviews the request. The inbox shows the requester, decision, expiry, affected policies and any blockers.
+3. The requesting admin returns to the operation on the original installation and applies the same selection. Requests expire after seven days. A change in the source, options or destination requires a fresh request.
+
+Choose **Request to turn off** to ask a second admin to approve disabling the current policy. After their decision, choose **Apply approved disable** on the original installation. Disabling invalidates outstanding requests for the prior policy and records both admins in the audit log. A storage change or disconnect cannot clear a known enrollment.
+
+A request with an uncertain apply outcome stays claimed. Check the outcome in Intune and reconcile any uncertain restore writes before choosing **Close interrupted apply**. Any retry that writes needs fresh approval. Use [Intune Multi Admin Approval](/restore/multi-admin-approval/) separately for operations that Intune subjects to its own review.
 
 ### Restore write history
 

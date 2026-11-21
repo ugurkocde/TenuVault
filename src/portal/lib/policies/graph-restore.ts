@@ -1,3 +1,8 @@
+import type { KeyValueStore, SecureStore } from "../../../main/storage/secure-store"
+import { WRITE_APPROVAL_LIFETIME } from "../../../shared/write-approvals"
+import { withWriteCheckpoint, sameObservation } from "../../../main/write-approvals/dispatch"
+import { hasWriteApproval, WriteApprovalError } from "../../../main/write-approvals/service"
+import { FetchPreconditionError } from "../../../main/api/network-error"
 import { approvalSignal, approvalMessage, type ApprovalSignal } from "../../../shared/intune/approval"
 import { restoreApprovals, saveRestoreApproval, removeRestoreApproval, type RestoreApproval, type ApprovalStep } from "../../../main/storage/restore-approvals"
 import { parseDependencyMappings } from "../../../shared/intune/recovery"
@@ -29,6 +34,7 @@ export type RestoreMode = "copy" | "replace"
 
 export interface RestoreOptions {
   approvalContext?: { tenantId: string; requesterId: string; requesterName?: string; justification?: string }
+  writeApprovalTenant?: string
   mode: RestoreMode
   /** Stable tenant/source binding for repair requests across API calls. */
   repairScope?: string
@@ -156,6 +162,7 @@ export function graphCaller(token: string, fetchImpl: typeof fetch = fetch, opti
           signal: AbortSignal.timeout(60_000),
         })
       } catch (error) {
+        if (error instanceof FetchPreconditionError) { if (key) removeWrite(key); throw error }
         if (method === "GET" && attempt < 3) { await sleep(1000 * 2 ** attempt); continue }
         throw error
       }
@@ -233,6 +240,38 @@ interface Repair {
   expires: number
 }
 const repairs = new Map<string, Repair>()
+const repairPrefix = "write-approval.restore-repair."
+type RepairStore = KeyValueStore & Pick<SecureStore, "keys">
+let repairStore: RepairStore | undefined
+
+export function setApprovedRestoreRepairStore(store: RepairStore | undefined): void { repairStore = store }
+
+function repairFor(id: string): Repair | undefined {
+  const memory = repairs.get(id)
+  if (memory) return memory
+  if (!GUID.test(id)) return undefined
+  const raw = repairStore?.get(repairPrefix + id)
+  if (!raw) return undefined
+  const { folder, ...entry } = JSON.parse(raw) as Omit<Repair, "type"> & { folder: string }
+  const type = typeForFolder(folder)
+  if (type && entry.expires > Date.now()) return { ...entry, type }
+  repairStore?.delete(repairPrefix + id)
+  return undefined
+}
+
+function saveRepair(id: string, entry: Repair, persist: boolean): void {
+  if (persist && repairStore) {
+    for (const key of repairStore.keys()) {
+      if (key.startsWith(repairPrefix)) repairFor(key.slice(repairPrefix.length))
+    }
+    const { type, ...record } = entry
+    repairStore.set(repairPrefix + id, JSON.stringify({ ...record, folder: type.folder }))
+  } else repairs.set(id, entry)
+}
+function consumeRepair(id: string): void {
+  repairs.delete(id)
+  if (repairStore?.get(repairPrefix + id)) repairStore.delete(repairPrefix + id)
+}
 
 export class DependencyMappingError extends Error {
   constructor(message: string, readonly status: number) { super(message) }
@@ -266,11 +305,11 @@ export class Restorer {
     for (const mapping of mappings) this.reviewed.set(mapping.sourceId.toLowerCase(), mapping.targetId)
   }
 
-  async restore(path: string, snapshot: Item): Promise<RestoreOutcome> {
-    return withAdminLink(path, await this.restoreOnce(path, snapshot), snapshot)
+  async restore(path: string, snapshot: Item, check?: () => Promise<void>): Promise<RestoreOutcome> {
+    return withAdminLink(path, await this.restoreOnce(path, snapshot, check), snapshot)
   }
 
-  private async restoreOnce(path: string, snapshot: Item): Promise<RestoreOutcome> {
+  private async restoreOnce(path: string, snapshot: Item, check?: () => Promise<void>): Promise<RestoreOutcome> {
     const folder = path.split("/")[1] ?? ""
     const type = typeForFolder(folder === "DeviceCompliancePolicies" ? "CompliancePolicies" : folder)
     if (!type) return { success: false, path, error: "This backup file is not an Intune type TenuVault can restore." }
@@ -284,41 +323,113 @@ export class Restorer {
       ? { ...outcome, warnings: [...(outcome.warnings ?? []), "Assignments were not restored: this backup was made by an earlier TenuVault version that could not read them. Assign the policy in Intune."] }
       : outcome
     try {
-      const current = this.options.mode === "replace" && typeof snapshot.id === "string" ? await this.current(type, snapshot.id) : undefined
-      if (current && this.matches(snapshot, current, assignments)) {
-        const name = type.singleton?.name ?? current[type.nameKey] ?? current.displayName ?? current.name
-        return withNote({ success: true, path, policyId: snapshot.id as string, policyName: typeof name === "string" ? name : undefined, action: "unchanged" })
-      }
-      if (current) return withNote(await this.update(type, path, source, snapshot.id as string, current, assignments))
-      // Added again under a new ID (such as an Autopilot device imported again): found by the type's locateBy property.
-      const located = this.options.mode === "replace" && !this.options.crossTenant && type.locateBy ? await locateLive(this.graph, type, snapshot) : undefined
-      if (located && typeof located.id === "string") {
-        if (this.matches({ ...snapshot, id: located.id }, located, assignments)) {
-          const name = located[type.nameKey] ?? located.displayName ?? located.name
-          return withNote({ success: true, path, policyId: located.id, policyName: typeof name === "string" ? name : undefined, action: "unchanged" })
+      await check?.()
+      const resolved = await this.resolveTarget(type, snapshot)
+      if (resolved) {
+        const { id, live, recreated } = resolved
+        if (recreated && typeof snapshot.id === "string" && !this.reviewed.has(snapshot.id.toLowerCase())) this.remapped.set(snapshot.id, id)
+        if (this.matches({ ...snapshot, id }, live, assignments)) {
+          const name = type.singleton?.name ?? live[type.nameKey] ?? live.displayName ?? live.name
+          return withNote({ success: true, path, policyId: id, policyName: typeof name === "string" ? name : undefined, action: "unchanged" })
         }
-        return withNote(await this.update(type, path, source, located.id, located, assignments))
-      }
-      if (this.options.mode === "replace" && typeof snapshot.id === "string") {
-        // An earlier replace run may already have recreated this deleted object under a new ID.
-        // Reuse that object instead of creating a duplicate on every fresh run.
-        const recreated = await this.recreated(type, snapshot)
-        if (recreated) {
-          if (!this.reviewed.has(snapshot.id.toLowerCase())) this.remapped.set(snapshot.id, recreated.id)
-          if (this.matches({ ...snapshot, id: recreated.id }, recreated.object, assignments)) {
-            const name = type.singleton?.name ?? recreated.object[type.nameKey] ?? recreated.object.displayName ?? recreated.object.name
-            return withNote({ success: true, path, policyId: recreated.id, policyName: typeof name === "string" ? name : undefined, action: "unchanged" })
-          }
-          return withNote(await this.update(type, path, source, recreated.id, recreated.object, assignments))
-        }
+        await check?.()
+        return withNote(await this.update(type, path, source, id, live, assignments))
       }
       if (this.options.mode === "replace" && this.options.recreateMissing === false) return { success: false, path, policyId: typeof snapshot.id === "string" ? snapshot.id : undefined, action: "skipped", missing: true, retryable: false, error: "The object no longer exists in Intune, so it was not recreated." }
       const blocker = restoreBlocker(type, source)
       if (blocker) return { success: false, path, action: "skipped", error: blocker }
-      return withNote(await this.create(type, path, source, snapshot, assignments))
+      return withNote(await this.create(type, path, source, snapshot, assignments, check))
     } catch (error) {
       return { success: false, path, retryable: false, error: error instanceof Error ? error.message : String(error) }
     }
+  }
+
+  private async resolveTarget(type: IntuneType, snapshot: Item): Promise<{ id: string; live: Item; recreated?: boolean } | undefined> {
+    if (this.options.mode !== "replace") return undefined
+    if (typeof snapshot.id === "string") {
+      const live = await this.current(type, snapshot.id)
+      if (live) return { id: snapshot.id, live }
+    }
+    const located = !this.options.crossTenant && type.locateBy ? await locateLive(this.graph, type, snapshot) : undefined
+    if (located && typeof located.id === "string") return { id: located.id, live: located }
+    const recreated = typeof snapshot.id === "string" ? await this.recreated(type, snapshot) : undefined
+    if (recreated) return { id: recreated.id, live: recreated.object, recreated: true }
+    return undefined
+  }
+
+  /** Resolve the same destination and verify the write plan that a restore will use. */
+  async approvalObservation(path: string, snapshot: Item, repairToken?: string): Promise<{ content: unknown; target: unknown }> {
+    if (repairToken) {
+      const entry = repairFor(repairToken)
+      if (!entry || entry.expires < Date.now() || entry.path !== path || entry.scope !== (this.options.repairScope ?? this.instanceScope)) throw new WriteApprovalError("The restore repair is unavailable or has expired.")
+      const live = await this.current(entry.type, entry.id)
+      if (!live) throw new WriteApprovalError("The object to repair is missing.")
+      return { content: [entry.id, entry.steps, entry.expectedCurrent], target: approvalFingerprint(live) }
+    }
+    const folder = path.split("/")[1] ?? ""
+    const type = typeForFolder(folder === "DeviceCompliancePolicies" ? "CompliancePolicies" : folder)
+    if (!type) throw new WriteApprovalError("This restore policy type cannot be verified.")
+    const source = this.remap(this.options.crossTenant ? forOtherTenant(snapshot) : snapshot)
+    const assignments = this.options.assignments && !this.options.crossTenant && !assignmentsUnread(type, snapshot)
+    const resolved = await this.resolveTarget(type, snapshot)
+    if (!resolved && this.options.mode === "replace" && this.options.recreateMissing === false) return { content: [path, snapshot], target: null }
+    const blocker = restorePermissionBlocker(type.folder, this.options.granted) ?? restoreBlocker(type, source)
+    if (blocker) return { content: [path, snapshot, blocker], target: null }
+    const plan = resolved
+      ? buildUpdatePlan(type, source, resolved.id, { includeAssignments: assignments, current: resolved.live })
+      : buildRestorePlan(type, source, { prefix: this.options.mode === "copy" ? (this.options.prefix ?? "[Restored]") : undefined, includeAssignments: assignments })
+    const steps = Array.isArray(plan) ? plan : [plan.create, ...plan.steps, ...plan.assignments]
+    const dependencies = await this.approvalDependencies(type, steps.map(step => step.body ?? {}))
+    const target = resolved ? [resolved.id, approvalFingerprint(resolved.live)] : await this.approvalCreateTarget(type, Array.isArray(plan) ? source : plan.create.body)
+    return { content: [path, snapshot, plan, assignments], target: [target, dependencies] }
+  }
+
+  async pendingApprovalObservation(record: RestoreApproval, action: "submit" | "complete"): Promise<{ content: unknown; target: unknown }> {
+    const type = typeForFolder(record.folder)!
+    const { status: _status, approverNote: _note, expiresAt: _expiry, requesterName: _name, ...step } = record
+    let intuneApproval: unknown
+    if (action === "complete" && !record.continuationPending) {
+      const result = await this.graph("GET", `deviceManagement/operationApprovalRequests/${encodeURIComponent(record.id)}`)
+      if (result.status !== 200 || result.body.status !== "approved") throw new WriteApprovalError("Intune must approve this saved step before it can be completed.")
+      intuneApproval = [result.body.status, result.body.expirationDateTime, result.body.approver]
+    }
+    const body = record.step.body ? JSON.parse(record.step.body) as Item : {}
+    const target = record.objectId ? await this.current(type, record.objectId) : null
+    if (record.objectId && !target) throw new WriteApprovalError("The object for this Intune request is missing.")
+    const dependencies = await this.approvalDependencies(type, [body, ...record.remaining.map(step => step.body ? JSON.parse(step.body) as Item : {})])
+    return { content: step, target: [target ? approvalFingerprint(target) : await this.approvalCreateTarget(type, body), dependencies, intuneApproval] }
+  }
+
+  private async approvalCreateTarget(type: IntuneType, body: Item): Promise<unknown> {
+    const name = body[type.nameKey] ?? body.displayName ?? body.name
+    if (type.singleton) throw new WriteApprovalError("The destination singleton could not be verified.")
+    const rows = await liveReader(this.graph).list(type.path)
+    return rows.filter(row => {
+      const label = row[type.nameKey] ?? row.displayName ?? row.name
+      return typeof name !== "string" || typeof label !== "string" || name.toLowerCase() === label.toLowerCase()
+    }).map(row => [row.id, approvalFingerprint(row)]).sort((a, b) => String(a[0]).localeCompare(String(b[0])))
+  }
+
+  private async approvalDependencies(type: IntuneType, bodies: Item[]): Promise<unknown[]> {
+    const paths = new Set<string>()
+    for (const body of bodies) {
+      for (const reference of dependencyReferences(body)) {
+        const path = this.dependencyPath(reference)
+        if (path && !path.includes("{id}")) paths.add(path)
+      }
+      if (type.folder === "ConditionalAccessPolicies") {
+        for (const reference of policyReferences(body)) {
+          const path = referencePath(reference)
+          if (path) paths.add(path)
+        }
+      }
+    }
+    return Promise.all([...paths].sort().map(async path => {
+      const { status, body } = await this.graph("GET", path)
+      if (status === 404) return [path, null]
+      if (status !== 200 || typeof body.id !== "string") throw new WriteApprovalError("A destination dependency could not be verified.")
+      return [path, approvalFingerprint(body)]
+    }))
   }
 
   /**
@@ -351,7 +462,7 @@ export class Restorer {
     return undefined
   }
 
-  private async create(type: IntuneType, path: string, source: Item, snapshot: Item, assignments: boolean): Promise<RestoreOutcome> {
+  private async create(type: IntuneType, path: string, source: Item, snapshot: Item, assignments: boolean, check?: () => Promise<void>): Promise<RestoreOutcome> {
     const plan = buildRestorePlan(type, source, {
       prefix: this.options.mode === "copy" ? (this.options.prefix ?? "[Restored]") : undefined,
       includeAssignments: assignments,
@@ -363,7 +474,8 @@ export class Restorer {
       : `Unresolved dependencies (${unresolved.join(", ")}). Restore the dependencies first or reconcile this object in Intune.` }
     const references = await this.policyReferences(type, plan.create.body)
     if (references.blocking.length) return { success: false, path, action: "skipped", retryable: false, error: references.blocking.join(" ") }
-    const created = await this.graph("POST", plan.create.path, plan.create.body, { sourceId: typeof snapshot.id === "string" ? snapshot.id : undefined })
+    const send = () => this.graph("POST", plan.create.path, plan.create.body, { sourceId: typeof snapshot.id === "string" ? snapshot.id : undefined })
+    const created = check ? await withWriteCheckpoint(check, send) : await send()
     if (created.approval) return this.pauseApproval(type, path, { ...plan.create, kind: "content" }, [...plan.steps, ...plan.assignments], source, "created", created.approval, undefined, undefined, typeof snapshot.id === "string" ? snapshot.id : undefined)
     if (created.status >= 300) return { success: false, path, retryable: created.status < 500 && created.status !== 408, error: writeError(type, created.body, created.status) }
     const id = String(created.body.id ?? "")
@@ -499,18 +611,19 @@ export class Restorer {
   }
 
   /** A repair replays only rejected/unattempted steps against the object already created. */
-  async repair(path: string, token: string): Promise<RestoreOutcome> {
-    const body = repairs.get(token)?.body ?? {}
+  async repair(path: string, token: string, check?: () => Promise<void>): Promise<RestoreOutcome> {
+    const body = repairFor(token)?.body ?? {}
+    await check?.()
     return withAdminLink(path, await this.repairOnce(path, token), body)
   }
 
   private async repairOnce(path: string, token: string): Promise<RestoreOutcome> {
-    const entry = repairs.get(token)
+    const entry = repairFor(token)
     if (!entry || entry.expires < Date.now() || entry.path !== path || entry.scope !== (this.options.repairScope ?? this.instanceScope)) {
       return { success: false, path, retryable: false, error: "Repair is unavailable or expired. Check the existing object in Intune; do not create another copy." }
     }
     // Consume before awaiting to prevent concurrent requests replaying additive steps.
-    repairs.delete(token)
+    consumeRepair(token)
     // A deleted object, a copy or a replaced one, has nothing to repair or open: report it missing, without an admin link.
     const gone: RestoreOutcome = { success: false, path, policyId: entry.id, missing: true, retryable: false, error: "The object no longer exists, so it was not repaired. Start a fresh restore if you still need it." }
     if (entry.action === "updated") {
@@ -546,14 +659,30 @@ export class Restorer {
     const name = type.singleton?.name ?? body[type.nameKey] ?? body.displayName ?? body.name
     const base = { path, policyId: id, policyName: typeof name === "string" ? name : undefined, action }
     const resolved = steps.map((step) => resolveStep(step, id))
+    const protectedWrite = resolved.length > 0 && this.options.writeApprovalTenant && hasWriteApproval(this.options.writeApprovalTenant)
+    let expected = protectedWrite ? await this.current(type, id) : undefined
+    if (protectedWrite && (!expected || (baseline && approvalFingerprint(baseline) !== approvalFingerprint(expected)))) {
+      throw new WriteApprovalError("The restored object changed before its remaining writes.")
+    }
     for (const [index, step] of resolved.entries()) {
       let message: string | undefined
       let safeToRetry = false
       let response: Awaited<ReturnType<GraphCall>> | undefined
       try {
-        response = await this.graph(step.method, step.path, step.body)
+        const send = () => this.graph(step.method, step.path, step.body)
+        const read = async () => {
+          const live = await this.current(type, id)
+          return live ? approvalFingerprint(live) : null
+        }
+        response = protectedWrite ? await withWriteCheckpoint(sameObservation(approvalFingerprint(expected!), read), send) : await send()
         if (!response.approval) {
-          if (response.status < 300) continue
+          if (response.status < 300) {
+            if (protectedWrite && index < resolved.length - 1) {
+              expected = await this.current(type, id)
+              if (!expected) throw new WriteApprovalError("The updated object could not be verified for its remaining writes.")
+            }
+            continue
+          }
           message = `${step.kind === "assignments" ? "Assignments" : "Settings"} could not be restored: ${writeError(type, response.body, response.status)}`
           safeToRetry = response.status < 500 && response.status !== 408
         }
@@ -577,8 +706,8 @@ export class Restorer {
         for (const [key, entry] of repairs) if (entry.expires < Date.now()) repairs.delete(key)
         if (repairs.size >= 1000) repairs.delete(repairs.keys().next().value!)
         repairToken = randomUUID()
-        repairs.set(repairToken, { scope: this.options.repairScope ?? this.instanceScope, path, type, id, body, action,
-          steps: resolved.slice(index), expectedCurrent, expires: Date.now() + 60 * 60 * 1000 })
+        saveRepair(repairToken, { scope: this.options.repairScope ?? this.instanceScope, path, type, id, body, action,
+          steps: resolved.slice(index), expectedCurrent, expires: Date.now() + (protectedWrite ? WRITE_APPROVAL_LIFETIME : 60 * 60 * 1000) }, Boolean(protectedWrite))
       }
       return { ...base, success: false, partial: true, retryable: safeToRetry, repairToken, error: message, warnings: [message!] }
     }
@@ -597,7 +726,7 @@ export class Restorer {
       step: exact(step), remaining: remaining.map(exact), objectId, fingerprint: baseline ? approvalFingerprint(baseline, this.options.assignments) : undefined, submittedAt: new Date().toISOString(), status: signal.kind === "pending" ? "needsApproval" : "justification-required", justification: context.justification ?? "", stepNumber, totalSteps, action, source, assignments: this.options.assignments, mode: this.options.mode }
     if (signal.kind === "pending" && restoreApprovals(context.tenantId).some(entry => entry.id === signal.code)) return { ...base, approvalId: signal.code, approvalState: "submitted", error: "Already submitted for approval" }
     saveRestoreApproval(record)
-    if (signal.kind === "justification-required" && record.justification.trim()) return this.submitApproval(record)
+    if (signal.kind === "justification-required" && record.justification.trim() && !hasWriteApproval(context.tenantId)) return this.submitApproval(record)
     if (signal.kind === "pending") { try { await this.refreshApproval(record) } catch { /* The pending record is already durable. */ } }
     return { ...base, approvalId: record.id, approvalState: signal.kind === "pending" ? "submitted" : "required", error: signal.kind === "pending" ? "Submitted for approval" : base.error }
   }
@@ -621,11 +750,12 @@ export class Restorer {
     if (requester && (!context.requesterId || context.requesterId.toLowerCase() !== record.requesterId.toLowerCase())) throw new Error("Only the original requester can complete or withdraw this request")
   }
 
-  async submitApproval(record: RestoreApproval, justification = record.justification): Promise<RestoreOutcome> {
+  async submitApproval(record: RestoreApproval, justification = record.justification, check?: () => Promise<void>): Promise<RestoreOutcome> {
     this.checkApprovalOwner(record)
     if (record.status !== "justification-required") throw new Error("This item was already submitted")
     if (!justification.trim() || justification.length > 700) throw new Error("Enter a justification of 1 to 700 characters")
-    const response = await this.graph(record.step.method, record.step.path, record.step.body ? JSON.parse(record.step.body) as Item : undefined, { exactBody: record.step.body, justification })
+    const send = () => this.graph(record.step.method, record.step.path, record.step.body ? JSON.parse(record.step.body) as Item : undefined, { exactBody: record.step.body, justification })
+    const response = check ? await withWriteCheckpoint(check, send) : await send()
     if (response.approval?.kind === "pending") {
       const draftId = record.id
       const code = response.approval.code
@@ -643,9 +773,12 @@ export class Restorer {
     return { success: false, path: record.backupPath, policyId: record.objectId, retryable: false, approval: response.approval, error: response.approval ? approvalMessage(response.approval, typeForFolder(record.folder)!.label, record.stepNumber > 1 ? "Earlier restore steps were written." : undefined) : errorMessage(response.body, response.status) }
   }
 
-  async completeApproval(record: RestoreApproval): Promise<RestoreOutcome> {
+  async completeApproval(record: RestoreApproval, check?: () => Promise<void>): Promise<RestoreOutcome> {
     this.checkApprovalOwner(record)
-    if (record.continuationPending && record.objectId) return this.resumeApproval(record, { id: record.objectId })
+    if (record.continuationPending && record.objectId) {
+      await check?.()
+      return this.resumeApproval(record, { id: record.objectId })
+    }
     record = await this.refreshApproval(record)
     if (record.status !== "approved") throw new Error("This request is not approved")
     const type = typeForFolder(record.folder)!
@@ -663,7 +796,8 @@ export class Restorer {
     if (unresolved.length) throw new Error(`Unresolved dependencies (${unresolved.join(", ")}). Restore them before completing this request.`)
     const references = await this.policyReferences(type, record.step.body ? JSON.parse(record.step.body) as Item : {})
     if (references.blocking.length) throw new Error(references.blocking.join(" "))
-    const response = await this.graph(record.step.method, record.step.path, record.step.body ? JSON.parse(record.step.body) as Item : undefined, { exactBody: record.step.body, approvalCode: record.id, sourceId: record.snapshotId })
+    const send = () => this.graph(record.step.method, record.step.path, record.step.body ? JSON.parse(record.step.body) as Item : undefined, { exactBody: record.step.body, approvalCode: record.id, sourceId: record.snapshotId })
+    const response = check ? await withWriteCheckpoint(check, send) : await send()
     if (response.status === 403) {
       try { await this.refreshApproval(record) } catch { /* Preserve the completion error. */ }
       throw new Error("Intune refused to complete this request. It may have expired, been changed, or been completed already. Check it in the Intune admin center.")

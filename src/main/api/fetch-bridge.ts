@@ -21,6 +21,7 @@ export interface FetchBridgeOptions {
   authorizeTenant?: (tenant: string) => unknown
   /** Serves Blob requests for local (`tvlocal-...`) storage accounts from the encrypted store. */
   handleLocalBlob?: (request: Request) => Promise<Response>
+  authorizeGraph?: (input: RequestInfo | URL, init?: RequestInit) => Promise<void>
   fetch?: typeof fetch
 }
 
@@ -110,6 +111,7 @@ export function createBridgedFetch(options: FetchBridgeOptions): typeof fetch {
         return response
       }
 
+      await options.authorizeGraph?.(input, init)
       return realFetch(input, init)
     } catch (error) {
       if (networkAttempted || error instanceof FetchPreconditionError) throw error

@@ -286,6 +286,12 @@ Conflicts with other policy families are not evaluated. Profile selection and ap
 | The policy pack exceeds 8 MB. | Import fewer or smaller files. |
 | Saved assessment history is full | The workspace holds 50 assessments or 32 MB. Export what you need, then click **Remove older assessments** or delete single assessments. See [Saved policy-pack workspace and history](#saved-policy-pack-workspace-and-history). |
 
+## Second admin approval for policy creation
+
+If the destination requires a second admin, creating unassigned Settings Catalog policies from framework recommendations requests approval for the selected settings. If an assessment expires while you are waiting, compare again and repeat the same selection. A changed destination requires a fresh review.
+
+Open **Settings > Storage and recovery > Tenant approvals** and select the destination tenant. A different signed-in admin reviews the request there. After approval, return to the operation on the original installation and apply the same selection within seven days.
+
 ## Related pages
 
 * [OpenIntuneBaseline](/baselines/quick-start/), to deploy, compare and validate OIB policies

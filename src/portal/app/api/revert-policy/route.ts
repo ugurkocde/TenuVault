@@ -1,3 +1,5 @@
+import { hasWriteApproval, verifyApprovalSource, withWriteApproval, WriteApprovalError } from "../../../../main/write-approvals/service"
+import { sameObservation } from "../../../../main/write-approvals/dispatch"
 import { readOwnedBackup, UNTAGGED_BACKUP } from "~/lib/policies/backup-owner"
 import { checkRestoreManifest, verifySnapshot } from "~/lib/policies/backup-manifest"
 import { grantedPermissions } from "../../../../shared/services/token"
@@ -153,8 +155,20 @@ export async function POST(request: NextRequest) {
     catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 }) }
     
     // Restore creates an unassigned copy; revert puts the existing policy back to the backed-up version.
-    const outcome = await new Restorer(graphCaller(graphToken, fetch, { tenant: tenantId, refreshToken: () => getAccessToken(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default", true) }), { mode: action === 'revert' ? 'replace' : 'copy', assignments: false, granted: grantedPermissions(graphToken) })
-      .restore(backupPath, policyContent)
+    const restorer = new Restorer(graphCaller(graphToken, fetch, { tenant: tenantId, refreshToken: () => getAccessToken(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default", true) }), { writeApprovalTenant: tenantId, mode: action === "revert" ? "replace" : "copy", assignments: false, granted: grantedPermissions(graphToken) })
+    let expected: unknown
+    const observe = () => restorer.approvalObservation(backupPath, policyContent)
+    const outcome = await withWriteApproval([{
+      tenant: tenantId,
+      reference: ["drift", backupPath, action, policyId],
+      summary: { kind: action === "revert" ? "Revert or recreate drifted policy" : "Restore previous policy as a copy", count: 1, targets: [backupPath], assignments: false },
+      observe: async () => {
+        verifyApprovalSource(tenantId, storageAccountName)
+        const observation = await observe()
+        expected = observation.target
+        return { ...observation, content: [storageAccountName, action, policyId, observation.content] }
+      },
+    }], () => restorer.restore(backupPath, policyContent, hasWriteApproval(tenantId) ? sameObservation(expected, async () => (await observe()).target) : undefined))
     const result = { success: outcome.success, error: outcome.error, policyId: outcome.policyId }
 
     if (!result.success) {
@@ -214,6 +228,7 @@ export async function POST(request: NextRequest) {
     })
 
   } catch (error) {
+    if (error instanceof WriteApprovalError) return NextResponse.json({ error: error.message }, { status: 409 })
     console.error("Revert policy error:", error)
     
     return NextResponse.json(

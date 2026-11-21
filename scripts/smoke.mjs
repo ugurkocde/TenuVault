@@ -975,6 +975,21 @@ await check("several tenants get the overview, switcher and schedule tab", async
   assert(await waitForText("Contoso 2"), "second tenant missing from the overview")
   assert(await waitForText("Save your backup recovery key"), "local storage recovery key notice missing from Overview")
   await screenshot("08-overview")
+  await send("Emulation.setDeviceMetricsOverride", { width: 1024, height: 720, deviceScaleFactor: 1, mobile: false })
+  try {
+    await go("#/portal/settings?section=storage#tenant-approvals", "Use shared Azure storage to request approval from another admin.")
+    for (const theme of ["light", "dark"]) {
+      await evaluate(`document.documentElement.classList.toggle("dark", ${theme === "dark"})`)
+      const card = "document.getElementById('tenant-approvals')"
+      assert(await evaluate(`${card}.getBoundingClientRect().right <= innerWidth && ${card}.scrollWidth <= ${card}.clientWidth`), `Tenant approvals overflowed in ${theme} mode at 1024px`)
+      await evaluate(`${card}.scrollIntoView({ block: "center" })`)
+      await screenshot(`tenant-approvals-1024-${theme}`)
+    }
+  } finally {
+    await evaluate('document.documentElement.classList.remove("dark")')
+    await send("Emulation.clearDeviceMetricsOverride")
+  }
+
   await go("#/portal/backup", "Backup History")
   await evaluate(`[...document.querySelectorAll("button")].find(b => b.innerText.trim() === "Schedule")?.click()`)
   assert(await waitForText("Automatic backups"), "schedule panel missing")

@@ -224,6 +224,12 @@ If the old OpenIntuneBaseline framework page saved policy pack comparisons for t
 
 OpenIntuneBaseline content is by SkipToTheEndpoint and contributors and licensed under [GPL-3.0](https://github.com/SkipToTheEndpoint/OpenIntuneBaseline/blob/main/LICENSE). Keep that attribution and license when you share policy content from OIB.
 
+## Second admin approval for OpenIntuneBaseline
+
+If the destination requires a second admin, deployment, pilot assignment, drift fix and undo need tenant approval. A deployment to several tenants checks their approvals before its first write.
+
+Open **Settings > Storage and recovery > Tenant approvals** and select the destination tenant. A different signed-in admin reviews the request there. After approval, return to the operation on the original installation and apply the same selection within seven days.
+
 ## Related pages
 
 * [OpenIntuneBaseline](https://www.tenuvault.com/openintunebaseline): deploy, compare and validate OIB, on the product site

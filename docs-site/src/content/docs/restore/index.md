@@ -205,6 +205,12 @@ Skipped items, and failed items that left nothing behind, have no button. An inc
 * Restores are recorded in the tenant's [audit log](/audit-log/).
 * Restored or overwritten items reach devices at their next check-in. Unassigned copies do not reach any device until you assign them in Intune.
 
+## Second admin approval for restores
+
+If the destination requires a second admin, full and selective restores, copies, in-place replacement and repairs need tenant approval before writing. Intune can also require its own approval for specific operations.
+
+Open **Settings > Storage and recovery > Tenant approvals** and select the destination tenant. A different signed-in admin reviews the request there. After approval, return to the operation on the original installation and apply the same selection within seven days.
+
 ## Related pages
 
 * [Intune restore](https://www.tenuvault.com/intune-restore): restore modes, plans and limits, on the product site

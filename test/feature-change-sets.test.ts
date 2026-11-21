@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest"
+import { setWriteApprovals } from "../src/main/write-approvals/service"
+import { reviewer, writeApprovalFixture } from "./helpers/write-approval-fixture"
+import { afterEach, describe, expect, it } from "vitest"
 import { applyChangeSet, approveChangeSet, CONTENT_DOMAIN, createChangeSet, KEPT_CHANGE_SETS, createRollbackChangeSet, getChangeSet, listChangeSets, previewChangeSet, previewRollback, rejectChangeSet, reviseChangeSet } from "../src/main/features/change-sets/engine"
 import type { FeatureDeps } from "../src/main/features/deps"
 import { FeatureError } from "../src/main/features/route"
@@ -514,4 +516,46 @@ it("retries approval blocks that wrote nothing", async () => {
   blocked = false
   const retried = await context.post({ action: "retry", id: record.id, contentHash: preview.contentHash, confirm: true })
   expect(retried.body.changeSet.status).toBe("applied")
+})
+
+
+afterEach(() => setWriteApprovals(undefined))
+
+it("requires a different signed-in admin even when a legacy reviewer label is present", async () => {
+  const context = setup()
+  const { profile } = writeApprovalFixture()
+  const origin = profile(), second = profile(reviewer)
+  setWriteApprovals(origin.service)
+  await origin.service.enable(TENANT_A)
+  const { record } = await threeOperations(context)
+  const preview = await approve(context, record.id)
+  const apply = () => context.post({ action: "apply", id: record.id, contentHash: preview.contentHash, confirm: true })
+  await expect(apply()).rejects.toThrow("pending")
+  expect(context.tenant.writeCount()).toBe(0)
+  const pending = (await second.service.inbox(TENANT_A)).requests[0]!
+  expect(pending.request.summary.count).toBe(3)
+  await second.service.decide(TENANT_A, pending.request.id, "approve")
+  expect((await apply()).body.changeSet.status).toBe("applied")
+  expect(context.tenant.writeCount()).toBe(3)
+})
+
+
+it("rechecks the reviewed destination after the pre-change backup", async () => {
+  const context = setup()
+  const { record, existing } = await threeOperations(context)
+  const preview = await approve(context, record.id)
+  const { profile } = writeApprovalFixture()
+  const origin = profile(), second = profile(reviewer)
+  setWriteApprovals(origin.service)
+  await origin.service.enable(TENANT_A)
+  const apply = () => context.post({ action: "apply", id: record.id, contentHash: preview.contentHash, confirm: true })
+  await expect(apply()).rejects.toThrow("pending")
+  await second.service.decide(TENANT_A, (await second.service.inbox(TENANT_A)).requests[0]!.request.id, "approve")
+  const api = context.deps.api
+  context.deps.api = async (path, tenantId, body, options) => {
+    if (path === "/api/backup/start") context.tenant.policies.get(existing.id as string)!.description = "Edited during backup"
+    return api(path, tenantId, body, options)
+  }
+  expect((await apply()).status).toBe(409)
+  expect(context.tenant.writeCount()).toBe(0)
 })

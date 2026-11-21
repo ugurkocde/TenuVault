@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest"
+import { setWriteApprovals } from "../src/main/write-approvals/service"
+import { reviewer, writeApprovalFixture } from "./helpers/write-approval-fixture"
+import { afterEach, describe, expect, it } from "vitest"
 import { routes as syncRoutes } from "../src/main/features/sync"
 import { routes as promotionRoutes } from "../src/main/features/promotion"
 import { applyChangeSet, approveChangeSet, createChangeSet, previewChangeSet } from "../src/main/features/change-sets/engine"
@@ -1341,4 +1343,26 @@ describe("Codex round 1", () => {
     const listed = (await context.post({ tenantId: TENANT_A, action: "list-runs" })).body.runs.find((entry: { id: string }) => entry.id === run.id)
     expect(listed.outcome).toBe("failed")
   })
+})
+
+
+afterEach(() => setWriteApprovals(undefined))
+
+it("binds Sync apply to the destination's approval and reviewed backup choice", async () => {
+  const context = setup()
+  const { profile } = writeApprovalFixture()
+  const origin = profile(), second = profile(reviewer)
+  setWriteApprovals(origin.service)
+  await origin.service.enable(TENANT_B)
+  const { targets } = await planned(context)
+  const id = targets[0]!.promotion!.id
+  const contentHash = await approved(context, TENANT_B, id, "none")
+  const apply = () => context.post({ tenantId: TENANT_B, action: "apply", id, contentHash, confirm: true, backup: "none" })
+  expect(await apply()).toMatchObject({ status: 409, body: { error: expect.stringContaining("pending") } })
+  expect(context.targets[TENANT_B]!.writeCount()).toBe(0)
+  const requestId = (await second.service.inbox(TENANT_B)).requests[0]!.request.id
+  expect((await second.service.inbox(TENANT_A)).requests).toEqual([])
+  await second.service.decide(TENANT_B, requestId, "approve")
+  expect((await apply()).status).toBe(200)
+  expect(context.targets[TENANT_B]!.writeCount()).toBe(1)
 })

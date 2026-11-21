@@ -124,3 +124,9 @@ Settings documented under [Governance](/governance/) organization customizations
 * An upgrade applies only through a confirmed change set with backup and read-back. Nothing is written by comparing or resolving.
 * Without recorded provenance, every difference needs your decision in a manual comparison.
 * Assignments are never changed by an upgrade.
+
+## Second admin approval
+
+When the destination requires a second admin, the first apply attempt requests that approval. A reviewer name entered in the change set is a note. It cannot authorize a write. The destination check covers the proposed operations, dependency mappings, assignments and pre-change backup choice.
+
+Open **Settings > Storage and recovery > Tenant approvals** and select the destination tenant. A different signed-in admin reviews the request there. After approval, return to the operation on the original installation and apply the same selection within seven days.

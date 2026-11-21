@@ -167,7 +167,7 @@ export function ChangeSetFlow({ changeSet, actions, tenantName, onChanged, rollb
           })()}
           {canReview && preview.blockers.length === 0 && (
             <div className="grid gap-2 sm:grid-cols-2">
-              {decisionFields && <label className="flex flex-col gap-1 text-xs text-gray-500">Reviewer<input className={inputClass} value={reviewer} maxLength={200} onChange={(event) => setReviewer(event.target.value)} placeholder="Name of the reviewer" /></label>}
+              {decisionFields && <label className="flex flex-col gap-1 text-xs text-gray-500">Reviewer note<input className={inputClass} value={reviewer} maxLength={200} onChange={(event) => setReviewer(event.target.value)} placeholder="Optional reviewer name" /></label>}
               {decisionFields && <label className="flex flex-col gap-1 text-xs text-gray-500">Decision note<input className={inputClass} value={note} maxLength={2000} onChange={(event) => setNote(event.target.value)} placeholder="Why this change is approved or rejected" /></label>}
               <div className="flex flex-wrap gap-2 sm:col-span-2">
                 {!preview.approval.valid && (
@@ -188,7 +188,7 @@ export function ChangeSetFlow({ changeSet, actions, tenantName, onChanged, rollb
 
       {changeSet.review && (
         <p className="text-sm text-gray-600 dark:text-gray-400">
-          {changeSet.review.decision === "approved" ? "Approved" : "Rejected"} by {changeSet.review.reviewer ?? changeSet.review.actor ?? "unknown"} on {formatDate(changeSet.review.decidedAt)}{changeSet.review.note ? `: ${changeSet.review.note}` : "."}{" "}
+          {changeSet.review.decision === "approved" ? "Approved" : "Rejected"} by {changeSet.review.actor ?? "unknown"} on {formatDate(changeSet.review.decidedAt)}{changeSet.review.note ? `: ${changeSet.review.note}` : "."}{changeSet.review.reviewer ? ` Reviewer note: ${changeSet.review.reviewer}.` : ""}{" "}
           <Link to={`/portal/audit?q=${encodeURIComponent(changeSet.id)}`} className="font-medium text-gray-900 underline underline-offset-2 dark:text-gray-100">View in Audit Log</Link>
         </p>
       )}

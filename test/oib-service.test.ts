@@ -1,3 +1,5 @@
+import { setWriteApprovals } from "../src/main/write-approvals/service"
+import { reviewer, writeApprovalFixture } from "./helpers/write-approval-fixture"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { handleOib, migrateLegacyOibRuns, OIB_BACKUP_POLLING, setOibStore } from "../src/main/oib/service"
 import { packFolder, packItems, parsePackFile, resetOibSource } from "../src/main/oib/source"
@@ -521,4 +523,51 @@ describe("legacy data", () => {
     migrateLegacyOibRuns({ keys: () => [...legacy.values.keys()], get: legacy.get, set: legacy.set, delete: legacy.delete })
     expect(legacy.get(`quickstart:runs:${tenantId}`)).toBe("{not json")
   })
+})
+
+
+it("requires approval for deployment, pilot, fix and undo", async () => {
+  const { profile } = writeApprovalFixture()
+  const origin = profile(), second = profile(reviewer)
+  setWriteApprovals(origin.service)
+  const writes: string[] = []
+  const state: Tenant = { policies: [{ id: EXISTING, name: "Existing policy", value: 2 }] }
+  const graph = world(state, writes)
+  vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    if (url.endsWith(`groups/${pilot}`)) return Response.json({ id: pilot })
+    if (url.includes("/deviceManagement/configurationPolicies") && init?.method === "GET" && !url.includes("/configurationPolicies/")) return Response.json({ value: state.policies })
+    if (url.endsWith("/scopeTags/0") || url.endsWith("/roleScopeTags/0")) return Response.json({ id: "0" })
+    if (url.endsWith("/configurationPolicies") && init?.method === "POST") {
+      const body = JSON.parse(String(init.body))
+      state.policies.push({ id: CREATED, name: body.name })
+    }
+    return graph(input, init)
+  })
+  const approve = async () => {
+    const current = (await second.service.inbox(tenantId)).requests.find(row => row.request.state === "pending" && !row.decision)
+    await second.service.decide(tenantId, current!.request.id, "approve")
+  }
+  try {
+    await origin.service.enable(tenantId)
+    await source()
+    const deploy = () => handleOib({ ...base, action: "oib-deploy", commit, backup: { mode: "none" }, items: [{ source: SC, mode: "create" }], pilotGroupId: pilot }) as Promise<OibRun>
+    await expect(deploy()).rejects.toThrow("pending")
+    expect(writes).toHaveLength(0)
+    await approve()
+    const deployed = await deploy()
+    expect(deployed.created).toHaveLength(1)
+    expect(writes).toHaveLength(2)
+    const fix = () => handleOib({ ...base, action: "oib-fix", commit, backup: { mode: "none" }, items: [{ source: SC, mode: "update", targetId: EXISTING }] })
+    await expect(fix()).rejects.toThrow("pending")
+    expect(writes).toHaveLength(2)
+    await approve()
+    expect(await fix()).toMatchObject({ updated: [{ id: EXISTING }] })
+    const undo = () => handleOib({ ...base, action: "oib-undo", runId: deployed.runId })
+    await expect(undo()).rejects.toThrow("pending")
+    expect(writes).toHaveLength(3)
+    await approve()
+    expect(await undo()).toMatchObject({ results: [{ action: "removed", done: true }] })
+    expect(writes).toHaveLength(4)
+  } finally { setWriteApprovals(undefined) }
 })

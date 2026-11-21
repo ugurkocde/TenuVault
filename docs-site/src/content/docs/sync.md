@@ -169,6 +169,12 @@ If the linked policy was deleted in the target, the next sync creates it again a
 * Assignments and secret values are not synced.
 * Sync is one way and runs only when you start it.
 
+## Second admin approval
+
+When the destination requires a second admin, request approval from each destination’s apply screen. The approval is tied to that destination’s change set and the selected backup choice.
+
+Open **Settings > Storage and recovery > Tenant approvals** and select the destination tenant. A different signed-in admin reviews the request there. After approval, return to the operation on the original installation and apply the same selection within seven days.
+
 ## Related pages
 
 * [Changes](/changes/)

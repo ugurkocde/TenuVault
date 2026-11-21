@@ -138,6 +138,12 @@ When a retry reuses a reconciled creation, TenuVault reads the object in the rec
 
 The journal keeps up to 1,000 records. When it is full, TenuVault removes completed records and reconciliations older than one hour. Uncertain writes are never removed. If only uncertain and recent records remain, restores stop with "Restore journal is full. Review write history in Settings before continuing; recent reconciliations stay protected for one hour." Resolve the uncertain records to continue.
 
+## Tenant approval and interrupted writes
+
+If the destination requires a second admin, a restore that stops after Graph may have accepted a request needs reconciliation before it is retried. A claimed approval cannot be replayed.
+
+Open **Settings > Storage and recovery > Tenant approvals** and select the destination tenant. A different signed-in admin reviews the request there. After approval, return to the operation on the original installation and apply the same selection within seven days.
+
 ## Related pages
 
 * [Intune restore](https://www.tenuvault.com/intune-restore): what restores automatically and what does not, on the product site

@@ -1,3 +1,12 @@
+import { setApprovedRestoreRepairStore } from "../portal/lib/policies/graph-restore"
+import { deployReviewedBatches } from "./oib/service"
+import { record as frameworkRecord } from "../shared/frameworks/policies"
+import { createHash } from "node:crypto"
+import { WriteApprovals, setWriteApprovals, WriteApprovalError } from "./write-approvals/service"
+import { graphDispatchGuard, setRestoreUploadGuard } from "./write-approvals/dispatch"
+import { approvalBlobs } from "./write-approvals/blob"
+import { approvalAudit } from "./write-approvals/audit"
+import { writeApprovalRoutes } from "./write-approvals/routes"
 import { requestWindowsContent } from "./app-backup/windows-helper"
 import { requireCaptureEnabled } from "./app-backup/capture-policy"
 import { checkCaptureMetadata } from "./app-backup/capture-preflight"
@@ -46,7 +55,7 @@ import { createBridgedFetch } from "./api/fetch-bridge"
 import { rejectProxyAuthResponses, withNetworkErrors } from "./api/network-error"
 import { ApiHost } from "./api/host"
 import { routes } from "./api/routes"
-import { AuthManager, SignInRequiredError } from "./auth/msal"
+import { AuthManager, delegatedApprovalActor, SignInRequiredError } from "./auth/msal"
 import { BackupEngine, verifyStorageAccess, type BackupJob } from "./backup/engine"
 import { BackupScheduler, reportsResult, runUnattended, scheduledResult } from "./backup/scheduler"
 import { runTrayBackups } from "./backup/tray-backup"
@@ -334,6 +343,7 @@ async function bootstrap(): Promise<void> {
   const backupKeys = new BackupKeys(appStore)
   setRestoreJournalStore(appStore)
   setRestoreApprovalStore(appStore)
+  setApprovedRestoreRepairStore(appStore)
   const localFolder = () => appStore.get(LOCAL_FOLDER_KEY) ?? join(app.getPath("documents"), "TenuVault Backups")
   let localStore: LocalBlobStore | null = null
   const getLocalStore = () => (localStore ??= new LocalBlobStore(localFolder(), backupKeys.keyring()))
@@ -345,9 +355,21 @@ async function bootstrap(): Promise<void> {
 
   // Background requests never open a sign-in window; the renderer shows a prompt instead.
   const lastPrompt = new Map<string, number>()
+  const graphSessions = new Map<string, NonNullable<ReturnType<AuthManager["approvalSession"]>> & { expires: number }>()
+  const tokenKey = (token: string) => createHash("sha256").update(token).digest("hex")
+  const observeGraphToken = (tenantId: string, token: Awaited<ReturnType<AuthManager["getAccessToken"]>>) => {
+    const identity = auth.approvalSession(tenantId)
+    if (identity?.current() && identity.actor?.oid === delegatedApprovalActor(token, tenantId)?.oid) {
+      const time = Date.now()
+      for (const [key, entry] of graphSessions) if (entry.expires <= time) graphSessions.delete(key)
+      graphSessions.set(tokenKey(token.accessToken), { ...identity, expires: token.expiresOn?.getTime() ?? time + 3_600_000 })
+    }
+    return token.accessToken
+  }
   const tokenFor = async (tenantId: string, clientId: string, scope: string, forceRefresh = false) => {
     try {
       const token = await auth.getAccessToken(tenantId, clientId, scope, forceRefresh)
+      if (scope.startsWith("https://graph.microsoft.com/")) observeGraphToken(tenantId, token)
       if (scope.includes("storage.azure.com")) registerStorageToken(token.accessToken, tenantId)
       return token
     } catch (error) {
@@ -362,11 +384,37 @@ async function bootstrap(): Promise<void> {
     }
   }
 
+  const writeApprovals = new WriteApprovals({
+    version: app.getVersion(),
+    store: appStore,
+    profile: tenant => tenantProfile(tenant),
+    open: async (tenant, client, account) => {
+      const token = await tokenFor(tenant, client, RESOURCE_SCOPES.storage)
+      const session = auth.approvalSession(tenant)
+      if (!session?.actor || !session.current()) throw new WriteApprovalError("Sign in with a delegated tenant account to verify shared write approvals.")
+      return { actor: session.actor, blobs: approvalBlobs(account, token.accessToken, chromiumFetch) }
+    },
+    current: (tenant, actor) => {
+      const session = auth.approvalSession(tenant)
+      return session?.actor?.oid === actor.oid && session.current()
+    },
+    audit: approvalAudit(tenant => signedInClient(tenant), request => host.dispatch(request)),
+  })
+  setWriteApprovals(writeApprovals)
+  setRestoreUploadGuard(async tenant => {
+    writeApprovals.checkDestination(tenant)
+    const session = auth.approvalSession(tenant)
+    if (!session?.current()) throw new WriteApprovalError("The installer upload requires a verified delegated destination account.")
+    if (session.actor) await writeApprovals.authorize(tenant, session.actor)
+    else if (await writeApprovals.active(tenant)) throw new WriteApprovalError("The installer upload requires a verified delegated destination account.")
+  })
+
   const bridgedFetch = createBridgedFetch({
     dispatch: (request) => host.dispatch(request),
     // Azure backups are written as plain JSON; backups sealed by earlier versions open with the device keyring.
     fetch: legacyAzureReader(withNetworkErrors(chromiumFetch), () => backupKeys.keyring()),
     authorizeTenant,
+    authorizeGraph: graphDispatchGuard(writeApprovals, token => graphSessions.get(tokenKey(token))),
     handleLocalBlob: (request) => handleLocalBlobRequest(getLocalStore(), request),
     getDelegatedToken: async (tenant, clientId, scope, forceRefresh) => {
       const result = await tokenFor(tenant, clientId, scope, forceRefresh)
@@ -642,7 +690,20 @@ async function bootstrap(): Promise<void> {
     },
   })
   const host: ApiHost = new ApiHost({
-    routes: { ...routes, ...backupRoutes(engine, (tenantId) => scopes.get(tenantId).scope), ...featureRoutes(featureDeps), ...driftScanRoutes(driftJobs) },
+    routes: { ...routes, ...backupRoutes(engine, (tenantId) => scopes.get(tenantId).scope), ...featureRoutes(featureDeps), ...driftScanRoutes(driftJobs), ...writeApprovalRoutes(writeApprovals),
+      "/api/oib-reviewed-batches": { POST: async request => {
+        try {
+          const body: unknown = await request.json()
+          if (!frameworkRecord(body)) return Response.json({ error: "Choose the deployment batches." }, { status: 400 })
+          return await deployReviewedBatches(body, async child => {
+            const check = new Request(`${INTERNAL_API_ORIGIN}/api/oib`, { method: "POST", body: JSON.stringify(child) })
+            return (await checkPlan(check)) ?? checkDisclaimer(check)
+          })
+        } catch (error) {
+          return Response.json({ error: error instanceof Error ? error.message : "Deployment could not be verified." }, { status: 409 })
+        }
+      } },
+    },
     transform: surfaceTokenErrors,
     // Disabled CIS routes refuse before any licensing work. The plan comes next, so the
     // disclaimer is never accepted for a change the plan refuses anyway.
@@ -1486,7 +1547,7 @@ async function bootstrap(): Promise<void> {
     },
     loadRestoreSettings: async (tenant, appId) => readRestoreSnapshot(tenant, appId, (await auth.getAccessToken(tenant, signedInClient(tenant), RESOURCE_SCOPES.graph)).accessToken, bridgedFetch, "current-settings"),
     restore: (store, source, snapshot, target, name, signal, progress) => disclaimer.run([target], () => restoreCapturedApp(store, source, snapshot, target, name, {
-      graph: restoreGraph(async () => (await auth.getAccessToken(target, signedInClient(target), RESOURCE_SCOPES.graph)).accessToken, bridgedFetch, signal),
+      graph: restoreGraph(async () => observeGraphToken(target, await auth.getAccessToken(target, signedInClient(target), RESOURCE_SCOPES.graph)), bridgedFetch, signal),
       fetch: bridgedFetch, signal, progress,
     })),
     ensureKeys: () => { backupKeys.keyring() },

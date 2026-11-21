@@ -1,3 +1,5 @@
+import { hasWriteApproval, withWriteApproval } from "../../write-approvals/service"
+import { sameObservation, withWriteCheckpoint } from "../../write-approvals/dispatch"
 import { AuditEventType, AuditResult, AuditSeverity, type CreateAuditLogInput } from "../../../portal/lib/audit/types"
 import type { GraphCall } from "../../../portal/lib/policies/graph-restore"
 import { typeForFolder, type IntuneType, type Item } from "../../../shared/intune/registry"
@@ -691,6 +693,32 @@ async function reconcile(graph: GraphCall, type: IntuneType, operation: ChangeOp
  * journaled Graph caller and reads it back. Retry: never repeats a verified operation,
  * reconciles uncertain ones from live state first, and re-checks the fingerprint of the rest.
  */
+/** The next approved step checks the original observation, then the last verified live state. */
+function guardedOperationWriter(operation: ChangeOperation, type: IntuneType, reader: GraphCall, writer: GraphCall, expected: unknown): GraphCall {
+  let id = operation.targetId
+  const targetState = async () => {
+    const live = id ? await readCurrent(reader, type, id) : null
+    if (!live) return null
+    const revision = live["@odata.etag"] ?? live.lastModifiedDateTime
+    if (sanitizeSnapshot(type, live).redacted && typeof revision !== "string") throw new FeatureError("The target has unreadable settings and no revision marker.", 409)
+    return [snapshotHash(type, live), revision]
+  }
+  let check = sameObservation(expected, async () => checkedObservation(await observe(reader, type, operation)))
+  return async (method, path, body, options) => {
+    const response = await withWriteCheckpoint(check, () => writer(method, path, body, options))
+    if (response.status < 300 && method !== "DELETE") {
+      if (!id && typeof response.body.id === "string") id = response.body.id
+      if (id) check = sameObservation(await targetState(), targetState)
+    }
+    return response
+  }
+}
+
+function checkedObservation(state: Observation) {
+  if (state.redacted && !state.revision) throw new FeatureError("The target has unreadable settings and no revision marker.", 409)
+  return [state.fingerprint, state.revision]
+}
+
 export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: string, input: ApplyInput, actor: Actor): Promise<Stored_> {
   if (input.confirmed !== true) throw new FeatureError("Confirm the change, including its irreversible steps, before applying.")
   const tenant = tenantId.toLowerCase()
@@ -735,6 +763,33 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
     const staleBefore = (await input.dependencyCheck?.()) ?? []
     if (staleBefore.length) markStale(deps, tenant, id, staleBefore.join(" "), actor)
 
+    const approvedTargets = new Map<string, unknown>()
+    return withWriteApproval([{
+      tenant,
+      reference: ["change-set", id],
+      summary: { kind: record.kind === "rollback" ? "Roll back a change set" : "Apply a change set", count: record.operations.length, reference: record.id,
+        targets: record.operations.map(operation => `${operation.action} ${operation.name}`),
+        assignments: record.operations.some(operation => operation.setsAssignments),
+        fields: [...new Set(record.operations.flatMap(operation => operation.diff.map(change => change.path)))],
+      },
+      observe: async () => {
+        const graph = await reader(deps, tenant, recoveryScope(record))
+        const dependencyErrors = (await input.dependencyCheck?.()) ?? []
+        if (dependencyErrors.length) throw new FeatureError(dependencyErrors.join(" "), 409)
+        const listing = createListingMemo()
+        const observations = []
+        for (const operation of record.operations) {
+          const result = record.results[operation.key]
+          if (result?.status === "verified" || (result?.status === "approval" && result.partial)) continue
+          const observed = await observe(graph, typeOf(operation.folder), operation, listing)
+          const checked = checkedObservation(observed)
+          approvedTargets.set(operation.key, checked)
+          observations.push([operation.key, checked, observed.snapshot, observed.sameNameIds])
+          if (!record.preChange && observed.fingerprint !== review.operationFingerprints[operation.key]) markStale(deps, tenant, id, `${operation.name} changed in the target tenant after review.`, actor)
+        }
+        return { content: [record.contentHash, record.origin, backupChoice, entries, record.dependencies, review.targetFingerprint], target: observations }
+      },
+    }], async () => {
     // Claim the change set before anything slow, so approve, reject and revise refuse it
     // while the backup runs, and a change made in between is detected instead of overwritten.
     const claimedFrom = record.status
@@ -863,7 +918,9 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
       if (stopIfCisRevoked()) break operations
       const attempt: OperationResult = { ...current, status: "writing", attempts: current.attempts + 1, message: null, readBack: null, at: at() }
       saveResult(deps, tenant, id, operation.key, attempt, actor, `Writing ${operation.name}`)
-      const outcome = await writeOperation(writer, type, { action: operation.action, targetId: operation.targetId, proposed: entry.body, assignments: entry.assignments, current: captured[operation.key]?.body ?? null }, (createdId) => {
+      const protectedWrite = hasWriteApproval(tenant)
+      const resultWriter = protectedWrite ? guardedOperationWriter(operation, type, gated, writer, approvedTargets.get(operation.key)) : writer
+      const outcome = await writeOperation(resultWriter, type, { action: operation.action, targetId: operation.targetId, proposed: entry.body, assignments: entry.assignments, current: captured[operation.key]?.body ?? null }, (createdId) => {
         saveResult(deps, tenant, id, operation.key, { ...attempt, objectId: createdId }, actor, `Created ${operation.name}`)
       })
       if (outcome.state === "approval") {
@@ -891,6 +948,7 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
     auditRecorded = true
     await recordApplyAudit(deps, tenant, updated, status, actor, undefined, claimedAttempt!, backupSkipped)
     return updated
+    })
     }))
   } catch (error) {
     // A throw from the write loop or the final update: writes may have happened, so the

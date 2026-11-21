@@ -68,7 +68,7 @@ export function RestoreApprovals({ tenant, revision = 0, openRevision = 0, enabl
   if (!enabled && !records.length) return null
   return <section id="restore-approval-list" className="rounded-xl border bg-white p-4">
     <div className="flex flex-wrap items-center justify-between gap-3">
-      <Button variant="ghost" aria-expanded={open} onClick={() => setOpen(!open)}>Waiting for approval</Button>
+      <div className="flex flex-wrap items-center gap-2"><h3 className="text-sm font-medium">Intune Multi Admin Approval</h3><Button variant="ghost" aria-expanded={open} onClick={() => setOpen(!open)}>Waiting for approval</Button></div>
       <a className="text-sm underline" href={inTenant(TENANT_ADMIN("multiAdminApproval").url, tenant.credentials.tenantId)} target="_blank" rel="noreferrer">Open Multi Admin Approval in Intune</a>
     </div>
     {open && <div className="mt-3 space-y-3" aria-live="polite">

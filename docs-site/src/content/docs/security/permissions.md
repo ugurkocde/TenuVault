@@ -177,6 +177,12 @@ You can target the app registration with your own controls, for example:
 * A Conditional Access policy that requires a compliant device or phishing-resistant MFA for TenuVault sign-ins. TenuVault signs in through your system browser, so device-based conditions are checked there. See [Conditional Access](/getting-started/requirements/#conditional-access) for the supported browsers.
 * Sign-in frequency to control how long a TenuVault session lasts before you sign in again. Scheduled backups stop when the session ends; see [Conditional Access and TenuVault](/security/conditional-access/) for ways to keep them running.
 
+## Approval permissions and limits
+
+Approval records are written using the signed-in admin’s delegated Azure storage access. Anyone who can write the backup container is trusted like an Intune admin. Tenant approvals do not grant any Graph permissions.
+
+App registration setup and provisioning, notification watcher infrastructure and Graph role grants, and email delivery through Microsoft Graph are outside this review. Manage app registration and watcher setup under your existing tenant change control. Backup Reader and cloud backups remain read-only with respect to tenant configuration.
+
 ## Related pages
 
 * [A client secret or a delegated sign-in for Intune automation](https://www.tenuvault.com/compare/intune-graph-client-secret-vs-delegated-sign-in): what an app-only script with a client secret exposes, on the product site

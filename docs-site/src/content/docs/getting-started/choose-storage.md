@@ -106,3 +106,7 @@ If the license no longer covers the tenant, the tenant is not saved and TenuVaul
 ## Next step
 
 [Run your first backup](/getting-started/first-backup/).
+
+## Moving storage for an enrolled tenant
+
+Enable tenant approval only with shared Azure storage. Keep the enrolled account connected while approval is on. Turning it off requires approval from another admin. See [Tenant approvals](/settings/#tenant-approvals).

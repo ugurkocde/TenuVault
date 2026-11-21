@@ -1,3 +1,4 @@
+import { WriteApprovalNotice } from "./write-approvals/TenantApprovals"
 import { Package } from "lucide-react"
 import { trialEndWhen, organizationLicenseRefusal } from "../../shared/trial-notices"
 import { Button } from "~/components/ui/button"
@@ -523,6 +524,7 @@ export function DesktopLayout() {
         {/* Room to scroll the end of a page clear of the floating backup and activity panels while they show. */}
         <main className="pb-[calc(var(--floating-progress-offset,0px)+var(--background-tasks-offset,0px))]">
           <ErrorBoundary key={desktopRouteBoundaryKey(pathname)}>
+            <WriteApprovalNotice />
             <Outlet />
           </ErrorBoundary>
         </main>

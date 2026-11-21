@@ -1,3 +1,4 @@
+import { reportWriteApproval } from "./write-approvals"
 import type { ApiResponse, TenuVaultBridge } from "../../shared/ipc"
 import { ACKNOWLEDGEMENT_REQUIRED, isAcknowledgementRequired } from "../../shared/disclaimer"
 import { requestAcknowledgement } from "./disclaimer"
@@ -33,6 +34,7 @@ export function installFetchBridge(bridge: TenuVaultBridge): void {
 
     // The IPC call itself cannot be cancelled, but aborting must still reject the fetch and
     // discard the answer, as a native fetch would. Callers rely on that to drop stale results.
+    const page = window.location.hash
     const signal = init?.signal ?? (input instanceof Request ? input.signal : undefined)
     signal?.throwIfAborted()
 
@@ -72,6 +74,15 @@ export function installFetchBridge(bridge: TenuVaultBridge): void {
     }
 
     signal?.throwIfAborted()
+    if (response.status >= 400 && !path.startsWith("/api/tenant-write-approvals") && page === window.location.hash) {
+      try {
+        const rejection = JSON.parse(new TextDecoder().decode(response.body))
+        if (typeof rejection?.error === "string") {
+          const document = body ? JSON.parse(new TextDecoder().decode(body)) : null
+          reportWriteApproval(rejection.error, document?.tenantId)
+        }
+      } catch { /* A non-JSON error is handled by the operation. */ }
+    }
     return new Response(NULL_BODY_STATUSES.has(response.status) ? null : new Uint8Array(response.body), {
       status: response.status,
       statusText: response.statusText,

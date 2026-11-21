@@ -31,7 +31,9 @@ import { join } from "node:path"
 import { pathToFileURL } from "node:url"
 import { LICENSE_HOST, LOGIN_HOST } from "./stand-in.mjs"
 
-export const HOSTS_NAMES = [LOGIN_HOST, LICENSE_HOST]
+import { BLOB_HOST, GRAPH_HOST } from "./approvals-stand-in.mjs"
+
+export const HOSTS_NAMES = [LOGIN_HOST, LICENSE_HOST, GRAPH_HOST, BLOB_HOST]
 const MARKER = "# tenuvault-sign-in-e2e"
 export const CA_NAME = "TenuVault sign-in e2e test root"
 

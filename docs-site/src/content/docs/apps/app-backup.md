@@ -213,6 +213,12 @@ On another installation, configure the same tenant, import the matching key in *
 
 If a folder cannot be read, check its location and import the matching key. After an interrupted export, resolve any destination file locks and refresh to retry cleanup. A published export remains successful even if temporary-file cleanup needs another attempt.
 
+## Second admin approval for App Backup restores
+
+If the destination requires a second admin, **Restore to tenant** requests approval for the reviewed settings and installer in that destination. TenuVault checks the destination draft and content references when continuing an interrupted restore. The restored app is unassigned.
+
+Open **Settings > Storage and recovery > Tenant approvals** and select the destination tenant. A different signed-in admin reviews the request there. After approval, return to the operation on the original installation and apply the same selection within seven days.
+
 ## Related pages
 
 - [Connect your tenant](/getting-started/connect-tenant/)

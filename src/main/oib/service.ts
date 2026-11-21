@@ -1,6 +1,8 @@
+import { approvalsEnabled, hasWriteApproval, verifyApprovalSource, withWriteApproval, type ApprovalOperation } from "../write-approvals/service"
+import { sameObservation, withWriteCheckpoint } from "../write-approvals/dispatch"
 import { approvalMessage } from "../../shared/intune/approval"
 import { randomUUID } from "node:crypto"
-import { graphCaller, readLive, Restorer, type GraphCall } from "../../portal/lib/policies/graph-restore"
+import { approvalFingerprint, graphCaller, readLive, Restorer, type GraphCall } from "../../portal/lib/policies/graph-restore"
 import { INTERNAL_API_ORIGIN } from "../../shared/constants"
 import { record, type RecordJson } from "../../shared/frameworks/policies"
 import { normalizeBackupStatus } from "../../portal/lib/backup-health"
@@ -393,28 +395,63 @@ function deployItems(value: unknown, kind: OibRun["kind"]): DeployItem[] {
   })
 }
 
-async function deploy(body: RecordJson, kind: OibRun["kind"]): Promise<OibRun> {
+async function prepareDeployment(body: RecordJson, kind: OibRun["kind"]) {
   const platform = platformOf(body.platform)
   const tenant = tenantOf(body.tenantId)
   const items = deployItems(body.items, kind)
   const pilot = body.pilotGroupId == null || body.pilotGroupId === "" ? undefined : body.pilotGroupId
   if (pilot !== undefined && (kind !== "deploy" || typeof pilot !== "string" || !GUID.test(pilot))) throw new FrameworkError("The pilot group must be an Entra group object ID.")
-  // Undo puts back the previous version saved in the run, so an update may skip the backup too.
   const backup = backupChoice(body.backup)
   if (backup.mode !== "none" && !hasStorage(body)) throw new FrameworkError("Choose where backups for this tenant are stored in Settings first, or skip the backup.")
   requireStore()
-  return withTenantWrite(tenant, kind === "fix" ? "OpenIntuneBaseline drift fix" : "OpenIntuneBaseline deployment", async () => {
+  const pack = await loadPack(platform, body.commit, body.tag)
+  const chosen = items.map((item) => {
+    const policy = pack.items.get(item.source)
+    if (!policy) throw new FrameworkError(`${item.source} is not part of this OIB pack.`)
+    return { ...item, policy, meta: pack.catalog.policies.find((entry) => entry.source === item.source) }
+  })
+  const { token } = await tokenFor(body)
+  const graph = graphCaller(token, fetch, { tenant, refreshToken: async () => (await tokenFor(body, true)).token })
+  const creator = new Restorer(graph, { writeApprovalTenant: tenant, mode: "copy", prefix: "", assignments: !!pilot })
+  const replacer = new Restorer(graph, { writeApprovalTenant: tenant, mode: "replace", assignments: false, recreateMissing: false })
+  const assignments = pilot ? [{ target: { "@odata.type": "#microsoft.graph.groupAssignmentTarget", groupId: pilot } }] : []
+  const observations = new Map<string, unknown>()
+  const observe = async (item: typeof chosen[number]) => {
+    const { policy } = item
+    const snapshot = replaceTenantVariables(policy.snapshot, tenant)
+    const path = `oib/${policy.folder}/${policy.source.split("/").pop()}`
+    if (item.mode === "create") return creator.approvalObservation(path, { ...snapshot, assignments })
+    const before = await readLive(graph, typeForFolder(policy.folder)!, item.targetId!)
+    const { roleScopeTagIds: _packTags, ...content } = snapshot
+    return replacer.approvalObservation(path, { ...content, ...(Array.isArray(before?.roleScopeTagIds) ? { roleScopeTagIds: before.roleScopeTagIds } : {}), id: item.targetId! })
+  }
+  const operation: ApprovalOperation = {
+    tenant, reference: ["oib", kind, platform, items],
+    summary: { kind: kind === "fix" ? "Fix OpenIntuneBaseline drift" : "Deploy OpenIntuneBaseline policies", count: items.length,
+      targets: chosen.map(item => item.policy.name), reference: pack.catalog.commit, assignments: !!pilot },
+    observe: async () => {
+      if (backup.mode !== "none") verifyApprovalSource(tenant, body.storageAccountName)
+      const state = []
+      for (const item of chosen) {
+        const result = await observe(item)
+        observations.set(item.source, result.target)
+        state.push(result)
+      }
+      const pilotGroup = pilot ? await graph("GET", `groups/${pilot}`) : undefined
+      if (pilotGroup && (pilotGroup.status !== 200 || typeof pilotGroup.body.id !== "string" || pilotGroup.body.id.toLowerCase() !== pilot!.toLowerCase())) {
+        throw new FrameworkError("The destination pilot group could not be verified.", 409)
+      }
+      const folders = chosen.filter(item => item.mode === "create").map(item => item.policy.folder)
+      const collisions = folders.length ? await inventory(graph, folders) : []
+      return {
+        content: [pack.catalog.commit, kind, pilot, backup, body.storageAccountName, items, state.map(result => result.content)],
+        target: [state.map(result => result.target), pilotGroup?.body, collisions.sort((a, b) => a.id.localeCompare(b.id))],
+      }
+    },
+  }
+  const work = async () => {
     const report = tracker(tenant, kind)
     try {
-      report({ stage: "Loading the OIB pack" })
-      const pack = await loadPack(platform, body.commit, body.tag)
-      const chosen = items.map((item) => {
-        const policy = pack.items.get(item.source)
-        if (!policy) throw new FrameworkError(`${item.source} is not part of this OIB pack.`)
-        return { ...item, policy, meta: pack.catalog.policies.find((entry) => entry.source === item.source) }
-      })
-      const { token } = await tokenFor(body)
-      const graph = graphCaller(token, fetch, { tenant, refreshToken: async () => (await tokenFor(body, true)).token })
       const written = [...new Set(chosen.map((item) => item.policy.folder))]
       let backupFolder: string | undefined
       if (backup.mode === "new") {
@@ -433,15 +470,12 @@ async function deploy(body: RecordJson, kind: OibRun["kind"]): Promise<OibRun> {
       const creates = chosen.filter((item) => item.mode === "create")
       // The refresh-capable caller: the token from before a long pre-deploy backup may have expired since.
       const existing = creates.length ? await inventory(graph, creates.map((item) => item.policy.folder)) : []
-      const creator = new Restorer(graph, { mode: "copy", prefix: "", assignments: !!pilot })
-      // A policy deleted after it was read is reported, never recreated under an ID the run would not record.
-      const replacer = new Restorer(graph, { mode: "replace", assignments: false, recreateMissing: false })
-      const assignments = pilot ? [{ target: { "@odata.type": "#microsoft.graph.groupAssignmentTarget", groupId: pilot } }] : []
       for (const [index, item] of chosen.entries()) {
         const { policy } = item
         report({ stage: `${item.mode === "create" ? "Creating" : "Updating"} ${policy.name}`, done: index, total: chosen.length })
         const snapshot = replaceTenantVariables(policy.snapshot, tenant)
         const path = `oib/${policy.folder}/${policy.source.split("/").pop()}`
+        const check = hasWriteApproval(tenant) ? sameObservation(observations.get(item.source), async () => (await observe(item)).target) : undefined
         if (item.mode === "create") {
           // A policy the tenant already has (same OIBID, or same type and name) is left alone rather than duplicated.
           const clash = existing.find((entry) => entry.folder === policy.folder && ((item.meta?.oibId && entry.oibId === item.meta.oibId) || entry.name.toLowerCase() === policy.name.toLowerCase()))
@@ -449,7 +483,7 @@ async function deploy(body: RecordJson, kind: OibRun["kind"]): Promise<OibRun> {
             run.skipped!.push({ name: policy.name, reason: `Already in the tenant as ${clash.name}.` })
             continue
           }
-          const outcome = await creator.restore(path, { ...snapshot, assignments })
+          const outcome = await creator.restore(path, { ...snapshot, assignments }, check)
           if (outcome.policyId) {
             run.created.push({ folder: policy.folder, id: outcome.policyId, name: policy.name, ...(outcome.partial ? { partial: true } : {}), ...(outcome.warnings ? { warnings: outcome.warnings } : {}) })
             // Saved after every object, so an interrupted run can still be undone.
@@ -472,7 +506,7 @@ async function deploy(body: RecordJson, kind: OibRun["kind"]): Promise<OibRun> {
           const previous = before[type.nameKey] ?? before.displayName ?? before.name
           // The pack's Default scope tag is for new policies; an update keeps the tenant's own tags.
           const { roleScopeTagIds: _packTags, ...content } = snapshot
-          const outcome = await replacer.restore(path, { ...content, ...(Array.isArray(before.roleScopeTagIds) ? { roleScopeTagIds: before.roleScopeTagIds } : {}), id: item.targetId! })
+          const outcome = await replacer.restore(path, { ...content, ...(Array.isArray(before.roleScopeTagIds) ? { roleScopeTagIds: before.roleScopeTagIds } : {}), id: item.targetId! }, check)
           if (outcome.action === "unchanged") {
             run.skipped!.push({ name: policy.name, reason: "Already matches the baseline." })
             continue
@@ -491,6 +525,58 @@ async function deploy(body: RecordJson, kind: OibRun["kind"]): Promise<OibRun> {
     } finally {
       progress.delete(tenant)
     }
+  }
+  return { operation, work }
+}
+
+async function deploy(body: RecordJson, kind: OibRun["kind"]): Promise<OibRun> {
+  const tenant = tenantOf(body.tenantId)
+  return withTenantWrite(tenant, kind === "fix" ? "OpenIntuneBaseline drift fix" : "OpenIntuneBaseline deployment", async () => {
+    const prepared = await prepareDeployment(body, kind)
+    return withWriteApproval([prepared.operation], prepared.work)
+  })
+}
+
+/** Preflight all protected destinations before dispatching any batch. Each child uses its existing access rules. */
+export async function deployReviewedBatches(body: RecordJson, admit: (child: RecordJson) => Promise<Response | null>): Promise<Response> {
+  if (!Array.isArray(body.batches) || body.batches.length < 2 || body.batches.length > 100 || body.batches.some(child => !record(child) || child.action !== "oib-deploy")) {
+    throw new FrameworkError("Choose the deployment batches.")
+  }
+  const batches = body.batches as RecordJson[]
+  if (tenantOf(body.tenantId) !== tenantOf(batches[0]!.tenantId)) throw new FrameworkError("Choose a primary deployment tenant.")
+  const tenants = [...new Set(batches.map(child => tenantOf(child.tenantId)))]
+  const policies = await Promise.all(tenants.map(approvalsEnabled))
+  if (!policies.some(Boolean)) return Response.json({ legacy: true })
+  const prepared = new Map<string, Awaited<ReturnType<typeof prepareDeployment>>[]>()
+  for (const child of batches) {
+    const tenant = tenantOf(child.tenantId)
+    const blocked = await admit({ ...child, bulk: tenant !== tenants[0] })
+    if (blocked) return blocked
+    const list = prepared.get(tenant) ?? []
+    list.push(await prepareDeployment(child, "deploy"))
+    prepared.set(tenant, list)
+  }
+  const operations = [...prepared].map(([tenant, entries]): ApprovalOperation => ({
+    tenant, reference: ["oib-batches", entries.map(entry => entry.operation.reference)],
+    summary: { kind: "Deploy OpenIntuneBaseline policies", count: entries.reduce((count, entry) => count + entry.operation.summary.count, 0),
+      targets: entries.flatMap(entry => entry.operation.summary.targets), assignments: entries.some(entry => entry.operation.summary.assignments) },
+    observe: async () => {
+      const observations = await Promise.all(entries.map(entry => entry.operation.observe()))
+      return { content: observations.map(item => item.content), target: observations.map(item => item.target) }
+    },
+  }))
+  return withWriteApproval(operations, async () => {
+    const results: Array<{ tenant: string; platform: unknown; run?: OibRun; error?: string }> = []
+    for (const [tenant, entries] of prepared) {
+      await withTenantWrite(tenant, "OpenIntuneBaseline deployment", async () => {
+        for (const [index, entry] of entries.entries()) {
+          const platform = batches.filter(child => tenantOf(child.tenantId) === tenant)[index]!.platform
+          try { results.push({ tenant, platform, run: await entry.work() }) }
+          catch (error) { results.push({ tenant, platform, error: message(error) }); break }
+        }
+      })
+    }
+    return Response.json({ results })
   })
 }
 
@@ -507,6 +593,25 @@ async function undo(body: RecordJson): Promise<UndoResult> {
       report({ stage: "Signing in" })
       const { token } = await tokenFor(body)
       const graph = graphCaller(token, fetch, { tenant, refreshToken: async () => (await tokenFor(body, true)).token })
+      const states = new Map<string, unknown>()
+      const read = async (item: { folder: string; id: string }) => {
+        const type = typeForFolder(item.folder)
+        const live = type && OBJECT_ID.test(item.id) ? await readLive(graph, type, item.id) : undefined
+        return live ? approvalFingerprint(live) : null
+      }
+      return await withWriteApproval([{
+        tenant, reference: ["oib-undo", run.runId],
+        summary: { kind: "Undo OpenIntuneBaseline", count: total, reference: run.runId, targets: [...run.created.map(item => item.name), ...run.updated.map(item => item.previousName)], assignments: false },
+        observe: async () => {
+          const observed = []
+          for (const item of [...run.created, ...run.updated]) {
+            const state = await read(item)
+            states.set(item.id, state)
+            observed.push([item.id, state])
+          }
+          return { content: run, target: observed }
+        },
+      }], async () => {
       const results: UndoResult["results"] = []
       const created: OibRun["created"] = []
       const updated: OibRun["updated"] = []
@@ -518,7 +623,8 @@ async function undo(body: RecordJson): Promise<UndoResult> {
           created.push(item)
           continue
         }
-        const response = await graph("DELETE", `${type.path}/${item.id}`)
+        const send = () => graph("DELETE", `${type.path}/${item.id}`)
+        const response = hasWriteApproval(tenant) ? await withWriteCheckpoint(sameObservation(states.get(item.id), () => read(item)), send) : await send()
         // Settings Catalog answers 400 ResourceNotFound for deleted policies instead of 404.
         const gone = response.status < 300 || response.status === 404 || (response.status === 400 && /ResourceNotFound/i.test(JSON.stringify(response.body)))
         if (gone) results.push({ name: item.name, id: item.id, action: "removed", done: true })
@@ -529,7 +635,7 @@ async function undo(body: RecordJson): Promise<UndoResult> {
         }
       }
       // A policy the admin deleted since the run stays deleted: undo does not recreate it as a new, untracked policy.
-      const restorer = new Restorer(graph, { mode: "replace", assignments: false, recreateMissing: false })
+      const restorer = new Restorer(graph, { writeApprovalTenant: tenant, mode: "replace", assignments: false, recreateMissing: false })
       for (const item of run.updated) {
         report({ stage: `Restoring ${item.previousName}`, done: results.length, total })
         if (!item.before) {
@@ -537,7 +643,7 @@ async function undo(body: RecordJson): Promise<UndoResult> {
           updated.push(item)
           continue
         }
-        const outcome = await restorer.restore(`oib/${item.folder}/${item.id}.json`, item.before)
+        const outcome = await restorer.restore(`oib/${item.folder}/${item.id}.json`, item.before, hasWriteApproval(tenant) ? sameObservation(states.get(item.id), () => read(item)) : undefined)
         if (outcome.success) results.push({ name: item.previousName, id: item.id, action: "restored", done: true })
         else if (outcome.missing) results.push({ name: item.previousName, id: item.id, action: "restored", done: true, note: "already deleted in Intune, so the previous version was not recreated" })
         else {
@@ -548,6 +654,7 @@ async function undo(body: RecordJson): Promise<UndoResult> {
       const remaining = { ...run, created, updated }
       saveRun(remaining)
       return { run: created.length || updated.length ? publicRun(remaining) : null, results }
+      })
     } finally {
       progress.delete(tenant)
     }

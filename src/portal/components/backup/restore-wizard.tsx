@@ -1,3 +1,5 @@
+import { TenantApprovals } from "../../../renderer/components/write-approvals/TenantApprovals"
+import { isApprovalBlocker } from "../../../renderer/lib/write-approvals"
 "use client"
 
 import { RestoreApprovals } from "./restore-approvals"
@@ -295,7 +297,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
 
   const [running, setRunning] = useState(false)
   const [progress, setProgress] = useState<{ total: number; done: number; current: string | null; results: Outcome[] } | null>(null)
-  const [result, setResult] = useState<{ outcome: "success" | "partial" | "failed"; message: string; results: Outcome[] } | null>(null)
+  const [result, setResult] = useState<{ outcome: "success" | "partial" | "failed" | "approval"; approvalRetry?: boolean; message: string; results: Outcome[] } | null>(null)
   const [runPaths, setRunPaths] = useState<string[]>([])
 
   // The plan's limits: Community restores one item at a time, as an unassigned copy.
@@ -575,6 +577,11 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
         message: `${restoreSummary(handled, failed, skipped)}${outcomes.some(item => item.approval) ? ` ${outcomes.filter(item => item.approval).length} awaiting approval.` : ""}`, results: outcomes })
     } catch (error) {
       showPlanError(error)
+      const message = error instanceof Error ? error.message : String(error)
+      if (error instanceof FeatureApiError && error.status === 409 && isApprovalBlocker(message)) {
+        setResult({ outcome: "approval", approvalRetry: retry, message, results: mergeOutcomes(previous, completed) })
+        return
+      }
       const missing = (batch: (typeof batches)[number], outcome: Omit<Outcome, "path" | "targetTenantId">): Outcome[] => {
         const targets = copying ? (batch.targetTenantId ? [batch.targetTenantId] : copyTargets) : [undefined]
         return targets.flatMap((targetTenantId) => batch.paths.filter((path) => !completed.some((item) => item.path === path && item.targetTenantId?.toLowerCase() === targetTenantId?.toLowerCase()))
@@ -1010,7 +1017,12 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
                   ) : null
                 })}
               </div>
-              <ul className="mt-4 max-h-[26rem] divide-y divide-gray-100 overflow-y-auto rounded-2xl border border-gray-200">
+              {result?.outcome === "approval" && <details className="mt-4 rounded-xl border p-4">
+            <summary className="cursor-pointer text-sm font-medium">Tenant approvals</summary>
+            <div className="mt-3"><TenantApprovals active initialTenant={copyTargets[0] ?? tenant.credentials.tenantId} /></div>
+          </details>}
+
+          <ul className="mt-4 max-h-[26rem] divide-y divide-gray-100 overflow-y-auto rounded-2xl border border-gray-200">
                 {[...plans]
                   .sort((a, b) => PLAN_ORDER.indexOf(a.plan) - PLAN_ORDER.indexOf(b.plan))
                   .slice(0, shown[REVIEW] ?? LIST_PAGE)
@@ -1140,7 +1152,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
 
       {step === "run" && (
         <div className={card}>
-          <h2 className="text-xl font-medium tracking-tight text-gray-900">{running ? "Restoring..." : "Restore finished"}</h2>
+          <h2 className="text-xl font-medium tracking-tight text-gray-900">{running ? "Restoring..." : result?.outcome === "approval" ? "Tenant approval required" : "Restore finished"}</h2>
           {progress && (
             <div className="mt-4">
               <div className="flex justify-between text-sm text-gray-600">
@@ -1161,7 +1173,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
               className={cn(
                 "mt-5 flex items-center gap-2 rounded-2xl px-4 py-3 text-sm font-medium",
                 result.outcome === "success" && "bg-green-50 text-green-900",
-                result.outcome === "partial" && "bg-amber-50 text-amber-900",
+                (result.outcome === "partial" || result.outcome === "approval") && "bg-amber-50 text-amber-900",
                 result.outcome === "failed" && "bg-red-50 text-red-800",
               )}
             >
@@ -1169,6 +1181,11 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
               {result.message}
             </p>
           )}
+
+          {result?.outcome === "approval" && <details className="mt-4 rounded-xl border p-4">
+            <summary className="cursor-pointer text-sm font-medium">Tenant approvals</summary>
+            <div className="mt-3"><TenantApprovals active initialTenant={copyTargets[0] ?? tenant.credentials.tenantId} /></div>
+          </details>}
 
           <ul className="mt-4 max-h-[26rem] divide-y divide-gray-100 overflow-y-auto">
             {(result?.results ?? progress?.results ?? []).slice(0, shown[RESULTS] ?? LIST_PAGE).map((outcome, index) => {
@@ -1194,7 +1211,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
                     </span>
                     <span className="block text-xs text-gray-500"><LinkedMessage text={text} /></span>
                     {outcome.approvalState === "required" && <Button variant="outline" className="mt-2" aria-controls="restore-approval-list" onClick={() => setApprovalOpenRevision(value => value + 1)}>Submit for approval</Button>}
-                    {outcome.partial && !outcome.approvalId && outcome.policyId && <span className="block text-xs text-amber-800">Incomplete object: {outcome.policyId}. {outcome.repairToken ? "Retry repairs the remaining steps without creating another object. Repair is available for one hour in this app session." : "Check and repair it in Intune."}</span>}
+                    {outcome.partial && !outcome.approvalId && outcome.policyId && <span className="block text-xs text-amber-800">Incomplete object: {outcome.policyId}. {outcome.repairToken ? "Retry repairs the remaining steps without creating another object while the repair is available." : "Check and repair it in Intune."}</span>}
                     {/* A skipped item was refused before any write, so there is nothing to check. */}
                     {outcome.retryable === false && !outcome.success && !outcome.approvalId && (!outcome.approval || outcome.partial) && outcome.action !== "skipped" && <span className="block text-xs text-amber-800">Check this item in {adminCenter(itemByPath.get(outcome.path)?.folder)} before retrying; a write may already have completed.</span>}
                     {outcome.warnings?.map((warning) => (
@@ -1224,7 +1241,8 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
 
           {!running && result && (
             <div className="mt-6 flex flex-wrap justify-end gap-3">
-              {retryBatches(result.results).length > 0 && (
+              {result.outcome === "approval" && <Button onClick={() => void run(runPaths, result.approvalRetry)}>Apply reviewed restore</Button>}
+              {result.outcome !== "approval" && retryBatches(result.results).length > 0 && (
                 <Button
                   variant="outline"
                   onClick={() => void run(runPaths, true)}

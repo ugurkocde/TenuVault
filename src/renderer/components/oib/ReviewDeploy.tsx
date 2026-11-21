@@ -1,10 +1,11 @@
+import { isApprovalBlocker } from "../../lib/write-approvals"
 import { useEffect, useState, type ReactNode } from "react"
 import { Link } from "react-router-dom"
 import { AlertTriangle, CheckCircle2, Rocket, RotateCcw, XCircle } from "lucide-react"
 import { useTenants } from "~/contexts/TenantContext"
 import { settingsHref } from "../../lib/settings-section"
 import { cn } from "~/lib/utils"
-import { OIB_BACKUP_REUSE_MINUTES, OIB_PLATFORMS, type OibBackupOptions, type OibRecentBackup, type OibRun } from "../../../shared/oib/types"
+import { OIB_BACKUP_REUSE_MINUTES, OIB_PLATFORMS, type OibBackupOptions, type OibRecentBackup, type OibPlatform, type OibRun } from "../../../shared/oib/types"
 import { PlanBadge } from "../UpgradeNote"
 import { button, errorText, GUID, listJoin, minutesAgo, oibRequest, primary, Toggle, useOibTenant, versionsLabel, type OibTenant } from "./common"
 import { batchFolders, deployItem, deployToTenant, type BackupRequest, type BatchOutcome, type DeployBatch } from "./deploy-sequence"
@@ -135,6 +136,22 @@ export function ReviewDeploy({ batches: given, flow, kind = "deploy", onBack, ba
     try {
       void startJob<DeployOutcome[]>({ tenantId: tenant!.tenantId, tenantName: tenant!.name, kind, flow, label: kind === "fix" ? `Fixing drift in ${tenant!.name}` : `Deploying to ${targets.length > 1 ? `${targets.length} tenants` : tenant!.name}` }, async context => {
         const outcomes: DeployOutcome[] = []
+        if (kind === "deploy" && targets.length * batches.length > 1) {
+          const payload = targets.flatMap((target, index) => batches.map(batch => ({
+            action: "oib-deploy", tenantId: target.tenantId, appId: target.appId, storageAccountName: target.storageAccountName,
+            platform: batch.platform, commit: batch.commit, tag: batch.tag, items: batch.items.map(deployItem),
+            backup: index === 0 || request.mode === "none" ? request : { mode: "new" },
+            pilotGroupId: index === 0 ? pilot.trim() || undefined : undefined,
+          })))
+          const response = await fetch("/api/oib-reviewed-batches", {
+            method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tenantId: tenant!.tenantId, batches: payload }),
+          })
+          const result = await response.json() as { legacy?: boolean; error?: string; results?: Array<{ tenant: string; platform: OibPlatform; run?: OibRun; error?: string }> }
+          if (!response.ok) throw new Error(result.error || "The deployment could not be verified.")
+          if (!result.legacy) return (result.results ?? []).map(entry => ({
+            ...entry, tenantId: entry.tenant, tenantName: targets.find(target => target.tenantId === entry.tenant)?.name ?? entry.tenant,
+          }))
+        }
         for (const [index, target] of targets.entries()) {
           context.poll(target.tenantId)
           const live: DeployOutcome[] = []
@@ -164,23 +181,24 @@ export function ReviewDeploy({ batches: given, flow, kind = "deploy", onBack, ba
   const notDeployed = outcomes.filter(o => !o.run)
   const nothingDeployed = outcomes.length > 0 && notDeployed.length === outcomes.length
   // A backup that failed (or could not be used) stops a tenant's run before any policy changes.
+  const awaitingApproval = view === "result" && [job!.error, ...notDeployed.map(item => item.error)].some(message => !!message && isApprovalBlocker(message))
   const backupFailed = view === "result" && !job!.error && notDeployed.some(o => /backup/i.test(o.error ?? "") && !/no backup storage/i.test(o.error ?? ""))
   const heading = view === "running" ? job!.label
-    : view === "result" ? backupFailed ? nothingDeployed ? `Nothing was ${kind === "fix" ? "reset" : "deployed"}: the backup failed` : "Some platforms were not deployed"
+    : view === "result" ? awaitingApproval ? "Tenant approval required" : backupFailed ? nothingDeployed ? `Nothing was ${kind === "fix" ? "reset" : "deployed"}: the backup failed` : "Some platforms were not deployed"
       : `${kind === "fix" ? "Drift fix" : "Deployment"} ${job!.error ? "stopped" : job!.result?.some(o => o.error || o.run?.failed.length) ? "finished with problems" : "finished"}`
     : view === "confirm" ? `Confirm the ${noun}` : `Review the ${noun}`
   const title = <h3 ref={headingRef} tabIndex={-1} className="scroll-mt-6 text-lg font-medium text-gray-900 outline-none">{heading}</h3>
 
   if (view === "running" || view === "result") {
     // Try again repeats what was not deployed with the same backup choice: all of it, or this tenant's skipped platforms.
-    const attempt = backupFailed ? attempts.get(attemptKey(tenant.tenantId, kind, flow)) : undefined
+    const attempt = backupFailed || awaitingApproval ? attempts.get(attemptKey(tenant.tenantId, kind, flow)) : undefined
     const skipped = notDeployed.filter(o => o.tenantId === tenant.tenantId).map(o => o.platform)
-    const again = attempt ? nothingDeployed ? attempt.batches : attempt.batches.filter(b => skipped.includes(b.platform)) : []
+    const again = attempt ? nothingDeployed || awaitingApproval ? attempt.batches : attempt.batches.filter(b => skipped.includes(b.platform)) : []
     const retryWith = (to: "review" | "confirm") => () => {
-      setRetry(again); setChoice(attempt!.choice); setPilot(attempt!.pilot); setAlsoDeploy(nothingDeployed ? attempt!.alsoDeploy : []); setAcknowledged(false); setPhase(to)
+      setRetry(again); setChoice(attempt!.choice); setPilot(attempt!.pilot); setAlsoDeploy(nothingDeployed || awaitingApproval ? attempt!.alsoDeploy : []); setAcknowledged(false); setPhase(to)
     }
     const actions: NextAction[] = view !== "result" ? [] : again.length
-      ? [{ label: "Try again", onClick: retryWith("confirm"), primary: true }, { label: "Choose a different backup option", onClick: retryWith("review") }, ...next(job!).filter(a => !a.primary)]
+      ? [{ label: awaitingApproval ? "Review and apply" : "Try again", onClick: retryWith("confirm"), primary: true }, { label: "Choose a different backup option", onClick: retryWith("review") }, ...next(job!).filter(a => !a.primary)]
       : next(job!)
     return <div>
       {title}

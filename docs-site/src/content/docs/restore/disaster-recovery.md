@@ -127,6 +127,12 @@ Backup metadata cannot recreate private keys, installer payloads or Apple creden
 
 The full list is in [What cannot be restored](/restore/limitations/).
 
+## Second admin approval during recovery
+
+Recovery writes still need tenant approval if the destination has enabled it. Plan for the second admin to be available when you need to restore. Check uncertain outcomes in Intune before retrying.
+
+Open **Settings > Storage and recovery > Tenant approvals** and select the destination tenant. A different signed-in admin reviews the request there. After approval, return to the operation on the original installation and apply the same selection within seven days.
+
 ## Related pages
 
 * [Intune disaster recovery plan](https://www.tenuvault.com/intune-disaster-recovery): the preparation checklist, on the product site

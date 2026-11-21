@@ -110,6 +110,12 @@ For Dev to Prod promotion, select the production tenant and open **Changes** > *
 * **Create a new policy:** confirmed, usable scope tag mappings are copied. Each source tag without a usable mapping uses the destination's **Default** tag (`0`) instead, with a warning naming that source tag. The built-in Default tag is portable between tenants.
 * **Redacted secrets:** a source policy or existing destination policy with masked secrets blocks promotion until you tick **I understand that secrets in this policy are not promoted and must be set again in the destination** and plan again. The preview identifies the blocked policy and the reason. Acknowledged promotion omits settings containing secrets; set those secrets again in the destination after applying. Automatic rollback cannot recover masked destination secrets.
 
+## Destination approval
+
+TenuVault checks all destinations before dispatching the first write. Each enrolled destination needs its own approval from a different delegated admin in that tenant. The source tenant’s sign-in cannot approve destination writes.
+
+Open **Settings > Storage and recovery > Tenant approvals** and select the destination tenant. A different signed-in admin reviews the request there. After approval, return to the operation on the original installation and apply the same selection within seven days.
+
 ## Related pages
 
 * [Intune tenant-to-tenant migration](https://www.tenuvault.com/guides/intune-tenant-to-tenant-migration): the migration guide, on the product site

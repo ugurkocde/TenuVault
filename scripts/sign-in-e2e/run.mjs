@@ -33,6 +33,7 @@ import { connect } from "node:net"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { chromium, firefox, webkit } from "playwright"
+import { APPROVAL_ACCOUNT, BACKUP_ID, SNAPSHOT_PATH } from "./approvals-stand-in.mjs"
 import { LOGIN_HOST, startStandIn } from "./stand-in.mjs"
 import { cleanup, forgetAppSecret, install, makeCertificates } from "./runner.mjs"
 
@@ -97,7 +98,7 @@ function assert(condition, message) {
 }
 
 /** Starts the app with a throwaway profile and connects to its window over CDP. */
-async function launchApp(label) {
+async function launchApp(label, resetSecret = true) {
   const port = 9800 + Math.floor(Math.random() * 1000)
   const profile = mkdtempSync(join(tmpdir(), "tenuvault-sign-in-e2e-"))
   const args = [...(packagedApp ? [] : [desktopDir]), `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`]
@@ -106,7 +107,7 @@ async function launchApp(label) {
   if (process.platform === "linux") args.push("--no-sandbox", "--password-store=gnome-libsecret")
   if (process.platform === "linux" && process.env.DISPLAY) args.push("--ozone-platform=x11")
   // On macOS the app's secrets go to the disposable keychain runner.mjs makes the default.
-  forgetAppSecret()
+  if (resetSecret) forgetAppSecret()
   const env = { ...process.env, ELECTRON_ENABLE_LOGGING: "1" }
   delete env.ELECTRON_RUN_AS_NODE
   const child = spawn(packagedApp ?? require("electron"), args, { stdio: ["ignore", "pipe", "pipe"], env })
@@ -273,6 +274,68 @@ async function refusals(standIn) {
   }
 }
 
+async function twoAdminApprovals(standIn) {
+  const second = { username: "reviewer@signin-e2e.example", name: "Sign-in Test Reviewer" }
+  const apps = []
+  const session = async (account, label) => {
+    standIn.setAccount(account)
+    const app = await launchApp(label, !apps.length)
+    apps.push(app)
+    await app.page.getByText("Welcome to TenuVault").waitFor({ timeout: 30_000 })
+    const url = await startSignIn(app.page)
+    const opened = await openBrowser({ type: chromium }, standIn)
+    try {
+      await opened.page.goto(url.href)
+      await opened.page.getByText("Go back to TenuVault").waitFor()
+      await app.page.getByText(`Signed in as ${account.username}`).waitFor({ timeout: 30_000 })
+    } finally { await opened.browser.close() }
+    await app.page.evaluate(async ({ tenantId, appId, storageAccountName }) => {
+      const credentials = { tenantId, appId, clientSecret: "tenuvault-desktop-delegated-auth" }
+      await window.tenuvault.storage.setItem("tenuvault_tenants", JSON.stringify([{
+        id: 1, name: "Approval fixture", domain: "signin-e2e.example", status: "healthy", tags: [], credentials, resources: { storageAccountName },
+      }]))
+      await window.tenuvault.storage.setItem("tenuvault_selected_tenant", "1")
+      await window.tenuvault.disclaimer.accept([tenantId])
+    }, { tenantId: TENANT_ID, appId: CLIENT_ID, storageAccountName: APPROVAL_ACCOUNT })
+    return app.page
+  }
+  const api = (page, path, body) => page.evaluate(async ({ path, body }) => {
+    const response = await window.tenuvault.api({
+      path, method: "POST", headers: { "content-type": "application/json" }, body: new TextEncoder().encode(JSON.stringify(body)),
+    })
+    return { status: response.status, ...JSON.parse(new TextDecoder().decode(response.body)) }
+  }, { path, body: { tenantId: TENANT_ID, ...body } })
+  const control = (page, action, body) => api(page, "/api/tenant-write-approvals", { action, ...body })
+  const apply = page => api(page, "/api/restore-backup", {
+    appId: CLIENT_ID, clientSecret: "tenuvault-desktop-delegated-auth", storageAccountName: APPROVAL_ACCOUNT,
+    backupId: BACKUP_ID, restoreType: "selective", selectedPolicies: [{ path: SNAPSHOT_PATH }],
+  })
+  try {
+    const origin = await session(ACCOUNT, "approval-origin")
+    const approver = await session(second, "approval-reviewer")
+    const enabled = await control(origin, "enable", { confirmManagedCutover: true })
+    assert(enabled.enabled, `could not activate approvals: ${enabled.error}`)
+    assert((await apply(origin)).error?.includes("pending"), "first apply did not request approval")
+    assert(standIn.approvals.writes() === 0, "Graph wrote before approval")
+    const inbox = await control(approver, "list")
+    const id = inbox.requests?.[0]?.request?.id
+    assert(id && inbox.actor.oid !== inbox.requests[0].request.requester.oid, "the second profile did not see a distinct requester")
+    assert((await control(origin, "approve", { requestId: id })).status === 409, "requester approved their own write")
+    assert((await control(approver, "approve", { requestId: id })).requests?.[0]?.decision?.decision === "approved", "review was not saved")
+    const applied = await apply(origin)
+    assert(applied.success && standIn.approvals.writes() === 1, `approved restore did not apply once: ${applied.error}`)
+    assert((await apply(origin)).error?.includes("pending"), "the next copy reused the finished request")
+    const next = (await control(approver, "list")).requests.find(entry => entry.request.state === "pending").request.id
+    await control(approver, "approve", { requestId: next })
+    standIn.approvals.changeTarget()
+    assert((await apply(origin)).error?.includes("changed after request"), "changed target did not invalidate approval")
+    assert(standIn.approvals.writes() === 1, "changed target dispatched a Graph write")
+  } finally {
+    standIn.setAccount(ACCOUNT)
+    for (const app of apps.reverse()) await app.close()
+  }
+}
+
 // Undo whatever an earlier, interrupted run left, then the changes of this run.
 function undo() {
   const { problems, left } = cleanup()
@@ -304,6 +367,7 @@ try {
   install(certificates.ca)
   standIn = await startStandIn({ key: certificates.key, cert: certificates.cert, tenantId: TENANT_ID, clientId: CLIENT_ID, account: ACCOUNT })
   for (const engine of ENGINES) await check(`first sign-in completes in ${engine.name}`, () => signInWith(engine, standIn))
+  await check("two signed-in admins request, review and apply with shared storage", () => twoAdminApprovals(standIn))
   await check("a wrong state is refused and a refusal shows the app's error", () => refusals(standIn))
 } catch (error) {
   failures++

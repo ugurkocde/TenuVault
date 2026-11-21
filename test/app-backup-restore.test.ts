@@ -1,3 +1,5 @@
+import { setWriteApprovals } from "../src/main/write-approvals/service"
+import { reviewer, writeApprovalFixture } from "./helpers/write-approval-fixture"
 import { afterEach, beforeAll, afterAll, describe, expect, it, vi } from "vitest"
 import { createCipheriv, createHash, createHmac, randomBytes, randomUUID } from "node:crypto"
 import { mkdtemp, readFile, rm, writeFile, readdir, mkdir } from "node:fs/promises"
@@ -446,4 +448,25 @@ describe("restore ownership across processes", () => {
     await expect(f.store.withRestoreLock(tenant, f.source.id, target, new AbortController().signal, action)).rejects.toThrow("owns this restore")
     expect(action).not.toHaveBeenCalled(); expect(await readdir(directory)).toHaveLength(kind === "empty" ? 0 : 1)
   })
+})
+
+
+it("binds the verified App Backup source before writes and retains the requested draft across restart", async () => {
+  const { profile } = writeApprovalFixture()
+  const origin = profile(), second = profile(reviewer)
+  setWriteApprovals(origin.service)
+  const f = await fixture(), d = destination()
+  const apply = () => restoreCapturedApp(f.store, f.source, snapshot, target, "Restored", options(d))
+  try {
+    await origin.service.enable(target)
+    await expect(apply()).rejects.toThrow("pending")
+    expect(d.calls.filter(([method]) => method !== "GET")).toHaveLength(0)
+    expect(d.fetcher).not.toHaveBeenCalled()
+    await second.service.decide(target, (await second.service.inbox(target)).requests[0]!.request.id, "approve")
+    const reload = profile(undefined, origin.store)
+    setWriteApprovals(reload.service)
+    expect(await apply()).toMatchObject({ tenantId: target, name: "Restored" })
+    expect(d.calls.filter(([method, path]) => method === "POST" && path.endsWith("/mobileApps"))).toHaveLength(1)
+    expect(d.fetcher).toHaveBeenCalled()
+  } finally { setWriteApprovals(undefined) }
 })
