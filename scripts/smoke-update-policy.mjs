@@ -267,8 +267,9 @@ const quote = (text) => `'${text.replaceAll("'", "''")}'`
  * PowerShell that removes the pending record and then the smoke's own key, which holds nothing else
  * (an empty one is what a kill between the two steps leaves). It fails when either is still there.
  */
-const removePending = `$record = Get-Item -LiteralPath ${quote(PENDING)} -ErrorAction SilentlyContinue
-if ($null -ne $record) {
+const removePending = `if (Test-Path -LiteralPath ${quote(PENDING)}) {
+  # Read errors stop the script: only a key confirmed missing counts as removed.
+  $record = Get-Item -LiteralPath ${quote(PENDING)}
   if (@($record.GetValueNames()) -contains '${PENDING_VALUE}') { Remove-ItemProperty -LiteralPath ${quote(PENDING)} -Name '${PENDING_VALUE}' }
   $record = Get-Item -LiteralPath ${quote(PENDING)}
   if ($record.ValueCount -eq 0 -and $record.SubKeyCount -eq 0) { Remove-Item -LiteralPath ${quote(PENDING)} }
@@ -407,6 +408,9 @@ function windowsChange(id) {
 New-Item -Path ${quote(PENDING)} | Out-Null
 New-ItemProperty -LiteralPath ${quote(PENDING)} -Name '${PENDING_VALUE}' -PropertyType String -Value ${quote(id)} | Out-Null
 $created = $false
+# Set when a failed write leaves a policy key without this run's mark: the record then stays, so
+# the next run or --clean can still tell the key is this run's.
+$keep = $false
 try {
   New-Item -Path ${quote(HKCU)} | Out-Null
   $created = $true
@@ -417,11 +421,14 @@ try {
     $key = Get-Item -LiteralPath ${quote(HKCU)} -ErrorAction SilentlyContinue
     if ($null -ne $key -and [string]$key.GetValue('${MARK}', '') -eq ${quote(id)} -and $null -eq $key.GetValue('${NAME}', $null)) { Remove-ItemProperty -LiteralPath ${quote(HKCU)} -Name '${MARK}' }
     $key = Get-Item -LiteralPath ${quote(HKCU)} -ErrorAction SilentlyContinue
-    if ($null -ne $key -and $key.ValueCount -eq 0 -and $key.SubKeyCount -eq 0) { Remove-Item -LiteralPath ${quote(HKCU)} }
+    if ($null -ne $key -and $key.ValueCount -eq 0 -and $key.SubKeyCount -eq 0) { Remove-Item -LiteralPath ${quote(HKCU)} -ErrorAction SilentlyContinue }
+    if ((Test-Path -LiteralPath ${quote(HKCU)}) -and [string](Get-Item -LiteralPath ${quote(HKCU)}).GetValue('${MARK}', '') -ne ${quote(id)}) { $keep = $true }
   }
   throw
 } finally {
-  ${removePending}
+  if (-not $keep) {
+    ${removePending}
+  }
 }`)
       return result.status === 0 ? null : failed(result)
     },
