@@ -78,6 +78,7 @@ $script:publishBehavior = "publish"
 $script:declineVariable = $null
 $script:failLookups = $false
 $script:failList = $false
+$script:failNextList = $false
 $script:translatedVariable = $null
 
 function Import-AzAutomationRunbook {
@@ -107,6 +108,7 @@ function Get-AzAutomationVariable {
     [CmdletBinding()]
     param($ResourceGroupName, $AutomationAccountName, $Name)
     if (-not $Name) {
+        if ($script:failNextList) { $script:failNextList = $false; Write-MockError $PSCmdlet (New-OutageException); return }
         if ($script:failLookups -or $script:failList) { Write-MockError $PSCmdlet (New-OutageException); return }
         return @($script:variables.Keys | Sort-Object | ForEach-Object { [pscustomobject]@{ Name = $_; Value = $script:variables[$_] } })
     }
@@ -285,19 +287,26 @@ function Invoke-WebRequest {
     if ($script:denyPrevious -or $Uri -notlike "https://stprevious.*") { throw "Access denied." }
     return @{ Content = $script:migrationPolicy }
 }
-foreach ($scenario in "move-copies-policy", "move-warns-on-denied", "move-refuses-enrolled", "move-keeps-destination", "move-refuses-disabled-destination", "move-refuses-unreadable-enrollment", "upgrade-preserves-binding", "upgrade-creates-binding", "upgrade-keeps-unreadable-binding") {
+foreach ($scenario in "move-copies-policy", "move-copies-off", "move-quiet-on-denied", "move-warns-on-denied", "move-keeps-destination", "move-keeps-off", "move-continues-on-list-error", "fresh-recovers-after-list-error", "fresh-continues-on-list-error", "upgrade-preserves-binding", "upgrade-creates-binding", "upgrade-keeps-unreadable-binding") {
     Reset-OldSetup
     $runbook = $null
     $script:variables["TenuVaultStorageAccount-$tenantKey"] = if ($scenario.StartsWith("move")) { "stprevious" } else { $StorageAccountName }
-    if ($scenario -notin @("upgrade-creates-binding", "move-warns-on-denied")) {
+    if ($scenario -notin @("upgrade-creates-binding", "move-quiet-on-denied")) {
         $script:variables["TenuVaultOmissionAccount-$tenantKey"] = "stprevious"
     }
-    if ($scenario -in @("upgrade-keeps-unreadable-binding", "move-refuses-unreadable-enrollment")) {
+    if ($scenario -in @("upgrade-keeps-unreadable-binding", "move-continues-on-list-error")) {
         $script:translatedVariable = "TenuVaultOmissionAccount-$tenantKey"
         $script:failList = $true
     }
-    $script:denyPrevious = $scenario -in @("move-warns-on-denied", "move-keeps-destination", "move-refuses-enrolled", "move-refuses-disabled-destination")
-    $script:destinationPolicy = if ($scenario -eq "move-keeps-destination") { $script:migrationPolicy } elseif ($scenario -eq "move-refuses-disabled-destination") { $script:migrationPolicy.Replace('"enabled":true', '"enabled":false') }
+    if ($scenario.StartsWith("fresh")) {
+        $script:variables.Clear()
+        $script:failNextList = $true
+        $script:failList = $scenario -eq "fresh-continues-on-list-error"
+    }
+    $script:migrationPolicy = $script:migrationPolicy.Replace('"enabled":false', '"enabled":true')
+    if ($scenario -eq "move-copies-off") { $script:migrationPolicy = $script:migrationPolicy.Replace('"enabled":true', '"enabled":false') }
+    $script:denyPrevious = $scenario -in @("move-warns-on-denied", "move-quiet-on-denied", "move-keeps-destination", "move-keeps-off", "move-continues-on-list-error")
+    $script:destinationPolicy = if ($scenario -eq "move-keeps-destination") { $script:migrationPolicy } elseif ($scenario -eq "move-keeps-off") { $script:migrationPolicy.Replace('"enabled":true', '"enabled":false') }
     $output = @()
     $errorText = $null
     try { $output = @(. $upgradeStep 3>&1 6>&1) } catch { $errorText = $_.Exception.Message }

@@ -38,7 +38,7 @@ If no tenant is connected, the card shows **No tenants yet.** with a link to **S
 
 New backups go to the location you choose. Existing backups stay where they are and are only listed while that location is selected. Azure storage needs the Pro or MSP plan. For the options and errors, see [Choose where backups are stored](/getting-started/choose-storage/).
 
-If the current location is enrolled in secret omission, enable omission at the destination before switching to keep leaving out values. You can also confirm that new backups at the destination may contain secret values. TenuVault stops the move if it cannot verify the destination's omission setting.
+If this installation has recorded secret omission enrollment for the current location, enable omission at the destination before switching to keep leaving out values. You can also confirm that new backups at the destination may contain secret values. TenuVault stops the enrolled move if it cannot verify the destination's omission setting. An installation that has never enrolled the current location can switch storage without an omission check.
 
 To add or remove tenants, use **Tenants**. See [Manage tenants](/tenants/).
 
@@ -55,7 +55,7 @@ In **Sign-in**, find the tenant in the **Tenants** card and turn on **Leave secr
 
 Upgrade each desktop installation and Azure runbook that backs up the tenant. Settings checks the published runbook version reported by the last job. If that status shows a version older than 1.6.0, upgrade the runbook and run a backup to refresh its status, or confirm that cloud jobs have stopped. If the version is unknown, confirm that every cloud runbook for this tenant has been upgraded or stopped.
 
-Each producer reads the policy from its own destination. Settings saves it to the selected desktop storage and to any cloud storage account registered in the app. Set the option on each installation that saves to its own device. Check the policy after changing either storage account. Settings and Backup History name producers whose backups start after activation without recording omission.
+Each producer reads the policy from its own destination. Settings saves it to the selected desktop storage and to any cloud storage account registered in the app. Set the option on each installation that saves to its own device. Check the policy after changing either storage account. After a cloud storage move, if the runbook has recorded enrollment and the new account has no policy, it stops until you enable omission or explicitly save it as off in the new account. Settings and Backup History name producers whose backups start after activation without recording omission. [Cloud backup storage moves](/backups/cloud/#secret-omission-for-cloud-backups)
 
 Turning the option on applies to backups and rollback captures that start afterwards. A run already in progress finishes with its original policy. Earlier backups keep their values until retention removes them. Older installations and runbooks can still make backups with values, so check the warnings after an upgrade or a storage move.
 

@@ -233,10 +233,15 @@ foreach ($case in @("forbidden", "ambiguous404", "unavailable", "malformed", "co
 
 $script:omaParity = $false
 $script:policyCode = "BlobNotFound"
-foreach ($case in @("unreadableEnrollment", "missingEnrollment", "emptyOmaSuccess", "emptyOmaFailure")) {
+foreach ($case in @("unreadableEnrollment", "missingEnrollment", "movedWithoutPolicy", "movedWithOffPolicy", "movedWithOnPolicy", "emptyOmaSuccess", "emptyOmaFailure")) {
     $script:calls.Clear()
     $script:OutcomeSent = $false
-    $script:binding = if ($case -eq "unreadableEnrollment") { "stcontoso" } else { "" }
+    $script:binding = if ($case -eq "unreadableEnrollment") { "stcontoso" } elseif ($case -like "moved*") { "stprevious" } else { "" }
+    $script:control = if ($case -in @("movedWithOffPolicy", "movedWithOnPolicy")) {
+        '{"version":1,"tenantId":"11111111-2222-3333-4444-555555555555","generation":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","enabled":' +
+            ($case -eq "movedWithOnPolicy").ToString().ToLowerInvariant() + ',"scripts":false}'
+    }
+    $script:omit = $case -eq "movedWithOnPolicy"
     $script:enrollmentRead = switch ($case) { "unreadableEnrollment" { "unavailable" }; "missingEnrollment" { "missing" }; default { "" } }
     $script:emptyOma = if ($case -like "emptyOma*") { $case } else { "" }
     $errorText = $null

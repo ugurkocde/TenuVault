@@ -676,7 +676,15 @@ async function bootstrap(): Promise<void> {
     },
   })
   const host: ApiHost = new ApiHost({
-    routes: { ...routes, ...backupRoutes(engine, (tenantId) => scopes.get(tenantId).scope), ...featureRoutes(featureDeps), ...driftScanRoutes(driftJobs) },
+    routes: {
+      ...routes,
+      ...backupRoutes(engine, (tenantId) => scopes.get(tenantId).scope, (tenantId) => {
+        return tenantProfile(tenantId)?.storageAccountName ??
+          (connectedTenantIds().some(id => id.toLowerCase() === tenantId.toLowerCase()) ? null : undefined)
+      }),
+      ...featureRoutes(featureDeps),
+      ...driftScanRoutes(driftJobs),
+    },
     transform: surfaceTokenErrors,
     // Disabled CIS routes refuse before any licensing work. The plan comes next, so the
     // disclaimer is never accepted for a change the plan refuses anyway.

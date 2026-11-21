@@ -288,9 +288,9 @@ function Copy-TenuVaultOmissionPolicy {
             } catch { }
         }
         $destination = & $read $target
-        if ((-not $destination -or ($Enrolled -and -not $destination.Policy.enabled)) -and $PreviousAccount -cmatch '^[a-z0-9]{3,24}$') {
+        if (-not $destination -and $PreviousAccount -cmatch '^[a-z0-9]{3,24}$') {
             $prior = & $read "https://$PreviousAccount.blob.core.windows.net/$blob"
-            if ($prior -and (-not $Enrolled -or $prior.Policy.enabled) -and $PSCmdlet.ShouldProcess($StorageAccountName, "Copy omission policy from $PreviousAccount")) {
+            if ($prior -and $PSCmdlet.ShouldProcess($StorageAccountName, "Copy omission policy from $PreviousAccount")) {
                 $putHeaders = $headers.Clone()
                 $putHeaders["x-ms-blob-type"] = "BlockBlob"
                 $putHeaders["If-None-Match"] = "*"
@@ -302,25 +302,19 @@ function Copy-TenuVaultOmissionPolicy {
                 $destination = & $read $target
             }
         }
-        if ($destination -and (-not $Enrolled -or $destination.Policy.enabled)) {
+        if ($destination) {
             Write-Host "Keeping the omission policy already set on '$StorageAccountName'."
             return $destination.Policy
         }
     } catch { }
-    if ($Enrolled) {
-        throw "Cloud backup storage was not changed. Omission is enrolled on '$PreviousAccount' and an enabled policy could not be verified on '$StorageAccountName'. Check access to both policy blobs or enable omission on the destination before retrying."
-    }
-    Write-Warning $warning
+    if ($Enrolled) { Write-Warning $warning }
 }
 
 function Initialize-TenuVaultOmissionBinding {
     [CmdletBinding(SupportsShouldProcess)]
     param($Policy, $Listed)
     $name = "TenuVaultOmissionAccount-$tenantKey"
-    if ($listed.Error) {
-        Write-Warning "Omission enrollment was kept. If the enrollment variable is missing, rerun setup when the Automation variables are available."
-        return
-    }
+    if ($Listed.Error) { return }
     $existing = $listed.Variables.ContainsKey($name)
     $value = [string]$listed.Variables[$name]
     if ($Policy.enabled -eq $true) {
@@ -837,18 +831,20 @@ if ($principalId) {
 # ---------------------------------------------------------------------------
 
 $listed = Get-TenuVaultAutomationVariables
+if ($listed.Error) { $listed = Get-TenuVaultAutomationVariables }
+if ($listed.Error) {
+    # A failed lookup by name cannot prove absence, but positive results still allow copying.
+    foreach ($name in "TenuVaultStorageAccount-$tenantKey", "TenuVaultStorageAccount", "TenuVaultOmissionAccount-$tenantKey") {
+        try {
+            $variable = Get-AzAutomationVariable -ResourceGroupName $ResourceGroupName -AutomationAccountName $AutomationAccountName -Name $name -ErrorAction Stop
+            $listed.Variables[$name] = $variable.Value
+        } catch { }
+    }
+}
 $previousAccount = [string]$listed.Variables["TenuVaultStorageAccount-$tenantKey"]
 if (-not $previousAccount) { $previousAccount = [string]$listed.Variables["TenuVaultStorageAccount"] }
-if ($listed.Error) {
-    # A positive scoped lookup is enough to keep the current destination during an upgrade.
-    $current = Get-AzAutomationVariable -ResourceGroupName $ResourceGroupName -AutomationAccountName $AutomationAccountName -Name "TenuVaultStorageAccount-$tenantKey" -ErrorAction SilentlyContinue
-    if ([string]$current.Value -cne $StorageAccountName) {
-        throw "Cloud backup storage was not changed. The existing Automation storage and omission enrollment could not be verified. Check access to the Automation variables and retry."
-    }
-    $previousAccount = $StorageAccountName
-}
 $enrollment = [string]$listed.Variables["TenuVaultOmissionAccount-$tenantKey"]
-$enrolled = $previousAccount -and $enrollment.Split(',') -ccontains $previousAccount
+$enrolled = [bool]$enrollment
 $destinationPolicy = Copy-TenuVaultOmissionPolicy $previousAccount $enrolled
 Initialize-TenuVaultOmissionBinding $destinationPolicy $listed
 

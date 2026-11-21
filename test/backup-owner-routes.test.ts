@@ -8,6 +8,7 @@ import { POST as downloadBackup } from "../src/portal/app/api/download-backup/ro
 import { POST as backupChanges } from "../src/portal/app/api/backup-changes/route"
 import { UNTAGGED_BACKUP } from "../src/portal/lib/policies/backup-owner"
 import { INVALID_MANIFEST_TENANT } from "../src/shared/backup-ownership"
+import { snapshotHash } from "../src/portal/lib/policies/backup-manifest"
 import { endlessBody } from "./helpers"
 
 const OWN = "11111111-1111-1111-1111-111111111111"
@@ -129,6 +130,32 @@ describe("positive ownership for changes to live policies", () => {
     const { items } = await (await restorePreview(request("/api/restore-preview", { ...base, paths: [policyPath] }))).json()
     expect(items[0].replaceBlocker).toBe(UNTAGGED_BACKUP)
     expect(items[0].blocker).toBeUndefined()
+  })
+
+  it("keeps verified hydration for StringXml values that match the Graph placeholder", async () => {
+    const hydrated = { ...snapshot, omaSettings: [{
+      "@odata.type": "#microsoft.graph.omaSettingStringXml",
+      isEncrypted: true,
+      value: "PGEvPg==",
+      secretReferenceValueId: "reference",
+    }] }
+    const preview = async (hash: string) => {
+      stubStorage({
+        [policyPath]: hydrated,
+        [`${backupId}/metadata.json`]: {
+          TenantId: OWN, Status: "Success",
+          Items: { "DeviceConfigurations/original": { file: "Example.json", hash, hydratedOmaMasks: [0] } },
+        },
+      })
+      const { items } = await (await restorePreview(request("/api/restore-preview", { ...base, paths: [policyPath] }))).json()
+      return items[0]
+    }
+    const verified = await preview(snapshotHash(hydrated))
+    expect(verified.blocker).toBeUndefined()
+    expect(verified.readiness).toMatchObject({ automatic: true, manualActions: [] })
+    expect((await preview(snapshotHash(snapshot))).readiness).toMatchObject({
+      automatic: false, manualActions: [expect.stringContaining("masked OMA-URI")],
+    })
   })
 
   it.each([

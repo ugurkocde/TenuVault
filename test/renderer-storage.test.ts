@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 import { assertTenantStorageUpdates, changeTenantAccount, RENDERER_STORAGE_VALUE_LIMIT, rendererStorageKey, rendererStorageValue } from "../src/main/renderer-storage"
 import { OmissionPolicyStore } from "../src/main/backup/omission-policy"
+import { localStorageAccountName } from "../src/shared/constants"
 
 describe("renderer storage bounds", () => {
   it("accepts ordinary keys and values", () => {
@@ -69,5 +70,14 @@ describe("desktop storage moves", () => {
     await expect(changeTenantAccount(tenant, "oldacct", next, deps)).resolves.toBe(true)
     expect(fetchPolicy).not.toHaveBeenCalled()
     expect(deps.confirmOff).not.toHaveBeenCalled()
+  })
+
+  it("keeps ordinary profile saves usable when a local omission policy is malformed", async () => {
+    const local = localStorageAccountName(tenant)
+    const profile = { credentials: { tenantId: tenant, appId: "client" }, resources: { ...old, storageAccountName: local } }
+    const policies = new OmissionPolicyStore({ get: () => "{invalid", set: vi.fn(), delete: vi.fn() }, vi.fn())
+    const enrolled = (id: string, account: string) => policies.hasStorageEnrollment(id, account)
+    expect(() => assertTenantStorageUpdates(JSON.stringify([profile]), JSON.stringify([{ ...profile, resources: next }]), enrolled)).not.toThrow()
+    await expect(policies.read(tenant, local, async () => "")).rejects.toThrow()
   })
 })

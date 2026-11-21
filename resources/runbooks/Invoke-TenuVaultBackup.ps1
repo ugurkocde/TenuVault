@@ -843,6 +843,9 @@ function Get-TvOmissionPolicy {
             if (-not $bindingVerified) {
                 throw "The tenant's backup omission policy could not be verified because the Automation enrollment variable could not be read. Retry the backup or rerun cloud backup setup."
             }
+            if ($enrolled.Count -gt 0) {
+                throw "Cloud backup stopped because omission was enrolled on another storage account and '$($Context.StorageAccount)' has no omission policy. Enable omission on the new account or explicitly set it off before retrying."
+            }
             return [ordered]@{ version = 1; tenantId = $tenant; enabled = $false; scripts = $false; generation = "default" }
         }
         throw "The tenant's backup omission policy could not be verified (storage HTTP $($_.Exception.Status)). Check that the storage identity can read it and try again."

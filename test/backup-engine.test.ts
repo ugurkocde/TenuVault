@@ -265,6 +265,22 @@ describe("BackupEngine", () => {
 })
 
 describe("backup routes", () => {
+  it("uses the connected tenant's saved destination and refuses a different account before starting a job", async () => {
+    const start = vi.fn(() => ({ id: "backup-job", status: "Running" }))
+    const routes = backupRoutes({ start } as unknown as BackupEngine, undefined, tenant => tenant === TENANT ? "savedaccount" : undefined)
+    const post = (storageAccountName?: string) => routes["/api/backup/start"]!.POST!(new NextRequest("http://x/api/backup/start", {
+      method: "POST", body: JSON.stringify({ tenantId: TENANT, appId: CLIENT, storageAccountName }),
+    }))
+
+    const refused = await post("differentaccount")
+    expect(refused.status).toBe(400)
+    expect(await refused.json()).toMatchObject({ error: expect.stringContaining("saved backup storage") })
+    expect(start).not.toHaveBeenCalled()
+    expect((await post()).status).toBe(400)
+    expect((await post("SAVEDACCOUNT")).status).toBe(200)
+    expect(start).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ storageAccountName: "savedaccount" }))
+  })
+
   it("start the engine and report its progress", async () => {
     const { engine, account } = setup()
     const routes = backupRoutes(engine)

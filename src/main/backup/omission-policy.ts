@@ -98,7 +98,11 @@ export class OmissionPolicyStore {
     const account = destination.toLowerCase()
     if (!isLocalAccount(account)) return this.isEnrolled(tenant, account)
     const local = this.store.get(key(tenant))
-    return !!local && parse(JSON.parse(local), tenant).enabled
+    try {
+      return !!local && parse(JSON.parse(local), tenant).enabled
+    } catch {
+      return false
+    }
   }
 
   private async readPolicy(tenantId: string, destination: string, storage: BlobWriter,
