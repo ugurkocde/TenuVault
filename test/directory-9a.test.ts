@@ -340,25 +340,6 @@ it("retains an unanswered cancelled send for reconciliation instead of retrying 
   expect((await executeGuardedRun(journal, run, io)).status).toBe("complete")
   expect(env.attempts()).toBe(1)
 })
-it("rechecks CA membership before a throttled removal retry and consumes all membership pages", async () => {
-  const env = retryWorld(true); env.configure("throttle", true)
-  let pages = 0
-  const original = env.fetcher.getMockImplementation()!
-  env.fetcher.mockImplementation(async (input, init) => {
-    const url = new URL(String(input))
-    if (url.pathname.endsWith("/members")) {
-      pages++
-      return url.searchParams.has("$skiptoken") ? Response.json({ value: [...env.members].filter(id => id !== principal.id).map(id => ({ id })) }) : Response.json({ value: [{ id: principal.id }], "@odata.nextLink": url.href + "&$skiptoken=rest" })
-    }
-    return original(input, init)
-  })
-  const io = directory9aIO(token(), actor, refs, env.fetcher, undefined, async () => { env.members.delete(uuid(31)) })
-  env.step.preview = restoreFingerprint(await io.read(env.step))
-  const run = runFor(env.step)
-  for (const kind of (await io.review(env.step)).approvals) approveDirectory(env.step, run, kind)
-  expect((await executeGuardedRun(new GuardedRunJournal(storage()), run, io)).status).toBe("partial")
-  expect(env.attempts()).toBe(1); expect(env.members.has(principal.id)).toBe(true); expect(pages).toBeGreaterThan(2)
-})
 
 it("checks cancellation at the final send boundary before attaching a write", async () => {
   const env = retryWorld(), io = directory9aIO(token(), actor, refs, env.fetcher)
@@ -367,27 +348,6 @@ it("checks cancellation at the final send boundary before attaching a write", as
   for (const kind of (await io.review(env.step)).approvals) approveDirectory(env.step, run, kind)
   await expect(io.write(env.step, env.step.desired, group.id, () => env.controller.abort(), run, env.controller.signal)).rejects.toThrow("cancelled before sending")
   expect(env.attempts()).toBe(0)
-})
-it("blocks removals if a later CA policy or membership page cannot be read completely", async () => {
-  for (const collection of ["policies", "members"]) {
-    const env = retryWorld(true); env.configure("success", true)
-    const original = env.fetcher.getMockImplementation()!
-    env.fetcher.mockImplementation(async (input, init) => {
-      const url = new URL(String(input))
-      if (url.pathname.endsWith("/" + collection)) {
-        if (url.searchParams.has("$skiptoken")) return new Response(null, { status: 403 })
-        const page = await original(input, init)
-        return Response.json({ ...await page.json(), "@odata.nextLink": url.href + (url.search ? "&" : "?") + "$skiptoken=unreadable" })
-      }
-      return original(input, init)
-    })
-    const io = directory9aIO(token(), actor, refs, env.fetcher)
-    env.step.preview = restoreFingerprint(await io.read(env.step))
-    await expect(io.review(env.step)).rejects.toThrow()
-    const run = runFor(env.step)
-    expect((await executeGuardedRun(new GuardedRunJournal(storage()), run, io)).status).toBe("partial")
-    expect(env.attempts()).toBe(0)
-  }
 })
 
 it.each(["Users", "Groups"] as const)("records a confirmed %s PATCH throttle as unapplied and repeats safety checks before success", async folder => {

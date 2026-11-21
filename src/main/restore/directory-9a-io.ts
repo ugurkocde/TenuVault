@@ -33,7 +33,7 @@ export function directoryPermissions(step: GuardedStep): string[] {
   return action === "create" ? ["User.Create"] : ["User.ReadUpdate.All", ...(step.desired.accountEnabled !== undefined ? ["User.EnableDisableAccount.All", "User.Read.All"] : [])]
 }
 /** The same operation evidence gates the preview and the final transport. */
-export function directory9aIO(token: string, actor: RestoreActor, safety: GuardedIO["references"], fetchImpl: typeof fetch = fetch, scan?: GuardedIO["replacedReferences"], wait?: (ms: number) => Promise<void>, signal?: AbortSignal, retryReads = true, removedRelationships?: (target: string, kind: "members" | "owners") => Set<string>): GuardedIO & { review: (step: GuardedStep, preimage?: Item | null) => Promise<ReturnType<typeof directoryReview>>; ids: (id: string, kind: "members" | "owners") => AsyncIterable<string>; locate: (folder: "Users" | "Groups", sourceId: string) => Promise<{ action: "update" | "recycle" | "create"; current: Item | null }> } {
+export function directory9aIO(token: string, actor: RestoreActor, safety: GuardedIO["references"], fetchImpl: typeof fetch = fetch, scan?: GuardedIO["replacedReferences"], wait?: (ms: number) => Promise<void>, signal?: AbortSignal, retryReads = true): GuardedIO & { review: (step: GuardedStep, preimage?: Item | null) => Promise<ReturnType<typeof directoryReview>>; ids: (id: string, kind: "members" | "owners") => AsyncIterable<string>; locate: (folder: "Users" | "Groups", sourceId: string) => Promise<{ action: "update" | "recycle" | "create"; current: Item | null }> } {
   requireRestoreActor(token, actor)
   // Preview inventories can retry individual reads. Journalled execution uses raw
   // reads so every throttle reaches its durable entry or restarts the whole writer.
@@ -187,7 +187,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
       if (!admin) throw new RestoreSafetyError("Security-group creation requires a current tenant-wide Groups Administrator or Global Administrator assignment. Non-admin creation can implicitly make the restoring account an owner.")
     }
     const principal = preimage !== undefined && preimage?.principal !== undefined ? preimage.principal as Item | null : intent.principalId ? await resolvePrincipal(intent.principalId) : null
-    let excluded = false, included = false, inherited = false, indirectUserChange = false, emptiesTarget = false
+    let excluded = false, included = false, inherited = false, indirectUserChange = false, targetingUnknown = false
     if (step.folder === "Users" && (intent.action === "manager" || (intent.action === "update" && step.desired.displayName !== undefined && step.desired.displayName !== resource?.displayName))) {
       for await (const policy of list("identity/conditionalAccess/policies?$select=id,conditions")) {
         const users = (policy.conditions as Item | undefined)?.users as Item | undefined
@@ -197,25 +197,19 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
     if (step.folder === "Groups" && (["member", "owner"].includes(intent.action) || (intent.action === "update" && (step.desired.membershipRule !== undefined || step.desired.membershipRuleProcessingState !== undefined)))) {
       if (!resource || (typeof resource.isAssignableToRole !== "boolean" && resource.isAssignableToRole !== null)) throw new RestoreSafetyError("The group's privilege could not be resolved.")
       if (["member", "owner"].includes(intent.action)) for await (const parent of list(`groups/${identity(step.targetId ?? step.sourceId)}/memberOf?$select=id`)) { if (parent) { inherited = true; break } }
-      for await (const policy of list("identity/conditionalAccess/policies?$select=id,conditions")) {
-        const users = (policy.conditions as Item | undefined)?.users as Item | undefined
-        if (!users || !Array.isArray(users.includeGroups) || !Array.isArray(users.excludeGroups) || [...users.includeGroups, ...users.excludeGroups].some(id => !isGuid(id))) throw new RestoreSafetyError("Conditional Access dependencies could not be resolved.")
-        if (users.excludeGroups.includes(step.targetId ?? step.sourceId)) excluded = true
-        if (users.includeGroups.includes(step.targetId ?? step.sourceId)) included = true
-      }
-    }
-    if (included && intent.action === "member" && step.desired.present === false) {
-      let survivor = false
-      // Consume every page: a partial read must never establish that a CA target stays populated.
-      const removed = removedRelationships?.(step.targetId ?? step.sourceId, "members") ?? new Set<string>()
       try {
-        for await (const id of ids(step.targetId ?? step.sourceId, "members")) if (id.toLowerCase() !== intent.principalId?.toLowerCase() && !removed.has(id.toLowerCase())) survivor = true
+        for await (const policy of list("identity/conditionalAccess/policies?$select=id,conditions")) {
+          const users = (policy.conditions as Item | undefined)?.users as Item | undefined
+          if (!users || !Array.isArray(users.includeGroups) || !Array.isArray(users.excludeGroups) || [...users.includeGroups, ...users.excludeGroups].some(id => !isGuid(id))) throw new RestoreSafetyError("Conditional Access dependencies could not be resolved.")
+          if (users.excludeGroups.some(id => String(id).toLowerCase() === (step.targetId ?? step.sourceId).toLowerCase())) excluded = true
+          if (users.includeGroups.some(id => String(id).toLowerCase() === (step.targetId ?? step.sourceId).toLowerCase())) included = true
+        }
       } catch (error) {
-        if (error instanceof RestoreWriteDeferredError) throw error
-        throw new RestoreWriteDeferredError("A complete membership read could not establish a remaining member. Resume to repeat safety checks.")
+        if (intent.action !== "member" || step.desired.present !== false) throw error
+        // Keep the row visible while refusing removal if any policy page is unreadable.
+        if (error instanceof RestoreWriteDeferredError) throw new RestoreWriteDeferredError("Conditional Access group targeting could not be determined. TenuVault cannot remove this member. Review the policies and remove the member in Microsoft Entra. " + error.message, error.retryAt)
+        targetingUnknown = true
       }
-      if (!survivor && removed.size) throw new RestoreWriteDeferredError("Saved removals leave no verified member in this Conditional Access target group. This deferral clears when a fresh read shows a remaining member after the 30 minute replication window from TenuVault's acknowledged removal, or an acknowledged re-add settles it. Confirm membership in Entra, then run a fresh preview to review the remaining removal.")
-      emptiesTarget = !survivor
     }
     const compared = ["member", "owner", "manager", "license"].includes(intent.action) ? { ...resource, ...(preimage === undefined ? await read(step, step.targetId) : preimage) } : resource
     const result = directoryReview(step, compared, principal, actor, excluded)
@@ -233,7 +227,10 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
       if (types.includes("Unified")) requireEvidence("microsoft365", "Microsoft 365 group restore has no matched complete live lifecycle.")
       if (types.includes("DynamicMembership")) requireEvidence("dynamic rule", "Dynamic rule restore remains blocked: paused fixture evidence does not establish safe future beneficiaries.")
     }
-    if (emptiesTarget) result.blocker ??= "This removal could empty a Conditional Access target group. A complete fresh membership read must show another member remains."
+    if (intent.action === "member" && step.desired.present === false) {
+      if (targetingUnknown) result.blocker = "Conditional Access group targeting could not be determined. TenuVault cannot remove this member. Review the policies and remove the member in Microsoft Entra."
+      else if (included || excluded) result.blocker = "TenuVault does not remove members from Conditional Access targeted groups because membership changes can affect policy enforcement. Remove the member in Microsoft Entra."
+    }
     if (excluded) requireEvidence("privileged-links", "Conditional Access excluded groups remain blocked: indirect security-response recovery is not admitted.")
     if (principal?.["@odata.type"] === "#microsoft.graph.group") requireEvidence("nested-links", "Nested group relationships have no live round trip or admitted indirect-beneficiary guard.")
     return result
@@ -241,7 +238,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
   return {
     ids,
     token, type: folder => typeForFolder(folder)!, ...(scan ? { replacedReferences: scan } : {}), review,
-    read: (step, id, readSignal) => retryReads || (readSignal && readSignal !== signal) ? directory9aIO(token, actor, safety, fetchImpl, scan, wait, readSignal ?? signal, false, removedRelationships).read(step, id, readSignal) : read(step, id),
+    read: (step, id, readSignal) => retryReads || (readSignal && readSignal !== signal) ? directory9aIO(token, actor, safety, fetchImpl, scan, wait, readSignal ?? signal, false).read(step, id, readSignal) : read(step, id),
     locate: async (folder, sourceId) => {
       const path = `${folder === "Users" ? "users" : "groups"}/${identity(sourceId)}`
       const current = await request(path)
@@ -254,7 +251,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
       return (await find(step)).map(item => step.directory?.action === "invite" ? { id: item.id!, ...sent } : item)
     },
     references: async (step, current, desired, readSignal) => {
-      if (retryReads || (readSignal && readSignal !== signal)) return directory9aIO(token, actor, safety, fetchImpl, scan, wait, readSignal ?? signal, false, removedRelationships).references(step, current, desired, readSignal)
+      if (retryReads || (readSignal && readSignal !== signal)) return directory9aIO(token, actor, safety, fetchImpl, scan, wait, readSignal ?? signal, false).references(step, current, desired, readSignal)
       const result = await review(step)
       if (result.blocker) throw new RestoreSafetyError(result.blocker)
       const refs = await safety(step, current, desired)
@@ -262,7 +259,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
       return refs
     },
     write: async (step, body, targetId, beforeSend, run, writeSignal, onUnapplied) => {
-      if (retryReads || (writeSignal && writeSignal !== signal)) return directory9aIO(token, actor, safety, fetchImpl, scan, wait, writeSignal ?? signal, false, removedRelationships).write(step, body, targetId, beforeSend, run, writeSignal, onUnapplied)
+      if (retryReads || (writeSignal && writeSignal !== signal)) return directory9aIO(token, actor, safety, fetchImpl, scan, wait, writeSignal ?? signal, false).write(step, body, targetId, beforeSend, run, writeSignal, onUnapplied)
       return retryDirectoryWrite(async () => {
         if (signal?.aborted) throw new RestoreWriteDeferredError("The directory write was cancelled before sending.")
         requireRestoreActor(token, actor)

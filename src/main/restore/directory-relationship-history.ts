@@ -1,16 +1,16 @@
 import { isGuid } from "../../shared/security"
 import type { KeyValueStore } from "../storage/secure-store"
 import { RestoreWriteDeferredError } from "../../shared/intune/restore-guards"
-import { GuardedRunJournal } from "./guarded-run"
+import { GuardedRunJournal, type GuardedStep } from "./guarded-run"
 import { directoryPagePrefix } from "./directory-object-state"
 
 /** Covers Microsoft Entra replication delay after our own acknowledged relationship writes. */
 export const DIRECTORY_REPLICATION_WINDOW_MS = 30 * 60 * 1000
 
-/** Bounded journal links outlive page locks, so a lagging replica cannot resurrect a removed survivor. */
+/** Journal links outlive page locks to verify uncertain writes against our acknowledged writes. */
 export function directoryRelationshipHistory(store: KeyValueStore, tenant: string, target: string, now: () => number = Date.now) {
   const key = `restore.directory.relationship-history.${tenant.toLowerCase()}.${target.toLowerCase()}`
-  const deferred = (): never => { throw new RestoreWriteDeferredError("Saved relationship results could not establish a remaining member. Resume after reviewing this group's restore history.") }
+  const deferred = (): never => { throw new RestoreWriteDeferredError("Saved relationship history could not be verified. Confirm this uncertain result after reviewing the restore history.") }
   const load = (name: string): string | null => {
     try {
       const raw = store.get(name), prefix: unknown = raw === null ? null : JSON.parse(raw)
@@ -28,8 +28,8 @@ export function directoryRelationshipHistory(store: KeyValueStore, tenant: strin
       store.set(link, JSON.stringify(head))
       store.set(key, JSON.stringify(journal))
     },
-    removed: (kind: "members" | "owners"): Set<string> => {
-      const removed = new Set<string>(), settled = new Set<string>(), seen = new Set<string>()
+    canReconcile: (candidate: GuardedStep): boolean => {
+      const seen = new Set<string>()
       try {
         let prefix = load(key)
         while (prefix) {
@@ -40,16 +40,12 @@ export function directoryRelationshipHistory(store: KeyValueStore, tenant: strin
           if (!runs.length || runs.some(run => prefix !== directoryPagePrefix(tenant, run.id) + prefix!.slice(prefix!.lastIndexOf("batch.")))) return deferred()
           for (const run of runs) for (const entry of [...run.entries].reverse()) {
             const step = entry.step
-            if ((entry.targetId ?? step.targetId ?? step.sourceId).toLowerCase() !== target.toLowerCase() || step.directory?.action !== (kind === "members" ? "member" : "owner")) continue
-            if (!isGuid(step.directory.principalId)) return deferred()
-            const principal = step.directory.principalId.toLowerCase()
-            if (settled.has(principal)) continue
-            if (entry.state === "applied") {
+            if ((entry.targetId ?? step.targetId ?? step.sourceId).toLowerCase() !== target.toLowerCase() || step.directory?.action !== candidate.directory?.action) continue
+            if (!isGuid(step.directory?.principalId)) return deferred()
+            if (step.directory.principalId.toLowerCase() !== candidate.directory?.principalId?.toLowerCase()) continue
+            if (entry.acknowledged && Number.isFinite(entry.acknowledgedAt) && now() < entry.acknowledgedAt! + DIRECTORY_REPLICATION_WINDOW_MS) {
               if (typeof step.desired.present !== "boolean") return deferred()
-              // A stale matching read-back cannot undo a journalled removal.
-              if (step.desired.present && !entry.acknowledged) continue
-              if (!step.desired.present && entry.acknowledged && Number.isFinite(entry.acknowledgedAt) && now() < entry.acknowledgedAt! + DIRECTORY_REPLICATION_WINDOW_MS) removed.add(principal)
-              settled.add(principal)
+              if (step.desired.present !== candidate.desired.present) return false
             }
           }
           const link = key + "." + prefix
@@ -57,7 +53,7 @@ export function directoryRelationshipHistory(store: KeyValueStore, tenant: strin
           prefix = load(link)
         }
       } catch { return deferred() }
-      return removed
+      return true
     },
   }
 }

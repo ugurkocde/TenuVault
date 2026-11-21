@@ -1,4 +1,3 @@
-import { directoryRelationshipHistory } from "./directory-relationship-history"
 import { directoryPagePrefix, directoryObjectState } from "./directory-object-state"
 import { DirectoryThrottledError, persistDirectoryRetry } from "./directory-retry"
 import { directory9bIO } from "./directory-9b-io"
@@ -36,6 +35,7 @@ export class DirectoryRestoreService {
   private readonly running = new Map<string, AbortController>()
   // Retain both atomic publications, including the exact rejected attempt, until a same-object operation flushes them.
   private readonly pendingRetries = new Map<string, () => void>()
+  private readonly pendingResults = new Map<string, () => void>()
   constructor(private readonly store: PartitionedRestoreStore, private readonly recovery: RecoveryAccounts, private readonly connection: (tenant: string) => Promise<RestoreConnection>, private readonly fetchImpl: typeof fetch = fetch, private readonly protectedAppIds: (tenant: string) => readonly string[] = () => [], private readonly settings?: Pick<ModuleSettings, "get">, private readonly now: () => number = Date.now) {}
   private async context(tenant: string, onThrottled?: (retryAt: number) => void, validatedConnection?: RestoreConnection) {
     const connection = validatedConnection ?? await this.connection(tenant)
@@ -62,22 +62,35 @@ export class DirectoryRestoreService {
       // Unrelated policy reads are advisory and never add a permission to directory restore.
       if (!granted || INTUNE_TYPES.some(type => type.restoreSafety !== "identity" && !type.singleton && !type.staticIds && !REFERENCE_SCAN_EXCLUDED.has(type.folder) && !canBackUp(type.folder, granted))) throw new Error("Reference scan read access is unavailable")
       return referenceMatches(connection.token, mappings, this.fetchImpl, { signal })
-    }, undefined, undefined, true, (target, kind) => directoryRelationshipHistory(this.store, tenant, target, this.now).removed(kind))
-    io.now = this.now
-    io.persistRetry = (step, journal, coordinator) => this.persistRetry(tenant, step, journal, coordinator)
-    return { actor, io, applicationIO: directory9bIO(connection.token, actor, this.fetchImpl, () => this.protectedAppIds(tenant), () => this.settings?.get(tenant).entra) }
+    })
+    const applicationIO = directory9bIO(connection.token, actor, this.fetchImpl, () => this.protectedAppIds(tenant), () => this.settings?.get(tenant).entra)
+    for (const adapter of [io, applicationIO]) {
+      adapter.now = this.now
+      adapter.persistRetry = (step, journal, coordinator) => this.persistRetry(tenant, step, journal, coordinator)
+      adapter.persistConfirmed = (step, save) => {
+        const key = this.retryKey(tenant, step)
+        const flush = () => { save(); this.pendingResults.delete(key) }
+        this.pendingResults.set(key, flush)
+        flush()
+      }
+    }
+    return { actor, io, applicationIO }
   }
   private retryKey(tenant: string, step: Pick<GuardedStep, "folder" | "sourceId" | "targetId">) {
     return `${tenant.toLowerCase()}.${(step.targetId ?? directoryMappedId(this.store, tenant, step.folder, step.sourceId) ?? step.sourceId).toLowerCase()}`
   }
-  private persistRetry(tenant: string, step: GuardedStep, journal: () => void, coordinator: () => void) {
+  private persistRetry(tenant: string, step: Pick<GuardedStep, "folder" | "sourceId" | "targetId">, journal: () => void, coordinator: () => void) {
     const key = this.retryKey(tenant, step)
     const flush = () => { persistDirectoryRetry(journal, coordinator); this.pendingRetries.delete(key) }
     this.pendingRetries.set(key, flush)
     flush()
   }
   private flushRetries(tenant: string, steps: Array<Pick<GuardedStep, "folder" | "sourceId" | "targetId">>) {
-    for (const step of steps) this.pendingRetries.get(this.retryKey(tenant, step))?.()
+    for (const step of steps) {
+      const key = this.retryKey(tenant, step)
+      this.pendingResults.get(key)?.()
+      this.pendingRetries.get(key)?.()
+    }
   }
   private async pageConnection(page: DirectoryPage) {
     const connection = await this.connection(page.run.tenant)
@@ -105,7 +118,11 @@ export class DirectoryRestoreService {
     catch (error) {
       if (error instanceof RestoreWriteDeferredError && error.retryAt !== undefined) {
         const folder = request.path.split("/")[1]!, sourceId = String(request.snapshot.id)
-        if (directoryObjectId(folder, sourceId)) directoryObjectState(this.store, tenant, "").recordThrottle({ sourceId, targetId: directoryMappedId(this.store, tenant, folder, sourceId) }, error.retryAt)
+        if (directoryObjectId(folder, sourceId)) {
+          const step = { folder, sourceId, targetId: directoryMappedId(this.store, tenant, folder, sourceId) }
+          const retryAt = error.retryAt
+          this.persistRetry(tenant, step, () => {}, () => directoryObjectState(this.store, tenant, "").recordThrottle(step, retryAt))
+        }
       }
       throw error
     }
@@ -332,12 +349,20 @@ export class DirectoryRestoreService {
     const objects = directoryObjectState(this.store, page.run.tenant, page.run.id)
     const runs = this.history(page)
     const steps = runs.length ? runs.flatMap(({ run }) => run.entries.map(entry => ({ ...entry.step, targetId: entry.targetId ?? entry.step.targetId ?? directoryMappedId(this.store, run.tenant, entry.step.folder, entry.step.sourceId) }))) : page.run.entries.map(({ step }) => ({ ...step, targetId: step.targetId ?? directoryMappedId(this.store, page.run.tenant, step.folder, step.sourceId) }))
-    persistDirectoryRetry(() => {
-      for (const { batch, run } of runs) {
-        for (const entry of run.entries) entry.retryAt = Math.max(entry.retryAt ?? 0, retryAt)
-        new GuardedRunJournal({ get: name => this.store.get(directoryPagePrefix(run.tenant, run.id) + `batch.${batch}.` + name), set: (name, value) => this.store.set(directoryPagePrefix(run.tenant, run.id) + `batch.${batch}.` + name, value), delete: () => fail("History cannot be deleted.") }).save(run)
-      }
-    }, () => { for (const step of steps) objects.recordThrottle(step, retryAt) })
+    // Retain the actor-read deadline even if both durable publications fail.
+    // Every later same-object action must flush it before any Graph request.
+    const keys = steps.map(step => this.retryKey(page.run.tenant, step))
+    const flush = () => {
+      persistDirectoryRetry(() => {
+        for (const { batch, run } of runs) {
+          for (const entry of run.entries) entry.retryAt = Math.max(entry.retryAt ?? 0, retryAt)
+          new GuardedRunJournal({ get: name => this.store.get(directoryPagePrefix(run.tenant, run.id) + `batch.${batch}.` + name), set: (name, value) => this.store.set(directoryPagePrefix(run.tenant, run.id) + `batch.${batch}.` + name, value), delete: () => fail("History cannot be deleted.") }).save(run)
+        }
+      }, () => { for (const step of steps) objects.recordThrottle(step, retryAt) })
+      for (const key of keys) this.pendingRetries.delete(key)
+    }
+    for (const key of keys) this.pendingRetries.set(key, flush)
+    flush()
   }
   private history(page: DirectoryPage) {
     const prefix = directoryPagePrefix(page.run.tenant, page.run.id)

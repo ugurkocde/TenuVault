@@ -179,24 +179,51 @@ it.each(["preview", "restore", "reconcile"])("clears account data and ignores an
   expect((button("Execute approved changes or resume page") as HTMLButtonElement).disabled).toBe(true)
 })
 
-it("handles a cancelled response while the backup is loading", async () => {
+it("keeps the cancelled execution page ID while backup loading so it can be resumed, confirmed or discarded", async () => {
   let resolve!: (response: Response) => void
-  const fetcher = vi.fn(async (_input: unknown, init?: RequestInit) => JSON.parse(String(init?.body)).action === "resume" ? new Promise<Response>(done => { resolve = done }) : Response.json(JSON.parse(String(init?.body)).action === "cancel" ? { cancelled: true } : { ...page, selection: ["member"] }))
+  const fetcher = vi.fn(async (_input: unknown, init?: RequestInit) => {
+    const action = JSON.parse(String(init?.body)).action
+    return action === "restore" ? new Promise<Response>(done => { resolve = done }) : Response.json(action === "cancel" ? { cancelled: true } : action === "discard" ? { discarded: true } : { ...page, canDiscard: action === "reconcile", selection: ["member"] })
+  })
   vi.stubGlobal("fetch", fetcher)
+  root = createRoot(document.body.appendChild(document.createElement("div")))
+  await act(async () => root.render(createElement(DirectoryRestore, props)))
+  await click("Review directory restore"); await click("Preview directory changes")
+  await act(async () => document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]').forEach(input => input.click()))
+  await click("Execute approved changes or resume page")
+  expect(button("Cancel directory restore")).toBeDefined()
+  await click("Cancel directory restore")
+  expect(JSON.parse(String(fetcher.mock.calls.at(-1)![1]?.body))).toMatchObject({ action: "cancel", runId: "run" })
+  await act(async () => resolve(Response.json({ cancelled: true })))
+  expect(document.body.textContent).toContain("Directory restore cancelled.")
+  expect(document.body.textContent).not.toContain("Directory restore is partial")
+  expect(document.body.textContent).toContain("Saved page: run")
+  expect(document.querySelector<HTMLInputElement>('input:not([type="checkbox"])')!.value).toBe("run")
+  expect(button("Execute approved changes or resume page")).toBeUndefined()
+  expect(button("Cancel directory restore")).toBeUndefined()
+  expect((button("Preview directory changes") as HTMLButtonElement).disabled).toBe(false)
+  await click("Resume saved page")
+  expect(JSON.parse(String(fetcher.mock.calls.at(-1)![1]?.body))).toMatchObject({ action: "resume", runId: "run" })
+  await click("Confirm this page's results")
+  expect(JSON.parse(String(fetcher.mock.calls.at(-1)![1]?.body))).toMatchObject({ action: "reconcile", runId: "run" })
+  await click("Discard saved restore")
+  expect(JSON.parse(String(fetcher.mock.calls.at(-1)![1]?.body))).toMatchObject({ action: "discard", runId: "run" })
+  expect(document.body.textContent).toContain("This page can never send again.")
+})
+
+it.each(["preview", "resume", "reconcile", "next", "discard"])("hides Cancel for the unregistered %s action", async action => {
+  let resolve!: (response: Response) => void, pending = false
+  vi.stubGlobal("fetch", vi.fn(async (_input: unknown, _init?: RequestInit) => pending ? new Promise<Response>(done => { resolve = done }) : Response.json({ ...page, canDiscard: true })))
   root = createRoot(document.body.appendChild(document.createElement("div")))
   await act(async () => root.render(createElement(DirectoryRestore, props)))
   await click("Review directory restore"); await click("Preview directory changes")
   await act(async () => {
     const input = document.querySelector<HTMLInputElement>('input:not([type="checkbox"])')!
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "run")
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "another-page")
     input.dispatchEvent(new Event("input", { bubbles: true }))
   })
-  await click("Resume saved page")
-  await click("Cancel directory restore")
-  await act(async () => resolve(Response.json({ cancelled: true })))
-  expect(document.body.textContent).toContain("Directory restore cancelled.")
-  expect(document.body.textContent).not.toContain("Directory restore is partial")
-  expect(document.body.textContent).not.toContain("Saved page: run")
-  expect(button("Execute approved changes or resume page")).toBeUndefined()
-  expect((button("Preview directory changes") as HTMLButtonElement).disabled).toBe(false)
+  pending = true
+  await click(action === "preview" ? "Preview directory changes" : action === "resume" ? "Resume saved page" : action === "reconcile" ? "Confirm this page's results" : action === "next" ? "Preview next page" : "Discard saved restore")
+  expect(button("Cancel directory restore")).toBeUndefined()
+  await act(async () => resolve(Response.json({ ...page, canDiscard: true })))
 })

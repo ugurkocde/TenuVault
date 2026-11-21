@@ -362,3 +362,62 @@ it.each(folders.flatMap(folder => ["preview", "execute", "resume", "reconcile", 
   expect(await env.execute(newer, newerRequest)).toMatchObject({ outcomes: [{ state: "deferred", retryAt: deadline }] })
   expect(sends).toBe(action === "reconcile" || action === "discard" ? 1 : 0)
 })
+
+it.each(folders)("retains the attempt-bound %s retry in memory when both durable records fail", async folder => {
+  const env = world(folder), service = env.service(), request = env.request(), page = await env.prepare(request), original = env.graph.getMockImplementation()!
+  let sends = 0
+  env.graph.mockImplementation((input, init) => init?.method === "PATCH" && ++sends === 1 ? Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
+  vi.useFakeTimers()
+  const deadline = Date.now() + 120_000, set = env.store.set
+  const spy = vi.spyOn(env.store, "set").mockImplementation((key, value) => {
+    if ((key.includes(".restore.guarded.") || key.includes(".coordinator.")) && value.includes(String(deadline))) throw new Error("Retry storage unavailable")
+    set(key, value)
+  })
+  const execute = () => service.execute(tenant, { ...request, runId: page.runId }, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])))
+  await expect(execute()).rejects.toThrow("retry deadline could not be saved")
+  expect(env.entry(page)).toMatchObject({ state: "uncertain", attempt: 1 })
+  const calls = env.graph.mock.calls.length
+  await expect(execute()).rejects.toThrow("retry deadline could not be saved")
+  expect(env.graph.mock.calls).toHaveLength(calls)
+  spy.mockRestore()
+  expect(await execute()).toMatchObject({ outcomes: [{ state: "deferred", retryAt: deadline }] })
+  expect(env.entry(page)).toMatchObject({ state: "deferred", attempt: 1 })
+  expect(sends).toBe(1)
+  await vi.advanceTimersByTimeAsync(120_000)
+  expect(await execute()).toMatchObject({ status: "complete", outcomes: [{ state: "applied" }] })
+  expect(env.entry(page).attempt).toBe(2)
+  expect(sends).toBe(2); expect(env.writes).toHaveLength(1)
+})
+
+it.each(["preview", "execute", "resume", "reconcile"].flatMap(action => folders.map(folder => ({ action, folder }))))("retains the $folder $action actor deadline in memory through failed deadline saves", async ({ action, folder }) => {
+  const env = world(folder), service = env.service(), request = env.request(), page = await env.prepare(request), original = env.graph.getMockImplementation()!
+  let throttle = false
+  env.graph.mockImplementation((input, init) => throttle && new URL(String(input)).pathname === "/v1.0/applications" ? Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
+  const execute = () => service.execute(tenant, { ...request, runId: page.runId }, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])))
+  if (action === "reconcile") {
+    const withThrottle = env.graph.getMockImplementation()!
+    env.graph.mockImplementation((input, init) => init?.method === "PATCH" ? Promise.resolve(new Response(null, { status: 503 })) : withThrottle(input, init))
+    expect(await execute()).toMatchObject({ outcomes: [{ state: "uncertain" }] })
+    env.graph.mockImplementation(withThrottle)
+  }
+  vi.useFakeTimers()
+  const deadline = Date.now() + 120_000, set = env.store.set
+  const spy = vi.spyOn(env.store, "set").mockImplementation((key, value) => {
+    if ((key.includes(".restore.guarded.") || key.includes(".coordinator.")) && value.includes(String(deadline))) throw new Error("Deadline storage unavailable")
+    set(key, value)
+  })
+  throttle = true
+  await expect(action === "preview" ? service.prepare(tenant, request, options, async () => request.snapshot) : action === "execute" ? execute() : action === "resume" ? service.resume(tenant, { ...request, runId: page.runId }) : service.saved(tenant, page.runId, "reconcile")).rejects.toThrow("retry deadline could not be saved")
+  throttle = false
+  const calls = env.graph.mock.calls.length
+  await expect(execute()).rejects.toThrow("retry deadline could not be saved")
+  expect(env.graph.mock.calls).toHaveLength(calls)
+  spy.mockRestore()
+  expect(await execute()).toMatchObject({ outcomes: [{ state: action === "reconcile" ? "uncertain" : "deferred", retryAt: deadline }] })
+  expect(env.writes).toEqual([])
+  expect(JSON.parse(env.data.get(`restore.directory.coordinator.${tenant}`)!).deadlines[targetId]).toBe(deadline)
+  await vi.advanceTimersByTimeAsync(120_000)
+  if (action === "reconcile") env.live[env.field] = "Saved"
+  expect(await execute()).toMatchObject({ outcomes: [{ state: "applied" }] })
+  expect(env.writes).toHaveLength(action === "reconcile" ? 0 : 1)
+})

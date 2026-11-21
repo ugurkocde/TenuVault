@@ -58,6 +58,7 @@ export interface GuardedIO {
   token: string
   now?: () => number
   canReconcile?: (step: GuardedStep, targetId?: string) => boolean
+  persistConfirmed?: (step: GuardedStep, save: () => void) => void
   persistRetry?: (step: GuardedStep, saveJournal: () => void, saveCoordinator: () => void) => void
   /** Directory pages retain live object ownership across deferred and uncertain steps. */
   prepareStep?: (step: GuardedStep) => number | undefined
@@ -162,9 +163,10 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
     journal.save(run)
     // A confirmed result must never enter safety-failure handling. Retry its atomic
     // publication once; if storage stays unavailable the durable send marker remains.
-    const saveConfirmed = () => {
-      try { journal.save(run) }
-      catch { journal.save(run) }
+    const saveConfirmed = (step: GuardedStep) => {
+      const save = () => { try { journal.save(run) } catch { journal.save(run) } }
+      if (io.persistConfirmed) io.persistConfirmed(step, save)
+      else save()
     }
     const dependencies = (step: GuardedStep) => [...new Set([...step.requires, ...run.entries.filter(entry => restoreMatrixRow(step.folder)?.dependsOn.includes(entry.step.folder)).map(entry => entry.step.key)])]
     const { order, blocked } = dependencyOrder(run.entries.map(({ step }) => ({ key: step.key, requires: dependencies(step) })))
@@ -195,14 +197,14 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
             journal.save(run); continue
           }
           if (io.canReconcile?.(step, entry.targetId) === false) {
-            entry.reason = "A recent acknowledged removal means this read may predate that removal. Confirm again after the 30 minute replication window, or after an acknowledged write settles this relationship."
+            entry.reason = "A recent acknowledged write in the opposite direction means this read may predate that write. Confirm again after the 30 minute replication window."
             journal.save(run); continue
           }
           const id = step.operation === "create" ? matches[0]!.id : entry.targetId
           if (!isGraphId(id)) throw new RestoreSafetyError("The reconciled object has no identity.")
           entry.targetId = id
           rememberMapping(run.mappings, { kind: "objectId", folder: step.folder, source: step.sourceId, target: id })
-          entry.state = "applied"; delete entry.reason; saveConfirmed(); continue
+          entry.state = "applied"; delete entry.reason; saveConfirmed(step); continue
         }
         const mapped = mappedReference(run.mappings, "objectId", step.folder, step.sourceId)
         if (mapped && step.targetId && mapped.toLowerCase() !== step.targetId.toLowerCase()) throw new RestoreSafetyError("The target mapping changed after this preview. Preview this item again.")
@@ -282,7 +284,7 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
         rememberMapping(run.mappings, { kind: "objectId", folder: step.folder, source: step.sourceId, target: id })
         entry.state = "applied"
         if (step.directory && typeof step.desired.present === "boolean") { entry.acknowledged = true; entry.acknowledgedAt = (io.now ?? Date.now)() }
-        saveConfirmed()
+        saveConfirmed(step)
       } catch (error) {
         if (entry.state === "applied" || error instanceof DirectoryRetryPersistenceError || error instanceof RestorePersistenceError) throw error
         if (entry.state === "uncertain" && error instanceof RestoreWriteDeferredError && error.retryAt !== undefined) {
