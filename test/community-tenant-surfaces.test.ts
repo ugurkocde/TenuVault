@@ -107,3 +107,15 @@ describe("Community tenant surfaces", () => {
     expect(render(createElement(BackupSchedulePanel, props))).toContain("does not cover")
   })
 })
+
+describe("tenant initials", () => {
+  it("takes the first letters of the first two words, or two letters of a single word", async () => {
+    const { tenantInitials } = await import("../src/renderer/components/TenantSwitcher")
+    expect(tenantInitials("Contoso Ltd")).toBe("CL")
+    expect(tenantInitials("  fabrikam  ")).toBe("FA")
+    expect(tenantInitials("Ugur Koc Lab")).toBe("UK")
+    expect(tenantInitials("(Test) Ärzte GmbH")).toBe("TÄ")
+    expect(tenantInitials("")).toBe("?")
+    expect(tenantInitials(undefined)).toBe("?")
+  })
+})

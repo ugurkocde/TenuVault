@@ -11,6 +11,10 @@ const signedInIds = vi.hoisted(() => ({ current: new Set(["t-1"]) as ReadonlySet
 const selectedTenantState = vi.hoisted(() => ({ current: null as unknown }))
 const routerPush = vi.hoisted(() => vi.fn())
 const trialAction = vi.hoisted(() => vi.fn(async () => undefined))
+const whatsNewState = vi.hoisted(() => ({ current: null as { hasUnseen: boolean } | null }))
+const supportDialog = vi.hoisted(() => vi.fn((_props: { open: boolean }) => null))
+const whatsNewDialog = vi.hoisted(() => vi.fn((_props: { open: boolean }) => null))
+const feedbackCapture = vi.hoisted(() => vi.fn(async () => null))
 
 vi.mock("../../src/renderer/lib/bridge", () => ({
   bridge: {
@@ -19,6 +23,7 @@ vi.mock("../../src/renderer/lib/bridge", () => ({
     schedules: { list: async () => [] },
     license: { open: async () => undefined, tenantTrialAction: trialAction },
     preferences: { get: async () => ({}), set: async () => ({}) },
+    feedback: { capture: feedbackCapture },
   },
 }))
 vi.mock("../../src/renderer/lib/license", async (original) => ({
@@ -38,13 +43,13 @@ vi.mock("../../src/renderer/lib/framework-jobs", () => ({ useFrameworkJobs: () =
 vi.mock("../../src/renderer/lib/cis-jobs", () => ({ CisJobNotifier: () => null }))
 vi.mock("../../src/renderer/lib/drift-jobs", () => ({ DriftScanIndicator: () => null, DriftScanNotifier: () => null }))
 vi.mock("../../src/renderer/features/scores/invalidate", () => ({ useScoreInvalidation: () => undefined }))
-vi.mock("../../src/renderer/lib/whats-new", () => ({ useWhatsNew: () => ({ state: null }) }))
+vi.mock("../../src/renderer/lib/whats-new", () => ({ useWhatsNew: () => ({ state: whatsNewState.current }) }))
 vi.mock("../../src/renderer/components/BackgroundTasksPanel", () => ({ BackgroundTasksPanel: () => null }))
 vi.mock("../../src/renderer/components/SignInBanner", () => ({ SignInBanner: () => null }))
-vi.mock("../../src/renderer/components/SupportDialog", () => ({ SupportDialog: () => null }))
+vi.mock("../../src/renderer/components/SupportDialog", () => ({ SupportDialog: supportDialog }))
 vi.mock("../../src/renderer/components/TenantSwitcher", () => ({ TenantSwitcher: () => null }))
 vi.mock("../../src/renderer/components/UpdateSidebarLabel", () => ({ UpdateSidebarLabel: () => null }))
-vi.mock("../../src/renderer/components/WhatsNewDialog", () => ({ WhatsNewAnnouncement: () => null, WhatsNewDialog: () => null }))
+vi.mock("../../src/renderer/components/WhatsNewDialog", () => ({ WhatsNewAnnouncement: () => null, WhatsNewDialog: whatsNewDialog }))
 vi.mock("../../src/renderer/components/TenantAccessNotice", () => ({ TenantAccessNotice: () => null }))
 vi.mock("../../src/renderer/components/oib/JobIndicator", () => ({ OibJobIndicator: () => null, OibJobCard: () => null }))
 vi.mock("../../src/renderer/features/custom-baselines/api", () => ({ customizeOib: vi.fn() }))
@@ -75,6 +80,7 @@ afterEach(() => {
   licenseStatus.current = null
   signedInIds.current = new Set(["t-1"])
   selectedTenantState.current = null
+  whatsNewState.current = null
   vi.clearAllMocks()
 })
 
@@ -389,5 +395,109 @@ describe("License badge in the sidebar", () => {
     const container = await render(createElement(DesktopLayout))
     expect(badge(container)).toContain("Pro trial")
     expect(badge(container)).toContain("14d")
+  })
+})
+
+describe("sidebar groups and Help", () => {
+  const groupOf = (container: HTMLElement, label: string) => {
+    const heading = [...container.querySelectorAll('nav[aria-label="Main navigation"] button[id^="nav-group-"]')].find((item) => item.textContent === label)!
+    return heading.closest('[role="group"]')!
+  }
+  const hrefs = (root: Element) => [...root.querySelectorAll("a")].map((link) => link.getAttribute("href"))
+  const openHelp = async (container: HTMLElement) => {
+    const trigger = [...container.querySelectorAll("aside button")].find((item) => item.textContent?.startsWith("Help"))!
+    await act(async () => { trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })) })
+    return trigger
+  }
+  const menuItem = (label: string) => [...document.querySelectorAll('[role="menuitem"]')].find((item) => item.textContent?.startsWith(label)) as HTMLElement | undefined
+  const choose = async (label: string) => {
+    await act(async () => { menuItem(label)!.click() })
+    // The item runs after the menu has closed and the window has painted.
+    for (let wait = 0; wait < 40 && document.querySelector('[role="menu"]'); wait++) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)) })
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)) })
+  }
+
+  it("puts every entry under Protect, Baselines or Oversight, after the ungrouped start entries", async () => {
+    licenseStatus.current = statusFor("pro")
+    selectTenant()
+    const container = await render(createElement(DesktopLayout))
+    const headings = [...container.querySelectorAll('nav[aria-label="Main navigation"] button[id^="nav-group-"]')].map((item) => item.textContent)
+    expect(headings).toEqual(["Protect", "Baselines", "Oversight"])
+    expect(hrefs(groupOf(container, "Protect"))).toEqual(["/portal/backup", "/portal/app-backup", "/portal/drift", "/portal/sync", "/portal/alerts"])
+    expect(hrefs(groupOf(container, "Baselines"))).toEqual(expect.arrayContaining(["/portal/oib", "/portal/frameworks/cis-benchmarks", "/portal/frameworks"]))
+    expect(hrefs(groupOf(container, "Oversight"))).toEqual(["/portal/reports", "/portal/audit", "/portal/governance", "/portal/changes", "/portal/operations"])
+  })
+
+  it("keeps Settings and License in the footer and moves What's new, Share feedback and Support into Help", async () => {
+    licenseStatus.current = statusFor("pro")
+    selectTenant()
+    const container = await render(createElement(DesktopLayout))
+    const aside = container.querySelector("aside")!
+    expect(aside.textContent).not.toContain("Desktop")
+    expect(aside.textContent).not.toContain("Share feedback")
+    expect(aside.querySelector('a[href="/portal/settings"]')).not.toBeNull()
+    await openHelp(container)
+    expect([...document.querySelectorAll('[role="menuitem"]')].map((item) => item.textContent)).toEqual(["What's new", "Share feedback", "SupportDocumentation, contact options and a free setup call"])
+  })
+
+  it("opens Support, What's new and a feedback capture from the Help menu", async () => {
+    licenseStatus.current = statusFor("pro")
+    selectTenant()
+    const container = await render(createElement(DesktopLayout))
+    await openHelp(container)
+    await choose("Support")
+    expect(supportDialog.mock.lastCall?.[0].open).toBe(true)
+    await openHelp(container)
+    await choose("What's new")
+    expect(whatsNewDialog.mock.lastCall?.[0].open).toBe(true)
+    await openHelp(container)
+    await choose("Share feedback")
+    expect(feedbackCapture).toHaveBeenCalledTimes(1)
+  })
+
+  it("marks Help and What's new while an installed build is unseen", async () => {
+    licenseStatus.current = statusFor("pro")
+    selectTenant()
+    whatsNewState.current = { hasUnseen: true }
+    const container = await render(createElement(DesktopLayout))
+    const trigger = await openHelp(container)
+    expect(trigger.getAttribute("aria-label")).toBe("Help, new changes since you last looked")
+    expect(menuItem("What's new")!.textContent).toBe("What's new, new changes since you last looked")
+  })
+})
+
+describe("folding sidebar groups", () => {
+  const head = (container: HTMLElement, label: string) => container.querySelector<HTMLButtonElement>(`button#nav-group-${label}`)!
+
+  it("folds a group from its heading, makes its entries inert and remembers it", async () => {
+    localStorage.removeItem("tenuvault.sidebar.folded")
+    licenseStatus.current = statusFor("pro")
+    selectTenant()
+    const container = await render(createElement(DesktopLayout), "/portal/reports")
+    const oversight = head(container, "Oversight")
+    expect(oversight.getAttribute("aria-expanded")).toBe("true")
+    await act(async () => oversight.click())
+    expect(oversight.getAttribute("aria-expanded")).toBe("false")
+    const items = container.querySelector("#nav-items-Oversight")!
+    expect(items.getAttribute("data-open")).toBe("false")
+    expect(items.querySelector(".tv-fold-inner")!.hasAttribute("inert")).toBe(true)
+    // The open page is inside the folded group, so its heading says so.
+    expect(oversight.textContent).toBe("Oversight, holds the open page")
+    expect(JSON.parse(localStorage.getItem("tenuvault.sidebar.folded")!)).toEqual(["Oversight"])
+
+    const again = await render(createElement(DesktopLayout), "/portal/dashboard")
+    expect(head(again, "Oversight").getAttribute("aria-expanded")).toBe("false")
+    expect(head(again, "Oversight").textContent).toBe("Oversight")
+    expect(head(again, "Protect").getAttribute("aria-expanded")).toBe("true")
+    localStorage.removeItem("tenuvault.sidebar.folded")
+  })
+
+  it("marks the entry of the open page for the sliding pill", async () => {
+    licenseStatus.current = statusFor("pro")
+    selectTenant()
+    const container = await render(createElement(DesktopLayout), "/portal/drift")
+    const current = [...container.querySelectorAll('nav[aria-label="Main navigation"] [aria-current="page"]')]
+    expect(current.map((element) => element.getAttribute("href"))).toEqual(["/portal/drift"])
+    expect(current[0]!.hasAttribute("data-nav-row")).toBe(true)
   })
 })

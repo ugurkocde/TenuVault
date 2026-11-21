@@ -15,6 +15,7 @@ import {
   ArrowRight,
   Building2,
   ChevronDown,
+  CircleHelp,
   Clock,
   Database,
   ExternalLink,
@@ -33,6 +34,7 @@ import {
   Sparkles,
 } from "lucide-react"
 import { FloatingProgress } from "~/components/backup/floating-progress"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "~/components/ui/dropdown-menu"
 import { useSelectedTenant, useTenants } from "~/contexts/TenantContext"
 import { cn } from "~/lib/utils"
 import { BrandMark } from "./BrandMark"
@@ -62,6 +64,7 @@ import { CisBenchmarksNavigation } from "./CisBenchmarksNavigation"
 import { NAV_PLAN_FEATURES, NavPlanBadge } from "./NavPlanBadge"
 import { FrameworkNavigation } from "./FrameworkNavigation"
 import { OibJobIndicator } from "./oib/JobIndicator"
+import { NavFoldGroup, useFoldedGroups, useSlidingPills } from "./SidebarNavigation"
 
 interface NavItem {
   name: string
@@ -72,20 +75,35 @@ interface NavItem {
   children?: NavItem[]
 }
 
-const allNavigation: NavItem[] = [
-  { name: "Dashboard", href: "/portal/dashboard", icon: LayoutDashboard },
-  { name: "Tenants", href: "/portal/tenants", icon: Building2 },
-  { name: "Backup & Restore", href: "/portal/backup", icon: Database },
-  { name: "App Backup", href: "/portal/app-backup", icon: Package, hint: "Intune apps and installer backups" },
-  { name: "Drift Detection", href: "/portal/drift", icon: GitCompare },
-  { name: "Sync", href: "/portal/sync", icon: RefreshCw, hint: "Copy settings from one tenant to others" },
-  { name: "Alerts", href: "/portal/alerts", icon: Siren, hint: "Teams, email and webhook alerts for backups and policy changes" },
-  { name: "OpenIntuneBaseline", href: "/portal/oib", icon: Layers },
-  { name: "Reports", href: "/portal/reports", icon: FileText, hint: "What changed, setting by setting, and who changed it" },
-  { name: "Audit Log", href: "/portal/audit", icon: Shield, hint: "What TenuVault did, when, and did it work" },
-  { name: "Governance", href: "/portal/governance", icon: ClipboardCheck, hint: "Posture, accepted deviations and standards" },
-  { name: "Changes", href: "/portal/changes", icon: GitPullRequest, hint: "Reviewed and approved tenant writes" },
-  { name: "Operations", href: "/portal/operations", icon: Activity },
+/** The sidebar's entries in groups; the first group has no heading. */
+interface NavGroup {
+  label?: string
+  items: NavItem[]
+}
+
+const navigationGroups: NavGroup[] = [
+  { items: [
+    { name: "Dashboard", href: "/portal/dashboard", icon: LayoutDashboard },
+    { name: "Tenants", href: "/portal/tenants", icon: Building2 },
+  ] },
+  { label: "Protect", items: [
+    { name: "Backup & Restore", href: "/portal/backup", icon: Database },
+    { name: "App Backup", href: "/portal/app-backup", icon: Package, hint: "Intune apps and installer backups" },
+    { name: "Drift Detection", href: "/portal/drift", icon: GitCompare },
+    { name: "Sync", href: "/portal/sync", icon: RefreshCw, hint: "Copy settings from one tenant to others" },
+    { name: "Alerts", href: "/portal/alerts", icon: Siren, hint: "Teams, email and webhook alerts for backups and policy changes" },
+  ] },
+  // CIS Benchmarks and Frameworks follow OpenIntuneBaseline in this group.
+  { label: "Baselines", items: [
+    { name: "OpenIntuneBaseline", href: "/portal/oib", icon: Layers },
+  ] },
+  { label: "Oversight", items: [
+    { name: "Reports", href: "/portal/reports", icon: FileText, hint: "What changed, setting by setting, and who changed it" },
+    { name: "Audit Log", href: "/portal/audit", icon: Shield, hint: "What TenuVault did, when, and did it work" },
+    { name: "Governance", href: "/portal/governance", icon: ClipboardCheck, hint: "Posture, accepted deviations and standards" },
+    { name: "Changes", href: "/portal/changes", icon: GitPullRequest, hint: "Reviewed and approved tenant writes" },
+    { name: "Operations", href: "/portal/operations", icon: Activity },
+  ] },
 ]
 
 /** A calm pill inside the content padding: tinted surface, round icon, round arrow action. */
@@ -305,18 +323,69 @@ function LicenseBanner() {
   )
 }
 
-/** Sidebar entry for the release notes, with a dot while an installed build is unseen. */
-function WhatsNewNav({ linkClass }: { linkClass: (active: boolean) => string }) {
+/** Runs after the next paint, so a closed menu is gone from the window (and from a feedback screenshot). */
+function afterPaint(run: () => void) {
+  if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => requestAnimationFrame(run))
+  else setTimeout(run, 0)
+}
+
+/**
+ * Help at the foot of the sidebar: the release notes and feedback, with Support as the panel's last
+ * row. It opens upward with the same motion as the tenant switcher. The release notes keep
+ * their dot on the Help entry while an installed build is unseen. A chosen item runs once the menu has
+ * closed and returned focus to Help, so the dialog it opens hands focus back there.
+ */
+function HelpMenu({ linkClass, onFeedback, onSupport }: { linkClass: (active: boolean) => string; onFeedback: () => void; onSupport: () => void }) {
   const { state } = useWhatsNew()
-  const [open, setOpen] = useState(false)
+  const [whatsNewOpen, setWhatsNewOpen] = useState(false)
+  const pending = useRef<(() => void) | null>(null)
+  const choose = (run: () => void) => () => { pending.current = run }
+  const unseen = Boolean(state?.hasUnseen)
   return (
     <>
-      <button type="button" onClick={() => setOpen(true)} className={cn(linkClass(false), "w-full")}>
-        <Sparkles className="h-[18px] w-[18px]" />
-        What&apos;s new
-        {state?.hasUnseen && <span aria-label="New changes since you last looked" className="ml-auto size-2 rounded-full bg-blue-600" />}
-      </button>
-      <WhatsNewDialog open={open} onOpenChange={setOpen} />
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button type="button" className={cn(linkClass(false), "w-full")} aria-label={unseen ? "Help, new changes since you last looked" : undefined}>
+            <CircleHelp className="h-[18px] w-[18px]" aria-hidden="true" />
+            Help
+            {unseen && <span aria-hidden="true" className="ml-auto size-2 rounded-full bg-blue-600" />}
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent
+          side="top"
+          align="start"
+          sideOffset={6}
+          className="tv-pop w-72 overflow-hidden rounded-[1.375rem] p-0"
+          onCloseAutoFocus={() => {
+            const run = pending.current
+            pending.current = null
+            if (run) afterPaint(run)
+          }}
+        >
+          <div className="space-y-px p-1.5">
+            <DropdownMenuItem onSelect={choose(() => setWhatsNewOpen(true))} className="gap-3 rounded-2xl px-3 py-2">
+              <Sparkles className="h-4 w-4" aria-hidden="true" />
+              What&apos;s new
+              {unseen && <><span aria-hidden="true" className="ml-auto size-2 rounded-full bg-blue-600" /><span className="sr-only">, new changes since you last looked</span></>}
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={choose(onFeedback)} className="gap-3 rounded-2xl px-3 py-2">
+              <MessageSquareHeart className="h-4 w-4" aria-hidden="true" />
+              Share feedback
+            </DropdownMenuItem>
+          </div>
+          <div className="border-t bg-secondary/60 p-1.5">
+            <DropdownMenuItem onSelect={choose(onSupport)} className="group/support gap-3 rounded-2xl px-2 py-2">
+              <span aria-hidden="true" className="flex size-8 flex-shrink-0 items-center justify-center rounded-full border bg-card text-muted-foreground"><LifeBuoy className="h-4 w-4" /></span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-[13px] font-medium">Support</span>
+                <span className="block text-xs text-muted-foreground">Documentation, contact options and a free setup call</span>
+              </span>
+              <ArrowRight aria-hidden="true" className="h-3.5 w-3.5 text-muted-foreground transition-transform group-focus/support:translate-x-0.5" />
+            </DropdownMenuItem>
+          </div>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <WhatsNewDialog open={whatsNewOpen} onOpenChange={setWhatsNewOpen} />
     </>
   )
 }
@@ -375,8 +444,9 @@ export function DesktopLayout() {
   const tenants = useTenants()
   useScoreInvalidation()
   // MSPs with several tenants get the all-tenants overview at the top.
-  const navigation =
-    tenants.length > 1 ? [{ name: "All tenants", href: "/portal/overview", icon: LayoutGrid }, ...allNavigation] : allNavigation
+  const groups: NavGroup[] = tenants.length > 1
+    ? [{ items: [{ name: "All tenants", href: "/portal/overview", icon: LayoutGrid }, ...navigationGroups[0]!.items] }, ...navigationGroups.slice(1)]
+    : navigationGroups
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [supportOpen, setSupportOpen] = useState(false)
   const [feedback, setFeedback] = useState<{ open: boolean; snapshot: FeedbackSnapshot | null }>({ open: false, snapshot: null })
@@ -391,6 +461,12 @@ export function DesktopLayout() {
   }
   const navRef = useRef<HTMLElement>(null)
   const navOverflowing = useOverflowing(navRef)
+  const pills = useSlidingPills(navRef, pathname)
+  const { folded, toggle: toggleGroup } = useFoldedGroups()
+  // Baselines also holds CIS Benchmarks, the framework catalog and custom baselines.
+  const holdsActive = (group: NavGroup) =>
+    group.items.some((item) => item.href && pathname.startsWith(item.href)) ||
+    (group.label === "Baselines" && /^\/portal\/(frameworks|baselines)(\/|$)/.test(pathname))
 
   const toggle = (name: string) =>
     setExpanded((prev) => {
@@ -402,8 +478,8 @@ export function DesktopLayout() {
 
   const linkClass = (active: boolean, nested = false) =>
     cn(
-      // 40px rows instead of the 44px touch minimum, so every entry fits a 900px tall window.
-      "flex min-h-10 items-center gap-3 rounded-full px-4 py-2.5 text-sm font-medium transition-colors",
+      // 32px rows, sized for a pointer, so the grouped list fits the default 920px tall window.
+      "flex min-h-8 items-center gap-3 rounded-full px-4 py-1.5 text-sm font-medium transition-colors",
       active
         ? "bg-primary text-primary-foreground"
         : nested
@@ -431,7 +507,7 @@ export function DesktopLayout() {
     }
 
     return (
-      <Link key={item.name} to={item.href!} title={item.hint} className={cn(linkClass(active, depth > 0), depth > 0 && "ml-4")}>
+      <Link key={item.name} to={item.href!} title={item.hint} aria-current={active ? "page" : undefined} data-nav-row="" className={cn(linkClass(active, depth > 0), depth > 0 && "ml-4")}>
         {item.icon ? (
           <item.icon className="h-[18px] w-[18px]" />
         ) : (
@@ -459,10 +535,7 @@ export function DesktopLayout() {
         <header className="flex items-center justify-between gap-4 px-6 pt-5 lg:px-8">
           <div className="flex items-center gap-3">
             <BrandMark className="size-9" />
-            <div className="leading-tight">
-              <div className="text-base font-semibold tracking-tight text-foreground">TenuVault</div>
-              <div className="text-xs text-muted-foreground">Desktop</div>
-            </div>
+            <div className="text-base font-semibold tracking-tight text-foreground">TenuVault</div>
           </div>
           <nav aria-label="Help" className="flex items-center gap-1">
             <SetupCallLink source="setup-header" variant="nav" className={quiet} />
@@ -473,12 +546,9 @@ export function DesktopLayout() {
         </header>
       ) : (
       <aside className="fixed bottom-3 left-3 top-3 z-40 flex w-[15.25rem] flex-col rounded-3xl bg-card shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
-        <div className="flex items-center gap-3 px-5 pb-4 pt-5">
-          <BrandMark className="size-10" />
-          <div className="leading-tight">
-            <div className="text-lg font-semibold tracking-tight text-foreground">TenuVault</div>
-            <div className="text-xs text-muted-foreground">Desktop</div>
-          </div>
+        <div className="flex items-center gap-3 px-5 pb-3 pt-4">
+          <BrandMark className="size-9" />
+          <div className="text-lg font-semibold tracking-tight text-foreground">TenuVault</div>
         </div>
 
         <div className="px-3 pb-2">
@@ -487,12 +557,22 @@ export function DesktopLayout() {
 
         {/* min-h-0 lets the list shrink and scroll inside the panel instead of pushing past it. Only while it
             scrolls does it keep the wheel to itself; otherwise the wheel over the sidebar scrolls the page. */}
-        <nav ref={navRef} aria-label="Main navigation" className={cn("min-h-0 flex-1 space-y-0.5 overflow-y-auto px-3 py-2", navOverflowing && "overscroll-contain")}>{navigation.map((item) => renderItem(item))}<CisBenchmarksNavigation linkClass={(active) => linkClass(active)} /><FrameworkNavigation /></nav>
+        <nav ref={navRef} aria-label="Main navigation" data-pills={pills.on ? "on" : undefined} className={cn("tv-nav relative min-h-0 flex-1 overflow-y-auto px-3 py-1", navOverflowing && "overscroll-contain")}>
+          <span ref={pills.hoverRef} aria-hidden="true" className="tv-pill tv-pill-hover" />
+          <span ref={pills.activeRef} aria-hidden="true" className="tv-pill tv-pill-active" />
+          {groups.map((group) => group.label ? (
+            <NavFoldGroup key={group.label} label={group.label} open={!folded.has(group.label)} holdsActive={holdsActive(group)} onToggle={() => toggleGroup(group.label!)}>
+              {group.items.map((item) => renderItem(item))}
+              {group.label === "Baselines" && <><CisBenchmarksNavigation linkClass={(active) => linkClass(active)} /><FrameworkNavigation /></>}
+            </NavFoldGroup>
+          ) : (
+            <div key="start" className="space-y-px">{group.items.map((item) => renderItem(item))}</div>
+          ))}
+        </nav>
 
         <OibJobIndicator />
-        <div className="space-y-1 p-3">
+        <div className="space-y-0.5 px-3 pb-3 pt-1">
           <UpdateSidebarLabel />
-          <WhatsNewNav linkClass={linkClass} />
           <Link to="/portal/settings" className={linkClass(pathname.startsWith("/portal/settings"))}>
             <Settings className="h-[18px] w-[18px]" />
             Settings
@@ -502,14 +582,7 @@ export function DesktopLayout() {
             License
             <LicenseNavBadge />
           </Link>
-          <button type="button" onClick={() => void openFeedback()} className={cn(linkClass(false), "w-full")}>
-            <MessageSquareHeart className="h-[18px] w-[18px]" />
-            Share feedback
-          </button>
-          <button type="button" onClick={() => setSupportOpen(true)} className={cn(linkClass(false), "w-full")}>
-            <LifeBuoy className="h-[18px] w-[18px]" />
-            Support
-          </button>
+          <HelpMenu linkClass={linkClass} onFeedback={() => void openFeedback()} onSupport={() => setSupportOpen(true)} />
         </div>
       </aside>
       )}
