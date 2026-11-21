@@ -102,3 +102,21 @@ it("offers journal confirmation and discard with no backup props or mutation con
   expect(JSON.parse(String(fetcher.mock.calls[1]![1]?.body))).toMatchObject({ action: "discard", runId: "run" })
   expect(document.body.textContent).toContain("This page can never send again.")
 })
+
+it("confirms the displayed page even when the saved page input names a different page", async () => {
+  const fetcher = vi.fn(async (_input: unknown, _init?: RequestInit) => Response.json(page))
+  vi.stubGlobal("fetch", fetcher)
+  root = createRoot(document.body.appendChild(document.createElement("div")))
+  await act(async () => root.render(createElement(DirectoryRestore, props)))
+  await click("Review directory restore"); await click("Preview directory changes")
+  await act(async () => {
+    const input = document.querySelector<HTMLInputElement>('input:not([type="checkbox"])')!
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "different-page")
+    input.dispatchEvent(new Event("input", { bubbles: true }))
+  })
+  expect(document.body.textContent).toContain("Saved page: run")
+  await click("Confirm this page's results")
+  expect(JSON.parse(String(fetcher.mock.calls[1]![1]?.body))).toMatchObject({ action: "reconcile", runId: "run" })
+  await click("Resume saved page")
+  expect(JSON.parse(String(fetcher.mock.calls[2]![1]?.body))).toMatchObject({ action: "resume", runId: "different-page" })
+})

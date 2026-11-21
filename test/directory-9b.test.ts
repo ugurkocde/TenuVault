@@ -793,3 +793,14 @@ it.each(["120", "1"])("defers a confirmed application throttle at Retry-After %s
   expect(wait).toHaveBeenCalledTimes(header === "120" ? 0 : 4)
   expect(env.writes).toEqual([])
 })
+
+it.each(["headers", "body"])("reports cancellation of an application GET during %s transport", async phase => {
+  const env = world(), controller = new AbortController()
+  const fetcher: typeof fetch = async () => {
+    if (phase === "headers") { controller.abort(); throw new Error("Connection aborted") }
+    return new Response(new ReadableStream({ start(stream) { controller.abort(); stream.error(new Error("Connection aborted")) } }), { status: 200 })
+  }
+  const io = directory9bIO(token, actor, fetcher)
+  const step = await applicationObjectStep("Applications", app, directory9bIO(token, actor, env.fetcher), async () => app)
+  await expect(io.read(step, String(app.id), controller.signal)).rejects.toThrow("cancelled")
+})

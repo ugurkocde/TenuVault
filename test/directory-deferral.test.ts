@@ -46,17 +46,13 @@ function world(folder: typeof folders[number]) {
 }
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals() })
 
-it.each(folders.flatMap(folder => ["current", "legacy"].map(version => ({ folder, version }))))("retains the $version $folder page lock until explicit discard and never bypasses Retry-After", async ({ folder, version }) => {
+it.each(folders)("retains the %s page lock until explicit discard and never bypasses Retry-After", async folder => {
   const env = world(folder), request = env.request(), page = await env.prepare(request), original = env.graph.getMockImplementation()!
   let sends = 0
   env.graph.mockImplementation((input, init) => init?.method === "PATCH" && ++sends === 1 ? Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
   vi.useFakeTimers()
   expect(await env.execute(page, request)).toMatchObject({ status: "partial", failed: 0, canDiscard: true, outcomes: [{ state: "deferred", retryAt: Date.now() + 120_000 }] })
   expect(env.locks()).toHaveLength(1)
-  if (version === "legacy") {
-    env.data.delete(`restore.directory.coordinator.${tenant}`)
-    env.data.set(`restore.directory.object.${tenant}.${folder}.${targetId}`, JSON.stringify({ owner: `restore.directory.${tenant}.${page.runId}.batch.0.`, retryAt: Date.now() + 120_000 }))
-  }
   const newerRequest = env.request("newer", "Newer"), newer = await env.prepare(newerRequest)
   expect(await env.execute(newer, newerRequest)).toMatchObject({ status: "partial", failed: 1, outcomes: [{ state: "blocked", reason: expect.stringContaining("owns this object") }] })
   // A queued replacement cannot invalidate the original page before its deadline.
@@ -241,4 +237,49 @@ it.each(["token", "metadata", "snapshot"])("registers cancellation before route 
   expect(await (await pending).json()).toEqual({ cancelled: true })
   expect(env.writes).toEqual([])
   expect(await service.cancel(tenant, page.runId)).toEqual({ cancelled: false })
+})
+
+it.each(folders)("retains the approved %s row when another page extends the final-read deadline", async folder => {
+  const env = world(folder), request = env.request(), page = await env.prepare(request)
+  const otherRequest = env.request("other", "Other"), other = await env.prepare(otherRequest), original = env.graph.getMockImplementation()!
+  let reads = 0, extending = false, extended = false
+  const finalRead = folder === "Users" ? 4 : 5
+  env.graph.mockImplementation(async (input, init) => {
+    const path = new URL(String(input)).pathname
+    if (extending && path === "/v1.0/applications") return new Response(null, { status: 429, headers: { "Retry-After": "120" } })
+    if (!extended && path === `/v1.0/${env.targetPath}` && ++reads === finalRead) {
+      extending = true; extended = true
+      await expect(env.execute(other, otherRequest)).rejects.toThrow("throttled")
+      extending = false
+    }
+    return original(input, init)
+  })
+  vi.useFakeTimers()
+  const deadline = Date.now() + 120_000
+  expect(await env.execute(page, request)).toMatchObject({ failed: 0, outcomes: [{ state: "deferred", retryAt: deadline }] })
+  expect(extended).toBe(true); expect(env.writes).toEqual([])
+  const stored = JSON.parse(env.data.get(`restore.directory.review.${tenant}.${page.runId}`)!)
+  expect(stored.selection).toEqual(page.rows.map(row => row.key))
+  await vi.advanceTimersByTimeAsync(120_000)
+  expect(await env.execute(page, request)).toMatchObject({ status: "complete", outcomes: [{ state: "applied" }] })
+  expect(env.writes).toEqual([{ [env.field]: "Saved" }])
+})
+
+it.each(folders.flatMap(folder => ["initial", "final"].flatMap(phase => ["body reset", "invalid JSON"].map(failure => ({ folder, phase, failure })))))("handles $folder $phase $failure separately from safety drift", async ({ folder, phase, failure }) => {
+  const env = world(folder), request = env.request(), page = await env.prepare(request), original = env.graph.getMockImplementation()!
+  let reads = 0, failed = false
+  const failureRead = phase === "initial" ? 1 : folder === "Users" ? 4 : 5
+  env.graph.mockImplementation(async (input, init) => {
+    if (!failed && new URL(String(input)).pathname === `/v1.0/${env.targetPath}` && ++reads === failureRead) {
+      failed = true
+      return failure === "invalid JSON" ? new Response("{", { status: 200 }) : new Response(new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode('{"id":')); controller.error(new Error("ECONNRESET")) } }), { status: 200 })
+    }
+    return original(input, init)
+  })
+  expect(await env.execute(page, request)).toMatchObject({ failed: failure === "body reset" ? 0 : 1, outcomes: [{ state: failure === "body reset" ? "deferred" : phase === "initial" ? "blocked" : "failed-before-send" }] })
+  expect(failed).toBe(true); expect(env.writes).toEqual([])
+  if (failure === "body reset") {
+    expect(await env.execute(page, request)).toMatchObject({ status: "complete", outcomes: [{ state: "applied" }] })
+    expect(env.writes).toEqual([{ [env.field]: "Saved" }])
+  }
 })

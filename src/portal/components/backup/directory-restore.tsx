@@ -26,7 +26,7 @@ export function DirectoryRestore({ tenant, backupId = "", path = "" }: { tenant:
     if (action !== "cancel") setBusy(true)
     setMessage("")
     try {
-      const response = await fetch("/api/restore-directory", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...tenant.credentials, storageAccountName: tenant.storageAccountName, backupId, path, action: action === "next" ? "preview" : action, ...(action === "next" ? { previousRunId: review?.runId } : {}), stage, exactMembers, exactOwners, approvals, runId: action === "resume" || action === "reconcile" ? (resumeId || review?.runId) : action === "discard" ? (review?.runId ?? resumeId) : review?.runId, fingerprint: review?.fingerprint, mode: "replace", restoreType: "selective", selectedPolicies: [path] }) })
+      const response = await fetch("/api/restore-directory", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...tenant.credentials, storageAccountName: tenant.storageAccountName, backupId, path, action: action === "next" ? "preview" : action, ...(action === "next" ? { previousRunId: review?.runId } : {}), stage, exactMembers, exactOwners, approvals, runId: action === "resume" ? resumeId : action === "reconcile" || action === "discard" ? (review?.runId ?? resumeId) : review?.runId, fingerprint: review?.fingerprint, mode: "replace", restoreType: "selective", selectedPolicies: [path] }) })
       const data = await response.json()
       if (generation.current !== run) return
       if (!response.ok) throw new Error(data.error ?? "Directory restore could not finish.")

@@ -144,6 +144,12 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
     for (const mapping of journal.mappings(run.tenant)) rememberMapping(run.mappings, mapping)
     if (run.actor.tenantId.toLowerCase() !== run.tenant.toLowerCase()) throw new RestoreSafetyError("The restore belongs to another tenant.")
     journal.save(run)
+    // A confirmed result must never enter safety-failure handling. Retry its atomic
+    // publication once; if storage stays unavailable the durable send marker remains.
+    const saveConfirmed = () => {
+      try { journal.save(run) }
+      catch { journal.save(run) }
+    }
     const dependencies = (step: GuardedStep) => [...new Set([...step.requires, ...run.entries.filter(entry => restoreMatrixRow(step.folder)?.dependsOn.includes(entry.step.folder)).map(entry => entry.step.key)])]
     const { order, blocked } = dependencyOrder(run.entries.map(({ step }) => ({ key: step.key, requires: dependencies(step) })))
     for (const entry of run.entries) if (entry.state === "blocked" && entry.reason?.startsWith("Prerequisite ")) { entry.state = "pending"; delete entry.reason }
@@ -170,7 +176,7 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
           if (!isGraphId(id)) throw new RestoreSafetyError("The reconciled object has no identity.")
           entry.targetId = id
           rememberMapping(run.mappings, { kind: "objectId", folder: step.folder, source: step.sourceId, target: id })
-          entry.state = "applied"; delete entry.reason; journal.save(run); continue
+          entry.state = "applied"; delete entry.reason; saveConfirmed(); continue
         }
         const mapped = mappedReference(run.mappings, "objectId", step.folder, step.sourceId)
         if (mapped && step.targetId && mapped.toLowerCase() !== step.targetId.toLowerCase()) throw new RestoreSafetyError("The target mapping changed after this preview. Preview this item again.")
@@ -245,8 +251,14 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
         if (!isGraphId(id)) { entry.reason = "The write did not return an object ID. It must be read back before continuing."; journal.save(run); continue }
         entry.targetId = id
         rememberMapping(run.mappings, { kind: "objectId", folder: step.folder, source: step.sourceId, target: id })
-        entry.state = "applied"; journal.save(run)
+        entry.state = "applied"; saveConfirmed()
       } catch (error) {
+        if (entry.state === "applied") throw error
+        if (entry.state === "uncertain" && error instanceof RestoreWriteDeferredError && error.retryAt !== undefined) {
+          entry.retryAt = Math.max(entry.retryAt ?? 0, error.retryAt)
+          io.defer?.(step, entry.retryAt)
+          entry.reason = "Microsoft Graph deferred confirmation of this unanswered write. Retry after the saved deadline."
+        }
         if (entry.state !== "uncertain" && (error instanceof RestoreWriteDeferredError || signal?.aborted)) {
           entry.state = step.directory ? "deferred" : "captured"; delete entry.reason
           if (error instanceof RestoreWriteDeferredError && error.retryAt !== undefined) { entry.retryAt = error.retryAt; journal.save(run); io.defer?.(step, error.retryAt) }

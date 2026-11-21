@@ -9,31 +9,6 @@ export const directoryMappedId = (store: KeyValueStore, tenant: string, folder: 
   return store.get(directoryMappingKey(tenant, folder, sourceId)) ?? undefined
 }
 
-/** Legacy records are adopted once at the operation boundary, never during lookup. */
-export function migrateDirectoryState(store: KeyValueStore, tenant: string, objects: Array<{ folder: string; sourceId: string }>) {
-  for (const { folder, sourceId } of objects) {
-    const oldKey = `restore.directory.object.${encodeURIComponent(tenant.toLowerCase())}.${folder}.${sourceId.toLowerCase()}`
-    const old = JSON.parse(store.get(oldKey) ?? "{}")
-    const unansweredKey = `restore.directory.unanswered.${encodeURIComponent(tenant.toLowerCase())}.${folder}.${sourceId.toLowerCase()}`
-    const legacy = store.get(unansweredKey) ?? old.owner
-    if (!legacy) continue
-    const prefix = `restore.directory.${encodeURIComponent(tenant)}.`
-    const page = legacy.startsWith(prefix) ? legacy.slice(prefix.length).split(".batch.")[0] : undefined
-    if (!page) throw new RestoreSafetyError("The earlier directory lock could not be verified.")
-    const journal = new GuardedRunJournal({ get: name => store.get(legacy + name), set: () => { throw new Error("Read-only history") }, delete: () => { throw new Error("Read-only history") } })
-    const entries = journal.load(tenant, decodeURIComponent(page))?.entries.filter(entry => entry.step.folder === folder && entry.step.sourceId.toLowerCase() === sourceId.toLowerCase())
-    if (!entries?.length) throw new RestoreSafetyError("The earlier directory lock has no verifiable journal.")
-    const coordinator = directoryObjectState(store, tenant, decodeURIComponent(page))
-    for (const entry of entries) {
-      const step = { ...entry.step, targetId: entry.targetId ?? entry.step.targetId ?? directoryMappedId(store, tenant, folder, sourceId) }
-      if (store.get(unansweredKey) || ["pending", "captured", "deferred", "uncertain"].includes(entry.state)) coordinator.prepare(entry.step.operation === "create" ? entry.step : step, legacy)
-      if (typeof old.retryAt === "number") coordinator.recordThrottle(step, old.retryAt)
-    }
-    store.delete(oldKey); store.delete(unansweredKey)
-  }
-  directoryObjectState(store, tenant, "").recoverMappings()
-}
-
 export interface DirectoryBatchSource {
   /** Stable immutable backup/index fingerprint. A cursor resumes this exact source. */
   fingerprint: string
@@ -46,7 +21,6 @@ export async function executeDirectoryBatches(store: PartitionedRestoreStore, id
   const prefix = directoryPagePrefix(identity.tenant, identity.id)
   const objectState = directoryObjectState(store, identity.tenant, identity.id)
   objectState.assertActive()
-  objectState.recoverMappings()
   const binding = restoreFingerprint({ ...identity, actor: { ...identity.actor, recoveryAccountIds: [] }, sourceFingerprint: source.fingerprint } as unknown as Item)
   const saved = store.get(prefix + "cursor")
   const state: { binding: string; cursor: string | null; batch: number; done: boolean; failed: number; warning?: boolean } = saved ? JSON.parse(saved) : { binding, cursor: null, batch: 0, done: false, failed: 0 }
@@ -72,13 +46,14 @@ export async function executeDirectoryBatches(store: PartitionedRestoreStore, id
     const effective = (step: typeof page.entries[number]["step"]) => resolved.get(step.key)!
     const guardedIO: GuardedIO = { ...io, prepareStep: step => {
       if (journal.load(identity.tenant, identity.id)?.entries.some(entry => entry.state === "uncertain" && (entry.targetId ?? entry.step.targetId ?? entry.step.sourceId).toLowerCase() === (effective(step).targetId ?? step.sourceId).toLowerCase())) throw new RestoreWriteDeferredError("This page has an unanswered write for this object. Confirm its result first.")
+      objectState.recoverMappings([effective(step)])
       return objectState.prepare(effective(step), batchKey)
     }, defer: (step, retryAt) => objectState.recordThrottle(effective(step), retryAt),
       write: (step, body, targetId, beforeSend, currentRun, writeSignal, onUnapplied) =>
         io.write(step, body, targetId, () => { objectState.beforeSend(effective(step)); beforeSend() }, currentRun, writeSignal, onUnapplied),
     }
     const result = await executeGuardedRun(journal, run, guardedIO, signal, reconcileOnly)
-    objectState.recoverMappings()
+    objectState.recoverMappings(result.run.entries.filter(entry => entry.step.operation === "create" && entry.state === "applied").map(entry => entry.step))
     // A confirmed create is resolved once both identities and its mapping are durable.
     objectState.releaseCreated(result.run.entries.filter(entry => entry.step.operation === "create" && entry.state === "applied").flatMap(entry => [entry.step.sourceId, entry.targetId!]))
     if (result.run.entries.some(entry => ["pending", "captured", "deferred", "uncertain"].includes(entry.state))) return { status: "partial", batches: state.batch, failed: state.failed }

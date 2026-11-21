@@ -18,7 +18,7 @@ import type { PartitionedRestoreStore } from "../storage/directory-restore-store
 import { directory9aIO, directoryAdmission } from "./directory-9a-io"
 import { directoryObjectStep, directoryRelationshipSteps, mappedDirectoryIds } from "./directory-9a-plan"
 import { approveDirectory, type DirectoryReview } from "./directory-9a"
-import { directoryMappedId, executeDirectoryBatches, migrateDirectoryState } from "./directory-9a-batches"
+import { directoryMappedId, executeDirectoryBatches } from "./directory-9a-batches"
 import { GuardedRunJournal, restoreFingerprint, type GuardedRun } from "./guarded-run"
 import { resolveRestoreActor, type RecoveryAccounts } from "./safety-resolvers"
 import { safetyReader } from "./safety-reader"
@@ -83,7 +83,7 @@ export class DirectoryRestoreService {
     const snapshot = request.snapshot, sourceId = snapshot.id
     if (!isGuid(sourceId)) fail("The directory source ID is missing.")
     const { actor, io } = await this.context(tenant)
-    migrateDirectoryState(this.store, tenant, [{ folder: folder!, sourceId: sourceId as string }])
+    directoryObjectState(this.store, tenant, "").recoverMappings([{ folder: folder!, sourceId: sourceId as string }])
     const mapped = directoryMappedId(this.store, tenant, folder!, sourceId as string)
     const object = await directoryObjectStep(folder as "Users" | "Groups", snapshot, io, undefined, mapped)
     // Account state has no live enabling/disabling evidence. Profile restores leave it untouched.
@@ -184,7 +184,7 @@ export class DirectoryRestoreService {
       if (!item || typeof item !== "object" || Array.isArray(item)) fail("The saved app reference is unavailable.")
       return item as Item
     }
-    migrateDirectoryState(this.store, tenant, [{ folder, sourceId: String(snapshot.id) }])
+    directoryObjectState(this.store, tenant, "").recoverMappings([{ folder, sourceId: String(snapshot.id) }])
     const object = await applicationObjectStep(folder, snapshot, io, readSource, directoryMappedId(this.store, tenant, folder, String(snapshot.id)))
     const run: GuardedRun = { version: 1, id: randomUUID(), tenant, actor, origin: "restore", source: { path: request.path, fingerprint: restoreFingerprint(snapshot) }, entries: [], mappings: [] }
     const page: DirectoryPage = { run, rows: [], more: false, options }
@@ -263,7 +263,6 @@ export class DirectoryRestoreService {
     }
     const page = this.load(tenant, request.runId!)
     if (request.origin !== "restore" || page.run.origin !== request.origin || page.run.source?.path !== request.path || page.run.source.fingerprint !== restoreFingerprint(request.snapshot) || this.view(page).fingerprint !== fingerprint) fail("The backup or preview changed. Preview this object again.")
-    migrateDirectoryState(this.store, tenant, page.run.entries.map(entry => entry.step))
     const context = await this.context(tenant, retryAt => {
       // A refused actor lookup cannot settle an earlier dispatch. Keep its lock,
       // but let every later reviewed plan inherit the tenant/object deadline.
@@ -316,8 +315,8 @@ export class DirectoryRestoreService {
       const context = await this.context(tenant)
       if (context.actor.userId !== page.run.actor.userId || context.actor.clientId !== page.run.actor.clientId) fail("Use the admin and connection that reviewed this page.")
       const state = directoryObjectState(this.store, tenant, id)
-      migrateDirectoryState(this.store, tenant, page.run.entries.map(entry => entry.step))
       if (action === "discard") {
+        state.recoverMappings(page.run.entries.map(entry => entry.step))
         if (this.history(page).some(run => run.entries.some(entry => entry.state === "uncertain"))) fail("Confirm the uncertain result before discarding this saved restore.")
         state.release(true)
         return { discarded: true, canDiscard: false }

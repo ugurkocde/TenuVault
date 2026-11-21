@@ -72,11 +72,13 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
       if (method !== "GET" && response.status >= 400 && response.status < 500 && response.status !== 408) throw new RestoreWriteRefusedError(response.status)
       if (method === "GET" && (response.status === 408 || response.status >= 500)) throw new DirectoryReadDeferredError()
       if (!response.ok) throw new Error("Directory request was not confirmed. No response body is retained.")
-      return response.status === 204 ? {} : await response.json().catch(error => {
+      if (response.status === 204) return {}
+      const text = await response.text().catch(error => {
         if (method === "GET" && signal?.aborted) throw new RestoreWriteDeferredError("The directory read was cancelled before sending a write.")
-        if (method === "GET" && (error instanceof TypeError || (error instanceof DOMException && ["TimeoutError", "AbortError"].includes(error.name)))) throw new DirectoryReadDeferredError()
+        if (method === "GET") throw new DirectoryReadDeferredError()
         throw error
-      }) as Item
+      })
+      return JSON.parse(text) as Item
     }
   }
   const ids = async function* (id: string, kind: "members" | "owners"): AsyncGenerator<string> {

@@ -21,7 +21,11 @@ export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typ
   requireRestoreActor(token, actor)
   const request = async (path: string, method = "GET", body?: Item, signal?: AbortSignal): Promise<Item | null> => {
     if (signal?.aborted) throw new RestoreWriteDeferredError("The application request was cancelled before sending.")
-    const response = await fetchImpl(root + path, { method, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, ...(body ? { body: JSON.stringify(body) } : {}), signal: method === "GET" && signal ? AbortSignal.any([signal, AbortSignal.timeout(60_000)]) : AbortSignal.timeout(60_000) }).catch(error => { if (method === "GET") throw new DirectoryReadDeferredError(); throw error })
+    const response = await fetchImpl(root + path, { method, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, ...(body ? { body: JSON.stringify(body) } : {}), signal: method === "GET" && signal ? AbortSignal.any([signal, AbortSignal.timeout(60_000)]) : AbortSignal.timeout(60_000) }).catch(error => {
+      if (method === "GET" && signal?.aborted) throw new RestoreWriteDeferredError("The application read was cancelled before sending a write.")
+      if (method === "GET") throw new DirectoryReadDeferredError()
+      throw error
+    })
     if (response.status === 404 && method === "GET") return null
     if (!response.ok) {
       if (response.status === 429) throw new DirectoryThrottledError(response)
@@ -31,7 +35,13 @@ export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typ
       if (method === "PATCH" && (response.status === 408 || response.status >= 500)) throw new Error("The application write has an unconfirmed result.")
       throw new RestoreWriteRefusedError(response.status)
     }
-    return response.status === 204 ? {} : await response.json().catch(error => { if (method === "GET" && (error instanceof TypeError || (error instanceof DOMException && ["TimeoutError", "AbortError"].includes(error.name)))) throw new DirectoryReadDeferredError(); throw error }) as Item
+    if (response.status === 204) return {}
+    const text = await response.text().catch(error => {
+      if (method === "GET" && signal?.aborted) throw new RestoreWriteDeferredError("The application read was cancelled before sending a write.")
+      if (method === "GET") throw new DirectoryReadDeferredError()
+      throw error
+    })
+    return JSON.parse(text) as Item
   }
   async function* list(path: string, signal?: AbortSignal): AsyncGenerator<Item> {
     const start = root + path, seen = new Set<string>()

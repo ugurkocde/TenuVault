@@ -381,7 +381,7 @@ it("never sends the 21st member from a discarded page after a completed first ba
   await expect(env.service().execute(tenant, request, page.fingerprint, approvals)).rejects.toThrow("discarded")
 })
 
-it.each(["current", "legacy"])("recovers a journalled group create before planning when %s mapping publication was interrupted", async version => {
+it("recovers a journalled group create before planning when mapping publication was interrupted", async () => {
   const env = world(0, true), page = await env.service().prepare(tenant, env.request, options, env.read)
   const set = env.store.set, publish = vi.spyOn(env.store, "set")
   let interrupted = false
@@ -391,10 +391,6 @@ it.each(["current", "legacy"])("recovers a journalled group create before planni
   })
   const request = { ...env.request, runId: page.runId }, approvals = { [page.rows[0]!.key]: page.rows[0]!.review.approvals }
   await expect(env.service().execute(tenant, request, page.fingerprint, approvals)).rejects.toThrow("Interrupted mapping")
-  if (version === "legacy") {
-    env.data.delete(`restore.directory.coordinator.${tenant}`)
-    env.data.set(`restore.directory.unanswered.${tenant}.Groups.${resource}`, `restore.directory.${tenant}.${page.runId}.batch.0.`)
-  }
   const recovered = await env.service().prepare(tenant, env.request, options, env.read)
   expect(recovered.rows[0]!.review.resource.id).toBe(id(900))
   expect(env.writes).toEqual(["POST groups"])
@@ -448,7 +444,7 @@ it.each((["Users", "Groups"] as const).flatMap(folder => ["area", "service", "ac
   await expect(service.prepare(tenant, request, options, env.read)).rejects.toThrow("Backup and restore access")
 })
 
-it.each(["clean", "legacy conflict"])("rejects stale creates before locking and keeps the mapped target owning page recoverable with %s state", async version => {
+it("rejects stale creates before locking and keeps the mapped target owning page recoverable", async () => {
   const env = world(0, true)
   const first = await env.service().prepare(tenant, env.request, options, env.read)
   const stale = await env.service().prepare(tenant, env.request, options, env.read)
@@ -460,13 +456,6 @@ it.each(["clean", "legacy conflict"])("rejects stale creates before locking and 
   expect(await execute(update, updateRequest)).toMatchObject({ outcomes: [{ state: "uncertain" }] })
   expect(await execute(stale)).toMatchObject({ outcomes: [{ state: "blocked", reason: expect.stringContaining("mapping") }] })
   expect(Object.keys(JSON.parse(env.data.get(`restore.directory.coordinator.${tenant}`)!).locks)).toEqual([id(900)])
-  if (version === "legacy conflict") {
-    // Reproduce the durable source lock left by the old stale-create path. Its
-    // inherited mapping belongs to the first create journal, not this journal.
-    const state = JSON.parse(env.data.get(`restore.directory.coordinator.${tenant}`)!)
-    state.locks[resource] = { owner: stale.runId, journal: `restore.directory.${tenant}.${stale.runId}.batch.0.` }
-    env.data.set(`restore.directory.coordinator.${tenant}`, JSON.stringify(state))
-  }
   expect((await env.service().prepare(tenant, updateRequest, options, env.read)).rows).toHaveLength(1)
   expect(await env.service().saved(tenant, update.runId, "reconcile")).toMatchObject({ outcomes: [{ state: "uncertain" }] })
   await env.service().saved(tenant, stale.runId, "discard")
@@ -476,7 +465,7 @@ it.each(["clean", "legacy conflict"])("rejects stale creates before locking and 
   expect(env.writes).toEqual(["POST groups"])
 })
 
-it.each(["current", "legacy"])("migrates %s recreated-object ownership and deadlines before competing execution or discard", async version => {
+it("retains resolved live-object deadlines after discard across competing backups", async () => {
   const env = world(0, true), created = await env.service().prepare(tenant, env.request, options, env.read)
   await env.service().execute(tenant, { ...env.request, runId: created.runId }, created.fingerprint, Object.fromEntries(created.rows.map(row => [row.key, row.review.approvals])))
   const request = { ...env.request, snapshot: { ...env.request.snapshot, description: "Saved" } }
@@ -488,18 +477,7 @@ it.each(["current", "legacy"])("migrates %s recreated-object ownership and deadl
   try {
     const deadline = Date.now() + 120_000
     expect(await execute(page)).toMatchObject({ outcomes: [{ state: "deferred", retryAt: deadline }] })
-    if (version === "legacy") {
-      env.data.delete(`restore.directory.coordinator.${tenant}`)
-      env.data.set(`restore.directory.object.${tenant}.Groups.${resource}`, JSON.stringify({ owner: `restore.directory.${tenant}.${page.runId}.batch.0.`, retryAt: deadline }))
-    } else {
-      const state = JSON.parse(env.data.get(`restore.directory.coordinator.${tenant}`)!)
-      state.locks[resource] = state.locks[id(900)]; delete state.locks[id(900)]
-      state.deadlines[resource] = deadline; delete state.deadlines[id(900)]
-      env.data.set(`restore.directory.coordinator.${tenant}`, JSON.stringify(state))
-    }
     const competitorRequest = { ...request, path: `newer/Groups/${id(900)}.json`, snapshot: { ...request.snapshot, id: id(900) } }
-    // Recover the source journal once before a live-ID backup competes.
-    await env.service().prepare(tenant, request, options, env.read)
     const competitor = await env.service().prepare(tenant, competitorRequest, options, env.read)
     expect(await execute(competitor, competitorRequest)).toMatchObject({ outcomes: [{ state: "blocked", reason: expect.stringContaining("owns this object") }] })
     await env.service().saved(tenant, page.runId, "discard")
@@ -568,7 +546,22 @@ it("uses one fresh snapshot for inventory review and refuses an already matching
   const env = world(51), service = env.service()
   const first = await service.prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read)
   env.members.add(id(150))
+  const original = env.fetcher.getMockImplementation()!
+  let relationshipReads = 0, principalReads = 0
+  env.fetcher.mockImplementation(async (input, init) => {
+    const path = new URL(String(input)).pathname
+    if (path === `/v1.0/groups/${resource}/members/${id(150)}`) {
+      relationshipReads++
+      const response = await original(input, init)
+      // A second read would see absence and disagree with the captured preview.
+      env.members.delete(id(150))
+      return response
+    }
+    if (path === `/v1.0/users/${id(150)}`) principalReads++
+    return original(input, init)
+  })
   const next = await service.prepare(tenant, env.request, { ...options, stage: "relationships", previousRunId: first.runId }, env.read)
+  expect(relationshipReads).toBe(1); expect(principalReads).toBe(1)
   expect(next.rows).toHaveLength(1)
   expect(next.rows[0]!.review.changes).toEqual([])
   expect(next.rows[0]!.review.blocker).toContain("already matches")
@@ -585,4 +578,107 @@ it("keeps mapping lookup pure after production create recovery", async () => {
   for (let lookup = 0; lookup < 100; lookup++) expect(directoryMappedId(env.store, tenant, "Groups", resource)).toBe(id(900))
   expect(get).toHaveBeenCalledTimes(100); expect(set).not.toHaveBeenCalled(); expect(remove).not.toHaveBeenCalled()
   expect(env.data).toEqual(before)
+})
+
+it.each([1, Infinity])("never repeats a confirmed group create after %s applied-result save failures", async failures => {
+  const env = world(0, true), page = await env.service().prepare(tenant, env.request, options, env.read)
+  const original = env.store.set
+  let saves = 0
+  const spy = vi.spyOn(env.store, "set").mockImplementation((key, value) => {
+    if (key.includes(".restore.guarded.") && JSON.parse(value).runs[page.runId]?.entries.some((entry: { state: string }) => entry.state === "applied") && ++saves <= failures) throw new Error("Result storage unavailable")
+    original(key, value)
+  })
+  const execute = (p: typeof page) => env.service().execute(tenant, { ...env.request, runId: p.runId }, p.fingerprint, Object.fromEntries(p.rows.map(row => [row.key, row.review.approvals])))
+  if (failures === 1) {
+    expect(await execute(page)).toMatchObject({ outcomes: [{ state: "applied", targetId: id(900) }] })
+    expect(saves).toBe(3)
+  } else {
+    await expect(execute(page)).rejects.toThrow("Result storage unavailable")
+    const journal = JSON.parse(env.data.get(`restore.directory.${tenant}.${page.runId}.batch.0.restore.guarded.${tenant}`)!)
+    expect(journal.runs[page.runId].entries[0].state).toBe("uncertain")
+    expect(JSON.parse(env.data.get(`restore.directory.coordinator.${tenant}`)!).locks[resource].owner).toBe(page.runId)
+  }
+  spy.mockRestore()
+  const fresh = await env.service().prepare(tenant, env.request, options, env.read)
+  if (failures === 1) {
+    expect(fresh.rows[0]!.review.resource.id).toBe(id(900))
+    expect(await execute(page)).toMatchObject({ outcomes: [{ state: "applied", targetId: id(900) }] })
+  } else {
+    expect(await execute(fresh)).toMatchObject({ outcomes: [{ state: "blocked", reason: expect.stringContaining("owns this object") }] })
+    expect(await env.service().saved(tenant, page.runId, "reconcile")).toMatchObject({ outcomes: [{ state: "uncertain" }] })
+    await expect(env.service().saved(tenant, page.runId, "discard")).rejects.toThrow("uncertain")
+  }
+  expect(env.writes).toEqual(["POST groups"])
+})
+
+it("refuses conflicting stored create mappings before changing either object lock", async () => {
+  const env = world(0, true), page = await env.service().prepare(tenant, env.request, options, env.read)
+  const original = env.store.set
+  const spy = vi.spyOn(env.store, "set").mockImplementation((key, value) => {
+    if (key.startsWith("restore.directory.mapping.")) throw new Error("Publication stopped")
+    original(key, value)
+  })
+  await expect(env.service().execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])))).rejects.toThrow("Publication stopped")
+  spy.mockRestore()
+  const coordinator = `restore.directory.coordinator.${tenant}`, mapping = `restore.directory.mapping.${tenant}.objectId.Groups.${resource}`
+  const state = JSON.parse(env.data.get(coordinator)!)
+  delete state.locks[id(900)]
+  env.data.set(coordinator, JSON.stringify(state)); env.data.set(mapping, id(901))
+  const before = env.data.get(coordinator)
+  await expect(env.service().prepare(tenant, env.request, options, env.read)).rejects.toThrow("stored mapping or ownership conflicts")
+  expect(env.data.get(coordinator)).toBe(before); expect(env.data.get(mapping)).toBe(id(901))
+  // An unrelated source still previews and executes normally.
+  const request = { ...env.request, path: `other/Groups/${id(900)}.json`, snapshot: { ...env.request.snapshot, id: id(900), description: "Other" } }
+  const other = await env.service().prepare(tenant, request, options, env.read)
+  expect(await env.service().execute(tenant, { ...request, runId: other.runId }, other.fingerprint, Object.fromEntries(other.rows.map(row => [row.key, row.review.approvals])))).toMatchObject({ outcomes: [{ state: "applied" }] })
+  expect(env.writes.filter(write => write === "POST groups")).toHaveLength(1)
+})
+
+it.each(["empty", "unparseable", "unknown", "invalid object", "invalid journal"])("refuses %s coordinator state per object without changing it", async kind => {
+  const env = world(), request = { ...env.request, snapshot: { ...env.request.snapshot, description: "Saved" } }
+  const page = await env.service().prepare(tenant, request, options, env.read)
+  const coordinator = `restore.directory.coordinator.${tenant}`
+  const raw = kind === "empty" ? "" : kind === "unparseable" ? "{" : kind === "unknown" ? JSON.stringify({ oldOwner: "unknown" }) : JSON.stringify({ locks: { [resource]: kind === "invalid object" ? { owner: 5 } : { owner: page.runId, journal: "unknown" } }, deadlines: {}, discarded: {} })
+  env.data.set(coordinator, raw)
+  expect(await env.service().execute(tenant, { ...request, runId: page.runId }, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])))).toMatchObject({ outcomes: [{ state: "blocked", reason: expect.stringContaining(`state for object ${resource} could not be verified`) }] })
+  expect(env.data.get(coordinator)).toBe(raw); expect(env.writes).toEqual([])
+})
+
+it("ignores unrelated damaged coordinator records and obsolete directory state", async () => {
+  const env = world(), request = { ...env.request, snapshot: { ...env.request.snapshot, description: "Saved" } }
+  env.data.set(`restore.directory.coordinator.${tenant}`, JSON.stringify({ locks: { [id(999)]: { owner: "stale", journal: "unparseable" } }, deadlines: { [id(999)]: "bad" }, discarded: {} }))
+  for (const kind of ["object", "unanswered", "owner", "superseded"]) env.data.set(`restore.directory.${kind}.${tenant}.Groups.${resource}`, "{")
+  const page = await env.service().prepare(tenant, request, options, env.read)
+  expect(await env.service().execute(tenant, { ...request, runId: page.runId }, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])))).toMatchObject({ outcomes: [{ state: "applied" }] })
+  expect(env.writes).toEqual([`PATCH groups/${resource}`])
+})
+
+it("keeps a read-back throttle on the recreated live identity after confirmation and discard", async () => {
+  const env = world(0, true), create = await env.service().prepare(tenant, env.request, options, env.read)
+  const execute = (p: typeof create, request = env.request) => env.service().execute(tenant, { ...request, runId: p.runId }, p.fingerprint, Object.fromEntries(p.rows.map(row => [row.key, row.review.approvals])))
+  await execute(create)
+  const request = { ...env.request, snapshot: { ...env.request.snapshot, description: "Saved" } }
+  const page = await env.service().prepare(tenant, request, options, env.read), original = env.fetcher.getMockImplementation()!
+  let throttle = false, sends = 0
+  env.fetcher.mockImplementation((input, init) => {
+    if (init?.method === "PATCH") { sends++; return Promise.resolve(new Response(null, { status: 503 })) }
+    if (throttle && new URL(String(input)).pathname === `/v1.0/groups/${id(900)}`) { throttle = false; return Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "120" } })) }
+    return original(input, init)
+  })
+  vi.useFakeTimers()
+  try {
+    expect(await execute(page, request)).toMatchObject({ outcomes: [{ state: "uncertain" }] })
+    throttle = true
+    const deadline = Date.now() + 120_000
+    expect(await env.service().saved(tenant, page.runId, "reconcile")).toMatchObject({ outcomes: [{ state: "uncertain", retryAt: deadline }] })
+    const state = JSON.parse(env.data.get(`restore.directory.coordinator.${tenant}`)!)
+    expect(state.deadlines[id(900)]).toBe(deadline); expect(state.deadlines[resource]).toBeUndefined()
+    env.group.description = "Saved"
+    expect(await env.service().saved(tenant, page.runId, "reconcile")).toMatchObject({ outcomes: [{ state: "applied" }] })
+    await env.service().saved(tenant, page.runId, "discard")
+    const newer = { ...request, path: `newer/Groups/${id(900)}.json`, snapshot: { ...request.snapshot, id: id(900), description: "Newer" } }
+    const replacement = await env.service().prepare(tenant, newer, options, env.read)
+    expect(await execute(replacement, newer)).toMatchObject({ outcomes: [{ state: "deferred", retryAt: deadline }] })
+    expect(sends).toBe(1)
+  } finally { vi.useRealTimers() }
 })
