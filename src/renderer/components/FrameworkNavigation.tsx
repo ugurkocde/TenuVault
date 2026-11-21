@@ -20,9 +20,9 @@ export function FrameworkNavigation() {
   // One filled entry at a time, like the rest of the sidebar: the catalog itself, or the framework beneath it.
   const overview = pathname === "/portal/frameworks"
   const tone = overview ? "bg-primary text-primary-foreground" : active ? "text-foreground hover:bg-secondary" : "text-muted-foreground hover:bg-secondary hover:text-foreground"
-  const entry = (selected: boolean) => `flex min-h-8 flex-col justify-center rounded-full px-3 py-1.5 text-sm font-medium leading-5 transition-colors ${selected ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-secondary hover:text-foreground"}`
+  const entry = (selected: boolean) => `flex min-h-8 flex-col justify-center rounded-full px-3 py-1.5 text-sm font-medium leading-5 ${selected ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-secondary hover:text-foreground"}`
   return <div>
-    <div data-nav-row="" className={`flex items-center rounded-full transition-colors ${tone}`}>
+    <div data-nav-row="" className={`flex items-center rounded-full ${tone}`}>
       <Link to="/portal/frameworks" aria-current={overview ? "page" : undefined} className="flex min-h-8 min-w-0 flex-1 items-center gap-3 rounded-full py-1.5 pl-4 text-sm font-medium">
         <ShieldCheck className="h-[18px] w-[18px] shrink-0" aria-hidden="true" /><span className="flex-1 text-left">Frameworks</span>
         {/* The open page is inside the folded list: mark it the way a folded sidebar group is marked. */}
@@ -30,7 +30,7 @@ export function FrameworkNavigation() {
         {running.size > 0 && <LoaderCircle className="h-4 w-4 animate-spin" aria-label={`${running.size} comparison${running.size === 1 ? "" : "s"} running`} />}
       </Link>
       <button type="button" aria-expanded={open} aria-controls="framework-navigation" aria-label={open ? "Collapse framework list" : "Expand framework list"} onClick={() => setOpen(!open)} className="mr-1 flex size-7 min-h-7 shrink-0 items-center justify-center rounded-full">
-        <ChevronDown className={`h-4 w-4 transition-transform ${open ? "rotate-180" : ""}`} aria-hidden="true" />
+        <ChevronDown className={`h-4 w-4 motion-safe:transition-transform ${open ? "rotate-180" : ""}`} aria-hidden="true" />
       </button>
     </div>
     <Fold id="framework-navigation" open={open}><div className="ml-6 mt-1 space-y-0.5 border-l border-gray-200 pl-2" aria-label="Framework list">

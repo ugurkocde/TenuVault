@@ -250,7 +250,7 @@ Messages from the OpenIntuneBaseline section and framework comparisons are cover
 
 Select **Help** > **Share feedback** at the bottom of the sidebar (during the guided setup, **Share feedback** at the top of the window) to tell us what you were trying to do and what got in your way. It is available on every plan, including Community and without a license.
 
-1. Open the screen where you got stuck, then select **Help** > **Share feedback**.
+1. Open the screen where you got stuck, then select **Help** > **Share feedback** in the sidebar, or **Share feedback** at the top of the window during the guided setup.
 2. Answer **What were you trying to do?** and **What got in your way, and what would help?** Both are required, up to 500 characters each.
 3. Optionally tick **Attach a screenshot of this window**. The screenshot is taken when you open the dialog, so the dialog itself is not in it. It may show tenant, policy or user names, so it is never attached unless you tick it.
 4. Optionally enter a **Reply-to email** if you would like an answer.

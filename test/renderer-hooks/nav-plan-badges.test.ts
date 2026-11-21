@@ -464,13 +464,16 @@ describe("sidebar groups and Help", () => {
     selectTenant()
     const container = await render(createElement(DesktopLayout))
     const trigger = await openHelp(container)
-    await act(async () => { menuItem("Share feedback")!.click() })
+    // A second choice made while the menu closes (Support here) is ignored: Share feedback, chosen first, runs.
+    const support = menuItem("Support")!
+    await act(async () => { menuItem("Share feedback")!.click(); support.click() })
     // Reopening Help before the window is captured does nothing, so the menu cannot be in the screenshot.
     await act(async () => { trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })) })
     expect(document.querySelector('[role="menu"]')).toBeNull()
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 80)) })
     expect(feedbackCapture).toHaveBeenCalledTimes(1)
     expect(menuAtCapture).toEqual([false])
+    expect(supportDialog.mock.calls.some(([props]) => props.open)).toBe(false)
 
     await openHelp(container)
     expect(document.querySelector('[role="menu"]')).not.toBeNull()
@@ -527,5 +530,7 @@ describe("folding sidebar groups", () => {
     const current = [...container.querySelectorAll('nav[aria-label="Main navigation"] [aria-current="page"]')]
     expect(current.map((element) => element.getAttribute("href"))).toEqual(["/portal/drift"])
     expect(current[0]!.hasAttribute("data-nav-row")).toBe(true)
+    // No row fades its fill or label: the open page's white label never passes through its background's shade.
+    for (const row of container.querySelectorAll("[data-nav-row]")) expect(row.className, row.textContent ?? "").not.toMatch(/\btransition(-colors|-all)?\b/)
   })
 })

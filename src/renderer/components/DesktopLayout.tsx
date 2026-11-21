@@ -348,7 +348,13 @@ function HelpMenu({ linkClass, onFeedback, onSupport }: {
   const helpRef = useRef<HTMLButtonElement>(null)
   const pending = useRef<(() => void | Promise<void>) | null>(null)
   const launching = useRef(false)
-  const choose = (run: () => void | Promise<void>) => () => {
+  // The first item chosen wins: the closing menu stays on screen for its exit animation, and a second
+  // choice made then (or while the first is still launching) is ignored.
+  const choose = (run: () => void | Promise<void>) => (event: Event) => {
+    if (launching.current) {
+      event.preventDefault()
+      return
+    }
     pending.current = run
     launching.current = true
   }
@@ -504,8 +510,10 @@ export function DesktopLayout() {
 
   const linkClass = (active: boolean, nested = false) =>
     cn(
-      // 32px rows, sized for a pointer, so the grouped list fits the default 920px tall window.
-      "flex min-h-8 items-center gap-3 rounded-full px-4 py-1.5 text-sm font-medium transition-colors",
+      // 32px rows, sized for a pointer, so the grouped list fits the default 920px tall window. No colour
+      // transition: a row that becomes the open page takes its fill and white label at once, so the label
+      // never passes through a shade that matches its background. Hover motion is the sliding pill's job.
+      "flex min-h-8 items-center gap-3 rounded-full px-4 py-1.5 text-sm font-medium",
       active
         ? "bg-primary text-primary-foreground"
         : nested
