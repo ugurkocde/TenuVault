@@ -10,6 +10,7 @@ import { DELEGATED_CLIENT_SECRET } from "../src/shared/constants"
 import { handleOib, reviewedOibRoute, migrateLegacyOibRuns, OIB_BACKUP_POLLING, setOibStore } from "../src/main/oib/service"
 import { packFolder, packItems, parsePackFile, resetOibSource } from "../src/main/oib/source"
 import type { OibBackupOptions, OibCatalog, OibComparison, OibProgress, OibRun, UndoResult, ValidationRun } from "../src/shared/oib/types"
+import { saveWrite, setRestoreJournalStore } from "../src/main/storage/restore-journal"
 import { memoryStore } from "./helpers"
 
 beforeEach(() => setWriteApprovals(unenrolledApprovals("none")))
@@ -118,7 +119,7 @@ function world(state: Tenant, writes: string[]) {
 }
 
 let store: ReturnType<typeof memoryStore>
-beforeEach(() => { store = memoryStore(); setOibStore(store); resetOibSource(); OIB_BACKUP_POLLING.intervalMs = 0 })
+beforeEach(() => { store = memoryStore(); setOibStore(store); setRestoreJournalStore(store); resetOibSource(); OIB_BACKUP_POLLING.intervalMs = 0 })
 afterEach(() => { vi.unstubAllGlobals(); setOibStore(null) })
 
 async function source() {
@@ -289,11 +290,14 @@ describe("deployments", () => {
     vi.stubGlobal("fetch", world(state, writes))
     await source()
     const run = await handleOib({ ...base, storageAccountName: null, action: "oib-deploy", commit, backup: { mode: "none" }, items: [{ source: SC, mode: "update", targetId: EXISTING }] }) as OibRun
-    state.policies = []
+    state.policies = [{ id: CREATED, name: "Win - OIB - SC - Test - v3.1", value: 42 }]
+    saveWrite({ key: "replacement", method: "POST", path: "deviceManagement/configurationPolicies", tenant: tenantId,
+      sourceId: EXISTING, objectId: CREATED, state: "complete", at: new Date().toISOString() })
     writes.length = 0
     const undone = await handleOib({ action: "oib-undo", tenantId, appId, runId: run.runId }) as UndoResult
     expect(writes).toEqual([])
-    expect(undone).toMatchObject({ run: null, results: [{ action: "restored", done: true, note: "already deleted in Intune, so the previous version was not recreated" }] })
+    expect(undone).toMatchObject({ results: [{ action: "restored", done: false, error: expect.stringContaining("no longer exists") }] })
+    expect(state.policies[0]!.value).toBe(42)
   })
 
   it("does not recreate a policy deleted between reading it and updating it", async () => {
@@ -743,4 +747,47 @@ it("keeps the legacy no-storage skip for an unenrolled destination in a reviewed
     { batchIndex: 1, error: expect.stringContaining("no backup storage") },
   ] })
   expect(writes).toHaveLength(1)
+})
+
+it("persists completed deletes and audits the remaining work when protected undo stops", async () => {
+  const { profile } = writeApprovalFixture()
+  const first = profile(), second = profile(reviewer)
+  setWriteApprovals(first.service)
+  await first.service.enable(tenantId)
+  const run: OibRun = { runId: "partial-undo", tenantId, createdAt: "2026-11-20T00:00:00Z", kind: "deploy", platform: "windows", reference: "r",
+    created: [EXISTING, CREATED, pilot].map((id, index) => ({ id, folder: "ConfigurationPolicies", name: `Policy ${index}` })), updated: [], failed: [] }
+  store.set(`oib:runs:${tenantId}`, JSON.stringify([run]))
+  const audit = vi.fn(async (_request: Request) => Response.json({ success: true }))
+  const host = new ApiHost({
+    routes: { "/api/oib": { POST: async request => Response.json(await handleOib(await request.json())) } },
+    onHandled: createAuditRecorder(audit, () => null),
+  })
+  const writes: string[] = []
+  let revision = "before"
+  vi.stubGlobal("fetch", createBridgedFetch({
+    dispatch: request => host.dispatch(request), getDelegatedToken: async () => ({ accessToken: "fixture", expiresOn: null }),
+    authorizeGraph: graphDispatchGuard(first.service, () => ({ tenant: tenantId, actor: requester, current: () => true })),
+    fetch: async (input, init) => {
+      const request = new Request(input, init)
+      const id = new URL(request.url).pathname.split("/")[4]
+      if (request.method === "GET") return request.url.endsWith("/assignments") ? Response.json({ value: [] }) :
+        Response.json({ id, name: id === CREATED ? revision : "original", settings: [] })
+      writes.push(id!)
+      revision = "edited"
+      return new Response(null, { status: 204 })
+    },
+  }))
+  const undo = () => handleOib({ ...base, action: "oib-undo", clientSecret: DELEGATED_CLIENT_SECRET, runId: run.runId })
+  await expect(undo()).rejects.toThrow("pending")
+  await second.service.decide(tenantId, (await second.service.inbox(tenantId)).requests[0]!.request.id, "approve")
+  const response = await host.dispatch(new Request("http://tenuvault.internal/api/oib", { method: "POST",
+    body: JSON.stringify({ ...base, action: "oib-undo", clientSecret: DELEGATED_CLIENT_SECRET, runId: run.runId }),
+  }))
+  expect(response.status).toBe(200)
+  expect(await response.json()).toMatchObject({ run: { created: [{ id: CREATED }, { id: pilot }] },
+    results: [{ id: EXISTING, done: true }, { id: CREATED, done: false, error: expect.stringContaining("changed after review") }, { id: pilot, done: false }] })
+  expect(await handleOib({ action: "oib-runs", tenantId })).toMatchObject({ runs: [{ created: [{ id: CREATED }, { id: pilot }] }] })
+  expect(writes).toEqual([EXISTING])
+  await vi.waitFor(() => expect(audit).toHaveBeenCalledOnce())
+  expect(await audit.mock.calls[0]![0].json()).toMatchObject({ logEntry: { result: "PARTIAL", details: { undone: 1, notUndone: 2 } } })
 })

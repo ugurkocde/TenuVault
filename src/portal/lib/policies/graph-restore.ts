@@ -9,7 +9,7 @@ import { restoreApprovals, saveRestoreApproval, removeRestoreApproval, type Rest
 import { parseDependencyMappings } from "../../../shared/intune/recovery"
 import { dependencyReferences, type DependencyReference } from "../../../shared/intune/dependencies"
 import { createHash, randomUUID } from "node:crypto"
-import { cleanAssignment, COMMON_READ_ONLY, typeForFolder, type IntuneType, type Item, type Json, type Step } from "../../../shared/intune/registry"
+import { cleanAssignment, COMMON_READ_ONLY, groupPolicyValue, typeForFolder, type IntuneType, type Item, type Json, type Step } from "../../../shared/intune/registry"
 
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 import { buildRestorePlan, buildUpdatePlan, NotRestorableError, resolveStep, restoreBlocker, type RestorePlan } from "../../../shared/intune/restore-plan"
@@ -52,6 +52,8 @@ export interface RestoreOptions {
    * missing instead of creating a new object from the snapshot. Defaults to true.
    */
   recreateMissing?: boolean
+  /** Replace only the recorded object ID, even when a replacement with the same identity fields exists. */
+  exactTargetId?: boolean
   /**
    * The permissions in the token the writes use (see shared/services/token). A service module whose
    * restore permission is missing is reported before any write. Unknown permissions block nothing.
@@ -448,6 +450,7 @@ export class Restorer {
       const live = await this.current(type, snapshot.id)
       if (live) return { id: snapshot.id, live }
     }
+    if (this.options.exactTargetId) return undefined
     const located = !this.options.crossTenant && type.locateBy ? await locateLive(this.graph, type, snapshot) : undefined
     if (located && typeof located.id === "string") return { id: located.id, live: located }
     const recreated = typeof snapshot.id === "string" ? await this.recreated(type, snapshot) : undefined
@@ -861,7 +864,8 @@ export class Restorer {
         }, dispatch) : await dispatch()
         if (!response.approval) {
           if (response.status < 300) {
-            if (protectedWrite && (index < resolved.length - 1 || finish)) {
+            const definitionValues = type.folder === "GroupPolicyConfigurations" && step.path.endsWith("/updateDefinitionValues")
+            if (protectedWrite && (index < resolved.length - 1 || finish || definitionValues)) {
               expected = await this.verifiedState(type, id, step, response.body, expected)
             }
             continue
@@ -1171,6 +1175,18 @@ export function verifiedMutation(type: IntuneType, id: string, method: string, p
       })
       desired.settings = cleanSettings(desired.settings)
       actual.settings = cleanSettings(actual.settings)
+    } else if (action === "updateDefinitionValues" && type.folder === "GroupPolicyConfigurations") {
+      if (!Array.isArray(before?.definitionValues) || !Array.isArray(live.definitionValues)
+        || !Array.isArray(body?.added) || !Array.isArray(body?.deletedIds)
+        || !Array.isArray(body?.updated) || body.updated.length) return false
+      const keep = (before.definitionValues as Item[]).filter(value => !((body.deletedIds as Json[]).includes(value.id ?? null)))
+      const ordered = (values: Item[]) => values.map((value): Item => ({
+        ...value,
+        presentationValues: [...(value.presentationValues as Item[])].sort((a, b) => String(a["presentation@odata.bind"]).localeCompare(String(b["presentation@odata.bind"]))),
+      })).sort((a, b) => String(a["definition@odata.bind"]).localeCompare(String(b["definition@odata.bind"])))
+      for (const key of Object.keys(desired)) delete desired[key]
+      desired.definitionValues = ordered([...keep.map(groupPolicyValue), ...(body.added as Item[])])
+      actual.definitionValues = ordered((live.definitionValues as Item[]).map(groupPolicyValue))
     } else if (action === "unassignUserFromDevice") {
       desired.userPrincipalName = ""
       desired.addressableUserName = ""

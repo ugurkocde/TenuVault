@@ -1,5 +1,6 @@
 import type { GraphCall } from "../../../portal/lib/policies/graph-restore"
 import { itemName, typeForFolder, type Item } from "../../../shared/intune/registry"
+import { comparableSnapshot } from "../../../shared/intune/compare"
 import { isGraphId, isGuid } from "../../../shared/security"
 import type { Plan } from "../../../shared/plans"
 import type { FeatureDeps } from "../deps"
@@ -110,7 +111,7 @@ async function groupState(graph: GraphCall, id: string): Promise<{ state: "found
  * are checked here so changes require a new plan. The change set's target fingerprint owns
  * the remaining content, so a retry after a verified update still matches.
  */
-export async function targetStateHash(graph: GraphCall, reads: TargetReads, policySnapshot?: Item | null, memo?: ListingMemo): Promise<string> {
+export async function targetStateHash(graph: GraphCall, reads: TargetReads, policySnapshot?: Item | null, memo?: ListingMemo, approval = false): Promise<string> {
   const state: Record<string, unknown> = {}
   if (reads.policyId && reads.policyFolder) {
     const type = typeForFolder(reads.policyFolder)!
@@ -124,22 +125,32 @@ export async function targetStateHash(graph: GraphCall, reads: TargetReads, poli
   const subset = async (kind: Exclude<ReferenceKind, "group">, ids: string[]) => {
     if (!ids.length) return []
     try {
-      const items = await listAll(graph, `${LISTS[kind].path}?$select=${LISTS[kind].select}`, memo)
+      const select = approval && kind === "scopeTag" ? "id,displayName,description,isBuiltIn" : LISTS[kind].select
+      const items = await listAll(graph, `${LISTS[kind].path}?$select=${select}`, memo)
       // Timestamps and versions are kept on purpose: any edit of a relied-on object invalidates the plan.
-      const fields = LISTS[kind].select.split(",")
+      const fields = select.split(",")
       return ids.map((id) => {
         const item = items.find((entry) => typeof entry.id === "string" && entry.id.toLowerCase() === id.toLowerCase())
+        if (!item && approval) throw new FeatureError("A mapped destination dependency no longer exists.", 409)
         return item ? Object.fromEntries(fields.map((field) => [field, item[field] ?? null])) : { id, missing: true }
       })
     } catch (error) {
-      if (error instanceof GraphReadError && (error.status === 401 || error.status === 403)) return "unreadable"
+      if (!approval && error instanceof GraphReadError && (error.status === 401 || error.status === 403)) return "unreadable"
       throw error
     }
   }
   state.filters = await subset("filter", reads.filterIds)
   state.scopeTags = await subset("scopeTag", reads.scopeTagIds.filter((id) => id !== "0"))
   state.reusableSettings = await subset("reusableSetting", reads.reusableSettingIds)
-  state.groups = await Promise.all(reads.groupIds.map(async (id) => ({ id: id.toLowerCase(), ...(await groupState(graph, id)) })))
+  state.groups = await Promise.all(reads.groupIds.map(async id => {
+    if (!approval) return { id: id.toLowerCase(), ...(await groupState(graph, id)) }
+    const group = await getOne(graph, `groups/${encodeURIComponent(id)}?$select=id,displayName,description,groupTypes,membershipRule,membershipRuleProcessingState,securityEnabled,mailEnabled,isAssignableToRole`).catch(error => {
+      if (error instanceof GraphReadError && (error.status === 401 || error.status === 403)) return "unreadable"
+      throw error
+    })
+    if (!group) throw new FeatureError("A mapped destination group no longer exists.", 409)
+    return { id: id.toLowerCase(), group: group === "unreadable" ? group : comparableSnapshot(group) }
+  }))
   return hashOf(state)
 }
 

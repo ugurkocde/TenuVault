@@ -109,14 +109,14 @@ Choose **Request to turn off** to ask a second admin to approve disabling the cu
 
 A request with an uncertain apply outcome stays claimed. Check the outcome in Intune and reconcile any uncertain restore writes before choosing **Close interrupted apply**. Any retry that writes needs fresh approval. Finished requests remain in the inbox for at least 30 days after their approval window closes. Unreadable requests are flagged separately and cannot be approved. Use [Intune Multi Admin Approval](/restore/multi-admin-approval/) separately for operations that Intune subjects to its own review.
 
-If TenuVault cannot read the prior Azure storage account and this installation has no active approval binding, you can confirm a storage change or tenant removal. TenuVault remembers the account only if this installation previously saw an approval policy there. If the last policy it saw was off and the policy or backup container is now missing, you can leave that account. Signing out or releasing a license does not require a storage check.
+If TenuVault cannot read the prior Azure storage account and this installation has no active approval binding, you can confirm a storage change or tenant removal. If this installation has never seen an approval policy on that account, your confirmation is final and TenuVault does not check that account again. If it has seen a policy, TenuVault checks the old account before the next tenant configuration write. When the last policy seen was off, a missing policy, missing backup container or confirmed missing Azure account lets you proceed. Permission failures, timeouts and invalid policy data block configuration writes until you restore access and verify the policy. Restore connectivity and the signed-in admin's Azure access, then retry. If the prior account has approval enabled, reconnect it and have a second admin approve turning it off before changing accounts. Signing out or releasing a license does not require a storage check.
 
 **Known limits**
 
 - A new Azure storage account can block tenant configuration writes for a few minutes while Azure role assignments take effect. Retry after the signed-in account can read the backup container.
-- Approval applies when a write's final policy check runs after activation is committed. A write can still complete if its final check passed just before another admin enabled approval on another computer.
+- Approval applies when a write's final policy check runs after activation is committed. A write can still complete if its final check passed just before another admin enabled approval on another computer. An App Backup installer upload that started with approval off can finish under that mode.
 
-If the inbox cannot reload after you save a decision, TenuVault confirms the decision was saved. Refresh approvals to reload the inbox and retry any pending decision audit receipts.
+If the inbox cannot reload after you save a decision, TenuVault confirms the decision was saved. Refresh approvals to reload the inbox and retry any pending decision audit receipts. If TenuVault cannot verify that a decision was saved in Azure within 30 days, the inbox shows that its pending audit receipt expired. Check the decision in the inbox or Azure Storage.
 
 ### Restore write history
 

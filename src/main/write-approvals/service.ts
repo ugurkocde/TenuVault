@@ -8,7 +8,7 @@ import {
 } from "../../shared/write-approvals"
 import { canonicalJson } from "../features/change-sets/model"
 import { isLocalAccount } from "../storage/blob-emulator"
-import type { ApprovalBlobs, BlobRecord } from "./blob"
+import { ApprovalAccountNotFound, type ApprovalBlobs, type BlobRecord } from "./blob"
 
 type Policy = { schema: 1; tenant: string; account: string; generation: number; enabled: boolean; minimumVersion: string; requester: string; approver?: string; requestId?: string }
 type Profile = { clientId: string; storageAccountName: string }
@@ -39,7 +39,7 @@ export interface ApprovalDependencies {
 }
 
 export class WriteApprovalError extends Error {
-  constructor(message: string) {
+  constructor(message: string, readonly reason?: "review" | "stale") {
     super(message)
     this.name = "WriteApprovalError"
   }
@@ -52,6 +52,7 @@ const namespace = (tenant: string) => `.tenuvault-controls/${tenant}/write-appro
 const policyPath = (tenant: string) => `${namespace(tenant)}policy.json`
 const requestPath = (tenant: string, id: string) => `${namespace(tenant)}requests/${id}.json`
 const decisionPath = (tenant: string, id: string) => `${namespace(tenant)}decisions/${id}.json`
+const expiredReceiptsKey = (tenant: string) => `write-approval.expired-receipts.${tenant}`
 const bindingKey = (tenant: string) => `write-approval.binding.${tenant}`
 const previousAccountsKey = (tenant: string) => `write-approval.unverified.${tenant}`
 const bindingSeenKey = (tenant: string, account: string) => `write-approval.seen.${tenant}.${account}`
@@ -197,7 +198,10 @@ export class WriteApprovals {
       if (seen && profile?.storageAccountName.toLowerCase() !== account) {
         const { actor, blobs } = await this.deps.open(tenant, profile?.clientId ?? old.clientId, account)
         if (!actorValid(actor)) throw new WriteApprovalError("Sign in to check the tenant's prior approval policy.")
-        const blob = await blobs.get(policyPath(tenant))
+        const blob = await blobs.get(policyPath(tenant)).catch(error => {
+          if (seen === "disabled" && error instanceof ApprovalAccountNotFound) return null
+          throw error
+        })
         this.checkActor(tenant, actor)
         const policy = blob?.value as Policy | undefined
         if (blob && (!policy || policy.schema !== 1 || policy.tenant !== tenant || policy.account !== account
@@ -228,6 +232,7 @@ export class WriteApprovals {
     try {
       context = await this.open(tenant, undefined, undefined, undefined, true)
     } catch (error) {
+      if (!pinned && previous && this.deps.store.get(bindingSeenKey(tenant, previous)) === "disabled" && error instanceof ApprovalAccountNotFound) return
       if (pinned || !profile || !previous || error instanceof WriteApprovalError || !confirm) throw error
       const recheck = this.tracksStorage(tenant)
       if (!await confirm(previous, recheck)) throw new WriteApprovalError("The storage change was cancelled.")
@@ -293,7 +298,7 @@ export class WriteApprovals {
         requests.push({ request, decision, invalidDecisionTime: decision !== undefined && decision.at < request.createdAt, expired, local: this.isOrigin(request), superseded })
       }))
     }
-    return { available: true, enabled: policy?.enabled === true, minimumVersion: policy?.minimumVersion, actor, invalidRecords, requests: requests.sort((a, b) => b.request.createdAt - a.request.createdAt) }
+    return { available: true, enabled: policy?.enabled === true, minimumVersion: policy?.minimumVersion, actor, invalidRecords, expiredAuditReceipts: Number(this.deps.store.get(expiredReceiptsKey(context.tenant)) ?? 0), requests: requests.sort((a, b) => b.request.createdAt - a.request.createdAt) }
   }
 
   private time(blob?: BlobRecord | null, context?: OpenStore): number {
@@ -326,16 +331,24 @@ export class WriteApprovals {
 
   private flushDecisionReceipts(c: OpenStore): Promise<void> {
     const existing = this.auditFlushes.get(c.tenant)
-    if (existing) return existing
-    const flush = Promise.resolve().then(async () => {
+    const flush = (existing ?? Promise.resolve()).catch(() => undefined).then(async () => {
       for (const entry of this.decisionReceipts(c.tenant)) {
         const { id } = entry.event.receipt
         try {
           if (!entry.committed) {
-            if (c.account !== entry.event.account) continue
-            const blob = await c.blobs.get(entry.path)
-            if (!blob) continue
-            if (canonicalJson(blob.value) !== canonicalJson(entry.record)) continue
+            const expired = (c.serverTime ?? Date.now()) >= entry.event.receipt.at + retention
+            const blob = c.account === entry.event.account ? await c.blobs.get(entry.path).catch(error => {
+              if (expired) return null
+              throw error
+            }) : null
+            if (!blob || canonicalJson(blob.value) !== canonicalJson(entry.record)) {
+              if (expired) {
+                const key = expiredReceiptsKey(c.tenant)
+                this.deps.store.set(key, String(Number(this.deps.store.get(key) ?? 0) + 1))
+                this.updateDecisionReceipt(c.tenant, id)
+              }
+              continue
+            }
             this.updateDecisionReceipt(c.tenant, id, { ...entry, committed: true })
           }
           await this.deps.audit(entry.event)
@@ -344,7 +357,9 @@ export class WriteApprovals {
           console.warn("[write approvals] Decision audit receipt remains queued", error)
         }
       }
-    }).finally(() => this.auditFlushes.delete(c.tenant))
+    }).finally(() => {
+      if (this.auditFlushes.get(c.tenant) === flush) this.auditFlushes.delete(c.tenant)
+    })
     this.auditFlushes.set(c.tenant, flush)
     return flush
   }
@@ -369,7 +384,9 @@ export class WriteApprovals {
       throw new WriteApprovalError(stateChanged)
     }
     try {
-      this.updateDecisionReceipt(c.tenant, id, { ...entry, committed: true })
+      if (this.decisionReceipts(c.tenant).some(pending => pending.event.receipt.id === id)) {
+        this.updateDecisionReceipt(c.tenant, id, { ...entry, committed: true })
+      }
       await this.flushDecisionReceipts(c)
     } catch (error) {
       console.warn("[write approvals] Could not flush the committed decision audit receipt", error)
@@ -439,6 +456,7 @@ export class WriteApprovals {
     const execution: Execution = { tenants: new Set(), permits: new Map(), inactive: new Map() }
     const ready: { context: OpenStore; request: WriteApproval; decision: WriteDecision; etag: string; operation: ApprovalOperation }[] = []
     const blockers: string[] = []
+    let stale = false
     const { tenants } = execution
     for (const operation of operations) {
       const tenant = operation.tenant.toLowerCase()
@@ -472,6 +490,7 @@ export class WriteApprovals {
         if (prior.contentHash !== contentHash || prior.targetFingerprint !== targetFingerprint || canonicalJson(prior.summary) !== canonicalJson(operation.summary)) {
           if (!await blobs.put(requestPath(tenant, prior.id), { ...prior, state: "stale" }, current!.etag)) throw new WriteApprovalError(stateChanged)
           await this.receipt(context, "Tenant write approval invalidated", prior)
+          stale = true
           blockers.push(`The source, options or destination changed after request ${prior.id}. Review the operation and request approval again.`)
         } else if (decision?.decision === "approved") {
           ready.push({ context, request: prior, decision, etag: current!.etag, operation })
@@ -498,7 +517,7 @@ export class WriteApprovals {
       await this.receipt(context, "Tenant write approval requested", request)
       blockers.push(`Tenant approval ${request.id} is pending. Open Tenant approvals in Settings.`)
     }
-    if (blockers.length) throw new WriteApprovalError(blockers.join(" "))
+    if (blockers.length) throw new WriteApprovalError(blockers.join(" "), stale ? "stale" : "review")
     const claimed: typeof ready = []
     let finished = false
     try {
@@ -579,6 +598,10 @@ export class WriteApprovals {
   claimed(tenant: string): boolean { return this.execution.getStore()?.permits.has(tenant.toLowerCase()) === true }
   hasClaimedDestination(): boolean { return (this.execution.getStore()?.permits.size ?? 0) > 0 }
 
+  hasBinding(tenant: string): boolean {
+    return Boolean(this.deps.store.get(bindingKey(tenant.toLowerCase())))
+  }
+
   async active(tenant: string): Promise<boolean> {
     return (await this.open(tenant))?.policy?.enabled === true
   }
@@ -630,7 +653,7 @@ export async function enrolledBatchDestinations(tenants: string[]): Promise<Set<
   const checks = await Promise.allSettled(tenants.map(approvalsEnabled))
   const enrolled = new Set(tenants.filter((_, index) => {
     const result = checks[index]
-    return result?.status === "fulfilled" && result.value
+    return result?.status === "fulfilled" ? result.value : runtime?.hasBinding(tenants[index]!)
   }))
   if (enrolled.size) {
     for (const result of checks) if (result.status === "rejected") throw result.reason

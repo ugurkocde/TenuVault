@@ -1,4 +1,4 @@
-import { enrolledBatchDestinations, withWriteApproval } from "../../write-approvals/service"
+import { enrolledBatchDestinations, withWriteApproval, WriteApprovalError } from "../../write-approvals/service"
 import type { RouteModule } from "../../api/host"
 import { allows, type Plan } from "../../../shared/plans"
 import type { FeatureDeps } from "../deps"
@@ -354,17 +354,24 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
         updateGroup(undefined)
         return { results }
       }
-      const prepared: Array<Awaited<ReturnType<typeof prepare>>> = []
-      for (const destination of destinations) {
-        const apply = await prepare(destination)
-        if (!controlled.has(destination.tenant)) await apply.operation.observe()
-        prepared.push(apply)
+      try {
+        const prepared: Array<Awaited<ReturnType<typeof prepare>>> = []
+        for (const destination of destinations) {
+          const apply = await prepare(destination)
+          if (!controlled.has(destination.tenant)) await apply.operation.observe()
+          prepared.push(apply)
+        }
+        if (!resuming) updateGroup({ destinations: destinations.map(destination => destination.reviewed), backup })
+        return await withWriteApproval(prepared.map(entry => entry.operation), async () => {
+          updateGroup(undefined)
+          return { results: await Promise.all(prepared.map(({ id, work }) => settle(id, work))) }
+        })
+      } catch (error) {
+        const stale = error instanceof WriteApprovalError && error.reason === "stale" || destinations.some(({ tenant, id }) =>
+          (targetRecords(deps, tenant, id).changeSet as Stored<ChangeSetRecord> | null)?.status === "stale")
+        if (stale) updateGroup(undefined)
+        throw error
       }
-      if (!resuming) updateGroup({ destinations: destinations.map(destination => destination.reviewed), backup })
-      return withWriteApproval(prepared.map(entry => entry.operation), async () => {
-        updateGroup(undefined)
-        return { results: await Promise.all(prepared.map(({ id, work }) => settle(id, work))) }
-      })
     },
     reject: async ({ tenantId, body, actor }) => {
       const target = syncTarget(deps, tenantId, body)

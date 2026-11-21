@@ -1,5 +1,8 @@
 import { setWriteApprovals } from "../src/main/write-approvals/service"
-import { reviewer, unenrolledApprovals, writeApprovalFixture } from "./helpers/write-approval-fixture"
+import { createBridgedFetch } from "../src/main/api/fetch-bridge"
+import { graphDispatchGuard } from "../src/main/write-approvals/dispatch"
+import { graphCaller } from "../src/portal/lib/policies/graph-restore"
+import { requester, reviewer, unenrolledApprovals, writeApprovalFixture } from "./helpers/write-approval-fixture"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { applyChangeSet, approveChangeSet, CONTENT_DOMAIN, createChangeSet, KEPT_CHANGE_SETS, createRollbackChangeSet, getChangeSet, listChangeSets, previewChangeSet, previewRollback, rejectChangeSet, reviseChangeSet } from "../src/main/features/change-sets/engine"
 import type { FeatureDeps } from "../src/main/features/deps"
@@ -624,4 +627,56 @@ it("compares a saved post-step hash before reconciling an uncertain change set",
   const retried = (await context.post({ action: "retry", id: record.id, contentHash: preview.contentHash, confirm: true })).body.changeSet as ChangeSetRecord
   expect(retried.results["op-2"]).toMatchObject({ status: "uncertain", message: expect.stringContaining("changed after the last verified step") })
   expect(context.tenant.writeCount(entry => entry.method === "POST")).toBe(1)
+})
+
+it.each(["before-apply", "transport-retry"])("binds a mapped filter rule in tenant approval and at dispatch (%s)", async timing => {
+  const context = setup()
+  const { profile } = writeApprovalFixture()
+  const first = profile(), second = profile(reviewer)
+  setWriteApprovals(first.service)
+  await first.service.enable(TENANT_A)
+  const filterId = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+  const filter = { id: filterId, displayName: "Pilot devices", rule: '(device.deviceName -eq "pilot")' }
+  context.tenant.filters.push(filter)
+  const record = await createChangeSet(context.deps, TENANT_A, {
+    title: "Assign Defender", dependencies: [{ kind: "filter", sourceId: filterId, targetId: filterId, name: "Pilot devices", state: "verified" }],
+    operations: [{ folder: "ConfigurationPolicies", action: "create", proposed: { name: "Defender", platforms: "windows10", technologies: "mdm" },
+      assignments: [{ target: { "@odata.type": "#microsoft.graph.allDevicesAssignmentTarget", deviceAndAppManagementAssignmentFilterId: filterId, deviceAndAppManagementAssignmentFilterType: "include" } }],
+    }],
+  }, "Admin")
+  const preview = await approve(context, record.id)
+  const apply = () => context.post({ action: "apply", id: record.id, contentHash: preview.contentHash, confirm: true })
+  await expect(apply()).rejects.toThrow("pending")
+  await second.service.decide(TENANT_A, (await second.service.inbox(TENANT_A)).requests[0]!.request.id, "approve")
+  if (timing === "before-apply") {
+    filter.rule = '(device.deviceName -ne "pilot")'
+    await expect(apply()).rejects.toThrow("changed after request")
+    expect(context.tenant.writeCount()).toBe(0)
+    return
+  }
+  let assignmentAttempts = 0
+  const graph = context.deps.graph
+  context.deps.graph = async (tenant, options) => {
+    const inner = await graph(tenant, options)
+    if (!options?.journal) return inner
+    const send = createBridgedFetch({
+      dispatch: async () => new Response(null, { status: 404 }),
+      getDelegatedToken: async () => ({ accessToken: "fixture", expiresOn: null }),
+      authorizeGraph: graphDispatchGuard(first.service, () => ({ tenant, actor: requester, current: () => true })),
+      fetch: async (input, init) => {
+        const request = new Request(input, init)
+        const path = request.url.split("/beta/")[1]!
+        if (path.endsWith("/assign") && ++assignmentAttempts === 1) {
+          filter.rule = '(device.deviceName -ne "pilot")'
+          return new Response(null, { status: 429, headers: { "retry-after": "0" } })
+        }
+        const result = await inner(request.method as "POST", path, await request.json())
+        return Response.json(result.body, { status: result.status })
+      },
+    })
+    return graphCaller("fixture", send)
+  }
+  const result = await apply()
+  expect(result.body.changeSet.results["op-1"]).toMatchObject({ writeNotSent: true, partial: true, message: expect.stringContaining("changed after review") })
+  expect(assignmentAttempts).toBe(1)
 })

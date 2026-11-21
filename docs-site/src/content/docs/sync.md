@@ -177,6 +177,8 @@ Open **Settings > Storage and recovery > Tenant approvals** and select the desti
 
 For a grouped sync, TenuVault checks all selected destinations before sending writes. Once the decisions are recorded, select **Continue to review** in the sync result. Confirm the saved destinations and backup choice, then select **Apply reviewed sync** to repeat the checks. Retries for individual destinations remain available after the grouped apply.
 
+If a saved approval group becomes stale, TenuVault clears the saved selection. Plan the affected destinations again and request approval for the new plan.
+
 ## Related pages
 
 * [Changes](/changes/)

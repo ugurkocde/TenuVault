@@ -4,6 +4,8 @@ import { FetchPreconditionError } from "../api/network-error"
 const BASE = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps"
 export type RestoreGraph = (method: "GET" | "POST" | "PATCH", path: string, body?: Record<string, unknown>) => Promise<Record<string, unknown>>
 
+export class RestoreGraphRejection extends Error {}
+
 /** Main-only, target-token-bound Graph transport. Error bodies may contain secrets and are never surfaced. */
 export function restoreGraph(token: () => Promise<string>, fetchImpl: typeof fetch, signal: AbortSignal): RestoreGraph {
   return async (method, path, body) => {
@@ -25,7 +27,13 @@ export function restoreGraph(token: () => Promise<string>, fetchImpl: typeof fet
     try {
       response = await fetchImpl(url.href, { method, redirect: "error", credentials: "omit", headers: { authorization, "content-type": "application/json" }, body: payload, signal: AbortSignal.any([signal, AbortSignal.timeout(60000)]) })
     } catch (error) { if (error instanceof FetchPreconditionError) throw error; signal.throwIfAborted(); throw new Error("The destination request was interrupted. Retry to reconcile the existing restore; a second app will not be created automatically.") }
-    if (![200, 201, 204].includes(response.status)) { await response.body?.cancel(); throw new Error(`The destination tenant refused the restore request (HTTP ${response.status}). Check Microsoft sign-in, Intune permissions and service availability.`) }
+    if (![200, 201, 204].includes(response.status)) {
+      await response.body?.cancel().catch(() => undefined)
+      const message = `The destination tenant refused the restore request (HTTP ${response.status}). Check Microsoft sign-in, Intune permissions and service availability.`
+      // A server timeout or an unexpected success status can leave the write outcome uncertain.
+      if (response.status >= 400 && response.status < 500 && response.status !== 408) throw new RestoreGraphRejection(message)
+      throw new Error(message)
+    }
     if (response.status === 204) { await response.body?.cancel(); if (voidResponse) return {}; throw new Error("The destination returned no metadata.") }
     const reader = response.body?.getReader()
     if (!reader) { if (voidResponse) return {}; throw new Error("The destination returned no metadata.") }

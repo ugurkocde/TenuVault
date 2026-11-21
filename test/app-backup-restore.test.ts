@@ -173,6 +173,23 @@ describe("cross-tenant restore engine", () => {
     expect(await f.store.readRestoreRecord(tenant, f.source.id, target)).toMatchObject({ creationStarted: false })
   })
 
+  it.each([403, 408, 503])("only clears an app create flag after a definitive HTTP refusal (%s)", async status => {
+    const f = await fixture(), d = destination()
+    const opts = options(d)
+    const denied = restoreGraph(async () => "token", async () => new Response(null, { status }), opts.signal)
+    opts.graph = (method, url, body) => method === "POST" ? denied(method, url, body) : d.graph(method, url, body)
+    const run = (configuration: typeof opts) => restoreCapturedApp(f.store, f.source, snapshot, target, "Restored", configuration)
+    await expect(run(opts)).rejects.toThrow(`HTTP ${status}`)
+    expect(await f.store.readRestoreRecord(tenant, f.source.id, target)).toMatchObject({ creationStarted: status !== 403 })
+    if (status === 403) {
+      await run(options(d))
+      expect(d.app).toMatchObject({ publishingState: "published" })
+    } else {
+      await expect(run(options(d))).rejects.toThrow("earlier app creation could not be confirmed")
+      expect(d.calls.every(([method]) => method === "GET")).toBe(true)
+    }
+  })
+
   it("uploads every block without an Azure policy check when App Backup is unenrolled", async () => {
     const f = await fixture(snapshot, true), d = destination()
     const { profile, state } = writeApprovalFixture()

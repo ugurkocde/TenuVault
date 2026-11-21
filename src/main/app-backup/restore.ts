@@ -8,7 +8,7 @@ import type { AppRestoreProgress, AppRestoreResult, CapturedAppSource } from "..
 import type { AppSourceStore } from "../app-sources/store"
 import type { ContentEncryption } from "./content-stream"
 import { encryptRestoreContent, newRestoreSecrets, type RestoreSecrets } from "./restore-encryption"
-import { putRestoreBlock, type RestoreGraph } from "./restore-graph"
+import { RestoreGraphRejection, putRestoreBlock, type RestoreGraph } from "./restore-graph"
 import { assertRestoredSettings, restoreBody, snapshotHash, type AppRestoreSnapshot } from "./restore-snapshot"
 
 const BASE = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps"
@@ -180,7 +180,7 @@ async function restoreOwnedApp(store: AppSourceStore, source: CapturedAppSource,
         if (signal.aborted) throw new FetchPreconditionError(signal.reason)
         record.appId = identifier((await (expected ? withWriteCheckpoint(checkpoint, create) : create())).id)
       } catch (error) {
-        if (error instanceof FetchPreconditionError) { record.creationStarted = false; await save() }
+        if (error instanceof FetchPreconditionError || error instanceof RestoreGraphRejection) { record.creationStarted = false; await save() }
         throw error
       }
       await advance("app")

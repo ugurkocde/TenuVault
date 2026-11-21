@@ -1429,3 +1429,24 @@ it("keeps a Sync destination's policy read failure local while neither destinati
   await service.enable(TENANT_B)
   await expect(batch()).rejects.toThrow("Injected transport failure")
 })
+
+it("clears a saved Sync group when its reviewed destination becomes stale", async () => {
+  const context = setup({ plans: MSP })
+  const { service } = writeApprovalFixture().profile()
+  setWriteApprovals(service)
+  await service.enable(TENANT_B)
+  const { run, targets } = await planned(context, [TENANT_B, TENANT_C])
+  const destinations = await Promise.all(targets.map(async entry => {
+    const id = entry.promotion!.id
+    const { body: { changeSet } } = await context.post({ tenantId: entry.targetTenantId, action: "preview", id })
+    return { id, contentHash: changeSet.contentHash, targetFingerprint: changeSet.targetFingerprint }
+  }))
+  const apply = (reviewed?: typeof destinations) => context.post({ tenantId: TENANT_A, action: "apply-batch", id: run.id, destinations: reviewed, backup: "none", confirm: true })
+  expect(await apply(destinations)).toMatchObject({ status: 409, body: { error: expect.stringContaining("pending") } })
+  expect((await context.post({ tenantId: TENANT_A, action: "get-run", id: run.id })).body.run.groupedApply).toBeDefined()
+  context.targets[TENANT_B]!.addPolicy({ name: String(context.policy.name) })
+  expect(await apply()).toMatchObject({ status: 409, body: { error: expect.stringContaining("changed") } })
+  expect((await context.post({ tenantId: TENANT_A, action: "get-run", id: run.id })).body.run.groupedApply).toBeUndefined()
+  expect(context.targets[TENANT_B]!.writeCount()).toBe(0)
+  expect(context.targets[TENANT_C]!.writeCount()).toBe(0)
+})

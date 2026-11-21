@@ -11,6 +11,7 @@ import { recordGovernanceAudit } from "../governance-audit"
 import { DOMAINS } from "../domains"
 import type { Stored } from "../records"
 import { FeatureError } from "../route"
+import { targetStateHash } from "../promotion/targets"
 import { withTenantWrite } from "../write-lock"
 import { cisBenchmarksAllowed } from "../../frameworks/service"
 import { requirePreChangeBackup } from "./backup"
@@ -691,7 +692,7 @@ async function reconcile(graph: GraphCall, type: IntuneType, operation: ChangeOp
 }
 
 /** The next approved step checks the original observation, then the last verified live state. */
-function guardedOperationWriter(operation: ChangeOperation, type: IntuneType, reader: GraphCall, writer: GraphCall, expected: unknown, saveStep: (hash: string) => void): GraphCall {
+function guardedOperationWriter(operation: ChangeOperation, type: IntuneType, reader: GraphCall, writer: GraphCall, expected: unknown, checkDependencies: () => Promise<void>, saveStep: (hash: string) => void): GraphCall {
   let id = operation.targetId
   let prior: Item | undefined
   const targetState = async () => {
@@ -709,7 +710,10 @@ function guardedOperationWriter(operation: ChangeOperation, type: IntuneType, re
     })()
   }
   return async (method, path, body, options) => {
-    const response = await withWriteCheckpoint(check, () => writer(method, path, body, options))
+    const response = await withWriteCheckpoint(async () => {
+      await check()
+      await checkDependencies()
+    }, () => writer(method, path, body, options))
     if (response.status < 300 && method !== "DELETE") {
       if (!id && typeof response.body.id === "string") id = response.body.id
       let verified = false
@@ -771,6 +775,16 @@ export async function prepareChangeSetApply(deps: FeatureDeps, tenant: string, i
   if (staleBefore.length) markStale(deps, tenant, id, staleBefore.join(" "), actor)
 
   const approvedTargets = new Map<string, unknown>()
+  const mapped = (kind: ChangeSetRecord["dependencies"][number]["kind"]) =>
+    [...new Set(record.dependencies.flatMap(ref => ref.kind === kind && ref.targetId ? [ref.targetId.toLowerCase()] : []))].sort()
+  const dependencyReads = { policyId: null, filterIds: mapped("filter"), scopeTagIds: mapped("scopeTag"), reusableSettingIds: mapped("reusableSetting"), groupIds: mapped("group") }
+  const observeDependencies = async (graph: GraphCall) => {
+    const dependencyErrors = (await input.dependencyCheck?.()) ?? []
+    if (dependencyErrors.length) markStale(deps, tenant, id, dependencyErrors.join(" "), actor)
+    return targetStateHash(graph, dependencyReads, undefined, undefined, true)
+  }
+  let approvedDependencies: string
+  const checkDependencies = (graph: GraphCall) => sameObservation(approvedDependencies, () => observeDependencies(graph))()
   const approval: ApprovalOperation = {
     tenant,
     reference: ["change-set", id],
@@ -791,8 +805,7 @@ export async function prepareChangeSetApply(deps: FeatureDeps, tenant: string, i
     },
     observe: async () => {
       const graph = await reader(deps, tenant, recoveryScope(record))
-      const dependencyErrors = (await input.dependencyCheck?.()) ?? []
-      if (dependencyErrors.length) throw new FeatureError(dependencyErrors.join(" "), 409)
+      approvedDependencies = await observeDependencies(graph)
       const listing = createListingMemo()
       const observations = []
       for (const [index, operation] of record.operations.entries()) {
@@ -813,10 +826,10 @@ export async function prepareChangeSetApply(deps: FeatureDeps, tenant: string, i
         observations.push([operation.key, checked, observed.snapshot, observed.sameNameIds])
         if (!record.preChange && observed.fingerprint !== review.operationFingerprints[operation.key]) markStale(deps, tenant, id, `${operation.name} changed in the target tenant after review.`, actor)
       }
-      return { content: [record.contentHash, record.origin, backupChoice, entries, record.dependencies, review.targetFingerprint], target: observations }
+      return { content: [record.contentHash, record.origin, backupChoice, entries, record.dependencies, review.targetFingerprint], target: [approvedDependencies, observations] }
     },
   }
-  return { record, review, backupChoice, backupSkipped, recovery, entries, approvedTargets, operation: approval }
+  return { record, review, backupChoice, backupSkipped, recovery, entries, approvedTargets, checkDependencies, operation: approval }
 }
 
 export type PreparedChangeSetApply = Awaited<ReturnType<typeof prepareChangeSetApply>>
@@ -849,7 +862,7 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
   }
   try {
     return await withTenantWrite(tenant, "Change set apply", () => settle(async () => {
-    const { record, review, backupChoice, backupSkipped: skip, recovery, entries, approvedTargets, operation } =
+    const { record, review, backupChoice, backupSkipped: skip, recovery, entries, approvedTargets, checkDependencies, operation } =
       prepared ?? await prepareChangeSetApply(deps, tenant, id, input, actor)
     if (prepared && input.resolveBackup && (input.resolveBackup() ?? backupChoice) !== backupChoice) throw new FeatureError("The pre-change backup choice changed after review.", 409)
     backupSkipped = skip
@@ -984,7 +997,7 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
       const attempt: OperationResult = { ...previous, status: "writing", attempts: current.attempts + 1, message: null, readBack: null, at: at() }
       saveResult(deps, tenant, id, operation.key, attempt, actor, `Writing ${operation.name}`)
       const protectedWrite = hasWriteApproval(tenant)
-      const resultWriter = protectedWrite ? guardedOperationWriter(operation, type, gated, writer, approvedTargets.get(operation.key), hash => {
+      const resultWriter = protectedWrite ? guardedOperationWriter(operation, type, gated, writer, approvedTargets.get(operation.key), () => checkDependencies(gated), hash => {
         attempt.verifiedPostStepHash = hash
         saveResult(deps, tenant, id, operation.key, attempt, actor, `Verified a step for ${operation.name}`)
       }) : writer

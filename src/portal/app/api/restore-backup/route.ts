@@ -98,7 +98,7 @@ export async function POST(request: NextRequest) {
     // under the original names, without assignments.
     const guid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
     if (targetTenants !== undefined && (!Array.isArray(targetTenants) || !targetTenants.length || targetTenants.length > 50 || mode !== 'copy' || assignments ||
-      targetTenants.some((t: any) => !guid.test(t?.tenantId ?? '') || !guid.test(t?.appId ?? '') || String(t.tenantId).toLowerCase() === String(tenantId).toLowerCase()))) {
+      targetTenants.some((t: any) => !guid.test(t?.tenantId ?? '') || (t.appId === undefined ? t.selectedPolicies === undefined || targetTenants.length < 2 : !guid.test(t.appId)) || String(t.tenantId).toLowerCase() === String(tenantId).toLowerCase()))) {
       return NextResponse.json({ error: 'Choose other connected tenants to copy to. Copies are created without assignments.' }, { status: 400 })
     }
 
@@ -107,7 +107,7 @@ export async function POST(request: NextRequest) {
     catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "Invalid dependency mappings" }, { status: 400 }) }
     if (dependencyMappings.length && (targetTenants?.length !== 1 || body.confirmMappings !== true)) return NextResponse.json({ error: "Review mappings and select exactly one target tenant" }, { status: 400 })
     type Selection = { path: string; repairToken?: string }
-    type Destination = { tenantId: string; appId: string; selectedPolicies?: Selection[] }
+    type Destination = { tenantId: string; appId?: string; selectedPolicies?: Selection[] }
     const destinations = targetTenants as Destination[] | undefined
     const validSelections = (items: unknown): items is Selection[] => Array.isArray(items) && items.length > 0
       && items.every(item => validPolicyPath(item?.path, backupId) && (item.repairToken === undefined || typeof item.repairToken === "string" && guid.test(item.repairToken)))
@@ -121,8 +121,14 @@ export async function POST(request: NextRequest) {
       || repairSelections.length > 0 && (restoreType !== "selective" || (destinations?.length ?? 0) > 1 || !validSelections(repairSelections))) {
       return NextResponse.json({ error: "Choose unique destinations and valid restore selections for each destination." }, { status: 400 })
     }
-    if (hasTargetSelections && destinations!.length > 1 && !(await enrolledBatchDestinations(destinations!.map(target => target.tenantId.toLowerCase()))).size) {
-      return NextResponse.json({ legacy: true })
+    const grouped = !!destinations && destinations.length > 1
+      && (await enrolledBatchDestinations(destinations.map(target => target.tenantId.toLowerCase())).catch(error => {
+        const message = error instanceof Error ? error.message : String(error)
+        throw new WriteApprovalError(`The tenant approval batch could not be checked. No writes were sent. ${message}`)
+      })).size > 0
+    if (hasTargetSelections && destinations!.length > 1 && !grouped) return NextResponse.json({ legacy: true })
+    if (destinations?.some(target => !target.appId)) {
+      return NextResponse.json({ error: "Reconnect all original destinations before applying this tenant approval batch." }, { status: 409 })
     }
     const repairScope = (target: string) => JSON.stringify([tenantId, storageAccountName, backupId, target.toLowerCase(), mode, assignments, dependencyMappings])
 
@@ -184,13 +190,12 @@ export async function POST(request: NextRequest) {
       ? await Promise.all(destinations.map(async (target) => {
           let token: string
           try {
-            token = await getAccessToken(target.tenantId, target.appId, clientSecret, "https://graph.microsoft.com/.default")
+            token = await getAccessToken(target.tenantId, target.appId!, clientSecret, "https://graph.microsoft.com/.default")
           } catch (error) {
-            if (destinations.length !== 1) throw error
             const message = error instanceof Error ? error.message : String(error)
             return { notSent: message, targetTenantId: target.tenantId.toLowerCase(), selection: target.selectedPolicies }
           }
-          const graph = graphCaller(token, fetch, { tenant: target.tenantId, refreshToken: () => getAccessToken(target.tenantId, target.appId, clientSecret, "https://graph.microsoft.com/.default", true) })
+          const graph = graphCaller(token, fetch, { tenant: target.tenantId, refreshToken: () => getAccessToken(target.tenantId, target.appId!, clientSecret, "https://graph.microsoft.com/.default", true) })
           const options = { writeApprovalTenant: target.tenantId, mode: "copy" as const, assignments: false, prefix: "", crossTenant: true, repairScope: repairScope(target.tenantId), granted: grantedPermissions(token) }
           return { targetTenantId: target.tenantId.toLowerCase(), restorer: new Restorer(graph, options), selection: target.selectedPolicies }
         }))
@@ -200,16 +205,6 @@ export async function POST(request: NextRequest) {
             { writeApprovalTenant: tenantId, mode, assignments, approvalContext: requesterContext(graphToken, tenantId, body.justification), repairScope: repairScope(tenantId), granted: grantedPermissions(graphToken) }),
           selection: undefined,
         }]
-    const refused = targets.find(target => "notSent" in target)
-    if (refused && "notSent" in refused) {
-      const message = `Write not sent: ${refused.notSent}`
-      const results = (refused.selection?.map(item => item.path) ?? paths).map(path => ({
-        path, targetTenantId: refused.targetTenantId, success: false, writeNotSent: true, retryable: true, error: message,
-      }))
-      return NextResponse.json({ success: false, jobId, status: "Failed", message, details: {
-        restoredCount: 0, failedCount: results.length, duration: Math.round((Date.now() - startTime.getTime()) / 1000), results,
-      } })
-    }
     const readyTargets = targets.filter(target => target.restorer !== undefined)
     try {
       if (dependencyMappings.length) for (const { restorer } of readyTargets) await restorer.mapDependencies(dependencyMappings)
@@ -260,41 +255,71 @@ export async function POST(request: NextRequest) {
         },
       }
     })
-    await withWriteApproval(admissions.map(entry => entry.operation), async () => {
-      const progress = progressId ? startProgress(progressId, admissions.reduce((total, entry) => total + entry.ordered.length, 0)) : null
+    const progress = progressId ? startProgress(progressId, targets.reduce((total, target) => total + (target.selection?.length ?? paths.length), 0)) : null
+    const recordResult = (result: RestoreOutcome, targetTenantId?: string) => {
+      const entry = targetTenantId ? { ...result, targetTenantId } : result
+      results.push(entry)
+      if (result.partial) partialCount++
+      if (result.action === 'unchanged') unchangedCount++
+      else if (result.success) restoredCount++
+      else if (result.action === 'skipped') skippedCount++
+      else if (result.approval) approvalCount++
+      else failedCount++
+      if (progress) {
+        progress.done++
+        progress.results.push(entry)
+        progress.updatedAt = Date.now()
+      }
+    }
+    const notSent = (items: string[], target: string | undefined, error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error)
+      for (const path of items) recordResult({ path, success: false, writeNotSent: true, retryable: true, error: `Write not sent: ${message}` }, target)
+    }
+    const apply = async (batch: typeof admissions) => {
+      let started = false
       try {
-        for (const { restorer, targetTenantId, ordered, repairs, snapshots, observePath } of admissions) {
-          for (const path of ordered) {
-            if (progress) progress.current = path
-            const repair = repairs.get(path)
-            const expected = snapshots.get(path)
-            const active = hasWriteApproval(targetTenantId ?? tenantId)
-            const check = active && expected && repair ? sameObservation(expected.state, () => observePath(path, expected.snapshot)) : undefined
-            const result = active && expected
-              ? expected.state.failure ?? (repair ? await restorer.repair(path, repair, check, expected.state.target) : await restorer.restore(path, expected.snapshot, undefined, expected.state))
-              : await restoreSinglePolicy(restorer, path, storageAccountName, storageToken, manifest?.get(path), repair)
-            const entry = targetTenantId ? { ...result, targetTenantId } : result
-            results.push(entry)
-            if (result.partial) partialCount++
-            if (result.action === 'unchanged') unchangedCount++
-            else if (result.success) restoredCount++
-            else if (result.action === 'skipped') skippedCount++
-            else if (result.approval) approvalCount++
-            else failedCount++
-            if (progress) {
-              progress.done++
-              progress.results.push(entry)
-              progress.updatedAt = Date.now()
+        await withWriteApproval(batch.map(entry => entry.operation), async () => {
+          started = true
+          for (const { restorer, targetTenantId, ordered, repairs, snapshots, observePath } of batch) {
+            for (const path of ordered) {
+              if (progress) progress.current = path
+              const repair = repairs.get(path)
+              const expected = snapshots.get(path)
+              const active = hasWriteApproval(targetTenantId ?? tenantId)
+              const check = active && expected && repair ? sameObservation(expected.state, () => observePath(path, expected.snapshot)) : undefined
+              const result = active && expected
+                ? expected.state.failure ?? (repair ? await restorer.repair(path, repair, check, expected.state.target) : await restorer.restore(path, expected.snapshot, undefined, expected.state))
+                : await restoreSinglePolicy(restorer, path, storageAccountName, storageToken, manifest?.get(path), repair)
+              recordResult(result, targetTenantId)
             }
           }
-        }
-      } finally {
-        if (progress) {
-          progress.finished = true
-          progress.current = null
+        })
+      } catch (error) {
+        if (started || error instanceof WriteApprovalError && error.reason && !results.length) throw error
+        for (const { ordered, targetTenantId } of batch) notSent(ordered, targetTenantId, error)
+      }
+    }
+    try {
+      if (grouped) {
+        const refused = targets.find(target => !target.restorer)
+        if (refused) {
+          for (const target of targets) notSent(target.selection?.map(item => item.path) ?? paths, target.targetTenantId,
+            target.restorer ? "Another destination in this approval batch could not sign in." : target.notSent)
+        } else await apply(admissions)
+      } else if (!destinations) await apply(admissions)
+      else {
+        let next = 0
+        for (const target of targets) {
+          if (target.restorer) await apply([admissions[next++]!])
+          else notSent(target.selection?.map(item => item.path) ?? paths, target.targetTenantId, target.notSent)
         }
       }
-    })
+    } finally {
+      if (progress) {
+        progress.finished = true
+        progress.current = null
+      }
+    }
 
     const endTime = new Date()
     const duration = Math.round((endTime.getTime() - startTime.getTime()) / 1000)

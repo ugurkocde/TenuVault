@@ -1,4 +1,11 @@
+import { networkFailure } from "../api/network-error"
 import { assertStorageAccountName } from "../../shared/storage-account"
+
+export class ApprovalAccountNotFound extends Error {
+  constructor() {
+    super("The Azure account for tenant approvals could not be found.")
+  }
+}
 
 export type BlobVersion = { etag: string; serverTime?: number; modifiedAt?: number }
 export type BlobRecord = BlobVersion & { value: unknown }
@@ -35,7 +42,15 @@ export function approvalBlobs(account: string, token: string, fetchImpl: typeof 
   }
   const missing = (response: Response) => response.status === 404 && ["BlobNotFound", "ContainerNotFound"].includes(response.headers.get("x-ms-error-code") ?? "")
   const get = async (name: string, etag?: string): Promise<BlobRecord | null> => {
-    const response = await request(url(name), etag ? { headers: { "if-none-match": etag } } : undefined)
+    const response = await request(url(name), etag ? { headers: { "if-none-match": etag } } : undefined).catch(error => {
+      const { code } = networkFailure(error, new URL(root).hostname)
+      if (code === "ERR_NAME_NOT_RESOLVED" || code === "ENOTFOUND") throw new ApprovalAccountNotFound()
+      throw error
+    })
+    if (response.status === 404 && response.headers.get("x-ms-error-code") === "AccountNotFound") {
+      await response.body?.cancel().catch(() => undefined)
+      throw new ApprovalAccountNotFound()
+    }
     if (response.status === 304 && etag) return { ...version(response, etag), value: undefined }
     if (missing(response)) {
       await response.body?.cancel()

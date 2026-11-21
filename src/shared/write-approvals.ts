@@ -55,5 +55,6 @@ export interface WriteApprovalInbox {
   minimumVersion?: string
   actor?: ApprovalActor
   invalidRecords?: number
+  expiredAuditReceipts?: number
   requests: Array<{ request: WriteApproval; decision?: WriteDecision; invalidDecisionTime?: boolean; expired: boolean; local: boolean; superseded: boolean }>
 }

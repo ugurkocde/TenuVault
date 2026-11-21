@@ -116,6 +116,10 @@ TenuVault checks all destinations before dispatching the first write. Each enrol
 
 Open **Settings > Storage and recovery > Tenant approvals** and select the destination tenant. A different signed-in admin reviews the request there. After approval, return to the operation on the original installation and apply the same selection before it expires. The deadline is seven days from request creation. The Tenant approvals inbox shows the expiry.
 
+When tenant approvals are enabled, a retry requests approval for the remaining copies or repairs in each destination. Each protected destination must be ready before TenuVault sends any retry writes.
+
+When no destination uses tenant approvals, a failed policy or sign-in check affects only that destination. **Write not sent** means you can resolve the reported issue and retry those items. If a retry includes a disconnected destination, the other destinations can still run unless the retry group includes a tenant enrolled in approvals.
+
 ## Related pages
 
 * [Intune tenant-to-tenant migration](https://www.tenuvault.com/guides/intune-tenant-to-tenant-migration): the migration guide, on the product site
@@ -125,5 +129,3 @@ Open **Settings > Storage and recovery > Tenant approvals** and select the desti
 * [Disaster recovery](/restore/disaster-recovery/)
 * [What cannot be restored](/restore/limitations/)
 * [Plans and features](/licensing/)
-
-When tenant approvals are enabled, a retry requests approval for the remaining copies or repairs in each destination. Each protected destination must be ready before TenuVault sends any retry writes.

@@ -681,48 +681,52 @@ async function undo(body: RecordJson): Promise<UndoResult> {
           return { content: run, target: observed }
         },
       }], async () => {
-      const results: UndoResult["results"] = []
-      const created: OibRun["created"] = []
-      const updated: OibRun["updated"] = []
-      for (const item of run.created) {
-        report({ stage: `Deleting ${item.name}`, done: results.length, total })
-        const type = typeForFolder(item.folder)
-        if (!type || !OBJECT_ID.test(item.id)) {
-          results.push({ name: item.name, id: item.id, action: "removed", done: false, error: "The recorded object cannot be removed automatically. Delete it in Intune." })
-          created.push(item)
-          continue
+        const results: UndoResult["results"] = []
+        const remaining = { ...run, created: [...run.created], updated: [...run.updated] }
+        let stopped: string | undefined
+        for (const item of run.created) {
+          report({ stage: `Deleting ${item.name}`, done: results.length, total })
+          const result = { name: item.name, id: item.id, action: "removed" as const }
+          const type = typeForFolder(item.folder)
+          if (stopped || !type || !OBJECT_ID.test(item.id)) {
+            results.push({ ...result, done: false, error: stopped ?? "The recorded object cannot be removed automatically. Delete it in Intune." })
+            continue
+          }
+          const send = () => graph("DELETE", `${type.path}/${item.id}`)
+          try {
+            const response = hasWriteApproval(tenant) ? await withWriteCheckpoint(sameObservation(states.get(item.id), () => read(item)), send) : await send()
+            // Settings Catalog answers 400 ResourceNotFound for deleted policies instead of 404.
+            const gone = response.status < 300 || response.status === 404 || (response.status === 400 && /ResourceNotFound/i.test(JSON.stringify(response.body)))
+            if (gone) {
+              remaining.created.splice(remaining.created.indexOf(item), 1)
+              saveRun(remaining)
+              results.push({ ...result, done: true })
+            } else {
+              const error = (response.body.error as Item | undefined)?.message
+              results.push({ ...result, done: false, error: response.approval ? approvalMessage(response.approval, type.label) : typeof error === "string" && error ? error : `Microsoft Graph returned ${response.status}` })
+            }
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error)
+            results.push({ ...result, done: false, error: message })
+            stopped = `Undo stopped before this object: ${message}`
+          }
         }
-        const send = () => graph("DELETE", `${type.path}/${item.id}`)
-        const response = hasWriteApproval(tenant) ? await withWriteCheckpoint(sameObservation(states.get(item.id), () => read(item)), send) : await send()
-        // Settings Catalog answers 400 ResourceNotFound for deleted policies instead of 404.
-        const gone = response.status < 300 || response.status === 404 || (response.status === 400 && /ResourceNotFound/i.test(JSON.stringify(response.body)))
-        if (gone) results.push({ name: item.name, id: item.id, action: "removed", done: true })
-        else {
-          const error = (response.body.error as Item | undefined)?.message
-          results.push({ name: item.name, id: item.id, action: "removed", done: false, error: response.approval ? approvalMessage(response.approval, type.label) : typeof error === "string" && error ? error : `Microsoft Graph returned ${response.status}` })
-          created.push(item)
+        const restorer = new Restorer(graph, { writeApprovalTenant: tenant, mode: "replace", assignments: false, recreateMissing: false, exactTargetId: true })
+        for (const item of run.updated) {
+          report({ stage: `Restoring ${item.previousName}`, done: results.length, total })
+          const result = { name: item.previousName, id: item.id, action: "restored" as const }
+          if (stopped || !item.before) {
+            results.push({ ...result, done: false, error: stopped ?? "No previous version was saved for this policy. Restore it from a backup." })
+            continue
+          }
+          const outcome = await restorer.restore(`oib/${item.folder}/${item.id}.json`, { ...item.before, id: item.id }, hasWriteApproval(tenant) ? sameObservation(states.get(item.id), () => read(item)) : undefined)
+          if (outcome.success) {
+            remaining.updated.splice(remaining.updated.indexOf(item), 1)
+            saveRun(remaining)
+            results.push({ ...result, done: true })
+          } else results.push({ ...result, done: false, error: outcome.error ?? "The previous version could not be put back." })
         }
-      }
-      // A policy the admin deleted since the run stays deleted: undo does not recreate it as a new, untracked policy.
-      const restorer = new Restorer(graph, { writeApprovalTenant: tenant, mode: "replace", assignments: false, recreateMissing: false })
-      for (const item of run.updated) {
-        report({ stage: `Restoring ${item.previousName}`, done: results.length, total })
-        if (!item.before) {
-          results.push({ name: item.previousName, id: item.id, action: "restored", done: false, error: "No previous version was saved for this policy. Restore it from a backup." })
-          updated.push(item)
-          continue
-        }
-        const outcome = await restorer.restore(`oib/${item.folder}/${item.id}.json`, item.before, hasWriteApproval(tenant) ? sameObservation(states.get(item.id), () => read(item)) : undefined)
-        if (outcome.success) results.push({ name: item.previousName, id: item.id, action: "restored", done: true })
-        else if (outcome.missing) results.push({ name: item.previousName, id: item.id, action: "restored", done: true, note: "already deleted in Intune, so the previous version was not recreated" })
-        else {
-          results.push({ name: item.previousName, id: item.id, action: "restored", done: false, error: outcome.error ?? "The previous version could not be put back." })
-          updated.push(item)
-        }
-      }
-      const remaining = { ...run, created, updated }
-      saveRun(remaining)
-      return { run: created.length || updated.length ? publicRun(remaining) : null, results }
+        return { run: remaining.created.length || remaining.updated.length ? publicRun(remaining) : null, results }
       })
     } finally {
       progress.delete(tenant)

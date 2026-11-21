@@ -99,6 +99,7 @@ function ApprovalInbox({ tenant, highlight }: { tenant: string; highlight: strin
         : inbox.enabled ? `On. This tenant requires TenuVault ${inbox.minimumVersion} or later.` : "Off for this tenant."}
     </p>}
     {inbox?.available && !inbox.requests.length && !inbox.invalidRecords && <p className="text-sm text-muted-foreground">No tenant approval requests.</p>}
+    {!!inbox?.expiredAuditReceipts && <p role="status" className="text-muted-foreground">{inbox.expiredAuditReceipts} approval audit receipts on this device expired because their changes could not be verified in Azure. Check the decision in the inbox or Azure Storage.</p>}
     {!!inbox?.invalidRecords && <p role="status" className="text-muted-foreground">{inbox.invalidRecords} approval records could not be read. Refresh to try again.</p>}
     {!!inbox?.requests.length && <ul className="divide-y rounded-lg border">
       {inbox.requests.map(({ request, decision, expired, local, superseded, invalidDecisionTime }) => {

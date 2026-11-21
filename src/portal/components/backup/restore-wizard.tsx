@@ -550,12 +550,20 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
       for (const batch of requests) {
         id = crypto.randomUUID()
         progressId.current = id
-        const targets = copying
-          ? copyCandidates.filter(target => groupedRetry
-            ? batches.some(entry => entry.targetTenantId === target.tenantId.toLowerCase())
-            : batch.targetTenantId ? target.tenantId.toLowerCase() === batch.targetTenantId : copyTargets.includes(target.tenantId))
-          : []
-        if (copying && (!targets.length || groupedRetry && targets.length !== batches.length)) throw new Error("The original target tenant is no longer connected.")
+        const targets = groupedRetry
+          ? batches.map(({ targetTenantId }) => ({
+              tenantId: targetTenantId!,
+              appId: copyCandidates.find(target => target.tenantId.toLowerCase() === targetTenantId)?.appId,
+            }))
+          : copying ? copyCandidates.filter(target => batch.targetTenantId
+            ? target.tenantId.toLowerCase() === batch.targetTenantId
+            : copyTargets.includes(target.tenantId)) : []
+        if (copying && !targets.length) {
+          if (!batch.targetTenantId) throw new Error("The original target tenant is no longer connected.")
+          completed.push(...batch.paths.map(path => ({ path, targetTenantId: batch.targetTenantId,
+            success: false, retryable: true, writeNotSent: true, error: "Write not sent: the original target tenant is no longer connected." })))
+          continue
+        }
         attempted.push(...(groupedRetry ? batches : [batch]))
         const data = await post<{ legacy?: boolean; success: boolean; message: string; details?: { restoredCount: number; unchangedCount?: number; results: Outcome[] } }>("/api/restore-backup", {
           ...tenant.credentials,

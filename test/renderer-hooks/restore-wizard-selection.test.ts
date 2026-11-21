@@ -23,16 +23,18 @@ afterEach(() => {
 const contents = { content: { groups: [{ folder: "DeviceConfigurations", label: "configuration profile", area: "Devices", policies: [{ path: "DeviceConfigurations/a.json", displayName: "Profile A" }, { path: "DeviceConfigurations/b.json", displayName: "Profile B" }] }] } }
 const preview = { items: [{ path: "DeviceConfigurations/a.json", name: "Profile A" }, { path: "DeviceConfigurations/b.json", name: "Profile B" }] }
 
-async function renderItems(community: boolean, copyCandidates: Array<{ tenantId: string; appId: string; name: string }> = []): Promise<HTMLDivElement> {
+async function renderItems(community: boolean, copyCandidates: Array<{ tenantId: string; appId: string; name: string }> = [], exposeRender?: (update: (targets: typeof copyCandidates) => void) => void): Promise<HTMLDivElement> {
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => Response.json(String(input).endsWith("/api/list-backup-contents") ? contents : String(input).endsWith("/api/restore-preview") ? preview : {})))
   const container = document.body.appendChild(document.createElement("div"))
   const root = createRoot(container)
   roots.push(root)
-  await act(async () => root.render(createElement(MemoryRouter, null, createElement(RestoreWizard, {
+  const render = (targets: typeof copyCandidates) => root.render(createElement(MemoryRouter, null, createElement(RestoreWizard, {
     tenant: { name: "Contoso", credentials: { tenantId: "tenant", appId: "app", clientSecret: "" }, storageAccountName: "tvlocal-tenant" },
     backups: [{ id: "backup-1", timestamp: "2026-10-16T02:00:00Z", type: "manual", status: "Completed", totalPolicies: 2, scope: null, size: 1, duration: 4, changes: null, comparedWith: null }],
-    initialBackupId: "backup-1", community, canCopyToTenants: copyCandidates.length > 0, copyCandidates,
-  }))))
+    initialBackupId: "backup-1", community, canCopyToTenants: targets.length > 0, copyCandidates: targets,
+  })))
+  exposeRender?.(render)
+  await act(async () => render(copyCandidates))
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
   // Open the group so each item's checkbox shows.
   const group = [...container.querySelectorAll<HTMLButtonElement>("button[aria-expanded]")].find((button) => button.textContent?.includes("Configuration profile"))!
@@ -86,6 +88,38 @@ it("retries legacy copies per destination and warns only about a potentially dis
   expect(container.textContent).toContain("Write not sent: sign in again")
   expect(container.textContent?.match(/a write may already have completed/g)).toHaveLength(1)
   expect([...container.querySelectorAll("li")].find(row => row.textContent?.includes("Write not sent"))?.textContent).not.toContain("a write may already have completed")
+})
+
+it("checks retry enrollment before requiring a disconnected destination's profile", async () => {
+  const targets = ["Disconnected", "Healthy"].map((name, index) => ({ tenantId: `tenant-${index}`, appId: "app", name }))
+  let render!: (next: typeof targets) => void
+  const container = await renderItems(false, targets, update => { render = update })
+  const path = "DeviceConfigurations/a.json"
+  const calls: Array<Array<{ tenantId: string; appId?: string; selectedPolicies?: unknown }>> = []
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).endsWith("/api/restore-preview")) return Response.json(preview)
+    const body = JSON.parse(String(init?.body ?? "{}"))
+    if (!body.targetTenants) return Response.json({ records: [] })
+    calls.push(body.targetTenants)
+    if (calls.length === 1) return Response.json({ details: { results: targets.map(target => ({
+      path, targetTenantId: target.tenantId, success: false, retryable: true, error: "Retry the copy",
+    })) } })
+    if (calls.length === 2) return Response.json({ legacy: true })
+    return Response.json({ details: { results: [{ path, targetTenantId: "tenant-1", success: true }] } })
+  }))
+  await act(async () => itemBoxes(container)[0]!.click())
+  await act(async () => buttonNamed(container, "Next")!.click())
+  for (const target of container.querySelectorAll<HTMLInputElement>('[aria-label="Tenants to copy to"] input')) await act(async () => target.click())
+  await act(async () => buttonNamed(container, "Review")!.click())
+  await act(async () => buttonNamed(container, " Restore 1 item")!.click())
+  await act(async () => render([targets[1]!]))
+  await act(async () => buttonNamed(container, " Retry failed items")!.click())
+  expect(calls[1]).toEqual([
+    { tenantId: "tenant-0", selectedPolicies: [{ path }] },
+    { tenantId: "tenant-1", appId: "app", selectedPolicies: [{ path }] },
+  ])
+  expect(calls[2]).toEqual([{ tenantId: "tenant-1", appId: "app" }])
+  expect(container.textContent).toContain("Write not sent: the original target tenant is no longer connected.")
 })
 
 describe("restore wizard item selection", () => {

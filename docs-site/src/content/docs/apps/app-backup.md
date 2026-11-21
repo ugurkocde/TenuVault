@@ -219,11 +219,13 @@ If the destination requires a second admin, **Restore to tenant** requests appro
 
 Open **Settings > Storage and recovery > Tenant approvals** and select the destination tenant. A different signed-in admin reviews the request there. After approval, return to the operation on the original installation and apply the same selection before it expires. The deadline is seven days from request creation. The Tenant approvals inbox shows the expiry.
 
+If a protected restore needs to resume, the next approval includes the draft and the installer content already recorded in the destination. Changes to the draft or installer content can stop the restore before the next upload or publish step.
+
+If Intune refuses the initial app creation, resolve the sign-in or permissions problem and retry the restore. If the outcome is uncertain, TenuVault first checks for the same draft before proceeding.
+
 ## Related pages
 
 - [Connect your tenant](/getting-started/connect-tenant/)
 - [What gets backed up](/backups/coverage/): app settings and installer content are separate.
 - [Encryption and recovery key](/security/encryption/)
 - [Network connections and data flows](/security/data-flows/#app-backup): the addresses App Backup contacts and what is sent to each.
-
-If a protected restore needs to resume, the next approval includes the draft and the installer content already recorded in the destination. Changes to the draft or installer content can stop the restore before the next upload or publish step.

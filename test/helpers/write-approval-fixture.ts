@@ -14,13 +14,16 @@ export const writeApprovalFixture = () => {
   let counter = 0
   const state = {
     time: Date.now(), online: true, account: approvalAccount, hasProfile: true, auditAvailable: true, serverTime: 0,
-    containerMissing: false, blockedAccounts: new Set<string>(), failedReads: new Set<string>(), policyReads: 0, conditionalReads: 0, policyChecks: 0, beforeAudit: undefined as ((event: Parameters<ApprovalDependencies["audit"]>[0]) => void) | undefined,
+    containerMissing: false, missingAccounts: new Map<string, "dns" | "azure">(), failedPuts: new Set<string>(), blockedAccounts: new Set<string>(), failedReads: new Set<string>(), policyReads: 0, conditionalReads: 0, policyChecks: 0, beforeAudit: undefined as ((event: Parameters<ApprovalDependencies["audit"]>[0]) => void | Promise<void>) | undefined,
   }
   const fetch: typeof globalThis.fetch = async (input, init) => {
     if (!state.online) return new Response(null, { status: 403 })
     const request = new Request(input, init)
     const url = new URL(request.url)
-    if (state.blockedAccounts.has(url.hostname.split(".")[0]!)) return new Response(null, { status: 403 })
+    const account = url.hostname.split(".")[0]!
+    if (state.missingAccounts.get(account) === "dns") throw new Error("net::ERR_NAME_NOT_RESOLVED")
+    if (state.missingAccounts.get(account) === "azure") return new Response(null, { status: 404, headers: { "x-ms-error-code": "AccountNotFound" } })
+    if (state.blockedAccounts.has(account)) return new Response(null, { status: 403 })
     if (state.containerMissing) return new Response(null, { status: 404, headers: { "x-ms-error-code": "ContainerNotFound" } })
     const date = new Date(state.serverTime || state.time).toUTCString()
     const prefix = "/intune-backups/"
@@ -51,6 +54,7 @@ export const writeApprovalFixture = () => {
     if (request.method === "GET") return existing
       ? new Response(existing.body, { headers: { etag: existing.etag, date } })
       : new Response(null, { status: 404, headers: { "x-ms-error-code": "BlobNotFound" } })
+    if (state.failedPuts.has(name)) throw new Error("Injected write failure")
     const body = await request.text()
     const current = values.get(name)
     const match = request.headers.get("if-match"), absent = request.headers.get("if-none-match")
@@ -67,7 +71,7 @@ export const writeApprovalFixture = () => {
       current: (_tenant, expected) => expected.oid === session.actor.oid,
       audit: async event => {
         if (!state.auditAvailable) throw new Error("Audit receipt unavailable")
-        state.beforeAudit?.(event)
+        await state.beforeAudit?.(event)
         audits.push(event)
       },
     }
