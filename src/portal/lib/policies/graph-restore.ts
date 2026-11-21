@@ -391,10 +391,10 @@ export class Restorer {
     return undefined
   }
 
-  private auditStep(type: IntuneType, step: Step, baseline?: Item, create = false): Promise<AuditChange[]> {
-    if (step.kind === "assignments") return Promise.resolve([{ operation: "assign", field: "assignments" }])
-    const recording = this.options.auditProgress || this.options.auditSubmitted
-    return auditChanges(type, create ? "create" : "update", step.body, baseline, recording ? this.graph : undefined)
+  private auditStep(type: IntuneType, step: Step, baseline?: Item, create = false): AuditChange[] {
+    if (step.kind === "assignments") return [{ operation: "assign", field: "assignments" }]
+    const recording = Boolean(this.options.auditProgress || this.options.auditSubmitted)
+    return auditChanges(type, create ? "create" : "update", step.body, baseline, recording)
   }
 
   private async create(type: IntuneType, path: string, source: Item, snapshot: Item, assignments: boolean): Promise<RestoreOutcome> {
@@ -409,8 +409,8 @@ export class Restorer {
       : `Unresolved dependencies (${unresolved.join(", ")}). Restore the dependencies first or reconcile this object in Intune.` }
     const references = await this.policyReferences(type, plan.create.body)
     if (references.blocking.length) return { success: false, path, action: "skipped", retryable: false, error: references.blocking.join(" ") }
-    const primary = await this.auditStep(type, { ...plan.create, kind: "content" }, undefined, true)
-    const planned = [...primary, ...(await Promise.all([...plan.steps, ...plan.assignments].map(step => this.auditStep(type, step)))).flat()]
+    const primary = this.auditStep(type, { ...plan.create, kind: "content" }, undefined, true)
+    const planned = [...primary, ...[...plan.steps, ...plan.assignments].flatMap(step => this.auditStep(type, step))]
     const created = await this.graph("POST", plan.create.path, plan.create.body, { ...this.trackWrite(), sourceId: typeof snapshot.id === "string" ? snapshot.id : undefined })
     if (created.approval) return { ...await this.pauseApproval(type, path, { ...plan.create, kind: "content" }, [...plan.steps, ...plan.assignments], source, "created", created.approval, undefined, undefined, typeof snapshot.id === "string" ? snapshot.id : undefined, false, 1, bodies.length, primary), auditPlanned: planned }
     if (created.status >= 300) return { success: false, path, retryable: created.status < 500 && created.status !== 408, auditPlanned: planned, auditUncertain: created.status >= 500 || created.status === 408, error: writeError(type, created.body, created.status) }
@@ -599,7 +599,7 @@ export class Restorer {
   private async complete(type: IntuneType, path: string, id: string, body: Item, action: "created" | "updated", steps: Step[], baseline?: Item, priorSteps = action === "created" ? 1 : 0, priorChanges: AuditChange[] = [], approvedStep?: AuditRestoreStep): Promise<RestoreOutcome> {
     const name = type.singleton?.name ?? body[type.nameKey] ?? body.displayName ?? body.name
     const applied = [...priorChanges]
-    const plannedByStep = await Promise.all(steps.map(step => this.auditStep(type, step, baseline)))
+    const plannedByStep = steps.map(step => this.auditStep(type, step, baseline))
     const stepResults: AuditRestoreStep[] | undefined = approvedStep && [
       approvedStep, ...steps.map(step => ({ kind: step.kind, outcome: "unattempted" as const })),
     ]

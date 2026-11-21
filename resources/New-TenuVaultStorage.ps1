@@ -307,13 +307,6 @@ function Get-TenuVaultAuditRole {
     return [pscustomobject]@{ Id = $definitionId; Name = $name }
 }
 
-$auditContainer = "audit-logs"
-if (-not (Get-AzRmStorageContainer -ResourceGroupName $ResourceGroupName -StorageAccountName $StorageAccountName -Name $auditContainer -ErrorAction SilentlyContinue)) {
-    if ($PSCmdlet.ShouldProcess($StorageAccountName, "Create private audit storage container")) {
-        New-AzRmStorageContainer -ResourceGroupName $ResourceGroupName -StorageAccountName $StorageAccountName -Name $auditContainer -PublicAccess None | Out-Null
-    }
-}
-
 $readerText = $null
 if ($BackupReaderAppId) {
     $reader = Get-AzADServicePrincipal -ApplicationId $BackupReaderAppId
@@ -389,20 +382,8 @@ if ($BackupReaderAppId) {
             New-AzRoleAssignment -ObjectId $reader.Id -RoleDefinitionId $role.Id -Scope $containerScope | Out-Null
         }
     }
-    $auditRole = Get-TenuVaultAuditRole $groupScope
-    $auditScope = "$($account.Id)/blobServices/default/containers/$auditContainer"
-    if ($auditRole) {
-        $existingAudit = Get-AzRoleAssignment -ObjectId $reader.Id -RoleDefinitionName $auditRole.Name -Scope $auditScope -ErrorAction SilentlyContinue |
-            Where-Object { $_.Scope -eq $auditScope }
-        if (-not $existingAudit -and $PSCmdlet.ShouldProcess($auditScope, "Assign the create-only audit role to the Backup Reader")) {
-            New-AzRoleAssignment -ObjectId $reader.Id -RoleDefinitionId $auditRole.Id -Scope $auditScope | Out-Null
-        }
-    }
     # Broader roles would let a stolen certificate delete backups; they are reported, not removed.
-    $broader = @(Get-AzRoleAssignment -ObjectId $reader.Id -Scope $containerScope -ErrorAction SilentlyContinue) +
-        @(Get-AzRoleAssignment -ObjectId $reader.Id -Scope $auditScope -ErrorAction SilentlyContinue) |
-        Where-Object { -not (($_.RoleDefinitionName -eq $roleName -and $_.Scope -eq $containerScope) -or
-            ($_.RoleDefinitionName -eq $auditRole.Name -and $_.Scope -eq $auditScope)) }
+    $broader = Get-AzRoleAssignment -ObjectId $reader.Id -Scope $account.Id -ErrorAction SilentlyContinue | Where-Object { $_.RoleDefinitionName -ne $roleName }
     foreach ($assignment in $broader) {
         Write-Warning "The Backup Reader also has '$($assignment.RoleDefinitionName)' at $($assignment.Scope). Remove it so the reader cannot delete backups."
     }
@@ -424,7 +405,7 @@ if ($BackupReaderAppId) {
         $rules += New-AzStorageAccountManagementPolicyRule -Name $ruleName -Action $action -Filter $filter
         Set-AzStorageAccountManagementPolicy -ResourceGroupName $ResourceGroupName -StorageAccountName $StorageAccountName -Rule $rules | Out-Null
     }
-    $readerText = "can write to '$container' but not delete; can create audit events in '$auditContainer'; versioning on, previous backup versions kept $VersionRetentionDays days"
+    $readerText = "can write to '$container' but not delete; versioning on, previous versions kept $VersionRetentionDays days"
 }
 
 # Read the final firewall state so a rerun without -AllowIpAddresses still reports a
@@ -460,3 +441,33 @@ Write-Host "firewall is restricted, the check must run from an allowed network. 
 Write-Host "backups at rest, and these role assignments decide who can read them: every admin in the"
 Write-Host "group sees and restores the same backups. Grant blob data roles on this account only to"
 Write-Host "the Intune admin group."
+
+# Audit provisioning runs after storage setup so a denied audit grant cannot interrupt it.
+$auditContainer = "audit-logs"
+try {
+    if (-not (Get-AzRmStorageContainer -ResourceGroupName $ResourceGroupName -StorageAccountName $StorageAccountName -Name $auditContainer -ErrorAction SilentlyContinue)) {
+        if (-not $PSCmdlet.ShouldProcess($StorageAccountName, "Create private audit storage container")) { return }
+        New-AzRmStorageContainer -ResourceGroupName $ResourceGroupName -StorageAccountName $StorageAccountName -Name $auditContainer -PublicAccess None | Out-Null
+    }
+    if ($BackupReaderAppId) {
+        $auditScope = "$($account.Id)/blobServices/default/containers/$auditContainer"
+        $auditRole = Get-TenuVaultAuditRole $groupScope
+        if ($auditRole) {
+            $assignments = @(Get-AzRoleAssignment -ObjectId $reader.Id -Scope $auditScope -ErrorAction Stop |
+                Where-Object { $_.Scope -eq $auditScope })
+            if (-not ($assignments | Where-Object { $_.RoleDefinitionName -eq $auditRole.Name }) -and
+                $PSCmdlet.ShouldProcess($auditScope, "Assign the create-only audit role to the Backup Reader")) {
+                New-AzRoleAssignment -ObjectId $reader.Id -RoleDefinitionId $auditRole.Id -Scope $auditScope | Out-Null
+            }
+            foreach ($assignment in ($assignments | Where-Object { $_.RoleDefinitionName -ne $auditRole.Name })) {
+                Write-Warning -WarningAction Continue "The Backup Reader also has '$($assignment.RoleDefinitionName)' at $auditScope. Check its effective audit access."
+            }
+        }
+    }
+} catch {
+    Write-Warning -WarningAction Continue "Could not provision audit access: $($_.Exception.Message)"
+    Write-Warning -WarningAction Continue "Ask an Azure administrator to create or verify the private '$auditContainer' container in '$StorageAccountName'."
+    if ($BackupReaderAppId) {
+        Write-Warning -WarningAction Continue "Create or verify the TenuVault Audit Writer custom role with only the blobs/read and blobs/add/action data actions and assignable scope '$groupScope'. Assign it to the Backup Reader service principal '$($reader.Id)' at the '$auditContainer' container scope."
+    }
+}

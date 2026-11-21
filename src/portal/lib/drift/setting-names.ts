@@ -60,6 +60,11 @@ export async function readSettingNames(ids: string[], graph: GraphCall, signal?:
   return (await readSettingNamesReport(ids, graph, signal)).names
 }
 
+/** Catalog IDs already verified by a Graph response, without issuing a request. */
+export function cachedVerifiedSettingIds(ids: string[]): string[] {
+  return ids.filter(id => definitions.get(id)?.verified === true)
+}
+
 /** readSettingNames, saying whether any lookup failed (so some names may be missing for that reason). */
 export async function readSettingNamesReport(ids: string[], graph: GraphCall, signal?: AbortSignal): Promise<{ names: SettingNames; failed: boolean; verifiedIds: string[] }> {
   const uncached = [...new Set(ids.filter((id) => !definitions.has(id)))]
@@ -105,7 +110,7 @@ export async function readSettingNamesReport(ids: string[], graph: GraphCall, si
     if (definition.name) names.settings[id] = definition.name
     Object.assign(names.options, definition.options)
   }
-  return { names, failed, verifiedIds: ids.filter(id => definitions.get(id)?.verified === true) }
+  return { names, failed, verifiedIds: cachedVerifiedSettingIds(ids) }
 }
 
 /** For tests. */

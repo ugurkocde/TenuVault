@@ -10,12 +10,12 @@ import { auditExportCSV, auditExportJSON } from "../src/portal/lib/audit/export"
 import { pendingEvents, setAuditOutboxStore } from "../src/portal/lib/audit/outbox"
 import { createAuditLogger } from "../src/portal/lib/audit/logger"
 import { AuditEventType, AuditResult, AuditSeverity, type AuditJob, type AuditLogEntry } from "../src/portal/lib/audit/types"
-import { Restorer, type GraphCall } from "../src/portal/lib/policies/graph-restore"
+import { graphCaller, Restorer, type GraphCall } from "../src/portal/lib/policies/graph-restore"
 import { projectItem } from "../src/portal/lib/audit/projection"
 import { auditChanges } from "../src/portal/lib/audit/restore-changes"
 import { recordRestorePreparationFailure, restoreAuditItem } from "../src/portal/lib/audit/restore"
-import { clearSettingNames } from "../src/portal/lib/drift/setting-names"
-import { typeForFolder, type Item } from "../src/shared/intune/registry"
+import { clearSettingNames, readSettingNames } from "../src/portal/lib/drift/setting-names"
+import { typeForFolder } from "../src/shared/intune/registry"
 import { memoryStore } from "./helpers"
 
 const tenantId = "11111111-1111-1111-1111-111111111111"
@@ -35,7 +35,7 @@ const input = (value: AuditJob) => ({
 })
 const dateFilter = { startDate: new Date(Date.now() - 86400_000), endDate: new Date(Date.now() + 86400_000), tenantId }
 const meta = { tenantId, exportedAt: new Date().toISOString(), filter: dateFilter, pendingCount: 0 }
-afterEach(() => { setMainAuditSink(undefined); setAuditOutboxStore(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
+afterEach(() => { clearSettingNames(); setMainAuditSink(undefined); setAuditOutboxStore(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
 function storage() {
   const blobs = new Map<string, { body: string; timestamp: string | null }>()
@@ -335,14 +335,11 @@ it("keeps unverified Catalog IDs out of failed restore checkpoints, outbox, stor
   const path = "backup-2026-11-15-120000/ConfigurationPolicies/Example.json"
   const invalidId = "device_canary_credential_placeholder"
   const verifiedId = "device_vendor_msft_policy_config_camera_allowcamera"
-  const restorer = new Restorer(async (_method, url, body): ReturnType<GraphCall> => {
-    if (url === "$batch") return { status: 200, body: { responses:
-      (body!.requests as { id: string; url: string }[]).map((request): Item =>
-        request.url.endsWith(verifiedId) ? { id: request.id, status: 200, body: { id: verifiedId, displayName: "Camera" } }
-          : { id: request.id, status: 404, body: {} }),
-    } }
-    return { status: 400, body: { error: { message: invalidId } } }
-  }, { mode: "copy", assignments: false, auditProgress: vi.fn() })
+  await readSettingNames([verifiedId], async () => ({ status: 200, body: { responses: [
+    { id: "0", status: 200, body: { id: verifiedId, displayName: "Camera" } },
+  ] } }))
+  const restorer = new Restorer(async () => ({ status: 400, body: { error: { message: invalidId } } }),
+    { mode: "copy", assignments: false, auditProgress: vi.fn() })
   const result = await restorer.restore(path, { name: "Example", settings: [catalogSetting(invalidId, 1), catalogSetting(verifiedId, 1)] })
   expect(result.success).toBe(false)
   const checkpoint = sink.begin(binding, input(job([restoreAuditItem(path)])))
@@ -371,18 +368,13 @@ it("reports only the changed Settings Catalog ID for a successful in-place write
   const changed = "device_vendor_msft_policy_config_camera_allowcamera"
   const unchanged = "device_vendor_msft_policy_config_system_allowlocation"
   const snapshot = { id: "policy", name: "Example", settings: [catalogSetting(changed, 1), catalogSetting(unchanged, 1)] }
-  const lookedUp: string[] = []
-  clearSettingNames()
-  const restorer = new Restorer(async (method, url, body): ReturnType<GraphCall> => {
-    if (url === "$batch") {
-      const requests = body!.requests as { id: string; url: string }[]
-      const responses = requests.map(request => {
-        const id = request.url.split("/").at(-1)!
-        lookedUp.push(id)
-        return { id: request.id, status: 200, body: { id, displayName: "Example setting" } }
-      })
-      return { status: 200, body: { responses } }
-    }
+  await readSettingNames([changed, unchanged], async (_method, _url, body) => ({ status: 200, body: { responses:
+    (body!.requests as { id: string; url: string }[]).map(request => ({
+      id: request.id, status: 200, body: { id: request.url.split("/").at(-1)!, displayName: "Example setting" },
+    })),
+  } }))
+  const restorer = new Restorer(async (method, url): ReturnType<GraphCall> => {
+    expect(url).not.toBe("$batch")
     if (method === "GET") {
       return url.endsWith("/assignments") ? { status: 200, body: { value: [] } }
         : { status: 200, body: { ...snapshot, settings: [catalogSetting(changed, 0), catalogSetting(unchanged, 1)] } }
@@ -391,9 +383,26 @@ it("reports only the changed Settings Catalog ID for a successful in-place write
   }, { mode: "replace", assignments: false, auditProgress: vi.fn() })
   const result = await restorer.restore("backup/ConfigurationPolicies/Example.json", snapshot)
   expect(result.success).toBe(true)
-  expect(lookedUp).toEqual([changed])
   expect(result.auditPlanned?.flatMap(change => change.settingDefinitionId ?? [])).toEqual([changed])
   expect(result.auditApplied?.flatMap(change => change.settingDefinitionId ?? [])).toEqual([changed])
+})
+
+it("preserves the Graph write sequence when a restore uses the last request in the quota", async () => {
+  const calls: string[] = []
+  const fetcher: typeof fetch = async (url, request) => {
+    calls.push(`${request?.method} ${new URL(String(url)).pathname}`)
+    if (calls.length > 1) return Response.json({ error: { message: "Throttled" } }, {
+      status: 429, headers: { "Retry-After": "60" },
+    })
+    return Response.json({ id: "created-policy" }, { status: 201 })
+  }
+  const restorer = new Restorer(graphCaller("test-token", fetcher), { mode: "copy", assignments: false, auditProgress: vi.fn() })
+  const result = await restorer.restore("backup/ConfigurationPolicies/Example.json", {
+    name: "Example", settings: [catalogSetting("device_vendor_msft_policy_config_camera_allowcamera", 1)],
+  })
+  expect(calls).toEqual(["POST /beta/deviceManagement/configurationPolicies"])
+  expect(result).toMatchObject({ success: true, auditApplied: expect.arrayContaining([{ operation: "create", field: "settings" }]) })
+  expect(result.auditApplied?.some(change => change.settingDefinitionId)).toBe(false)
 })
 
 it("records only changed top-level schema paths for a Windows configuration", async () => {
@@ -408,7 +417,7 @@ it("records only changed top-level schema paths for a Windows configuration", as
   expect(result.planned?.map(change => change.field)).toEqual(["cameraBlocked", "passwordMinimumLength"])
   expect(result.applied).toEqual(result.planned)
   const custom = { "@odata.type": "#microsoft.graph.windows10CustomConfiguration", omaSettings: [{ value: canary, [canary]: 1 }] }
-  const changes = await auditChanges(typeForFolder("DeviceConfigurations")!, "update", custom, { ...custom, omaSettings: [] }, vi.fn())
+  const changes = auditChanges(typeForFolder("DeviceConfigurations")!, "update", custom, { ...custom, omaSettings: [] }, true)
   expect(changes).toEqual([{ operation: "update", field: "omaSettings" }])
 })
 

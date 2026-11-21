@@ -382,7 +382,11 @@ describe("Cloud audit contract", () => {
     const resources = template.resources as Array<{ type: string; name: string; condition?: string; dependsOn?: string[] }>
     const audit = resources.filter(resource => resource.name.includes("audit"))
     expect(audit).toHaveLength(3)
-    expect(audit.every(resource => !resource.condition)).toBe(true)
+    expect(audit.every(resource => resource.condition === "[parameters('enableAudit')]")).toBe(true)
+    expect(template.parameters.enableAudit).toMatchObject({ type: "bool", defaultValue: true })
+    for (const name of ["auditContainer", "auditCapability"]) {
+      expect(template.outputs[name]).toMatchObject({ condition: "[parameters('enableAudit')]" })
+    }
     const existingDependencies = resources.filter(resource => !audit.includes(resource)).flatMap(resource => resource.dependsOn ?? [])
     expect(existingDependencies.filter(dependency => /audit/i.test(dependency))).toEqual([])
     expect(resources.filter(resource => !audit.includes(resource)).every(resource => resource.condition?.includes("not(parameters('auditOnly'))"))).toBe(true)
@@ -395,14 +399,39 @@ describe("Cloud audit contract", () => {
     if (main) {
       const base = JSON.parse(readFileSync(join(main, "resources/cloud-backup/azuredeploy.json"), "utf8")) as typeof template
       expect(template.parameters.scheduleStartTime).toEqual(base.parameters.scheduleStartTime)
-      for (const kind of ["runbooks", "schedules", "jobSchedules"]) {
-        const current = resources.find(resource => resource.type.endsWith("/" + kind))!
-        const { condition, ...definition } = current
-        expect(condition).toBe("[not(parameters('auditOnly'))]")
-        expect(definition).toEqual(base.resources.find(resource => resource.type === current.type))
-      }
+      const existing = resources.filter(resource => !audit.includes(resource))
+      expect(existing.map(({ condition: _condition, ...definition }) => definition)).toEqual(base.resources)
     }
   })
+
+  it.runIf(Boolean(pwsh)).each(["Container", "ReaderContainer", "RoleDefinition", "RoleAssignment"])(
+    "preserves standalone storage setup when audit provisioning is denied at %s", (denial) => {
+      const script = fileURLToPath(new URL("./fixtures/cloud-backup/storage-audit-denial.ps1", import.meta.url))
+      const run = (setupPath?: string) => {
+        const output = execFileSync(pwsh!, ["-NoProfile", "-File", script, "-Denial", denial,
+          ...(setupPath ? ["-SetupPath", setupPath] : [])], { encoding: "utf8", timeout: 15_000 })
+        const { calls } = JSON.parse(output.trim().split(/\r?\n/).at(-1)!) as { calls: string[] }
+        return { calls, output, setupCalls: calls.filter(call => !call.startsWith("audit:")) }
+      }
+      const { calls, output, setupCalls } = run()
+      expect(output).toContain("Could not provision audit access")
+      expect(output).toContain("create or verify the private 'audit-logs' container")
+      expect(output).toContain("Done. In TenuVault")
+      expect(setupCalls).toEqual([
+        "blob soft delete", "container soft delete", "assign Reader", "assign Storage Blob Data Contributor",
+        ...(denial === "Container" ? [] : ["create intune-backups", "assign backup writer", "versioning", "lifecycle"]),
+        "final firewall read",
+      ])
+      if (denial !== "Container") expect(output).toContain("Assign it to the Backup Reader service principal")
+      expect(calls.slice(setupCalls.length)).toEqual([
+        "audit:container",
+        ...(["RoleDefinition", "RoleAssignment"].includes(denial) ? ["audit:definition"] : []),
+        ...(denial === "RoleAssignment" ? ["audit:assignment"] : []),
+      ])
+      const main = process.env.TENUVAULT_TEST_MAIN_WORKTREE
+      if (main) expect(setupCalls).toEqual(run(join(main, "resources/New-TenuVaultStorage.ps1")).calls)
+    }, 35_000,
+  )
 
   it("bounds the audit setup PowerShell subprocess to one minute", () => {
     const shell = vi.fn(() => "")
