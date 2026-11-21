@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useRef, useState, type RefObject } from "react"
+import { returnFocusTo } from "../lib/return-focus"
 import { ExternalLink } from "lucide-react"
 import type { WhatsNewChange, WhatsNewEntry, WhatsNewState } from "../../shared/ipc"
 import { Button } from "~/components/ui/button"
@@ -88,7 +89,7 @@ export function WhatsNewEntries({ state }: { state: WhatsNewState }) {
  * The What's new dialog. Closing it marks the installed version as seen, so
  * neither the dialog nor the sidebar dot comes back until a later update.
  */
-export function WhatsNewDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+export function WhatsNewDialog({ open, onOpenChange, returnFocus }: { open: boolean; onOpenChange: (open: boolean) => void; returnFocus?: RefObject<HTMLElement | null> }) {
   const { state, markSeen, refresh } = useWhatsNew()
   useEffect(() => { if (open) void refresh() }, [open, refresh])
   const close = (next: boolean) => {
@@ -100,7 +101,7 @@ export function WhatsNewDialog({ open, onOpenChange }: { open: boolean; onOpenCh
   return (
     <Dialog open={open} onOpenChange={close}>
       {/* No entrance animation: the dialog announces an update, it should simply be there. */}
-      <DialogContent className="max-w-2xl" disableAnimation>
+      <DialogContent className="max-w-2xl" disableAnimation onCloseAutoFocus={returnFocusTo(returnFocus)}>
         <DialogHeader>
           <DialogTitle>What&apos;s new</DialogTitle>
           <DialogDescription>

@@ -248,9 +248,9 @@ Messages from the OpenIntuneBaseline section and framework comparisons are cover
 
 ## Share feedback
 
-Select **Share feedback** in the sidebar, just above **Support**, to tell us what you were trying to do and what got in your way. It is available on every plan, including Community and without a license.
+Select **Help** > **Share feedback** at the bottom of the sidebar (during the guided setup, **Share feedback** at the top of the window) to tell us what you were trying to do and what got in your way. It is available on every plan, including Community and without a license.
 
-1. Open the screen where you got stuck, then select **Share feedback**.
+1. Open the screen where you got stuck, then select **Help** > **Share feedback** in the sidebar, or **Share feedback** at the top of the window during the guided setup.
 2. Answer **What were you trying to do?** and **What got in your way, and what would help?** Both are required, up to 500 characters each.
 3. Optionally tick **Attach a screenshot of this window**. The screenshot is taken when you open the dialog, so the dialog itself is not in it. It may show tenant, policy or user names, so it is never attached unless you tick it.
 4. Optionally enter a **Reply-to email** if you would like an answer.
@@ -258,10 +258,10 @@ Select **Share feedback** in the sidebar, just above **Support**, to tell us wha
 
 Nothing is sent before you select **Send feedback**. Your answers stay in the dialog while TenuVault runs, so you can close it and come back. If sending fails, for example because you are offline or your network blocks `www.tenuvault.com`, the dialog keeps your draft and shows why. Try again later, or select **Copy as email**. It copies the full text (subject, both answers, the same details and the message ID, without the screenshot) to the clipboard and opens a new email to support. The email draft may be shortened to fit what mail apps accept, so if anything is cut off, paste the copied text instead. If no mail app opens, paste the text into an email to support@tenuvault.com.
 
-Feedback and its screenshot are stored up to 12 months; the email copy to support is kept as support correspondence. See [Network connections and data flows](/security/data-flows/#feedback) for exactly what is sent. For a problem that is blocking your work, use **Support** instead.
+Feedback and its screenshot are stored up to 12 months; the email copy to support is kept as support correspondence. See [Network connections and data flows](/security/data-flows/#feedback) for exactly what is sent. For a problem that is blocking your work, use **Help** > **Support** instead.
 
 ## Still stuck?
 
 Check **Settings** > **About** for your TenuVault version and sign-in method, then contact support through **Website and support** on the same page, or tell us what got in your way with [Share feedback](#share-feedback).
 
-If setup is what you are stuck on, select **Support** and then **Book a free setup call**. It opens the [free setup call](/getting-started/#free-setup-call) page in your browser: 30 minutes, free on every plan, in which you share your screen and we sort it out together.
+If setup is what you are stuck on, select **Support** at the top of the guided setup (or **Help** > **Support** in the sidebar once a tenant is connected) and then **Book a free setup call**. It opens the [free setup call](/getting-started/#free-setup-call) page in your browser: 30 minutes, free on every plan, in which you share your screen and we sort it out together.
