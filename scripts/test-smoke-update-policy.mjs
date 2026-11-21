@@ -96,7 +96,7 @@ function snapshot() {
   const result = powershell(`$out = foreach ($path in ${`'${HKLM}', '${HKCU}', '${PENDING}'`}) {
   if (Test-Path -LiteralPath $path) {
     $key = Get-Item -LiteralPath $path
-    "$path|$($key.SubKeyCount)|" + (($key.GetValueNames() | Sort-Object | ForEach-Object { "$_=$($key.GetValueKind($_)):$($key.GetValue($_))" }) -join ';')
+    "$path|$($key.SubKeyCount)|$((Get-Acl -LiteralPath $path).Sddl)|" + (($key.GetValueNames() | Sort-Object | ForEach-Object { "$_=$($key.GetValueKind($_)):$($key.GetValue($_))" }) -join ';')
   }
 }
 $out -join [Environment]::NewLine`)
@@ -300,17 +300,40 @@ try {
 
   if (platform === "win32") {
     await check("leaves an empty policy key that no smoke run recorded, and refuses", async () => {
+      let created = false
       try {
         // An empty key someone else created (for example with custom permissions): no pending record.
-        await locked(() => assert(powershell(`New-Item -Path '${HKCU}' | Out-Null`).status === 0, "could not create the key"))
+        await locked(() => {
+          assert(powershell(`New-Item -Path '${HKCU}' | Out-Null`).status === 0, "could not create the key")
+          created = true
+        })
         const before = snapshot()
         await refuses(/already exists/)
         const cleaned = run(process.execPath, [SCRIPT, "--clean"])
         assert(cleaned.status === 0, `--clean failed: ${cleaned.stderr || cleaned.stdout}`)
         assert(snapshot() === before, "--clean removed an empty key no smoke run recorded")
       } finally {
-        // The test created this key while the store was empty; it carries no mark to clear it by.
-        await locked(() => powershell(`$key = Get-Item -LiteralPath '${HKCU}' -ErrorAction SilentlyContinue\nif ($null -ne $key -and $key.ValueCount -eq 0 -and $key.SubKeyCount -eq 0) { Remove-Item -LiteralPath '${HKCU}' }`))
+        // Only a key this test created, which carries no mark to clear it by.
+        if (created) await locked(() => powershell(`$key = Get-Item -LiteralPath '${HKCU}' -ErrorAction SilentlyContinue\nif ($null -ne $key -and $key.ValueCount -eq 0 -and $key.SubKeyCount -eq 0) { Remove-Item -LiteralPath '${HKCU}' }`))
+      }
+    })
+  }
+
+  if (platform === "win32") {
+    await check("leaves the smoke's record key when it holds something else, and refuses", async () => {
+      let created = false
+      try {
+        await locked(() => {
+          assert(powershell(`New-Item -Path '${PENDING}' | Out-Null\nNew-ItemProperty -LiteralPath '${PENDING}' -Name Other -PropertyType String -Value kept | Out-Null`).status === 0, "could not create the record key")
+          created = true
+        })
+        const before = snapshot()
+        await refuses(/holds something other than a smoke run's record/)
+        const cleaned = run(process.execPath, [SCRIPT, "--clean"])
+        assert(cleaned.status === 0, `--clean failed: ${cleaned.stderr || cleaned.stdout}`)
+        assert(snapshot() === before, "--clean changed a record key holding something else")
+      } finally {
+        if (created) await locked(() => powershell(`Remove-Item -LiteralPath '${PENDING}' -Recurse -ErrorAction SilentlyContinue`))
       }
     })
   }
@@ -319,14 +342,18 @@ try {
   // the key with the mark but not the value, or the key alone. --clean must remove each of them.
   // A mark in the smoke run's own format (pid@ISO time), as a killed run writes it.
   const deadMark = "1@2000-01-01T00:00:00.000Z"
+  const pendingRecord = `New-Item -Path '${PENDING}' | Out-Null\nNew-ItemProperty -LiteralPath '${PENDING}' -Name PendingPolicy -PropertyType String -Value '${deadMark}' | Out-Null`
   const halfway = platform === "darwin"
     ? { "the staged file": () => plant(STAGE, `<key>DisableAutoUpdate</key><true/><key>TenuVaultSmokeRun</key><string>${deadMark}</string>`) }
     : {
-        "the mark without the value": () => assert(powershell(`New-Item -Path '${HKCU}' | Out-Null\nNew-ItemProperty -LiteralPath '${HKCU}' -Name TenuVaultSmokeRun -PropertyType String -Value '${deadMark}' | Out-Null`).status === 0, "could not plant the mark"),
+        // Killed after writing the mark, before the value: the pending record is still there too.
+        "the mark without the value": () => assert(powershell(`${pendingRecord}\nNew-Item -Path '${HKCU}' | Out-Null\nNew-ItemProperty -LiteralPath '${HKCU}' -Name TenuVaultSmokeRun -PropertyType String -Value '${deadMark}' | Out-Null`).status === 0, "could not plant the mark"),
         // Killed right after creating the key: the pending record says the empty key is the run's.
-        "an empty key": () => assert(powershell(`New-Item -Path '${PENDING}' -Force | Out-Null\nNew-ItemProperty -LiteralPath '${PENDING}' -Name PendingPolicy -PropertyType String -Value '${deadMark}' | Out-Null\nNew-Item -Path '${HKCU}' | Out-Null`).status === 0, "could not create the key"),
+        "an empty key": () => assert(powershell(`${pendingRecord}\nNew-Item -Path '${HKCU}' | Out-Null`).status === 0, "could not create the key"),
         // Killed before creating the key: only the pending record.
-        "the pending record alone": () => assert(powershell(`New-Item -Path '${PENDING}' -Force | Out-Null\nNew-ItemProperty -LiteralPath '${PENDING}' -Name PendingPolicy -PropertyType String -Value '${deadMark}' | Out-Null`).status === 0, "could not create the pending record"),
+        "the pending record alone": () => assert(powershell(pendingRecord).status === 0, "could not create the pending record"),
+        // Killed between creating the record key and writing the record, or between its two removals.
+        "an empty record key": () => assert(powershell(`New-Item -Path '${PENDING}' | Out-Null`).status === 0, "could not create the record key"),
       }
   for (const [left, put] of Object.entries(halfway)) {
     await check(`--clean removes ${left} a run killed halfway through its write left`, async () => {
