@@ -1,6 +1,7 @@
 import type { PartitionedRestoreStore } from "../storage/directory-restore-store"
 import type { KeyValueStore } from "../storage/secure-store"
 import { GuardedRunJournal, executeGuardedRun, restoreFingerprint, type GuardedRun, type GuardedIO } from "./guarded-run"
+import { directoryObjectState } from "./directory-object-state"
 import { RestoreSafetyError } from "../../shared/intune/restore-guards"
 import type { Item } from "../../shared/intune/registry"
 
@@ -37,14 +38,11 @@ export async function executeDirectoryBatches(store: PartitionedRestoreStore, id
       const mapped = directoryMappedId(store, identity.tenant, step.folder, step.sourceId)
       if (mapped && !run.mappings.some(mapping => mapping.folder === step.folder && mapping.source === step.sourceId)) run.mappings.push({ kind: "objectId", folder: step.folder, source: step.sourceId, target: mapped })
     }
-    const lockKey = (step: GuardedRun["entries"][number]["step"]) => `restore.directory.unanswered.${encodeURIComponent(identity.tenant.toLowerCase())}.${step.folder}.${step.sourceId.toLowerCase()}`
-    const owner = batchKey
-    const guardedIO: GuardedIO = { ...io, write: async (step, body, targetId, beforeSend, currentRun, writeSignal, onUnapplied) => {
-      const lock = store.get(lockKey(step))
-      if (lock && lock !== owner) throw new RestoreSafetyError("An earlier directory batch has an unanswered write for this object. Resume that run first.")
-      store.set(lockKey(step), owner)
-      return io.write(step, body, targetId, beforeSend, currentRun, writeSignal, onUnapplied)
-    } }
+    const objectState = directoryObjectState(store, identity.tenant, batchKey)
+    const guardedIO: GuardedIO = { ...io, prepareStep: objectState.prepare, defer: objectState.defer,
+      write: (step, body, targetId, beforeSend, currentRun, writeSignal, onUnapplied) =>
+        io.write(step, body, targetId, () => { objectState.beforeSend(step); beforeSend() }, currentRun, writeSignal, onUnapplied),
+    }
     const result = await executeGuardedRun(journal, run, guardedIO, signal)
     // Publish confirmed mappings before releasing conflict locks, including cancelled batches.
     for (const mapping of result.run.mappings) {
@@ -53,10 +51,7 @@ export async function executeDirectoryBatches(store: PartitionedRestoreStore, id
       if (previous && previous !== mapping.target) throw new RestoreSafetyError("An ambiguous directory mapping was refused.")
       store.set(key, mapping.target)
     }
-    for (const entry of result.run.entries) {
-      const key = lockKey(entry.step)
-      if (store.get(key) === owner && !result.run.entries.some(other => lockKey(other.step) === key && ["pending", "captured", "uncertain"].includes(other.state))) store.delete(key)
-    }
+    for (const entry of result.run.entries) objectState.settle(entry.step, result.run.entries.some(other => other.step.folder === entry.step.folder && other.step.sourceId.toLowerCase() === entry.step.sourceId.toLowerCase() && other.state === "uncertain"))
     if (result.run.entries.some(entry => ["pending", "captured", "uncertain"].includes(entry.state))) return { status: "partial", batches: state.batch, failed: state.failed }
     state.warning ||= !!result.run.referenceWarning
     state.failed += result.run.entries.filter(entry => entry.state !== "applied").length

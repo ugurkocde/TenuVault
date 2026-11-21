@@ -50,6 +50,9 @@ export interface GuardedRun {
 }
 export interface GuardedIO {
   token: string
+  /** Directory batches arbitrate reviewed plans independently from uncertain sends. */
+  prepareStep?: (step: GuardedStep) => number | undefined
+  defer?: (step: GuardedStep, retryAt: number) => void
   /** A complete scan of current Intune and Conditional Access references, after replacements. */
   replacedReferences?: (mappings: readonly RestoreMapping[], signal?: AbortSignal) => Promise<ReplacedReference[]>
   type: (folder: string) => IntuneType
@@ -169,6 +172,8 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
           rememberMapping(run.mappings, { kind: "objectId", folder: step.folder, source: step.sourceId, target: id })
           entry.state = "applied"; delete entry.reason; journal.save(run); continue
         }
+        const objectRetryAt = io.prepareStep?.(step)
+        if (objectRetryAt !== undefined) { entry.retryAt = Math.max(entry.retryAt ?? 0, objectRetryAt); journal.save(run) }
         if (entry.retryAt !== undefined) await waitForDirectoryRetry(entry.retryAt, signal)
         const type = io.type(step.folder)
         if (["none", "metadata"].includes(restoreCapability(type)) || (restoreCapability(type) === "singleton" && step.operation === "create")) throw new RestoreSafetyError(type.limitation ?? "This type cannot be restored.")
@@ -214,10 +219,12 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
             entry.state = "uncertain"; delete entry.retryAt; journal.save(run)
           }, run, signal, retryAt => {
             entry.state = "captured"; entry.retryAt = retryAt; delete entry.reason; journal.save(run)
+            io.defer?.(step, retryAt)
           })
         } catch (error) {
           if (error instanceof RestoreWriteDeferredError || (entry.state === "captured" && signal?.aborted)) {
             entry.state = "captured"; delete entry.reason
+            if (error instanceof RestoreWriteDeferredError && error.retryAt !== undefined) { entry.retryAt = error.retryAt; journal.save(run); io.defer?.(step, error.retryAt) }
           } else if (entry.state === "captured") {
             entry.state = "failed-before-send"
             entry.reason = "The write was not sent. Preview this item again."
@@ -233,7 +240,9 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
         entry.state = "applied"; journal.save(run)
       } catch (error) {
         if (entry.state !== "uncertain" && (error instanceof RestoreWriteDeferredError || signal?.aborted)) {
-          delete entry.reason; journal.save(run); continue
+          delete entry.reason
+          if (error instanceof RestoreWriteDeferredError && error.retryAt !== undefined) { entry.retryAt = error.retryAt; journal.save(run); io.defer?.(step, error.retryAt) }
+          journal.save(run); continue
         }
         // Never persist service error bodies: they may contain credential values or submitted payloads.
         if (entry.state !== "uncertain") { if (entry.state !== "failed") entry.state = "blocked"; entry.reason = error instanceof RestoreSafetyError ? error.message : "This item failed a restore safety check. Preview and resolve its prerequisites before continuing." }

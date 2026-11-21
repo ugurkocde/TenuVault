@@ -3,7 +3,9 @@ import type { Item, Json } from "./registry"
 
 export class RestoreSafetyError extends Error {}
 /** No send is outstanding: cancellation occurred before sending or after a definite throttle. */
-export class RestoreWriteDeferredError extends RestoreSafetyError {}
+export class RestoreWriteDeferredError extends RestoreSafetyError {
+  constructor(message: string, readonly retryAt?: number) { super(message) }
+}
 export class RestoreWriteRefusedError extends RestoreSafetyError {
   constructor(status: number) { super(`Microsoft Graph refused this write (${status}). Review restore access in Services in Settings and preview this item again.`) }
 }

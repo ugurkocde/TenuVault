@@ -309,3 +309,40 @@ it.each((["Users", "Groups"] as const).flatMap(folder => ["success", "503", "tim
   await env.service().execute(tenant, saved, page.fingerprint, approvals)
   expect(env.writes).toEqual([`PATCH ${target}`])
 })
+
+it("defers a confirmed group-create POST throttle without locking out a newer reviewed backup", async () => {
+  const env = world(0, true), original = env.fetcher.getMockImplementation()!
+  const page = await env.service().prepare(tenant, env.request, options, env.read)
+  let sends = 0
+  env.fetcher.mockImplementation((input, init) => init?.method === "POST" && ++sends === 1 ? Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
+  const approvals = { [page.rows[0]!.key]: page.rows[0]!.review.approvals }
+  vi.useFakeTimers()
+  try {
+    expect(await env.service().execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, approvals)).toMatchObject({ status: "partial", failed: 0, outcomes: [{ state: "captured" }] })
+    expect([...env.data.keys()].some(key => key.startsWith("restore.directory.unanswered."))).toBe(false)
+    const newerRequest = { ...env.request, path: env.request.path.replace("backup/", "newer/") }
+    const newer = await env.service().prepare(tenant, newerRequest, options, env.read)
+    const newerApprovals = { [newer.rows[0]!.key]: newer.rows[0]!.review.approvals }
+    expect(await env.service().execute(tenant, { ...newerRequest, runId: newer.runId }, newer.fingerprint, newerApprovals)).toMatchObject({ status: "partial", failed: 0, outcomes: [{ state: "pending" }] })
+    expect(sends).toBe(1); expect(env.writes).toEqual([])
+    await vi.advanceTimersByTimeAsync(120_000)
+    // The advisory reference scan still reports its existing missing read access.
+    expect(await env.service().execute(tenant, { ...newerRequest, runId: newer.runId }, newer.fingerprint, newerApprovals)).toMatchObject({ status: "partial", failed: 0, outcomes: [{ state: "applied", targetId: id(900) }] })
+    expect(await env.service().execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, approvals)).toMatchObject({ status: "partial", failed: 1, outcomes: [{ state: "blocked", reason: expect.stringContaining("superseded") }] })
+    expect(sends).toBe(2); expect(env.writes).toEqual(["POST groups"])
+  } finally { vi.useRealTimers() }
+})
+
+it("keeps a same-page unanswered relationship locked and refuses later rows for that object", async () => {
+  const env = world(2), service = env.service(), original = env.fetcher.getMockImplementation()!
+  const page = await service.prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read)
+  let sends = 0
+  env.fetcher.mockImplementation((input, init) => {
+    if (init?.method === "POST") { sends++; return Promise.resolve(new Response(null, { status: 503 })) }
+    return original(input, init)
+  })
+  const request = { ...env.request, runId: page.runId }, approvals = Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals]))
+  for (let restart = 0; restart < 3; restart++) expect(await env.service().execute(tenant, request, page.fingerprint, approvals)).toMatchObject({ status: "partial", outcomes: [{ state: "uncertain" }, { state: "blocked", reason: expect.stringContaining("unanswered write") }] })
+  expect(sends).toBe(1); expect(env.writes).toEqual([])
+  expect([...env.data.keys()].filter(key => key.startsWith("restore.directory.unanswered."))).toHaveLength(1)
+})

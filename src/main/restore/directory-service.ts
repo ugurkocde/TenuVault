@@ -1,3 +1,5 @@
+import { directoryObjectState } from "./directory-object-state"
+import { DirectoryThrottledError } from "./directory-retry"
 import { directory9bIO } from "./directory-9b-io"
 import { applicationObjectStep, applicationRelationshipSteps } from "./directory-9b-plan"
 import { DIRECTORY_9B_FOLDERS, applicationAdmission, applicationReview, requireApplicationRestoreAccess } from "./directory-9b"
@@ -32,11 +34,20 @@ const key = (tenant: string, id: string) => `restore.directory.review.${tenant.t
 export class DirectoryRestoreService {
   private readonly running = new Map<string, AbortController>()
   constructor(private readonly store: PartitionedRestoreStore, private readonly recovery: RecoveryAccounts, private readonly connection: (tenant: string) => Promise<RestoreConnection>, private readonly fetchImpl: typeof fetch = fetch, private readonly protectedAppIds: (tenant: string) => readonly string[] = () => [], private readonly settings?: Pick<ModuleSettings, "get">) {}
-  private async context(tenant: string) {
+  private async context(tenant: string, onThrottled?: (retryAt: number) => void) {
     const connection = await this.connection(tenant)
     if (connection.tenantId.toLowerCase() !== tenant.toLowerCase()) fail("The connection belongs to another tenant.")
     requireRestoreActor(connection.token, { ...connection, recoveryAccountIds: [] })
-    const actor = await resolveRestoreActor(safetyReader(connection.token, this.fetchImpl), connection, this.recovery.get(tenant), ["identity-references"])
+    const actorFetch: typeof fetch = async (input, init) => {
+      const response = await this.fetchImpl(input, init)
+      if (response.status === 429 && onThrottled) {
+        const error = new DirectoryThrottledError(response)
+        onThrottled(error.retryAt!)
+        throw error
+      }
+      return response
+    }
+    const actor = await resolveRestoreActor(safetyReader(connection.token, actorFetch), connection, this.recovery.get(tenant), ["identity-references"])
     const io = directory9aIO(connection.token, actor, async (step) => {
       // The admitted subset cannot remove directory roles or change account state. Group
       // relationships are restricted again at transport to static, nonprivileged user links.
@@ -222,7 +233,12 @@ export class DirectoryRestoreService {
   async execute(tenant: string, request: IdentityRestoreRequest, fingerprint: string, approvals: Record<string, string[]>) {
     const page = this.load(tenant, request.runId!)
     if (request.origin !== "restore" || page.run.origin !== request.origin || page.run.source?.path !== request.path || page.run.source.fingerprint !== restoreFingerprint(request.snapshot) || this.view(page).fingerprint !== fingerprint) fail("The backup or preview changed. Preview this object again.")
-    const context = await this.context(tenant), actor = context.actor
+    const context = await this.context(tenant, retryAt => {
+      // A refused actor lookup cannot settle an earlier dispatch. Keep its lock,
+      // but let every later reviewed plan inherit the tenant/object deadline.
+      const objects = directoryObjectState(this.store, tenant, `restore.directory.${encodeURIComponent(tenant)}.${encodeURIComponent(page.run.id)}.batch.0.`)
+      for (const entry of page.run.entries) objects.recordThrottle(entry.step, retryAt)
+    }), actor = context.actor
     const io = DIRECTORY_9B_FOLDERS.includes(request.path.split("/")[1]!) ? context.applicationIO : context.io
     if (actor.userId !== page.run.actor.userId || actor.clientId !== page.run.actor.clientId) fail("Resume with the admin and connection that reviewed this page.")
     const selection = page.rows.filter(row => !row.review.blocker && row.review.approvals.every(kind => approvals[row.key]?.includes(kind))).map(row => row.key)

@@ -82,7 +82,7 @@ for (const action of ["create", "update", "recycle", "invite", "member", "owner"
       if (options?.method !== "GET") {
         writes++
         if (outcome === "throttled" && writes === 1) return new Response(null, { status: 429, headers: { "Retry-After": "1" } })
-        if (outcome === "refused") return new Response(null, { status: action === "license" ? 429 : 403 })
+        if (outcome === "refused") return new Response(null, { status: 403 })
         const body = options?.body ? JSON.parse(String(options.body)) : {}
         if (action === "create") { secret = body.passwordProfile.password; live = { ...base, ...step.desired } }
         else if (action === "invite") live = { ...base, ...step.desired, mail: "guest@example.com" }
@@ -112,8 +112,8 @@ for (const action of ["create", "update", "recycle", "invite", "member", "owner"
     let result = await executeGuardedRun(journal, run, io, controller.signal)
     if (outcome === "timeout" || outcome === "cancel") result = await executeGuardedRun(new GuardedRunJournal(saved), run, io)
     const state = result.run.entries[0]!.state
-    expect(state).toBe(outcome === "refused" || (outcome === "throttled" && action === "license") ? "failed" : outcome === "stale" ? "blocked" : outcome === "unapproved" ? "failed-before-send" : "applied")
-    expect(writes).toBe(["stale", "unapproved"].includes(outcome) ? 0 : outcome === "throttled" && action !== "license" ? 2 : 1)
+    expect(state).toBe(outcome === "refused" ? "failed" : outcome === "stale" ? "blocked" : outcome === "unapproved" ? "failed-before-send" : "applied")
+    expect(writes).toBe(["stale", "unapproved"].includes(outcome) ? 0 : outcome === "throttled" ? 2 : 1)
     if (secret) { expect(secret.length).toBeGreaterThan(60); expect([...saved.values.values()].join()).not.toContain(secret); expect([...saved.values.values()].join()).not.toContain("passwordProfile") }
   }))
 })

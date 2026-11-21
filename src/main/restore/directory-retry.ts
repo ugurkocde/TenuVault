@@ -1,7 +1,22 @@
 import { RestoreWriteDeferredError } from "../../shared/intune/restore-guards"
 
-export class DirectoryThrottledError extends Error {
-  constructor(readonly response: Response) { super("The directory request was throttled and was not applied.") }
+export class DirectoryThrottledError extends RestoreWriteDeferredError {
+  constructor(readonly response: Response) { super("The directory request was throttled and was not applied.", directoryRetryAt(response, 0)) }
+}
+/** Retry the entire writer so a throttled safety read cannot bypass earlier checks. */
+export async function retryDirectoryWrite<T>(attemptWrite: () => Promise<T>, onUnapplied?: (retryAt: number) => void, signal?: AbortSignal, wait?: (ms: number) => Promise<void>): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try { return await attemptWrite() }
+    catch (error) {
+      if (!(error instanceof DirectoryThrottledError)) throw error
+      const retryAt = directoryRetryAt(error.response, attempt)
+      onUnapplied?.(retryAt)
+      try {
+        if (attempt >= DIRECTORY_RETRIES) throw error
+        await waitForDirectoryRetry(retryAt, signal, wait)
+      } catch { throw new RestoreWriteDeferredError("The unapplied directory request is deferred. Resume after Retry-After.", retryAt) }
+    }
+  }
 }
 /** Match the directory transport's four retries and one-minute wait budget. */
 export const DIRECTORY_RETRIES = 4

@@ -1,4 +1,4 @@
-import { DIRECTORY_RETRIES, directoryRetryAt, waitForDirectoryRetry } from "./directory-retry"
+import { DIRECTORY_RETRIES, DirectoryThrottledError, directoryRetryAt, retryDirectoryWrite, waitForDirectoryRetry } from "./directory-retry"
 import { typeForFolder, restoreCapability, type Item } from "../../shared/intune/registry"
 import { restoreMatrixRow } from "../../shared/intune/restore-matrix"
 import { RestoreSafetyError, RestoreWriteDeferredError, RestoreWriteRefusedError, guardRestoreItem, type RestoreActor } from "../../shared/intune/restore-guards"
@@ -33,9 +33,11 @@ export function directoryPermissions(step: GuardedStep): string[] {
   return action === "create" ? ["User.Create"] : ["User.ReadUpdate.All", ...(step.desired.accountEnabled !== undefined ? ["User.EnableDisableAccount.All", "User.Read.All"] : [])]
 }
 /** The same operation evidence gates the preview and the final transport. */
-export function directory9aIO(token: string, actor: RestoreActor, safety: GuardedIO["references"], fetchImpl: typeof fetch = fetch, scan?: GuardedIO["replacedReferences"], wait?: (ms: number) => Promise<void>, signal?: AbortSignal): GuardedIO & { review: (step: GuardedStep) => Promise<ReturnType<typeof directoryReview>>; ids: (id: string, kind: "members" | "owners") => AsyncIterable<string>; locate: (folder: "Users" | "Groups", sourceId: string) => Promise<{ action: "update" | "recycle" | "create"; current: Item | null }> } {
+export function directory9aIO(token: string, actor: RestoreActor, safety: GuardedIO["references"], fetchImpl: typeof fetch = fetch, scan?: GuardedIO["replacedReferences"], wait?: (ms: number) => Promise<void>, signal?: AbortSignal, retryReads = true): GuardedIO & { review: (step: GuardedStep) => Promise<ReturnType<typeof directoryReview>>; ids: (id: string, kind: "members" | "owners") => AsyncIterable<string>; locate: (folder: "Users" | "Groups", sourceId: string) => Promise<{ action: "update" | "recycle" | "create"; current: Item | null }> } {
   requireRestoreActor(token, actor)
-  const request = async (path: string, method = "GET", body?: Item, validateSend?: () => Promise<void>, beforeSend?: () => void, onUnapplied?: (retryAt: number) => void): Promise<Item | null> => {
+  // Preview inventories can retry individual reads. Journalled execution uses raw
+  // reads so every throttle reaches its durable entry or restarts the whole writer.
+  const request = async (path: string, method = "GET", body?: Item, validateSend?: () => Promise<void>, beforeSend?: () => void): Promise<Item | null> => {
     for (let attempt = 0; ; attempt++) {
       const url = new URL(path.startsWith("https://") ? path : root + path)
       if (method === "GET" && /^(users|groups)\/[0-9a-f-]+$/i.test(path)) url.searchParams.set("$select", path.startsWith("users/") ? "id,displayName,userPrincipalName,mailNickname,userType,accountEnabled,givenName,surname,jobTitle,department,officeLocation,usageLocation,assignedLicenses,onPremisesSyncEnabled,onPremisesImmutableId,onPremisesLastSyncDateTime" : "id,displayName,description,mailNickname,groupTypes,mailEnabled,securityEnabled,isAssignableToRole,membershipRule,membershipRuleProcessingState,onPremisesSyncEnabled")
@@ -45,7 +47,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
           await validateSend?.()
           signal?.throwIfAborted()
         } catch (error) {
-          if (signal?.aborted) throw new RestoreWriteDeferredError("The directory write was cancelled before sending.")
+          if (!(error instanceof DirectoryThrottledError) && signal?.aborted) throw new RestoreWriteDeferredError("The directory write was cancelled before sending.")
           throw error
         }
       } else if (signal?.aborted) throw new RestoreWriteDeferredError("The directory read was cancelled before sending a write.")
@@ -58,9 +60,11 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
       })
       if (response.status === 429) {
         const retryAt = directoryRetryAt(response, attempt)
-        if (method !== "GET") onUnapplied?.(retryAt)
-        if (attempt >= DIRECTORY_RETRIES) throw new RestoreWriteDeferredError("The throttled directory request was not applied. Resume to continue.")
-        await waitForDirectoryRetry(retryAt, signal, wait)
+        if (method !== "GET" || !retryReads) throw new DirectoryThrottledError(response)
+        try {
+          if (attempt >= DIRECTORY_RETRIES) throw new DirectoryThrottledError(response)
+          await waitForDirectoryRetry(retryAt, signal, wait)
+        } catch { throw new RestoreWriteDeferredError("The throttled directory read was not applied. Resume after Retry-After.", retryAt) }
         continue
       }
       if (method === "GET" && response.status === 404) return null
@@ -225,7 +229,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
   return {
     ids,
     token, type: folder => typeForFolder(folder)!, ...(scan ? { replacedReferences: scan } : {}), review,
-    read: (step, id, readSignal) => readSignal && readSignal !== signal ? directory9aIO(token, actor, safety, fetchImpl, scan, wait, readSignal).read(step, id, readSignal) : read(step, id),
+    read: (step, id, readSignal) => retryReads || (readSignal && readSignal !== signal) ? directory9aIO(token, actor, safety, fetchImpl, scan, wait, readSignal ?? signal, false).read(step, id, readSignal) : read(step, id),
     locate: async (folder, sourceId) => {
       const path = `${folder === "Users" ? "users" : "groups"}/${identity(sourceId)}`
       const current = await request(path)
@@ -238,7 +242,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
       return (await find(step)).map(item => step.directory?.action === "invite" ? { id: item.id!, ...sent } : item)
     },
     references: async (step, current, desired, readSignal) => {
-      if (readSignal && readSignal !== signal) return directory9aIO(token, actor, safety, fetchImpl, scan, wait, readSignal).references(step, current, desired, readSignal)
+      if (retryReads || (readSignal && readSignal !== signal)) return directory9aIO(token, actor, safety, fetchImpl, scan, wait, readSignal ?? signal, false).references(step, current, desired, readSignal)
       const result = await review(step)
       if (result.blocker) throw new RestoreSafetyError(result.blocker)
       const refs = await safety(step, current, desired)
@@ -246,69 +250,64 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
       return refs
     },
     write: async (step, body, targetId, beforeSend, run, writeSignal, onUnapplied) => {
-      if (writeSignal && writeSignal !== signal) return directory9aIO(token, actor, safety, fetchImpl, scan, wait, writeSignal).write(step, body, targetId, beforeSend, run, writeSignal, onUnapplied)
-      if (signal?.aborted) throw new RestoreWriteDeferredError("The directory write was cancelled before sending.")
-      requireRestoreActor(token, actor)
-      if (restoreFingerprint(body) !== restoreFingerprint(step.desired)) throw new RestoreSafetyError("The directory write no longer matches its approved difference.")
-      const type = typeForFolder(step.folder), row = restoreMatrixRow(step.folder)
-      if (!type || restoreCapability(type) === "none" || !row || directoryAdmission(step)) throw new RestoreSafetyError(directoryAdmission(step) ?? DIRECTORY_9A_BLOCKER)
-      const result = await review(step)
-      if (result.blocker) throw new RestoreSafetyError(result.blocker)
-      requireDirectoryApprovals(step, run, result.approvals)
-      const permissions = directoryPermissions(step)
-      if (result.roleAssignable && ["create", "member"].includes(step.directory!.action)) permissions.push("RoleManagement.ReadWrite.Directory")
-      const granted = grantedPermissions(token)
-      if (granted?.kind !== "delegated" || permissions.some(permission => !granted.permissions.has(permission))) throw new RestoreSafetyError("The signed-in connection lacks this operation's least-privileged permission.")
-      const admittedFields = step.folder === "Users" ? (step.directory?.action === "create" ? ["displayName", "mailNickname", "userPrincipalName", "accountEnabled"] : ["displayName"]) : ["description"]
-      if (["create", "update"].includes(step.directory!.action) && !(step.folder === "Groups" && step.directory?.action === "create") && Object.keys(body).some(name => !admittedFields.includes(name))) throw new RestoreSafetyError("Only the live-verified directory metadata subset can be restored.")
-      const action = step.directory!.action
-      const path = target(step, targetId)
-      let method = "PATCH", writePath = path, payload: Item | undefined = body
-      if (action === "create" || action === "update") {
-        const rebuilt = directoryPayload(step.folder, action, { ...(step.folder === "Groups" && action === "update" ? await request(path) : {}), ...body })
-        // Only the projected supported properties may reach Graph.
-        if (Object.keys(body).some(key => !(key in rebuilt) || JSON.stringify(body[key]) !== JSON.stringify(rebuilt[key]))) throw new RestoreSafetyError("Unsupported directory write property.")
-        if (action === "create") { method = "POST"; writePath = folderPath(step); payload = step.folder === "Users" ? disabledUserBody(body) : body }
-      } else if (action === "recycle") { method = "POST"; writePath = `directory/deletedItems/${identity(targetId ?? step.sourceId)}/restore`; payload = {} }
-      else if (action === "invite") {
-        if (body.sendInvitationMessage !== false || typeof body.invitedUserEmailAddress !== "string" || typeof body.inviteRedirectUrl !== "string") throw new RestoreSafetyError("A guest invitation needs its own reviewed address and redirect, without automatic email.")
-        method = "POST"; writePath = "invitations"
-      } else if (["member", "owner"].includes(action)) {
-        const relation = action === "member" ? "members" : "owners", principalId = identity(step.directory!.principalId)
-        if (body.principalId !== principalId || typeof body.present !== "boolean") throw new RestoreSafetyError("The relationship no longer matches its preview.")
-        method = body.present ? "POST" : "DELETE"
-        writePath = `${path}/${relation}/${body.present ? "" : principalId + "/"}$ref`
-        payload = body.present ? { "@odata.id": root + "directoryObjects/" + principalId } : undefined
-      } else if (action === "manager") {
-        const principalId = identity(step.directory!.principalId)
-        if (body.principalId !== principalId) throw new RestoreSafetyError("The manager no longer matches its preview.")
-        method = "PUT"; writePath = `${path}/manager/$ref`; payload = { "@odata.id": root + "users/" + principalId }
-      } else if (action === "license") {
-        if (!Array.isArray(body.assignedLicenses) || body.assignedLicenses.length !== 1) throw new RestoreSafetyError("Review one license assignment per user and SKU.")
-        const license = body.assignedLicenses[0] as Item
-        identity(license?.skuId)
-        if (!Array.isArray(license.disabledPlans) || license.disabledPlans.some(plan => !isGuid(plan))) throw new RestoreSafetyError("Invalid disabled license plans.")
-        method = "POST"; writePath = `${path}/assignLicense`; payload = { addLicenses: [license], removeLicenses: [] }
-      } else throw new RestoreSafetyError("Unsupported directory intent.")
-      // License writes are never replayed, including on a definite throttle or lost response.
-      const response = action === "license" ? await (async () => {
+      if (retryReads || (writeSignal && writeSignal !== signal)) return directory9aIO(token, actor, safety, fetchImpl, scan, wait, writeSignal ?? signal, false).write(step, body, targetId, beforeSend, run, writeSignal, onUnapplied)
+      return retryDirectoryWrite(async () => {
         if (signal?.aborted) throw new RestoreWriteDeferredError("The directory write was cancelled before sending.")
-        beforeSend()
-        const answer = await fetchImpl(root + writePath, { method, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify(payload), signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(60_000)]) : AbortSignal.timeout(60_000) })
-        if (!answer.ok) throw new RestoreWriteRefusedError(answer.status)
-        return await answer.json() as Item
-      })() : await request(writePath, method, payload, async () => {
-        const current = await read(step, targetId)
-        if (restoreFingerprint(current) !== step.preview) throw new RestoreSafetyError("The tenant changed before sending. Preview this item again.")
-        const fresh = await review(step)
-        if (fresh.blocker) throw new RestoreSafetyError(fresh.blocker)
-        requireDirectoryApprovals(step, run, fresh.approvals)
-        const references = await safety(step, current, body)
-        if (step.directory?.principalId) references.principals = [...references.principals, step.directory.principalId]
-        guardRestoreItem(actor, step.folder, targetId, references, step.allowRemoval === true, guardedProtections(step))
-      }, beforeSend, onUnapplied)
-      const id = action === "invite" ? (response?.invitedUser as Item | undefined)?.id : response?.id ?? targetId
-      return { id: identity(id) }
+        requireRestoreActor(token, actor)
+        if (restoreFingerprint(body) !== restoreFingerprint(step.desired)) throw new RestoreSafetyError("The directory write no longer matches its approved difference.")
+        const type = typeForFolder(step.folder), row = restoreMatrixRow(step.folder)
+        if (!type || restoreCapability(type) === "none" || !row || directoryAdmission(step)) throw new RestoreSafetyError(directoryAdmission(step) ?? DIRECTORY_9A_BLOCKER)
+        const result = await review(step)
+        if (result.blocker) throw new RestoreSafetyError(result.blocker)
+        requireDirectoryApprovals(step, run, result.approvals)
+        const permissions = directoryPermissions(step)
+        if (result.roleAssignable && ["create", "member"].includes(step.directory!.action)) permissions.push("RoleManagement.ReadWrite.Directory")
+        const granted = grantedPermissions(token)
+        if (granted?.kind !== "delegated" || permissions.some(permission => !granted.permissions.has(permission))) throw new RestoreSafetyError("The signed-in connection lacks this operation's least-privileged permission.")
+        const admittedFields = step.folder === "Users" ? (step.directory?.action === "create" ? ["displayName", "mailNickname", "userPrincipalName", "accountEnabled"] : ["displayName"]) : ["description"]
+        if (["create", "update"].includes(step.directory!.action) && !(step.folder === "Groups" && step.directory?.action === "create") && Object.keys(body).some(name => !admittedFields.includes(name))) throw new RestoreSafetyError("Only the live-verified directory metadata subset can be restored.")
+        const action = step.directory!.action
+        const path = target(step, targetId)
+        let method = "PATCH", writePath = path, payload: Item | undefined = body
+        if (action === "create" || action === "update") {
+          const rebuilt = directoryPayload(step.folder, action, { ...(step.folder === "Groups" && action === "update" ? await request(path) : {}), ...body })
+          // Only the projected supported properties may reach Graph.
+          if (Object.keys(body).some(key => !(key in rebuilt) || JSON.stringify(body[key]) !== JSON.stringify(rebuilt[key]))) throw new RestoreSafetyError("Unsupported directory write property.")
+          if (action === "create") { method = "POST"; writePath = folderPath(step); payload = step.folder === "Users" ? disabledUserBody(body) : body }
+        } else if (action === "recycle") { method = "POST"; writePath = `directory/deletedItems/${identity(targetId ?? step.sourceId)}/restore`; payload = {} }
+        else if (action === "invite") {
+          if (body.sendInvitationMessage !== false || typeof body.invitedUserEmailAddress !== "string" || typeof body.inviteRedirectUrl !== "string") throw new RestoreSafetyError("A guest invitation needs its own reviewed address and redirect, without automatic email.")
+          method = "POST"; writePath = "invitations"
+        } else if (["member", "owner"].includes(action)) {
+          const relation = action === "member" ? "members" : "owners", principalId = identity(step.directory!.principalId)
+          if (body.principalId !== principalId || typeof body.present !== "boolean") throw new RestoreSafetyError("The relationship no longer matches its preview.")
+          method = body.present ? "POST" : "DELETE"
+          writePath = `${path}/${relation}/${body.present ? "" : principalId + "/"}$ref`
+          payload = body.present ? { "@odata.id": root + "directoryObjects/" + principalId } : undefined
+        } else if (action === "manager") {
+          const principalId = identity(step.directory!.principalId)
+          if (body.principalId !== principalId) throw new RestoreSafetyError("The manager no longer matches its preview.")
+          method = "PUT"; writePath = `${path}/manager/$ref`; payload = { "@odata.id": root + "users/" + principalId }
+        } else if (action === "license") {
+          if (!Array.isArray(body.assignedLicenses) || body.assignedLicenses.length !== 1) throw new RestoreSafetyError("Review one license assignment per user and SKU.")
+          const license = body.assignedLicenses[0] as Item
+          identity(license?.skuId)
+          if (!Array.isArray(license.disabledPlans) || license.disabledPlans.some(plan => !isGuid(plan))) throw new RestoreSafetyError("Invalid disabled license plans.")
+          method = "POST"; writePath = `${path}/assignLicense`; payload = { addLicenses: [license], removeLicenses: [] }
+        } else throw new RestoreSafetyError("Unsupported directory intent.")
+        const response = await request(writePath, method, payload, async () => {
+          const current = await read(step, targetId)
+          if (restoreFingerprint(current) !== step.preview) throw new RestoreSafetyError("The tenant changed before sending. Preview this item again.")
+          const fresh = await review(step)
+          if (fresh.blocker) throw new RestoreSafetyError(fresh.blocker)
+          requireDirectoryApprovals(step, run, fresh.approvals)
+          const references = await safety(step, current, body)
+          if (step.directory?.principalId) references.principals = [...references.principals, step.directory.principalId]
+          guardRestoreItem(actor, step.folder, targetId, references, step.allowRemoval === true, guardedProtections(step))
+        }, beforeSend)
+        const id = action === "invite" ? (response?.invitedUser as Item | undefined)?.id : response?.id ?? targetId
+        return { id: identity(id) }
+      }, onUnapplied, signal, wait)
     },
   }
 }

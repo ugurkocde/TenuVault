@@ -1,4 +1,4 @@
-import { DIRECTORY_RETRIES, DirectoryThrottledError, directoryRetryAt, waitForDirectoryRetry } from "./directory-retry"
+import { DirectoryThrottledError, retryDirectoryWrite } from "./directory-retry"
 import { typeForFolder, type Item } from "../../shared/intune/registry"
 import { graphContinuation } from "../../shared/graph-continuation"
 import { grantedPermissions } from "../../shared/services/token"
@@ -24,7 +24,7 @@ export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typ
     const response = await fetchImpl(root + path, { method, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, ...(body ? { body: JSON.stringify(body) } : {}), signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(60_000)]) : AbortSignal.timeout(60_000) })
     if (response.status === 404 && method === "GET") return null
     if (!response.ok) {
-      if (method === "PATCH" && response.status === 429) throw new DirectoryThrottledError(response)
+      if (response.status === 429) throw new DirectoryThrottledError(response)
       // A dispatched PATCH may have committed before a timeout or gateway failure.
       // Keep the durable send marker uncertain so restart reconciles by read-back only.
       if (method === "PATCH" && (response.status === 408 || response.status >= 500)) throw new Error("The application write has an unconfirmed result.")
@@ -160,7 +160,7 @@ export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typ
     // Display names are not unique and cannot reconcile app or gallery creation.
     findCreated: async step => step.directory?.action === "create" && step.folder === "Applications" || step.directory?.action === "gallery" ? [] : (await read(step) ? [await read(step) as Item] : []),
     write: async (step, body, targetId, beforeSend, run, signal, onUnapplied) => {
-      for (let attempt = 0; ; attempt++) {
+      return retryDirectoryWrite(async () => {
         let dispatched = false
         try {
           if (signal?.aborted) throw new RestoreWriteDeferredError("The application write was cancelled before sending.")
@@ -192,18 +192,10 @@ export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typ
           await request(path, "PATCH", payload, signal)
           return { id: targetId }
         } catch (error) {
-          if (error instanceof DirectoryThrottledError) {
-            const retryAt = directoryRetryAt(error.response, attempt)
-            onUnapplied?.(retryAt)
-            if (attempt >= DIRECTORY_RETRIES) throw new RestoreWriteDeferredError("The throttled application write was not applied. Resume to continue.")
-            await waitForDirectoryRetry(retryAt, signal, wait)
-            // Repeat every final safety check before dispatching another PATCH.
-            continue
-          }
-          if (!dispatched && signal?.aborted) throw new RestoreWriteDeferredError("The application write was cancelled before sending.")
+          if (!(error instanceof DirectoryThrottledError) && !dispatched && signal?.aborted) throw new RestoreWriteDeferredError("The application write was cancelled before sending.")
           throw error
         }
-      }
+      }, onUnapplied, signal, wait)
     },
   }
   return { ...io, review, preview, hydrate, list, object, resolveApp, resolveUser, async locate(folder: string, sourceId: string) {

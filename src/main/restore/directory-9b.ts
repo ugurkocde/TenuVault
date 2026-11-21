@@ -67,7 +67,7 @@ export function applicationReview(step: GuardedStep, current: Item | null, resou
   if (privileged) approvals.push("privileged-relationship")
   if (relationship && (!current || action === "owner" && current.present !== true || action === "consent" && current.scope !== step.desired.scope)) { approvals.push("security-response"); notices.push("The current state looks deliberate. Restoring removed access may undo a security response.") }
   if (step.folder === "Applications" && action === "create") notices.push("Recreation gets a new app ID. This breaks every client that uses the old app ID. Use recycle-bin recovery to preserve it where possible; that recovery remains blocked until completely verified.")
-  if (step.folder === "ServicePrincipals") notices.push("SAML signing keys, provisioning secrets and all credentials are never restored. Set up single sign-on and provisioning again.")
+  if (step.folder === "ServicePrincipals") notices.push("SAML signing keys, provisioning secrets and all credentials are never restored. Set up single sign-on and provisioning again only when rebuilding a missing app or recovering missing configuration. Name and description updates do not require this.")
   if (action === "recycle") notices.push("The recycle bin preserves the object ID and app ID, but can recover credentials and previous access. It is offered for review only and remains blocked.")
   let blocker: string | undefined
   if (relationship && !person) blocker = "The principal no longer resolves to a current name and type. This item is blocked."
