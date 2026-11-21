@@ -261,7 +261,7 @@ function Set-TenuVaultAutomationVariable {
 function Test-TenuVaultOmissionPolicy {
     param($Policy)
     return ($Policy.version -is [int] -or $Policy.version -is [long] -or $Policy.version -is [double]) -and
-        $Policy.version -eq 1 -and $Policy.tenantId -ceq $TenantId.ToLowerInvariant() -and
+        $Policy.version -eq 1 -and $Policy.tenantId -is [string] -and $Policy.tenantId -ceq $TenantId.ToLowerInvariant() -and
         $Policy.enabled -is [bool] -and $Policy.scripts -is [bool] -and
         $Policy.generation -is [string] -and ($Policy.generation -cmatch '^[a-f0-9-]{36}$' -or
             ($Policy.generation -ceq "default" -and -not $Policy.enabled)) -and

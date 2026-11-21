@@ -219,12 +219,16 @@ foreach ($run in @(1, 2)) {
 }
 
 $script:writeOnce = $false
-foreach ($case in @("forbidden", "ambiguous404", "unavailable", "malformed", "containerMissing")) {
+foreach ($case in @("forbidden", "ambiguous404", "unavailable", "malformed", "arrayTenant", "containerMissing")) {
     $script:calls.Clear()
     $script:OutcomeSent = $false
     $script:policyStatus = switch ($case) { "forbidden" { 403 }; "unavailable" { 503 }; default { 404 } }
     $script:policyCode = if ($case -eq "containerMissing") { "ContainerNotFound" } else { "" }
-    $script:control = if ($case -eq "malformed") { "invalid JSON" } else { $null }
+    $script:control = switch ($case) {
+        "malformed" { "invalid JSON" }
+        "arrayTenant" { '{"version":1,"tenantId":["11111111-2222-3333-4444-555555555555"],"generation":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","enabled":false,"scripts":false}' }
+        default { $null }
+    }
     $script:omaParity = $case -eq "containerMissing"
     $errorText = $null
     try { $null = @(Invoke-TvBackup) } catch { $errorText = $_.Exception.Message }

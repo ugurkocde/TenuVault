@@ -719,7 +719,7 @@ describe("azuredeploy.json", () => {
 
 it.runIf(Boolean(pwsh))("cloud runs fail closed on unverified policies and preserve the off-mode OMA snapshot format", () => {
   const runs = runPlainFixture()
-  for (const scenario of ["forbidden", "ambiguous404", "unavailable", "malformed"]) {
+  for (const scenario of ["forbidden", "ambiguous404", "unavailable", "malformed", "arrayTenant"]) {
     const run = runs.find(entry => entry.scenario === scenario)!
     expect(run.error).toContain("omission policy could not be verified")
     expect(run.calls.some(({ uri }) => uri.startsWith("https://graph.microsoft.com") || uri.includes("/intune-backups/backup-"))).toBe(false)

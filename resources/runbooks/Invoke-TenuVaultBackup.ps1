@@ -851,7 +851,7 @@ function Get-TvOmissionPolicy {
         throw "The tenant's backup omission policy could not be verified (storage HTTP $($_.Exception.Status)). Check that the storage identity can read it and try again."
     }
     catch { throw "The tenant's backup omission policy could not be verified. Check that it is valid and that storage is reachable, then try again." }
-    if (-not (Test-TvJsNumber $policy.version) -or $policy.version -ne 1 -or $policy.tenantId -cne $tenant -or
+    if (-not (Test-TvJsNumber $policy.version) -or $policy.version -ne 1 -or $policy.tenantId -isnot [string] -or $policy.tenantId -cne $tenant -or
         $policy.enabled -isnot [bool] -or $policy.scripts -isnot [bool] -or
         $policy.generation -isnot [string] -or ($policy.generation -cnotmatch '^[a-f0-9-]{36}$' -and
         ($policy.generation -cne "default" -or $policy.enabled -or $bound -or -not $bindingVerified)) -or
