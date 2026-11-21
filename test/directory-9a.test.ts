@@ -402,3 +402,12 @@ it("propagates one raw create lookup throttle without a signal or internal retry
   expect(fetcher).toHaveBeenCalledTimes(1)
   expect(wait).not.toHaveBeenCalled()
 })
+
+
+it.each(["saved", "current"])("closes relationship streams when the initial %s read fails", async side => {
+  const closed: string[] = []
+  async function* stream(name: string) { try { if (side === name) throw new Error("Initial read unavailable"); yield uuid(1) } finally { closed.push(name) } }
+  await expect(previewDirectoryPage(relationshipDifference(stream("saved"), stream("current")))).rejects.toThrow("Initial read unavailable")
+  expect(closed).toContain("saved")
+  if (side === "current") expect(closed.sort()).toEqual(["current", "saved"])
+})

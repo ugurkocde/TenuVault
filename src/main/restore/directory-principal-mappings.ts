@@ -40,7 +40,13 @@ export class DirectoryPrincipalMappings {
     this.records = []
   }
   finish() { this.flush(); return { parts: this.parts, fingerprint: this.hash.digest("hex") } }
-  discard() { for (let part = 0; part < this.parts; part++) this.store.delete(this.key(part)) }
+  discard() {
+    let failure: unknown
+    for (let part = 0; part < this.parts; part++) {
+      try { this.store.delete(this.key(part)) } catch (error) { failure ??= error }
+    }
+    if (failure) throw failure
+  }
   /** Load and authenticate once per page; synchronous row validation still follows final safety reads. */
   validate(expected: { parts: number; fingerprint: string }, step: GuardedStep) {
     if (!this.inventory) {

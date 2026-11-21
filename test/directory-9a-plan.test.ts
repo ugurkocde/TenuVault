@@ -1,7 +1,8 @@
 import { expect, it, vi } from "vitest"
 import { directoryObjectStep, directoryRelationshipSteps, mappedDirectoryIds } from "../src/main/restore/directory-9a-plan"
 import { directory9aIO } from "../src/main/restore/directory-9a-io"
-import { previewDirectoryPage } from "../src/main/restore/directory-9a"
+import { SortedSpool } from "../src/main/backup/sorted-spool"
+import { previewDirectoryPage, relationshipDifference } from "../src/main/restore/directory-9a"
 const id = "00000000-0000-4000-8000-000000000001", manager = "00000000-0000-4000-8000-000000000002"
 const actor = { tenantId: "tenant", userId: "admin", clientId: "client", recoveryAccountIds: [] }
 const token = `header.${Buffer.from(JSON.stringify({ tid: "tenant", oid: "admin", appid: "client", scp: "User.Read.All Group.Read.All" })).toString("base64url")}.signature`
@@ -51,4 +52,15 @@ it("maps recreated principals before an exact comparison, so it never adds and r
   expect(await previewDirectoryPage(directoryRelationshipSteps("Groups", id, id, {}, ioFor("live"), relationships))).toEqual([])
   async function* reversed() { yield manager; yield id }
   expect(await previewDirectoryPage(mappedDirectoryIds(reversed(), async value => value))).toEqual([id, manager])
+})
+
+it("closes both encrypted sort spools when the initial live membership read fails", async () => {
+  const close = vi.spyOn(SortedSpool.prototype, "close")
+  async function* saved() { yield id; yield manager }
+  async function* current(): AsyncGenerator<string> { yield await Promise.reject(new Error("Live membership unavailable")) }
+  try {
+    const map = async (value: string) => value
+    await expect(previewDirectoryPage(relationshipDifference(mappedDirectoryIds(saved(), map), mappedDirectoryIds(current(), map)))).rejects.toThrow("Live membership unavailable")
+    expect(close).toHaveBeenCalledTimes(2)
+  } finally { close.mockRestore() }
 })

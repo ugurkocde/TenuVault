@@ -37,6 +37,7 @@ const key = (tenant: string, id: string) => `restore.directory.review.${tenant.t
 /** Owned backup readers are supplied by the authenticated route, never by the renderer. */
 export class DirectoryRestoreService {
   private readonly pending = new DirectoryPendingPublications(() => this.now())
+  private readonly unpublishedCleanup = new Set<() => void>()
   private readonly running = new Map<string, AbortController>()
   private readonly store: PartitionedRestoreStore
   constructor(store: PartitionedRestoreStore, private readonly recovery: RecoveryAccounts, private readonly connection: (tenant: string) => Promise<RestoreConnection>, private readonly localOwner: (tenant: string) => Promise<Pick<RestoreConnection, "tenantId" | "userId" | "clientId">>, private readonly fetchImpl: typeof fetch = fetch, private readonly protectedAppIds: (tenant: string) => readonly string[] = () => [], private readonly settings?: Pick<ModuleSettings, "get">, private readonly now: () => number = () => Date.now()) {
@@ -116,7 +117,15 @@ export class DirectoryRestoreService {
     return JSON.parse(raw!)
   }
   private save(page: DirectoryPage) { this.store.set(key(page.run.tenant, page.run.id), JSON.stringify(page)) }
+  private cleanupUnpublished(work: Array<() => void> = []) {
+    for (const remove of work) this.unpublishedCleanup.add(remove)
+    for (const remove of this.unpublishedCleanup) {
+      try { remove(); this.unpublishedCleanup.delete(remove) }
+      catch { /* Retain failed deletes for the next preview, and attempt every record. */ }
+    }
+  }
   async prepare(tenant: string, request: IdentityRestoreRequest, options: DirectoryOptions, read: (path: string) => Promise<unknown>) {
+    this.cleanupUnpublished()
     if (options.previousRunId !== undefined) await this.verifySavedOwner(tenant, options.previousRunId)
     directoryObjectState(this.store, tenant, "", this.now).recoverRetryDeadlines()
     this.pending.forTenant(tenant).flush(options.previousRunId)
@@ -203,8 +212,7 @@ export class DirectoryRestoreService {
       const inventoryKey = (part: number) => `restore.directory.inventory.${tenant.toLowerCase()}.${run.id}.${part}`
       onInventory(() => {
         if (this.store.get(key(tenant, run.id))) return
-        principalMappings.discard()
-        for (let index = 0; index < part; index++) this.store.delete(inventoryKey(index))
+        this.cleanupUnpublished([() => principalMappings.discard(), ...Array.from({ length: part }, (_, index) => () => this.store.delete(inventoryKey(index)))])
       })
       for await (const step of steps) {
         if (++inventory.count > 1_000_000) fail("The directory difference limit was reached.")
@@ -281,7 +289,7 @@ export class DirectoryRestoreService {
         let chunk: GuardedStep[] = [], part = 0
         onInventory(() => {
           if (this.store.get(key(tenant, run.id))) return
-          for (let index = 0; index < part; index++) this.store.delete(`restore.directory.inventory.${tenant.toLowerCase()}.${run.id}.${index}`)
+          this.cleanupUnpublished(Array.from({ length: part }, (_, index) => () => this.store.delete(`restore.directory.inventory.${tenant.toLowerCase()}.${run.id}.${index}`)))
         })
         for await (const step of applicationRelationshipSteps(request.path, snapshot, object.targetId!, io, read, readSource)) {
           if (++inventory.count > 1_000_000) fail("The application difference limit was reached.")
@@ -343,12 +351,14 @@ export class DirectoryRestoreService {
   }
   private view(page: DirectoryPage) {
     const runs = this.history(page), entries = runs.flatMap(({ run }) => run.entries)
-    const discardEntries = runs.flatMap(({ batch, run }) => {
+    return { outcomes: this.outcomes(page, runs), ...this.pageState(page, entries), canDiscard: this.canDiscard(page, runs), runId: page.run.id, selection: page.selection, fingerprint: restoreFingerprint({ source: page.run.source!, rows: page.rows as unknown as Item["rows"], options: page.options as unknown as Item, ...(page.inventory?.principalMappings ? { principalMappings: page.inventory.principalMappings.fingerprint } : {}) }), rows: page.rows, more: page.more, options: page.options }
+  }
+  private canDiscard(page: DirectoryPage, runs = this.history(page)) {
+    return !directoryObjectState(this.store, page.run.tenant, page.run.id).discarded() && !runs.some(({ batch, run }) => {
       const recovered = structuredClone(run)
       recoverDirectoryRejections(this.store, recovered, directoryPagePrefix(page.run.tenant, page.run.id) + `batch.${batch}.`, this.now)
-      return recovered.entries
+      return recovered.entries.some(entry => entry.state === "uncertain")
     })
-    return { outcomes: this.outcomes(page, runs), ...this.pageState(page, entries), canDiscard: !directoryObjectState(this.store, page.run.tenant, page.run.id).discarded() && !discardEntries.some(entry => entry.state === "uncertain"), runId: page.run.id, selection: page.selection, fingerprint: restoreFingerprint({ source: page.run.source!, rows: page.rows as unknown as Item["rows"], options: page.options as unknown as Item, ...(page.inventory?.principalMappings ? { principalMappings: page.inventory.principalMappings.fingerprint } : {}) }), rows: page.rows, more: page.more, options: page.options }
   }
   private pageState(page: DirectoryPage, entries: GuardedRun["entries"]) {
     const discarded = directoryObjectState(this.store, page.run.tenant, page.run.id).discarded()
@@ -429,14 +439,18 @@ export class DirectoryRestoreService {
     this.persistRetry(page.run.tenant, retryAt, () => {
       // A write may have completed since the actor read was throttled. Never replay its old outcome.
       const runs = this.history(page)
-      objects.trackRetryJournals(runs.map(({ batch, run }) => directoryPagePrefix(run.tenant, run.id) + `batch.${batch}.`), retryAt)
+      objects.trackRetryJournals(runs.filter(({ run }) => run.entries.length).map(({ batch, run }) => ({
+        prefix: directoryPagePrefix(run.tenant, run.id) + `batch.${batch}.`,
+        targets: run.entries.map(entry => entry.targetId ?? entry.step.targetId ?? directoryMappedId(this.store, run.tenant, entry.step.folder, entry.step.sourceId) ?? entry.step.sourceId),
+      })), retryAt)
       for (const { batch, run } of runs) {
         for (const entry of run.entries) entry.retryAt = Math.max(entry.retryAt ?? 0, retryAt)
         new GuardedRunJournal({ get: name => this.store.get(directoryPagePrefix(run.tenant, run.id) + `batch.${batch}.` + name), set: (name, value) => this.store.set(directoryPagePrefix(run.tenant, run.id) + `batch.${batch}.` + name, value), delete: () => fail("History cannot be deleted.") }).save(run)
       }
     }, () => {
       const runs = this.history(page)
-      const steps = runs.length ? runs.flatMap(({ run }) => run.entries.map(entry => ({ ...entry.step, targetId: entry.targetId ?? entry.step.targetId }))) : page.run.entries.map(({ step }) => step)
+      const steps: Array<Pick<GuardedStep, "folder" | "sourceId" | "targetId">> = runs.length ? runs.flatMap(({ run }) => run.entries.map(entry => ({ ...entry.step, targetId: entry.targetId ?? entry.step.targetId }))) : page.run.entries.map(({ step }) => step)
+      if (!steps.length && page.inventory) steps.push({ folder: page.run.source!.path.split("/")[1]!, sourceId: page.inventory.targetId })
       for (const step of steps) objects.recordThrottle(step, retryAt)
     }, page.run.id)
   }
@@ -458,7 +472,7 @@ export class DirectoryRestoreService {
   }
   private results(page: DirectoryPage, result: { status: "complete" | "partial" | "nothing-sent"; batches: number; failed: number }, runs = this.history(page)) {
     const outcomes = this.outcomes(page, runs)
-    return { ...result, ...this.pageState(page, runs.flatMap(({ run }) => run.entries)), failed: outcomes.filter(entry => ["blocked", "failed", "failed-before-send"].includes(entry.state)).length, canDiscard: !runs.some(({ run }) => run.entries.some(entry => entry.state === "uncertain")) && !directoryObjectState(this.store, page.run.tenant, page.run.id).discarded(),
+    return { ...result, ...this.pageState(page, runs.flatMap(({ run }) => run.entries)), failed: outcomes.filter(entry => ["blocked", "failed", "failed-before-send"].includes(entry.state)).length, canDiscard: this.canDiscard(page, runs),
       outcomes,
       replacedReferences: runs.flatMap(({ run }) => run.replacedReferences ?? []), warnings: [...new Set(runs.flatMap(({ run }) => run.referenceWarning ? [run.referenceWarning] : []))] }
   }

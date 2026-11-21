@@ -823,3 +823,25 @@ it("removes unpublished application relationship inventory after repeated page-s
   }
   expect(env.writes).toEqual([])
 })
+
+
+it("attempts every unpublished application inventory delete and retries the failed record", async () => {
+  const env = world(), ids = Array.from({ length: 101 }, (_, n) => id(100 + n)), data = new Map<string, string>(), deletes: string[] = []
+  const snapshot = { ...app, owners: { format: "sorted-id-shards-v1", complete: true, count: ids.length, shards: 1, hash: createHash("sha256").update(ids.map(id => JSON.stringify(id) + "\n").join("")).digest("hex") } }
+  let failing = true
+  const store = { partitioned: true as const, get: (key: string) => data.get(key) ?? null, set: (key: string, value: string) => {
+    if (key.startsWith("restore.directory.review.")) throw new Error("Preview save unavailable")
+    data.set(key, value)
+  }, delete: (key: string) => {
+    deletes.push(key)
+    if (failing && key.endsWith(".0")) throw new Error("Delete unavailable")
+    data.delete(key)
+  } }
+  const service = new DirectoryRestoreService(store, new RecoveryAccounts(store), async () => ({ token, ...actor }), async () => actor, env.fetcher, () => [], env.settings)
+  const request = { path: `backup/Applications/${app.id}.json`, snapshot, origin: "restore" as const }, options = { stage: "relationships" as const, exactMembers: false, exactOwners: false }
+  await expect(service.prepare(actor.tenantId, request, options, async () => ids)).rejects.toThrow("Preview save unavailable")
+  expect(deletes).toHaveLength(3); expect([...data.keys()]).toEqual([expect.stringMatching(/\.0$/)])
+  failing = false
+  await expect(service.prepare(actor.tenantId, request, options, async () => ids)).rejects.toThrow("Preview save unavailable")
+  expect(data.size).toBe(0); expect(env.writes).toEqual([])
+})

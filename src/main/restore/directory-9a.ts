@@ -152,8 +152,8 @@ export async function* relationshipDifference(saved: AsyncIterable<string>, curr
     }
   }
   const a = checked(saved)[Symbol.asyncIterator](), b = checked(current)[Symbol.asyncIterator]()
-  let left = await a.next(), right = await b.next()
   try {
+    let left = await a.next(), right = await b.next()
     while (!left.done || !right.done) {
       if (right.done || (!left.done && left.value < right.value)) { yield { id: left.value!, present: true }; left = await a.next() }
       else if (left.done || right.value < left.value) { if (exact) yield { id: right.value, present: false }; right = await b.next() }

@@ -1,10 +1,11 @@
+import { persistDirectoryRetry } from "./directory-retry"
 import type { KeyValueStore } from "../storage/secure-store"
 import { RestoreSafetyError, RestoreWriteDeferredError } from "../../shared/intune/restore-guards"
 import { isRestorePersistenceError, GuardedRunJournal, type GuardedRun, type GuardedStep } from "./guarded-run"
 
 type Rejection = { step: string; attempt: number; cause?: "proxy" }
 type State = { locks: Record<string, { owner: string; journal: string; rejected?: Rejection }>; deadlines: Record<string, number>; discarded: Record<string, true>; invalid?: boolean }
-export const directoryPagePrefix = (tenant: string, id: string) => `restore.directory.${encodeURIComponent(tenant)}.${encodeURIComponent(id)}.`
+export const directoryPagePrefix = (tenant: string, id: string) => `restore.directory.${encodeURIComponent(tenant.toLowerCase())}.${encodeURIComponent(id)}.`
 export const directoryMappingKey = (tenant: string, folder: string, source: string) => `restore.directory.mapping.${encodeURIComponent(tenant.toLowerCase())}.objectId.${folder}.${source.toLowerCase()}`
 /** One atomic value arbitrates page ownership and discard. All mutations are synchronous. */
 export function directoryObjectState(store: KeyValueStore, tenant: string, owner: string, now: () => number = Date.now, retryableLock: (owner: string) => boolean = () => false) {
@@ -68,48 +69,89 @@ export function directoryObjectState(store: KeyValueStore, tenant: string, owner
   // This bounded-by-active-deadlines index outlives page locks. Publish it before
   // throttle journal saves so the next tenant operation can repair a lost coordinator save.
   const retryIndexKey = `restore.directory.retry-journals.${tenant.toLowerCase()}`
-  const retryIndex = (): Record<string, number> => {
+  type RetryIndex = Record<string, number | Record<string, number>>
+  const retryIndex = (): RetryIndex => {
     const raw = store.get(retryIndexKey)
     if (raw === null) return {}
+    const deadline = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0
     try {
       const index: unknown = JSON.parse(raw)
-      if (record(index) && Object.entries(index).every(([prefix, deadline]) => prefix.startsWith(`restore.directory.${encodeURIComponent(tenant)}.`) && /\.batch\.\d+\.$/.test(prefix) && typeof deadline === "number" && Number.isFinite(deadline) && deadline >= 0)) return index as Record<string, number>
+      if (record(index) && Object.entries(index).every(([prefix, value]) => prefix.startsWith(`restore.directory.${encodeURIComponent(tenant.toLowerCase())}.`) && /\.batch\.\d+\.$/.test(prefix) && (deadline(value) || record(value) && Object.values(value).every(deadline)))) return index as RetryIndex
     } catch { /* Refuse unverifiable recovery evidence. */ }
     return invalid(owner)
   }
-  const trackRetryJournals = (prefixes: string[], retryAt: number) => {
+  const trackRetryJournals = (journals: Array<{ prefix: string; targets: string[] }>, retryAt: number) => {
     const index = retryIndex()
-    for (const prefix of prefixes) index[prefix] = Math.max(index[prefix] ?? 0, retryAt)
-    store.set(retryIndexKey, JSON.stringify(index))
+    for (const { prefix, targets } of journals) {
+      const previous = index[prefix]
+      // Preserve older numeric records until recovery has read their journals.
+      if (typeof previous === "number") { index[prefix] = Math.max(previous, retryAt); continue }
+      const deadlines = previous ?? {}
+      for (const target of targets) deadlines[target.toLowerCase()] = Math.max(deadlines[target.toLowerCase()] ?? 0, retryAt)
+      index[prefix] = deadlines
+    }
+    if (journals.length) store.set(retryIndexKey, JSON.stringify(index))
   }
-  const recoverRetryDeadlines = () => {
+  const recoverRetryDeadlines = (ids?: Set<string>) => {
     const index = retryIndex(), time = now()
     if (!Object.keys(index).length) return
     const state = load()
     if (state.invalid) invalid(owner)
     let changed = false, pruned = false
-    for (const [prefix, deadline] of Object.entries(index)) {
-      if (deadline <= time) { delete index[prefix]; pruned = true; continue }
-      const journal = new GuardedRunJournal({ get: name => store.get(prefix + name), set: () => { throw new Error("Read-only history") }, delete: () => { throw new Error("Read-only history") } })
-      for (const run of journal.list(tenant)) for (const entry of run.entries) {
-        if (entry.retryAt === undefined) continue
-        if (!Number.isFinite(entry.retryAt) || entry.retryAt < 0) invalid(owner)
-        if (entry.retryAt <= time) continue
-        const id = (entry.targetId ?? entry.step.targetId ?? store.get(directoryMappingKey(tenant, entry.step.folder, entry.step.sourceId)) ?? entry.step.sourceId).toLowerCase()
-        verify(state, id)
-        if (entry.retryAt > (state.deadlines[id] ?? 0)) { state.deadlines[id] = entry.retryAt; changed = true }
+    for (const [prefix, evidence] of Object.entries(index)) {
+      const deadlines: Record<string, number> = typeof evidence === "number" ? {} : evidence
+      if (typeof evidence === "number" ? evidence <= time : Object.values(deadlines).every(deadline => deadline <= time)) { delete index[prefix]; pruned = true; continue }
+      // New records carry target deadlines, so tenant recovery never scans page journals.
+      // A requested object still validates its indexed history and refuses local damage.
+      const targets = Object.keys(deadlines).filter(id => !ids || ids.has(id))
+      if (typeof evidence === "number" || ids && targets.length) {
+        try {
+          const journal = new GuardedRunJournal({ get: name => store.get(prefix + name), set: () => { throw new Error("Read-only history") }, delete: () => { throw new Error("Read-only history") } })
+          for (const run of journal.list(tenant)) for (const entry of run.entries) {
+            if (entry.retryAt === undefined) continue
+            if (!Number.isFinite(entry.retryAt) || entry.retryAt < 0) throw new RestoreSafetyError("Invalid retry deadline")
+            const id = (entry.targetId ?? entry.step.targetId ?? store.get(directoryMappingKey(tenant, entry.step.folder, entry.step.sourceId)) ?? entry.step.sourceId).toLowerCase()
+            deadlines[id] = Math.max(deadlines[id] ?? 0, entry.retryAt)
+          }
+        } catch (error) {
+          let affected = targets[0] ?? (ids && [...ids].find(id => state.locks[id]?.journal === prefix))
+          // Older numeric indexes lack targets. The saved review still identifies
+          // the affected object after a completed page has released its locks.
+          if (!affected && ids && typeof evidence === "number") {
+            try {
+              const pageId = decodeURIComponent(prefix.match(/\.([^.]+)\.batch\.\d+\.$/)![1]!)
+              const page = JSON.parse(store.get(`restore.directory.review.${tenant.toLowerCase()}.${pageId}`) ?? "null") as { inventory?: { targetId: string }; run?: GuardedRun } | null
+              const reviewed = [page?.inventory?.targetId, ...(page?.run?.entries ?? []).map(entry => entry.targetId ?? entry.step.targetId ?? store.get(directoryMappingKey(tenant, entry.step.folder, entry.step.sourceId)) ?? entry.step.sourceId)]
+              affected = reviewed.find((id): id is string => typeof id === "string" && ids.has(id.toLowerCase()))?.toLowerCase()
+            } catch { /* Unknown reviews cannot be attributed to an unrelated object. */ }
+          }
+          if (ids && affected) {
+            if (isRestorePersistenceError(error)) throw error
+            invalid(affected)
+          }
+          continue
+        }
+      }
+      for (const [id, deadline] of Object.entries(deadlines)) {
+        if (deadline <= time || ids && !ids.has(id)) continue
+        try { verify(state, id) } catch (error) {
+          if (ids?.has(id)) throw error
+          continue
+        }
+        if (deadline > (state.deadlines[id] ?? 0)) { state.deadlines[id] = deadline; changed = true }
       }
     }
-    if (changed) save(state)
+    if (changed) persistDirectoryRetry(() => {}, () => save(state))
     if (pruned) {
       if (Object.keys(index).length) store.set(retryIndexKey, JSON.stringify(index))
       else store.delete(retryIndexKey)
     }
+    return changed
   }
   const createJournalKey = (step: Pick<GuardedStep, "folder" | "sourceId">) => `restore.directory.create-journal.${tenant.toLowerCase()}.${step.folder}.${step.sourceId.toLowerCase()}`
   const createJournal = (step: Pick<GuardedStep, "folder" | "sourceId">): string | null => {
     const prefix = store.get(createJournalKey(step))
-    if (prefix !== null && (!prefix.startsWith(`restore.directory.${encodeURIComponent(tenant)}.`) || !/\.batch\.\d+\.$/.test(prefix))) invalid(step.sourceId)
+    if (prefix !== null && (!prefix.startsWith(`restore.directory.${encodeURIComponent(tenant.toLowerCase())}.`) || !/\.batch\.\d+\.$/.test(prefix))) invalid(step.sourceId)
     return prefix
   }
   const clearCreateJournal = (step: Pick<GuardedStep, "folder" | "sourceId">, prefix: string) => {
@@ -121,6 +163,7 @@ export function directoryObjectState(store: KeyValueStore, tenant: string, owner
   const recoverMappings = (steps: Array<Pick<GuardedStep, "folder" | "sourceId" | "targetId">>, state = load(), history?: Map<string, GuardedRun[]>) => {
     const ids = new Set(steps.flatMap(step => [step.sourceId, step.targetId, store.get(directoryMappingKey(tenant, step.folder, step.sourceId))].filter((id): id is string => !!id).map(id => id.toLowerCase())))
     const uncertainCreates = new Set<string>()
+    if (recoverRetryDeadlines(ids)) state.deadlines = load().deadlines
     for (const id of ids) verify(state, id)
     // Create journal references survive a lost coordinator lock. One source cannot
     // replace its reference while the previous create is still uncertain.

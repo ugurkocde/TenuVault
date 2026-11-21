@@ -2674,6 +2674,11 @@ it.each(["matching", "wrong step", "wrong attempt"])("discards a coordinator-onl
     expect(resumed.canDiscard).toBe(marker === "matching")
     expect(resumed.outcomes[0]!.state).toBe("uncertain")
     expect(env.data).toEqual(beforeResume)
+    const beforeConfirm = new Map(env.data)
+    const confirmed = await env.service().saved(tenant, page.runId, "reconcile")
+    expect(confirmed.canDiscard).toBe(marker === "matching")
+    expect(confirmed.outcomes[0]!.state).toBe("uncertain")
+    expect(env.data).toEqual(beforeConfirm)
     const calls = env.fetcher.mock.calls.length, online = vi.fn(async () => { throw new Error("Proxy still requires authentication") })
     env.fetcher.mockImplementation(async () => new Response(null, { status: 407 }))
     const restarted = new DirectoryRestoreService(env.store, new RecoveryAccounts(env.store), online, env.connection, env.fetcher, () => [], env.settings)
@@ -2764,4 +2769,113 @@ it("retains first-page inventory when the review save publishes before reporting
     expect(await env.service().resume(tenant, { ...env.request, runId: page.run.id })).toMatchObject({ runId: page.run.id, rows: [{ key: page.rows[0].key }] })
     expect(env.writes).toEqual([])
   } finally { spy.mockRestore() }
+})
+
+
+it.each([false, true])("retains an empty relationship page's confirmation deadline on its inventory target (mapped: %s)", async mapped => {
+  vi.useFakeTimers({ toFake: ["Date"] })
+  const env = world(), service = env.service(), source = mapped ? id(99) : resource
+  if (mapped) env.data.set(directoryMappingKey(tenant, "Groups", source), resource)
+  const request = { ...env.request, path: `backup/Groups/${source}.json`, snapshot: { ...env.request.snapshot, id: source } }
+  const page = await service.prepare(tenant, request, { ...options, stage: "relationships" }, env.read)
+  expect(page.rows).toEqual([])
+  const original = env.fetcher.getMockImplementation()!, retryAt = Date.now() + 120_000
+  env.fetcher.mockImplementation((input, init) => new URL(String(input)).pathname === "/v1.0/applications" ? Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
+  try {
+    await expect(service.saved(tenant, page.runId, "reconcile")).rejects.toThrow("throttled")
+    expect(JSON.parse(env.data.get(`restore.directory.coordinator.${tenant}`)!).deadlines[resource]).toBe(retryAt)
+    env.fetcher.mockImplementation(original)
+    const update = { ...request, snapshot: { ...request.snapshot, description: "Saved" } }
+    const next = await env.service().prepare(tenant, update, options, env.read), approvals = Object.fromEntries(next.rows.map(row => [row.key, row.review.approvals]))
+    vi.setSystemTime(retryAt - 1)
+    expect(await env.service().execute(tenant, { ...update, runId: next.runId }, next.fingerprint, approvals)).toMatchObject({ outcomes: [{ state: "deferred", retryAt }] })
+    expect(env.writes).toEqual([])
+    vi.setSystemTime(retryAt)
+    expect(await env.service().execute(tenant, { ...update, runId: next.runId }, next.fingerprint, approvals)).toMatchObject({ outcomes: [{ state: "applied" }] })
+    expect(env.writes).toEqual([`PATCH groups/${resource}`])
+  } finally { vi.useRealTimers() }
+})
+
+it.each(["principals", "inventory"])("attempts every unpublished delete after a %s failure and retries leftovers on the next preview", async kind => {
+  const env = world(1001), service = env.service(), original = env.fetcher.getMockImplementation()!, remove = env.store.delete
+  const deleted: string[] = []
+  const save = vi.spyOn(env.store, "set").mockImplementation((key, value) => {
+    if (key.startsWith("restore.directory.review.")) throw new Error("Preview save unavailable")
+    env.data.set(key, value)
+  })
+  const spy = vi.spyOn(env.store, "delete").mockImplementation(key => {
+    deleted.push(key)
+    if (key.startsWith(`restore.directory.${kind}.`) && key.endsWith(".0")) throw new Error("Delete unavailable")
+    remove(key)
+  })
+  try {
+    await expect(service.prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read)).rejects.toThrow("Preview save unavailable")
+    const leftovers = [...env.data.keys()].filter(key => /^restore\.directory\.(inventory|principals)\./.test(key))
+    expect(leftovers).toHaveLength(1); expect(leftovers[0]).toContain(`.${kind}.`); expect(leftovers[0]).toMatch(/\.0$/)
+    expect(deleted.filter(key => key.startsWith("restore.directory.inventory."))).toHaveLength(21)
+    expect(deleted.filter(key => key.startsWith("restore.directory.principals."))).toHaveLength(2)
+    spy.mockRestore()
+    env.fetcher.mockImplementation((input, init) => new URL(String(input)).pathname === "/v1.0/applications" ? Promise.resolve(new Response(null, { status: 503 })) : original(input, init))
+    await expect(service.prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read)).rejects.toThrow()
+    expect([...env.data.keys()].filter(key => /^restore\.directory\.(inventory|principals|review)\./.test(key))).toEqual([])
+    expect(env.writes).toEqual([])
+  } finally { spy.mockRestore(); save.mockRestore() }
+})
+
+it.each(["lock", "indexed journal"])("isolates a damaged throttled object's %s from another group's preview and execution", async damage => {
+  const env = world(), service = env.service(), request = { ...env.request, snapshot: { ...env.request.snapshot, description: "First" } }
+  const page = await service.prepare(tenant, request, options, env.read)
+  await service.execute(tenant, { ...request, runId: page.runId }, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])))
+  const prefix = directoryPagePrefix(tenant, page.runId) + "batch.0.", deadline = Date.now() + 120_000
+  const objects = directoryObjectState(env.store, tenant, page.runId)
+  objects.trackRetryJournals([{ prefix, targets: [resource] }], deadline)
+  if (damage === "lock") env.data.set(`restore.directory.coordinator.${tenant}`, JSON.stringify({ locks: { [resource]: { owner: page.runId, journal: "damaged" } }, deadlines: {}, discarded: {} }))
+  else env.data.set(prefix + `restore.guarded.${tenant}`, "{")
+  const original = env.fetcher.getMockImplementation()!, other = id(999)
+  env.fetcher.mockImplementation((input, init) => new URL(String(input)).pathname === `/v1.0/groups/${other}` && (!init?.method || init.method === "GET") ? Promise.resolve(Response.json({ ...env.group, id: other, description: "Live" })) : original(input, init))
+  const unrelated = { ...request, path: `backup/Groups/${other}.json`, snapshot: { ...request.snapshot, id: other } }
+  const reads = vi.spyOn(env.store, "get")
+  try {
+    const next = await env.service().prepare(tenant, unrelated, options, env.read)
+    expect(reads.mock.calls.some(([key]) => key.startsWith(prefix))).toBe(false)
+    expect(await env.service().execute(tenant, { ...unrelated, runId: next.runId }, next.fingerprint, Object.fromEntries(next.rows.map(row => [row.key, row.review.approvals])))).toMatchObject({ outcomes: [{ state: "applied" }] })
+    await expect(env.service().prepare(tenant, request, options, env.read)).rejects.toThrow(`state for object ${resource} could not be verified`)
+    expect(env.writes).toEqual([`PATCH groups/${resource}`, `PATCH groups/${other}`])
+  } finally { reads.mockRestore() }
+})
+
+it("recovers indexed target deadlines without reading page batches and normalizes tenant casing", async () => {
+  const env = world(), page = await env.service().prepare(tenant, env.request, options, env.read)
+  const mixedTenant = "abcdefab-ABCD-4000-8000-abcdefabcdef", lowerTenant = mixedTenant.toLowerCase(), deadline = Date.now() + 120_000
+  const prefix = directoryPagePrefix(mixedTenant, page.runId) + "batch.0."
+  expect(prefix).toBe(directoryPagePrefix(lowerTenant, page.runId) + "batch.0.")
+  const run = { ...JSON.parse(env.data.get(`restore.directory.review.${tenant}.${page.runId}`)!).run, tenant: mixedTenant }
+  const journal = new GuardedRunJournal({ get: key => env.store.get(prefix + key), set: (key, value) => env.store.set(prefix + key, value), delete: key => env.store.delete(prefix + key) })
+  journal.save(run)
+  directoryObjectState(env.store, mixedTenant, page.runId).trackRetryJournals([{ prefix, targets: [resource.toUpperCase()] }], deadline)
+  const reads = vi.spyOn(env.store, "get")
+  try {
+    directoryObjectState(env.store, lowerTenant, "").recoverRetryDeadlines()
+    expect(reads.mock.calls.some(([key]) => key.startsWith(prefix))).toBe(false)
+    expect(JSON.parse(env.data.get(`restore.directory.coordinator.${lowerTenant}`)!).deadlines[resource]).toBe(deadline)
+    expect(directoryObjectState(env.store, lowerTenant, "").recoverMappings([{ folder: "Groups", sourceId: resource }])).toEqual(new Set())
+    expect(env.data.has(`restore.directory.retry-journals.${lowerTenant}`)).toBe(true)
+  } finally { reads.mockRestore() }
+})
+
+
+it("isolates a corrupt legacy indexed journal after its completed page releases the object lock", async () => {
+  const env = world(), request = { ...env.request, snapshot: { ...env.request.snapshot, description: "Saved" } }
+  const page = await env.service().prepare(tenant, request, options, env.read)
+  await env.service().execute(tenant, { ...request, runId: page.runId }, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])))
+  expect(JSON.parse(env.data.get(`restore.directory.coordinator.${tenant}`)!).locks).toEqual({})
+  const prefix = directoryPagePrefix(tenant, page.runId) + "batch.0."
+  env.data.set(`restore.directory.retry-journals.${tenant}`, JSON.stringify({ [prefix]: Date.now() + 120_000 }))
+  env.data.set(prefix + `restore.guarded.${tenant}`, "{")
+  const other = id(999), original = env.fetcher.getMockImplementation()!
+  env.fetcher.mockImplementation((input, init) => new URL(String(input)).pathname === `/v1.0/groups/${other}` ? Promise.resolve(Response.json({ ...env.group, id: other })) : original(input, init))
+  const unrelated = { ...request, path: `backup/Groups/${other}.json`, snapshot: { ...request.snapshot, id: other } }
+  expect(await env.service().prepare(tenant, unrelated, options, env.read)).toMatchObject({ rows: expect.any(Array) })
+  await expect(env.service().prepare(tenant, request, options, env.read)).rejects.toThrow(`state for object ${resource} could not be verified`)
+  expect(env.writes).toEqual([`PATCH groups/${resource}`])
 })
