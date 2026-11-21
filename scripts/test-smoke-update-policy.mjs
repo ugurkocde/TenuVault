@@ -93,10 +93,12 @@ function snapshot() {
     }
     return Object.keys(state).length ? JSON.stringify(state) : null
   }
+  // The ACL comes from the key itself: Get-Acl lives in a module that Windows PowerShell may fail to
+  // load when started from PowerShell 7 (as CI's default shell is), with its module path.
   const result = powershell(`$out = foreach ($path in ${`'${HKLM}', '${HKCU}', '${PENDING}'`}) {
   if (Test-Path -LiteralPath $path) {
     $key = Get-Item -LiteralPath $path
-    "$path|$($key.SubKeyCount)|$((Get-Acl -LiteralPath $path).Sddl)|" + (($key.GetValueNames() | Sort-Object | ForEach-Object { "$_=$($key.GetValueKind($_)):$($key.GetValue($_))" }) -join ';')
+    "$path|$($key.SubKeyCount)|$($key.GetAccessControl().GetSecurityDescriptorSddlForm('All'))|" + (($key.GetValueNames() | Sort-Object | ForEach-Object { "$_=$($key.GetValueKind($_)):$($key.GetValue($_))" }) -join ';')
   }
 }
 $out -join [Environment]::NewLine`)
