@@ -61,6 +61,7 @@ export interface BackupReaderState {
   available: boolean
   reader: BackupReaderStatus | null
   auditPending?: number | null
+  auditSetupRequired?: boolean
   /** The tenant's Azure backup storage account; omitted when backups stay on this device. */
   storageAccountName?: string
   /** After a verification: the reader works for Microsoft Graph but cannot write backups to the tenant's Azure storage. */

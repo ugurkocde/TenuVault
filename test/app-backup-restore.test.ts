@@ -16,7 +16,7 @@ import { LicenseService } from "../src/main/license/service"
 import { memoryStore } from "./helpers"
 import { PlanRequired, type Plan } from "../src/shared/plans"
 import { ingestContent, type ContentEncryption } from "../src/main/app-backup/content-stream"
-import { restoreCapturedApp } from "../src/main/app-backup/restore"
+import { appRestoreAuditItem, restoreCapturedApp, type AppRestoreAuditObservation } from "../src/main/app-backup/restore"
 import { restoreGraph, putRestoreBlock, type RestoreGraph } from "../src/main/app-backup/restore-graph"
 import { assertRestoredSettings, readRestoreSnapshot, restoreBody, snapshotHash, type AppRestoreSnapshot } from "../src/main/app-backup/restore-snapshot"
 import { encryptRestoreContent, newRestoreSecrets } from "../src/main/app-backup/restore-encryption"
@@ -205,9 +205,9 @@ describe("cross-tenant restore engine", () => {
     expect(Buffer.concat(written)).toEqual(f.plain)
     const operationId = audit.mock.lastCall?.[0]?.operationId
     expect(operationId).toBeTruthy()
-    expect(audit).toHaveBeenLastCalledWith(expect.objectContaining({ operationId, appId: result.appId, created: true, metadata: true, published: true }))
+    expect(audit).toHaveBeenLastCalledWith(expect.objectContaining({ operationId, appId: result.appId, creationApplied: true, metadataVerified: true, publicationVerified: true }))
     expect(await restoreCapturedApp(f.store, f.source, snapshot, target, "Restored", opts)).toEqual(result)
-    expect(audit).toHaveBeenLastCalledWith(expect.objectContaining({ operationId, appId: result.appId, created: false, unchanged: true, published: true }))
+    expect(audit).toHaveBeenLastCalledWith(expect.objectContaining({ operationId, appId: result.appId, unchanged: true, publicationVerified: true }))
     expect(d.calls.filter(([m, p]) => m === "POST" && p.endsWith("/mobileApps"))).toHaveLength(1)
     expect(d.calls.some(([m, p]) => m !== "GET" && p.endsWith("/assignments"))).toBe(false)
     expect(opts.progress).toHaveBeenLastCalledWith(expect.objectContaining({ phase: "completed" }))
@@ -449,5 +449,28 @@ describe("restore ownership across processes", () => {
     const action = vi.fn(async () => {})
     await expect(f.store.withRestoreLock(tenant, f.source.id, target, new AbortController().signal, action)).rejects.toThrow("owns this restore")
     expect(action).not.toHaveBeenCalled(); expect(await readdir(directory)).toHaveLength(kind === "empty" ? 0 : 1)
+  })
+})
+
+it("records a resumed draft as created and a read-only refusal as failed for the same operation", async () => {
+  const f = await fixture(), d = destination()
+  const original = { folder: "Apps", outcome: "unattempted" as const }
+  const audit = vi.fn<(event: AppRestoreAuditObservation) => void>()
+  const optionsWithAudit = { ...options(d), audit }
+  const interrupted: RestoreGraph = async (method, url, body) => {
+    if (method === "GET" && url.endsWith("/assignments")) throw new Error("HTTP 403")
+    return d.graph(method, url, body)
+  }
+  await expect(restoreCapturedApp(f.store, f.source, snapshot, target, "Restored", { ...optionsWithAudit, graph: interrupted })).rejects.toThrow("HTTP 403")
+  expect(appRestoreAuditItem(original, audit.mock.lastCall?.[0], true).outcome).toBe("partial")
+  const operationId = audit.mock.lastCall?.[0].operationId
+  const writes = d.calls.filter(([method]) => method !== "GET").length
+  await expect(restoreCapturedApp(f.store, f.source, snapshot, target, "Restored", { ...optionsWithAudit, graph: interrupted })).rejects.toThrow("HTTP 403")
+  expect(d.calls.filter(([method]) => method !== "GET")).toHaveLength(writes)
+  expect(audit.mock.lastCall?.[0].operationId).toBe(operationId)
+  expect(appRestoreAuditItem(original, audit.mock.lastCall?.[0], true)).toMatchObject({ outcome: "failed", targetId: d.app!.id, applied: [] })
+  await restoreCapturedApp(f.store, f.source, snapshot, target, "Restored", optionsWithAudit)
+  expect(appRestoreAuditItem(original, audit.mock.lastCall?.[0])).toMatchObject({
+    outcome: "created", targetId: d.app!.id, applied: [{ operation: "publish", field: "content" }],
   })
 })

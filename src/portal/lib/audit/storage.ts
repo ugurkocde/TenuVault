@@ -22,6 +22,9 @@ const RETENTION_DAYS = 90 // Keep logs for 90 days
 export const MAX_AUDIT_RANGE_DAYS = 90
 export const AUDIT_READ_CONCURRENCY = 6
 export class AuditRangeError extends Error {}
+export class AuditContainerMissingError extends Error {
+  constructor() { super('The audit container is missing. Rerun the Azure storage setup.') }
+}
 interface AuditBlob { name: string; dayPath: string; timestamp: number | null; version: string }
 const readCaches = new WeakMap<typeof fetch, MetadataCache<AuditLogEntry[]>>()
 
@@ -133,9 +136,24 @@ export class AuditStorageService {
   async testProducerAccess(tenantId: string): Promise<void> {
     const name = `producer-tests/${tenantId}/${crypto.randomUUID()}.json`
     const receipt = { tenantId, type: 'audit-access-test' }
+    const auditUrl = this.blobUrl(name)
+    const backupUrl = `${this.getBaseUrl()}/intune-backups/${blobPath(name)}`
+    const request = (url: string, method: string, headers?: HeadersInit, body?: string) =>
+      this.fetch(url, { method, headers: { ...this.getHeaders(), ...headers }, body, signal: AbortSignal.timeout(15000) })
     await this.putImmutable(name, receipt, existing => existing?.tenantId === tenantId)
-    const read = await this.fetch(this.blobUrl(name), { headers: this.getHeaders(), signal: AbortSignal.timeout(15000) })
+    const read = await request(auditUrl, 'GET')
     if (!read.ok || (await read.json()).tenantId !== tenantId) throw new Error('Audit storage test could not be verified')
+    const canary = JSON.stringify(receipt)
+    const backup = await request(backupUrl, 'PUT', { 'x-ms-blob-type': 'BlockBlob', 'If-None-Match': '*' }, canary)
+    if (!backup.ok) throw new Error('Could not create the backup permission test blob')
+    const probes = await Promise.all([
+      request(auditUrl, 'PUT', { 'x-ms-blob-type': 'BlockBlob', 'If-Match': '*' }, JSON.stringify({ ...receipt, overwriteTest: true })),
+      request(backupUrl, 'DELETE'),
+    ])
+    // Test audit deletion after overwrite, otherwise deletion could make the overwrite inconclusive.
+    probes.push(await request(auditUrl, 'DELETE'))
+    if (probes.some(result => result.ok)) throw new Error('The Backup Reader has excessive Azure Storage permissions. Remove grants that allow audit overwrite or blob deletion.')
+    if (probes.some(result => result.status !== 403)) throw new Error('Azure Storage did not confirm that audit overwrite and blob deletion are denied.')
   }
 
   async writeLog(input: AuditLogEntry): Promise<void> {
@@ -175,6 +193,7 @@ export class AuditStorageService {
         throw new Error('An audit event with this ID already exists and could not be verified')
       }
     }
+    if (response.status === 404 && response.headers.get('x-ms-error-code') === 'ContainerNotFound') throw new AuditContainerMissingError()
     if (!response.ok) throw new Error(`Failed to write audit log (${response.status}); the event is queued for retry`)
   }
 

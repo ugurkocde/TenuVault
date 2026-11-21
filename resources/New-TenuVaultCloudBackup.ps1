@@ -848,6 +848,7 @@ if ($AuditRoleOnly) {
 # Runbook import and publish. A rerun is the upgrade path.
 # ---------------------------------------------------------------------------
 
+Write-Warning "This setup publishes without waiting for Azure role propagation. For an existing schedule, pause it before upgrading and resume only after AUDITCANARY passes. Use AuditRoleOnly to grant audit access first."
 $runbook = Publish-TenuVaultRunbook
 
 Write-Host "Writing Automation variables for this tenant (suffix -$tenantKey)..."

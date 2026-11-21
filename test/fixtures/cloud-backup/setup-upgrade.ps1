@@ -214,7 +214,7 @@ foreach ($scenario in "approved", "outer-declined", "import-declined", "publish-
     $errorText = $null
     $output = @()
     try {
-        $output = @(. $upgradeStep 6>&1)
+        $output = @(. $upgradeStep 3>&1 6>&1)
         $output += @(Write-TenuVaultLegacyKeyVaultNote $legacyKeyVaults -KeptBecause $runbook.Reason 6>&1)
         # The test run hint the summary prints once the schedule is linked.
         $output += @(Write-TenuVaultTestRunHint -Runbook $runbook 6>&1)
@@ -240,7 +240,7 @@ foreach ($scenario in "rerun-keeps-report", "rerun-sets-report") {
     $runbook = $null
     $errorText = $null
     $output = @()
-    try { $output = @(. $upgradeStep 6>&1) } catch { $errorText = $_.Exception.Message }
+    try { $output = @(. $upgradeStep 3>&1 6>&1) } catch { $errorText = $_.Exception.Message }
     $changeReportPassed = $false
     $changeReportActorsPassed = $false
     $tenantNamePassed = $false

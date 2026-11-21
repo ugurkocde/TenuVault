@@ -186,12 +186,13 @@ export function BackupReaderSettings() {
                   {reader.lastTest?.message ? `: ${reader.lastTest.message}` : ""}
                 </CheckLine>
                 <CheckLine state={reader.lastTest?.audit === true ? "ok" : reader.lastTest?.audit === false ? "fail" : storageAccountName ? "unknown" : "ok"}>
-                  {storageAccountName ? reader.lastTest?.audit === true ? "Audit storage create and read test passed" : reader.lastTest?.audit === false ? "Audit storage access needs attention. Rerun the Azure storage setup for this Backup Reader." : "Audit storage access test pending" : "Audit uses encrypted storage on this device"}
+                  {storageAccountName ? reader.lastTest?.audit === true ? "Audit storage access and permission limits verified" : reader.lastTest?.audit === false ? "Audit storage access needs attention. Rerun the Azure storage setup for this Backup Reader." : "Audit storage access test pending" : "Audit uses encrypted storage on this device"}
                 </CheckLine>
                 <CheckLine state={reader.lastRun ? (reader.lastRun.status === "Completed" ? "ok" : reader.lastRun.status === "Cancelled" ? "unknown" : "fail") : "unknown"}>
                   {reader.lastRun ? `Last scheduled backup with the reader: ${reader.lastRun.status.toLowerCase()}, ${day(reader.lastRun.at)}` : "No scheduled backup has run with the reader yet"}
                 </CheckLine>
               </ul>
+              {state?.auditSetupRequired && <p role="status">The audit container is missing. Rerun the Azure storage setup for this Backup Reader.</p>}
               {state?.auditPending === null && <p role="status">Pending backup audit events could not be counted.</p>}
               {!!state?.auditPending && <p role="status">{state.auditPending} backup audit event(s) waiting for delivery.</p>}
               {reader.lastTest?.storage === false && (

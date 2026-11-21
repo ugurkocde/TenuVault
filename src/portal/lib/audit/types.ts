@@ -165,6 +165,8 @@ export interface AuditChange {
   operation: 'create' | 'update' | 'assign' | 'publish'
   field?: string
   settingDefinitionId?: string
+  /** Present only after an exact match against the public Graph settings catalog. */
+  catalogVerified?: true
 }
 
 export interface AuditJobItem {

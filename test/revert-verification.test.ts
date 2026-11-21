@@ -80,3 +80,28 @@ describe('revert and recreate from a backup', () => {
     expect(graph).toEqual([])
   })
 })
+
+it("finishes the revert audit if restore execution throws after it started", async () => {
+  const { Restorer } = await import('../src/portal/lib/policies/graph-restore')
+  const { AuditSink, setMainAuditSink } = await import('../src/main/api/audit-sink')
+  const { pendingEvents, setAuditOutboxStore } = await import('../src/portal/lib/audit/outbox')
+  const { memoryStore } = await import('./helpers')
+  const local = memoryStore()
+  const failure = vi.spyOn(Restorer.prototype, 'restore').mockRejectedValue(new Error('Interrupted'))
+  stub({ [`${backupId}/metadata.json`]: manifest(snapshot), [backupPath]: snapshot })
+  setAuditOutboxStore(local)
+  setMainAuditSink(new AuditSink({
+    store: local,
+    bind: () => ({ tenantId: TENANT, storageAccountName: 'storage', user: { id: TENANT, name: 'Admin', email: '' } }),
+    transport: async () => { throw new Error('Offline') },
+  }))
+  try {
+    expect((await revert()).status).toBe(500)
+    expect(pendingEvents('storage')[0]?.job).toMatchObject({ status: 'uncertain', items: [{ outcome: 'uncertain' }] })
+    expect(local.get('audit.restore-jobs')).toBe('{}')
+  } finally {
+    setMainAuditSink(undefined)
+    setAuditOutboxStore()
+    failure.mockRestore()
+  }
+})

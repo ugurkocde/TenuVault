@@ -6,7 +6,7 @@ import { checkRestoreManifest, verifySnapshot } from "~/lib/policies/backup-mani
 import { grantedPermissions } from "../../../../shared/services/token"
 import { validPolicyPath } from "~/lib/policies/restore"
 import { isGraphId, isGuid } from "../../../../shared/security"
-import { graphCaller, Restorer } from "~/lib/policies/graph-restore"
+import { graphCaller, Restorer, type RestoreOutcome } from "~/lib/policies/graph-restore"
 import { readLegacyRevertHistory, revertHistoryPath } from "~/lib/policies/revert-history"
 import { type NextRequest, NextResponse } from "next/server"
 interface RevertPolicyRequest {
@@ -156,11 +156,13 @@ export async function POST(request: NextRequest) {
       items: [restoreAuditItem(backupPath, undefined, policyContent.id)],
     })
     audit?.started(0)
-    const outcome = await new Restorer(graphCaller(graphToken, fetch, { tenant: tenantId, refreshToken: () => getAccessToken(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default", true) }), { mode: action === 'revert' ? 'replace' : 'copy', assignments: false, granted: grantedPermissions(graphToken), operationId,
-      auditProgress: result => audit?.item(0, restoreAuditItem(backupPath, result, policyContent.id)) })
-      .restore(backupPath, policyContent)
-    audit?.item(0, restoreAuditItem(backupPath, outcome, policyContent.id))
-    audit?.finish()
+    let outcome: RestoreOutcome
+    try {
+      outcome = await new Restorer(graphCaller(graphToken, fetch, { tenant: tenantId, refreshToken: () => getAccessToken(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default", true) }), { mode: action === 'revert' ? 'replace' : 'copy', assignments: false, granted: grantedPermissions(graphToken), operationId,
+        auditProgress: result => audit?.item(0, restoreAuditItem(backupPath, result, policyContent.id)) })
+        .restore(backupPath, policyContent)
+      audit?.item(0, restoreAuditItem(backupPath, outcome, policyContent.id))
+    } finally { audit?.finish() }
     const result = { success: outcome.success, error: outcome.error, policyId: outcome.policyId }
 
     if (!result.success) {

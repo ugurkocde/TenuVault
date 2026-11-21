@@ -73,7 +73,7 @@ function AuditJobDetails({ entry }: { entry: AuditLogEntry }) {
             {item.sourceId && <p>Source item {item.sourceId}</p>}
             {item.targetId && <p>Destination item {item.targetId}</p>}
             {item.reason && <p>{item.reason.toLowerCase().replaceAll("_", " ")}</p>}
-            {item.approval && <p>{item.approval.system === "intune" ? "Intune" : "TenuVault"} approval {item.approval.requestId} · {item.approval.displayName || item.approval.upn || item.approval.principalId || item.approval.applicationId || "Approver unavailable"}{item.approval.decisionAt ? ` · ${new Date(item.approval.decisionAt).toLocaleString()}` : ""}{item.approval.justificationPresent ? " · Justification recorded" : ""}</p>}
+            {item.approval && <p>{item.approval.system === "intune" ? "Intune" : "TenuVault"} approval {item.approval.requestId} · {item.approval.displayName || item.approval.upn || item.approval.principalId || item.approval.applicationId || "Approver unavailable"}{item.approval.decisionAt ? ` · ${new Date(item.approval.decisionAt).toLocaleString()}` : " · Decision time unavailable"}{item.approval.justificationPresent ? " · Justification recorded" : ""}</p>}
             {(["planned", "applied", "verified"] as const).map(phase => item[phase]?.length ? (
               <p key={phase}><span className="capitalize">{phase}</span> {item[phase].map(change => [change.operation, change.field ?? change.settingDefinitionId].filter(Boolean).join(" ")).join(", ")}</p>
             ) : null)}

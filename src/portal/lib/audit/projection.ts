@@ -1,5 +1,4 @@
-import { sameSnapshot } from "../../../shared/intune/compare"
-import type { Json } from "../../../shared/intune/registry"
+import { isGraphPropertyName } from './graph-property-schema'
 import { sha256Hex } from '../../../shared/notifications/envelope'
 import { isGuid } from '../../../shared/security'
 import { redactText } from '../../../shared/compliance/export'
@@ -11,14 +10,14 @@ const fixedFields = new Set([
   'state', 'conditions', 'grantControls', 'sessionControls', 'requirements', 'rules', 'relationships',
   'installCommandLine', 'uninstallCommandLine', 'installExperience', 'returnCodes', 'publisher',
   'committedContentVersion', 'metadata', 'content', 'allowedCombinations', 'localizedNotificationMessages',
-  'omaSettings', 'deviceName', 'groupTag', 'userPrincipalName', 'enrollmentStatusScreenSettings', 'settingsDelta',
+  'omaSettings', 'settingInstance', 'deviceComplianceScheduledActionForRules', 'scheduledActions', 'deviceName', 'groupTag', 'userPrincipalName', 'enrollmentStatusScreenSettings', 'settingsDelta',
 ])
 
 const fixedReasons = new Set([
   'WRITE_FAILED', 'WRITE_UNCONFIRMED', 'WRITE_PARTIAL', 'RESTORE_SKIPPED', 'AWAITING_INTUNE_APPROVAL',
   'NOT_ATTEMPTED', 'PROCESS_INTERRUPTED', 'BACKUP_FAILED', 'BACKUP_WARNINGS', 'BACKUP_UNREACHABLE',
-  'BACKUP_CANCELLED', 'FOLDER_CLAIM_FAILED', 'GRAPH_START_FAILED', 'APP_RESTORE_FAILED',
-  'CHANGE_SET_APPLY_FAILED', 'BASELINE_CREATION_FAILED', 'OIB_FAILED', 'RESTORE_FAILED',
+  'BACKUP_CANCELLED', 'FOLDER_CLAIM_FAILED', 'GRAPH_START_FAILED', 'GRAPH_LIST_FAILED', 'APP_RESTORE_FAILED',
+  'APPROVAL_COMPLETION_REFUSED', 'CHANGE_SET_APPLY_FAILED', 'BASELINE_CREATION_FAILED', 'OIB_FAILED', 'RESTORE_FAILED',
 ])
 const numericDetails = [
   'statusCode', 'restoredCount', 'partialCount', 'failedCount', 'approvalCount', 'skippedCount',
@@ -55,25 +54,10 @@ export function auditId(value: unknown): string | undefined {
   return 'sha256-' + sha256Hex(value)
 }
 
-export function auditChanges(operation: AuditChange['operation'], body: Record<string, unknown>, baseline?: Record<string, unknown>): AuditChange[] {
-  const fields = [...fixedFields].filter(key => Object.hasOwn(body, key)
-    && (!baseline || !sameSnapshot(body[key] as Json, baseline[key] as Json)))
-  const changes: AuditChange[] = fields.map(field => ({ operation, field }))
-  const ids = new Set<string>()
-  const visit = (node: unknown, depth: number) => {
-    if (!node || depth > 16 || ids.size >= 128) return
-    if (Array.isArray(node)) { for (const child of node) visit(child, depth + 1); return }
-    if (typeof node !== 'object') return
-    const value = node as Record<string, unknown>
-    if (settingId(value.settingDefinitionId)) ids.add(value.settingDefinitionId)
-    for (const key of ['settingInstance', 'choiceSettingValue', 'groupSettingCollectionValue', 'children', 'settings']) visit(value[key], depth + 1)
-  }
-  if (fields.includes('settings')) visit(body.settings, 0)
-  return [...(changes.length || ids.size ? changes : [{ operation }]), ...[...ids].sort().map(settingDefinitionId => ({ operation, settingDefinitionId }))]
-}
+// Only a coarse input bound for catalog lookups. Syntax alone never authorizes persistence.
+export const settingId = (value: unknown): value is string => typeof value === 'string'
+  && value.length <= 220 && /^(?:device|user)_[a-z0-9][a-z0-9_.-]+$/i.test(value)
 
-const settingId = (value: unknown): value is string => typeof value === 'string'
-  && /^(?:device|user)_[a-z0-9]+(?:[_.-][a-z0-9]+){1,40}$/i.test(value) && value.length <= 220
 const identity = (value: unknown) => typeof value === 'string' && ![...value].some(char => char.charCodeAt(0) < 32)
   ? redactText(value).slice(0, 200) : undefined
 const time = (value: unknown) => typeof value === 'string' && Number.isFinite(Date.parse(value)) ? new Date(value).toISOString() : undefined
@@ -81,14 +65,18 @@ const time = (value: unknown) => typeof value === 'string' && Number.isFinite(Da
 function changes(value: AuditChange[] | undefined) {
   return Array.isArray(value) ? value.slice(0, 160).flatMap(change =>
     change && ['create', 'update', 'assign', 'publish'].includes(change.operation)
-      ? [{ operation: change.operation, field: fixedFields.has(change.field ?? '') ? change.field : undefined, settingDefinitionId: settingId(change.settingDefinitionId) ? change.settingDefinitionId : undefined }]
+      ? [{ operation: change.operation,
+          field: fixedFields.has(change.field ?? '') || isGraphPropertyName(change.field ?? '') ? change.field : undefined,
+          ...(change.catalogVerified === true && settingId(change.settingDefinitionId)
+            ? { settingDefinitionId: change.settingDefinitionId, catalogVerified: true as const } : {}),
+        }]
       : []) : undefined
 }
 
 function approval(value: AuditApproval | undefined): AuditApproval | undefined {
   if (!value || !['intune', 'tenuvault'].includes(value.system)) return undefined
   return {
-    system: value.system, requestId: auditId(value.requestId), decisionAt: time(value.decisionAt),
+    system: value.system, requestId: auditId(value.requestId), decisionAt: value.system === 'tenuvault' ? time(value.decisionAt) : undefined,
     principalId: auditId(value.principalId), applicationId: auditId(value.applicationId),
     displayName: identity(value.displayName), upn: identity(value.upn),
     justificationPresent: value.justificationPresent === true || undefined,

@@ -179,13 +179,15 @@ describe("BackupEngine", () => {
       "/beta/deviceManagement/deviceCompliancePolicies/cp1?$expand=scheduledActionsForRule($expand=scheduledActionConfigurations),assignments": () =>
         throttled++ === 0 ? new Response("", { status: 429, headers: { "retry-after": "0.001" } }) : Response.json({ id: "cp1" }),
       "/beta/deviceManagement/configurationPolicies/sc1?$expand=settings": () =>
-        Response.json({ error: { message: "Forbidden" } }, { status: 403 }),
+        Response.json({ error: { message: "SyntheticGraphErrorCanary" } }, { status: 403 }),
     })
     const { engine } = setup(graph)
     const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: localStorageAccountName(TENANT) }).id)
     expect(job.status).toBe("Completed")
     expect(job.progressMessage).toBe("Backup completed with 1 warning")
     expect(job.log.join("\n")).toMatch(/Could not back up "Settings catalog": Access denied by Microsoft Graph/)
+    expect(job.log.join("\n")).toContain("HTTP 403")
+    expect(JSON.stringify({ log: job.log, results: job.results })).not.toContain("SyntheticGraphErrorCanary")
     expect(throttled).toBe(2)
     // Progress views read the per type results instead of the log wording.
     const types = job.results!.types

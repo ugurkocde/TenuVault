@@ -319,8 +319,8 @@ async function approvalAction(body: any): Promise<Response> {
     } catch { return NextResponse.json({ enabled: false }) }
   }
   if (!context) return NextResponse.json({ error: "Sign in with the requester account to manage restore approvals" }, { status: 403 })
-  const restorer = new Restorer(graph, { mode: "copy", assignments: false, approvalContext: context })
   if (action === "list") {
+    const restorer = new Restorer(graph, { mode: "copy", assignments: false, approvalContext: context })
     const records = restoreApprovals(tenantId).filter(record => !(record.status === "completed" && record.stepNumber === 0))
     const refreshed = await Promise.all(records.map(async record => {
       try { return body.refresh ? await restorer.refreshApproval(record) : record } catch { return record }
@@ -345,13 +345,37 @@ async function approvalAction(body: any): Promise<Response> {
     audit?.item(0, restoreAuditItem(record.backupPath, outcome, record.snapshotId))
     return outcome
   }
+  let completionDispatched = false
+  let completionRecorded = false
+  const restorer = new Restorer(graph, {
+    mode: "copy", assignments: false, approvalContext: context, operationId: record.operationId ?? record.id,
+    auditApprovalDispatched: () => { completionDispatched = true },
+    auditApprovalCompleted: outcome => {
+      if (action !== "complete") return
+      capture(outcome)
+      audit?.finish()
+      completionRecorded = true
+    },
+    auditSubmitted: outcome => {
+      if (action === "submit") {
+        capture(outcome)
+        audit?.finish()
+        return
+      }
+      beginRestoreAudit({
+        destination: tenantId, graphToken: token, sourceBackupId: record.backupPath.split("/")[0]!,
+        operationId: record.operationId ?? record.id, stage: "approval-submit", action: "Restore submitted for approval",
+        eventType: AuditEventType.CONFIG_UPDATED, items: [restoreAuditItem(record.backupPath, outcome, record.snapshotId)],
+      })?.finish()
+    },
+  })
   try {
     if (action === "dismiss") {
       if (record.status !== "justification-required" && record.requesterId.toLowerCase() !== context.requesterId.toLowerCase()) throw new Error("Only the original requester can dismiss this request")
       dismissRestoreApproval(tenantId, record.id)
     }
     else if (action === "submit") return NextResponse.json({ outcome: capture(await restorer.submitApproval(record, body.justification)) })
-    else if (action === "complete") return NextResponse.json({ outcome: capture(await restorer.completeApproval(record)) })
+    else if (action === "complete") return NextResponse.json({ outcome: await restorer.completeApproval(record) })
     else if (action === "withdraw") {
       if (record.requesterId.toLowerCase() !== context.requesterId.toLowerCase()) throw new Error("Only the original requester can withdraw this request")
       try {
@@ -366,6 +390,10 @@ async function approvalAction(body: any): Promise<Response> {
     } else return NextResponse.json({ error: "Unknown approval action" }, { status: 400 })
     return NextResponse.json({ success: true })
   } catch (error) {
+    if (action === "complete" && !completionDispatched && !completionRecorded) {
+      audit?.item(0, { ...restoreAuditItem(record.backupPath, undefined, record.snapshotId),
+        outcome: "failed", reason: "APPROVAL_COMPLETION_REFUSED", approval: { system: "intune", requestId: record.id } })
+    }
     return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 409 })
   } finally {
     audit?.finish()

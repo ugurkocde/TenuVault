@@ -1,13 +1,19 @@
 import { randomUUID } from "node:crypto"
 import { afterEach, expect, it, vi } from "vitest"
 import { AuditSink } from "../src/main/api/audit-sink"
-import { recordBackupAudit } from "../src/main/backup/audit"
+import { backupAudit, reconcileBackupAudit, recordBackupAudit } from "../src/main/backup/audit"
 import { BackupEngine } from "../src/main/backup/engine"
-import { AuditStorageService } from "../src/portal/lib/audit/storage"
+import { AuditContainerMissingError, AuditStorageService } from "../src/portal/lib/audit/storage"
 import { auditExportCSV, auditExportJSON } from "../src/portal/lib/audit/export"
 import { pendingEvents, setAuditOutboxStore } from "../src/portal/lib/audit/outbox"
 import { createAuditLogger } from "../src/portal/lib/audit/logger"
 import { AuditEventType, type AuditJob, type AuditLogEntry } from "../src/portal/lib/audit/types"
+import { Restorer, type GraphCall } from "../src/portal/lib/policies/graph-restore"
+import { projectItem } from "../src/portal/lib/audit/projection"
+import { auditChanges } from "../src/portal/lib/audit/restore-changes"
+import { restoreAuditItem } from "../src/portal/lib/audit/restore"
+import { clearSettingNames } from "../src/portal/lib/drift/setting-names"
+import { typeForFolder, type Item } from "../src/shared/intune/registry"
 import { memoryStore } from "./helpers"
 
 const tenantId = "11111111-1111-1111-1111-111111111111"
@@ -188,4 +194,179 @@ it("lets an administrator confirm a Reader entry after a lost response without d
   expect(await admin.retryPending(tenantId)).toBe(0)
   expect(remote.blobs.size).toBe(1)
   expect((await admin.queryAllLogs(dateFilter))[0]?.job?.producer).toBe("backup-reader")
+})
+
+it("keeps unverified Catalog IDs out of failed restore checkpoints, outbox, storage and exports", async () => {
+  const local = memoryStore()
+  setAuditOutboxStore(local)
+  const remote = storage()
+  remote.deny()
+  const sink = new AuditSink({ store: local, bind: () => binding, transport: async () => remote.service })
+  const path = "backup-2026-11-15-120000/ConfigurationPolicies/Example.json"
+  const invalidId = "device_canary_credential_placeholder"
+  const verifiedId = "device_vendor_msft_policy_config_camera_allowcamera"
+  const restorer = new Restorer(async (_method, url, body): ReturnType<GraphCall> => {
+    if (url === "$batch") return { status: 200, body: { responses:
+      (body!.requests as { id: string; url: string }[]).map((request): Item =>
+        request.url.endsWith(verifiedId) ? { id: request.id, status: 200, body: { id: verifiedId, displayName: "Camera" } }
+          : { id: request.id, status: 404, body: {} }),
+    } }
+    return { status: 400, body: { error: { message: invalidId } } }
+  }, { mode: "copy", assignments: false, auditProgress: vi.fn() })
+  const result = await restorer.restore(path, { name: "Example", settings: [catalogSetting(invalidId, 1), catalogSetting(verifiedId, 1)] })
+  expect(result.success).toBe(false)
+  const checkpoint = sink.begin(binding, input(job([restoreAuditItem(path)])))
+  checkpoint.item(0, restoreAuditItem(path, result))
+  expect(local.get("audit.restore-jobs")).not.toContain(invalidId)
+  checkpoint.finish()
+  expect(local.get("audit.pending-events")).not.toContain(invalidId)
+  remote.allow()
+  await sink.retry()
+  expect([...remote.blobs.values()].map(blob => blob.body).join("")).not.toContain(invalidId)
+  const entries = await remote.service.queryAllLogs(dateFilter)
+  expect(entries[0]?.job?.items?.[0]).toMatchObject({ outcome: "failed", planned: expect.arrayContaining([
+    { operation: "create", field: "settings" }, { operation: "create", catalogVerified: true, settingDefinitionId: verifiedId },
+  ]) })
+  const legacy = structuredClone(entries[0]!)
+  legacy.job!.items![0]!.planned!.push({ operation: "create", settingDefinitionId: invalidId })
+  expect(auditExportJSON([legacy], meta)).not.toContain(invalidId)
+  expect(auditExportCSV([legacy], meta)).not.toContain(invalidId)
+})
+
+const catalogSetting = (settingDefinitionId: string, value: number) => ({
+  settingInstance: { settingDefinitionId, simpleSettingValue: { value } },
+})
+
+it("reports only the changed Settings Catalog ID for a successful in-place write", async () => {
+  const changed = "device_vendor_msft_policy_config_camera_allowcamera"
+  const unchanged = "device_vendor_msft_policy_config_system_allowlocation"
+  const snapshot = { id: "policy", name: "Example", settings: [catalogSetting(changed, 1), catalogSetting(unchanged, 1)] }
+  const lookedUp: string[] = []
+  clearSettingNames()
+  const restorer = new Restorer(async (method, url, body): ReturnType<GraphCall> => {
+    if (url === "$batch") {
+      const requests = body!.requests as { id: string; url: string }[]
+      const responses = requests.map(request => {
+        const id = request.url.split("/").at(-1)!
+        lookedUp.push(id)
+        return { id: request.id, status: 200, body: { id, displayName: "Example setting" } }
+      })
+      return { status: 200, body: { responses } }
+    }
+    if (method === "GET") {
+      return url.endsWith("/assignments") ? { status: 200, body: { value: [] } }
+        : { status: 200, body: { ...snapshot, settings: [catalogSetting(changed, 0), catalogSetting(unchanged, 1)] } }
+    }
+    return { status: 204, body: {} }
+  }, { mode: "replace", assignments: false, auditProgress: vi.fn() })
+  const result = await restorer.restore("backup/ConfigurationPolicies/Example.json", snapshot)
+  expect(result.success).toBe(true)
+  expect(lookedUp).toEqual([changed])
+  expect(result.auditPlanned?.flatMap(change => change.settingDefinitionId ?? [])).toEqual([changed])
+  expect(result.auditApplied?.flatMap(change => change.settingDefinitionId ?? [])).toEqual([changed])
+})
+
+it("records only changed top-level schema paths for a Windows configuration", async () => {
+  const snapshot = { id: "policy", "@odata.type": "#microsoft.graph.windows10GeneralConfiguration", displayName: "Example",
+    passwordMinimumLength: 10, cameraBlocked: true, extraPrivateKey: "ignored", }
+  const restorer = new Restorer(async (method) => method === "GET"
+    ? { status: 200, body: { ...snapshot, passwordMinimumLength: 8, cameraBlocked: false, extraPrivateKey: "custom" } }
+    : { status: 204, body: {} }, { mode: "replace", assignments: false })
+  const path = "backup/DeviceConfigurations/Example.json"
+  const result = projectItem(restoreAuditItem(path, await restorer.restore(path, snapshot)))
+  expect(result.outcome).toBe("updated")
+  expect(result.planned?.map(change => change.field)).toEqual(["cameraBlocked", "passwordMinimumLength"])
+  expect(result.applied).toEqual(result.planned)
+  const custom = { "@odata.type": "#microsoft.graph.windows10CustomConfiguration", omaSettings: [{ value: canary, [canary]: 1 }] }
+  const changes = await auditChanges(typeForFolder("DeviceConfigurations")!, "update", custom, { ...custom, omaSettings: [] }, vi.fn())
+  expect(changes).toEqual([{ operation: "update", field: "omaSettings" }])
+})
+
+it.each(["Success", "foreign", "missing"])("recovers a Reader checkpoint using the original binding when its manifest is %s", async status => {
+  const local = memoryStore()
+  setAuditOutboxStore(local)
+  const remote = storage()
+  const opts = { store: local, bind: () => binding, transport: async (_account: string, entry: AuditLogEntry) => {
+    expect(entry.job?.registrationId).toBe(registration)
+    return remote.service
+  } }
+  const first = new AuditSink(opts)
+  let committed: Record<string, unknown> | undefined
+  const engine = new BackupEngine({
+    getToken: async () => { throw new Error("No admin session") },
+    unattendedTokens: () => ({ mode: "app-only", registrationId: registration, graph: async () => "reader-graph", storage: async () => "reader-storage" }),
+    fetch: vi.fn(async (input, init) => {
+      expect(local.get("audit.restore-jobs")).toContain(registration)
+      const url = new URL(String(input))
+      if (init?.method === "PUT") {
+        if (url.pathname.endsWith("/metadata.json")) committed = JSON.parse(String(init.body))
+        return new Response(null, { status: 201 })
+      }
+      if (url.pathname === "/beta/deviceManagement/deviceConfigurations") return Response.json({ value: [{ id: "first", displayName: "Example" }] })
+      return Response.json({ id: "first", value: [] })
+    }),
+    onStarted: (active, request, tokens) => {
+      const { binding, input, stamp } = backupAudit(active, request, tokens, opts.bind().user, "1.2.3")
+      first.checkpointBackup(binding, input, stamp)
+    },
+  })
+  const active = engine.start({ tenantId, storageAccountName, clientId: "admin", trigger: "scheduled" })
+  await engine.waitForJob(active)
+  expect(committed).toMatchObject({ TenantId: tenantId, RunId: active.id, Status: "Success" })
+  expect(local.get("audit.restore-jobs")).toContain(active.id)
+  const restarted = new AuditSink(opts)
+  restarted.recover()
+  await restarted.recoverBackups((original, entry) => {
+    expect(original).toMatchObject({ tenantId, storageAccountName, user: { id: registration } })
+    expect(entry.resource.id).toBe(active.backupFolder)
+    return reconcileBackupAudit(entry, async () => status === "missing" ? new Response(null, { status: 404 })
+      : Response.json({ ...committed, TenantId: status === "foreign" ? registration : tenantId }))
+  })
+  await restarted.retry()
+  const [event] = await remote.service.queryAllLogs(dateFilter)
+  expect(event?.id).toBe(active.id)
+  expect(event?.job?.status).toBe(status === "Success" ? "completed" : "uncertain")
+  if (status === "Success") expect(event?.job?.counts.saved).toBe(active.totalPolicies)
+  const last = new AuditSink(opts)
+  last.recover()
+  await last.recoverBackups(vi.fn(() => { throw new Error("Reconciled twice") }))
+  await last.retry()
+  expect(remote.blobs.size).toBe(1)
+})
+
+it.each([403, 201])("only passes a Reader permission canary when overwrite and both deletes are denied (%s)", async overwriteStatus => {
+  const calls: Array<{ method?: string; path: string; match: string | null }> = []
+  const service = new AuditStorageService({ ...credentials, fetch: async (url, init) => {
+    const path = new URL(String(url)).pathname
+    const match = new Headers(init?.headers).get("if-match")
+    calls.push({ path, method: init?.method, match })
+    if (init?.method === "DELETE") return new Response(null, { status: overwriteStatus === 403 ? 403 : 202 })
+    if (init?.method === "PUT") return new Response(null, { status: match ? overwriteStatus : 201 })
+    return Response.json({ tenantId })
+  } })
+  if (overwriteStatus === 403) await expect(service.testProducerAccess(tenantId)).resolves.toBeUndefined()
+  else await expect(service.testProducerAccess(tenantId)).rejects.toThrow("excessive Azure Storage permissions")
+  expect(calls.filter(call => call.method === "DELETE").map(call => call.path.split("/")[1]).sort()).toEqual(["audit-logs", "intune-backups"])
+  expect(calls.every(call => call.path.includes("/producer-tests/"))).toBe(true)
+  expect(calls.filter(call => call.match === "*")).toMatchObject([{ method: "PUT", path: expect.stringContaining("/audit-logs/") }])
+})
+
+it("surfaces a missing audit container during Reader delivery and keeps the original event pending", async () => {
+  const local = memoryStore()
+  setAuditOutboxStore(local)
+  const onDelivery = vi.fn()
+  const service = new AuditStorageService({ ...credentials, fetch: async () =>
+    new Response(null, { status: 404, headers: { "x-ms-error-code": "ContainerNotFound" } }),
+  })
+  const sink = new AuditSink({ store: local, bind: () => binding, transport: async () => service, onDelivery })
+  await expect(sink.record(binding, input({ ...job(), producer: "backup-reader" }))).rejects.toThrow("Rerun the Azure storage setup")
+  expect(onDelivery).toHaveBeenCalledWith(storageAccountName, expect.objectContaining({ job: expect.objectContaining({ producer: "backup-reader" }) }), expect.any(AuditContainerMissingError))
+  expect(sink.pending(tenantId, "backup-reader")).toBe(1)
+})
+
+it("drops an unsupported legacy Intune decision timestamp at the export boundary", () => {
+  const item = { folder: "ConfigurationPolicies", outcome: "updated" as const,
+    approval: { system: "intune" as const, requestId: registration, decisionAt: "2026-11-20T12:00:00Z" } }
+  expect(projectItem(item).approval).toMatchObject({ requestId: registration, decisionAt: undefined })
+  expect(projectItem({ ...item, approval: { ...item.approval, system: "tenuvault" } }).approval?.decisionAt).toBe("2026-11-20T12:00:00.000Z")
 })

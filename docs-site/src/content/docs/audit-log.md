@@ -34,6 +34,8 @@ The audit log records the actions TenuVault performs for a tenant: backups, down
 
 Each entry has a result: **SUCCESS**, **FAILURE**, or **PARTIAL** for a cancelled backup or when a restore, deployment or change set apply worked for some items and not for others, or left an operation uncertain. It also has a severity: **INFO** for success and cancellation, **WARNING** for partial restores, deployments and change set applies, and **ERROR** for failures. A **BACKUP_CANCELLED** event records **PARTIAL** with **INFO**.
 
+Restore events can show changed top-level policy fields and verified Settings Catalog definition IDs. For in-place restores, the setting list shows the IDs that differ from the live policy. When Microsoft Graph cannot verify a definition ID, the event shows the parent settings field. Audit records field names and setting IDs, without their values.
+
 The **User** column shows the signed-in administrator, Backup Reader service principal or cloud managed identity that ran the job. Read-only drift scans, including opening Drift Detection and **Check all**, no longer add audit events. Earlier drift check events remain readable.
 
 :::note

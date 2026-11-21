@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
-import { CalendarClock, Check, CheckCircle2, Cloud, Copy, ExternalLink, RefreshCw, Trash2 } from "lucide-react"
+import { AlertCircle, CalendarClock, Check, CheckCircle2, Cloud, Copy, ExternalLink, RefreshCw, Trash2 } from "lucide-react"
 import { Button } from "~/components/ui/button"
 import type { Tenant } from "~/contexts/TenantContext"
 import setupScript from "../../../resources/New-TenuVaultCloudBackup.ps1?raw"
@@ -213,7 +213,9 @@ export function CloudBackupSettings({ tenant, community, cloud, scopeVersion = 0
                     <span role="alert" className="text-sm text-red-600">Could not read the last cloud run: {cloud.statusError}</span>
                   ) : cloud.status ? (
                     <>
-                      <CheckCircle2 className={`mt-0.5 h-4 w-4 flex-shrink-0 ${cloud.status.lastStatus === "Failed" ? "text-red-600" : "text-green-600"}`} />
+                      {cloud.status.lastStatus === "Success"
+                        ? <CheckCircle2 className="mt-0.5 h-4 w-4 flex-shrink-0 text-green-600" aria-hidden="true" />
+                        : <AlertCircle className={`mt-0.5 h-4 w-4 flex-shrink-0 ${cloud.status.lastStatus === "Failed" ? "text-red-600" : "text-amber-600"}`} aria-hidden="true" />}
                       <span>
                         {formatWhen(cloud.status.lastRunAt)}
                         <span className="block text-xs text-gray-500">

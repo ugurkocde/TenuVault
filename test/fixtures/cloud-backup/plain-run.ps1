@@ -40,7 +40,7 @@ function Invoke-TvHttp {
     $text = '{"value":[]}'
     if ($Uri -like "*/tenuvault-backup-results?*comp=list*") {
         $text = "<EnumerationResults><Blobs /><NextMarker /></EnumerationResults>"
-    } elseif ($Uri -like "*/audit-cursors/*" -and $Method -eq "Get") {
+    } elseif ($Uri -like "*/tenuvault-backup-results/audit-*/*" -and $Method -eq "Get") {
         throw [TvHttpError]::new(404, "HTTP 404")
     } elseif ($Uri -eq "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations") {
         $text = '{"value":[{"id":"cfg-1","displayName":"Baseline Wi-Fi"}]}'

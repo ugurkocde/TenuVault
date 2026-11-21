@@ -1,12 +1,12 @@
-import { recordBackupAudit } from "./backup/audit"
+import { backupAudit, reconcileBackupAudit, recordBackupAudit } from "./backup/audit"
 import { AuditSink, setMainAuditSink } from "./api/audit-sink"
-import { AuditStorageService } from "../portal/lib/audit/storage"
+import { AuditContainerMissingError, AuditStorageService } from "../portal/lib/audit/storage"
 import { type AuditJobItem } from "../portal/lib/audit/types"
 import { beginRestoreAudit } from "../portal/lib/audit/restore"
 import { requestWindowsContent } from "./app-backup/windows-helper"
 import { requireCaptureEnabled } from "./app-backup/capture-policy"
 import { checkCaptureMetadata } from "./app-backup/capture-preflight"
-import { restoreCapturedApp } from "./app-backup/restore"
+import { appRestoreAuditItem, restoreCapturedApp, type AppRestoreAuditObservation } from "./app-backup/restore"
 import { restoreDestinationPlan } from "./app-backup/restore-plan"
 import { restoreGraph } from "./app-backup/restore-graph"
 import { readRestoreSnapshot, sameRestoreSettings } from "./app-backup/restore-snapshot"
@@ -463,6 +463,11 @@ async function bootstrap(): Promise<void> {
       }
     },
     retentionDays: backupAccess.retentionDays,
+    onStarted: (job, request, tokens) => {
+      if (tokens.mode !== "app-only") return
+      const { binding, input, stamp } = backupAudit(job, request, tokens, { id: "unknown", email: "", name: "Unknown user" }, app.getVersion())
+      auditSink.checkpointBackup(binding, input, stamp)
+    },
     onFinished: (job, request, tokens) => {
       if (tokens) {
         const account = accounts.get(job.tenantId)
@@ -708,6 +713,16 @@ async function bootstrap(): Promise<void> {
     }
   }
 
+  const missingReaderAuditContainers = new Set<string>()
+  const readerAuditKey = (tenantId: string, account: string) => `${tenantId.toLowerCase()}:${account}`
+  const readerAuditToken = async (tenantId: string, storageAccountName: string, registrationId?: string) => {
+    const clientId = tenantProfile(tenantId)?.clientId
+    const tokens = clientId && backupReader.tokens({ tenantId, clientId, storageAccountName, trigger: "scheduled" })
+    if (!tokens || tokens.registrationId !== registrationId) throw new Error("The original Backup Reader is unavailable")
+    return tokens.storage()
+  }
+  const fetchLocalAudit = (tenantId: string, account: string): typeof fetch =>
+    (input, init) => withRouteTenant(tenantId, () => handleLocalBlobRequest(getLocalStore(), new Request(input, init)), account)
   const auditSink = new AuditSink({
     store: canEncrypt() ? appStore : undefined,
     bind: (tenantId) => {
@@ -721,27 +736,44 @@ async function bootstrap(): Promise<void> {
       assertStorageAccountName(storageAccountName)
       const tenantId = entry.user.tenantId
       if (!tenantId || !isGuid(tenantId)) throw new Error("Audit tenant is unavailable")
-      const fetchLocal: typeof fetch = (input, init) => withRouteTenant(tenantId, () => handleLocalBlobRequest(getLocalStore(), new Request(input, init)), storageAccountName)
       if (isLocalAccount(storageAccountName)) {
         if (storageAccountName !== localStorageAccountName(tenantId)) throw new Error("Audit storage belongs to another tenant")
-        return new AuditStorageService({ storageAccountName, accessToken: "", fetch: fetchLocal })
+        return new AuditStorageService({ storageAccountName, accessToken: "", fetch: fetchLocalAudit(tenantId, storageAccountName) })
       }
       const profile = tenantProfile(tenantId)
       const clientId = profile?.clientId
       if (!clientId) throw new Error("Audit tenant is unavailable")
       if (entry.job?.producer === "backup-reader") {
-        const tokens = backupReader.tokens({ tenantId, clientId, storageAccountName, trigger: "scheduled" })
-        if (!tokens || tokens.registrationId !== entry.job.registrationId) throw new Error("The original Backup Reader is unavailable")
-        return new AuditStorageService({ storageAccountName, accessToken: await tokens.storage(), provisionContainer: false, fetch: bridgedFetch })
+        const accessToken = await readerAuditToken(tenantId, storageAccountName, entry.job.registrationId)
+        return new AuditStorageService({ storageAccountName, accessToken, provisionContainer: false, fetch: bridgedFetch })
       }
       const accessToken = (await auth.getAccessToken(tenantId, clientId, RESOURCE_SCOPES.storage)).accessToken
       return new AuditStorageService({ storageAccountName, accessToken, fetch: bridgedFetch })
+    },
+    onDelivery: (account, entry, error) => {
+      if (entry.job?.producer !== "backup-reader" || !entry.user.tenantId) return
+      const key = readerAuditKey(entry.user.tenantId, account)
+      if (error instanceof AuditContainerMissingError) missingReaderAuditContainers.add(key)
+      if (!error) missingReaderAuditContainers.delete(key)
     },
   })
   setMainAuditSink(auditSink)
   auditSink.recover()
   const retryAudit = () => void auditSink.retry().catch(() => console.warn("[audit] Queued audit events could not be retried"))
-  retryAudit()
+  void auditSink.recoverBackups((binding, entry) => reconcileBackupAudit(entry, async () => {
+    const { tenantId, storageAccountName } = binding
+    const folder = entry.resource.id
+    if (!/^backup-\d{4}-\d{2}-\d{2}-\d{6}$/.test(folder)) throw new Error("Invalid backup folder")
+    assertStorageAccountName(storageAccountName)
+    const url = `https://${storageAccountName}.blob.core.windows.net/intune-backups/${folder}/metadata.json`
+    const signal = AbortSignal.timeout(15_000)
+    if (isLocalAccount(storageAccountName)) {
+      if (storageAccountName !== localStorageAccountName(tenantId)) throw new Error("Audit storage belongs to another tenant")
+      return fetchLocalAudit(tenantId, storageAccountName)(url, { signal })
+    }
+    const token = await readerAuditToken(tenantId, storageAccountName, entry.job?.registrationId)
+    return bridgedFetch(url, { signal, headers: { Authorization: `Bearer ${token}`, "x-ms-version": "2021-12-02" } })
+  })).then(retryAudit)
   setInterval(retryAudit, 60_000)
 
   // Tenants connected by an older version, or whose license check never completed, are
@@ -996,6 +1028,7 @@ async function bootstrap(): Promise<void> {
       supported: readerSupported,
       available: !!plan && allows(plan, "backupReader"),
       auditPending: pendingReaderAudit(tenantId),
+      auditSetupRequired: !!azureStorage && missingReaderAuditContainers.has(readerAuditKey(tenantId, azureStorage)),
       reader: reader && { ...reader, excludedTypes: reader.excludedTypes.filter((folder) => !off.has(folder)) },
       ...(azureStorage ? { storageAccountName: azureStorage } : {}),
     }
@@ -1065,15 +1098,22 @@ async function bootstrap(): Promise<void> {
       }
     }
     let audit: boolean | null = null
+    let auditWarning: string | undefined
     if (azure) {
       try {
         assertStorageAccountName(profile.storageAccountName)
         const service = new AuditStorageService({ storageAccountName: profile.storageAccountName, accessToken: await tokens.storage(), provisionContainer: false, fetch: bridgedFetch })
         await service.testProducerAccess(tenantId)
         audit = true
-      } catch { audit = false }
+        missingReaderAuditContainers.delete(readerAuditKey(tenantId, profile.storageAccountName))
+      } catch (error) {
+        audit = false
+        if (error instanceof AuditContainerMissingError) missingReaderAuditContainers.add(readerAuditKey(tenantId, profile.storageAccountName))
+        auditWarning = error instanceof Error && error.message.startsWith("The Backup Reader has excessive")
+          ? error.message : "Audit storage access needs attention. Rerun the Azure storage setup for this Backup Reader."
+      }
     }
-    const message = [graph ? undefined : graphMessage, warning].filter(Boolean).join(" ") || undefined
+    const message = [graph ? undefined : graphMessage, warning, auditWarning].filter(Boolean).join(" ") || undefined
     backupReader.recordTest(tenantId, { graph, storage, audit, ...(message ? { message } : {}) })
     return message ? { warning: message } : {}
   }
@@ -1519,26 +1559,18 @@ async function bootstrap(): Promise<void> {
       const audit = beginRestoreAudit({ destination: target, graphToken, sourceBackupId: source.id,
         operationId: randomUUID(), action: "Restore app backup", items: [original] })
       audit?.started(0)
-      let observed = original
+      let observed: AppRestoreAuditObservation | undefined
       try {
         return await restoreCapturedApp(store, source, snapshot, target, name, {
           graph: restoreGraph(getGraphToken, bridgedFetch, signal), fetch: bridgedFetch, signal, progress,
-          audit: ({ operationId, appId, created, metadata, publishing, published, unchanged }) => {
-            audit?.correlate(operationId)
-            observed = { ...original, targetId: appId, outcome: published ? unchanged ? "unchanged" : created ? "created" : "updated" : appId ? "partial" : "uncertain",
-              applied: [
-                ...(created ? [{ operation: "create", field: "metadata" } as const] : []),
-                ...(publishing || (published && !unchanged) ? [{ operation: "publish", field: "content" } as const] : []),
-              ],
-              verified: [
-                ...(metadata ? [{ operation: "create", field: "metadata" } as const] : []),
-                ...(published ? [{ operation: "publish", field: "content" } as const] : []),
-              ] }
-            audit?.item(0, observed)
+          audit: state => {
+            if (observed?.operationId !== state.operationId) audit?.correlate(state.operationId)
+            observed = state
+            audit?.item(0, appRestoreAuditItem(original, state))
           },
         })
       } catch (error) {
-        audit?.item(0, { ...observed, outcome: observed.outcome === "unattempted" ? "failed" : observed.outcome, reason: "APP_RESTORE_FAILED" })
+        audit?.item(0, appRestoreAuditItem(original, observed, true))
         throw error
       } finally { audit?.finish() }
     }),

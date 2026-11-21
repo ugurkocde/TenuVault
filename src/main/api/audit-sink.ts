@@ -17,6 +17,7 @@ interface AuditSinkOptions {
   store?: KeyValueStore
   bind: (tenant: string) => AuditBinding | undefined
   transport: (account: string, entry: AuditLogEntry) => Promise<AuditStorageService>
+  onDelivery?: (account: string, entry: AuditLogEntry, error?: unknown) => void
 }
 
 interface Checkpoint {
@@ -64,13 +65,20 @@ export class AuditSink {
 
   async record(binding: AuditBinding, input: CreateAuditLogInput, stamp?: { id: string; timestamp: string }): Promise<void> {
     const entry = this.entry(binding, input, stamp)
-    queueEvent(binding.storageAccountName, entry)
+    if (this.checkpoints[entry.id]) this.finishBackupCheckpoint(entry.id, entry)
+    else queueEvent(binding.storageAccountName, entry)
     await this.deliver(binding.storageAccountName, entry)
   }
 
   private async deliver(account: string, entry: AuditLogEntry): Promise<void> {
-    const storage = await this.options.transport(account, entry)
-    await storage.deliver(entry)
+    try {
+      const storage = await this.options.transport(account, entry)
+      await storage.deliver(entry)
+    } catch (error) {
+      this.options.onDelivery?.(account, entry, error)
+      throw error
+    }
+    this.options.onDelivery?.(account, entry)
   }
 
   begin(binding: AuditBinding, input: CreateAuditLogInput & { job: AuditJob }): {
@@ -86,6 +94,7 @@ export class AuditSink {
     }
     try { persist() } catch { warning() }
     const storeItem = (index: number, item: AuditJobItem) => {
+      if (finished) return
       entry.job!.items![index] = projectItem(item)
       try { persist() } catch { warning() }
     }
@@ -136,11 +145,33 @@ export class AuditSink {
     this.save(remaining)
   }
 
+  checkpointBackup(binding: AuditBinding, input: CreateAuditLogInput, stamp: { id: string; timestamp: string }): void {
+    const entry = this.entry(binding, input, stamp)
+    this.save({ ...this.checkpoints, [entry.id]: { binding: { ...binding, user: entry.user }, entry } })
+  }
+
+  private finishBackupCheckpoint(id: string, input: AuditLogEntry): void {
+    const checkpoint = this.checkpoints[id]!
+    this.save({ ...this.checkpoints, [id]: { ...checkpoint, entry: projectEntry(input), finished: true } })
+    this.enqueueCheckpoint(id)
+  }
+
+  async recoverBackups(reconcile: (binding: AuditBinding, entry: AuditLogEntry) => Promise<AuditLogEntry>): Promise<void> {
+    for (const [id, checkpoint] of Object.entries(this.checkpoints)) {
+      if (checkpoint.finished || checkpoint.entry.job?.producer !== 'backup-reader') continue
+      try {
+        const entry = await reconcile(checkpoint.binding, checkpoint.entry)
+        this.finishBackupCheckpoint(id, entry)
+      } catch { warning() }
+    }
+  }
+
   /** Called at startup before new work is admitted. Never replay Graph writes. */
   recover(): void {
     for (const [id, checkpoint] of Object.entries(this.checkpoints)) {
       try {
         if (!checkpoint.finished) {
+          if (checkpoint.entry.job?.producer === 'backup-reader') continue
           this.finalize(checkpoint.entry, true)
           this.save({ ...this.checkpoints, [id]: { ...checkpoint, finished: true } })
         }

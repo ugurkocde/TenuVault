@@ -1,3 +1,4 @@
+param([switch]$Paged)
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "../../../resources/runbooks/Invoke-TenuVaultBackup.ps1") -LibraryOnly
 
@@ -14,9 +15,15 @@ function Invoke-TvHttp {
     param([string]$Uri, [string]$Token, [string]$Method = "Get", [hashtable]$Headers, [byte[]]$BodyBytes, [string]$ContentType, [long]$MaxBytes)
     $script:calls.Add(@{ uri = $Uri; method = $Method; condition = $Headers["If-None-Match"] })
     if ($Uri -like "*comp=list*") {
-        $names = @($script:blobs.Keys | Where-Object { $_ -like "*/audit-receipts/$tenantId/*" } | ForEach-Object { ([uri]$_).AbsolutePath.Substring("/tenuvault-backup-results/".Length) })
-        $xml = ($names | ForEach-Object { "<Blob><Name>$_</Name></Blob>" }) -join ""
-        return @{ Text = "<EnumerationResults><Blobs>$xml</Blobs><NextMarker /></EnumerationResults>" }
+        $prefix = [uri]::UnescapeDataString([regex]::Match($Uri, 'prefix=([^&]*)').Groups[1].Value)
+        $marker = [uri]::UnescapeDataString([regex]::Match($Uri, 'marker=([^&]*)').Groups[1].Value)
+        $names = @($script:blobs.Keys | Where-Object { $_ -like "*/tenuvault-backup-results/*" } | ForEach-Object { ([uri]$_).AbsolutePath.Substring("/tenuvault-backup-results/".Length) } |
+            Where-Object { $_.StartsWith($prefix, [StringComparison]::Ordinal) } | Sort-Object)
+        if ($marker) { $names = @($names | Where-Object { [string]::CompareOrdinal($_, $marker) -gt 0 }) }
+        $limit = if ($Paged) { 2 } else { 20 }
+        $next = if ($names.Count -gt $limit) { $names[$limit - 1] } else { "" }
+        $xml = ($names | Select-Object -First $limit | ForEach-Object { "<Blob><Name>$_</Name></Blob>" }) -join ""
+        return @{ Text = "<EnumerationResults><Blobs>$xml</Blobs><NextMarker>$next</NextMarker></EnumerationResults>" }
     }
     if ($Method -eq "Put") {
         if ($Uri -like "*/audit-logs/*" -and $script:denied) { throw [TvHttpError]::new(403, "secretCanaryAclMessage") }
@@ -34,9 +41,23 @@ function Invoke-TvHttp {
 $runId = "33333333-3333-3333-3333-333333333333"
 $output = @(Write-TvTerminalAudit $context $runId "CompletedWithWarnings" "backup-2026-11-20-120000" 10 1 "scheduled" "BACKUP_WARNINGS" 3>&1)
 $pending = $context.AuditPending
-$script:denied = $false
-$replay = Invoke-TvAuditReplay $context
-$replayAgain = Invoke-TvAuditReplay $context
+if ($Paged) {
+    foreach ($number in 1..4) {
+        $additional = "44444444-4444-4444-4444-44444444444$number"
+        $file = New-TvAuditFile $context $additional "Success" "" 0 0 "scheduled"
+        $script:blobs["https://stcontoso.blob.core.windows.net/tenuvault-backup-results/audit-receipts/$tenantId/$($file.date)-$additional.json"] =
+            (@{ delivered = ($number -in @(1, 2)); file = $file } | ConvertTo-Json -Compress -Depth 12)
+    }
+    $old = [DateTime]::UtcNow.AddDays(-50).ToString("yyyy-MM-dd")
+    $script:blobs["https://stcontoso.blob.core.windows.net/tenuvault-backup-results/audit-receipts/$tenantId/$old-55555555-5555-5555-5555-555555555555.json"] = '{"delivered":false}'
+    $replay = Invoke-TvAuditReplay $context 3>$null
+    $script:denied = $false
+    $replayAgain = Invoke-TvAuditReplay $context
+} else {
+    $script:denied = $false
+    $replay = Invoke-TvAuditReplay $context
+    $replayAgain = Invoke-TvAuditReplay $context
+}
 [Console]::WriteLine((@{
     blobs = $script:blobs; calls = $script:calls; pending = $pending
     replay = $replay; replayAgain = $replayAgain; output = @($output | ForEach-Object { [string]$_ })

@@ -54,6 +54,8 @@ export interface BackupJob {
   credentialError?: true
   /** Set when the job failed because Microsoft or the storage account could not be reached, including timeouts. */
   unreachable?: boolean
+  /** A manifest PUT was dispatched, but the final response did not confirm it. */
+  commitUnconfirmed?: boolean
   log: string[]
   /** Per type results and notices for progress views, filled as the run goes; absent until the run starts. */
   results?: BackupResults
@@ -109,6 +111,8 @@ export interface BackupEngineDeps {
   now?: () => Date
   /** Items read at the same time. Graph throttling (429) pauses every reader. */
   concurrency?: number
+  /** Called before a job reads Graph or starts writing its assigned folder. */
+  onStarted?: (job: BackupJob, request: BackupRequest, tokens: RunTokens) => void
   /** Called once when a job has ended, with the request that started it. */
   onFinished?: (job: BackupJob, request: BackupRequest, tokens?: RunTokens) => void
 }
@@ -377,6 +381,7 @@ export class BackupEngine {
     // An unqueued backup begins synchronously inside start(), as it did before the queue existed.
     const done = (queued ? waitForTurn().then(execute) : execute())
       .catch(async (error: unknown) => {
+        if (stopped.committing) job.commitUnconfirmed = true
         job.status = error instanceof BackupCancelledError ? "Cancelled" : "Failed"
         job.exception = error instanceof Error ? error.message : String(error)
         // Classified before the failed manifest is written, which goes around the run's fetch and cannot change it.
@@ -434,6 +439,7 @@ export class BackupEngine {
     const fetchImpl = answeredFetch(this.deps.fetch, outcome, local ? `${request.storageAccountName.toLowerCase()}.blob.core.windows.net` : null)
     const backupFolder = `backup-${folderTimestamp(started)}`
     job.backupFolder = backupFolder
+    this.deps.onStarted?.(job, request, tokens)
     this.write(job, `Backing up tenant ${request.tenantId} to ${local ? "this device (encrypted)" : `storage account ${request.storageAccountName}`}.`)
     this.write(job, `Backup folder: ${backupFolder}`)
     if (tokens.mode === "app-only") this.write(job, "Reading as the tenant's Backup Reader (app-only, read-only).")
@@ -586,6 +592,7 @@ export class BackupEngine {
         BackupFolder: backupFolder,
         StartTime: displayTime(started),
         EndTime: displayTime(ended),
+        CompletedAt: ended.toISOString(),
         Duration: seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`,
         DurationSeconds: seconds,
         // Inventory such as Autopilot devices is counted under its own folder, not as policies.
@@ -666,7 +673,7 @@ export class BackupEngine {
     const totalPolicies = policyCount(counts)
     const saved = Object.values(counts).reduce((sum, count) => sum + count, 0)
     const inventory = Object.entries(counts).filter(([folder, count]) => count > 0 && typeForFolder(folder)?.inventory)
-    const metadata = manifest(failures > 0 ? (saved === 0 ? "Failed" : "CompletedWithWarnings") : "Success", ended)
+    const metadata = manifest(failures > 0 && saved === 0 ? "Failed" : failures || maskedItems.length ? "CompletedWithWarnings" : "Success", ended)
 
     // Detach cancellation at the first manifest PUT, after cancellable token acquisition.
     // Retention reads cannot delay the manifest, and a saved backup must not burn a retry slot.

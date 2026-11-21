@@ -143,4 +143,4 @@ An access policy can exclude apps from approval. Microsoft applies those exclusi
 
 ### Audit history for approval stages
 
-Submission and completion have separate audit events linked by the original operation ID. The request ID stays visible when Microsoft does not return an approver. If Graph provides the approver identity, the completion event records it. Audit shows whether Intune recorded a justification. The justification text stays in Intune.
+Submission and completion have separate audit events linked by the original operation ID. If finishing one request submits the next, both request IDs appear in their own audit events. The request ID stays visible when Microsoft does not return an approver. If Graph provides the approver identity, the completion event records it. Intune decision time is shown as unavailable. Audit shows whether Intune recorded a justification. The justification text stays in Intune.
