@@ -10,6 +10,8 @@ import { spawn } from "node:child_process"
 import { once } from "node:events"
 import { AppSourceStore } from "../src/main/app-sources/store"
 import { AppSourceService } from "../src/main/app-sources/service"
+import { AuditSink, setMainAuditSink } from "../src/main/api/audit-sink"
+import { pendingEvents, setAuditOutboxStore } from "../src/portal/lib/audit/outbox"
 import { restoreDestinationPlan } from "../src/main/app-backup/restore-plan"
 import { withPlanError } from "../src/shared/plan-errors"
 import { LicenseService } from "../src/main/license/service"
@@ -270,7 +272,24 @@ it("binds service restore to both configured tenants, captured provenance and th
   const service = new AppSourceService({ restore, restorePlan: async () => "pro", knownTenant: t => [tenant, target].includes(t), folder: () => f.root, keys: () => [f.master], setFolder: vi.fn(), pickFolder: vi.fn(), pickExport: vi.fn(), openFolder: vi.fn(), confirmNewStore: vi.fn(), checkDevice: vi.fn(), signIn: vi.fn(), details: vi.fn(), apps: vi.fn(), printDetails: vi.fn(), downloadScript: vi.fn() })
   expect((await service.restoreReview(tenant, f.source.id)).settingsHash).toBe(snapshotHash(snapshot))
   expect(() => service.restore(tenant, randomUUID(), f.source.id, randomUUID(), "Restored", snapshotHash(snapshot))).toThrow("configured")
-  await expect(service.restore(tenant, randomUUID(), f.source.id, target, "Restored", "0".repeat(64))).rejects.toThrow("changed")
+  const account = "apprestoretest", operationId = randomUUID(), journal = memoryStore()
+  setAuditOutboxStore(journal)
+  setMainAuditSink(new AuditSink({
+    store: journal,
+    bind: destination => ({ tenantId: destination, storageAccountName: account, user: { id: appId, name: "Admin", email: "" } }),
+    transport: async () => { throw new Error("Offline") },
+  }))
+  try {
+    await expect(service.restore(tenant, operationId, f.source.id, target, "Restored", "0".repeat(64))).rejects.toThrow("The app settings changed. Review them before restoring.")
+    expect(restore).not.toHaveBeenCalled()
+    expect(pendingEvents(account)).toMatchObject([{
+      user: { tenantId: target },
+      job: { operationId, sourceBackupId: f.source.id, status: "failed", reason: "RESTORE_PREPARATION_FAILED" },
+    }])
+  } finally {
+    setMainAuditSink(undefined)
+    setAuditOutboxStore()
+  }
   await service.restore(tenant, randomUUID(), f.source.id, target, "Restored", snapshotHash(snapshot))
   expect(restore).toHaveBeenCalledOnce()
 })

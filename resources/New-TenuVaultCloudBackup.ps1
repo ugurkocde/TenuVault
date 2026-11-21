@@ -809,7 +809,12 @@ if ($principalId) {
         $existing = Get-AzRoleAssignment -ObjectId $principalId -RoleDefinitionId $roleId -Scope $scope |
             Where-Object { $_.Scope -eq $scope }
         if (-not $existing -and $PSCmdlet.ShouldProcess($scope, "Assign the create-only audit role to the managed identity")) {
-            $assignmentKey = "$scope-$principalId-$roleId".ToLowerInvariant()
+            # ARM deploys both accounts in the same group and uses the relative container scope.
+            # Keep the principal-specific key for shared storage in another resource group.
+            $assignmentKey = if (($storageGroupScope -split '/')[-1] -eq $ResourceGroupName) {
+                $relativeScope = $scope.Substring($storageGroupScope.Length + "/providers/".Length).ToLowerInvariant()
+                "$relativeScope-$($AutomationAccountName.ToLowerInvariant())-$($auditRole.Name)"
+            } else { "$scope-$principalId-$roleId".ToLowerInvariant() }
             $assignmentId = Get-TenuVaultAuditGuid $assignmentKey
             $payload = @{ properties = @{
                 principalId = $principalId; principalType = "ServicePrincipal"

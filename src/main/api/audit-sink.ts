@@ -47,7 +47,7 @@ interface RestoreAuditOptions {
 interface AuditProgress {
   correlate(operationId: string): void
   started(index: number): void
-  item(index: number, item: AuditJobItem): void
+  item(index: number, item: AuditJobItem, checkpoint?: boolean): void
   ready(index: number, item: AuditJobItem): void
   refuse(index: number, item: AuditJobItem): void
   finish(uncertain?: boolean): void
@@ -131,8 +131,15 @@ export class AuditSink {
 
   async record(binding: AuditBinding, input: CreateAuditLogInput, stamp?: { id: string; timestamp: string }): Promise<void> {
     const entry = this.entry(binding, input, stamp)
-    if (this.checkpoints[entry.id]) this.finishCheckpoint({ binding: { ...binding, user: entry.user }, entry })
-    else queueEvent(binding.storageAccountName, entry)
+    const checkpoint = { binding: { ...binding, user: entry.user }, entry }
+    if (this.checkpoints[entry.id]) this.finishCheckpoint(checkpoint)
+    else {
+      try { queueEvent(binding.storageAccountName, entry) }
+      catch (error) {
+        if (!isBackupCheckpoint(entry)) throw error
+        this.finishCheckpoint(checkpoint)
+      }
+    }
     await this.deliver(binding.storageAccountName, entry)
   }
 
@@ -178,12 +185,18 @@ export class AuditSink {
       this.save({ ...this.checkpoints, [entry.id]: checkpoint(snapshot) })
     }
     try { persist() } catch { warning() }
-    const storeItem = (index: number, item: AuditJobItem) => {
+    const persistBatch = (from: number, end: number) => {
+      const items = entry.job!.items!.map((item, index): AuditJobItem => index >= from && index < end
+        ? { ...item, outcome: 'uncertain', reason: 'PROCESS_INTERRUPTED' } : item)
+      persist({ ...entry, job: { ...entry.job!, items } })
+    }
+    const storeItem = (index: number, item: AuditJobItem, checkpoint = false) => {
       if (finished) return
       entry.job!.items![index] = projectItem(item)
-      if (index >= batchEnd) {
-        try { persist() } catch { warning() }
-      }
+      try {
+        if (index >= batchEnd) persist()
+        else if (checkpoint) persistBatch(index + 1, batchEnd)
+      } catch { warning() }
     }
     return {
       correlate: operationId => {
@@ -193,14 +206,12 @@ export class AuditSink {
       },
       started: index => {
         const items = entry.job!.items!
-        const interrupted = (item: AuditJobItem): AuditJobItem => ({ ...item, outcome: 'uncertain', reason: 'PROCESS_INTERRUPTED' })
         if (items.length > RESTORE_CHECKPOINT_ITEMS && index >= batchEnd) {
           const end = index + RESTORE_CHECKPOINT_ITEMS
           // Write ahead for this window so a restart never treats a possible write as unattempted.
-          const snapshot = { ...entry, job: { ...entry.job!, items: items.map((item, i) => i >= index && i < end ? interrupted(item) : item) } }
-          try { persist(snapshot); batchEnd = end } catch { warning() }
+          try { persistBatch(index, end); batchEnd = end } catch { warning() }
         }
-        storeItem(index, interrupted(items[index]!))
+        storeItem(index, { ...items[index]!, outcome: 'uncertain', reason: 'PROCESS_INTERRUPTED' })
       },
       item: storeItem,
       ready: (index, item) => {

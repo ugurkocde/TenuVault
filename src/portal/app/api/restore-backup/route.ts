@@ -227,14 +227,21 @@ export async function POST(request: NextRequest) {
           action,
           items: ordered.map(path => restoreAuditItem(path, undefined, manifest?.get(path)?.id)),
         })
-        const submitted: AuditJobItem[] = []
         try {
           for (const [index, path] of ordered.entries()) {
             if (progress) progress.current = path
             const sourceId = manifest?.get(path)?.id
             if (restorer) audit?.started(index)
             auditProgress.save = result => audit?.item(index, restoreAuditItem(path, result, sourceId))
-            auditProgress.submitted = result => submitted.push(restoreAuditItem(path, result, sourceId))
+            auditProgress.submitted = result => {
+              const item: AuditJobItem = restoreAuditItem(path, result, sourceId)
+              audit?.item(index, item, true)
+              beginRestoreAudit({
+                destination: targetTenantId ?? tenantId, graphToken: targetToken, sourceBackupId: backupId,
+                operationId, runId: jobId, stage: "approval-submit", action: "Restore submitted for approval",
+                eventType: AuditEventType.CONFIG_UPDATED, items: [item],
+              })?.finish()
+            }
             const result = restorer
               ? await restoreSinglePolicy(restorer, path, storageAccountName, storageToken, manifest?.get(path), repairSelections.find((p: any) => p.path === path)?.repairToken)
               : { success: false, path, error: "Could not sign in to the destination tenant." }
@@ -256,13 +263,6 @@ export async function POST(request: NextRequest) {
             }
           }
         } finally {
-          if (submitted.length) {
-            beginRestoreAudit({
-              destination: targetTenantId ?? tenantId, graphToken: targetToken, sourceBackupId: backupId,
-              operationId, runId: jobId, stage: "approval-submit", action: "Restore submitted for approval",
-              eventType: AuditEventType.CONFIG_UPDATED, items: submitted,
-            })?.finish()
-          }
           audit?.finish()
         }
       }

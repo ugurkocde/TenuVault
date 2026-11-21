@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs"
+import { mkdtempSync, readFileSync } from "node:fs"
 import { X509Certificate, createPrivateKey } from "node:crypto"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -6,6 +6,9 @@ import { describe, expect, it, vi } from "vitest"
 import { BackupReaderError, BackupReaderService, CONDITIONAL_ACCESS_ROLE, CONDITIONAL_ACCESS_TYPES, DEVICE_INVENTORY_ROLE, DEVICE_INVENTORY_TYPES, READER_REQUIRED_ROLES, checkReaderToken, type AcquireToken } from "../src/main/auth/backup-reader"
 import { certificateIdentity, createSelfSignedCertificate } from "../src/main/auth/certificate"
 import { SecureStore } from "../src/main/storage/secure-store"
+import { BackupEngine } from "../src/main/backup/engine"
+import { scheduledResult } from "../src/main/backup/scheduler"
+import { INTUNE_TYPES } from "../src/shared/intune/registry"
 
 const TENANT = "11111111-1111-1111-1111-111111111111"
 const READER = "44444444-4444-4444-4444-444444444444"
@@ -223,6 +226,35 @@ describe("BackupReaderService", () => {
       expect(save).toHaveBeenCalledOnce()
       expect(warn).toHaveBeenCalledWith("[backup-reader] Scheduled run status could not be saved")
     } finally { save.mockRestore(); warn.mockRestore() }
+  })
+
+  it("records Failed on the Reader card and Schedule tab when a scheduled Reader backup saves only part of its scope", async () => {
+    const { reader } = service()
+    reader.prepare(TENANT, "LAPTOP-1")
+    await reader.verify(TENANT, READER)
+    const request = {
+      ...scheduled,
+      scope: { excluded: INTUNE_TYPES.map(type => type.folder).filter(folder => !["DeviceConfigurations", "CompliancePolicies"].includes(folder)) },
+    }
+    const engine = new BackupEngine({
+      fetch: async (input, init) => {
+        if (init?.method === "PUT") return new Response(null, { status: 201 })
+        const path = new URL(String(input)).pathname
+        if (path.endsWith("/deviceCompliancePolicies")) return Response.json({}, { status: 403 })
+        const policy = { id: "saved", displayName: "Saved", assignments: [] }
+        return Response.json(path.endsWith("/deviceConfigurations") ? { value: [policy] } : policy)
+      },
+      getToken: async () => { throw new Error("No administrator session") },
+      unattendedTokens: job => reader.tokens(job),
+    })
+    const job = await engine.waitForJob(engine.start(request))
+    expect(job).toMatchObject({ authMode: "app-only", status: "Completed", failures: 1, totalPolicies: 1 })
+    const result = scheduledResult(job)
+    reader.recordRun(job.tenantId, result.status, request.trigger)
+    expect(reader.status(TENANT)?.lastRun?.status).toBe("Failed")
+    // The Electron entry point must write the scheduled result shared by both surfaces.
+    const main = readFileSync(new URL("../src/main/index.ts", import.meta.url), "utf8")
+    expect(main).toMatch(/backupReader\.recordRun\((?:job\.tenantId, scheduledResult\(job\)\.status, request\.trigger|tenantId, result\.status)\)/)
   })
 
   it("verifies the active certificate again while a renewal waits, and keeps the renewal", async () => {

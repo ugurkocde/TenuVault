@@ -59,6 +59,55 @@ it("does not send stored bodies to the renderer", async () => {
   expect(data.records[0]).not.toHaveProperty("source")
   expect(fetcher).not.toHaveBeenCalled()
 })
+
+it("persists a confirmed submission while the initial approval refresh is still in flight", async () => {
+  const local = memoryStore()
+  const account = "restoresubmission"
+  const options = {
+    store: local,
+    bind: () => ({ tenantId, storageAccountName: account, user: { id: requesterId, name: "Requester", email: "" } }),
+    transport: async () => { throw new Error("Offline") },
+  }
+  setAuditOutboxStore(local)
+  setMainAuditSink(new AuditSink(options))
+  const original = network()
+  let refreshStarted!: () => void, finishRefresh!: () => void
+  const refreshing = new Promise<void>(resolve => { refreshStarted = resolve })
+  const release = new Promise<void>(resolve => { finishRefresh = resolve })
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input))
+    if (url.pathname.endsWith("/metadata.json")) return Response.json({ TenantId: tenantId, Status: "Success" })
+    if (url.pathname.endsWith("/test.json")) return Response.json({ displayName: "Test" })
+    if (url.pathname.endsWith(`/operationApprovalRequests/${code}`)) {
+      refreshStarted()
+      await release
+      return Response.json({ status: "needsApproval" })
+    }
+    if (url.hostname === "graph.microsoft.com" && init?.method === "POST") {
+      return Response.json({}, { status: 412, headers: { "x-msft-approval-code": code } })
+    }
+    return original(input, init)
+  }))
+  const running = POST(request({
+    storageAccountName: account, backupId: "backup", restoreType: "selective",
+    selectedPolicies: [{ path: "backup/DeviceCategories/test.json" }],
+  }))
+  try {
+    await Promise.race([refreshing, running.then(() => { throw new Error("The restore returned before refreshing the approval") })])
+    expect(restoreApprovals(tenantId)).toMatchObject([{ id: code, status: "needsApproval" }])
+    setAuditOutboxStore(local)
+    new AuditSink(options).recover()
+    const outcome = { outcome: "pending", approval: { requestId: code } }
+    expect(pendingEvents(account).map(entry => entry.job)).toMatchObject([
+      { stage: "approval-submit", status: "pending", items: [outcome] },
+      { stage: "terminal", status: "uncertain", items: [outcome] },
+    ])
+  } finally {
+    finishRefresh()
+    await running
+  }
+  expect(pendingEvents(account).filter(entry => entry.job?.stage === "approval-submit")).toHaveLength(1)
+})
 it("uses stored restore plan requirements for approval actions", async () => {
   await seed()
   expect(requiredFeatures("/api/restore-backup", { tenantId, approvalId: code, approvalAction: "complete", mode: "replace", assignments: true })).toEqual([])

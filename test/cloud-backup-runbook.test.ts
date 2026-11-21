@@ -19,6 +19,11 @@ const pwsh = ["/usr/local/bin/pwsh", "/opt/homebrew/bin/pwsh", "/usr/bin/pwsh", 
 const runbook = readFileSync(new URL("../resources/runbooks/Invoke-TenuVaultBackup.ps1", import.meta.url), "utf8")
 const RUNBOOK_VERSION = /\$script:RunbookVersion = "([^"]+)"/.exec(runbook)?.[1]
 const setup = readFileSync(new URL("../resources/New-TenuVaultCloudBackup.ps1", import.meta.url), "utf8")
+const auditSetupTimeout = 60_000
+function runAuditSetup(shell: (file: string, args: string[], options: { encoding: "utf8"; timeout?: number }) => string = execFileSync) {
+  const script = fileURLToPath(new URL("./fixtures/cloud-backup/audit-setup.ps1", import.meta.url))
+  return shell(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8", timeout: auditSetupTimeout })
+}
 type RunCall = { condition?: string; uri: string; method: string; contentType: string | null; ifNoneMatch: string | null; body: string | null }
 type Run = { calls: RunCall[]; error?: string | null; output?: string[] }
 let plainRuns: Run[] | undefined
@@ -41,6 +46,7 @@ const folderOf = (blobs: Map<string, string>) => [...blobs.keys()].find((name) =
 const template = JSON.parse(readFileSync(new URL("../resources/cloud-backup/azuredeploy.json", import.meta.url), "utf8")) as {
   parameters: Record<string, unknown>
   resources: Array<{ type: string }>
+  variables: Record<string, string>
   outputs: Record<string, unknown>
 }
 
@@ -113,6 +119,7 @@ describe("Cloud audit contract", () => {
     transport: { budgeted: number; unbudgeted: number; remaining: number }
     orphanReplay: { Count: number; More: boolean }
     orphanBlobs: Record<string, string>
+    agedStart: { blobs: Record<string, string>; calls: RunCall[]; manifest: Record<string, string> }
   }
   let restartRuns: RestartScenarios | undefined
   const runRestartFixture = () => {
@@ -137,9 +144,65 @@ describe("Cloud audit contract", () => {
     expect(run.error).toBeNull()
     expect(run.output!.join("\n")).toContain("could not verify or save its start checkpoint")
     expect(run.calls.some(call => call.uri.includes("graph.microsoft.com"))).toBe(true)
-    expect(JSON.parse(manifestFiles(run)[0]![1]).Status).toBe("Success")
+    const manifest = JSON.parse(manifestFiles(run)[0]![1])
+    expect(manifest.Status).toBe("Success")
+    expect(manifest.RunId).not.toBe("99999999-9999-4999-8999-999999999999")
     expect(JSON.parse(outcomeFiles(run)[0]![1]).status).toBe("Success")
     expect(JSON.parse(auditFiles(run)[0]![1]).entries[0].job.status).toBe("completed")
+  }, 60_000)
+
+  it.runIf(Boolean(pwsh))("uses the job's terminal result even when its start checkpoint is unreadable", () => {
+    const original = restartRun("lostAck")
+    const restarted = restartRun("startUnreadableRestart")
+    expect(restarted.error).toBeNull()
+    expect(restarted.calls.some(call => call.uri.includes("graph.microsoft.com"))).toBe(false)
+    expect(manifestFiles(restarted)).toEqual(manifestFiles(original))
+    expect(auditFiles(restarted)).toEqual(auditFiles(original))
+  }, 60_000)
+
+  it.runIf(Boolean(pwsh))("replaces sealed Schedule status and rereads a concurrent writer's ETag", () => {
+    const uri = `${BACKUP_CONTAINER_URL}cloud-backup-status-11111111.json`
+    for (const scenario of ["sealedStatus", "statusOlderConflict"]) {
+      const run = restartRun(scenario)
+      expect(run.error).toBeNull()
+      expect(JSON.parse(run.blobs[uri]!)).toMatchObject({ TenantId: TENANT, LastStatus: "Success" })
+      const put = run.calls.filter(call => call.uri === uri && call.method === "Put")
+      expect(put.map(call => call.condition)).toEqual(scenario === "sealedStatus" ? ['"legacy"'] : ['"legacy"', '"concurrent"'])
+    }
+    const newest = restartRun("statusNewerConflict")
+    expect(JSON.parse(newest.blobs[uri]!)).toMatchObject({ RunId: "other-job", LastStatus: "Failed" })
+    expect(newest.calls.filter(call => call.uri === uri && call.method === "Get")).toHaveLength(2)
+    expect(newest.calls.filter(call => call.uri === uri && call.method === "Put")).toHaveLength(1)
+  }, 60_000)
+
+  it.runIf(Boolean(pwsh))("resumes an unpublished report from the committed manifest under its existing create-only key", () => {
+    const reportFiles = (run: RestartRun) => Object.entries(run.blobs).filter(([uri]) => uri.includes("/cloud-change-reports/"))
+    const first = restartRun("reportGap")
+    const resumed = restartRun("reportRestart")
+    const repeated = restartRun("reportRestartAgain")
+    expect(reportFiles(first)).toHaveLength(0)
+    expect(resumed.error).toBeNull()
+    expect(manifestFiles(resumed)).toEqual(manifestFiles(first))
+    expect(outcomeFiles(resumed)).toEqual(outcomeFiles(first))
+    expect(resumed.calls.filter(call => call.uri.includes("graph.microsoft.com")).every(call => call.uri.includes("/auditEvents?"))).toBe(true)
+    expect(reportFiles(resumed)).toHaveLength(1)
+    const [key, body] = reportFiles(resumed)[0]!
+    const manifest = JSON.parse(manifestFiles(resumed).find(([uri]) => !uri.includes("backup-2026-01-01"))![1])
+    expect(JSON.parse(body)).toMatchObject({ runId: manifest.RunId, backupFolder: manifest.BackupFolder })
+    expect(resumed.calls).toContainEqual(expect.objectContaining({ method: "Put", uri: key, ifNoneMatch: "*" }))
+    expect(reportFiles(repeated)).toEqual(reportFiles(resumed))
+  }, 60_000)
+
+  it.runIf(Boolean(pwsh))("reconstructs the receipt for an aged start with a committed manifest", () => {
+    const { blobs, calls, manifest } = runRestartFixture().agedStart
+    const published = Object.entries(blobs).filter(([uri]) => uri.includes("/audit-logs/"))
+    expect(published).toHaveLength(1)
+    expect(JSON.parse(published[0]![1]).entries[0]).toMatchObject({
+      id: `${TENANT}-${manifest.RunId}`, timestamp: manifest.CompletedAt,
+      resource: { id: manifest.BackupFolder }, user: { id: "22222222-2222-2222-2222-222222222222" },
+      job: { runId: manifest.RunId, status: "warnings", trigger: "manual", counts: { saved: 8, failures: 1 } },
+    })
+    expect(calls.filter(call => call.method === "Put").every(call => call.uri.includes("/audit-"))).toBe(true)
   }, 60_000)
 
   it.runIf(Boolean(pwsh))("verifies the interrupted run's manifest when its terminal checkpoint cannot be read", () => {
@@ -321,9 +384,14 @@ describe("Cloud audit contract", () => {
     expect(template.parameters.auditOnly).toMatchObject({ type: "bool", defaultValue: false })
   })
 
+  it("bounds the audit setup PowerShell subprocess to one minute", () => {
+    const shell = vi.fn(() => "")
+    runAuditSetup(shell)
+    expect(shell).toHaveBeenCalledWith(pwsh, expect.arrayContaining(["-NoProfile", "-File"]), { encoding: "utf8", timeout: 60_000 })
+  })
+
   it.runIf(Boolean(pwsh))("creates the same audit role on both setup paths and reuses it on rerun", () => {
-    const script = fileURLToPath(new URL("./fixtures/cloud-backup/audit-setup.ps1", import.meta.url))
-    const lines = execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8" }).trim().split(/\r?\n/)
+    const lines = runAuditSetup().trim().split(/\r?\n/)
     const groupScope = "/subscriptions/11111111-1111-1111-1111-111111111111/resourcegroups/rg-audit"
     const bytes = createHash("sha1").update(Buffer.from("11fb06fb712d4ddd98c7e71bbd588830", "hex")).update(groupScope + "-TenuVault Audit Writer").digest()
     bytes[6] = (bytes[6]! & 15) | 80
@@ -342,16 +410,25 @@ describe("Cloud audit contract", () => {
       expect(run.writes[0].path).toContain(`/roleDefinitions/${expected}?`)
     }
     const assignment = JSON.parse(lines[2]!)
-    expect(Object.keys(assignment.grants)).toHaveLength(2)
+    expect(Object.keys(assignment.grants)).toHaveLength(3)
     expect(assignment.writes.map((write: { body: { properties: { principalId: string } } }) => write.body.properties.principalId)).toEqual([
-      "22222222-2222-2222-2222-222222222222", "33333333-3333-3333-3333-333333333333",
+      "22222222-2222-2222-2222-222222222222", "33333333-3333-3333-3333-333333333333", "44444444-4444-4444-4444-444444444444",
     ])
-  })
+    const sameGroup = assignment.writes[2]
+    const key = `microsoft.storage/storageaccounts/stcontoso/blobservices/default/containers/audit-logs-same-auto-account-name-TenuVault Audit Writer ${expected}`
+    const id = createHash("sha1").update(Buffer.from("11fb06fb712d4ddd98c7e71bbd588830", "hex")).update(key).digest()
+    id[6] = (id[6]! & 15) | 80
+    id[8] = (id[8]! & 63) | 128
+    const guid = id.toString("hex").slice(0, 32).replace(/^(........)(....)(....)(....)(............)$/, "$1-$2-$3-$4-$5")
+    expect(sameGroup.path).toContain(`/roleAssignments/${guid}?`)
+    expect(template.variables.auditAssignmentId).toBe("[guid(toLower(variables('auditContainerScope')), toLower(parameters('automationAccountName')), variables('auditRoleName'))]")
+  }, auditSetupTimeout)
 
   it("describes cloud audit records by runbook version in the history and replay sections", () => {
     const guide = readFileSync(new URL("../docs-site/src/content/docs/backups/cloud.md", import.meta.url), "utf8")
     expect(guide).toMatch(/Audit Log.*starting with runbook 1\.5\.0/)
     expect(guide).not.toMatch(/audit log.*gets no entries/i)
+    expect(guide).toContain("The watcher reads the tenant's Schedule status file to check for audit delivery problems.")
   })
 
   it("provisions private audit storage with container-scoped read and add only in both setup paths", () => {
@@ -362,7 +439,7 @@ describe("Cloud audit contract", () => {
       "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/add/action",
     ] }])
     expect(resources.find(resource => resource.type.endsWith("/containers") && resource.name?.includes("auditContainer"))?.properties.publicAccess).toBe("None")
-    expect(resources.find(resource => resource.type.endsWith("/roleAssignments") && resource.name?.includes("auditRoleName"))?.scope).toContain("variables('auditContainer')")
+    expect(resources.find(resource => resource.type.endsWith("/roleAssignments") && resource.name?.includes("auditAssignmentId"))?.scope).toContain("variables('auditContainer')")
     const readerSetup = readFileSync(new URL("../resources/New-TenuVaultStorage.ps1", import.meta.url), "utf8")
     for (const script of [setup, readerSetup]) {
       expect(script).toContain('$auditContainer = "audit-logs"')

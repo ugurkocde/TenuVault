@@ -114,17 +114,19 @@ it("checkpoints large restores once per group and marks only one group uncertain
   const options = { store: local, bind: () => binding, transport: async () => remote.service }
   const entry = job(Array.from({ length: 60 }, () => ({ folder: "DeviceConfigurations", outcome: "unattempted" })))
   const restore = new AuditSink(options).begin(binding, input(entry))
+  const approval = { system: "intune" as const, requestId: randomUUID() }
   for (let index = 0; index < 40; index++) {
     restore.started(index)
-    restore.item(index, { folder: "DeviceConfigurations", outcome: "updated" })
+    if (index === 30) restore.item(index, { folder: "DeviceConfigurations", outcome: "pending", approval }, true)
+    else restore.item(index, { folder: "DeviceConfigurations", outcome: "updated" })
   }
-  expect(save.mock.calls.filter(([key]) => key === "audit.restore-jobs")).toHaveLength(3)
+  expect(save.mock.calls.filter(([key]) => key === "audit.restore-jobs")).toHaveLength(4)
   const restarted = new AuditSink(options)
   restarted.recover()
   await restarted.retry()
-  expect(await remote.service.queryAllLogs(dateFilter)).toMatchObject([{
-    job: { status: "uncertain", counts: { updated: 25, uncertain: 25, unattempted: 10 } },
-  }])
+  const [saved] = await remote.service.queryAllLogs(dateFilter)
+  expect(saved?.job).toMatchObject({ status: "uncertain", counts: { updated: 30, pending: 1, uncertain: 19, unattempted: 10 } })
+  expect(saved?.job?.items?.[30]).toMatchObject({ outcome: "pending", approval })
 })
 
 it("quarantines corrupt audit state and allows new audit events", async () => {
@@ -210,6 +212,50 @@ it("records a joined Reader cancellation without admin sign-in and retries under
   expect(pendingEvents(storageAccountName)).toEqual([])
 })
 
+
+it("recovers a cancellation before backup execution after the first outbox write fails", async () => {
+  const local = memoryStore()
+  setAuditOutboxStore(local)
+  const save = local.set
+  let failed = false
+  vi.spyOn(local, "set").mockImplementation((key, value) => {
+    if (key === "audit.pending-events" && !failed) {
+      failed = true
+      throw new Error("Outbox temporarily unavailable")
+    }
+    save(key, value)
+  })
+  const remote = storage()
+  remote.deny()
+  const options = { store: local, bind: () => binding, transport: async () => remote.service }
+  const sink = new AuditSink(options)
+  const started = vi.fn()
+  const terminal: Promise<void>[] = []
+  const engine = new BackupEngine({
+    fetch, getToken: () => new Promise(() => {}),
+    onStarted: started,
+    onFinished: (ended, request, tokens) => {
+      if (tokens && ended.tenantId === tenantId) terminal.push(recordBackupAudit(sink, ended, request, tokens, binding.user, "1.5.0").catch(() => undefined))
+    },
+  })
+  const blocker = engine.start({ tenantId: registration, storageAccountName, clientId: registration })
+  const run = engine.start({ tenantId, storageAccountName, clientId: registration })
+  expect(run.status).toBe("Queued")
+  engine.cancel(run.id)
+  await engine.waitForJob(run)
+  engine.cancel(blocker.id)
+  await engine.waitForJob(blocker)
+  await Promise.all(terminal)
+  expect(started).toHaveBeenCalledOnce()
+  expect(started.mock.calls[0]?.[0]).toBe(blocker)
+  expect(failed).toBe(true)
+  remote.allow()
+  setAuditOutboxStore(local)
+  const restarted = new AuditSink(options)
+  restarted.recover()
+  await restarted.retry()
+  expect(await remote.service.queryAllLogs(dateFilter)).toMatchObject([{ id: run.id, job: { status: "cancelled", producer: "desktop" } }])
+})
 
 it("keeps a finalized restore checkpoint when the encrypted outbox write fails", async () => {
   const local = memoryStore()

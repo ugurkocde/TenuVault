@@ -126,7 +126,8 @@
     "auditContainer": "audit-logs",
     "auditContainerScope": "[concat('Microsoft.Storage/storageAccounts/', parameters('storageAccountName'), '/blobServices/default/containers/', variables('auditContainer'))]",
     "auditRoleId": "[guid(toLower(resourceGroup().id), 'TenuVault Audit Writer')]",
-    "auditRoleName": "[concat('TenuVault Audit Writer ', variables('auditRoleId'))]"
+    "auditRoleName": "[concat('TenuVault Audit Writer ', variables('auditRoleId'))]",
+    "auditAssignmentId": "[guid(toLower(variables('auditContainerScope')), toLower(parameters('automationAccountName')), variables('auditRoleName'))]"
   },
   "resources": [
     {
@@ -237,7 +238,7 @@
     {
       "type": "Microsoft.Authorization/roleAssignments",
       "apiVersion": "2022-04-01",
-      "name": "[guid(toLower(variables('auditContainerScope')), toLower(parameters('automationAccountName')), variables('auditRoleName'))]",
+      "name": "[variables('auditAssignmentId')]",
       "scope": "[concat('Microsoft.Storage/storageAccounts/', parameters('storageAccountName'), '/blobServices/default/containers/', variables('auditContainer'))]",
       "dependsOn": [
         "[resourceId('Microsoft.Authorization/roleDefinitions', variables('auditRoleId'))]",
@@ -258,7 +259,7 @@
       "location": "[parameters('location')]",
       "dependsOn": [
         "[resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName'))]",
-        "[extensionResourceId(resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('storageAccountName'), 'default', variables('auditContainer')), 'Microsoft.Authorization/roleAssignments', guid(toLower(variables('auditContainerScope')), toLower(parameters('automationAccountName')), variables('auditRoleName')))]"
+        "[extensionResourceId(resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('storageAccountName'), 'default', variables('auditContainer')), 'Microsoft.Authorization/roleAssignments', variables('auditAssignmentId'))]"
       ],
       "properties": {
         "description": "TenuVault scheduled Intune backup in Azure",
