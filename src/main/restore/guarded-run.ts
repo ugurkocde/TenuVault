@@ -172,6 +172,9 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
           rememberMapping(run.mappings, { kind: "objectId", folder: step.folder, source: step.sourceId, target: id })
           entry.state = "applied"; delete entry.reason; journal.save(run); continue
         }
+        const mapped = mappedReference(run.mappings, "objectId", step.folder, step.sourceId)
+        if (mapped && step.targetId && mapped.toLowerCase() !== step.targetId.toLowerCase()) throw new RestoreSafetyError("The target mapping changed after this preview. Preview this item again.")
+        if (step.directory && step.operation === "create" && mapped) throw new RestoreSafetyError("The object already has a target mapping. Preview it as an update.")
         const objectRetryAt = io.prepareStep?.(step)
         if (objectRetryAt !== undefined) { entry.retryAt = Math.max(entry.retryAt ?? 0, objectRetryAt); journal.save(run) }
         if (entry.retryAt !== undefined) await waitForDirectoryRetry(entry.retryAt, signal)
@@ -181,8 +184,6 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
         const originBlock = restoreOriginBlocker(step.folder, run.origin)
         if (originBlock) throw new RestoreSafetyError(originBlock)
         if (journal.hasEarlierUnanswered(run, step)) throw new RestoreSafetyError("An earlier restore has an unanswered write for this object. Resume that run before starting another.")
-        const mapped = mappedReference(run.mappings, "objectId", step.folder, step.sourceId)
-        if (mapped && step.targetId && mapped.toLowerCase() !== step.targetId.toLowerCase()) throw new RestoreSafetyError("The target mapping changed after this preview. Preview this item again.")
         const current = await io.read(step, entry.targetId ?? step.targetId ?? mapped, signal)
         if (restoreFingerprint(current) !== step.preview) throw new RestoreSafetyError("The tenant changed after this preview. Preview this item again.")
         if (step.operation === "create" && mapped && current === null) throw new RestoreSafetyError("The previously mapped object is missing. Review its mapping before recreating it again.")
@@ -217,7 +218,13 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
         try {
           result = await io.write(step, desired, entry.targetId, () => {
             if (signal?.aborted) throw new RestoreWriteDeferredError("The directory write was cancelled before sending.")
-            entry.state = "uncertain"; delete entry.retryAt; journal.save(run)
+            const retryAt = entry.retryAt
+            entry.state = "uncertain"; delete entry.retryAt
+            try { journal.save(run) }
+            catch (error) {
+              if (step.directory) { entry.state = "captured"; entry.retryAt = retryAt }
+              throw error
+            }
           }, run, signal, retryAt => {
             entry.state = step.directory ? "deferred" : "captured"; entry.retryAt = retryAt; delete entry.reason; journal.save(run)
             io.defer?.(step, retryAt)

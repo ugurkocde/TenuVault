@@ -1,5 +1,10 @@
 import { RestoreWriteDeferredError } from "../../shared/intune/restore-guards"
 
+/** A failed safety read dispatched no write and can be checked again on resume. */
+export class DirectoryReadDeferredError extends RestoreWriteDeferredError {
+  constructor() { super("A temporary Microsoft Graph read failure deferred this row. Resume to repeat its safety checks.") }
+}
+
 export class DirectoryThrottledError extends RestoreWriteDeferredError {
   constructor(readonly response: Response) { super("The directory request was throttled and was not applied.", directoryRetryAt(response, 0)) }
 }

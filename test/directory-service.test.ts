@@ -3,6 +3,7 @@ import { expect, it, vi } from "vitest"
 import { DirectoryRestoreService } from "../src/main/restore/directory-service"
 import { ModuleSettings } from "../src/main/services/settings"
 import { RecoveryAccounts } from "../src/main/restore/safety-resolvers"
+import { directoryMappedId } from "../src/main/restore/directory-9a-batches"
 import { restoreFingerprint } from "../src/main/restore/guarded-run"
 import { LARGE_SHARD_ITEMS } from "../src/shared/large-backup"
 import type { Item } from "../src/shared/intune/registry"
@@ -293,7 +294,7 @@ it.each((["Users", "Groups"] as const).flatMap(folder => ["success", "503", "tim
   const finalRead = new Promise<void>(resolve => { reached = resolve })
   env.fetcher.mockImplementation(async (input, init) => {
     // Groups rebuild the payload with one extra GET before the final validation reads.
-    if (new URL(String(input)).pathname === `/v1.0/${target}` && (!init?.method || init.method === "GET") && ++reads === (folder === "Groups" ? 6 : 5)) {
+    if (new URL(String(input)).pathname === `/v1.0/${target}` && (!init?.method || init.method === "GET") && ++reads === (folder === "Groups" ? 5 : 4)) {
       reached(); await new Promise<void>(resolve => { release = resolve })
       expect(init?.signal?.aborted).toBe(true)
       if (failure === "503") return new Response(null, { status: 503 })
@@ -348,30 +349,36 @@ it("keeps a same-page unanswered relationship locked and refuses later rows for 
     return original(input, init)
   })
   const request = { ...env.request, runId: page.runId }, approvals = Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals]))
-  for (let restart = 0; restart < 3; restart++) expect(await env.service().execute(tenant, request, page.fingerprint, approvals)).toMatchObject({ status: "partial", outcomes: [{ state: "uncertain" }, { state: "blocked", reason: expect.stringContaining("unanswered write") }] })
+  for (let restart = 0; restart < 3; restart++) expect(await env.service().execute(tenant, request, page.fingerprint, approvals)).toMatchObject({ status: "partial", outcomes: [{ state: "uncertain" }, { state: "deferred" }] })
   expect(sends).toBe(1); expect(env.writes).toEqual([])
   expect(Object.keys(JSON.parse(env.data.get(`restore.directory.coordinator.${tenant}`)!).locks)).toHaveLength(1)
 })
 
 it("never sends the 21st member from a discarded page after a completed first batch", async () => {
-  const env = world(21), service = env.service(), original = env.fetcher.getMockImplementation()!
+  const env = world(41), service = env.service(), original = env.fetcher.getMockImplementation()!
   const page = await service.prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read)
-  let sends = 0, release!: () => void, reached!: () => void
-  const twentieth = new Promise<void>(resolve => { reached = resolve })
+  let discarded = false
   env.fetcher.mockImplementation(async (input, init) => {
-    if (init?.method === "POST" && ++sends === 20) { reached(); await new Promise<void>(resolve => { release = resolve }) }
+    if (!discarded && new URL(String(input)).pathname.endsWith(`/members/${id(120)}`)) {
+      discarded = true
+      const prefix = `restore.directory.${tenant}.${page.runId}.`
+      expect(JSON.parse(env.data.get(prefix + "cursor")!).batch).toBe(1)
+      expect(env.data.has(prefix + "batch.1.plan")).toBe(true)
+      expect(env.writes).toHaveLength(20)
+      // A separate service represents another desktop window. Its durable discard
+      // must stop the current batch at send and the next batch at its entry check.
+      expect(await env.service().saved(tenant, page.runId, "discard")).toMatchObject({ discarded: true })
+    }
     return original(input, init)
   })
   const request = { ...env.request, runId: page.runId }, approvals = Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals]))
-  const pending = service.execute(tenant, request, page.fingerprint, approvals)
-  await twentieth
-  await expect(service.saved(tenant, page.runId, "discard")).rejects.toThrow("already running")
-  expect(await service.cancel(tenant, page.runId)).toEqual({ cancelled: true }); release()
-  expect(await pending).toMatchObject({ status: "partial" })
-  expect(env.writes).toHaveLength(20)
-  await service.saved(tenant, page.runId, "discard")
+  await expect(service.execute(tenant, request, page.fingerprint, approvals)).rejects.toThrow("discarded")
+  expect(discarded).toBe(true)
+  expect(env.data.has(`restore.directory.${tenant}.${page.runId}.batch.2.plan`)).toBe(false)
+  const second = JSON.parse(env.data.get(`restore.directory.${tenant}.${page.runId}.batch.1.restore.guarded.${tenant}`)!).runs[page.runId]
+  expect(second.entries[0]).toMatchObject({ state: "failed-before-send" })
+  expect(env.writes).toHaveLength(20); expect(env.members.has(id(120))).toBe(false)
   await expect(env.service().execute(tenant, request, page.fingerprint, approvals)).rejects.toThrow("discarded")
-  expect(sends).toBe(20); expect(env.members.has(id(120))).toBe(false)
 })
 
 it.each(["current", "legacy"])("recovers a journalled group create before planning when %s mapping publication was interrupted", async version => {
@@ -433,10 +440,149 @@ it.each((["Users", "Groups"] as const).flatMap(folder => ["area", "service", "ac
   const page = await service.prepare(tenant, request, options, env.read), original = env.fetcher.getMockImplementation()!
   let reads = 0
   env.fetcher.mockImplementation(async (input, init) => {
-    if (new URL(String(input)).pathname.endsWith(`/${request.snapshot.id}`) && init?.method === "GET" && ++reads === (folder === "Groups" ? 6 : 5)) env.settings.setChoice(tenant, change === "service" ? {} : { entra: { access: change === "access" ? "backup" : "restore", areas: change === "area" ? [] : ["usersAndDevices", "groups"] } })
+    if (new URL(String(input)).pathname.endsWith(`/${request.snapshot.id}`) && init?.method === "GET" && ++reads === (folder === "Groups" ? 5 : 4)) env.settings.setChoice(tenant, change === "service" ? {} : { entra: { access: change === "access" ? "backup" : "restore", areas: change === "area" ? [] : ["usersAndDevices", "groups"] } })
     return original(input, init)
   })
   expect(await service.execute(tenant, { ...request, runId: page.runId }, page.fingerprint, { [page.rows[0]!.key]: page.rows[0]!.review.approvals })).toMatchObject({ outcomes: [{ state: "failed-before-send" }] })
   expect(env.writes).toEqual([])
   await expect(service.prepare(tenant, request, options, env.read)).rejects.toThrow("Backup and restore access")
+})
+
+it.each(["clean", "legacy conflict"])("rejects stale creates before locking and keeps the mapped target owning page recoverable with %s state", async version => {
+  const env = world(0, true)
+  const first = await env.service().prepare(tenant, env.request, options, env.read)
+  const stale = await env.service().prepare(tenant, env.request, options, env.read)
+  const execute = (page: typeof first, request = env.request) => env.service().execute(tenant, { ...request, runId: page.runId }, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])))
+  await execute(first)
+  const updateRequest = { ...env.request, snapshot: { ...env.request.snapshot, description: "Saved" } }
+  const update = await env.service().prepare(tenant, updateRequest, options, env.read), original = env.fetcher.getMockImplementation()!
+  env.fetcher.mockImplementation((input, init) => init?.method === "PATCH" ? Promise.resolve(new Response(null, { status: 503 })) : original(input, init))
+  expect(await execute(update, updateRequest)).toMatchObject({ outcomes: [{ state: "uncertain" }] })
+  expect(await execute(stale)).toMatchObject({ outcomes: [{ state: "blocked", reason: expect.stringContaining("mapping") }] })
+  expect(Object.keys(JSON.parse(env.data.get(`restore.directory.coordinator.${tenant}`)!).locks)).toEqual([id(900)])
+  if (version === "legacy conflict") {
+    // Reproduce the durable source lock left by the old stale-create path. Its
+    // inherited mapping belongs to the first create journal, not this journal.
+    const state = JSON.parse(env.data.get(`restore.directory.coordinator.${tenant}`)!)
+    state.locks[resource] = { owner: stale.runId, journal: `restore.directory.${tenant}.${stale.runId}.batch.0.` }
+    env.data.set(`restore.directory.coordinator.${tenant}`, JSON.stringify(state))
+  }
+  expect((await env.service().prepare(tenant, updateRequest, options, env.read)).rows).toHaveLength(1)
+  expect(await env.service().saved(tenant, update.runId, "reconcile")).toMatchObject({ outcomes: [{ state: "uncertain" }] })
+  await env.service().saved(tenant, stale.runId, "discard")
+  env.group.description = "Saved"
+  expect(await env.service().saved(tenant, update.runId, "reconcile")).toMatchObject({ outcomes: [{ state: "applied" }] })
+  expect(await env.service().saved(tenant, update.runId, "discard")).toMatchObject({ discarded: true })
+  expect(env.writes).toEqual(["POST groups"])
+})
+
+it.each(["current", "legacy"])("migrates %s recreated-object ownership and deadlines before competing execution or discard", async version => {
+  const env = world(0, true), created = await env.service().prepare(tenant, env.request, options, env.read)
+  await env.service().execute(tenant, { ...env.request, runId: created.runId }, created.fingerprint, Object.fromEntries(created.rows.map(row => [row.key, row.review.approvals])))
+  const request = { ...env.request, snapshot: { ...env.request.snapshot, description: "Saved" } }
+  const page = await env.service().prepare(tenant, request, options, env.read), original = env.fetcher.getMockImplementation()!
+  let sends = 0
+  env.fetcher.mockImplementation((input, init) => init?.method === "PATCH" && ++sends === 1 ? Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
+  const execute = (p: typeof page, r = request) => env.service().execute(tenant, { ...r, runId: p.runId }, p.fingerprint, Object.fromEntries(p.rows.map(row => [row.key, row.review.approvals])))
+  vi.useFakeTimers()
+  try {
+    const deadline = Date.now() + 120_000
+    expect(await execute(page)).toMatchObject({ outcomes: [{ state: "deferred", retryAt: deadline }] })
+    if (version === "legacy") {
+      env.data.delete(`restore.directory.coordinator.${tenant}`)
+      env.data.set(`restore.directory.object.${tenant}.Groups.${resource}`, JSON.stringify({ owner: `restore.directory.${tenant}.${page.runId}.batch.0.`, retryAt: deadline }))
+    } else {
+      const state = JSON.parse(env.data.get(`restore.directory.coordinator.${tenant}`)!)
+      state.locks[resource] = state.locks[id(900)]; delete state.locks[id(900)]
+      state.deadlines[resource] = deadline; delete state.deadlines[id(900)]
+      env.data.set(`restore.directory.coordinator.${tenant}`, JSON.stringify(state))
+    }
+    const competitorRequest = { ...request, path: `newer/Groups/${id(900)}.json`, snapshot: { ...request.snapshot, id: id(900) } }
+    // Recover the source journal once before a live-ID backup competes.
+    await env.service().prepare(tenant, request, options, env.read)
+    const competitor = await env.service().prepare(tenant, competitorRequest, options, env.read)
+    expect(await execute(competitor, competitorRequest)).toMatchObject({ outcomes: [{ state: "blocked", reason: expect.stringContaining("owns this object") }] })
+    await env.service().saved(tenant, page.runId, "discard")
+    const state = JSON.parse(env.data.get(`restore.directory.coordinator.${tenant}`)!)
+    expect(state.deadlines[id(900)]).toBe(deadline); expect(state.deadlines[resource]).toBeUndefined()
+    const replacement = await env.service().prepare(tenant, competitorRequest, options, env.read)
+    expect(await execute(replacement, competitorRequest)).toMatchObject({ outcomes: [{ state: "deferred", retryAt: deadline }] })
+    expect(sends).toBe(1)
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(await execute(replacement, competitorRequest)).toMatchObject({ outcomes: [{ state: "applied" }] })
+    expect(sends).toBe(2)
+  } finally { vi.useRealTimers() }
+})
+
+it("finishes a dispatched create after cancellation and durably retains its returned identity", async () => {
+  const env = world(0, true), service = env.service(), page = await service.prepare(tenant, env.request, options, env.read), original = env.fetcher.getMockImplementation()!
+  let reached!: () => void, release!: () => void
+  const sent = new Promise<void>(resolve => { reached = resolve })
+  env.fetcher.mockImplementation(async (input, init) => {
+    if (init?.method === "POST") {
+      reached(); await new Promise<void>(resolve => { release = resolve })
+      expect(init.signal?.aborted).toBe(false)
+      init.signal?.throwIfAborted()
+    }
+    return original(input, init)
+  })
+  const request = { ...env.request, runId: page.runId }, approvals = Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals]))
+  const pending = service.execute(tenant, request, page.fingerprint, approvals)
+  await sent; expect(await service.cancel(tenant, page.runId)).toEqual({ cancelled: true }); release()
+  expect(await pending).toMatchObject({ outcomes: [{ state: "applied", targetId: id(900) }] })
+  expect(await env.service().saved(tenant, page.runId, "reconcile")).toMatchObject({ outcomes: [{ state: "applied", targetId: id(900) }] })
+  expect((await env.service().prepare(tenant, env.request, options, env.read)).rows[0]!.review.resource.id).toBe(id(900))
+  expect(env.writes).toEqual(["POST groups"])
+})
+
+it("does not mark a write uncertain when saving its send marker fails", async () => {
+  const env = world(), request = { ...env.request, snapshot: { ...env.request.snapshot, description: "Saved" } }
+  const page = await env.service().prepare(tenant, request, options, env.read), set = env.store.set
+  let failed = false
+  vi.spyOn(env.store, "set").mockImplementation((key, value) => {
+    if (!failed && key.includes("restore.guarded.") && value.includes('"state":"uncertain"')) { failed = true; throw new Error("Disk unavailable") }
+    set(key, value)
+  })
+  expect(await env.service().execute(tenant, { ...request, runId: page.runId }, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])))).toMatchObject({ outcomes: [{ state: "failed-before-send" }], canDiscard: true })
+  expect(failed).toBe(true); expect(env.writes).toEqual([])
+  expect(await env.service().saved(tenant, page.runId, "discard")).toMatchObject({ discarded: true })
+})
+
+it("resumes later approved rows after the same object's uncertain relationship resolves", async () => {
+  const env = world(2), page = await env.service().prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read), original = env.fetcher.getMockImplementation()!
+  let sends = 0
+  env.fetcher.mockImplementation(async (input, init) => {
+    if (init?.method === "POST" && ++sends === 1) return new Response(null, { status: 503 })
+    return original(input, init)
+  })
+  const execute = () => env.service().execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])))
+  expect(await execute()).toMatchObject({ outcomes: [{ state: "uncertain" }, { state: "deferred" }] })
+  expect(sends).toBe(1)
+  env.members.add(id(100))
+  expect(await env.service().saved(tenant, page.runId, "reconcile")).toMatchObject({ outcomes: [{ state: "applied" }, { state: "deferred" }] })
+  expect(await execute()).toMatchObject({ status: "complete", outcomes: [{ state: "applied" }, { state: "applied" }] })
+  expect(sends).toBe(2); expect(env.members).toEqual(new Set([id(100), id(101)]))
+})
+
+it("uses one fresh snapshot for inventory review and refuses an already matching row", async () => {
+  const env = world(51), service = env.service()
+  const first = await service.prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read)
+  env.members.add(id(150))
+  const next = await service.prepare(tenant, env.request, { ...options, stage: "relationships", previousRunId: first.runId }, env.read)
+  expect(next.rows).toHaveLength(1)
+  expect(next.rows[0]!.review.changes).toEqual([])
+  expect(next.rows[0]!.review.blocker).toContain("already matches")
+  const saved = JSON.parse(env.data.get(`restore.directory.review.${tenant}.${next.runId}`)!)
+  expect(saved.run.entries[0].step.preview).toBe(restoreFingerprint({ id: resource, present: true, principalId: id(150), resource: env.group, principal: { id: id(150), displayName: "Person", userType: "Member", accountEnabled: false, "@odata.type": "#microsoft.graph.user" } }))
+  await expect(service.execute(tenant, { ...env.request, runId: next.runId }, next.fingerprint, Object.fromEntries(next.rows.map(row => [row.key, row.review.approvals])))).rejects.toThrow("Approve each")
+  expect(env.writes).toEqual([])
+})
+
+it("keeps mapping lookup pure after production create recovery", async () => {
+  const env = world(0, true), page = await env.service().prepare(tenant, env.request, options, env.read)
+  await env.service().execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])))
+  const before = new Map(env.data), get = vi.spyOn(env.store, "get"), set = vi.spyOn(env.store, "set"), remove = vi.spyOn(env.store, "delete")
+  for (let lookup = 0; lookup < 100; lookup++) expect(directoryMappedId(env.store, tenant, "Groups", resource)).toBe(id(900))
+  expect(get).toHaveBeenCalledTimes(100); expect(set).not.toHaveBeenCalled(); expect(remove).not.toHaveBeenCalled()
+  expect(env.data).toEqual(before)
 })

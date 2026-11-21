@@ -20,7 +20,7 @@ function world(owner = tenant) {
 it("reads the owned snapshot and ignores renderer identity and snapshot inputs", async () => {
   world()
   expect((await POST(request({ ...base, snapshot: { displayName: "Injected" }, actor: { userId: "injected" } }))).status).toBe(200)
-  expect(execute).toHaveBeenCalledWith(tenant, expect.objectContaining({ snapshot: { id: "stored", displayName: "Owned group" }, origin: "restore" }), expect.objectContaining({ options: { stage: "object", exactMembers: false, exactOwners: false } }), expect.any(Function))
+  expect(execute).toHaveBeenCalledWith(tenant, expect.objectContaining({ snapshot: { id: "stored", displayName: "Owned group" }, origin: "restore" }), expect.objectContaining({ options: { stage: "object", exactMembers: false, exactOwners: false } }), expect.any(Function), undefined)
 })
 it("refuses another tenant, malformed stage, bulk paths and unrelated types", async () => {
   world("00000000-0000-4000-8000-000000000002")

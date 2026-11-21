@@ -2,31 +2,36 @@ import type { PartitionedRestoreStore } from "../storage/directory-restore-store
 import type { KeyValueStore } from "../storage/secure-store"
 import { GuardedRunJournal, executeGuardedRun, restoreFingerprint, type GuardedRun, type GuardedIO } from "./guarded-run"
 import { directoryMappingKey, directoryPagePrefix, directoryObjectState } from "./directory-object-state"
-import { RestoreSafetyError } from "../../shared/intune/restore-guards"
+import { RestoreSafetyError, RestoreWriteDeferredError } from "../../shared/intune/restore-guards"
 import type { Item } from "../../shared/intune/registry"
 
 export const directoryMappedId = (store: KeyValueStore, tenant: string, folder: string, sourceId: string): string | undefined => {
-  // Adopt verified older ownership without reviving automatic supersession.
-  const oldKey = `restore.directory.object.${encodeURIComponent(tenant.toLowerCase())}.${folder}.${sourceId.toLowerCase()}`
-  const old = JSON.parse(store.get(oldKey) ?? "{}")
-  const unanswered = store.get(`restore.directory.unanswered.${encodeURIComponent(tenant.toLowerCase())}.${folder}.${sourceId.toLowerCase()}`)
-  const legacy = unanswered ?? old.owner
-  if (legacy) {
+  return store.get(directoryMappingKey(tenant, folder, sourceId)) ?? undefined
+}
+
+/** Legacy records are adopted once at the operation boundary, never during lookup. */
+export function migrateDirectoryState(store: KeyValueStore, tenant: string, objects: Array<{ folder: string; sourceId: string }>) {
+  for (const { folder, sourceId } of objects) {
+    const oldKey = `restore.directory.object.${encodeURIComponent(tenant.toLowerCase())}.${folder}.${sourceId.toLowerCase()}`
+    const old = JSON.parse(store.get(oldKey) ?? "{}")
+    const unansweredKey = `restore.directory.unanswered.${encodeURIComponent(tenant.toLowerCase())}.${folder}.${sourceId.toLowerCase()}`
+    const legacy = store.get(unansweredKey) ?? old.owner
+    if (!legacy) continue
     const prefix = `restore.directory.${encodeURIComponent(tenant)}.`
     const page = legacy.startsWith(prefix) ? legacy.slice(prefix.length).split(".batch.")[0] : undefined
     if (!page) throw new RestoreSafetyError("The earlier directory lock could not be verified.")
     const journal = new GuardedRunJournal({ get: name => store.get(legacy + name), set: () => { throw new Error("Read-only history") }, delete: () => { throw new Error("Read-only history") } })
     const entries = journal.load(tenant, decodeURIComponent(page))?.entries.filter(entry => entry.step.folder === folder && entry.step.sourceId.toLowerCase() === sourceId.toLowerCase())
-    if (unanswered && !entries?.length) throw new RestoreSafetyError("The earlier directory lock has no verifiable journal.")
+    if (!entries?.length) throw new RestoreSafetyError("The earlier directory lock has no verifiable journal.")
     const coordinator = directoryObjectState(store, tenant, decodeURIComponent(page))
-    for (const entry of entries ?? []) {
-      if (unanswered || ["pending", "captured", "deferred", "uncertain"].includes(entry.state)) coordinator.prepare(entry.step, legacy)
-      if (typeof old.retryAt === "number") coordinator.recordThrottle(entry.step, old.retryAt)
+    for (const entry of entries) {
+      const step = { ...entry.step, targetId: entry.targetId ?? entry.step.targetId ?? directoryMappedId(store, tenant, folder, sourceId) }
+      if (store.get(unansweredKey) || ["pending", "captured", "deferred", "uncertain"].includes(entry.state)) coordinator.prepare(entry.step.operation === "create" ? entry.step : step, legacy)
+      if (typeof old.retryAt === "number") coordinator.recordThrottle(step, old.retryAt)
     }
-    if (entries?.length) store.delete(oldKey)
+    store.delete(oldKey); store.delete(unansweredKey)
   }
   directoryObjectState(store, tenant, "").recoverMappings()
-  return store.get(directoryMappingKey(tenant, folder, sourceId)) ?? undefined
 }
 
 export interface DirectoryBatchSource {
@@ -63,12 +68,14 @@ export async function executeDirectoryBatches(store: PartitionedRestoreStore, id
       const mapped = directoryMappedId(store, identity.tenant, step.folder, step.sourceId)
       if (mapped && !run.mappings.some(mapping => mapping.folder === step.folder && mapping.source === step.sourceId)) run.mappings.push({ kind: "objectId", folder: step.folder, source: step.sourceId, target: mapped })
     }
+    const resolved = new Map(page.entries.map(({ step }) => [step.key, { ...step, targetId: step.targetId ?? directoryMappedId(store, identity.tenant, step.folder, step.sourceId) }]))
+    const effective = (step: typeof page.entries[number]["step"]) => resolved.get(step.key)!
     const guardedIO: GuardedIO = { ...io, prepareStep: step => {
-      if (journal.load(identity.tenant, identity.id)?.entries.some(entry => entry.state === "uncertain" && (entry.targetId ?? entry.step.targetId ?? entry.step.sourceId).toLowerCase() === (step.targetId ?? step.sourceId).toLowerCase())) throw new RestoreSafetyError("This page has an unanswered write for this object. Confirm its result first.")
-      return objectState.prepare(step, batchKey)
-    }, defer: objectState.recordThrottle,
+      if (journal.load(identity.tenant, identity.id)?.entries.some(entry => entry.state === "uncertain" && (entry.targetId ?? entry.step.targetId ?? entry.step.sourceId).toLowerCase() === (effective(step).targetId ?? step.sourceId).toLowerCase())) throw new RestoreWriteDeferredError("This page has an unanswered write for this object. Confirm its result first.")
+      return objectState.prepare(effective(step), batchKey)
+    }, defer: (step, retryAt) => objectState.recordThrottle(effective(step), retryAt),
       write: (step, body, targetId, beforeSend, currentRun, writeSignal, onUnapplied) =>
-        io.write(step, body, targetId, () => { objectState.beforeSend(step); beforeSend() }, currentRun, writeSignal, onUnapplied),
+        io.write(step, body, targetId, () => { objectState.beforeSend(effective(step)); beforeSend() }, currentRun, writeSignal, onUnapplied),
     }
     const result = await executeGuardedRun(journal, run, guardedIO, signal, reconcileOnly)
     objectState.recoverMappings()

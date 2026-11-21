@@ -18,7 +18,7 @@ import type { PartitionedRestoreStore } from "../storage/directory-restore-store
 import { directory9aIO, directoryAdmission } from "./directory-9a-io"
 import { directoryObjectStep, directoryRelationshipSteps, mappedDirectoryIds } from "./directory-9a-plan"
 import { approveDirectory, type DirectoryReview } from "./directory-9a"
-import { directoryMappedId, executeDirectoryBatches } from "./directory-9a-batches"
+import { directoryMappedId, executeDirectoryBatches, migrateDirectoryState } from "./directory-9a-batches"
 import { GuardedRunJournal, restoreFingerprint, type GuardedRun } from "./guarded-run"
 import { resolveRestoreActor, type RecoveryAccounts } from "./safety-resolvers"
 import { safetyReader } from "./safety-reader"
@@ -83,6 +83,7 @@ export class DirectoryRestoreService {
     const snapshot = request.snapshot, sourceId = snapshot.id
     if (!isGuid(sourceId)) fail("The directory source ID is missing.")
     const { actor, io } = await this.context(tenant)
+    migrateDirectoryState(this.store, tenant, [{ folder: folder!, sourceId: sourceId as string }])
     const mapped = directoryMappedId(this.store, tenant, folder!, sourceId as string)
     const object = await directoryObjectStep(folder as "Users" | "Groups", snapshot, io, undefined, mapped)
     // Account state has no live enabling/disabling evidence. Profile restores leave it untouched.
@@ -153,13 +154,16 @@ export class DirectoryRestoreService {
       const raw = this.store.get(`restore.directory.inventory.${tenant.toLowerCase()}.${inventory.id}.${inventory.offset / 50}`)
       if (!raw && inventory.offset < inventory.count) fail("The saved relationship difference is unavailable. Preview again.")
       const chunk: typeof object[] = raw ? JSON.parse(raw!) : []
-      steps = (async function* () { for (const step of chunk) { step.preview = restoreFingerprint(await io.read(step, step.targetId)); yield step } })()
+      steps = (async function* () { yield* chunk })()
       page.inventory = inventory
       page.more = inventory.offset + chunk.length < inventory.count
     }
     for await (const step of steps) {
       if (page.rows.length === 50) { page.more = true; break }
-      const review = await io.review(step)
+      const current = await io.read(step, step.targetId)
+      step.preview = restoreFingerprint(current)
+      const review = await io.review(step, current)
+      if (step.operation !== "create" && !review.changes.length) review.blocker ??= "This row already matches the desired state. No write is needed."
       const blocker = directoryAdmission(step)
       if (blocker) review.blocker ??= blocker
       page.rows.push({ key: step.key, review }); run.entries.push({ step, state: "pending" })
@@ -180,6 +184,7 @@ export class DirectoryRestoreService {
       if (!item || typeof item !== "object" || Array.isArray(item)) fail("The saved app reference is unavailable.")
       return item as Item
     }
+    migrateDirectoryState(this.store, tenant, [{ folder, sourceId: String(snapshot.id) }])
     const object = await applicationObjectStep(folder, snapshot, io, readSource, directoryMappedId(this.store, tenant, folder, String(snapshot.id)))
     const run: GuardedRun = { version: 1, id: randomUUID(), tenant, actor, origin: "restore", source: { path: request.path, fingerprint: restoreFingerprint(snapshot) }, entries: [], mappings: [] }
     const page: DirectoryPage = { run, rows: [], more: false, options }
@@ -237,39 +242,52 @@ export class DirectoryRestoreService {
     if (request.origin !== "restore" || page.run.origin !== request.origin || page.run.source?.path !== request.path || page.run.source.fingerprint !== restoreFingerprint(request.snapshot) || actor.userId !== page.run.actor.userId || actor.clientId !== page.run.actor.clientId) fail("Resume the original backup with the admin and connection that reviewed it.")
     return this.view(page)
   }
-  async execute(tenant: string, request: IdentityRestoreRequest, fingerprint: string, approvals: Record<string, string[]>) {
-    const page = this.load(tenant, request.runId!)
-    if (request.origin !== "restore" || page.run.origin !== request.origin || page.run.source?.path !== request.path || page.run.source.fingerprint !== restoreFingerprint(request.snapshot) || this.view(page).fingerprint !== fingerprint) fail("The backup or preview changed. Preview this object again.")
-    const controller = new AbortController(), runningKey = key(tenant, page.run.id)
+  private register(tenant: string, id: string) {
+    this.load(tenant, id)
+    const runningKey = key(tenant, id), controller = new AbortController()
     if (this.running.has(runningKey)) fail("This directory page is already running.")
     this.running.set(runningKey, controller)
-    try {
-      const context = await this.context(tenant, retryAt => {
-        // A refused actor lookup cannot settle an earlier dispatch. Keep its lock,
-        // but let every later reviewed plan inherit the tenant/object deadline.
-        const objects = directoryObjectState(this.store, tenant, page.run.id)
-        for (const entry of page.run.entries) objects.recordThrottle(entry.step, retryAt)
-      }), actor = context.actor
-      const rawIO = DIRECTORY_9B_FOLDERS.includes(request.path.split("/")[1]!) ? context.applicationIO : context.io
-      const io = { ...rawIO, write: ((step, body, targetId, beforeSend, run, signal, onUnapplied) => rawIO.write(step, body, targetId, () => {
-        this.requireAccess(tenant, step.folder)
-        if (signal?.aborted) throw new RestoreWriteDeferredError("The directory write was cancelled before sending.")
-        beforeSend()
-      }, run, signal, onUnapplied)) as typeof rawIO.write }
-      if (actor.userId !== page.run.actor.userId || actor.clientId !== page.run.actor.clientId) fail("Resume with the admin and connection that reviewed this page.")
-      const selection = page.rows.filter(row => !row.review.blocker && row.review.approvals.every(kind => approvals[row.key]?.includes(kind))).map(row => row.key)
-      if (!selection.length || (page.selection && JSON.stringify(page.selection) !== JSON.stringify(selection))) fail("Approve each selected row separately. A resumed page must keep its original selection.")
-      page.selection = selection; this.save(page)
-      const entries = page.run.entries.filter(entry => selection.includes(entry.step.key))
-      for (const entry of entries) for (const kind of page.rows.find(row => row.key === entry.step.key)!.review.approvals) approveDirectory(entry.step, page.run, kind)
-      const { entries: _entries, mappings: _mappings, ...identity } = page.run
-      const result = await executeDirectoryBatches(this.store, { ...identity, actor }, { fingerprint, page: async (cursor, limit) => {
-        const start = Number(cursor ?? 0), end = Math.min(entries.length, start + limit)
-        return { entries: entries.slice(start, end), next: end < entries.length ? String(end) : null }
-      } }, io, controller.signal)
-      return this.results(page, result)
-
-    } finally { this.running.delete(runningKey) }
+    return { signal: controller.signal, finish: () => { this.running.delete(runningKey) } }
+  }
+  async operation<T>(tenant: string, id: string, work: (signal: AbortSignal) => Promise<T>): Promise<T | { cancelled: true }> {
+    const operation = this.register(tenant, id)
+    try { return await work(operation.signal) }
+    catch (error) { if (operation.signal.aborted) return { cancelled: true }; throw error }
+    finally { operation.finish() }
+  }
+  async execute(tenant: string, request: IdentityRestoreRequest, fingerprint: string, approvals: Record<string, string[]>, operationSignal?: AbortSignal): Promise<ReturnType<DirectoryRestoreService["results"]>> {
+    if (!operationSignal) {
+      const operation = this.register(tenant, request.runId!)
+      try { return await this.execute(tenant, request, fingerprint, approvals, operation.signal) }
+      finally { operation.finish() }
+    }
+    const page = this.load(tenant, request.runId!)
+    if (request.origin !== "restore" || page.run.origin !== request.origin || page.run.source?.path !== request.path || page.run.source.fingerprint !== restoreFingerprint(request.snapshot) || this.view(page).fingerprint !== fingerprint) fail("The backup or preview changed. Preview this object again.")
+    migrateDirectoryState(this.store, tenant, page.run.entries.map(entry => entry.step))
+    const context = await this.context(tenant, retryAt => {
+      // A refused actor lookup cannot settle an earlier dispatch. Keep its lock,
+      // but let every later reviewed plan inherit the tenant/object deadline.
+      const objects = directoryObjectState(this.store, tenant, page.run.id)
+      for (const { step } of page.run.entries) objects.recordThrottle({ ...step, targetId: step.targetId ?? directoryMappedId(this.store, tenant, step.folder, step.sourceId) }, retryAt)
+    }), actor = context.actor
+    const rawIO = DIRECTORY_9B_FOLDERS.includes(request.path.split("/")[1]!) ? context.applicationIO : context.io
+    const io = { ...rawIO, write: ((step, body, targetId, beforeSend, run, signal, onUnapplied) => rawIO.write(step, body, targetId, () => {
+      this.requireAccess(tenant, step.folder)
+      if (signal?.aborted) throw new RestoreWriteDeferredError("The directory write was cancelled before sending.")
+      beforeSend()
+    }, run, signal, onUnapplied)) as typeof rawIO.write }
+    if (actor.userId !== page.run.actor.userId || actor.clientId !== page.run.actor.clientId) fail("Resume with the admin and connection that reviewed this page.")
+    const selection = page.rows.filter(row => !row.review.blocker && row.review.approvals.every(kind => approvals[row.key]?.includes(kind))).map(row => row.key)
+    if (!selection.length || (page.selection && JSON.stringify(page.selection) !== JSON.stringify(selection))) fail("Approve each selected row separately. A resumed page must keep its original selection.")
+    page.selection = selection; this.save(page)
+    const entries = page.run.entries.filter(entry => selection.includes(entry.step.key))
+    for (const entry of entries) for (const kind of page.rows.find(row => row.key === entry.step.key)!.review.approvals) approveDirectory(entry.step, page.run, kind)
+    const { entries: _entries, mappings: _mappings, ...identity } = page.run
+    const result = await executeDirectoryBatches(this.store, { ...identity, actor }, { fingerprint, page: async (cursor, limit) => {
+      const start = Number(cursor ?? 0), end = Math.min(entries.length, start + limit)
+      return { entries: entries.slice(start, end), next: end < entries.length ? String(end) : null }
+    } }, io, operationSignal)
+    return this.results(page, result)
   }
   private history(page: DirectoryPage) {
     const prefix = directoryPagePrefix(page.run.tenant, page.run.id)
@@ -298,14 +316,10 @@ export class DirectoryRestoreService {
       const context = await this.context(tenant)
       if (context.actor.userId !== page.run.actor.userId || context.actor.clientId !== page.run.actor.clientId) fail("Use the admin and connection that reviewed this page.")
       const state = directoryObjectState(this.store, tenant, id)
+      migrateDirectoryState(this.store, tenant, page.run.entries.map(entry => entry.step))
       if (action === "discard") {
         if (this.history(page).some(run => run.entries.some(entry => entry.state === "uncertain"))) fail("Confirm the uncertain result before discarding this saved restore.")
-        for (const { step } of page.run.entries) {
-          directoryMappedId(this.store, tenant, step.folder, step.sourceId)
-          const retryAt = JSON.parse(this.store.get(`restore.directory.object.${encodeURIComponent(tenant.toLowerCase())}.${step.folder}.${step.sourceId.toLowerCase()}`) ?? "{}").retryAt
-          if (typeof retryAt === "number") state.recordThrottle(step, retryAt)
-        }
-        state.recoverMappings(); state.release(true)
+        state.release(true)
         return { discarded: true, canDiscard: false }
       }
       const entries = page.run.entries.filter(entry => page.selection?.includes(entry.step.key))

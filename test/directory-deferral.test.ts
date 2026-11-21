@@ -97,7 +97,7 @@ it.each(folders)("resumes %s after a PATCH throttle followed by a longer final s
 it.each(folders.flatMap(folder => ["initial", "references", "final"].map(phase => ({ folder, phase }))))("persists a $folder $phase safety-read deadline before any PATCH", async ({ folder, phase }) => {
   const env = world(folder), request = env.request(), page = await env.prepare(request), original = env.graph.getMockImplementation()!
   let reads = 0
-  const throttleRead = phase === "initial" ? 1 : phase === "references" ? (folder === "Applications" ? 3 : 2) : folder === "Groups" ? 6 : 5
+  const throttleRead = phase === "initial" ? 1 : phase === "references" ? (folder === "Applications" ? 3 : 2) : folder === "Applications" ? 5 : folder === "Groups" ? 5 : 4
   env.graph.mockImplementation((input, init) => new URL(String(input)).pathname === `/v1.0/${env.targetPath}` && init?.method === "GET" && ++reads === throttleRead ? Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
   vi.useFakeTimers()
   const deadline = Date.now() + 120_000
@@ -194,4 +194,51 @@ it.each(folders)("preserves a %s actor safety-read throttle across a new reviewe
   expect(await env.execute(newer, newerRequest)).toMatchObject({ status: "complete", outcomes: [{ state: "applied" }] })
   expect(await env.execute(page, request)).toMatchObject({ status: "partial", failed: 1, outcomes: [{ state: "blocked", reason: expect.stringContaining("tenant changed") }] })
   expect(env.writes).toEqual([{ [env.field]: "Newer" }])
+})
+
+it.each(folders.flatMap(folder => ["initial", "final"].flatMap(phase => [429, 408, 500, 503, "timeout", "network"].map(failure => ({ folder, phase, failure })))))("defers $folder $phase safety-read $failure and repeats fresh checks on resume", async ({ folder, phase, failure }) => {
+  const env = world(folder), request = env.request(), page = await env.prepare(request), original = env.graph.getMockImplementation()!
+  let reads = 0, failed = false
+  const failureRead = phase === "initial" ? 1 : folder === "Users" ? 4 : 5
+  env.graph.mockImplementation(async (input, init) => {
+    if (!failed && new URL(String(input)).pathname === `/v1.0/${env.targetPath}` && init?.method === "GET" && ++reads === failureRead) {
+      failed = true
+      if (failure === "timeout") throw new DOMException("Timeout", "TimeoutError")
+      if (failure === "network") throw new TypeError("Network failure")
+      return new Response(null, { status: Number(failure), headers: { "Retry-After": "120" } })
+    }
+    return original(input, init)
+  })
+  vi.useFakeTimers()
+  expect(await env.execute(page, request)).toMatchObject({ failed: 0, outcomes: [{ state: "deferred" }] })
+  expect(failed).toBe(true); expect(env.writes).toEqual([])
+  await vi.advanceTimersByTimeAsync(120_000)
+  expect(await env.execute(page, request)).toMatchObject({ status: "complete", outcomes: [{ state: "applied" }] })
+  expect(env.writes).toEqual([{ [env.field]: "Saved" }])
+})
+
+it.each(["token", "metadata", "snapshot"])("registers cancellation before route backup loading at %s and sends nothing", async phase => {
+  const env = world("Groups"), request = env.request(), page = await env.prepare(request), service = env.service()
+  setDirectoryRestoreService(service)
+  let reached!: () => void, release!: () => void
+  const loading = new Promise<void>(resolve => { reached = resolve })
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    if (phase === "token" && url.includes("oauth2") || phase === "metadata" && url.endsWith("metadata.json") || phase === "snapshot" && url.endsWith(`${targetId}.json`)) {
+      reached(); await new Promise<void>(resolve => { release = resolve })
+      if (phase !== "token") expect(init?.signal?.aborted).toBe(true)
+    }
+    if (url.includes("oauth2")) return Response.json({ access_token: "storage-token" })
+    if (url.endsWith("metadata.json")) return Response.json({ TenantId: tenant })
+    if (url.endsWith(".tenuvault-owner.json")) return new Response(null, { status: 404 })
+    return Response.json(request.snapshot)
+  }))
+  const call = (body: object) => POST(new Request("http://localhost/api/restore-directory", { method: "POST", body: JSON.stringify({ tenantId: tenant, appId: clientId, clientSecret: "placeholder", runId: page.runId, ...body }) }) as Parameters<typeof POST>[0])
+  const pending = call({ action: "restore", storageAccountName: "store", backupId: "backup", path: request.path, stage: "object", fingerprint: page.fingerprint, approvals: Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])) })
+  await loading
+  expect(await (await call({ action: "cancel" })).json()).toEqual({ cancelled: true })
+  release()
+  expect(await (await pending).json()).toEqual({ cancelled: true })
+  expect(env.writes).toEqual([])
+  expect(await service.cancel(tenant, page.runId)).toEqual({ cancelled: false })
 })

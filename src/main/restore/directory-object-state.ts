@@ -35,9 +35,24 @@ export function directoryObjectState(store: KeyValueStore, tenant: string, owner
       }
       const retryAt = Math.max(state.deadlines[object(step)] ?? 0, JSON.parse(store.get(`restore.directory.object.${encodeURIComponent(tenant.toLowerCase())}.${step.folder}.${step.sourceId.toLowerCase()}`) ?? "{}").retryAt ?? 0)
       if (retryAt) state.deadlines[object(step)] = retryAt
-      acquire(state, object(step), journal); save(state)
+      // Transfer legacy source ownership and deadlines to the resolved live identity atomically.
+      const source = step.sourceId.toLowerCase(), target = object(step)
+      const sourceLock = state.locks[source]
+      if (source !== target && sourceLock) {
+        const targetLock = state.locks[target]
+        if (targetLock && targetLock.owner !== sourceLock.owner) throw new RestoreSafetyError("Another saved directory page owns this object. Resolve or discard that page first.")
+        state.locks[target] = sourceLock
+        delete state.locks[source]
+      }
+      if (source !== target && state.deadlines[source]) {
+        state.deadlines[target] = Math.max(state.deadlines[target] ?? 0, state.deadlines[source])
+        delete state.deadlines[source]
+      }
+      // Persist a key migration even when a competing page is refused.
+      if (state.locks[target] && state.locks[target].owner !== owner) save(state)
+      acquire(state, target, journal); save(state)
       for (const legacyKey of legacyKeys) store.delete(legacyKey)
-      return retryAt || undefined
+      return state.deadlines[object(step)] || undefined
     },
     recordThrottle: (step: GuardedStep, retryAt: number) => {
       const state = load(), id = object(step)
@@ -54,18 +69,35 @@ export function directoryObjectState(store: KeyValueStore, tenant: string, owner
       for (const journalPrefix of new Set(Object.values(state.locks).map(lock => lock.journal))) {
         const journal = new GuardedRunJournal({ get: name => store.get(journalPrefix + name), set: () => { throw new Error("Read-only history") }, delete: () => { throw new Error("Read-only history") } })
         for (const run of journal.list(tenant)) {
-          for (const entry of run.entries) if (entry.retryAt !== undefined) {
-            const id = (entry.targetId ?? entry.step.targetId ?? entry.step.sourceId).toLowerCase()
-            state.deadlines[id] = Math.max(state.deadlines[id] ?? 0, entry.retryAt)
+          for (const entry of run.entries) {
+            const source = entry.step.sourceId.toLowerCase()
+            const id = (entry.targetId ?? entry.step.targetId ?? store.get(directoryMappingKey(tenant, entry.step.folder, source)) ?? source).toLowerCase()
+            const deadline = Math.max(entry.retryAt ?? 0, state.deadlines[source] ?? 0, state.deadlines[id] ?? 0)
+            if (deadline) state.deadlines[id] = deadline
+            if (source !== id) {
+              delete state.deadlines[source]
+              const sourceLock = state.locks[source], targetLock = state.locks[id]
+              if (entry.step.operation !== "create" && sourceLock?.journal === journalPrefix && (!targetLock || targetLock.owner === sourceLock.owner)) {
+                state.locks[id] = sourceLock; delete state.locks[source]
+              }
+            }
           }
           save(state)
           for (const mapping of run.mappings) {
+            // Only a confirmed create in this exact journal can publish its replacement.
+            if (!run.entries.some(entry => entry.step.operation === "create" && entry.state === "applied" && entry.step.folder === mapping.folder && entry.step.sourceId === mapping.source && entry.targetId === mapping.target)) continue
             const sourceLock = state.locks[mapping.source.toLowerCase()]
             const targetLock = state.locks[mapping.target.toLowerCase()]
-            if (sourceLock && targetLock && sourceLock.owner !== targetLock.owner) throw new RestoreSafetyError("An ambiguous directory mapping was refused.")
-            if (sourceLock) { state.locks[mapping.target.toLowerCase()] = sourceLock; save(state) }
+            if (sourceLock?.journal !== journalPrefix) continue
+            if (!targetLock || targetLock.owner === sourceLock.owner) state.locks[mapping.target.toLowerCase()] = sourceLock
+            const source = mapping.source.toLowerCase(), target = mapping.target.toLowerCase()
+            if (state.deadlines[source]) {
+              state.deadlines[target] = Math.max(state.deadlines[target] ?? 0, state.deadlines[source])
+              delete state.deadlines[source]
+            }
+            save(state)
             const mappingKey = directoryMappingKey(tenant, mapping.folder, mapping.source), previous = store.get(mappingKey)
-            if (previous && previous !== mapping.target) throw new RestoreSafetyError("An ambiguous directory mapping was refused.")
+            if (previous && previous !== mapping.target) continue
             store.set(mappingKey, mapping.target)
           }
         }

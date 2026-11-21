@@ -1,4 +1,4 @@
-import { DIRECTORY_RETRIES, DirectoryThrottledError, directoryRetryAt, retryDirectoryWrite, waitForDirectoryRetry } from "./directory-retry"
+import { DIRECTORY_RETRIES, DirectoryReadDeferredError, DirectoryThrottledError, directoryRetryAt, retryDirectoryWrite, waitForDirectoryRetry } from "./directory-retry"
 import { typeForFolder, restoreCapability, type Item } from "../../shared/intune/registry"
 import { restoreMatrixRow } from "../../shared/intune/restore-matrix"
 import { RestoreSafetyError, RestoreWriteDeferredError, RestoreWriteRefusedError, guardRestoreItem, type RestoreActor } from "../../shared/intune/restore-guards"
@@ -33,7 +33,7 @@ export function directoryPermissions(step: GuardedStep): string[] {
   return action === "create" ? ["User.Create"] : ["User.ReadUpdate.All", ...(step.desired.accountEnabled !== undefined ? ["User.EnableDisableAccount.All", "User.Read.All"] : [])]
 }
 /** The same operation evidence gates the preview and the final transport. */
-export function directory9aIO(token: string, actor: RestoreActor, safety: GuardedIO["references"], fetchImpl: typeof fetch = fetch, scan?: GuardedIO["replacedReferences"], wait?: (ms: number) => Promise<void>, signal?: AbortSignal, retryReads = true): GuardedIO & { review: (step: GuardedStep) => Promise<ReturnType<typeof directoryReview>>; ids: (id: string, kind: "members" | "owners") => AsyncIterable<string>; locate: (folder: "Users" | "Groups", sourceId: string) => Promise<{ action: "update" | "recycle" | "create"; current: Item | null }> } {
+export function directory9aIO(token: string, actor: RestoreActor, safety: GuardedIO["references"], fetchImpl: typeof fetch = fetch, scan?: GuardedIO["replacedReferences"], wait?: (ms: number) => Promise<void>, signal?: AbortSignal, retryReads = true): GuardedIO & { review: (step: GuardedStep, preimage?: Item | null) => Promise<ReturnType<typeof directoryReview>>; ids: (id: string, kind: "members" | "owners") => AsyncIterable<string>; locate: (folder: "Users" | "Groups", sourceId: string) => Promise<{ action: "update" | "recycle" | "create"; current: Item | null }> } {
   requireRestoreActor(token, actor)
   // Preview inventories can retry individual reads. Journalled execution uses raw
   // reads so every throttle reaches its durable entry or restarts the whole writer.
@@ -51,11 +51,12 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
           throw error
         }
       } else if (signal?.aborted) throw new RestoreWriteDeferredError("The directory read was cancelled before sending a write.")
-      const requestSignal = signal ? AbortSignal.any([signal, AbortSignal.timeout(60_000)]) : AbortSignal.timeout(60_000)
+      const requestSignal = method === "GET" && signal ? AbortSignal.any([signal, AbortSignal.timeout(60_000)]) : AbortSignal.timeout(60_000)
       beforeSend?.()
       if (method !== "GET" && signal?.aborted) throw new RestoreWriteDeferredError("The directory write was cancelled before sending.")
       const response = await fetchImpl(url.href, { method, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, ...(body ? { body: JSON.stringify(body) } : {}), signal: requestSignal }).catch(error => {
         if (method === "GET" && signal?.aborted) throw new RestoreWriteDeferredError("The directory read was cancelled before sending a write.")
+        if (method === "GET") throw new DirectoryReadDeferredError()
         throw error
       })
       if (response.status === 429) {
@@ -69,9 +70,11 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
       }
       if (method === "GET" && response.status === 404) return null
       if (method !== "GET" && response.status >= 400 && response.status < 500 && response.status !== 408) throw new RestoreWriteRefusedError(response.status)
+      if (method === "GET" && (response.status === 408 || response.status >= 500)) throw new DirectoryReadDeferredError()
       if (!response.ok) throw new Error("Directory request was not confirmed. No response body is retained.")
       return response.status === 204 ? {} : await response.json().catch(error => {
         if (method === "GET" && signal?.aborted) throw new RestoreWriteDeferredError("The directory read was cancelled before sending a write.")
+        if (method === "GET" && (error instanceof TypeError || (error instanceof DOMException && ["TimeoutError", "AbortError"].includes(error.name)))) throw new DirectoryReadDeferredError()
         throw error
       }) as Item
     }
@@ -163,10 +166,10 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
     }
     return request(path)
   }
-  const review = async (step: GuardedStep) => {
+  const review = async (step: GuardedStep, preimage?: Item | null) => {
     const intent = step.directory
     if (!intent) throw new RestoreSafetyError("A directory intent is required.")
-    let resource = step.operation === "create" ? null : await request(target(step))
+    let resource = preimage !== undefined ? (preimage?.resource as Item | undefined) ?? preimage : step.operation === "create" ? null : await request(target(step))
     if (!resource && intent.action === "recycle") resource = await request(`directory/deletedItems/${identity(step.targetId ?? step.sourceId)}`)
     if (resource) { cloudObject(resource); if (step.folder === "Groups") directoryPayload("Groups", "update", resource) }
     // Delegated non-admin group creation implicitly adds the caller as an owner.
@@ -181,7 +184,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
       }
       if (!admin) throw new RestoreSafetyError("Security-group creation requires a current tenant-wide Groups Administrator or Global Administrator assignment. Non-admin creation can implicitly make the restoring account an owner.")
     }
-    const principal = intent.principalId ? await resolvePrincipal(intent.principalId) : null
+    const principal = preimage !== undefined && preimage?.principal !== undefined ? preimage.principal as Item | null : intent.principalId ? await resolvePrincipal(intent.principalId) : null
     let excluded = false, included = false, inherited = false, indirectUserChange = false, emptiesTarget = false
     if (step.folder === "Users" && (intent.action === "manager" || (intent.action === "update" && step.desired.displayName !== undefined && step.desired.displayName !== resource?.displayName))) {
       for await (const policy of list("identity/conditionalAccess/policies?$select=id,conditions")) {
@@ -205,7 +208,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
       for await (const id of ids(step.targetId ?? step.sourceId, "members")) if (id !== intent.principalId) survivor = true
       emptiesTarget = !survivor
     }
-    const compared = ["member", "owner", "manager", "license"].includes(intent.action) ? { ...resource, ...await read(step, step.targetId) } : resource
+    const compared = ["member", "owner", "manager", "license"].includes(intent.action) ? { ...resource, ...(preimage === undefined ? await read(step, step.targetId) : preimage) } : resource
     const result = directoryReview(step, compared, principal, actor, excluded)
     // The optional flag is explicitly null on ordinary lab groups, and true on role-assignable fixtures.
     // An omitted or malformed selected field still fails closed.
@@ -298,7 +301,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
         const response = await request(writePath, method, payload, async () => {
           const current = await read(step, targetId)
           if (restoreFingerprint(current) !== step.preview) throw new RestoreSafetyError("The tenant changed before sending. Preview this item again.")
-          const fresh = await review(step)
+          const fresh = await review(step, current)
           if (fresh.blocker) throw new RestoreSafetyError(fresh.blocker)
           requireDirectoryApprovals(step, run, fresh.approvals)
           const references = await safety(step, current, body)
