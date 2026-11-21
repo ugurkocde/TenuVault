@@ -442,7 +442,6 @@ function Invoke-TvHttp {
     )
     $lastError = $null
     foreach ($attempt in 1..3) {
-        if ([DateTime]::UtcNow -ge $DispatchDeadline) { throw "The backup publication window expired." }
         $request = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::new($Method), $Uri)
         $request.Headers.Authorization = [System.Net.Http.Headers.AuthenticationHeaderValue]::new("Bearer", $Token)
         if ($Headers) { foreach ($name in $Headers.Keys) { [void]$request.Headers.TryAddWithoutValidation($name, [string]$Headers[$name]) } }
@@ -453,6 +452,7 @@ function Invoke-TvHttp {
         }
         $response = $null
         $completion = if ($MaxBytes -gt 0) { [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead } else { [System.Net.Http.HttpCompletionOption]::ResponseContentRead }
+        if ([DateTime]::UtcNow -ge $DispatchDeadline) { throw "The backup publication window expired." }
         try { $response = $script:HttpClient.SendAsync($request, $completion).GetAwaiter().GetResult() }
         catch {
             $lastError = $_

@@ -7,7 +7,8 @@ import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import JSZip from "jszip"
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { BackupEngine } from "../src/main/backup/engine"
+import { BackupEngine, NetworkCircuit } from "../src/main/backup/engine"
+import { BlobWriter } from "../src/main/backup/blob-writer"
 import { backupGaps } from "../src/main/backup/completeness"
 import { configuredCloudPolicyAccount, OmissionPolicyStore } from "../src/main/backup/omission-policy"
 import { importArchive, reviewArchive } from "../src/main/backup/archive"
@@ -697,4 +698,21 @@ it("reports a recoverable pending change when enrollment is interrupted", async 
   failEnrollment = false
   await enable()
   expect(await store.read(TENANT, "stdesktop", undefined, token, true)).toMatchObject({ enabled: true })
+})
+
+
+it("never dispatches a snapshot after the publication deadline even if the token arrives before the abort timer", async () => {
+  const deadline = Date.now() + 1000
+  const fetch = vi.fn(async () => new Response(null, { status: 201 }))
+  const clock = vi.spyOn(Date, "now")
+  try {
+    const storage = new BlobWriter(fetch, "stdesktop", async () => {
+      clock.mockReturnValue(deadline + 1)
+      return "token"
+    }, new NetworkCircuit(3, undefined, deadline))
+    await expect(storage.put("backup-old/snapshot.json", "{}")).rejects.toThrow("job deadline")
+    expect(fetch).not.toHaveBeenCalled()
+  } finally {
+    clock.mockRestore()
+  }
 })

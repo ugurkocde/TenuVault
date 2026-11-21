@@ -144,6 +144,9 @@ export class BlobWriter {
             ? await withAbort(this.token, AbortSignal.any([signal, beforeCommit.signal]))
             : await withAbort(this.token, signal)
           signal.throwIfAborted()
+          // Recheck the wall clock after acquiring the token, including when a sleeping
+          // computer resumed before the job's abort timer could run.
+          this.network?.signal.throwIfAborted()
           beforeCommit?.signal.throwIfAborted()
           beforeCommit = undefined
           attempted = true
