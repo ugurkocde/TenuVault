@@ -135,3 +135,5 @@ The full list is in [What cannot be restored](/restore/limitations/).
 * [Restore modes and assignments](/restore/modes/)
 * [Encryption and recovery key](/security/encryption/)
 * [Troubleshooting](/troubleshooting/)
+
+Before relying on a recovery backup, use restore preview to check for omitted values. Keep a fully restorable version of each policy type you need. If a choice of recovery backup requires full coverage, a backup with omissions for the required types does not qualify.

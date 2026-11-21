@@ -13,7 +13,7 @@ import { formatDate, useLicense } from "../lib/license"
 import { openCheckout } from "../lib/purchase"
 import { useTrialAction } from "../lib/trial-action"
 import { SUPPORT_EMAIL, TRIAL_USED_MESSAGE, LOCAL_STORAGE_PREFIX } from "../../shared/constants"
-import { changeTenantStorage, LOCAL_SWITCH_CONFIRMATION } from "../lib/storage"
+import { saveTenantStorage, LOCAL_SWITCH_CONFIRMATION } from "../lib/storage"
 import { useConfirm } from "~/components/ConfirmDialog"
 import { CommunityTenantChoiceButton } from "./CommunityTenantPicker"
 
@@ -292,7 +292,7 @@ function TrialAzureChoice() {
   const { busy, error, run } = useTrialAction()
   const { status } = useLicense()
   return <>{confirmDialog}{tenants.filter(t => t.credentials && t.resources?.storageAccountName && !t.resources.storageAccountName.startsWith(LOCAL_STORAGE_PREFIX) && status?.tenants.some(licensed => licensed.trialEndsAt && !licensed.entitled && licensed.tenantId === t.credentials?.tenantId?.toLowerCase())).map(t => <Button key={t.credentials!.tenantId} variant="outline" disabled={busy} onClick={() => void run(async () => {
-    if (await confirm(LOCAL_SWITCH_CONFIRMATION)) await updateTenant(t.id, changeTenantStorage(t, { kind: "local" }))
+    if (await confirm(LOCAL_SWITCH_CONFIRMATION)) await saveTenantStorage(t, { kind: "local" }, bridge.storage.changeTenantAccount, updateTenant)
   })}>Switch {t.name} to weekly local backups</Button>)}{error && <p role="alert" className="basis-full text-sm">{error}</p>}</>
 }
 

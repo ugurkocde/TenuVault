@@ -1,5 +1,6 @@
 import { normalizeBackupStatus } from "../../portal/lib/backup-health"
 import { typeForFolder } from "../../shared/intune/registry"
+import { omittedFolders } from "../../shared/intune/secret-omission"
 import { maskedFolders } from "../../shared/intune/scope"
 
 /**
@@ -17,13 +18,14 @@ export interface BackupGaps {
   missing: Array<{ reason: GapReason; folders: string[] }>
 }
 
-export type GapReason = "excluded" | "skipped" | "failed" | "reader" | "masked"
+export type GapReason = "excluded" | "skipped" | "failed" | "reader" | "masked" | "omitted"
 
 const REASON_TEXT: Record<GapReason, string> = {
   excluded: "left out of the backup scope",
   skipped: "skipped for missing permissions",
   failed: "failed",
   reader: "not readable by the Backup Reader (covered by manual backups)",
+  omitted: "saved with values left out",
   masked: "saved with encrypted values masked (a manual backup captures them)",
 }
 
@@ -41,7 +43,8 @@ export function backupGaps(metadataValue: unknown, folders: string[]): BackupGap
   const failures = typeof metadata.Failures === "number" ? metadata.Failures : undefined
   const lists: Array<[GapReason, string[]]> = [
     ["excluded", strings(record(metadata.Scope).Excluded)],
-    ["skipped", strings(metadata.SkippedTypes)],
+    ["skipped", strings(metadata.OmissionVersion === 1 && Array.isArray(metadata.ActualSkippedTypes) ? metadata.ActualSkippedTypes : metadata.SkippedTypes)],
+    ["omitted", [...omittedFolders(metadata.Items)]],
     ["failed", strings(metadata.FailedTypes)],
     ["reader", strings(metadata.AppOnlyExcludedTypes)],
     ["masked", [...maskedFolders(metadata)]],

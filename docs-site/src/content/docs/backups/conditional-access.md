@@ -84,3 +84,5 @@ The Backup Reader exists because Conditional Access session controls, such as si
 * [What gets backed up](/backups/coverage/)
 * [App registration and delegated permissions](/security/permissions/)
 * [Restore modes and assignments](/restore/modes/)
+
+Secret omission applies to the policy backup as a whole. The supported Conditional Access configuration and its references remain visible in backups, comparisons and restore preview. Restrict access to identity data in the backup and exports. [Backup coverage](/backups/coverage/#leave-secret-values-out-of-policy-backups)

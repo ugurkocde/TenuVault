@@ -96,6 +96,7 @@ $script:publishBehavior = "publish"
 $script:declineVariable = $null
 $script:failLookups = $false
 $script:failList = $false
+$script:failNextList = $false
 $script:translatedVariable = $null
 
 function Import-AzAutomationRunbook {
@@ -125,6 +126,7 @@ function Get-AzAutomationVariable {
     [CmdletBinding()]
     param($ResourceGroupName, $AutomationAccountName, $Name)
     if (-not $Name) {
+        if ($script:failNextList) { $script:failNextList = $false; Write-MockError $PSCmdlet (New-OutageException); return }
         if ($script:failLookups -or $script:failList) { Write-MockError $PSCmdlet (New-OutageException); return }
         return @($script:variables.Keys | Sort-Object | ForEach-Object { [pscustomobject]@{ Name = $_; Value = $script:variables[$_] } })
     }
@@ -237,6 +239,7 @@ function Invoke-AzRestMethod {
 function Reset-OldSetup {
     $script:variables = @{ $legacyKeyVaultVariable = "kv-tenuvault-abc123" }
     foreach ($name in $variableNames) { $script:variables[$name] = "x" }
+    $script:variables["TenuVaultStorageAccount-$tenantKey"] = $StorageAccountName
     $script:actions.Clear()
     $script:variableWrites.Clear()
     $script:draft = $oldRunbook
@@ -267,6 +270,8 @@ function Write-Scenario {
         legacyVariableKept = $script:variables.ContainsKey($legacyKeyVaultVariable)
         changeReport = $script:variables["TenuVaultChangeReport-$tenantKey"]
         changeReportActors = $script:variables["TenuVaultChangeReportActors-$tenantKey"]
+        omissionBinding = $script:variables["TenuVaultOmissionAccount-$tenantKey"]
+        storageAccount = $script:variables["TenuVaultStorageAccount-$tenantKey"]
         tenantName = $script:variables["TenuVaultTenantName-$tenantKey"]
         variables = @($script:variables.Keys | Sort-Object)
         variableWrites = $script:variableWrites.ToArray()
@@ -411,4 +416,49 @@ foreach ($scenario in "remove-complete", "remove-whatif", "remove-variable-decli
     if ($scenario -eq "remove-scope-read-403-declined") { $script:declineVariable = "TenuVaultScope-$tenantKey" }
     $output = if ($scenario -like "remove-whatif*") { @(Remove-TenuVaultCloudBackupSetup -WhatIf 6>&1) } else { @(Remove-TenuVaultCloudBackupSetup 6>&1) }
     Write-Scenario -Name $scenario -Output $output
+}
+
+
+# Use the actual upgrade step for a storage move. The data-plane fake grants access to the
+# previous account only for the copy case, and records where the original policy was written.
+$backupContainer = "intune-backups"
+$script:migrationPolicy = '{"version":1,"tenantId":"11111111-2222-3333-4444-555555555555","enabled":true,"scripts":false,"generation":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}'
+function Get-AzAccessToken { param($ResourceUrl) @{ Token = "storage-token" } }
+function Invoke-WebRequest {
+    param($Uri, $Authentication, $Token, $Headers, $Method, $ContentType, $Body, $TimeoutSec, [switch]$SkipHttpErrorCheck)
+    if (-not $Uri.EndsWith("/intune-backups/.tenuvault-control/$TenantId/secret-omission.json")) { throw "Unexpected policy path." }
+    if ($Method -eq "Put") {
+        if ($Uri -notlike "https://stcontoso.*" -or $Headers["If-None-Match"] -ne "*" -or $Body -cne $script:migrationPolicy) { throw "Unsafe copy request." }
+        if ($script:variables["TenuVaultStorageAccount-$tenantKey"] -ne "stprevious") { throw "Storage account changed before the policy was copied." }
+        $script:actions.Add("copy-policy")
+        return @{ StatusCode = 201 }
+    }
+    if ($script:destinationPolicy -and $Uri -like "https://stcontoso.*") { return @{ Content = $script:destinationPolicy } }
+    if ($script:denyPrevious -or $Uri -notlike "https://stprevious.*") { throw "Access denied." }
+    return @{ Content = $script:migrationPolicy }
+}
+foreach ($scenario in "move-copies-policy", "move-copies-off", "move-quiet-on-denied", "move-warns-on-denied", "move-keeps-destination", "move-keeps-off", "move-continues-on-list-error", "fresh-recovers-after-list-error", "fresh-continues-on-list-error", "upgrade-preserves-binding", "upgrade-creates-binding", "upgrade-keeps-unreadable-binding") {
+    Reset-OldSetup
+    $runbook = $null
+    $script:variables["TenuVaultStorageAccount-$tenantKey"] = if ($scenario.StartsWith("move")) { "stprevious" } else { $StorageAccountName }
+    if ($scenario -notin @("upgrade-creates-binding", "move-quiet-on-denied")) {
+        $script:variables["TenuVaultOmissionAccount-$tenantKey"] = "stprevious"
+    }
+    if ($scenario -in @("upgrade-keeps-unreadable-binding", "move-continues-on-list-error")) {
+        $script:translatedVariable = "TenuVaultOmissionAccount-$tenantKey"
+        $script:failList = $true
+    }
+    if ($scenario.StartsWith("fresh")) {
+        $script:variables.Clear()
+        $script:failNextList = $true
+        $script:failList = $scenario -eq "fresh-continues-on-list-error"
+    }
+    $script:migrationPolicy = $script:migrationPolicy.Replace('"enabled":false', '"enabled":true')
+    if ($scenario -eq "move-copies-off") { $script:migrationPolicy = $script:migrationPolicy.Replace('"enabled":true', '"enabled":false') }
+    $script:denyPrevious = $scenario -in @("move-warns-on-denied", "move-quiet-on-denied", "move-keeps-destination", "move-keeps-off", "move-continues-on-list-error")
+    $script:destinationPolicy = if ($scenario -eq "move-keeps-destination") { $script:migrationPolicy } elseif ($scenario -eq "move-keeps-off") { $script:migrationPolicy.Replace('"enabled":true', '"enabled":false') }
+    $output = @()
+    $errorText = $null
+    try { $output = @(. $upgradeStep 3>&1 6>&1) } catch { $errorText = $_.Exception.Message }
+    Write-Scenario -Name $scenario -Runbook $runbook -ErrorText $errorText -Output $output
 }

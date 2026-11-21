@@ -206,3 +206,7 @@ If a tenant's plan does not include an action, TenuVault shows which plan does a
 * [What gets backed up](/backups/coverage/)
 * [Schedule backups](/backups/schedules/)
 * [Restore Intune policies](/restore/)
+
+## Back up policies with values left out
+
+You can leave classified credentials out of future policy backups for a tenant. The same setting applies to scheduled backups and upgraded Azure runbooks. Backup History shows how many policies had values left out. Use a backup that includes those values to restore them. [Backup coverage](/backups/coverage/#leave-secret-values-out-of-policy-backups)

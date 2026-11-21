@@ -19,6 +19,7 @@ import { join, resolve } from "node:path"
 import { checkSchedulePanel } from "./schedule-panel-smoke.mjs"
 import { checkBackupCancel } from "./backup-cancel-smoke.mjs"
 import { checkAppBackupCompletion } from "./app-backup-completion-smoke.mjs"
+import { checkOmission } from "./omission-smoke.mjs"
 import { disableAutoUpdate, RUN_SWITCH } from "./smoke-update-policy.mjs"
 
 const require = createRequire(import.meta.url)
@@ -103,10 +104,13 @@ const env = { ...process.env, ELECTRON_ENABLE_LOGGING: "1" }
 delete env.ELECTRON_RUN_AS_NODE
 // Only a development run needs the electron package, and it loads after the policy step, so a
 // missing package cannot skip the recovery of a packaged run.
-app = spawn(packagedApp ?? require("electron"), args, { stdio: ["ignore", "pipe", "pipe"], env })
 let appLog = ""
-app.stdout.on("data", (d) => (appLog += d))
-app.stderr.on("data", (d) => (appLog += d))
+function startApp() {
+  app = spawn(packagedApp ?? require("electron"), args, { stdio: ["ignore", "pipe", "pipe"], env })
+  app.stdout.on("data", (data) => (appLog += data))
+  app.stderr.on("data", (data) => (appLog += data))
+}
+startApp()
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 let failures = 0
@@ -125,8 +129,7 @@ async function connect() {
   throw new Error(`App did not expose a page target. App log:\n${appLog.slice(-4000)}`)
 }
 
-const ws = new WebSocket(await connect())
-await new Promise((r) => ws.addEventListener("open", r, { once: true }))
+let ws
 let nextId = 1
 let renderFailures = 0
 // Render failures the error-boundary check provokes on purpose; any beyond
@@ -134,19 +137,39 @@ let renderFailures = 0
 let expectedRenderFailures = 0
 let unhandledRejections = 0
 const pending = new Map()
-ws.addEventListener("message", (event) => {
-  const message = JSON.parse(event.data)
-  if (message.method === "Runtime.consoleAPICalled" && message.params.args[0]?.value === "Screen failed to render:") {
-    renderFailures++
-  }
-  if (message.method === "Runtime.consoleAPICalled" && message.params.args[0]?.value === "Unhandled promise rejection:") {
-    unhandledRejections++
-  }
-  if (message.id && pending.has(message.id)) {
-    pending.get(message.id)(message)
-    pending.delete(message.id)
-  }
-})
+
+async function connectPage() {
+  ws = new WebSocket(await connect())
+  await new Promise((resolve) => ws.addEventListener("open", resolve, { once: true }))
+  ws.addEventListener("message", (event) => {
+    const message = JSON.parse(event.data)
+    if (message.method === "Runtime.consoleAPICalled" && message.params.args[0]?.value === "Screen failed to render:") {
+      renderFailures++
+    }
+    if (message.method === "Runtime.consoleAPICalled" && message.params.args[0]?.value === "Unhandled promise rejection:") {
+      unhandledRejections++
+    }
+    if (message.id && pending.has(message.id)) {
+      pending.get(message.id)(message)
+      pending.delete(message.id)
+    }
+  })
+}
+await connectPage()
+
+async function restart() {
+  const previousApp = app
+  const exited = new Promise((resolve) => previousApp.once("exit", () => resolve(true)))
+  ws.send(JSON.stringify({ id: nextId++, method: "Browser.close" }))
+  if (!await Promise.race([exited, sleep(5000).then(() => false)])) previousApp.kill("SIGKILL")
+  assert(await Promise.race([exited, sleep(10000).then(() => false)]), "app did not exit for restart")
+  ws.close()
+  startApp()
+  await connectPage()
+  await send("Runtime.enable")
+  assert(await waitForCondition("Boolean(window.tenuvault?.backups)"), "preload did not reconnect after restart")
+}
+
 const send = (method, params = {}) =>
   new Promise((resolveSend, rejectSend) => {
     const id = nextId++
@@ -1042,6 +1065,11 @@ await check("several tenants get the overview, switcher and schedule tab", async
   await sleep(300)
   await screenshot("09-schedule-cloud")
 })
+
+if (process.env.TENUVAULT_SMOKE_SECTION === "omission") {
+  await checkOmission({ check, evaluate, restart, waitForText, waitForCondition, assert })
+  await finish()
+}
 
 await check("App Backup keeps stored access independent of sign-in and exposes guarded capture", async () => {
   await go("#/portal/app-backup", "Installer backups from Intune")

@@ -160,13 +160,15 @@ On the **Review** step, **Overwrite the current version** lists each property th
 
 By default, items are restored to the tenant selected at the top of **Backup & Restore**. On MSP, **Copy to other tenants instead** sends copies to other connected tenants. Copies to other tenants always use **Create copies**, keep their original names, get the Default scope tag and are never assigned. See [Restore to another tenant](/restore/cross-tenant/).
 
+A policy with omitted values is unavailable in both restore modes. Choose a different snapshot that contains those values before creating a copy or replacing it in place. [Restore preview](/restore/#policies-with-values-left-out)
+
+## Recorded outcomes
+
+**Job details** in [Audit Log](/audit-log/) records created copies and in-place updates as separate item outcomes. It also shows unchanged, skipped, failed, partial, pending and unattempted items. Applied fields describe steps accepted by Intune. Verified fields are shown when a read confirmed them.
+
 ## Related pages
 
 * [Intune restore](https://www.tenuvault.com/intune-restore): restore modes and plans, on the product site
 * [Restore Intune policies](/restore/)
 * [What cannot be restored and restore write history](/restore/limitations/)
 * [Plans and features](/licensing/)
-
-### Recorded outcomes
-
-**Job details** in [Audit Log](/audit-log/) records created copies and in-place updates as separate item outcomes. It also shows unchanged, skipped, failed, partial, pending and unattempted items. Applied fields describe steps accepted by Intune. Verified fields are shown when a read confirmed them.

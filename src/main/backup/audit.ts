@@ -35,8 +35,9 @@ export function backupAudit(job: BackupJob, request: BackupRequest, tokens: RunT
   const user = reader ? { id: tokens.auditUser?.id ?? tokens.registrationId ?? 'unknown', email: '', name: 'Backup Reader service principal' } : tokens.auditUser ?? admin
   const warnings = (job.results?.warnings ?? 0) > 0 || (job.failures ?? 0) > 0
   const status: AuditJobStatus = job.commitUnconfirmed || job.status === 'Running' || job.status === 'Queued' ? 'uncertain' : job.status === 'Cancelled' ? 'cancelled' : job.status === 'Failed' ? 'failed' : warnings ? 'warnings' : 'completed'
-  const reason = status === 'uncertain' ? 'WRITE_UNCONFIRMED' : status === 'cancelled' ? 'BACKUP_CANCELLED' : status === 'warnings' ? 'BACKUP_WARNINGS'
-    : status === 'failed' ? job.unreachable ? 'BACKUP_UNREACHABLE' : 'BACKUP_FAILED' : undefined
+  const reason = status === 'uncertain' ? 'WRITE_UNCONFIRMED' : status === 'cancelled' ? 'BACKUP_CANCELLED'
+    : status === 'warnings' ? job.valuesOmitted && !job.failures ? 'BACKUP_VALUES_OMITTED' : 'BACKUP_WARNINGS'
+      : status === 'failed' ? job.unreachable ? 'BACKUP_UNREACHABLE' : 'BACKUP_FAILED' : undefined
   const binding = { tenantId: job.tenantId, storageAccountName: job.storageAccountName, user }
   const input = {
     eventType: status === 'cancelled' ? AuditEventType.BACKUP_CANCELLED : status === 'failed' ? AuditEventType.BACKUP_FAILED : AuditEventType.BACKUP_COMPLETED,
@@ -63,10 +64,12 @@ export async function reconcileBackupAudit(entry: AuditLogEntry, readManifest: (
   const manifest = parsed.value as {
     RunId?: string; TenantId?: string; Status?: string; AuthMode?: string; CompletedAt?: string;
     ItemCounts?: { TotalPolicies?: number }; Failures?: number; MaskedSecretItems?: unknown[];
+    OmissionEnabled?: boolean; Items?: Record<string, { omitted?: unknown[] }>;
   }
   const authMode = entry.job?.producer === 'backup-reader' ? 'app-only' : 'delegated'
   if (manifest.RunId !== entry.job?.runId || manifest.TenantId !== entry.user.tenantId || manifest.AuthMode !== authMode) return entry
-  const status = manifest.Status === 'Success' ? manifest.MaskedSecretItems?.length ? 'warnings' : 'completed'
+  const omitted = manifest.OmissionEnabled === true && Object.values(manifest.Items ?? {}).some(item => item?.omitted?.length)
+  const status = manifest.Status === 'Success' ? omitted || manifest.MaskedSecretItems?.length ? 'warnings' : 'completed'
     : manifest.Status === 'CompletedWithWarnings' ? 'warnings' : manifest.Status === 'Failed' ? 'failed'
       : manifest.Status === 'Cancelled' ? 'cancelled' : 'uncertain'
   if (status === 'uncertain') return entry
@@ -78,7 +81,7 @@ export async function reconcileBackupAudit(entry: AuditLogEntry, readManifest: (
     result: status === 'completed' ? AuditResult.SUCCESS : status === 'failed' ? AuditResult.FAILURE : AuditResult.PARTIAL,
     severity: status === 'failed' ? AuditSeverity.ERROR : status === 'warnings' ? AuditSeverity.WARNING : AuditSeverity.INFO,
     job: { ...entry.job!, status,
-      reason: status === 'warnings' ? 'BACKUP_WARNINGS' : status === 'failed' ? 'BACKUP_FAILED' : status === 'cancelled' ? 'BACKUP_CANCELLED' : undefined,
+      reason: status === 'warnings' ? omitted && manifest.Status === 'Success' ? 'BACKUP_VALUES_OMITTED' : 'BACKUP_WARNINGS' : status === 'failed' ? 'BACKUP_FAILED' : status === 'cancelled' ? 'BACKUP_CANCELLED' : undefined,
       counts: { saved: manifest.ItemCounts?.TotalPolicies, failures: manifest.Failures },
     },
   }

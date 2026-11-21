@@ -51,6 +51,7 @@ it('lets another authorized admin repair a partial restore and audits the execut
     bind: () => ({ tenantId, storageAccountName: account, user: { id: firstActor, email: '', name: 'Admin' } }),
     transport: async () => { throw new Error('Offline') },
   }))
+  let snapshotReads = 0
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input))
     if (url.hostname === 'login.microsoftonline.com') {
@@ -58,7 +59,10 @@ it('lets another authorized admin repair a partial restore and audits the execut
       return Response.json({ access_token: `mock.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.local` })
     }
     if (url.pathname.endsWith('/metadata.json') || url.pathname.endsWith('/.tenuvault-owner.json')) return new Response('', { status: 404 })
-    if (url.hostname.endsWith('.blob.core.windows.net')) return Response.json(snapshot)
+    if (url.hostname.endsWith('.blob.core.windows.net')) {
+      snapshotReads++
+      return reject ? Response.json(snapshot) : new Response(null, { status: 404 })
+    }
     if (url.pathname.endsWith('localizedNotificationMessages')) {
       writes.push(JSON.parse(String(init?.body)).locale)
       return reject ? Response.json({ error: { message: 'No' } }, { status: 400 }) : new Response(null, { status: 204 })
@@ -83,6 +87,7 @@ it('lets another authorized admin repair a partial restore and audits the execut
     { user: { id: firstActor }, job: { operationId: first.jobId, status: 'warnings' } },
     { user: { id: secondActor }, job: { operationId: first.jobId, runId: second.jobId, status: 'completed' } },
   ])
+  expect(snapshotReads).toBe(1)
 })
 it('rejects a replacement repair when live state changed after the failure', async () => {
   let liveName = 'Before'

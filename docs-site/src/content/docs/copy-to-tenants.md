@@ -185,3 +185,5 @@ If the linked policy was deleted in the target, the next copy creates it again a
 * [Restore to another tenant](/restore/cross-tenant/)
 * [Audit log](/audit-log/)
 * [Plans and features](/licensing/)
+
+When secret omission is enabled, rollback captures leave out the classified values. The rollback preview identifies the policies that need another recovery source. [Backup coverage](/backups/coverage/#leave-secret-values-out-of-policy-backups)

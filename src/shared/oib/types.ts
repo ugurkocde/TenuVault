@@ -245,6 +245,7 @@ export interface UpdatedObject extends RunObject {
 }
 
 export interface OibRun {
+  omission?: { enabled: boolean; scripts: boolean; generation: string }
   runId: string
   tenantId: string
   createdAt: string
@@ -297,6 +298,7 @@ export interface OibRecentBackup {
 
 export interface OibBackupOptions {
   recent: OibRecentBackup | null
+  omissionNotice?: string
 }
 
 /** oib-progress: what a running deployment, fix, undo or validation is doing; null when nothing runs. */

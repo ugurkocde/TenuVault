@@ -3,6 +3,7 @@ import { INTUNE_TYPES, typeForFolder } from "../../../../shared/intune/registry"
 import { isBackupName } from "../../../../shared/intune/backup-names"
 import { blobPath } from "../../../../shared/security"
 import { type NextRequest, NextResponse } from "next/server"
+import { backupManifest } from "~/lib/policies/backup-manifest"
 import { readOwnedBackup } from "~/lib/policies/backup-owner"
 
 interface PolicyFile {
@@ -100,6 +101,18 @@ export async function POST(request: NextRequest) {
     }), backupId, tenantId)
     if (!owned.ok) return NextResponse.json({ error: owned.error }, { status: owned.status })
     const metadata = owned.metadata ?? undefined
+
+    if (metadata?.OmissionVersion !== undefined) {
+      for (const [path, entry] of backupManifest(metadata, backupId) ?? []) {
+        if (!entry.omitted) continue
+        const [, folder, fileName] = path.split("/")
+        const type = typeForFolder(folder!)
+        if (!type || !fileName) continue
+        const group = groups.get(type.folder) ?? { folder: type.folder, label: type.label, area: type.area, policies: [] }
+        if (!group.policies.some((policy) => policy.path === path)) group.policies.push({ name: fileName, path, size: 0, type: type.folder, displayName: fileName.replace(/\.json$/, "") })
+        groups.set(type.folder, group)
+      }
+    }
 
     const ordered = INTUNE_TYPES.map((type) => groups.get(type.folder)).filter((group): group is BackupGroup => !!group)
     for (const group of ordered) group.policies.sort((a, b) => (a.displayName || "").localeCompare(b.displayName || ""))
