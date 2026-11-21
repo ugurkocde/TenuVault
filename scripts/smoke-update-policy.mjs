@@ -78,6 +78,23 @@ function waitForWriters(list, describe) {
   return `${describe} is still running after 10 seconds`
 }
 
+/**
+ * The app of a killed smoke run can outlive it, and it reads the policy as it starts. A smoke run
+ * starts it with a profile folder named tenuvault-smoke-..., so recovery waits until no such app
+ * runs before it removes anything: otherwise the app could start without the policy and update the
+ * build under test. Returns why it cannot go on, or null.
+ */
+function smokeAppsGone(list) {
+  for (let attempt = 0; attempt < 50; attempt++) {
+    const apps = list()
+    if (apps === null) return "could not list running processes to check for a smoke run's app"
+    if (apps.length === 0) return null
+    if (attempt === 49) return `the app of a killed smoke run is still running (process ${apps.join(", ")}); quit it, then start again`
+    sleep(200)
+  }
+  return null
+}
+
 // ---------- macOS ----------
 
 const MANAGED = "/Library/Managed Preferences"
@@ -135,6 +152,16 @@ function macosWriters() {
   })
 }
 
+/** Process IDs of apps a smoke run started, or null when ps fails. */
+function macosSmokeApps() {
+  const listed = run("/bin/ps", ["-axww", "-o", "pid=,stat=,command="], { timeout: 5000 })
+  if (listed.status !== 0 || listed.stderr.trim() || !listed.stdout.trim()) return null
+  return listed.stdout.split("\n").flatMap((line) => {
+    const [, pid, stat = "", command = ""] = /^\s*(\d+)\s+(\S+)\s+(.*)$/.exec(line) ?? []
+    return pid && !stat.startsWith("Z") && /--user-data-dir=\S*tenuvault-smoke-/.test(command) ? [pid] : []
+  })
+}
+
 /** Removes what a dead smoke run left. Returns why it could not, or null. */
 function macosRecover() {
   const waited = waitForWriters(macosWriters, `a process writing ${MANAGED}`)
@@ -146,6 +173,8 @@ function macosRecover() {
   if (inspected.error) return inspected.error
   const leftovers = [...(stage === "present" ? [STAGE] : []), ...(inspected.mark ? [FILE] : [])]
   if (leftovers.length === 0) return null
+  const running = smokeAppsGone(macosSmokeApps)
+  if (running) return running
   const removed = sudo(["/bin/rm", "-f", ...leftovers])
   if (removed.status !== 0) return `could not remove ${leftovers.join(" and ")}, which a killed smoke run left: ${failed(removed)}. ${SUDO_HINT}`
   console.log(`Removed the ${NAME} policy a killed smoke run left in ${MANAGED}.`)
@@ -188,7 +217,7 @@ function macosChange(id) {
           ["/bin/mv", "-n", STAGE, FILE],
         ]) {
           const result = sudo(step)
-          if (result.status !== 0) return failed(result)
+          if (result.status !== 0) return `${failed(result)}${/sudo/i.test(failed(result)) ? `. ${SUDO_HINT}` : ""}`
         }
       } finally {
         rmSync(work, { recursive: true, force: true })
@@ -274,11 +303,22 @@ Remove-ItemProperty -LiteralPath ${quote(HKCU)} -Name '${MARK}'`)
   return result.status === 0 ? null : failed(result)
 }
 
+/** Process IDs of apps a smoke run started, or null when the listing fails. */
+function windowsSmokeApps() {
+  const result = powershell(`@(Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -like '*--user-data-dir=*tenuvault-smoke-*' -and $_.CommandLine -notlike '*Get-CimInstance*' } | ForEach-Object { $_.ProcessId }) -join ','`)
+  const ids = result.stdout?.trim() ?? ""
+  return result.status === 0 && /^(\d+(,\d+)*)?$/.test(ids) ? ids.split(",").filter(Boolean) : null
+}
+
 function windowsRecover() {
   const waited = waitForWriters(windowsWriters, "a smoke run's registry write")
   if (waited) return waited
   const now = windowsRead()
   if (now.error) return now.error
+  if (now.hkcu && (now.hkcu.mark != null || (now.hkcu.values === 0 && now.hkcu.subkeys === 0))) {
+    const running = smokeAppsGone(windowsSmokeApps)
+    if (running) return running
+  }
   if (now.hkcu && now.hkcu.mark == null && now.hkcu.values === 0 && now.hkcu.subkeys === 0) {
     // An empty policy key holds no policy: what a run killed right after creating it leaves.
     const removed = powershell(`# ${WRITER}
@@ -394,5 +434,6 @@ if (entry && import.meta.url === entry && process.argv[2] === "--clean") {
     process.exit(1)
   }
   held.release()
-  console.log("No smoke run's update policy is left.")
+  // On Windows the policy is per user (HKCU): a run another account started is cleaned up there.
+  console.log(process.platform === "win32" ? "No smoke run's update policy is left for this Windows user." : "No smoke run's update policy is left.")
 }

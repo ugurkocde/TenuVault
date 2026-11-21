@@ -109,7 +109,10 @@ function managed() {
 }
 
 /** Puts a binary plist into the store as root, with the fixture mark unless it is a smoke run's. */
-function plant(target, body, mode = "644") {
+function plant(target, body, mode = "644", { replacing = null } = {}) {
+  // Only where nothing is yet, or over the given smoke run's own file: never over someone's profile.
+  if (replacing) assert(run("/usr/bin/plutil", ["-extract", "TenuVaultSmokeRun", "raw", "-o", "-", target]).stdout?.trim() === replacing, `${target} is not the smoke run's own file`)
+  else assert(!present(target), `${target} appeared, so the test does not plant over it`)
   const file = join(work, "plant.plist")
   writeFileSync(file, `<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict>${body}<key>${FIXTURE}</key><true/></dict></plist>\n`)
   assert(run("/usr/bin/plutil", ["-convert", "binary1", file]).status === 0, "could not convert the plist to binary")
@@ -194,10 +197,19 @@ async function refuses(expected) {
   const before = snapshot()
   assert(before !== null, "nothing was planted")
   const result = await disableAutoUpdate()
-  assert(expected.test(result.error ?? ""), `the harness did not refuse: ${result.error}`)
-  assert(result.restore(), "restore after a refusal reported a failure")
+  try {
+    assert(expected.test(result.error ?? ""), `the harness did not refuse: ${result.error}`)
+  } finally {
+    assert(result.restore(), "restore after a refusal reported a failure")
+  }
   assert(snapshot() === before, "the refused run changed the store")
 }
+
+/** The smoke run's mark in the store now. */
+const currentMark = () =>
+  platform === "darwin"
+    ? run("/usr/bin/plutil", ["-extract", "TenuVaultSmokeRun", "raw", "-o", "-", FILE]).stdout?.trim()
+    : powershell(`(Get-ItemProperty -LiteralPath '${HKCU}').TenuVaultSmokeRun`).stdout?.trim()
 
 if (snapshot() !== null) {
   console.log("This test needs a store without any TenuVault policy; it found one and changed nothing.")
@@ -243,17 +255,21 @@ try {
   })
 
   await check("leaves a policy that replaced the smoke run's during the run", async () => {
+    let result = null
     try {
-      const result = await disableAutoUpdate()
+      result = await disableAutoUpdate()
       assert(!result.error, result.error)
+      const mark = currentMark()
+      assert(/^\d+@/.test(mark ?? ""), "the run's policy carries no mark")
       // A profile replaces the file, or Group Policy sets the value to 0 next to the smoke's mark.
-      if (platform === "darwin") plant(FILE, "<key>DisableAutoUpdate</key><false/>")
+      if (platform === "darwin") plant(FILE, "<key>DisableAutoUpdate</key><false/>", "644", { replacing: mark })
       else {
         planted.add("DisableAutoUpdate")
         assert(powershell(`Set-ItemProperty -LiteralPath '${HKCU}' -Name DisableAutoUpdate -Value 0\nNew-ItemProperty -LiteralPath '${HKCU}' -Name '${FIXTURE}' -PropertyType DWord -Value 1 | Out-Null`).status === 0, "could not replace the value")
       }
       const replaced = snapshot()
       assert(result.restore(), "restore reported a failure")
+      result = null
       const after = snapshot()
       if (platform === "darwin") assert(after === replaced, "the restore changed the replacing profile")
       else {
@@ -261,6 +277,7 @@ try {
         assert(!/TenuVaultSmokeRun/.test(after ?? ""), "the smoke mark was left")
       }
     } finally {
+      result?.restore()
       await clear()
     }
   })
@@ -289,19 +306,44 @@ try {
   }
 
   await check("changes nothing when a policy already turns updates off, and holds the lock until it ends", async () => {
+    let result = null
     try {
       await locked(() => (platform === "darwin" ? plant(FILE, "<key>DisableAutoUpdate</key><true/>") : plantKey({ DisableAutoUpdate: ["DWord", 1] })))
       const before = snapshot()
-      const result = await disableAutoUpdate()
+      result = await disableAutoUpdate()
       assert(!result.error, result.error)
       assert(snapshot() === before, "the run changed a policy that already turned updates off")
       const second = await disableAutoUpdate()
+      second.restore()
       assert(/another smoke run/.test(second.error ?? ""), `a second run did not wait for the lock: ${second.error}`)
       assert(result.restore(), "restore reported a failure")
+      result = null
       assert(snapshot() === before, "the restore changed the existing policy")
     } finally {
+      result?.restore()
       await clear()
     }
+  })
+
+  await check("--clean waits while the app of a killed smoke run still runs", async () => {
+    const child = await holder()
+    await kill(child)
+    assert(managed(), "the killed holder took the policy away, so the test proves nothing")
+    // Stands in for the packaged app the killed run started: same profile folder argument.
+    const app = spawn(process.execPath, ["-e", "setTimeout(() => {}, 3000)", "--", `--user-data-dir=${join(work, "tenuvault-smoke-app")}`], { stdio: "ignore" })
+    holders.add(app)
+    app.on("exit", () => holders.delete(app))
+    const appExited = new Promise((resolve) => app.once("exit", resolve))
+    const cleaning = spawn(process.execPath, [SCRIPT, "--clean"], { stdio: ["ignore", "pipe", "pipe"] })
+    let output = ""
+    cleaning.stdout.on("data", (data) => (output += data))
+    cleaning.stderr.on("data", (data) => (output += data))
+    const cleaned = new Promise((resolve) => cleaning.once("exit", resolve))
+    await new Promise((resolve) => setTimeout(resolve, 1000))
+    assert(managed(), "--clean removed the policy while the app was still running")
+    await appExited
+    assert((await cleaned) === 0, `--clean failed: ${output}`)
+    assert(snapshot() === null, "--clean left the policy after the app quit")
   })
 
   await check("--clean refuses while a run holds the policy", async () => {
