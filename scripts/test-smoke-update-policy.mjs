@@ -298,10 +298,12 @@ try {
 
   // What a kill partway through a write leaves. macOS: the staged file, not yet renamed. Windows:
   // the key with the mark but not the value, or the key alone. --clean must remove each of them.
+  // A mark in the smoke run's own format (pid@ISO time), as a killed run writes it.
+  const deadMark = "1@2000-01-01T00:00:00.000Z"
   const halfway = platform === "darwin"
-    ? { "the staged file": () => plant(STAGE, "<key>DisableAutoUpdate</key><true/><key>TenuVaultSmokeRun</key><string>1@x</string>") }
+    ? { "the staged file": () => plant(STAGE, `<key>DisableAutoUpdate</key><true/><key>TenuVaultSmokeRun</key><string>${deadMark}</string>`) }
     : {
-        "the mark without the value": () => assert(powershell(`New-Item -Path '${HKCU}' | Out-Null\nNew-ItemProperty -LiteralPath '${HKCU}' -Name TenuVaultSmokeRun -PropertyType String -Value '1@x' | Out-Null`).status === 0, "could not plant the mark"),
+        "the mark without the value": () => assert(powershell(`New-Item -Path '${HKCU}' | Out-Null\nNew-ItemProperty -LiteralPath '${HKCU}' -Name TenuVaultSmokeRun -PropertyType String -Value '${deadMark}' | Out-Null`).status === 0, "could not plant the mark"),
         "an empty key": () => assert(powershell(`New-Item -Path '${HKCU}' | Out-Null`).status === 0, "could not create the key"),
       }
   for (const [left, put] of Object.entries(halfway)) {
