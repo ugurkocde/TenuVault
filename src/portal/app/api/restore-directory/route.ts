@@ -24,10 +24,14 @@ export async function POST(request: NextRequest) {
     const owned = await readOwnedBackup(read, backupId, tenantId, storageAccountName)
     if (!owned.ok) return NextResponse.json({ error: owned.error }, { status: owned.status })
     if (!owned.owned) throw new Error("This backup must identify the connected tenant.")
+    if (!owned.metadata) throw new Error("The backup provenance could not be read. Directory restore requires its backup metadata.")
+    // Ownership markers also place imports in this tenant's store. Only the manifest
+    // records that provenance; renderer inputs and local ownership cannot replace it.
+    const origin = Object.hasOwn(owned.metadata, "Import") ? "import" : "restore"
     const response = await read(path)
     if (!response.ok) throw new Error("The backup policy could not be read.")
     const snapshot = await response.json() as Item
-    const restore = { path, snapshot, origin: "restore" as const, runId: typeof body.runId === "string" ? body.runId : undefined }
+    const restore = { path, snapshot, origin, runId: typeof body.runId === "string" ? body.runId : undefined } as const
     const result = await directoryRestoreRequest(tenantId, restore, { action, options: { stage: body.stage, exactMembers: body.exactMembers === true, exactOwners: body.exactOwners === true, ...(typeof body.previousRunId === "string" ? { previousRunId: body.previousRunId } : {}) }, fingerprint: body.fingerprint, approvals: body.approvals }, async name => {
       const response = await read(name)
       if (!response.ok) throw new Error("A backup relationship shard could not be read.")

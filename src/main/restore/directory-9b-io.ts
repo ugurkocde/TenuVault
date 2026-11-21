@@ -19,7 +19,7 @@ const collection = (folder: string) => {
 export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typeof fetch = fetch, protectedAppIds: () => readonly string[] = () => [], settings: () => ModuleSetting | undefined = () => undefined) {
   requireRestoreActor(token, actor)
   const request = async (path: string, method = "GET", body?: Item, signal?: AbortSignal): Promise<Item | null> => {
-    signal?.throwIfAborted()
+    if (signal?.aborted) throw new RestoreWriteDeferredError("The application request was cancelled before sending.")
     const response = await fetchImpl(root + path, { method, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, ...(body ? { body: JSON.stringify(body) } : {}), signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(60_000)]) : AbortSignal.timeout(60_000) })
     if (response.status === 404 && method === "GET") return null
     if (!response.ok) {
@@ -181,7 +181,8 @@ export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typ
       // Read saved opt-in again after all asynchronous checks, before recording a send.
       // Reads stay available so already-sent writes can reconcile after opt-out.
       requireApplicationRestoreAccess(settings())
-      signal?.throwIfAborted(); beforeSend()
+      if (signal?.aborted) throw new RestoreWriteDeferredError("The application write was cancelled before sending.")
+      beforeSend()
       await request(path, "PATCH", payload, signal)
       return { id: targetId }
     },

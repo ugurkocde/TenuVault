@@ -5,6 +5,7 @@ import { RecoveryAccounts } from "../src/main/restore/safety-resolvers"
 import { restoreFingerprint } from "../src/main/restore/guarded-run"
 import { LARGE_SHARD_ITEMS } from "../src/shared/large-backup"
 import type { Item } from "../src/shared/intune/registry"
+import type { IdentityRestoreRequest } from "../src/main/restore/dispatch"
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`
 const tenant = id(1), app = id(2), admin = id(3), resource = id(10)
 const options = { stage: "object" as const, exactMembers: false, exactOwners: false }
@@ -270,4 +271,31 @@ it("cancels the production adapter's throttle wait and resumes after restart", a
   expect(attempts).toBe(1); expect(env.writes).toEqual([])
   expect(await env.service().execute(tenant, request, page.fingerprint, approvals)).toMatchObject({ status: "complete" })
   expect(attempts).toBe(2); expect(env.writes).toHaveLength(1)
+})
+
+it.each(["Users", "Groups"] as const)("keeps cancellation during the final %s read resumable with exactly one PATCH", async folder => {
+  const env = world(), service = env.service()
+  const request: IdentityRestoreRequest = folder === "Groups" ? { ...env.request, snapshot: { ...env.request.snapshot, description: "Saved description" } } : { path: `backup/Users/${id(100)}.json`, origin: "restore" as const, snapshot: { id: id(100), displayName: "Saved name", userType: "Member" } }
+  const page = await service.prepare(tenant, request, options, env.read)
+  const original = env.fetcher.getMockImplementation()!
+  const target = `${folder === "Groups" ? "groups" : "users"}/${request.snapshot.id}`
+  let release!: () => void, reached!: () => void, reads = 0
+  const finalRead = new Promise<void>(resolve => { reached = resolve })
+  env.fetcher.mockImplementation(async (input, init) => {
+    // Groups rebuild the payload with one extra GET before the final validation reads.
+    if (new URL(String(input)).pathname === `/v1.0/${target}` && (!init?.method || init.method === "GET") && ++reads === (folder === "Groups" ? 6 : 5)) {
+      reached(); await new Promise<void>(resolve => { release = resolve })
+    }
+    return original(input, init)
+  })
+  const saved = { ...request, runId: page.runId }, approvals = { [page.rows[0]!.key]: page.rows[0]!.review.approvals }
+  const pending = service.execute(tenant, saved, page.fingerprint, approvals)
+  await finalRead; await service.cancel(tenant, page.runId); release()
+  expect(await pending).toMatchObject({ status: "partial", failed: 0, outcomes: [{ state: "captured" }] })
+  expect(env.writes).toEqual([])
+  const restarted = env.service()
+  expect(await restarted.resume(tenant, saved)).toEqual(page)
+  expect(await restarted.execute(tenant, saved, page.fingerprint, approvals)).toMatchObject({ status: "complete", failed: 0, outcomes: [{ state: "applied" }] })
+  await env.service().execute(tenant, saved, page.fingerprint, approvals)
+  expect(env.writes).toEqual([`PATCH ${target}`])
 })

@@ -666,3 +666,29 @@ it("refuses a metadata write without the expected appId from its saved plan", as
   expect(before).not.toHaveBeenCalled()
   expect(env.writes).toEqual([])
 })
+
+it("keeps cancellation during the final application read resumable with exactly one PATCH", async () => {
+  const env = persisted(), service = env.service(), request = metadataRequest()
+  const page = await service.prepare(actor.tenantId, request, options, async () => request.snapshot)
+  const original = env.fetcher.getMockImplementation()!
+  let release!: () => void, reached!: () => void, reads = 0
+  const finalRead = new Promise<void>(resolve => { reached = resolve })
+  env.fetcher.mockImplementation(async (input, init) => {
+    // Capture, reference review and final writer read each resolve the application twice.
+    if (new URL(String(input)).pathname === `/v1.0/applications/${app.id}` && (!init?.method || init.method === "GET") && ++reads === 6) {
+      reached(); await new Promise<void>(resolve => { release = resolve })
+    }
+    return original(input, init)
+  })
+  const saved = { ...request, runId: page.runId }, approvals = { [page.rows[0]!.key]: page.rows[0]!.review.approvals }
+  const pending = service.execute(actor.tenantId, saved, page.fingerprint, approvals)
+  await finalRead; await service.cancel(actor.tenantId, page.runId); release()
+  expect(await pending).toMatchObject({ status: "partial", failed: 0, outcomes: [{ state: "captured" }] })
+  expect(env.writes).toEqual([])
+  const restarted = env.service()
+  expect(await restarted.resume(actor.tenantId, saved)).toEqual(page)
+  expect(await restarted.execute(actor.tenantId, saved, page.fingerprint, approvals)).toMatchObject({ status: "complete", failed: 0, outcomes: [{ state: "applied" }] })
+  await env.service().execute(actor.tenantId, saved, page.fingerprint, approvals)
+  expect(env.fetcher.mock.calls.filter(([, init]) => init?.method === "PATCH")).toHaveLength(1)
+  expect(env.writes).toEqual([`applications/${app.id}`])
+})
