@@ -1,4 +1,5 @@
-import { useEffect, useId, useState } from "react"
+import { useEffect, useId, useState, type RefObject } from "react"
+import { returnFocusTo } from "../lib/return-focus"
 import { Mail } from "lucide-react"
 import { Button } from "~/components/ui/button"
 import { Checkbox } from "~/components/ui/checkbox"
@@ -43,8 +44,10 @@ function Question({ id, label, value, onChange, disabled, error }: { id: string;
  * Two questions, an optional reply-to address and an opt-in screenshot, sent to TenuVault only when
  * the admin clicks Send. The draft stays while the app runs, so closing the dialog loses nothing.
  */
-export function FeedbackDialog({ open, onOpenChange, snapshot, onOpenSupport }: {
+export function FeedbackDialog({ open, onOpenChange, snapshot, onOpenSupport, returnFocus }: {
   open: boolean
+  /** Where focus goes when the dialog closes, since it opens from a menu or button, not a DialogTrigger. */
+  returnFocus?: RefObject<HTMLElement | null>
   onOpenChange: (open: boolean) => void
   /**
    * What the main process recorded when the dialog opened: the screenshot preview, the context and
@@ -139,7 +142,7 @@ export function FeedbackDialog({ open, onOpenChange, snapshot, onOpenSupport }: 
 
   return (
     <Dialog open={open} onOpenChange={close}>
-      <DialogContent className="max-h-[calc(100vh-2rem)] overflow-y-auto sm:max-w-lg">
+      <DialogContent className="max-h-[calc(100vh-2rem)] overflow-y-auto sm:max-w-lg" onCloseAutoFocus={returnFocusTo(returnFocus)}>
         <DialogHeader>
           <DialogTitle>Share feedback</DialogTitle>
           <DialogDescription>

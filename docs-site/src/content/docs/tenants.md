@@ -17,7 +17,9 @@ A tenant in TenuVault is one Microsoft Intune tenant you have signed in to, toge
 | **Settings** | Sidebar | Sign in again and change where a tenant's backups are stored |
 | **License** | Sidebar | License state of each tenant and license sharing |
 
-The **Services** group always lists all three services. A service marked **Off** opens **Settings > Services and permissions**, where you can turn it on. The badges follow the selected tenant and update when a service changes. An enabled service opens **Backup & Restore** with that service selected; its sidebar entry stays highlighted until you choose **All** in the page's **Service** filter.
+Below **Dashboard** and **Tenants**, the sidebar groups its pages under **Protect** (backups, services, App Backup, drift, Sync and alerts), **Baselines** (OpenIntuneBaseline, CIS Benchmarks and frameworks) and **Oversight** (reports, audit log, governance, changes and operations). Select a group's heading to fold it away; TenuVault remembers folded groups on this computer, and a dot next to a folded heading shows that the open page is inside it. The arrow next to **Frameworks** folds its list of frameworks the same way, with the same dot. **Help** at the bottom of the sidebar opens **What's new**, **Share feedback** and **Support**.
+
+The **Services** list under **Protect**, just below **Backup & Restore**, always lists all three services. A service marked **Off** opens **Settings > Services and permissions**, where you can turn it on. The badges follow the selected tenant and update when a service changes. An enabled service opens **Backup & Restore** with that service selected; its sidebar entry stays highlighted until you choose **All** in the page's **Service** filter.
 
 ![Services navigation beside the backup timeline](/images/sidebar/all-services-on-light.png)
 
@@ -25,10 +27,10 @@ The **Services** group always lists all three services. A service marked **Off**
 
 The Dashboard, Backup & Restore, Drift Detection and Audit Log pages work on one tenant at a time: the tenant selected in the switcher at the top of the sidebar.
 
-1. Click the tenant switcher. It shows the selected tenant's name and domain.
+1. Click the tenant switcher. It shows the selected tenant's name and, below it, the tenant's domain. During a trial that line shows the trial's plan instead, and for a tenant your license does not cover it shows **Not licensed**. With the menu open, you can also type the start of a tenant's name to jump to it.
 2. Under **Tenants**, select the tenant you want. A check mark shows the current one.
 
-The switcher marks tenants your license does not cover right now with a warning icon, and shows **Not licensed** under the selected tenant's name when it applies. The menu also has **All tenants** (when two or more tenants are connected) and **Connect a tenant**.
+Each tenant shows its initials. Tenants your license does not cover right now have amber initials and **Not licensed** under their name, in the menu and under the selected tenant. A tenant in a trial shows **Pro trial** under its name in the menu. The menu also has **All tenants** (when two or more tenants are connected) and, at the bottom, **Connect a tenant**.
 
 Notification links wait for saved tenants to load, then select the tenant the work belongs to before opening its workflow. If that tenant is no longer connected or is unknown on this computer, TenuVault shows **The linked tenant is not connected** with **Open Tenants**. Connect or choose a tenant there to continue. If the linked tenant is removed while its page is open, the workflow closes and the same notice appears.
 

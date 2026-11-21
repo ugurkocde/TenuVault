@@ -167,12 +167,23 @@ jobs:
           fi
 
       # The installed nightly must stay the one under test: the DisableAutoUpdate policy managed
-      # deployments use keeps it from updating itself to a newer release during the run.
+      # deployments use keeps it from updating itself to a newer release during the run. On macOS
+      # the app reads it only where configuration profiles put it, which only root can write.
       - name: Turn off automatic updates by policy
         shell: bash
         run: |
-          if [ "$RUNNER_OS" = "Windows" ]; then MSYS_NO_PATHCONV=1 reg add 'HKCU\SOFTWARE\Policies\TenuVault' /v DisableAutoUpdate /t REG_DWORD /d 1 /f
-          else defaults write com.tenuvault.desktop DisableAutoUpdate -bool true; fi
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            MSYS_NO_PATHCONV=1 reg add 'HKCU\SOFTWARE\Policies\TenuVault' /v DisableAutoUpdate /t REG_DWORD /d 1 /f
+          else
+            plist="/Library/Managed Preferences/com.tenuvault.desktop.plist"
+            sudo mkdir -p "/Library/Managed Preferences"
+            printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' '<plist version="1.0"><dict><key>DisableAutoUpdate</key><true/></dict></plist>' | sudo tee "$plist" > /dev/null
+            sudo chmod 644 "$plist"
+            test "$(plutil -extract DisableAutoUpdate raw -o - "$plist")" = true
+            # Nightlies built before the app read only managed preferences use the user's defaults (a rerun for an older
+            # tag). The runner is thrown away after the job, so nothing is left behind.
+            defaults write com.tenuvault.desktop DisableAutoUpdate -bool true
+          fi
 
       - name: Activate, show, keep, refresh and release the canary Pro key
         shell: bash
@@ -269,12 +280,23 @@ jobs:
         run: scripts/nightly-verification/install-macos.sh "$RUNNER_TEMP/installers" /Applications
 
       # The installed nightly must stay the one under test: the DisableAutoUpdate policy managed
-      # deployments use keeps it from updating itself to a newer release during the run.
+      # deployments use keeps it from updating itself to a newer release during the run. On macOS
+      # the app reads it only where configuration profiles put it, which only root can write.
       - name: Turn off automatic updates by policy
         shell: bash
         run: |
-          if [ "$RUNNER_OS" = "Windows" ]; then MSYS_NO_PATHCONV=1 reg add 'HKCU\SOFTWARE\Policies\TenuVault' /v DisableAutoUpdate /t REG_DWORD /d 1 /f
-          else defaults write com.tenuvault.desktop DisableAutoUpdate -bool true; fi
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            MSYS_NO_PATHCONV=1 reg add 'HKCU\SOFTWARE\Policies\TenuVault' /v DisableAutoUpdate /t REG_DWORD /d 1 /f
+          else
+            plist="/Library/Managed Preferences/com.tenuvault.desktop.plist"
+            sudo mkdir -p "/Library/Managed Preferences"
+            printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' '<plist version="1.0"><dict><key>DisableAutoUpdate</key><true/></dict></plist>' | sudo tee "$plist" > /dev/null
+            sudo chmod 644 "$plist"
+            test "$(plutil -extract DisableAutoUpdate raw -o - "$plist")" = true
+            # Nightlies built before the app read only managed preferences use the user's defaults (a rerun for an older
+            # tag). The runner is thrown away after the job, so nothing is left behind.
+            defaults write com.tenuvault.desktop DisableAutoUpdate -bool true
+          fi
 
       - name: Sign in to the test tenant in ${{ matrix.browsers }}
         shell: bash

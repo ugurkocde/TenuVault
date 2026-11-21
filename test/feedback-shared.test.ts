@@ -8,6 +8,7 @@ const context: FeedbackContext = { appVersion: "0.4.1", os: "win32", osVersion: 
 describe("feedbackPageLabel", () => {
   it.each([
     ["/portal/drift", "Drift Detection"],
+    ["/portal/sync", "Sync"],
     ["/portal/backup", "Backup & Restore"],
     ["/portal/frameworks/cis-benchmarks", "CIS Benchmarks"],
     ["/portal/frameworks/cis-benchmarks/windows-11", "CIS Benchmarks"],

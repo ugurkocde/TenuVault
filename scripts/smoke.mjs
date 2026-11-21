@@ -14,7 +14,7 @@ import { checkIdentityRestoreSafety } from "./identity-restore-safety-smoke.mjs"
  * renderer-to-main API bridge and the per tenant license gate. No tenant is signed in, so
  * the licensing service is never called. Screenshots are written to screenshot-dir.
  */
-import { execFileSync, spawn } from "node:child_process"
+import { execFileSync, spawn, spawnSync } from "node:child_process"
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { createRequire } from "node:module"
 import { availableParallelism, tmpdir, uptime } from "node:os"
@@ -23,12 +23,67 @@ import { checkSchedulePanel } from "./schedule-panel-smoke.mjs"
 import { checkBackupCancel } from "./backup-cancel-smoke.mjs"
 import { checkAppBackupCompletion } from "./app-backup-completion-smoke.mjs"
 import { checkRestoreService } from "./restore-service-smoke.mjs"
-import { disableAutoUpdate } from "./smoke-update-policy.mjs"
+import { disableAutoUpdate, RUN_SWITCH } from "./smoke-update-policy.mjs"
 
 const require = createRequire(import.meta.url)
-const electronPath = require("electron")
 const desktopDir = resolve(import.meta.dirname, "..")
 const shotsDir = resolve(process.argv[2] ?? join(desktopDir, "out", "smoke"))
+const packagedApp = process.env.TENUVAULT_SMOKE_APP
+
+// A packaged build would check for updates like an installed app; the suite switches the update
+// channel, so a release could download and, on macOS, replace the app under test when it quits.
+// This comes before anything else that can fail, so a policy a killed run left is always removed
+// first. The handlers come before the policy; a run that dies anyway leaves a marked policy the
+// next run removes.
+let updatePolicy = null
+let app = null
+process.on("exit", () => {
+  if (!updatePolicy) return
+  // The app reads the policy as it starts, so the policy goes only once the app is gone.
+  if (!appStopped()) {
+    console.warn("The app under test did not quit, so its update policy stays. The next smoke run or `node scripts/smoke-update-policy.mjs --clean` removes it once the app has quit.")
+    process.exitCode = 1
+    return
+  }
+  if (!updatePolicy.restore()) process.exitCode = 1
+})
+
+/** Stops the app if it still runs and waits until it is gone, synchronously (for the exit handler). */
+function appStopped() {
+  if (!app?.pid || app.exitCode !== null || app.signalCode !== null) return true
+  // An exited child is reaped only by the event loop, which no longer runs here: ps tells a
+  // zombie (state Z, finished) from a running process. Windows has no zombies.
+  // Gone only when confirmed: an unknown state (a probe that failed) counts as still running.
+  const running = () => {
+    if (process.platform === "win32") {
+      try {
+        process.kill(app.pid, 0)
+        return true
+      } catch (error) {
+        return error.code !== "ESRCH"
+      }
+    }
+    // ps exits 1 with no output when no process has the ID; anything else is a failed probe.
+    const probe = spawnSync("/bin/ps", ["-o", "stat=", "-p", String(app.pid)], { encoding: "utf8", timeout: 5000 })
+    const state = probe.stdout?.trim() ?? ""
+    if (probe.error || probe.signal) return true
+    if (probe.status === 1 && state === "" && !probe.stderr?.trim()) return false
+    return probe.status !== 0 || !state.startsWith("Z")
+  }
+  const pause = () => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200)
+  for (const signal of ["SIGTERM", "SIGKILL"]) {
+    if (!running()) return true
+    try { app.kill(signal) } catch {}
+    for (let i = 0; i < 50 && running(); i++) pause()
+  }
+  return !running()
+}
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.once(signal, () => { app?.kill(); process.exit(1) })
+updatePolicy = packagedApp ? await disableAutoUpdate() : null
+if (updatePolicy?.error) {
+  console.error(`Could not turn automatic updates off for this run, so the packaged app is not started: ${updatePolicy.error}`)
+  process.exit(1)
+}
 
 const licenseKey = process.argv[3] ? readFileSync(process.argv[3], "utf8").trim() : null
 const port = 9300 + Math.floor(Math.random() * 500)
@@ -36,9 +91,10 @@ const inspectorPort = port + 500
 const profile = mkdtempSync(join(tmpdir(), "tenuvault-smoke-"))
 mkdirSync(shotsDir, { recursive: true })
 
-const packagedApp = process.env.TENUVAULT_SMOKE_APP
 const args = [...(packagedApp ? [] : [desktopDir]), `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`]
 if (!packagedApp) args.push(`--inspect=127.0.0.1:${inspectorPort}`)
+// The policy's mark, so recovery after a killed run can tell this app is still running.
+if (updatePolicy?.token) args.push(`${RUN_SWITCH}=${updatePolicy.token}`)
 if (process.platform === "linux") args.push("--no-sandbox")
 // On a Wayland desktop the compositor stops sending frame callbacks to a window it does not draw
 // (an idle or locked screen, another workspace), so CSS animations stall and a dialog's exit
@@ -49,20 +105,9 @@ if (process.platform === "darwin" && (!packagedApp || process.env.TENUVAULT_SMOK
 // Tools that are themselves Electron apps may export ELECTRON_RUN_AS_NODE, which would start plain Node.
 const env = { ...process.env, ELECTRON_ENABLE_LOGGING: "1" }
 delete env.ELECTRON_RUN_AS_NODE
-// A packaged build would check for updates like an installed app; the suite switches the update
-// channel, so a release could download and, on macOS, replace the app under test when it quits.
-// The handlers come first: a signal during the synchronous policy setup waits for them, so the
-// earlier policy is always put back.
-let updatePolicy = null
-let app = null
-process.on("exit", () => updatePolicy?.restore())
-for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, () => { app?.kill(); process.exit(1) })
-updatePolicy = packagedApp ? disableAutoUpdate() : null
-if (updatePolicy?.error) {
-  console.error(`Could not turn automatic updates off for this run, so the packaged app is not started: ${updatePolicy.error}`)
-  process.exit(1)
-}
-app = spawn(packagedApp ?? electronPath, args, { stdio: ["ignore", "pipe", "pipe"], env })
+// Only a development run needs the electron package, and it loads after the policy step, so a
+// missing package cannot skip the recovery of a packaged run.
+app = spawn(packagedApp ?? require("electron"), args, { stdio: ["ignore", "pipe", "pipe"], env })
 let appLog = ""
 app.stdout.on("data", (d) => (appLog += d))
 app.stderr.on("data", (d) => (appLog += d))
@@ -276,6 +321,15 @@ await check("first run shows the welcome screen", async () => {
     }
   }
 })
+
+// On Windows an unpacked build reports managed updates without any policy (no uninstaller beside
+// it), so only macOS proves here that the app reads the policy the harness set.
+if (packagedApp && process.platform === "darwin") {
+  await check("the packaged app reports that the DisableAutoUpdate policy manages updates", async () => {
+    const preferences = await evaluate(`window.tenuvault.preferences.get()`)
+    assert(preferences?.autoUpdateManaged === true, `autoUpdateManaged is ${preferences?.autoUpdateManaged}`)
+  })
+}
 
 await check("the welcome screen opens the free setup call page in the browser, named after the screen", async () => {
   try {

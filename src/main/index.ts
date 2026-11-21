@@ -32,6 +32,7 @@ import { trialBackupObserver } from "./license/usage-actions"
 import { cachedTrialUsage, trialWorkflowsConfigured } from "./license/usage"
 import { notifyTenantTrial, runTrialNotificationCheck } from "./license/notifications"
 import { licenseStatusHandler } from "./license/status"
+import { sameLicense } from "./license/same-license"
 import { CommunityChoicePendingError, CommunityLimitError, withPlanError } from "../shared/plan-errors"
 import { licenseBuyUrl, licenseCheckoutUrl, trialCheckoutUrl } from "./license/buy-url"
 import { requestTrialKey } from "./license/trial"
@@ -560,13 +561,7 @@ async function bootstrap(): Promise<void> {
   const featureDeps: FeatureDeps = {
     records,
     plan: (tenantId) => license.requireEntitlement(tenantId),
-    sameLicense: (a, b) => {
-      const tenants = license.status([]).tenants
-      const first = tenants.find((t) => t.tenantId === a.toLowerCase())
-      const second = tenants.find((t) => t.tenantId === b.toLowerCase())
-      if (!first?.entitled || !second?.entitled || first.source !== second.source) return false
-      return first.source === "key" || (first.displayKey !== null && first.displayKey === second.displayKey)
-    },
+    sameLicense: (a, b) => sameLicense(license.status([]).tenants, a, b),
     tenant: (tenantId) => {
       const profile = tenantProfile(tenantId)
       return profile ? { tenantId: tenantId.toLowerCase(), ...profile } : null
