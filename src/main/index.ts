@@ -32,7 +32,7 @@ import { readFile, stat } from "node:fs/promises"
 import { randomUUID } from "node:crypto"
 import { pathToFileURL } from "node:url"
 import { isGuid, isMicrosoftLoginUrl, sameRendererDocument } from "../shared/security"
-import { rendererStorageKey, rendererStorageValue } from "./renderer-storage"
+import { assertTenantStorageUpdates, changeTenantAccount, rendererStorageKey, rendererStorageValue } from "./renderer-storage"
 import { prepareGeneratedFile, prepareSaveFile, type PreparedFile } from "./save-file"
 import { pdfBrandingFor, PdfBrandingPolicy, PdfBrandingStore, setPdfBrandingPolicy } from "./pdf-branding"
 import { prepareOibReportFile, printHtmlToPdf } from "./report-export"
@@ -40,7 +40,7 @@ import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, net, Notif
 import { createChromiumFetch } from "./chromium-fetch"
 import { ProxyAuth, ProxyPrompts, type ProxyAuthAttempt, type ProxyChallenge } from "./proxy-auth"
 import { basename, dirname, join } from "node:path"
-import type { ApiRequest, AppPreferences, ScheduleInput } from "../shared/ipc"
+import type { ApiRequest, AppPreferences, ScheduleInput, TenantStorageResources } from "../shared/ipc"
 import { DELEGATED_CLIENT_SECRET, INTERNAL_API_ORIGIN, RESOURCE_SCOPES, localStorageAccountName } from "../shared/constants"
 import { createAuditRecorder } from "./api/audit"
 import { setAuditOutboxStore } from "../portal/lib/audit/outbox"
@@ -1377,8 +1377,35 @@ async function bootstrap(): Promise<void> {
     const text = rendererStorageValue(value)
     // The first tenant saved on this computer is the end of the setup.
     const firstTenant = name === "tenuvault_tenants" && connectedTenantIds().length === 0
+    if (name === "tenuvault_tenants") {
+      assertTenantStorageUpdates(appStore.get(RENDERER_STORAGE_PREFIX + name), text,
+        (tenant, account) => omissionPolicies.hasStorageEnrollment(tenant, account))
+    }
     appStore.set(RENDERER_STORAGE_PREFIX + name, text)
     if (firstTenant && connectedTenantIds().length > 0) diagnostics.record({ name: "tenant_added" })
+  })
+  handleTrusted("storage:changeTenantAccount", (_event, tenant: unknown, previous: unknown, resources: TenantStorageResources) => {
+    if (!isGuid(tenant) || typeof previous !== "string") throw new Error("Choose a tenant and storage account.")
+    const id = tenant.toLowerCase()
+    const key = `${RENDERER_STORAGE_PREFIX}tenuvault_tenants`
+    return changeTenantAccount(id, previous.toLowerCase(), resources, {
+      readProfiles: () => appStore.get(key),
+      writeProfiles: (value) => appStore.set(key, value),
+      enrolled: (tenantId, account) => omissionPolicies.hasStorageEnrollment(tenantId, account),
+      destinationEnabled: async (account, clientId) => (await omissionPolicies.read(id, account,
+        async () => (await tokenFor(id, clientId, "https://storage.azure.com/.default")).accessToken,
+        AbortSignal.timeout(15_000))).enabled,
+      confirmOff: async (account) => {
+        if (!mainWindow || mainWindow.isDestroyed()) return false
+        return (await dialog.showMessageBox(mainWindow, {
+          type: "warning",
+          title: "Switch storage with secret omission off?",
+          message: `New backups in ${isLocalAccount(account) ? "device storage" : account} may include secret values.`,
+          detail: "The current storage is enrolled in secret omission. To keep omitting values, enable the policy on the destination before switching.",
+          buttons: ["Cancel", "Switch with omission off"], defaultId: 0, cancelId: 0,
+        })).response === 1
+      },
+    })
   })
   handleTrusted("storage:remove", (_event, key: unknown) => appStore.delete(RENDERER_STORAGE_PREFIX + rendererStorageKey(key)))
 

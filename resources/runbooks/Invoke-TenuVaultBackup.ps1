@@ -51,6 +51,8 @@
                                  backup, leave a change report for the notification watcher.
       TenuVaultChangeReportActors "false" leaves out who made each change.
       TenuVaultTenantName        The tenant's name in change reports; the tenant id without it.
+      TENUVAULT_OMISSION_ACCOUNT Outside Automation, comma-separated storage accounts already
+                                 enrolled in omission. Unset or empty means no enrollment.
     TenuVaultKeyVault, set by setups before 1.2.0, is no longer read.
 
     Dot source the file with -LibraryOnly to load the library functions without running a backup.
@@ -821,16 +823,18 @@ function Get-TvOmissionPolicy {
     $path = ".tenuvault-control/$tenant/secret-omission.json"
     $bindingName = "TenuVaultOmissionAccount-$($tenant.Substring(0, 8))"
     $binding = $null
-    $bindingVerified = $false
+    $bindingVerified = $true
     if (Get-Command Get-AutomationVariable -ErrorAction SilentlyContinue) {
         try {
             $binding = Get-AutomationVariable -Name $bindingName -ErrorAction Stop
-            $bindingVerified = $null -eq $binding -or ($binding -is [string] -and
-                ($binding -ceq "" -or $binding -cmatch "^[a-z0-9]{3,24}(,[a-z0-9]{3,24})*$"))
         } catch {
             $bindingVerified = $_.CategoryInfo.Category -eq [System.Management.Automation.ErrorCategory]::ObjectNotFound
         }
+    } else {
+        $binding = $env:TENUVAULT_OMISSION_ACCOUNT
     }
+    $bindingVerified = $bindingVerified -and ($null -eq $binding -or ($binding -is [string] -and
+        ($binding -ceq "" -or $binding -cmatch "^[a-z0-9]{3,24}(,[a-z0-9]{3,24})*$")))
     $enrolled = @(([string]$binding).Split(",") | Where-Object { $_ -cmatch "^[a-z0-9]{3,24}$" })
     $bound = $enrolled -ccontains $Context.StorageAccount
     try { $policy = Read-TvPlainJson $Context $path }

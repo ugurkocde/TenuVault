@@ -738,7 +738,7 @@ function sameCapturedState(type: IntuneType, action: ChangeOperation["action"], 
   return fingerprint(left) === fingerprint(right)
 }
 
-async function reconcile(graph: GraphCall, type: IntuneType, operation: ChangeOperation, result: OperationResult, entry: { body: Item | null; assignments: Item[] | null }, captured: { body: Item | null; sameNameIds: string[] }, omission?: OmissionOptions): Promise<Reconciled> {
+async function reconcile(graph: GraphCall, type: IntuneType, operation: ChangeOperation, result: OperationResult, entry: { body: Item | null; assignments: Item[] | null }, captured: { body: Item | null; sameNameIds: string[]; omission?: OmissionOptions }, omission: OmissionOptions): Promise<Reconciled> {
   try {
     if (operation.action === "create") {
       let id = result.objectId
@@ -762,7 +762,7 @@ async function reconcile(graph: GraphCall, type: IntuneType, operation: ChangeOp
       if (matchesObserved(type, entry.body ?? {}, live, omission) && (entry.assignments === null || sameAssignments(entry.assignments, live.assignments))) return { decision: "verified", objectId: operation.targetId!, readBack: "match", readBackHash: snapshotHash(type, safeSnapshot(type, live, omission)) }
     }
     const sanitized = sanitizeSnapshot(type, live!).snapshot
-    if (sameCapturedState(type, operation.action, captured.body, sanitized, omission)) return { decision: "write" }
+    if (sameCapturedState(type, operation.action, captured.body, sanitized, captured.omission)) return { decision: "write" }
     if (operation.action === "update") return { decision: "stop", status: "uncertain", message: "The object holds neither the captured nor the proposed state, so an earlier attempt may have written part of the update. It is not written again; review it in Intune or roll it back to the captured state.", objectId: operation.targetId }
     return { decision: "stop", status: "failed", message: "The object changed after the review and holds neither the captured nor the proposed state. Create a fresh review.", objectId: operation.targetId }
   } catch (error) {
@@ -838,13 +838,19 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
 
     let preChange = record.preChange
     let captured: ChangeSetContent["entries"] = {}
-    let omission: ChangeSetContent["omission"]
+    let omission: NonNullable<ChangeSetContent["omission"]>
+    let captureComparison: OmissionOptions | undefined
     const capturedNames: Record<string, string[]> = {}
     let graph: GraphCall
     let gated: GraphCall
     let writer: GraphCall
     let listings = createListingMemo()
     try {
+      const policy = await deps.omissionPolicy?.(tenant)
+      omission = { enabled: policy?.enabled ?? false, scripts: policy?.scripts ?? false, generation: policy?.generation ?? "default" }
+      if (record.operations.some(({ key, folder }) => proposalWouldOmit(folder, entries[key]!.body, entries[key]!.assignments, omission))) {
+        throw new FeatureError(proposalOmissionBlocker(omission), 409)
+      }
       graph = await reader(deps, tenant, recoveryScope(record))
       // Acquired before anything is marked as applying: a sign-in or plan failure here hands
       // the change set back through the catch below instead of leaving it stuck in "applying".
@@ -852,11 +858,6 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
       requireCisChangeSetEnabled(record.origin.workflow, tenantId, recovery)
       gated = gatedGraph(graph, record.origin.workflow, tenantId, recovery)
       if (!preChange) {
-        const policy = await deps.omissionPolicy?.(tenant)
-        omission = { enabled: policy?.enabled ?? false, scripts: policy?.scripts ?? false, generation: policy?.generation ?? "default" }
-        if (record.operations.some(({ key, folder }) => proposalWouldOmit(folder, entries[key]!.body, entries[key]!.assignments, omission))) {
-          throw new FeatureError(proposalOmissionBlocker(omission), 409)
-        }
         const check = async () => {
           const observations: Record<string, Observation> = {}
           for (const operation of record.operations) {
@@ -907,8 +908,9 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
       } else {
         const capture = content(deps, tenant, preChange.captureId)
         captured = capture.entries
-        omission = capture.omission ?? (Object.values(captured).some(({ body }) => hasOmissions(body))
-          ? { enabled: true, scripts: true, generation: "legacy" } : undefined)
+        const recorded = capture.omission ?? (Object.values(captured).some(({ body }) => hasOmissions(body))
+          ? { enabled: true, scripts: true } : undefined)
+        captureComparison = { enabled: omission.enabled || !!recorded?.enabled, scripts: omission.scripts || !!recorded?.scripts }
       }
       requireCisChangeSetEnabled(record.origin.workflow, tenantId, recovery)
     } catch (error) {
@@ -943,7 +945,7 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
       const entry = entries[operation.key]!
       const at = () => deps.now().toISOString()
       if (current.status === "uncertain" || current.status === "writing") {
-        const settled = await reconcile(gated, type, operation, current, entry, { body: captured[operation.key]?.body ?? null, sameNameIds: capturedNames[operation.key] ?? [] }, omission)
+        const settled = await reconcile(gated, type, operation, current, entry, { body: captured[operation.key]?.body ?? null, sameNameIds: capturedNames[operation.key] ?? [], omission: captureComparison }, omission)
         if (stopIfCisRevoked()) break operations
         if (settled.decision === "verified") {
           saveResult(deps, tenant, id, operation.key, { ...current, status: "verified", objectId: settled.objectId, readBack: settled.readBack, ...(settled.readBackHash ? { readBackHash: settled.readBackHash } : {}), message: "Reconciled from live state; not written again.", at: at() }, actor, `Reconciled ${operation.name}: verified without a repeat write`)
@@ -963,8 +965,8 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
           continue
         }
         if (stopIfCisRevoked()) break operations
-        const matches = operation.action !== "create" && (omission?.enabled || review.omission?.enabled)
-          ? sameCapturedState(type, operation.action, captured[operation.key]?.body ?? null, observed.snapshot, omission)
+        const matches = operation.action !== "create" && (captureComparison?.enabled || review.omission?.enabled)
+          ? sameCapturedState(type, operation.action, captured[operation.key]?.body ?? null, observed.snapshot, captureComparison)
           : observed.fingerprint === review.operationFingerprints[operation.key]
         if (!matches) {
           saveResult(deps, tenant, id, operation.key, { ...current, status: "failed", message: "The object changed after approval. Nothing was written in this attempt; create a fresh review.", at: at() }, actor, `${operation.name} changed after approval`)

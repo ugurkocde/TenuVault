@@ -38,6 +38,8 @@ If no tenant is connected, the card shows **No tenants yet.** with a link to **S
 
 New backups go to the location you choose. Existing backups stay where they are and are only listed while that location is selected. Azure storage needs the Pro or MSP plan. For the options and errors, see [Choose where backups are stored](/getting-started/choose-storage/).
 
+If the current location is enrolled in secret omission, enable omission at the destination before switching to keep leaving out values. You can also confirm that new backups at the destination may contain secret values. TenuVault stops the move if it cannot verify the destination's omission setting.
+
 To add or remove tenants, use **Tenants**. See [Manage tenants](/tenants/).
 
 <figure class="docs-screenshot">

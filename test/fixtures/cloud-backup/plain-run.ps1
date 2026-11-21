@@ -37,12 +37,24 @@ $script:binding = ""
 $script:writeOnce = $false
 $script:written = @{}
 
+Add-Type -TypeDefinition @'
+namespace Automation.Sandbox.AssetManagement.Cmdlets.AssetManagementClient {
+    public class AssetManagementClientException : System.Exception {
+        public AssetManagementClientException(string message) : base(message) { }
+    }
+}
+'@
 function Get-AutomationVariable {
     [CmdletBinding()]
     param($Name)
     if ($Name -ne "TenuVaultOmissionAccount-11111111") { return }
     if ($script:enrollmentRead -eq "unavailable") { throw "Automation enrollment read timed out" }
-    if ($script:enrollmentRead -eq "missing") { Write-Error "Variable $Name was not found" -Category ObjectNotFound; return }
+    if ($script:enrollmentRead -eq "missing") {
+        $exception = [Automation.Sandbox.AssetManagement.Cmdlets.AssetManagementClient.AssetManagementClientException]::new("Variable not found. To create this Variable, navigate to the Variables blade and create a Variable named: $Name.")
+        throw [System.Management.Automation.ErrorRecord]::new($exception,
+            "1,Automation.Sandbox.AssetManagement.Cmdlets.AssetCmdlets.GetAutomationVariableCmdlet",
+            [System.Management.Automation.ErrorCategory]::ObjectNotFound, $Name)
+    }
     return $script:binding
 }
 function Set-AutomationVariable { param($Name, $Value) if ($Name -eq "TenuVaultOmissionAccount-11111111") { $script:binding = $Value } }
@@ -227,6 +239,17 @@ foreach ($case in @("unreadableEnrollment", "missingEnrollment", "emptyOmaSucces
     $script:binding = if ($case -eq "unreadableEnrollment") { "stcontoso" } else { "" }
     $script:enrollmentRead = switch ($case) { "unreadableEnrollment" { "unavailable" }; "missingEnrollment" { "missing" }; default { "" } }
     $script:emptyOma = if ($case -like "emptyOma*") { $case } else { "" }
+    $errorText = $null
+    try { $null = @(Invoke-TvBackup) } catch { $errorText = $_.Exception.Message }
+    Write-Output (@{ scenario = $case; calls = @($script:calls.ToArray()); error = $errorText } | ConvertTo-Json -Compress -Depth 5)
+}
+
+Remove-Item Function:Get-AutomationVariable, Function:Set-AutomationVariable
+$script:emptyOma = ""
+foreach ($case in @("environmentUnset", "environmentEmpty", "environmentEnrolled")) {
+    $script:calls.Clear()
+    $script:OutcomeSent = $false
+    $env:TENUVAULT_OMISSION_ACCOUNT = switch ($case) { "environmentEmpty" { "" }; "environmentEnrolled" { "stcontoso" }; default { $null } }
     $errorText = $null
     try { $null = @(Invoke-TvBackup) } catch { $errorText = $_.Exception.Message }
     Write-Output (@{ scenario = $case; calls = @($script:calls.ToArray()); error = $errorText } | ConvertTo-Json -Compress -Depth 5)

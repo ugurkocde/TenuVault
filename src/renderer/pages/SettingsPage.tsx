@@ -21,7 +21,7 @@ import { RecoveryKeyImport } from "../components/RecoveryKeyImport"
 import { RecoveryKeyNotice } from "../components/RecoveryKeyNotice"
 import { bridge } from "../lib/bridge"
 import { localTenantIds, useBackupSettings, useLocalInventoryProblems } from "../lib/local-inventory"
-import { changeTenantStorage, savedAzureStorage, LOCAL_SWITCH_CONFIRMATION, type StorageChoice } from "../lib/storage"
+import { saveTenantStorage, savedAzureStorage, LOCAL_SWITCH_CONFIRMATION, type StorageChoice } from "../lib/storage"
 import { toast } from "../lib/toast"
 import { tenantPlan, useLicense } from "../lib/license"
 import { anyTenantIncludes } from "../lib/selected-plan"
@@ -490,6 +490,7 @@ function TenantSettings({ active }: { active: boolean }) {
   // The Change storage dialog closes while its section is hidden; its chooser draft lives here so the reopened dialog picks up where the admin left off.
   const [storageDraft, setStorageDraft] = useState<StorageChooserDraft | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
+  const [savingStorage, setSavingStorage] = useState(false)
 
   const refresh = () => void bridge.auth.accounts().then(setAccounts)
   useEffect(refresh, [])
@@ -509,12 +510,19 @@ function TenantSettings({ active }: { active: boolean }) {
   }
 
   const saveStorage = async () => {
-    if (!editing?.credentials || !choice) return
-    if (choice.kind === "local" && editing.resources?.storageAccountName && !editing.resources.storageAccountName.startsWith(LOCAL_STORAGE_PREFIX) && !await confirm(LOCAL_SWITCH_CONFIRMATION)) return
-    updateTenant(editing.id, changeTenantStorage(editing, choice))
-    toast(`Backups for ${editing.name} now go to ${choice.kind === "local" ? "this device" : choice.storageAccountName}.`, "success")
-    setStorageDraft(null)
-    setEditing(null)
+    if (!editing?.credentials || !choice || savingStorage) return
+    setSavingStorage(true)
+    try {
+      if (choice.kind === "local" && editing.resources?.storageAccountName && !editing.resources.storageAccountName.startsWith(LOCAL_STORAGE_PREFIX) && !await confirm(LOCAL_SWITCH_CONFIRMATION)) return
+      if (!await saveTenantStorage(editing, choice, bridge.storage.changeTenantAccount, updateTenant)) return
+      toast(`Backups for ${editing.name} now go to ${choice.kind === "local" ? "this device" : choice.storageAccountName}.`, "success")
+      setStorageDraft(null)
+      setEditing(null)
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "Could not change backup storage.", "error")
+    } finally {
+      setSavingStorage(false)
+    }
   }
 
   return (
@@ -543,7 +551,7 @@ function TenantSettings({ active }: { active: boolean }) {
                     <p className="truncate text-xs text-gray-500">
                       {account ? `Signed in as ${account.username}` : "Not signed in"} · Backups: {storageLabel(tenant.resources?.storageAccountName)}
                     </p>
-                    {active && account && tenantId && tenant.resources?.storageAccountName && <TenantOmissionSettings key={tenantId} tenantId={tenantId} />}
+                    {active && account && tenantId && tenant.resources?.storageAccountName && <TenantOmissionSettings key={`${tenantId}:${tenant.resources.storageAccountName}`} tenantId={tenantId} />}
                   </div>
                   <Button variant="outline" size="sm" onClick={() => void signIn(tenant)} disabled={busy === tenantId || !tenant.credentials}>
                     {busy === tenantId && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
@@ -559,7 +567,7 @@ function TenantSettings({ active }: { active: boolean }) {
         )}
       </CardContent>
 
-      <Dialog open={active && Boolean(editing)} onOpenChange={(open) => { if (!open) { setStorageDraft(null); setEditing(null) } }}>
+      <Dialog open={active && Boolean(editing)} onOpenChange={(open) => { if (!open && !savingStorage) { setStorageDraft(null); setEditing(null) } }}>
         <DialogContent className="sm:max-w-[620px]">
           <DialogHeader>
             <DialogTitle>Backup storage for {editing?.name}</DialogTitle>
@@ -580,8 +588,8 @@ function TenantSettings({ active }: { active: boolean }) {
             />
           )}
           <DialogFooter>
-            <Button variant="outline" onClick={() => { setStorageDraft(null); setEditing(null) }}>Cancel</Button>
-            <Button disabled={!choice} onClick={saveStorage}>Save</Button>
+            <Button variant="outline" disabled={savingStorage} onClick={() => { setStorageDraft(null); setEditing(null) }}>Cancel</Button>
+            <Button disabled={!choice || savingStorage} onClick={saveStorage}>Save</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

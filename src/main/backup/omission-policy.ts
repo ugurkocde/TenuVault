@@ -93,6 +93,14 @@ export class OmissionPolicyStore {
     return Boolean(this.store.get(this.bindingKey(tenant, account)) || this.store.get(`${key(tenant)}.account`) === account)
   }
 
+  hasStorageEnrollment(tenantId: string, destination: string): boolean {
+    const tenant = tenantId.toLowerCase()
+    const account = destination.toLowerCase()
+    if (!isLocalAccount(account)) return this.isEnrolled(tenant, account)
+    const local = this.store.get(key(tenant))
+    return !!local && parse(JSON.parse(local), tenant).enabled
+  }
+
   private async readPolicy(tenantId: string, destination: string, storage: BlobWriter,
     signal: AbortSignal | undefined): Promise<BackupOmissionPolicy> {
     const tenant = tenantId.toLowerCase()

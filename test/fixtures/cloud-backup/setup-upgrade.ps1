@@ -191,6 +191,7 @@ function Write-Scenario {
         changeReport = $script:variables["TenuVaultChangeReport-$tenantKey"]
         changeReportActors = $script:variables["TenuVaultChangeReportActors-$tenantKey"]
         omissionBinding = $script:variables["TenuVaultOmissionAccount-$tenantKey"]
+        storageAccount = $script:variables["TenuVaultStorageAccount-$tenantKey"]
         tenantName = $script:variables["TenuVaultTenantName-$tenantKey"]
         variables = @($script:variables.Keys | Sort-Object)
         schedule = $script:schedule
@@ -280,25 +281,25 @@ function Invoke-WebRequest {
         $script:actions.Add("copy-policy")
         return @{ StatusCode = 201 }
     }
-    if ($script:destinationPolicy -and $Uri -like "https://stcontoso.*") { return @{ Content = $script:migrationPolicy } }
+    if ($script:destinationPolicy -and $Uri -like "https://stcontoso.*") { return @{ Content = $script:destinationPolicy } }
     if ($script:denyPrevious -or $Uri -notlike "https://stprevious.*") { throw "Access denied." }
     return @{ Content = $script:migrationPolicy }
 }
-foreach ($scenario in "move-copies-policy", "move-warns-on-denied", "move-keeps-destination", "upgrade-preserves-binding", "upgrade-creates-binding", "upgrade-keeps-unreadable-binding") {
+foreach ($scenario in "move-copies-policy", "move-warns-on-denied", "move-refuses-enrolled", "move-keeps-destination", "move-refuses-disabled-destination", "move-refuses-unreadable-enrollment", "upgrade-preserves-binding", "upgrade-creates-binding", "upgrade-keeps-unreadable-binding") {
     Reset-OldSetup
+    $runbook = $null
     $script:variables["TenuVaultStorageAccount-$tenantKey"] = if ($scenario.StartsWith("move")) { "stprevious" } else { $StorageAccountName }
-    if ($scenario -in @("upgrade-preserves-binding", "upgrade-keeps-unreadable-binding", "move-keeps-destination")) {
+    if ($scenario -notin @("upgrade-creates-binding", "move-warns-on-denied")) {
         $script:variables["TenuVaultOmissionAccount-$tenantKey"] = "stprevious"
     }
-    if ($scenario -eq "upgrade-keeps-unreadable-binding") {
+    if ($scenario -in @("upgrade-keeps-unreadable-binding", "move-refuses-unreadable-enrollment")) {
         $script:translatedVariable = "TenuVaultOmissionAccount-$tenantKey"
         $script:failList = $true
     }
-    $script:denyPrevious = $scenario -in @("move-warns-on-denied", "move-keeps-destination")
-    $script:destinationPolicy = $scenario -eq "move-keeps-destination"
+    $script:denyPrevious = $scenario -in @("move-warns-on-denied", "move-keeps-destination", "move-refuses-enrolled", "move-refuses-disabled-destination")
+    $script:destinationPolicy = if ($scenario -eq "move-keeps-destination") { $script:migrationPolicy } elseif ($scenario -eq "move-refuses-disabled-destination") { $script:migrationPolicy.Replace('"enabled":true', '"enabled":false') }
     $output = @()
     $errorText = $null
     try { $output = @(. $upgradeStep 3>&1 6>&1) } catch { $errorText = $_.Exception.Message }
-    if ($script:variables["TenuVaultStorageAccount-$tenantKey"] -ne $StorageAccountName) { throw "Storage was not repointed." }
     Write-Scenario -Name $scenario -Runbook $runbook -ErrorText $errorText -Output $output
 }

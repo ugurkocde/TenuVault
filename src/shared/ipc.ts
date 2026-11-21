@@ -639,6 +639,7 @@ export interface TenuVaultBridge {
     getItemSync: (key: string) => string | null
     setItem: (key: string, value: string) => Promise<void>
     removeItem: (key: string) => Promise<void>
+    changeTenantAccount: (tenantId: string, previous: string, resources: TenantStorageResources) => Promise<boolean>
   }
   app: {
     info: () => Promise<AppInfo>
@@ -681,6 +682,15 @@ export interface TenuVaultBridge {
 }
 
 /** Plan failures cross the preload boundary as data, then become renderer errors. */
+export interface TenantStorageResources {
+  storageAccountName: string
+  subscriptionId: string
+  subscriptionName: string
+  resourceGroupName: string
+  resourceGroupLocation?: string
+  automationAccountName: string
+}
+
 export type TenuVaultPreloadBridge = Omit<TenuVaultBridge, "auth" | "license" | "schedules" | "pdfBranding" | "backupReader" | "appSources"> & {
   appSources: Omit<TenuVaultBridge["appSources"], "restore"> & {
     restore: (...args: Parameters<TenuVaultBridge["appSources"]["restore"]>) => Promise<Awaited<ReturnType<TenuVaultBridge["appSources"]["restore"]>> | PlanIpcError>

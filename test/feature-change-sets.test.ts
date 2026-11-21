@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { applyChangeSet, approveChangeSet, CONTENT_DOMAIN, createChangeSet, KEPT_CHANGE_SETS, createRollbackChangeSet, getChangeSet, listChangeSets, previewChangeSet, previewRollback, rejectChangeSet, reviseChangeSet } from "../src/main/features/change-sets/engine"
 import type { FeatureDeps } from "../src/main/features/deps"
 import { FeatureError } from "../src/main/features/route"
@@ -513,9 +513,9 @@ describe("change-set engine", () => {
     expect(JSON.stringify(capture).includes("example token")).toBe(reviewMode)
   })
 
-  it.each([400, 503])("projects planner, read-back and both retry paths in omission mode (%s)", async (writeFailure) => {
+  it.each([[400, true], [503, true], [400, false], [503, false]])("uses the current omission policy for retry diagnostics and live reads (%s, capture omission %s)", async (writeFailure, captureOmission) => {
     const context = setup()
-    context.deps.omissionPolicy = async () => ({ enabled: true, scripts: false, generation: "stored-generation" })
+    context.deps.omissionPolicy = async () => ({ enabled: captureOmission, scripts: false, generation: "stored-generation" })
     const canary = "VPN operand echoed by Microsoft Graph"
     const id = "vpn"
     const graphPath = `deviceManagement/deviceConfigurations/${id}`
@@ -523,7 +523,7 @@ describe("change-set engine", () => {
     let readBackFails = false
     let live: Item = {
       id, displayName: "VPN", "@odata.type": "#microsoft.graph.iosVpnConfiguration", description: "Before",
-      nested: { sharedSecret: canary, enabled: false }, assignments: [],
+      nested: { sharedSecret: "operand from the original capture", enabled: false }, assignments: [],
       omaSettings: [{ omaUri: "./secret", isEncrypted: true, value: "****", secretReferenceValueId: "operand-reference" }],
     }
     const normalGraph = context.deps.graph
@@ -536,7 +536,7 @@ describe("change-set engine", () => {
         if (path.includes("getOmaSettingPlainTextValue")) return { status: 200, body: { value: canary } }
         if (method === "GET") return readBackFails ? { status: 403, body: { error: { message: canary } } } : { status: 200, body: structuredClone(live) }
         writes++
-        if (writes === 1) return { status: writeFailure, body: { error: { message: canary } } }
+        if (writes === 1) return { status: writeFailure, body: { error: { message: "first attempt rejected" } } }
         live = { ...live, ...body }
         readBackFails = true
         return { status: 204, body: {} }
@@ -546,21 +546,51 @@ describe("change-set engine", () => {
     const record = await createChangeSet(context.deps, TENANT_A, {
       title: "Update VPN", operations: [{ folder: "DeviceConfigurations", action: "update", targetId: id, proposed }],
     }, null)
-    expect(JSON.stringify(record)).not.toContain(canary)
+    if (captureOmission) expect(JSON.stringify(record)).not.toContain("operand from the original capture")
     expect(record.operations[0]!.diff).toEqual(expect.arrayContaining([expect.objectContaining({ path: "description" })]))
     const review = await approve(context, record.id)
     const input = { id: record.id, contentHash: review.contentHash, confirm: true }
     const before = await context.post({ action: "apply", ...input })
     expect(before.status).toBe(200)
     const capture = context.deps.records.get<ChangeSetContent>(CONTENT_DOMAIN, TENANT_A, before.body.changeSet.preChange.captureId)
-    expect(capture?.omission).toEqual({ enabled: true, scripts: false, generation: "stored-generation" })
-    expect(JSON.stringify([capture, before.body])).not.toContain(canary)
-    context.deps.omissionPolicy = async () => ({ enabled: false, scripts: false, generation: "new-generation" })
+    expect(capture?.omission).toEqual({ enabled: captureOmission, scripts: false, generation: "stored-generation" })
+    if (captureOmission) expect(JSON.stringify([capture, before.body])).not.toContain("operand from the original capture")
+    context.deps.omissionPolicy = async () => ({ enabled: true, scripts: false, generation: "new-generation" })
+    paths.length = 0
     const retried = await context.post({ action: "retry", ...input })
     expect(writes).toBe(2)
     expect(retried.body.changeSet.results["op-1"]).toMatchObject({ readBack: "denied", message: expect.stringContaining("HTTP 403") })
     expect(JSON.stringify(retried.body)).not.toContain(canary)
     expect(paths.some(path => path.includes("getOmaSettingPlainTextValue"))).toBe(false)
+  })
+
+  it("blocks retry of a stored proposal with values covered by the current omission policy", async () => {
+    const context = setup()
+    const id = "vpn"
+    const graphPath = `deviceManagement/deviceConfigurations/${id}`
+    const normalGraph = context.deps.graph
+    const write = vi.fn(() => ({ status: 400, body: { error: { message: "Rejected" } } }))
+    context.deps.graph = async (...args) => {
+      const graph = await normalGraph(...args)
+      return async (method, path, body, options) => {
+        if (!path.startsWith(graphPath)) return graph(method, path, body, options)
+        if (method === "GET") return { status: 200, body: { id, displayName: "VPN", "@odata.type": "#microsoft.graph.iosVpnConfiguration", assignments: [] } }
+        return write()
+      }
+    }
+    const record = await createChangeSet(context.deps, TENANT_A, {
+      title: "Update VPN", operations: [{ folder: "DeviceConfigurations", action: "update", targetId: id,
+        proposed: { displayName: "VPN", "@odata.type": "#microsoft.graph.iosVpnConfiguration", sharedSecret: "fixture-secret" } }],
+    }, null)
+    const review = await approve(context, record.id)
+    const input = { id: record.id, contentHash: review.contentHash, confirm: true }
+    expect((await context.post({ action: "apply", ...input })).status).toBe(200)
+    expect(write).toHaveBeenCalledOnce()
+    context.deps.omissionPolicy = async () => ({ enabled: true, scripts: false, generation: "current" })
+    const retry = await context.post({ action: "retry", ...input })
+    expect(retry.status).toBe(409)
+    expect(JSON.stringify(retry.body)).not.toContain("fixture-secret")
+    expect(write).toHaveBeenCalledOnce()
   })
 
   it("returns recovery instructions for an omitted capture alongside eligible rollback operations", async () => {
