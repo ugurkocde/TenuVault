@@ -118,6 +118,7 @@ describe("tenant initials", () => {
     expect(tenantInitials("  fabrikam  ")).toBe("FA")
     expect(tenantInitials("Ugur Koc Lab")).toBe("UK")
     expect(tenantInitials("(Test) Ärzte GmbH")).toBe("TÄ")
+    expect(tenantInitials("A\u0308rzte")).toBe(tenantInitials("\u00c4rzte"))
     expect(tenantInitials("")).toBe("?")
     expect(tenantInitials(undefined)).toBe("?")
   })

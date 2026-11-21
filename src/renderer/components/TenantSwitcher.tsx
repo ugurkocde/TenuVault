@@ -14,7 +14,8 @@ import { tenantLicense, tenantPlan, tenantPlanName, useLicense } from "../lib/li
 
 /** Up to two letters for a tenant's badge: the first letters of its first two words, or the first two letters of one word. */
 export function tenantInitials(name: string | undefined): string {
-  const words = (name ?? "").trim().split(/\s+/).map((word) => word.replace(/[^\p{L}\p{N}]/gu, "")).filter(Boolean)
+  // NFC first, so a name typed with combining accents gives the same letters as its composed spelling.
+  const words = (name ?? "").normalize("NFC").trim().split(/\s+/).map((word) => word.replace(/[^\p{L}\p{N}]/gu, "")).filter(Boolean)
   if (words.length === 0) return "?"
   const letters = words.length > 1 ? [...words[0]!].slice(0, 1).concat([...words[1]!].slice(0, 1)) : [...words[0]!].slice(0, 2)
   return letters.join("").toUpperCase()

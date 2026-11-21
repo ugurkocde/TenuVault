@@ -13,7 +13,7 @@ const routerPush = vi.hoisted(() => vi.fn())
 const trialAction = vi.hoisted(() => vi.fn(async () => undefined))
 const whatsNewState = vi.hoisted(() => ({ current: null as { hasUnseen: boolean } | null }))
 const supportDialog = vi.hoisted(() => vi.fn((_props: { open: boolean; returnFocus?: { current: HTMLElement | null } }) => null))
-const whatsNewDialog = vi.hoisted(() => vi.fn((_props: { open: boolean }) => null))
+const whatsNewDialog = vi.hoisted(() => vi.fn((_props: { open: boolean; returnFocus?: { current: HTMLElement | null } }) => null))
 // Records whether the Help menu was still in the page when the window was captured.
 const feedbackCapture = vi.hoisted(() => vi.fn(async () => { menuAtCapture.push(document.querySelector('[role="menu"]') !== null); return null }))
 const menuAtCapture = vi.hoisted(() => [] as boolean[])
@@ -557,6 +557,10 @@ describe("sidebar groups and Help", () => {
     expect(container.querySelector("aside")).toBeNull()
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 80)) })
     expect(whatsNewDialog.mock.lastCall?.[0].open).toBe(true)
+    // With no sidebar, focus goes back to the guided setup's Support button when the dialog closes.
+    const props = whatsNewDialog.mock.lastCall?.[0] as { returnFocus?: { current: HTMLElement | null } }
+    expect(props.returnFocus?.current?.textContent).toBe("Support")
+    expect(props.returnFocus?.current?.closest('nav[aria-label="Help"]')).not.toBeNull()
   })
 
   it("marks Help and What's new while an installed build is unseen", async () => {

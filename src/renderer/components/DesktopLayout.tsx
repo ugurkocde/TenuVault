@@ -480,6 +480,8 @@ export function DesktopLayout() {
   const capturingFeedback = useRef(false)
   const helpLaunching = useRef(false)
   const helpTrigger = useRef<HTMLButtonElement>(null)
+  // During the guided setup there is no sidebar: dialogs fall back to the header's Support button.
+  const headerSupport = useRef<HTMLButtonElement>(null)
   // Dialogs opened from Help or the first-run header hand focus back to the control that opened them.
   const supportReturn = useRef<HTMLElement | null>(null)
   const feedbackReturn = useRef<HTMLElement | null>(null)
@@ -580,7 +582,7 @@ export function DesktopLayout() {
             <SetupCallLink source="setup-header" variant="nav" className={quiet} />
             <Link to="/license" className={quiet}>License</Link>
             <button type="button" onClick={(event) => void openFeedback(event.currentTarget)} className={quiet}>Share feedback</button>
-            <button type="button" onClick={(event) => openSupport(event.currentTarget)} className={quiet}>Support</button>
+            <button ref={headerSupport} type="button" onClick={(event) => openSupport(event.currentTarget)} className={quiet}>Support</button>
           </nav>
         </header>
       ) : (
@@ -646,13 +648,13 @@ export function DesktopLayout() {
       <FrameworkJobNotifier />
       <CisJobNotifier />
       <DriftScanNotifier />
-      <WhatsNewDialog open={whatsNewOpen} onOpenChange={setWhatsNewOpen} returnFocus={firstConnected(whatsNewReturn, helpTrigger)} />
-      <SupportDialog open={supportOpen} onOpenChange={setSupportOpen} returnFocus={firstConnected(supportReturn, helpTrigger)} />
+      <WhatsNewDialog open={whatsNewOpen} onOpenChange={setWhatsNewOpen} returnFocus={firstConnected(whatsNewReturn, helpTrigger, headerSupport)} />
+      <SupportDialog open={supportOpen} onOpenChange={setSupportOpen} returnFocus={firstConnected(supportReturn, helpTrigger, headerSupport)} />
       <FeedbackDialog
         open={feedback.open}
         onOpenChange={(open) => setFeedback((current) => ({ open, snapshot: open ? current.snapshot : null }))}
         snapshot={feedback.snapshot}
-        returnFocus={firstConnected(feedbackReturn, helpTrigger)}
+        returnFocus={firstConnected(feedbackReturn, helpTrigger, headerSupport)}
         // Support opened from the feedback dialog returns to where feedback was opened from.
         onOpenSupport={() => { supportReturn.current = feedbackReturn.current; setSupportOpen(true) }}
       />
