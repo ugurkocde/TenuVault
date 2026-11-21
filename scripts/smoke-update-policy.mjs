@@ -29,7 +29,7 @@
  * `node scripts/smoke-update-policy.mjs --clean` removes what a killed run left, without a smoke run.
  */
 import { spawn, spawnSync } from "node:child_process"
-import { lstatSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { accessSync, constants, lstatSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { createServer } from "node:net"
 import { tmpdir, userInfo } from "node:os"
 import { join } from "node:path"
@@ -101,11 +101,23 @@ function exists(path) {
 
 /** True when file sets key to the boolean true, read as the app reads it. */
 const plistTrue = (file, key) => run("/usr/bin/plutil", ["-extract", key, "raw", "-expect", "bool", "-o", "-", file]).stdout?.trim() === "true"
-/** The smoke run that wrote file, or null when it is unreadable or not a smoke run's. */
-const plistMark = (file) => {
-  const result = run("/usr/bin/plutil", ["-extract", MARK, "raw", "-expect", "string", "-o", "-", file])
-  return result.status === 0 ? result.stdout.trim() : null
+/**
+ * { mark }: the smoke run that wrote file, or null when the file is not a smoke run's (a smoke run's
+ * file is readable by everyone and carries the mark as a string). { error } when it cannot tell.
+ */
+function inspectMark(file) {
+  try {
+    accessSync(file, constants.R_OK)
+  } catch (error) {
+    return error.code === "ENOENT" || error.code === "EACCES" ? { mark: null } : { error: `could not check ${file}: ${error.message}` }
+  }
+  const result = run("/usr/bin/plutil", ["-extract", MARK, "raw", "-expect", "string", "-o", "-", file], { timeout: 10_000 })
+  if (result.status === 0) return { mark: result.stdout.trim() }
+  // Exit 1 is plutil's answer for a missing key, another type or a file that is no plist.
+  if (result.status === 1 && !result.error && !result.signal) return { mark: null }
+  return { error: `could not read ${file}: ${failed(result)}` }
 }
+const plistMark = (file) => inspectMark(file).mark ?? null
 
 /** sudo commands of any process that name the store: a killed run's install, mv or rm. */
 function macosWriters() {
@@ -127,7 +139,9 @@ function macosRecover() {
   const file = exists(FILE)
   const stage = exists(STAGE)
   for (const state of [file, stage]) if (state.error) return state.error
-  const leftovers = [...(stage === "present" ? [STAGE] : []), ...(file === "present" && plistMark(FILE) ? [FILE] : [])]
+  const inspected = file === "present" ? inspectMark(FILE) : { mark: null }
+  if (inspected.error) return inspected.error
+  const leftovers = [...(stage === "present" ? [STAGE] : []), ...(inspected.mark ? [FILE] : [])]
   if (leftovers.length === 0) return null
   const removed = sudo(["/bin/rm", "-f", ...leftovers])
   if (removed.status !== 0) return `could not remove ${leftovers.join(" and ")}, which a killed smoke run left: ${failed(removed)}. ${SUDO_HINT}`
@@ -179,9 +193,12 @@ function macosChange(id) {
       return plistMark(FILE) === id ? null : `${FILE} appeared while the smoke was writing it and was left as it is`
     },
     undo() {
-      const removed = sudo(["/bin/rm", "-f", STAGE, ...(plistMark(FILE) === id ? [FILE] : [])])
+      const before = inspectMark(FILE)
+      if (before.error) return before.error
+      const removed = sudo(["/bin/rm", "-f", STAGE, ...(before.mark === id ? [FILE] : [])])
       if (removed.status !== 0) return `${failed(removed)}. ${SUDO_HINT}`
-      return plistMark(FILE) === id ? `${FILE} is still there` : null
+      const after = inspectMark(FILE)
+      return after.error ?? (after.mark === id ? `${FILE} is still there` : null)
     },
     // A long suite outlives the sudo timestamp, and the removal at the end needs it.
     keepAlive() {
@@ -232,18 +249,24 @@ function windowsWriters() {
 }
 
 /**
- * Removes a marked key in one step: the key with both values when it holds nothing else, otherwise
- * only the policy value and then the mark, each checked. Returns why it could not, or null.
+ * Removes a marked key in one step: the key with both values when it holds nothing else and the
+ * policy is still the DWORD 1 the run wrote. Otherwise it removes the policy value only while it is
+ * that DWORD 1 (a value Group Policy put in its place stays), and then the mark. Returns why it
+ * could not, or null.
  */
 function windowsRemove(mark) {
   const result = powershell(`# ${WRITER}
 $key = Get-Item -LiteralPath ${quote(HKCU)} -ErrorAction SilentlyContinue
 if ($null -eq $key) { return }
 if ([string]$key.GetValue('${MARK}', '') -ne ${quote(mark)}) { throw 'the key carries another mark' }
+$ours = { param($key) (@($key.GetValueNames()) -contains '${NAME}') -and [string]$key.GetValueKind('${NAME}') -eq 'DWord' -and $key.GetValue('${NAME}') -eq 1 }
 $others = @($key.GetValueNames() | Where-Object { $_ -ne '${NAME}' -and $_ -ne '${MARK}' })
-if ($others.Count -eq 0 -and $key.SubKeyCount -eq 0) { Remove-Item -LiteralPath ${quote(HKCU)}; return }
-Remove-ItemProperty -LiteralPath ${quote(HKCU)} -Name '${NAME}' -ErrorAction SilentlyContinue
-if ($null -ne (Get-Item -LiteralPath ${quote(HKCU)}).GetValue('${NAME}', $null)) { throw 'the policy value is still there' }
+$hasPolicy = @($key.GetValueNames()) -contains '${NAME}'
+if ($others.Count -eq 0 -and $key.SubKeyCount -eq 0 -and (-not $hasPolicy -or (& $ours $key))) { Remove-Item -LiteralPath ${quote(HKCU)}; return }
+if (& $ours $key) {
+  Remove-ItemProperty -LiteralPath ${quote(HKCU)} -Name '${NAME}'
+  if (@((Get-Item -LiteralPath ${quote(HKCU)}).GetValueNames()) -contains '${NAME}') { throw 'the policy value is still there' }
+}
 Remove-ItemProperty -LiteralPath ${quote(HKCU)} -Name '${MARK}'`)
   return result.status === 0 ? null : failed(result)
 }
@@ -332,10 +355,13 @@ export async function disableAutoUpdate(platform = process.platform) {
   if (held.error) return { error: held.error, ...none }
   const id = `${process.pid}@${new Date().toISOString()}`
   const change = platform === "darwin" ? macosChange(id) : windowsChange(id)
-  if (change.error || !change.apply) {
+  if (change.error) {
     held.release()
-    return change.error ? { error: change.error, ...none } : none
+    return { error: change.error, ...none }
   }
+  // Updates are already off by policy: nothing to write, but the run still holds the lock until
+  // it ends, so one run at a time holds the policy either way.
+  if (!change.apply) return { restore: () => (held.release(), true) }
   const stopKeepAlive = change.keepAlive?.() ?? (() => {})
   let result = null
   const restore = () => {

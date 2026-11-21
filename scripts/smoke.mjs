@@ -25,6 +25,24 @@ const require = createRequire(import.meta.url)
 const electronPath = require("electron")
 const desktopDir = resolve(import.meta.dirname, "..")
 const shotsDir = resolve(process.argv[2] ?? join(desktopDir, "out", "smoke"))
+const packagedApp = process.env.TENUVAULT_SMOKE_APP
+
+// A packaged build would check for updates like an installed app; the suite switches the update
+// channel, so a release could download and, on macOS, replace the app under test when it quits.
+// This comes before anything else that can fail, so a policy a killed run left is always removed
+// first. The handlers come before the policy; a run that dies anyway leaves a marked policy the
+// next run removes.
+let updatePolicy = null
+let app = null
+process.on("exit", () => {
+  if (updatePolicy && !updatePolicy.restore()) process.exitCode = 1
+})
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.once(signal, () => { app?.kill(); process.exit(1) })
+updatePolicy = packagedApp ? await disableAutoUpdate() : null
+if (updatePolicy?.error) {
+  console.error(`Could not turn automatic updates off for this run, so the packaged app is not started: ${updatePolicy.error}`)
+  process.exit(1)
+}
 
 const licenseKey = process.argv[3] ? readFileSync(process.argv[3], "utf8").trim() : null
 const port = 9300 + Math.floor(Math.random() * 500)
@@ -32,7 +50,6 @@ const inspectorPort = port + 500
 const profile = mkdtempSync(join(tmpdir(), "tenuvault-smoke-"))
 mkdirSync(shotsDir, { recursive: true })
 
-const packagedApp = process.env.TENUVAULT_SMOKE_APP
 const args = [...(packagedApp ? [] : [desktopDir]), `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`]
 if (!packagedApp) args.push(`--inspect=127.0.0.1:${inspectorPort}`)
 if (process.platform === "linux") args.push("--no-sandbox")
@@ -45,20 +62,6 @@ if (process.platform === "darwin" && (!packagedApp || process.env.TENUVAULT_SMOK
 // Tools that are themselves Electron apps may export ELECTRON_RUN_AS_NODE, which would start plain Node.
 const env = { ...process.env, ELECTRON_ENABLE_LOGGING: "1" }
 delete env.ELECTRON_RUN_AS_NODE
-// A packaged build would check for updates like an installed app; the suite switches the update
-// channel, so a release could download and, on macOS, replace the app under test when it quits.
-// The handlers come first. A run that dies anyway leaves a marked policy the next run removes.
-let updatePolicy = null
-let app = null
-process.on("exit", () => {
-  if (updatePolicy && !updatePolicy.restore()) process.exitCode = 1
-})
-for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.once(signal, () => { app?.kill(); process.exit(1) })
-updatePolicy = packagedApp ? await disableAutoUpdate() : null
-if (updatePolicy?.error) {
-  console.error(`Could not turn automatic updates off for this run, so the packaged app is not started: ${updatePolicy.error}`)
-  process.exit(1)
-}
 app = spawn(packagedApp ?? electronPath, args, { stdio: ["ignore", "pipe", "pipe"], env })
 let appLog = ""
 app.stdout.on("data", (d) => (appLog += d))

@@ -227,6 +227,26 @@ try {
     await roundTrip()
   })
 
+  await check("leaves a policy that replaced the smoke run's during the run", async () => {
+    try {
+      const result = await disableAutoUpdate()
+      assert(!result.error, result.error)
+      // A profile replaces the file, or Group Policy sets the value to 0 next to the smoke's mark.
+      if (platform === "darwin") plant(FILE, "<key>DisableAutoUpdate</key><false/>")
+      else assert(powershell(`Set-ItemProperty -LiteralPath '${HKCU}' -Name DisableAutoUpdate -Value 0\nNew-ItemProperty -LiteralPath '${HKCU}' -Name '${FIXTURE}' -PropertyType DWord -Value 1 | Out-Null`).status === 0, "could not replace the value")
+      const replaced = snapshot()
+      assert(result.restore(), "restore reported a failure")
+      const after = snapshot()
+      if (platform === "darwin") assert(after === replaced, "the restore changed the replacing profile")
+      else {
+        assert(/DisableAutoUpdate=DWord:0/.test(after ?? ""), `the replacing value is gone: ${after}`)
+        assert(!/TenuVaultSmokeRun/.test(after ?? ""), "the smoke mark was left")
+      }
+    } finally {
+      await clear()
+    }
+  })
+
   // What a kill partway through a write leaves. macOS: the staged file, not yet renamed. Windows:
   // the key with the mark but not the value, or the key alone. --clean must remove each of them.
   const halfway = platform === "darwin"
