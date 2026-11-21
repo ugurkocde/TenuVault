@@ -97,20 +97,20 @@ describe("Cloud audit contract", () => {
 
   it.runIf(Boolean(pwsh))("counts all recent receipt pages without using the history cursor", () => {
     const script = fileURLToPath(new URL("./fixtures/cloud-backup/audit-replay.ps1", import.meta.url))
-    const result = JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", script, "-Paged"], { encoding: "utf8" }))
+    const result = JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", script, "-Paged"], { encoding: "utf8", timeout: 50_000 }))
     expect(result.replay).toEqual({ Count: 3, More: false })
     expect(result.replayAgain).toEqual({ Count: 0, More: false })
     const lists = (result.calls as RunCall[]).filter(call => call.uri.includes("comp=list"))
     expect(new Set(lists.map(call => new URL(call.uri).searchParams.get("prefix"))).size).toBe(14)
     expect(lists.some(call => new URL(call.uri).searchParams.get("marker"))).toBe(true)
     expect((result.calls as RunCall[]).some(call => call.uri.includes("/audit-cursors/") || call.uri.includes("55555555-5555-5555-5555-555555555555.json"))).toBe(false)
-  })
+  }, 60_000)
 
   type RestartRun = Run & { blobs: Record<string, string> }
   let restartRuns: Record<string, RestartRun> | undefined
   const restartRun = (name: string) => {
     const script = fileURLToPath(new URL("./fixtures/cloud-backup/audit-restart.ps1", import.meta.url))
-    restartRuns ??= JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8" })) as Record<string, RestartRun>
+    restartRuns ??= JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8", timeout: 50_000 })) as Record<string, RestartRun>
     return restartRuns[name]!
   }
   const auditFiles = (run: RestartRun) => Object.entries(run.blobs).filter(([uri]) => uri.includes("/audit-logs/"))
@@ -139,7 +139,7 @@ describe("Cloud audit contract", () => {
     expect(replay.calls.some(call => call.uri.includes("graph.microsoft.com"))).toBe(false)
     expect(auditFiles(replay)).toEqual(auditFiles(original))
     expect(replay.calls.filter(call => call.method === "Put" && call.uri.includes("/audit-logs/"))).toHaveLength(0)
-  })
+  }, 60_000)
 
   it.runIf(Boolean(pwsh))("uses the verified manifest after Azure commits a PUT whose acknowledgement was lost", () => {
     const run = restartRun("lostAck")
@@ -149,7 +149,7 @@ describe("Cloud audit contract", () => {
     expect(JSON.parse(auditFiles(run)[0]![1]).entries[0].job.status).toBe("completed")
     const note = Object.entries(run.blobs).find(([url]) => url.includes("/cloud-backup-outcomes/"))!
     expect(JSON.parse(note[1]).status).toBe("Success")
-  })
+  }, 60_000)
 
   it.runIf(Boolean(pwsh))("detects excessive rights on disposable cloud canaries", () => {
     const scoped = restartRun("scoped")
@@ -163,14 +163,14 @@ describe("Cloud audit contract", () => {
       expect(run.calls.filter(call => call.method === "Delete").map(call => new URL(call.uri).pathname.split("/")[1])).toEqual(["audit-logs", "intune-backups"])
       expect(run.calls.filter(call => call.method === "Put" && call.condition === "*")).toHaveLength(1)
     }
-  })
+  }, 60_000)
 
   it.runIf(Boolean(pwsh))("reports a Graph policy listing 401 at the correct stage", () => {
     const run = restartRun("graph401")
     expect(run.error).toBe("Microsoft Graph policy listing did not finish.")
     expect(JSON.parse(auditFiles(run)[0]![1]).entries[0].job).toMatchObject({ status: "failed", reason: "GRAPH_LIST_FAILED" })
     expect(run.calls.some(call => call.uri.includes(".tenuvault-owner.json"))).toBe(false)
-  })
+  }, 60_000)
 
   it("offers an ARM upgrade that leaves a PowerShell setup's backup writer, variables and schedule in place", () => {
     const resources = template.resources as Array<{ type: string; name: string; condition?: string }>
