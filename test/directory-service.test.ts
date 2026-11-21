@@ -34,7 +34,7 @@ function world(count = 0, missing = false, now: () => number = () => Date.now(),
   const tenant = fixtureTenant
   let target = missing ? "" : resource
   const data = new Map<string, string>(), members = new Set<string>(), writes: string[] = []
-  const store = { partitioned: true as const, get: (key: string) => data.get(key) ?? null, set: (key: string, value: string) => { data.set(key, value) }, delete: (key: string) => { data.delete(key) } }
+  const store = { partitioned: true as const, keys: () => [...data.keys()], get: (key: string) => data.get(key) ?? null, set: (key: string, value: string) => { data.set(key, value) }, delete: (key: string) => { data.delete(key) } }
   const settings = new ModuleSettings(store)
   settings.setChoice(tenant, { entra: { access: "restore", areas: ["usersAndDevices", "groups"] } })
   const group: Item = { ...unsetGroupFields, id: resource, displayName: "Group", mailNickname: "group", groupTypes: [], mailEnabled: false, securityEnabled: true, isAssignableToRole: false }
@@ -55,6 +55,7 @@ function world(count = 0, missing = false, now: () => number = () => Date.now(),
     if (path === "applications" || path === "servicePrincipals") return Response.json({ value: [{ id: id(path === "applications" ? 4 : 5), appId: app }] })
     if (path.endsWith("/memberOf")) return Response.json({ value: [] })
     if (path.startsWith("identity/conditionalAccess/")) return Response.json({ value: [] })
+    if (path === "groups" || path === "me/transitiveMemberOf/microsoft.graph.group") return Response.json({ value: [] })
     if (path === "roleManagement/directory/roleAssignments") return Response.json({ value: [{ principalId: admin, directoryScopeId: "/", roleDefinitionId: id(50) }] })
     if (path === `roleManagement/directory/roleDefinitions/${id(50)}`) return Response.json({ id: id(50), templateId: "fdd7a751-b60b-444a-984c-02652fe8fa1c" })
     if (path === `groups/${target}`) return Response.json(group)
@@ -3276,4 +3277,130 @@ it.each<{ folder: string; current: Item; desired: Item; name: string }>([{ folde
   expect(blocker).toContain(id(900))
   expect(blocker).not.toContain("undefined")
   if (folder === "Groups") expect(blocker).not.toContain("user principal name")
+})
+
+it("lists only the current owner's unfinished pages locally after restart and account switches", async () => {
+  const env = world(1), local = { tenantId: tenant, userId: admin, clientId: app }
+  const page = await env.service().prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read)
+  const another = structuredClone(JSON.parse(env.store.get(`restore.directory.review.${tenant}.${page.runId}`)!))
+  another.run.id = id(700); another.run.actor.userId = id(701)
+  env.store.set(`restore.directory.review.${tenant}.${another.run.id}`, JSON.stringify(another))
+  const connection = vi.fn(async () => { throw new Error("No network or token refresh") })
+  const fetcher = vi.fn(), owner = vi.fn(async () => local)
+  const service = () => new DirectoryRestoreService(env.store, new RecoveryAccounts(env.store), connection, owner, fetcher)
+  expect(await service().unfinished(tenant)).toEqual({ owner: `${tenant}/${admin}/${app}`, pages: [{ runId: page.runId, path: env.request.path }] })
+  local.userId = id(701)
+  expect(await service().unfinished(tenant)).toMatchObject({ pages: [{ runId: id(700) }] })
+  await expect(service().saved(tenant, page.runId, "discard")).rejects.toThrow("admin and connection")
+  local.clientId = id(702)
+  expect((await service().unfinished(tenant)).pages).toEqual([])
+  local.userId = admin; local.clientId = app
+  await service().saved(tenant, page.runId, "discard")
+  expect((await service().unfinished(tenant)).pages).toEqual([])
+  owner.mockResolvedValueOnce(local).mockResolvedValueOnce({ ...local, userId: id(799) })
+  await expect(service().unfinished(tenant)).rejects.toThrow("account changed")
+  expect(connection).not.toHaveBeenCalled(); expect(fetcher).not.toHaveBeenCalled()
+})
+
+it.each(["mailNickname", "displayName"])("blocks group creation on a live %s conflict in preview and again at send", async field => {
+  const env = world(0, true), original = env.fetcher.getMockImplementation()!
+  let conflicts = true
+  const existing = [id(710), id(711)].map((id, index) => ({ id, displayName: `Existing ${index}`, mailNickname: `existing${index}` }))
+  env.fetcher.mockImplementation((input, init) => {
+    const url = new URL(String(input))
+    if (url.pathname === "/v1.0/groups" && init?.method === "GET") {
+      expect(url.searchParams.get("$filter")).toContain(`${field} eq '`)
+      expect(url.searchParams.get("$count")).toBe("true")
+      expect(new Headers(init.headers).get("ConsistencyLevel")).toBe("eventual")
+      return Promise.resolve(Response.json({ value: conflicts ? existing : [] }))
+    }
+    return original(input, init)
+  })
+  const service = env.service(), blocked = await service.prepare(tenant, env.request, options, env.read)
+  for (const group of existing) { expect(blocked.rows[0]!.review.blocker).toContain(group.id); expect(blocked.rows[0]!.review.blocker).toContain(group.displayName) }
+  conflicts = false
+  const page = await service.prepare(tenant, env.request, options, env.read)
+  expect(page.rows[0]!.review.blocker).toBeUndefined()
+  conflicts = true
+  const result = await service.execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, { [page.rows[0]!.key]: page.rows[0]!.review.approvals })
+  expect(result.outcomes).toEqual([expect.objectContaining({ state: "blocked", reason: expect.stringContaining(existing[0]!.id) })])
+  expect(env.writes).toEqual([]); expect(directoryMappedId(env.store, tenant, "Groups", resource)).toBeUndefined()
+})
+
+it.each(["tenant-wide", "scoped", "wrong principal", "non-role group", "revoked"])("checks a %s group-assigned administrator through v1.0 before group creation", async variant => {
+  const env = world(0, true), original = env.fetcher.getMockImplementation()!, principal = id(720)
+  let revoked = false
+  env.fetcher.mockImplementation((input, init) => {
+    const url = new URL(String(input))
+    if (url.pathname === "/v1.0/roleManagement/directory/roleAssignments") return Promise.resolve(Response.json({ value: url.searchParams.get("$filter") === `principalId eq '${principal}'` && !revoked ? [{ principalId: variant === "wrong principal" ? admin : principal, directoryScopeId: variant === "scoped" ? `/administrativeUnits/${id(721)}` : "/", roleDefinitionId: id(50) }] : [] }))
+    if (url.pathname === "/v1.0/me/transitiveMemberOf/microsoft.graph.group") {
+      expect(new Headers(init?.headers).get("ConsistencyLevel")).toBe("eventual")
+      expect(url.searchParams.get("$filter")).toBe("isAssignableToRole eq true")
+      return Promise.resolve(Response.json({ value: variant === "non-role group" ? [] : [{ id: principal, isAssignableToRole: true }] }))
+    }
+    return original(input, init)
+  })
+  const service = env.service(), page = await service.prepare(tenant, env.request, options, env.read)
+  if (["scoped", "wrong principal", "non-role group"].includes(variant)) expect(page.rows[0]!.review.blocker).toContain("Non-admin creation")
+  else {
+    expect(page.rows[0]!.review.blocker).toBeUndefined()
+    revoked = variant === "revoked"
+    const result = await service.execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, { [page.rows[0]!.key]: page.rows[0]!.review.approvals })
+    expect(result.outcomes[0]!.state).toBe(revoked ? "deferred" : "applied")
+    expect(env.writes).toEqual(revoked ? [] : ["POST groups"])
+  }
+  expect(env.fetcher.mock.calls.every(([input]) => new URL(String(input)).pathname.startsWith("/v1.0/"))).toBe(true)
+})
+
+it("defers a journal-proven recent object write 404 and repeats every check on resume", async () => {
+  const env = world(1, true), original = env.fetcher.getMockImplementation()!, target = id(900)
+  const connection = vi.fn(env.connection)
+  const service = () => new DirectoryRestoreService(env.store, new RecoveryAccounts(env.store), connection, connection, env.fetcher, () => [], env.settings)
+  const created = await service().prepare(tenant, env.request, options, env.read)
+  expect(await service().execute(tenant, { ...env.request, runId: created.runId }, created.fingerprint, { [created.rows[0]!.key]: created.rows[0]!.review.approvals })).toMatchObject({ status: "partial", outcomes: [{ state: "applied", targetId: target }] })
+  expect(directoryMappedId(env.store, tenant, "Groups", resource)).toBe(target)
+  let sends = 0, reads = 0, replication = true, denySafetyRead = false
+  env.fetcher.mockImplementation((input, init) => {
+    const url = new URL(String(input))
+    if (url.pathname.startsWith(`/v1.0/groups/${target}`) && init?.method === "GET") {
+      reads++
+      if (denySafetyRead) return Promise.resolve(Response.json({ error: { code: "Authorization_RequestDenied" } }, { status: 403 }))
+    }
+    if (url.pathname === `/v1.0/groups/${target}/members/$ref` && init?.method === "POST") {
+      sends++
+      if (replication) return Promise.resolve(Response.json({ error: { code: "Request_ResourceNotFound", message: "Sensitive replication response" } }, { status: 404 }))
+    }
+    // The fixture's membership store follows the group's new ID after recreation.
+    url.pathname = url.pathname.replace(`/groups/${target}/`, `/groups/${resource}/`)
+    return original(url, init)
+  })
+  const page = await service().prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read)
+  expect(page.rows).toHaveLength(1)
+  const request = { ...env.request, runId: page.runId }, approvals = { [page.rows[0]!.key]: page.rows[0]!.review.approvals }
+  vi.useFakeTimers()
+  try {
+    expect(await service().execute(tenant, request, page.fingerprint, approvals)).toMatchObject({ failed: 0, outcomes: [{ state: "deferred", deferralCause: "replication", reason: expect.stringContaining("replicating"), retryAt: Date.now() + 5000 }] })
+    expect(sends).toBe(1); expect(env.writes).toEqual(["POST groups"])
+    const record = JSON.parse(env.store.get(`restore.directory.coordinator.${tenant}`)!)
+    expect(Object.values(record.locks)).toEqual([expect.objectContaining({ rejected: expect.objectContaining({ attempt: 1, cause: "replication" }) })])
+    vi.setSystemTime(Date.now() + 5001)
+    replication = false
+    await expect(service().execute(tenant, request, page.fingerprint, {})).rejects.toThrow("Approve each selected row separately")
+    const valid = await env.connection()
+    const claims = JSON.parse(Buffer.from(valid.token.split(".")[1]!, "base64url").toString())
+    connection.mockResolvedValue({ ...valid, token: `h.${Buffer.from(JSON.stringify({ ...claims, scp: "User.Read.All Group.Read.All Application.Read.All Policy.Read.All" })).toString("base64url")}.s` })
+    expect(await service().execute(tenant, request, page.fingerprint, approvals)).toMatchObject({ outcomes: [{ state: "deferred" }] })
+    expect(sends).toBe(1)
+    connection.mockImplementation(env.connection)
+    const connections = connection.mock.calls.length
+    denySafetyRead = true
+    expect(await service().execute(tenant, request, page.fingerprint, approvals)).toMatchObject({ outcomes: [{ state: "deferred" }] })
+    expect(sends).toBe(1); expect(connection.mock.calls.length).toBeGreaterThan(connections)
+    denySafetyRead = false
+    const previousReads = reads
+    expect(await service().execute(tenant, request, page.fingerprint, approvals)).toMatchObject({ status: "partial", outcomes: [{ state: "applied" }] })
+    expect(reads).toBeGreaterThan(previousReads)
+    await service().execute(tenant, request, page.fingerprint, approvals)
+    expect(sends).toBe(2); expect(env.writes).toEqual(["POST groups", `POST groups/${resource}/members/$ref`]); expect(env.members).toEqual(new Set([id(100)]))
+  } finally { vi.useRealTimers() }
 })

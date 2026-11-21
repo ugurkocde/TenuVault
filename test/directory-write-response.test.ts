@@ -64,3 +64,14 @@ it("defers only the exact documented 400 for POST group member references", asyn
   for (const other of [{ ...error, code: "Request_ResourceNotFound" }, { ...error, message: "Already a member" }, { ...error, message: undefined }]) await expect(directoryWriteReplication(Response.json({ error: other }, { status: 400 }), "POST", url(path))).resolves.toBeUndefined()
   for (const response of [Response.json({ error }, { status: 404 }), new Response(JSON.stringify({ error }), { status: 400 }), new Response("{", { status: 400, headers: { "Content-Type": "application/json" } })]) await expect(directoryWriteReplication(response, "POST", url(path))).resolves.toBeUndefined()
 })
+
+it.each(["", "not JSON", "<html>Sign in</html>"])("defers a header-only Graph 401 claims challenge with body %s", async body => {
+  const headers = { "WWW-Authenticate": 'Bearer claims="sensitive-claims", error="insufficient_claims", realm=""' }
+  await expect(directoryWriteAuthorization(new Response(body, { status: 401, headers }))).rejects.toMatchObject({ deferralCause: "authentication", message: expect.stringContaining("Sign in again and satisfy the Conditional Access requirement") })
+  await expect(directoryWriteAuthorization(new Response(body, { status: 401, headers }), true)).rejects.toMatchObject({ deferralCause: "authentication" })
+})
+
+it("binds claims parameters to the same Bearer challenge in combined authentication headers", async () => {
+  for (const challenge of ['Basic realm="proxy", Bearer claims="encoded", error="insufficient_claims"', 'Bearer realm="a,b", error="insufficient_claims", claims="encoded", Basic realm="proxy"']) await expect(directoryWriteAuthorization(new Response(null, { status: 401, headers: { "WWW-Authenticate": challenge } }))).rejects.toMatchObject({ deferralCause: "authentication" })
+  for (const challenge of ['Basic error="insufficient_claims", Bearer claims="encoded"', 'Bearer error="insufficient_claims", Basic claims="encoded"', 'Bearer error="insufficient_claims", claims=" "']) await expect(directoryWriteAuthorization(new Response(null, { status: 401, headers: { "WWW-Authenticate": challenge } }))).resolves.toBeUndefined()
+})

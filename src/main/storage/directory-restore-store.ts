@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto"
-import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
+import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import type { Cipher, KeyValueStore } from "./secure-store"
 import { RestoreSafetyError } from "../../shared/intune/restore-guards"
@@ -11,7 +11,7 @@ function syncDirectorySync(directory: string): void {
   try { fsyncSync(handle) } finally { closeSync(handle) }
 }
 
-export interface PartitionedRestoreStore extends KeyValueStore { readonly partitioned: true }
+export interface PartitionedRestoreStore extends KeyValueStore { readonly partitioned: true; keys?: () => string[] }
 /** Uses the app's cipher, but never reads or rewrites the full directory history for a batch save. */
 export class DirectoryRestoreStore implements PartitionedRestoreStore {
   readonly partitioned = true as const
@@ -46,6 +46,16 @@ export class DirectoryRestoreStore implements PartitionedRestoreStore {
       try { writeFileSync(handle, encrypted); fsyncSync(handle) } finally { closeSync(handle) }
       renameSync(temporary, file); this.syncDirectory()
     } finally { rmSync(temporary, { force: true }) }
+  }
+  /** Enumerate verified encrypted records for local saved-page discovery only. */
+  keys(): string[] {
+    return readdirSync(this.directory).filter(file => /^[0-9a-f]{64}\.bin$/.test(file)).map(file => {
+      try {
+        const record = JSON.parse(this.cipher.decrypt(readFileSync(join(this.directory, file))))
+        if (typeof record.key !== "string" || typeof record.value !== "string" || this.file(record.key) !== join(this.directory, file)) throw new Error("Invalid record")
+        return record.key as string
+      } catch { throw new RestoreSafetyError("Directory restore history could not be verified. No write was sent.") }
+    })
   }
   delete(key: string): void {
     rmSync(this.file(key), { force: true }); this.syncDirectory()

@@ -5,7 +5,7 @@ import { restoreMatrixRow } from "../../shared/intune/restore-matrix"
 import { RestoreSafetyError, RestoreWriteDeferredError, RestoreWriteRefusedError, guardRestoreItem, type RestoreActor } from "../../shared/intune/restore-guards"
 import { isGuid } from "../../shared/security"
 import { directoryContinuation } from "./directory-read-shape"
-import { directoryWriteAuthorization, directoryWriteReplication, directoryWriteResponse } from "./directory-write-response"
+import { directoryWriteAuthorization, directoryWriteReplication, directoryWriteResponse, directoryWriteNotFound } from "./directory-write-response"
 import { directoryPermissionBlocker } from "./directory-permissions"
 import { directoryReadAbsent, directoryReadShape, directoryWorkloadOnly } from "./directory-read-shape"
 import { requireRestoreActor } from "./restore-actor"
@@ -59,7 +59,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
       const requestSignal = method === "GET" && signal ? AbortSignal.any([signal, AbortSignal.timeout(60_000)]) : AbortSignal.timeout(60_000)
       beforeSend?.()
       if (method !== "GET" && signal?.aborted) throw new RestoreWriteDeferredError("The directory write was cancelled before sending.")
-      const response = await fetchRequest(url.href, { method, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, ...(body ? { body: JSON.stringify(body) } : {}), signal: requestSignal }).catch(error => {
+      const response = await fetchRequest(url.href, { method, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", ...(method === "GET" && (url.searchParams.has("$count") || url.pathname.includes("/transitiveMemberOf/")) ? { ConsistencyLevel: "eventual" } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}), signal: requestSignal }).catch(error => {
         if (isRestorePersistenceError(error)) throw error
         if (method === "GET" && signal?.aborted) throw new RestoreWriteDeferredError("The directory read was cancelled before sending a write.")
         if (method === "GET") throw new DirectoryReadDeferredError()
@@ -78,8 +78,10 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
       if (method === "GET" && response.status === 404) return directoryReadAbsent(response, url)
       await directoryWriteAuthorization(response, method === "GET")
       await directoryWriteReplication(response, method, url)
+      if (method !== "GET") await directoryWriteNotFound(response)
       if (method !== "GET" && response.status >= 400 && response.status < 500 && response.status !== 408) throw new RestoreWriteRefusedError(response.status)
       if (method === "GET" && (response.status === 408 || response.status >= 500)) throw new DirectoryReadDeferredError()
+      if (method === "GET" && response.ok && response.status !== 200) throw new DirectoryReadDeferredError()
       if (!response.ok) throw new Error("Directory request was not confirmed. No response body is retained.")
       if (method !== "GET" && (method !== "POST" || /^(?:users|groups)$|\/\$ref$/.test(url.pathname.replace(/^\/v1\.0\//, "")))) return directoryWriteResponse(response, method, url, body)
       if (method === "GET" && !/^application\/(?:[\w.+-]+\+)?json(?:\s*;|$)/i.test(response.headers.get("Content-Type") ?? "")) throw new DirectoryReadDeferredError()
@@ -201,15 +203,32 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
     let resource = preimage !== undefined ? (preimage?.resource as Item | undefined) ?? preimage : step.operation === "create" ? null : await request(target(step))
     if (!resource && intent.action === "recycle") resource = await request(`directory/deletedItems/${identity(step.targetId ?? step.sourceId)}`)
     if (resource) { cloudObject(resource); if (step.folder === "Groups") directoryPayload("Groups", "update", resource) }
+    if (step.folder === "Groups" && intent.action === "create") {
+      const values = ["mailNickname", "displayName"].map(field => {
+        const value = step.desired[field]
+        if (typeof value !== "string" || !value.trim()) throw new RestoreSafetyError("A group create needs a reviewed alias and display name.")
+        return `${field} eq '${value.replaceAll("'", "''")}'`
+      })
+      const matches: Item[] = []
+      for await (const group of list(`groups?$select=id,displayName,mailNickname&$count=true&$filter=${encodeURIComponent(values.join(" or "))}`)) matches.push(group)
+      if (matches.length) return { ...directoryReview(step, resource, null, actor, false), blocker: `Existing groups match the reviewed alias or display name: ${matches.map(group => `${String(group.displayName ?? group.mailNickname ?? group.id)} (${String(group.id)})`).join(", ")}. Review them in Microsoft Entra before restoring.` }
+    }
     // Delegated non-admin group creation implicitly adds the caller as an owner.
     // A fresh tenant-wide Groups Administrator or Global Administrator assignment
     // establishes the documented security-group exception without restoring ownership.
     if (step.folder === "Groups" && intent.action === "create") {
-      let admin = false
-      for await (const assignment of list(`roleManagement/directory/roleAssignments?$filter=${encodeURIComponent(`principalId eq '${actor.userId}'`)}`)) {
-        if (assignment.principalId !== actor.userId || assignment.directoryScopeId !== "/") continue
-        const definition = await request(`roleManagement/directory/roleDefinitions/${identity(assignment.roleDefinitionId)}?$select=id,templateId`)
-        if (["fdd7a751-b60b-444a-984c-02652fe8fa1c", "62e90394-69f5-4237-9190-012177145e10"].includes(String(definition?.templateId))) admin = true
+      const assignedAdmin = async (principalId: string) => {
+        for await (const assignment of list(`roleManagement/directory/roleAssignments?$filter=${encodeURIComponent(`principalId eq '${principalId}'`)}`)) {
+          if (typeof assignment.principalId !== "string" || assignment.principalId.toLowerCase() !== principalId.toLowerCase() || assignment.directoryScopeId !== "/" || assignment.appScopeId != null) continue
+          const definition = await request(`roleManagement/directory/roleDefinitions/${identity(assignment.roleDefinitionId)}?$select=id,templateId`)
+          if (["fdd7a751-b60b-444a-984c-02652fe8fa1c", "62e90394-69f5-4237-9190-012177145e10"].includes(String(definition?.templateId))) return true
+        }
+        return false
+      }
+      let admin = await assignedAdmin(actor.userId)
+      if (!admin) for await (const group of list("me/transitiveMemberOf/microsoft.graph.group?$select=id,isAssignableToRole&$filter=isAssignableToRole%20eq%20true&$count=true")) {
+        if (!isGuid(group.id) || group.isAssignableToRole !== true) throw new DirectoryReadDeferredError()
+        if (await assignedAdmin(group.id)) { admin = true; break }
       }
       if (!admin) throw new DirectoryRoleDeferredError("Security-group creation requires a current tenant-wide Groups Administrator or Global Administrator assignment. Non-admin creation can implicitly make the restoring account an owner.")
     }

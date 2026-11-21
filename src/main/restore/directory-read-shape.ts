@@ -25,7 +25,7 @@ export function directoryReadShape(value: unknown, url: URL): Item {
   const selected = (url.searchParams.get("$select") ?? "").split(",").filter(Boolean)
   const appRoles = /\/appRoleAssignments$/.test(path)
   const relationship = /\/(?:members|owners|memberOf|appRoleAssignments)(?:\/\$ref)?$/.test(path)
-  const collection = relationship || /^(?:users|groups|applications|servicePrincipals|oauth2PermissionGrants|identity\/conditionalAccess\/policies|roleManagement\/directory\/roleAssignments)$/.test(path)
+  const collection = relationship || /^(?:users|groups|applications|servicePrincipals|oauth2PermissionGrants|identity\/conditionalAccess\/policies|roleManagement\/directory\/roleAssignments|me\/transitiveMemberOf\/microsoft.graph.group)$/.test(path)
   if (collection) {
     if (path === "identity/conditionalAccess/policies" && Object.hasOwn(value, "@odata.context")) {
       let context: URL

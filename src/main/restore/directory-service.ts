@@ -1,3 +1,4 @@
+import { DIRECTORY_REPLICATION_WINDOW_MS } from "./directory-relationship-history"
 import { restoreTenantKey } from "./restore-tenant-key"
 import { DirectoryPrincipalMappings } from "./directory-principal-mappings"
 import { DirectoryPendingPublications } from "./directory-pending-publications"
@@ -51,7 +52,7 @@ export class DirectoryRestoreService {
   private readonly running = new Map<string, AbortController>()
   private readonly store: PartitionedRestoreStore
   constructor(store: PartitionedRestoreStore, private readonly recovery: RecoveryAccounts, private readonly connection: (tenant: string) => Promise<RestoreConnection>, private readonly localOwner: (tenant: string) => Promise<Pick<RestoreConnection, "tenantId" | "userId" | "clientId">>, private readonly fetchImpl: typeof fetch = fetch, private readonly protectedAppIds: (tenant: string) => readonly string[] = () => [], private readonly settings?: Pick<ModuleSettings, "get">, private readonly now: () => number = () => Date.now()) {
-    this.store = { partitioned: store.partitioned, get: name => restorePersistence(() => store.get(name)), set: (name, value) => restorePersistence(() => store.set(name, value)), delete: name => restorePersistence(() => store.delete(name)) }
+    this.store = { ...(store.keys ? { keys: () => restorePersistence(() => store.keys!()) } : {}), partitioned: store.partitioned, get: name => restorePersistence(() => store.get(name)), set: (name, value) => restorePersistence(() => store.set(name, value)), delete: name => restorePersistence(() => store.delete(name)) }
   }
   private async context(tenant: string, onThrottled?: (retryAt: number) => void, validatedConnection?: RestoreConnection, pageId?: string) {
     const connection = validatedConnection ?? await this.connection(tenant)
@@ -85,6 +86,7 @@ export class DirectoryRestoreService {
     }, undefined, undefined, true, onThrottled)
     const applicationIO = directory9bIO(connection.token, actor, this.fetchImpl, () => this.protectedAppIds(tenant), () => this.settings?.get(tenant).entra, undefined, onThrottled)
     for (const adapter of [io, applicationIO]) {
+      adapter.recentlyCreated = (step, targetId) => this.recentlyCreated(tenant, step, targetId)
       adapter.now = this.now
       adapter.persistRetry = (_step, journal, coordinator, retryAt) => this.persistRetry(tenant, retryAt, journal, coordinator, pageId)
       adapter.persistConfirmed = (_step, save) => this.pending.forTenant(tenant).retain(save, undefined, pageId)
@@ -98,6 +100,36 @@ export class DirectoryRestoreService {
     if (connection.tenantId.toLowerCase() !== restoreTenantKey(page.run.tenant) || connection.tenantId.toLowerCase() !== page.run.actor.tenantId.toLowerCase() || connection.userId.toLowerCase() !== page.run.actor.userId.toLowerCase() || connection.clientId.toLowerCase() !== page.run.actor.clientId.toLowerCase()) fail("Use the admin and connection that reviewed this page.")
   }
   private async verifyLocalOwner(page: DirectoryPage) { this.verifyOwner(page, await this.localOwner(page.run.tenant)) }
+  private pageIds(tenant: string): string[] {
+    const prefix = `restore.directory.review.${restoreTenantKey(tenant)}.`
+    if (!this.store.keys) fail("Local saved restore discovery is unavailable.")
+    return this.store.keys!().filter(name => name.startsWith(prefix)).map(name => name.slice(prefix.length)).filter(isGuid)
+  }
+  async unfinished(tenant: string) {
+    const owner = await this.localOwner(tenant)
+    if (owner.tenantId.toLowerCase() !== restoreTenantKey(tenant)) fail("The connection belongs to another tenant.")
+    const pages: Array<{ runId: string; path: string }> = []
+    for (const id of this.pageIds(tenant)) {
+      const page = this.load(tenant, id)
+      if (page.run.actor.tenantId.toLowerCase() !== owner.tenantId.toLowerCase() || page.run.actor.userId.toLowerCase() !== owner.userId.toLowerCase() || page.run.actor.clientId.toLowerCase() !== owner.clientId.toLowerCase()) continue
+      this.verifyOwner(page, owner)
+      const view = this.view(page)
+      if (!view.discarded && (!page.selection || view.unresolved)) pages.push({ runId: id, path: page.run.source?.path ?? "" })
+    }
+    // Account changes while the read was running must not disclose the prior owner's pages.
+    const current = await this.localOwner(tenant)
+    if (["tenantId", "userId", "clientId"].some(field => current[field as keyof typeof current].toLowerCase() !== owner[field as keyof typeof owner].toLowerCase())) fail("The signed-in account changed. Refresh saved restores.")
+    return { owner: [owner.tenantId, owner.userId, owner.clientId].map(value => value.toLowerCase()).join("/"), pages }
+  }
+  private recentlyCreated(tenant: string, step: GuardedStep, targetId?: string): boolean {
+    if (!targetId || !this.store.keys) return false
+    const now = this.now()
+    for (const id of this.pageIds(tenant)) for (const { run } of this.history(this.load(tenant, id))) {
+      if (run.tenant.toLowerCase() !== restoreTenantKey(tenant)) continue
+      if (run.entries.some(entry => entry.step.folder === step.folder && entry.step.directory?.action === "create" && entry.step.operation === "create" && entry.acknowledged === true && entry.targetId?.toLowerCase() === targetId.toLowerCase() && Number.isFinite(entry.acknowledgedAt) && entry.acknowledgedAt! <= now && now < entry.acknowledgedAt! + DIRECTORY_REPLICATION_WINDOW_MS)) return true
+    }
+    return false
+  }
   async verifySavedOwner(tenant: string, id: string) { await this.verifyLocalOwner(this.load(tenant, id)) }
   private async ownerConnection(page: DirectoryPage) {
     const connection = await this.connection(page.run.tenant)

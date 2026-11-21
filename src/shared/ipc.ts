@@ -451,6 +451,7 @@ export interface TenuVaultBridge {
     signIn: (tenant: string, clientId: string, options?: { loginHint?: string }) => Promise<SignedInAccount>
     signOut: (tenantId: string) => Promise<void>
     accounts: () => Promise<SignedInAccount[]>
+    savedDirectoryRestores: (tenantId: string) => Promise<{ owner: string; pages: Array<{ runId: string; path: string }> }>
     /** Called after an account is saved or removed, before any old verification is reused. */
     onAccountsChanged: (listener: (tenantId: string) => void) => () => void
     /** Signs in again to an existing tenant profile, for `scope` (Microsoft Graph when omitted). */

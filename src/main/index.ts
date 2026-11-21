@@ -1,6 +1,6 @@
 import { DirectoryRestoreStore } from "./storage/directory-restore-store"
 import { DirectoryRestoreService } from "./restore/directory-service"
-import { setDirectoryRestoreService } from "./restore/directory-dispatch"
+import { directoryRestoreUnfinished, setDirectoryRestoreService } from "./restore/directory-dispatch"
 import { IdentityRestoreService } from "./restore/service"
 import { RecoveryAccounts } from "./restore/safety-resolvers"
 import { restoreSafetyRoutes } from "./restore/routes"
@@ -1321,6 +1321,10 @@ async function bootstrap(): Promise<void> {
     pushLicense()
   })
   handleTrusted("auth:accounts", () => auth.accounts())
+  handleTrusted("auth:savedDirectoryRestores", (_event, tenantId: unknown) => {
+    if (typeof tenantId !== "string") throw new Error("Choose a signed-in tenant.")
+    return directoryRestoreUnfinished(tenantId)
+  })
   // Stops waiting for a sign-in the admin abandoned in the browser.
   handleTrusted("auth:cancelSignIn", () => auth.cancelInteractive())
   // Copies the sign-in address a waiting sign-in opened, for another browser. Only whether it was

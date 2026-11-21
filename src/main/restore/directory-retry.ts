@@ -15,7 +15,7 @@ export class DirectoryAuthenticationDeferredError extends RestoreWriteDeferredEr
 
 /** Graph rejected a member add while the new group replicates. No write was applied. */
 export class DirectoryReplicationDeferredError extends RestoreWriteDeferredError {
-  constructor() { super("The group has not finished replicating in Microsoft Entra. Wait a few seconds, then resume to repeat permission, approval and safety checks.", Date.now() + 5000, "replication") }
+  constructor() { super("The directory object has not finished replicating in Microsoft Entra. Wait a few seconds, then resume to repeat permission, approval and safety checks.", Date.now() + 5000, "replication") }
 }
 
 export class DirectoryThrottledError extends RestoreWriteDeferredError {

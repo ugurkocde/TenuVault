@@ -48,6 +48,7 @@ const bridge: TenuVaultPreloadBridge = {
     signIn: (tenant, clientId, options) => invoke("auth:signIn", tenant, clientId, options),
     signOut: (tenantId) => invoke("auth:signOut", tenantId),
     accounts: () => invoke("auth:accounts"),
+    savedDirectoryRestores: (tenantId) => invoke("auth:savedDirectoryRestores", tenantId),
     onAccountsChanged: (listener) => subscribe<string>("auth:accountsChanged", listener),
     reauthenticate: (tenantId, clientId, scope) => invoke("auth:reauthenticate", tenantId, clientId, scope),
     cancelSignIn: () => invoke("auth:cancelSignIn"),

@@ -45,6 +45,7 @@ export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typ
       if (method === "PATCH" && (response.status === 408 || response.status >= 500)) throw new Error("The application write has an unconfirmed result.")
       throw new RestoreWriteRefusedError(response.status)
     }
+    if (method === "GET" && response.status !== 200) throw new DirectoryReadDeferredError()
     if (method !== "GET") return directoryWriteResponse(response, method, new URL(root + path))
     if (method === "GET" && !/^application\/(?:[\w.+-]+\+)?json(?:\s*;|$)/i.test(response.headers.get("Content-Type") ?? "")) throw new DirectoryReadDeferredError()
     if (response.status === 204) {

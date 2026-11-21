@@ -1,23 +1,52 @@
 import type { Item } from "../../shared/intune/registry"
+import { RestoreWriteRefusedError } from "../../shared/intune/restore-guards"
 import { isGuid } from "../../shared/security"
 import { DirectoryAuthenticationDeferredError, DirectoryReadDeferredError, DirectoryReplicationDeferredError, DirectoryRoleDeferredError } from "./directory-retry"
 
 const object = (value: unknown): value is Item => !!value && typeof value === "object" && !Array.isArray(value)
 const jsonContent = (response: Response) => /^application\/(?:[\w.+-]+\+)?json(?:\s*;|$)/i.test(response.headers.get("Content-Type") ?? "")
 
+/** Keep parameters bound to their authentication scheme, including combined headers. */
+function claimsChallenge(header: string): boolean {
+  let bearer = false
+  const parameters = new Map<string, string>()
+  const matches = () => bearer && parameters.get("error")?.toLowerCase() === "insufficient_claims" && !!parameters.get("claims")?.trim()
+  for (const segment of header.match(/(?:[^,"]|"(?:\\.|[^"\\])*")+/g) ?? []) {
+    let part = segment.trim()
+    const scheme = /^([a-z][\w-]*)\s+(.+)$/i.exec(part)
+    if (scheme && !scheme[2]!.trimStart().startsWith("=")) {
+      if (matches()) return true
+      bearer = scheme[1]!.toLowerCase() === "bearer"; parameters.clear(); part = scheme[2]!
+    }
+    const parameter = /^([a-z][\w-]*)\s*=\s*"((?:\\.|[^"\\])*)"$/i.exec(part)
+    if (parameter) parameters.set(parameter[1]!.toLowerCase(), parameter[2]!)
+  }
+  return !!matches()
+}
 /** A structured Graph authorization denial proves this send was not applied. */
 export async function directoryWriteAuthorization(response: Response, read = false): Promise<void> {
+  const challenge = response.headers.get("WWW-Authenticate") ?? ""
+  if (response.status === 401 && claimsChallenge(challenge)) throw new DirectoryAuthenticationDeferredError("Sign in again and satisfy the Conditional Access requirement, then resume with a fresh connection to repeat permission, approval and safety checks. Automatic claims challenge replay is unavailable; if sign-in does not resolve it, complete the change in Microsoft Entra.")
   if (![401, 403].includes(response.status) || !jsonContent(response)) return
   let value: unknown
   try { value = await response.clone().json() } catch { return }
   if (!object(value) || !object(value.error) || typeof value.error.code !== "string" || !value.error.code.trim()) return
   if (read) throw new DirectoryReadDeferredError()
-  const challenge = response.headers.get("WWW-Authenticate") ?? ""
-  if (value.error.code.toLowerCase() === "insufficient_claims" || /^Bearer\s/i.test(challenge) && /(?:\s|,)error\s*=\s*"insufficient_claims"(?:,|$)/i.test(challenge) && /(?:\s|,)claims\s*=\s*"[^"]+"/i.test(challenge)) throw new DirectoryAuthenticationDeferredError("Sign in again and satisfy the Conditional Access requirement, then resume with a fresh connection to repeat permission, approval and safety checks.")
+  if (value.error.code.toLowerCase() === "insufficient_claims" || claimsChallenge(challenge)) throw new DirectoryAuthenticationDeferredError("Sign in again and satisfy the Conditional Access requirement, then resume with a fresh connection to repeat permission, approval and safety checks.")
   if (response.status === 401) throw new DirectoryAuthenticationDeferredError()
   if (["authorization_requestdenied", "accessdenied"].includes(value.error.code.toLowerCase())) throw new DirectoryRoleDeferredError()
 }
 
+export class DirectoryObjectNotFoundError extends RestoreWriteRefusedError {
+  constructor() { super(404) }
+}
+/** A structured resource-not-found can be replication only with our journal's creation evidence. */
+export async function directoryWriteNotFound(response: Response): Promise<void> {
+  if (response.status !== 404 || !jsonContent(response)) return
+  let value: unknown
+  try { value = await response.clone().json() } catch { return }
+  if (object(value) && object(value.error) && value.error.code === "Request_ResourceNotFound") throw new DirectoryObjectNotFoundError()
+}
 /** Only the documented member-add replication failure proves this send was unapplied. */
 export async function directoryWriteReplication(response: Response, method: string, url: URL): Promise<void> {
   if (response.status !== 400 || method !== "POST" || !/^\/v1\.0\/groups\/[^/]+\/members\/\$ref$/.test(url.pathname) || !jsonContent(response)) return

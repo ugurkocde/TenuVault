@@ -2,15 +2,15 @@ import { act, createElement } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, expect, it, vi } from "vitest"
 import { DirectoryRestore } from "../../src/portal/components/backup/directory-restore"
-const accounts = vi.hoisted(() => ({ changed: null as null | ((tenantId: string) => void) }))
-vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { auth: { onAccountsChanged: (listener: (tenantId: string) => void) => { accounts.changed = listener; return () => { accounts.changed = null } } } } }))
+const accounts = vi.hoisted(() => ({ discover: vi.fn<() => Promise<{ owner: string; pages: Array<{ runId: string; path: string }> }> | undefined>(), changed: null as null | ((tenantId: string) => void) }))
+vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { auth: { savedDirectoryRestores: () => accounts.discover(), onAccountsChanged: (listener: (tenantId: string) => void) => { accounts.changed = listener; return () => { accounts.changed = null } } } } }))
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 let root: Root
 const tenant = { name: "Contoso", credentials: { tenantId: "tenant", appId: "app", clientSecret: "placeholder" }, storageAccountName: "local" }
 const button = (name: string) => [...document.querySelectorAll("button")].find(item => item.textContent === name)!
 const props = { tenant, backupId: "backup", path: "backup/Groups/group.json" }
 const page = { runId: "run", fingerprint: "bound", more: true, rows: [{ key: "member", review: { principal: { id: "p", name: "Member", type: "user" }, resource: { id: "g", name: "Team", type: "group" }, privilege: "member", scope: "tenant/group/g", approvals: ["directory-item", "security-response"], notices: ["The current state looks deliberate."], changes: [{ property: "present", before: false, after: true }], roleAssignable: false } }] }
-afterEach(async () => { if (root) await act(async () => root.unmount()); document.body.innerHTML = ""; vi.unstubAllGlobals() })
+afterEach(async () => { if (root) await act(async () => root.unmount()); document.body.innerHTML = ""; accounts.discover.mockReset(); vi.unstubAllGlobals() })
 const click = async (name: string) => act(async () => button(name).click())
 it("shows who gets what and requires each approval before sending its saved page", async () => {
   const fetcher = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => Response.json(JSON.parse(String(init?.body)).action === "preview" ? page : { status: "complete", replacedReferences: [{ path: "DeviceConfigurations/p", property: "groupId", mapping: { kind: "objectId", folder: "Groups", source: "old", target: "new" } }] }))
@@ -687,4 +687,37 @@ it.each(["role", "authentication"])("renders the stored %s deferral cause withou
   expect(results.textContent).toContain(reason)
   expect(results.textContent).not.toContain("Throttled by Microsoft Graph")
   expect(results.textContent).not.toContain("Deferred before dispatch")
+})
+
+it("keeps the saved page ID after same-owner reauthentication while clearing the displayed review", async () => {
+  accounts.discover.mockResolvedValue({ owner: "tenant/user/app", pages: [] })
+  vi.stubGlobal("fetch", vi.fn(async () => Response.json(page)))
+  root = createRoot(document.body.appendChild(document.createElement("div")))
+  await act(async () => root.render(createElement(DirectoryRestore, props)))
+  await click("Review directory restore"); await click("Preview directory changes")
+  await act(async () => accounts.changed!("TENANT"))
+  expect(document.body.textContent).not.toContain("Member (user)")
+  expect(document.querySelector<HTMLInputElement>('input:not([type="checkbox"])')!.value).toBe("run")
+  expect(button("Resume saved page").disabled).toBe(false)
+  expect(button("Execute approved changes or resume page")).toBeUndefined()
+})
+
+it("recovers only the new owner's unfinished IDs after an account switch and ignores a stale listing", async () => {
+  accounts.discover.mockResolvedValue({ owner: "tenant/first/app", pages: [] })
+  vi.stubGlobal("fetch", vi.fn(async () => Response.json(page)))
+  root = createRoot(document.body.appendChild(document.createElement("div")))
+  await act(async () => root.render(createElement(DirectoryRestore, props)))
+  await click("Review directory restore"); await click("Preview directory changes")
+  let resolve!: (value: { owner: string; pages: Array<{ runId: string; path: string }> }) => void
+  accounts.discover.mockReturnValueOnce(new Promise(done => { resolve = done }))
+  await act(async () => accounts.changed!("tenant"))
+  accounts.discover.mockResolvedValue({ owner: "tenant/second/app", pages: [{ runId: "second-page", path: props.path }] })
+  await act(async () => accounts.changed!("tenant"))
+  await act(async () => resolve({ owner: "tenant/first/app", pages: [{ runId: "private-page", path: "private-path" }] }))
+  expect(document.querySelector<HTMLInputElement>('input:not([type="checkbox"])')!.value).toBe("")
+  expect(document.body.textContent).toContain("Your unfinished saved restores")
+  expect(document.body.textContent).not.toContain("private-page")
+  await click(`${props.path}: second-page`)
+  expect(document.querySelector<HTMLInputElement>('input:not([type="checkbox"])')!.value).toBe("second-page")
+  expect(button("Resume saved page").disabled).toBe(false)
 })

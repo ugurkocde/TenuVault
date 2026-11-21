@@ -37,6 +37,7 @@ it("persists encrypted journal partitions across restarts without loading unrela
       expect(readFileSync(join(directory, file)).toString()).not.toContain("Private user")
     }
     const restarted = new DirectoryRestoreStore(directory, cipher)
+    expect(restarted.keys().sort()).toEqual(Array.from({ length: 100 }, (_, i) => `restore.directory.batch.${i}`).sort())
     expect(restarted.get("restore.directory.batch.20")).toBe("Private user metadata 20")
     restarted.set("restore.directory.batch.20", "Changed")
     expect(store.get("restore.directory.batch.20")).toBe("Changed")

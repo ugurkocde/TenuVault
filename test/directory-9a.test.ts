@@ -202,6 +202,7 @@ for (const operation of ["create", "update"] as const) it(`group ${operation}: r
   step.desired = operation === "create" ? directoryPayload("Groups", operation, group) : { description: "Restored description" }; step.properties = Object.keys(step.desired)
   let writes = 0, live: Item | null = operation === "create" ? null : group
   const fetcher = vi.fn(async (_url: RequestInfo | URL, options?: RequestInit) => {
+    if (new URL(String(_url)).pathname === "/v1.0/groups" && options?.method === "GET") return Response.json({ value: [] })
     if (String(_url).includes("roleAssignments")) return Response.json({ value: [{ principalId: actor.userId, directoryScopeId: "/", roleDefinitionId: uuid(50) }] })
     if (String(_url).includes("roleDefinitions")) {
       expect(new URL(String(_url)).searchParams.get("$select")).toBe("id,templateId")
@@ -275,7 +276,7 @@ it("refuses non-admin group creation before Graph can implicitly add the caller 
   const fetcher = vi.fn(async () => Response.json({ value: [] }))
   const io = directory9aIO(token(), actor, refs, fetcher)
   await expect(io.review(step)).rejects.toThrow("Non-admin creation")
-  expect(fetcher).toHaveBeenCalledTimes(1)
+  expect(fetcher).toHaveBeenCalledTimes(3)
 })
 
 it("selects the optional user fields needed to reconcile an unanswered create", async () => {

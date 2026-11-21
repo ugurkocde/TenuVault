@@ -1,7 +1,8 @@
 import { restoreTenantKey } from "./restore-tenant-key"
 import { isProxyAuthResponse } from "../api/network-error"
 import { DirectoryRetryPersistenceError, DirectoryWriteUncertainError, persistDirectoryRetry, waitForDirectoryRetry } from "./directory-retry"
-import { directoryCreateMatches } from "./directory-write-response"
+import { DirectoryReplicationDeferredError } from "./directory-retry"
+import { DirectoryObjectNotFoundError, directoryCreateMatches } from "./directory-write-response"
 import { requireConfigurationApproval } from "./entra-configuration"
 import { isGraphId, isGuid } from "../../shared/security"
 import { operationProtections, restoreMatrixRow } from "../../shared/intune/restore-matrix"
@@ -61,6 +62,7 @@ export interface GuardedRun {
 export interface GuardedIO {
   token: string
   now?: () => number
+  recentlyCreated?: (step: GuardedStep, targetId?: string) => boolean
   canReconcile?: (step: GuardedStep, targetId?: string) => boolean
   persistConfirmed?: (step: GuardedStep, save: () => void) => void
   persistRetry?: (step: GuardedStep, saveJournal: () => void, saveCoordinator: () => void, retryAt: number) => void
@@ -332,7 +334,12 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
           })
         } catch (error) {
           if (isRestorePersistenceError(error)) throw error
-          if (step.directory && isProxyAuthResponse(error)) {
+          if (step.directory && error instanceof DirectoryObjectNotFoundError && io.recentlyCreated?.(step, entry.targetId)) {
+            const deferred = new DirectoryReplicationDeferredError()
+            const attempt = rejectedAttempt(), rejected = attempt ? { ...attempt, cause: "replication" as const } : undefined
+            entry.deferralCause = "replication"; entry.state = "deferred"; entry.reason = deferred.message
+            defer(deferred.retryAt!, rejected)
+          } else if (step.directory && isProxyAuthResponse(error)) {
             const attempt = rejectedAttempt(), rejected = attempt ? { ...attempt, cause: "proxy" as const } : undefined
             entry.deferralCause = "proxy"
             entry.state = "deferred"; entry.reason = "The proxy requires authentication. No directory write reached Microsoft Graph. Resume to repeat the safety checks after proxy recovery."
@@ -358,6 +365,7 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
         if (!isGraphId(id) || (step.directory && ["Users", "Groups", "Applications"].includes(step.folder) && !isGuid(id))) { entry.reason = "The write did not return an object ID. It must be read back before continuing."; journal.save(run); continue }
         entry.targetId = id
         if (directoryCreate(step)) {
+          entry.acknowledged = true; entry.acknowledgedAt = (io.now ?? Date.now)()
           entry.reason = "The created object must be verified by its returned ID before publishing its mapping."
           journal.save(run)
           // Finish confirmation of the dispatched create even if cancellation stopped later writes.

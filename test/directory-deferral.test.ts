@@ -15,7 +15,7 @@ const options = { stage: "object" as const, exactMembers: false, exactOwners: fa
 const folders = ["Applications", "Users", "Groups"] as const
 function world(folder: typeof folders[number], wrapped = false) {
   const data = new Map<string, string>()
-  const store = { partitioned: true as const, get: (key: string) => data.get(key) ?? null, set: (key: string, value: string) => { data.set(key, value) }, delete: (key: string) => { data.delete(key) } }
+  const store = { partitioned: true as const, keys: () => [...data.keys()], get: (key: string) => data.get(key) ?? null, set: (key: string, value: string) => { data.set(key, value) }, delete: (key: string) => { data.delete(key) } }
   const settings = new ModuleSettings(store)
   settings.setChoice(tenant, { entra: { access: "restore", areas: ["applications", "usersAndDevices", "groups"] } })
   let scopes = "Application.Read.All Application.ReadWrite.All User.ReadUpdate.All User.ReadWrite.All User.Read.All Group.ReadWrite.All Group.Read.All Policy.Read.All"
@@ -737,11 +737,12 @@ it.each(folders.flatMap(folder => ["html", "empty", "missing code", "invalid jso
   expect(sends).toBe(1); expect(env.writes).toEqual([])
 })
 
-it.each(folders.flatMap(folder => [401, 403].flatMap(status => ["body", "header"].map(form => ({ folder, status, form })))))("resumes $folder after a write-time $status $form claims challenge with a fresh connection and all checks", async ({ folder, status, form }) => {
+it.each(folders.flatMap(folder => [401, 403].flatMap(status => (status === 401 ? ["body", "header", "header only"] : ["body", "header"]).map(form => ({ folder, status, form })))))("resumes $folder after a write-time $status $form claims challenge with a fresh connection and all checks", async ({ folder, status, form }) => {
   const env = world(folder), request = env.request(), page = await env.prepare(request), original = env.graph.getMockImplementation()!
   let sends = 0, safetyReads = 0
   env.graph.mockImplementation((input, init) => {
-    if (init?.method === "PATCH" && ++sends === 1) return Promise.resolve(Response.json({ error: { code: form === "body" ? "insufficient_claims" : "Authorization_RequestDenied", message: "Sensitive claims body" } }, { status, headers: form === "header" ? { "WWW-Authenticate": 'Bearer error="insufficient_claims", claims="sensitive-claims"' } : {} }))
+    if (init?.method === "PATCH" && ++sends === 1 && form === "header only") return Promise.resolve(new Response(null, { status: 401, headers: { "WWW-Authenticate": 'Bearer error="insufficient_claims", claims="sensitive-claims"' } }))
+    if (init?.method === "PATCH" && sends === 1) return Promise.resolve(Response.json({ error: { code: form === "body" ? "insufficient_claims" : "Authorization_RequestDenied", message: "Sensitive claims body" } }, { status, headers: form === "header" ? { "WWW-Authenticate": 'Bearer error="insufficient_claims", claims="sensitive-claims"' } : {} }))
     if (init?.method === "GET" && new URL(String(input)).pathname === `/v1.0/${env.targetPath}`) safetyReads++
     return original(input, init)
   })
@@ -760,4 +761,38 @@ it.each(folders.flatMap(folder => [401, 403].flatMap(status => ["body", "header"
   expect(safetyReads).toBeGreaterThan(before)
   await env.execute(page, request)
   expect(sends).toBe(2); expect(env.writes).toEqual([{ [env.field]: "Saved" }]); expect(env.locks()).toEqual([])
+})
+
+it.each(folders.flatMap(folder => [201, 202, 203, 206].map(status => ({ folder, status }))))("requires HTTP 200 for $folder directory reads instead of $status", async ({ folder, status }) => {
+  const env = world(folder), original = env.graph.getMockImplementation()!
+  env.graph.mockImplementation(async (input, init) => {
+    const response = await original(input, init)
+    if (new URL(String(input)).pathname === `/v1.0/${env.targetPath}` && init?.method === "GET") return new Response(await response.text(), { status, headers: response.headers })
+    return response
+  })
+  await expect(env.prepare()).rejects.toThrow("read failure")
+  expect(env.writes).toEqual([])
+})
+
+it.each(["recent", "outside window", "future", "unacknowledged", "wrong target", "wrong code", "unstructured"])("uses only verified recent creation journals for a write 404: %s", async variant => {
+  const env = world("Users"), request = env.request(), page = await env.prepare(request), original = env.graph.getMockImplementation()!
+  const createdId = id(810), createdKey = `restore.directory.review.${tenant}.${createdId}`
+  const stored = structuredClone(JSON.parse(env.store.get(`restore.directory.review.${tenant}.${page.runId}`)!))
+  stored.run.id = createdId; stored.run.entries[0].step.operation = "create"; stored.run.entries[0].step.directory = { action: "create" }
+  stored.run.entries[0].targetId = variant === "wrong target" ? id(811) : targetId
+  stored.run.entries[0].state = "applied"; stored.run.entries[0].acknowledged = variant !== "unacknowledged"
+  stored.run.entries[0].acknowledgedAt = Date.now() + (variant === "future" ? 100_000 : variant === "outside window" ? -30 * 60 * 1000 : -1000)
+  env.store.set(createdKey, JSON.stringify(stored))
+  const { GuardedRunJournal } = await import("../src/main/restore/guarded-run")
+  const { directoryPagePrefix } = await import("../src/main/restore/directory-object-state")
+  const prefix = directoryPagePrefix(tenant, createdId) + "batch.0."
+  new GuardedRunJournal({ get: name => env.store.get(prefix + name), set: (name, value) => env.store.set(prefix + name, value), delete: () => {} }).save(stored.run)
+  env.graph.mockImplementation((input, init) => init?.method === "PATCH" ? Promise.resolve(variant === "unstructured" ? new Response("Not found", { status: 404 }) : Response.json({ error: { code: variant === "wrong code" ? "Unknown" : "Request_ResourceNotFound", message: "Sensitive 404 body" } }, { status: 404 })) : original(input, init))
+  vi.useFakeTimers()
+  try {
+    const result = await env.execute(page, request)
+    expect(result.outcomes[0]).toMatchObject(variant === "recent" ? { state: "deferred", deferralCause: "replication", retryAt: Date.now() + 5000 } : { state: "failed" })
+    expect([...env.data.values()].join()).not.toContain("Sensitive 404 body")
+    expect(env.writes).toEqual([])
+  } finally { vi.useRealTimers() }
 })
