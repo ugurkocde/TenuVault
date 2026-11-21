@@ -165,3 +165,5 @@ If a stored backup keyring is malformed, TenuVault reports an error and preserve
 The tenant's **Leave secret values out of policy backups** setting controls which values TenuVault saves. Azure backups remain plain JSON protected by Azure storage access and encryption at rest. Backups on this device remain encrypted with AES-256-GCM. Treat downloaded ZIPs and retained opaque policy payloads as sensitive. [Backup coverage](/backups/coverage/#leave-secret-values-out-of-policy-backups)
 
 Turning on omission applies to backups and rollback captures that start afterwards. A run already in progress finishes with its original policy. Earlier backups keep their values until retention removes them. Settings and Backup History identify producers that make later backups without recording omission.
+
+If the desktop cannot verify the destination's omission policy, it leaves classified values and script bodies out of rollback captures. The affected policies require a backup containing those values for recovery. Change-set proposals containing those values are refused until storage access can be verified or the affected settings are removed.

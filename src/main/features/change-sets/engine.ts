@@ -13,6 +13,7 @@ import { FeatureError } from "../route"
 import { withTenantWrite } from "../write-lock"
 import { cisBenchmarksAllowed } from "../../frameworks/service"
 import { requirePreChangeBackup } from "./backup"
+import { UNVERIFIED_OMISSION_GENERATION } from "../../backup/omission-policy"
 import { createListingMemo, GraphReadError, matchesObserved, observe, readBack, readCurrent, safeSnapshot, sameNameIds, writeOperation, type Observation } from "./graph"
 import {
   assignmentTargets,
@@ -171,6 +172,12 @@ export interface RollbackPreview {
 export const STALE = "This change set is stale and can no longer be approved or applied. Preview the change again to create a new change set."
 
 const PROPOSAL_OMISSION_BLOCKER = "Backup omission is enabled and the proposed configuration contains values covered by it. Remove the affected settings from the proposal or configure them in Intune."
+
+function proposalOmissionBlocker(omission?: { generation?: string }): string {
+  return omission?.generation === UNVERIFIED_OMISSION_GENERATION
+    ? "The backup omission policy could not be verified and the proposal contains values it may cover. Verify storage access, remove the affected settings from the proposal or configure them in Intune."
+    : PROPOSAL_OMISSION_BLOCKER
+}
 
 function proposalWouldOmit(folder: string, body: Item | null, assignments: Item[] | null, omission?: OmissionOptions): boolean {
   return !!omission?.enabled && !!body &&
@@ -356,7 +363,7 @@ export async function createChangeSet(deps: FeatureDeps, tenantId: string, input
     const assignments = operation.action === "delete" ? null : validateAssignments(operation.assignments)
     // Freeze the target's values before review so writes, retries and read-back agree.
     const body = proposed ? (() => { const { assignments: _a, ...rest } = structuredClone(proposed); return resolveVariables ? replaceTenantVariables(rest as Item, tenant) : rest as Item })() : null
-    if (proposalWouldOmit(type.folder, body, assignments, omission)) throw new FeatureError(PROPOSAL_OMISSION_BLOCKER)
+    if (proposalWouldOmit(type.folder, body, assignments, omission)) throw new FeatureError(proposalOmissionBlocker(omission))
     let observed: Observation
     requireCisChangeSetEnabled(input.origin?.workflow ?? "change-sets", tenantId, recovery)
     try {
@@ -425,7 +432,7 @@ export async function reviseChangeSet(deps: FeatureDeps, tenantId: string, id: s
   const entries = Object.fromEntries(operations.map((operation) => [operation.key, previous.entries[operation.key] ?? { body: null, assignments: null }]))
   const omission = await deps.omissionPolicy?.(tenantId)
   if (operations.some(({ key, folder }) => proposalWouldOmit(folder, entries[key]!.body, entries[key]!.assignments, omission))) {
-    throw new FeatureError(PROPOSAL_OMISSION_BLOCKER)
+    throw new FeatureError(proposalOmissionBlocker(omission))
   }
   const proposal = deps.records.create<ChangeSetContent>(CONTENT_DOMAIN, tenantId, { title: record.title, status: "frozen", summary: "Frozen proposal of a revised change set.", kind: "proposal", changeSetId: record.id, entries }, { actor, reason: "Froze the revised content" })
   return deps.records.update<ChangeSetRecord>(DOMAINS.changeSets, tenantId, id, (current) => {
@@ -502,7 +509,7 @@ async function reviewTarget(deps: FeatureDeps, tenantId: string, id: string) {
   const review = record.review
   let reviewMismatch = false
   let reviewUnavailable = false
-  const omission = await deps.omissionPolicy?.(tenantId, true)
+  const omission = await deps.omissionPolicy?.(tenantId)
   for (const operation of record.operations) {
     const type = typeOf(operation.folder)
     const blockers: string[] = []
@@ -530,11 +537,11 @@ async function reviewTarget(deps: FeatureDeps, tenantId: string, id: string) {
     }
     if (operation.action !== "create" && !observed.snapshot) blockers.push(`${operation.name} no longer exists in the target tenant.`)
     if (operation.action === "create" && observed.sameNameIds.length) warnings.push(`${observed.sameNameIds.length} object(s) named "${operation.name}" already exist; this creates another one.`)
-    if (operation.action !== "create" && observed.snapshot && hasOmissions(projectRollback(operation.folder, observed.snapshot, omission))) warnings.push(`${operation.name}: values will be left out of the rollback capture.`)
+    if (operation.action !== "create" && observed.snapshot && hasOmissions(projectRollback(operation.folder, observed.snapshot, omission))) warnings.push(`${operation.name}: values will be left out of the rollback capture. This operation cannot be undone automatically.`)
     if (observed.redacted && operation.action !== "create") warnings.push(`${operation.name} holds values Intune masks. They are not stored in the capture, so a rollback of this object is not supported.`)
     const entry = entries[operation.key]
     const body = entry?.body ?? null
-    if (proposalWouldOmit(type.folder, body, entry?.assignments ?? null, omission)) blockers.push(PROPOSAL_OMISSION_BLOCKER)
+    if (proposalWouldOmit(type.folder, body, entry?.assignments ?? null, omission)) blockers.push(proposalOmissionBlocker(omission))
     const diff = omission?.enabled || (operation.action === "update" && observed.snapshot && body)
       ? reviewedDiff(type, observed.snapshot, body, omission)
       : { entries: operation.diff, truncated: operation.diffTruncated }
@@ -848,7 +855,7 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
         const policy = await deps.omissionPolicy?.(tenant)
         omission = { enabled: policy?.enabled ?? false, scripts: policy?.scripts ?? false, generation: policy?.generation ?? "default" }
         if (record.operations.some(({ key, folder }) => proposalWouldOmit(folder, entries[key]!.body, entries[key]!.assignments, omission))) {
-          throw new FeatureError(PROPOSAL_OMISSION_BLOCKER, 409)
+          throw new FeatureError(proposalOmissionBlocker(omission), 409)
         }
         const check = async () => {
           const observations: Record<string, Observation> = {}
@@ -1066,6 +1073,7 @@ export async function previewRollback(deps: FeatureDeps, tenantId: string, id: s
   const record = getChangeSet(deps, tenantId, id)
   const { inputs, manual } = inverseOperations(deps, tenantId, record)
   const graph = await reader(deps, tenantId, { changeSetId: record.id })
+  const omission = await deps.omissionPolicy?.(tenantId)
   const operations: RollbackPreview["operations"] = []
   for (const input of inputs) {
     const type = typeOf(input.folder)
@@ -1076,12 +1084,12 @@ export async function previewRollback(deps: FeatureDeps, tenantId: string, id: s
     }
     let live: Item | null = null
     try {
-      live = input.targetId ? await readCurrent(graph, type, input.targetId) : null
+      live = input.targetId ? await readCurrent(graph, type, input.targetId, { omitEncryptedOma: omission?.enabled }) : null
     } catch (error) {
       warnings.push(`The live object could not be read: ${error instanceof Error ? error.message : String(error)}`)
     }
     if (input.action !== "create" && input.targetId && !live) warnings.push(`"${input.name}" no longer exists in the tenant.`)
-    const diff = input.action === "update" && live && input.proposed ? diffConfigurations(type, sanitizeSnapshot(type, live).snapshot, input.proposed).entries : input.action === "create" && input.proposed ? diffConfigurations(type, null, input.proposed).entries : []
+    const diff = input.action === "update" && live && input.proposed ? reviewedDiff(type, sanitizeSnapshot(type, live).snapshot, input.proposed, omission).entries : input.action === "create" && input.proposed ? reviewedDiff(type, null, input.proposed, omission).entries : []
     operations.push({ key: input.key, action: input.action, name: input.name ?? String(input.proposed?.[type.nameKey] ?? ""), targetId: input.targetId ?? null, blocked: input.blocked, warnings, diff })
   }
   return {

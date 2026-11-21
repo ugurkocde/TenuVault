@@ -524,6 +524,7 @@ async function undo(body: RecordJson): Promise<UndoResult> {
       report({ stage: "Signing in" })
       const { token } = await tokenFor(body)
       const graph = graphCaller(token, fetch, { tenant, refreshToken: async () => (await tokenFor(body, true)).token })
+      const omission = await readOmissionPolicy?.(tenant)
       const results: UndoResult["results"] = []
       const created: OibRun["created"] = []
       const updated: OibRun["updated"] = []
@@ -538,7 +539,7 @@ async function undo(body: RecordJson): Promise<UndoResult> {
         let response: Awaited<ReturnType<GraphCall>>
         try { response = await graph("DELETE", `${type.path}/${item.id}`) }
         catch (error) {
-          if (!run.omission?.enabled) throw error
+          if (!omission?.enabled) throw error
           results.push({ name: item.name, id: item.id, action: "removed", done: false, error: "Microsoft Graph did not confirm the delete. Check Intune before retrying." })
           created.push(item)
           continue
@@ -548,12 +549,13 @@ async function undo(body: RecordJson): Promise<UndoResult> {
         if (gone) results.push({ name: item.name, id: item.id, action: "removed", done: true })
         else {
           const error = (response.body.error as Item | undefined)?.message
-          results.push({ name: item.name, id: item.id, action: "removed", done: false, error: response.approval ? approvalMessage(response.approval, type.label) : run.omission?.enabled ? `Microsoft Graph returned HTTP ${response.status}.` : typeof error === "string" && error ? error : `Microsoft Graph returned ${response.status}` })
+          results.push({ name: item.name, id: item.id, action: "removed", done: false, error: response.approval ? approvalMessage(response.approval, type.label) : omission?.enabled ? `Microsoft Graph returned HTTP ${response.status}.` : typeof error === "string" && error ? error : `Microsoft Graph returned ${response.status}` })
           created.push(item)
         }
       }
       // A policy the admin deleted since the run stays deleted: undo does not recreate it as a new, untracked policy.
-      const restorer = new Restorer(graph, { mode: "replace", assignments: false, recreateMissing: false, statusOnlyWriteErrors: run.omission?.enabled, readOptions: { omitEncryptedOma: run.omission?.enabled } })
+      const restorer = new Restorer(graph, { mode: "replace", assignments: false, recreateMissing: false,
+        statusOnlyWriteErrors: omission?.enabled, readOptions: { omitEncryptedOma: run.omission?.enabled, statusOnlyErrors: omission?.enabled } })
       for (const item of run.updated) {
         report({ stage: `Restoring ${item.previousName}`, done: results.length, total })
         if (!item.before) {

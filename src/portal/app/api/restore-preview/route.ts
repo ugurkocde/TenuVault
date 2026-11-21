@@ -1,11 +1,11 @@
-import { backupManifest, readProjectedSnapshot, verifySnapshot } from "~/lib/policies/backup-manifest"
+import { backupPreviewManifest, readProjectedSnapshot, snapshotHash } from "~/lib/policies/backup-manifest"
 import { hasOmissions, OMISSION_BLOCKER, type OmittedField } from "../../../../shared/intune/secret-omission"
 import { recoveryReadiness, type RecoveryReadiness } from "../../../../shared/intune/recovery"
 import { type NextRequest, NextResponse } from "next/server"
 import { validPolicyPath } from "~/lib/policies/restore"
 import { readOwnedBackup, UNTAGGED_BACKUP } from "~/lib/policies/backup-owner"
 import { graphCaller, locateLive, readLive } from "~/lib/policies/graph-restore"
-import { itemName, typeForFolder, type Item, type ReviewChange } from "../../../../shared/intune/registry"
+import { itemName, rememberHydratedOmaMasks, typeForFolder, type Item, type ReviewChange } from "../../../../shared/intune/registry"
 import { restoreCapabilities } from "../../../../shared/intune/restore-plan"
 import { sameSnapshot } from "../../../../shared/intune/compare"
 import { assignmentsUnread } from "../../../../shared/intune/read"
@@ -81,7 +81,7 @@ export async function POST(request: NextRequest) {
     }), backupId, tenantId, storageAccountName)
     if (!owned.ok) return NextResponse.json({ error: owned.error }, { status: owned.status })
     // A backup that records no tenant cannot change live policies; it can still be restored as a copy.
-    const manifest = backupManifest(owned.metadata, backupId)
+    const manifest = backupPreviewManifest(owned.metadata, backupId)
     const ownership = owned.owned ? undefined : UNTAGGED_BACKUP
     const graph = graphCaller(graphToken, fetch, { tenant: tenantId, refreshToken: () => token(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default", true) })
 
@@ -98,7 +98,9 @@ export async function POST(request: NextRequest) {
       if (!response.ok) return { path, folder: type.folder, name: fallbackName, live: "error", error: "The backup file could not be read.", blocker: "The backup file could not be read.", replaceBlocker: "The backup file could not be read." }
       const snapshot = entry?.omitted ? await readProjectedSnapshot(response, entry) : (await response.json()) as Item
       if (entry?.omitted || hasOmissions(snapshot)) return { path, folder: type.folder, name: itemName(type, snapshot), blocker: OMISSION_BLOCKER, replaceBlocker: OMISSION_BLOCKER, omitted: entry?.omitted }
-      if (entry?.hydratedOmaMasks) verifySnapshot(snapshot, entry)
+      if (entry?.hydratedOmaMasks && snapshot.id === entry.id && snapshotHash(snapshot) === entry.hash) {
+        rememberHydratedOmaMasks(snapshot, entry.hydratedOmaMasks)
+      }
       const item: PreviewItem = { path, folder: type.folder, name: itemName(type, snapshot), snapshot, readiness: recoveryReadiness(type, snapshot), ...restoreCapabilities(type, snapshot) }
       if (ownership) item.replaceBlocker = ownership
       if (live !== true || typeof snapshot.id !== "string") return item

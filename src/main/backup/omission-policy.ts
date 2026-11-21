@@ -20,6 +20,8 @@ interface Policy extends BackupOmissionPolicy {
 }
 
 const OFF: BackupOmissionPolicy = { enabled: false, scripts: false, generation: "default" }
+export const UNVERIFIED_OMISSION_GENERATION = "unverified"
+const UNVERIFIED: BackupOmissionPolicy = { enabled: true, scripts: true, generation: UNVERIFIED_OMISSION_GENERATION }
 const key = (tenant: string) => `backup.omission.${tenant}`
 const verificationError = (cause?: unknown) => new Error(
   "The tenant's backup omission policy could not be verified. Check that the policy is valid and that the storage identity can read it, then try again.",
@@ -65,20 +67,26 @@ export class OmissionPolicyStore {
   }
 
   async readForBackup(tenantId: string, destination: string, storage: BlobWriter, signal?: AbortSignal): Promise<BackupOmissionPolicy> {
-    return this.readPolicy(tenantId, destination, storage, signal, false)
+    return this.readPolicy(tenantId, destination, storage, signal)
   }
 
-  async readForRollback(tenantId: string, destination: string, silentToken: () => Promise<string>, enrolledOnly = false): Promise<BackupOmissionPolicy> {
-    const tenant = tenantId.toLowerCase()
+  /** The OIB backup-choice notice can use previously observed enrollment without probing a new account. */
+  hasRollbackPolicy(tenantId: string, destination: string): boolean {
     const account = destination.toLowerCase()
-    // Review screens can use local settings or a binding already observed on this installation.
-    // A capture still checks its destination so it can discover enrollment enabled elsewhere.
-    if (enrolledOnly && !isLocalAccount(account) && !this.isEnrolled(tenant, account)) return OFF
+    return isLocalAccount(account) || this.isEnrolled(tenantId.toLowerCase(), account)
+  }
+
+  async readForRollback(tenantId: string, destination: string, silentToken: () => Promise<string>): Promise<BackupOmissionPolicy> {
+    const account = destination.toLowerCase()
     const signal = AbortSignal.timeout(10_000)
     const storage = this.writer(account, async () => {
       try { return await silentToken() } catch (cause) { throw new TokenError("A silent storage token is unavailable.", { cause }) }
     }, signal)
-    return this.readPolicy(tenantId, destination, storage, signal, true)
+    try {
+      return await this.readPolicy(tenantId, destination, storage, signal)
+    } catch {
+      return UNVERIFIED
+    }
   }
 
   private isEnrolled(tenant: string, account: string) {
@@ -86,7 +94,7 @@ export class OmissionPolicyStore {
   }
 
   private async readPolicy(tenantId: string, destination: string, storage: BlobWriter,
-    signal: AbortSignal | undefined, allowUnreadable: boolean): Promise<BackupOmissionPolicy> {
+    signal: AbortSignal | undefined): Promise<BackupOmissionPolicy> {
     const tenant = tenantId.toLowerCase()
     const account = destination.toLowerCase()
     signal?.throwIfAborted()
@@ -101,8 +109,7 @@ export class OmissionPolicyStore {
     try {
       value = await storage.readJson(omissionPolicyPath(tenant), true)
     } catch (error) {
-      if (!allowUnreadable) signal?.throwIfAborted()
-      if (allowUnreadable && !enrolled) return OFF
+      signal?.throwIfAborted()
       throw verificationError(error)
     }
     if (!value) {

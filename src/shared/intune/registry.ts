@@ -346,7 +346,7 @@ export const INTUNE_TYPES: IntuneType[] = [
     expand: "assignments",
     secrets: (item) =>
       collection(item.omaSettings)
-        .filter((setting) => encryptedOmaSetting(setting) && typeof setting.secretReferenceValueId === "string" && setting.secretReferenceValueId.length > 0)
+        .filter((setting) => encryptedOmaSetting(setting) && typeof setting.secretReferenceValueId === "string")
         .map((setting) => ({
           path: `deviceManagement/deviceConfigurations/${encodeURIComponent(str(item.id))}/getOmaSettingPlainTextValue(secretReferenceValueId='${encodeURIComponent(str(setting.secretReferenceValueId).replaceAll("'", "''"))}')`,
           apply: (value: string, masked = false) => {

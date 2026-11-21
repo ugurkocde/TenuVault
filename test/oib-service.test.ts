@@ -3,6 +3,7 @@ import { handleOib, migrateLegacyOibRuns, OIB_BACKUP_POLLING, setOibOmissionPoli
 import { packFolder, packItems, parsePackFile, resetOibSource } from "../src/main/oib/source"
 import type { OibBackupOptions, OibCatalog, OibComparison, OibProgress, OibRun, UndoResult, ValidationRun } from "../src/shared/oib/types"
 import { memoryStore } from "./helpers"
+import { OmissionPolicyStore } from "../src/main/backup/omission-policy"
 
 const tenantId = "11111111-1111-1111-1111-111111111111"
 const appId = "22222222-2222-2222-2222-222222222222"
@@ -364,6 +365,49 @@ describe("deployments", () => {
     const undone = await handleOib({ action: "oib-undo", tenantId, appId, runId: run.runId }) as UndoResult
     expect(writes).toEqual([])
     expect(undone).toMatchObject({ run: null, results: [{ action: "restored", done: true, note: "already deleted in Intune, so the previous version was not recreated" }] })
+  })
+
+  it.each(["enabled", "unverified", "off"] as const)("uses the current %s policy for Undo diagnostics and keeps an older capture eligible", async (mode) => {
+    const canary = "Graph echoed an Undo token"
+    const state: Tenant = { policies: [{ id: EXISTING, name: "Prior Settings Catalog policy", value: 7 }] }
+    const tenant = world(state, [])
+    let refuse = false
+    const refusedMethods: string[] = []
+    vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
+      const method = init?.method
+      if (refuse && (method === "PUT" || method === "DELETE")) {
+        refusedMethods.push(method)
+        return Promise.resolve(Response.json({ error: { message: canary } }, { status: 400 }))
+      }
+      if (method === "POST" && String(input).endsWith("/deviceCompliancePolicies")) {
+        return Promise.resolve(Response.json({ id: CREATED, displayName: "Created compliance policy" }))
+      }
+      return tenant(input, init)
+    })
+    await source()
+    const run = await handleOib({ ...base, action: "oib-deploy", commit, backup: { mode: "none" },
+      items: [{ source: SC, mode: "update", targetId: EXISTING }, { source: COMPLIANCE, mode: "create" }],
+    }) as OibRun
+    expect(run.updated).toHaveLength(1)
+    expect(run.created).toHaveLength(1)
+    const policy = new OmissionPolicyStore(memoryStore(), async () => {
+      if (mode === "enabled") return Response.json({
+        version: 1, tenantId, enabled: true, scripts: false, generation: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      })
+      return new Response(null, mode === "unverified" ? { status: 403 } : { status: 404, headers: { "x-ms-error-code": "BlobNotFound" } })
+    })
+    setOibOmissionPolicy(tenant => policy.readForRollback(tenant, "stcontoso", async () => "silent-token"))
+    refuse = true
+    const result = await handleOib({ action: "oib-undo", tenantId, appId, runId: run.runId }) as UndoResult
+    expect(refusedMethods).toEqual(["DELETE", "PUT"])
+    expect(result.results).toEqual(["removed", "restored"].map(action => expect.objectContaining({
+      action, done: false, error: expect.stringContaining(mode === "off" ? canary : "HTTP 400"),
+    })))
+    if (mode !== "off") expect(JSON.stringify(result)).not.toContain(canary)
+
+    refuse = false
+    expect(await handleOib({ action: "oib-undo", tenantId, appId, runId: run.runId })).toMatchObject({ run: null })
+    expect(state.policies[0]).toMatchObject({ name: "Prior Settings Catalog policy", value: 7 })
   })
 
   it("does not recreate a policy deleted between reading it and updating it", async () => {

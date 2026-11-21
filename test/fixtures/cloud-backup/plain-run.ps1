@@ -31,11 +31,20 @@ $script:control = $null
 $script:policyStatus = 404
 $script:policyCode = "BlobNotFound"
 $script:omaParity = $false
+$script:enrollmentRead = ""
+$script:emptyOma = ""
 $script:binding = ""
 $script:writeOnce = $false
 $script:written = @{}
 
-function Get-AutomationVariable { param($Name) if ($Name -eq "TenuVaultOmissionAccount-11111111") { return $script:binding } }
+function Get-AutomationVariable {
+    [CmdletBinding()]
+    param($Name)
+    if ($Name -ne "TenuVaultOmissionAccount-11111111") { return }
+    if ($script:enrollmentRead -eq "unavailable") { throw "Automation enrollment read timed out" }
+    if ($script:enrollmentRead -eq "missing") { Write-Error "Variable $Name was not found" -Category ObjectNotFound; return }
+    return $script:binding
+}
 function Set-AutomationVariable { param($Name, $Value) if ($Name -eq "TenuVaultOmissionAccount-11111111") { $script:binding = $Value } }
 
 function Get-TvManagedIdentityToken {
@@ -76,6 +85,9 @@ function Invoke-TvHttp {
         $text = '{"value":[{"id":"ap-1","serialNumber":"SN-0001","manufacturer":"Contoso","model":"Laptop 7","groupTag":"Sales","displayName":null,"userPrincipalName":"","lastContactedDateTime":"2026-11-01T10:00:00Z","enrollmentState":"enrolled","deviceAccountPassword":"secret","productKey":"PK-1","managedDeviceId":"md-1"}]}'
     } elseif ($Uri -like "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations/cfg-0*") {
         $text = '{"id":"cfg-0","displayName":"First","assignments":[]}'
+    } elseif ($script:emptyOma -and $Uri -like "*getOmaSettingPlainTextValue*") {
+        if ($script:emptyOma -eq "emptyOmaFailure") { throw [TvHttpError]::new(400, "Empty OMA reference refused") }
+        $text = '{"value":"Hydrated empty reference"}'
     } elseif ($script:omaParity -and $Uri -like "*getOmaSettingPlainTextValue*") {
         $text = '{"value":"****"}'
     } elseif ($Uri -like "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations/cfg-1*") {
@@ -85,7 +97,9 @@ function Invoke-TvHttp {
         if ($script:failDetail) { throw [TvHttpError]::new(401, "HTTP 401") }
         if ($script:failOmittedRead) { throw [TvHttpError]::new(400, "omission-test-value-397c6d") }
         $text = '{"@odata.context":"x","id":"cfg-1","displayName":"Baseline Wi-Fi","lastModifiedDateTime":"2026-11-01T10:00:00Z","assignments":[]}'
-        if ($script:omaParity) {
+        if ($script:emptyOma) {
+            $text = '{"id":"cfg-1","displayName":"Baseline Wi-Fi","omaSettings":[{"isEncrypted":true,"secretReferenceValueId":"","value":"From Graph"}]}'
+        } elseif ($script:omaParity) {
             $text = '{"id":"cfg-1","displayName":"Baseline Wi-Fi","omaSettings":[{"isEncrypted":true,"value":"Graph value"},{"isEncrypted":true,"secretReferenceValueId":"ref","value":"masked"}],"nested":{"children":[1],"children@odata.nextLink":"https://graph.microsoft.com/beta/next"}}'
         } elseif ($script:omit) {
             $text = '{"id":"cfg-1","displayName":"Baseline Wi-Fi","omaSettings":[{"@odata.type":"#microsoft.graph.omaSettingString","isEncrypted":true,"value":"omission-test-value-397c6d","secretReferenceValueId":"omission-test-secret-reference","omaUri":"./Secret"}],"settings":[{"@odata.type":"#microsoft.graph.deviceManagementConfigurationSecretSettingValue","value":"omission-test-value-397c6d"}]}'
@@ -200,6 +214,19 @@ foreach ($case in @("forbidden", "ambiguous404", "unavailable", "malformed", "co
     $script:policyCode = if ($case -eq "containerMissing") { "ContainerNotFound" } else { "" }
     $script:control = if ($case -eq "malformed") { "invalid JSON" } else { $null }
     $script:omaParity = $case -eq "containerMissing"
+    $errorText = $null
+    try { $null = @(Invoke-TvBackup) } catch { $errorText = $_.Exception.Message }
+    Write-Output (@{ scenario = $case; calls = @($script:calls.ToArray()); error = $errorText } | ConvertTo-Json -Compress -Depth 5)
+}
+
+$script:omaParity = $false
+$script:policyCode = "BlobNotFound"
+foreach ($case in @("unreadableEnrollment", "missingEnrollment", "emptyOmaSuccess", "emptyOmaFailure")) {
+    $script:calls.Clear()
+    $script:OutcomeSent = $false
+    $script:binding = if ($case -eq "unreadableEnrollment") { "stcontoso" } else { "" }
+    $script:enrollmentRead = switch ($case) { "unreadableEnrollment" { "unavailable" }; "missingEnrollment" { "missing" }; default { "" } }
+    $script:emptyOma = if ($case -like "emptyOma*") { $case } else { "" }
     $errorText = $null
     try { $null = @(Invoke-TvBackup) } catch { $errorText = $_.Exception.Message }
     Write-Output (@{ scenario = $case; calls = @($script:calls.ToArray()); error = $errorText } | ConvertTo-Json -Compress -Depth 5)

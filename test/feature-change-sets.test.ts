@@ -9,6 +9,8 @@ import { MAX_RECORDS } from "../src/main/features/records"
 import { fakeDeps, seedRecords, TENANT_A, TENANT_B } from "./feature-helpers"
 import { COMPLETE_BACKUP_METADATA, FakeTenant, setting, wire } from "./feature-change-sets-fakes"
 import { writeOperation } from "../src/main/features/change-sets/graph"
+import { OmissionPolicyStore } from "../src/main/backup/omission-policy"
+import { memoryStore } from "./helpers"
 
 const POLICIES = typeForFolder("ConfigurationPolicies")!
 
@@ -452,6 +454,33 @@ describe("change-set engine", () => {
     expect(context.tenant.writeCount()).toBe(0)
   })
 
+  it("refuses covered proposals and saves projected rollback captures when a new installation cannot read storage", async () => {
+    const context = setup()
+    let readable = true
+    const policy = new OmissionPolicyStore(memoryStore(), async () => readable
+      ? new Response(null, { status: 404, headers: { "x-ms-error-code": "BlobNotFound" } })
+      : new Response(null, { status: 403 }))
+    context.deps.omissionPolicy = (tenant) => policy.readForRollback(tenant, "stcontoso", async () => "silent-token")
+    const { record, doomed } = await threeOperations(context)
+    const canary = "private target operand"
+    const settings = [{ settingInstance: { settingDefinitionId: "test", simpleSettingValue: { valueState: "encryptedValueToken", value: canary } } }]
+    doomed.settings = settings
+    const review = await approve(context, record.id)
+    readable = false
+    await expect(createChangeSet(context.deps, TENANT_A, { title: "Token proposal", operations: [
+      { folder: "ConfigurationPolicies", action: "create", proposed: { name: "Token policy", settings } },
+    ] }, null)).rejects.toThrow("The backup omission policy could not be verified")
+    expect(context.deps.records.list(CONTENT_DOMAIN, TENANT_A)).toHaveLength(1)
+    const preview = await previewChangeSet(context.deps, TENANT_A, record.id)
+    expect(preview.operations[2]?.warnings.join(" ")).toContain("cannot be undone automatically")
+    const applied = await context.post({ action: "apply", id: record.id, contentHash: review.contentHash, confirm: true })
+    expect(applied.body.changeSet.status).toBe("applied")
+    const capture = context.deps.records.get<ChangeSetContent>(CONTENT_DOMAIN, TENANT_A, applied.body.changeSet.preChange.captureId)
+    expect(capture?.omission).toEqual({ enabled: true, scripts: true, generation: "unverified" })
+    expect(JSON.stringify(capture)).not.toContain(canary)
+    expect((await previewRollback(context.deps, TENANT_A, record.id)).operations[2]?.blocked).toContain("Values were left out")
+  })
+
   it.each([true, false])("validates a review after omission flips from %s and captures under the apply policy", async (reviewMode) => {
     const context = setup()
     let enabled = reviewMode
@@ -550,6 +579,55 @@ describe("change-set engine", () => {
       expect.objectContaining({ key: "op-2", blocked: null }),
       expect.objectContaining({ key: "op-3", blocked: expect.stringContaining("Use a backup that includes them"), diff: [] }),
     ])
+  })
+
+  it("uses the current policy for rollback preview diffs, Graph reads and diagnostics", async () => {
+    const context = setup()
+    const { record, existing } = await threeOperations(context)
+    const approved = await approve(context, record.id)
+    const applied = await context.post({ action: "apply", id: record.id, contentHash: approved.contentHash, confirm: true })
+    expect(applied.body.changeSet.status).toBe("applied")
+
+    const canary = "private live token echoed in rollback preview"
+    const live = context.tenant.policies.get(String(existing.id))!
+    live.settings = [{ settingInstance: { settingDefinitionId: "secret", simpleSettingValue: { valueState: "encryptedValueToken", value: canary } } }]
+    let refuseRead = false
+    const graph = context.deps.graph
+    const paths: string[] = []
+    context.deps.graph = async (...args) => {
+      const call = await graph(...args)
+      return async (method, path, body, options) => {
+        paths.push(path)
+        if (refuseRead && path.startsWith(`deviceManagement/configurationPolicies/${existing.id}?`)) {
+          return { status: 403, body: { error: { message: canary } } }
+        }
+        return call(method, path, body, options)
+      }
+    }
+    context.deps.omissionPolicy = async () => ({ enabled: true, scripts: false, generation: "on" })
+    const preview = await previewRollback(context.deps, TENANT_A, record.id)
+    expect(preview.operations[0]?.diff).toContainEqual(expect.objectContaining({ path: "description" }))
+    expect(JSON.stringify(preview)).not.toContain(canary)
+    refuseRead = true
+    const refused = await previewRollback(context.deps, TENANT_A, record.id)
+    expect(refused.operations[0]?.warnings.join(" ")).toContain("HTTP 403")
+    expect(JSON.stringify(refused)).not.toContain(canary)
+
+    // A run captured with omission off can also contain Device Configuration rollback operations.
+    context.deps.records.update<ChangeSetRecord>(DOMAINS.changeSets, TENANT_A, record.id, (current) => ({
+      ...current, operations: current.operations.map(operation => operation.key === "op-1"
+        ? { ...operation, folder: "DeviceConfigurations" } : operation),
+    }), { actor: null, reason: "Fixture rollback from a Device Configuration" })
+    context.deps.graph = async () => async (_method, path) => {
+      paths.push(path)
+      const body: Item = path.includes("getOmaSettingPlainTextValue") ? { value: canary } : {
+        id: String(existing.id), displayName: "Live policy", omaSettings: [{ isEncrypted: true, value: "****", secretReferenceValueId: "ref" }],
+      }
+      return { status: 200, body }
+    }
+    const oma = await previewRollback(context.deps, TENANT_A, record.id)
+    expect(oma.operations[0]?.warnings).toEqual([])
+    expect(paths.some(path => path.includes("getOmaSettingPlainTextValue"))).toBe(false)
   })
 
   it("rolls back through a separately reviewed change set with read-back", async () => {

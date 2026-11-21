@@ -666,8 +666,7 @@ function Get-TvEncryptedOmaSettings {
     $settings = Get-TvProp $Detail "omaSettings"
     if ($null -eq $settings) { return @() }
     return @($settings | Where-Object {
-        $ref = Get-TvProp $_ "secretReferenceValueId"
-        (Test-TvEncryptedOmaSetting $_) -and $ref -is [string] -and $ref.Length -gt 0
+        (Get-TvProp $_ "isEncrypted") -eq $true -and (Get-TvProp $_ "secretReferenceValueId") -is [string]
     })
 }
 
@@ -822,14 +821,24 @@ function Get-TvOmissionPolicy {
     $path = ".tenuvault-control/$tenant/secret-omission.json"
     $bindingName = "TenuVaultOmissionAccount-$($tenant.Substring(0, 8))"
     $binding = $null
+    $bindingVerified = $false
     if (Get-Command Get-AutomationVariable -ErrorAction SilentlyContinue) {
-        try { $binding = Get-AutomationVariable -Name $bindingName -ErrorAction Stop } catch { }
+        try {
+            $binding = Get-AutomationVariable -Name $bindingName -ErrorAction Stop
+            $bindingVerified = $null -eq $binding -or ($binding -is [string] -and
+                ($binding -ceq "" -or $binding -cmatch "^[a-z0-9]{3,24}(,[a-z0-9]{3,24})*$"))
+        } catch {
+            $bindingVerified = $_.CategoryInfo.Category -eq [System.Management.Automation.ErrorCategory]::ObjectNotFound
+        }
     }
     $enrolled = @(([string]$binding).Split(",") | Where-Object { $_ -cmatch "^[a-z0-9]{3,24}$" })
     $bound = $enrolled -ccontains $Context.StorageAccount
     try { $policy = Read-TvPlainJson $Context $path }
     catch [TvHttpError] {
         if (-not $bound -and $_.Exception.Status -eq 404 -and $_.Exception.ServiceCode -cin @("BlobNotFound", "ContainerNotFound")) {
+            if (-not $bindingVerified) {
+                throw "The tenant's backup omission policy could not be verified because the Automation enrollment variable could not be read. Retry the backup or rerun cloud backup setup."
+            }
             return [ordered]@{ version = 1; tenantId = $tenant; enabled = $false; scripts = $false; generation = "default" }
         }
         throw "The tenant's backup omission policy could not be verified (storage HTTP $($_.Exception.Status)). Check that the storage identity can read it and try again."
@@ -838,11 +847,12 @@ function Get-TvOmissionPolicy {
     if (-not (Test-TvJsNumber $policy.version) -or $policy.version -ne 1 -or $policy.tenantId -cne $tenant -or
         $policy.enabled -isnot [bool] -or $policy.scripts -isnot [bool] -or
         $policy.generation -isnot [string] -or ($policy.generation -cnotmatch '^[a-f0-9-]{36}$' -and
-        ($policy.generation -cne "default" -or $policy.enabled -or $bound)) -or
+        ($policy.generation -cne "default" -or $policy.enabled -or $bound -or -not $bindingVerified)) -or
         (-not $policy.enabled -and $policy.scripts)) {
         throw "The tenant's backup omission policy could not be verified. Check its storage and try again."
     }
     if ($policy.enabled -and -not $bound -and (Get-Command Set-AutomationVariable -ErrorAction SilentlyContinue)) {
+        if (-not $bindingVerified) { throw "Could not verify omission enrollment. Retry the backup before updating the Automation enrollment variable." }
         try { Set-AutomationVariable -Name $bindingName -Value (($enrolled + $Context.StorageAccount) -join ",") -ErrorAction Stop | Out-Null }
         catch { throw "Could not record omission enrollment. Rerun the cloud backup setup to provision its Automation variable before running this backup." }
     }
@@ -937,7 +947,7 @@ function Read-TvObject {
         for ($index = 0; $index -lt $settings.Count; $index++) {
             $setting = $settings[$index]
             $ref = Get-TvProp $setting "secretReferenceValueId"
-            if (-not (Test-TvEncryptedOmaSetting $setting) -or $ref -isnot [string] -or $ref.Length -eq 0) { continue }
+            if ((Get-TvProp $setting "isEncrypted") -ne $true -or $ref -isnot [string]) { continue }
             $reference = $ref.Replace("'", "''")
             $secretPath = "deviceManagement/deviceConfigurations/$encodedId/getOmaSettingPlainTextValue(secretReferenceValueId='$([uri]::EscapeDataString($reference))')"
             try {

@@ -371,8 +371,8 @@ describe("omission backup generations", () => {
     expect(fixture.paths.some(path => path.endsWith("/nested"))).toBe(false)
   })
 
-  it("keeps the Graph value and emits no new masked warning when no reference is present", async () => {
-    const snapshot: Item = { id: "policy", omaSettings: [{ isEncrypted: true, value: null }, { isEncrypted: true, value: "From Graph", secretReferenceValueId: "" }] }
+  it("keeps the Graph value and emits no new masked warning when the reference is absent", async () => {
+    const snapshot: Item = { id: "policy", omaSettings: [{ isEncrypted: true, value: null }] }
     const get = vi.fn(async () => structuredClone(snapshot))
     const onMasked = vi.fn()
     const result = await readObject(TYPE, "policy", { get, list: async () => [] }, { onMasked })
@@ -380,7 +380,24 @@ describe("omission backup generations", () => {
     expect(onMasked).not.toHaveBeenCalled()
     expect(get).toHaveBeenCalledTimes(1)
     expect(restoreBlocker(TYPE, result)).toBeUndefined()
-    expect(buildRestorePlan(TYPE, result).create.body.omaSettings).toEqual([{ value: null }, { value: "From Graph" }])
+    expect(buildRestorePlan(TYPE, result).create.body.omaSettings).toEqual([{ value: null }])
+  })
+
+  it("hydrates an empty OMA reference off-mode and propagates a failed lookup", async () => {
+    const snapshot = { id: "policy", omaSettings: [{ isEncrypted: true, value: "From Graph", secretReferenceValueId: "" }] }
+    const lookup = "deviceManagement/deviceConfigurations/policy/getOmaSettingPlainTextValue(secretReferenceValueId='')"
+    const get = vi.fn(async (path: string) => path === lookup ? { value: "Hydrated value" } : structuredClone(snapshot))
+    const reader = { get, list: async () => [] }
+    expect(await readObject(TYPE, "policy", reader)).toMatchObject({ omaSettings: [{ value: "Hydrated value" }] })
+    expect(get).toHaveBeenCalledWith(lookup)
+    get.mockImplementation(async (path) => {
+      if (path === lookup) throw new Error("Graph rejected the empty reference")
+      return structuredClone(snapshot)
+    })
+    await expect(readObject(TYPE, "policy", reader)).rejects.toThrow("Graph rejected the empty reference")
+    get.mockClear()
+    await expect(readObject(TYPE, "policy", reader, { omitEncryptedOma: true })).resolves.toEqual(snapshot)
+    expect(get).not.toHaveBeenCalledWith(lookup)
   })
 
   it("spends detail slots only on modified candidates and preserves an off-mode missing file", async () => {
@@ -598,6 +615,23 @@ describe("omission recovery", () => {
     }))
     return { graph, blobs, metadata }
   }
+
+  it("previews a legacy file independently of a broken inventory entry but rejects the restore write", async () => {
+    const { blobs, graph } = fixture()
+    blobs.set(`${id}/metadata.json`, JSON.stringify({ TenantId: TENANT, Status: "Success", Items: {
+      [`${FOLDER}/eligible`]: { file: "Eligible.json", hash: snapshotHash(JSON.parse(blobs.get(eligible)!)) },
+      [`${FOLDER}/unrelated`]: { file: "Broken.json" },
+    } }))
+    const response = await preview(request({ paths: [eligible, logical] }))
+    expect(response.status).toBe(200)
+    expect((await response.json()).items).toEqual([
+      expect.objectContaining({ path: eligible, name: "Eligible", snapshot: expect.objectContaining({ id: "eligible" }) }),
+      expect.objectContaining({ path: logical, live: "error" }),
+    ])
+    const write = await restore(request({ restoreType: "selective", selectedPolicies: [{ path: eligible }] }))
+    expect((await write.json()).error).toMatch(/invalid backup inventory/i)
+    expect(graph).not.toHaveBeenCalled()
+  })
 
   it("blocks direct restore, repair and revert requests, and restores only eligible policies in a full run", async () => {
     const { graph } = fixture()
@@ -838,7 +872,7 @@ it("lets a second producer run and keeps the original mode through an activation
   expect([...storage.blobs].find(([path]) => path.endsWith(`/${job.backupFolder}/DeviceConfigurations/Baseline.json`))?.[1].body).toContain(CANARY)
 })
 
-it("requires confirmed absence for producers and allows unreadable storage for unbound rollback capture", async () => {
+it("requires confirmed absence for producers and projects rollback captures when storage is unverified", async () => {
   const storage = sharedStorage()
   const store = memoryStore()
   const writer = new OmissionPolicyStore(store, storage.fetch)
@@ -849,16 +883,18 @@ it("requires confirmed absence for producers and allows unreadable storage for u
   await expect(reader.read(TENANT, "stdesktop", denied)).rejects.toThrow("could not be verified")
   await expect(reader.read(TENANT, "stcloud", denied)).rejects.toThrow("could not be verified")
   const silent = vi.fn(async () => { throw new Error("Sign in required") })
-  expect(await reader.readForRollback(TENANT, "stcloud", silent, true)).toMatchObject({ enabled: false })
-  expect(silent).not.toHaveBeenCalled()
-  expect(await reader.readForRollback(TENANT, "stcloud", silent)).toMatchObject({ enabled: false })
-  expect(silent).toHaveBeenCalledOnce()
-  await expect(reader.readForRollback(TENANT, "stdesktop", silent)).rejects.toThrow("could not be verified")
+  const unverified = { enabled: true, scripts: true, generation: "unverified" }
+  expect(await reader.readForRollback(TENANT, "stcloud", silent)).toEqual(unverified)
+  expect(await reader.readForRollback(TENANT, "stcloud", denied)).toEqual(unverified)
+  expect(await reader.readForRollback(TENANT, "stdesktop", silent)).toEqual(unverified)
+  expect(await reader.readForRollback(TENANT, "stcloud", async () => "stcloud")).toEqual({ enabled: false, scripts: false, generation: "default" })
+  expect(await reader.readForRollback(TENANT, "stdesktop", token)).toMatchObject({ enabled: true, scripts: false })
   expect(await reader.read(TENANT, ACCOUNT, denied)).toMatchObject({ enabled: false })
   await reader.save(TENANT, ACCOUNT, denied, { enabled: true, scripts: true })
   expect(await new OmissionPolicyStore(store, storage.fetch).read(TENANT, ACCOUNT, denied)).toMatchObject({ enabled: true, scripts: true })
   storage.blobs.clear()
   await expect(reader.read(TENANT, "stdesktop", token)).rejects.toThrow("could not be verified")
+  expect(await reader.readForRollback(TENANT, "stdesktop", token)).toEqual(unverified)
 })
 
 it("names later producers that saved backups without omission, but ignores an in-flight run", async () => {

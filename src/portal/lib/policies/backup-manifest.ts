@@ -19,22 +19,46 @@ export const snapshotHash = (snapshot: Item) => createHash("sha256").update(JSON
 
 /** Recorded backup items by blob path, or null for legacy backups that hold no inventory. */
 export function backupManifest(metadata: Record<string, any> | null, backupId: string): Map<string, ManifestEntry> | null {
+  return readManifest(metadata, backupId)
+}
+
+/** Legacy preview reads individual snapshots even if another entry in the inventory is broken. */
+export function backupPreviewManifest(metadata: Record<string, any> | null, backupId: string): Map<string, ManifestEntry> | null {
+  return readManifest(metadata, backupId, metadata?.OmissionVersion === undefined)
+}
+
+function readManifest(metadata: Record<string, any> | null, backupId: string, legacyPreview = false): Map<string, ManifestEntry> | null {
   if (metadata?.OmissionVersion !== undefined && metadata.OmissionVersion !== OMISSION_VERSION) throw new Error("Unsupported backup omission format")
   const items = metadata?.Items
   if (metadata?.OmissionVersion !== undefined && items === undefined) throw new Error("The backup has no omission inventory.")
   if (items === undefined) return null
-  if (!items || typeof items !== "object" || Array.isArray(items)) throw new Error("Invalid backup inventory manifest")
+  if (!items || typeof items !== "object" || Array.isArray(items)) {
+    if (legacyPreview) return null
+    throw new Error("Invalid backup inventory manifest")
+  }
   const entries = new Map<string, ManifestEntry>()
+  const paths = new Set<string>()
   for (const [key, item] of Object.entries(items as Record<string, any>)) {
     const split = key.indexOf("/")
     const folder = split > 0 ? key.slice(0, split) : ""
     const id = split > 0 ? key.slice(split + 1) : ""
     const file = item?.file
     const hash = item?.hash
-    if (!folder || !id || typeof file !== "string" || !file || file.includes("/") || file.includes("\\") || typeof hash !== "string" || !hash) throw new Error("Invalid backup inventory manifest")
+    if (!folder || !id || typeof file !== "string" || !file || file.includes("/") || file.includes("\\") || typeof hash !== "string" || !hash) {
+      if (legacyPreview) continue
+      throw new Error("Invalid backup inventory manifest")
+    }
     const path = `${backupId}/${folder}/${file}`
-    if (entries.has(path)) throw new Error("Invalid backup inventory manifest")
-    if (item.omitted !== undefined && (metadata?.OmissionVersion !== OMISSION_VERSION || !validOmissions(item.omitted) || !validRawHash(item.rawHash))) throw new Error("Invalid backup omission inventory")
+    if (paths.has(path)) {
+      if (!legacyPreview) throw new Error("Invalid backup inventory manifest")
+      entries.delete(path)
+      continue
+    }
+    paths.add(path)
+    if (item.omitted !== undefined && (metadata?.OmissionVersion !== OMISSION_VERSION || !validOmissions(item.omitted) || !validRawHash(item.rawHash))) {
+      if (legacyPreview) continue
+      throw new Error("Invalid backup omission inventory")
+    }
     const hydratedOmaMasks = Array.isArray(item.hydratedOmaMasks) ? item.hydratedOmaMasks.filter((index: unknown) =>
       typeof index === "number" && Number.isSafeInteger(index) && index >= 0) as number[] : undefined
     entries.set(path, { id, hash, ...(hydratedOmaMasks?.length ? { hydratedOmaMasks } : {}), ...(item.omitted ? { omitted: item.omitted, rawHash: item.rawHash } : {}) })

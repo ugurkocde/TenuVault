@@ -644,13 +644,43 @@ it.runIf(Boolean(pwsh))("cloud runs fail closed on unverified policies and prese
   expect(item).not.toHaveProperty("partialCollections")
 }, 60_000)
 
+it.runIf(Boolean(pwsh))("requires verified Automation enrollment before treating an absent policy as off", () => {
+  const runs = runPlainFixture()
+  const unavailable = runs.find(entry => entry.scenario === "unreadableEnrollment")!
+  expect(unavailable.error).toContain("Automation enrollment variable could not be read")
+  expect(unavailable.calls.some(({ uri }) => uri.includes("secret-omission.json"))).toBe(true)
+  expect(unavailable.calls.some(({ uri }) => uri.includes("graph.microsoft.com") || uri.includes("/intune-backups/backup-"))).toBe(false)
+  const absent = runs.find(entry => entry.scenario === "missingEnrollment")!
+  expect(absent.error).toBeNull()
+  const blobs = writtenBlobs(absent)
+  expect(JSON.parse(blobs.get(`${folderOf(blobs)}/metadata.json`)!)).toMatchObject({ OmissionEnabled: false })
+}, 60_000)
+
+it.runIf(Boolean(pwsh))("hydrates an empty OMA reference off-mode and reports a failed lookup", () => {
+  const runs = runPlainFixture()
+  const success = runs.find(entry => entry.scenario === "emptyOmaSuccess")!
+  const refused = runs.find(entry => entry.scenario === "emptyOmaFailure")!
+  for (const run of [success, refused]) {
+    expect(run.calls.filter(({ uri }) => uri.endsWith("getOmaSettingPlainTextValue(secretReferenceValueId='')"))).toHaveLength(1)
+  }
+  const blobs = writtenBlobs(success)
+  expect(JSON.parse(blobs.get(`${folderOf(blobs)}/DeviceConfigurations/Baseline Wi-Fi.json`)!)).toMatchObject({
+    omaSettings: [{ value: "Hydrated empty reference", secretReferenceValueId: "" }],
+  })
+  const failedBlobs = writtenBlobs(refused)
+  const failedFolder = folderOf(failedBlobs)
+  expect(failedBlobs.has(`${failedFolder}/DeviceConfigurations/Baseline Wi-Fi.json`)).toBe(false)
+  expect(JSON.parse(failedBlobs.get(`${failedFolder}/metadata.json`)!)).toMatchObject({ Status: "CompletedWithWarnings", Failures: 1 })
+}, 60_000)
+
 it.runIf(Boolean(pwsh))("keeps off-mode cloud report fields and compares matched typed and untyped tokens only under omission", () => {
   const script = fileURLToPath(new URL("./fixtures/cloud-backup/omission-compare.ps1", import.meta.url))
-  const { off, on } = JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8" }))
+  const { off, on, offWithOneSkip } = JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8", timeout: 60_000 }))
   expect(off.ExcludedPaths).toEqual([])
   expect(off.Warnings).toEqual([])
   expect(off.Drifts).toHaveLength(1)
   expect(JSON.stringify(off.Drifts[0].changes)).toContain("nested.children")
+  expect(offWithOneSkip.Drifts).toEqual([])
   expect(on.ExcludedPaths).toEqual(["/nested/children"])
   expect(on.Drifts).toEqual([])
-})
+}, 60_000)
