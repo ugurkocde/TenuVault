@@ -10,6 +10,7 @@ import { graphCaller, Restorer, DependencyMappingError, type RestoreOutcome } fr
 import { PROGRESS_ID, startProgress } from "~/lib/policies/restore-progress"
 import { restoreOrder, type Item } from "../../../../shared/intune/registry"
 import { grantedPermissions } from "../../../../shared/services/token"
+import { isGuid } from "../../../../shared/security"
 import { type NextRequest, NextResponse } from "next/server"
 export async function getAccessToken(tenantId: string, appId: string, clientSecret: string, scope: string, forceRefresh = false) {
   const tokenResponse = await fetch(
@@ -40,6 +41,15 @@ export async function getAccessToken(tenantId: string, appId: string, clientSecr
 const blobUrl = (storageAccountName: string, name: string) => `https://${storageAccountName}.blob.core.windows.net/intune-backups/${name.split("/").map(encodeURIComponent).join("/")}`
 const storageHeaders = (storageToken: string) => ({ 'x-ms-version': '2021-12-02', Authorization: `Bearer ${storageToken}` })
 
+async function groupedApproval(tenants: string[]): Promise<boolean> {
+  try {
+    return (await enrolledBatchDestinations(tenants.map(tenant => tenant.toLowerCase()))).size > 0
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    throw new WriteApprovalError(`The tenant approval batch could not be checked. No writes were sent. ${message}`)
+  }
+}
+
 async function readSnapshot(policyPath: string, storageAccountName: string, storageToken: string, expected?: ManifestEntry): Promise<Item> {
   const response = await fetch(blobUrl(storageAccountName, policyPath), { headers: storageHeaders(storageToken) })
   if (!response.ok) throw new Error("Failed to fetch from backup")
@@ -61,6 +71,13 @@ export async function POST(request: NextRequest) {
   let body: any
   try {
     body = await request.json()
+    if (body.approvalAction === "check-destinations") {
+      const { destinationIds } = body
+      if (!Array.isArray(destinationIds) || destinationIds.length < 2 || destinationIds.length > 50 || !destinationIds.every(isGuid)) {
+        return NextResponse.json({ error: "Choose the original restore destinations." }, { status: 400 })
+      }
+      return NextResponse.json({ grouped: await groupedApproval(destinationIds) })
+    }
     if (body.approvalAction) return await approvalAction(body)
     if (body.justification !== undefined && (typeof body.justification !== "string" || body.justification.length > 700)) return NextResponse.json({ error: "Justification must be at most 700 characters" }, { status: 400 })
     const {
@@ -121,11 +138,7 @@ export async function POST(request: NextRequest) {
       || repairSelections.length > 0 && (restoreType !== "selective" || (destinations?.length ?? 0) > 1 || !validSelections(repairSelections))) {
       return NextResponse.json({ error: "Choose unique destinations and valid restore selections for each destination." }, { status: 400 })
     }
-    const grouped = !!destinations && destinations.length > 1
-      && (await enrolledBatchDestinations(destinations.map(target => target.tenantId.toLowerCase())).catch(error => {
-        const message = error instanceof Error ? error.message : String(error)
-        throw new WriteApprovalError(`The tenant approval batch could not be checked. No writes were sent. ${message}`)
-      })).size > 0
+    const grouped = !!destinations && destinations.length > 1 && await groupedApproval(destinations.map(target => target.tenantId))
     if (hasTargetSelections && destinations!.length > 1 && !grouped) return NextResponse.json({ legacy: true })
     if (destinations?.some(target => !target.appId)) {
       return NextResponse.json({ error: "Reconnect all original destinations before applying this tenant approval batch." }, { status: 409 })

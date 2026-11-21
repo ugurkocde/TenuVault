@@ -359,7 +359,7 @@ export class Restorer {
           const destination = graphPath.slice(0, graphPath.lastIndexOf("/") + 1) + encodeURIComponent(created.id)
           const live = reused
             ? await this.resolveTarget(typeForFolder(reused.folder)!, reused.snapshot)
-            : await this.graph("GET", destination).then(({ status, body }) => status === 200 ? { id: body.id, live: body } : undefined)
+            : await this.readApprovalDependency(destination).then(body => body ? { id: body.id, live: body } : undefined)
           if (!live || live.id !== created.id || approvalFingerprint(live.live) !== created.fingerprint) {
             throw new WriteApprovalError("The reviewed dependency changed. Request a new approval.")
           }
@@ -581,11 +581,23 @@ export class Restorer {
     return Promise.all([...paths].sort().map(async path => {
       const prior = planned?.get(path.toLowerCase())
       if (prior) return [path, prior]
-      const { status, body } = await this.graph("GET", path)
-      if (status === 404) return [path, null]
-      if (status !== 200 || typeof body.id !== "string") throw new WriteApprovalError("A destination dependency could not be verified.")
-      return [path, approvalFingerprint(body)]
+      const live = await this.readApprovalDependency(path)
+      return [path, live ? approvalFingerprint(live) : null]
     }))
+  }
+
+  private async readApprovalDependency(path: string): Promise<Item | null> {
+    const type = typeForFolder("ScopeTags")!
+    if (path.startsWith(type.path + "/")) {
+      const id = decodeURIComponent(path.slice(type.path.length + 1))
+      const live = await readObject(type, id, liveReader(this.graph))
+      if (typeof live.id === "string" && live.id.toLowerCase() === id.toLowerCase()) return live
+      throw new WriteApprovalError("A destination scope tag could not be verified.")
+    }
+    const { status, body } = await this.graph("GET", path)
+    if (status === 404) return null
+    if (status !== 200 || typeof body.id !== "string") throw new WriteApprovalError("A destination dependency could not be verified.")
+    return body
   }
 
   /**
@@ -910,14 +922,6 @@ export class Restorer {
     const live = await this.current(type, id)
     if (!live || !verifiedMutation(type, id, step.method, step.path, step.body, response, live, before)) {
       throw new WriteApprovalError("The preceding write could not be reconciled with the live object. Review it before continuing.")
-    }
-    const tenant = this.options.writeApprovalTenant
-    if (tenant) {
-      const key = writeKey(tenant, step.method, step.path, step.body)
-      const entry = writeRecords().find(record => record.key === key)
-      if (entry?.state === "complete" || entry?.state === "reconciled") {
-        saveWrite({ ...entry, objectId: id, verifiedPostStep: approvalFingerprint(live) })
-      }
     }
     return live
   }

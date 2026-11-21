@@ -459,18 +459,27 @@ it("retries unenrolled restore destinations individually when a destination sign
   })
   vi.stubGlobal("fetch", send)
   let licensed = false
-  const host = new ApiHost({ routes: { "/api/restore-backup": { POST: restoreRoute } }, guard: planGuard(async id => id === tenant && !licensed ? null : "msp") })
+  const planOf = vi.fn(async id => id === tenant && !licensed ? null : "msp" as const)
+  const host = new ApiHost({ routes: { "/api/restore-backup": { POST: restoreRoute } }, guard: planGuard(planOf) })
   const post = (selectedPolicies: ReturnType<typeof selection>, targetTenants: unknown[]) => host.dispatch(new Request(`${INTERNAL_API_ORIGIN}/api/restore-backup`, {
     method: "POST", body: JSON.stringify({ tenantId: source, appId: requester.oid, clientSecret: DELEGATED_CLIENT_SECRET, storageAccountName: approvalAccount,
       backupId: "fixture", restoreType: "selective", selectedPolicies, targetTenants }),
   }))
   const targets = [tenant, secondTenant].map(id => ({ tenantId: id, appId: requester.oid }))
   const first = selection("first"), second = selection("second")
-  expect(await (await post([...first, ...second], [{ tenantId: tenant, selectedPolicies: first }, { ...targets[1], selectedPolicies: second }])).json()).toEqual({ legacy: true })
+  const probe = () => host.dispatch(new Request(`${INTERNAL_API_ORIGIN}/api/restore-backup`, { method: "POST",
+    body: JSON.stringify({ tenantId: source, approvalAction: "check-destinations", destinationIds: [tenant, secondTenant] }),
+  }))
+  expect(await (await probe()).json()).toEqual({ grouped: false })
+  expect(planOf).not.toHaveBeenCalled()
+  expect(mutations).toEqual([])
+  expect((await post(first, [targets[0]])).status).toBe(402)
+  expect(await (await post(second, [targets[1]])).json()).toMatchObject({ success: true })
   licensed = true
   expect(await (await post(first, [targets[0]])).json()).toMatchObject({ details: { results: [{ targetTenantId: tenant, writeNotSent: true, retryable: true }] } })
-  expect(await (await post(second, [targets[1]])).json()).toMatchObject({ success: true })
   expect(mutations).toEqual(["Second"])
+  await service.enable(secondTenant)
+  expect((await probe()).status).toBe(409)
 })
 
 it.each([false, true])("isolates an unreadable copy destination before dispatch, multiple destinations %s", async multiple => {
@@ -667,10 +676,47 @@ it("binds the resolved Autopilot device and its actual update steps even though 
   expect(writes).toBe(0)
 })
 
+it.each(["changed", "unreadable"])("blocks a protected restore when scope-tag assignments become %s after claim", async condition => {
+  const { state, profile } = writeApprovalFixture()
+  const first = profile(), second = profile(reviewer)
+  setWriteApprovals(first.service)
+  await first.service.enable(tenant)
+  const path = "fixture/DeviceConfigurations/source.json"
+  const snapshot = { id: requester.oid, displayName: "Example", roleScopeTagIds: ["12"] }
+  let claimed = false
+  const writes = vi.fn()
+  const send = createBridgedFetch({
+    dispatch: async () => new Response(null, { status: 404 }),
+    getDelegatedToken: async () => ({ accessToken: "sign-in", expiresOn: null }),
+    authorizeGraph: graphDispatchGuard(first.service, () => ({ tenant, actor: requester, current: () => true })),
+    fetch: async (input, init) => {
+      const req = new Request(input, init)
+      const url = new URL(req.url)
+      if (req.method !== "GET") { writes(); return Response.json({ id: reviewer.oid }, { status: 201 }) }
+      if (url.pathname.endsWith("/roleScopeTags/12")) return Response.json({ id: "12", displayName: "Pilot devices" })
+      if (url.pathname.endsWith("/roleScopeTags/12/assignments")) return claimed && condition === "unreadable"
+        ? new Response(null, { status: 403 })
+        : Response.json({ value: [{ id: "assignment", target: { groupId: claimed ? secondTenant : tenant } }] })
+      return Response.json({ value: [] })
+    },
+  })
+  const restorer = new Restorer(graphCaller("sign-in", send), { mode: "copy", assignments: false, writeApprovalTenant: tenant })
+  let review: Awaited<ReturnType<typeof restorer.approvalObservation>>
+  const run = () => first.service.run([{ ...prepare().operation, observe: async () => review = await restorer.approvalObservation(path, snapshot) }],
+    () => restorer.restore(path, snapshot, undefined, review))
+  await expect(run()).rejects.toThrow("pending")
+  await second.service.decide(tenant, (await second.service.inbox(tenant)).requests[0]!.request.id, "approve")
+  state.beforeAudit = event => { if (event.action.endsWith("claimed")) claimed = true }
+  expect(await run()).toMatchObject({ success: false, writeNotSent: true })
+  expect(writes).not.toHaveBeenCalled()
+})
+
 it.each(["changed", "deleted", "unreadable"])("reports a %s repair without aborting other items", async condition => {
   const { setApprovedRestoreRepairStore } = await import("../src/portal/lib/policies/graph-restore")
   const { memoryStore } = await import("./helpers")
   const repairStore = memoryStore()
+  const journal = memoryStore()
+  setRestoreJournalStore(journal)
   const { state, profile } = writeApprovalFixture()
   const first = profile(), second = profile(reviewer)
   setWriteApprovals(first.service)
@@ -724,10 +770,11 @@ it.each(["changed", "deleted", "unreadable"])("reports a %s repair without abort
     const partial = await (await run([{ path }])).json()
     const repair = partial.details.results[0].repairToken
     expect(typeof repair).toBe("string")
+    expect(journal.values.get("restore.write-journal")).not.toContain("verifiedPostStep")
     const { writeRecords } = await import("../src/main/storage/restore-journal")
-    expect(writeRecords()).toContainEqual(expect.objectContaining({
-      objectId: reviewer.oid, path: "deviceManagement/deviceConfigurations", verifiedPostStep: expect.stringMatching(/^[a-f0-9]{64}$/),
-    }))
+    const created = writeRecords().find(record => record.objectId === reviewer.oid && record.path === "deviceManagement/deviceConfigurations")
+    expect(created).toBeDefined()
+    expect(created).not.toHaveProperty("verifiedPostStep")
     expect(writes).toBe(2)
     const persisted = new Map(repairStore.values)
     expect(JSON.parse(persisted.get(`write-approval.restore-repair.${repair}`)!).expectedCurrent.description).toBe("Reviewed")

@@ -194,6 +194,8 @@ Only one process or computer can restore a particular backup to a particular des
 
 If Intune reports a permanent upload-storage failure, the draft is retained for review. Intune may refuse renewal in this state; TenuVault does not delete the draft or create a replacement automatically.
 
+If another admin enables tenant write approval before the installer starts uploading, TenuVault reports **Write not sent** for the upload. Retry with the same backup, destination and app name to request approval and continue the existing draft.
+
 If a creation response was lost, TenuVault searches for its unique restore marker and refuses to create a second app when the outcome cannot be confirmed. If someone assigns or changes an unfinished destination app, restore stops for review. A successful repeat returns the existing restored app. Creating another copy from the same backup in the same destination is not currently supported.
 
 Legacy local archives are export-only and cannot be selected for restore.

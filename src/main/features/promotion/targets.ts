@@ -124,8 +124,18 @@ export async function targetStateHash(graph: GraphCall, reads: TargetReads, poli
   }
   const subset = async (kind: Exclude<ReferenceKind, "group">, ids: string[]) => {
     if (!ids.length) return []
+    if (approval && kind === "scopeTag") {
+      const scopeTag = typeForFolder("ScopeTags")!
+      return Promise.all(ids.map(async id => {
+        const item = await readCurrent(graph, scopeTag, id)
+        if (typeof item?.id !== "string" || item.id.toLowerCase() !== id.toLowerCase()) {
+          throw new FeatureError("A mapped destination scope tag could not be verified.", 409)
+        }
+        return comparableSnapshot(item)
+      }))
+    }
     try {
-      const select = approval && kind === "scopeTag" ? "id,displayName,description,isBuiltIn" : LISTS[kind].select
+      const select = LISTS[kind].select
       const items = await listAll(graph, `${LISTS[kind].path}?$select=${select}`, memo)
       // Timestamps and versions are kept on purpose: any edit of a relied-on object invalidates the plan.
       const fields = select.split(",")

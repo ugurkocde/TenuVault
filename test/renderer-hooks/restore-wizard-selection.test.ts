@@ -58,23 +58,31 @@ it("reads access policies only at the review step", async () => {
   expect(JSON.parse(String(requests()[0]![1]?.body))).toMatchObject({ approvalAction: "detect" })
 })
 
-it("retries legacy copies per destination and warns only about a potentially dispatched write", async () => {
+it.each([false, true])("retries legacy copies per destination when a later peer loses its license (%s)", async unlicensed => {
   const targets = ["First tenant", "Second tenant"].map((name, index) => ({ tenantId: `tenant-${index}`, appId: "app", name }))
   const container = await renderItems(false, targets)
   const path = "DeviceConfigurations/a.json"
   const calls: Array<Array<{ tenantId: string; selectedPolicies?: unknown }>> = []
+  const probes: string[][] = []
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     if (String(input).endsWith("/api/restore-preview")) return Response.json(preview)
     const body = JSON.parse(String(init?.body ?? "{}"))
+    if (body.approvalAction === "check-destinations") {
+      probes.push(body.destinationIds)
+      return Response.json({ grouped: false })
+    }
     if (!body.targetTenants) return Response.json({ records: [] })
     calls.push(body.targetTenants)
     const destination = body.targetTenants[0].tenantId
     if (calls.length === 1) return Response.json({ details: { results: targets.map(target => ({
       path, targetTenantId: target.tenantId, success: false, retryable: true, error: "Retry the copy",
     })) } })
-    if (calls.length === 2) return Response.json({ legacy: true })
+    if (body.targetTenants.length > 1 || unlicensed && destination === "tenant-1") {
+      return Response.json({ error: "The later destination requires MSP.", upgrade: "bulkActions" }, { status: 402 })
+    }
+    if (unlicensed) return Response.json({ details: { results: [{ path, targetTenantId: destination, success: true }] } })
     return Response.json({ details: { results: [{ path, targetTenantId: destination, success: false, retryable: false,
-      ...(calls.length === 3 ? { writeNotSent: true, error: "Write not sent: sign in again" } : { writeMayHaveCompleted: true, error: "Graph response lost" }),
+      ...(calls.length === 2 ? { writeNotSent: true, error: "Write not sent: sign in again" } : { writeMayHaveCompleted: true, error: "Graph response lost" }),
     }] } })
   }))
   await act(async () => itemBoxes(container)[0]!.click())
@@ -83,8 +91,14 @@ it("retries legacy copies per destination and warns only about a potentially dis
   await act(async () => buttonNamed(container, "Review")!.click())
   await act(async () => buttonNamed(container, " Restore 1 item")!.click())
   await act(async () => buttonNamed(container, " Retry failed items")!.click())
-  expect(calls.map(batch => batch.map(target => target.tenantId))).toEqual([["tenant-0", "tenant-1"], ["tenant-0", "tenant-1"], ["tenant-0"], ["tenant-1"]])
-  expect(calls[1]?.every(target => target.selectedPolicies)).toBe(true)
+  expect(probes).toEqual([["tenant-0", "tenant-1"]])
+  expect(calls.map(batch => batch.map(target => target.tenantId))).toEqual([["tenant-0", "tenant-1"], ["tenant-0"], ["tenant-1"]])
+  expect(calls[1]?.some(target => target.selectedPolicies)).toBe(false)
+  if (unlicensed) {
+    expect(container.textContent).toContain("The later destination requires MSP.")
+    expect(container.textContent).toContain("Copied")
+    return
+  }
   expect(container.textContent).toContain("Write not sent: sign in again")
   expect(container.textContent?.match(/a write may already have completed/g)).toHaveLength(1)
   expect([...container.querySelectorAll("li")].find(row => row.textContent?.includes("Write not sent"))?.textContent).not.toContain("a write may already have completed")
@@ -96,15 +110,19 @@ it("checks retry enrollment before requiring a disconnected destination's profil
   const container = await renderItems(false, targets, update => { render = update })
   const path = "DeviceConfigurations/a.json"
   const calls: Array<Array<{ tenantId: string; appId?: string; selectedPolicies?: unknown }>> = []
+  const probes: string[][] = []
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     if (String(input).endsWith("/api/restore-preview")) return Response.json(preview)
     const body = JSON.parse(String(init?.body ?? "{}"))
+    if (body.approvalAction === "check-destinations") {
+      probes.push(body.destinationIds)
+      return Response.json({ grouped: false })
+    }
     if (!body.targetTenants) return Response.json({ records: [] })
     calls.push(body.targetTenants)
     if (calls.length === 1) return Response.json({ details: { results: targets.map(target => ({
       path, targetTenantId: target.tenantId, success: false, retryable: true, error: "Retry the copy",
     })) } })
-    if (calls.length === 2) return Response.json({ legacy: true })
     return Response.json({ details: { results: [{ path, targetTenantId: "tenant-1", success: true }] } })
   }))
   await act(async () => itemBoxes(container)[0]!.click())
@@ -114,11 +132,8 @@ it("checks retry enrollment before requiring a disconnected destination's profil
   await act(async () => buttonNamed(container, " Restore 1 item")!.click())
   await act(async () => render([targets[1]!]))
   await act(async () => buttonNamed(container, " Retry failed items")!.click())
-  expect(calls[1]).toEqual([
-    { tenantId: "tenant-0", selectedPolicies: [{ path }] },
-    { tenantId: "tenant-1", appId: "app", selectedPolicies: [{ path }] },
-  ])
-  expect(calls[2]).toEqual([{ tenantId: "tenant-1", appId: "app" }])
+  expect(probes).toEqual([["tenant-0", "tenant-1"]])
+  expect(calls.slice(1)).toEqual([[{ tenantId: "tenant-1", appId: "app" }]])
   expect(container.textContent).toContain("Write not sent: the original target tenant is no longer connected.")
 })
 

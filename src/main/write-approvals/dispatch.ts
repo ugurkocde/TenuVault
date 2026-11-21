@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks"
-import { hasClaimedDestination, hasWriteApproval, WriteApprovalError, type WriteApprovals } from "./service"
+import { approvalsEnabled, hasClaimedDestination, hasWriteApproval, WriteApprovalError, type WriteApprovals } from "./service"
 import { canonicalJson } from "../features/change-sets/model"
 import type { ApprovalActor } from "../../shared/write-approvals"
 
@@ -27,11 +27,18 @@ export function sameObservation(expected: unknown, observe: () => Promise<unknow
 }
 
 export function setRestoreUploadGuard(guard: typeof uploadGuard): void { uploadGuard = guard }
-export async function authorizeRestoreUpload(tenant: string | undefined): Promise<void> {
-  if (uploadGuard && hasClaimedDestination()) {
+export async function authorizeRestoreUpload(tenant: string | undefined, firstPut: boolean): Promise<void> {
+  if (hasClaimedDestination()) {
     if (!tenant || !hasWriteApproval(tenant)) throw new WriteApprovalError("The installer upload has no approved destination.")
-    await checkpoint.getStore()?.()
-    await uploadGuard(tenant)
+    if (uploadGuard) {
+      await checkpoint.getStore()?.()
+      await uploadGuard(tenant)
+    }
+  } else if (tenant && firstPut) {
+    const enabled = await approvalsEnabled(tenant).catch(() => {
+      throw new WriteApprovalError("Write not sent: tenant approval could not be checked. Retry to resume the same installer restore.")
+    })
+    if (enabled) throw new WriteApprovalError("Write not sent: tenant approval is now enabled. Retry this restore to request a new approval for the existing draft.")
   }
 }
 

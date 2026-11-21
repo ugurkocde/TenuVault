@@ -711,7 +711,8 @@ async function undo(body: RecordJson): Promise<UndoResult> {
             stopped = `Undo stopped before this object: ${message}`
           }
         }
-        const restorer = new Restorer(graph, { writeApprovalTenant: tenant, mode: "replace", assignments: false, recreateMissing: false, exactTargetId: true })
+        const protectedWrite = hasWriteApproval(tenant)
+        const restorer = new Restorer(graph, { writeApprovalTenant: tenant, mode: "replace", assignments: false, recreateMissing: false, exactTargetId: protectedWrite })
         for (const item of run.updated) {
           report({ stage: `Restoring ${item.previousName}`, done: results.length, total })
           const result = { name: item.previousName, id: item.id, action: "restored" as const }
@@ -719,11 +720,13 @@ async function undo(body: RecordJson): Promise<UndoResult> {
             results.push({ ...result, done: false, error: stopped ?? "No previous version was saved for this policy. Restore it from a backup." })
             continue
           }
-          const outcome = await restorer.restore(`oib/${item.folder}/${item.id}.json`, { ...item.before, id: item.id }, hasWriteApproval(tenant) ? sameObservation(states.get(item.id), () => read(item)) : undefined)
-          if (outcome.success) {
+          const snapshot = protectedWrite ? { ...item.before, id: item.id } : item.before
+          const outcome = await restorer.restore(`oib/${item.folder}/${item.id}.json`, snapshot, protectedWrite ? sameObservation(states.get(item.id), () => read(item)) : undefined)
+          if (outcome.success || (!protectedWrite && outcome.missing)) {
             remaining.updated.splice(remaining.updated.indexOf(item), 1)
             saveRun(remaining)
-            results.push({ ...result, done: true })
+            const note = outcome.missing ? "already deleted in Intune, so the previous version was not recreated" : undefined
+            results.push({ ...result, done: true, ...(note ? { note } : {}) })
           } else results.push({ ...result, done: false, error: outcome.error ?? "The previous version could not be put back." })
         }
         return { run: remaining.created.length || remaining.updated.length ? publicRun(remaining) : null, results }

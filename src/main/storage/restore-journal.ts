@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import type { KeyValueStore } from './secure-store'
-export interface WriteRecord { key: string; tenant: string; method: string; path: string; at: string; state: 'uncertain' | 'complete' | 'reconciled'; objectId?: string; verifiedPostStep?: string; label?: string; /** Snapshot object ID this creation restores, when known. Binds a recreation to its source. */ sourceId?: string }
+export interface WriteRecord { key: string; tenant: string; method: string; path: string; at: string; state: 'uncertain' | 'complete' | 'reconciled'; objectId?: string; label?: string; /** Snapshot object ID this creation restores, when known. Binds a recreation to its source. */ sourceId?: string }
 const memory = new Map<string, string>()
 let store: KeyValueStore = { get: key => memory.get(key) ?? null, set: (key, value) => { memory.set(key, value) }, delete: key => { memory.delete(key) } }
 export function setRestoreJournalStore(value: KeyValueStore): void { store = value }
@@ -13,7 +13,17 @@ export function writeRecords(): WriteRecord[] {
   if (!raw) return []
   let parsed: unknown
   try { parsed = JSON.parse(raw) } catch { parsed = null }
-  if (Array.isArray(parsed)) return parsed as WriteRecord[]
+  if (Array.isArray(parsed)) {
+    let cleaned = false
+    for (const entry of parsed) {
+      if (entry && typeof entry === 'object' && 'verifiedPostStep' in entry) {
+        delete entry.verifiedPostStep
+        cleaned = true
+      }
+    }
+    if (cleaned) store.set(JOURNAL_KEY, JSON.stringify(parsed))
+    return parsed as WriteRecord[]
+  }
   // An unreadable journal must not throw a raw parse error into every restore, and must not
   // be silently overwritten either: the raw value is set aside so it can still be recovered.
   store.set(`${JOURNAL_KEY}.unreadable.${Date.now()}`, raw)

@@ -1,6 +1,6 @@
 import { setWriteApprovals } from "../src/main/write-approvals/service"
 import { reviewer, unenrolledApprovals, writeApprovalFixture } from "./helpers/write-approval-fixture"
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { routes as syncRoutes } from "../src/main/features/sync"
 import { routes as promotionRoutes } from "../src/main/features/promotion"
 import { applyChangeSet, approveChangeSet, createChangeSet, previewChangeSet } from "../src/main/features/change-sets/engine"
@@ -1428,6 +1428,28 @@ it("keeps a Sync destination's policy read failure local while neither destinati
   expect(context.targets[TENANT_C]!.writeCount()).toBe(0)
   await service.enable(TENANT_B)
   await expect(batch()).rejects.toThrow("Injected transport failure")
+})
+
+it("checks Sync enrollment before applying a source plan gate to a grouped request", async () => {
+  const context = setup({ plans: MSP })
+  const { service } = writeApprovalFixture().profile()
+  setWriteApprovals(service)
+  const { run, targets } = await planned(context, [TENANT_B, TENANT_C])
+  const destinations = await Promise.all(targets.map(async target => {
+    const id = target.promotion!.id
+    const { body: { changeSet } } = await context.post({ tenantId: target.targetTenantId, action: "preview", id })
+    return { id, contentHash: changeSet.contentHash, targetFingerprint: changeSet.targetFingerprint }
+  }))
+  const planOf = context.deps.plan
+  context.deps.plan = vi.fn(async (id: string) => id === TENANT_A ? "community" : planOf(id))
+  const body = { tenantId: TENANT_A, action: "apply-batch", id: run.id, destinations, backup: "none", confirm: true }
+  expect(await planGuard(context.deps.plan)(guardRequest(body))).toBeNull()
+  expect(await context.post(body)).toMatchObject({ status: 200, body: { legacy: true } })
+  expect(context.deps.plan).not.toHaveBeenCalled()
+  await service.enable(TENANT_B)
+  expect(await context.post(body)).toMatchObject({ status: 402, body: { upgrade: "sync" } })
+  expect(context.targets[TENANT_B]!.writeCount()).toBe(0)
+  expect(context.targets[TENANT_C]!.writeCount()).toBe(0)
 })
 
 it("clears a saved Sync group when its reviewed destination becomes stale", async () => {

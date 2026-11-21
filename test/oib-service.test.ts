@@ -290,14 +290,28 @@ describe("deployments", () => {
     vi.stubGlobal("fetch", world(state, writes))
     await source()
     const run = await handleOib({ ...base, storageAccountName: null, action: "oib-deploy", commit, backup: { mode: "none" }, items: [{ source: SC, mode: "update", targetId: EXISTING }] }) as OibRun
+    state.policies = []
+    writes.length = 0
+    const undone = await handleOib({ action: "oib-undo", tenantId, appId, runId: run.runId }) as UndoResult
+    expect(writes).toEqual([])
+    expect(undone).toMatchObject({ run: null, results: [{ action: "restored", done: true, note: "already deleted in Intune, so the previous version was not recreated" }] })
+    expect(await handleOib({ action: "oib-runs", tenantId })).toEqual({ runs: [] })
+  })
+
+  it("undo restores the previous version to a journaled replacement when approvals are off", async () => {
+    const writes: string[] = []
+    const state: Tenant = { policies: [{ id: EXISTING, name: "Win - OIB - SC - Test - v3.1", value: 7 }] }
+    vi.stubGlobal("fetch", world(state, writes))
+    await source()
+    const run = await handleOib({ ...base, storageAccountName: null, action: "oib-deploy", commit, backup: { mode: "none" }, items: [{ source: SC, mode: "update", targetId: EXISTING }] }) as OibRun
     state.policies = [{ id: CREATED, name: "Win - OIB - SC - Test - v3.1", value: 42 }]
     saveWrite({ key: "replacement", method: "POST", path: "deviceManagement/configurationPolicies", tenant: tenantId,
       sourceId: EXISTING, objectId: CREATED, state: "complete", at: new Date().toISOString() })
     writes.length = 0
     const undone = await handleOib({ action: "oib-undo", tenantId, appId, runId: run.runId }) as UndoResult
-    expect(writes).toEqual([])
-    expect(undone).toMatchObject({ results: [{ action: "restored", done: false, error: expect.stringContaining("no longer exists") }] })
-    expect(state.policies[0]!.value).toBe(42)
+    expect(writes).toEqual([expect.stringContaining(`PUT deviceManagement/configurationPolicies/${CREATED}`)])
+    expect(undone).toMatchObject({ run: null, results: [{ action: "restored", done: true }] })
+    expect(state.policies[0]!.value).toBe(7)
   })
 
   it("does not recreate a policy deleted between reading it and updating it", async () => {

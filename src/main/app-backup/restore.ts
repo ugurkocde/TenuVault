@@ -254,7 +254,7 @@ async function restoreOwnedApp(store: AppSourceStore, source: CapturedAppSource,
         checkedUploadAt = performance.now()
       }
       const put = async (query: Record<string, string>, bytes: Buffer | string) => {
-        const dispatch = () => putRestoreBlock(sas, query, bytes, fetchImpl, signal, target)
+        const dispatch = () => putRestoreBlock(sas, query, bytes, fetchImpl, signal, target, ids.length === 0)
         if (expected) {
           await withWriteCheckpoint(checkUpload, dispatch)
         } else await dispatch()

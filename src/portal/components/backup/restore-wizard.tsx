@@ -541,8 +541,16 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
         .then((state) => progressId.current === polledId && setProgress({ ...state, total, done: completed.length + state.done, results: mergeOutcomes(previous, [...completed, ...state.results]) }))
         .catch(() => undefined)
     }, 700)
-    let groupedRetry = copying && retry && batches.length > 1
+    let groupedRetry = false
     try {
+      if (copying && retry && batches.length > 1) {
+        const probe = await post<{ grouped: boolean }>("/api/restore-backup", {
+          tenantId: tenant.credentials.tenantId,
+          approvalAction: "check-destinations",
+          destinationIds: batches.map(batch => batch.targetTenantId),
+        })
+        groupedRetry = probe.grouped
+      }
       const selections = (batch: (typeof batches)[number]) => batch.paths.map(path => ({
         path, repairToken: previous.find(item => item.path === path && item.targetTenantId?.toLowerCase() === batch.targetTenantId)?.repairToken,
       }))

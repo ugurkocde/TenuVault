@@ -190,7 +190,7 @@ describe("cross-tenant restore engine", () => {
     }
   })
 
-  it("uploads every block without an Azure policy check when App Backup is unenrolled", async () => {
+  it("checks approval once before an unenrolled upload and does not recheck subsequent blocks", async () => {
     const f = await fixture(snapshot, true), d = destination()
     const { profile, state } = writeApprovalFixture()
     const { service } = profile()
@@ -201,7 +201,40 @@ describe("cross-tenant restore engine", () => {
       await restoreCapturedApp(f.store, f.source, snapshot, target, "Restored", options(d))
       expect(d.fetcher.mock.calls.length).toBeGreaterThan(2)
       expect(guard).not.toHaveBeenCalled()
-      expect(state.policyReads).toBe(1)
+      expect(state.policyReads).toBe(2)
+    } finally { setRestoreUploadGuard(undefined) }
+  })
+
+  it("stops before the first SAS PUT if approval was enabled after draft creation and resumes the same draft with approval", async () => {
+    const f = await fixture(), d = destination()
+    const { profile } = writeApprovalFixture()
+    const first = profile(), second = profile(reviewer)
+    setWriteApprovals(first.service)
+    setRestoreUploadGuard(tenant => first.service.authorize(tenant, requester))
+    const run = () => restoreCapturedApp(f.store, f.source, snapshot, target, "Restored", opts)
+    const opts = options(d)
+    let activated = false
+    opts.graph = async (method, url, body) => {
+      const response = await d.graph(method, url, body)
+      if (!activated && method === "GET" && response.uploadState === "azureStorageUriRequestSuccess") {
+        activated = true
+        await first.service.enable(target)
+      }
+      return response
+    }
+    try {
+      await expect(run()).rejects.toThrow("Write not sent: tenant approval is now enabled")
+      expect(d.fetcher).not.toHaveBeenCalled()
+      const draft = await f.store.readRestoreRecord(tenant, f.source.id, target)
+      const draftId = d.app!.id
+      expect(draft).toMatchObject({ appId: draftId, version: "1", fileId: expect.any(String) })
+      await expect(run()).rejects.toThrow("pending")
+      expect(d.fetcher).not.toHaveBeenCalled()
+      const row = (await second.service.inbox(target)).requests[0]!
+      await second.service.decide(target, row.request.id, "approve")
+      await run()
+      expect(d.app).toMatchObject({ id: draftId, publishingState: "published" })
+      expect(d.calls.filter(([method, path]) => method === "POST" && path.endsWith("/mobileApps"))).toHaveLength(1)
     } finally { setRestoreUploadGuard(undefined) }
   })
   it("refuses changed settings on a completed retry without rewriting the app", async () => {

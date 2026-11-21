@@ -680,3 +680,56 @@ it.each(["before-apply", "transport-retry"])("binds a mapped filter rule in tena
   expect(result.body.changeSet.results["op-1"]).toMatchObject({ writeNotSent: true, partial: true, message: expect.stringContaining("changed after review") })
   expect(assignmentAttempts).toBe(1)
 })
+
+it.each(["before-apply", "before-dispatch", "unreadable"])("requires the reviewed scope-tag assignments for a change set (%s)", async timing => {
+  const context = setup()
+  const { profile, state } = writeApprovalFixture()
+  const first = profile(), second = profile(reviewer)
+  setWriteApprovals(first.service)
+  await first.service.enable(TENANT_A)
+  const tag = { id: "12", displayName: "Pilot devices" }
+  context.tenant.scopeTags.push(tag)
+  let group = "group-1"
+  let readable = true
+  const graph = context.deps.graph
+  context.deps.graph = async (tenant, options) => {
+    const inner = await graph(tenant, options)
+    const guard = graphDispatchGuard(first.service, () => ({ tenant, actor: requester, current: () => true }))
+    const send = graphCaller("fixture", createBridgedFetch({
+      dispatch: async () => new Response(null, { status: 404 }),
+      getDelegatedToken: async () => ({ accessToken: "fixture", expiresOn: null }),
+      authorizeGraph: guard,
+      fetch: async (input, init) => {
+        const request = new Request(input, init)
+        const response = await inner("POST", new URL(request.url).pathname.slice("/beta/".length), await request.json())
+        return Response.json(response.body, { status: response.status })
+      },
+    }))
+    return (method, path, body, callOptions) => {
+      if (path === "deviceManagement/roleScopeTags/12") return Promise.resolve({ status: 200, body: tag })
+      if (path === "deviceManagement/roleScopeTags/12/assignments") {
+        return readable
+          ? Promise.resolve({ status: 200, body: { value: [{ id: "assignment", target: { groupId: group } }] } })
+          : Promise.resolve({ status: 403, body: {} })
+      }
+      return options?.journal && method === "POST" ? send(method, path, body, callOptions) : inner(method, path, body, callOptions)
+    }
+  }
+  const record = await createChangeSet(context.deps, TENANT_A, {
+    title: "Scoped Defender", dependencies: [{ kind: "scopeTag", sourceId: tag.id, targetId: tag.id, name: tag.displayName, state: "verified" }],
+    operations: [{ folder: "ConfigurationPolicies", action: "create", proposed: { name: "Defender", roleScopeTagIds: [tag.id] } }],
+  }, "Admin")
+  const preview = await approve(context, record.id)
+  const apply = () => context.post({ action: "apply", id: record.id, contentHash: preview.contentHash, confirm: true })
+  await expect(apply()).rejects.toThrow("pending")
+  await second.service.decide(TENANT_A, (await second.service.inbox(TENANT_A)).requests[0]!.request.id, "approve")
+  if (timing === "before-dispatch") {
+    state.beforeAudit = event => { if (event.action.endsWith("claimed")) group = "group-2" }
+    expect((await apply()).body.changeSet.results["op-1"]).toMatchObject({ writeNotSent: true })
+  } else {
+    if (timing === "unreadable") readable = false
+    else group = "group-2"
+    await expect(apply()).rejects.toThrow()
+  }
+  expect(context.tenant.writeCount()).toBe(0)
+})
