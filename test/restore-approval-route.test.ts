@@ -516,7 +516,9 @@ it("correlates a retry after main restarts only for the original actor, source a
     }))
     expect(response.status).toBe(200)
     const { jobId, details } = await response.json()
-    expect(details.results[0].retryJobId).toBe(jobId)
+    expect(jobId).toMatch(/^[0-9a-f-]{36}$/)
+    if (target) expect(details.results[0]).not.toHaveProperty("retryJobId")
+    else expect(details.results[0].retryJobId).toBe(jobId)
     return jobId as string
   }
   setMainAuditSink(new AuditSink(opts))
@@ -525,9 +527,12 @@ it("correlates a retry after main restarts only for the original actor, source a
   const retry = await run("backup", original)
   const differentSource = await run("other", original)
   const differentDestination = await run("backup", original, foreignTenant)
+  const bulk = await run("backup", undefined, foreignTenant)
+  const bulkRetry = await run("backup", bulk, foreignTenant)
   actor = foreignTenant
   const differentActor = await run("backup", original)
   const operations = new Map(pendingEvents(account).map(entry => [entry.job?.runId, entry.job?.operationId]))
   expect(operations.get(retry)).toBe(original)
+  expect(operations.get(bulkRetry)).toBe(bulk)
   for (const id of [differentSource, differentDestination, differentActor]) expect(operations.get(id)).toBe(id)
 })
