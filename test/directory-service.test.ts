@@ -1072,8 +1072,8 @@ it.each(["included", "excluded", "malformed", "unreadable", "incomplete next pag
 })
 
 it.each(["included", "excluded", "unreadable", "malformed"])("refuses an approved ordinary removal when Conditional Access becomes %s at final send", async mode => {
-  const env = world(), service = env.service(), original = env.fetcher.getMockImplementation()!
-  env.members.add(id(100))
+  const env = world(2), service = env.service(), original = env.fetcher.getMockImplementation()!
+  env.members.add(id(100)); env.members.add(id(101)); env.members.add(id(102))
   const page = await service.prepare(tenant, env.request, { ...options, stage: "relationships", exactMembers: true }, env.read)
   expect(page.rows[0]!.review.blocker).toBeUndefined()
   let policies = 0
@@ -1084,7 +1084,7 @@ it.each(["included", "excluded", "unreadable", "malformed"])("refuses an approve
   expect(await service.execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])))).toMatchObject({ outcomes: [{ state: "failed-before-send" }] })
   expect(policies).toBe(2)
   expect(env.writes).toEqual([])
-  expect([...env.members]).toEqual([id(100)])
+  expect([...env.members]).toEqual([id(100), id(101), id(102)])
 })
 
 it.each(["execute", "reconcile"])("keeps an uncertain removal unconfirmed after our acknowledged add via %s until the window expires", async action => {
@@ -1158,8 +1158,8 @@ it("keeps a matching relationship uncertain when its reconciliation history cann
 })
 
 it("refuses a removal retry if Conditional Access begins targeting the group during backoff", async () => {
-  const env = world(), service = env.service(), original = env.fetcher.getMockImplementation()!
-  env.members.add(id(100))
+  const env = world(2), service = env.service(), original = env.fetcher.getMockImplementation()!
+  env.members.add(id(100)); env.members.add(id(101)); env.members.add(id(102))
   const page = await service.prepare(tenant, env.request, { ...options, stage: "relationships", exactMembers: true }, env.read)
   let attempts = 0
   env.fetcher.mockImplementation((input, init) => {
@@ -1176,6 +1176,159 @@ it("refuses a removal retry if Conditional Access begins targeting the group dur
     expect(await pending).toMatchObject({ outcomes: [{ state: "failed-before-send" }] })
     expect(attempts).toBe(1)
     expect(env.writes).toEqual([])
-    expect([...env.members]).toEqual([id(100)])
+    expect([...env.members]).toEqual([id(100), id(101), id(102)])
   } finally { vi.useRealTimers() }
+})
+
+
+it("keeps an in-flight member add applied when resume meets actor throttling and unavailable storage", async () => {
+  const env = world(1), service = env.service(), original = env.fetcher.getMockImplementation()!
+  const page = await service.prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read)
+  let release!: () => void, started!: () => void
+  const sent = new Promise<void>(resolve => { started = resolve })
+  const response = new Promise<void>(resolve => { release = resolve })
+  let throttle = false
+  env.fetcher.mockImplementation(async (input, init) => {
+    if (init?.method === "POST") { started(); await response }
+    if (throttle && new URL(String(input)).pathname === "/v1.0/applications") return new Response(null, { status: 429, headers: { "Retry-After": "120" } })
+    return original(input, init)
+  })
+  const execution = service.execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])))
+  await sent
+  throttle = true
+  const spy = vi.spyOn(env.store, "set").mockImplementation(() => { throw new Error("Storage unavailable") })
+  const calls = env.fetcher.mock.calls.length
+  await expect(service.resume(tenant, { ...env.request, runId: page.runId })).rejects.toThrow("already running")
+  for (const action of ["reconcile", "discard"] as const) await expect(service.saved(tenant, page.runId, action)).rejects.toThrow("already running")
+  expect(env.fetcher.mock.calls).toHaveLength(calls)
+  spy.mockRestore(); throttle = false; release()
+  expect(await execution).toMatchObject({ outcomes: [{ state: "applied" }], canDiscard: true })
+  env.fetcher.mockImplementation((input, init) => new URL(String(input)).pathname.includes(`/members/${id(100)}`) ? Promise.resolve(new Response(null, { status: 404 })) : original(input, init))
+  expect(await service.saved(tenant, page.runId, "reconcile")).toMatchObject({ outcomes: [{ state: "applied" }], canDiscard: true })
+  expect(env.writes).toEqual([`POST groups/${resource}/members/$ref`])
+  expect(await service.saved(tenant, page.runId, "discard")).toEqual({ discarded: true, canDiscard: false })
+})
+
+it("retains a preview policy deadline after one failed save before a description PATCH", async () => {
+  const env = world(), service = env.service(), original = env.fetcher.getMockImplementation()!
+  env.members.add(id(100))
+  vi.useFakeTimers()
+  try {
+    const deadline = Date.now() + 120_000, set = env.store.set
+    let failed = false
+    const spy = vi.spyOn(env.store, "set").mockImplementation((key, value) => {
+      if (!failed && key.includes(".coordinator.") && value.includes(String(deadline))) { failed = true; throw new Error("Deadline storage unavailable") }
+      set(key, value)
+    })
+    env.fetcher.mockImplementation((input, init) => String(input).includes("conditionalAccess") ? Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
+    const blocked = await service.prepare(tenant, env.request, { ...options, stage: "relationships", exactMembers: true }, env.read)
+    expect(blocked.rows[0]!.review.blocker).toContain("Resume after Retry-After")
+    expect(failed).toBe(true)
+    spy.mockRestore(); env.fetcher.mockImplementation(original)
+    const request = { ...env.request, snapshot: { ...env.request.snapshot, description: "Saved description" } }
+    const page = await service.prepare(tenant, request, options, env.read)
+    const execute = () => service.execute(tenant, { ...request, runId: page.runId }, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])))
+    expect(await execute()).toMatchObject({ outcomes: [{ state: "deferred", retryAt: deadline }] })
+    expect(env.writes).toEqual([])
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(await execute()).toMatchObject({ outcomes: [{ state: "applied" }] })
+    expect(env.writes).toEqual([`PATCH groups/${resource}`])
+  } finally { vi.useRealTimers() }
+})
+
+it("confirms and discards an authenticated cancelled page without a journal or backup", async () => {
+  const env = world(1), service = env.service()
+  const page = await service.prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read)
+  let loaded!: () => void, release!: () => void
+  const loading = new Promise<void>(resolve => { loaded = resolve })
+  const backup = new Promise<void>(resolve => { release = resolve })
+  const operation = service.operation(tenant, page.runId, async signal => {
+    loaded(); await backup
+    if (signal.aborted) throw new Error("Cancelled while loading backup")
+  })
+  await loading
+  expect(await service.cancel(tenant, page.runId)).toEqual({ cancelled: true })
+  release(); expect(await operation).toEqual({ cancelled: true })
+  // Saved confirmation has no backup reader or snapshot input.
+  expect(await service.saved(tenant, page.runId, "reconcile")).toMatchObject({ outcomes: [], rows: [], canDiscard: true })
+  expect(await service.saved(tenant, page.runId, "discard")).toEqual({ discarded: true, canDiscard: false })
+  expect(env.writes).toEqual([])
+})
+
+it("retains both concurrent preview deadlines for the same object and flushes before connection reads", async () => {
+  const env = world(1), original = env.fetcher.getMockImplementation()!, connection = vi.fn(env.connection)
+  const service = new DirectoryRestoreService(env.store, new RecoveryAccounts(env.store), connection, env.fetcher, () => [], env.settings)
+  const page = await service.prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read)
+  let entered!: () => void, release!: () => void, actors = 0
+  const started = new Promise<void>(resolve => { entered = resolve }), gate = new Promise<void>(resolve => { release = resolve })
+  env.fetcher.mockImplementation(async (input, init) => {
+    if (new URL(String(input)).pathname === "/v1.0/applications") {
+      const index = ++actors
+      if (actors === 2) entered()
+      await gate
+      return new Response(null, { status: 429, headers: { "Retry-After": String(index === 1 ? 180 : 120) } })
+    }
+    return original(input, init)
+  })
+  vi.useFakeTimers()
+  try {
+    const firstDeadline = Date.now() + 180_000, secondDeadline = Date.now() + 120_000
+    const spy = vi.spyOn(env.store, "set").mockImplementation(() => { throw new Error("Storage unavailable") })
+    const previews = [service.prepare(tenant, env.request, options, env.read), service.prepare(tenant, env.request, options, env.read)]
+    const settled = Promise.allSettled(previews)
+    await started; release()
+    expect((await settled).every(result => result.status === "rejected")).toBe(true)
+    const calls = env.fetcher.mock.calls.length, connections = connection.mock.calls.length
+    await expect(service.resume(tenant, { ...env.request, runId: page.runId })).rejects.toThrow("retry deadline could not be saved")
+    expect(env.fetcher.mock.calls).toHaveLength(calls); expect(connection).toHaveBeenCalledTimes(connections)
+    spy.mockRestore(); env.fetcher.mockImplementation(original)
+    await service.resume(tenant, { ...env.request, runId: page.runId })
+    expect(JSON.parse(env.data.get(`restore.directory.coordinator.${tenant}`)!).deadlines[resource]).toBe(firstDeadline)
+    expect(firstDeadline).toBeGreaterThan(secondDeadline)
+  } finally { vi.useRealTimers() }
+})
+
+it("merges a retained actor deadline without overwriting a result confirmed by another service", async () => {
+  const env = world(1), service = env.service(), original = env.fetcher.getMockImplementation()!
+  const page = await service.prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read)
+  env.fetcher.mockImplementation(async (input, init) => {
+    const response = await original(input, init)
+    return init?.method === "POST" ? new Response(null, { status: 503 }) : response
+  })
+  expect(await service.execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])))).toMatchObject({ outcomes: [{ state: "uncertain" }] })
+  vi.useFakeTimers()
+  try {
+    const deadline = Date.now() + 120_000
+    env.fetcher.mockImplementation((input, init) => new URL(String(input)).pathname === "/v1.0/applications" ? Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
+    const spy = vi.spyOn(env.store, "set").mockImplementation(() => { throw new Error("Storage unavailable") })
+    await expect(service.resume(tenant, { ...env.request, runId: page.runId })).rejects.toThrow("retry deadline could not be saved")
+    spy.mockRestore(); env.fetcher.mockImplementation(original)
+    expect(await env.service().saved(tenant, page.runId, "reconcile")).toMatchObject({ outcomes: [{ state: "applied" }] })
+    // The delayed publication must reload that newer outcome, even when read-back is now stale.
+    env.members.clear()
+    expect(await service.saved(tenant, page.runId, "reconcile")).toMatchObject({ outcomes: [{ state: "applied", retryAt: deadline }], canDiscard: true })
+    expect(env.writes).toEqual([`POST groups/${resource}/members/$ref`])
+    expect(await service.saved(tenant, page.runId, "discard")).toEqual({ discarded: true, canDiscard: false })
+  } finally { vi.useRealTimers() }
+})
+
+it("merges a retained acknowledgement without replacing newer outcomes in the same batch", async () => {
+  const env = world(2), service = env.service()
+  const page = await service.prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read)
+  const journalKey = `restore.directory.${tenant}.${page.runId}.batch.0.restore.guarded.${tenant}`
+  const set = env.store.set
+  const spy = vi.spyOn(env.store, "set").mockImplementation((key, value) => {
+    if (key === journalKey && value.includes('"acknowledged":true')) throw new Error("Result storage unavailable")
+    set(key, value)
+  })
+  const execute = (service: DirectoryRestoreService) => service.execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])))
+  await expect(execute(service)).rejects.toThrow("Result storage unavailable")
+  spy.mockRestore()
+  const other = env.service()
+  expect(await execute(other)).toMatchObject({ outcomes: [{ state: "applied" }, { state: "applied" }] })
+  env.members.clear()
+  expect(await service.saved(tenant, page.runId, "reconcile")).toMatchObject({ outcomes: [{ state: "applied" }, { state: "applied" }], canDiscard: true })
+  const entries = JSON.parse(env.data.get(journalKey)!).runs[page.runId].entries
+  expect(entries.every((entry: { acknowledged?: boolean }) => entry.acknowledged)).toBe(true)
+  expect(env.writes).toEqual([`POST groups/${resource}/members/$ref`, `POST groups/${resource}/members/$ref`])
 })

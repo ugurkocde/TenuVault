@@ -130,6 +130,28 @@ export class GuardedRunJournal {
     for (const previous of settled.filter(previous => previous.id !== run.id).slice(0, Math.max(0, settled.length - 1000))) delete history.runs[previous.id]
     restorePersistence(() => this.store.set(tenantKey(run.tenant), JSON.stringify(history)))
   }
+  /** Retained directory publications merge one entry into the latest journal, never an old batch snapshot. */
+  publication(run: GuardedRun, entry: GuardedEntry, retryOnly = false): () => void {
+    const snapshot = structuredClone(entry), mappings = structuredClone(run.mappings)
+    return () => {
+      const current = this.load(run.tenant, run.id)
+      const saved = current?.entries.find(candidate => candidate.step.key === snapshot.step.key)
+      if (!current || !saved) throw new RestoreSafetyError("The directory journal entry is unavailable.")
+      const retryAt = Math.max(saved.retryAt ?? 0, snapshot.retryAt ?? 0)
+      const sameAttempt = (saved.attempt ?? 0) === (snapshot.attempt ?? 0)
+      // A known rejection may settle its unanswered attempt, but cannot downgrade a later outcome.
+      if (sameAttempt && saved.state === "uncertain" && retryOnly && snapshot.state === "deferred") {
+        saved.state = "deferred"; saved.reason = snapshot.reason
+      }
+      if (!retryOnly && (saved.attempt ?? 0) <= (snapshot.attempt ?? 0) && saved.state !== "applied") Object.assign(saved, snapshot)
+      if (snapshot.acknowledged && (snapshot.acknowledgedAt ?? 0) > (saved.acknowledgedAt ?? 0) && sameAttempt) {
+        saved.acknowledged = true; saved.acknowledgedAt = snapshot.acknowledgedAt
+      }
+      if (retryAt) saved.retryAt = retryAt
+      if (!retryOnly && saved.state === "applied") for (const mapping of mappings) rememberMapping(current.mappings, mapping)
+      this.save(current)
+    }
+  }
   mappings(tenant: string): RestoreMapping[] {
     const history = this.history(tenant)
     const mappings: RestoreMapping[] = [...history.mappings]
@@ -164,7 +186,8 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
     // A confirmed result must never enter safety-failure handling. Retry its atomic
     // publication once; if storage stays unavailable the durable send marker remains.
     const saveConfirmed = (step: GuardedStep) => {
-      const save = () => { try { journal.save(run) } catch { journal.save(run) } }
+      const publish = step.directory ? journal.publication(run, run.entries.find(entry => entry.step.key === step.key)!) : () => journal.save(run)
+      const save = () => { try { publish() } catch { publish() } }
       if (io.persistConfirmed) io.persistConfirmed(step, save)
       else save()
     }
@@ -184,7 +207,9 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
       const defer = (retryAt: number, rejected?: { step: string; attempt: number }) => {
         entry.retryAt = Math.max(entry.retryAt ?? 0, retryAt)
         const persist = io.persistRetry ? (journal: () => void, coordinator: () => void) => io.persistRetry!(step, journal, coordinator) : persistDirectoryRetry
-        persist(() => journal.save(run), () => io.defer?.(step, entry.retryAt!, rejected))
+        const publish = step.directory ? journal.publication(run, entry, true) : () => journal.save(run)
+        const deadline = entry.retryAt
+        persist(publish, () => io.defer?.(step, deadline, rejected))
       }
       try {
         if (entry.state === "uncertain" && (entry.retryAt ?? 0) > Date.now()) throw new RestoreWriteDeferredError("Microsoft Graph Retry-After has not elapsed. Confirm after the saved deadline.", entry.retryAt)

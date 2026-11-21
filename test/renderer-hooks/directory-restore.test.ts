@@ -227,3 +227,32 @@ it.each(["preview", "resume", "reconcile", "next", "discard"])("hides Cancel for
   expect(button("Cancel directory restore")).toBeUndefined()
   await act(async () => resolve(Response.json({ ...page, canDiscard: true })))
 })
+
+it.each([false, true])("offers discard after confirming a cancelled page with no journal and a deleted backup, saved-only=%s", async savedOnly => {
+  let resolve!: (response: Response) => void
+  const empty = { runId: "run", rows: [], status: "complete", outcomes: [], canDiscard: true }
+  const fetcher = vi.fn(async (_input: unknown, init?: RequestInit) => {
+    const action = JSON.parse(String(init?.body)).action
+    return action === "restore" ? new Promise<Response>(done => { resolve = done }) : Response.json(action === "preview" ? page : action === "cancel" ? { cancelled: true } : action === "discard" ? { discarded: true } : empty)
+  })
+  vi.stubGlobal("fetch", fetcher)
+  root = createRoot(document.body.appendChild(document.createElement("div")))
+  await act(async () => root.render(createElement(DirectoryRestore, savedOnly ? { tenant } : props)))
+  if (savedOnly) {
+    await act(async () => {
+      const input = document.querySelector<HTMLInputElement>("input")!
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "run")
+      input.dispatchEvent(new Event("input", { bubbles: true }))
+    })
+  } else {
+    await click("Review directory restore"); await click("Preview directory changes")
+    await act(async () => document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]').forEach(input => input.click()))
+    await click("Execute approved changes or resume page"); await click("Cancel directory restore")
+    await act(async () => resolve(Response.json({ cancelled: true })))
+  }
+  await click(savedOnly ? "Confirm saved page results" : "Confirm this page's results")
+  expect(button("Discard saved restore")).toBeDefined()
+  await click("Discard saved restore")
+  expect(JSON.parse(String(fetcher.mock.calls.at(-1)![1]?.body))).toMatchObject({ action: "discard", runId: "run" })
+  expect(document.body.textContent).toContain("This page can never send again.")
+})
