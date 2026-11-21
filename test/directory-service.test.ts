@@ -1051,9 +1051,8 @@ it("retains a review row's throttle deadline when deferring its preview", async 
   vi.useFakeTimers()
   try {
     const deadline = Date.now() + 120_000
-    const page = await env.service().prepare(tenant, env.request, { ...options, stage: "relationships", exactMembers: true }, env.read)
-    expect(page.rows).toHaveLength(2)
-    expect(page.rows.every(row => row.review.blocker?.includes("Resume after Retry-After"))).toBe(true)
+    await expect(env.service().prepare(tenant, env.request, { ...options, stage: "relationships", exactMembers: true }, env.read)).rejects.toThrow("Resume after Retry-After")
+    expect([...env.data.keys()].some(key => key.startsWith("restore.directory.review."))).toBe(false)
     expect(JSON.parse(env.data.get(`restore.directory.coordinator.${tenant}`)!).deadlines[resource]).toBe(deadline)
     env.fetcher.mockImplementation(original)
     const fresh = await env.service().prepare(tenant, env.request, { ...options, stage: "relationships", exactMembers: true }, env.read)
@@ -1239,8 +1238,8 @@ it("retains a preview policy deadline after one failed save before a description
       set(key, value)
     })
     env.fetcher.mockImplementation((input, init) => String(input).includes("conditionalAccess") ? Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
-    const blocked = await service.prepare(tenant, env.request, { ...options, stage: "relationships", exactMembers: true }, env.read)
-    expect(blocked.rows[0]!.review.blocker).toContain("Resume after Retry-After")
+    await expect(service.prepare(tenant, env.request, { ...options, stage: "relationships", exactMembers: true }, env.read)).rejects.toThrow("Resume after Retry-After")
+    expect([...env.data.keys()].some(key => key.startsWith("restore.directory.review."))).toBe(false)
     expect(failed).toBe(true)
     spy.mockRestore(); env.fetcher.mockImplementation(original)
     const request = { ...env.request, snapshot: { ...env.request.snapshot, description: "Saved description" } }
@@ -2617,12 +2616,71 @@ it.each(["journal", "coordinator"])("recovers a known-unsent proxy 407 create af
     await expect(service.execute(tenant, request, page.fingerprint, approvals)).rejects.toBeInstanceOf(DirectoryRetryPersistenceError)
     if (record === "journal") {
       expect(JSON.parse(env.data.get(journalKey)!).runs[page.runId].entries[0].state).toBe("uncertain")
-      expect(JSON.parse(env.data.get(coordinatorKey)!).locks[resource].rejected).toEqual({ step: page.rows[0]!.key, attempt: 1 })
+      expect(JSON.parse(env.data.get(coordinatorKey)!).locks[resource].rejected).toEqual({ step: page.rows[0]!.key, attempt: 1, cause: "proxy" })
     } else expect(JSON.parse(env.data.get(journalKey)!).runs[page.runId].entries[0]).toMatchObject({ state: "deferred", attempt: 1 })
     expect(env.writes).toEqual([]); expect(posts).toBe(1)
     unavailable = false; proxy = false; spy.mockRestore()
     expect(await service.resume(tenant, request)).toMatchObject({ outcomes: [{ state: "deferred" }], canDiscard: true })
     expect(await env.service().execute(tenant, request, page.fingerprint, approvals)).toMatchObject({ failed: 0, outcomes: [{ state: "applied", targetId: id(900) }] })
     expect(env.writes).toEqual(["POST groups"]); expect(posts).toBe(2)
+  } finally { spy.mockRestore() }
+})
+
+it.each([407, 408, 429, 503, "network"] as const)("retries the same 51-member preview slice after a %s safety read without saving a blocker", async failure => {
+  const env = world(51), first = await env.service().prepare(tenant, env.request, { ...options, stage: "relationships", exactOwners: true }, env.read)
+  expect(first.rows).toHaveLength(50); expect(first.more).toBe(true)
+  await env.service().saved(tenant, first.runId, "discard")
+  const original = env.fetcher.getMockImplementation()!, previous = env.data.get(`restore.directory.review.${tenant}.${first.runId}`)
+  const continuation = { ...first.options, previousRunId: first.runId }
+  let failures = 0
+  env.fetcher.mockImplementation((input, init) => {
+    if (String(input).includes("conditionalAccess") && failures++ === 0) return failure === "network" ? Promise.reject(new Error("Connection lost")) : Promise.resolve(new Response(null, { status: failure, headers: { "Retry-After": "120" } }))
+    return original(input, init)
+  })
+  await expect(env.service().prepare(tenant, env.request, continuation, env.read)).rejects.toBeInstanceOf(RestoreWriteDeferredError)
+  expect([...env.data.keys()].filter(key => key.startsWith("restore.directory.review."))).toEqual([`restore.directory.review.${tenant}.${first.runId}`])
+  expect(env.data.get(`restore.directory.review.${tenant}.${first.runId}`)).toBe(previous)
+  env.fetcher.mockImplementation(original)
+  const recovered = await env.service().prepare(tenant, env.request, continuation, env.read)
+  expect(recovered.options).toEqual(continuation); expect(recovered.rows).toHaveLength(1); expect(recovered.more).toBe(false)
+  expect(recovered.rows[0]!.review.principal?.id).toBe(id(150)); expect(recovered.rows[0]!.review.blocker).toBeUndefined()
+  expect(recovered.rows[0]!.review.approvals).toContain("directory-item"); expect(env.writes).toEqual([])
+})
+
+it.each(["matching", "wrong step", "wrong attempt"])("discards a coordinator-only rejected proxy create offline only with a %s attempt marker", async marker => {
+  const env = world(0, true), service = env.service(), page = await service.prepare(tenant, env.request, options, env.read), original = env.fetcher.getMockImplementation()!
+  const journalKey = `restore.directory.${tenant}.${page.runId}.batch.0.restore.guarded.${tenant}`, coordinatorKey = `restore.directory.coordinator.${tenant}`
+  let unavailable = false, posts = 0
+  env.fetcher.mockImplementation((input, init) => {
+    if (new URL(String(input)).pathname === "/v1.0/groups" && init?.method === "POST") { posts++; unavailable = true; return Promise.resolve(new Response(null, { status: 407 })) }
+    return original(input, init)
+  })
+  const set = env.store.set, spy = vi.spyOn(env.store, "set").mockImplementation((key, value) => {
+    if (unavailable && key === journalKey) throw new Error("Journal publication unavailable")
+    set(key, value)
+  })
+  try {
+    await expect(service.execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])))).rejects.toBeInstanceOf(DirectoryRetryPersistenceError)
+    expect(JSON.parse(env.data.get(journalKey)!).runs[page.runId].entries[0]).toMatchObject({ state: "uncertain", attempt: 1 })
+    const coordinator = JSON.parse(env.data.get(coordinatorKey)!), deadline = Date.now() + 120_000
+    expect(coordinator.locks[resource].rejected).toEqual({ step: page.rows[0]!.key, attempt: 1, cause: "proxy" })
+    coordinator.deadlines[resource] = deadline
+    if (marker === "wrong step") coordinator.locks[resource].rejected.step = "different-step"
+    if (marker === "wrong attempt") coordinator.locks[resource].rejected.attempt++
+    env.data.set(coordinatorKey, JSON.stringify(coordinator))
+    unavailable = false; spy.mockRestore()
+    const calls = env.fetcher.mock.calls.length, online = vi.fn(async () => { throw new Error("Proxy still requires authentication") })
+    env.fetcher.mockImplementation(async () => new Response(null, { status: 407 }))
+    const restarted = new DirectoryRestoreService(env.store, new RecoveryAccounts(env.store), online, env.connection, env.fetcher, () => [], env.settings)
+    if (marker === "matching") {
+      expect(await restarted.saved(tenant, page.runId, "discard")).toMatchObject({ discarded: true, unresolved: false, outcomes: [{ state: "deferred", retryAt: deadline, deferralCause: "proxy" }] })
+      const saved = JSON.parse(env.data.get(coordinatorKey)!)
+      expect(saved.discarded[page.runId]).toBe(true); expect(saved.locks).toEqual({}); expect(saved.deadlines[resource]).toBe(deadline)
+    } else {
+      await expect(restarted.saved(tenant, page.runId, "discard")).rejects.toThrow("Confirm the uncertain result")
+      expect(JSON.parse(env.data.get(coordinatorKey)!).locks[resource].owner).toBe(page.runId)
+      expect(JSON.parse(env.data.get(journalKey)!).runs[page.runId].entries[0].state).toBe("uncertain")
+    }
+    expect(online).not.toHaveBeenCalled(); expect(env.fetcher).toHaveBeenCalledTimes(calls); expect(posts).toBe(1); expect(env.writes).toEqual([])
   } finally { spy.mockRestore() }
 })

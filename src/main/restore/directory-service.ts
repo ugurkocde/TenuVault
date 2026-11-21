@@ -2,7 +2,7 @@ import { DirectoryPrincipalMappings } from "./directory-principal-mappings"
 import { DirectoryPendingPublications } from "./directory-pending-publications"
 import { captureDirectoryExecutionActor } from "../api/execution-metadata"
 import { directoryPagePrefix, directoryObjectState } from "./directory-object-state"
-import { DirectoryThrottledError, persistDirectoryRetry } from "./directory-retry"
+import { DirectoryReadDeferredError, DirectoryThrottledError, persistDirectoryRetry } from "./directory-retry"
 import { directory9bIO } from "./directory-9b-io"
 import { applicationObjectStep, applicationRelationshipSteps } from "./directory-9b-plan"
 import { DIRECTORY_9B_FOLDERS, applicationAdmission, applicationReview, requireApplicationRestoreAccess } from "./directory-9b"
@@ -22,7 +22,7 @@ import type { PartitionedRestoreStore } from "../storage/directory-restore-store
 import { directory9aIO, directoryAdmission } from "./directory-9a-io"
 import { directoryObjectStep, directoryRelationshipSteps, mappedDirectoryIds } from "./directory-9a-plan"
 import { approveDirectory, directoryReview, type DirectoryReview } from "./directory-9a"
-import { directoryMappedId, executeDirectoryBatches } from "./directory-9a-batches"
+import { directoryMappedId, executeDirectoryBatches, recoverDirectoryRejections } from "./directory-9a-batches"
 import { isRestorePersistenceError, GuardedRunJournal, restoreFingerprint, restorePersistence, type GuardedRun } from "./guarded-run"
 import { resolveRestoreActor, type RecoveryAccounts } from "./safety-resolvers"
 import { safetyReader } from "./safety-reader"
@@ -233,6 +233,7 @@ export class DirectoryRestoreService {
           const retryAt = error.retryAt
           this.persistRetry(tenant, retryAt, () => {}, () => directoryObjectState(this.store, tenant, "").recordThrottle(step, retryAt))
         }
+        if (error instanceof DirectoryReadDeferredError || error.retryAt !== undefined) throw error
         review = directoryReview(step, { ...(current?.resource as Item | undefined), ...current }, (current?.principal as Item | null) ?? null, actor, false)
         review.blocker = error.message
       }
@@ -442,7 +443,7 @@ export class DirectoryRestoreService {
     return runs
   }
   private outcomes(page: DirectoryPage, runs = this.history(page)) {
-    const outcomes = new Map(runs.flatMap(({ run }) => run.entries.map(entry => [entry.step.key, { key: entry.step.key, state: entry.state, reason: entry.reason, targetId: entry.targetId, retryAt: entry.retryAt }] as const)))
+    const outcomes = new Map(runs.flatMap(({ run }) => run.entries.map(entry => [entry.step.key, { key: entry.step.key, state: entry.state, reason: entry.reason, targetId: entry.targetId, retryAt: entry.retryAt, ...(entry.deferralCause ? { deferralCause: entry.deferralCause } : {}) }] as const)))
     for (const entry of page.run.entries) if (page.selection?.includes(entry.step.key) && !outcomes.has(entry.step.key)) outcomes.set(entry.step.key, { key: entry.step.key, state: "pending", reason: undefined, targetId: undefined, retryAt: undefined })
     return [...outcomes.values()]
   }
@@ -463,6 +464,10 @@ export class DirectoryRestoreService {
       const state = directoryObjectState(this.store, tenant, id)
       if (action === "discard") {
         this.pending.forTenant(tenant).flush(page.run.id)
+        for (const { batch, run } of this.history(page)) {
+          const prefix = directoryPagePrefix(tenant, id) + `batch.${batch}.`
+          if (recoverDirectoryRejections(this.store, run, prefix, this.now)) new GuardedRunJournal({ get: name => this.store.get(prefix + name), set: (name, value) => this.store.set(prefix + name, value), delete: () => fail("History cannot be deleted.") }).save(run)
+        }
         state.recoverMappings(page.run.entries.map(entry => entry.step))
         if (this.history(page).some(({ run }) => run.entries.some(entry => entry.state === "uncertain"))) fail("Confirm the uncertain result before discarding this saved restore.")
         state.release(true)

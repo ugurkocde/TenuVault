@@ -1,10 +1,10 @@
 import { isGuid } from "../../shared/security"
 import type { KeyValueStore } from "../storage/secure-store"
 import { RestoreWriteDeferredError } from "../../shared/intune/restore-guards"
-import { isRestorePersistenceError, GuardedRunJournal, type GuardedStep } from "./guarded-run"
+import { isRestorePersistenceError, GuardedRunJournal, restoreFingerprint, type GuardedStep } from "./guarded-run"
 import { directoryPagePrefix } from "./directory-object-state"
 
-/** Covers Microsoft Entra replication delay after our own acknowledged relationship writes. */
+/** Covers Microsoft Entra replication delay after our own acknowledged directory writes. */
 export const DIRECTORY_REPLICATION_WINDOW_MS = 30 * 60 * 1000
 
 /** Journal links outlive page locks to verify uncertain writes against our acknowledged writes. */
@@ -41,11 +41,22 @@ export function directoryRelationshipHistory(store: KeyValueStore, tenant: strin
           for (const run of runs) for (const entry of [...run.entries].reverse()) {
             const step = entry.step
             if ((entry.targetId ?? step.targetId ?? step.sourceId).toLowerCase() !== target.toLowerCase() || step.directory?.action !== candidate.directory?.action) continue
-            if (!isGuid(step.directory?.principalId)) return deferred()
-            if (step.directory.principalId.toLowerCase() !== candidate.directory?.principalId?.toLowerCase()) continue
+            if (step.folder !== candidate.folder) continue
+            const relationship = ["member", "owner"].includes(step.directory?.action ?? "")
+            if (relationship) {
+              if (!isGuid(step.directory?.principalId)) return deferred()
+              if (step.directory.principalId.toLowerCase() !== candidate.directory?.principalId?.toLowerCase()) continue
+            }
             if (entry.acknowledged && Number.isFinite(entry.acknowledgedAt) && now() < entry.acknowledgedAt! + DIRECTORY_REPLICATION_WINDOW_MS) {
-              if (typeof step.desired.present !== "boolean") return deferred()
-              if (step.desired.present !== candidate.desired.present) return false
+              if (relationship) {
+                if (typeof step.desired.present !== "boolean") return deferred()
+                if (step.desired.present !== candidate.desired.present) return false
+              } else {
+                const desired = entry.sent ?? step.desired
+                for (const field of Object.keys(candidate.desired)) {
+                  if (Object.hasOwn(desired, field) && restoreFingerprint({ value: desired[field]! }) !== restoreFingerprint({ value: candidate.desired[field]! })) return false
+                }
+              }
             }
           }
           const link = key + "." + prefix

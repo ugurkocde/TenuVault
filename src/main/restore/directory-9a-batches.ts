@@ -10,6 +10,23 @@ export const directoryMappedId = (store: KeyValueStore, tenant: string, folder: 
   return store.get(directoryMappingKey(tenant, folder, sourceId)) ?? undefined
 }
 
+/** Recover only coordinator evidence bound to this journal entry's exact send attempt. */
+export function recoverDirectoryRejections(store: KeyValueStore, run: GuardedRun, batchKey: string, now?: () => number): boolean {
+  const objects = directoryObjectState(store, run.tenant, run.id, now)
+  let changed = false
+  for (const entry of run.entries.filter(entry => entry.state === "uncertain")) {
+    const step = { ...entry.step, targetId: entry.targetId ?? entry.step.targetId ?? directoryMappedId(store, run.tenant, entry.step.folder, entry.step.sourceId) }
+    const retryAt = objects.retryDeadline(step), rejected = objects.rejected(step, batchKey, entry.attempt)
+    if (retryAt !== undefined && rejected) {
+      entry.state = "deferred"; entry.reason = "The unapplied directory request is deferred. Resume after the saved retry time."
+      if (rejected.cause) entry.deferralCause = rejected.cause
+      changed = true
+    }
+    if (retryAt !== undefined && retryAt > (entry.retryAt ?? 0)) { entry.retryAt = retryAt; changed = true }
+  }
+  return changed
+}
+
 export interface DirectoryBatchSource {
   /** Stable immutable backup/index fingerprint. A cursor resumes this exact source. */
   fingerprint: string
@@ -49,7 +66,7 @@ export async function executeDirectoryBatches(store: PartitionedRestoreStore, id
     const effective = (step: typeof page.entries[number]["step"]) => resolved.get(step.key)!
     const guardedIO: GuardedIO = { ...io,
       canReconcile: (step, targetId) => {
-        if (typeof step.desired.present !== "boolean" || !["member", "owner"].includes(step.directory?.action ?? "")) return true
+        if (!["member", "owner", "update", "manager"].includes(step.directory?.action ?? "")) return true
         const history = directoryRelationshipHistory(durableStore, identity.tenant, targetId ?? effective(step).targetId ?? step.sourceId, io.now)
         return history.canReconcile(step)
       },
@@ -58,7 +75,7 @@ export async function executeDirectoryBatches(store: PartitionedRestoreStore, id
       objectState.recoverMappings([effective(step)])
       objectState.trackCreate(effective(step), batchKey)
       const retryAt = objectState.prepare(effective(step), batchKey)
-      if (["member", "owner"].includes(step.directory?.action ?? "")) directoryRelationshipHistory(durableStore, identity.tenant, effective(step).targetId ?? step.sourceId).track(batchKey)
+      if (["member", "owner", "update", "manager"].includes(step.directory?.action ?? "")) directoryRelationshipHistory(durableStore, identity.tenant, effective(step).targetId ?? step.sourceId).track(batchKey)
       return retryAt
     }, defer: (step, retryAt, rejected) => objectState.recordThrottle(effective(step), retryAt, rejected),
       write: (step, body, targetId, beforeSend, currentRun, writeSignal, onUnapplied) =>
@@ -67,18 +84,7 @@ export async function executeDirectoryBatches(store: PartitionedRestoreStore, id
     // A failed throttle journal save can leave only the earlier uncertain marker.
     // Restore the coordinator deadline before confirmation can settle and release it.
     const persisted = journal.load(identity.tenant, identity.id)
-    if (persisted) {
-      let changed = false
-      for (const entry of persisted.entries.filter(entry => entry.state === "uncertain")) {
-        const step = { ...effective(entry.step), targetId: entry.targetId ?? effective(entry.step).targetId }
-        const retryAt = objectState.retryDeadline(step)
-        if (retryAt !== undefined && objectState.rejected(step, batchKey, entry.attempt)) {
-          entry.state = "deferred"; entry.reason = "The unapplied directory request is deferred. Resume after Retry-After."; changed = true
-        }
-        if (retryAt !== undefined && retryAt > (entry.retryAt ?? 0)) { entry.retryAt = retryAt; changed = true }
-      }
-      if (changed) journal.save(persisted)
-    }
+    if (persisted && recoverDirectoryRejections(durableStore, persisted, batchKey, io.now)) journal.save(persisted)
     const result = await executeGuardedRun(journal, run, guardedIO, signal, reconcileOnly)
     for (const entry of result.run.entries.filter(entry => entry.state === "applied")) objectState.clearRejected(effective(entry.step), batchKey, entry.attempt)
     objectState.recoverMappings(result.run.entries.filter(entry => entry.step.operation === "create" && entry.state === "applied").map(entry => entry.step))

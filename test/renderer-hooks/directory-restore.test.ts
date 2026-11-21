@@ -608,3 +608,38 @@ it("shows saved applied, failed, deferred and uncertain outcomes with retry time
   await click("Preview directory changes")
   expect(document.querySelector('[aria-label="Directory page results"]')).toBeNull()
 })
+
+it("shows proxy authentication guidance with its saved timestamp while Graph throttling keeps its label", async () => {
+  const retryAt = Date.now() - 120_000
+  const outcomes = [{ key: "proxy", state: "deferred", retryAt, deferralCause: "proxy" }, { key: "graph", state: "deferred", retryAt }]
+  const fetcher = vi.fn(async (_input: unknown, init?: RequestInit) => Response.json(JSON.parse(String(init?.body)).action === "resume" ? { ...page, rows: outcomes.map(outcome => ({ ...page.rows[0]!, key: outcome.key })), outcomes } : page))
+  vi.stubGlobal("fetch", fetcher)
+  root = createRoot(document.body.appendChild(document.createElement("div")))
+  await act(async () => root.render(createElement(DirectoryRestore, props)))
+  await click("Review directory restore"); await click("Preview directory changes"); await click("Resume saved page")
+  const results = document.querySelector('[aria-label="Directory page results"]')!
+  expect(results.children[0]!.textContent).toContain(`Proxy authentication required. Sign in to the proxy and resume. Earliest retry: ${new Date(retryAt).toLocaleString()}.`)
+  expect(results.children[0]!.textContent).not.toContain("Throttled by Microsoft Graph")
+  expect(results.children[1]!.textContent).toContain(`Throttled by Microsoft Graph. Earliest retry: ${new Date(retryAt).toLocaleString()}.`)
+  expect(fetcher.mock.calls.map(([, init]) => JSON.parse(String(init?.body)).action)).toEqual(["preview", "resume"])
+})
+
+it("keeps the previous page ID and exact options when the next preview must retry a read", async () => {
+  const options = { stage: "relationships", exactMembers: true, exactOwners: false }
+  let next = 0
+  const fetcher = vi.fn(async (_input: unknown, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body))
+    return body.previousRunId && ++next === 1 ? Response.json({ error: "A temporary read failure. Retry this preview." }, { status: 409 }) : Response.json({ ...page, options, ...(body.previousRunId ? { runId: "next", more: false } : {}) })
+  })
+  vi.stubGlobal("fetch", fetcher)
+  root = createRoot(document.body.appendChild(document.createElement("div")))
+  await act(async () => root.render(createElement(DirectoryRestore, props)))
+  await click("Review directory restore"); await click("Preview directory changes"); await click("Preview next page")
+  expect(document.body.textContent).toContain("Retry this preview")
+  expect(document.body.textContent).toContain("Saved page: run.")
+  expect(button("Preview next page").disabled).toBe(false)
+  await click("Preview next page")
+  expect(JSON.parse(String(fetcher.mock.calls[1]![1]?.body))).toMatchObject({ previousRunId: "run", ...options })
+  expect(JSON.parse(String(fetcher.mock.calls[2]![1]?.body))).toEqual(JSON.parse(String(fetcher.mock.calls[1]![1]?.body)))
+  expect(document.body.textContent).toContain("Saved page: next.")
+})

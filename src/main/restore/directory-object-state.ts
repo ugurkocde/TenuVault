@@ -2,7 +2,7 @@ import type { KeyValueStore } from "../storage/secure-store"
 import { RestoreSafetyError, RestoreWriteDeferredError } from "../../shared/intune/restore-guards"
 import { isRestorePersistenceError, GuardedRunJournal, type GuardedRun, type GuardedStep } from "./guarded-run"
 
-type Rejection = { step: string; attempt: number }
+type Rejection = { step: string; attempt: number; cause?: "proxy" }
 type State = { locks: Record<string, { owner: string; journal: string; rejected?: Rejection }>; deadlines: Record<string, number>; discarded: Record<string, true>; invalid?: boolean }
 export const directoryPagePrefix = (tenant: string, id: string) => `restore.directory.${encodeURIComponent(tenant)}.${encodeURIComponent(id)}.`
 export const directoryMappingKey = (tenant: string, folder: string, source: string) => `restore.directory.mapping.${encodeURIComponent(tenant.toLowerCase())}.objectId.${folder}.${source.toLowerCase()}`
@@ -25,7 +25,7 @@ export function directoryObjectState(store: KeyValueStore, tenant: string, owner
     const lock = state.locks[id], deadline = state.deadlines[id]
     if (lock !== undefined) {
       if (!record(lock) || Object.keys(lock).some(key => !["owner", "journal", "rejected"].includes(key)) || typeof lock.owner !== "string" || typeof lock.journal !== "string") invalid(id)
-      if (lock.rejected !== undefined && (!record(lock.rejected) || Object.keys(lock.rejected).length !== 2 || typeof lock.rejected.step !== "string" || !Number.isSafeInteger(lock.rejected.attempt) || lock.rejected.attempt < 1)) invalid(id)
+      if (lock.rejected !== undefined && (!record(lock.rejected) || Object.keys(lock.rejected).some(key => !["step", "attempt", "cause"].includes(key)) || (lock.rejected.cause !== undefined && lock.rejected.cause !== "proxy") || typeof lock.rejected.step !== "string" || !Number.isSafeInteger(lock.rejected.attempt) || lock.rejected.attempt < 1)) invalid(id)
       const prefix = directoryPagePrefix(tenant, lock.owner) + "batch."
       if (!lock.journal.startsWith(prefix) || !/^\d+\.$/.test(lock.journal.slice(prefix.length))) invalid(id)
     }
@@ -149,11 +149,11 @@ export function directoryObjectState(store: KeyValueStore, tenant: string, owner
       verify(state, id)
       return state.deadlines[id] || undefined
     },
-    rejected: (step: GuardedStep, journal: string, attempt: number | undefined): boolean => {
+    rejected: (step: GuardedStep, journal: string, attempt: number | undefined): Rejection | undefined => {
       const state = load(), id = object(step)
       verify(state, id)
       const lock = state.locks[id]
-      return lock?.owner === owner && lock.journal === journal && lock.rejected?.step === step.key && lock.rejected.attempt === attempt
+      return lock?.owner === owner && lock.journal === journal && lock.rejected?.step === step.key && lock.rejected.attempt === attempt ? lock.rejected : undefined
     },
     clearRejected: (step: GuardedStep, journal: string, attempt: number | undefined) => {
       const state = load(), id = object(step)

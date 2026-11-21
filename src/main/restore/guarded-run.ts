@@ -32,11 +32,12 @@ export interface GuardedEntry {
   state: "pending" | "captured" | "deferred" | "uncertain" | "applied" | "blocked" | "failed" | "failed-before-send"
   /** Earliest retry of a confirmed, unapplied throttle, preserved across cancellation/restart. */
   retryAt?: number
+  deferralCause?: "proxy"
   /** Durable send attempt, also binds a confirmed throttle in the directory coordinator. */
   attempt?: number
-  /** Only a successful write response, never reconciliation, acknowledges a relationship write. */
+  /** Only a successful write response, never reconciliation, acknowledges a directory write. */
   acknowledged?: true
-  /** Time of our successful relationship write response, never a matching read-back. */
+  /** Time of our successful directory write response, never a matching read-back. */
   acknowledgedAt?: number
   before?: Item | null
   sent?: Item
@@ -63,7 +64,7 @@ export interface GuardedIO {
   persistRetry?: (step: GuardedStep, saveJournal: () => void, saveCoordinator: () => void, retryAt: number) => void
   /** Directory pages retain live object ownership across deferred and uncertain steps. */
   prepareStep?: (step: GuardedStep) => number | undefined
-  defer?: (step: GuardedStep, retryAt: number, rejected?: { step: string; attempt: number }) => void
+  defer?: (step: GuardedStep, retryAt: number, rejected?: { step: string; attempt: number; cause?: "proxy" }) => void
   /** A complete scan of current Intune and Conditional Access references, after replacements. */
   replacedReferences?: (mappings: readonly RestoreMapping[], signal?: AbortSignal) => Promise<ReplacedReference[]>
   type: (folder: string) => IntuneType
@@ -147,9 +148,13 @@ export class GuardedRunJournal {
       // A known rejection may settle its unanswered attempt, but cannot downgrade a later outcome.
       if (sameAttempt && saved.state === "uncertain" && retryOnly && snapshot.state === "deferred") {
         saved.state = "deferred"; saved.reason = snapshot.reason
+        if (snapshot.deferralCause) saved.deferralCause = snapshot.deferralCause
       }
       const acknowledgedAt = sameAttempt && saved.acknowledged ? saved.acknowledgedAt : undefined
-      if (!retryOnly && (saved.attempt ?? 0) <= (snapshot.attempt ?? 0) && saved.state !== "applied") Object.assign(saved, snapshot)
+      if (!retryOnly && (saved.attempt ?? 0) <= (snapshot.attempt ?? 0) && saved.state !== "applied") {
+        Object.assign(saved, snapshot)
+        if (!snapshot.deferralCause) delete saved.deferralCause
+      }
       if (snapshot.acknowledged && (snapshot.acknowledgedAt ?? 0) > (saved.acknowledgedAt ?? 0) && sameAttempt) {
         saved.acknowledged = true; saved.acknowledgedAt = snapshot.acknowledgedAt
       }
@@ -215,7 +220,7 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
       const prerequisite = dependencies(step).find(required => run.entries.find(entry => entry.step.key === required)?.state !== "applied")
       if (prerequisite && entry.state !== "uncertain") { entry.state = "blocked"; entry.reason = `Prerequisite ${prerequisite} did not complete.`; journal.save(run); continue }
       const rejectedAttempt = () => entry.state === "uncertain" && entry.attempt !== undefined ? { step: step.key, attempt: entry.attempt } : undefined
-      const defer = (retryAt: number, rejected?: { step: string; attempt: number }) => {
+      const defer = (retryAt: number, rejected?: { step: string; attempt: number; cause?: "proxy" }) => {
         entry.retryAt = Math.max(entry.retryAt ?? 0, retryAt)
         const persist = io.persistRetry ? (journal: () => void, coordinator: () => void) => io.persistRetry!(step, journal, coordinator, entry.retryAt!) : persistDirectoryRetry
         const publish = step.directory ? journal.publication(run, entry, true) : () => journal.save(run)
@@ -242,6 +247,7 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
           rememberMapping(run.mappings, { kind: "objectId", folder: step.folder, source: step.sourceId, target: id })
           entry.state = "applied"; delete entry.reason; saveConfirmed(step); continue
         }
+        delete entry.deferralCause
         const mapped = mappedReference(run.mappings, "objectId", step.folder, step.sourceId)
         if (mapped && step.targetId && mapped.toLowerCase() !== step.targetId.toLowerCase()) throw new RestoreSafetyError("The target mapping changed after this preview. Preview this item again.")
         if (step.directory && step.operation === "create" && mapped) throw new RestoreSafetyError("The object already has a target mapping. Preview it as an update.")
@@ -290,7 +296,7 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
             if (signal?.aborted) throw new RestoreWriteDeferredError("The directory write was cancelled before sending.")
             const retryAt = entry.retryAt
             if (step.directory) entry.attempt = (entry.attempt ?? 0) + 1
-            delete entry.acknowledged; delete entry.acknowledgedAt
+            delete entry.acknowledged; delete entry.acknowledgedAt; delete entry.deferralCause
             entry.state = "uncertain"; delete entry.retryAt
             try { journal.save(run) }
             catch (error) {
@@ -309,7 +315,8 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
         } catch (error) {
           if (isRestorePersistenceError(error)) throw error
           if (step.directory && isProxyAuthResponse(error)) {
-            const rejected = rejectedAttempt()
+            const attempt = rejectedAttempt(), rejected = attempt ? { ...attempt, cause: "proxy" as const } : undefined
+            entry.deferralCause = "proxy"
             entry.state = "deferred"; entry.reason = "The proxy requires authentication. No directory write reached Microsoft Graph. Resume to repeat the safety checks after proxy recovery."
             // Publish known-unsent evidence to both records, including its exact send attempt.
             defer(Date.now(), rejected)
@@ -331,7 +338,7 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
         entry.targetId = id
         rememberMapping(run.mappings, { kind: "objectId", folder: step.folder, source: step.sourceId, target: id })
         entry.state = "applied"; delete entry.reason
-        if (step.directory && typeof step.desired.present === "boolean") { entry.acknowledged = true; entry.acknowledgedAt = (io.now ?? Date.now)() }
+        if (step.directory && (typeof step.desired.present === "boolean" || ["update", "manager"].includes(step.directory.action))) { entry.acknowledged = true; entry.acknowledgedAt = (io.now ?? Date.now)() }
         saveConfirmed(step)
       } catch (error) {
         if (entry.state === "applied" || isRestorePersistenceError(error)) throw error

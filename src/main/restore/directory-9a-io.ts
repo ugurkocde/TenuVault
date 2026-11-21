@@ -213,6 +213,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
       } catch (error) {
         if (isRestorePersistenceError(error)) throw error
         if (intent.action !== "member" || step.desired.present !== false) throw error
+        if (error instanceof DirectoryReadDeferredError) throw error
         // Keep the row visible while refusing removal if any policy page is unreadable.
         if (error instanceof RestoreWriteDeferredError) throw new RestoreWriteDeferredError("Conditional Access group targeting could not be determined. TenuVault cannot remove this member. Review the policies and remove the member in Microsoft Entra. " + error.message, error.retryAt)
         targetingUnknown = true

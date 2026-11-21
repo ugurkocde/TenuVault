@@ -16,7 +16,7 @@ function world(folder: typeof folders[number], wrapped = false) {
   const store = { partitioned: true as const, get: (key: string) => data.get(key) ?? null, set: (key: string, value: string) => { data.set(key, value) }, delete: (key: string) => { data.delete(key) } }
   const settings = new ModuleSettings(store)
   settings.setChoice(tenant, { entra: { access: "restore", areas: ["applications", "usersAndDevices", "groups"] } })
-  const token = `h.${Buffer.from(JSON.stringify({ tid: tenant, oid: userId, appid: clientId, scp: "Application.Read.All Application.ReadWrite.All User.ReadUpdate.All User.Read.All Group.ReadWrite.All Group.Read.All Policy.Read.All" })).toString("base64url")}.s`
+  const token = `h.${Buffer.from(JSON.stringify({ tid: tenant, oid: userId, appid: clientId, scp: "Application.Read.All Application.ReadWrite.All User.ReadUpdate.All User.ReadWrite.All User.Read.All Group.ReadWrite.All Group.Read.All Policy.Read.All" })).toString("base64url")}.s`
   const live: Item = folder === "Applications" ? { id: targetId, appId, displayName: "Live", description: "Live" } : folder === "Users" ? { id: targetId, displayName: "Live", userType: "Member", accountEnabled: false } : { id: targetId, displayName: "Live", description: "Live", mailNickname: "group", groupTypes: [], mailEnabled: false, securityEnabled: true, isAssignableToRole: false }
   const targetPath = `${folder === "Applications" ? "applications" : folder === "Users" ? "users" : "groups"}/${targetId}`
   const field = folder === "Groups" ? "description" : "displayName"
@@ -465,4 +465,54 @@ it.each(folders.flatMap(folder => [false, true].map(wrapped => ({ folder, wrappe
   expect(await env.execute(page, request)).toMatchObject({ status: "complete", outcomes: [{ state: "applied" }] })
   await env.execute(page, request)
   expect(env.writes).toEqual([{ [env.field]: "Saved" }]); expect(attempts).toBe(2); expect(env.locks()).toEqual([])
+})
+
+
+it.each([
+  { folder: "Users" as const, field: "displayName" },
+  { folder: "Users" as const, field: "manager" },
+  { folder: "Groups" as const, field: "description" },
+  { folder: "Applications" as const, field: "displayName" },
+  { folder: "Applications" as const, field: "description" },
+])("keeps a stale $folder $field read uncertain after an acknowledged update until a fresh read after the replication window", async ({ folder, field }) => {
+  vi.useFakeTimers()
+  const env = world(folder), original = env.graph.getMockImplementation()!
+  const manager = field === "manager", a = manager ? id(100) : "Live", b = manager ? id(101) : "Changed"
+  let managerId = a, stale = false, reject = false, attempts = 0, reads = 0
+  env.graph.mockImplementation((input, init) => {
+    const path = new URL(String(input)).pathname.replace("/v1.0/", ""), method = init?.method ?? "GET"
+    if (method !== "GET") {
+      attempts++
+      if (reject) return Promise.resolve(new Response(null, { status: 503 }))
+      if (manager) { expect(path).toBe(`${env.targetPath}/manager/$ref`); managerId = b; return Promise.resolve(new Response(null, { status: 204 })) }
+    }
+    if (manager && path === `${env.targetPath}/manager`) { reads++; return Promise.resolve(Response.json({ id: stale ? a : managerId })) }
+    if (manager && path.startsWith("users/") && path !== env.targetPath) return Promise.resolve(Response.json({ id: path.split("/")[1], displayName: "Manager", userType: "Member", accountEnabled: false }))
+    if (!manager && path === env.targetPath && method === "GET") { reads++; return Promise.resolve(Response.json({ ...env.live, ...(stale ? { [field]: a } : {}) })) }
+    return original(input, init)
+  })
+  const request = (value: string) => ({ ...env.request(), snapshot: { ...env.live, ...(manager ? { manager: { id: value, complete: true } } : { [field]: value }) } })
+  const prepare = (value: ReturnType<typeof request>) => env.service().prepare(tenant, value, { ...options, stage: manager ? "relationships" : "object" }, async () => value.snapshot)
+  const firstRequest = request(b), first = await prepare(firstRequest)
+  expect(first.rows).toHaveLength(1); expect(first.rows[0]!.review.blocker).toBeUndefined()
+  expect(await env.execute(first, firstRequest)).toMatchObject({ outcomes: [{ state: "applied" }] })
+  expect(env.entry(first)).toMatchObject({ acknowledged: true, acknowledgedAt: Date.now() })
+  const secondRequest = request(a), second = await prepare(secondRequest)
+  reject = true
+  expect(await env.execute(second, secondRequest)).toMatchObject({ outcomes: [{ state: "uncertain" }], canDiscard: false })
+  stale = true
+  expect(await env.service().saved(tenant, second.runId, "reconcile")).toMatchObject({ outcomes: [{ state: "uncertain", reason: expect.stringContaining("30 minute replication window") }], canDiscard: false })
+  expect(env.entry(second).acknowledged).toBeUndefined()
+  await vi.advanceTimersByTimeAsync(30 * 60 * 1000 - 1)
+  expect(await env.execute(second, secondRequest)).toMatchObject({ outcomes: [{ state: "uncertain" }] })
+  stale = false
+  await vi.advanceTimersByTimeAsync(1)
+  const previousReads = reads
+  expect(await env.service().saved(tenant, second.runId, "reconcile")).toMatchObject({ outcomes: [{ state: "uncertain" }] })
+  expect(reads).toBeGreaterThan(previousReads)
+  // A new matching read after the window can settle the result without another write.
+  if (manager) managerId = a
+  else env.live[field] = a
+  expect(await env.service().saved(tenant, second.runId, "reconcile")).toMatchObject({ outcomes: [{ state: "applied" }], canDiscard: true })
+  expect(attempts).toBe(2); expect(env.entry(second).acknowledged).toBeUndefined(); expect(env.locks()).toEqual([])
 })
