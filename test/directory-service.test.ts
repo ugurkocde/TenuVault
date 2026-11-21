@@ -1,3 +1,5 @@
+import { setDirectoryRestoreService } from "../src/main/restore/directory-dispatch"
+import { POST as restoreDirectory } from "../src/portal/app/api/restore-directory/route"
 import { DirectoryRetryPersistenceError } from "../src/main/restore/directory-retry"
 import { INTUNE_TYPES } from "../src/shared/intune/registry"
 import { backupNeed } from "../src/shared/services/modules"
@@ -1572,7 +1574,7 @@ it("counts a current-batch failure alongside a deferred row in directory audit t
   expect(sends).toBe(2); expect(env.writes).toEqual([])
 })
 
-it.each(["preview", "final validation"])("defers every exact removal for an uncertain saved user create at %s", async phase => {
+it.each(["preview", "final validation"].flatMap(phase => [false, true].map(missingLock => ({ phase, missingLock }))))("defers every exact removal for an uncertain saved user create at $phase with missing lock $missingLock", async ({ phase, missingLock }) => {
   const env = world(1), service = env.service(), original = env.fetcher.getMockImplementation()!, source = id(100), target = id(900)
   const userRequest: IdentityRestoreRequest = { origin: "restore", path: `backup/Users/${source}.json`, snapshot: { id: source, userType: "Member", displayName: "Saved user", userPrincipalName: "saved@example.test", mailNickname: "saved", accountEnabled: false } }
   let created = false, confirmed = false
@@ -1589,6 +1591,12 @@ it.each(["preview", "final validation"])("defers every exact removal for an unce
   const user = await service.prepare(tenant, userRequest, options, env.read)
   expect(await service.execute(tenant, { ...userRequest, runId: user.runId }, user.fingerprint, Object.fromEntries(user.rows.map(row => [row.key, row.review.approvals])))).toMatchObject({ outcomes: [{ state: "uncertain" }] })
   expect(created).toBe(true)
+  if (missingLock) {
+    const coordinatorKey = `restore.directory.coordinator.${tenant}`
+    const coordinator = JSON.parse(env.data.get(coordinatorKey)!)
+    delete coordinator.locks[source]
+    env.data.set(coordinatorKey, JSON.stringify(coordinator))
+  }
   const preview = await service.prepare(tenant, env.request, exactOptions, env.read)
   const removals = preview.rows.filter(row => row.review.changes.some(change => change.after === false))
   expect(removals).toHaveLength(2)
@@ -1710,17 +1718,33 @@ it.each(["execute", "saved confirmation"])("captures the verified owner when %s 
     const response = await original(input, init)
     return init?.method === "POST" ? new Response(null, { status: 503 }) : response
   })
-  expect(await service.execute(tenant, request, page.fingerprint, approvals)).toMatchObject({ outcomes: [{ state: "uncertain" }] })
   const audits: unknown[] = [], accountFor = vi.fn(() => null)
-  const host = new ApiHost({ routes: { "/api/restore-directory": { POST: async () => {
-    const result = action === "execute" ? await service.execute(tenant, request, page.fingerprint, approvals) : await service.saved(tenant, page.runId, "reconcile")
-    return Response.json({ ...result, success: "status" in result && result.status === "complete", details: { restoredCount: 1, failedCount: 0 } })
-  } } }, onHandled: createAuditRecorder(async request => { audits.push(await request.json()); return Response.json({ success: true }) }, accountFor) })
-  expect((await host.dispatch(new Request("http://tenuvault.internal/api/restore-directory", { method: "POST", body: JSON.stringify({ tenantId: tenant, appId: app, clientSecret: "delegated", storageAccountName: "fixtureaccount", action: "restore" }) }))).ok).toBe(true)
-  await vi.waitFor(() => expect(audits).toHaveLength(1))
-  expect(audits[0]).toMatchObject({ user: { id: "owner@example.test", email: "owner@example.test", name: "Page owner" }, logEntry: { result: "SUCCESS", details: { restoredCount: 1 } } })
-  expect(accountFor).not.toHaveBeenCalled()
-  expect(env.writes).toHaveLength(1)
+  setDirectoryRestoreService(service)
+  const storage = vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input)
+    if (url.includes("oauth2")) return Response.json({ access_token: "storage-token" })
+    if (url.endsWith("metadata.json")) return Response.json({ TenantId: tenant })
+    if (url.endsWith(".tenuvault-owner.json")) return new Response(null, { status: 404 })
+    return Response.json(env.request.snapshot)
+  })
+  vi.stubGlobal("fetch", storage)
+  const host = new ApiHost({ routes: { "/api/restore-directory": { POST: restoreDirectory } }, onHandled: createAuditRecorder(async request => { audits.push(await request.json()); return Response.json({ success: true }) }, accountFor) })
+  const dispatch = (action: string) => host.dispatch(new Request("http://tenuvault.internal/api/restore-directory", { method: "POST", body: JSON.stringify({ tenantId: tenant, appId: app, clientSecret: "delegated", storageAccountName: "fixtureaccount", backupId: "backup", path: request.path, runId: page.runId, fingerprint: page.fingerprint, approvals, stage: "relationships", action }) }))
+  try {
+    expect(await (await dispatch("restore")).json()).toMatchObject({ outcomes: [{ state: "uncertain" }], partial: true })
+    await vi.waitFor(() => expect(audits).toHaveLength(1))
+    expect(audits[0]).toMatchObject({ logEntry: { result: "PARTIAL", details: { restoredCount: 0, partialCount: 1 } } })
+    storage.mockClear()
+    expect(await (await dispatch(action === "execute" ? "restore" : "reconcile")).json()).toMatchObject({ success: true, details: { restoredCount: 1, partialCount: 0, failedCount: 0 } })
+    await vi.waitFor(() => expect(audits).toHaveLength(2))
+    expect(audits[1]).toMatchObject({ user: { id: "owner@example.test", email: "owner@example.test", name: "Page owner" }, logEntry: { result: "SUCCESS", details: { restoredCount: 1, partialCount: 0 } } })
+    if (action === "saved confirmation") {
+      expect(audits[1]).toMatchObject({ logEntry: { action: "Confirm saved directory restore results" } })
+      expect(storage).not.toHaveBeenCalled()
+    }
+    expect(accountFor).not.toHaveBeenCalled()
+    expect(env.writes).toHaveLength(1)
+  } finally { vi.unstubAllGlobals() }
 })
 
 it("counts the full saved selection in audit before later batches exist and never duplicates totals on resume", async () => {
@@ -1792,4 +1816,50 @@ it("refuses an add when an uppercase saved principal mapping changes during fina
   })
   expect(await service.execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, { [page.rows[0]!.key]: page.rows[0]!.review.approvals })).toMatchObject({ failed: 1, outcomes: [{ state: "failed-before-send" }] })
   expect(env.writes).toEqual([])
+})
+
+it.each(["execute", "saved confirmation"].flatMap(action => ["read", "Retry-After wait"].map(phase => ({ action, phase }))))("cancels uncertain user-create lookup during $phase via $action without another POST", async ({ action, phase }) => {
+  const env = world(), service = env.service(), original = env.fetcher.getMockImplementation()!, source = id(100), target = id(900)
+  const request: IdentityRestoreRequest = { origin: "restore", path: `backup/Users/${source}.json`, snapshot: { id: source, userType: "Member", displayName: "Saved user", userPrincipalName: "saved@example.test", mailNickname: "saved", accountEnabled: false } }
+  let created = false, confirming = false, lookupSignal: AbortSignal | undefined
+  let reached!: () => void
+  const lookup = new Promise<void>(resolve => { reached = resolve })
+  env.fetcher.mockImplementation(async (input, init) => {
+    const path = new URL(String(input)).pathname
+    if (path === "/v1.0/users" && init?.method === "POST") { created = true; env.writes.push("POST users"); throw new Error("Create response lost") }
+    if (path === `/v1.0/users/${source}`) return new Response(null, { status: 404 })
+    if (path === "/v1.0/users") {
+      if (!confirming) return Response.json({ value: created ? [{ ...request.snapshot, id: target }] : [] })
+      lookupSignal = init?.signal ?? undefined
+      reached()
+      if (phase === "Retry-After wait") return new Response(null, { status: 429, headers: { "Retry-After": "60" } })
+      return new Promise<Response>((_resolve, reject) => {
+        lookupSignal?.addEventListener("abort", () => reject(lookupSignal!.reason), { once: true })
+      })
+    }
+    return original(input, init)
+  })
+  const page = await service.prepare(tenant, request, options, env.read)
+  const execute = () => service.execute(tenant, { ...request, runId: page.runId }, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])))
+  expect(await execute()).toMatchObject({ outcomes: [{ state: "uncertain" }] })
+  confirming = true
+  const pending = action === "execute" ? execute() : service.saved(tenant, page.runId, "reconcile")
+  await lookup
+  if (phase === "Retry-After wait") await vi.waitFor(() => expect(JSON.parse(env.data.get(`restore.directory.coordinator.${tenant}`)!).deadlines[source]).toBeGreaterThan(Date.now()))
+  expect(lookupSignal).toBeDefined()
+  expect(await service.cancel(tenant, page.runId)).toEqual({ cancelled: true })
+  expect(await pending).toMatchObject({ outcomes: [{ state: "uncertain" }] })
+  expect(lookupSignal!.aborted).toBe(true)
+  expect(env.writes).toEqual(["POST users"])
+  const history = JSON.parse(env.data.get(`restore.directory.${tenant}.${page.runId}.batch.0.restore.guarded.${tenant}`)!)
+  expect(history.runs[page.runId].entries[0].state).toBe("uncertain")
+  if (phase === "Retry-After wait") {
+    const deadline = history.runs[page.runId].entries[0].retryAt
+    expect(deadline).toBeGreaterThan(Date.now())
+    expect(await env.service().saved(tenant, page.runId, "reconcile")).toMatchObject({ outcomes: [{ state: "uncertain", retryAt: deadline }] })
+  } else {
+    confirming = false
+    expect(await env.service().saved(tenant, page.runId, "reconcile")).toMatchObject({ outcomes: [{ state: "applied", targetId: target }] })
+  }
+  expect(env.writes).toEqual(["POST users"])
 })

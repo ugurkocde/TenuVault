@@ -69,7 +69,7 @@ export interface GuardedIO {
   /** Reads through the descriptor's singleton, fixed key or object ID rule. */
   read: (step: GuardedStep, targetId?: string, signal?: AbortSignal) => Promise<Item | null>
   /** Complete descriptor-based lookup. Must reject an incomplete list, never match a guessed name. */
-  findCreated: (step: GuardedStep, sent: Item) => Promise<Item[]>
+  findCreated: (step: GuardedStep, sent: Item, signal?: AbortSignal) => Promise<Item[]>
   references: (step: GuardedStep, current: Item | null, desired: Item, signal?: AbortSignal) => Promise<SafetyReferences>
   write: (step: GuardedStep, body: Item, targetId: string | undefined, beforeSend: () => void, run?: GuardedRun, signal?: AbortSignal, onUnapplied?: (retryAt: number) => void) => Promise<{ id?: string }>
 }
@@ -222,7 +222,7 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
         if (entry.state === "uncertain") {
           // Neither absence nor repeated old values prove an unanswered write failed: Graph may be eventually consistent.
           // Only a matching read-back can settle it. Confirmed throttles never enter this path.
-          const matches = step.operation === "create" ? await io.findCreated(step, entry.sent!) : [await io.read(step, entry.targetId)].filter((item): item is Item => item !== null)
+          const matches = step.operation === "create" ? await io.findCreated(step, entry.sent!, signal) : [await io.read(step, entry.targetId, signal)].filter((item): item is Item => item !== null)
           if (matches.length !== 1 || restoreFingerprint(writableSnapshot(matches[0]!, Object.keys(entry.sent!))) !== restoreFingerprint(entry.sent!)) {
             entry.reason = "The unanswered write could not be uniquely reconciled. Review this item before continuing."
             journal.save(run); continue
@@ -289,7 +289,12 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
             entry.state = "uncertain"; delete entry.retryAt
             try { journal.save(run) }
             catch (error) {
-              if (step.directory) { entry.state = "captured"; entry.retryAt = retryAt }
+              if (step.directory) {
+                entry.state = "captured"; entry.retryAt = retryAt
+                // Rename may have published the marker before directory sync failed.
+                // No request was sent, so restore the resumable pre-send state as well.
+                try { journal.save(run) } catch { /* Preserve the original persistence failure. */ }
+              }
               throw error
             }
           }, run, signal, retryAt => {
@@ -341,7 +346,7 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
       } catch (error) { if (isRestorePersistenceError(error)) throw error; run.referenceWarning = "The Intune and Conditional Access reference scan did not complete. Review references to replaced IDs before activating restored policies." }
       // Advisory reads can publish a deadline into this journal. Keep their newer evidence.
       if (run.entries.some(entry => entry.step.directory)) {
-        const current = journal.load(run.tenant, run.id)!
+        const current = journal.load(run.tenant, run.id) ?? run
         current.replacedReferences = run.replacedReferences
         current.referenceWarning = run.referenceWarning
         journal.save(current); Object.assign(run, current)

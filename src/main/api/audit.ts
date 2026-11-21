@@ -59,7 +59,8 @@ export function createAuditRecorder(
       return
     }
 
-    if (["/api/restore-configuration", "/api/restore-directory"].includes(path) && JSON.parse(requestBody).action !== "restore") return
+    if (path === "/api/restore-configuration" && JSON.parse(requestBody).action !== "restore") return
+    if (path === "/api/restore-directory" && !["restore", "reconcile"].includes(JSON.parse(requestBody).action)) return
     if (["/api/restore-directory", "/api/restore-configuration", "/api/restore-backup", "/api/revert-policy"].includes(path) && request.method === "POST") {
       void recordRestore(requestBody, response.clone(), dispatch, accountFor, path === "/api/revert-policy", onRestore, onTrialUsage, path === "/api/restore-directory", metadata?.directoryActor)
         .catch((error: unknown) => console.error("[audit] Failed to record restore:", error))
@@ -175,7 +176,7 @@ async function recordRestore(bodyText: string, response: Response, dispatch: (re
     eventType: approvalAction === "submit" || approvalAction === "withdraw" ? AuditEventType.CONFIG_UPDATED : policyCopy ? (body.action === "revert" ? AuditEventType.POLICY_REVERTED : AuditEventType.POLICY_RESTORED) : ok || partial ? AuditEventType.RESTORE_COMPLETED : AuditEventType.RESTORE_FAILED,
     action: approvalAction === "submit" ? "Restore submitted for approval" : approvalAction === "withdraw" ? "Approval request withdrawn" : approvalAction === "complete" ? "Complete approved restore item" : policyCopy
       ? body.action === "revert" ? "Revert policy to the backed-up version in place" : "Restore policy as an unassigned copy"
-      : body.mode === "replace" ? "Restore backup in place" : "Restore backup as policy copies",
+      : directory && body.action === "reconcile" ? "Confirm saved directory restore results" : body.mode === "replace" ? "Restore backup in place" : "Restore backup as policy copies",
     resource: { type: policyCopy ? "policy" : "backup", id: data.policyId ?? body.approvalId ?? data.jobId ?? body.policyId ?? body.backupId ?? body.tenantId, name: body.originalName ?? body.backupId ?? "Restore backup" },
     result: ok ? AuditResult.SUCCESS : partial ? AuditResult.PARTIAL : AuditResult.FAILURE,
     severity: ok ? AuditSeverity.INFO : partial ? AuditSeverity.WARNING : AuditSeverity.ERROR,

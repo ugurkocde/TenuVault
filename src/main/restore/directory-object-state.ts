@@ -62,12 +62,24 @@ export function directoryObjectState(store: KeyValueStore, tenant: string, owner
       }
     }
   }
+  const createJournalKey = (step: Pick<GuardedStep, "folder" | "sourceId">) => `restore.directory.create-journal.${tenant.toLowerCase()}.${step.folder}.${step.sourceId.toLowerCase()}`
+  const createJournal = (step: Pick<GuardedStep, "folder" | "sourceId">): string | null => {
+    const prefix = store.get(createJournalKey(step))
+    if (prefix !== null && (!prefix.startsWith(`restore.directory.${encodeURIComponent(tenant)}.`) || !/\.batch\.\d+\.$/.test(prefix))) invalid(step.sourceId)
+    return prefix
+  }
   /** Replay confirmed mapping publication only for requested identities. */
   const recoverMappings = (steps: Array<Pick<GuardedStep, "folder" | "sourceId" | "targetId">>, state = load(), history?: Map<string, GuardedRun[]>) => {
     const ids = new Set(steps.flatMap(step => [step.sourceId, step.targetId, store.get(directoryMappingKey(tenant, step.folder, step.sourceId))].filter((id): id is string => !!id).map(id => id.toLowerCase())))
     const uncertainCreates = new Set<string>()
     for (const id of ids) verify(state, id)
+    // Create journal references survive a lost coordinator lock. One source cannot
+    // replace its reference while the previous create is still uncertain.
     const journals = new Set([...ids].flatMap(id => state.locks[id] ? [state.locks[id].journal] : []))
+    for (const step of steps) {
+      const prefix = createJournal(step)
+      if (prefix) journals.add(prefix)
+    }
     for (const journalPrefix of journals) {
       const journal = new GuardedRunJournal({ get: name => store.get(journalPrefix + name), set: () => { throw new Error("Read-only history") }, delete: () => { throw new Error("Read-only history") } })
       const runs = (() => {
@@ -78,7 +90,7 @@ export function directoryObjectState(store: KeyValueStore, tenant: string, owner
         }
         catch (error) {
           if (isRestorePersistenceError(error)) throw error
-          return invalid([...ids].find(id => state.locks[id]?.journal === journalPrefix)!)
+          return invalid([...ids].find(id => state.locks[id]?.journal === journalPrefix) ?? steps[0]!.sourceId)
         }
       })()
       for (const run of runs) for (const entry of run.entries) {
@@ -91,10 +103,12 @@ export function directoryObjectState(store: KeyValueStore, tenant: string, owner
         const publicationState = history ? load() : state
         const source = mapping.source.toLowerCase(), target = mapping.target.toLowerCase()
         verify(publicationState, source); verify(publicationState, target)
-        const sourceLock = publicationState.locks[source], targetLock = publicationState.locks[target]
-        if (sourceLock?.journal !== journalPrefix) continue
         const mappingKey = directoryMappingKey(tenant, mapping.folder, mapping.source), previous = store.get(mappingKey)
+        const sourceLock = publicationState.locks[source] ?? (!previous && createJournal({ folder: mapping.folder, sourceId: mapping.source }) === journalPrefix ? { owner: run.id, journal: journalPrefix } : undefined)
+        const targetLock = publicationState.locks[target]
+        if (sourceLock?.journal !== journalPrefix) continue
         if ((previous && previous.toLowerCase() !== target) || (targetLock && targetLock.owner !== sourceLock.owner)) throw new RestoreSafetyError(`The stored mapping or ownership conflicts for directory object ${source}. Review this object's saved restore state.`)
+        publicationState.locks[source] = sourceLock
         publicationState.locks[target] = sourceLock
         if (publicationState.deadlines[source]) {
           publicationState.deadlines[target] = Math.max(publicationState.deadlines[target] ?? 0, publicationState.deadlines[source])
@@ -155,6 +169,15 @@ export function directoryObjectState(store: KeyValueStore, tenant: string, owner
       if ((state.deadlines[object(step)] ?? 0) > now()) throw new RestoreWriteDeferredError("Microsoft Graph Retry-After has not elapsed. Resume to repeat safety checks.", state.deadlines[object(step)])
     },
     recoverMappings,
+    trackCreate: (step: GuardedStep, journal: string) => {
+      if (step.operation !== "create") return
+      const state = load(), id = object(step)
+      verify(state, id)
+      const lock = state.locks[id]
+      if (lock && lock.owner !== owner) throw new RestoreSafetyError("Another saved directory page owns this object. Resolve or discard that page first.")
+      if (recoverMappings([step]).has(step.sourceId.toLowerCase())) throw new RestoreWriteDeferredError("An earlier create for this object is unconfirmed. Confirm its result first.")
+      store.set(createJournalKey(step), journal)
+    },
     /** One read-only capture snapshot; only requested principals and journals are examined. */
     mappingCapture: () => {
       const state = load(), history = new Map<string, GuardedRun[]>()

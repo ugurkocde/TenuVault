@@ -56,6 +56,7 @@ export async function executeDirectoryBatches(store: PartitionedRestoreStore, id
       prepareStep: step => {
       if (journal.load(identity.tenant, identity.id)?.entries.some(entry => entry.state === "uncertain" && (entry.targetId ?? entry.step.targetId ?? entry.step.sourceId).toLowerCase() === (effective(step).targetId ?? step.sourceId).toLowerCase())) throw new RestoreWriteDeferredError("This page has an unanswered write for this object. Confirm its result first.")
       objectState.recoverMappings([effective(step)])
+      objectState.trackCreate(effective(step), batchKey)
       const retryAt = objectState.prepare(effective(step), batchKey)
       if (["member", "owner"].includes(step.directory?.action ?? "")) directoryRelationshipHistory(durableStore, identity.tenant, effective(step).targetId ?? step.sourceId).track(batchKey)
       return retryAt

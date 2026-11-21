@@ -4,8 +4,18 @@ import { fstatSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, wr
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto"
-import { it, expect, vi } from "vitest"
+import { afterEach, it, expect, vi } from "vitest"
+import { executeDirectoryBatches } from "../src/main/restore/directory-9a-batches"
+import { directory9aIO } from "../src/main/restore/directory-9a-io"
+import { approveDirectory } from "../src/main/restore/directory-9a"
+import { GuardedRunJournal, RestorePersistenceError, restoreFingerprint, type GuardedRun, type GuardedStep } from "../src/main/restore/guarded-run"
 import { DirectoryRestoreStore } from "../src/main/storage/directory-restore-store"
+afterEach(() => {
+  vi.restoreAllMocks()
+  vi.mocked(fs.openSync).mockReset()
+  vi.mocked(fs.fsyncSync).mockReset()
+  vi.mocked(fs.writeFileSync).mockReset()
+})
 it("persists encrypted journal partitions across restarts without loading unrelated history", () => {
   const directory = mkdtempSync(join(tmpdir(), "tv-directory-store-")), key = randomBytes(32)
   const cipher = {
@@ -57,4 +67,54 @@ it("starts and atomically saves on win32 without opening directory handles", asy
     expect(rename).toHaveBeenCalledTimes(2)
     expect(opened.mock.calls.filter(call => call[1] === "wx")).toHaveLength(2)
   } finally { vi.restoreAllMocks(); rmSync(root, { recursive: true, force: true }) }
+})
+
+it.each(["file", "directory"])("retries a create without POST after EIO syncing the send marker %s", async failure => {
+  const root = mkdtempSync(join(tmpdir(), "tv-directory-barrier-"))
+  const actual = await vi.importActual<typeof import("node:fs")>("node:fs")
+  const store = new DirectoryRestoreStore(root, { encrypt: text => Buffer.from(text), decrypt: bytes => bytes.toString() })
+  const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`
+  const actor = { tenantId: id(1), userId: id(2), clientId: id(3), applicationObjectId: id(4), servicePrincipalId: id(5), recoveryAccountIds: [] }
+  const token = `h.${Buffer.from(JSON.stringify({ tid: actor.tenantId, oid: actor.userId, appid: actor.clientId, scp: "User.Create" })).toString("base64url")}.s`
+  const desired = { displayName: "Saved", userPrincipalName: "saved@example.test", mailNickname: "saved", accountEnabled: false }
+  const step: GuardedStep = { key: "create", folder: "Users", sourceId: id(10), operation: "create", directory: { action: "create" }, desired, properties: Object.keys(desired), preview: restoreFingerprint(null), requires: [] }
+  const run: GuardedRun = { version: 1, tenant: actor.tenantId, id: id(20), actor, origin: "restore", entries: [{ step, state: "pending" }], mappings: [] }
+  const posts = vi.fn()
+  const io = directory9aIO(token, actor, async () => ({ principals: [], applications: [], complete: true }), async (input, init) => {
+    if (init?.method === "POST") { posts(); return Response.json({ id: id(30) }, { status: 201 }) }
+    if (new URL(String(input)).pathname === "/v1.0/users") return Response.json({ value: [] })
+    return new Response(null, { status: 404 })
+  }, async () => [])
+  for (const kind of (await io.review(step)).approvals) approveDirectory(step, run, kind)
+  let sendMarker = false
+  const write = vi.spyOn(fs, "writeFileSync").mockImplementation((...args) => {
+    sendMarker = JSON.parse(String(args[1])).value.includes('"state":"uncertain"')
+    return actual.writeFileSync(...args)
+  })
+  const sync = vi.spyOn(fs, "fsyncSync").mockImplementation(handle => {
+    if (sendMarker && fstatSync(handle).isDirectory() === (failure === "directory")) throw Object.assign(new Error("Send marker sync failed"), { code: "EIO" })
+    actual.fsyncSync(handle)
+  })
+  const source = { fingerprint: "source", page: async () => ({ entries: run.entries, next: null }) }
+  const prefix = `restore.directory.${actor.tenantId}.${run.id}.batch.0.`
+  const journal = new GuardedRunJournal({ get: key => store.get(prefix + key), set: (key, value) => store.set(prefix + key, value), delete: key => store.delete(prefix + key) })
+  try {
+    await expect(executeDirectoryBatches(store, run, source, io)).rejects.toBeInstanceOf(RestorePersistenceError)
+    expect(posts).not.toHaveBeenCalled()
+    expect(journal.load(run.tenant, run.id)!.entries[0]!.state).toBe("captured")
+    expect(readdirSync(root).some(file => file.endsWith(".tmp"))).toBe(false)
+    sync.mockRestore(); write.mockRestore()
+    expect(await executeDirectoryBatches(store, run, source, io)).toMatchObject({ status: "complete" })
+    expect(posts).toHaveBeenCalledTimes(1)
+  } finally { vi.restoreAllMocks(); rmSync(root, { recursive: true, force: true }) }
+})
+
+it("throws when syncing a coordinator directory fails", () => {
+  const root = mkdtempSync(join(tmpdir(), "tv-directory-coordinator-sync-"))
+  const store = new DirectoryRestoreStore(root, { encrypt: text => Buffer.from(text), decrypt: bytes => bytes.toString() })
+  const sync = vi.spyOn(fs, "fsyncSync").mockImplementation(handle => {
+    if (fstatSync(handle).isDirectory()) throw Object.assign(new Error("Coordinator sync failed"), { code: "EIO" })
+  })
+  try { expect(() => store.set("restore.directory.coordinator.tenant", "state")).toThrow("Coordinator sync failed") }
+  finally { sync.mockRestore(); rmSync(root, { recursive: true, force: true }) }
 })

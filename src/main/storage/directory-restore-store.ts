@@ -1,8 +1,15 @@
 import { createHash, randomUUID } from "node:crypto"
 import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
-import { syncDirectorySync, type Cipher, type KeyValueStore } from "./secure-store"
+import type { Cipher, KeyValueStore } from "./secure-store"
 import { RestoreSafetyError } from "../../shared/intune/restore-guards"
+
+/** Directory restore send barriers must fail closed. Windows does not support directory handles here. */
+function syncDirectorySync(directory: string): void {
+  if (process.platform === "win32") return
+  const handle = openSync(directory, "r")
+  try { fsyncSync(handle) } finally { closeSync(handle) }
+}
 
 export interface PartitionedRestoreStore extends KeyValueStore { readonly partitioned: true }
 /** Uses the app's cipher, but never reads or rewrites the full directory history for a batch save. */

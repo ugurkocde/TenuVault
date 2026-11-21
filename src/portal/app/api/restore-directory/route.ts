@@ -11,6 +11,12 @@ async function token(tenantId: string, appId: string, clientSecret: string, scop
   if (!response.ok) throw new Error("Sign in again before restoring.")
   return (await response.json()).access_token as string
 }
+function outcomeResponse(result: Awaited<ReturnType<typeof directoryRestoreRequest>>) {
+  if (!("outcomes" in result)) return NextResponse.json(result)
+  const restoredCount = result.outcomes.filter(row => row.state === "applied").length
+  const partialCount = result.outcomes.filter(row => ["pending", "captured", "deferred", "uncertain"].includes(row.state)).length
+  return NextResponse.json({ ...result, success: result.status === "complete", partial: result.status === "partial", details: { restoredCount, partialCount, failedCount: result.failed, duration: 0, results: [] } })
+}
 /** One owned directory object with bounded, individually approved relationship pages. */
 export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => ({}))
@@ -19,7 +25,7 @@ export async function POST(request: NextRequest) {
     if (![tenantId, appId, clientSecret, body.runId].every(value => typeof value === "string" && value)) return NextResponse.json({ error: "Enter the saved directory page ID." }, { status: 400 })
     try {
       const result = await directoryRestoreRequest(tenantId, { path: "", snapshot: {}, origin: "restore", runId: body.runId }, { action, options: { stage: "object", exactMembers: false, exactOwners: false } }, async () => { throw new Error("Saved-page actions do not read backups.") })
-      return NextResponse.json(result)
+      return action === "reconcile" ? outcomeResponse(result) : NextResponse.json(result)
     } catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "The saved directory page could not be read." }, { status: 409 }) }
   }
   if (![tenantId, appId, clientSecret, storageAccountName, backupId, path].every(value => typeof value === "string" && value) || !/^[a-zA-Z0-9_-]+$/.test(backupId) || !validPolicyPath(path, backupId) || !["preview", "restore", "cancel", "resume", "reconcile", "discard"].includes(action) || !["object", "relationships"].includes(body.stage)) return NextResponse.json({ error: "Choose one directory object from this backup." }, { status: 400 })
@@ -49,12 +55,7 @@ export async function POST(request: NextRequest) {
       signal?.throwIfAborted()
       return response.json()
     }, signal)
-    if (action === "restore" && "outcomes" in result) {
-      const restoredCount = result.outcomes.filter(row => row.state === "applied").length
-      const partialCount = result.outcomes.filter(row => ["pending", "captured", "deferred", "uncertain"].includes(row.state)).length
-      return NextResponse.json({ ...result, success: result.status === "complete", partial: result.status === "partial", details: { restoredCount, partialCount, failedCount: result.failed, duration: 0, results: [] } })
-    }
-    return NextResponse.json(result)
+    return action === "restore" ? outcomeResponse(result) : NextResponse.json(result)
   }
   try {
     if (action === "restore") {

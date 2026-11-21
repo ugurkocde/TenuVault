@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { GuardedRunJournal, executeGuardedRun, restoreFingerprint, type GuardedIO, type GuardedRun, type GuardedStep } from "../src/main/restore/guarded-run"
 import { requireRestoreActor } from "../src/main/restore/restore-actor"
 import { addsOnly, addsOnlyPayload, RestoreWriteRefusedError, guardRestoreItem, mergeConsentScopes, restoreOriginBlocker, type RestoreActor } from "../src/shared/intune/restore-guards"
@@ -311,4 +311,15 @@ it("preserves a newer same-attempt acknowledgement when publishing an older appl
   const saved = env.journal.load("tenant", "run")!.entries[0]!
   expect(saved).toMatchObject({ state: "applied", attempt: 1, acknowledged: true, acknowledgedAt: 200 })
   expect(saved.reason).toBeUndefined()
+})
+
+it("uses the current run when the advisory publication journal is unavailable", async () => {
+  const env = setup(1)
+  env.input.entries[0]!.step.directory = { action: "create" }
+  const load = env.journal.load.bind(env.journal)
+  let scanning = false
+  env.io.replacedReferences = async () => { scanning = true; return [] }
+  vi.spyOn(env.journal, "load").mockImplementation((tenant, id) => scanning ? undefined : load(tenant, id))
+  expect(await executeGuardedRun(env.journal, env.input, env.io)).toMatchObject({ status: "complete", run: { replacedReferences: [], entries: [{ state: "applied" }] } })
+  expect(env.writes()).toBe(1)
 })
