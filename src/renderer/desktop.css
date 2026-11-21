@@ -204,14 +204,16 @@ html:has([data-flow-shell]) {
 }
 
 /* Sidebar (components/SidebarNavigation, TenantSwitcher, DesktopLayout's Help menu).
-   Folding groups ease their row between full and zero height while the content fades and blurs, after
-   the Details Vault accordion, shortened for a sidebar. overflow: clip with a small clip margin keeps
-   the rows' focus rings visible while the group is open. */
+   Folding groups ease their row between full and zero height, after the Details Vault accordion,
+   shortened for a sidebar. The rows themselves never fade or blur, so every label in view keeps its
+   full contrast while a group moves; the clip reveals and hides them. Folded content turns hidden once
+   the fold has closed (at once when it opens). overflow: clip with a small clip margin keeps the rows'
+   focus rings visible while the group is open. */
 :root { --tv-fold-ease: linear(0, .163 5%, .387 10%, .564 15%, .692 20%, .783 25%, .847 30%, .892 35%, .924 40%, .946 45%, .962 50%, .973 55%, .981 60%, .987 65%, .991 70%, .993 75%, .995 80%, .997 85%, .998 90%, .999 95%, 1); }
 .tv-fold { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: 1fr; transition: grid-template-rows .45s var(--tv-fold-ease); }
 .tv-fold[data-open="false"] { grid-template-rows: 0fr; }
-.tv-fold-inner { min-height: 0; min-width: 0; overflow: clip; overflow-clip-margin: 6px; transition: opacity .45s var(--tv-fold-ease), filter .45s var(--tv-fold-ease); }
-.tv-fold[data-open="false"] > .tv-fold-inner { opacity: 0; filter: blur(4px); }
+.tv-fold-inner { min-height: 0; min-width: 0; overflow: clip; overflow-clip-margin: 6px; transition: visibility 0s; }
+.tv-fold[data-open="false"] > .tv-fold-inner { visibility: hidden; transition: visibility 0s linear .45s; }
 .tv-fold-caret { transition: opacity .15s ease-out, transform .45s var(--tv-fold-ease); }
 
 /* A soft pill behind the main navigation rows follows the pointer. While it runs, the rows other than
@@ -220,10 +222,11 @@ html:has([data-flow-shell]) {
 .tv-pill[data-shown="true"] { opacity: 1; }
 .tv-nav[data-pills="on"] [data-nav-row] { position: relative; z-index: 1; }
 .tv-nav[data-pills="on"] [data-nav-row]:not(.bg-primary) { background-color: transparent; }
-/* A row the pill is leaving has its muted label back while the pill still slides out from under it. In
-   the light theme the muted shade is a little deeper here, so labels keep 4.5:1 on the card and on the
-   pill alike; the dark theme's muted shade already does. */
-:root:not(.dark) .tv-nav { --muted-foreground: #6b665f; }
+/* A row the pill is leaving has its muted label back while the pill still slides out from under it, and
+   a focused menu row puts its description on the same shade. In the light theme the muted shade is a
+   little deeper in the sidebar and its menus, so secondary text keeps 4.5:1 on the card, the pill and a
+   focused row alike; the dark theme's muted shade already does. */
+:root:not(.dark) :is(.tv-sidebar, .tv-pop) { --muted-foreground: #6b665f; }
 
 /* Sidebar menus (tenant switcher, Help): fade and scale in from the edge they open from, after the
    AccessGrid navigation panel. */

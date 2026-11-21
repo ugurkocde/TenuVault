@@ -491,11 +491,15 @@ export function DesktopLayout() {
     setSupportOpen(true)
   }
   // The window is captured before the dialog opens, so the dialog is not in the screenshot.
+  // The page is read when the capture starts: a Help choice runs after the menu's exit, and the user
+  // may have moved to another page meanwhile, which is then the one in the screenshot.
+  const currentPath = useRef(pathname)
+  useEffect(() => { currentPath.current = pathname }, [pathname])
   const openFeedback = async (opener: HTMLElement | null) => {
     if (capturingFeedback.current || feedback.open) return
     capturingFeedback.current = true
     feedbackReturn.current = opener
-    const snapshot = await bridge.feedback.capture(feedbackPageLabel(pathname)).catch(() => null)
+    const snapshot = await bridge.feedback.capture(feedbackPageLabel(currentPath.current)).catch(() => null)
     capturingFeedback.current = false
     setFeedback({ open: true, snapshot })
   }
@@ -587,7 +591,7 @@ export function DesktopLayout() {
           </nav>
         </header>
       ) : (
-      <aside className="fixed bottom-3 left-3 top-3 z-40 flex w-[15.25rem] flex-col rounded-3xl bg-card shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
+      <aside className="tv-sidebar fixed bottom-3 left-3 top-3 z-40 flex w-[15.25rem] flex-col rounded-3xl bg-card shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
         <div className="flex items-center gap-3 px-5 pb-3 pt-4">
           <BrandMark className="size-9" />
           <div className="text-lg font-semibold tracking-tight text-foreground">TenuVault</div>

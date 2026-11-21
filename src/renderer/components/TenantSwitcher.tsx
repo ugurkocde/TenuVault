@@ -82,9 +82,9 @@ export function TenantSwitcher() {
           <span className="min-w-0 flex-1">
             <span className="block truncate text-sm font-medium text-gray-900">{selectedTenant?.name ?? "Choose a tenant"}</span>
             {unlicensed(selectedTenant?.credentials?.tenantId) ? (
-              <span className="block truncate text-xs text-amber-700">Not licensed</span>
+              <span className="block truncate text-xs text-amber-800">Not licensed</span>
             ) : (
-              <span className="block truncate text-xs text-gray-500">{trialLabel || selectedTenant?.domain || "Active tenant"}</span>
+              <span className="block truncate text-xs text-muted-foreground">{trialLabel || selectedTenant?.domain || "Active tenant"}</span>
             )}
           </span>
           <ChevronsUpDown className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
@@ -103,8 +103,8 @@ export function TenantSwitcher() {
                 <span className="min-w-0 flex-1">
                   <span className="block truncate font-medium">{tenant.name}</span>
                   {notLicensed
-                    ? <span className="block truncate text-xs text-amber-700">Not licensed</span>
-                    : tenant.domain && <span className="block truncate text-xs text-gray-500">{trial ? "Pro trial" : tenant.domain}</span>}
+                    ? <span className="block truncate text-xs text-amber-800">Not licensed</span>
+                    : tenant.domain && <span className="block truncate text-xs text-muted-foreground">{trial ? "Pro trial" : tenant.domain}</span>}
                 </span>
                 {tenant.id === selectedTenant?.id && <Check className="h-4 w-4 text-blue-600" aria-label="Selected" />}
               </DropdownMenuItem>

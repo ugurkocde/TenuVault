@@ -34,9 +34,9 @@ export function useFoldedGroups() {
 }
 
 /**
- * Content that folds to nothing: its row eases between full and zero height while the content fades
- * and blurs (styles in desktop.css). Folded content stays in the page but is inert, so it takes no
- * focus or clicks and screen readers skip it.
+ * Content that folds to nothing: its row eases between full and zero height and clips the content,
+ * which never fades, so labels in view keep their contrast (styles in desktop.css). Folded content
+ * stays in the page but is inert, so it takes no focus or clicks and screen readers skip it.
  */
 export function Fold({ id, open, children }: { id?: string; open: boolean; children: ReactNode }) {
   return (

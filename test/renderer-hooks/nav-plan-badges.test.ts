@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs"
 import { act, createElement } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { MemoryRouter, useNavigate } from "react-router-dom"
@@ -15,7 +16,7 @@ const whatsNewState = vi.hoisted(() => ({ current: null as { hasUnseen: boolean 
 const supportDialog = vi.hoisted(() => vi.fn((_props: { open: boolean; returnFocus?: { current: HTMLElement | null } }) => null))
 const whatsNewDialog = vi.hoisted(() => vi.fn((_props: { open: boolean; returnFocus?: { current: HTMLElement | null } }) => null))
 // Records whether the Help menu was still in the page when the window was captured.
-const feedbackCapture = vi.hoisted(() => vi.fn(async () => { menuAtCapture.push(document.querySelector('[role="menu"]') !== null); return null }))
+const feedbackCapture = vi.hoisted(() => vi.fn(async (_page?: string) => { menuAtCapture.push(document.querySelector('[role="menu"]') !== null); return null }))
 const menuAtCapture = vi.hoisted(() => [] as boolean[])
 
 vi.mock("../../src/renderer/lib/bridge", () => ({
@@ -58,6 +59,7 @@ vi.mock("../../src/renderer/features/custom-baselines/api", () => ({ customizeOi
 vi.mock("../../src/renderer/lib/appearance", () => ({ getAppearance: () => "light", setAppearance: () => undefined }))
 
 import { DesktopLayout } from "../../src/renderer/components/DesktopLayout"
+import { feedbackPageLabel } from "../../src/shared/feedback"
 import { FrameworkNavigation } from "../../src/renderer/components/FrameworkNavigation"
 import { CustomizeCard } from "../../src/renderer/pages/OibPage"
 import { SettingsSectionNav } from "../../src/renderer/pages/SettingsPage"
@@ -486,6 +488,21 @@ describe("sidebar groups and Help", () => {
     expect(props.returnFocus?.current).toBe(trigger)
   })
 
+  it("labels the feedback with the page open when the capture starts, not when Share feedback was chosen", async () => {
+    licenseStatus.current = statusFor("pro")
+    selectTenant()
+    let go: (path: string) => void = () => undefined
+    function Navigator() { go = useNavigate(); return null }
+    const container = await render(createElement("div", null, createElement(Navigator), createElement(DesktopLayout)))
+    await openHelp(container)
+    // The user moves on to Settings while the menu closes; the screenshot then shows Settings.
+    await act(async () => { menuItem("Share feedback")!.click(); go("/portal/settings") })
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 80)) })
+    expect(feedbackCapture).toHaveBeenCalledTimes(1)
+    expect(feedbackCapture.mock.calls[0]![0]).toBe(feedbackPageLabel("/portal/settings"))
+    expect(feedbackPageLabel("/portal/settings")).not.toBe(feedbackPageLabel("/portal/dashboard"))
+  })
+
   it("ignores a choice made in a dismissed menu while it animates out", async () => {
     // jsdom applies no stylesheets: give the menu its exit animation, so it stays mounted after Escape
     // until the animation ends, as it does in the app.
@@ -632,6 +649,15 @@ describe("folding sidebar groups", () => {
     expect(head(again, "Oversight").textContent).toBe("Oversight")
     expect(head(again, "Protect").getAttribute("aria-expanded")).toBe("true")
     localStorage.removeItem("tenuvault.sidebar.folded")
+  })
+
+  it("reveals and hides folding rows by clipping only, so labels in view never lose contrast", () => {
+    const css = readFileSync("src/renderer/desktop.css", "utf8")
+    const fold = css.split("\n").filter((line) => /^\.tv-fold(\[|-inner| )/.test(line)).join("\n")
+    expect(fold).toContain("grid-template-rows: 0fr")
+    expect(fold).not.toMatch(/opacity|filter|blur/)
+    // Folded rows are hidden once the fold has closed.
+    expect(fold).toMatch(/data-open="false"\] > \.tv-fold-inner \{[^}]*visibility: hidden/)
   })
 
   it("marks the entry of the open page for the sliding pill", async () => {
