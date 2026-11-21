@@ -13,3 +13,16 @@ export function returnFocusTo(target: RefObject<HTMLElement | null> | undefined)
     element.focus()
   }
 }
+
+/**
+ * The first of several targets that is still in the page, read when the dialog closes. A dialog opened
+ * from a control that has since left the page (the sidebar remounts around the guided setup) then
+ * returns focus to the replacement, such as the current Help button.
+ */
+export function firstConnected(...targets: RefObject<HTMLElement | null>[]): RefObject<HTMLElement | null> {
+  return {
+    get current() {
+      return targets.map((target) => target.current).find((element) => element?.isConnected) ?? null
+    },
+  }
+}

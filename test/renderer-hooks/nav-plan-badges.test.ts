@@ -507,6 +507,45 @@ describe("sidebar groups and Help", () => {
     await act(async () => { finishCapture(); await new Promise((resolve) => setTimeout(resolve, 0)) })
   })
 
+  it("keeps Help closed while a capture started from the first-run header is pending", async () => {
+    licenseStatus.current = statusFor("pro")
+    let finishCapture: () => void = () => undefined
+    feedbackCapture.mockImplementationOnce(() => new Promise((resolve) => { finishCapture = () => resolve(null) }))
+    let go: (path: string) => void = () => undefined
+    function Navigator() { go = useNavigate(); return null }
+    const container = await render(createElement("div", null, createElement(Navigator), createElement(DesktopLayout)), "/portal/onboarding")
+    const header = [...container.querySelectorAll<HTMLButtonElement>('nav[aria-label="Help"] button')].find((button) => button.textContent === "Share feedback")!
+    await act(async () => header.click())
+    expect(feedbackCapture).toHaveBeenCalledTimes(1)
+    await act(async () => go("/license"))
+    await openHelp(container)
+    expect(document.querySelector('[role="menu"]')).toBeNull()
+    await act(async () => { finishCapture(); await new Promise((resolve) => setTimeout(resolve, 0)) })
+  })
+
+  it("returns focus to the current Help button when feedback closes after the sidebar came back", async () => {
+    licenseStatus.current = statusFor("pro")
+    let finishCapture: () => void = () => undefined
+    feedbackCapture.mockImplementationOnce(() => new Promise((resolve) => { finishCapture = () => resolve(null) }))
+    let go: (path: string) => void = () => undefined
+    function Navigator() { go = useNavigate(); return null }
+    const container = await render(createElement("div", null, createElement(Navigator), createElement(DesktopLayout)), "/license")
+    const first = await openHelp(container)
+    await act(async () => { menuItem("Share feedback")!.click() })
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 80)) })
+    await act(async () => go("/portal/onboarding"))
+    await act(async () => go("/license"))
+    const help = [...container.querySelectorAll("aside button")].find((button) => button.textContent?.startsWith("Help"))!
+    expect(help).not.toBe(first)
+    await act(async () => { finishCapture(); await new Promise((resolve) => setTimeout(resolve, 0)) })
+    const dialog = document.querySelector('[role="dialog"]')!
+    expect(dialog.textContent).toContain("Share feedback")
+    await act(async () => { dialog.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })) })
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)) })
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
+    expect(document.activeElement).toBe(help)
+  })
+
   it("marks Help and What's new while an installed build is unseen", async () => {
     licenseStatus.current = statusFor("pro")
     selectTenant()

@@ -65,6 +65,7 @@ import { NAV_PLAN_FEATURES, NavPlanBadge } from "./NavPlanBadge"
 import { FrameworkNavigation } from "./FrameworkNavigation"
 import { OibJobIndicator } from "./oib/JobIndicator"
 import { NavFoldGroup, useFoldedGroups, useHoverPill } from "./SidebarNavigation"
+import { firstConnected } from "../lib/return-focus"
 
 interface NavItem {
   name: string
@@ -337,22 +338,25 @@ function afterPaint(run: () => void) {
  * work (for Share feedback, until the window is captured) Help does not open again, so the menu can
  * never be in the feedback screenshot.
  */
-function HelpMenu({ linkClass, onFeedback, onSupport, launching }: {
+function HelpMenu({ linkClass, onFeedback, onSupport, launching, busy, trigger }: {
   linkClass: (active: boolean) => string
   /** Set while a chosen item launches. Owned by DesktopLayout, so it outlives a sidebar that unmounts meanwhile. */
   launching: RefObject<boolean>
+  /** True while Help must stay closed: an item is launching, or a feedback capture started anywhere is pending. */
+  busy: () => boolean
+  /** The Help button, owned by DesktopLayout so dialogs can return focus to the current one. */
+  trigger: RefObject<HTMLButtonElement | null>
   onFeedback: (opener: HTMLElement | null) => Promise<void>
   onSupport: (opener: HTMLElement | null) => void
 }) {
   const { state } = useWhatsNew()
   const [open, setOpen] = useState(false)
   const [whatsNewOpen, setWhatsNewOpen] = useState(false)
-  const helpRef = useRef<HTMLButtonElement>(null)
   const pending = useRef<(() => void | Promise<void>) | null>(null)
   // The first item chosen wins: the closing menu stays on screen for its exit animation, and a second
   // choice made then (or while the first is still launching) is ignored.
   const choose = (run: () => void | Promise<void>) => (event: Event) => {
-    if (launching.current) {
+    if (busy()) {
       event.preventDefault()
       return
     }
@@ -362,9 +366,9 @@ function HelpMenu({ linkClass, onFeedback, onSupport, launching }: {
   const unseen = Boolean(state?.hasUnseen)
   return (
     <>
-      <DropdownMenu open={open} onOpenChange={(next) => { if (!next || !launching.current) setOpen(next) }}>
+      <DropdownMenu open={open} onOpenChange={(next) => { if (!next || !busy()) setOpen(next) }}>
         <DropdownMenuTrigger asChild>
-          <button ref={helpRef} type="button" className={cn(linkClass(false), "w-full")} aria-label={unseen ? "Help, new changes since you last looked" : undefined}>
+          <button ref={trigger} type="button" className={cn(linkClass(false), "w-full")} aria-label={unseen ? "Help, new changes since you last looked" : undefined}>
             <CircleHelp className="h-[18px] w-[18px]" aria-hidden="true" />
             Help
             {unseen && <span aria-hidden="true" className="ml-auto size-2 rounded-full bg-blue-600" />}
@@ -390,13 +394,13 @@ function HelpMenu({ linkClass, onFeedback, onSupport, launching }: {
               What&apos;s new
               {unseen && <><span aria-hidden="true" className="ml-auto size-2 rounded-full bg-blue-600" /><span className="sr-only">, new changes since you last looked</span></>}
             </DropdownMenuItem>
-            <DropdownMenuItem onSelect={choose(() => onFeedback(helpRef.current))} className="gap-3 rounded-2xl px-3 py-2">
+            <DropdownMenuItem onSelect={choose(() => onFeedback(trigger.current))} className="gap-3 rounded-2xl px-3 py-2">
               <MessageSquareHeart className="h-4 w-4" aria-hidden="true" />
               Share feedback
             </DropdownMenuItem>
           </div>
           <div className="border-t bg-secondary/60 p-1.5">
-            <DropdownMenuItem onSelect={choose(() => onSupport(helpRef.current))} className="group/support gap-3 rounded-2xl px-2 py-2">
+            <DropdownMenuItem onSelect={choose(() => onSupport(trigger.current))} className="group/support gap-3 rounded-2xl px-2 py-2">
               <span aria-hidden="true" className="flex size-8 flex-shrink-0 items-center justify-center rounded-full border bg-card text-muted-foreground"><LifeBuoy className="h-4 w-4" /></span>
               <span className="min-w-0 flex-1">
                 <span className="block text-[13px] font-medium">Support</span>
@@ -407,7 +411,7 @@ function HelpMenu({ linkClass, onFeedback, onSupport, launching }: {
           </div>
         </DropdownMenuContent>
       </DropdownMenu>
-      <WhatsNewDialog open={whatsNewOpen} onOpenChange={setWhatsNewOpen} returnFocus={helpRef} />
+      <WhatsNewDialog open={whatsNewOpen} onOpenChange={setWhatsNewOpen} returnFocus={trigger} />
     </>
   )
 }
@@ -473,6 +477,7 @@ export function DesktopLayout() {
   const [feedback, setFeedback] = useState<{ open: boolean; snapshot: FeedbackSnapshot | null }>({ open: false, snapshot: null })
   const capturingFeedback = useRef(false)
   const helpLaunching = useRef(false)
+  const helpTrigger = useRef<HTMLButtonElement>(null)
   // Dialogs opened from Help or the first-run header hand focus back to the control that opened them.
   const supportReturn = useRef<HTMLElement | null>(null)
   const feedbackReturn = useRef<HTMLElement | null>(null)
@@ -613,7 +618,7 @@ export function DesktopLayout() {
             License
             <LicenseNavBadge />
           </Link>
-          <HelpMenu linkClass={linkClass} onFeedback={openFeedback} onSupport={openSupport} launching={helpLaunching} />
+          <HelpMenu linkClass={linkClass} onFeedback={openFeedback} onSupport={openSupport} launching={helpLaunching} busy={() => helpLaunching.current || capturingFeedback.current} trigger={helpTrigger} />
         </div>
       </aside>
       )}
@@ -639,12 +644,12 @@ export function DesktopLayout() {
       <FrameworkJobNotifier />
       <CisJobNotifier />
       <DriftScanNotifier />
-      <SupportDialog open={supportOpen} onOpenChange={setSupportOpen} returnFocus={supportReturn} />
+      <SupportDialog open={supportOpen} onOpenChange={setSupportOpen} returnFocus={firstConnected(supportReturn, helpTrigger)} />
       <FeedbackDialog
         open={feedback.open}
         onOpenChange={(open) => setFeedback((current) => ({ open, snapshot: open ? current.snapshot : null }))}
         snapshot={feedback.snapshot}
-        returnFocus={feedbackReturn}
+        returnFocus={firstConnected(feedbackReturn, helpTrigger)}
         // Support opened from the feedback dialog returns to where feedback was opened from.
         onOpenSupport={() => { supportReturn.current = feedbackReturn.current; setSupportOpen(true) }}
       />
