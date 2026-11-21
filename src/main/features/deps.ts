@@ -30,7 +30,7 @@ export interface RecoveryScope {
  */
 export interface FeatureDeps {
   records: TenantRecords
-  omissionPolicy?: (tenantId: string) => Promise<import("../../shared/intune/secret-omission").OmissionOptions>
+  omissionPolicy?: (tenantId: string) => Promise<import("../../shared/intune/secret-omission").OmissionOptions & { generation?: string }>
   /** The tenant's plan; throws when the tenant is not signed in or not licensed. */
   plan: (tenantId: string) => Promise<Plan>
   /** Whether two tenants are covered by the same license (Pro promotion stays inside it). */

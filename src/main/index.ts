@@ -1,5 +1,5 @@
 import { BlobWriter } from "./backup/blob-writer"
-import { cloudStatusBlobName, cloudRunbookLacksOmission, parseCloudStatus, requireCloudOmissionSupport } from "../shared/cloud-backup"
+import { cloudStatusBlobName, parseCloudStatus, requireCloudOmissionSupport } from "../shared/cloud-backup"
 import { requestWindowsContent } from "./app-backup/windows-helper"
 import { configuredCloudPolicyAccount, OmissionPolicyStore } from "./backup/omission-policy"
 import { requireCaptureEnabled } from "./app-backup/capture-policy"
@@ -440,11 +440,11 @@ async function bootstrap(): Promise<void> {
   const cloudPolicyAccount = (tenantId: string) => configuredCloudPolicyAccount(
     appStore.get(`${RENDERER_STORAGE_PREFIX}tenuvault_cloud_backup_${tenantId.toLowerCase()}`), tenantId,
   )
-  const oldCloudRunbook = async (tenantId: string, account: string | undefined, token: () => Promise<string>) => {
+  const cloudRunbookVersion = async (tenantId: string, account: string | undefined, token: () => Promise<string>) => {
     if (!account) return undefined
     const blobs = new BlobWriter(bridgedFetch, account, token, undefined, true, AbortSignal.timeout(10_000))
     const status = parseCloudStatus(await blobs.readJson(cloudStatusBlobName(tenantId)), tenantId)
-    return status && cloudRunbookLacksOmission(status.runbookVersion) ? status.runbookVersion : undefined
+    return status?.runbookVersion || undefined
   }
   const omissionAccess = (tenantId: unknown) => {
     if (!isGuid(tenantId)) throw new Error("Choose a tenant.")
@@ -459,15 +459,12 @@ async function bootstrap(): Promise<void> {
   }
   const readOmissionForTenant = (tenant: string) => {
     const profile = tenantProfile(tenant)
-    return omissionPolicies.read(tenant, profile?.storageAccountName ?? localStorageAccountName(tenant), cloudPolicyAccount(tenant),
+    return omissionPolicies.read(tenant, profile?.storageAccountName ?? localStorageAccountName(tenant),
       async () => (await tokenFor(tenant, profile?.clientId ?? signedInClient(tenant), "https://storage.azure.com/.default")).accessToken)
   }
   setOibOmissionPolicy(readOmissionForTenant)
   const engine = new BackupEngine({
-    omissionPolicy: (request, tokens, signal) => omissionPolicies.readForBackup(
-      request.tenantId, request.storageAccountName, tenantProfile(request.tenantId)?.storageAccountName,
-      cloudPolicyAccount(request.tenantId), tokens.storage, signal,
-    ),
+    omissionPolicy: (request, tokens, signal) => omissionPolicies.read(request.tenantId, request.storageAccountName, tokens.storage, signal),
     fetch: bridgedFetch,
     getToken: backupAccess.getToken,
     enabledModules: (tenantId) => moduleSettings.enabled(tenantId),
@@ -1401,21 +1398,29 @@ async function bootstrap(): Promise<void> {
   handleTrusted("backups:settings", () => backupSettings())
   handleTrusted("backups:omission", async (_event, tenantId: unknown) => {
     const { tenantId: tenant, destination, cloud, token } = omissionAccess(tenantId)
-    const [policy, cloudRunbook] = await Promise.all([
-      omissionPolicies.read(tenant, destination, cloud, token, true, AbortSignal.timeout(15_000)),
-      oldCloudRunbook(tenant, cloud, token).catch(() => undefined),
+    const accounts = [...new Set([destination, ...(cloud ? [cloud] : [])])]
+    const [policies, cloudRunbook] = await Promise.all([
+      Promise.allSettled(accounts.map(account => omissionPolicies.read(tenant, account, token, AbortSignal.timeout(10_000)))),
+      cloudRunbookVersion(tenant, cloud, token).catch(() => undefined),
     ])
-    const { enabled, scripts, generation, migrationRequired, pending } = policy
-    return { enabled, scripts, generation, migrationRequired, pending, cloudRunbook }
+    const primary = policies[0]!
+    const policy = primary.status === "fulfilled" ? primary.value : null
+    const inconsistent = !!policy && policies.some(other => other.status === "fulfilled" && (other.value.enabled !== policy.enabled || other.value.scripts !== policy.scripts))
+    const warnings = await Promise.all(accounts.map((account, i) => {
+      const state = policies[i]!
+      return state.status === "fulfilled" ? omissionPolicies.warnings(tenant, account, state.value, token).catch(() => null) : null
+    }))
+    return { enabled: policy?.enabled ?? false, scripts: policy?.scripts ?? false, cloudRunbook, inconsistent,
+      policyUnavailable: !policy, warnings: warnings.flatMap(value => value ?? []), historyUnavailable: warnings.includes(null) }
   })
   handleTrusted("backups:setOmission", async (_event, tenantId: unknown, enabled: unknown, scripts: unknown, cloudStopped: unknown) => {
     const { tenantId: tenant, destination, cloud, token } = omissionAccess(tenantId)
     if (typeof enabled !== "boolean" || typeof scripts !== "boolean") throw new Error("Choose which backup values to leave out.")
-    if (engine.liveRuns(tenant).length) throw new Error("Wait for this tenant's backups to finish before changing the omission policy.")
     if (enabled && cloudStopped !== true) {
-      requireCloudOmissionSupport(await oldCloudRunbook(tenant, cloud, token), cloudStopped)
+      requireCloudOmissionSupport(await cloudRunbookVersion(tenant, cloud, token).catch(() => undefined), cloudStopped)
     }
-    await omissionPolicies.save(tenant, destination, cloud, token, { enabled, scripts })
+    if (cloud && cloud !== destination) await omissionPolicies.save(tenant, cloud, token, { enabled, scripts })
+    await omissionPolicies.save(tenant, destination, token, { enabled, scripts })
   })
   handleTrusted("backups:inventoryProblem", (_event, tenantId: unknown) => {
     if (!isGuid(tenantId)) throw new Error("Unknown tenant.")

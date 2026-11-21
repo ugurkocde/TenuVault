@@ -15,8 +15,14 @@ export async function compareBackupFiles(
   detailLimit = 0,
   reserveComparisonRead?: () => boolean,
 ) {
+  const excludedPaths = new Set<string>()
   const before = itemsOf(older.metadata)
   const after = itemsOf(newer.metadata)
+  for (const [key, item] of Object.entries(before ?? {})) {
+    const other = after?.[key]
+    if (!other) continue
+    for (const path of [...(item.partialCollections ?? []), ...(other.partialCollections ?? [])]) excludedPaths.add(path)
+  }
   const candidates = compareBackups(older.metadata, newer.metadata, true)
   const policy = comparisonOmission(older.metadata, newer.metadata)
   let partial = [before, after].some((items) => Object.values(items ?? {}).some((item) => item.omitted))
@@ -34,7 +40,7 @@ export async function compareBackupFiles(
     const projected = left.omitted !== undefined || right.omitted !== undefined
     const mixed = older.metadata.OmissionVersion !== newer.metadata.OmissionVersion &&
       (older.metadata.OmissionVersion === OMISSION_VERSION || newer.metadata.OmissionVersion === OMISSION_VERSION)
-    if (!projected && !mixed && index >= detailLimit) return { change }
+    if (!projected && !mixed && !left.partialCollections?.length && !right.partialCollections?.length && index >= detailLimit) return { change }
     if (reserveComparisonRead && !reserveComparisonRead()) {
       partial = true
       return null
@@ -44,15 +50,16 @@ export async function compareBackupFiles(
         readItem(older, change.folder, change.id, left),
         readItem(newer, change.folder, change.id, right),
       ])
-      const [oldView, newView] = withoutUnreadAssignments(typeForFolder(change.folder),
-        ...observablePair(change.folder, oldItem, newItem, left.secretsMasked || right.secretsMasked, policy))
+      const [olderView, newerView, excluded] = observablePair(change.folder, oldItem, newItem, left.secretsMasked || right.secretsMasked, policy)
+      for (const path of excluded) excludedPaths.add(path)
+      const [oldView, newView] = withoutUnreadAssignments(typeForFolder(change.folder), olderView, newerView)
       const fields = compare(oldView, newView)
-      if ((projected || mixed || policy) && !fields.length) return null
+      if ((projected || mixed || policy || excluded.length) && !fields.length) return null
       return { change, ...(index < detailLimit ? { fields: fields.slice(0, 50) } : {}) }
     } catch {
       partial = true
       return projected || mixed ? null : { change }
     }
   })
-  return { entries: results.filter((entry) => entry !== null), partial }
+  return { entries: results.filter((entry) => entry !== null), partial: partial || excludedPaths.size > 0, excludedPaths: [...excludedPaths].sort() }
 }

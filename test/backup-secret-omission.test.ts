@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process"
 import { createHash } from "node:crypto"
 import { existsSync } from "node:fs"
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -28,9 +28,8 @@ import { compareBackups } from "../src/shared/intune/backup-changes"
 import { INTUNE_TYPES, typeForFolder, type Item } from "../src/shared/intune/registry"
 import { restorableFolders } from "../src/shared/intune/scope"
 import { buildRestorePlan, buildUpdatePlan, restoreBlocker } from "../src/shared/intune/restore-plan"
-import { OMISSION_BLOCKER, omissionBody, projectSecrets } from "../src/shared/intune/secret-omission"
+import { observablePair, OMISSION_BLOCKER, omissionBody, projectSecrets } from "../src/shared/intune/secret-omission"
 import { POST as listBackups } from "../src/portal/app/api/list-backups/route"
-import { backupRoutes } from "../src/main/api/desktop-routes"
 import { readObject } from "../src/shared/intune/read"
 import { memoryStore } from "./helpers"
 import { REFERENCE_SETTING_VALUE } from "../src/shared/intune/dependencies"
@@ -50,6 +49,10 @@ const config = (value = CANARY, kept = 1): Item => ({
     { "@odata.type": "#microsoft.graph.omaSettingInteger", omaUri: "./Kept", value: kept },
   ],
 })
+const tokenCases: Item[] = [
+  { valueState: "encryptedValueToken", value: CANARY },
+  { "@odata.type": "#microsoft.graph.futureSecretValue", valueState: "encryptedValueToken", value: CANARY },
+]
 const typed = { "@odata.type": "#microsoft.graph.deviceManagementConfigurationSecretSettingValue", value: CANARY, valueState: "encrypted" }
 const pwsh = ["/usr/local/bin/pwsh", "/opt/homebrew/bin/pwsh", "/usr/bin/pwsh"].find(existsSync)
 const rootPaths: string[] = []
@@ -81,6 +84,21 @@ describe("shared omission rules", () => {
       snapshot: { "@odata.type": snapshot["@odata.type"] },
       fields: [{ path: `/${field}`, reason: "credential" }],
     })
+  })
+
+  it.each(tokenCases)("omits an encrypted token with any type annotation", (tokenValue) => {
+    const snapshot = { settings: [{ settingInstance: { simpleSettingValue: tokenValue } }] }
+    const projected = projectSecrets("ConfigurationPolicies", snapshot, false)
+    expect(projected.fields).toEqual([
+      { path: "/settings/0/settingInstance/simpleSettingValue/value", reason: "typed-secret" },
+      { path: "/settings/0/settingInstance/simpleSettingValue/valueState", reason: "typed-secret" },
+    ])
+    expect(JSON.stringify(projected.snapshot)).not.toContain(CANARY)
+  })
+
+  it.each(credentialCases)("omits nested $field on classified policy types", ({ folder, snapshot, field }) => {
+    const projected = projectSecrets(folder, { "@odata.type": snapshot["@odata.type"]!, nested: [{ [field]: CANARY }] }, false)
+    expect(projected.fields).toEqual([{ path: `/nested/0/${field}`, reason: "credential" }])
   })
 
   it.each(rules.androidFields)("leaves Android enrollment %s out", (field) => {
@@ -118,6 +136,18 @@ describe("shared omission rules", () => {
     expect(restoreBlocker(TYPE, masked)).toContain("masked OMA-URI")
   })
 
+  it.each(omaSubtypes.slice(0, 3))("distinguishes a legacy %s mask from a successfully hydrated literal", async (subtype, placeholder) => {
+    const value = { id: "policy", omaSettings: [{ "@odata.type": `#microsoft.graph.${subtype}`, isEncrypted: true, value: placeholder, secretReferenceValueId: REF }] }
+    expect(restoreBlocker(TYPE, value)).toContain("masked OMA-URI")
+    const hydrated = await readObject(TYPE, "policy", {
+      get: async path => path.includes("getOmaSettingPlainTextValue") ? { value: placeholder } : structuredClone(value),
+      list: async () => [],
+    })
+    expect(restoreBlocker(TYPE, hydrated)).toBeUndefined()
+    const plan = buildRestorePlan(TYPE, hydrated)
+    expect(plan.create.body.omaSettings).toEqual([{ "@odata.type": `#microsoft.graph.${subtype}`, value: placeholder }])
+  })
+
   it.each(["iosWiFiConfiguration", "windowsWifiConfiguration", "androidDeviceOwnerWiFiConfiguration", "macOSWiFiConfiguration"])("keeps the Graph-null key and public metadata of %s", (subtype) => {
     const snapshot = { "@odata.type": `#microsoft.graph.${subtype}`, preSharedKey: null, ...(subtype === "androidDeviceOwnerWiFiConfiguration" ? { preSharedKeyIsSet: true } : {}) }
     expect(projectSecrets(FOLDER, snapshot, true)).toEqual({ snapshot, fields: [] })
@@ -138,9 +168,38 @@ describe("shared omission rules", () => {
     execFileSync(process.execPath, [fileURLToPath(new URL("../scripts/sync-secret-rules.mjs", import.meta.url)), "--check"])
   })
 
+  it("updates and checks a CRLF runbook without changing its line endings", async () => {
+    const dir = await temp()
+    await Promise.all(["scripts", "resources/runbooks", "src/shared/intune"].map(async path => mkdir(join(dir, path), { recursive: true })))
+    const script = await readFile(new URL("../scripts/sync-secret-rules.mjs", import.meta.url))
+    const rulesText = await readFile(new URL("../src/shared/intune/secret-rules.json", import.meta.url), "utf8")
+    await Promise.all([
+      writeFile(join(dir, "scripts/sync-secret-rules.mjs"), script),
+      writeFile(join(dir, "src/shared/intune/secret-rules.json"), rulesText),
+      writeFile(join(dir, "resources/runbooks/Invoke-TenuVaultBackup.ps1"), "before\r\n# BEGIN GENERATED SECRET RULES\r\nstale\r\n# END GENERATED SECRET RULES\r\nafter\r\n"),
+    ])
+    execFileSync(process.execPath, [join(dir, "scripts/sync-secret-rules.mjs")])
+    execFileSync(process.execPath, [join(dir, "scripts/sync-secret-rules.mjs"), "--check"])
+    const updated = await readFile(join(dir, "resources/runbooks/Invoke-TenuVaultBackup.ps1"), "utf8")
+    expect(updated).not.toMatch(/(?<!\r)\n/)
+    expect(updated).toContain(rulesText.trim().replaceAll("\n", "\r\n"))
+  })
+
+  it("uses the setting definition to suppress an earlier operand when its projected copy lacks a type annotation", () => {
+    const value = (settingValue: Item) => ({ settings: [{ settingInstance: { settingDefinitionId: "secret", simpleSettingValue: settingValue } }] })
+    const before = value({ value: CANARY })
+    const projected = projectSecrets("ConfigurationPolicies", value(tokenCases[0]!), false)
+    const after = omissionBody(projected.snapshot, projected.fields)
+    const [left, right] = observablePair("ConfigurationPolicies", before, after)
+    expect(left).toEqual(right)
+    expect(JSON.stringify(left)).not.toContain(CANARY)
+  })
+
   it.runIf(!!pwsh)("matches PowerShell projections and hashes for every registry folder and credential entry", async () => {
     const cases: Array<{ folder: string; scripts: boolean; snapshot: Item }> = [
       ...credentialCases,
+      ...credentialCases.map(({ folder, scripts, field, snapshot }) => ({ folder, scripts, snapshot: { "@odata.type": snapshot["@odata.type"]!, nested: [{ [field]: CANARY }] } })),
+      ...tokenCases.map(token => ({ folder: "ConfigurationPolicies", scripts: false, snapshot: { settings: [{ settingInstance: { simpleSettingValue: token } }] } })) ,
       ...INTUNE_TYPES.map(({ folder }) => ({ folder, scripts: true, snapshot: { id: folder, settings: [null, { children: [typed, { value: "kept" }] }], scriptContent: CANARY } })),
       { folder: FOLDER, scripts: true, snapshot: config() },
       ...omaSubtypes.map(([subtype, value]) => ({
@@ -153,6 +212,7 @@ describe("shared omission rules", () => {
     await writeFile(path, JSON.stringify(cases))
     const fixture = fileURLToPath(new URL("./fixtures/cloud-backup/omission-project.ps1", import.meta.url))
     const result = JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", fixture, path], { encoding: "utf8", timeout: 30_000 }))
+    expect(JSON.stringify(result)).not.toContain("encryptedValueToken")
     expect(result).toEqual(cases.map(({ folder, snapshot, scripts }) => {
       const projection = projectSecrets(folder, snapshot, scripts)
       return { ...projection, hash: snapshotHash(projection.snapshot) }
@@ -289,8 +349,8 @@ describe("omission backup generations", () => {
         new Response(path.startsWith("old/") ? JSON.stringify(before) : projected.raw), compareObjects, 10)
     }
 
-    expect(await compare(1)).toEqual({ entries: [], partial: true })
-    expect(await compare(1, true)).toEqual({ entries: [], partial: true })
+    expect(await compare(1)).toEqual({ entries: [], partial: true, excludedPaths: [] })
+    expect(await compare(1, true)).toEqual({ entries: [], partial: true, excludedPaths: [] })
     const changed = await compare(2)
     expect(changed.entries).toHaveLength(1)
     expect(JSON.stringify(changed)).not.toMatch(new RegExp(`${CANARY}|${REF}`))
@@ -328,19 +388,50 @@ describe("omission backup generations", () => {
     expect(await drift()).toMatchObject({ drifts: [], warnings: expect.arrayContaining([expect.objectContaining({ file: `${FOLDER}/Previous name.json` })]) })
   })
 
+  it("pairs compliance folders across legacy aliases even when the files have different names", async () => {
+    const older = "backup-2026-09-19-180000"
+    const newer = "backup-2026-09-20-180000"
+    const snapshot = { id: "same-policy", displayName: "Compliance", passwordRequired: false }
+    const current = { ...snapshot, passwordRequired: true }
+    const olderFile = "DeviceCompliancePolicies/Old.json"
+    const newerFile = "CompliancePolicies/New.json"
+    const blobs = new Map([
+      [`${older}/metadata.json`, JSON.stringify({ TenantId: TENANT, Status: "Success" })],
+      [`${newer}/metadata.json`, JSON.stringify({ TenantId: TENANT, Status: "Success" })],
+      [`${older}/${olderFile}`, JSON.stringify(snapshot)], [`${newer}/${newerFile}`, JSON.stringify(current)],
+    ])
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input))
+      if (url.hostname === "login.microsoftonline.com") return Response.json({ access_token: "test" })
+      if (url.searchParams.has("delimiter")) return new Response(`<Blobs><BlobPrefix><Name>${older}/</Name></BlobPrefix><BlobPrefix><Name>${newer}/</Name></BlobPrefix></Blobs>`)
+      if (url.searchParams.has("comp")) {
+        return new Response(`<Blobs>${[...blobs.keys()].filter(name => name.startsWith(url.searchParams.get("prefix") ?? "")).map(name => `<Blob><Name>${name}</Name><Content-Length>64</Content-Length></Blob>`).join("")}</Blobs>`)
+      }
+      const result = blobs.get(decodeURIComponent(url.pathname).split("/").slice(2).join("/"))
+      return new Response(result, { status: result === undefined ? 404 : 200 })
+    }))
+    const drift = await (await scan(new NextRequest("http://tenuvault.internal", { method: "POST", body: JSON.stringify({
+      tenantId: TENANT, storageAccountName: "stcontoso", appId: "test", clientSecret: "test", baseline: older, comparison: newer,
+    }) }))).json()
+    expect(drift.drifts).toEqual([expect.objectContaining({ changeType: "modified", configId: "same-policy", backupFile: olderFile })])
+  })
+
   it("stops reading mixed pairs when the history budget runs out", async () => {
     const { item, raw } = projectedRecord(config("PGEvPg==", 2))
     const key = `${FOLDER}/policy`
     const older = { id: "old", metadata: { Status: "Success", Items: { [key]: { file: "Baseline.json", hash: snapshotHash(config()) } } } }
     const newer = { id: "new", metadata: { Status: "Success", OmissionVersion: 1, Items: { [key]: item } } }
     const read = vi.fn(async (path: string) => new Response(path.startsWith("old") ? JSON.stringify(config()) : raw))
-    expect(await compareBackupFiles(older, newer, read, compareObjects, 0, () => false)).toEqual({ entries: [], partial: true })
+    expect(await compareBackupFiles(older, newer, read, compareObjects, 0, () => false)).toEqual({ entries: [], partial: true, excludedPaths: [] })
     expect(read).not.toHaveBeenCalled()
   })
 
   it.runIf(!!pwsh)("agrees in drift and both reports for a mixed pair with a kept change, without reporting or exporting secret operands", async () => {
     const old = config()
-    const { item, raw } = projectedRecord(config("new-secret-operand", 2))
+    delete (old.omaSettings as Item[])[0]!.isEncrypted
+    old.additional = { nested: { children: [{ enabled: false }], "children@odata.nextLink": "https://graph.microsoft.com/partial" } }
+    const next = { ...config("new-secret-operand", 2), additional: { nested: { children: [{ enabled: true }] } } }
+    const { item, raw } = projectedRecord(next)
     const older = {
       name: "backup-2026-11-19-180000",
       metadata: { TenantId: TENANT, Status: "Success", Items: { [`${FOLDER}/policy`]: { file: "Baseline.json", hash: snapshotHash(old) } } },
@@ -391,6 +482,7 @@ describe("omission backup generations", () => {
     for (const output of [JSON.stringify(drift), JSON.stringify(report), JSON.stringify(cloud), changeReportMarkdown(report)]) {
       expect(output).not.toMatch(new RegExp(`${CANARY}|${REF}|new-secret-operand`))
       expect(output).toContain("Some values could not be compared")
+      expect(output).toContain("/additional/nested/children")
     }
   }, 60_000)
 })
@@ -469,6 +561,19 @@ describe("omission recovery", () => {
     ])
   })
 
+  it("blocks selective restore and a drift restore when the same omitted dependency is absent", async () => {
+    const { blobs, metadata, graph } = fixture()
+    const set = { id: "set", displayName: "Depends on omitted profile", items: [{ "@odata.type": "#microsoft.graph.deviceConfigurationPolicySetItem", payloadId: "policy" }] }
+    const path = `${id}/PolicySets/Set.json`
+    blobs.set(path, JSON.stringify(set))
+    blobs.set(`${id}/metadata.json`, JSON.stringify({ ...metadata, Items: { ...metadata.Items, "PolicySets/set": { file: "Set.json", hash: snapshotHash(set) } } }))
+    const selected = await (await restore(request({ restoreType: "selective", selectedPolicies: [{ path }] }))).json()
+    expect(selected.details.results).toEqual([expect.objectContaining({ action: "skipped", error: expect.stringContaining("items[0].payloadId") })])
+    const drift = await (await revert(request({ action: "restore", backupPath: path, policyId: "set", policyType: "PolicySets" }))).json()
+    expect(drift).toMatchObject({ error: expect.stringContaining("items[0].payloadId") })
+    expect(graph.mock.calls).toEqual(Array.from({ length: 2 }, () => ["https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations/policy", "GET"]))
+  })
+
   it("skips a Settings Catalog policy when its omitted reusable setting is absent", async () => {
     const graph = vi.fn<GraphCall>().mockResolvedValue({ status: 404, body: {} })
     const body: Item = { id: "catalog", name: "Catalog", settings: [{ settingInstance: {
@@ -478,6 +583,29 @@ describe("omission recovery", () => {
     const restorer = new Restorer(graph, { mode: "copy", assignments: false, omittedDependencies: new Map([["omitted-reusable", "ReusablePolicySettings"]]) })
     expect(await restorer.restore(`${id}/ConfigurationPolicies/Catalog.json`, body)).toMatchObject({ action: "skipped", retryable: false, error: expect.stringContaining("simpleSettingValue.value") })
     expect(graph.mock.calls).toEqual([["GET", "deviceManagement/reusablePolicySettings/omitted-reusable"]])
+  })
+
+  it("rechecks a disappearing omitted dependency before replaying a repair", async () => {
+    let exists = true
+    const graph = vi.fn<GraphCall>(async (method, path): ReturnType<GraphCall> => {
+      if (method === "GET" && path.endsWith("deviceConfigurations/policy")) return { status: exists ? 200 : 404, body: exists ? { id: "policy" } : {} }
+      if (method === "GET") return { status: 200, body: { id: "created" } }
+      if (method === "POST" && path.endsWith("policySets")) return { status: 201, body: { id: "created" } }
+      return { status: 400, body: { error: { message: "Retry the rejected assignments" } } }
+    })
+    const restorer = new Restorer(graph, { mode: "copy", assignments: true, omittedDependencies: new Map([["policy", FOLDER]]) })
+    const path = `${id}/PolicySets/Set.json`
+    const initial = await restorer.restore(path, {
+      id: "set", displayName: "Set", items: [{ "@odata.type": "#microsoft.graph.deviceConfigurationPolicySetItem", payloadId: "policy" }],
+      assignments: [{ target: { "@odata.type": "#microsoft.graph.allDevicesAssignmentTarget" } }],
+    })
+    expect(initial).toMatchObject({ partial: true, repairToken: expect.any(String) })
+    exists = false
+    graph.mockClear()
+    const repair = await restorer.repair(path, initial.repairToken!)
+    expect(repair).toMatchObject({ success: false, error: expect.stringContaining("items[0].payloadId") })
+    expect(graph.mock.calls).toContainEqual(["GET", "deviceManagement/deviceConfigurations/policy"])
+    expect(graph.mock.calls.every(([method]) => method === "GET")).toBe(true)
   })
 
   it("blocks both plans and the shared main restorer when a projected body is supplied directly", async () => {
@@ -515,46 +643,22 @@ describe("omission recovery", () => {
   })
 })
 
-describe("tenant omission policy", () => {
-  it("defaults off, survives a restart, binds device backups to cloud storage and fails closed", async () => {
-    const entries = new Map<string, string>()
-    const store = { get: (key: string) => entries.get(key) ?? null, set: (key: string, value: string) => { entries.set(key, value) }, delete: (key: string) => { entries.delete(key) } }
-    const blobs = new Map<string, string>()
-    const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
-      const request = new Request(input, init)
-      if (request.method === "PUT") {
-        blobs.set(request.url, await request.text())
-        return new Response(null, { status: 201 })
-      }
-      const value = blobs.get(request.url)
-      return new Response(value, { status: value === undefined ? 404 : 200, headers: { etag: "\"version\"" } })
-    })
-    const token = async () => "existing-token"
-    const policy = new OmissionPolicyStore(store, fetch)
-    expect(await policy.read(TENANT, ACCOUNT, undefined, token)).toMatchObject({ enabled: false, scripts: false })
-    await policy.save(TENANT, ACCOUNT, undefined, token, { enabled: true, scripts: false })
-    expect(await new OmissionPolicyStore(store, fetch).read(TENANT, ACCOUNT, undefined, token)).toMatchObject({ enabled: true, scripts: false })
-    await expect(policy.read(TENANT, ACCOUNT, "stcontoso", token)).rejects.toThrow(/could not be verified/)
-    expect(await policy.read(TENANT, ACCOUNT, "stcontoso", token, true)).toMatchObject({ enabled: true, migrationRequired: true })
-    await policy.save(TENANT, ACCOUNT, "stcontoso", token, { enabled: true, scripts: true })
-    expect(await new OmissionPolicyStore(store, fetch).read(TENANT, ACCOUNT, undefined, token)).toMatchObject({ enabled: true, scripts: true })
-    expect(fetch.mock.calls.some(([, init]) => new Headers(init?.headers).get("authorization") === "Bearer existing-token")).toBe(true)
-    await expect(policy.read(TENANT, "otheraccount", undefined, token)).rejects.toThrow(/could not be verified/)
-    const name = [...blobs.keys()].find((key) => key.endsWith("secret-omission.json"))!
-    blobs.delete(name)
-    await expect(policy.read(TENANT, ACCOUNT, "stcontoso", token)).rejects.toThrow(/could not be verified/)
-    blobs.set(name, '{"version":2}')
-    await expect(policy.read(TENANT, ACCOUNT, "stcontoso", token)).rejects.toThrow(/could not be verified/)
-  })
-})
-
-function sharedStorage(graph: typeof fetch = async () => Response.json({ value: [] })) {
+function sharedStorage(graph: typeof fetch = async () => Response.json({ value: [] }), writeOnce = false) {
   const blobs = new Map<string, { body: string; etag: string }>()
   let revision = 0
+  const attemptedAccounts: string[] = []
   const fetch: typeof globalThis.fetch = async (input, init) => {
     const request = new Request(input, init)
     const url = new URL(request.url)
     if (!url.hostname.endsWith(".blob.core.windows.net")) return graph(input, init)
+    const account = url.hostname.split(".")[0]!
+    attemptedAccounts.push(account)
+    const grants = request.headers.get("authorization")?.replace(/^Bearer /, "").split(",") ?? []
+    if (!grants.includes(account)) return new Response(null, { status: 403 })
+    if (url.searchParams.get("comp") === "list") {
+      const folders = [...new Set([...blobs.keys()].filter(name => name.startsWith(url.origin)).flatMap(name => /intune-backups\/(backup-[^/]+)\//.exec(name)?.slice(1) ?? []))]
+      return new Response(folders.map(folder => `<BlobPrefix><Name>${folder}/</Name></BlobPrefix>`).join(""))
+    }
     const name = decodeURIComponent(url.origin + url.pathname)
     const current = blobs.get(name)
     if (request.method === "GET") return current ? new Response(current.body, { headers: { etag: current.etag } }) : new Response(null, { status: 404 })
@@ -565,95 +669,127 @@ function sharedStorage(graph: typeof fetch = async () => Response.json({ value: 
         (request.headers.has("if-match") && request.headers.get("if-match") !== latest?.etag)) {
       return new Response(null, { status: 412 })
     }
+    if (writeOnce && latest) return new Response(null, { status: 409, headers: { "x-ms-error-code": "BlobImmutableDueToPolicy" } })
     blobs.set(name, { body, etag: `"${++revision}"` })
     return new Response(null, { status: 201 })
   }
-  return { fetch, blobs }
+  return { fetch, blobs, attemptedAccounts }
 }
 
-const token = async () => "token"
+const token = async () => "stdesktop"
 const azureRequest = { tenantId: TENANT, clientId: "client", storageAccountName: "stdesktop", scope: { excluded: INTUNE_TYPES.filter(({ folder }) => folder !== FOLDER).map(({ folder }) => folder) } }
 
-it("keeps a never-enrolled desktop and Backup Reader running across a configured account mismatch", async () => {
-  const storage = sharedStorage()
-  const policies = new OmissionPolicyStore(memoryStore(), storage.fetch)
-  const cloud = configuredCloudPolicyAccount(JSON.stringify({ tenantId: TENANT, storageAccount: "stcloud" }), TENANT)
-  const engine = new BackupEngine({
-    fetch: storage.fetch, getToken: token,
-    unattendedTokens: () => ({ mode: "app-only", graph: token, storage: token }),
-    omissionPolicy: (request, tokens, signal) => policies.readForBackup(TENANT, request.storageAccountName, "stdesktop", cloud, tokens.storage, signal),
-  })
+it("only reads the producer account and lets both desktop identities back up to write-once storage", async () => {
+  const storage = sharedStorage(undefined, true)
+  const policy = new OmissionPolicyStore(memoryStore(), storage.fetch)
   expect(configuredCloudPolicyAccount("{broken", TENANT)).toBeUndefined()
-  expect(await policies.read(TENANT, "stdesktop", cloud, token)).toMatchObject({ enabled: false, generation: "default" })
-  expect((await engine.waitForJob(engine.start(azureRequest))).status).toBe("Completed")
-  // Each run needs its own timestamped folder.
-  const readerEngine = new BackupEngine({
-    fetch: storage.fetch, getToken: token, now: () => new Date(Date.now() + 1_001),
-    unattendedTokens: () => ({ mode: "app-only", graph: token, storage: token }),
-    omissionPolicy: (request, tokens, signal) => policies.readForBackup(TENANT, request.storageAccountName, "stdesktop", cloud, tokens.storage, signal),
-  })
-  expect(await readerEngine.waitForJob(readerEngine.start({ ...azureRequest, trigger: "scheduled" }))).toMatchObject({ status: "Completed", authMode: "app-only" })
-  await new OmissionPolicyStore(memoryStore(), storage.fetch).save(TENANT, "stcloud", undefined, token, { enabled: true, scripts: false })
-  await expect(policies.read(TENANT, "stdesktop", cloud, token)).rejects.toThrow(/could not be verified/)
+  const cloud = configuredCloudPolicyAccount(JSON.stringify({ tenantId: TENANT, storageAccount: "stcloud" }), TENANT)!
+  await policy.save(TENANT, cloud, async () => cloud, { enabled: true, scripts: false })
+  storage.attemptedAccounts.length = 0
+  const start = async (second: number) => {
+    const engine = new BackupEngine({
+      fetch: storage.fetch, getToken: token, now: () => new Date(Date.UTC(2026, 0, 1, 0, 0, second)),
+      unattendedTokens: () => ({ mode: "app-only", graph: token, storage: token }),
+      omissionPolicy: (request, tokens, signal) => policy.read(TENANT, request.storageAccountName, tokens.storage, signal),
+    })
+    return engine.waitForJob(engine.start({ ...azureRequest, trigger: second ? "scheduled" : "manual" }))
+  }
+  expect(await start(0)).toMatchObject({ status: "Completed", authMode: "delegated" })
+  expect(await start(2)).toMatchObject({ status: "Completed", authMode: "app-only" })
+  expect(new Set(storage.attemptedAccounts)).toEqual(new Set(["stdesktop"]))
+  const manifests = [...storage.blobs].filter(([path]) => /\/metadata.json$/.test(path)).map(([, entry]) => JSON.parse(entry.body))
+  expect(manifests).toHaveLength(2)
+  for (const manifest of manifests) expect(manifest).toMatchObject({ OmissionEnabled: false, OmissionPolicyGeneration: "default" })
+  expect([...storage.blobs.keys()].filter(path => path.includes(".tenuvault-control"))).toHaveLength(1)
 })
 
-it("rejects a direct device backup request when the persisted destination is Azure", async () => {
-  const storage = sharedStorage()
-  await new OmissionPolicyStore(memoryStore(), storage.fetch).save(TENANT, "stdesktop", undefined, token, { enabled: true, scripts: false })
-  const policies = new OmissionPolicyStore(memoryStore(), storage.fetch)
-  const engine = new BackupEngine({
-    fetch: storage.fetch, getToken: token,
-    omissionPolicy: (request, tokens, signal) => policies.readForBackup(TENANT, request.storageAccountName, "stdesktop", undefined, tokens.storage, signal),
-  })
-  const route = backupRoutes(engine)["/api/backup/start"]!.POST!
-  const response = await route(new NextRequest("http://tenuvault.internal/api/backup/start", {
-    method: "POST", body: JSON.stringify({ ...azureRequest, storageAccountName: ACCOUNT, appId: "client" }),
-  }))
-  const { jobId } = await response.json()
-  expect(await engine.waitForJob(engine.get(jobId)!)).toMatchObject({ status: "Failed", exception: expect.stringContaining("saved storage") })
-  expect([...storage.blobs.keys()].some((key) => key.includes("/backup-"))).toBe(false)
+it("streams snapshots before a mid-run Graph failure and records the saved item", async () => {
+  const storage = sharedStorage(async (input) => {
+    const url = String(input)
+    if (url.endsWith("/deviceConfigurations")) return Response.json({ value: [{ id: "one", displayName: "First" }, { id: "two", displayName: "Second" }] })
+    if (url.includes("/one")) return Response.json({ id: "one", displayName: "First", assignments: [] })
+    expect([...storage.blobs.keys()].some(path => path.endsWith("/First.json"))).toBe(true)
+    return new Response(null, { status: 401 })
+  }, true)
+  const policy = new OmissionPolicyStore(memoryStore(), storage.fetch)
+  const engine = new BackupEngine({ fetch: storage.fetch, getToken: token, concurrency: 1,
+    omissionPolicy: (request, tokens, signal) => policy.read(TENANT, request.storageAccountName, tokens.storage, signal) })
+  const job = await engine.waitForJob(engine.start(azureRequest))
+  expect(job.status).toBe("Failed")
+  const manifest = [...storage.blobs].find(([path]) => path.endsWith("/metadata.json"))!
+  expect(JSON.parse(manifest[1].body)).toMatchObject({ Status: "Failed", OmissionEnabled: false, ItemCounts: { [FOLDER]: 1 } })
 })
 
-it("fences a desktop producer that began to capture before another computer enabled omission", async () => {
+it("lets a second producer run and keeps the original mode through an activation", async () => {
   let reachDetail!: () => void
   let finishDetail!: () => void
+  let first = true
   const reached = new Promise<void>((resolve) => { reachDetail = resolve })
   const finish = new Promise<void>((resolve) => { finishDetail = resolve })
   const storage = sharedStorage(async (input) => {
     const url = String(input)
     if (url.endsWith("/deviceConfigurations")) return Response.json({ value: [{ id: "policy", displayName: "Baseline" }] })
     if (url.includes("getOmaSettingPlainTextValue")) return Response.json({ value: CANARY })
-    reachDetail()
-    await finish
+    if (first) {
+      first = false
+      reachDetail()
+      await finish
+    }
     return Response.json(config("****"))
   })
-  const reader = new OmissionPolicyStore(memoryStore(), storage.fetch)
   const admin = new OmissionPolicyStore(memoryStore(), storage.fetch)
-  const engine = new BackupEngine({
-    fetch: storage.fetch, getToken: token,
-    omissionPolicy: (request, tokens, signal) => reader.read(TENANT, request.storageAccountName, undefined, tokens.storage, false, signal),
+  const createEngine = (offset: number) => new BackupEngine({
+    fetch: storage.fetch, getToken: token, now: () => new Date(Date.now() + offset),
+    omissionPolicy: (request, tokens, signal) => admin.read(TENANT, request.storageAccountName, tokens.storage, signal),
   })
-  const job = engine.start(azureRequest)
+  const firstEngine = createEngine(0)
+  const job = firstEngine.start(azureRequest)
   await reached
-  await admin.save(TENANT, "stdesktop", undefined, token, { enabled: true, scripts: false })
+  await admin.save(TENANT, "stdesktop", token, { enabled: true, scripts: false })
+  const secondEngine = createEngine(2_000)
+  const second = await secondEngine.waitForJob(secondEngine.start(azureRequest))
   finishDetail()
-  expect(await engine.waitForJob(job)).toMatchObject({ status: "Failed", exception: expect.stringContaining("policy changed") })
-  expect([...storage.blobs.keys()].some((name) => name.includes(`/${job.backupFolder}/`))).toBe(false)
-  expect(JSON.stringify([...storage.blobs.values()])).not.toContain(CANARY)
+  expect(await firstEngine.waitForJob(job)).toMatchObject({ status: "Completed" })
+  expect(second.status).toBe("Completed")
+  const metadata = (folder: string) => JSON.parse([...storage.blobs].find(([path]) => path.endsWith(`/${folder}/metadata.json`))![1].body)
+  expect(metadata(job.backupFolder!)).toMatchObject({ OmissionEnabled: false, OmissionPolicyGeneration: "default" })
+  expect(metadata(second.backupFolder!)).toMatchObject({ OmissionEnabled: true, OmissionPolicyGeneration: expect.not.stringMatching(/^default$/) })
+  expect([...storage.blobs].find(([path]) => path.endsWith(`/${job.backupFolder}/DeviceConfigurations/Baseline.json`))?.[1].body).toContain(CANARY)
 })
 
-it("will not declare a change active while another computer holds a publication claim", async () => {
+it("fails closed only for the account on which this installation saw omission enabled", async () => {
   const storage = sharedStorage()
-  const reader = new OmissionPolicyStore(memoryStore(), storage.fetch)
-  const admin = new OmissionPolicyStore(memoryStore(), storage.fetch)
-  const old = await reader.read(TENANT, "stdesktop", undefined, token)
-  const claim = await old.beginPublication!("existing-run", Date.now() + 5_000, new AbortController().signal)
-  const enable = () => admin.save(TENANT, "stdesktop", undefined, token, { enabled: true, scripts: false })
-  await expect(enable()).rejects.toThrow(/publishing/)
-  expect(await admin.read(TENANT, "stdesktop", undefined, token)).toMatchObject({ enabled: false })
-  await claim()
-  await enable()
-  expect(await admin.read(TENANT, "stdesktop", undefined, token)).toMatchObject({ enabled: true })
+  const store = memoryStore()
+  const writer = new OmissionPolicyStore(store, storage.fetch)
+  const denied = async () => "unrelated"
+  await writer.save(TENANT, "stdesktop", token, { enabled: true, scripts: false })
+  const reader = new OmissionPolicyStore(store, storage.fetch)
+  expect(await reader.read(TENANT, "stdesktop", token)).toMatchObject({ enabled: true })
+  await expect(reader.read(TENANT, "stdesktop", denied)).rejects.toThrow("could not be verified")
+  expect(await reader.read(TENANT, "stcloud", denied)).toMatchObject({ enabled: false })
+  expect(await reader.read(TENANT, ACCOUNT, denied)).toMatchObject({ enabled: false })
+  await reader.save(TENANT, ACCOUNT, denied, { enabled: true, scripts: true })
+  expect(await new OmissionPolicyStore(store, storage.fetch).read(TENANT, ACCOUNT, denied)).toMatchObject({ enabled: true, scripts: true })
+  storage.blobs.clear()
+  await expect(reader.read(TENANT, "stdesktop", token)).rejects.toThrow("could not be verified")
+})
+
+it("names later producers that saved backups without omission, but ignores an in-flight run", async () => {
+  const storage = sharedStorage()
+  const policy = new OmissionPolicyStore(memoryStore(), storage.fetch)
+  const first = new Date("2026-11-20T18:00:00.100Z")
+  const enabledAt = "2026-11-20T18:00:00.500Z"
+  const later = "backup-2026-11-20-180001"
+  const prefix = "https://stdesktop.blob.core.windows.net/intune-backups"
+  for (const [folder, body] of [
+    ["backup-2026-11-20-180000", { TenantId: TENANT, StartedAt: first.toISOString(), OmissionEnabled: false }],
+    [later, { TenantId: TENANT, Source: "TenuVault Cloud Backup", RunbookVersion: "1.5.0" }],
+    ["backup-2026-11-20-180002", { TenantId: TENANT, OmissionEnabled: true }],
+    ["backup-2026-11-20-180003", { TenantId: "different" }],
+  ] as const) storage.blobs.set(`${prefix}/${folder}/metadata.json`, { body: JSON.stringify(body), etag: "test" })
+  expect(await policy.warnings(TENANT, "stdesktop", { enabledAt, enabled: true, scripts: false, generation: "test" }, token)).toEqual([
+    { folder: later, account: "stdesktop", producer: "Cloud runbook 1.5.0" },
+  ])
 })
 
 it.each(["token", "fetch", "backoff"])("cancels a default-off policy read during %s", async (stage) => {
@@ -668,7 +804,7 @@ it.each(["token", "fetch", "backoff"])("cancels a default-off policy read during
   const policies = new OmissionPolicyStore(memoryStore(), fetch)
   const engine = new BackupEngine({
     fetch, getToken: stage === "token" ? hang : token,
-    omissionPolicy: (request, tokens, signal) => policies.read(TENANT, request.storageAccountName, undefined, tokens.storage, false, signal),
+    omissionPolicy: (request, tokens, signal) => policies.read(TENANT, request.storageAccountName, tokens.storage, signal),
   })
   const job = engine.start(azureRequest)
   await reached
@@ -678,30 +814,7 @@ it.each(["token", "fetch", "backoff"])("cancels a default-off policy read during
   expect(fetch).toHaveBeenCalledTimes(stage === "token" ? 0 : 1)
 })
 
-it("reports a recoverable pending change when enrollment is interrupted", async () => {
-  const storage = sharedStorage()
-  let failEnrollment = true
-  const interrupted: typeof fetch = async (input, init) => {
-    const request = new Request(input, init)
-    if (failEnrollment && request.method === "PUT" && request.url.endsWith("secret-omission-enrolled.json")) {
-      return new Response(null, { status: 403 })
-    }
-    return storage.fetch(request)
-  }
-  const store = new OmissionPolicyStore(memoryStore(), interrupted)
-  const enable = () => store.save(TENANT, "stdesktop", undefined, token, { enabled: true, scripts: false })
-  await expect(enable()).rejects.toThrow()
-  await expect(store.read(TENANT, "stdesktop", undefined, token)).rejects.toThrow("could not be verified")
-  expect(await store.read(TENANT, "stdesktop", undefined, token, true)).toMatchObject({
-    enabled: false, pending: { enabled: true, scripts: false },
-  })
-  failEnrollment = false
-  await enable()
-  expect(await store.read(TENANT, "stdesktop", undefined, token, true)).toMatchObject({ enabled: true })
-})
-
-
-it("never dispatches a snapshot after the publication deadline even if the token arrives before the abort timer", async () => {
+it("never dispatches a snapshot after the job deadline even if the token arrives before the abort timer", async () => {
   const deadline = Date.now() + 1000
   const fetch = vi.fn(async () => new Response(null, { status: 201 }))
   const clock = vi.spyOn(Date, "now")

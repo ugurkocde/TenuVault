@@ -7,7 +7,7 @@ description: Every control on the Settings page, what it does and when to use it
 
 Choose a section in the list on the left to open it: **Sign-in**, **Services and permissions**, **Storage and recovery**, **Background runner**, **Notifications**, **PDF branding**, **Updates**, **Appearance** and **About**. One section shows at a time, starting with **Sign-in**. When no tenant on this computer is on Pro or MSP, **Notifications** and **PDF branding** carry a **Pro** badge in the list; both sections still open. **Notifications** links to the [Alerts](/notifications/) page in the sidebar, where alerts, channels, change watching and deliveries are set up. On a narrow window the list becomes a row above the section.
 
-Most settings apply to this computer. The backup omission policy is shared when the tenant uses Azure producers.
+Most settings apply to this computer. The backup omission policy is shared by producers that write to the same Azure storage account.
 
 ## Appearance
 
@@ -51,11 +51,13 @@ To add or remove tenants, use **Tenants**. See [Manage tenants](/tenants/).
 
 In **Sign-in**, find the tenant in the **Tenants** card and turn on **Leave secret values out of policy backups**. The setting is off by default. Turn on **Also leave out script content** if you also want to exclude script bodies.
 
-Before changing either option, pause backup schedules and wait for active backups to finish on every computer and in Azure. Upgrade every desktop and cloud runbook that backs up the tenant. Settings blocks enabling omission if the cloud status reports a runbook older than 1.6.0. Upgrade the runbook and run a backup to refresh its status, or confirm in Settings that cloud backups have stopped and their jobs have finished.
+Upgrade each desktop installation and Azure runbook that backs up the tenant. Settings checks the published runbook version reported by the last job. If that status shows a version older than 1.6.0, upgrade the runbook and run a backup to refresh its status, or confirm that cloud jobs have stopped. If the version is unknown, confirm that every cloud runbook for this tenant has been upgraded or stopped.
 
-Azure producers use the same storage account for the shared policy, including when the desktop saves backups to this device. A tenant with different desktop and cloud Azure accounts can keep running with omission off until it enrolls, provided TenuVault can verify the policy in both accounts. Before saving the policy, point both producers at the same account. For tenants with only device storage, set the option on each installation that runs backups. If you move a device-only setting to Azure, select **Apply policy to Azure backup storage** after pausing the writers.
+Each producer reads the policy from its own destination. Settings saves it to the selected desktop storage and to any cloud storage account registered in the app. Set the option on each installation that saves to its own device. Check the policy after changing either storage account. Settings and Backup History name producers whose backups start after activation without recording omission.
 
-A policy change takes effect after the shared policy is saved. If a current producer is publishing a backup, wait for it to finish and save again. A backup still reading policies when another computer changes the setting stops before storing a backup. If a save stops while marked pending, use **Finish policy change** to complete it. Changes apply to future backups. [Backup coverage](/backups/coverage/#leave-secret-values-out-of-policy-backups)
+Turning the option on applies to backups and rollback captures that start afterwards. A run already in progress finishes with its original policy. Earlier backups keep their values until retention removes them. Older installations and runbooks can still make backups with values, so check the warnings after an upgrade or a storage move.
+
+[Backup coverage](/backups/coverage/#leave-secret-values-out-of-policy-backups) lists the affected values and restore limits.
 
 ## Services and permissions
 

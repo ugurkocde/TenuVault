@@ -438,6 +438,56 @@ describe("change-set engine", () => {
     await expect(createChangeSet(context.deps, TENANT_A, { title: "x", operations: [{ folder: "ConfigurationPolicies", action: "create", proposed: { name: "x", secret: REDACTED } }] }, null)).rejects.toThrow(/redacted/)
   })
 
+  it.each([400, 503])("projects planner, read-back and both retry paths in omission mode (%s)", async (writeFailure) => {
+    const context = setup()
+    context.deps.omissionPolicy = async () => ({ enabled: true, scripts: false, generation: "stored-generation" })
+    const canary = "VPN operand echoed by Microsoft Graph"
+    const id = "vpn"
+    const graphPath = `deviceManagement/deviceConfigurations/${id}`
+    let writes = 0
+    let readBackFails = false
+    let live: Item = {
+      id, displayName: "VPN", "@odata.type": "#microsoft.graph.iosVpnConfiguration", description: "Before",
+      nested: { sharedSecret: canary, enabled: false }, assignments: [],
+      omaSettings: [{ omaUri: "./secret", isEncrypted: true, value: "****", secretReferenceValueId: "operand-reference" }],
+    }
+    const normalGraph = context.deps.graph
+    const paths: string[] = []
+    context.deps.graph = async (...args) => {
+      const graph = await normalGraph(...args)
+      return async (method, path, body, options) => {
+        paths.push(path)
+        if (!path.startsWith(graphPath)) return graph(method, path, body, options)
+        if (path.includes("getOmaSettingPlainTextValue")) return { status: 200, body: { value: canary } }
+        if (method === "GET") return readBackFails ? { status: 403, body: { error: { message: canary } } } : { status: 200, body: structuredClone(live) }
+        writes++
+        if (writes === 1) return { status: writeFailure, body: { error: { message: canary } } }
+        live = { ...live, ...body }
+        readBackFails = true
+        return { status: 204, body: {} }
+      }
+    }
+    const proposed = { displayName: "VPN", "@odata.type": "#microsoft.graph.iosVpnConfiguration", description: "After", nested: { enabled: true } }
+    const record = await createChangeSet(context.deps, TENANT_A, {
+      title: "Update VPN", operations: [{ folder: "DeviceConfigurations", action: "update", targetId: id, proposed }],
+    }, null)
+    expect(JSON.stringify(record)).not.toContain(canary)
+    expect(record.operations[0]!.diff).toEqual(expect.arrayContaining([expect.objectContaining({ path: "description" })]))
+    const review = await approve(context, record.id)
+    const input = { id: record.id, contentHash: review.contentHash, confirm: true }
+    const before = await context.post({ action: "apply", ...input })
+    expect(before.status).toBe(200)
+    const capture = context.deps.records.get<ChangeSetContent>(CONTENT_DOMAIN, TENANT_A, before.body.changeSet.preChange.captureId)
+    expect(capture?.omission).toEqual({ enabled: true, scripts: false, generation: "stored-generation" })
+    expect(JSON.stringify([capture, before.body])).not.toContain(canary)
+    context.deps.omissionPolicy = async () => ({ enabled: false, scripts: false, generation: "new-generation" })
+    const retried = await context.post({ action: "retry", ...input })
+    expect(writes).toBe(2)
+    expect(retried.body.changeSet.results["op-1"]).toMatchObject({ readBack: "denied", message: expect.stringContaining("HTTP 403") })
+    expect(JSON.stringify(retried.body)).not.toContain(canary)
+    expect(paths.some(path => path.includes("getOmaSettingPlainTextValue"))).toBe(false)
+  })
+
   it("returns recovery instructions for an omitted capture alongside eligible rollback operations", async () => {
     const context = setup()
     context.deps.omissionPolicy = async () => ({ enabled: true, scripts: false, generation: "on" })

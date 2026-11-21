@@ -186,6 +186,7 @@ export interface ChangeSetContent {
   status: "frozen"
   summary: string
   kind: "proposal" | "capture"
+  omission?: { enabled: boolean; scripts: boolean; generation: string }
   changeSetId: string | null
   /** Per operation key. Proposal: proposed body and assignments. Capture: pre-change snapshot. */
   entries: Record<string, { body: Item | null; assignments: Item[] | null }>

@@ -245,6 +245,7 @@ export interface UpdatedObject extends RunObject {
 }
 
 export interface OibRun {
+  omission?: { enabled: boolean; scripts: boolean; generation: string }
   runId: string
   tenantId: string
   createdAt: string

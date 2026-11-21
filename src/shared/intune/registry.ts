@@ -282,13 +282,18 @@ const CATEGORY_REF = (categoryId: string) => `https://graph.microsoft.com/beta/d
 /** The only properties Graph lets a PATCH change on AOSP profiles; null is rejected for them. */
 const AOSP_PATCHABLE = ["displayName", "description", "wifiSsid", "wifiPassword", "wifiSecurityType", "wifiHidden", "deviceNameTemplate"]
 
-const MASKED_SECRET = "This backup holds a masked OMA-URI value (****). Create a new manual backup to restore it; restoring would send **** to devices."
+const MASKED_SECRET = "This backup holds a masked OMA-URI value. Create a new manual backup to restore it."
 // iOS, Windows, Android device owner and macOS Wi-Fi profiles return null for preSharedKey.
 export const encryptedOmaSetting = (setting: Item): boolean => setting.isEncrypted === true
-// Older backups stored the literal mask with no per-value hydration marker.
-const hasMaskedSecret = (item: Item) => collection(item.omaSettings).some((setting) =>
-  encryptedOmaSetting(setting) && (setting._tenuvaultOmaMasked === true || setting.value === "****"))
-
+const hasMaskedSecret = (item: Item) => collection(item.omaSettings).some((setting) => {
+  if (!encryptedOmaSetting(setting)) return false
+  if (typeof setting.value !== "string") return true
+  if (typeof setting._tenuvaultOmaMasked === "boolean") return setting._tenuvaultOmaMasked
+  const subtype = String(setting["@odata.type"] ?? "").toLowerCase()
+  if (subtype.endsWith("omasettingstringxml")) return setting.value === "PGEvPg==" || setting.value === "****"
+  if (subtype.endsWith("omasettingbase64")) return setting.value === "KioqKg==" || setting.value === "****"
+  return setting.value === "****"
+})
 
 /** Dependencies and superseded apps an app points to, in the shape updateRelationships expects. */
 const appLinks = (app: Item): Item[] =>
@@ -328,9 +333,9 @@ export const INTUNE_TYPES: IntuneType[] = [
         .filter(encryptedOmaSetting)
         .map((setting) => ({
           path: typeof setting.secretReferenceValueId === "string" && setting.secretReferenceValueId ? `deviceManagement/deviceConfigurations/${encodeURIComponent(str(item.id))}/getOmaSettingPlainTextValue(secretReferenceValueId='${encodeURIComponent(str(setting.secretReferenceValueId).replaceAll("'", "''"))}')` : null,
-          apply: (value: string, masked?: boolean) => {
+          apply: (value: string, masked = false) => {
             setting.value = value
-            if (masked) setting._tenuvaultOmaMasked = true
+            setting._tenuvaultOmaMasked = masked
           },
         })),
     restore: "create",

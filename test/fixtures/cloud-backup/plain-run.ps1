@@ -24,52 +24,54 @@ $script:failDetail = $false
 $script:failReportList = $false
 $script:failCompliance = $false
 $script:omit = $false
-$script:policyMissing = $false
+$script:binding = ""
 $script:failOmittedRead = $false
 $script:changeDuringCapture = $false
 $script:control = $null
-$script:etag = 0
+$script:binding = ""
+$script:writeOnce = $false
+$script:written = @{}
+
+function Get-AutomationVariable { param($Name) if ($Name -eq "TenuVaultOmissionAccount-11111111") { return $script:binding } }
+function Set-AutomationVariable { param($Name, $Value) if ($Name -eq "TenuVaultOmissionAccount-11111111") { $script:binding = $Value } }
 
 function Get-TvManagedIdentityToken {
     param([string]$Resource)
     $script:calls.Add([pscustomobject]@{ uri = "token:$Resource"; method = "Token"; contentType = $null; ifNoneMatch = $null; body = $null })
     if ($script:failGraphToken -and $Resource -like "https://graph.microsoft.com*") { throw "Could not get a managed identity token for $Resource." }
-    return "token"
+    if ($Resource -like "https://storage.azure.com*") { return "stcontoso" }
+    return "graph-token"
 }
 
 function Invoke-TvHttp {
-    param([string]$Uri, [string]$Token, [string]$Method = "Get", [hashtable]$Headers, [byte[]]$BodyBytes, [string]$ContentType, [long]$MaxBytes = 0, [DateTime]$DispatchDeadline)
+    param([string]$Uri, [string]$Token, [string]$Method = "Get", [hashtable]$Headers, [byte[]]$BodyBytes, [string]$ContentType, [long]$MaxBytes = 0)
     if ($script:failReportList -and $Uri -like "*comp=list*") { throw [InvalidOperationException]::new("storage listing is unavailable") }
     if ($script:failCompliance -and $Uri -like "https://graph.microsoft.com/beta/deviceManagement/deviceCompliancePolicies*") { throw [TvHttpError]::new(500, "HTTP 500") }
     $body = if ($null -ne $BodyBytes) { [Text.Encoding]::UTF8.GetString($BodyBytes) } else { $null }
     $script:calls.Add([pscustomobject]@{ uri = $Uri; method = $Method; contentType = $ContentType; ifNoneMatch = $Headers["If-None-Match"]; ifMatch = $Headers["If-Match"]; body = $body })
+    if ($Uri -like "*.blob.core.windows.net/*" -and (-not $Uri.StartsWith("https://$Token.blob.core.windows.net/"))) {
+        throw [TvHttpError]::new(403, "HTTP 403")
+    }
     if ($Uri -like "*/.tenuvault-control/*") {
-        if ($Uri.EndsWith("secret-omission.json")) {
-            if ($Method -eq "Put") {
-                if (($null -ne $script:control -and $Headers["If-None-Match"] -eq "*") -or
-                    ($Headers["If-Match"] -and $Headers["If-Match"] -ne [string]$script:etag)) { throw [TvHttpError]::new(412, "HTTP 412") }
-                $script:control = $body
-                $script:etag++
-                return @{ Status = 201 }
-            }
-            if ($null -eq $script:control) { throw [TvHttpError]::new(404, "HTTP 404") }
-            $text = $script:control
-        } else {
-            if (-not $script:omit) { throw [TvHttpError]::new(404, "HTTP 404") }
-            $text = '{}'
-        }
-        return @{ Status = 200; Bytes = [Text.Encoding]::UTF8.GetBytes($text); Text = $text; ETag = [string]$script:etag }
+        if ($Method -ne "Get") { throw "A producer must not write omission policy." }
+        if ($null -eq $script:control) { throw [TvHttpError]::new(404, "HTTP 404") }
+        return @{ Status = 200; Bytes = [Text.Encoding]::UTF8.GetBytes($script:control); Text = $script:control }
+    }
+    if ($script:writeOnce -and $Method -eq "Put") {
+        if ($script:written.ContainsKey($Uri)) { throw [TvHttpError]::new(409, "HTTP 409 BlobImmutableDueToPolicy") }
+        $script:written[$Uri] = $true
     }
     $text = '{"value":[]}'
     if ($Uri -eq "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations") {
-        $text = '{"value":[{"id":"cfg-1","displayName":"Baseline Wi-Fi"}]}'
+        $text = if ($script:failDetail) { '{"value":[{"id":"cfg-0","displayName":"First"},{"id":"cfg-1","displayName":"Baseline Wi-Fi"}]}' } else { '{"value":[{"id":"cfg-1","displayName":"Baseline Wi-Fi"}]}' }
     } elseif ($Uri -eq "https://graph.microsoft.com/beta/deviceManagement/windowsAutopilotDeviceIdentities") {
         # A list-only type: the entry is the snapshot, with status fields and secrets left out.
         $text = '{"value":[{"id":"ap-1","serialNumber":"SN-0001","manufacturer":"Contoso","model":"Laptop 7","groupTag":"Sales","displayName":null,"userPrincipalName":"","lastContactedDateTime":"2026-11-01T10:00:00Z","enrollmentState":"enrolled","deviceAccountPassword":"secret","productKey":"PK-1","managedDeviceId":"md-1"}]}'
+    } elseif ($Uri -like "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations/cfg-0*") {
+        $text = '{"id":"cfg-0","displayName":"First","assignments":[]}'
     } elseif ($Uri -like "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations/cfg-1*") {
         if ($script:changeDuringCapture) {
             $script:control = '{"version":1,"tenantId":"11111111-2222-3333-4444-555555555555","generation":"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb","enabled":true,"scripts":false}'
-            $script:etag++
         }
         if ($script:failDetail) { throw [TvHttpError]::new(401, "HTTP 401") }
         if ($script:failOmittedRead) { throw [TvHttpError]::new(400, "omission-test-value-397c6d") }
@@ -145,7 +147,6 @@ foreach ($case in @("on", "missing", "graphError")) {
     $script:calls.Clear()
     $script:OutcomeSent = $false
     $script:control = if ($case -ne "missing") { '{"version":1,"tenantId":"11111111-2222-3333-4444-555555555555","generation":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","enabled":true,"scripts":false}' }
-    $script:etag++
     $script:failOmittedRead = $case -eq "graphError"
     $errorText = $null
     $output = @()
@@ -154,13 +155,28 @@ foreach ($case in @("on", "missing", "graphError")) {
 }
 
 
-# Switch policy after the old producer starts to read snapshots, before it can publish.
+# Switch policy after the old producer starts to read snapshots.
 $script:calls.Clear()
 $script:OutcomeSent = $false
 $script:omit = $false
+$script:binding = ""
 $script:failOmittedRead = $false
 $script:changeDuringCapture = $true
 $script:control = $null
 $errorText = $null
 try { $null = @(Invoke-TvBackup) } catch { $errorText = $_.Exception.Message }
 Write-Output (@{ calls = @($script:calls.ToArray()); error = $errorText } | ConvertTo-Json -Compress -Depth 5)
+
+
+# Two default-off runs with an immutable archive. The best-effort status blob can fail on run two.
+$script:changeDuringCapture = $false
+$script:control = $null
+$script:writeOnce = $true
+foreach ($run in @(1, 2)) {
+    if ($run -eq 2) { Start-Sleep -Milliseconds 1100 }
+    $script:calls.Clear()
+    $script:OutcomeSent = $false
+    $errorText = $null
+    try { $output = @(Invoke-TvBackup) } catch { $errorText = $_.Exception.Message }
+    Write-Output (@{ calls = @($script:calls.ToArray()); error = $errorText } | ConvertTo-Json -Compress -Depth 5)
+}

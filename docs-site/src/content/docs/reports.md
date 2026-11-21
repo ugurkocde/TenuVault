@@ -115,3 +115,5 @@ Like the scheduled backups themselves, this runs only while TenuVault is running
 ## Change reports with omitted values
 
 Desktop and cloud change reports compare the values available in both backups. Changes to retained fields, new policies and deleted policies can still appear. The report records when some values could not be compared. This also applies to comparisons across a change in the tenant's omission setting.
+
+When an earlier snapshot contains only part of a paged collection, **Not compared** lists the excluded collection path.

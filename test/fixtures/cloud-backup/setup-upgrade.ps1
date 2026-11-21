@@ -163,6 +163,7 @@ function Remove-AzAutomationSchedule {
 function Reset-OldSetup {
     $script:variables = @{ $legacyKeyVaultVariable = "kv-tenuvault-abc123" }
     foreach ($name in $variableNames) { $script:variables[$name] = "x" }
+    $script:variables["TenuVaultStorageAccount-$tenantKey"] = $StorageAccountName
     $script:actions.Clear()
     $script:draft = $oldRunbook
     $script:published = $oldRunbook
@@ -261,4 +262,33 @@ foreach ($scenario in "remove-complete", "remove-whatif", "remove-variable-decli
     if ($scenario -eq "remove-scope-read-403-declined") { $script:declineVariable = "TenuVaultScope-$tenantKey" }
     $output = if ($scenario -like "remove-whatif*") { @(Remove-TenuVaultCloudBackupSetup -WhatIf 6>&1) } else { @(Remove-TenuVaultCloudBackupSetup 6>&1) }
     Write-Scenario -Name $scenario -Output $output
+}
+
+
+# Use the actual upgrade step for a storage move. The data-plane fake grants access to the
+# previous account only for the copy case, and records where the original policy was written.
+$backupContainer = "intune-backups"
+$script:migrationPolicy = '{"version":1,"tenantId":"11111111-2222-3333-4444-555555555555","enabled":true,"scripts":false,"generation":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}'
+function Get-AzAccessToken { param($ResourceUrl) @{ Token = "storage-token" } }
+function Invoke-WebRequest {
+    param($Uri, $Authentication, $Token, $Headers, $Method, $ContentType, $Body, $TimeoutSec, [switch]$SkipHttpErrorCheck)
+    if (-not $Uri.EndsWith("/intune-backups/.tenuvault-control/$TenantId/secret-omission.json")) { throw "Unexpected policy path." }
+    if ($Method -eq "Put") {
+        if ($Uri -notlike "https://stcontoso.*" -or $Headers["If-None-Match"] -ne "*" -or $Body -cne $script:migrationPolicy) { throw "Unsafe copy request." }
+        if ($script:variables["TenuVaultStorageAccount-$tenantKey"] -ne "stprevious") { throw "Storage account changed before the policy was copied." }
+        $script:actions.Add("copy-policy")
+        return @{ StatusCode = 201 }
+    }
+    if ($script:denyPrevious -or $Uri -notlike "https://stprevious.*") { throw "Access denied." }
+    return @{ Content = $script:migrationPolicy }
+}
+foreach ($scenario in "move-copies-policy", "move-warns-on-denied") {
+    Reset-OldSetup
+    $script:variables["TenuVaultStorageAccount-$tenantKey"] = "stprevious"
+    $script:denyPrevious = $scenario -eq "move-warns-on-denied"
+    $output = @()
+    $errorText = $null
+    try { $output = @(. $upgradeStep 3>&1 6>&1) } catch { $errorText = $_.Exception.Message }
+    if ($script:variables["TenuVaultStorageAccount-$tenantKey"] -ne $StorageAccountName) { throw "Storage was not repointed." }
+    Write-Scenario -Name $scenario -Runbook $runbook -ErrorText $errorText -Output $output
 }

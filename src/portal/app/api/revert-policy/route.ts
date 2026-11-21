@@ -1,5 +1,5 @@
 import { readOwnedBackup, UNTAGGED_BACKUP } from "~/lib/policies/backup-owner"
-import { checkRestoreManifest, verifySnapshot } from "~/lib/policies/backup-manifest"
+import { checkRestoreManifest, omittedDependencyMap, verifySnapshot } from "~/lib/policies/backup-manifest"
 import { grantedPermissions } from "../../../../shared/services/token"
 import { OMISSION_BLOCKER } from "../../../../shared/intune/secret-omission"
 import { validPolicyPath } from "~/lib/policies/restore"
@@ -156,7 +156,7 @@ export async function POST(request: NextRequest) {
     catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 }) }
     
     // Restore creates an unassigned copy; revert puts the existing policy back to the backed-up version.
-    const outcome = await new Restorer(graphCaller(graphToken, fetch, { tenant: tenantId, refreshToken: () => getAccessToken(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default", true) }), { mode: action === 'revert' ? 'replace' : 'copy', assignments: false, granted: grantedPermissions(graphToken) })
+    const outcome = await new Restorer(graphCaller(graphToken, fetch, { tenant: tenantId, refreshToken: () => getAccessToken(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default", true) }), { mode: action === 'revert' ? 'replace' : 'copy', assignments: false, omittedDependencies: omittedDependencyMap(checked.manifest), granted: grantedPermissions(graphToken) })
       .restore(backupPath, policyContent)
     const result = { success: outcome.success, error: outcome.error, policyId: outcome.policyId }
 

@@ -1,11 +1,12 @@
+import type { BackupSummary } from "../../src/portal/components/backup/types"
 import { act, createElement } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-const state = vi.hoisted(() => ({ tenant: 0, damagedFiles: 3, sealed: 0, refresh: (() => Promise.resolve("updated")) as () => Promise<string> }))
-const backups = vi.hoisted(() => ({ importRecoveryKey: vi.fn(), openFolder: vi.fn() }))
+const state = vi.hoisted(() => ({ tenant: 0, damagedFiles: 3, sealed: 0, entries: [] as BackupSummary[], refresh: (() => Promise.resolve("updated")) as () => Promise<string> }))
+const backups = vi.hoisted(() => ({ importRecoveryKey: vi.fn(), openFolder: vi.fn(), omission: vi.fn().mockResolvedValue({ enabled: false, scripts: false }) }))
 vi.mock("react-router-dom", () => ({ useSearchParams: () => [new URLSearchParams(), vi.fn()] }))
 const tenants = vi.hoisted(() => [
   { id: 1, name: "Contoso", status: "healthy", credentials: { tenantId: "11111111-1111-1111-1111-111111111111", appId: "app" }, resources: { storageAccountName: "tvlocal-11111111-1111-1111-1111-111111111111" } },
@@ -19,7 +20,7 @@ vi.mock("~/contexts/TenantContext", () => ({
 vi.mock("@desktop/lib/license", () => ({ useTenantPlan: () => null }))
 vi.mock("@desktop/lib/bridge", () => ({ bridge: { license: { open: vi.fn() }, backups } }))
 vi.mock("@desktop/lib/backup-list", () => ({
-  useBackupList: () => ({ backups: [], loading: false, error: "", unresolved: 0, sealed: state.sealed, damagedFiles: state.damagedFiles, damagedFileNames: [], damagedKinds: { counts: { key: state.damagedFiles, os: 0, duplicate: 0, damaged: 0 }, codes: [], names: { key: [], os: [], duplicate: [], damaged: [] } }, refresh: () => state.refresh() }),
+  useBackupList: () => ({ backups: state.entries, loading: false, error: "", unresolved: 0, sealed: state.sealed, damagedFiles: state.damagedFiles, damagedFileNames: [], damagedKinds: { counts: { key: state.damagedFiles, os: 0, duplicate: 0, damaged: 0 }, codes: [], names: { key: [], os: [], duplicate: [], damaged: [] } }, refresh: () => state.refresh() }),
 }))
 vi.mock("@desktop/components/BackupSchedulePanel", () => ({ BackupSchedulePanel: () => null }))
 vi.mock("@desktop/components/RunBackupDialog", () => ({ RunBackupDialog: () => null }))
@@ -33,6 +34,8 @@ const roots: Root[] = []
 afterEach(() => {
   for (const root of roots.splice(0)) act(() => root.unmount())
   document.body.innerHTML = ""
+  backups.omission.mockResolvedValue({ enabled: false, scripts: false })
+  state.entries = []
 })
 
 async function flush(): Promise<void> {
@@ -68,6 +71,25 @@ describe("Backup History notices", () => {
     expect(cards(container, "Some backups may be missing from this list")).toBe(1)
     expect(cards(container, "older Azure backups need a recovery key")).toBe(1)
     expect(container.textContent).toContain("TenuVault cannot read 4 files")
+  })
+
+  it("names the producer that missed omission and distinguishes an incomplete summary", async () => {
+    state.tenant = 0
+    state.entries = [{
+      id: "backup-2026-11-20-180000", timestamp: "2026-11-20T18:00:00Z", type: "scheduled",
+      status: "Success", totalPolicies: 1, size: 100, duration: 2, scope: null,
+      comparedWith: "backup-2026-11-19-180000", changes: { added: 0, modified: 0, removed: 0 }, partialComparison: true,
+    }]
+    backups.omission.mockResolvedValueOnce({ enabled: true, scripts: false, warnings: [{
+      account: "stcloud", folder: state.entries[0]!.id, producer: "Cloud runbook 1.5.0",
+    }] })
+    const container = document.createElement("div")
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    roots.push(root)
+    await act(async () => root.render(createElement(BackupRestorePage)))
+    expect(container.textContent).toContain("Cloud runbook 1.5.0 did not record omission")
+    expect(container.textContent).toContain("No changes found in comparable values")
   })
 
   it.each(["updated", "failed"])("keeps a key import check started for one tenant off the next tenant's card when it ends %s after the switch", async (outcome) => {

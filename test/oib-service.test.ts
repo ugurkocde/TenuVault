@@ -295,6 +295,16 @@ describe("deployments", () => {
     expect(run.updated[0]?.warnings?.join(" ")).toContain("cannot be undone automatically")
   })
 
+  it("returns the rollback notice when recent backup discovery fails", async () => {
+    const fetch = world({ policies: [] }, [])
+    vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => String(input).endsWith("/api/list-backups")
+      ? Promise.resolve(Response.json({ error: "Cannot list storage" }, { status: 403 })) : fetch(input, init))
+    setOibOmissionPolicy(async () => ({ enabled: true, scripts: false }))
+    expect(await handleOib({ ...base, action: "oib-backup-options", folders: ["ConfigurationPolicies"] })).toMatchObject({
+      recent: null, omissionNotice: expect.stringContaining("cannot be undone automatically"),
+    })
+  })
+
   it("does not persist operands Graph echoes while reading an OIB update", async () => {
     const canary = "secret echoed by Graph in OIB capture"
     const writes: string[] = []

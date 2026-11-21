@@ -64,7 +64,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ backupId, comparedWith: null, changes: [] })
     }
 
-    const { entries, partial } = await compareBackupFiles(previous, { id: backupId, metadata: current }, readBlob, compareObjects, MAX_DETAILED)
+    const { entries, partial, excludedPaths } = await compareBackupFiles(previous, { id: backupId, metadata: current }, readBlob, compareObjects, MAX_DETAILED)
     const items = entries.map(({ change, fields }) => {
       const type = typeForFolder(change.folder)
       const name = (change.file ?? "").replace(/\.json$/, "")
@@ -72,7 +72,7 @@ export async function POST(request: NextRequest) {
     })
     const order = { removed: 0, modified: 1, added: 2 }
     items.sort((a, b) => order[a.change] - order[b.change] || a.typeLabel.localeCompare(b.typeLabel) || a.name.localeCompare(b.name))
-    return NextResponse.json({ backupId, comparedWith: previous.id, changes: items, partial })
+    return NextResponse.json({ backupId, comparedWith: previous.id, changes: items, partial, excludedPaths })
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Changes could not be listed." }, { status: 500 })
   }

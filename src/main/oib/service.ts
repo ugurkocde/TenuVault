@@ -50,7 +50,7 @@ const failure = (folder: string, error: string) =>
   folder === "DriverUpdateProfiles" && /^An error has occurred|forbidden/i.test(error) ? `${error.replace(/\.?\s*$/, ".")} ${DRIVER_LICENSE_NOTE}` : error
 
 let store: KeyValueStore | null = null
-let readOmissionPolicy: ((tenantId: string) => Promise<OmissionOptions>) | undefined
+let readOmissionPolicy: ((tenantId: string) => Promise<OmissionOptions & { generation?: string }>) | undefined
 
 export function setOibOmissionPolicy(read: typeof readOmissionPolicy): void {
   readOmissionPolicy = read
@@ -338,7 +338,11 @@ async function backupOptions(body: RecordJson): Promise<OibBackupOptions> {
   const notice = omission?.enabled ? { omissionNotice: "Values left out of a saved previous version cannot be undone automatically. Keep a backup containing those values if you need to restore them." } : {}
   if (!hasStorage(body)) return { recent: null, ...notice }
   // A failed or cancelled backup holds only part of the tenant, so it never hides an older finished one.
-  const finished = (await tenantBackups(body, tenant)).filter((backup) => !["running", "incomplete", "failed", "cancelled"].includes(normalizeBackupStatus(backup)))
+  const backups = await tenantBackups(body, tenant).catch((error: unknown) => {
+    if (!omission?.enabled) throw error
+    return []
+  })
+  const finished = backups.filter((backup) => !["running", "incomplete", "failed", "cancelled"].includes(normalizeBackupStatus(backup)))
   for (const backup of finished.slice(0, RECENT_CANDIDATES)) {
     // A backup that cannot be read is passed over, like one recorded for another tenant.
     const recent = await inspectBackup(body, tenant, backup, folders).catch(() => null)
@@ -436,6 +440,7 @@ async function deploy(body: RecordJson, kind: OibRun["kind"]): Promise<OibRun> {
       const omission = await readOmissionPolicy?.(tenant)
       const run: OibRun = {
         runId: randomUUID(), tenantId: tenant, createdAt: new Date().toISOString(), kind, platform, reference: pack.catalog.reference, commit: pack.catalog.commit,
+        omission: { enabled: omission?.enabled ?? false, scripts: omission?.scripts ?? false, generation: omission?.generation ?? "default" },
         ...(backupFolder ? { backupFolder } : {}), backupMode: backup.mode, ...(pilot ? { pilotGroupId: pilot.toLowerCase() } : {}), created: [], updated: [], failed: [], skipped: [],
       }
       report({ stage: "Checking existing policies" })

@@ -229,4 +229,4 @@ A refusal that retrying cannot fix (an unknown or expired certificate, a missing
 
 ## Secret omission
 
-The Backup Reader follows the tenant's **Leave secret values out of policy backups** setting. In this mode it does not request the decrypted values of OMA-URI strings. If the tenant uses a shared Azure policy, the Backup Reader uses its existing storage identity to read it even when it saves backups on this device. An unreadable policy stops the backup. [Backup coverage](/backups/coverage/#leave-secret-values-out-of-policy-backups)
+The Backup Reader follows the tenant's **Leave secret values out of policy backups** setting. In this mode it does not request the decrypted values of OMA-URI strings. The Backup Reader reads the policy from the storage it writes to. For Azure backups it uses its existing storage identity. If this installation previously saw omission enabled on that account, a missing or unreadable policy stops the backup. [Backup coverage](/backups/coverage/#leave-secret-values-out-of-policy-backups)

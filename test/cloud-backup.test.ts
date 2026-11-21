@@ -96,6 +96,10 @@ describe("parseCloudStatus", () => {
     expect(() => requireCloudOmissionSupport(version, "true")).toThrow("must be upgraded")
     expect(() => requireCloudOmissionSupport(version, true)).not.toThrow()
     expect(() => requireCloudOmissionSupport("1.6.0", false)).not.toThrow()
+    for (const unknown of [undefined, "", "unknown"]) {
+      expect(() => requireCloudOmissionSupport(unknown, false)).toThrow("Confirm that every cloud runbook")
+      expect(() => requireCloudOmissionSupport(unknown, true)).not.toThrow()
+    }
   })
   it("reads the runbook status for its tenant only", () => {
     expect(parseCloudStatus(body, TENANT)).toMatchObject({ lastStatus: "Success", backupFolder: "backup-2026-10-30-020000" })

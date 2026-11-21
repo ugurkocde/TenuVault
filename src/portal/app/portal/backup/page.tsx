@@ -47,14 +47,16 @@ const capitalize = (text: string) => text.charAt(0).toUpperCase() + text.slice(1
 
 /** Changes since the previous backup; `first` when no older backup exists. */
 function ChangesText({ backup, first }: { backup: BackupSummary; first: boolean }) {
+  if (backup.partialComparison && !backup.changes) return <span>Incomplete comparison</span>
   if (!backup.changes) return <span className="text-gray-500" title={first ? undefined : "Made by an older version, or the backup before it did not finish"}>{first ? "First backup" : "Not compared"}</span>
   const { added, modified, removed } = backup.changes
-  if (added + modified + removed === 0) return <span>None</span>
+  if (added + modified + removed === 0) return <span>{backup.partialComparison ? "No changes found in comparable values" : "None"}</span>
   return (
     <span className="flex flex-wrap gap-x-2">
       {added > 0 && <span className="text-green-700">+{added}</span>}
       {modified > 0 && <span className="text-amber-800">~{modified}</span>}
       {removed > 0 && <span className="text-red-700">-{removed}</span>}
+      {backup.partialComparison && <span>Incomplete comparison</span>}
     </span>
   )
 }
@@ -89,11 +91,22 @@ export default function BackupRestorePage() {
   // Shared with the drift page and kept between visits: shown at once, refreshed in the background.
   const backupList = useBackupList(selectedTenant)
   const backups = backupList.backups ?? NO_BACKUPS
-  const retentionMessage = retentionNote(plan, backups, new Date())
-  const isLoading = backupList.loading && backupList.backups === null
   // The tenant and storage the list is for. Notices are keyed by it, so their state, such as a check
   // after a key import, never carries over to another tenant's list.
   const listIdentity = `${selectedTenant?.credentials?.tenantId?.toLowerCase() ?? ""}/${selectedTenant?.resources?.storageAccountName?.toLowerCase() ?? ""}`
+  const omissionTenant = selectedTenant?.credentials?.tenantId
+  const [omissionStatus, setOmissionStatus] = useState<{ identity: string; value: Awaited<ReturnType<typeof bridge.backups.omission>> } | null>(null)
+  useEffect(() => {
+    if (!omissionTenant || backupList.loading || activeTab !== "backup") return
+    let current = true
+    void bridge.backups.omission(omissionTenant).then(value => {
+      if (current) setOmissionStatus({ identity: listIdentity, value })
+    }).catch(() => { if (current) setOmissionStatus(null) })
+    return () => { current = false }
+  }, [activeTab, omissionTenant, listIdentity, backupList.loading])
+  const omissionWarnings = omissionStatus?.identity === listIdentity ? omissionStatus?.value : undefined
+  const retentionMessage = retentionNote(plan, backups, new Date())
+  const isLoading = backupList.loading && backupList.backups === null
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [restoreFrom, setRestoreFrom] = useState<string | null>(null)
   const [setupError, setSetupError] = useState("")
@@ -341,6 +354,10 @@ export default function BackupRestorePage() {
               </p>
             )}
             <LegacySealedBackupsNotice key={`sealed:${listIdentity}`} count={backupList.sealed} onImported={async () => { await backupList.refresh({ force: true }) }} />
+            {omissionWarnings?.warnings?.map(({ folder, producer, account }) => (
+              <Alert key={`${account}/${folder}`}><AlertDescription>{producer} did not record omission for {folder} in {account}.</AlertDescription></Alert>
+            ))}
+            {omissionWarnings?.historyUnavailable && <Alert><AlertDescription>Some backup history could not be checked for omission.</AlertDescription></Alert>}
             {retentionMessage && (
               <p className="mb-4 text-sm text-gray-500">
                 {retentionMessage}{" "}

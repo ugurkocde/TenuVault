@@ -419,9 +419,9 @@ export class Restorer {
    * clearly, "forbidden" when the app registration may not read it, and undefined for any other
    * unclear answer (such as a server error), so a failed check never masquerades as a missing dependency.
    */
-  private async existsLive(path: string, id: string): Promise<boolean | "forbidden" | undefined> {
+  private async existsLive(path: string, id: string, fresh = false): Promise<boolean | "forbidden" | undefined> {
     const cached = this.liveDependencies.get(path)
-    if (cached !== undefined) return cached
+    if (!fresh && cached !== undefined) return cached
     let exists: boolean | "forbidden" | undefined
     try {
       const response = await this.graph("GET", path)
@@ -436,14 +436,13 @@ export class Restorer {
     return exists
   }
 
-  private async blockedByOmission(steps: { body: Item }[]): Promise<string | undefined> {
-    const dependencies = this.options.omittedDependencies
+  private async blockedByOmission(steps: { body: Item }[], dependencies = this.options.omittedDependencies): Promise<string | undefined> {
     if (!dependencies?.size) return undefined
     for (const step of steps) {
       for (const reference of dependencyReferences(step.body, true)) {
         const folder = dependencies.get(reference.id.toLowerCase())
         const type = folder ? typeForFolder(folder) : undefined
-        if (type && (this.options.crossTenant || await this.existsLive(`${type.path}/${encodeURIComponent(reference.id)}`, reference.id) !== true)) {
+        if (type && (this.options.crossTenant || await this.existsLive(`${type.path}/${encodeURIComponent(reference.id)}`, reference.id, true) !== true)) {
           return `The dependency at ${reference.path} was skipped because its backup leaves out values, and it could not be verified in the target tenant. Restore the dependency from a backup with its values first.`
         }
       }
@@ -548,6 +547,8 @@ export class Restorer {
     } else if (await this.parentGone(entry.type, entry.id)) {
       return gone
     }
+    const omitted = await this.blockedByOmission([{ body: entry.body }, ...entry.steps])
+    if (omitted) return { success: false, path, partial: true, policyId: entry.id, retryable: false, error: omitted }
     return this.complete(entry.type, path, entry.id, entry.body, entry.action, entry.steps, entry.expectedCurrent)
   }
 
@@ -571,6 +572,8 @@ export class Restorer {
     const base = { path, policyId: id, policyName: typeof name === "string" ? name : undefined, action }
     const resolved = steps.map((step) => resolveStep(step, id))
     for (const [index, step] of resolved.entries()) {
+      const omitted = await this.blockedByOmission([step])
+      if (omitted) return { ...base, success: false, partial: priorSteps + index > 0, retryable: false, error: omitted }
       let message: string | undefined
       let safeToRetry = false
       let response: Awaited<ReturnType<GraphCall>> | undefined
@@ -616,7 +619,7 @@ export class Restorer {
     if (action === "updated" && !baseline && signal.kind !== "pending") return { ...base, error: `${base.error} The live object could not be fingerprinted. Review it before submitting.` }
     const exact = (entry: Step): ApprovalStep => ({ method: entry.method, path: entry.path, kind: entry.kind, body: entry.body ? JSON.stringify(entry.body) : undefined })
     const name = source[type.nameKey] ?? source.displayName ?? source.name
-    const record: RestoreApproval = { id: signal.kind === "pending" ? signal.code : randomUUID(), tenantId: context.tenantId, requesterId: context.requesterId, requesterName: context.requesterName, origin: "restore", backupPath: path, snapshotId, repairScope: this.options.repairScope,
+    const record: RestoreApproval = { id: signal.kind === "pending" ? signal.code : randomUUID(), tenantId: context.tenantId, requesterId: context.requesterId, requesterName: context.requesterName, origin: "restore", backupPath: path, snapshotId, repairScope: this.options.repairScope, omittedDependencies: this.options.omittedDependencies ? [...this.options.omittedDependencies] : undefined,
       label: typeof name === "string" ? name : type.label, folder: type.folder, operation: step.kind === "assignments" ? "assign" : action === "created" && !objectId ? "create" : "update",
       step: exact(step), remaining: remaining.map(exact), objectId, fingerprint: baseline ? approvalFingerprint(baseline, this.options.assignments) : undefined, submittedAt: new Date().toISOString(), status: signal.kind === "pending" ? "needsApproval" : "justification-required", justification: context.justification ?? "", stepNumber, totalSteps, action, source, assignments: this.options.assignments, mode: this.options.mode }
     if (signal.kind === "pending" && restoreApprovals(context.tenantId).some(entry => entry.id === signal.code)) return { ...base, approvalId: signal.code, approvalState: "submitted", error: "Already submitted for approval" }
@@ -645,10 +648,19 @@ export class Restorer {
     if (requester && (!context.requesterId || context.requesterId.toLowerCase() !== record.requesterId.toLowerCase())) throw new Error("Only the original requester can complete or withdraw this request")
   }
 
+  private async checkApprovalOmissions(record: RestoreApproval, steps: ApprovalStep[]): Promise<void> {
+    if (hasOmissions(record.source) || record.backupPath.split("/")[1] === ".omitted") throw new Error(OMISSION_BLOCKER)
+    const dependencies = record.omittedDependencies ? new Map(record.omittedDependencies) : this.options.omittedDependencies
+    const bodies = steps.flatMap(step => step.body ? [{ body: JSON.parse(step.body) as Item }] : [])
+    const omitted = await this.blockedByOmission([{ body: record.source }, ...bodies], dependencies)
+    if (omitted) throw new Error(omitted)
+  }
+
   async submitApproval(record: RestoreApproval, justification = record.justification): Promise<RestoreOutcome> {
     this.checkApprovalOwner(record)
     if (record.status !== "justification-required") throw new Error("This item was already submitted")
     if (!justification.trim() || justification.length > 700) throw new Error("Enter a justification of 1 to 700 characters")
+    await this.checkApprovalOmissions(record, [record.step, ...record.remaining])
     const response = await this.graph(record.step.method, record.step.path, record.step.body ? JSON.parse(record.step.body) as Item : undefined, { exactBody: record.step.body, justification })
     if (response.approval?.kind === "pending") {
       const draftId = record.id
@@ -682,6 +694,7 @@ export class Restorer {
         throw new Error("The live object changed after submission. Review it and start a fresh restore.")
       }
     }
+    await this.checkApprovalOmissions(record, [record.step, ...record.remaining])
     const bodies = [record.step, ...record.remaining].flatMap(step => step.body ? [JSON.parse(step.body) as Item] : [])
     const unresolved = await this.unresolved(bodies.flatMap(body => dependencyReferences(body)))
     if (unresolved.length) throw new Error(`Unresolved dependencies (${unresolved.join(", ")}). Restore them before completing this request.`)
@@ -701,7 +714,8 @@ export class Restorer {
     const id = record.objectId ?? (typeof response.id === "string" ? response.id : undefined)
     if (!id) throw new Error("Microsoft Graph did not return an object ID. Check Intune before continuing.")
     saveRestoreApproval({ ...record, objectId: id, status: "approved", continuationPending: true })
-    const next = new Restorer(this.graph, { ...this.options, mode: record.mode, assignments: record.assignments, repairScope: record.repairScope, approvalContext: { ...this.options.approvalContext!, justification: `${record.justification.slice(0, 686)} (${record.remaining[0]?.kind ?? "content"})` } })
+    await this.checkApprovalOmissions(record, record.remaining)
+    const next = new Restorer(this.graph, { ...this.options, omittedDependencies: record.omittedDependencies ? new Map(record.omittedDependencies) : this.options.omittedDependencies, mode: record.mode, assignments: record.assignments, repairScope: record.repairScope, approvalContext: { ...this.options.approvalContext!, justification: `${record.justification.slice(0, 686)} (${record.remaining[0]?.kind ?? "content"})` } })
     const steps = record.remaining.map(step => ({ ...step, body: step.body ? JSON.parse(step.body) as Item : {} }))
     const baseline = record.action === "updated" ? await this.current(type, id) : undefined
     const outcome = await next.complete(type, record.backupPath, id, record.source, record.action, steps, baseline, record.stepNumber)

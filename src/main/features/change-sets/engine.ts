@@ -1,4 +1,4 @@
-import { hasOmissions, OMISSION_BLOCKER, projectRollback } from "../../../shared/intune/secret-omission"
+import { hasOmissions, observablePair, OMISSION_BLOCKER, projectRollback, type OmissionOptions } from "../../../shared/intune/secret-omission"
 import { AuditEventType, AuditResult, AuditSeverity, type CreateAuditLogInput } from "../../../portal/lib/audit/types"
 import type { GraphCall } from "../../../portal/lib/policies/graph-restore"
 import { typeForFolder, type IntuneType, type Item } from "../../../shared/intune/registry"
@@ -13,7 +13,7 @@ import { FeatureError } from "../route"
 import { withTenantWrite } from "../write-lock"
 import { cisBenchmarksAllowed } from "../../frameworks/service"
 import { requirePreChangeBackup } from "./backup"
-import { createListingMemo, GraphReadError, observe, readBack, readCurrent, sameNameIds, writeOperation, type Observation } from "./graph"
+import { createListingMemo, GraphReadError, matchesObserved, observe, readBack, readCurrent, safeSnapshot, sameNameIds, writeOperation, type Observation } from "./graph"
 import {
   assignmentTargets,
   combinedFingerprint,
@@ -24,7 +24,6 @@ import {
   emptyResult,
   hashOf,
   irreversibleSteps,
-  matchesProposed,
   MAX_OPERATIONS,
   operationFingerprint,
   resultSummary,
@@ -303,6 +302,12 @@ function retain(deps: FeatureDeps, tenantId: string): void {
   deps.records.prune<ChangeSetContent>(CONTENT_DOMAIN, tenantId, KEPT_CHANGE_SETS, (record) => !used.has(record.id))
 }
 
+function reviewedDiff(type: IntuneType, before: Item | null, after: Item | null, omission?: OmissionOptions) {
+  if (!omission?.enabled) return diffConfigurations(type, before, after)
+  const [left, right] = observablePair(type.folder, before ?? {}, after ?? {}, false, omission)
+  return diffConfigurations(type, before ? left : null, after ? right : null)
+}
+
 /**
  * Freezes operations into a new change set in review. Reads the target once to name delete
  * targets and to compute the proposed diff; refuses unsupported types and actions, missing
@@ -319,6 +324,7 @@ export async function createChangeSet(deps: FeatureDeps, tenantId: string, input
   if (input.operations.length > MAX_OPERATIONS) throw new FeatureError(`A change set holds at most ${MAX_OPERATIONS} operations. Split the change.`)
   const graph = gatedGraph(await reader(deps, tenant, recovery ? { changeSetId: input.rollbackOf! } : undefined), input.origin?.workflow ?? "change-sets", tenantId, recovery)
   const listings = createListingMemo()
+  const omission = await deps.omissionPolicy?.(tenant)
   const operations: ChangeOperation[] = []
   const entries: ChangeSetContent["entries"] = {}
   const seenTargets = new Set<string>()
@@ -346,14 +352,14 @@ export async function createChangeSet(deps: FeatureDeps, tenantId: string, input
     let observed: Observation
     requireCisChangeSetEnabled(input.origin?.workflow ?? "change-sets", tenantId, recovery)
     try {
-      observed = await observe(graph, type, { action: operation.action, targetId, name: String(body?.[type.nameKey] ?? operation.name ?? "") }, listings)
+      observed = await observe(graph, type, { action: operation.action, targetId, name: String(body?.[type.nameKey] ?? operation.name ?? "") }, listings, omission)
     } catch (error) {
       asFeatureError(error, "The target tenant could not be read.")
     }
     if (operation.action !== "create" && !observed.snapshot) throw new FeatureError(`The target object of operation ${index + 1} does not exist in this tenant.`, 409)
     const name = String(body?.[type.nameKey] ?? observed.snapshot?.[type.nameKey] ?? operation.name ?? "").trim()
     if (!name) throw new FeatureError("Every operation needs an object name.")
-    const diff = diffConfigurations(type, operation.action === "create" ? null : observed.snapshot, body)
+    const diff = reviewedDiff(type, operation.action === "create" ? null : observed.snapshot, body, omission)
     operations.push({
       key,
       folder: type.folder,
@@ -459,7 +465,7 @@ export async function previewChangeSet(deps: FeatureDeps, tenantId: string, id: 
     let observed: Observation
     requireCisChangeSetEnabled(record.origin.workflow, tenantId, recovery)
     try {
-      observed = await observe(graph, type, operation, listings, { omitEncryptedOma: omission?.enabled })
+      observed = await observe(graph, type, operation, listings, omission)
     } catch (error) {
       asFeatureError(error, "The target tenant could not be read.")
     }
@@ -469,7 +475,9 @@ export async function previewChangeSet(deps: FeatureDeps, tenantId: string, id: 
     if (operation.action !== "create" && observed.snapshot && hasOmissions(projectRollback(operation.folder, observed.snapshot, omission))) warnings.push(`${operation.name}: values will be left out of the rollback capture.`)
     if (observed.redacted && operation.action !== "create") warnings.push(`${operation.name} holds values Intune masks. They are not stored in the capture, so a rollback of this object is not supported.`)
     const body = entries[operation.key]?.body ?? null
-    const diff = operation.action === "update" && observed.snapshot && body ? diffConfigurations(type, observed.snapshot, body) : { entries: operation.diff, truncated: operation.diffTruncated }
+    const diff = omission?.enabled || (operation.action === "update" && observed.snapshot && body)
+      ? reviewedDiff(type, observed.snapshot, body, omission)
+      : { entries: operation.diff, truncated: operation.diffTruncated }
     operations.push({
       key: operation.key,
       folder: operation.folder,
@@ -653,7 +661,14 @@ type Reconciled = { decision: "verified"; objectId: string; readBack: OperationR
  * neither state may have been partly written (for example the configuration but not the
  * assignments), so it stays uncertain and rollback restores it from the capture.
  */
-async function reconcile(graph: GraphCall, type: IntuneType, operation: ChangeOperation, result: OperationResult, entry: { body: Item | null; assignments: Item[] | null }, captured: { body: Item | null; sameNameIds: string[] }): Promise<Reconciled> {
+function sameCapturedState(type: IntuneType, action: ChangeOperation["action"], before: Item | null, after: Item | null, omission?: OmissionOptions): boolean {
+  if (!before || !after) return before === after
+  const [left, right] = omission?.enabled ? observablePair(type.folder, before, after, false, omission) : [before, after]
+  const fingerprint = (snapshot: Item) => operationFingerprint(action, { snapshot, sameNameIds: [] })
+  return fingerprint(left) === fingerprint(right)
+}
+
+async function reconcile(graph: GraphCall, type: IntuneType, operation: ChangeOperation, result: OperationResult, entry: { body: Item | null; assignments: Item[] | null }, captured: { body: Item | null; sameNameIds: string[] }, omission?: OmissionOptions): Promise<Reconciled> {
   try {
     if (operation.action === "create") {
       let id = result.objectId
@@ -664,25 +679,27 @@ async function reconcile(graph: GraphCall, type: IntuneType, operation: ChangeOp
         if (fresh.length > 1) return { decision: "stop", status: "uncertain", message: `Several new objects named "${operation.name}" exist. Check Intune and remove duplicates before retrying.`, objectId: null }
         id = fresh[0]!
       }
-      const live = await readCurrent(graph, type, id)
+      const live = await readCurrent(graph, type, id, { omitEncryptedOma: omission?.enabled })
       if (!live) return { decision: "stop", status: "uncertain", message: "The created object no longer exists. Check Intune before retrying.", objectId: id }
-      if (matchesProposed(type, entry.body ?? {}, live) && (entry.assignments === null || sameAssignments(entry.assignments, live.assignments))) return { decision: "verified", objectId: id, readBack: "match", readBackHash: snapshotHash(type, live) }
+      if (matchesObserved(type, entry.body ?? {}, live, omission) && (entry.assignments === null || sameAssignments(entry.assignments, live.assignments))) return { decision: "verified", objectId: id, readBack: "match", readBackHash: snapshotHash(type, safeSnapshot(type, live, omission)) }
       return { decision: "stop", status: "uncertain", message: "An object was created but it does not match the proposed configuration. Review it in Intune.", objectId: id }
     }
-    const live = await readCurrent(graph, type, operation.targetId!)
+    const live = await readCurrent(graph, type, operation.targetId!, { omitEncryptedOma: omission?.enabled })
     if (operation.action === "delete") {
       if (!live) return { decision: "verified", objectId: operation.targetId!, readBack: "missing" }
     } else {
       if (!live) return { decision: "stop", status: "failed", message: "The object no longer exists in the tenant. An earlier attempt may have written to it before it was deleted; check Intune.", objectId: operation.targetId }
-      if (matchesProposed(type, entry.body ?? {}, live) && (entry.assignments === null || sameAssignments(entry.assignments, live.assignments))) return { decision: "verified", objectId: operation.targetId!, readBack: "match", readBackHash: snapshotHash(type, live) }
+      if (matchesObserved(type, entry.body ?? {}, live, omission) && (entry.assignments === null || sameAssignments(entry.assignments, live.assignments))) return { decision: "verified", objectId: operation.targetId!, readBack: "match", readBackHash: snapshotHash(type, safeSnapshot(type, live, omission)) }
     }
     const sanitized = sanitizeSnapshot(type, live!).snapshot
-    const before = captured.body ? operationFingerprint(operation.action, { snapshot: captured.body, sameNameIds: [] }) : "missing"
-    if (operationFingerprint(operation.action, { snapshot: sanitized, sameNameIds: [] }) === before) return { decision: "write" }
+    if (sameCapturedState(type, operation.action, captured.body, sanitized, omission)) return { decision: "write" }
     if (operation.action === "update") return { decision: "stop", status: "uncertain", message: "The object holds neither the captured nor the proposed state, so an earlier attempt may have written part of the update. It is not written again; review it in Intune or roll it back to the captured state.", objectId: operation.targetId }
     return { decision: "stop", status: "failed", message: "The object changed after the review and holds neither the captured nor the proposed state. Create a fresh review.", objectId: operation.targetId }
   } catch (error) {
-    return { decision: "stop", status: "uncertain", message: `Live state could not be read to reconcile: ${error instanceof Error ? error.message : String(error)}`, objectId: result.objectId }
+    const message = omission?.enabled
+      ? `Microsoft Graph returned HTTP ${error instanceof GraphReadError ? error.status : 502}.`
+      : error instanceof Error ? error.message : String(error)
+    return { decision: "stop", status: "uncertain", message: `Live state could not be read to reconcile: ${message}`, objectId: result.objectId }
   }
 }
 
@@ -751,6 +768,7 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
 
     let preChange = record.preChange
     let captured: ChangeSetContent["entries"] = {}
+    let omission: ChangeSetContent["omission"]
     const capturedNames: Record<string, string[]> = {}
     let graph: GraphCall
     let gated: GraphCall
@@ -764,13 +782,14 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
       requireCisChangeSetEnabled(record.origin.workflow, tenantId, recovery)
       gated = gatedGraph(graph, record.origin.workflow, tenantId, recovery)
       if (!preChange) {
-        const omission = await deps.omissionPolicy?.(tenant)
+        const policy = await deps.omissionPolicy?.(tenant)
+        omission = { enabled: policy?.enabled ?? false, scripts: policy?.scripts ?? false, generation: policy?.generation ?? "default" }
         const check = async () => {
           const observations: Record<string, Observation> = {}
           for (const operation of record.operations) {
             requireCisChangeSetEnabled(record.origin.workflow, tenantId, recovery)
             try {
-              observations[operation.key] = await observe(gated, typeOf(operation.folder), operation, listings, { omitEncryptedOma: omission?.enabled })
+              observations[operation.key] = await observe(gated, typeOf(operation.folder), operation, listings, omission)
             } catch (error) {
               asFeatureError(error, "The target tenant could not be read, so nothing was written.")
             }
@@ -795,7 +814,7 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
           const body = observed.snapshot && projectRollback(operation.folder, observed.snapshot, omission)
           return [operation.key, { body, assignments: body && Array.isArray(body.assignments) ? body.assignments as Item[] : null }]
         }))
-        const capture = deps.records.create<ChangeSetContent>(CONTENT_DOMAIN, tenant, { title: record.title, status: "frozen", summary: "Pre-change capture of a change set.", kind: "capture", changeSetId: record.id, entries: captured }, { actor, reason: "Captured the pre-change state" })
+        const capture = deps.records.create<ChangeSetContent>(CONTENT_DOMAIN, tenant, { title: record.title, status: "frozen", summary: "Pre-change capture of a change set.", kind: "capture", changeSetId: record.id, omission, entries: captured }, { actor, reason: "Captured the pre-change state" })
         preChange = {
           capturedAt: deps.now().toISOString(),
           backupFolder,
@@ -806,7 +825,10 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
           }),
         }
       } else {
-        captured = content(deps, tenant, preChange.captureId).entries
+        const capture = content(deps, tenant, preChange.captureId)
+        captured = capture.entries
+        omission = capture.omission ?? (Object.values(captured).some(({ body }) => hasOmissions(body))
+          ? { enabled: true, scripts: true, generation: "legacy" } : undefined)
       }
       requireCisChangeSetEnabled(record.origin.workflow, tenantId, recovery)
     } catch (error) {
@@ -841,7 +863,7 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
       const entry = entries[operation.key]!
       const at = () => deps.now().toISOString()
       if (current.status === "uncertain" || current.status === "writing") {
-        const settled = await reconcile(gated, type, operation, current, entry, { body: captured[operation.key]?.body ?? null, sameNameIds: capturedNames[operation.key] ?? [] })
+        const settled = await reconcile(gated, type, operation, current, entry, { body: captured[operation.key]?.body ?? null, sameNameIds: capturedNames[operation.key] ?? [] }, omission)
         if (stopIfCisRevoked()) break operations
         if (settled.decision === "verified") {
           saveResult(deps, tenant, id, operation.key, { ...current, status: "verified", objectId: settled.objectId, readBack: settled.readBack, ...(settled.readBackHash ? { readBackHash: settled.readBackHash } : {}), message: "Reconciled from live state; not written again.", at: at() }, actor, `Reconciled ${operation.name}: verified without a repeat write`)
@@ -854,14 +876,17 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
       } else if (!firstAttempt) {
         let observed: Observation | null = null
         try {
-          observed = await observe(gated, type, operation)
+          observed = await observe(gated, type, operation, undefined, omission)
         } catch (error) {
           if (stopIfCisRevoked()) break operations
           saveResult(deps, tenant, id, operation.key, { ...current, status: current.status, message: `The target could not be read before retrying: ${error instanceof Error ? error.message : String(error)}`, at: at() }, actor, `Could not re-check ${operation.name}`)
           continue
         }
         if (stopIfCisRevoked()) break operations
-        if (observed.fingerprint !== review.operationFingerprints[operation.key]) {
+        const matches = omission?.enabled && operation.action !== "create"
+          ? sameCapturedState(type, operation.action, captured[operation.key]?.body ?? null, observed.snapshot, omission)
+          : observed.fingerprint === review.operationFingerprints[operation.key]
+        if (!matches) {
           saveResult(deps, tenant, id, operation.key, { ...current, status: "failed", message: "The object changed after approval. Nothing was written in this attempt; create a fresh review.", at: at() }, actor, `${operation.name} changed after approval`)
           continue
         }
@@ -871,7 +896,7 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
       saveResult(deps, tenant, id, operation.key, attempt, actor, `Writing ${operation.name}`)
       const outcome = await writeOperation(writer, type, { action: operation.action, targetId: operation.targetId, proposed: entry.body, assignments: entry.assignments, current: captured[operation.key]?.body ?? null }, (createdId) => {
         saveResult(deps, tenant, id, operation.key, { ...attempt, objectId: createdId }, actor, `Created ${operation.name}`)
-      })
+      }, omission)
       if (outcome.state === "approval") {
         saveResult(deps, tenant, id, operation.key, { ...attempt, status: "approval", partial: outcome.partial, objectId: outcome.objectId, message: outcome.message, at: at() }, actor, `${operation.name} needs Multi Admin Approval`)
         continue
@@ -884,7 +909,7 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
         saveResult(deps, tenant, id, operation.key, { ...attempt, status: "uncertain", objectId: outcome.objectId, message: `${outcome.message} Retry reconciles from live state before writing again.`, at: at() }, actor, `${operation.name} has an uncertain outcome`)
         continue
       }
-      const check = await readBack(gated, type, { action: operation.action, objectId: outcome.objectId, proposed: entry.body, assignments: entry.assignments })
+      const check = await readBack(gated, type, { action: operation.action, objectId: outcome.objectId, proposed: entry.body, assignments: entry.assignments }, omission)
       const status: OperationResult["status"] = check.state === "match" ? "verified" : "uncertain"
       const message = check.state === "match" ? "Written and verified by read-back." : check.state === "denied" ? `Written, but the read-back was denied or failed (${check.message}). The outcome is unverified.` : check.state === "missing" ? "Written, but the object could not be found on read-back." : "Written, but the read-back differs from the proposed configuration."
       const readBackHash = check.state === "match" && check.live ? snapshotHash(type, check.live) : undefined

@@ -9,6 +9,11 @@ import { manifestStatus, stoppedEarly } from "../../../shared/intune/backup-stat
 /** One recorded backup item: the Intune object ID and the fingerprint of its backed-up content. */
 export interface ManifestEntry { id: string; hash: string; omitted?: OmittedField[]; rawHash?: string }
 
+export function omittedDependencyMap(manifest: ReadonlyMap<string, ManifestEntry> | null): Map<string, string> {
+  return new Map([...(manifest ?? [])].flatMap(([path, entry]) =>
+    entry.omitted ? [[entry.id.toLowerCase(), path.split("/")[1]!] as const] : []))
+}
+
 /** The fingerprint a backup records for a snapshot, without the fields Intune changes on every read or write. */
 export const snapshotHash = (snapshot: Item) => createHash("sha256").update(JSON.stringify(comparableSnapshot(snapshot))).digest("base64").slice(0, 22)
 

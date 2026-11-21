@@ -16,6 +16,16 @@
       "maxLength": 24,
       "metadata": { "description": "Existing storage account that holds the intune-backups container, the same account the tenant uses in TenuVault. Deploy this template into that storage account's resource group (New-TenuVaultStorage.ps1 uses rg-tenuvault-backups). For a storage account in another resource group, use New-TenuVaultCloudBackup.ps1 instead." }
     },
+    "omissionMigrationIdentityId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": { "description": "For a storage move, an existing user-assigned managed identity with permission to read the Automation variables and the previous storage blob, and create the policy blob in the new account. Without it, re-enable omission after moving the account." }
+    },
+    "initializeOmissionEnrollment": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": { "description": "Set false when reusing an existing omission enrollment variable without a migration identity. A first-time deployment needs this variable to remember which accounts used omission." }
+    },
     "location": {
       "type": "string",
       "defaultValue": "[resourceGroup().location]",
@@ -88,6 +98,7 @@
   },
   "variables": {
     "tenantKey": "[take(toLower(parameters('tenantId')), 8)]",
+    "omissionMigrationName": "[concat('tenuvault-omission-', variables('tenantKey'))]",
     "runbookName": "Invoke-TenuVaultBackup",
     "scheduleName": "[concat('TenuVaultBackup-', variables('tenantKey'))]",
     "container": "intune-backups",
@@ -199,6 +210,61 @@
       }
     },
     {
+      "condition": "[not(empty(parameters('omissionMigrationIdentityId')))]",
+      "type": "Microsoft.Resources/deploymentScripts",
+      "apiVersion": "2023-08-01",
+      "name": "[variables('omissionMigrationName')]",
+      "location": "[parameters('location')]",
+      "kind": "AzureCLI",
+      "identity": {
+        "type": "UserAssigned",
+        "userAssignedIdentities": "[createObject(parameters('omissionMigrationIdentityId'), createObject())]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName'))]"
+      ],
+      "properties": {
+        "azCliVersion": "2.67.0",
+        "retentionInterval": "P1D",
+        "cleanupPreference": "OnSuccess",
+        "timeout": "PT10M",
+        "forceUpdateTag": "[deployment().name]",
+        "environmentVariables": [
+          {
+            "name": "AUTOMATION_ID",
+            "value": "[resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName'))]"
+          },
+          {
+            "name": "TENANT_ID",
+            "value": "[toLower(parameters('tenantId'))]"
+          },
+          {
+            "name": "TENANT_KEY",
+            "value": "[variables('tenantKey')]"
+          },
+          {
+            "name": "NEW_ACCOUNT",
+            "value": "[parameters('storageAccountName')]"
+          }
+        ],
+        "scriptContent": "set -eu\nwarning='If this deployment moved cloud backup storage, enable omission again for the new account before running backups if this tenant requires it.'\nreport() {\n  printf '%s\\n' \"$1\"\n  jq -n --arg message \"$1\" --arg binding \"${2:-}\" '{message: $message, binding: $binding}' > \"$AZ_SCRIPTS_OUTPUT_PATH\"\n}\nlookup() {\n  value=$(az rest --method get --url \"https://management.azure.com$AUTOMATION_ID/variables/$1?api-version=2023-11-01\" --query properties.value -o tsv --only-show-errors 2>/dev/null) || return 1\n  printf '%s' \"$value\" | jq -r 'select(type == \"string\")'\n}\nbinding=$(lookup \"TenuVaultOmissionAccount-$TENANT_KEY\" || true)\nprevious=$(lookup \"TenuVaultStorageAccount-$TENANT_KEY\" || lookup 'TenuVaultStorageAccount' || true)\nif [ \"$previous\" = \"$NEW_ACCOUNT\" ]; then report 'Cloud backup storage was unchanged.' \"$binding\"; exit 0; fi\nif [[ ! \"$previous\" =~ ^[a-z0-9]{3,24}$ ]]; then report \"$warning\" \"$binding\"; exit 0; fi\nblob=\".tenuvault-control/$TENANT_ID/secret-omission.json\"\nfile=$(mktemp)\ntrap 'rm -f \"$file\"' EXIT\nif az storage blob download --account-name \"$previous\" --auth-mode login --container-name intune-backups --name \"$blob\" --file \"$file\" --overwrite --only-show-errors >/dev/null 2>&1 &&\n   jq -e --arg tenant \"$TENANT_ID\" '.version == 1 and .tenantId == $tenant and (.enabled | type == \"boolean\")' \"$file\" >/dev/null &&\n   az storage blob upload --account-name \"$NEW_ACCOUNT\" --auth-mode login --container-name intune-backups --name \"$blob\" --file \"$file\" --if-none-match '*' --content-type application/json --only-show-errors >/dev/null 2>&1; then\n  if jq -e '.enabled' \"$file\" >/dev/null; then binding=$(printf '%s\\n' \"$binding\" \"$NEW_ACCOUNT\" | tr ',' '\\n' | awk 'NF && !seen[$0]++' | paste -sd, -); fi\n  report \"Copied the omission policy to $NEW_ACCOUNT.\" \"$binding\"\nelif az storage blob download --account-name \"$NEW_ACCOUNT\" --auth-mode login --container-name intune-backups --name \"$blob\" --file \"$file\" --overwrite --only-show-errors >/dev/null 2>&1 &&\n     jq -e --arg tenant \"$TENANT_ID\" '.version == 1 and .tenantId == $tenant and (.enabled | type == \"boolean\")' \"$file\" >/dev/null; then\n  if jq -e '.enabled' \"$file\" >/dev/null; then binding=$(printf '%s\\n' \"$binding\" \"$NEW_ACCOUNT\" | tr ',' '\\n' | awk 'NF && !seen[$0]++' | paste -sd, -); fi\n  report \"Keeping the omission policy already set on $NEW_ACCOUNT.\" \"$binding\"\nelse\n  report \"$warning\" \"$binding\"\nfi"
+      }
+    },
+    {
+      "condition": "[or(parameters('initializeOmissionEnrollment'), not(empty(parameters('omissionMigrationIdentityId'))))]",
+      "type": "Microsoft.Automation/automationAccounts/variables",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(parameters('automationAccountName'), '/TenuVaultOmissionAccount-', variables('tenantKey'))]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName'))]",
+        "[resourceId('Microsoft.Resources/deploymentScripts', variables('omissionMigrationName'))]"
+      ],
+      "properties": {
+        "value": "[concat('\"', if(empty(parameters('omissionMigrationIdentityId')), '', reference(variables('omissionMigrationName')).outputs.binding), '\"')]",
+        "isEncrypted": false
+      }
+    },
+    {
       "copy": {
         "name": "automationVariables",
         "count": "[length(variables('variableValues'))]"
@@ -206,7 +272,10 @@
       "type": "Microsoft.Automation/automationAccounts/variables",
       "apiVersion": "2023-11-01",
       "name": "[concat(parameters('automationAccountName'), '/', variables('variableValues')[copyIndex()].name)]",
-      "dependsOn": ["[resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName'))]"],
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName'))]",
+        "[resourceId('Microsoft.Resources/deploymentScripts', variables('omissionMigrationName'))]"
+      ],
       "properties": {
         "value": "[concat('\"', variables('variableValues')[copyIndex()].value, '\"')]",
         "isEncrypted": false
@@ -252,6 +321,10 @@
       "type": "string",
       "value": "DeviceManagementConfiguration.Read.All, DeviceManagementApps.Read.All, DeviceManagementServiceConfig.Read.All, DeviceManagementScripts.Read.All, DeviceManagementRBAC.Read.All (plus DeviceManagementManagedDevices.Read.All only when includeDeviceCategories is true)",
       "metadata": { "description": "Read-only Microsoft Graph application roles for the managed identity. Until they are assigned every run fails with access denied, on purpose." }
+    },
+    "omissionPolicyMigration": {
+      "type": "string",
+      "value": "[if(empty(parameters('omissionMigrationIdentityId')), 'If this deployment moved cloud backup storage, enable omission again for the new account before running backups if this tenant requires it.', reference(variables('omissionMigrationName')).outputs.message)]"
     },
     "pasteIntoTenuVault": {
       "type": "string",

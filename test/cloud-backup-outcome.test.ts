@@ -66,8 +66,8 @@ describe("cloud backup result notes", () => {
     expect(backupRunbook).toContain('$script:OutcomeContainer = "tenuvault-backup-results"')
     expect(backupRunbook).not.toMatch(/tenuvault-notification-state/)
     expect(backupRunbook).toContain('/$script:OutcomeContainer/cloud-backup-outcomes/')
-    // Every path that ends a run leaves a note: tokens and scope, listing, write phase and the result.
-    expect(backupRunbook.match(/Send-TvBackupOutcome -Account/g)).toHaveLength(4)
+    // Every path that ends a run leaves a note: tokens and scope, listing, folder ownership, write phase and the result.
+    expect(backupRunbook.match(/Send-TvBackupOutcome -Account/g)).toHaveLength(5)
   })
 
   it("the watcher leaves failed folders out of the missed backup check and remembers them in its state", () => {

@@ -8,6 +8,7 @@ export type BackupItems = Record<string, {
   hash: string
   omitted?: OmittedField[]
   rawHash?: string
+  partialCollections?: string[]
   /**
    * For types whose assignments earlier versions could not read (assignmentsFormerlyExpanded): the hash
    * with `assignments: []`, as those versions recorded it.

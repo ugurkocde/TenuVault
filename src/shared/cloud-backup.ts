@@ -136,7 +136,11 @@ export function cloudRunbookLacksOmission(version: string): boolean {
 }
 
 export function requireCloudOmissionSupport(version: string | undefined, cloudStopped: unknown): void {
-  if (version && cloudRunbookLacksOmission(version) && cloudStopped !== true) {
+  if (cloudStopped === true) return
+  if (!version || !/^\d+\.\d+\.\d+$/.test(version.trim())) {
+    throw new Error("Confirm that every cloud runbook for this tenant has been upgraded or stopped before enabling omission.")
+  }
+  if (cloudRunbookLacksOmission(version)) {
     throw new Error(`Cloud runbook ${version} must be upgraded, or cloud backups must be stopped, before enabling omission.`)
   }
 }

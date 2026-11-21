@@ -1,7 +1,7 @@
 import { restoreApprovals, dismissRestoreApproval, saveRestoreApproval } from "../../../../main/storage/restore-approvals"
 import { parseDependencyMappings } from "../../../../shared/intune/recovery"
 import { randomUUID } from "node:crypto"
-import { checkRestoreManifest, verifySnapshot, type ManifestEntry } from "~/lib/policies/backup-manifest"
+import { checkRestoreManifest, omittedDependencyMap, verifySnapshot, type ManifestEntry } from "~/lib/policies/backup-manifest"
 import { readOwnedBackup, UNTAGGED_BACKUP } from "~/lib/policies/backup-owner"
 import { validPolicyPath } from "~/lib/policies/restore"
 import { graphCaller, Restorer, DependencyMappingError, type RestoreOutcome } from "~/lib/policies/graph-restore"
@@ -174,11 +174,9 @@ export async function POST(request: NextRequest) {
     const checked = checkRestoreManifest(metadata, backupId, paths, restoreType !== 'selective')
     if (!checked.ok) return NextResponse.json({ error: checked.error }, { status: 400 })
     const manifest = checked.manifest
-    const omittedDependencies = new Map<string, string>()
+    const omittedDependencies = omittedDependencyMap(manifest)
     if (restoreType !== "selective" && manifest) {
-      const omitted = [...manifest].filter(([, entry]) => entry.omitted)
-      paths = [...new Set([...paths, ...omitted.map(([path]) => path)])]
-      for (const [path, entry] of omitted) omittedDependencies.set(entry.id.toLowerCase(), path.split("/")[1]!)
+      paths = [...new Set([...paths, ...[...manifest].filter(([, entry]) => entry.omitted).map(([path]) => path)])]
     }
 
     const targets: Array<{ restorer: Restorer; targetTenantId?: string }> = targetTenants

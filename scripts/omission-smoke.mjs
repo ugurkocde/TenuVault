@@ -4,7 +4,9 @@ export async function checkOmission({ check, evaluate, restart, waitForText, wai
   const blocker = "Values were left out of this backup. Use a backup that includes them to restore this item."
   await check("omission survives an app restart and appears in comparison and restore preview", async () => {
     assert(!(await evaluate(`window.tenuvault.backups.omission("${tenantId}").then(policy => policy.enabled)`)), "omission was enabled by default")
-    await evaluate(`window.tenuvault.backups.setOmission("${tenantId}", true, false)`)
+    const blocked = await evaluate(`window.tenuvault.backups.setOmission("${tenantId}", true, false).then(() => false, error => error.message.includes("every cloud runbook"))`)
+    assert(blocked, "activating without a confirmed cloud runbook status did not require acknowledgement")
+    await evaluate(`window.tenuvault.backups.setOmission("${tenantId}", true, false, true)`)
     await restart()
     const policy = await evaluate(`window.tenuvault.backups.omission("${tenantId}")`)
     assert(policy.enabled && !policy.scripts, "the main-process setting did not survive restart")
@@ -18,7 +20,7 @@ export async function checkOmission({ check, evaluate, restart, waitForText, wai
       const original = window.fetch;
       const backupId = "${backupId}";
       const prior = "backup-2026-11-19-180000";
-      const backup = { id: backupId, timestamp: '2026-11-20T18:00:00Z', type: 'manual', status: 'Success', totalPolicies: 1, omittedPolicies: 1, size: 1024, duration: 1, counts: { DeviceConfigurations: 1 }, scope: null, comparedWith: prior, changes: { added: 0, modified: 0, removed: 0 } };
+      const backup = { id: backupId, timestamp: '2026-11-20T18:00:00Z', type: 'manual', status: 'Success', totalPolicies: 1, omittedPolicies: 1, size: 1024, duration: 1, counts: { DeviceConfigurations: 1 }, scope: null, comparedWith: prior, partialComparison: true, changes: { added: 0, modified: 0, removed: 0 } };
       const path = backupId + "/DeviceConfigurations/Baseline.json";
       const blocker = "${blocker}";
       const json = payload => Promise.resolve(Response.json(payload));
@@ -36,6 +38,7 @@ export async function checkOmission({ check, evaluate, restart, waitForText, wai
     const clicked = (text) => evaluate(`[...document.querySelectorAll('button')].find(button => button.textContent.trim() === ${JSON.stringify(text)})?.click()`)
     assert(await waitForText("1 with values left out"), "Backup History did not show the omission")
     await evaluate(`[...document.querySelectorAll('button')].find(button => button.textContent.includes('1 with values left out'))?.click()`)
+    assert(await waitForText("No changes found in comparable values"), "Backup History did not mark the summary as incomplete")
     await clicked("View Changes")
     assert(await waitForText("Some values could not be compared"), "the comparison did not show partial coverage")
     assert(await waitForText("No changes found in comparable values"), "the comparison reported a mode change as a policy change")

@@ -340,7 +340,11 @@ function itemsByIdentity(metadata: BackupMetadata): Map<string, { path: string; 
   if (!items) return null
   const entries = new Map<string, { path: string; item: BackupItems[string] }>()
   for (const [key, item] of Object.entries(items)) {
-    if (item && typeof item.file === 'string' && typeof item.hash === 'string') entries.set(key, { path: snapshotPath(key.split("/")[0]!, item), item })
+    if (item && typeof item.file === 'string' && typeof item.hash === 'string') {
+      const folder = key.split("/")[0]!
+      const id = key.slice(folder.length + 1).toLowerCase()
+      entries.set(`${canonicalFolder(folder)}/${id}`, { path: snapshotPath(folder, item), item })
+    }
   }
   return entries
 }
@@ -425,7 +429,7 @@ async function detectDrifts(
     // A file metadata names but storage does not hold cannot be compared; reported rather than
     // shown as the item being added or deleted.
     const missing = (path: string, backup: string) => warnings.push({ file: path, backup, message: 'Could not be compared: the file is missing from the backup.' })
-    const compared = (path: string) => options.folders.has(folderOf(path))
+    const compared = (path: string) => options.folders.has(canonicalFolder(folderOf(path)))
     for (const [key, after] of newerItems) {
       const before = olderItems.get(key)
       const newer = newerMap.get(after.path)
@@ -441,7 +445,12 @@ async function detectDrifts(
       if (!before || !older) { tasks.push({ name: after.path, change: 'added', newer }); continue }
       pairedOlder.add(before.path)
       // The same assignment handling as compareBackups: reading assignments now that an older version could not is no change.
-      if (sameItem(before.item, after.item)) { unchanged++; continue }
+      if (sameItem(before.item, after.item)) {
+        const excludedPaths = [...new Set([...(before.item.partialCollections ?? []), ...(after.item.partialCollections ?? [])])]
+        if (excludedPaths.length) warnings.push({ file: before.path, backup: newerBackup.name, message: `Paged collections could not be compared: ${excludedPaths.join(", ")}.`, excludedPaths })
+        unchanged++
+        continue
+      }
       // Named by the baseline file: reverting a modified item restores it from the baseline backup.
       tasks.push({ name: before.path, change: 'modified', newer, older })
     }
@@ -452,7 +461,8 @@ async function detectDrifts(
       tasks.push({ name: before.path, change: 'deleted', older })
     }
   }
-  const identifyLegacy = !!omission || Boolean(newerItems) !== Boolean(olderItems)
+  const hasLegacyAlias = [...olderMap.keys(), ...newerMap.keys()].some(path => canonicalFolder(folderOf(path)) !== folderOf(path))
+  const identifyLegacy = !!omission || hasLegacyAlias || Boolean(newerItems) !== Boolean(olderItems)
   if (identifyLegacy) {
     // A legacy file can have a different name from the same policy in the manifest. Learn
     // its identity before classifying additions or deletions, and keep failures indeterminate.
@@ -462,7 +472,7 @@ async function detectDrifts(
       const identified = await mapLimit(entries, READ_CONCURRENCY, async ([path, file]) => {
         signal?.throwIfAborted()
         const record = records.get(backup.name)?.get(path)
-        const folder = folderOf(path)
+        const folder = canonicalFolder(folderOf(path))
         if (record) return { folder, id: record.id, path, file }
         const content = await read(file, backup.name)
         if (content && typeof content.id === "string" && content.id) {
@@ -574,7 +584,9 @@ async function detectDrifts(
       const folder = folderOf(task.name)
       const masked = records.get(olderBackup.name)?.get(relative(task.older!))?.secretsMasked ||
         records.get(newerBackup.name)?.get(relative(task.newer!))?.secretsMasked
-      const compared = withoutUnreadAssignments(typeOfFile(task.name), ...observablePair(folder, olderContent, newerContent, masked, omission))
+      const [left, right, excluded] = observablePair(folder, olderContent, newerContent, masked, omission)
+      if (excluded.length) warnings.push({ file: task.name, backup: newerBackup.name, message: `Paged collections could not be compared: ${excluded.join(", ")}.`, excludedPaths: excluded })
+      const compared = withoutUnreadAssignments(typeOfFile(task.name), left, right)
       const changes = options.documentItems ? redactedChanges(compared[0], compared[1]) : compareObjects(...compared)
       if (changes.length === 0) return null
       const previousName = olderContent?.displayName || olderContent?.name
@@ -671,9 +683,10 @@ function folderOf(fileName: string): string {
   return parts[parts.length - 2] ?? ''
 }
 
+const canonicalFolder = (folder: string) => folder === "DeviceCompliancePolicies" ? "CompliancePolicies" : folder
+
 function typeOfFile(fileName: string) {
-  const folder = folderOf(fileName)
-  return typeForFolder(folder === 'DeviceCompliancePolicies' ? 'CompliancePolicies' : folder)
+  return typeForFolder(canonicalFolder(folderOf(fileName)))
 }
 
 /**

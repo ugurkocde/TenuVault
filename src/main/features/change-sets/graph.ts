@@ -1,3 +1,4 @@
+import { observablePair, projectSecrets, type OmissionOptions } from "../../../shared/intune/secret-omission"
 import { approvalMessage, type ApprovalSignal } from "../../../shared/intune/approval"
 import { readLive, type GraphCall } from "../../../portal/lib/policies/graph-restore"
 import type { ReadOptions } from "../../../shared/intune/read"
@@ -103,7 +104,7 @@ export async function readCurrent(graph: GraphCall, type: IntuneType, id: string
     return (await readLive(tracking, type, id, options)) ?? null
   } catch (error) {
     const status = error instanceof Error && "status" in error && typeof error.status === "number" ? error.status : failedStatus || 502
-    throw new GraphReadError(error instanceof Error ? error.message : String(error), status)
+    throw new GraphReadError(options?.omitEncryptedOma ? `Microsoft Graph returned HTTP ${status} while reading the target.` : error instanceof Error ? error.message : String(error), status)
   }
 }
 
@@ -123,22 +124,32 @@ export interface Observation {
 }
 
 /** Reads what one operation would change in the target and fingerprints it. */
-export async function observe(graph: GraphCall, type: IntuneType, operation: { action: OperationAction; targetId: string | null; name: string }, memo?: ListingMemo, options?: ReadOptions): Promise<Observation> {
+export async function observe(graph: GraphCall, type: IntuneType, operation: { action: OperationAction; targetId: string | null; name: string }, memo?: ListingMemo, omission?: OmissionOptions): Promise<Observation> {
   if (operation.action === "create") {
     let ids: string[]
     try {
       ids = await sameNameIds(graph, type, operation.name, memo)
     } catch (error) {
-      if (!options?.omitEncryptedOma) throw error
+      if (!omission?.enabled) throw error
       const status = error instanceof GraphReadError ? error.status : 502
       throw new GraphReadError(`Microsoft Graph returned HTTP ${status} while reading the target inventory.`, status)
     }
     return { snapshot: null, redacted: false, sameNameIds: ids, fingerprint: operationFingerprint("create", { snapshot: null, sameNameIds: ids }) }
   }
-  const live = await readCurrent(graph, type, operation.targetId!, options)
+  const live = await readCurrent(graph, type, operation.targetId!, { omitEncryptedOma: omission?.enabled })
   if (!live) return { snapshot: null, redacted: false, sameNameIds: [], fingerprint: "missing" }
   const { snapshot, redacted } = sanitizeSnapshot(type, live)
-  return { snapshot, redacted, sameNameIds: [], fingerprint: operationFingerprint(operation.action, { snapshot, sameNameIds: [] }) }
+  return { snapshot, redacted, sameNameIds: [], fingerprint: operationFingerprint(operation.action, { snapshot: safeSnapshot(type, snapshot, omission), sameNameIds: [] }) }
+}
+
+export function safeSnapshot(type: IntuneType, snapshot: Item, omission?: OmissionOptions): Item {
+  return omission?.enabled ? projectSecrets(type.folder, snapshot, omission.scripts).snapshot : snapshot
+}
+
+export function matchesObserved(type: IntuneType, proposed: Item, live: Item, omission?: OmissionOptions): boolean {
+  if (!omission?.enabled) return matchesProposed(type, proposed, live)
+  const [expected, observed] = observablePair(type.folder, proposed, live, false, omission)
+  return matchesProposed(type, expected, observed)
 }
 
 export type WriteOutcome =
@@ -152,7 +163,7 @@ export type WriteOutcome =
 
 type Sent = { ok: true; body: Item } | { ok: false; rejected: boolean; message: string; approval?: ApprovalSignal }
 
-async function send(graph: GraphCall, method: Step["method"], path: string, body?: Item): Promise<Sent> {
+async function sendRequest(graph: GraphCall, safe: boolean, method: Step["method"], path: string, body?: Item): Promise<Sent> {
   try {
     const response = await graph(method, path, body)
     if (response.status < 300) return { ok: true, body: response.body }
@@ -160,9 +171,9 @@ async function send(graph: GraphCall, method: Step["method"], path: string, body
     // Already gone; the read-back confirms it.
     if (method === "DELETE" && notFound(response)) return { ok: true, body: {} }
     const rejected = response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429
-    return { ok: false, rejected, message: graphMessage(response.body, response.status) }
+    return { ok: false, rejected, message: safe ? `Microsoft Graph returned HTTP ${response.status}.` : graphMessage(response.body, response.status) }
   } catch (error) {
-    return { ok: false, rejected: false, message: `Write outcome unknown: ${error instanceof Error ? error.message : String(error)}` }
+    return { ok: false, rejected: false, message: safe ? "Microsoft Graph did not confirm the write." : `Write outcome unknown: ${error instanceof Error ? error.message : String(error)}` }
   }
 }
 
@@ -175,15 +186,17 @@ export async function writeOperation(
   type: IntuneType,
   input: { action: OperationAction; targetId: string | null; proposed: Item | null; assignments: Item[] | null; current: Item | null },
   onCreated: (id: string) => void,
+  omission?: OmissionOptions,
 ): Promise<WriteOutcome> {
+  const send = (method: Step["method"], path: string, body?: Item) => sendRequest(graph, omission?.enabled === true, method, path, body)
   const blocked = (sent: Extract<Sent, { ok: false }>, objectId: string | null, partial = false): WriteOutcome => ({ state: "approval", objectId, partial, message: approvalMessage(sent.approval!, type.label, partial ? "The configuration was written, but assignments or a follow-up step need approval." : undefined) })
   const assign = async (id: string): Promise<Sent> => {
     if (!input.assignments) return { ok: true, body: {} }
     if (!type.assign || type.assign === "post") return { ok: false, rejected: true, message: `Assignments cannot be set for ${type.label} by a change set.` }
-    return send(graph, "POST", `${type.path}/${encodeURIComponent(id)}/assign`, { [type.assign.key]: input.assignments as Json })
+    return send("POST", `${type.path}/${encodeURIComponent(id)}/assign`, { [type.assign.key]: input.assignments as Json })
   }
   if (input.action === "delete") {
-    const sent = await send(graph, "DELETE", `${type.path}/${encodeURIComponent(input.targetId!)}`)
+    const sent = await send("DELETE", `${type.path}/${encodeURIComponent(input.targetId!)}`)
     if (!sent.ok && sent.approval) return blocked(sent, input.targetId)
     if (!sent.ok) return sent.rejected ? { state: "rejected", objectId: input.targetId, message: sent.message } : { state: "unknown", objectId: input.targetId, message: sent.message }
     return { state: "written", objectId: input.targetId! }
@@ -191,14 +204,14 @@ export async function writeOperation(
   const { assignments: _ignored, ...proposed } = input.proposed ?? {}
   if (input.action === "create") {
     const plan = buildRestorePlan(type, proposed as Item, { includeAssignments: false })
-    const created = await send(graph, "POST", plan.create.path, plan.create.body)
+    const created = await send("POST", plan.create.path, plan.create.body)
     if (!created.ok && created.approval) return blocked(created, null)
     if (!created.ok) return created.rejected ? { state: "rejected", objectId: null, message: created.message } : { state: "unknown", objectId: null, message: created.message }
     const id = created.body.id
     if (!isGraphId(id)) return { state: "unknown", objectId: null, message: "Microsoft Graph did not return a valid ID for the created object. Check Intune before retrying." }
     onCreated(id)
     for (const step of plan.steps.map((entry) => resolveStep(entry, id))) {
-      const sent = await send(graph, step.method, step.path, step.body)
+      const sent = await send(step.method, step.path, step.body)
       if (!sent.ok && sent.approval) return blocked(sent, id, true)
       if (!sent.ok) return { state: "unknown", objectId: id, message: `The object was created but a follow-up step failed: ${sent.message}` }
     }
@@ -209,7 +222,7 @@ export async function writeOperation(
   }
   const steps = buildUpdatePlan(type, proposed as Item, input.targetId!, { includeAssignments: false, current: input.current ?? {} })
   for (const [index, step] of steps.entries()) {
-    const sent = await send(graph, step.method, step.path, step.body)
+    const sent = await send(step.method, step.path, step.body)
     if (!sent.ok) {
       if (sent.approval) return blocked(sent, input.targetId, index > 0)
       if (index === 0 && sent.rejected) return { state: "rejected", objectId: input.targetId, message: sent.message }
@@ -225,16 +238,16 @@ export async function writeOperation(
 export type ReadBack = { state: "match" | "differs" | "missing"; live: Item | null } | { state: "denied"; live: null; message: string }
 
 /** Reads the object after a write and compares it with what was intended. */
-export async function readBack(graph: GraphCall, type: IntuneType, input: { action: OperationAction; objectId: string; proposed: Item | null; assignments: Item[] | null }): Promise<ReadBack> {
+export async function readBack(graph: GraphCall, type: IntuneType, input: { action: OperationAction; objectId: string; proposed: Item | null; assignments: Item[] | null }, omission?: OmissionOptions): Promise<ReadBack> {
   let live: Item | null
   try {
-    live = await readCurrent(graph, type, input.objectId)
+    live = await readCurrent(graph, type, input.objectId, { omitEncryptedOma: omission?.enabled })
   } catch (error) {
     return { state: "denied", live: null, message: error instanceof Error ? error.message : String(error) }
   }
-  if (input.action === "delete") return { state: live ? "differs" : "match", live }
+  if (input.action === "delete") return { state: live ? "differs" : "match", live: live && safeSnapshot(type, live, omission) }
   if (!live) return { state: "missing", live: null }
-  const content = matchesProposed(type, input.proposed ?? {}, live)
+  const content = matchesObserved(type, input.proposed ?? {}, live, omission)
   const assignments = input.assignments === null || sameAssignments(input.assignments, live.assignments)
-  return { state: content && assignments ? "match" : "differs", live }
+  return { state: content && assignments ? "match" : "differs", live: safeSnapshot(type, live, omission) }
 }

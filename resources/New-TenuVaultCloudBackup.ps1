@@ -175,7 +175,7 @@ if ($IncludeDeviceCategories) { $graphRoleNames += "DeviceManagementManagedDevic
 $appOnlyExcluded = if ($IncludeDeviceCategories) { "" } else { "DeviceCategories,DeviceCleanupRules" }
 
 $variableNames = @(
-    "TenuVaultTenantId-$tenantKey", "TenuVaultStorageAccount-$tenantKey",
+    "TenuVaultTenantId-$tenantKey", "TenuVaultStorageAccount-$tenantKey", "TenuVaultOmissionAccount-$tenantKey",
     "TenuVaultScope-$tenantKey", "TenuVaultExcludedFolders-$tenantKey", "TenuVaultAppOnlyExcluded-$tenantKey",
     "TenuVaultChangeReport-$tenantKey", "TenuVaultChangeReportActors-$tenantKey", "TenuVaultTenantName-$tenantKey"
 )
@@ -256,6 +256,33 @@ function Set-TenuVaultAutomationVariable {
             -AutomationAccountName $AutomationAccountName -Name $Name `
             -Encrypted:$Encrypted -Value $Value | Out-Null
     }
+}
+
+function Copy-TenuVaultOmissionPolicy {
+    [CmdletBinding(SupportsShouldProcess)]
+    param([string]$PreviousAccount)
+    if (-not $PreviousAccount -or $PreviousAccount -ceq $StorageAccountName) { return }
+    $warning = "Omission could not be carried over from the previous storage account. Enable omission again for '$StorageAccountName' before running cloud backups if this tenant requires it."
+    if ($PreviousAccount -cnotmatch '^[a-z0-9]{3,24}$') { Write-Warning $warning; return }
+    $blob = "$backupContainer/.tenuvault-control/$($TenantId.ToLowerInvariant())/secret-omission.json"
+    try {
+        $access = (Get-AzAccessToken -ResourceUrl "https://storage.azure.com/").Token
+        if ($access -isnot [securestring]) { $access = ConvertTo-SecureString $access -AsPlainText -Force }
+        $headers = @{ "x-ms-version" = "2021-12-02"; "x-ms-date" = [DateTime]::UtcNow.ToString("R", [Globalization.CultureInfo]::InvariantCulture) }
+        $prior = Invoke-WebRequest -Uri "https://$PreviousAccount.blob.core.windows.net/$blob" -Authentication Bearer -Token $access -Headers $headers -TimeoutSec 30
+        $policy = $prior.Content | ConvertFrom-Json -ErrorAction Stop
+        if ($policy.version -ne 1 -or $policy.tenantId -cne $TenantId.ToLowerInvariant() -or $policy.enabled -isnot [bool]) { throw "Invalid omission policy." }
+        $headers["x-ms-blob-type"] = "BlockBlob"
+        $headers["If-None-Match"] = "*"
+        $target = "https://$StorageAccountName.blob.core.windows.net/$blob"
+        if (-not $PSCmdlet.ShouldProcess($StorageAccountName, "Copy omission policy from $PreviousAccount")) { Write-Warning $warning; return }
+        $result = Invoke-WebRequest -Uri $target -Authentication Bearer -Token $access -Headers $headers -Method Put -ContentType "application/json" -Body $prior.Content -TimeoutSec 30 -SkipHttpErrorCheck
+        if ($result.StatusCode -eq 412) {
+            Write-Host "Keeping the omission policy already set on '$StorageAccountName'."
+        } elseif ($result.StatusCode -eq 201) {
+            Write-Host "Copied the omission policy from '$PreviousAccount' to '$StorageAccountName'."
+        } else { Write-Warning $warning }
+    } catch { Write-Warning $warning }
 }
 
 function Get-TenuVaultAutomationPrincipalId {
@@ -750,6 +777,14 @@ if ($principalId) {
 # ---------------------------------------------------------------------------
 # Runbook import and publish. A rerun is the upgrade path.
 # ---------------------------------------------------------------------------
+
+$previousStorage = Get-AzAutomationVariable -ResourceGroupName $ResourceGroupName -AutomationAccountName $AutomationAccountName -Name "TenuVaultStorageAccount-$tenantKey" -ErrorAction SilentlyContinue
+if (-not $previousStorage) {
+    $previousStorage = Get-AzAutomationVariable -ResourceGroupName $ResourceGroupName -AutomationAccountName $AutomationAccountName -Name "TenuVaultStorageAccount" -ErrorAction SilentlyContinue
+}
+Copy-TenuVaultOmissionPolicy ([string]$previousStorage.Value)
+$omissionBinding = Get-AzAutomationVariable -ResourceGroupName $ResourceGroupName -AutomationAccountName $AutomationAccountName -Name "TenuVaultOmissionAccount-$tenantKey" -ErrorAction SilentlyContinue
+if (-not $omissionBinding) { Set-TenuVaultAutomationVariable -Name "TenuVaultOmissionAccount-$tenantKey" -Value "" }
 
 $runbook = Publish-TenuVaultRunbook
 

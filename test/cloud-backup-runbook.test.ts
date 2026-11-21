@@ -39,7 +39,7 @@ const folderOf = (blobs: Map<string, string>) => [...blobs.keys()].find((name) =
 
 const template = JSON.parse(readFileSync(new URL("../resources/cloud-backup/azuredeploy.json", import.meta.url), "utf8")) as {
   parameters: Record<string, unknown>
-  resources: Array<{ type: string }>
+  resources: Array<{ type: string; dependsOn?: string[]; properties?: { scriptContent?: string } }>
   outputs: Record<string, unknown>
 }
 
@@ -155,7 +155,7 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
     expect(note(manual)).toBe("manual")
     expect(note(invalid)).toBe("scheduled")
     // Every path that ends a run passes it on.
-    expect(runbook.match(/Send-TvBackupOutcome -Account [^\n]*-Trigger \$runTrigger\n/g)).toHaveLength(4)
+    expect(runbook.match(/Send-TvBackupOutcome -Account [^\n]*-Trigger \$runTrigger\n/g)).toHaveLength(5)
   }, 60_000)
 
   it.runIf(Boolean(pwsh))("never lets the optional change report fail a backup, and says when a backup with warnings gets none", () => {
@@ -216,7 +216,7 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
     const folder = folderOf(blobs)
     const projected = blobs.get(`${folder}/.omitted/DeviceConfigurations/Baseline Wi-Fi.json`)!
     const manifest = JSON.parse(blobs.get(`${folder}/metadata.json`)!)
-    expect(manifest).toMatchObject({ OmissionVersion: 1, OmissionPolicyGeneration: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", SkippedTypes: ["DeviceConfigurations"], ActualSkippedTypes: [] })
+    expect(manifest).toMatchObject({ OmissionEnabled: true, OmissionVersion: 1, OmissionPolicyGeneration: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", SkippedTypes: ["DeviceConfigurations"], ActualSkippedTypes: [] })
     expect(verifyProjectedSnapshot(projected, { ...manifest.Items["DeviceConfigurations/cfg-1"], id: "cfg-1" })).toHaveProperty("displayName", "Baseline Wi-Fi")
     expect(blobs.has(`${folder}/DeviceConfigurations/Baseline Wi-Fi.json`)).toBe(false)
     expect(JSON.stringify([active, missing, graphError])).not.toMatch(/omission-test-value|omission-test-secret-reference|getOmaSettingPlainTextValue/)
@@ -224,14 +224,23 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
     expect(missing!.calls.some(({ uri }) => uri.startsWith("https://graph.microsoft.com") || uri.includes("/intune-backups/backup-"))).toBe(false)
   }, 60_000)
 
-  it.runIf(Boolean(pwsh))("never publishes a folder or manifest when the generation changes while reading Graph", () => {
-    const stopped = runPlainFixture()[10]!
-    expect(stopped.error).toContain("The backup omission policy changed during this run.")
-    expect([...writtenBlobs(stopped).keys()].some((path) => path.startsWith("backup-"))).toBe(false)
-    const completed = runPlainFixture()[0]!
-    const updates = completed.calls.filter((call) => call.method === "Put" && call.uri.endsWith("secret-omission.json"))
-    expect(updates[0]?.ifNoneMatch).toBe("*")
-    expect(updates[1]?.ifMatch).toBeTruthy()
+  it.runIf(Boolean(pwsh))("records the starting mode, streams partial backups and writes to immutable storage", () => {
+    const runs = runPlainFixture()
+    const startingOff = runs[10]!
+    expect(startingOff.error).toBeNull()
+    const inFlight = writtenBlobs(startingOff)
+    expect(JSON.parse(inFlight.get(`${folderOf(inFlight)}/metadata.json`)!)).toMatchObject({ OmissionEnabled: false, OmissionPolicyGeneration: "default" })
+    expect(startingOff.calls.filter(call => call.uri.endsWith("secret-omission.json")).map(call => call.method)).toEqual(["Get"])
+    const interrupted = runs[2]!
+    const saved = interrupted.calls.findIndex(call => call.method === "Put" && call.uri.endsWith("/DeviceConfigurations/First.json"))
+    expect(saved).toBeGreaterThan(-1)
+    expect(saved).toBeLessThan(interrupted.calls.findIndex(call => call.method === "Get" && call.uri.includes("/deviceConfigurations/cfg-1")))
+    expect(JSON.parse([...writtenBlobs(interrupted)].find(([path]) => path.endsWith("metadata.json"))![1])).toMatchObject({ Status: "Failed", ItemCounts: { DeviceConfigurations: 1 } })
+    for (const immutable of runs.slice(11)) {
+      expect(immutable.error).toBeNull()
+      expect(immutable.calls.some(call => call.method === "Put" && call.uri.endsWith("/metadata.json"))).toBe(true)
+      expect(immutable.calls.every(call => !call.uri.includes(".blob.core.windows.net") || call.uri.startsWith("https://stcontoso."))).toBe(true)
+    }
   }, 60_000)
 
   it.runIf(Boolean(pwsh))("saves a list-only type from its list entry, with the desktop snapshot and fingerprint", () => {
@@ -308,6 +317,20 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
     expect(runbook).not.toMatch(/Get-AutomationVariable -Name \$Name/)
   })
 })
+
+it.runIf(Boolean(pwsh))("copies the omission policy before changing the cloud storage variable, or warns if the old account denies access", () => {
+  const script = fileURLToPath(new URL("./fixtures/cloud-backup/setup-upgrade.ps1", import.meta.url))
+  const runs = execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8" }).trim().split(/\r?\n/)
+    .filter(line => line.startsWith("{")).map(line => JSON.parse(line))
+  expect(runs.find(run => run.scenario === "move-copies-policy")).toMatchObject({ error: null, actions: expect.arrayContaining(["copy-policy"]) })
+  expect(runs.find(run => run.scenario === "move-warns-on-denied")).toMatchObject({ error: null, output: expect.arrayContaining([expect.stringContaining("Enable omission again")]) })
+  const migration = template.resources.find(resource => resource.type === "Microsoft.Resources/deploymentScripts")
+  expect(migration?.properties?.scriptContent).toContain('az storage blob download --account-name "$previous"')
+  expect(migration?.properties?.scriptContent).toContain("--if-none-match '*'")
+  expect(template.outputs).toHaveProperty("omissionPolicyMigration")
+  expect(template.resources.filter(resource => resource.type === "Microsoft.Automation/automationAccounts/variables")
+    .every(resource => resource.dependsOn?.some(dependency => dependency.includes("deploymentScripts")))).toBe(true)
+}, 60_000)
 
 describe("New-TenuVaultCloudBackup.ps1", () => {
   it("grants only the read roles, behind the same device inventory decision", () => {

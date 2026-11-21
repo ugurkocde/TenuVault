@@ -1,3 +1,4 @@
+import { cloudRunbookLacksOmission } from "../../shared/cloud-backup"
 import type { WriteRecord } from "../../main/storage/restore-journal"
 import { getAppearance, setAppearance, type Appearance } from "../lib/appearance"
 import { useEffect, useId, useRef, useState, type ReactNode } from "react"
@@ -425,14 +426,14 @@ function TenantOmissionSettings({ tenantId }: { tenantId: string }) {
   const change = async (enabled: boolean, scripts: boolean) => {
     if (!await confirm({
       title: "Change what policy backups keep?",
-      description: "Pause backup schedules and wait for running backups to finish on every computer and in Azure. Upgrade every desktop and cloud runbook that backs up this tenant before resuming schedules. This change applies to new backups.",
+      description: "Upgrade every desktop and cloud runbook that backs up this tenant. This change applies to backups and rollback captures that start after you save it. Backups already in progress finish with their original setting.",
       confirmLabel: "Confirm and save",
     })) return
     setBusy(true)
     setError("")
     try {
       await bridge.backups.setOmission(tenantId, enabled, scripts, cloudStopped)
-      setOptions({ enabled, scripts, cloudRunbook: options?.cloudRunbook })
+      setOptions(await bridge.backups.omission(tenantId))
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure))
       const current = await bridge.backups.omission(tenantId).catch(() => null)
@@ -442,17 +443,19 @@ function TenantOmissionSettings({ tenantId }: { tenantId: string }) {
     }
   }
 
-  const pending = options?.pending
-  const cloudNeedsConfirmation = Boolean(options?.cloudRunbook && !cloudStopped)
-  const controlsDisabled = busy || !options || Boolean(pending || options.migrationRequired)
+  const version = options?.cloudRunbook?.trim()
+  const cloudOld = !!version && cloudRunbookLacksOmission(version)
+  const cloudUnknown = !version || !/^\d+\.\d+\.\d+$/.test(version)
+  const cloudNeedsConfirmation = (cloudOld || cloudUnknown) && !cloudStopped
+  const controlsDisabled = busy || !options || options.policyUnavailable
   return (
     <div className="mt-3 space-y-2 text-sm">
       {confirmDialog}
-      {options?.cloudRunbook && <div className="space-y-2">
-        <p role="alert">Cloud runbook {options.cloudRunbook} does not honor this setting. Upgrade it and run a backup to refresh its status, or stop cloud backups before enabling omission.</p>
+      {options && (cloudOld || cloudUnknown) && <div className="space-y-2">
+        <p role="alert">{cloudOld ? `Cloud runbook ${version} does not honor this setting. Upgrade it and run a backup to refresh its status, or stop cloud backups before enabling omission.` : "The cloud runbook version could not be confirmed."}</p>
         <label className="flex items-center gap-2">
           <input type="checkbox" checked={cloudStopped} disabled={busy} onChange={(event) => setCloudStopped(event.target.checked)} />
-          I stopped cloud backups and waited for running jobs to finish.
+          {cloudOld ? "I stopped cloud backups and waited for running jobs to finish." : "Every cloud runbook for this tenant has been upgraded or stopped."}
         </label>
       </div>}
       <label className="flex items-center gap-2">
@@ -463,15 +466,15 @@ function TenantOmissionSettings({ tenantId }: { tenantId: string }) {
         <input type="checkbox" checked={options.scripts} disabled={controlsDisabled || cloudNeedsConfirmation} onChange={(event) => void change(true, event.target.checked)} />
         Also leave out script content
       </label>}
-      {options?.migrationRequired && <Button size="sm" variant="outline" disabled={busy || (options.enabled && cloudNeedsConfirmation)} onClick={() => void change(options.enabled, options.scripts)}>
-        Apply policy to Azure backup storage
-      </Button>}
-      {pending && <div className="space-y-2">
-        <p>The policy change is pending. Backups resume once the change is finished.</p>
-        <Button size="sm" variant="outline" disabled={busy || (pending.enabled && cloudNeedsConfirmation)} onClick={() => void change(pending.enabled, pending.scripts)}>
-          Finish policy change
+      {options?.policyUnavailable && <p role="alert">The omission policy could not be verified. Check that this storage is available.</p>}
+      {options?.inconsistent && <div>
+        <p role="alert">Desktop and cloud storage have different omission settings.</p>
+        <Button size="sm" variant="outline" disabled={busy || (options.enabled && cloudNeedsConfirmation)} onClick={() => void change(options.enabled, options.scripts)}>
+          Apply this setting to both accounts
         </Button>
       </div>}
+      {options?.warnings?.map(({ folder, account, producer }) => <p key={`${account}/${folder}`} role="alert">{producer} did not record omission for {folder} in {account}.</p>)}
+      {options?.historyUnavailable && <p role="alert">Some backup history could not be checked for omission.</p>}
       {error && <p role="alert" className="text-red-700">{error}</p>}
     </div>
   )
