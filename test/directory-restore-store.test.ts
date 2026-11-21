@@ -1,3 +1,4 @@
+import { graphUserCreateResponse } from "./fixtures/directory-graph-v1"
 vi.mock("node:fs", { spy: true })
 import * as fs from "node:fs"
 import { graphNotFound, unsetUserFields } from "./fixtures/directory-response"
@@ -84,7 +85,7 @@ it.each(["file", "directory", "directory and rollback"])("recovers a create with
   const run: GuardedRun = { version: 1, tenant: actor.tenantId, id: id(20), actor, origin: "restore", entries: [{ step, state: "pending" }], mappings: [] }
   const posts = vi.fn()
   const io = directory9aIO(token, actor, async () => ({ principals: [], applications: [], complete: true }), async (input, init) => {
-    if (init?.method === "POST") { posts(); return Response.json({ ...desired, id: id(30), userType: "Member" }, { status: 201 }) }
+    if (init?.method === "POST") { posts(); return Response.json(graphUserCreateResponse({ ...desired, id: id(30) }), { status: 201 }) }
     if (new URL(String(input)).pathname === `/v1.0/users/${id(30)}`) return Response.json({ ...unsetUserFields, ...desired, id: id(30), userType: "Member" })
     if (new URL(String(input)).pathname === "/v1.0/users") return Response.json({ value: [] })
     return graphNotFound()

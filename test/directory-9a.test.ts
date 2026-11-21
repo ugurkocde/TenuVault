@@ -1,3 +1,4 @@
+import { graphUserCreateResponse } from "./fixtures/directory-graph-v1"
 import { graphNotFound, unsetUserFields, unsetGroupFields } from "./fixtures/directory-response"
 import { describe, it, expect, vi } from "vitest"
 import { directoryPayload, directoryReview, approveDirectory, requireDirectoryApprovals, relationshipDifference, previewDirectoryPage, NEVER_RESTORED } from "../src/main/restore/directory-9a"
@@ -83,7 +84,7 @@ for (const action of ["create", "update", "recycle", "invite", "member", "owner"
       const url = new URL(String(input)), path = url.pathname.replace("/v1.0/", "")
       if (options?.method !== "GET") {
         writes++
-        if (outcome === "throttled" && writes === 1) return new Response(null, { status: 429, headers: { "Retry-After": "1" } })
+        if (outcome === "throttled" && writes === 1) return Response.json({ error: { code: "TooManyRequests" } }, { status: 429, headers: { "Retry-After": "1" } })
         if (outcome === "refused") return new Response(null, { status: 403 })
         const body = options?.body ? JSON.parse(String(options.body)) : {}
         if (action === "create") { secret = body.passwordProfile.password; live = { ...base, ...step.desired } }
@@ -93,7 +94,7 @@ for (const action of ["create", "update", "recycle", "invite", "member", "owner"
         else if (action === "license") licensed = true
         else live = { ...base, ...body }
         if (outcome === "timeout") throw new Error("The answer was lost after commit")
-        return action === "create" ? Response.json(live, { status: 201 }) : ["update", "member", "owner", "manager"].includes(action) ? new Response(null, { status: 204 }) : Response.json(action === "invite" ? { invitedUser: { id: user.id } } : { id: base.id })
+        return action === "create" ? Response.json(graphUserCreateResponse(live!), { status: 201 }) : ["update", "member", "owner", "manager"].includes(action) ? new Response(null, { status: 204 }) : Response.json(action === "invite" ? { invitedUser: { id: user.id } } : { id: base.id })
       }
       if (path.endsWith("/memberOf")) return Response.json({ value: [] })
       if (path.startsWith("identity/conditionalAccess/")) return Response.json({ value: [] })
@@ -137,7 +138,7 @@ it("retries bounded throttles and rejects hostile continuations before attaching
   try {
     let calls = 0
     const wait = vi.fn(async () => {})
-    const io = directory9aIO(token(), actor, refs, vi.fn(async () => ++calls < 3 ? new Response(null, { status: 429, headers: { "Retry-After": "2" } }) : graphNotFound()), undefined, wait)
+    const io = directory9aIO(token(), actor, refs, vi.fn(async () => ++calls < 3 ? Response.json({ error: { code: "TooManyRequests" } }, { status: 429, headers: { "Retry-After": "2" } }) : graphNotFound()), undefined, wait)
     expect((await io.locate("Users", user.id)).action).toBe("create")
     expect(wait.mock.calls).toEqual([[2000], [2000]])
     const fetcher = vi.fn(async (_input: RequestInfo | URL) => Response.json({ value: [], "@odata.nextLink": "https://evil.example/users" }))
@@ -299,7 +300,7 @@ function retryWorld(removal = false) {
     const url = new URL(String(input)), path = url.pathname.replace(/^\/(v1\.0|beta)\//, "")
     if (init?.method !== "GET") {
       attempts++
-      if (mode === "throttle" && attempts === 1) return new Response(null, { status: 429 })
+      if (mode === "throttle" && attempts === 1) return Response.json({ error: { code: "TooManyRequests" } }, { status: 429 })
       applied++
       if (removal) members.delete(principal.id); else members.add(principal.id)
       if (mode === "unanswered") { controller.abort(); throw new Error("Answer lost") }
@@ -362,7 +363,7 @@ it.each(["Users", "Groups"] as const)("records a confirmed %s PATCH throttle as 
   step.desired = folder === "Users" ? { displayName: "Saved" } : { description: "Saved" }; step.properties = Object.keys(step.desired)
   const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     if (init?.method === "PATCH") {
-      if (++attempts === 1) return new Response(null, { status: 429, headers: { "Retry-After": "2" } })
+      if (++attempts === 1) return Response.json({ error: { code: "TooManyRequests" } }, { status: 429, headers: { "Retry-After": "2" } })
       live = { ...live, ...JSON.parse(String(init.body)) }; return new Response(null, { status: 204 })
     }
     if (String(input).includes("conditionalAccess")) return Response.json({ value: [] })
@@ -401,7 +402,7 @@ it.each(["Users", "Groups"] as const)("never resends an unconfirmed %s 503 PATCH
 it("propagates one raw create lookup throttle without a signal or internal retry", async () => {
   const step = stepFor("create", "Users")
   step.desired = directoryPayload("Users", "create", savedUser)
-  const fetcher = vi.fn(async () => new Response(null, { status: 429, headers: { "Retry-After": "1" } })), wait = vi.fn(async () => {})
+  const fetcher = vi.fn(async () => Response.json({ error: { code: "TooManyRequests" } }, { status: 429, headers: { "Retry-After": "1" } })), wait = vi.fn(async () => {})
   const io = directory9aIO(token(), actor, refs, fetcher, undefined, wait)
   await expect(io.findCreated(step, step.desired)).rejects.toMatchObject({ retryAt: expect.any(Number) })
   expect(fetcher).toHaveBeenCalledTimes(1)

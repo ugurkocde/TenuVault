@@ -20,8 +20,9 @@ export async function directoryWriteAuthorization(response: Response, read = fal
 export function directoryCreateMatches(folder: string, value: Item, approved: Item): boolean {
   const normalized = (input: unknown) => typeof input === "string" && input.trim() ? input.trim().toLowerCase() : undefined
   const type = folder === "Users" ? "user" : "group"
-  if (!isGuid(value.id) || typeof value.displayName !== "string" || value["@odata.type"] !== undefined && value["@odata.type"] !== `#microsoft.graph.${type}`) return false
-  if (folder === "Users") return !!normalized(approved.userPrincipalName) && normalized(value.userPrincipalName) === normalized(approved.userPrincipalName) && value.accountEnabled === false && value.userType === "Member"
+  if (!isGuid(value.id) || typeof value.displayName !== "string" || value.displayName !== approved.displayName || value["@odata.type"] !== undefined && value["@odata.type"] !== `#microsoft.graph.${type}`) return false
+  if (folder === "Users") return !!normalized(approved.userPrincipalName) && normalized(value.userPrincipalName) === normalized(approved.userPrincipalName)
+  if (Object.hasOwn(approved, "description") && Object.hasOwn(value, "description") && value.description !== approved.description) return false
   return folder === "Groups" && !!normalized(approved.mailNickname) && normalized(value.mailNickname) === normalized(approved.mailNickname) && value.securityEnabled === true && value.mailEnabled === false && Array.isArray(value.groupTypes) && value.groupTypes.length === 0
 }
 

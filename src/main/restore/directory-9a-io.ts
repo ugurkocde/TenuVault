@@ -1,5 +1,5 @@
 import { rejectProxyAuthResponses } from "../api/network-error"
-import { DIRECTORY_RETRIES, DirectoryReadDeferredError, DirectoryThrottledError, directoryRetryAt, retryDirectoryWrite, waitForDirectoryRetry } from "./directory-retry"
+import { DIRECTORY_RETRIES, DirectoryReadDeferredError, DirectoryRoleDeferredError, DirectoryThrottledError, directoryThrottleError, directoryRetryAt, retryDirectoryWrite, waitForDirectoryRetry } from "./directory-retry"
 import { typeForFolder, restoreCapability, type Item } from "../../shared/intune/registry"
 import { restoreMatrixRow } from "../../shared/intune/restore-matrix"
 import { RestoreSafetyError, RestoreWriteDeferredError, RestoreWriteRefusedError, guardRestoreItem, type RestoreActor } from "../../shared/intune/restore-guards"
@@ -68,11 +68,11 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
       if (response.status === 429) {
         const retryAt = directoryRetryAt(response, attempt)
         if (method === "GET") onReadThrottled?.(retryAt)
-        if (method !== "GET" || !retryReads) throw new DirectoryThrottledError(response)
+        if (method !== "GET" || !retryReads) throw await directoryThrottleError(response, method === "GET")
         try {
           if (attempt >= DIRECTORY_RETRIES) throw new DirectoryThrottledError(response)
           await waitForDirectoryRetry(retryAt, signal, wait)
-        } catch { throw new RestoreWriteDeferredError("The throttled directory read was not applied. Resume after Retry-After.", retryAt) }
+        } catch { throw new RestoreWriteDeferredError("The throttled directory read was not applied. Resume after Retry-After.", retryAt, "throttle") }
         continue
       }
       if (method === "GET" && response.status === 404) return directoryReadAbsent(response, url)
@@ -210,7 +210,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
         const definition = await request(`roleManagement/directory/roleDefinitions/${identity(assignment.roleDefinitionId)}?$select=id,templateId`)
         if (["fdd7a751-b60b-444a-984c-02652fe8fa1c", "62e90394-69f5-4237-9190-012177145e10"].includes(String(definition?.templateId))) admin = true
       }
-      if (!admin) throw new RestoreSafetyError("Security-group creation requires a current tenant-wide Groups Administrator or Global Administrator assignment. Non-admin creation can implicitly make the restoring account an owner.")
+      if (!admin) throw new DirectoryRoleDeferredError("Security-group creation requires a current tenant-wide Groups Administrator or Global Administrator assignment. Non-admin creation can implicitly make the restoring account an owner.")
     }
     const principal = preimage !== undefined && preimage?.principal !== undefined ? preimage.principal as Item | null : intent.principalId ? await resolvePrincipal(intent.principalId) : null
     let excluded = false, included = false, inherited = false, indirectUserChange = false, targetingUnknown = false
@@ -237,7 +237,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
         if (intent.action !== "member" || step.desired.present !== false) throw error
         if (error instanceof DirectoryReadDeferredError) throw error
         // Keep the row visible while refusing removal if any policy page is unreadable.
-        if (error instanceof RestoreWriteDeferredError) throw new RestoreWriteDeferredError("Conditional Access group targeting could not be determined. TenuVault cannot remove this member. Review the policies and remove the member in Microsoft Entra. " + error.message, error.retryAt)
+        if (error instanceof RestoreWriteDeferredError) throw new RestoreWriteDeferredError("Conditional Access group targeting could not be determined. TenuVault cannot remove this member. Review the policies and remove the member in Microsoft Entra. " + error.message, error.retryAt, error.deferralCause)
         targetingUnknown = true
       }
     }

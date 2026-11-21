@@ -7,31 +7,49 @@ export class DirectoryReadDeferredError extends RestoreWriteDeferredError {
 
 /** The signed-in admin can resume after activating the required Entra role. */
 export class DirectoryRoleDeferredError extends RestoreWriteDeferredError {
-  constructor() { super("Your Entra role does not allow this change. Activate the role, then resume.") }
+  constructor(message = "Your Entra role does not allow this change. Activate the role, then resume.") { super(message, undefined, "role") }
 }
 export class DirectoryAuthenticationDeferredError extends RestoreWriteDeferredError {
-  constructor() { super("Microsoft Graph rejected the connection's authentication. Resume with a fresh connection to repeat permission and approval checks.") }
+  constructor() { super("Microsoft Graph rejected the connection's authentication. Resume with a fresh connection to repeat permission and approval checks.", undefined, "authentication") }
 }
 
 export class DirectoryThrottledError extends RestoreWriteDeferredError {
-  constructor(readonly response: Response) { super("The directory request was throttled and was not applied.", directoryRetryAt(response, 0)) }
+  constructor(readonly response: Response) { super("The directory request was throttled and was not applied.", directoryRetryAt(response, 0), "throttle") }
+}
+/** An intermediary throttle does not prove whether a dispatched write reached Graph. */
+export class DirectoryWriteUncertainError extends Error {
+  readonly retryAt: number
+  constructor(response: Response) {
+    super("The directory throttle did not contain a structured Microsoft Graph error. Confirm the write after Retry-After before any retry.")
+    this.retryAt = directoryRetryAt(response, 0)
+  }
+}
+export async function directoryThrottleError(response: Response, read: boolean): Promise<DirectoryThrottledError | DirectoryWriteUncertainError> {
+  if (read) return new DirectoryThrottledError(response)
+  if (/^application\/(?:[\w.+-]+\+)?json(?:\s*;|$)/i.test(response.headers.get("Content-Type") ?? "")) {
+    try {
+      const value = await response.clone().json()
+      if (value && typeof value.error?.code === "string" && value.error.code.trim()) return new DirectoryThrottledError(response)
+    } catch { /* Unparseable error bodies cannot prove a write was rejected by Graph. */ }
+  }
+  return new DirectoryWriteUncertainError(response)
 }
 /** Retry the entire writer so a throttled safety read cannot bypass earlier checks. */
-export async function retryDirectoryWrite<T>(attemptWrite: () => Promise<T>, onUnapplied?: (retryAt: number) => void, signal?: AbortSignal, wait?: (ms: number) => Promise<void>): Promise<T> {
+export async function retryDirectoryWrite<T>(attemptWrite: () => Promise<T>, onUnapplied?: (retryAt: number, cause?: RestoreWriteDeferredError["deferralCause"]) => void, signal?: AbortSignal, wait?: (ms: number) => Promise<void>): Promise<T> {
   for (let attempt = 0; ; attempt++) {
     try { return await attemptWrite() }
     catch (error) {
       if (error instanceof DirectoryRoleDeferredError || error instanceof DirectoryAuthenticationDeferredError) {
-        onUnapplied?.(Date.now())
+        onUnapplied?.(Date.now(), error.deferralCause)
         throw error
       }
       if (!(error instanceof DirectoryThrottledError)) throw error
       const retryAt = directoryRetryAt(error.response, attempt)
-      onUnapplied?.(retryAt)
+      onUnapplied?.(retryAt, "throttle")
       try {
         if (attempt >= DIRECTORY_RETRIES) throw error
         await waitForDirectoryRetry(retryAt, signal, wait)
-      } catch { throw new RestoreWriteDeferredError("The unapplied directory request is deferred. Resume after Retry-After.", retryAt) }
+      } catch { throw new RestoreWriteDeferredError("The unapplied directory request is deferred. Resume after Retry-After.", retryAt, "throttle") }
     }
   }
 }

@@ -1,5 +1,5 @@
 import { rejectProxyAuthResponses } from "../api/network-error"
-import { DirectoryReadDeferredError, DirectoryThrottledError, retryDirectoryWrite } from "./directory-retry"
+import { DirectoryReadDeferredError, DirectoryThrottledError, directoryThrottleError, retryDirectoryWrite } from "./directory-retry"
 import { typeForFolder, type Item } from "../../shared/intune/registry"
 import { directoryContinuation } from "./directory-read-shape"
 import { directoryWriteAuthorization, directoryWriteResponse } from "./directory-write-response"
@@ -35,7 +35,7 @@ export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typ
     await directoryWriteAuthorization(response, method === "GET")
     if (!response.ok) {
       if (response.status === 429) {
-        const error = new DirectoryThrottledError(response)
+        const error = await directoryThrottleError(response, method === "GET")
         if (method === "GET") onReadThrottled?.(error.retryAt!)
         throw error
       }

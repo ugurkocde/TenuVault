@@ -249,6 +249,7 @@ export class DirectoryRestoreService {
         review = directoryReview(step, { ...(current?.resource as Item | undefined), ...current }, (current?.principal as Item | null) ?? null, actor, false)
         review.blocker = error.message
       }
+      if (step.operation === "create" && current !== null) review.blocker = `The user principal name ${String(current.userPrincipalName ?? step.desired.userPrincipalName)} belongs to existing object ${String(current.displayName)} (${String(current.id)}). Review that object in Microsoft Entra before restoring.`
       if (step.operation !== "create" && !review.changes.length) review.blocker ??= "This row already matches the desired state. No write is needed."
       const blocker = directoryAdmission(step)
       if (blocker) review.blocker ??= blocker

@@ -71,7 +71,7 @@ it("shows Graph throttle deadlines, confirms uncertain results and offers discar
   const retryAt = Date.UTC(2026, 10, 20, 18)
   const fetcher = vi.fn(async (_input: unknown, init?: RequestInit) => {
     const action = JSON.parse(String(init?.body)).action
-    return Response.json(action === "preview" ? { ...page, canDiscard: true } : { ...page, status: "partial", canDiscard: action !== "restore", outcomes: [{ key: "member", state: action === "restore" ? "uncertain" : "deferred", retryAt }] })
+    return Response.json(action === "preview" ? { ...page, canDiscard: true } : { ...page, status: "partial", canDiscard: action !== "restore", outcomes: [{ key: "member", state: action === "restore" ? "uncertain" : "deferred", deferralCause: "throttle", retryAt }] })
   })
   vi.stubGlobal("fetch", fetcher)
   root = createRoot(document.body.appendChild(document.createElement("div")))
@@ -588,7 +588,7 @@ it("shows saved applied, failed, deferred and uncertain outcomes with retry time
   const outcomes = [
     { key: "applied", state: "applied", targetId: "saved-target" },
     { key: "failed", state: "failed", reason: "Saved refusal" },
-    { key: "deferred", state: "deferred", retryAt, reason: "Saved throttle" },
+    { key: "deferred", state: "deferred", retryAt, deferralCause: "throttle", reason: "Saved throttle" },
     { key: "uncertain", state: "uncertain", retryAt, reason: "Saved unanswered write" },
   ]
   const rows = outcomes.map(outcome => ({ ...page.rows[0]!, key: outcome.key }))
@@ -611,7 +611,7 @@ it("shows saved applied, failed, deferred and uncertain outcomes with retry time
 
 it("shows proxy authentication guidance with its saved timestamp while Graph throttling keeps its label", async () => {
   const retryAt = Date.now() - 120_000
-  const outcomes = [{ key: "proxy", state: "deferred", retryAt, deferralCause: "proxy" }, { key: "graph", state: "deferred", retryAt }]
+  const outcomes = [{ key: "proxy", state: "deferred", retryAt, deferralCause: "proxy" }, { key: "graph", state: "deferred", retryAt, deferralCause: "throttle" }]
   const fetcher = vi.fn(async (_input: unknown, init?: RequestInit) => Response.json(JSON.parse(String(init?.body)).action === "resume" ? { ...page, rows: outcomes.map(outcome => ({ ...page.rows[0]!, key: outcome.key })), outcomes } : page))
   vi.stubGlobal("fetch", fetcher)
   root = createRoot(document.body.appendChild(document.createElement("div")))
@@ -665,8 +665,21 @@ it("shows Discard after Resume recovers a coordinator-only rejection without con
 
 it("shows the role authorization reason instead of a throttle label after resume", async () => {
   const reason = "Your Entra role does not allow this change. Activate the role, then resume."
-  const outcome = { key: "member", state: "deferred", retryAt: Date.now() - 1000, reason }
+  const outcome = { key: "member", state: "deferred", retryAt: Date.now() - 1000, deferralCause: "role", reason }
   vi.stubGlobal("fetch", vi.fn(async (_input: unknown, init?: RequestInit) => Response.json(JSON.parse(String(init?.body)).action === "resume" ? { ...page, outcomes: [outcome] } : page)))
+  root = createRoot(document.body.appendChild(document.createElement("div")))
+  await act(async () => root.render(createElement(DirectoryRestore, props)))
+  await click("Review directory restore"); await click("Preview directory changes"); await click("Resume saved page")
+  const results = document.querySelector('[aria-label="Directory page results"]')!
+  expect(results.textContent).toContain(reason)
+  expect(results.textContent).not.toContain("Throttled by Microsoft Graph")
+  expect(results.textContent).not.toContain("Deferred before dispatch")
+})
+
+it.each(["role", "authentication"])("renders the stored %s deferral cause without inferring throttle from its deadline", async deferralCause => {
+  const reason = deferralCause === "authentication" ? "Microsoft Graph rejected the connection's authentication. Resume with a fresh connection to repeat permission and approval checks." : "Security-group creation requires a current tenant-wide Groups Administrator or Global Administrator assignment."
+  const outcomes = [{ key: "member", state: "deferred", retryAt: Date.now() + 120000, deferralCause, reason }]
+  vi.stubGlobal("fetch", vi.fn(async (_input: unknown, init?: RequestInit) => Response.json(JSON.parse(String(init?.body)).action === "resume" ? { ...page, outcomes } : page)))
   root = createRoot(document.body.appendChild(document.createElement("div")))
   await act(async () => root.render(createElement(DirectoryRestore, props)))
   await click("Review directory restore"); await click("Preview directory changes"); await click("Resume saved page")

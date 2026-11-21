@@ -1,4 +1,4 @@
-import { graphWorkloadPolicy } from "./fixtures/directory-graph-v1"
+import { graphWorkloadPolicy, graphUserCreateResponse } from "./fixtures/directory-graph-v1"
 import { graphNotFound, unsetUserFields, unsetGroupFields } from "./fixtures/directory-response"
 import { rejectProxyAuthResponses, withNetworkErrors } from "../src/main/api/network-error"
 import { planGuard } from "../src/main/api/plan-gates"
@@ -231,7 +231,7 @@ it("retries a throttled later relationship page through production prepare", asy
     const url = new URL(String(input))
     if (url.pathname.endsWith("/members")) {
       if (!url.searchParams.has("$skiptoken")) return Response.json({ value: [], "@odata.nextLink": url.href + "&$skiptoken=next" })
-      if (++attempts === 1) return new Response(null, { status: 429, headers: { "Retry-After": "0" } })
+      if (++attempts === 1) return Response.json({ error: { code: "TooManyRequests" } }, { status: 429, headers: { "Retry-After": "0" } })
       return Response.json({ value: [] })
     }
     return original(input, init)
@@ -263,7 +263,7 @@ it("cancels the production adapter's throttle wait and resumes after restart", a
   let reached!: () => void, attempts = 0
   const throttled = new Promise<void>(resolve => { reached = resolve })
   env.fetcher.mockImplementation(async (input, init) => {
-    if (init?.method === "POST" && ++attempts === 1) { reached(); return new Response(null, { status: 429, headers: { "Retry-After": "60" } }) }
+    if (init?.method === "POST" && ++attempts === 1) { reached(); return Response.json({ error: { code: "TooManyRequests" } }, { status: 429, headers: { "Retry-After": "60" } }) }
     return original(input, init)
   })
   const request = { ...env.request, runId: page.runId }, approvals = { [page.rows[0]!.key]: page.rows[0]!.review.approvals }
@@ -316,7 +316,7 @@ it("keeps a throttled group create owned until discard before another backup can
   const env = world(0, true), original = env.fetcher.getMockImplementation()!
   const page = await env.service().prepare(tenant, env.request, options, env.read)
   let sends = 0
-  env.fetcher.mockImplementation((input, init) => init?.method === "POST" && ++sends === 1 ? Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
+  env.fetcher.mockImplementation((input, init) => init?.method === "POST" && ++sends === 1 ? Promise.resolve(Response.json({ error: { code: "TooManyRequests" } }, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
   const approvals = { [page.rows[0]!.key]: page.rows[0]!.review.approvals }
   vi.useFakeTimers()
   try {
@@ -471,7 +471,7 @@ it("retains resolved live-object deadlines after discard across competing backup
   const request = { ...env.request, snapshot: { ...env.request.snapshot, description: "Saved" } }
   const page = await env.service().prepare(tenant, request, options, env.read), original = env.fetcher.getMockImplementation()!
   let sends = 0
-  env.fetcher.mockImplementation((input, init) => init?.method === "PATCH" && ++sends === 1 ? Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
+  env.fetcher.mockImplementation((input, init) => init?.method === "PATCH" && ++sends === 1 ? Promise.resolve(Response.json({ error: { code: "TooManyRequests" } }, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
   const execute = (p: typeof page, r = request) => env.service().execute(tenant, { ...r, runId: p.runId }, p.fingerprint, Object.fromEntries(p.rows.map(row => [row.key, row.review.approvals])))
   vi.useFakeTimers()
   try {
@@ -673,7 +673,7 @@ it.each(["actor", "read-back"])("keeps a %s throttle on the recreated live ident
   let throttle = false, sends = 0
   env.fetcher.mockImplementation((input, init) => {
     if (init?.method === "PATCH") { sends++; return Promise.resolve(new Response(null, { status: 503 })) }
-    if (throttle && new URL(String(input)).pathname === (phase === "actor" ? "/v1.0/applications" : `/v1.0/groups/${id(900)}`)) { throttle = false; return Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "120" } })) }
+    if (throttle && new URL(String(input)).pathname === (phase === "actor" ? "/v1.0/applications" : `/v1.0/groups/${id(900)}`)) { throttle = false; return Promise.resolve(Response.json({ error: { code: "TooManyRequests" } }, { status: 429, headers: { "Retry-After": "120" } })) }
     return original(input, init)
   })
   vi.useFakeTimers()
@@ -805,7 +805,7 @@ it("keeps an approved add uncertain while read-back may predate our acknowledged
 it.each(["matching", "wrong step", "wrong attempt"])("recovers a rejected group create from a coordinator-only deadline with a %s marker", async marker => {
   const env = world(0, true), page = await env.service().prepare(tenant, env.request, options, env.read), original = env.fetcher.getMockImplementation()!
   let posts = 0, failures = 0
-  env.fetcher.mockImplementation((input, init) => init?.method === "POST" && new URL(String(input)).pathname === "/v1.0/groups" && ++posts === 1 ? Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
+  env.fetcher.mockImplementation((input, init) => init?.method === "POST" && new URL(String(input)).pathname === "/v1.0/groups" && ++posts === 1 ? Promise.resolve(Response.json({ error: { code: "TooManyRequests" } }, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
   vi.useFakeTimers()
   try {
     const deadline = Date.now() + 120_000, set = env.store.set
@@ -821,7 +821,7 @@ it.each(["matching", "wrong step", "wrong attempt"])("recovers a rejected group 
     expect(entry).toMatchObject({ state: "uncertain", attempt: 1 })
     const coordinatorKey = `restore.directory.coordinator.${tenant}`, state = JSON.parse(env.data.get(coordinatorKey)!)
     expect(state.deadlines[resource]).toBe(deadline)
-    expect(state.locks[resource].rejected).toEqual({ step: entry.step.key, attempt: 1 })
+    expect(state.locks[resource].rejected).toEqual({ step: entry.step.key, attempt: 1, cause: "throttle" })
     if (marker === "wrong step") state.locks[resource].rejected.step = "different-step"
     if (marker === "wrong attempt") state.locks[resource].rejected.attempt++
     env.data.set(coordinatorKey, JSON.stringify(state))
@@ -850,7 +850,7 @@ it("preserves batch numbers across a journal gap when saving an actor throttle",
   const before = JSON.parse(env.data.get(second)!).runs[page.runId]
   env.data.delete(first)
   const original = env.fetcher.getMockImplementation()!
-  env.fetcher.mockImplementation((input, init) => new URL(String(input)).pathname === "/v1.0/applications" ? Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
+  env.fetcher.mockImplementation((input, init) => new URL(String(input)).pathname === "/v1.0/applications" ? Promise.resolve(Response.json({ error: { code: "TooManyRequests" } }, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
   vi.useFakeTimers()
   try {
     const deadline = Date.now() + 120_000
@@ -906,7 +906,7 @@ it.each(["capture", "send marker", "coordinator", "relationship history"])("retr
 
 it.each(["user", "client", "tenant"].flatMap(identity => ["reconcile", "resume", "discard"].map(action => ({ identity, action }))))("refuses saved $action data for a different $identity before Graph reads during Retry-After", async ({ identity, action }) => {
   const env = world(1), page = await env.service().prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read), original = env.fetcher.getMockImplementation()!
-  env.fetcher.mockImplementation((input, init) => init?.method === "POST" ? Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
+  env.fetcher.mockImplementation((input, init) => init?.method === "POST" ? Promise.resolve(Response.json({ error: { code: "TooManyRequests" } }, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
   expect(await env.service().execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])))).toMatchObject({ outcomes: [{ state: "deferred" }] })
   const connection = { ...await env.connection(), ...(identity === "tenant" ? { tenantId: id(990) } : identity === "client" ? { clientId: id(991) } : { userId: id(992) }) }
   connection.token = `h.${Buffer.from(JSON.stringify({ tid: connection.tenantId, oid: connection.userId, appid: connection.clientId, scp: "GroupMember.ReadWrite.All" })).toString("base64url")}.s`
@@ -920,7 +920,7 @@ it.each(["user", "client", "tenant"].flatMap(identity => ["reconcile", "resume",
 it("returns and enforces the original row selection when resuming a partial page", async () => {
   const env = world(3), page = await env.service().prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read), original = env.fetcher.getMockImplementation()!
   const selected = [page.rows[0]!, page.rows[2]!], approvals = Object.fromEntries(selected.map(row => [row.key, row.review.approvals])), request = { ...env.request, runId: page.runId }
-  env.fetcher.mockImplementation((input, init) => init?.method === "POST" ? Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
+  env.fetcher.mockImplementation((input, init) => init?.method === "POST" ? Promise.resolve(Response.json({ error: { code: "TooManyRequests" } }, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
   vi.useFakeTimers()
   try {
     expect(await env.service().execute(tenant, request, page.fingerprint, approvals)).toMatchObject({ outcomes: [{ state: "deferred" }, { state: "deferred" }] })
@@ -964,7 +964,7 @@ it.each(["within writer", "after resume"])("clears a step's rejected marker afte
   const env = world(2), page = await env.service().prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read), original = env.fetcher.getMockImplementation()!
   let posts = 0
   env.fetcher.mockImplementation((input, init) => {
-    if (init?.method === "POST" && ++posts !== 2) return Promise.resolve(new Response(null, { status: posts === 1 ? 429 : 503, headers: { "Retry-After": mode === "within writer" ? "1" : "120" } }))
+    if (init?.method === "POST" && ++posts !== 2) return Promise.resolve(Response.json({ error: { code: "TooManyRequests" } }, { status: posts === 1 ? 429 : 503, headers: { "Retry-After": mode === "within writer" ? "1" : "120" } }))
     return original(input, init)
   })
   const execute = () => env.service().execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])))
@@ -974,7 +974,7 @@ it.each(["within writer", "after resume"])("clears a step's rejected marker afte
     await vi.advanceTimersByTimeAsync(0)
     const coordinator = `restore.directory.coordinator.${tenant}`
     expect(posts).toBe(1)
-    expect(JSON.parse(env.data.get(coordinator)!).locks[resource].rejected).toEqual({ step: page.rows[0]!.key, attempt: 1 })
+    expect(JSON.parse(env.data.get(coordinator)!).locks[resource].rejected).toEqual({ step: page.rows[0]!.key, attempt: 1, cause: "throttle" })
     if (mode === "after resume") {
       expect(await pending).toMatchObject({ outcomes: [{ state: "deferred" }, { state: "deferred" }] })
       await vi.advanceTimersByTimeAsync(120_000)
@@ -995,7 +995,7 @@ it.each(["same session", "restart"])("retains a rejected group create through lo
   const env = world(0, true), service = env.service(), original = env.fetcher.getMockImplementation()!
   const page = await service.prepare(tenant, env.request, options, env.read)
   let posts = 0
-  env.fetcher.mockImplementation((input, init) => init?.method === "POST" && ++posts === 1 ? Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
+  env.fetcher.mockImplementation((input, init) => init?.method === "POST" && ++posts === 1 ? Promise.resolve(Response.json({ error: { code: "TooManyRequests" } }, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
   vi.useFakeTimers()
   try {
     const deadline = Date.now() + 120_000, set = env.store.set
@@ -1022,7 +1022,7 @@ it.each(["same session", "restart"])("retains a rejected group create through lo
       expect(env.fetcher).toHaveBeenCalledTimes(calls)
       const state = JSON.parse(env.data.get(`restore.directory.coordinator.${tenant}`)!)
       expect(state.deadlines[resource]).toBe(deadline)
-      expect(state.locks[resource].rejected).toEqual({ step: entry.step.key, attempt: 1 })
+      expect(state.locks[resource].rejected).toEqual({ step: entry.step.key, attempt: 1, cause: "throttle" })
     }
     await vi.advanceTimersByTimeAsync(120_000)
     expect(await current.execute(tenant, request, page.fingerprint, approvals)).toMatchObject({ outcomes: [{ state: mode === "same session" ? "applied" : "uncertain" }] })
@@ -1035,7 +1035,7 @@ it("persists the first validated selection before a throttled actor lookup", asy
   const env = world(3), service = env.service(), page = await service.prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read)
   const original = env.fetcher.getMockImplementation()!, rows = page.rows.slice(0, 2), request = { ...env.request, runId: page.runId }
   const approvals = Object.fromEntries(rows.map(row => [row.key, row.review.approvals]))
-  env.fetcher.mockImplementation((input, init) => new URL(String(input)).pathname === "/v1.0/applications" ? Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
+  env.fetcher.mockImplementation((input, init) => new URL(String(input)).pathname === "/v1.0/applications" ? Promise.resolve(Response.json({ error: { code: "TooManyRequests" } }, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
   vi.useFakeTimers()
   try {
     await expect(service.execute(tenant, request, page.fingerprint, approvals)).rejects.toThrow("throttled")
@@ -1054,7 +1054,7 @@ it("persists the first validated selection before a throttled actor lookup", asy
 it("retains a review row's throttle deadline when deferring its preview", async () => {
   const env = world(), original = env.fetcher.getMockImplementation()!
   env.members.add(id(100)); env.members.add(id(101))
-  env.fetcher.mockImplementation((input, init) => String(input).includes("conditionalAccess") ? Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
+  env.fetcher.mockImplementation((input, init) => String(input).includes("conditionalAccess") ? Promise.resolve(Response.json({ error: { code: "TooManyRequests" } }, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
   vi.useFakeTimers()
   try {
     const deadline = Date.now() + 120_000
@@ -1193,7 +1193,7 @@ it("refuses a removal retry if Conditional Access begins targeting the group dur
   const page = await service.prepare(tenant, env.request, { ...options, stage: "relationships", exactMembers: true }, env.read)
   let attempts = 0
   env.fetcher.mockImplementation((input, init) => {
-    if (init?.method === "DELETE") { attempts++; return Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "1" } })) }
+    if (init?.method === "DELETE") { attempts++; return Promise.resolve(Response.json({ error: { code: "TooManyRequests" } }, { status: 429, headers: { "Retry-After": "1" } })) }
     if (attempts && String(input).includes("conditionalAccess")) return Promise.resolve(Response.json({ value: [{ conditions: { users: { includeGroups: [resource], excludeGroups: [] } } }] }))
     return original(input, init)
   })
@@ -1220,7 +1220,7 @@ it("keeps an in-flight member add applied when resume meets actor throttling and
   let throttle = false
   env.fetcher.mockImplementation(async (input, init) => {
     if (init?.method === "POST") { started(); await response }
-    if (throttle && new URL(String(input)).pathname === "/v1.0/applications") return new Response(null, { status: 429, headers: { "Retry-After": "120" } })
+    if (throttle && new URL(String(input)).pathname === "/v1.0/applications") return Response.json({ error: { code: "TooManyRequests" } }, { status: 429, headers: { "Retry-After": "120" } })
     return original(input, init)
   })
   const execution = service.execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])))
@@ -1250,7 +1250,7 @@ it("retains a preview policy deadline after one failed save before a description
       if (!failed && key.includes(".coordinator.") && value.includes(String(deadline))) { failed = true; throw new Error("Deadline storage unavailable") }
       set(key, value)
     })
-    env.fetcher.mockImplementation((input, init) => String(input).includes("conditionalAccess") ? Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
+    env.fetcher.mockImplementation((input, init) => String(input).includes("conditionalAccess") ? Promise.resolve(Response.json({ error: { code: "TooManyRequests" } }, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
     await expect(service.prepare(tenant, env.request, { ...options, stage: "relationships", exactMembers: true }, env.read)).rejects.toThrow("Resume after Retry-After")
     expect([...env.data.keys()].some(key => key.startsWith("restore.directory.review."))).toBe(false)
     expect(failed).toBe(true)
@@ -1296,7 +1296,7 @@ it("retains both concurrent preview deadlines for the same object and flushes be
       const index = ++actors
       if (actors === 2) entered()
       await gate
-      return new Response(null, { status: 429, headers: { "Retry-After": String(index === 1 ? 180 : 120) } })
+      return Response.json({ error: { code: "TooManyRequests" } }, { status: 429, headers: { "Retry-After": String(index === 1 ? 180 : 120) } })
     }
     return original(input, init)
   })
@@ -1329,7 +1329,7 @@ it("merges a retained actor deadline without overwriting a result confirmed by a
   vi.useFakeTimers()
   try {
     const deadline = Date.now() + 120_000
-    env.fetcher.mockImplementation((input, init) => new URL(String(input)).pathname === "/v1.0/applications" ? Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
+    env.fetcher.mockImplementation((input, init) => new URL(String(input)).pathname === "/v1.0/applications" ? Promise.resolve(Response.json({ error: { code: "TooManyRequests" } }, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
     const spy = vi.spyOn(env.store, "set").mockImplementation(() => { throw new Error("Storage unavailable") })
     await expect(service.resume(tenant, { ...env.request, runId: page.runId })).rejects.toThrow("retry deadline could not be saved")
     spy.mockRestore(); env.fetcher.mockImplementation(original)
@@ -1371,7 +1371,7 @@ it.each([resource, id(999)])("defers a running write for an unsaved concurrent p
   const started = new Promise<void>(resolve => { entered = resolve }), gate = new Promise<void>(resolve => { release = resolve })
   env.fetcher.mockImplementation(async (input, init) => {
     const path = new URL(String(input)).pathname
-    if (throttle && path === "/v1.0/applications") return new Response(null, { status: 429, headers: { "Retry-After": "120" } })
+    if (throttle && path === "/v1.0/applications") return Response.json({ error: { code: "TooManyRequests" } }, { status: 429, headers: { "Retry-After": "120" } })
     if (hold && path === `/v1.0/groups/${resource}`) { hold = false; entered(); await gate }
     return original(input, init)
   })
@@ -1407,7 +1407,7 @@ it.each([false, true])("transfers a concurrent source deadline to a recreated gr
   let entered!: () => void, release!: () => void, throttle = false
   const started = new Promise<void>(resolve => { entered = resolve }), gate = new Promise<void>(resolve => { release = resolve })
   env.fetcher.mockImplementation(async (input, init) => {
-    if (throttle && new URL(String(input)).pathname === "/v1.0/applications") return new Response(null, { status: 429, headers: { "Retry-After": "120" } })
+    if (throttle && new URL(String(input)).pathname === "/v1.0/applications") return Response.json({ error: { code: "TooManyRequests" } }, { status: 429, headers: { "Retry-After": "120" } })
     if (init?.method === "POST") { entered(); await gate }
     return original(input, init)
   })
@@ -1481,7 +1481,7 @@ it.each(["before preview", "after preview"])("recovers a recreated user's journa
     if (path === "/v1.0/users" && init?.method === "POST") {
       env.members.add(target); env.writes.push("POST users"); entered()
       if (recovery === "after preview") await responseGate
-      return Response.json({ ...userRequest.snapshot, id: target }, { status: 201 })
+      return Response.json(graphUserCreateResponse({ ...userRequest.snapshot, id: target }), { status: 201 })
     }
     if (path === "/v1.0/users") return Response.json({ value: [] })
     if (path === `/v1.0/users/${source}`) return graphNotFound()
@@ -1552,7 +1552,7 @@ it.each(["object", "members", "policy"])("publishes a preview %s read deadline b
     const path = new URL(String(input)).pathname
     if (throttle && (phase === "object" ? path === `/v1.0/groups/${resource}` : phase === "members" ? path === `/beta/groups/${resource}/members` : path.includes("conditionalAccess"))) {
       throttle = false; reached()
-      return Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "1" } }))
+      return Promise.resolve(Response.json({ error: { code: "TooManyRequests" } }, { status: 429, headers: { "Retry-After": "1" } }))
     }
     return original(input, init)
   })
@@ -1578,7 +1578,7 @@ it("counts a current-batch failure alongside a deferred row in directory audit t
   const page = await service.prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read), original = env.fetcher.getMockImplementation()!
   let sends = 0
   env.fetcher.mockImplementation((input, init) => {
-    if (init?.method === "POST") return Promise.resolve(new Response(null, { status: ++sends === 1 ? 403 : 429, headers: { "Retry-After": "120" } }))
+    if (init?.method === "POST") return Promise.resolve(Response.json({ error: { code: "TooManyRequests" } }, { status: ++sends === 1 ? 403 : 429, headers: { "Retry-After": "120" } }))
     return original(input, init)
   })
   const entries: unknown[] = []
@@ -1671,7 +1671,7 @@ it("propagates a failed policy retry publication and retains its saved deadline 
     set(key, value)
   })
   env.fetcher.mockImplementation(async (input, init) => {
-    if (!throttled && String(input).includes("conditionalAccess")) { throttled = true; fail = true; return new Response(null, { status: 429, headers: { "Retry-After": "120" } }) }
+    if (!throttled && String(input).includes("conditionalAccess")) { throttled = true; fail = true; return Response.json({ error: { code: "TooManyRequests" } }, { status: 429, headers: { "Retry-After": "120" } }) }
     return original(input, init)
   })
   vi.useFakeTimers()
@@ -1710,7 +1710,7 @@ it.each(["journal", "coordinator", "none"])("preserves an advisory scan deadline
   const page = await service.prepare(tenant, env.request, options, env.read)
   let scanned = false
   env.fetcher.mockImplementation(async (input, init) => {
-    if (String(input).includes("deviceManagement/")) { scanned = true; return new Response(null, { status: 429, headers: { "Retry-After": "120" } }) }
+    if (String(input).includes("deviceManagement/")) { scanned = true; return Response.json({ error: { code: "TooManyRequests" } }, { status: 429, headers: { "Retry-After": "120" } }) }
     return original(input, init)
   })
   const set = env.store.set
@@ -1776,7 +1776,7 @@ it("counts the full saved selection in audit before later batches exist and neve
   const page = await service.prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read)
   let throttle = true
   env.fetcher.mockImplementation(async (input, init) => {
-    if (throttle && init?.method === "POST") return new Response(null, { status: 429, headers: { "Retry-After": "120" } })
+    if (throttle && init?.method === "POST") return Response.json({ error: { code: "TooManyRequests" } }, { status: 429, headers: { "Retry-After": "120" } })
     return original(input, init)
   })
   const audits: unknown[] = []
@@ -1926,7 +1926,7 @@ it("reports saved failure totals when confirmation returns during Retry-After", 
   const env = world(2), service = env.service(), original = env.fetcher.getMockImplementation()!
   const page = await service.prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read)
   let posts = 0
-  env.fetcher.mockImplementation((input, init) => init?.method === "POST" ? Promise.resolve(new Response(null, { status: ++posts === 1 ? 403 : 429, headers: { "Retry-After": "120" } })) : original(input, init))
+  env.fetcher.mockImplementation((input, init) => init?.method === "POST" ? Promise.resolve(Response.json({ error: { code: "TooManyRequests" } }, { status: ++posts === 1 ? 403 : 429, headers: { "Retry-After": "120" } })) : original(input, init))
   const result = await service.execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])))
   expect(result).toMatchObject({ failed: 1, outcomes: [{ state: "failed" }, { state: "deferred" }] })
   const reads = env.fetcher.mock.calls.length
@@ -1967,7 +1967,7 @@ it.each(["execute", "saved confirmation"])("defers uncertain user-create confirm
     if (path === "/v1.0/users") {
       if (!confirming) return Response.json({ value: [] })
       lookups++
-      return throttled ? new Response(null, { status: 429, headers: { "Retry-After": "60" } }) : Response.json({ value: [{ ...request.snapshot, id: target }] })
+      return throttled ? Response.json({ error: { code: "TooManyRequests" } }, { status: 429, headers: { "Retry-After": "60" } }) : Response.json({ value: [{ ...request.snapshot, id: target }] })
     }
     return original(input, init)
   })
@@ -2259,7 +2259,7 @@ it("cancels a Retry-After wait from the cached owner when token refresh is unava
     const page = await service.prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read), original = env.fetcher.getMockImplementation()!
     let attempts = 0
     env.fetcher.mockImplementation((input, init) => {
-      if (init?.method === "POST") { attempts++; return Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "60" } })) }
+      if (init?.method === "POST") { attempts++; return Promise.resolve(Response.json({ error: { code: "TooManyRequests" } }, { status: 429, headers: { "Retry-After": "60" } })) }
       return original(input, init)
     })
     const pending = service.execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])))
@@ -2288,7 +2288,7 @@ it("executes an unrelated approved page after an unsaved deadline expires despit
       if (key === coordinator && JSON.parse(value).deadlines[resource]) throw new Error("Deadline publication unavailable")
       set(key, value)
     })
-    env.fetcher.mockImplementation((input, init) => new URL(String(input)).pathname === "/v1.0/applications" ? Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
+    env.fetcher.mockImplementation((input, init) => new URL(String(input)).pathname === "/v1.0/applications" ? Promise.resolve(Response.json({ error: { code: "TooManyRequests" } }, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
     const own = () => service.resume(tenant, { ...env.request, runId: page.runId })
     await expect(own()).rejects.toBeInstanceOf(DirectoryRetryPersistenceError)
     const deadline = Date.now() + 120_000
@@ -2313,7 +2313,7 @@ it.each(["Graph lookup forbidden", "token refresh unavailable"])("discards defer
   const page = await service.prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read), original = env.fetcher.getMockImplementation()!
   const abort = new AbortController()
   env.fetcher.mockImplementation((input, init) => {
-    if (init?.method === "POST") { abort.abort(); return Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "120" } })) }
+    if (init?.method === "POST") { abort.abort(); return Promise.resolve(Response.json({ error: { code: "TooManyRequests" } }, { status: 429, headers: { "Retry-After": "120" } })) }
     return original(input, init)
   })
   expect(await service.execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])), abort.signal)).toMatchObject({ outcomes: [{ state: "deferred" }], canDiscard: true })
@@ -2569,7 +2569,7 @@ it.each(["raw", "wrapped"].flatMap(transport => ["recovered", "role revoked", "o
   expect(posts).toBe(1)
   const reads = roleReads
   const settled = await service().execute(tenant, request, page.fingerprint, approvals)
-  expect(settled).toMatchObject(recovery === "recovered" ? { status: "partial", failed: 0, warnings: [expect.stringContaining("reference scan did not complete")], outcomes: [{ state: "applied", targetId: id(900) }] } : { status: "partial", failed: 1, outcomes: [{ state: "blocked" }] })
+  expect(settled).toMatchObject(recovery === "recovered" ? { status: "partial", failed: 0, warnings: [expect.stringContaining("reference scan did not complete")], outcomes: [{ state: "applied", targetId: id(900) }] } : recovery === "role revoked" ? { status: "partial", failed: 0, outcomes: [{ state: "deferred", deferralCause: "role" }] } : { status: "partial", failed: 1, outcomes: [{ state: "blocked" }] })
   if (recovery === "recovered") {
     expect(roleReads).toBeGreaterThan(reads)
     expect(env.writes).toEqual(["POST groups"]); expect(posts).toBe(2)
@@ -2602,7 +2602,7 @@ it("returns all saved outcomes and retry times on Resume including unstarted app
   env.fetcher.mockImplementation((input, init) => {
     if (init?.method === "POST") {
       const status = { 1: 403, 3: 429 }[++posts]
-      if (status) return Promise.resolve(new Response(null, { status, headers: { "Retry-After": "120" } }))
+      if (status) return Promise.resolve(Response.json({ error: { code: "TooManyRequests" } }, { status, headers: { "Retry-After": "120" } }))
     }
     return original(input, init)
   })
@@ -2730,7 +2730,7 @@ it.each(["coordinator saved", "journal only"])("recovers a completed page's rele
   const coordinatorKey = `restore.directory.coordinator.${tenant}`, journalKey = directoryPagePrefix(tenant, page.runId) + `batch.0.restore.guarded.${tenant}`
   expect(JSON.parse(env.data.get(coordinatorKey)!).locks).toEqual({})
   const original = env.fetcher.getMockImplementation()!, deadline = time + 120_000
-  env.fetcher.mockImplementation((input, init) => new URL(String(input)).pathname === "/v1.0/applications" ? Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": new Date(deadline).toUTCString() } })) : original(input, init))
+  env.fetcher.mockImplementation((input, init) => new URL(String(input)).pathname === "/v1.0/applications" ? Promise.resolve(Response.json({ error: { code: "TooManyRequests" } }, { status: 429, headers: { "Retry-After": new Date(deadline).toUTCString() } })) : original(input, init))
   const set = env.store.set, spy = vi.spyOn(env.store, "set").mockImplementation((key, value) => {
     if (publication === "journal only" && key === coordinatorKey) throw new Error("Coordinator unavailable")
     set(key, value)
@@ -2803,7 +2803,7 @@ it.each([false, true])("retains an empty relationship page's confirmation deadli
   expect(page.rows).toEqual([])
   env.data.set(directoryMappingKey(tenant, "Groups", resource), id(777))
   const original = env.fetcher.getMockImplementation()!, retryAt = Date.now() + 120_000
-  env.fetcher.mockImplementation((input, init) => new URL(String(input)).pathname === "/v1.0/applications" ? Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
+  env.fetcher.mockImplementation((input, init) => new URL(String(input)).pathname === "/v1.0/applications" ? Promise.resolve(Response.json({ error: { code: "TooManyRequests" } }, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
   try {
     await expect(service.saved(tenant, page.runId, "reconcile")).rejects.toThrow("throttled")
     expect(JSON.parse(env.data.get(`restore.directory.coordinator.${tenant}`)!).deadlines).toEqual({ [resource]: retryAt })
@@ -3064,7 +3064,7 @@ it("keeps a user create with a different response UPN uncertain without publishi
   let posts = 0
   env.fetcher.mockImplementation((input, init) => {
     const url = new URL(String(input))
-    if (url.pathname === "/v1.0/users" && init?.method === "POST") { posts++; return Promise.resolve(Response.json({ ...snapshot, id: target, userPrincipalName: "other@example.test" }, { status: 201 })) }
+    if (url.pathname === "/v1.0/users" && init?.method === "POST") { posts++; return Promise.resolve(Response.json(graphUserCreateResponse({ ...snapshot, id: target, userPrincipalName: "other@example.test" }), { status: 201 })) }
     if (url.pathname === `/v1.0/users/${source}`) return Promise.resolve(graphNotFound())
     if (url.pathname === "/v1.0/users") return Promise.resolve(Response.json({ value: [] }))
     return original(input, init)
@@ -3085,7 +3085,7 @@ it.each(["Users", "Groups"])("verifies the returned %s create ID before mapping 
   let posts = 0, keyedReads = 0, healthy = false
   env.fetcher.mockImplementation((input, init) => {
     const url = new URL(String(input))
-    if (url.pathname === `/v1.0/${path}` && init?.method === "POST") { posts++; return Promise.resolve(Response.json({ ...snapshot, id: target }, { status: 201 })) }
+    if (url.pathname === `/v1.0/${path}` && init?.method === "POST") { posts++; return Promise.resolve(Response.json(folder === "Users" ? graphUserCreateResponse({ ...snapshot, id: target }) : { ...snapshot, id: target }, { status: 201 })) }
     if (url.pathname === `/v1.0/${path}/${source}`) return Promise.resolve(graphNotFound())
     if (url.pathname === `/v1.0/${path}/${target}`) {
       keyedReads++
@@ -3104,4 +3104,99 @@ it.each(["Users", "Groups"])("verifies the returned %s create ID before mapping 
   expect(await env.service().saved(tenant, page.runId, "reconcile")).toMatchObject({ outcomes: [{ state: "applied", targetId: target }] })
   expect(posts).toBe(1); expect(keyedReads).toBe(2)
   expect(directoryMappedId(env.store, tenant, folder, source)).toBe(target)
+})
+
+it.each(["healthy", "guest", "enabled", "missing account state", "missing user type"])("applies a documented user 201 in one pass only after keyed state verification: %s", async state => {
+  const healthy = state === "healthy"
+  const env = world(), original = env.fetcher.getMockImplementation()!, source = id(100), target = id(900)
+  const snapshot = { ...unsetUserFields, id: source, userType: "Member", displayName: "Saved user", userPrincipalName: "saved@example.test", mailNickname: "saved", accountEnabled: false }
+  const request = { origin: "restore" as const, path: `backup/Users/${source}.json`, snapshot }
+  let posts = 0, reads = 0
+  env.fetcher.mockImplementation((input, init) => {
+    const path = new URL(String(input)).pathname
+    if (path === "/v1.0/users" && init?.method === "POST") {
+      posts++
+      const created = graphUserCreateResponse({ ...snapshot, id: target })
+      expect(Object.keys(created).sort()).toEqual(["id", "businessPhones", "displayName", "givenName", "jobTitle", "mail", "mobilePhone", "officeLocation", "preferredLanguage", "surname", "userPrincipalName"].sort())
+      return Promise.resolve(Response.json(created, { status: 201 }))
+    }
+    if (path === `/v1.0/users/${source}`) return Promise.resolve(graphNotFound())
+    if (path === `/v1.0/users/${target}`) { reads++; return Promise.resolve(Response.json({ ...snapshot, id: target, userType: state === "missing user type" ? undefined : state === "guest" ? "Guest" : "Member", accountEnabled: state === "missing account state" ? undefined : state === "enabled" })) }
+    if (path === "/v1.0/users") return Promise.resolve(Response.json({ value: [] }))
+    return original(input, init)
+  })
+  const page = await env.service().prepare(tenant, request, options, env.read)
+  const result = await env.service().execute(tenant, { ...request, runId: page.runId }, page.fingerprint, { [page.rows[0]!.key]: page.rows[0]!.review.approvals })
+  expect(result).toMatchObject({ outcomes: [{ state: healthy ? "applied" : "uncertain", targetId: target }] })
+  expect(posts).toBe(1); expect(reads).toBe(1)
+  expect(directoryMappedId(env.store, tenant, "Users", source)).toBe(healthy ? target : undefined)
+})
+
+it.each([{ displayName: "Other group" }, { description: "Other description" }, { mailNickname: "other" }, { securityEnabled: false }, { mailEnabled: true }, { groupTypes: ["Unified"] }])("rejects contradictory group creation evidence %j without retaining or querying its ID", async extra => {
+  const env = world(0, true), original = env.fetcher.getMockImplementation()!, target = id(900)
+  env.request.snapshot.description = "Reviewed description"
+  let posts = 0, wrongReads = 0
+  env.fetcher.mockImplementation((input, init) => {
+    const path = new URL(String(input)).pathname
+    if (path === "/v1.0/groups" && init?.method === "POST") { posts++; return Promise.resolve(Response.json({ ...JSON.parse(String(init.body)), id: target, ...extra }, { status: 201 })) }
+    if (path === `/v1.0/groups/${target}`) { wrongReads++; return Promise.resolve(graphNotFound()) }
+    return original(input, init)
+  })
+  const page = await env.service().prepare(tenant, env.request, options, env.read)
+  const result = await env.service().execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, { [page.rows[0]!.key]: page.rows[0]!.review.approvals })
+  expect(result).toMatchObject({ outcomes: [{ state: "uncertain" }] })
+  expect(result.outcomes[0]!.targetId).toBeUndefined()
+  expect(await env.service().saved(tenant, page.runId, "reconcile")).toMatchObject({ outcomes: [{ state: "uncertain" }] })
+  expect(posts).toBe(1); expect(wrongReads).toBe(0)
+  expect(directoryMappedId(env.store, tenant, "Groups", resource)).toBeUndefined()
+})
+
+it.each(["references", "send"])("defers group creation when the admin role expires at %s and repeats approvals on resume", async phase => {
+  const env = world(0, true), original = env.fetcher.getMockImplementation()!
+  const page = await env.service().prepare(tenant, env.request, options, env.read)
+  let reads = 0, expired = true
+  env.fetcher.mockImplementation((input, init) => {
+    if (new URL(String(input)).pathname === "/v1.0/roleManagement/directory/roleAssignments" && ++reads >= (phase === "send" ? 2 : 1) && expired) return Promise.resolve(Response.json({ value: [] }))
+    return original(input, init)
+  })
+  const request = { ...env.request, runId: page.runId }, approvals = { [page.rows[0]!.key]: page.rows[0]!.review.approvals }
+  expect(await env.service().execute(tenant, request, page.fingerprint, approvals)).toMatchObject({ failed: 0, outcomes: [{ state: "deferred", deferralCause: "role", reason: expect.stringContaining("current tenant-wide Groups Administrator") }] })
+  expect(env.writes).toEqual([])
+  expired = false
+  await expect(env.service().execute(tenant, request, page.fingerprint, {})).rejects.toThrow("Approve each selected row separately")
+  expect(await env.service().execute(tenant, request, page.fingerprint, approvals)).toMatchObject({ outcomes: [{ state: "applied" }] })
+  expect(reads).toBeGreaterThan(phase === "send" ? 2 : 1)
+  expect(env.writes).toEqual(["POST groups"])
+})
+
+it("blocks a create preview when the UPN belongs to an existing object and names it", async () => {
+  const env = world(), original = env.fetcher.getMockImplementation()!, source = id(100), existing = id(900)
+  const snapshot = { id: source, displayName: "Saved user", userPrincipalName: "saved@example.test", mailNickname: "saved", accountEnabled: false, userType: "Member" }
+  const request = { origin: "restore" as const, path: `backup/Users/${source}.json`, snapshot }
+  env.fetcher.mockImplementation((input, init) => {
+    const path = new URL(String(input)).pathname
+    if (path === `/v1.0/users/${source}`) return Promise.resolve(graphNotFound())
+    if (path === "/v1.0/users") return Promise.resolve(Response.json({ value: [{ ...unsetUserFields, ...snapshot, id: existing, displayName: "Existing person" }] }))
+    return original(input, init)
+  })
+  const page = await env.service().prepare(tenant, request, options, env.read)
+  expect(page.rows[0]!.review.blocker).toContain(existing)
+  expect(page.rows[0]!.review.blocker).toContain("Existing person")
+  expect(page.rows[0]!.review.blocker).toContain(snapshot.userPrincipalName)
+  await expect(env.service().execute(tenant, { ...request, runId: page.runId }, page.fingerprint, { [page.rows[0]!.key]: page.rows[0]!.review.approvals })).rejects.toThrow("Approve each selected row separately")
+  expect(env.writes).toEqual([])
+})
+
+it("defers exact removal for a Conditional Access collection with the wrong context until a healthy read", async () => {
+  const env = world(0), original = env.fetcher.getMockImplementation()!
+  env.members.add(id(100))
+  const page = await env.service().prepare(tenant, env.request, { ...options, stage: "relationships", exactMembers: true }, env.read)
+  let healthy = false
+  env.fetcher.mockImplementation((input, init) => String(input).includes("identity/conditionalAccess/policies") ? Promise.resolve(Response.json({ "@odata.context": `https://graph.microsoft.com/v1.0/$metadata#${healthy ? "identity/conditionalAccess/policies" : "users"}`, value: [] })) : original(input, init))
+  const request = { ...env.request, runId: page.runId }, approvals = { [page.rows[0]!.key]: page.rows[0]!.review.approvals }
+  expect(await env.service().execute(tenant, request, page.fingerprint, approvals)).toMatchObject({ outcomes: [{ state: "deferred" }] })
+  expect(env.writes).toEqual([])
+  healthy = true
+  expect(await env.service().execute(tenant, request, page.fingerprint, approvals)).toMatchObject({ outcomes: [{ state: "applied" }] })
+  expect(env.writes).toEqual([`DELETE groups/${resource}/members/${id(100)}/$ref`])
 })

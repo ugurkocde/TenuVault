@@ -1,6 +1,6 @@
 import { restoreTenantKey } from "./restore-tenant-key"
 import { isProxyAuthResponse } from "../api/network-error"
-import { DirectoryRetryPersistenceError, persistDirectoryRetry, waitForDirectoryRetry } from "./directory-retry"
+import { DirectoryRetryPersistenceError, DirectoryWriteUncertainError, persistDirectoryRetry, waitForDirectoryRetry } from "./directory-retry"
 import { directoryCreateMatches } from "./directory-write-response"
 import { requireConfigurationApproval } from "./entra-configuration"
 import { isGraphId, isGuid } from "../../shared/security"
@@ -34,7 +34,7 @@ export interface GuardedEntry {
   state: "pending" | "captured" | "deferred" | "uncertain" | "applied" | "blocked" | "failed" | "failed-before-send"
   /** Earliest retry of a confirmed, unapplied throttle, preserved across cancellation/restart. */
   retryAt?: number
-  deferralCause?: "proxy"
+  deferralCause?: RestoreWriteDeferredError["deferralCause"]
   /** Durable send attempt, also binds a confirmed throttle in the directory coordinator. */
   attempt?: number
   /** Only a successful write response, never reconciliation, acknowledges a directory write. */
@@ -66,7 +66,7 @@ export interface GuardedIO {
   persistRetry?: (step: GuardedStep, saveJournal: () => void, saveCoordinator: () => void, retryAt: number) => void
   /** Directory pages retain live object ownership across deferred and uncertain steps. */
   prepareStep?: (step: GuardedStep) => number | undefined
-  defer?: (step: GuardedStep, retryAt: number, rejected?: { step: string; attempt: number; cause?: "proxy" }) => void
+  defer?: (step: GuardedStep, retryAt: number, rejected?: { step: string; attempt: number; cause?: GuardedEntry["deferralCause"] }) => void
   /** A complete scan of current Intune and Conditional Access references, after replacements. */
   replacedReferences?: (mappings: readonly RestoreMapping[], signal?: AbortSignal) => Promise<ReplacedReference[]>
   type: (folder: string) => IntuneType
@@ -75,7 +75,7 @@ export interface GuardedIO {
   /** Complete descriptor-based lookup. Must reject an incomplete list, never match a guessed name. */
   findCreated: (step: GuardedStep, sent: Item, signal?: AbortSignal) => Promise<Item[]>
   references: (step: GuardedStep, current: Item | null, desired: Item, signal?: AbortSignal) => Promise<SafetyReferences>
-  write: (step: GuardedStep, body: Item, targetId: string | undefined, beforeSend: () => void, run?: GuardedRun, signal?: AbortSignal, onUnapplied?: (retryAt: number) => void) => Promise<{ id?: string }>
+  write: (step: GuardedStep, body: Item, targetId: string | undefined, beforeSend: () => void, run?: GuardedRun, signal?: AbortSignal, onUnapplied?: (retryAt: number, cause?: RestoreWriteDeferredError["deferralCause"]) => void) => Promise<{ id?: string }>
 }
 /** The closed directory adapter refuses privileged links and state changes at its final send boundary.
  * Other writers retain the full descriptor protections, including remaining administrators. */
@@ -185,6 +185,7 @@ const directoryCreate = (step: GuardedStep) => step.directory?.action === "creat
 function matchesSent(step: GuardedStep, value: Item, sent: Item): boolean {
   const snapshot = writableSnapshot(value, Object.keys(sent)), approved = { ...sent }
   if (directoryCreate(step)) {
+    if (step.folder === "Users" && (value.accountEnabled !== false || value.userType !== "Member")) return false
     if (!directoryCreateMatches(step.folder, value, sent)) return false
     const key = step.folder === "Users" ? "userPrincipalName" : "mailNickname"
     for (const item of [snapshot, approved]) if (typeof item[key] === "string") item[key] = item[key].trim().toLowerCase()
@@ -232,7 +233,7 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
       const prerequisite = dependencies(step).find(required => run.entries.find(entry => entry.step.key === required)?.state !== "applied")
       if (prerequisite && entry.state !== "uncertain") { entry.state = "blocked"; entry.reason = `Prerequisite ${prerequisite} did not complete.`; journal.save(run); continue }
       const rejectedAttempt = () => entry.state === "uncertain" && entry.attempt !== undefined ? { step: step.key, attempt: entry.attempt } : undefined
-      const defer = (retryAt: number, rejected?: { step: string; attempt: number; cause?: "proxy" }) => {
+      const defer = (retryAt: number, rejected?: { step: string; attempt: number; cause?: GuardedEntry["deferralCause"] }) => {
         entry.retryAt = Math.max(entry.retryAt ?? 0, retryAt)
         const persist = io.persistRetry ? (journal: () => void, coordinator: () => void) => io.persistRetry!(step, journal, coordinator, entry.retryAt!) : persistDirectoryRetry
         const publish = step.directory ? journal.publication(run, entry, true) : () => journal.save(run)
@@ -324,8 +325,9 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
               }
               throw error
             }
-          }, run, signal, retryAt => {
-            const rejected = rejectedAttempt()
+          }, run, signal, (retryAt, cause) => {
+            entry.deferralCause = cause ?? "throttle"
+            const attempt = rejectedAttempt(), rejected = attempt ? { ...attempt, cause: entry.deferralCause } : undefined
             entry.state = step.directory ? "deferred" : "captured"; delete entry.reason; defer(retryAt, rejected)
           })
         } catch (error) {
@@ -336,7 +338,10 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
             entry.state = "deferred"; entry.reason = "The proxy requires authentication. No directory write reached Microsoft Graph. Resume to repeat the safety checks after proxy recovery."
             // Publish known-unsent evidence to both records, including its exact send attempt.
             defer(Date.now(), rejected)
+          } else if (error instanceof DirectoryWriteUncertainError) {
+            entry.reason = error.message; defer(error.retryAt)
           } else if (error instanceof RestoreWriteDeferredError || (["captured", "deferred"].includes(entry.state) && signal?.aborted)) {
+            if (error instanceof RestoreWriteDeferredError && error.deferralCause) entry.deferralCause = error.deferralCause
             entry.state = step.directory ? "deferred" : "captured"; entry.reason = error instanceof RestoreWriteDeferredError ? error.message : "The directory write was cancelled before sending."
             if (error instanceof RestoreWriteDeferredError && error.retryAt !== undefined) { defer(error.retryAt) }
           } else if (["captured", "deferred"].includes(entry.state)) {
@@ -370,6 +375,7 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
           entry.reason = "Microsoft Graph deferred confirmation of this unanswered write. Retry after the saved deadline."
         }
         if (entry.state !== "uncertain" && (error instanceof RestoreWriteDeferredError || signal?.aborted)) {
+          if (error instanceof RestoreWriteDeferredError && error.deferralCause) entry.deferralCause = error.deferralCause
           entry.state = step.directory ? "deferred" : "captured"; entry.reason = error instanceof RestoreWriteDeferredError ? error.message : "The directory write was cancelled before sending."
           if (error instanceof RestoreWriteDeferredError && error.retryAt !== undefined) { defer(error.retryAt) }
           journal.save(run); continue

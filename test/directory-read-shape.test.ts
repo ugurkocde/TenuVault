@@ -76,3 +76,11 @@ it("defers repeated or invalid directory continuations before fetching another p
   expect(directoryContinuation(start, start, seen)).toBe(start)
   for (const next of [start, "bad", "https://evil.example/v1.0/users", "https://graph.microsoft.com/v1.0/groups"]) expect(() => directoryContinuation(start, next, seen)).toThrow(DirectoryReadDeferredError)
 })
+
+it.each([null, 42, "", "https://graph.microsoft.com/v1.0/$metadata#users", "https://graph.microsoft.com/v1.0/$metadata#identity/conditionalAccess/policiesOther", "https://other.example/v1.0/$metadata#identity/conditionalAccess/policies"])("defers a Conditional Access collection with a foreign or invalid context %j", context => {
+  expect(() => directoryReadShape({ value: [], "@odata.context": context }, url("identity/conditionalAccess/policies"))).toThrow(DirectoryReadDeferredError)
+})
+it.each(["identity/conditionalAccess/policies", "identity/conditionalAccess/policies(id,conditions)"])("accepts the documented Conditional Access collection context %s", context => {
+  const page = { value: [graphUserPolicy], "@odata.context": `https://graph.microsoft.com/v1.0/$metadata#${context}` }
+  expect(directoryReadShape(page, url("identity/conditionalAccess/policies?$select=id,conditions"))).toEqual(page)
+})

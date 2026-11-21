@@ -54,7 +54,7 @@ afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals() })
 it.each(folders)("retains the %s page lock until explicit discard and never bypasses Retry-After", async folder => {
   const env = world(folder), request = env.request(), page = await env.prepare(request), original = env.graph.getMockImplementation()!
   let sends = 0
-  env.graph.mockImplementation((input, init) => init?.method === "PATCH" && ++sends === 1 ? Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
+  env.graph.mockImplementation((input, init) => init?.method === "PATCH" && ++sends === 1 ? Promise.resolve(Response.json({ error: { code: "TooManyRequests" } }, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
   vi.useFakeTimers()
   expect(await env.execute(page, request)).toMatchObject({ status: "partial", failed: 0, canDiscard: true, outcomes: [{ state: "deferred", retryAt: Date.now() + 120_000 }] })
   expect(env.locks()).toHaveLength(1)
@@ -77,9 +77,9 @@ it.each(folders)("resumes %s after a PATCH throttle followed by a longer final s
   const env = world(folder), request = env.request(), page = await env.prepare(request), original = env.graph.getMockImplementation()!
   let sends = 0, safetyThrottles = 0
   env.graph.mockImplementation((input, init) => {
-    if (init?.method === "PATCH" && ++sends === 1) return Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "1" } }))
+    if (init?.method === "PATCH" && ++sends === 1) return Promise.resolve(Response.json({ error: { code: "TooManyRequests" } }, { status: 429, headers: { "Retry-After": "1" } }))
     if (sends === 1 && !safetyThrottles && new URL(String(input)).pathname === `/v1.0/${env.targetPath}` && init?.method === "GET") {
-      safetyThrottles++; return Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "120" } }))
+      safetyThrottles++; return Promise.resolve(Response.json({ error: { code: "TooManyRequests" } }, { status: 429, headers: { "Retry-After": "120" } }))
     }
     return original(input, init)
   })
@@ -99,7 +99,7 @@ it.each(folders.flatMap(folder => ["initial", "references", "final"].map(phase =
   const env = world(folder), request = env.request(), page = await env.prepare(request), original = env.graph.getMockImplementation()!
   let reads = 0
   const throttleRead = phase === "initial" ? 1 : phase === "references" ? (folder === "Applications" ? 3 : 2) : folder === "Applications" ? 5 : folder === "Groups" ? 5 : 4
-  env.graph.mockImplementation((input, init) => new URL(String(input)).pathname === `/v1.0/${env.targetPath}` && init?.method === "GET" && ++reads === throttleRead ? Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
+  env.graph.mockImplementation((input, init) => new URL(String(input)).pathname === `/v1.0/${env.targetPath}` && init?.method === "GET" && ++reads === throttleRead ? Promise.resolve(Response.json({ error: { code: "TooManyRequests" } }, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
   vi.useFakeTimers()
   const deadline = Date.now() + 120_000
   expect(await env.execute(page, request)).toMatchObject({ status: "partial", failed: 0, outcomes: [{ state: "deferred" }] })
@@ -164,7 +164,7 @@ it.each(folders)("rechecks %s drift on resume after a confirmed safety-read thro
   let throttled = false
   env.graph.mockImplementation((input, init) => {
     if (!throttled && new URL(String(input)).pathname === `/v1.0/${env.targetPath}` && init?.method === "GET") {
-      throttled = true; return Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "120" } }))
+      throttled = true; return Promise.resolve(Response.json({ error: { code: "TooManyRequests" } }, { status: 429, headers: { "Retry-After": "120" } }))
     }
     return original(input, init)
   })
@@ -181,7 +181,7 @@ it.each(folders)("preserves a %s actor safety-read throttle across a new reviewe
   let throttled = false
   env.graph.mockImplementation((input, init) => {
     if (!throttled && new URL(String(input)).pathname === "/v1.0/applications") {
-      throttled = true; return Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "120" } }))
+      throttled = true; return Promise.resolve(Response.json({ error: { code: "TooManyRequests" } }, { status: 429, headers: { "Retry-After": "120" } }))
     }
     return original(input, init)
   })
@@ -251,7 +251,7 @@ it.each(folders)("retains the approved %s row when another page extends the fina
   const finalRead = folder === "Users" ? 4 : 5
   env.graph.mockImplementation(async (input, init) => {
     const path = new URL(String(input)).pathname
-    if (extending && path === "/v1.0/applications") return new Response(null, { status: 429, headers: { "Retry-After": "120" } })
+    if (extending && path === "/v1.0/applications") return Response.json({ error: { code: "TooManyRequests" } }, { status: 429, headers: { "Retry-After": "120" } })
     if (!extended && path === `/v1.0/${env.targetPath}` && ++reads === finalRead) {
       extending = true; extended = true
       await expect(env.execute(other, otherRequest)).rejects.toThrow("throttled")
@@ -291,7 +291,7 @@ it.each(folders.flatMap(folder => ["initial", "final"].flatMap(phase => ["body r
 it.each(folders.flatMap(folder => ["journal", "coordinator"].map(record => ({ folder, record }))))("keeps $folder deferred and locked after one $record deadline save failure", async ({ folder, record }) => {
   const env = world(folder), request = env.request(), page = await env.prepare(request), original = env.graph.getMockImplementation()!
   let sends = 0, failures = 0
-  env.graph.mockImplementation((input, init) => init?.method === "PATCH" && ++sends === 1 ? Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
+  env.graph.mockImplementation((input, init) => init?.method === "PATCH" && ++sends === 1 ? Promise.resolve(Response.json({ error: { code: "TooManyRequests" } }, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
   vi.useFakeTimers()
   const deadline = Date.now() + 120_000, set = env.store.set
   vi.spyOn(env.store, "set").mockImplementation((key, value) => {
@@ -312,7 +312,7 @@ it.each(folders.flatMap(folder => ["journal", "coordinator"].map(record => ({ fo
 it.each(["journal", "coordinator"])("recovers the deadline from the surviving %s record before discard releases ownership", async surviving => {
   const env = world("Groups"), request = env.request(), page = await env.prepare(request), original = env.graph.getMockImplementation()!
   let sends = 0
-  env.graph.mockImplementation((input, init) => init?.method === "PATCH" && ++sends === 1 ? Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
+  env.graph.mockImplementation((input, init) => init?.method === "PATCH" && ++sends === 1 ? Promise.resolve(Response.json({ error: { code: "TooManyRequests" } }, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
   vi.useFakeTimers()
   const deadline = Date.now() + 120_000, set = env.store.set
   const spy = vi.spyOn(env.store, "set").mockImplementation((key, value) => {
@@ -339,7 +339,7 @@ it.each(folders.flatMap(folder => ["preview", "execute", "resume", "reconcile"].
   const env = world(folder), request = env.request(), page = await env.prepare(request), original = env.graph.getMockImplementation()!
   let throttle = false, sends = 0
   env.graph.mockImplementation((input, init) => {
-    if (throttle && new URL(String(input)).pathname === "/v1.0/applications") return Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "120" } }))
+    if (throttle && new URL(String(input)).pathname === "/v1.0/applications") return Promise.resolve(Response.json({ error: { code: "TooManyRequests" } }, { status: 429, headers: { "Retry-After": "120" } }))
     if (init?.method === "PATCH") { sends++; return Promise.resolve(new Response(null, { status: 503 })) }
     return original(input, init)
   })
@@ -370,7 +370,7 @@ it.each(folders.flatMap(folder => ["preview", "execute", "resume", "reconcile"].
 it.each(folders)("retains the attempt-bound %s retry in memory when both durable records fail", async folder => {
   const env = world(folder), service = env.service(), request = env.request(), page = await env.prepare(request), original = env.graph.getMockImplementation()!
   let sends = 0
-  env.graph.mockImplementation((input, init) => init?.method === "PATCH" && ++sends === 1 ? Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
+  env.graph.mockImplementation((input, init) => init?.method === "PATCH" && ++sends === 1 ? Promise.resolve(Response.json({ error: { code: "TooManyRequests" } }, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
   vi.useFakeTimers()
   const deadline = Date.now() + 120_000, set = env.store.set
   const spy = vi.spyOn(env.store, "set").mockImplementation((key, value) => {
@@ -396,7 +396,7 @@ it.each(folders)("retains the attempt-bound %s retry in memory when both durable
 it.each(["preview", "execute", "resume", "reconcile"].flatMap(action => folders.map(folder => ({ action, folder }))))("retains the $folder $action actor deadline in memory through failed deadline saves", async ({ action, folder }) => {
   const env = world(folder), service = env.service(), request = env.request(), page = await env.prepare(request), original = env.graph.getMockImplementation()!
   let throttle = false
-  env.graph.mockImplementation((input, init) => throttle && new URL(String(input)).pathname === "/v1.0/applications" ? Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
+  env.graph.mockImplementation((input, init) => throttle && new URL(String(input)).pathname === "/v1.0/applications" ? Promise.resolve(Response.json({ error: { code: "TooManyRequests" } }, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
   const execute = () => service.execute(tenant, { ...request, runId: page.runId }, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])))
   if (action === "reconcile") {
     const withThrottle = env.graph.getMockImplementation()!
@@ -689,6 +689,7 @@ it.each(folders.flatMap(folder => ["initial", "references", "final", "write"].ma
   })
   expect(await env.execute(page, request)).toMatchObject({ status: "partial", failed: 0, outcomes: [{ state: "deferred" }] })
   expect(denied).toBe(true); expect(sends).toBe(phase === "write" ? 1 : 0)
+  if (phase === "write") expect(env.entry(page).deferralCause).toBe("authentication")
   expect(env.writes).toEqual([]); expect(env.locks()).toHaveLength(1)
   expect([...env.data.values()].join()).not.toContain("Never retain authorization body")
   const connections = env.connection.mock.calls.length
@@ -709,4 +710,29 @@ it.each(folders)("keeps a non-authorization %s Graph 403 failed with the sanitiz
   expect(await env.execute(page, request)).toMatchObject({ failed: 1, outcomes: [{ state: "failed", reason: "Microsoft Graph refused this write (403). Review restore access in Services in Settings and preview this item again." }] })
   expect([...env.data.values()].join()).not.toContain("Never retain refusal body")
   expect(env.writes).toEqual([])
+})
+
+it.each(folders.flatMap(folder => ["html", "empty", "missing code", "invalid json", "wrong content type"].map(shape => ({ folder, shape }))))("keeps a $folder write uncertain for an intermediary 429 with $shape while honoring Retry-After", async ({ folder, shape }) => {
+  const env = world(folder), request = env.request(), page = await env.prepare(request), original = env.graph.getMockImplementation()!
+  let sends = 0
+  const response = () => {
+    const options = { status: 429, headers: { "Retry-After": "120", "Content-Type": shape === "html" ? "text/html" : shape === "wrong content type" ? "text/plain" : "application/json" } }
+    return new Response(shape === "html" ? "<html>Rate limited</html>" : shape === "empty" ? "" : shape === "invalid json" ? "{" : JSON.stringify(shape === "missing code" ? { error: {} } : { error: { code: "TooManyRequests" } }), options)
+  }
+  env.graph.mockImplementation((input, init) => {
+    if (init?.method === "PATCH") { sends++; return Promise.resolve(response()) }
+    return original(input, init)
+  })
+  vi.useFakeTimers()
+  const deadline = Date.now() + 120000
+  expect(await env.execute(page, request)).toMatchObject({ failed: 0, canDiscard: false, outcomes: [{ state: "uncertain", retryAt: deadline }] })
+  expect(env.locks()).toHaveLength(1)
+  expect(await env.service().saved(tenant, page.runId, "reconcile")).toMatchObject({ canDiscard: false, outcomes: [{ state: "uncertain", retryAt: deadline }] })
+  expect(sends).toBe(1)
+  vi.setSystemTime(deadline + 1)
+  expect(await env.execute(page, request)).toMatchObject({ outcomes: [{ state: "uncertain" }] })
+  expect(sends).toBe(1)
+  env.live[env.field] = "Saved"
+  expect(await env.service().saved(tenant, page.runId, "reconcile")).toMatchObject({ outcomes: [{ state: "applied" }] })
+  expect(sends).toBe(1); expect(env.writes).toEqual([])
 })

@@ -27,6 +27,11 @@ export function directoryReadShape(value: unknown, url: URL): Item {
   const relationship = /\/(?:members|owners|memberOf|appRoleAssignments)(?:\/\$ref)?$/.test(path)
   const collection = relationship || /^(?:users|groups|applications|servicePrincipals|oauth2PermissionGrants|identity\/conditionalAccess\/policies|roleManagement\/directory\/roleAssignments)$/.test(path)
   if (collection) {
+    if (path === "identity/conditionalAccess/policies" && Object.hasOwn(value, "@odata.context")) {
+      let context: URL
+      try { if (typeof value["@odata.context"] !== "string") throw new Error(); context = new URL(value["@odata.context"]) } catch { throw new DirectoryReadDeferredError() }
+      if (context.origin !== url.origin || context.username || context.password || context.search || context.pathname !== `/${url.pathname.split("/")[1]}/$metadata` || !/^#identity\/conditionalAccess\/policies(?:\([^)]*\))?$/.test(context.hash)) throw new DirectoryReadDeferredError()
+    }
     if (!Array.isArray(value.value) || value.value.some(item => !object(item) || relationship && (appRoles ? typeof item.id !== "string" || !item.id.trim() || ["principalId", "resourceId", "appRoleId"].some(field => !isGuid(item[field])) : !isGuid(item.id)))) throw new DirectoryReadDeferredError()
     if (Object.hasOwn(value, "@odata.nextLink")) {
       const next = value["@odata.nextLink"]

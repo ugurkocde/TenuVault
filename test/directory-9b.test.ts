@@ -706,7 +706,7 @@ it("persists a confirmed 429 as unapplied and repeats final reads before exactly
   const page = await env.service().prepare(actor.tenantId, request, options, async () => request.snapshot)
   const original = env.fetcher.getMockImplementation()!
   let sends = 0
-  env.fetcher.mockClear().mockImplementation((url, init) => init?.method === "PATCH" && ++sends === 1 ? Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "2" } })) : original(url, init))
+  env.fetcher.mockClear().mockImplementation((url, init) => init?.method === "PATCH" && ++sends === 1 ? Promise.resolve(Response.json({ error: { code: "TooManyRequests" } }, { status: 429, headers: { "Retry-After": "2" } })) : original(url, init))
   vi.useFakeTimers()
   try {
     const pending = env.service().execute(actor.tenantId, { ...request, runId: page.runId }, page.fingerprint, { [page.rows[0]!.key]: page.rows[0]!.review.approvals })
@@ -732,7 +732,7 @@ it("cancels a 429 backoff and resumes the saved page without violating Retry-Aft
   const page = await service.prepare(actor.tenantId, request, options, async () => request.snapshot)
   const original = env.fetcher.getMockImplementation()!
   let sends = 0
-  env.fetcher.mockImplementation((url, init) => init?.method === "PATCH" && ++sends === 1 ? Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "2" } })) : original(url, init))
+  env.fetcher.mockImplementation((url, init) => init?.method === "PATCH" && ++sends === 1 ? Promise.resolve(Response.json({ error: { code: "TooManyRequests" } }, { status: 429, headers: { "Retry-After": "2" } })) : original(url, init))
   const saved = { ...request, runId: page.runId }, approvals = { [page.rows[0]!.key]: page.rows[0]!.review.approvals }
   vi.useFakeTimers()
   try {
@@ -767,7 +767,7 @@ it.each(["opt-in", "origin", "identity", "protected", "drift", "approval"])("rec
   const candidate = await applicationObjectStep("Applications", { ...app, displayName: "Saved" }, io, async () => app)
   await io.preview(candidate)
   const run = runFor(candidate), original = env.fetcher.getMockImplementation()!, beforeSend = vi.fn(), unapplied = vi.fn()
-  env.fetcher.mockImplementation((url, init) => init?.method === "PATCH" ? Promise.resolve(new Response(null, { status: 429 })) : original(url, init))
+  env.fetcher.mockImplementation((url, init) => init?.method === "PATCH" ? Promise.resolve(Response.json({ error: { code: "TooManyRequests" } }, { status: 429 })) : original(url, init))
   await expect(io.write(candidate, candidate.desired, candidate.targetId, beforeSend, run, undefined, unapplied)).rejects.toThrow()
   expect(beforeSend).toHaveBeenCalledOnce(); expect(unapplied).toHaveBeenCalledOnce(); expect(wait).toHaveBeenCalledOnce()
   expect(env.fetcher.mock.calls.filter(([, init]) => init?.method === "PATCH")).toHaveLength(1)
@@ -792,7 +792,7 @@ it.each(["120", "1"])("defers a confirmed application throttle at Retry-After %s
   const candidate = await applicationObjectStep("Applications", { ...app, displayName: "Saved" }, io, async () => app)
   await io.preview(candidate)
   const run = runFor(candidate), original = env.fetcher.getMockImplementation()!
-  env.fetcher.mockImplementation((url, init) => init?.method === "PATCH" ? Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": header } })) : original(url, init))
+  env.fetcher.mockImplementation((url, init) => init?.method === "PATCH" ? Promise.resolve(Response.json({ error: { code: "TooManyRequests" } }, { status: 429, headers: { "Retry-After": header } })) : original(url, init))
   const result = await executeGuardedRun(new GuardedRunJournal(env.store), run, io)
   expect(result).toMatchObject({ status: "partial", run: { entries: [{ state: "deferred", retryAt: expect.any(Number) }] } })
   expect(env.fetcher.mock.calls.filter(([, init]) => init?.method === "PATCH")).toHaveLength(header === "120" ? 1 : 5)
