@@ -1,5 +1,7 @@
 "use client"
 
+import { TenantApprovals } from "../../../renderer/components/write-approvals/TenantApprovals"
+import { isApprovalBlocker } from "../../../renderer/lib/write-approvals"
 import { RestoreApprovals } from "./restore-approvals"
 import { reviewedDependencyMappings, type RecoveryReadiness } from "../../../shared/intune/recovery"
 import { settingDefinitionIds, type DeprecatedSettingHit } from "../../../shared/intune/settings-catalog"
@@ -153,6 +155,8 @@ interface Outcome {
   warnings?: string[]
   targetTenantId?: string
   retryable?: boolean
+  writeNotSent?: boolean
+  writeMayHaveCompleted?: boolean
   partial?: boolean
   policyId?: string
   repairToken?: string
@@ -295,7 +299,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
 
   const [running, setRunning] = useState(false)
   const [progress, setProgress] = useState<{ total: number; done: number; current: string | null; results: Outcome[] } | null>(null)
-  const [result, setResult] = useState<{ outcome: "success" | "partial" | "failed"; message: string; results: Outcome[] } | null>(null)
+  const [result, setResult] = useState<{ outcome: "success" | "partial" | "failed" | "approval"; approvalRetry?: boolean; message: string; results: Outcome[] } | null>(null)
   const [runPaths, setRunPaths] = useState<string[]>([])
 
   // The plan's limits: Community restores one item at a time, as an unassigned copy.
@@ -537,23 +541,44 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
         .then((state) => progressId.current === polledId && setProgress({ ...state, total, done: completed.length + state.done, results: mergeOutcomes(previous, [...completed, ...state.results]) }))
         .catch(() => undefined)
     }, 700)
+    let groupedRetry = false
     try {
-      for (const batch of batches) {
+      if (copying && retry && batches.length > 1) {
+        const probe = await post<{ grouped: boolean }>("/api/restore-backup", {
+          tenantId: tenant.credentials.tenantId,
+          approvalAction: "check-destinations",
+          destinationIds: batches.map(batch => batch.targetTenantId),
+        })
+        groupedRetry = probe.grouped
+      }
+      const selections = (batch: (typeof batches)[number]) => batch.paths.map(path => ({
+        path, repairToken: previous.find(item => item.path === path && item.targetTenantId?.toLowerCase() === batch.targetTenantId)?.repairToken,
+      }))
+      const requests = groupedRetry ? [{ paths: [...new Set(batches.flatMap(batch => batch.paths))] }] : batches
+      for (const batch of requests) {
         id = crypto.randomUUID()
         progressId.current = id
-        const targets = copying
-          ? copyCandidates.filter((target) => batch.targetTenantId
+        const targets = groupedRetry
+          ? batches.map(({ targetTenantId }) => ({
+              tenantId: targetTenantId!,
+              appId: copyCandidates.find(target => target.tenantId.toLowerCase() === targetTenantId)?.appId,
+            }))
+          : copying ? copyCandidates.filter(target => batch.targetTenantId
             ? target.tenantId.toLowerCase() === batch.targetTenantId
-            : copyTargets.includes(target.tenantId))
-          : []
-        if (copying && !targets.length) throw new Error("The original target tenant is no longer connected.")
-        attempted.push(batch)
-        const data = await post<{ success: boolean; message: string; details?: { restoredCount: number; unchangedCount?: number; results: Outcome[] } }>("/api/restore-backup", {
+            : copyTargets.includes(target.tenantId)) : []
+        if (copying && !targets.length) {
+          if (!batch.targetTenantId) throw new Error("The original target tenant is no longer connected.")
+          completed.push(...batch.paths.map(path => ({ path, targetTenantId: batch.targetTenantId,
+            success: false, retryable: true, writeNotSent: true, error: "Write not sent: the original target tenant is no longer connected." })))
+          continue
+        }
+        attempted.push(...(groupedRetry ? batches : [batch]))
+        const data = await post<{ legacy?: boolean; success: boolean; message: string; details?: { restoredCount: number; unchangedCount?: number; results: Outcome[] } }>("/api/restore-backup", {
           ...tenant.credentials,
           storageAccountName: tenant.storageAccountName,
           backupId,
           restoreType: "selective",
-          selectedPolicies: batch.paths.map((path) => ({ path, repairToken: previous.find((item) => item.path === path && item.targetTenantId?.toLowerCase() === batch.targetTenantId)?.repairToken })),
+          selectedPolicies: groupedRetry ? batch.paths.map(path => ({ path })) : selections(batch),
           dependencyMappings,
           confirmMappings: mappingsConfirmed,
           justification: copying ? undefined : justification.trim() || undefined,
@@ -561,9 +586,15 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
           assignments: copying ? false : assignments,
           progressId: id,
           ...(copying
-            ? { targetTenants: targets.map((target) => ({ tenantId: target.tenantId, appId: target.appId })) }
+            ? { targetTenants: targets.map(target => ({ tenantId: target.tenantId, appId: target.appId, ...(groupedRetry ? { selectedPolicies: selections(batches.find(entry => entry.targetTenantId === target.tenantId.toLowerCase())!) } : {}) })) }
             : {}),
         })
+        if (data.legacy && groupedRetry) {
+          attempted.length = 0
+          groupedRetry = false
+          requests.push(...batches)
+          continue
+        }
         completed.push(...(data.details?.results ?? []))
       }
       const outcomes = mergeOutcomes(previous, completed)
@@ -575,18 +606,23 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
         message: `${restoreSummary(handled, failed, skipped)}${outcomes.some(item => item.approval) ? ` ${outcomes.filter(item => item.approval).length} awaiting approval.` : ""}`, results: outcomes })
     } catch (error) {
       showPlanError(error)
+      const message = error instanceof Error ? error.message : String(error)
+      if (error instanceof FeatureApiError && error.status === 409 && isApprovalBlocker(message)) {
+        setResult({ outcome: "approval", approvalRetry: retry, message, results: mergeOutcomes(previous, completed) })
+        return
+      }
       const missing = (batch: (typeof batches)[number], outcome: Omit<Outcome, "path" | "targetTenantId">): Outcome[] => {
         const targets = copying ? (batch.targetTenantId ? [batch.targetTenantId] : copyTargets) : [undefined]
         return targets.flatMap((targetTenantId) => batch.paths.filter((path) => !completed.some((item) => item.path === path && item.targetTenantId?.toLowerCase() === targetTenantId?.toLowerCase()))
           .map((path) => ({ ...outcome, path, targetTenantId })))
       }
       // A refused disclaimer wrote nothing, so the batch it stopped stays open for another try.
-      const refused = error instanceof NotAccepted ? attempted.pop() : undefined
-      const notStarted = refused ? missing(refused, { success: false, retryable: true, error: "Not started: the disclaimer was not accepted." }) : []
+      const refused = error instanceof NotAccepted ? attempted.splice(groupedRetry ? 0 : -1) : []
+      const notStarted = refused.flatMap(batch => missing(batch, { success: false, retryable: true, error: "Not started: the disclaimer was not accepted." }))
       // A lost response leaves the write outcome unknown. Keep completed results and
       // block blind repetition of every attempted item whose result is missing.
       const known = mergeOutcomes(previous, completed)
-      const unknown = attempted.flatMap((batch) => missing(batch, { success: false, retryable: false, error: "Outcome unknown. Check Intune before attempting another restore." }))
+      const unknown = attempted.flatMap((batch) => missing(batch, { success: false, retryable: false, writeMayHaveCompleted: true, error: "Outcome unknown. Check Intune before attempting another restore." }))
       setResult({ outcome: known.some((item) => item.success) ? "partial" : "failed",
         message: `Restore interrupted: ${error instanceof Error ? error.message : String(error)}`, results: mergeOutcomes(known, [...notStarted, ...unknown]) })
     } finally {
@@ -1010,7 +1046,12 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
                   ) : null
                 })}
               </div>
-              <ul className="mt-4 max-h-[26rem] divide-y divide-gray-100 overflow-y-auto rounded-2xl border border-gray-200">
+              {result?.outcome === "approval" && <details className="mt-4 rounded-xl border p-4">
+            <summary className="cursor-pointer text-sm font-medium">Tenant approvals</summary>
+            <div className="mt-3"><TenantApprovals active initialTenant={copyTargets[0] ?? tenant.credentials.tenantId} /></div>
+          </details>}
+
+          <ul className="mt-4 max-h-[26rem] divide-y divide-gray-100 overflow-y-auto rounded-2xl border border-gray-200">
                 {[...plans]
                   .sort((a, b) => PLAN_ORDER.indexOf(a.plan) - PLAN_ORDER.indexOf(b.plan))
                   .slice(0, shown[REVIEW] ?? LIST_PAGE)
@@ -1140,7 +1181,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
 
       {step === "run" && (
         <div className={card}>
-          <h2 className="text-xl font-medium tracking-tight text-gray-900">{running ? "Restoring..." : "Restore finished"}</h2>
+          <h2 className="text-xl font-medium tracking-tight text-gray-900">{running ? "Restoring..." : result?.outcome === "approval" ? "Tenant approval required" : "Restore finished"}</h2>
           {progress && (
             <div className="mt-4">
               <div className="flex justify-between text-sm text-gray-600">
@@ -1161,7 +1202,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
               className={cn(
                 "mt-5 flex items-center gap-2 rounded-2xl px-4 py-3 text-sm font-medium",
                 result.outcome === "success" && "bg-green-50 text-green-900",
-                result.outcome === "partial" && "bg-amber-50 text-amber-900",
+                (result.outcome === "partial" || result.outcome === "approval") && "bg-amber-50 text-amber-900",
                 result.outcome === "failed" && "bg-red-50 text-red-800",
               )}
             >
@@ -1169,6 +1210,11 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
               {result.message}
             </p>
           )}
+
+          {result?.outcome === "approval" && <details className="mt-4 rounded-xl border p-4">
+            <summary className="cursor-pointer text-sm font-medium">Tenant approvals</summary>
+            <div className="mt-3"><TenantApprovals active initialTenant={copyTargets[0] ?? tenant.credentials.tenantId} /></div>
+          </details>}
 
           <ul className="mt-4 max-h-[26rem] divide-y divide-gray-100 overflow-y-auto">
             {(result?.results ?? progress?.results ?? []).slice(0, shown[RESULTS] ?? LIST_PAGE).map((outcome, index) => {
@@ -1194,9 +1240,9 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
                     </span>
                     <span className="block text-xs text-gray-500"><LinkedMessage text={text} /></span>
                     {outcome.approvalState === "required" && <Button variant="outline" className="mt-2" aria-controls="restore-approval-list" onClick={() => setApprovalOpenRevision(value => value + 1)}>Submit for approval</Button>}
-                    {outcome.partial && !outcome.approvalId && outcome.policyId && <span className="block text-xs text-amber-800">Incomplete object: {outcome.policyId}. {outcome.repairToken ? "Retry repairs the remaining steps without creating another object. Repair is available for one hour in this app session." : "Check and repair it in Intune."}</span>}
+                    {outcome.partial && !outcome.approvalId && outcome.policyId && <span className="block text-xs text-amber-800">Incomplete object: {outcome.policyId}. {outcome.repairToken ? "Retry repairs the remaining steps without creating another object while the repair is available." : "Check and repair it in Intune."}</span>}
                     {/* A skipped item was refused before any write, so there is nothing to check. */}
-                    {outcome.retryable === false && !outcome.success && !outcome.approvalId && (!outcome.approval || outcome.partial) && outcome.action !== "skipped" && <span className="block text-xs text-amber-800">Check this item in {adminCenter(itemByPath.get(outcome.path)?.folder)} before retrying; a write may already have completed.</span>}
+                    {outcome.writeMayHaveCompleted && !outcome.writeNotSent && !outcome.success && !outcome.approvalId && <span className="block text-xs text-amber-800">Check this item in {adminCenter(itemByPath.get(outcome.path)?.folder)} before retrying; a write may already have completed.</span>}
                     {outcome.warnings?.map((warning) => (
                       <span key={warning} className="block text-xs text-amber-800">
                         <LinkedMessage text={warning} />
@@ -1224,7 +1270,8 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
 
           {!running && result && (
             <div className="mt-6 flex flex-wrap justify-end gap-3">
-              {retryBatches(result.results).length > 0 && (
+              {result.outcome === "approval" && <Button onClick={() => void run(runPaths, result.approvalRetry)}>Apply reviewed restore</Button>}
+              {result.outcome !== "approval" && retryBatches(result.results).length > 0 && (
                 <Button
                   variant="outline"
                   onClick={() => void run(runPaths, true)}

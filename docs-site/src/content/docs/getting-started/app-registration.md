@@ -271,3 +271,7 @@ Assigning a group to an enterprise application requires Microsoft Entra ID P1 or
 ## Next step
 
 [Sign in to your tenant](/getting-started/connect-tenant/) with the two values the script printed.
+
+## Tenant approval and registration setup
+
+The tenant approval setting covers configuration writes by connected TenuVault installations. Registration setup and provisioning are performed under the tenant’s own Entra change control.

@@ -75,10 +75,23 @@ export const tenantStorage = {
         }
         return
       }
-      if (next && previous) for (const id of previous) {
-        if (!next.has(id)) void bridge.license.releaseTenant(id).catch((error) => console.error("Could not release removed tenant:", error))
-      }
       cachedTenantIds.set(key, next)
+      cache.set(key, value)
+      void bridge.storage.setItem(key, value).then(() => {
+        if (next && previous) for (const id of previous) {
+          if (!next.has(id)) void bridge.license.releaseTenant(id).catch((error) => console.error("Could not release removed tenant:", error))
+        }
+      }).catch(error => {
+        console.error("Could not save tenant profiles:", error)
+        if (cache.get(key) === value) {
+          cache.delete(key)
+          cachedTenantIds.delete(key)
+          // The tenant context holds its own optimistic profile list. Reload it from main.
+          window.alert(error instanceof Error ? error.message : String(error))
+          window.location.reload()
+        }
+      })
+      return
     }
     cache.set(key, value)
     void bridge.storage.setItem(key, value)

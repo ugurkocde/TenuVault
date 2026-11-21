@@ -1,4 +1,9 @@
-import { describe, expect, it } from "vitest"
+import { setWriteApprovals } from "../src/main/write-approvals/service"
+import { createBridgedFetch } from "../src/main/api/fetch-bridge"
+import { graphDispatchGuard } from "../src/main/write-approvals/dispatch"
+import { graphCaller } from "../src/portal/lib/policies/graph-restore"
+import { requester, reviewer, unenrolledApprovals, writeApprovalFixture } from "./helpers/write-approval-fixture"
+import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { applyChangeSet, approveChangeSet, CONTENT_DOMAIN, createChangeSet, KEPT_CHANGE_SETS, createRollbackChangeSet, getChangeSet, listChangeSets, previewChangeSet, previewRollback, rejectChangeSet, reviseChangeSet } from "../src/main/features/change-sets/engine"
 import type { FeatureDeps } from "../src/main/features/deps"
 import { FeatureError } from "../src/main/features/route"
@@ -9,6 +14,9 @@ import { MAX_RECORDS } from "../src/main/features/records"
 import { fakeDeps, seedRecords, TENANT_A, TENANT_B } from "./feature-helpers"
 import { COMPLETE_BACKUP_METADATA, FakeTenant, setting, wire } from "./feature-change-sets-fakes"
 import { writeOperation } from "../src/main/features/change-sets/graph"
+import { FetchPreconditionError } from "../src/main/api/network-error"
+
+beforeEach(() => setWriteApprovals(unenrolledApprovals("azure")))
 
 const POLICIES = typeForFolder("ConfigurationPolicies")!
 
@@ -398,6 +406,32 @@ describe("change-set engine", () => {
     expect(applied.status).toBe("uncertain")
   })
 
+  it("records an unsent follow-up without marking the creation uncertain or dropping it from rollback", async () => {
+    const context = setup()
+    const record = await createChangeSet(context.deps, TENANT_A, {
+      title: "Create an assigned policy", operations: [{
+        folder: "ConfigurationPolicies", action: "create",
+        proposed: { name: "Defender", platforms: "windows10", technologies: "mdm" },
+        assignments: [{ target: { "@odata.type": "#microsoft.graph.allDevicesAssignmentTarget" } }],
+      }],
+    }, "Admin")
+    const preview = await approve(context, record.id)
+    const original = context.tenant.graph.bind(context.tenant)
+    context.tenant.graph = (journaled: boolean) => {
+      const inner = original(journaled)
+      return async (method, path, body) => {
+        if (method === "POST" && path.endsWith("/assign")) throw new FetchPreconditionError("The policy changed")
+        return inner(method, path, body)
+      }
+    }
+    const applied = (await context.post({ action: "apply", id: record.id, contentHash: preview.contentHash, confirm: true })).body.changeSet as ChangeSetRecord
+    expect(applied.status).toBe("partial")
+    expect(applied.results["op-1"]).toMatchObject({ status: "failed", writeNotSent: true, partial: true,
+      objectId: expect.any(String), message: "Write not sent: The policy changed (Earlier steps were sent.)" })
+    const rollback = await previewRollback(context.deps, TENANT_A, record.id)
+    expect(rollback.operations).toEqual([expect.objectContaining({ key: "op-1", targetId: applied.results["op-1"]!.objectId })])
+  })
+
   it("drops old change sets that never wrote and nothing refers to instead of failing at the record cap", async () => {
     const context = setup()
     const ids = (index: number) => `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`
@@ -514,4 +548,188 @@ it("retries approval blocks that wrote nothing", async () => {
   blocked = false
   const retried = await context.post({ action: "retry", id: record.id, contentHash: preview.contentHash, confirm: true })
   expect(retried.body.changeSet.status).toBe("applied")
+})
+
+
+afterEach(() => setWriteApprovals(undefined))
+
+it("requires a different signed-in admin even when a legacy reviewer label is present", async () => {
+  const context = setup()
+  const { profile } = writeApprovalFixture()
+  const origin = profile(), second = profile(reviewer)
+  setWriteApprovals(origin.service)
+  await origin.service.enable(TENANT_A)
+  const { record } = await threeOperations(context)
+  const preview = await approve(context, record.id)
+  const apply = () => context.post({ action: "apply", id: record.id, contentHash: preview.contentHash, confirm: true })
+  await expect(apply()).rejects.toThrow("pending")
+  expect(context.tenant.writeCount()).toBe(0)
+  const pending = (await second.service.inbox(TENANT_A)).requests[0]!
+  expect(pending.request.summary.count).toBe(3)
+  await second.service.decide(TENANT_A, pending.request.id, "approve")
+  expect((await apply()).body.changeSet.status).toBe("applied")
+  expect(context.tenant.writeCount()).toBe(3)
+})
+
+
+it("rechecks the reviewed destination after the pre-change backup", async () => {
+  const context = setup()
+  const { record, existing } = await threeOperations(context)
+  const preview = await approve(context, record.id)
+  const { profile } = writeApprovalFixture()
+  const origin = profile(), second = profile(reviewer)
+  setWriteApprovals(origin.service)
+  await origin.service.enable(TENANT_A)
+  const apply = () => context.post({ action: "apply", id: record.id, contentHash: preview.contentHash, confirm: true })
+  await expect(apply()).rejects.toThrow("pending")
+  await second.service.decide(TENANT_A, (await second.service.inbox(TENANT_A)).requests[0]!.request.id, "approve")
+  const api = context.deps.api
+  context.deps.api = async (path, tenantId, body, options) => {
+    if (path === "/api/backup/start") context.tenant.policies.get(existing.id as string)!.description = "Edited during backup"
+    return api(path, tenantId, body, options)
+  }
+  expect((await apply()).status).toBe(409)
+  expect(context.tenant.writeCount()).toBe(0)
+})
+
+it("shows assignment targets and filters with the operation verb in the approval summary", async () => {
+  const context = setup()
+  const { service } = writeApprovalFixture().profile()
+  setWriteApprovals(service)
+  await service.enable(TENANT_A)
+  const group = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+  const filter = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+  const record = await createChangeSet(context.deps, TENANT_A, {
+    title: "Assign Defender", operations: [{
+      folder: "ConfigurationPolicies", action: "create",
+      proposed: { name: "Defender", platforms: "windows10", technologies: "mdm" },
+      assignments: [{ target: { "@odata.type": "#microsoft.graph.groupAssignmentTarget", groupId: group, deviceAndAppManagementAssignmentFilterId: filter, deviceAndAppManagementAssignmentFilterType: "include" } }],
+    }],
+  }, "Admin")
+  const preview = await approve(context, record.id)
+  await expect(context.post({ action: "apply", id: record.id, contentHash: preview.contentHash, confirm: true })).rejects.toThrow("pending")
+  const { requests } = await service.inbox(TENANT_A)
+  expect(requests[0]!.request.summary.operations).toEqual([expect.objectContaining({
+    verb: "create", assignments: expect.arrayContaining([expect.stringContaining(group), expect.stringContaining(filter)]),
+  })])
+})
+
+it("compares a saved post-step hash before reconciling an uncertain change set", async () => {
+  const context = setup()
+  const { record } = await threeOperations(context)
+  const preview = await approve(context, record.id)
+  context.tenant.failWrite = method => method === "POST" ? "lost" : undefined
+  const first = (await context.post({ action: "apply", id: record.id, contentHash: preview.contentHash, confirm: true })).body.changeSet as ChangeSetRecord
+  expect(first.results["op-2"]?.status).toBe("uncertain")
+  context.deps.records.update<ChangeSetRecord>(DOMAINS.changeSets, TENANT_A, record.id, current => ({
+    ...current, results: { ...current.results, "op-2": { ...current.results["op-2"]!, verifiedPostStepHash: "0".repeat(64) } },
+  }), { actor: "Admin", reason: "Persist the prior verified post-step state" })
+  const retried = (await context.post({ action: "retry", id: record.id, contentHash: preview.contentHash, confirm: true })).body.changeSet as ChangeSetRecord
+  expect(retried.results["op-2"]).toMatchObject({ status: "uncertain", message: expect.stringContaining("changed after the last verified step") })
+  expect(context.tenant.writeCount(entry => entry.method === "POST")).toBe(1)
+})
+
+it.each(["before-apply", "transport-retry"])("binds a mapped filter rule in tenant approval and at dispatch (%s)", async timing => {
+  const context = setup()
+  const { profile } = writeApprovalFixture()
+  const first = profile(), second = profile(reviewer)
+  setWriteApprovals(first.service)
+  await first.service.enable(TENANT_A)
+  const filterId = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+  const filter = { id: filterId, displayName: "Pilot devices", rule: '(device.deviceName -eq "pilot")' }
+  context.tenant.filters.push(filter)
+  const record = await createChangeSet(context.deps, TENANT_A, {
+    title: "Assign Defender", dependencies: [{ kind: "filter", sourceId: filterId, targetId: filterId, name: "Pilot devices", state: "verified" }],
+    operations: [{ folder: "ConfigurationPolicies", action: "create", proposed: { name: "Defender", platforms: "windows10", technologies: "mdm" },
+      assignments: [{ target: { "@odata.type": "#microsoft.graph.allDevicesAssignmentTarget", deviceAndAppManagementAssignmentFilterId: filterId, deviceAndAppManagementAssignmentFilterType: "include" } }],
+    }],
+  }, "Admin")
+  const preview = await approve(context, record.id)
+  const apply = () => context.post({ action: "apply", id: record.id, contentHash: preview.contentHash, confirm: true })
+  await expect(apply()).rejects.toThrow("pending")
+  await second.service.decide(TENANT_A, (await second.service.inbox(TENANT_A)).requests[0]!.request.id, "approve")
+  if (timing === "before-apply") {
+    filter.rule = '(device.deviceName -ne "pilot")'
+    await expect(apply()).rejects.toThrow("changed after request")
+    expect(context.tenant.writeCount()).toBe(0)
+    return
+  }
+  let assignmentAttempts = 0
+  const graph = context.deps.graph
+  context.deps.graph = async (tenant, options) => {
+    const inner = await graph(tenant, options)
+    if (!options?.journal) return inner
+    const send = createBridgedFetch({
+      dispatch: async () => new Response(null, { status: 404 }),
+      getDelegatedToken: async () => ({ accessToken: "fixture", expiresOn: null }),
+      authorizeGraph: graphDispatchGuard(first.service, () => ({ tenant, actor: requester, current: () => true })),
+      fetch: async (input, init) => {
+        const request = new Request(input, init)
+        const path = request.url.split("/beta/")[1]!
+        if (path.endsWith("/assign") && ++assignmentAttempts === 1) {
+          filter.rule = '(device.deviceName -ne "pilot")'
+          return new Response(null, { status: 429, headers: { "retry-after": "0" } })
+        }
+        const result = await inner(request.method as "POST", path, await request.json())
+        return Response.json(result.body, { status: result.status })
+      },
+    })
+    return graphCaller("fixture", send)
+  }
+  const result = await apply()
+  expect(result.body.changeSet.results["op-1"]).toMatchObject({ writeNotSent: true, partial: true, message: expect.stringContaining("changed after review") })
+  expect(assignmentAttempts).toBe(1)
+})
+
+it.each(["before-apply", "before-dispatch", "unreadable"])("requires the reviewed scope-tag assignments for a change set (%s)", async timing => {
+  const context = setup()
+  const { profile, state } = writeApprovalFixture()
+  const first = profile(), second = profile(reviewer)
+  setWriteApprovals(first.service)
+  await first.service.enable(TENANT_A)
+  const tag = { id: "12", displayName: "Pilot devices" }
+  context.tenant.scopeTags.push(tag)
+  let group = "group-1"
+  let readable = true
+  const graph = context.deps.graph
+  context.deps.graph = async (tenant, options) => {
+    const inner = await graph(tenant, options)
+    const guard = graphDispatchGuard(first.service, () => ({ tenant, actor: requester, current: () => true }))
+    const send = graphCaller("fixture", createBridgedFetch({
+      dispatch: async () => new Response(null, { status: 404 }),
+      getDelegatedToken: async () => ({ accessToken: "fixture", expiresOn: null }),
+      authorizeGraph: guard,
+      fetch: async (input, init) => {
+        const request = new Request(input, init)
+        const response = await inner("POST", new URL(request.url).pathname.slice("/beta/".length), await request.json())
+        return Response.json(response.body, { status: response.status })
+      },
+    }))
+    return (method, path, body, callOptions) => {
+      if (path === "deviceManagement/roleScopeTags/12") return Promise.resolve({ status: 200, body: tag })
+      if (path === "deviceManagement/roleScopeTags/12/assignments") {
+        return readable
+          ? Promise.resolve({ status: 200, body: { value: [{ id: "assignment", target: { groupId: group } }] } })
+          : Promise.resolve({ status: 403, body: {} })
+      }
+      return options?.journal && method === "POST" ? send(method, path, body, callOptions) : inner(method, path, body, callOptions)
+    }
+  }
+  const record = await createChangeSet(context.deps, TENANT_A, {
+    title: "Scoped Defender", dependencies: [{ kind: "scopeTag", sourceId: tag.id, targetId: tag.id, name: tag.displayName, state: "verified" }],
+    operations: [{ folder: "ConfigurationPolicies", action: "create", proposed: { name: "Defender", roleScopeTagIds: [tag.id] } }],
+  }, "Admin")
+  const preview = await approve(context, record.id)
+  const apply = () => context.post({ action: "apply", id: record.id, contentHash: preview.contentHash, confirm: true })
+  await expect(apply()).rejects.toThrow("pending")
+  await second.service.decide(TENANT_A, (await second.service.inbox(TENANT_A)).requests[0]!.request.id, "approve")
+  if (timing === "before-dispatch") {
+    state.beforeAudit = event => { if (event.action.endsWith("claimed")) group = "group-2" }
+    expect((await apply()).body.changeSet.results["op-1"]).toMatchObject({ writeNotSent: true })
+  } else {
+    if (timing === "unreadable") readable = false
+    else group = "group-2"
+    await expect(apply()).rejects.toThrow()
+  }
+  expect(context.tenant.writeCount()).toBe(0)
 })

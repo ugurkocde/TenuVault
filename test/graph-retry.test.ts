@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { graphCaller } from '../src/portal/lib/policies/graph-restore'
 import { POST as journalRequest } from '../src/portal/app/api/restore-journal/route'
 import { setRestoreJournalStore, writeRecords, saveWrite, writeKey, setRestoreJournalAuthorization } from '../src/main/storage/restore-journal'
+import { memoryStore } from './helpers'
 const tenant = '11111111-1111-1111-1111-111111111111'
 beforeEach(() => { setRestoreJournalAuthorization(async id => { if (id !== tenant) throw new Error('Not authorized') }); const data = new Map<string, string>(); setRestoreJournalStore({ get: k => data.get(k) ?? null, set: (k, v) => { data.set(k, v) }, delete: k => { data.delete(k) } }) })
 describe('bounded Graph retries', () => {
@@ -151,6 +152,22 @@ it('requires authorization and scopes journal listing and mutations to the selec
   setRestoreJournalAuthorization(async () => { throw new Error('Session ended') })
   expect((await request({ tenantId: tenant, action: 'not-applied', key: 'own', confirmed: true })).status).toBe(403)
   expect(writeRecords()).toHaveLength(2)
+})
+
+it('removes an older post-step fingerprint from storage and the restore journal API', async () => {
+  const { values, ...store } = memoryStore()
+  setRestoreJournalStore(store)
+  store.set('restore.write-journal', JSON.stringify([{
+    key: 'legacy', tenant, method: 'PATCH', path: 'deviceManagement/deviceConfigurations/legacy',
+    at: new Date().toISOString(), state: 'complete', verifiedPostStep: 'a'.repeat(64),
+  }]))
+  const response = await journalRequest(new Request('https://tenuvault.internal/api/restore-journal', {
+    method: 'POST', body: JSON.stringify({ tenantId: tenant, action: 'list' }),
+  }))
+  const { records } = await response.json()
+  expect(records).toMatchObject([{ key: 'legacy', state: 'complete' }])
+  expect(records[0]).not.toHaveProperty('verifiedPostStep')
+  expect(values.get('restore.write-journal')).not.toContain('verifiedPostStep')
 })
 
 it.each([true, false])('verifies createInstance settings through their collection before replay (match=%s)', async matching => {

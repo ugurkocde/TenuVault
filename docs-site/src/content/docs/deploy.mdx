@@ -176,3 +176,9 @@ Scheduled backups run on the admin's computer, as that admin, while TenuVault is
 In **Settings** > **Background runner**, these labels say **menu bar** on macOS and **tray** on Windows.
 
 Backups do not run while the admin is signed out or the computer is asleep or off. See [Schedule backups](/backups/schedules/) and [Settings reference](/settings/#background-runner).
+
+## Managed cutover for tenant write approvals
+
+A tenant can require a second admin for configuration writes in **Settings > Storage and recovery > Tenant approvals**. Before enabling it, update every installation that writes to the tenant to this version or later, configure the same shared Azure account on each, and complete or replace in-progress jobs. The policy records the minimum client version and current clients enforce it.
+
+Older or unmanaged installations, the Intune admin center and other tools can still write. A new unmanaged profile using another storage account cannot discover the policy. Use your deployment controls to pin the supported client version and the tenant’s shared account. See [Multiple admins](/getting-started/multiple-admins/).

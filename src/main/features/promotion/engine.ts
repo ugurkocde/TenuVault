@@ -6,7 +6,7 @@ import type { FeatureDeps } from "../deps"
 import { DOMAINS } from "../domains"
 import type { Stored } from "../records"
 import { FeatureError } from "../route"
-import { applyChangeSet, approveChangeSet, createChangeSet, getChangeSet, previewChangeSet, type ApplyInput, type ChangeSetPreview, type OperationInput } from "../change-sets/engine"
+import { applyChangeSet, approveChangeSet, createChangeSet, getChangeSet, previewChangeSet, prepareChangeSetApply, type ApplyInput, type ChangeSetPreview, type OperationInput } from "../change-sets/engine"
 import { createListingMemo, readCurrent } from "../change-sets/graph"
 import { hashOf, sanitizeSnapshot, type ChangeSetRecord } from "../change-sets/model"
 import type { DependencyFinding, Mapping, ReferenceResolution, TargetReads } from "./mapping"
@@ -258,12 +258,31 @@ export async function approvePromotion(deps: FeatureDeps, tenantId: string, id: 
  * target and of the mapped dependencies, production pre-change backup (fail closed), a second
  * dependency re-check, capture, journaled writes with read-back.
  */
-export async function applyPromotion(deps: FeatureDeps, tenantId: string, id: string, input: { contentHash: string; confirmed: boolean; backup?: "new" | "none"; resolveBackup?: ApplyInput["resolveBackup"]; check?: PlanCheck; onSettled?: ApplyInput["onSettled"] }, actor: string | null): Promise<{ promotion: Stored<PromotionRecord>; changeSet: Stored<ChangeSetRecord> }> {
+type PromotionApplyInput = Pick<ApplyInput, "contentHash" | "confirmed" | "backup" | "resolveBackup" | "onSettled"> & { check?: PlanCheck }
+
+function promotionApply(deps: FeatureDeps, tenantId: string, id: string, input: PromotionApplyInput) {
   const promotion = getPromotion(deps, tenantId, id)
   if (!promotion.changeSetId) throw new FeatureError("This promotion is blocked. Resolve its findings and plan again.", 409)
   const { check, ...apply } = input
+  return { changeSetId: promotion.changeSetId, apply: { ...apply, dependencyCheck: () => staleDependencies(deps, tenantId, promotion, check) } }
+}
+
+export async function preparePromotionApply(deps: FeatureDeps, tenantId: string, id: string, input: PromotionApplyInput, actor: string | null) {
+  const { changeSetId, apply } = promotionApply(deps, tenantId, id, input)
+  const prepared = await prepareChangeSetApply(deps, tenantId, changeSetId, apply, actor)
+  return {
+    operation: prepared.operation,
+    work: async () => {
+      try { return await applyChangeSet(deps, tenantId, changeSetId, apply, actor, prepared) }
+      finally { syncPromotion(deps, tenantId, id) }
+    },
+  }
+}
+
+export async function applyPromotion(deps: FeatureDeps, tenantId: string, id: string, input: PromotionApplyInput, actor: string | null): Promise<{ promotion: Stored<PromotionRecord>; changeSet: Stored<ChangeSetRecord> }> {
+  const { changeSetId, apply } = promotionApply(deps, tenantId, id, input)
   try {
-    const changeSet = await applyChangeSet(deps, tenantId, promotion.changeSetId, { ...apply, dependencyCheck: () => staleDependencies(deps, tenantId, promotion, check) }, actor)
+    const changeSet = await applyChangeSet(deps, tenantId, changeSetId, apply, actor)
     return { promotion: syncPromotion(deps, tenantId, id), changeSet }
   } catch (error) {
     syncPromotion(deps, tenantId, id)

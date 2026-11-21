@@ -1,3 +1,4 @@
+import { TenantApprovalSettings } from "../components/write-approvals/TenantApprovals"
 import type { WriteRecord } from "../../main/storage/restore-journal"
 import { getAppearance, setAppearance, type Appearance } from "../lib/appearance"
 import { useEffect, useId, useRef, useState, type ReactNode } from "react"
@@ -949,7 +950,7 @@ export default function SettingsPage() {
         <div className="min-w-0 w-full max-w-5xl flex-1">
           {panel("signin", <div className="space-y-6"><TenantSettings active={section === "signin"} /><ProxySignInSettings /></div>)}
           {panel("services", <ServicesSettings />)}
-          {panel("storage", <div className="space-y-6"><BackupsOnDevice /><RestoreWrites active={section === "storage"} /></div>)}
+          {panel("storage", <div className="space-y-6"><BackupsOnDevice /><TenantApprovalSettings active={section === "storage"} /><RestoreWrites active={section === "storage"} /></div>)}
           {panel("background", <div className="space-y-6"><BackgroundAndRetention /><BackupReaderSettings /></div>)}
           {panel("notifications", <NotificationSettings />)}
           {panel("branding", <PdfBrandingSettings />)}

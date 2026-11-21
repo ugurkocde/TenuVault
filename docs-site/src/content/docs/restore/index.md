@@ -205,6 +205,12 @@ Skipped items, and failed items that left nothing behind, have no button. An inc
 * Restores are recorded in the tenant's [audit log](/audit-log/).
 * Restored or overwritten items reach devices at their next check-in. Unassigned copies do not reach any device until you assign them in Intune.
 
+## Second admin approval for restores
+
+If the destination requires a second admin, full and selective restores, copies, in-place replacement and repairs need tenant approval before writing. Intune can also require its own approval for specific operations.
+
+Open **Settings > Storage and recovery > Tenant approvals** and select the destination tenant. A different signed-in admin reviews the request there. After approval, return to the operation on the original installation and apply the same selection before it expires. The deadline is seven days from request creation. The Tenant approvals inbox shows the expiry.
+
 ## Related pages
 
 * [Intune restore](https://www.tenuvault.com/intune-restore): restore modes, plans and limits, on the product site
@@ -215,3 +221,7 @@ Skipped items, and failed items that left nothing behind, have no button. An inc
 * [What cannot be restored and restore write history](/restore/limitations/)
 * [Disaster recovery](/restore/disaster-recovery/)
 * [Drift detection](/drift/), for reverting a single changed policy
+
+If an Intune request already completed a step before tenant approvals were enabled, and that step has no verified saved state, open **Intune Multi Admin Approval**, select **Withdraw**, then submit the restore again.
+
+If a final check refuses a write before it reaches Microsoft Graph, the result says **Write not sent**. Review the reason before starting a fresh restore. When an earlier step completed, the result still reports the partial restore.

@@ -8,6 +8,7 @@ import { useLicense, useTenantPlan } from "../lib/license"
 import { showFeaturePlanError } from "../lib/plan-dialog"
 import { formatDate } from "../features/shared/change-set"
 import {
+  applySyncBatch,
   applySyncTarget,
   approveSyncTarget,
   discardSyncRun,
@@ -244,6 +245,10 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
     try {
       const detail = await fetchRun(id)
       if (!current()) return
+      if (detail.run.groupedApply) {
+        setRunId(id)
+        return
+      }
       const named = new Map(detail.targets.flatMap((target) => target.promotion?.items ?? []).map((item) => [policyKey(item.folder, item.sourceId), item.sourceName]))
       setChosen(Object.fromEntries(detail.run.items.map((item) => {
         const key = policyKey(item.folder, item.sourceId)
@@ -317,12 +322,39 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
     })
     setNotes(left)
     setStep(4)
-    // Every target is approved and applied on its own, at the same time; backups queue in the engine.
+    const batch = ready.length > 1 ? applySyncBatch(source, forRun, ready.map(target => {
+      const { contentHash, targetFingerprint } = reviews[target.targetTenantId]!.preview!.changeSet
+      return { id: target.promotionId!, contentHash, targetFingerprint }
+    }), backup).then(result => ({ result, error: undefined }), error => ({ result: undefined, error })) : undefined
     for (const target of ready) {
       const preview = reviews[target.targetTenantId]!.preview!.changeSet
       void work(forRun, target, async (tenant, id) => {
+        const response = await batch
+        if (response?.error) throw response.error
+        const prepared = response?.result
+        if (prepared && !prepared.legacy) {
+          const result = prepared.results?.find(item => item.id === id)
+          if (!result || result.error) throw new Error(result?.error ?? "No result was returned for this destination.")
+          return
+        }
         await approveSyncTarget(tenant, id, preview, backup)
         await applySyncTarget(tenant, id, preview.contentHash, backup)
+      })
+    }
+  }
+
+  const group = run.data?.run.groupedApply
+  const groupedTargets = group ? runTargets.filter(target => group.destinations.some(item => item.id === target.promotionId)) : []
+  const resumeGroup = () => {
+    if (!runId || !group || pending(runId)) return
+    setStep(4)
+    const batch = applySyncBatch(source, runId).then(result => ({ result, error: undefined }), error => ({ result: undefined, error }))
+    for (const target of groupedTargets) {
+      void work(runId, target, async (_, promotionId) => {
+        const response = await batch
+        if (response.error) throw response.error
+        const result = response.result?.results?.find(item => item.id === promotionId)
+        if (!result || result.error) throw new Error(result?.error ?? "No result was returned for this destination.")
       })
     }
   }
@@ -408,7 +440,22 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
         />
       )}
 
-      {step === 3 && (
+      {step === 3 && group && (
+        <section aria-label="Review" className={`${card} space-y-4 p-6`}>
+          <h2 className="text-lg font-semibold">Review saved sync</h2>
+          <ul className="list-disc pl-5 text-sm">
+            {groupedTargets.map(target => <li key={target.targetTenantId}>{tenantOf(target.targetTenantId)?.name ?? target.targetTenantId}</li>)}
+          </ul>
+          <p className="text-sm">{group.backup === "new" ? "Back up the affected policies before syncing." : "Sync without a pre-change backup."}</p>
+          {planError && <p role="alert" className="text-sm text-red-700">{planError}</p>}
+          <div className="flex justify-between gap-3">
+            <Button variant="outline" onClick={() => setStep(4)}>Back to results</Button>
+            <Button disabled={planning || !!planError || pending(runId)} onClick={resumeGroup}>Apply reviewed sync</Button>
+          </div>
+        </section>
+      )}
+
+      {step === 3 && !group && (
         <ReviewStep
           targets={runTargets}
           reviews={reviews}
@@ -449,6 +496,7 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
               tenantOf={tenantOf}
               onChanged={() => { void run.refetch(); void runs.refetch(); refreshStatus() }}
               onContinue={runTargets.some(awaitingReview) && runId ? () => void continueReview(runId) : undefined}
+              onContinueGrouped={run.data.run.groupedApply && runId && !planning ? () => void continueReview(runId) : undefined}
               onDiscard={runId && runTargets.length > 0 && discardable(runTargets) && !shownActive.size ? () => void discardRun(runId) : undefined}
               discard={discarding}
             />

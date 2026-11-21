@@ -105,6 +105,7 @@ export type OperationStatus = "approval" | "pending" | "writing" | "verified" | 
 
 export interface OperationResult {
   partial?: boolean
+  writeNotSent?: boolean
   status: OperationStatus
   /** The object written (created ID, or the updated or deleted ID). */
   objectId: string | null
@@ -112,6 +113,7 @@ export interface OperationResult {
   readBack: "match" | "differs" | "denied" | "missing" | null
   /** For a verified create or update: snapshotHash of the object the verifying read saw. */
   readBackHash?: string
+  verifiedPostStepHash?: string
   attempts: number
   at: string | null
 }

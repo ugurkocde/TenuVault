@@ -106,3 +106,9 @@ If the license no longer covers the tenant, the tenant is not saved and TenuVaul
 ## Next step
 
 [Run your first backup](/getting-started/first-backup/).
+
+## Moving storage for an enrolled tenant
+
+Enable tenant approval only with shared Azure storage. Keep the enrolled account connected while approval is on. Turning it off requires approval from another admin. See [Tenant approvals](/settings/#tenant-approvals).
+
+If TenuVault cannot read the prior Azure storage account and this installation has no active approval binding, you can confirm a storage change or tenant removal. If this installation has never seen an approval policy on that account, your confirmation is final and TenuVault does not check that account again. If it has seen a policy, TenuVault checks the old account before the next tenant configuration write. When the last policy seen was off, a missing policy, missing backup container or confirmed missing Azure account lets you proceed. Permission failures, timeouts and invalid policy data block configuration writes until you restore access and verify the policy. Restore connectivity and the signed-in admin's Azure access, then retry. If the prior account has approval enabled, reconnect it and have a second admin approve turning it off before changing accounts. Signing out or releasing a license does not require a storage check.

@@ -102,3 +102,7 @@ Windows builds are signed with Azure Trusted Signing. macOS builds are signed an
 * [Network connections and data flows](/security/data-flows/): every outbound destination and what is sent to it.
 * [Encryption and recovery key](/security/encryption/): how backups on your device and in Azure are protected, and when you need the recovery key.
 * [Conditional Access and TenuVault](/security/conditional-access/): how your policies apply, and how to keep scheduled backups running under sign-in frequency.
+
+## Tenant write approvals
+
+Tenant write approvals rely on signed-in delegated admins and conditional Azure Blob Storage updates. Anyone with write access to the backup container is trusted like an Intune admin. The workflow applies to enrolled TenuVault installations. Older or unmanaged installations, the Intune admin center and other tools can still write. See [Multiple admins](/getting-started/multiple-admins/).

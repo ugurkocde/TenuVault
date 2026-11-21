@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest"
+import { setWriteApprovals } from "../src/main/write-approvals/service"
+import { reviewer, unenrolledApprovals, writeApprovalFixture } from "./helpers/write-approval-fixture"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { routes as syncRoutes } from "../src/main/features/sync"
 import { routes as promotionRoutes } from "../src/main/features/promotion"
 import { applyChangeSet, approveChangeSet, createChangeSet, previewChangeSet } from "../src/main/features/change-sets/engine"
@@ -13,6 +15,8 @@ import { upgradeMessage, type Plan } from "../src/shared/plans"
 import { call, fakeDeps, TENANT_A, TENANT_B, TENANT_C } from "./feature-helpers"
 import { FakeTenant, referenceSetting, setting, wire } from "./feature-change-sets-fakes"
 import { withTenantWrite } from "../src/main/features/write-lock"
+
+beforeEach(() => setWriteApprovals(unenrolledApprovals("none")))
 
 const PATH = "/api/sync"
 const TENANT_D = "44444444-4444-4444-4444-444444444444"
@@ -1341,4 +1345,130 @@ describe("Codex round 1", () => {
     const listed = (await context.post({ tenantId: TENANT_A, action: "list-runs" })).body.runs.find((entry: { id: string }) => entry.id === run.id)
     expect(listed.outcome).toBe("failed")
   })
+})
+
+
+afterEach(() => setWriteApprovals(undefined))
+
+it("binds Sync apply to the destination's approval and reviewed backup choice", async () => {
+  const context = setup()
+  const { profile } = writeApprovalFixture()
+  const origin = profile(), second = profile(reviewer)
+  setWriteApprovals(origin.service)
+  await origin.service.enable(TENANT_B)
+  const { targets } = await planned(context)
+  const id = targets[0]!.promotion!.id
+  const contentHash = await approved(context, TENANT_B, id, "none")
+  const apply = () => context.post({ tenantId: TENANT_B, action: "apply", id, contentHash, confirm: true, backup: "none" })
+  expect(await apply()).toMatchObject({ status: 409, body: { error: expect.stringContaining("pending") } })
+  expect(context.targets[TENANT_B]!.writeCount()).toBe(0)
+  const requestId = (await second.service.inbox(TENANT_B)).requests[0]!.request.id
+  expect((await second.service.inbox(TENANT_A)).requests).toEqual([])
+  await second.service.decide(TENANT_B, requestId, "approve")
+  expect((await apply()).status).toBe(200)
+  expect(context.targets[TENANT_B]!.writeCount()).toBe(1)
+})
+
+it("preflights all Sync destinations and sends zero mutations if one is pending", async () => {
+  const context = setup({ plans: MSP })
+  const { profile } = writeApprovalFixture()
+  const first = profile(), second = profile(reviewer)
+  setWriteApprovals(first.service)
+  await first.service.enable(TENANT_B)
+  await first.service.enable(TENANT_C)
+  const { run, targets } = await planned(context, [TENANT_B, TENANT_C])
+  const destinations = await Promise.all(targets.map(async target => {
+    const id = target.promotion!.id
+    const { body: { changeSet } } = await context.post({ tenantId: target.targetTenantId, action: "preview", id })
+    return { id, contentHash: changeSet.contentHash, targetFingerprint: changeSet.targetFingerprint }
+  }))
+  const apply = () => context.post({ tenantId: TENANT_A, action: "apply-batch", id: run.id, destinations, backup: "none", confirm: true })
+  const resume = () => context.post({ tenantId: TENANT_A, action: "apply-batch", id: run.id, confirm: true })
+  expect((await apply()).status).toBe(409)
+  expect((await context.post({ tenantId: TENANT_A, action: "get-run", id: run.id })).body.run.groupedApply)
+    .toEqual({ destinations, backup: "none" })
+  const approveTenant = async (tenant: string) => {
+    const { request } = (await second.service.inbox(tenant)).requests[0]!
+    await second.service.decide(tenant, request.id, "approve")
+  }
+  await approveTenant(TENANT_B)
+  expect(await resume()).toMatchObject({ status: 409, body: { error: expect.stringContaining("pending") } })
+  expect(context.targets[TENANT_B]!.writeCount()).toBe(0)
+  expect(context.targets[TENANT_C]!.writeCount()).toBe(0)
+  await approveTenant(TENANT_C)
+  expect(await resume()).toMatchObject({ status: 200, body: { results: destinations.map(({ id }) => ({ id })) } })
+  expect(context.targets[TENANT_B]!.writeCount()).toBe(1)
+  expect(context.targets[TENANT_C]!.writeCount()).toBe(1)
+  expect(changeSets(context, TENANT_B)[0]?.backupChoice).toBe("none")
+  expect(changeSets(context, TENANT_C)[0]?.backupChoice).toBe("none")
+})
+
+it("keeps a Sync destination's policy read failure local while neither destination is enrolled", async () => {
+  const context = setup({ plans: MSP })
+  const { profile, state } = writeApprovalFixture()
+  const { service } = profile()
+  setWriteApprovals(service)
+  state.failedReads.add(`.tenuvault-controls/${TENANT_C}/write-approval/policy.json`)
+  const { run, targets } = await planned(context, [TENANT_B, TENANT_C])
+  const destinations = await Promise.all(targets.map(async target => {
+    const id = target.promotion!.id
+    const { body: { changeSet } } = await context.post({ tenantId: target.targetTenantId, action: "preview", id })
+    return { id, contentHash: changeSet.contentHash, targetFingerprint: changeSet.targetFingerprint }
+  }))
+  const batch = () => context.post({ tenantId: TENANT_A, action: "apply-batch", id: run.id, destinations, backup: "none", confirm: true })
+  expect(await batch()).toMatchObject({ status: 200, body: { legacy: true } })
+  for (const [index, entry] of destinations.entries()) {
+    const tenantId = index === 0 ? TENANT_B : TENANT_C
+    expect((await context.post({ ...entry, tenantId, action: "approve", backup: "none" })).status).toBe(200)
+    const result = context.post({ ...entry, tenantId, action: "apply", backup: "none", confirm: true })
+    if (index === 0) expect((await result).status).toBe(200)
+    else await expect(result).rejects.toThrow("Injected transport failure")
+  }
+  expect(context.targets[TENANT_B]!.writeCount()).toBe(1)
+  expect(context.targets[TENANT_C]!.writeCount()).toBe(0)
+  await service.enable(TENANT_B)
+  await expect(batch()).rejects.toThrow("Injected transport failure")
+})
+
+it("checks Sync enrollment before applying a source plan gate to a grouped request", async () => {
+  const context = setup({ plans: MSP })
+  const { service } = writeApprovalFixture().profile()
+  setWriteApprovals(service)
+  const { run, targets } = await planned(context, [TENANT_B, TENANT_C])
+  const destinations = await Promise.all(targets.map(async target => {
+    const id = target.promotion!.id
+    const { body: { changeSet } } = await context.post({ tenantId: target.targetTenantId, action: "preview", id })
+    return { id, contentHash: changeSet.contentHash, targetFingerprint: changeSet.targetFingerprint }
+  }))
+  const planOf = context.deps.plan
+  context.deps.plan = vi.fn(async (id: string) => id === TENANT_A ? "community" : planOf(id))
+  const body = { tenantId: TENANT_A, action: "apply-batch", id: run.id, destinations, backup: "none", confirm: true }
+  expect(await planGuard(context.deps.plan)(guardRequest(body))).toBeNull()
+  expect(await context.post(body)).toMatchObject({ status: 200, body: { legacy: true } })
+  expect(context.deps.plan).not.toHaveBeenCalled()
+  await service.enable(TENANT_B)
+  expect(await context.post(body)).toMatchObject({ status: 402, body: { upgrade: "sync" } })
+  expect(context.targets[TENANT_B]!.writeCount()).toBe(0)
+  expect(context.targets[TENANT_C]!.writeCount()).toBe(0)
+})
+
+it("clears a saved Sync group when its reviewed destination becomes stale", async () => {
+  const context = setup({ plans: MSP })
+  const { service } = writeApprovalFixture().profile()
+  setWriteApprovals(service)
+  await service.enable(TENANT_B)
+  const { run, targets } = await planned(context, [TENANT_B, TENANT_C])
+  const destinations = await Promise.all(targets.map(async entry => {
+    const id = entry.promotion!.id
+    const { body: { changeSet } } = await context.post({ tenantId: entry.targetTenantId, action: "preview", id })
+    return { id, contentHash: changeSet.contentHash, targetFingerprint: changeSet.targetFingerprint }
+  }))
+  const apply = (reviewed?: typeof destinations) => context.post({ tenantId: TENANT_A, action: "apply-batch", id: run.id, destinations: reviewed, backup: "none", confirm: true })
+  expect(await apply(destinations)).toMatchObject({ status: 409, body: { error: expect.stringContaining("pending") } })
+  expect((await context.post({ tenantId: TENANT_A, action: "get-run", id: run.id })).body.run.groupedApply).toBeDefined()
+  context.targets[TENANT_B]!.addPolicy({ name: String(context.policy.name) })
+  expect(await apply()).toMatchObject({ status: 409, body: { error: expect.stringContaining("changed") } })
+  expect((await context.post({ tenantId: TENANT_A, action: "get-run", id: run.id })).body.run.groupedApply).toBeUndefined()
+  expect(context.targets[TENANT_B]!.writeCount()).toBe(0)
+  expect(context.targets[TENANT_C]!.writeCount()).toBe(0)
 })

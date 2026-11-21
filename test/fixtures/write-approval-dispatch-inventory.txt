@@ -1,0 +1,222 @@
+src/main/api/audit.ts: Request(`${INTERNAL_API_ORIGIN}/api/audit/log`) method "POST"
+src/main/api/audit.ts: Request(`${INTERNAL_API_ORIGIN}/api/audit/log`) method "POST"
+src/main/api/audit.ts: Request(`${INTERNAL_API_ORIGIN}/api/audit/log`) method "POST"
+src/main/api/audit.ts: Request(`${INTERNAL_API_ORIGIN}/api/audit/log`) method "POST"
+src/main/api/audit.ts: dispatch(new Request(`${INTERNAL_API_ORIGIN}/api/audit/log`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tenantId: body.tenantId, appId: body.appId, clientSecret: DELEGATED_CLIENT_SECRET, // The Audit page reads the tenant's configured account, so entries must land there: // writing to the local account would hide creations for Azure storage tenants. storageAccountName: body.storageAccountName ?? localStorageAccountName(body.tenantId), user: { id: account?.username ?? "unknown", email: account?.username ?? "unknown", name: account?.name ?? "Unknown user" }, logEntry, }), }))
+src/main/api/audit.ts: dispatch(new Request(`${INTERNAL_API_ORIGIN}/api/audit/log`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tenantId: body.tenantId, appId: body.appId, clientSecret: DELEGATED_CLIENT_SECRET, storageAccountName: body.storageAccountName ?? localStorageAccountName(body.tenantId), user: { id: account?.username ?? "unknown", email: account?.username ?? "unknown", name: account?.name ?? "Unknown user" }, logEntry, }), }))
+src/main/api/audit.ts: dispatch(new Request(`${INTERNAL_API_ORIGIN}/api/audit/log`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tenantId: body.tenantId, appId: body.appId, clientSecret: body.clientSecret, storageAccountName: body.storageAccountName, user: { id: account?.username ?? "unknown", email: account?.username ?? "unknown", name: account?.name ?? "Unknown user" }, logEntry, }), }))
+src/main/api/audit.ts: dispatch(new Request(`${INTERNAL_API_ORIGIN}/api/audit/log`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tenantId: body.tenantId, appId: body.appId, clientSecret: body.clientSecret, storageAccountName: body.storageAccountName, user: { id: account?.username ?? "unknown", email: account?.username ?? "unknown", name: account?.name ?? account?.username ?? "Unknown user", }, logEntry, }), }))
+src/main/api/fetch-bridge.ts: FetchPreconditionError(error)
+src/main/api/fetch-bridge.ts: Request(input, init)
+src/main/api/fetch-bridge.ts: Request(input, init)
+src/main/api/fetch-bridge.ts: Request(input, init)
+src/main/api/fetch-bridge.ts: networkFetch(input, init)
+src/main/api/fetch-bridge.ts: options.dispatch(new Request(input, init))
+src/main/api/fetch-bridge.ts: realFetch(input, init)
+src/main/api/fetch-bridge.ts: realFetch(request)
+src/main/api/host.ts: Request(INTERNAL_API_ORIGIN + input.path) method input.method
+src/main/api/host.ts: this.dispatch(request)
+src/main/api/network-error.ts: fetchImpl(input, init)
+src/main/api/network-error.ts: fetchImpl(input, init)
+src/main/app-backup/account.ts: fetchImpl("https://graph.microsoft.com/beta/deviceManagement?$select=intuneAccountId") method "GET"
+src/main/app-backup/assignment-graph.ts: fetchImpl(url.href) method "GET"
+src/main/app-backup/graph-read.ts: fetchImpl(url) method "GET"
+src/main/app-backup/restore-graph.ts: FetchPreconditionError("Invalid restore metadata request.")
+src/main/app-backup/restore-graph.ts: FetchPreconditionError(error)
+src/main/app-backup/restore-graph.ts: fetchImpl(url.href) method "PUT"
+src/main/app-backup/restore-graph.ts: fetchImpl(url.href) method method
+src/main/app-backup/restore.ts: FetchPreconditionError(signal.reason)
+src/main/app-backup/restore.ts: graph(POST, BASE)
+src/main/app-backup/restore.ts: graph(method, path)
+src/main/app-backup/restore.ts: graph(method, path)
+src/main/app-backup/restore.ts: send(PATCH, appUrl)
+src/main/app-backup/restore.ts: send(POST, `${fileUrl}/commit`)
+src/main/app-backup/restore.ts: send(POST, `${fileUrl}/renewUpload`)
+src/main/app-backup/restore.ts: send(POST, `${fileUrl}/renewUpload`)
+src/main/app-backup/restore.ts: send(POST, contentUrl)
+src/main/app-backup/restore.ts: send(POST, filesUrl)
+src/main/auth/app-registration-setup.ts: fetchNetworkClient(this.host.fetch)
+src/main/auth/backup-reader.ts: fetchNetworkClient(fetchImpl)
+src/main/auth/msal.ts: fetchNetworkClient(this.host.fetch)
+src/main/auth/network-client.ts: fetchImpl(url) method method
+src/main/auth/registration-provisioning.ts: graph(DELETE, `/applications/${created.id}`)
+src/main/auth/registration-provisioning.ts: graph(PATCH, `/oauth2PermissionGrants/${encodeURIComponent(grant.id)}`)
+src/main/auth/registration-provisioning.ts: graph(POST, "/applications")
+src/main/auth/registration-provisioning.ts: graph(POST, "/oauth2PermissionGrants")
+src/main/auth/registration-provisioning.ts: graph(POST, "/servicePrincipals")
+src/main/auth/registration-provisioning.ts: graph(POST, "/servicePrincipals")
+src/main/auth/registration-provisioning.ts: request(`https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/devicecode`) method "POST"
+src/main/auth/registration-provisioning.ts: request(url.href) method method
+src/main/azure/arm.ts: options.fetch(url) method request.method
+src/main/backup/blob-writer.ts: FetchApplicationError(new Error(`${name.split("/").pop()} is not a JSON object`))
+src/main/backup/blob-writer.ts: FetchApplicationError(new Error(`${name.split("/").pop()} is not valid JSON`))
+src/main/backup/blob-writer.ts: FetchApplicationError(new Error(oversizedOwnershipFile(name.split("/").pop() ?? name)))
+src/main/backup/blob-writer.ts: this.fetchImpl(`https://${this.account}.blob.core.windows.net/${path}`, { ...init, signal, headers: { ...(init.headers as Record<string, string> | undefined), "x-ms-version)
+src/main/backup/blob-writer.ts: this.request(`${BACKUP_CONTAINER}/${name.split("/").map(encodeURIComponent).join("/")}`) method "DELETE"
+src/main/backup/blob-writer.ts: this.request(`${BACKUP_CONTAINER}/${name.split("/").map(encodeURIComponent).join("/")}`) method "GET"
+src/main/backup/blob-writer.ts: this.request(`${BACKUP_CONTAINER}?${query.toString()}`) method "GET"
+src/main/backup/blob-writer.ts: this.request(`${BACKUP_CONTAINER}?restype=container`) method "PUT"
+src/main/backup/blob-writer.ts: this.request(path) method "GET"
+src/main/backup/blob-writer.ts: this.request(path) method "PUT"
+src/main/backup/engine.ts: answeredFetch(this.deps.fetch, outcome)
+src/main/backup/engine.ts: fetchImpl(input, init)
+src/main/backup/graph-session.ts: this.fetchImpl(url, { signal, headers: { Authorization: `Bearer ${token}` } })
+src/main/backup/request.ts: request(signal)
+src/main/chromium-fetch.ts: Request(input, init)
+src/main/chromium-fetch.ts: request() method req.method
+src/main/features/change-sets/engine.ts: graph(method, path)
+src/main/features/change-sets/engine.ts: writer(method, path)
+src/main/features/change-sets/graph.ts: graph(method, path)
+src/main/features/change-sets/graph.ts: graph(method, path)
+src/main/features/cis-remediation/engine.ts: rawGraph(method, path)
+src/main/features/health-review/service.ts: deps.externalFetch(endpoint.url) method "POST"
+src/main/features/hygiene/index.ts: fetchSettingsCatalog(deps, tenantId)
+src/main/features/notifications/service.ts: deps.externalFetch(channel.url) method "POST"
+src/main/features/notifications/service.ts: graph(POST, "me/sendMail")
+src/main/features/notifications/watcher-deploy/engine.ts: arm(tenant) method "POST"
+src/main/features/notifications/watcher-deploy/engine.ts: arm(tenant) method "PUT"
+src/main/features/notifications/watcher-deploy/engine.ts: arm(tenant) method "PUT"
+src/main/features/notifications/watcher-deploy/engine.ts: deps.arm(tenant) method "POST"
+src/main/features/notifications/watcher-deploy/graph-roles.ts: graph(POST, `servicePrincipals/${encodeURIComponent(principalId)}/appRoleAssignments`)
+src/main/features/recovery.ts: Request(`${INTERNAL_API_ORIGIN}${path}`) method "POST"
+src/main/features/recovery.ts: options.dispatch(new Request(`${INTERNAL_API_ORIGIN}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(apiBody(tenantId, profile, body)), }))
+src/main/features/reports/index.ts: graph(POST, "me/sendMail")
+src/main/feedback/send.ts: fetchImpl(`${apiBase}/api/desktop-feedback`) method "POST"
+src/main/frameworks/cis-content.ts: fetch(url, { headers: { Accept: "application/json", Authorization: `Bearer ${entitlementToken}` }, redirect: "e)
+src/main/frameworks/cis-content.ts: fetchJson(`${base}/cis/v1/catalog`, CIS_CATALOG_MAX_BYTES)
+src/main/frameworks/cis-content.ts: fetchJson(url, CIS_LIST_MAX_BYTES)
+src/main/frameworks/cis-content.ts: fetchJson(url, CIS_PACK_MAX_BYTES)
+src/main/frameworks/collector.ts: fetch(url, { headers: { Authorization: `Bearer ${token}` }, signal: signal ? AbortSignal.any([signal, timeout]))
+src/main/frameworks/ncsc.ts: fetcher(`${RAW}${FOLDER}${encodeURIComponent(file)}`, { signal: AbortSignal.timeout(60_000) })
+src/main/frameworks/service.ts: fetch(url, { ...init, signal: AbortSignal.timeout(60_000) })
+src/main/frameworks/service.ts: fetchCisCatalog(cisEntitlementToken(body.tenantId))
+src/main/frameworks/service.ts: fetchCisList({ benchmark, version, level }, cisEntitlementToken(body.tenantId))
+src/main/frameworks/service.ts: fetchCisPack({ benchmark, version, level }, cisEntitlementToken(body.tenantId))
+src/main/frameworks/service.ts: jsonFetch(GRAPH) method "POST"
+src/main/frameworks/service.ts: jsonFetch(`${GRAPH}/${id}`, { headers: { Authorization: `Bearer ${token}` } })
+src/main/frameworks/service.ts: jsonFetch(`https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`) method "POST"
+src/main/frameworks/service.ts: jsonFetch(url, { headers: { Authorization: `Bearer ${token}` } })
+src/main/index.ts: Request(`${INTERNAL_API_ORIGIN}/api/audit/log`) method "POST"
+src/main/index.ts: Request(`${INTERNAL_API_ORIGIN}/api/oib`) method "POST"
+src/main/index.ts: bridgedFetch("https://graph.microsoft.com/beta/deviceManagement/deviceCategories?$top=1&$select=id", { headers: { Authorization: `Bearer ${token.accessToken}` }, signal: AbortSignal.timeout(15_000), })
+src/main/index.ts: bridgedFetch(`https://${profile.storageAccountName}.blob.core.windows.net/tenuvault-notification-state/alerts.json`) method "PUT"
+src/main/index.ts: bridgedFetch(`https://${profile.storageAccountName}.blob.core.windows.net/tenuvault-notification-state/heartbeat.json`, { headers: { authorization: `Bearer ${token}`, "x-ms-version": "2021-12-02" }, signal: AbortSignal.t)
+src/main/index.ts: bridgedFetchImpl(input, init)
+src/main/index.ts: chromiumFetch("https://graph.microsoft.com/beta/deviceManagement/deviceCompliancePolicies?$top=1&$select=id", { headers: { Authorization: `Bearer ${await tokens.graph()}` }, signal: AbortSignal.timeout(15_000),)
+src/main/index.ts: chromiumFetch(`https://${profile.storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&maxresults=1`, { headers: { Authorization: `Bearer ${await tokens.storage()}`, "x-ms-version": "2023-11-03" }, sign)
+src/main/index.ts: chromiumFetch(input, init)
+src/main/index.ts: createBridgedFetch({ dispatch: (request) => host.dispatch(request), // Azure backups are written as plain JSON; backups sealed by earlier versions open with the device keyring. fetch: legacyAzureReader(withNetworkErrors(chromiumFetch), () => backupKeys.keyring()), authorizeTenant, authorizeGraph: graphDispatchGuard(writeApprovals, token => graphTokenSessions.get(token)), handleLocalBlob: (request) => handleLocalBlobRequest(getLocalStore(), request), getDelegatedToken: async (tenant, clientId, scope, forceRefresh) => { const result = await tokenFor(tenant, clientId, scope, forceRefresh) return { accessToken: result.accessToken, expiresOn: result.expiresOn } }, })
+src/main/index.ts: createChromiumFetch((options) => net.request(options), () => proxyAuth?.attempt() ?? NO_PROXY_AUTH)
+src/main/index.ts: graphDispatchGuard(writeApprovals, token => graphTokenSessions.get(token))
+src/main/index.ts: host .dispatch(new Request(`${INTERNAL_API_ORIGIN}/api/audit/log`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tenantId, appId: profile.clientId, clientSecret: DELEGATED_CLIENT_SECRET, storageAccountName: profile.storageAccountName, user: { id: account?.username ?? "unknown", email: account?.username ?? "unknown", name: account?.name ?? "Scheduled backup" }, logEntry: { eventType: cancelled ? "BACKUP_CANCELLED" : ok ? "BACKUP_COMPLETED" : "BACKUP_FAILED", action: "Scheduled backup", resource: { type: "backup", id: job.backupFolder ?? job.id, name: profile.name }, result: cancelled ? "PARTIAL" : ok ? "SUCCESS" : "FAILURE", severity: ok || cancelled ? "INFO" : "ERROR", details: { source: "schedule", message: job.exception ?? job.progressMessage }, }, }), }))
+src/main/index.ts: host.dispatch(request)
+src/main/index.ts: host.dispatch(request)
+src/main/index.ts: host.dispatch(request)
+src/main/index.ts: host.dispatch(request)
+src/main/index.ts: net.request(options)
+src/main/license/buy-url.ts: fetchImpl(new URL("/api/desktop-checkout", apiBase).href) method "POST"
+src/main/license/service.ts: globalThis.fetch(input, init)
+src/main/license/service.ts: this.fetchImpl(`${this.options.apiBase}/api/desktop-license/${action}`) method "POST"
+src/main/license/service.ts: this.fetchImpl(`${this.options.apiBase}/api/desktop-license/health`, { signal: AbortSignal.timeout(10_000), redirect: "error" })
+src/main/license/trial.ts: fetchImpl(`${apiBase}/api/desktop-trial`) method "POST"
+src/main/oib/service.ts: fetch(`${INTERNAL_API_ORIGIN}${path}`) method "POST"
+src/main/oib/service.ts: graph(DELETE, `${type.path}/${item.id}`)
+src/main/oib/source.ts: fetch(url, { headers: { Accept: "application/vnd.github+json" }, signal: AbortSignal.timeout(60_000) })
+src/main/oib/source.ts: fetchContent(platform, commit)
+src/main/setup-diagnostics/service.ts: fetchImpl(url) method "POST"
+src/main/storage/azure-seal.ts: FetchApplicationError(error)
+src/main/storage/azure-seal.ts: FetchPreconditionError(new Error('Backup tenant context is unavailable. Sign in again.'))
+src/main/storage/azure-seal.ts: fetchImpl(input, init)
+src/main/storage/azure-seal.ts: fetchImpl(input, init)
+src/main/storage/azure-seal.ts: fetchImpl(input, init)
+src/main/whats-new.ts: this.fetchImpl(`https://api.github.com/repos/${repository}/releases?per_page=${MAX_RELEASES}`, { headers: { Accept: "application/vnd.github+json", "User-Agent": `TenuVault/${this.options.currentV)
+src/main/write-approvals/audit.ts: Request(`${INTERNAL_API_ORIGIN}/api/audit/log`) method "POST"
+src/main/write-approvals/audit.ts: dispatch(new Request(`${INTERNAL_API_ORIGIN}/api/audit/log`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tenantId: tenant, storageAccountName: account, appId: client(tenant), clientSecret: DELEGATED_CLIENT_SECRET, user, logEntry, }), }))
+src/main/write-approvals/blob.ts: fetchImpl(target, { ...init, cache: "no-store", redirect: "error", signal: AbortSignal.timeout(15_000), headers: { ...)
+src/main/write-approvals/blob.ts: request(`${root}?${query}`)
+src/main/write-approvals/blob.ts: request(url(name)) method "DELETE"
+src/main/write-approvals/blob.ts: request(url(name)) method "HEAD"
+src/main/write-approvals/blob.ts: request(url(name)) method "PUT"
+src/main/write-approvals/blob.ts: request(url(name), etag ? { headers: { "if-none-match": etag } } : undefined)
+src/main/write-approvals/dispatch.ts: Request(input instanceof Request ? input.clone() : input, init)
+src/portal/app/api/audit/cleanup/route.ts: fetch(`https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`) method "POST"
+src/portal/app/api/audit/export/route.ts: fetch(`https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`) method "POST"
+src/portal/app/api/audit/log/route.ts: fetch(`https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`) method "POST"
+src/portal/app/api/audit/logs/route.ts: fetch(`https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`) method "POST"
+src/portal/app/api/audit/stats/route.ts: fetch(`https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`) method "POST"
+src/portal/app/api/backup-changes/route.ts: fetch(`${container}/${name.split("/").map(encodeURIComponent).join("/")}`, { headers: { "x-ms-version": "2021-12-02", Authorization: `Bearer ${accessToken}` }, })
+src/portal/app/api/backup-changes/route.ts: fetch(`${container}/${path.split("/").map(encodeURIComponent).join("/")}`, { headers: { "x-ms-version": "2021-12-02", Authorization: `Bearer ${accessToken}` }, })
+src/portal/app/api/backup-changes/route.ts: fetch(`https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`) method "POST"
+src/portal/app/api/cloud-backup-status/route.ts: fetch(`https://${storageAccountName}.blob.core.windows.net/${BACKUP_CONTAINER}/${blobPath(blob)}`, { headers: storageHeaders(accessToken) })
+src/portal/app/api/cloud-backup-status/route.ts: fetch(`https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`) method "POST"
+src/portal/app/api/detect-drifts/route.ts: fetch(`${request.nextUrl.origin}/api/revert-metadata`) method "POST"
+src/portal/app/api/detect-drifts/route.ts: fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${encodeURIComponent(name)}/${file}`, { headers: { 'x-ms-version': '2021-12-02', Authorization: `Bearer ${accessToken}` }, signal })
+src/portal/app/api/detect-drifts/route.ts: fetch(`https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`) method "POST"
+src/portal/app/api/detect-drifts/route.ts: fetch(`https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`) method "POST"
+src/portal/app/api/detect-drifts/route.ts: fetch(url, { headers: { 'x-ms-version': '2021-12-02', Authorization: `Bearer ${accessToken}` }, signal })
+src/portal/app/api/detect-drifts/route.ts: fetchPolicyContent(file.url, accessToken)
+src/portal/app/api/detect-drifts/route.ts: fetchPolicyFiles(storageAccountName, backup)
+src/portal/app/api/download-backup/route.ts: fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${blobPath(name)}`, { headers: { 'x-ms-version': '2021-12-02', 'Authorization': `Bearer ${accessToken}` }, })
+src/portal/app/api/download-backup/route.ts: fetch(`https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`) method "POST"
+src/portal/app/api/download-backup/route.ts: fetch(fileUrl, { headers: { 'x-ms-version': '2021-12-02', 'Authorization': `Bearer ${accessToken}`, }, })
+src/portal/app/api/download-backup/route.ts: fetch(listUrl, { headers: { 'x-ms-version': '2021-12-02', 'Authorization': `Bearer ${accessToken}`, }, })
+src/portal/app/api/fetch-tenant-details/route.ts: fetch(`https://graph.microsoft.com/${apiVersion}${endpoint}`, { headers: { Authorization: `Bearer ${accessToken}`, ...(endpoint.includes("$count=true") ? { Consis)
+src/portal/app/api/fetch-tenant-details/route.ts: fetch(`https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`) method "POST"
+src/portal/app/api/list-azure-resources/route.ts: fetch(`https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`) method "POST"
+src/portal/app/api/list-azure-resources/route.ts: fetch(url, { headers })
+src/portal/app/api/list-backup-contents/route.ts: fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${blobPath(name)}`, { headers: { 'x-ms-version': '2021-12-02', 'Authorization': `Bearer ${accessToken}` }, })
+src/portal/app/api/list-backup-contents/route.ts: fetch(`https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`) method "POST"
+src/portal/app/api/list-backups/route.ts: fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${blobPath(name)}/${BACKUP_OWNER_FILE}`, { headers: storageHeaders(accessToken) })
+src/portal/app/api/list-backups/route.ts: fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${blobPath(name)}/metadata.json`, { headers: storageHeaders(accessToken) })
+src/portal/app/api/list-backups/route.ts: fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container`, { headers: storageHeaders(accessToken) })
+src/portal/app/api/list-backups/route.ts: fetch(`https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`) method "POST"
+src/portal/app/api/restore-backup/route.ts: fetch(`https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`) method "POST"
+src/portal/app/api/restore-backup/route.ts: fetch(blobUrl(storageAccountName, name), { headers: storageHeaders(storageToken) })
+src/portal/app/api/restore-backup/route.ts: fetch(blobUrl(storageAccountName, policyPath), { headers: storageHeaders(storageToken) })
+src/portal/app/api/restore-backup/route.ts: fetch(listUrl, { headers: { 'x-ms-version': '2021-12-02', Authorization: `Bearer ${storageToken}` } })
+src/portal/app/api/restore-backup/route.ts: graph(POST, "deviceManagement/operationApprovalRequests/cancelMyRequest")
+src/portal/app/api/restore-preview/route.ts: fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${name.split("/").map(encodeURIComponent).join("/")}`, { headers: { "x-ms-version": "2021-12-02", Authorization: `Bearer ${storageToken}` }, })
+src/portal/app/api/restore-preview/route.ts: fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${path.split("/").map(encodeURIComponent).join("/")}`, { headers: { "x-ms-version": "2021-12-02", Authorization: `Bearer ${storageToken}` }, })
+src/portal/app/api/restore-preview/route.ts: fetch(`https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`) method "POST"
+src/portal/app/api/restore-validate/route.ts: fetch(`https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`) method "POST"
+src/portal/app/api/restore-validate/route.ts: fetch(blobUrl(storageAccountName, name), { headers: storageHeaders(token) })
+src/portal/app/api/restore-validate/route.ts: fetch(blobUrl(storageAccountName, path), { headers: storageHeaders(token) })
+src/portal/app/api/revert-metadata/route.ts: fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${name.split("/").map(encodeURIComponent).join("/")}`, { headers: { 'x-ms-version': '2021-12-02', 'x-ms-date': new Date().toUTCString(), 'Authorization': `)
+src/portal/app/api/revert-metadata/route.ts: fetch(`https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`) method "POST"
+src/portal/app/api/revert-policy/route.ts: fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${name.split("/").map(encodeURIComponent).join("/")}`, { headers: { 'x-ms-version': '2021-12-02', 'Authorization': `Bearer ${storageToken}` }, })
+src/portal/app/api/revert-policy/route.ts: fetch(`https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`) method "POST"
+src/portal/app/api/revert-policy/route.ts: fetch(blobUrl(name), { headers: { 'x-ms-version': '2021-12-02', 'Authorization': `Bearer ${accessToken}` }, })
+src/portal/app/api/revert-policy/route.ts: fetch(metadataUrl) method 'PUT'
+src/portal/app/api/revert-policy/route.ts: fetch(metadataUrl, { headers: { 'x-ms-version': '2021-12-02', 'x-ms-date': new Date().toUTCString(), 'Authorization': `)
+src/portal/app/api/revert-policy/route.ts: fetch(policyUrl, { headers: { 'x-ms-version': '2021-12-02', 'Authorization': `Bearer ${storageToken}`, }, })
+src/portal/app/api/settings-catalog-check/route.ts: fetch(`https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`) method "POST"
+src/portal/app/api/tenant-metadata/check/route.ts: fetch(`https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`) method "POST"
+src/portal/app/api/tenant-metadata/check/route.ts: fetch(blobUrl) method 'HEAD'
+src/portal/app/api/tenant-metadata/delete/route.ts: fetch(`https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`) method "POST"
+src/portal/app/api/tenant-metadata/delete/route.ts: fetch(blobUrl) method 'DELETE'
+src/portal/app/api/tenant-metadata/delete/route.ts: fetch(folderUrl) method 'DELETE'
+src/portal/app/api/tenant-metadata/load/route.ts: fetch(`https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`) method "POST"
+src/portal/app/api/tenant-metadata/load/route.ts: fetch(blobUrl) method 'GET'
+src/portal/app/api/tenant-metadata/save/route.ts: fetch(`https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`) method "POST"
+src/portal/app/api/tenant-metadata/save/route.ts: fetch(blobUrl) method 'PUT'
+src/portal/app/api/tenant-metadata/save/route.ts: fetch(containerUrl) method 'PUT'
+src/portal/lib/audit/storage.ts: fetch(blobUrl) method 'DELETE'
+src/portal/lib/audit/storage.ts: fetch(blobUrl, { headers: this.getHeaders() })
+src/portal/lib/audit/storage.ts: fetch(this.blobUrl(blob.name), { headers: this.getHeaders() })
+src/portal/lib/audit/storage.ts: fetch(url) method 'HEAD'
+src/portal/lib/audit/storage.ts: fetch(url) method 'PUT'
+src/portal/lib/audit/storage.ts: fetch(url) method 'PUT'
+src/portal/lib/audit/storage.ts: fetch(url, { headers: this.getHeaders() })
+src/portal/lib/drift/setting-names.ts: graph(POST, "$batch")
+src/portal/lib/policies/graph-restore.ts: fetchImpl(`${GRAPH}${path}`) method method
+src/portal/lib/policies/graph-restore.ts: this.graph(POST, plan.create.path)
+src/portal/lib/policies/graph-restore.ts: this.graph(record.step.method, record.step.path)
+src/portal/lib/policies/graph-restore.ts: this.graph(record.step.method, record.step.path)
+src/portal/lib/policies/graph-restore.ts: this.graph(step.method, step.path)
+src/portal/lib/storage/list.ts: fetch(target, { headers: { 'x-ms-version': '2021-12-02', Authorization: `Bearer ${token}` }, signal })
+src/shared/intune/autopilot-devices.ts: steps.push() method "POST"
+src/shared/intune/autopilot-devices.ts: steps.push() method "POST"
+src/shared/intune/conditional-access.ts: steps.push() method "DELETE"
+src/shared/intune/conditional-access.ts: steps.push() method "POST"
+src/shared/intune/conditional-access.ts: steps.push() method "POST"
+src/shared/intune/conditional-access.ts: updates.push() method "PATCH"

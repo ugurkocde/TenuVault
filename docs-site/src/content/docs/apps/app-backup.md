@@ -194,6 +194,8 @@ Only one process or computer can restore a particular backup to a particular des
 
 If Intune reports a permanent upload-storage failure, the draft is retained for review. Intune may refuse renewal in this state; TenuVault does not delete the draft or create a replacement automatically.
 
+If another admin enables tenant write approval before the installer starts uploading, TenuVault reports **Write not sent** for the upload. Retry with the same backup, destination and app name to request approval and continue the existing draft.
+
 If a creation response was lost, TenuVault searches for its unique restore marker and refuses to create a second app when the outcome cannot be confirmed. If someone assigns or changes an unfinished destination app, restore stops for review. A successful repeat returns the existing restored app. Creating another copy from the same backup in the same destination is not currently supported.
 
 Legacy local archives are export-only and cannot be selected for restore.
@@ -212,6 +214,16 @@ Keep both the encrypted folder and its [recovery key](/security/encryption/). Th
 On another installation, configure the same tenant, import the matching key in **Settings → Storage and recovery**, then use **Choose installer folder** to select the retained folder's root, which contains the tenant folders. Reconnecting does not move or delete any existing files. Earlier archive manifests remain readable.
 
 If a folder cannot be read, check its location and import the matching key. After an interrupted export, resolve any destination file locks and refresh to retry cleanup. A published export remains successful even if temporary-file cleanup needs another attempt.
+
+## Second admin approval for App Backup restores
+
+If the destination requires a second admin, **Restore to tenant** requests approval for the reviewed settings and installer in that destination. TenuVault checks the destination draft and content references when continuing an interrupted restore. The restored app is unassigned.
+
+Open **Settings > Storage and recovery > Tenant approvals** and select the destination tenant. A different signed-in admin reviews the request there. After approval, return to the operation on the original installation and apply the same selection before it expires. The deadline is seven days from request creation. The Tenant approvals inbox shows the expiry.
+
+If a protected restore needs to resume, the next approval includes the draft and the installer content already recorded in the destination. Changes to the draft or installer content can stop the restore before the next upload or publish step.
+
+If Intune refuses the initial app creation, resolve the sign-in or permissions problem and retry the restore. If the outcome is uncertain, TenuVault first checks for the same draft before proceeding.
 
 ## Related pages
 

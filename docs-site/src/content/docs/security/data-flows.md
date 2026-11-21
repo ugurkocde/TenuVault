@@ -326,6 +326,10 @@ raw.githubusercontent.com
 
 Capturing an installer also needs the [capture check](#capture-check) at `https://www.tenuvault.com/api/app-backup/capture-policy`. It is covered by `www.tenuvault.com`. Allow the path if your proxy filters by path. Capture and restore also use `login.microsoftonline.com` and `graph.microsoft.com`, like every other feature. On the PC that captures, the capture helper requests `graph.microsoft.com` itself, without the proxy sign-in saved in TenuVault, see [Installer capture](#installer-capture). Listing apps and their details needs nothing else, and exporting an installer needs no connection.
 
+## Shared tenant approval records
+
+When enabled, TenuVault writes requests, decisions and policy records under a reserved prefix in the tenant’s Azure backup container. The records include tenant-local Microsoft object IDs, account labels, review summaries and request status. Payloads stay in their existing storage or on the requesting computer. TenuVault stores neither access tokens nor sign-in assertions in approval records. Azure Storage diagnostics can corroborate a principal when enabled.
+
 ## Related pages
 
 * [Security and privacy](/security/)

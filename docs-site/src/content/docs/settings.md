@@ -7,7 +7,7 @@ description: Every control on the Settings page, what it does and when to use it
 
 Choose a section in the list on the left to open it: **Sign-in**, **Services and permissions**, **Storage and recovery**, **Background runner**, **Notifications**, **PDF branding**, **Updates**, **Appearance** and **About**. One section shows at a time, starting with **Sign-in**. When no tenant on this computer is on Pro or MSP, **Notifications** and **PDF branding** carry a **Pro** badge in the list; both sections still open. **Notifications** links to the [Alerts](/notifications/) page in the sidebar, where alerts, channels, change watching and deliveries are set up. On a narrow window the list becomes a row above the section.
 
-Settings apply to this computer only. Other admins who use TenuVault have their own settings.
+Most settings apply to this computer. The tenant approval policy and inbox are shared through the tenant’s Azure backup account.
 
 ## Appearance
 
@@ -94,6 +94,29 @@ When local backup files exist or a tenant uses local storage, **Settings** and *
 :::caution
 Without the recovery key, backups on this device can only be read on this computer by this user account. Save it in your password manager and delete the file. See [Encryption and recovery key](/security/encryption/).
 :::
+
+### Tenant approvals
+
+Choose the tenant in **Settings > Storage and recovery > Tenant approvals**. **Require a second admin** is off by default. It is available when the tenant uses shared Azure storage. With device storage, the card shows **Use shared Azure storage to request approval from another admin**.
+
+Before turning approval on, update every TenuVault installation that writes to the tenant to this version or later. Connect them to the same Azure account and finish or replace in-progress jobs. The policy records the minimum client version. Older or unmanaged installations, the Intune admin center and other tools can still write directly. See [Managed deployment](/deploy/) for the cutover.
+
+1. Start a covered operation and confirm the selection. If approval is on, TenuVault creates a request and shows its ID without writing to Intune.
+2. A second admin signs in to the destination tenant on their installation, opens **Tenant approvals**, selects **Refresh approvals** and reviews the request. The inbox shows the requester, decision, expiry and blockers. Expand the review details to see the destination names and IDs, assignment changes and affected field names. The review does not show setting values.
+3. The requesting admin returns to the operation on the original installation and applies the same selection. Requests expire seven days after creation. The Tenant approvals inbox shows the expiry. A change in the source, options or destination requires a fresh request.
+
+Choose **Request to turn off** to ask a second admin to approve disabling the current policy. After their decision, choose **Apply approved disable** on the original installation. Disabling invalidates outstanding requests for the prior policy and records both admins in the audit log. Before switching from Azure or disconnecting, TenuVault checks the existing account. Disconnecting keeps the enrollment on this installation. Ask another admin to approve disabling the policy before changing storage.
+
+A request with an uncertain apply outcome stays claimed. Check the outcome in Intune and reconcile any uncertain restore writes before choosing **Close interrupted apply**. Any retry that writes needs fresh approval. Finished requests remain in the inbox for at least 30 days after their approval window closes. Unreadable requests are flagged separately and cannot be approved. Use [Intune Multi Admin Approval](/restore/multi-admin-approval/) separately for operations that Intune subjects to its own review.
+
+If TenuVault cannot read the prior Azure storage account and this installation has no active approval binding, you can confirm a storage change or tenant removal. If this installation has never seen an approval policy on that account, your confirmation is final and TenuVault does not check that account again. If it has seen a policy, TenuVault checks the old account before the next tenant configuration write. When the last policy seen was off, a missing policy, missing backup container or confirmed missing Azure account lets you proceed. Permission failures, timeouts and invalid policy data block configuration writes until you restore access and verify the policy. Restore connectivity and the signed-in admin's Azure access, then retry. If the prior account has approval enabled, reconnect it and have a second admin approve turning it off before changing accounts. Signing out or releasing a license does not require a storage check.
+
+**Known limits**
+
+- A new Azure storage account can block tenant configuration writes for a few minutes while Azure role assignments take effect. Retry after the signed-in account can read the backup container.
+- Approval applies when a write's final policy check runs after activation is committed. A write can still complete if its final check passed just before another admin enabled approval on another computer. An App Backup installer upload that started with approval off can finish under that mode.
+
+If the inbox cannot reload after you save a decision, TenuVault confirms the decision was saved. Refresh approvals to reload the inbox and retry any pending decision audit receipts. If TenuVault cannot verify that a decision was saved in Azure within 30 days, the inbox shows that its pending audit receipt expired. Check the decision in the inbox or Azure Storage.
 
 ### Restore write history
 

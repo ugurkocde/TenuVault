@@ -1,3 +1,4 @@
+import { withExemptGraphCaller } from "../../write-approvals/dispatch"
 import type { RouteModule } from "../../api/host"
 import { allows } from "../../../shared/plans"
 import { AuditEventType } from "../../../portal/lib/audit/types"
@@ -494,7 +495,7 @@ export async function sendReport(
         toRecipients: resolved.addresses.map((address) => ({ emailAddress: { address } })),
         ...(attachment ? { attachments: [{ "@odata.type": "#microsoft.graph.fileAttachment", name: attachment.name, contentType: attachment.type, contentBytes: attachment.bytes.toString("base64") }] } : {}),
       }
-      const response = await graph("POST", "me/sendMail", { message, saveToSentItems: true } as unknown as Parameters<typeof graph>[2])
+      const response = await withExemptGraphCaller("email", () => graph("POST", "me/sendMail", { message, saveToSentItems: true } as unknown as Parameters<typeof graph>[2]))
       result = response.status >= 200 && response.status < 300
         ? { at, ok: true, recipients: resolved.addresses.length, attachment: attachment?.format ?? null, error: null, automatic: options.automatic }
         : { at, ok: false, recipients: 0, attachment: null, error: graphError(response.body as Record<string, unknown>, response.status).slice(0, 300), automatic: options.automatic }

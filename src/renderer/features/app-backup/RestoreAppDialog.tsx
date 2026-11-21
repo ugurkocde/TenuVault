@@ -1,3 +1,4 @@
+import { TenantApprovals } from "../../components/write-approvals/TenantApprovals"
 import { useEffect, useRef, useState } from "react"
 import { CheckCircle2, ExternalLink } from "lucide-react"
 import { useTenants } from "~/contexts/TenantContext"
@@ -162,6 +163,10 @@ export function RestoreAppDialog({ tenant: sourceTenantId, source, onClose, onBu
       </div>}
       <div className="flex flex-wrap justify-end gap-2 border-t pt-4"><Button variant="outline" disabled={running || loading || signingIn} onClick={onClose}>{result ? "Done" : "Close"}</Button>{!result && <Button disabled={running || loading || signingIn || deviceStarting || !!deviceCode || !authenticated || !confirmed || targetPlan === "excluded" || !review?.settingsHash || !!review.blocker || !name.trim()} onClick={() => void restore()}>{running ? "Restoring…" : "Restore unassigned app"}</Button>}</div>
       <UpgradeDialog feature="appRestoreOtherTenant" open={planDialog} onOpenChange={setPlanDialog} tenantId={target || null} />
+      {!running && /tenant (?:write )?approval|after request [a-f0-9-]{36}|uncertain apply outcome/i.test(error) && <details className="rounded-lg border p-3">
+        <summary className="cursor-pointer text-sm font-medium">Tenant approvals</summary>
+        <div className="mt-3"><TenantApprovals active initialTenant={target} /></div>
+      </details>}
     </DialogContent>
   </Dialog>
 }

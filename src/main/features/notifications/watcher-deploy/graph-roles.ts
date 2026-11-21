@@ -1,3 +1,4 @@
+import { withExemptGraphCaller } from "../../../write-approvals/dispatch"
 import type { FeatureDeps } from "../../deps"
 import { brief } from "../service"
 
@@ -73,11 +74,11 @@ export async function grantGraphRoles(deps: FeatureDeps, tenantId: string, princ
     if ("error" in resolved) return { ok: false, detail: resolved.error.detail ?? "The Graph roles could not be read." }
     const graph = await deps.graph(tenantId)
     for (const role of roles) {
-      const response = await graph("POST", `servicePrincipals/${encodeURIComponent(principalId)}/appRoleAssignments`, {
+      const response = await withExemptGraphCaller("watcher-roles", () => graph("POST", `servicePrincipals/${encodeURIComponent(principalId)}/appRoleAssignments`, {
         principalId,
         resourceId: resolved.resolved.graphServicePrincipalId,
         appRoleId: resolved.resolved.byName.get(role)!,
-      } as never)
+      } as never))
       if (response.status >= 200 && response.status < 300) continue
       const body = JSON.stringify(response.body ?? {})
       if (/already exists|MultipleObjectsWithSameKeyValue/i.test(body)) continue

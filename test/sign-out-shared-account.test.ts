@@ -1,13 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import type { SignedInAccount } from "../src/shared/ipc"
 
-const msal = vi.hoisted(() => ({ signOut: vi.fn(async () => undefined), accounts: [] as Array<{ homeAccountId: string }> }))
+const msal = vi.hoisted(() => ({ signOut: vi.fn(async () => undefined), acquire: vi.fn(), accounts: [] as Array<{ homeAccountId: string }> }))
 
 vi.mock("@azure/msal-node", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@azure/msal-node")>()
   class PublicClientApplication {
     getAllAccounts = async () => msal.accounts
     signOut = msal.signOut
+    acquireTokenSilent = msal.acquire
   }
   return { ...actual, PublicClientApplication }
 })
@@ -66,4 +67,22 @@ describe("AuthManager.signOut", () => {
       expect(msal.signOut).toHaveBeenCalledTimes(1)
     }
   })
+})
+
+
+it.each(["https://graph.microsoft.com/.default", "https://storage.azure.com/.default"])("refuses a silent %s token across sign-out and sign-in to the same account", async scope => {
+  const saved = profile(TENANT_A)
+  const { auth, store } = manager([saved])
+  let entered!: () => void
+  let resolveToken!: (value: object) => void
+  const acquiring = new Promise<void>(resolve => { entered = resolve })
+  const token = new Promise<object>(resolve => { resolveToken = resolve })
+  msal.acquire.mockImplementationOnce(() => { entered(); return token })
+  const waiting = auth.getAccessToken(TENANT_A, CLIENT, scope)
+  await acquiring
+  await auth.signOut(TENANT_A)
+  store.set(TENANT_A, saved)
+  resolveToken({ accessToken: "old token" })
+  await expect(waiting).rejects.toThrow("signed-in account changed")
+  expect(auth.approvalSession(TENANT_A)).toBeUndefined()
 })

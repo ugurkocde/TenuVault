@@ -55,10 +55,15 @@ export function isReadAction(action: string): boolean {
   return /^(list|get|revoke)(-|$)/.test(action)
 }
 
+/** A grouped Sync apply checks every involved plan itself after probing enrollment. */
+export function defersFeatureCheck(pathname: FeatureRoutePath, action: string): boolean {
+  return pathname === "/api/sync" && action === "apply-batch"
+}
+
 /** The features an action on a feature route needs; empty for stored-record reads. */
 export function featureRouteFeatures(pathname: FeatureRoutePath, action: string): Feature[] {
   const route: FeatureRoute = FEATURE_ROUTES[pathname]
-  if (isReadAction(action) || route.recovery?.includes(action)) return []
+  if (isReadAction(action) || route.recovery?.includes(action) || defersFeatureCheck(pathname, action)) return []
   const prefixed = Object.entries(route.prefixes ?? {}).find(([prefix]) => action.startsWith(prefix))?.[1]
   const features: Feature[] = [prefixed ?? route.feature]
   if (action.startsWith("portfolio-")) features.push("portfolio")

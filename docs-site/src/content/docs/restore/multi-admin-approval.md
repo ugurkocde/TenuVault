@@ -132,6 +132,12 @@ If only a follow-up step was blocked (the policy was created or updated, but its
 
 An access policy can exclude apps from approval. Microsoft applies those exclusions only to **app-only** calls, made by an app without a signed-in user. TenuVault writes signed in as you, with [delegated permissions](/security/permissions/), so excluding the TenuVault app registration does not exempt its changes. That is intended: changes made through TenuVault go through the same approval as changes you make in the admin center.
 
+## When the tenant also requires a second admin
+
+**Tenant approvals** is a TenuVault review in **Settings > Storage and recovery**. **Intune Multi Admin Approval** is a separate section in the restore wizard. You can still inspect or withdraw previously saved Intune requests. When tenant approval is enabled, submitting or completing an Intune request needs a TenuVault decision for the saved step before it can write. Intune retains its own justification, status, approver and assignment rounds.
+
+Review the request in the destination tenant’s inbox and return to the saved Intune step on the original installation. See [Tenant approvals](/settings/#tenant-approvals).
+
 ## Related pages
 
 * [Restore Intune policies](/restore/)

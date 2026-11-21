@@ -6,10 +6,11 @@ import {
   type AuthenticationResult,
   type ICachePlugin,
 } from "@azure/msal-node"
+import type { ApprovalActor } from "../../shared/write-approvals"
 import type { SignedInAccount } from "../../shared/ipc"
 import { RESOURCE_SCOPES } from "../../shared/constants"
 import { CONSENT_ROLES_TEXT, FIRST_SIGN_IN_TIMEOUT_MESSAGE } from "../../shared/app-registration"
-import { isMicrosoftLoginUrl } from "../../shared/security"
+import { isGuid, isMicrosoftLoginUrl } from "../../shared/security"
 import { fetchNetworkClient } from "./network-client"
 import { loopbackSignIn } from "./loopback-sign-in"
 import { deviceCodeSignIn } from "./device-code-sign-in"
@@ -199,7 +200,30 @@ export const ERROR_PAGE = page("Sign-in failed", "Go back to TenuVault for detai
  * operating system. Device-based policies are satisfied by a browser that passes the
  * device identity (see the Conditional Access supported browsers).
  */
+/** Identity from MSAL's tenant-scoped authentication result, never from a route or a label. */
+export function delegatedApprovalActor(result: AuthenticationResult, tenant: string): ApprovalActor | null {
+  const claims = (result.idTokenClaims ?? result.account?.idTokenClaims) as { tid?: unknown; oid?: unknown } | undefined
+  if (!claims || !isGuid(claims.tid) || claims.tid.toLowerCase() !== tenant.toLowerCase() || !isGuid(claims.oid)
+    || !result.account || result.account.tenantId.toLowerCase() !== tenant.toLowerCase()) return null
+  return { oid: claims.oid.toLowerCase(), label: (result.account.name || result.account.username || claims.oid).slice(0, 200) }
+}
+
+type ApprovalSession = { tenant: string; actor: ApprovalActor | null; current: () => boolean }
+
 export class AuthManager {
+  private readonly generations = new Map<string, object>()
+  private readonly tokenSessions = new WeakMap<AuthenticationResult, ApprovalSession>()
+
+  private invalidateSession(tenant: string): void {
+    this.generations.delete(tenant)
+    this.approvalSessions.delete(tenant)
+  }
+
+  tokenApprovalSession(token: AuthenticationResult): ApprovalSession | undefined {
+    return this.tokenSessions.get(token)
+  }
+
+  private readonly approvalSessions = new Map<string, { revision: object; home: string; actor: ApprovalActor | null }>()
   private readonly apps = new Map<string, PublicClientApplication>()
   /**
    * The Microsoft sign-in address the waiting first sign-in opened, so the admin can copy it into
@@ -235,12 +259,14 @@ export class AuthManager {
       name: account.name,
       homeAccountId: account.homeAccountId,
     }
+    this.invalidateSession(signedIn.tenantId)
     this.host.accountStore.set(signedIn)
     return { tenantId: signedIn.tenantId, clientId, username: signedIn.username, name: signedIn.name }
   }
 
   async signOut(tenantId: string): Promise<void> {
     const stored = this.host.accountStore.get(tenantId)
+    this.invalidateSession(tenantId.toLowerCase())
     this.host.accountStore.delete(tenantId)
     if (!stored) return
     // MSAL signs an account out of every tenant at once, and the refresh token is shared across
@@ -265,11 +291,14 @@ export class AuthManager {
    * token. Throws SignInRequiredError when the admin has to sign in again.
    */
   async getAccessToken(tenantId: string, clientId: string, scope: string, forceRefresh = false): Promise<AuthenticationResult> {
-    const stored = this.host.accountStore.get(tenantId.toLowerCase())
+    const tenant = tenantId.toLowerCase()
+    const stored = this.host.accountStore.get(tenant)
     if (!stored || stored.clientId !== clientId) {
       throw new SignInRequiredError(tenantId, clientId, "You are not signed in to this tenant. Sign in to continue.", scope)
     }
 
+    const generation = this.generations.get(tenant) ?? {}
+    this.generations.set(tenant, generation)
     const app = this.app(clientId)
     const account = await this.findAccount(app, stored.homeAccountId)
     if (!account) {
@@ -277,7 +306,20 @@ export class AuthManager {
     }
     try {
       const result = await app.acquireTokenSilent({ account, scopes: [scope], authority: authority(tenantId), forceRefresh })
-      if (result) return result
+      if (result) {
+        const current = this.host.accountStore.get(tenant)
+        if (this.generations.get(tenant) !== generation || !current || current.homeAccountId !== stored.homeAccountId || current.clientId !== stored.clientId
+          || (result.account && result.account.homeAccountId !== stored.homeAccountId)) {
+          throw new SignInRequiredError(tenantId, clientId, "The signed-in account changed. Try again.", scope)
+        }
+        const actor = delegatedApprovalActor(result, tenant)
+        const previous = this.approvalSessions.get(tenant)
+        const revision = previous?.actor?.oid === actor?.oid && previous?.home === stored.homeAccountId ? previous.revision : {}
+        this.approvalSessions.set(tenant, { revision, home: stored.homeAccountId, actor })
+        const token = { ...result }
+        this.tokenSessions.set(token, this.approvalSession(tenant)!)
+        return token
+      }
     } catch (error) {
       if (error instanceof InteractionRequiredAuthError) {
         throw new SignInRequiredError(tenantId, clientId, signInAgainMessage(stored.username, scope, error), scope)
@@ -285,6 +327,18 @@ export class AuthManager {
       throw error
     }
     throw new SignInRequiredError(tenantId, clientId, "Sign in again to continue.", scope)
+  }
+
+  approvalSession(rawTenant: string) {
+    const tenant = rawTenant.toLowerCase()
+    const session = this.approvalSessions.get(tenant)
+    if (!session) return undefined
+    return {
+      tenant,
+      actor: session.actor,
+      current: () => this.approvalSessions.get(tenant)?.revision === session.revision
+        && this.host.accountStore.get(tenant)?.homeAccountId === session.home,
+    }
   }
 
   /**
@@ -339,6 +393,7 @@ export class AuthManager {
       name: account.name,
       homeAccountId: account.homeAccountId,
     }
+    this.invalidateSession(signedIn.tenantId)
     this.host.accountStore.set(signedIn)
     return { tenantId: signedIn.tenantId, clientId, username: signedIn.username, name: signedIn.name }
   }
@@ -354,6 +409,7 @@ export class AuthManager {
     const result = await deviceCodeSignIn(tenant, request => this.app(clientId).acquireTokenByDeviceCode(request), onCode, signal)
     signal.throwIfAborted()
     const account = result.account!
+    this.invalidateSession(tenant.toLowerCase())
     this.host.accountStore.set({ tenantId: tenant.toLowerCase(), clientId, username: account.username, name: account.name, homeAccountId: account.homeAccountId })
   }
 
