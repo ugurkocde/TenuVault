@@ -49,3 +49,15 @@ export async function waitForDirectoryRetry(retryAt: number, signal?: AbortSigna
     else timer = setTimeout(() => finish(), delay)
   })
 }
+
+/** Attempt both durable records even when one store write fails. Never turn a known throttle into a terminal failure. */
+export class DirectoryRetryPersistenceError extends Error {
+  constructor() { super("The Microsoft Graph retry deadline could not be saved in both restore records. The page remains locked. Resume to recover its saved deadline.") }
+}
+export function persistDirectoryRetry(saveJournal: () => void, saveCoordinator: () => void): void {
+  let failed = false
+  for (const save of [saveJournal, saveCoordinator]) {
+    try { save() } catch { try { save() } catch { failed = true } }
+  }
+  if (failed) throw new DirectoryRetryPersistenceError()
+}

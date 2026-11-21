@@ -1,6 +1,6 @@
 import type { KeyValueStore } from "../storage/secure-store"
 import { RestoreSafetyError, RestoreWriteDeferredError } from "../../shared/intune/restore-guards"
-import { GuardedRunJournal, type GuardedStep } from "./guarded-run"
+import { GuardedRunJournal, type GuardedRun, type GuardedStep } from "./guarded-run"
 
 type State = { locks: Record<string, { owner: string; journal: string }>; deadlines: Record<string, number>; discarded: Record<string, true>; invalid?: boolean }
 export const directoryPagePrefix = (tenant: string, id: string) => `restore.directory.${encodeURIComponent(tenant)}.${encodeURIComponent(id)}.`
@@ -31,7 +31,7 @@ export function directoryObjectState(store: KeyValueStore, tenant: string, owner
     if (state.discarded[owner] !== undefined && state.discarded[owner] !== true) invalid(id)
   }
   const save = (state: State) => store.set(key, JSON.stringify(state))
-  const object = (step: GuardedStep) => (step.targetId ?? step.sourceId).toLowerCase()
+  const object = (step: Pick<GuardedStep, "sourceId" | "targetId">) => (step.targetId ?? step.sourceId).toLowerCase()
   const assertActive = (state = load()) => {
     if (state.discarded[owner]) throw new RestoreSafetyError("This saved directory restore was discarded. It can never send again.")
   }
@@ -40,6 +40,26 @@ export function directoryObjectState(store: KeyValueStore, tenant: string, owner
     if (lock && lock.owner !== owner) throw new RestoreSafetyError("Another saved directory page owns this object. Resolve or discard that page first.")
     state.locks[id.toLowerCase()] = { owner, journal }
   }
+  // A throttle can reach either atomic record first. Recover the journal half before
+  // ownership is released, and let prepare publish the coordinator half on resume.
+  const recoverDeadlines = (state: State, ids = Object.keys(state.locks)) => {
+    if (state.invalid) invalid(owner)
+    const history = new Map<string, GuardedRun[]>()
+    for (const id of ids) {
+      const lock = state.locks[id]
+      if (lock?.owner !== owner) continue
+      verify(state, id)
+      const journal = new GuardedRunJournal({ get: name => store.get(lock.journal + name), set: () => { throw new Error("Read-only history") }, delete: () => { throw new Error("Read-only history") } })
+      const runs = history.get(lock.journal) ?? journal.list(tenant)
+      history.set(lock.journal, runs)
+      for (const run of runs) for (const entry of run.entries) {
+        if (entry.retryAt === undefined) continue
+        if (!Number.isFinite(entry.retryAt) || entry.retryAt < 0) invalid(id)
+        const target = (entry.targetId ?? entry.step.targetId ?? store.get(directoryMappingKey(tenant, entry.step.folder, entry.step.sourceId)) ?? entry.step.sourceId).toLowerCase()
+        if (target === id) state.deadlines[id] = Math.max(state.deadlines[id] ?? 0, entry.retryAt)
+      }
+    }
+  }
   return {
     assertActive,
     discarded: () => !!load().discarded[owner],
@@ -47,10 +67,16 @@ export function directoryObjectState(store: KeyValueStore, tenant: string, owner
       const state = load(); assertActive(state)
       const target = object(step)
       verify(state, target)
+      recoverDeadlines(state, [target])
       acquire(state, target, journal); save(state)
       return state.deadlines[object(step)] || undefined
     },
-    recordThrottle: (step: GuardedStep, retryAt: number) => {
+    retryDeadline: (step: Pick<GuardedStep, "sourceId" | "targetId">): number | undefined => {
+      const state = load(), id = object(step)
+      verify(state, id)
+      return state.deadlines[id] || undefined
+    },
+    recordThrottle: (step: Pick<GuardedStep, "sourceId" | "targetId">, retryAt: number) => {
       const state = load(), id = object(step)
       verify(state, id)
       state.deadlines[id] = Math.max(state.deadlines[id] ?? 0, retryAt); save(state)
@@ -95,16 +121,19 @@ export function directoryObjectState(store: KeyValueStore, tenant: string, owner
     },
     releaseCreated: (ids: string[]) => {
       const state = load()
-      if (state.invalid) return
-      for (const id of ids) if (state.locks[id.toLowerCase()]?.owner === owner) delete state.locks[id.toLowerCase()]
+      recoverDeadlines(state, ids.map(id => id.toLowerCase()))
+      for (const id of ids) {
+        verify(state, id.toLowerCase())
+        if (state.locks[id.toLowerCase()]?.owner === owner) delete state.locks[id.toLowerCase()]
+      }
       save(state)
     },
     release: (discard = false) => {
       const state = load()
-      if (state.invalid) return
+      recoverDeadlines(state)
       if (discard) state.discarded[owner] = true
       for (const [id, lock] of Object.entries(state.locks)) if (lock?.owner === owner) {
-        try { verify(state, id) } catch { continue }
+        verify(state, id)
         delete state.locks[id]
       }
       save(state)

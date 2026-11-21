@@ -1,5 +1,6 @@
+import { directoryRelationshipHistory } from "./directory-relationship-history"
 import { directoryPagePrefix, directoryObjectState } from "./directory-object-state"
-import { DirectoryThrottledError } from "./directory-retry"
+import { DirectoryThrottledError, persistDirectoryRetry } from "./directory-retry"
 import { directory9bIO } from "./directory-9b-io"
 import { applicationObjectStep, applicationRelationshipSteps } from "./directory-9b-plan"
 import { DIRECTORY_9B_FOLDERS, applicationAdmission, applicationReview, requireApplicationRestoreAccess } from "./directory-9b"
@@ -40,9 +41,9 @@ export class DirectoryRestoreService {
     requireRestoreActor(connection.token, { ...connection, recoveryAccountIds: [] })
     const actorFetch: typeof fetch = async (input, init) => {
       const response = await this.fetchImpl(input, init)
-      if (response.status === 429 && onThrottled) {
+      if (response.status === 429) {
         const error = new DirectoryThrottledError(response)
-        onThrottled(error.retryAt!)
+        onThrottled?.(error.retryAt!)
         throw error
       }
       return response
@@ -59,7 +60,7 @@ export class DirectoryRestoreService {
       // Unrelated policy reads are advisory and never add a permission to directory restore.
       if (!granted || INTUNE_TYPES.some(type => type.restoreSafety !== "identity" && !type.singleton && !type.staticIds && !REFERENCE_SCAN_EXCLUDED.has(type.folder) && !canBackUp(type.folder, granted))) throw new Error("Reference scan read access is unavailable")
       return referenceMatches(connection.token, mappings, this.fetchImpl, { signal })
-    })
+    }, undefined, undefined, true, (target, kind) => directoryRelationshipHistory(this.store, tenant, target).removed(kind))
     return { actor, io, applicationIO: directory9bIO(connection.token, actor, this.fetchImpl, () => this.protectedAppIds(tenant), () => this.settings?.get(tenant).entra) }
   }
   private requireAccess(tenant: string, folder: string) {
@@ -76,6 +77,16 @@ export class DirectoryRestoreService {
   }
   private save(page: DirectoryPage) { this.store.set(key(page.run.tenant, page.run.id), JSON.stringify(page)) }
   async prepare(tenant: string, request: IdentityRestoreRequest, options: DirectoryOptions, read: (path: string) => Promise<unknown>) {
+    try { return await this.preparePage(tenant, request, options, read) }
+    catch (error) {
+      if (error instanceof RestoreWriteDeferredError && error.retryAt !== undefined) {
+        const folder = request.path.split("/")[1]!, sourceId = String(request.snapshot.id)
+        if (directoryObjectId(folder, sourceId)) directoryObjectState(this.store, tenant, "").recordThrottle({ sourceId, targetId: directoryMappedId(this.store, tenant, folder, sourceId) }, error.retryAt)
+      }
+      throw error
+    }
+  }
+  private async preparePage(tenant: string, request: IdentityRestoreRequest, options: DirectoryOptions, read: (path: string) => Promise<unknown>) {
     const folder = request.path.split("/")[1]
     if (DIRECTORY_9B_FOLDERS.includes(folder ?? "")) return this.prepareApplications(tenant, request, options, read)
     if (!["Users", "Groups"].includes(folder ?? "") || request.origin !== "restore") fail("Directory restore requires an owned same-tenant backup.")
@@ -223,7 +234,7 @@ export class DirectoryRestoreService {
       try { await io.hydrate(step); review = await io.preview(step) }
       catch (error) {
         // An admitted update must resolve to the saved identity before any preview is persisted.
-        if (!applicationAdmission(step)) throw error
+        if (error instanceof RestoreWriteDeferredError || !applicationAdmission(step)) throw error
         review = applicationReview(step, null, { id: snapshot.id!, displayName: snapshot.displayName ?? "Unresolved application" }, null, actor)
         review.blocker = error instanceof RestoreSafetyError ? error.message : "A reference could not be resolved. This item is blocked."
       }
@@ -238,7 +249,8 @@ export class DirectoryRestoreService {
     return { canDiscard: !directoryObjectState(this.store, page.run.tenant, page.run.id).discarded() && !this.history(page).some(run => run.entries.some(entry => entry.state === "uncertain")), runId: page.run.id, fingerprint: restoreFingerprint({ source: page.run.source!, rows: page.rows as unknown as Item["rows"], options: page.options as unknown as Item }), rows: page.rows, more: page.more, options: page.options }
   }
   async resume(tenant: string, request: IdentityRestoreRequest) {
-    const { actor } = await this.context(tenant), page = this.load(tenant, request.runId!)
+    const page = this.load(tenant, request.runId!)
+    const { actor } = await this.context(tenant, retryAt => this.recordPageThrottle(page, retryAt))
     if (request.origin !== "restore" || page.run.origin !== request.origin || page.run.source?.path !== request.path || page.run.source.fingerprint !== restoreFingerprint(request.snapshot) || actor.userId !== page.run.actor.userId || actor.clientId !== page.run.actor.clientId) fail("Resume the original backup with the admin and connection that reviewed it.")
     return this.view(page)
   }
@@ -263,12 +275,7 @@ export class DirectoryRestoreService {
     }
     const page = this.load(tenant, request.runId!)
     if (request.origin !== "restore" || page.run.origin !== request.origin || page.run.source?.path !== request.path || page.run.source.fingerprint !== restoreFingerprint(request.snapshot) || this.view(page).fingerprint !== fingerprint) fail("The backup or preview changed. Preview this object again.")
-    const context = await this.context(tenant, retryAt => {
-      // A refused actor lookup cannot settle an earlier dispatch. Keep its lock,
-      // but let every later reviewed plan inherit the tenant/object deadline.
-      const objects = directoryObjectState(this.store, tenant, page.run.id)
-      for (const { step } of page.run.entries) objects.recordThrottle({ ...step, targetId: step.targetId ?? directoryMappedId(this.store, tenant, step.folder, step.sourceId) }, retryAt)
-    }), actor = context.actor
+    const context = await this.context(tenant, retryAt => this.recordPageThrottle(page, retryAt)), actor = context.actor
     const rawIO = DIRECTORY_9B_FOLDERS.includes(request.path.split("/")[1]!) ? context.applicationIO : context.io
     const io = { ...rawIO, write: ((step, body, targetId, beforeSend, run, signal, onUnapplied) => rawIO.write(step, body, targetId, () => {
       this.requireAccess(tenant, step.folder)
@@ -287,6 +294,17 @@ export class DirectoryRestoreService {
       return { entries: entries.slice(start, end), next: end < entries.length ? String(end) : null }
     } }, io, operationSignal)
     return this.results(page, result)
+  }
+  private recordPageThrottle(page: DirectoryPage, retryAt: number) {
+    const objects = directoryObjectState(this.store, page.run.tenant, page.run.id)
+    const runs = this.history(page)
+    const steps = runs.length ? runs.flatMap(run => run.entries.map(entry => ({ ...entry.step, targetId: entry.targetId ?? entry.step.targetId ?? directoryMappedId(this.store, run.tenant, entry.step.folder, entry.step.sourceId) }))) : page.run.entries.map(({ step }) => ({ ...step, targetId: step.targetId ?? directoryMappedId(this.store, page.run.tenant, step.folder, step.sourceId) }))
+    persistDirectoryRetry(() => {
+      for (const [batch, run] of runs.entries()) {
+        for (const entry of run.entries) entry.retryAt = Math.max(entry.retryAt ?? 0, retryAt)
+        new GuardedRunJournal({ get: name => this.store.get(directoryPagePrefix(run.tenant, run.id) + `batch.${batch}.` + name), set: (name, value) => this.store.set(directoryPagePrefix(run.tenant, run.id) + `batch.${batch}.` + name, value), delete: () => fail("History cannot be deleted.") }).save(run)
+      }
+    }, () => { for (const step of steps) objects.recordThrottle(step, retryAt) })
   }
   private history(page: DirectoryPage) {
     const prefix = directoryPagePrefix(page.run.tenant, page.run.id)
@@ -312,13 +330,14 @@ export class DirectoryRestoreService {
     const controller = new AbortController()
     this.running.set(runningKey, controller)
     try {
-      const context = await this.context(tenant)
+      const context = await this.context(tenant, retryAt => this.recordPageThrottle(page, retryAt))
       if (context.actor.userId !== page.run.actor.userId || context.actor.clientId !== page.run.actor.clientId) fail("Use the admin and connection that reviewed this page.")
       const state = directoryObjectState(this.store, tenant, id)
       if (action === "discard") {
         state.recoverMappings(page.run.entries.map(entry => entry.step))
         if (this.history(page).some(run => run.entries.some(entry => entry.state === "uncertain"))) fail("Confirm the uncertain result before discarding this saved restore.")
         state.release(true)
+        if (!state.discarded()) fail("The discard marker could not be verified. This page remains saved.")
         return { discarded: true, canDiscard: false }
       }
       const entries = page.run.entries.filter(entry => page.selection?.includes(entry.step.key))

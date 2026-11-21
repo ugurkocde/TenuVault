@@ -640,7 +640,11 @@ it.each(["empty", "unparseable", "unknown", "invalid object", "invalid journal"]
   const coordinator = `restore.directory.coordinator.${tenant}`
   const raw = kind === "empty" ? "" : kind === "unparseable" ? "{" : kind === "unknown" ? JSON.stringify({ oldOwner: "unknown" }) : JSON.stringify({ locks: { [resource]: kind === "invalid object" ? { owner: 5 } : { owner: page.runId, journal: "unknown" } }, deadlines: {}, discarded: {} })
   env.data.set(coordinator, raw)
-  expect(await env.service().execute(tenant, { ...request, runId: page.runId }, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])))).toMatchObject({ outcomes: [{ state: "blocked", reason: expect.stringContaining(`state for object ${resource} could not be verified`) }] })
+  const execution = env.service().execute(tenant, { ...request, runId: page.runId }, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])))
+  if (kind === "invalid object") await execution
+  else await expect(execution).rejects.toThrow("could not be verified")
+  const journal = JSON.parse(env.data.get(`restore.directory.${tenant}.${page.runId}.batch.0.restore.guarded.${tenant}`)!)
+  expect(journal.runs[page.runId]).toMatchObject({ entries: [{ state: "blocked", reason: expect.stringContaining(`state for object ${resource} could not be verified`) }] })
   expect(env.data.get(coordinator)).toBe(raw); expect(env.writes).toEqual([])
 })
 
@@ -653,7 +657,7 @@ it("ignores unrelated damaged coordinator records and obsolete directory state",
   expect(env.writes).toEqual([`PATCH groups/${resource}`])
 })
 
-it("keeps a read-back throttle on the recreated live identity after confirmation and discard", async () => {
+it.each(["actor", "read-back"])("keeps a %s throttle on the recreated live identity after confirmation and discard", async phase => {
   const env = world(0, true), create = await env.service().prepare(tenant, env.request, options, env.read)
   const execute = (p: typeof create, request = env.request) => env.service().execute(tenant, { ...request, runId: p.runId }, p.fingerprint, Object.fromEntries(p.rows.map(row => [row.key, row.review.approvals])))
   await execute(create)
@@ -662,7 +666,7 @@ it("keeps a read-back throttle on the recreated live identity after confirmation
   let throttle = false, sends = 0
   env.fetcher.mockImplementation((input, init) => {
     if (init?.method === "PATCH") { sends++; return Promise.resolve(new Response(null, { status: 503 })) }
-    if (throttle && new URL(String(input)).pathname === `/v1.0/groups/${id(900)}`) { throttle = false; return Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "120" } })) }
+    if (throttle && new URL(String(input)).pathname === (phase === "actor" ? "/v1.0/applications" : `/v1.0/groups/${id(900)}`)) { throttle = false; return Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "120" } })) }
     return original(input, init)
   })
   vi.useFakeTimers()
@@ -670,7 +674,10 @@ it("keeps a read-back throttle on the recreated live identity after confirmation
     expect(await execute(page, request)).toMatchObject({ outcomes: [{ state: "uncertain" }] })
     throttle = true
     const deadline = Date.now() + 120_000
-    expect(await env.service().saved(tenant, page.runId, "reconcile")).toMatchObject({ outcomes: [{ state: "uncertain", retryAt: deadline }] })
+    if (phase === "actor") await expect(env.service().saved(tenant, page.runId, "reconcile")).rejects.toThrow("throttled")
+    else expect(await env.service().saved(tenant, page.runId, "reconcile")).toMatchObject({ outcomes: [{ state: "uncertain", retryAt: deadline }] })
+    const journal = JSON.parse(env.data.get(`restore.directory.${tenant}.${page.runId}.batch.0.restore.guarded.${tenant}`)!)
+    expect(journal.runs[page.runId].entries[0]).toMatchObject({ state: "uncertain", retryAt: deadline, targetId: id(900) })
     const state = JSON.parse(env.data.get(`restore.directory.coordinator.${tenant}`)!)
     expect(state.deadlines[id(900)]).toBe(deadline); expect(state.deadlines[resource]).toBeUndefined()
     env.group.description = "Saved"
@@ -681,4 +688,115 @@ it("keeps a read-back throttle on the recreated live identity after confirmation
     expect(await execute(replacement, newer)).toMatchObject({ outcomes: [{ state: "deferred", retryAt: deadline }] })
     expect(sends).toBe(1)
   } finally { vi.useRealTimers() }
+})
+
+it.each(["same batch", "next batch", "next page", "another page"])("excludes confirmed removals from lagging survivor reads across %s and restarts", async scope => {
+  const count = scope === "next batch" ? 21 : scope === "next page" ? 51 : 2
+  const env = world(), original = env.fetcher.getMockImplementation()!, lagging = Array.from({ length: count }, (_, n) => id(100 + n))
+  for (const member of lagging) env.members.add(member)
+  env.fetcher.mockImplementation((input, init) => {
+    const url = new URL(String(input))
+    if (url.pathname.includes("conditionalAccess")) return Promise.resolve(Response.json({ value: [{ conditions: { users: { includeGroups: [resource], excludeGroups: [] } } }] }))
+    if (url.pathname === `/beta/groups/${resource}/members`) return Promise.resolve(Response.json(url.searchParams.get("$skiptoken") ? { value: lagging.slice(1).map(id => ({ id })) } : { value: [{ id: lagging[0] }], "@odata.nextLink": `https://graph.microsoft.com/beta/groups/${resource}/members?$select=id&$top=999&$skiptoken=second` }))
+    return original(input, init)
+  })
+  const exact = { ...options, stage: "relationships" as const, exactMembers: true }, first = await env.service().prepare(tenant, env.request, exact, env.read)
+  const next = scope === "next page" ? await env.service().prepare(tenant, env.request, { ...exact, previousRunId: first.runId }, env.read) : scope === "another page" ? await env.service().prepare(tenant, env.request, exact, env.read) : first
+  const execute = (page: typeof first, keys = page.rows.map(row => row.key)) => env.service().execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, Object.fromEntries(page.rows.filter(row => keys.includes(row.key)).map(row => [row.key, row.review.approvals])))
+  expect(first.rows.every(row => !row.review.blocker)).toBe(true)
+  if (scope === "another page") {
+    expect(await execute(first, [first.rows[0]!.key])).toMatchObject({ status: "complete", outcomes: [{ state: "applied" }] })
+    expect(await execute(next, [next.rows[1]!.key])).toMatchObject({ outcomes: [{ state: "deferred" }] })
+  } else {
+    const result = await execute(first)
+    expect(result.outcomes.filter(row => row.state === "applied")).toHaveLength(Math.min(count - 1, 50))
+    if (scope === "next page") expect(await execute(next)).toMatchObject({ outcomes: [{ state: "deferred" }] })
+    else expect(result.outcomes.at(-1)?.state).toBe("deferred")
+  }
+  expect(env.members.size).toBe(1); expect(env.members.has(lagging.at(-1)!)).toBe(true)
+  expect(await execute(next, scope === "another page" ? [next.rows[1]!.key] : undefined)).toMatchObject({ outcomes: expect.arrayContaining([{ key: next.rows.at(-1)!.key, state: "deferred", reason: undefined, targetId: undefined, retryAt: undefined }]) })
+  expect(env.writes).toHaveLength(count - 1)
+})
+
+it("defers a survivor check when a recorded removal journal cannot be read", async () => {
+  const env = world(), original = env.fetcher.getMockImplementation()!
+  env.members.add(id(100)); env.members.add(id(101))
+  env.fetcher.mockImplementation((input, init) => String(input).includes("conditionalAccess") ? Promise.resolve(Response.json({ value: [{ conditions: { users: { includeGroups: [resource], excludeGroups: [] } } }] })) : original(input, init))
+  const page = await env.service().prepare(tenant, env.request, { ...options, stage: "relationships", exactMembers: true }, env.read)
+  env.data.set(`restore.directory.relationship-history.${tenant}.${resource}`, JSON.stringify(`restore.directory.${tenant}.${id(999)}.batch.0.`))
+  expect(await env.service().execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])))).toMatchObject({ failed: 0, outcomes: [{ state: "deferred" }, { state: "deferred" }] })
+  expect(env.writes).toEqual([])
+})
+
+it.each(["uncertain", "applied"].flatMap(state => ["cycle", "missing", "prerequisite"].map(dependency => ({ state, dependency }))))("never blocks a $state entry for a $dependency dependency during saved confirmation", async ({ state, dependency }) => {
+  const env = world(2), page = await env.service().prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read)
+  const original = env.fetcher.getMockImplementation()!
+  let sends = 0
+  env.fetcher.mockImplementation((input, init) => {
+    if (init?.method === "POST" && ++sends === 2 && state === "uncertain") return Promise.resolve(new Response(null, { status: 503 }))
+    return original(input, init)
+  })
+  expect(await env.service().execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])))).toMatchObject({ outcomes: [{ state: "applied" }, { state }] })
+  const prefix = `restore.directory.${tenant}.${page.runId}.batch.0.`, key = prefix + `restore.guarded.${tenant}`
+  const journal = JSON.parse(env.data.get(key)!), run = journal.runs[page.runId], entry = run.entries[1]
+  entry.step.requires = [dependency === "cycle" ? entry.step.key : dependency === "missing" ? "missing" : run.entries[0].step.key]
+  if (dependency === "prerequisite") run.entries[0].state = "failed"
+  env.data.set(key, JSON.stringify(journal))
+  const plan = JSON.parse(env.data.get(prefix + "plan")!)
+  plan.entries[1].step = entry.step
+  env.data.set(prefix + "plan", JSON.stringify(plan))
+  expect(await env.service().saved(tenant, page.runId, "reconcile")).toMatchObject({ outcomes: [{}, { state }] })
+  expect(JSON.parse(env.data.get(key)!).runs[page.runId].entries[1].state).toBe(state)
+  expect(sends).toBe(2)
+})
+
+it("refuses release of a confirmed create when coordinator state becomes invalid", async () => {
+  const env = world(0, true), page = await env.service().prepare(tenant, env.request, options, env.read), set = env.store.set
+  vi.spyOn(env.store, "set").mockImplementation((key, value) => {
+    set(key, value)
+    if (key.startsWith("restore.directory.mapping.")) env.data.set(`restore.directory.coordinator.${tenant}`, "{")
+  })
+  await expect(env.service().execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])))).rejects.toThrow("could not be verified")
+  const journal = JSON.parse(env.data.get(`restore.directory.${tenant}.${page.runId}.batch.0.restore.guarded.${tenant}`)!)
+  expect(journal.runs[page.runId].entries[0]).toMatchObject({ state: "applied", targetId: id(900) })
+  expect(env.data.get(`restore.directory.coordinator.${tenant}`)).toBe("{")
+  expect(env.writes).toEqual(["POST groups"])
+})
+
+it.each(["throw", "drop"])("reports discard only after its marker is durably saved despite a %s failure", async failure => {
+  const env = world(), request = { ...env.request, snapshot: { ...env.request.snapshot, description: "Saved" } }, page = await env.service().prepare(tenant, request, options, env.read)
+  const set = env.store.set
+  const spy = vi.spyOn(env.store, "set").mockImplementation((key, value) => {
+    if (key === `restore.directory.coordinator.${tenant}` && JSON.parse(value).discarded[page.runId]) {
+      if (failure === "throw") throw new Error("Discard storage unavailable")
+      return
+    }
+    set(key, value)
+  })
+  await expect(env.service().saved(tenant, page.runId, "discard")).rejects.toThrow(failure === "throw" ? "Discard storage unavailable" : "discard marker could not be verified")
+  expect(env.data.get(`restore.directory.coordinator.${tenant}`)).toBeUndefined()
+  expect((await env.service().resume(tenant, { ...request, runId: page.runId })).canDiscard).toBe(true)
+  spy.mockRestore()
+  expect(await env.service().saved(tenant, page.runId, "discard")).toEqual({ discarded: true, canDiscard: false })
+  expect(JSON.parse(env.data.get(`restore.directory.coordinator.${tenant}`)!).discarded[page.runId]).toBe(true)
+  expect(env.writes).toEqual([])
+})
+
+it("counts a confirmed re-added member as a survivor after an earlier restore removal", async () => {
+  const env = world(2), original = env.fetcher.getMockImplementation()!
+  env.members.add(id(100)); env.members.add(id(101))
+  env.fetcher.mockImplementation((input, init) => String(input).includes("conditionalAccess") ? Promise.resolve(Response.json({ value: [{ conditions: { users: { includeGroups: [resource], excludeGroups: [] } } }] })) : original(input, init))
+  const empty = { ...env.request, snapshot: { ...env.request.snapshot, members: { ...env.request.snapshot.owners } } }
+  const execute = async (request: typeof env.request, principal: string, exactMembers: boolean) => {
+    const page = await env.service().prepare(tenant, request, { ...options, stage: "relationships", exactMembers }, request === empty ? async () => [] : env.read)
+    const row = page.rows.find(row => row.review.principal?.id === principal)!
+    expect(row.review.blocker).toBeUndefined()
+    expect(await env.service().execute(tenant, { ...request, runId: page.runId }, page.fingerprint, { [row.key]: row.review.approvals })).toMatchObject({ status: "complete", outcomes: [{ state: "applied" }] })
+  }
+  await execute(empty, id(101), true)
+  expect([...env.members]).toEqual([id(100)])
+  await execute(env.request, id(101), false)
+  await execute(empty, id(100), true)
+  expect([...env.members]).toEqual([id(101)])
+  expect(env.writes).toEqual([`DELETE groups/${resource}/members/${id(101)}/$ref`, `POST groups/${resource}/members/$ref`, `DELETE groups/${resource}/members/${id(100)}/$ref`])
 })

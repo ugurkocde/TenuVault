@@ -15,7 +15,7 @@ export async function checkDirectoryRestore({ check, evaluate, waitForCondition,
           if (body.action === 'reconcile') {
             window.__directoryConfirmCount = (window.__directoryConfirmCount || 0) + 1;
             const uncertain = window.__directoryConfirmCount === 1;
-            return Promise.resolve(Response.json({ status: 'partial', canDiscard: !uncertain, outcomes: [{ key: 'member', state: 'deferred', retryAt: Date.now() + 120000 }, ...(uncertain ? [{ key: 'unconfirmed', state: 'uncertain' }] : [])] }));
+            return Promise.resolve(Response.json({ status: 'partial', canDiscard: !uncertain, outcomes: [{ key: 'member', state: 'deferred', retryAt: Date.now() + 120000 }, ...(uncertain ? [{ key: 'unconfirmed', state: 'uncertain', retryAt: Date.now() + 120000 }] : [])] }));
           }
           return Promise.resolve(Response.json(body.action === 'preview' ? { runId: 'reviewed-directory-page', fingerprint: 'bound-directory-page', more: true, rows: [{ key: 'member', review: { principal: { id: 'p', name: 'Recovery member', type: 'user' }, resource: { id: 'g', name: 'Recovery security group', type: 'group' }, privilege: 'member', scope: 'tenant/group/00000000-0000-4000-8000-000000000010', approvals: ['directory-item', 'security-response'], notices: ['The current state looks deliberate. This restore may undo a security response.'], changes: [{ property: 'present', before: false, after: true }], roleAssignable: false } }] } : { status: 'complete', failed: 0 }));
         }
@@ -48,7 +48,7 @@ export async function checkDirectoryRestore({ check, evaluate, waitForCondition,
       assert(await waitForCondition(`document.body.innerText.includes('Directory page completed')`), "directory result did not appear")
       assert(await evaluate(`window.__directoryRequests[1].runId === 'reviewed-directory-page' && window.__directoryRequests[1].fingerprint === 'bound-directory-page' && window.__directoryRequests[1].approvals.member.length === 2`), "directory execution was not bound to individual approvals")
       await click("Confirm this page's results")
-      assert(await waitForCondition(`document.body.innerText.includes('Throttled by Microsoft Graph. Earliest retry:') && document.body.innerText.includes('The result is being confirmed.')`), "directory deferred and uncertain wording is missing")
+      assert(await waitForCondition(`document.body.innerText.includes('Throttled by Microsoft Graph. Earliest retry:') && document.body.innerText.includes('The result is being confirmed. Earliest retry:')`), "directory deferred and uncertain wording is missing")
       assert(await evaluate(`![...document.querySelectorAll('button')].some(b => b.innerText === 'Discard saved restore')`), "uncertain page offers discard")
       await click("Confirm this page's results")
       assert(await waitForCondition(`[...document.querySelectorAll('button')].some(b => b.innerText === 'Discard saved restore' && !b.disabled)`), "resolved page cannot discard")

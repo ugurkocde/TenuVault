@@ -1,3 +1,4 @@
+import { directoryRelationshipHistory } from "./directory-relationship-history"
 import type { PartitionedRestoreStore } from "../storage/directory-restore-store"
 import type { KeyValueStore } from "../storage/secure-store"
 import { GuardedRunJournal, executeGuardedRun, restoreFingerprint, type GuardedRun, type GuardedIO } from "./guarded-run"
@@ -47,15 +48,29 @@ export async function executeDirectoryBatches(store: PartitionedRestoreStore, id
     const guardedIO: GuardedIO = { ...io, prepareStep: step => {
       if (journal.load(identity.tenant, identity.id)?.entries.some(entry => entry.state === "uncertain" && (entry.targetId ?? entry.step.targetId ?? entry.step.sourceId).toLowerCase() === (effective(step).targetId ?? step.sourceId).toLowerCase())) throw new RestoreWriteDeferredError("This page has an unanswered write for this object. Confirm its result first.")
       objectState.recoverMappings([effective(step)])
-      return objectState.prepare(effective(step), batchKey)
+      const retryAt = objectState.prepare(effective(step), batchKey)
+      if (["member", "owner"].includes(step.directory?.action ?? "")) directoryRelationshipHistory(store, identity.tenant, effective(step).targetId ?? step.sourceId).track(batchKey)
+      return retryAt
     }, defer: (step, retryAt) => objectState.recordThrottle(effective(step), retryAt),
       write: (step, body, targetId, beforeSend, currentRun, writeSignal, onUnapplied) =>
         io.write(step, body, targetId, () => { objectState.beforeSend(effective(step)); beforeSend() }, currentRun, writeSignal, onUnapplied),
     }
+    // A failed throttle journal save can leave only the earlier uncertain marker.
+    // Restore the coordinator deadline before confirmation can settle and release it.
+    const persisted = journal.load(identity.tenant, identity.id)
+    if (persisted) {
+      let changed = false
+      for (const entry of persisted.entries.filter(entry => entry.state === "uncertain")) {
+        const retryAt = objectState.retryDeadline({ ...effective(entry.step), targetId: entry.targetId ?? effective(entry.step).targetId })
+        if (retryAt !== undefined && retryAt > (entry.retryAt ?? 0)) { entry.retryAt = retryAt; changed = true }
+      }
+      if (changed) journal.save(persisted)
+    }
     const result = await executeGuardedRun(journal, run, guardedIO, signal, reconcileOnly)
     objectState.recoverMappings(result.run.entries.filter(entry => entry.step.operation === "create" && entry.state === "applied").map(entry => entry.step))
     // A confirmed create is resolved once both identities and its mapping are durable.
-    objectState.releaseCreated(result.run.entries.filter(entry => entry.step.operation === "create" && entry.state === "applied").flatMap(entry => [entry.step.sourceId, entry.targetId!]))
+    const created = result.run.entries.filter(entry => entry.step.operation === "create" && entry.state === "applied").flatMap(entry => [entry.step.sourceId, entry.targetId!])
+    if (created.length) objectState.releaseCreated(created)
     if (result.run.entries.some(entry => ["pending", "captured", "deferred", "uncertain"].includes(entry.state))) return { status: "partial", batches: state.batch, failed: state.failed }
     state.warning ||= !!result.run.referenceWarning
     state.failed += result.run.entries.filter(entry => entry.state !== "applied").length

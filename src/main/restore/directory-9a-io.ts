@@ -33,7 +33,7 @@ export function directoryPermissions(step: GuardedStep): string[] {
   return action === "create" ? ["User.Create"] : ["User.ReadUpdate.All", ...(step.desired.accountEnabled !== undefined ? ["User.EnableDisableAccount.All", "User.Read.All"] : [])]
 }
 /** The same operation evidence gates the preview and the final transport. */
-export function directory9aIO(token: string, actor: RestoreActor, safety: GuardedIO["references"], fetchImpl: typeof fetch = fetch, scan?: GuardedIO["replacedReferences"], wait?: (ms: number) => Promise<void>, signal?: AbortSignal, retryReads = true): GuardedIO & { review: (step: GuardedStep, preimage?: Item | null) => Promise<ReturnType<typeof directoryReview>>; ids: (id: string, kind: "members" | "owners") => AsyncIterable<string>; locate: (folder: "Users" | "Groups", sourceId: string) => Promise<{ action: "update" | "recycle" | "create"; current: Item | null }> } {
+export function directory9aIO(token: string, actor: RestoreActor, safety: GuardedIO["references"], fetchImpl: typeof fetch = fetch, scan?: GuardedIO["replacedReferences"], wait?: (ms: number) => Promise<void>, signal?: AbortSignal, retryReads = true, removedRelationships?: (target: string, kind: "members" | "owners") => Set<string>): GuardedIO & { review: (step: GuardedStep, preimage?: Item | null) => Promise<ReturnType<typeof directoryReview>>; ids: (id: string, kind: "members" | "owners") => AsyncIterable<string>; locate: (folder: "Users" | "Groups", sourceId: string) => Promise<{ action: "update" | "recycle" | "create"; current: Item | null }> } {
   requireRestoreActor(token, actor)
   // Preview inventories can retry individual reads. Journalled execution uses raw
   // reads so every throttle reaches its durable entry or restarts the whole writer.
@@ -207,7 +207,14 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
     if (included && intent.action === "member" && step.desired.present === false) {
       let survivor = false
       // Consume every page: a partial read must never establish that a CA target stays populated.
-      for await (const id of ids(step.targetId ?? step.sourceId, "members")) if (id !== intent.principalId) survivor = true
+      const removed = removedRelationships?.(step.targetId ?? step.sourceId, "members") ?? new Set<string>()
+      try {
+        for await (const id of ids(step.targetId ?? step.sourceId, "members")) if (id.toLowerCase() !== intent.principalId?.toLowerCase() && !removed.has(id.toLowerCase())) survivor = true
+      } catch (error) {
+        if (error instanceof RestoreWriteDeferredError) throw error
+        throw new RestoreWriteDeferredError("A complete membership read could not establish a remaining member. Resume to repeat safety checks.")
+      }
+      if (!survivor && removed.size) throw new RestoreWriteDeferredError("Saved removals leave no verified member in this Conditional Access target group. Resume after its membership is resolved.")
       emptiesTarget = !survivor
     }
     const compared = ["member", "owner", "manager", "license"].includes(intent.action) ? { ...resource, ...(preimage === undefined ? await read(step, step.targetId) : preimage) } : resource
@@ -234,7 +241,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
   return {
     ids,
     token, type: folder => typeForFolder(folder)!, ...(scan ? { replacedReferences: scan } : {}), review,
-    read: (step, id, readSignal) => retryReads || (readSignal && readSignal !== signal) ? directory9aIO(token, actor, safety, fetchImpl, scan, wait, readSignal ?? signal, false).read(step, id, readSignal) : read(step, id),
+    read: (step, id, readSignal) => retryReads || (readSignal && readSignal !== signal) ? directory9aIO(token, actor, safety, fetchImpl, scan, wait, readSignal ?? signal, false, removedRelationships).read(step, id, readSignal) : read(step, id),
     locate: async (folder, sourceId) => {
       const path = `${folder === "Users" ? "users" : "groups"}/${identity(sourceId)}`
       const current = await request(path)
@@ -247,7 +254,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
       return (await find(step)).map(item => step.directory?.action === "invite" ? { id: item.id!, ...sent } : item)
     },
     references: async (step, current, desired, readSignal) => {
-      if (retryReads || (readSignal && readSignal !== signal)) return directory9aIO(token, actor, safety, fetchImpl, scan, wait, readSignal ?? signal, false).references(step, current, desired, readSignal)
+      if (retryReads || (readSignal && readSignal !== signal)) return directory9aIO(token, actor, safety, fetchImpl, scan, wait, readSignal ?? signal, false, removedRelationships).references(step, current, desired, readSignal)
       const result = await review(step)
       if (result.blocker) throw new RestoreSafetyError(result.blocker)
       const refs = await safety(step, current, desired)
@@ -255,7 +262,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
       return refs
     },
     write: async (step, body, targetId, beforeSend, run, writeSignal, onUnapplied) => {
-      if (retryReads || (writeSignal && writeSignal !== signal)) return directory9aIO(token, actor, safety, fetchImpl, scan, wait, writeSignal ?? signal, false).write(step, body, targetId, beforeSend, run, writeSignal, onUnapplied)
+      if (retryReads || (writeSignal && writeSignal !== signal)) return directory9aIO(token, actor, safety, fetchImpl, scan, wait, writeSignal ?? signal, false, removedRelationships).write(step, body, targetId, beforeSend, run, writeSignal, onUnapplied)
       return retryDirectoryWrite(async () => {
         if (signal?.aborted) throw new RestoreWriteDeferredError("The directory write was cancelled before sending.")
         requireRestoreActor(token, actor)

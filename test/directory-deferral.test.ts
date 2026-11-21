@@ -283,3 +283,77 @@ it.each(folders.flatMap(folder => ["initial", "final"].flatMap(phase => ["body r
     expect(env.writes).toEqual([{ [env.field]: "Saved" }])
   }
 })
+
+it.each(folders.flatMap(folder => ["journal", "coordinator"].map(record => ({ folder, record }))))("keeps $folder deferred and locked after one $record deadline save failure", async ({ folder, record }) => {
+  const env = world(folder), request = env.request(), page = await env.prepare(request), original = env.graph.getMockImplementation()!
+  let sends = 0, failures = 0
+  env.graph.mockImplementation((input, init) => init?.method === "PATCH" && ++sends === 1 ? Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
+  vi.useFakeTimers()
+  const deadline = Date.now() + 120_000, set = env.store.set
+  vi.spyOn(env.store, "set").mockImplementation((key, value) => {
+    if (key.includes(record === "journal" ? ".restore.guarded." : "coordinator.") && value.includes(String(deadline)) && failures++ === 0) throw new Error("One storage failure")
+    set(key, value)
+  })
+  expect(await env.execute(page, request)).toMatchObject({ failed: 0, outcomes: [{ state: "deferred", retryAt: deadline }] })
+  expect(failures).toBeGreaterThan(1)
+  expect(env.entry(page)).toMatchObject({ state: "deferred", retryAt: deadline })
+  expect(JSON.parse(env.data.get(`restore.directory.coordinator.${tenant}`)!).deadlines[targetId]).toBe(deadline)
+  expect(env.locks()).toEqual([targetId]); expect(sends).toBe(1)
+  await env.service().saved(tenant, page.runId, "discard")
+  const replacementRequest = env.request("newer", "Newer"), replacement = await env.prepare(replacementRequest)
+  expect(await env.execute(replacement, replacementRequest)).toMatchObject({ outcomes: [{ state: "deferred", retryAt: deadline }] })
+  expect(sends).toBe(1)
+})
+
+it.each(["journal", "coordinator"])("recovers the deadline from the surviving %s record before discard releases ownership", async surviving => {
+  const env = world("Groups"), request = env.request(), page = await env.prepare(request), original = env.graph.getMockImplementation()!
+  let sends = 0
+  env.graph.mockImplementation((input, init) => init?.method === "PATCH" && ++sends === 1 ? Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
+  vi.useFakeTimers()
+  const deadline = Date.now() + 120_000, set = env.store.set
+  const spy = vi.spyOn(env.store, "set").mockImplementation((key, value) => {
+    if (key.includes(surviving === "journal" ? "coordinator." : ".restore.guarded.") && value.includes(String(deadline))) throw new Error("Storage unavailable")
+    set(key, value)
+  })
+  await expect(env.execute(page, request)).rejects.toThrow("retry deadline could not be saved")
+  expect(env.locks()).toEqual([targetId])
+  expect(env.entry(page).state).toBe(surviving === "journal" ? "deferred" : "uncertain")
+  spy.mockRestore()
+  if (surviving === "coordinator") {
+    // A persistent journal outage retains the send marker. Matching read-back is needed before discard.
+    env.live.description = "Saved"
+    await env.service().saved(tenant, page.runId, "reconcile")
+    expect(env.entry(page)).toMatchObject({ state: "applied", retryAt: deadline })
+  }
+  await env.service().saved(tenant, page.runId, "discard")
+  expect(JSON.parse(env.data.get(`restore.directory.coordinator.${tenant}`)!).deadlines[targetId]).toBe(deadline)
+  const replacementRequest = env.request("newer", "Newer"), replacement = await env.prepare(replacementRequest)
+  expect(await env.execute(replacement, replacementRequest)).toMatchObject({ outcomes: [{ state: "deferred", retryAt: deadline }] })
+  expect(sends).toBe(1)
+})
+
+it.each(folders.flatMap(folder => ["preview", "execute", "resume", "reconcile", "discard"].map(action => ({ folder, action }))))("persists $folder $action actor-read throttles and never sends before the deadline", async ({ folder, action }) => {
+  const env = world(folder), request = env.request(), page = await env.prepare(request), original = env.graph.getMockImplementation()!
+  let throttle = false, sends = 0
+  env.graph.mockImplementation((input, init) => {
+    if (throttle && new URL(String(input)).pathname === "/v1.0/applications") return Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "120" } }))
+    if (init?.method === "PATCH") { sends++; return Promise.resolve(new Response(null, { status: 503 })) }
+    return original(input, init)
+  })
+  if (action === "reconcile" || action === "discard") expect(await env.execute(page, request)).toMatchObject({ outcomes: [{ state: "uncertain" }] })
+  vi.useFakeTimers()
+  const deadline = Date.now() + 120_000
+  throttle = true
+  await expect(action === "preview" ? env.prepare(request) : action === "execute" ? env.execute(page, request) : action === "resume" ? env.service().resume(tenant, { ...request, runId: page.runId }) : env.service().saved(tenant, page.runId, action as "reconcile" | "discard")).rejects.toThrow("throttled")
+  expect(JSON.parse(env.data.get(`restore.directory.coordinator.${tenant}`)!).deadlines[targetId]).toBe(deadline)
+  if (action === "reconcile" || action === "discard") expect(env.entry(page)).toMatchObject({ state: "uncertain", retryAt: deadline, targetId })
+  throttle = false
+  if (action === "reconcile" || action === "discard") {
+    env.live[env.field] = "Saved"
+    await env.service().saved(tenant, page.runId, "reconcile")
+    await env.service().saved(tenant, page.runId, "discard")
+  }
+  const newerRequest = env.request("newer", "Newer"), newer = await env.prepare(newerRequest)
+  expect(await env.execute(newer, newerRequest)).toMatchObject({ outcomes: [{ state: "deferred", retryAt: deadline }] })
+  expect(sends).toBe(action === "reconcile" || action === "discard" ? 1 : 0)
+})

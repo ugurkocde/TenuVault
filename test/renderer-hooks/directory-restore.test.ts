@@ -75,7 +75,7 @@ it("shows Graph throttle deadlines, confirms uncertain results and offers discar
   expect(button("Discard saved restore")).toBeDefined()
   await act(async () => document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]').forEach(input => input.click()))
   await click("Execute approved changes or resume page")
-  expect(document.body.textContent).toContain("The result is being confirmed.")
+  expect(document.body.textContent).toContain(`The result is being confirmed. Earliest retry: ${new Date(retryAt).toLocaleString()}.`)
   expect(button("Discard saved restore")).toBeUndefined()
   await click("Confirm this page's results")
   expect(document.body.textContent).toContain("Throttled by Microsoft Graph. Earliest retry:")
