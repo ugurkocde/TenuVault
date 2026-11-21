@@ -480,3 +480,47 @@ it("retains review rows and enables Resume for the displayed page after confirma
   expect(JSON.parse(String(fetcher.mock.calls.at(-1)![1]?.body))).toMatchObject({ action: "resume", runId: "run", ...savedOptions })
   expect((button("Execute approved changes or resume page") as HTMLButtonElement).disabled).toBe(false)
 })
+
+it.each([false, true])("discards an entered saved page locally without confirmation when token refresh is unavailable, saved-only=%s", async savedOnly => {
+  const { DirectoryRestoreService } = await import("../../src/main/restore/directory-service")
+  const { RecoveryAccounts } = await import("../../src/main/restore/safety-resolvers")
+  const { GuardedRunJournal } = await import("../../src/main/restore/guarded-run")
+  const runId = "00000000-0000-4000-8000-000000000025", sourceId = "00000000-0000-4000-8000-000000000010"
+  const owner = { tenantId: tenant.credentials.tenantId, userId: "cached-admin", clientId: tenant.credentials.appId }
+  const data = new Map<string, string>(), store = { partitioned: true as const, get: (key: string) => data.get(key) ?? null, set: (key: string, value: string) => { data.set(key, value) }, delete: (key: string) => { data.delete(key) } }
+  const saved: import("../../src/main/restore/directory-service").DirectoryPage = {
+    run: { version: 1, id: runId, tenant: owner.tenantId, actor: { ...owner, recoveryAccountIds: [] }, origin: "restore", source: { path: props.path, fingerprint: "saved-source" }, mappings: [], entries: [{ state: "deferred", step: { key: "member", folder: "Groups", sourceId, operation: "update", properties: ["description"], desired: { description: "Saved" }, preview: "saved-preview", requires: [] } }] },
+    rows: page.rows, more: false, selection: ["member"], options: { stage: "object", exactMembers: false, exactOwners: false },
+  }
+  store.set(`restore.directory.review.${owner.tenantId}.${runId}`, JSON.stringify(saved))
+  const prefix = `restore.directory.${owner.tenantId}.${runId}.batch.0.`
+  new GuardedRunJournal({ get: key => store.get(prefix + key), set: (key, value) => store.set(prefix + key, value), delete: key => store.delete(prefix + key) }).save(saved.run)
+  const coordinator = `restore.directory.coordinator.${owner.tenantId}`
+  store.set(coordinator, JSON.stringify({ locks: { [sourceId]: { owner: runId, journal: prefix } }, deadlines: {}, discarded: {} }))
+  const connection = vi.fn(async () => { throw new Error("Token refresh unavailable") }), localOwner = vi.fn(async () => owner), graph = vi.fn(async () => { throw new Error("Graph unavailable") })
+  const service = new DirectoryRestoreService(store, new RecoveryAccounts(store), connection, localOwner, graph)
+  await expect(connection()).rejects.toThrow("Token refresh unavailable")
+  connection.mockClear()
+  const fetcher = vi.fn(async (_input: unknown, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body))
+    expect(body.action).toBe("discard")
+    return Response.json(await service.saved(body.tenantId, body.runId, body.action))
+  })
+  vi.stubGlobal("fetch", fetcher)
+  root = createRoot(document.body.appendChild(document.createElement("div")))
+  await act(async () => root.render(createElement(DirectoryRestore, savedOnly ? { tenant } : props)))
+  if (!savedOnly) await click("Review directory restore")
+  expect(button("Discard saved restore")).toBeUndefined()
+  await act(async () => {
+    const input = document.querySelector<HTMLInputElement>('input:not([type="checkbox"])')!
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, runId)
+    input.dispatchEvent(new Event("input", { bubbles: true }))
+  })
+  expect((button("Discard saved restore") as HTMLButtonElement).disabled).toBe(false)
+  await click("Discard saved restore")
+  expect(fetcher).toHaveBeenCalledOnce(); expect(localOwner).toHaveBeenCalledOnce()
+  expect(connection).not.toHaveBeenCalled(); expect(graph).not.toHaveBeenCalled()
+  expect(JSON.parse(data.get(coordinator)!)).toEqual({ locks: {}, deadlines: {}, discarded: { [runId]: true } })
+  expect(document.body.textContent).toContain("This page can never send again.")
+  expect(button("Discard saved restore")).toBeUndefined()
+})

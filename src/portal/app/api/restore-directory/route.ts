@@ -58,7 +58,7 @@ export async function POST(request: NextRequest) {
     return action === "restore" ? outcomeResponse(result) : NextResponse.json(result)
   }
   try {
-    if (action === "restore") {
+    if (action === "restore" || action === "resume") {
       if (typeof body.runId !== "string") throw new Error("Review this directory object first.")
       const result = await directoryRestoreOperation(tenantId, body.runId, perform)
       return result instanceof Response ? result : NextResponse.json(result)

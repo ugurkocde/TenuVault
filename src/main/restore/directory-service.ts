@@ -94,6 +94,8 @@ export class DirectoryRestoreService {
     return connection
   }
   private async pageConnection(page: DirectoryPage) {
+    // Online actions retain the tenant-wide publication gate as well as this page's recovery requirement.
+    this.pending.forTenant(page.run.tenant).flush()
     this.pending.forTenant(page.run.tenant).flush(page.run.id)
     const connection = await this.ownerConnection(page)
     captureDirectoryExecutionActor(connection)
@@ -313,7 +315,7 @@ export class DirectoryRestoreService {
     }
   }
   private async finishContinuation(page: DirectoryPage, io: GuardedIO) {
-    const operation = this.register(page.run.tenant, page.run.id)
+    const operation = await this.register(page.run.tenant, page.run.id)
     try {
       const view = this.view(page)
       if (view.unresolved) fail("Resolve or discard this saved page before previewing the next page.")
@@ -342,25 +344,28 @@ export class DirectoryRestoreService {
     const discarded = directoryObjectState(this.store, page.run.tenant, page.run.id).discarded()
     return { discarded, unresolved: directoryPageUnresolved(discarded, page.selection ?? [], entries.map(entry => ({ key: entry.step.key, state: entry.state }))) }
   }
-  async resume(tenant: string, request: IdentityRestoreRequest) {
-    const operation = this.register(tenant, request.runId!)
-    try {
-      const page = this.load(tenant, request.runId!)
-      const connection = await this.pageConnection(page)
-      const { actor } = await this.context(tenant, retryAt => this.recordPageThrottle(page, retryAt), connection, page.run.id)
-      if (request.origin !== "restore" || page.run.origin !== request.origin || page.run.source?.path !== request.path || page.run.source.fingerprint !== restoreFingerprint(request.snapshot) || actor.userId !== page.run.actor.userId || actor.clientId !== page.run.actor.clientId) fail("Resume the original backup with the admin and connection that reviewed it.")
-      return this.view(page)
-    } finally { operation.finish() }
+  async resume(tenant: string, request: IdentityRestoreRequest, operationSignal?: AbortSignal): Promise<ReturnType<DirectoryRestoreService["view"]>> {
+    if (!operationSignal) {
+      const operation = await this.register(tenant, request.runId!)
+      try { return await this.resume(tenant, request, operation.signal) }
+      finally { operation.finish() }
+    }
+    const page = this.load(tenant, request.runId!)
+    await this.verifyLocalOwner(page)
+    const connection = await this.pageConnection(page)
+    const { actor } = await this.context(tenant, retryAt => this.recordPageThrottle(page, retryAt), connection, page.run.id)
+    if (request.origin !== "restore" || page.run.origin !== request.origin || page.run.source?.path !== request.path || page.run.source.fingerprint !== restoreFingerprint(request.snapshot) || actor.userId !== page.run.actor.userId || actor.clientId !== page.run.actor.clientId) fail("Resume the original backup with the admin and connection that reviewed it.")
+    return this.view(page)
   }
-  private register(tenant: string, id: string) {
-    this.load(tenant, id)
+  private async register(tenant: string, id: string) {
+    await this.verifyLocalOwner(this.load(tenant, id))
     const runningKey = key(tenant, id), controller = new AbortController()
     if (this.running.has(runningKey)) fail("This directory page is already running.")
     this.running.set(runningKey, controller)
     return { signal: controller.signal, finish: () => { this.running.delete(runningKey) } }
   }
   async operation<T>(tenant: string, id: string, work: (signal: AbortSignal) => Promise<T>): Promise<T | { cancelled: true }> {
-    const operation = this.register(tenant, id)
+    const operation = await this.register(tenant, id)
     try { return await work(operation.signal) }
     catch (error) {
       if (isRestorePersistenceError(error)) throw error
@@ -371,11 +376,12 @@ export class DirectoryRestoreService {
   }
   async execute(tenant: string, request: IdentityRestoreRequest, fingerprint: string, approvals: Record<string, string[]>, operationSignal?: AbortSignal): Promise<ReturnType<DirectoryRestoreService["results"]>> {
     if (!operationSignal) {
-      const operation = this.register(tenant, request.runId!)
+      const operation = await this.register(tenant, request.runId!)
       try { return await this.execute(tenant, request, fingerprint, approvals, operation.signal) }
       finally { operation.finish() }
     }
     const page = this.load(tenant, request.runId!)
+    await this.verifyLocalOwner(page)
     if (request.origin !== "restore" || page.run.origin !== request.origin || page.run.source?.path !== request.path || page.run.source.fingerprint !== restoreFingerprint(request.snapshot) || this.view(page).fingerprint !== fingerprint) fail("The backup or preview changed. Preview this object again.")
     const connection = await this.pageConnection(page)
     const selection = page.rows.filter(row => !row.review.blocker && row.review.approvals.every(kind => approvals[row.key]?.includes(kind))).map(row => row.key)

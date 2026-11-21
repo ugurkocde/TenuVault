@@ -21,7 +21,7 @@ export class DirectoryPendingPublications {
         let failure: unknown
         for (const entry of pending) {
           try { publish(entry) } catch (error) {
-            if (entry.retryAt === undefined || entry.retryAt > now() || (pageId !== undefined && entry.pageId === pageId)) failure ??= error
+            if (pageId !== undefined ? entry.pageId === pageId : entry.retryAt === undefined || entry.retryAt > now()) failure ??= error
           }
         }
         if (failure) throw failure
