@@ -138,7 +138,7 @@ describe("durable touched-object journal", () => {
     await executeGuardedRun(s.journal, s.input, s.io)
     s.input.entries[0]!.step.desired = { displayName: "different" }
     await expect(executeGuardedRun(s.journal, s.input, s.io)).rejects.toThrow("plan changed")
-    for (const value of [{ password: "x" }, { description: "Bearer secret" }] as Item[]) expect(() => s.journal.save({ ...s.input, entries: [{ ...s.input.entries[0]!, before: value }] })).toThrow("Credential")
+    for (const value of [{ password: "x" }, { passwordCredentials: [] }, { keyCredentials: [] }, { passwordProfile: { password: "x" } }, { nested: { clientSecret: "x" } }, { description: "Bearer " + "a".repeat(64) }] as Item[]) expect(() => s.journal.save({ ...s.input, entries: [{ ...s.input.entries[0]!, before: value }] })).toThrow("Credential")
     s.memory.set([...s.memory.keys()][0]!, "broken")
     expect(() => s.journal.load("tenant", "run")).toThrow()
   })

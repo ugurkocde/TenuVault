@@ -1,3 +1,4 @@
+import { restoreTenantKey } from "./restore-tenant-key"
 import { createHash } from "node:crypto"
 import type { KeyValueStore } from "../storage/secure-store"
 import { RestoreSafetyError, RestoreWriteDeferredError } from "../../shared/intune/restore-guards"
@@ -18,7 +19,7 @@ export class DirectoryPrincipalMappings {
   constructor(store: KeyValueStore, private readonly tenant: string, private readonly inventoryId: string) {
     this.store = { get: key => restorePersistence(() => store.get(key)), set: (key, value) => restorePersistence(() => store.set(key, value)), delete: key => restorePersistence(() => store.delete(key)) }
   }
-  private key(part: number) { return `restore.directory.principals.${this.tenant.toLowerCase()}.${this.inventoryId}.${part}` }
+  private key(part: number) { return `restore.directory.principals.${restoreTenantKey(this.tenant)}.${this.inventoryId}.${part}` }
   private state(id: string): [string | null, string | null] {
     return [this.store.get(directoryMappingKey(this.tenant, "Users", id)), this.store.get(directoryMappingKey(this.tenant, "Groups", id))]
   }

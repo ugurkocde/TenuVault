@@ -801,7 +801,7 @@ it.each(["headers", "body"])("reports cancellation of an application GET during 
   const env = world(), controller = new AbortController()
   const fetcher: typeof fetch = async () => {
     if (phase === "headers") { controller.abort(); throw new Error("Connection aborted") }
-    return new Response(new ReadableStream({ start(stream) { controller.abort(); stream.error(new Error("Connection aborted")) } }), { status: 200 })
+    return new Response(new ReadableStream({ start(stream) { controller.abort(); stream.error(new Error("Connection aborted")) } }), { status: 200, headers: { "Content-Type": "application/json" } })
   }
   const io = directory9bIO(token, actor, fetcher)
   const step = await applicationObjectStep("Applications", app, directory9bIO(token, actor, env.fetcher), async () => app)
@@ -844,4 +844,29 @@ it("attempts every unpublished application inventory delete and retries the fail
   failing = false
   await expect(service.prepare(actor.tenantId, request, options, async () => ids)).rejects.toThrow("Preview save unavailable")
   expect(data.size).toBe(0); expect(env.writes).toEqual([])
+})
+
+it.each([false, true])("keeps application cleanup queued across a failed review lookup (published: %s)", async published => {
+  const env = world(), ids = [id(60)], data = new Map<string, string>()
+  const snapshot = { ...app, owners: { format: "sorted-id-shards-v1", complete: true, count: 1, shards: 1, hash: createHash("sha256").update(JSON.stringify(ids[0]) + "\n").digest("hex") } }
+  let failing = true
+  const store = { partitioned: true as const, get: (key: string) => {
+    if (failing && key.startsWith("restore.directory.review.")) throw new Error("Review lookup unavailable")
+    return data.get(key) ?? null
+  }, set: (key: string, value: string) => {
+    if (failing && key.startsWith("restore.directory.review.")) {
+      if (published) data.set(key, value)
+      throw new Error("Review save unavailable")
+    }
+    data.set(key, value)
+  }, delete: (key: string) => { data.delete(key) } }
+  const service = new DirectoryRestoreService(store, new RecoveryAccounts(store), async () => ({ token, ...actor }), async () => actor, env.fetcher, () => [], env.settings)
+  const request = { path: `backup/Applications/${app.id}.json`, snapshot, origin: "restore" as const }
+  await expect(service.prepare(actor.tenantId, request, { stage: "relationships", exactMembers: false, exactOwners: false }, async () => ids)).rejects.toThrow("Review save unavailable")
+  const records = [...data.entries()].filter(([key]) => key.startsWith("restore.directory.inventory."))
+  expect(records).toHaveLength(1)
+  failing = false
+  await service.prepare(actor.tenantId, request, { stage: "object", exactMembers: false, exactOwners: false }, async () => ids)
+  for (const [key, value] of records) expect(data.get(key)).toBe(published ? value : undefined)
+  expect(env.writes).toEqual([])
 })

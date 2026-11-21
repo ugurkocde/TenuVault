@@ -28,7 +28,8 @@ import type { IdentityRestoreRequest } from "../src/main/restore/dispatch"
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`
 const tenant = id(1), app = id(2), admin = id(3), resource = id(10)
 const options = { stage: "object" as const, exactMembers: false, exactOwners: false }
-function world(count = 0, missing = false, now: () => number = () => Date.now()) {
+function world(count = 0, missing = false, now: () => number = () => Date.now(), fixtureTenant = tenant) {
+  const tenant = fixtureTenant
   let target = missing ? "" : resource
   const data = new Map<string, string>(), members = new Set<string>(), writes: string[] = []
   const store = { partitioned: true as const, get: (key: string) => data.get(key) ?? null, set: (key: string, value: string) => { data.set(key, value) }, delete: (key: string) => { data.delete(key) } }
@@ -2464,19 +2465,25 @@ it.each(["userId", "tenantId", "clientId"] as const)("checks the cached %s befor
   const env = world(51), page = await env.service().prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read)
   const localOwner = vi.fn(async () => ({ ...await env.connection(), [changed]: id(800) })), connection = vi.fn(env.connection)
   const service = new DirectoryRestoreService(env.store, new RecoveryAccounts(env.store), connection, localOwner, env.fetcher, () => [], env.settings)
+  await queueUnpublishedCleanup(env, service)
+  connection.mockClear()
+  const deletes = vi.spyOn(env.store, "delete")
   const publications = vi.spyOn(DirectoryPendingPublications.prototype, "forTenant"), get = vi.spyOn(env.store, "get"), before = new Map(env.data), calls = env.fetcher.mock.calls.length, read = vi.fn(env.read)
   try {
     await expect(service.prepare(tenant, env.request, { ...options, stage: "relationships", previousRunId: page.runId }, read)).rejects.toThrow("Use the admin and connection that reviewed this page.")
     expect(get.mock.calls).toEqual([[`restore.directory.review.${tenant}.${page.runId}`]])
-    expect(publications).not.toHaveBeenCalled(); expect(connection).not.toHaveBeenCalled(); expect(read).not.toHaveBeenCalled()
+    expect(deletes).not.toHaveBeenCalled(); expect(publications).not.toHaveBeenCalled(); expect(connection).not.toHaveBeenCalled(); expect(read).not.toHaveBeenCalled()
     expect(env.fetcher).toHaveBeenCalledTimes(calls); expect(env.data).toEqual(before); expect(env.writes).toEqual([])
-  } finally { publications.mockRestore(); get.mockRestore() }
+  } finally { deletes.mockRestore(); publications.mockRestore(); get.mockRestore() }
 })
 
 it.each(["token", "metadata", "snapshot"])("checks the next-page owner before backup loading and again after an account switch during %s loading", async phase => {
   const env = world(51), page = await env.service().prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read)
   const localOwner = vi.fn(env.connection), connection = vi.fn(env.connection)
   const service = new DirectoryRestoreService(env.store, new RecoveryAccounts(env.store), connection, localOwner, env.fetcher, () => [], env.settings)
+  await queueUnpublishedCleanup(env, service)
+  localOwner.mockClear(); connection.mockClear()
+  const deletes = vi.spyOn(env.store, "delete")
   setDirectoryRestoreService(service)
   let entered!: () => void, release!: () => void
   const started = new Promise<void>(resolve => { entered = resolve }), gate = new Promise<void>(resolve => { release = resolve })
@@ -2506,9 +2513,9 @@ it.each(["token", "metadata", "snapshot"])("checks the next-page owner before ba
     expect(await response.json()).toEqual({ error: "Use the admin and connection that reviewed this page." })
     expect(localOwner).toHaveBeenCalledTimes(3)
     expect(get.mock.calls).toEqual(Array.from({ length: 2 }, () => [`restore.directory.review.${tenant}.${page.runId}`]))
-    expect(publications).not.toHaveBeenCalled(); expect(connection).not.toHaveBeenCalled()
+    expect(deletes).not.toHaveBeenCalled(); expect(publications).not.toHaveBeenCalled(); expect(connection).not.toHaveBeenCalled()
     expect(env.fetcher).toHaveBeenCalledTimes(calls); expect(env.data).toEqual(before); expect(env.writes).toEqual([])
-  } finally { release(); await pending; publications.mockRestore(); get.mockRestore(); vi.unstubAllGlobals() }
+  } finally { release(); await pending; deletes.mockRestore(); publications.mockRestore(); get.mockRestore(); vi.unstubAllGlobals() }
 })
 
 
@@ -2779,11 +2786,13 @@ it.each([false, true])("retains an empty relationship page's confirmation deadli
   const request = { ...env.request, path: `backup/Groups/${source}.json`, snapshot: { ...env.request.snapshot, id: source } }
   const page = await service.prepare(tenant, request, { ...options, stage: "relationships" }, env.read)
   expect(page.rows).toEqual([])
+  env.data.set(directoryMappingKey(tenant, "Groups", resource), id(777))
   const original = env.fetcher.getMockImplementation()!, retryAt = Date.now() + 120_000
   env.fetcher.mockImplementation((input, init) => new URL(String(input)).pathname === "/v1.0/applications" ? Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
   try {
     await expect(service.saved(tenant, page.runId, "reconcile")).rejects.toThrow("throttled")
-    expect(JSON.parse(env.data.get(`restore.directory.coordinator.${tenant}`)!).deadlines[resource]).toBe(retryAt)
+    expect(JSON.parse(env.data.get(`restore.directory.coordinator.${tenant}`)!).deadlines).toEqual({ [resource]: retryAt })
+    env.data.delete(directoryMappingKey(tenant, "Groups", resource))
     env.fetcher.mockImplementation(original)
     const update = { ...request, snapshot: { ...request.snapshot, description: "Saved" } }
     const next = await env.service().prepare(tenant, update, options, env.read), approvals = Object.fromEntries(next.rows.map(row => [row.key, row.review.approvals]))
@@ -2864,18 +2873,75 @@ it("recovers indexed target deadlines without reading page batches and normalize
 })
 
 
-it("isolates a corrupt legacy indexed journal after its completed page releases the object lock", async () => {
-  const env = world(), request = { ...env.request, snapshot: { ...env.request.snapshot, description: "Saved" } }
-  const page = await env.service().prepare(tenant, request, options, env.read)
-  await env.service().execute(tenant, { ...request, runId: page.runId }, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])))
-  expect(JSON.parse(env.data.get(`restore.directory.coordinator.${tenant}`)!).locks).toEqual({})
-  const prefix = directoryPagePrefix(tenant, page.runId) + "batch.0."
-  env.data.set(`restore.directory.retry-journals.${tenant}`, JSON.stringify({ [prefix]: Date.now() + 120_000 }))
-  env.data.set(prefix + `restore.guarded.${tenant}`, "{")
-  const other = id(999), original = env.fetcher.getMockImplementation()!
-  env.fetcher.mockImplementation((input, init) => new URL(String(input)).pathname === `/v1.0/groups/${other}` ? Promise.resolve(Response.json({ ...env.group, id: other })) : original(input, init))
-  const unrelated = { ...request, path: `backup/Groups/${other}.json`, snapshot: { ...request.snapshot, id: other } }
-  expect(await env.service().prepare(tenant, unrelated, options, env.read)).toMatchObject({ rows: expect.any(Array) })
-  await expect(env.service().prepare(tenant, request, options, env.read)).rejects.toThrow(`state for object ${resource} could not be verified`)
-  expect(env.writes).toEqual([`PATCH groups/${resource}`])
+it("sends two additions to the same group for a mixed-case tenant using one normalized history", async () => {
+  const mixedTenant = "aBcDeFaB-AbCd-4000-8000-aBcDeFaBcDeF", env = world(2, false, Date.now, mixedTenant), service = env.service()
+  const page = await service.prepare(mixedTenant, env.request, { ...options, stage: "relationships" }, env.read)
+  expect(page.rows).toHaveLength(2)
+  expect(await service.execute(mixedTenant, { ...env.request, runId: page.runId }, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])))).toMatchObject({ status: "complete", outcomes: [{ state: "applied" }, { state: "applied" }] })
+  expect(env.writes).toEqual(Array(2).fill(`POST groups/${resource}/members/$ref`))
+  expect(env.members).toEqual(new Set(env.saved))
+  const directoryKeys = [...env.data.keys()].filter(key => key.startsWith("restore.directory."))
+  expect(directoryKeys.length).toBeGreaterThan(0)
+  expect(directoryKeys.every(key => key.includes(mixedTenant.toLowerCase()))).toBe(true)
+  expect(directoryKeys.some(key => key.includes("relationship-history."))).toBe(true)
+  expect(await env.service().resume(mixedTenant.toLowerCase(), { ...env.request, runId: page.runId })).toMatchObject({ outcomes: [{ state: "applied" }, { state: "applied" }] })
 })
+
+it.each([false, true])("retries queued cleanup after a failed review publication lookup (published: %s)", async published => {
+  const env = world(1), service = env.service(), set = env.store.set, get = env.store.get
+  const save = vi.spyOn(env.store, "set").mockImplementation((key, value) => {
+    if (key.startsWith("restore.directory.review.")) {
+      if (published) set(key, value)
+      throw new Error("Review save unavailable")
+    }
+    set(key, value)
+  })
+  const lookup = vi.spyOn(env.store, "get").mockImplementation(key => {
+    if (key.startsWith("restore.directory.review.")) throw new Error("Review lookup unavailable")
+    return get(key)
+  })
+  try {
+    await expect(service.prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read)).rejects.toThrow("Review save unavailable")
+    const records = [...env.data.entries()].filter(([key]) => /^restore\.directory\.(inventory|principals)\./.test(key))
+    expect(records).toHaveLength(2)
+    save.mockRestore(); lookup.mockRestore()
+    await service.prepare(tenant, env.request, options, env.read)
+    for (const [key, value] of records) expect(env.data.get(key)).toBe(published ? value : undefined)
+    expect(env.writes).toEqual([])
+  } finally { save.mockRestore(); lookup.mockRestore() }
+})
+
+it("refuses every requested target covered by a corrupt indexed batch", async () => {
+  const env = world(), pageId = id(700), targets = [resource, id(11), id(12)], prefix = directoryPagePrefix(tenant, pageId) + "batch.0."
+  directoryObjectState(env.store, tenant, pageId).trackRetryJournals([{ prefix, targets }], Date.now() + 120_000)
+  env.data.set(prefix + `restore.guarded.${tenant}`, "{")
+  for (const requested of [...targets.map(target => [target]), targets]) {
+    expect(() => directoryObjectState(env.store, tenant, "").recoverMappings(requested.map(sourceId => ({ folder: "Groups", sourceId })))).toThrow(`state for object ${requested[0]} could not be verified`)
+  }
+  expect(() => directoryObjectState(env.store, tenant, "").recoverMappings([{ folder: "Groups", sourceId: id(999) }])).not.toThrow()
+  expect(env.writes).toEqual([])
+})
+
+it.each([120_000, "invalid", null, [120_000]])("refuses non-current retry index evidence %j without reading old page records", value => {
+  const env = world(), prefix = directoryPagePrefix(tenant, id(700)) + "batch.0."
+  env.data.set(`restore.directory.retry-journals.${tenant}`, JSON.stringify({ [prefix]: value }))
+  const read = vi.spyOn(env.store, "get")
+  try {
+    expect(() => directoryObjectState(env.store, tenant, resource).recoverMappings([{ folder: "Groups", sourceId: resource }])).toThrow(`state for object ${resource} could not be verified`)
+    expect(read.mock.calls.some(([key]) => key.startsWith(prefix) || key.startsWith("restore.directory.review."))).toBe(false)
+  } finally { read.mockRestore() }
+})
+
+async function queueUnpublishedCleanup(env: ReturnType<typeof world>, service: DirectoryRestoreService) {
+  const set = env.store.set
+  const save = vi.spyOn(env.store, "set").mockImplementation((key, value) => {
+    if (key.startsWith("restore.directory.review.")) throw new Error("Review save unavailable")
+    set(key, value)
+  })
+  const remove = vi.spyOn(env.store, "delete").mockImplementation(() => { throw new Error("Cleanup unavailable") })
+  try {
+    await expect(service.prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read)).rejects.toThrow("Review save unavailable")
+    expect(remove).toHaveBeenCalled()
+    expect([...env.data.keys()].some(key => key.startsWith("restore.directory.inventory."))).toBe(true)
+  } finally { save.mockRestore(); remove.mockRestore() }
+}

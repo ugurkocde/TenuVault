@@ -1,3 +1,4 @@
+import { restoreTenantKey } from "./restore-tenant-key"
 import { DirectoryPrincipalMappings } from "./directory-principal-mappings"
 import { DirectoryPendingPublications } from "./directory-pending-publications"
 import { captureDirectoryExecutionActor } from "../api/execution-metadata"
@@ -23,7 +24,7 @@ import { directory9aIO, directoryAdmission } from "./directory-9a-io"
 import { directoryObjectStep, directoryRelationshipSteps, mappedDirectoryIds } from "./directory-9a-plan"
 import { approveDirectory, directoryReview, type DirectoryReview } from "./directory-9a"
 import { directoryMappedId, executeDirectoryBatches, recoverDirectoryRejections } from "./directory-9a-batches"
-import { isRestorePersistenceError, GuardedRunJournal, restoreFingerprint, restorePersistence, type GuardedRun } from "./guarded-run"
+import { assertNoSecrets, isRestorePersistenceError, GuardedRunJournal, restoreFingerprint, restorePersistence, type GuardedRun } from "./guarded-run"
 import { resolveRestoreActor, type RecoveryAccounts } from "./safety-resolvers"
 import { safetyReader } from "./safety-reader"
 import { requireRestoreActor } from "./restore-actor"
@@ -33,7 +34,7 @@ import type { IdentityRestoreRequest } from "./dispatch"
 export interface DirectoryOptions { stage: "object" | "relationships"; exactMembers: boolean; exactOwners: boolean; previousRunId?: string }
 export interface DirectoryPage { inventory?: { id: string; count: number; offset: number; targetId: string; principalMappings?: { parts: number; fingerprint: string } }; run: GuardedRun; rows: Array<{ key: string; review: DirectoryReview }>; more: boolean; options: DirectoryOptions; selection?: string[] }
 const fail = (message: string): never => { throw new RestoreSafetyError(message) }
-const key = (tenant: string, id: string) => `restore.directory.review.${tenant.toLowerCase()}.${id}`
+const key = (tenant: string, id: string) => `restore.directory.review.${restoreTenantKey(tenant)}.${id}`
 /** Owned backup readers are supplied by the authenticated route, never by the renderer. */
 export class DirectoryRestoreService {
   private readonly pending = new DirectoryPendingPublications(() => this.now())
@@ -45,7 +46,7 @@ export class DirectoryRestoreService {
   }
   private async context(tenant: string, onThrottled?: (retryAt: number) => void, validatedConnection?: RestoreConnection, pageId?: string) {
     const connection = validatedConnection ?? await this.connection(tenant)
-    if (connection.tenantId.toLowerCase() !== tenant.toLowerCase()) fail("The connection belongs to another tenant.")
+    if (connection.tenantId.toLowerCase() !== restoreTenantKey(tenant)) fail("The connection belongs to another tenant.")
     requireRestoreActor(connection.token, { ...connection, recoveryAccountIds: [] })
     const actorFetch: typeof fetch = async (input, init) => {
       const response = await this.fetchImpl(input, init)
@@ -85,7 +86,7 @@ export class DirectoryRestoreService {
     this.pending.forTenant(tenant).retain(() => persistDirectoryRetry(journal, coordinator), retryAt, pageId)
   }
   private verifyOwner(page: DirectoryPage, connection: Pick<RestoreConnection, "tenantId" | "userId" | "clientId">) {
-    if (connection.tenantId.toLowerCase() !== page.run.tenant.toLowerCase() || connection.tenantId.toLowerCase() !== page.run.actor.tenantId.toLowerCase() || connection.userId.toLowerCase() !== page.run.actor.userId.toLowerCase() || connection.clientId.toLowerCase() !== page.run.actor.clientId.toLowerCase()) fail("Use the admin and connection that reviewed this page.")
+    if (connection.tenantId.toLowerCase() !== restoreTenantKey(page.run.tenant) || connection.tenantId.toLowerCase() !== page.run.actor.tenantId.toLowerCase() || connection.userId.toLowerCase() !== page.run.actor.userId.toLowerCase() || connection.clientId.toLowerCase() !== page.run.actor.clientId.toLowerCase()) fail("Use the admin and connection that reviewed this page.")
   }
   private async verifyLocalOwner(page: DirectoryPage) { this.verifyOwner(page, await this.localOwner(page.run.tenant)) }
   async verifySavedOwner(tenant: string, id: string) { await this.verifyLocalOwner(this.load(tenant, id)) }
@@ -116,17 +117,17 @@ export class DirectoryRestoreService {
     if (!raw) fail("This directory preview is unavailable.")
     return JSON.parse(raw!)
   }
-  private save(page: DirectoryPage) { this.store.set(key(page.run.tenant, page.run.id), JSON.stringify(page)) }
-  private cleanupUnpublished(work: Array<() => void> = []) {
-    for (const remove of work) this.unpublishedCleanup.add(remove)
+  private save(page: DirectoryPage) { assertNoSecrets(page); this.store.set(key(page.run.tenant, page.run.id), JSON.stringify(page)) }
+  private cleanupUnpublished(work: Array<() => void> = [], published?: () => boolean) {
+    for (const remove of work) this.unpublishedCleanup.add(() => { if (!published?.()) remove() })
     for (const remove of this.unpublishedCleanup) {
       try { remove(); this.unpublishedCleanup.delete(remove) }
       catch { /* Retain failed deletes for the next preview, and attempt every record. */ }
     }
   }
   async prepare(tenant: string, request: IdentityRestoreRequest, options: DirectoryOptions, read: (path: string) => Promise<unknown>) {
-    this.cleanupUnpublished()
     if (options.previousRunId !== undefined) await this.verifySavedOwner(tenant, options.previousRunId)
+    this.cleanupUnpublished()
     directoryObjectState(this.store, tenant, "", this.now).recoverRetryDeadlines()
     this.pending.forTenant(tenant).flush(options.previousRunId)
     let discardUnpublished: (() => void) | undefined
@@ -209,10 +210,9 @@ export class DirectoryRestoreService {
       // Cursoring over these records happens before any per-row Graph resolution on later pages.
       inventory = { id: run.id, count: 0, offset: 0, targetId: target }
       let chunk: typeof object[] = [], part = 0
-      const inventoryKey = (part: number) => `restore.directory.inventory.${tenant.toLowerCase()}.${run.id}.${part}`
+      const inventoryKey = (part: number) => `restore.directory.inventory.${restoreTenantKey(tenant)}.${run.id}.${part}`
       onInventory(() => {
-        if (this.store.get(key(tenant, run.id))) return
-        this.cleanupUnpublished([() => principalMappings.discard(), ...Array.from({ length: part }, (_, index) => () => this.store.delete(inventoryKey(index)))])
+        this.cleanupUnpublished([() => principalMappings.discard(), ...Array.from({ length: part }, (_, index) => () => this.store.delete(inventoryKey(index)))], () => !!this.store.get(key(tenant, run.id)))
       })
       for await (const step of steps) {
         if (++inventory.count > 1_000_000) fail("The directory difference limit was reached.")
@@ -223,7 +223,7 @@ export class DirectoryRestoreService {
       inventory.principalMappings = principalMappings.finish()
     }
     if (inventory) {
-      const raw = this.store.get(`restore.directory.inventory.${tenant.toLowerCase()}.${inventory.id}.${inventory.offset / 50}`)
+      const raw = this.store.get(`restore.directory.inventory.${restoreTenantKey(tenant)}.${inventory.id}.${inventory.offset / 50}`)
       if (!raw && inventory.offset < inventory.count) fail("The saved relationship difference is unavailable. Preview again.")
       const chunk: typeof object[] = raw ? JSON.parse(raw!) : []
       steps = (async function* () { yield* chunk })()
@@ -234,6 +234,7 @@ export class DirectoryRestoreService {
     for await (const step of steps) {
       if (page.rows.length === 50) { page.more = true; break }
       const current = await io.read(step, step.targetId)
+      assertNoSecrets(current)
       step.preview = restoreFingerprint(current)
       let review: DirectoryReview
       try { review = await io.review(step, current); principalValidation?.validate(inventory!.principalMappings!, step) }
@@ -288,17 +289,16 @@ export class DirectoryRestoreService {
         inventory = { id: run.id, count: 0, offset: 0, targetId: object.targetId! }
         let chunk: GuardedStep[] = [], part = 0
         onInventory(() => {
-          if (this.store.get(key(tenant, run.id))) return
-          this.cleanupUnpublished(Array.from({ length: part }, (_, index) => () => this.store.delete(`restore.directory.inventory.${tenant.toLowerCase()}.${run.id}.${index}`)))
+          this.cleanupUnpublished(Array.from({ length: part }, (_, index) => () => this.store.delete(`restore.directory.inventory.${restoreTenantKey(tenant)}.${run.id}.${index}`)), () => !!this.store.get(key(tenant, run.id)))
         })
         for await (const step of applicationRelationshipSteps(request.path, snapshot, object.targetId!, io, read, readSource)) {
           if (++inventory.count > 1_000_000) fail("The application difference limit was reached.")
           chunk.push(step)
-          if (chunk.length === 50) { this.store.set(`restore.directory.inventory.${tenant.toLowerCase()}.${run.id}.${part++}`, JSON.stringify(chunk)); chunk = [] }
+          if (chunk.length === 50) { this.store.set(`restore.directory.inventory.${restoreTenantKey(tenant)}.${run.id}.${part++}`, JSON.stringify(chunk)); chunk = [] }
         }
-        if (chunk.length) this.store.set(`restore.directory.inventory.${tenant.toLowerCase()}.${run.id}.${part++}`, JSON.stringify(chunk))
+        if (chunk.length) this.store.set(`restore.directory.inventory.${restoreTenantKey(tenant)}.${run.id}.${part++}`, JSON.stringify(chunk))
       }
-      const raw = this.store.get(`restore.directory.inventory.${tenant.toLowerCase()}.${inventory.id}.${inventory.offset / 50}`)
+      const raw = this.store.get(`restore.directory.inventory.${restoreTenantKey(tenant)}.${inventory.id}.${inventory.offset / 50}`)
       if (!raw && inventory.offset < inventory.count) fail("The application relationship inventory is unavailable.")
       steps = raw ? JSON.parse(raw) : []
       page.inventory = inventory; page.more = inventory.offset + steps.length < inventory.count
@@ -450,7 +450,7 @@ export class DirectoryRestoreService {
     }, () => {
       const runs = this.history(page)
       const steps: Array<Pick<GuardedStep, "folder" | "sourceId" | "targetId">> = runs.length ? runs.flatMap(({ run }) => run.entries.map(entry => ({ ...entry.step, targetId: entry.targetId ?? entry.step.targetId }))) : page.run.entries.map(({ step }) => step)
-      if (!steps.length && page.inventory) steps.push({ folder: page.run.source!.path.split("/")[1]!, sourceId: page.inventory.targetId })
+      if (!steps.length && page.inventory) steps.push({ folder: page.run.source!.path.split("/")[1]!, sourceId: page.inventory.targetId, targetId: page.inventory.targetId })
       for (const step of steps) objects.recordThrottle(step, retryAt)
     }, page.run.id)
   }

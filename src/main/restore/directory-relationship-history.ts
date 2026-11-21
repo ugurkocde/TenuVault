@@ -1,3 +1,4 @@
+import { restoreTenantKey } from "./restore-tenant-key"
 import { isGuid } from "../../shared/security"
 import type { KeyValueStore } from "../storage/secure-store"
 import { RestoreWriteDeferredError } from "../../shared/intune/restore-guards"
@@ -9,12 +10,12 @@ export const DIRECTORY_REPLICATION_WINDOW_MS = 30 * 60 * 1000
 
 /** Journal links outlive page locks to verify uncertain writes against our acknowledged writes. */
 export function directoryRelationshipHistory(store: KeyValueStore, tenant: string, target: string, now: () => number = Date.now) {
-  const key = `restore.directory.relationship-history.${tenant.toLowerCase()}.${target.toLowerCase()}`
+  const key = `restore.directory.relationship-history.${restoreTenantKey(tenant)}.${target.toLowerCase()}`
   const deferred = (): never => { throw new RestoreWriteDeferredError("Saved relationship history could not be verified. Confirm this uncertain result after reviewing the restore history.") }
   const load = (name: string): string | null => {
     try {
       const raw = store.get(name), prefix: unknown = raw === null ? null : JSON.parse(raw)
-      if (prefix !== null && (typeof prefix !== "string" || !prefix.startsWith(`restore.directory.${encodeURIComponent(tenant)}.`) || !/\.batch\.\d+\.$/.test(prefix))) return deferred()
+      if (prefix !== null && (typeof prefix !== "string" || !prefix.startsWith(`restore.directory.${encodeURIComponent(restoreTenantKey(tenant))}.`) || !/\.batch\.\d+\.$/.test(prefix))) return deferred()
       return prefix
     } catch (error) { if (isRestorePersistenceError(error)) throw error; return deferred() }
   }

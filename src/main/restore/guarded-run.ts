@@ -1,3 +1,4 @@
+import { restoreTenantKey } from "./restore-tenant-key"
 import { isProxyAuthResponse } from "../api/network-error"
 import { DirectoryRetryPersistenceError, persistDirectoryRetry, waitForDirectoryRetry } from "./directory-retry"
 import { requireConfigurationApproval } from "./entra-configuration"
@@ -79,8 +80,8 @@ export interface GuardedIO {
  * Other writers retain the full descriptor protections, including remaining administrators. */
 export const guardedProtections = (step: GuardedStep) => step.directory && ["Users", "Groups"].includes(step.folder) ? ["identity-references"] as const : operationProtections(step.folder, step.operation)
 const secretKey = /^(?:passwordProfile|password|passwordCredentials|keyCredentials|clientSecret|privateKey|sharedSecret|secretKey|tokenSeed|seed|tunnelKey|secret|accessToken|refreshToken|clientAssertion|pfx|pkcs12|secretText|authenticationConfiguration|certificateData|deploymentAccessKey)$/i
-function assertNoSecrets(value: unknown): void {
-  if (typeof value === "string" && /-----BEGIN .*PRIVATE KEY-----|Bearer\s+[\w.-]+|\beyJ[\w-]+\.[\w-]+\.[\w-]+/i.test(value)) throw new RestoreSafetyError("Credential values cannot be saved in restore history.")
+export function assertNoSecrets(value: unknown): void {
+  if (typeof value === "string" && /-----BEGIN .*PRIVATE KEY-----|\bBearer\s+[A-Za-z0-9+/_-]{32,}={0,2}|\beyJ[\w-]+\.[\w-]+\.[\w-]+/i.test(value)) throw new RestoreSafetyError("Credential values cannot be saved in restore history.")
   if (!value || typeof value !== "object") return
   for (const [key, child] of Object.entries(value)) {
     if (secretKey.test(key)) throw new RestoreSafetyError("Credential properties cannot be saved in restore history.")
@@ -93,7 +94,7 @@ function canonical(value: unknown): string {
   return JSON.stringify(value)
 }
 export const restoreFingerprint = (value: Item | null): string => createHash("sha256").update(canonical(value)).digest("hex")
-const tenantKey = (tenant: string) => `restore.guarded.${encodeURIComponent(tenant.toLowerCase())}`
+const tenantKey = (tenant: string) => `restore.guarded.${encodeURIComponent(restoreTenantKey(tenant))}`
 
 /** Storage failures must escape safety and transport failure classification. */
 export class RestorePersistenceError extends Error {}
@@ -117,7 +118,7 @@ export class GuardedRunJournal {
     const runs = parsed?.version === 2 ? parsed.runs : parsed
     const mappings: RestoreMapping[] = parsed?.version === 2 ? parsed.mappings : []
     if (!Array.isArray(mappings)) throw new RestoreSafetyError("Restore mappings could not be verified.")
-    if (!runs || typeof runs !== "object" || Array.isArray(runs) || Object.entries(runs as Record<string, GuardedRun>).some(([id, run]) => !run || run.version !== 1 || run.tenant.toLowerCase() !== tenant.toLowerCase() || run.id !== id || !Array.isArray(run.entries) || !Array.isArray(run.mappings))) throw new RestoreSafetyError("Restore history could not be verified. Nothing was written.")
+    if (!runs || typeof runs !== "object" || Array.isArray(runs) || Object.entries(runs as Record<string, GuardedRun>).some(([id, run]) => !run || run.version !== 1 || restoreTenantKey(run.tenant) !== restoreTenantKey(tenant) || run.id !== id || !Array.isArray(run.entries) || !Array.isArray(run.mappings))) throw new RestoreSafetyError("Restore history could not be verified. Nothing was written.")
     return { version: 2, runs, mappings }
   }
   private runs(tenant: string): Record<string, GuardedRun> { return this.history(tenant).runs }
@@ -185,7 +186,7 @@ const active = new Set<string>()
  * resolution is provided by the signed-in desktop connection. Legacy writers cannot bypass this by merely enabling a registry capability.
  */
 export async function executeGuardedRun(journal: GuardedRunJournal, input: GuardedRun, io: GuardedIO, signal?: AbortSignal, reconcileOnly = false): Promise<{ status: "complete" | "partial"; run: GuardedRun }> {
-  const key = input.tenant.toLowerCase()
+  const key = restoreTenantKey(input.tenant)
   if (active.has(key)) throw new RestoreSafetyError("This restore is already running.")
   active.add(key)
   try {
@@ -196,7 +197,7 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
     const run = previous ?? structuredClone(input)
     run.actor = structuredClone(input.actor)
     for (const mapping of journal.mappings(run.tenant)) rememberMapping(run.mappings, mapping)
-    if (run.actor.tenantId.toLowerCase() !== run.tenant.toLowerCase()) throw new RestoreSafetyError("The restore belongs to another tenant.")
+    if (run.actor.tenantId.toLowerCase() !== restoreTenantKey(run.tenant)) throw new RestoreSafetyError("The restore belongs to another tenant.")
     journal.save(run)
     // A known outcome must never enter safety-failure handling. Retry its atomic
     // publication once; if storage stays unavailable the durable send marker remains.

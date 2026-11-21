@@ -1,3 +1,4 @@
+import { restoreTenantKey } from "./restore-tenant-key"
 import { persistDirectoryRetry } from "./directory-retry"
 import type { KeyValueStore } from "../storage/secure-store"
 import { RestoreSafetyError, RestoreWriteDeferredError } from "../../shared/intune/restore-guards"
@@ -5,11 +6,11 @@ import { isRestorePersistenceError, GuardedRunJournal, type GuardedRun, type Gua
 
 type Rejection = { step: string; attempt: number; cause?: "proxy" }
 type State = { locks: Record<string, { owner: string; journal: string; rejected?: Rejection }>; deadlines: Record<string, number>; discarded: Record<string, true>; invalid?: boolean }
-export const directoryPagePrefix = (tenant: string, id: string) => `restore.directory.${encodeURIComponent(tenant.toLowerCase())}.${encodeURIComponent(id)}.`
-export const directoryMappingKey = (tenant: string, folder: string, source: string) => `restore.directory.mapping.${encodeURIComponent(tenant.toLowerCase())}.objectId.${folder}.${source.toLowerCase()}`
+export const directoryPagePrefix = (tenant: string, id: string) => `restore.directory.${encodeURIComponent(restoreTenantKey(tenant))}.${encodeURIComponent(id)}.`
+export const directoryMappingKey = (tenant: string, folder: string, source: string) => `restore.directory.mapping.${encodeURIComponent(restoreTenantKey(tenant))}.objectId.${folder}.${source.toLowerCase()}`
 /** One atomic value arbitrates page ownership and discard. All mutations are synchronous. */
 export function directoryObjectState(store: KeyValueStore, tenant: string, owner: string, now: () => number = Date.now, retryableLock: (owner: string) => boolean = () => false) {
-  const key = `restore.directory.coordinator.${tenant.toLowerCase()}`
+  const key = `restore.directory.coordinator.${restoreTenantKey(tenant)}`
   const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value)
   const load = (): State => {
     const raw = store.get(key)
@@ -68,15 +69,15 @@ export function directoryObjectState(store: KeyValueStore, tenant: string, owner
   }
   // This bounded-by-active-deadlines index outlives page locks. Publish it before
   // throttle journal saves so the next tenant operation can repair a lost coordinator save.
-  const retryIndexKey = `restore.directory.retry-journals.${tenant.toLowerCase()}`
-  type RetryIndex = Record<string, number | Record<string, number>>
+  const retryIndexKey = `restore.directory.retry-journals.${restoreTenantKey(tenant)}`
+  type RetryIndex = Record<string, Record<string, number>>
   const retryIndex = (): RetryIndex => {
     const raw = store.get(retryIndexKey)
     if (raw === null) return {}
     const deadline = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0
     try {
       const index: unknown = JSON.parse(raw)
-      if (record(index) && Object.entries(index).every(([prefix, value]) => prefix.startsWith(`restore.directory.${encodeURIComponent(tenant.toLowerCase())}.`) && /\.batch\.\d+\.$/.test(prefix) && (deadline(value) || record(value) && Object.values(value).every(deadline)))) return index as RetryIndex
+      if (record(index) && Object.entries(index).every(([prefix, value]) => prefix.startsWith(`restore.directory.${encodeURIComponent(restoreTenantKey(tenant))}.`) && /\.batch\.\d+\.$/.test(prefix) && (record(value) && Object.values(value).every(deadline)))) return index as RetryIndex
     } catch { /* Refuse unverifiable recovery evidence. */ }
     return invalid(owner)
   }
@@ -84,8 +85,6 @@ export function directoryObjectState(store: KeyValueStore, tenant: string, owner
     const index = retryIndex()
     for (const { prefix, targets } of journals) {
       const previous = index[prefix]
-      // Preserve older numeric records until recovery has read their journals.
-      if (typeof previous === "number") { index[prefix] = Math.max(previous, retryAt); continue }
       const deadlines = previous ?? {}
       for (const target of targets) deadlines[target.toLowerCase()] = Math.max(deadlines[target.toLowerCase()] ?? 0, retryAt)
       index[prefix] = deadlines
@@ -98,13 +97,12 @@ export function directoryObjectState(store: KeyValueStore, tenant: string, owner
     const state = load()
     if (state.invalid) invalid(owner)
     let changed = false, pruned = false
-    for (const [prefix, evidence] of Object.entries(index)) {
-      const deadlines: Record<string, number> = typeof evidence === "number" ? {} : evidence
-      if (typeof evidence === "number" ? evidence <= time : Object.values(deadlines).every(deadline => deadline <= time)) { delete index[prefix]; pruned = true; continue }
+    for (const [prefix, deadlines] of Object.entries(index)) {
+      if (Object.values(deadlines).every(deadline => deadline <= time)) { delete index[prefix]; pruned = true; continue }
       // New records carry target deadlines, so tenant recovery never scans page journals.
       // A requested object still validates its indexed history and refuses local damage.
       const targets = Object.keys(deadlines).filter(id => !ids || ids.has(id))
-      if (typeof evidence === "number" || ids && targets.length) {
+      if (ids && targets.length) {
         try {
           const journal = new GuardedRunJournal({ get: name => store.get(prefix + name), set: () => { throw new Error("Read-only history") }, delete: () => { throw new Error("Read-only history") } })
           for (const run of journal.list(tenant)) for (const entry of run.entries) {
@@ -114,17 +112,7 @@ export function directoryObjectState(store: KeyValueStore, tenant: string, owner
             deadlines[id] = Math.max(deadlines[id] ?? 0, entry.retryAt)
           }
         } catch (error) {
-          let affected = targets[0] ?? (ids && [...ids].find(id => state.locks[id]?.journal === prefix))
-          // Older numeric indexes lack targets. The saved review still identifies
-          // the affected object after a completed page has released its locks.
-          if (!affected && ids && typeof evidence === "number") {
-            try {
-              const pageId = decodeURIComponent(prefix.match(/\.([^.]+)\.batch\.\d+\.$/)![1]!)
-              const page = JSON.parse(store.get(`restore.directory.review.${tenant.toLowerCase()}.${pageId}`) ?? "null") as { inventory?: { targetId: string }; run?: GuardedRun } | null
-              const reviewed = [page?.inventory?.targetId, ...(page?.run?.entries ?? []).map(entry => entry.targetId ?? entry.step.targetId ?? store.get(directoryMappingKey(tenant, entry.step.folder, entry.step.sourceId)) ?? entry.step.sourceId)]
-              affected = reviewed.find((id): id is string => typeof id === "string" && ids.has(id.toLowerCase()))?.toLowerCase()
-            } catch { /* Unknown reviews cannot be attributed to an unrelated object. */ }
-          }
+          const affected = targets[0]
           if (ids && affected) {
             if (isRestorePersistenceError(error)) throw error
             invalid(affected)
@@ -148,10 +136,10 @@ export function directoryObjectState(store: KeyValueStore, tenant: string, owner
     }
     return changed
   }
-  const createJournalKey = (step: Pick<GuardedStep, "folder" | "sourceId">) => `restore.directory.create-journal.${tenant.toLowerCase()}.${step.folder}.${step.sourceId.toLowerCase()}`
+  const createJournalKey = (step: Pick<GuardedStep, "folder" | "sourceId">) => `restore.directory.create-journal.${restoreTenantKey(tenant)}.${step.folder}.${step.sourceId.toLowerCase()}`
   const createJournal = (step: Pick<GuardedStep, "folder" | "sourceId">): string | null => {
     const prefix = store.get(createJournalKey(step))
-    if (prefix !== null && (!prefix.startsWith(`restore.directory.${encodeURIComponent(tenant.toLowerCase())}.`) || !/\.batch\.\d+\.$/.test(prefix))) invalid(step.sourceId)
+    if (prefix !== null && (!prefix.startsWith(`restore.directory.${encodeURIComponent(restoreTenantKey(tenant))}.`) || !/\.batch\.\d+\.$/.test(prefix))) invalid(step.sourceId)
     return prefix
   }
   const clearCreateJournal = (step: Pick<GuardedStep, "folder" | "sourceId">, prefix: string) => {

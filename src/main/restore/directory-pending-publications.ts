@@ -1,3 +1,4 @@
+import { restoreTenantKey } from "./restore-tenant-key"
 import { RestoreWriteDeferredError } from "../../shared/intune/restore-guards"
 
 // The desktop directory service owns one in-process guard per tenant. A new service
@@ -7,7 +8,7 @@ export class DirectoryPendingPublications {
   constructor(private readonly now: () => number = Date.now) {}
   forTenant(tenant: string) {
     const now = this.now
-    const key = tenant.toLowerCase()
+    const key = restoreTenantKey(tenant)
     let pending = this.tenants.get(key)
     if (!pending) { pending = new Set(); this.tenants.set(key, pending) }
     const publish = (entry: { save: () => void; retryAt?: number; pageId?: string }) => { entry.save(); pending.delete(entry) }

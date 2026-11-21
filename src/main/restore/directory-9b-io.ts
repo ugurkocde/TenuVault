@@ -7,7 +7,7 @@ import { RestoreSafetyError, RestoreWriteDeferredError, RestoreWriteRefusedError
 import { requireRestoreActor } from "./restore-actor"
 import { requireDirectoryApprovals } from "./directory-9a"
 import { appIdentity, applicationAdmission, applicationPermissions, applicationReview, restorableApp, requireApplicationRestoreAccess } from "./directory-9b"
-import { isRestorePersistenceError, restoreFingerprint, type GuardedIO, type GuardedStep } from "./guarded-run"
+import { assertNoSecrets, isRestorePersistenceError, restoreFingerprint, type GuardedIO, type GuardedStep } from "./guarded-run"
 import type { ModuleSetting } from "../services/settings"
 
 const root = "https://graph.microsoft.com/v1.0/"
@@ -42,6 +42,7 @@ export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typ
       if (method === "PATCH" && (response.status === 408 || response.status >= 500)) throw new Error("The application write has an unconfirmed result.")
       throw new RestoreWriteRefusedError(response.status)
     }
+    if (method === "GET" && !/^application\/(?:[\w.+-]+\+)?json(?:\s*;|$)/i.test(response.headers.get("Content-Type") ?? "")) throw new DirectoryReadDeferredError()
     if (response.status === 204) return {}
     const text = await response.text().catch(error => {
       if (isRestorePersistenceError(error)) throw error
@@ -49,7 +50,11 @@ export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typ
       if (method === "GET") throw new DirectoryReadDeferredError()
       throw error
     })
-    return JSON.parse(text) as Item
+    try { return JSON.parse(text) as Item }
+    catch (error) {
+      if (method === "GET") throw new DirectoryReadDeferredError()
+      throw error
+    }
   }
   async function* list(path: string, signal?: AbortSignal): AsyncGenerator<Item> {
     const start = root + path, seen = new Set<string>()
@@ -152,6 +157,7 @@ export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typ
   const preview = async (step: GuardedStep) => {
     requireApplicationRestoreAccess(settings())
     const current = await read(step, step.targetId)
+    assertNoSecrets(current)
     step.preview = restoreFingerprint(current)
     if (step.folder === "Applications" && step.directory?.action === "update") {
       step.desired = Object.fromEntries(Object.entries(step.desired).filter(([key, value]) => JSON.stringify(current?.[key]) !== JSON.stringify(value)))

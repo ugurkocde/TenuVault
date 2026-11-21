@@ -273,16 +273,15 @@ it.each(folders.flatMap(folder => ["initial", "final"].flatMap(phase => ["body r
   env.graph.mockImplementation(async (input, init) => {
     if (!failed && new URL(String(input)).pathname === `/v1.0/${env.targetPath}` && ++reads === failureRead) {
       failed = true
-      return failure === "invalid JSON" ? new Response("{", { status: 200 }) : new Response(new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode('{"id":')); controller.error(new Error("ECONNRESET")) } }), { status: 200 })
+      return failure === "invalid JSON" ? new Response("{", { status: 200, headers: { "Content-Type": "application/json" } }) : new Response(new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode('{"id":')); controller.error(new Error("ECONNRESET")) } }), { status: 200, headers: { "Content-Type": "application/json" } })
     }
     return original(input, init)
   })
-  expect(await env.execute(page, request)).toMatchObject({ failed: failure === "body reset" ? 0 : 1, outcomes: [{ state: failure === "body reset" ? "deferred" : phase === "initial" ? "blocked" : "failed-before-send" }] })
+  expect(await env.execute(page, request)).toMatchObject({ failed: 0, outcomes: [{ state: "deferred", reason: expect.stringContaining("temporary Microsoft Graph read failure") }] })
   expect(failed).toBe(true); expect(env.writes).toEqual([])
-  if (failure === "body reset") {
-    expect(await env.execute(page, request)).toMatchObject({ status: "complete", outcomes: [{ state: "applied" }] })
-    expect(env.writes).toEqual([{ [env.field]: "Saved" }])
-  }
+  expect(await env.execute(page, request)).toMatchObject({ status: "complete", outcomes: [{ state: "applied" }] })
+  await env.execute(page, request)
+  expect(env.writes).toEqual([{ [env.field]: "Saved" }])
 })
 
 it.each(folders.flatMap(folder => ["journal", "coordinator"].map(record => ({ folder, record }))))("keeps $folder deferred and locked after one $record deadline save failure", async ({ folder, record }) => {
@@ -515,4 +514,59 @@ it.each([
   else env.live[field] = a
   expect(await env.service().saved(tenant, second.runId, "reconcile")).toMatchObject({ outcomes: [{ state: "applied" }], canDiscard: true })
   expect(attempts).toBe(2); expect(env.entry(second).acknowledged).toBeUndefined(); expect(env.locks()).toEqual([])
+})
+
+it.each(folders.flatMap(folder => ["HTML", "malformed JSON", "non-JSON type"].map(response => ({ folder, response }))))("resumes $folder after a 200 $response safety read and sends its approved PATCH once", async ({ folder, response }) => {
+  const env = world(folder), request = env.request(), page = await env.prepare(request), original = env.graph.getMockImplementation()!
+  env.graph.mockImplementation((input, init) => new URL(String(input)).pathname === `/v1.0/${env.targetPath}` && init?.method === "GET"
+    ? Promise.resolve(new Response(response === "HTML" ? "<html>Proxy sign-in</html>" : response === "malformed JSON" ? "{" : JSON.stringify(env.live), { status: 200, headers: { "Content-Type": response === "malformed JSON" ? "application/json" : "text/html" } }))
+    : original(input, init))
+  expect(await env.execute(page, request)).toMatchObject({ failed: 0, outcomes: [{ state: "deferred", reason: expect.stringContaining("temporary Microsoft Graph read failure") }] })
+  expect(env.writes).toEqual([]); expect(env.locks()).toHaveLength(1)
+  env.graph.mockImplementation(original)
+  expect(await env.execute(page, request)).toMatchObject({ status: "complete", outcomes: [{ state: "applied" }] })
+  await env.execute(page, request)
+  expect(env.writes).toEqual([{ [env.field]: "Saved" }]); expect(env.locks()).toEqual([])
+})
+
+it.each(folders)("keeps an uncertain %s write retryable after a malformed 200 read-back without resending", async folder => {
+  const env = world(folder), request = env.request(), page = await env.prepare(request), original = env.graph.getMockImplementation()!
+  let sends = 0
+  env.graph.mockImplementation((input, init) => {
+    if (init?.method === "PATCH") { sends++; return Promise.resolve(new Response(null, { status: 503 })) }
+    if (sends && new URL(String(input)).pathname === `/v1.0/${env.targetPath}`) return Promise.resolve(new Response("{", { headers: { "Content-Type": "application/json" } }))
+    return original(input, init)
+  })
+  expect(await env.execute(page, request)).toMatchObject({ outcomes: [{ state: "uncertain" }] })
+  expect(await env.execute(page, request)).toMatchObject({ outcomes: [{ state: "uncertain", reason: "The write did not return a confirmed result. It must be read back before any retry." }] })
+  env.live[env.field] = "Saved"; env.graph.mockImplementation(original)
+  expect(await env.execute(page, request)).toMatchObject({ status: "complete", outcomes: [{ state: "applied" }] })
+  expect(sends).toBe(1); expect(env.writes).toEqual([]); expect(env.locks()).toEqual([])
+})
+
+it.each(folders)("previews and sends ordinary Bearer token authentication prose for %s", async folder => {
+  const env = world(folder)
+  env.live[folder === "Applications" ? "description" : folder === "Groups" ? "displayName" : "jobTitle"] = "Bearer token authentication"
+  const request = env.request("backup", "Bearer token authentication"), page = await env.prepare(request)
+  expect(page.rows[0]!.review.blocker).toBeUndefined()
+  expect(await env.execute(page, request)).toMatchObject({ status: "complete", outcomes: [{ state: "applied" }] })
+  expect(env.writes).toEqual([{ [env.field]: "Bearer token authentication" }])
+})
+
+it.each(folders.flatMap(folder => ["JWT", "Bearer token"].map(secret => ({ folder, secret }))))("refuses $secret in $folder metadata at preview before approval or journal publication", async ({ folder, secret }) => {
+  const env = world(folder), value = secret === "JWT" ? "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJmaXh0dXJlIn0.c2lnbmF0dXJl" : "Bearer " + "a".repeat(64)
+  await expect(env.prepare(env.request("backup", value))).rejects.toThrow("Credential values")
+  expect([...env.data.keys()].some(key => key.startsWith("restore.directory.review.") || key.includes("restore.guarded."))).toBe(false)
+  expect([...env.data.values()].some(saved => saved.includes(value))).toBe(false)
+  expect(env.writes).toEqual([])
+})
+
+
+it.each(folders)("refuses a JWT in an unchanged live %s field during preview before journal capture", async folder => {
+  const env = world(folder), request = env.request()
+  if (folder === "Applications") delete request.snapshot.description
+  env.live[folder === "Applications" ? "description" : folder === "Groups" ? "displayName" : "jobTitle"] = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJmaXh0dXJlIn0.c2lnbmF0dXJl"
+  await expect(env.prepare(request)).rejects.toThrow("Credential values")
+  expect([...env.data.keys()].some(key => key.includes("restore.guarded."))).toBe(false)
+  expect(env.writes).toEqual([])
 })

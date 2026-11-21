@@ -48,6 +48,7 @@ export async function POST(request: NextRequest) {
     if (!response.ok) throw new Error("The backup policy could not be read.")
     const snapshot = await response.json() as Item
     signal?.throwIfAborted()
+    if (action === "preview" && typeof body.previousRunId === "string") await directoryRestoreVerifyOwner(tenantId, body.previousRunId)
     const restore = { path, snapshot, origin, runId: typeof body.runId === "string" ? body.runId : undefined } as const
     const result = await directoryRestoreRequest(tenantId, restore, { action, options: { stage: body.stage, exactMembers: body.exactMembers === true, exactOwners: body.exactOwners === true, ...(typeof body.previousRunId === "string" ? { previousRunId: body.previousRunId } : {}) }, fingerprint: body.fingerprint, approvals: body.approvals }, async name => {
       const response = await read(name)
