@@ -1,3 +1,4 @@
+import { backupManifest, verifyProjectedSnapshot, type ManifestEntry } from "~/lib/policies/backup-manifest"
 import { decodeXml } from "~/lib/storage/list"
 import { blobPath, isSafeArchivePath } from "../../../../shared/security"
 import { isBackupName } from "../../../../shared/intune/backup-names"
@@ -193,6 +194,20 @@ export async function POST(request: NextRequest) {
       headers: { 'x-ms-version': '2021-12-02', 'Authorization': `Bearer ${accessToken}` },
     }), backupId, tenantId, storageAccountName)
     if (!owned.ok) return NextResponse.json({ error: owned.error }, { status: owned.status })
+    const projectedEntries = new Map<string, ManifestEntry>()
+    const hasProjectedFiles = filePaths.some((path) => path.startsWith(`${backupId}/.omitted/`))
+    if (owned.metadata?.OmissionVersion !== undefined || hasProjectedFiles) {
+      const present = new Set(filePaths)
+      for (const [path, entry] of backupManifest(owned.metadata, backupId) ?? []) {
+        if (!entry.omitted) continue
+        const projected = path.replace(`${backupId}/`, `${backupId}/.omitted/`)
+        if (present.has(path) || !present.has(projected)) return NextResponse.json({ error: "A projected backup file does not match its omission inventory." }, { status: 502 })
+        projectedEntries.set(projected, entry)
+      }
+      if (filePaths.some((path) => path.startsWith(`${backupId}/.omitted/`) && !projectedEntries.has(path))) {
+        return NextResponse.json({ error: "A projected backup file has no omission inventory." }, { status: 502 })
+      }
+    }
     const batches: string[][] = []
     for (let i = 0; i < filePaths.length; i += batchSize) batches.push(filePaths.slice(i, i + batchSize))
     // Actual fetched bytes, rechecked against the cap: listed lengths can be
@@ -218,6 +233,8 @@ export async function POST(request: NextRequest) {
               oversized = true
               return { success: false, path: filePath }
             }
+            const projected = projectedEntries.get(filePath)
+            if (projected) verifyProjectedSnapshot(Buffer.from(content), projected)
             fetchedBytes += content.byteLength
             if (fetchedBytes > MAX_BACKUP_ARCHIVE_TOTAL_BYTES) oversized = true
             // Remove the backup folder prefix from the path in the zip

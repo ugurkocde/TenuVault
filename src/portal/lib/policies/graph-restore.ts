@@ -1,6 +1,7 @@
 import { approvalSignal, approvalMessage, type ApprovalSignal } from "../../../shared/intune/approval"
 import { restoreApprovals, saveRestoreApproval, removeRestoreApproval, type RestoreApproval, type ApprovalStep } from "../../../main/storage/restore-approvals"
 import { parseDependencyMappings } from "../../../shared/intune/recovery"
+import { hasOmissions, OMISSION_BLOCKER } from "../../../shared/intune/secret-omission"
 import { dependencyReferences, type DependencyReference } from "../../../shared/intune/dependencies"
 import { createHash, randomUUID } from "node:crypto"
 import { typeForFolder, type IntuneType, type Item, type Json, type Step } from "../../../shared/intune/registry"
@@ -271,6 +272,7 @@ export class Restorer {
   }
 
   private async restoreOnce(path: string, snapshot: Item): Promise<RestoreOutcome> {
+    if (hasOmissions(snapshot) || path.split("/")[1] === ".omitted") return { success: false, path, action: "skipped", retryable: false, error: OMISSION_BLOCKER }
     const folder = path.split("/")[1] ?? ""
     const type = typeForFolder(folder === "DeviceCompliancePolicies" ? "CompliancePolicies" : folder)
     if (!type) return { success: false, path, error: "This backup file is not an Intune type TenuVault can restore." }
@@ -501,6 +503,7 @@ export class Restorer {
   /** A repair replays only rejected/unattempted steps against the object already created. */
   async repair(path: string, token: string): Promise<RestoreOutcome> {
     const body = repairs.get(token)?.body ?? {}
+    if (hasOmissions(body) || path.split("/")[1] === ".omitted") return { success: false, path, action: "skipped", retryable: false, error: OMISSION_BLOCKER }
     return withAdminLink(path, await this.repairOnce(path, token), body)
   }
 
@@ -728,9 +731,9 @@ export function locateLive(graph: GraphCall, type: IntuneType, snapshot: Item): 
 }
 
 /** The live object read like a backup, or undefined when it was deleted. */
-export async function readLive(graph: GraphCall, type: IntuneType, id: string): Promise<Item | undefined> {
+export async function readLive(graph: GraphCall, type: IntuneType, id: string, options?: import("../../../shared/intune/read").ReadOptions): Promise<Item | undefined> {
   try {
-    return await readObject(type, id, liveReader(graph))
+    return await readObject(type, id, liveReader(graph), options)
   } catch (error) {
     if (error instanceof Gone) return undefined
     throw error

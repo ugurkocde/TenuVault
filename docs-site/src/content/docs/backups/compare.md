@@ -75,3 +75,7 @@ To compare the tenant as it is right now with your last backup, run a new backup
 
 * [Change reports](/reports/): the same changes as a document with who made them, saved as PDF or Markdown or sent by email
 * [Intune drift detection](https://www.tenuvault.com/intune-drift-detection): compare and revert changes, on the product site
+
+## Compare backups with values left out
+
+When a value is unavailable in either copy, it is excluded from the comparison. Turning omission on or off does not count as a policy change. Changes to fields that both copies retained remain visible. The comparison displays **Some values could not be compared** when a copy has omissions. Older clients leave the affected policy types out of the comparison.

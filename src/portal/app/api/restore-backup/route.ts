@@ -6,6 +6,7 @@ import { readOwnedBackup, UNTAGGED_BACKUP } from "~/lib/policies/backup-owner"
 import { validPolicyPath } from "~/lib/policies/restore"
 import { graphCaller, Restorer, DependencyMappingError, type RestoreOutcome } from "~/lib/policies/graph-restore"
 import { PROGRESS_ID, startProgress } from "~/lib/policies/restore-progress"
+import { OMISSION_BLOCKER } from "../../../../shared/intune/secret-omission"
 import { restoreOrder, type Item } from "../../../../shared/intune/registry"
 import { grantedPermissions } from "../../../../shared/services/token"
 import { type NextRequest, NextResponse } from "next/server"
@@ -48,8 +49,10 @@ async function readSnapshot(policyPath: string, storageAccountName: string, stor
 
 async function restoreSinglePolicy(restorer: Restorer, policyPath: string, storageAccountName: string, storageToken: string, expected?: ManifestEntry, repairToken?: string): Promise<RestoreOutcome> {
   try {
+    if (expected?.omitted) return { success: false, path: policyPath, retryable: false, error: OMISSION_BLOCKER }
+    const snapshot = await readSnapshot(policyPath, storageAccountName, storageToken, expected)
     if (repairToken) return await restorer.repair(policyPath, repairToken)
-    return await restorer.restore(policyPath, await readSnapshot(policyPath, storageAccountName, storageToken, expected))
+    return await restorer.restore(policyPath, snapshot)
   } catch (error) {
     return { success: false, path: policyPath, error: error instanceof Error ? error.message : "Unknown error" }
   }
@@ -87,6 +90,9 @@ export async function POST(request: NextRequest) {
     }
     if (progressId !== undefined && (typeof progressId !== 'string' || !PROGRESS_ID.test(progressId))) {
       return NextResponse.json({ error: 'Invalid progress ID' }, { status: 400 })
+    }
+    if (restoreType === "selective" && Array.isArray(selectedPolicies) && selectedPolicies.some((item) => typeof item?.path === "string" && item.path.split("/")[1] === ".omitted")) {
+      return NextResponse.json({ error: OMISSION_BLOCKER }, { status: 400 })
     }
     if (restoreType === 'selective' && (!Array.isArray(selectedPolicies) || !selectedPolicies.length || selectedPolicies.some((p: any) => !validPolicyPath(p?.path, backupId)) || new Set(selectedPolicies.map((p: any) => p.path)).size !== selectedPolicies.length)) {
       return NextResponse.json({ error: 'Select unique policy files from the chosen backup' }, { status: 400 })
@@ -185,6 +191,7 @@ export async function POST(request: NextRequest) {
     const checked = checkRestoreManifest(metadata, backupId, paths, restoreType !== 'selective')
     if (!checked.ok) return NextResponse.json({ error: checked.error }, { status: 400 })
     const manifest = checked.manifest
+    if (restoreType !== "selective" && manifest) paths = [...new Set([...paths, ...[...manifest].filter(([, entry]) => entry.omitted).map(([path]) => path)])]
 
     const progress = progressId ? startProgress(progressId, paths.length * targets.length) : null
     try {

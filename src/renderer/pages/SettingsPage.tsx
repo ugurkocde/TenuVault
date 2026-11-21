@@ -404,6 +404,60 @@ export function ProxySignInSettings() {
   )
 }
 
+function TenantOmissionSettings({ tenantId }: { tenantId: string }) {
+  const { confirm, confirmDialog } = useConfirm()
+  const [options, setOptions] = useState<{ enabled: boolean; scripts: boolean; migrationRequired?: true } | null>(null)
+  const [busy, setBusy] = useState(true)
+  const [error, setError] = useState("")
+  useEffect(() => {
+    let current = true
+    void bridge.backups.omission(tenantId).then(value => {
+      if (current) setOptions(value)
+    }).catch((failure: unknown) => {
+      if (current) setError(failure instanceof Error ? failure.message : String(failure))
+    }).finally(() => {
+      if (current) setBusy(false)
+    })
+    return () => { current = false }
+  }, [tenantId])
+
+  const change = async (enabled: boolean, scripts: boolean) => {
+    if (!await confirm({
+      title: "Change what policy backups keep?",
+      description: "Pause backup schedules and wait for running backups to finish on every computer and in Azure. Upgrade every desktop and cloud runbook that backs up this tenant before resuming schedules. This change applies to new backups.",
+      confirmLabel: "Confirm and save",
+    })) return
+    setBusy(true)
+    setError("")
+    try {
+      await bridge.backups.setOmission(tenantId, enabled, scripts)
+      setOptions({ enabled, scripts })
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : String(failure))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="mt-3 space-y-2 text-sm">
+      {confirmDialog}
+      <label className="flex items-center gap-2">
+        <input type="checkbox" checked={options?.enabled ?? false} disabled={busy || !options || options.migrationRequired} onChange={(event) => void change(event.target.checked, false)} />
+        Leave secret values out of policy backups
+      </label>
+      {options?.enabled && <label className="flex items-center gap-2 pl-5">
+        <input type="checkbox" checked={options.scripts} disabled={busy || options.migrationRequired} onChange={(event) => void change(true, event.target.checked)} />
+        Also leave out script content
+      </label>}
+      {options?.migrationRequired && <Button size="sm" variant="outline" disabled={busy} onClick={() => void change(options.enabled, options.scripts)}>
+        Apply policy to Azure backup storage
+      </Button>}
+      {error && <p role="alert" className="text-red-700">{error}</p>}
+    </div>
+  )
+}
+
 function TenantSettings({ active }: { active: boolean }) {
   const { confirm, confirmDialog } = useConfirm()
   const tenants = useTenants()
@@ -467,6 +521,7 @@ function TenantSettings({ active }: { active: boolean }) {
                     <p className="truncate text-xs text-gray-500">
                       {account ? `Signed in as ${account.username}` : "Not signed in"} · Backups: {storageLabel(tenant.resources?.storageAccountName)}
                     </p>
+                    {active && account && tenantId && tenant.resources?.storageAccountName && <TenantOmissionSettings key={tenantId} tenantId={tenantId} />}
                   </div>
                   <Button variant="outline" size="sm" onClick={() => void signIn(tenant)} disabled={busy === tenantId || !tenant.credentials}>
                     {busy === tenantId && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}

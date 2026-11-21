@@ -1,3 +1,4 @@
+import { hasOmissions, OMISSION_BLOCKER, projectRollback } from "../../../shared/intune/secret-omission"
 import { AuditEventType, AuditResult, AuditSeverity, type CreateAuditLogInput } from "../../../portal/lib/audit/types"
 import type { GraphCall } from "../../../portal/lib/policies/graph-restore"
 import { typeForFolder, type IntuneType, type Item } from "../../../shared/intune/registry"
@@ -335,6 +336,7 @@ export async function createChangeSet(deps: FeatureDeps, tenantId: string, input
     const proposed = operation.action === "delete" ? null : operation.proposed ?? null
     if (operation.action !== "delete") {
       if (!proposed || typeof proposed !== "object" || Array.isArray(proposed)) throw new FeatureError("Create and update operations need the proposed configuration.")
+      if (hasOmissions(proposed)) throw new FeatureError(OMISSION_BLOCKER)
       if (containsRedaction(proposed)) throw new FeatureError("The proposed configuration contains redacted values and cannot be written.")
       if (containsSecret(proposed)) throw new FeatureError("The proposed configuration contains a secret value Intune masks. Secrets are never copied or written back; set them in Intune.")
     }
@@ -449,6 +451,7 @@ export async function previewChangeSet(deps: FeatureDeps, tenantId: string, id: 
   const listings = createListingMemo()
   const operations: OperationPreview[] = []
   const fingerprints: Record<string, string> = {}
+  const omission = await deps.omissionPolicy?.(tenantId)
   for (const operation of record.operations) {
     const type = typeOf(operation.folder)
     const blockers: string[] = []
@@ -456,13 +459,14 @@ export async function previewChangeSet(deps: FeatureDeps, tenantId: string, id: 
     let observed: Observation
     requireCisChangeSetEnabled(record.origin.workflow, tenantId, recovery)
     try {
-      observed = await observe(graph, type, operation, listings)
+      observed = await observe(graph, type, operation, listings, { omitEncryptedOma: omission?.enabled })
     } catch (error) {
       asFeatureError(error, "The target tenant could not be read.")
     }
     fingerprints[operation.key] = observed.fingerprint
     if (operation.action !== "create" && !observed.snapshot) blockers.push(`${operation.name} no longer exists in the target tenant.`)
     if (operation.action === "create" && observed.sameNameIds.length) warnings.push(`${observed.sameNameIds.length} object(s) named "${operation.name}" already exist; this creates another one.`)
+    if (operation.action !== "create" && observed.snapshot && hasOmissions(projectRollback(operation.folder, observed.snapshot, omission))) warnings.push(`${operation.name}: values will be left out of the rollback capture.`)
     if (observed.redacted && operation.action !== "create") warnings.push(`${operation.name} holds values Intune masks. They are not stored in the capture, so a rollback of this object is not supported.`)
     const body = entries[operation.key]?.body ?? null
     const diff = operation.action === "update" && observed.snapshot && body ? diffConfigurations(type, observed.snapshot, body) : { entries: operation.diff, truncated: operation.diffTruncated }
@@ -760,12 +764,13 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
       requireCisChangeSetEnabled(record.origin.workflow, tenantId, recovery)
       gated = gatedGraph(graph, record.origin.workflow, tenantId, recovery)
       if (!preChange) {
+        const omission = await deps.omissionPolicy?.(tenant)
         const check = async () => {
           const observations: Record<string, Observation> = {}
           for (const operation of record.operations) {
             requireCisChangeSetEnabled(record.origin.workflow, tenantId, recovery)
             try {
-              observations[operation.key] = await observe(gated, typeOf(operation.folder), operation, listings)
+              observations[operation.key] = await observe(gated, typeOf(operation.folder), operation, listings, { omitEncryptedOma: omission?.enabled })
             } catch (error) {
               asFeatureError(error, "The target tenant could not be read, so nothing was written.")
             }
@@ -787,7 +792,8 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
         const observations = await check()
         captured = Object.fromEntries(record.operations.map((operation) => {
           const observed = observations[operation.key]!
-          return [operation.key, { body: observed.snapshot, assignments: observed.snapshot && Array.isArray(observed.snapshot.assignments) ? (observed.snapshot.assignments as Item[]) : null }]
+          const body = observed.snapshot && projectRollback(operation.folder, observed.snapshot, omission)
+          return [operation.key, { body, assignments: body && Array.isArray(body.assignments) ? body.assignments as Item[] : null }]
         }))
         const capture = deps.records.create<ChangeSetContent>(CONTENT_DOMAIN, tenant, { title: record.title, status: "frozen", summary: "Pre-change capture of a change set.", kind: "capture", changeSetId: record.id, entries: captured }, { actor, reason: "Captured the pre-change state" })
         preChange = {
@@ -941,7 +947,7 @@ function inverseOperations(deps: FeatureDeps, tenantId: string, record: ChangeSe
       manual.push(`"${operation.name}" did not exist when the change set was applied; nothing was captured for it.`)
       continue
     }
-    const blocked = redacted ? `"${operation.name}" holds values Intune masks; they were not stored, so it cannot be written back automatically.` : null
+    const blocked = hasOmissions(snapshot) ? OMISSION_BLOCKER : redacted ? `"${operation.name}" holds values Intune masks; they were not stored, so it cannot be written back automatically.` : null
     if (operation.action === "update") {
       inputs.push({ key: operation.key, folder: operation.folder, action: "update", targetId: operation.targetId, proposed: snapshot, assignments: operation.setsAssignments ? assignmentTargets(snapshot.assignments) : null, source, blocked, warnings })
     } else {

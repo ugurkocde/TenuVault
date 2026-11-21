@@ -1,7 +1,10 @@
 import { BlobListError, decodeXml, listBlobPages } from "~/lib/storage/list"
 import { typeForFolder } from "../../../../shared/intune/registry"
 import { describeScope } from "../../../../shared/intune/scope"
-import { comparable, compareBackups, summarize, type BackupFingerprint, type ChangeSummary } from "../../../../shared/intune/backup-changes"
+import { compareBackupFiles } from "~/lib/policies/compare-backups"
+import { compareObjects } from "../detect-drifts/route"
+import { omittedFolders } from "../../../../shared/intune/secret-omission"
+import { itemsOf, comparable, summarize, type BackupFingerprint, type ChangeSummary } from "../../../../shared/intune/backup-changes"
 import { blobPath } from "../../../../shared/security"
 import { BACKUP_OWNER_FILE, LOCAL_STORAGE_PREFIX, MAX_BACKUP_ARCHIVE_BYTES } from "../../../../shared/constants"
 import { mapLimit } from "../../../../shared/map-limit"
@@ -181,7 +184,7 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
     },
     scope: metadata ? { excluded, description: describeScope({ excluded }) } : null,
     failures: typeof metadata?.Failures === 'number' ? metadata.Failures : 0,
-    skippedTypes: Array.isArray(metadata?.SkippedTypes) ? metadata.SkippedTypes : [],
+    skippedTypes: metadata?.OmissionVersion === 1 && Array.isArray(metadata.ActualSkippedTypes) ? metadata.ActualSkippedTypes : Array.isArray(metadata?.SkippedTypes) ? metadata.SkippedTypes : [],
     failedTypes: Array.isArray(metadata?.FailedTypes) ? metadata.FailedTypes : [],
     size,
     sizeFormatted: formatBytes(size),
@@ -352,10 +355,18 @@ export async function POST(request: NextRequest) {
       if (!current.fingerprint || !comparable(current.fingerprint)) continue
       const previous = backups.slice(i + 1).find((backup) => backup.fingerprint && comparable(backup.fingerprint))
       if (!previous) continue
-      current.changes = summarize(compareBackups(previous.fingerprint, current.fingerprint))
+      const { entries, partial } = await compareBackupFiles(
+        { id: previous.id, metadata: previous.fingerprint },
+        { id: current.id, metadata: current.fingerprint },
+        (path) => fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${path.split("/").map(encodeURIComponent).join("/")}`, { headers: storageHeaders(accessToken) }),
+        compareObjects,
+      )
+      current.changes = summarize(entries.map((entry) => entry.change))
+      current.partialComparison = partial
       current.comparedWith = previous.id
     }
     for (const backup of backups) {
+      if (omittedFolders(backup.fingerprint?.Items).size) backup.omittedPolicies = Object.values(itemsOf(backup.fingerprint) ?? {}).filter((item) => item.omitted).length
       delete backup.fingerprint
       delete backup.ownerTenantId
       delete (backup as { ownerKind?: unknown }).ownerKind

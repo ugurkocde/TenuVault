@@ -37,6 +37,9 @@
     a TenuVaultKeyVault variable; the script checks this account and names the tenants that still
     have one. Backups made before the upgrade stay sealed and open in TenuVault with the recovery key.
 
+    Upgrade the runbook before turning on secret omission in TenuVault. The runbook reads the
+    tenant policy from the chosen backup container with its existing backup identity.
+
     Microsoft Graph application roles are the one part Azure RBAC cannot grant. With
     -GrantGraphRoles (Global Administrator) the script assigns the read-only DeviceManagement
     roles to the managed identity, the same set as the desktop Backup Reader, and prints a consent

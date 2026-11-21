@@ -39,12 +39,14 @@ const show = (value: unknown) => {
 /** Items added, changed and deleted in the tenant between the previous backup and this one. */
 export function BackupChangesDialog({ open, onOpenChange, tenant, backup, previous }: BackupChangesDialogProps) {
   const [items, setItems] = useState<ChangedItem[] | null>(null)
+  const [partial, setPartial] = useState(false)
   const [error, setError] = useState("")
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
 
   useEffect(() => {
     if (!open) return
     setItems(null)
+    setPartial(false)
     setError("")
     const controller = new AbortController()
     void fetch("/api/backup-changes", {
@@ -56,7 +58,9 @@ export function BackupChangesDialog({ open, onOpenChange, tenant, backup, previo
       .then(async (response) => {
         const data = await response.json()
         if (!response.ok) throw new Error(data.error ?? "Changes could not be listed.")
+        if (controller.signal.aborted) return
         setItems(data.changes)
+        setPartial(data.partial === true)
       })
       .catch((failure: unknown) => {
         if (failure instanceof DOMException && failure.name === "AbortError") return
@@ -89,7 +93,8 @@ export function BackupChangesDialog({ open, onOpenChange, tenant, backup, previo
             <Loader2 className="h-4 w-4 animate-spin" /> Comparing backups...
           </div>
         )}
-        {items && items.length === 0 && <p className="py-6 text-sm text-gray-600">Nothing changed between these backups.</p>}
+        {partial && <p className="text-sm text-gray-600">Some values could not be compared.</p>}
+        {items && items.length === 0 && <p className="py-6 text-sm text-gray-600">{partial ? "No changes found in comparable values." : "Nothing changed between these backups."}</p>}
         {items && items.length > 0 && (
           <ul className="divide-y divide-gray-100">
             {items.map((item) => {

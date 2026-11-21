@@ -1,3 +1,4 @@
+import { omissionBody, omittedFolders, OMISSION_VERSION, projectSecrets, snapshotPath, type OmissionOptions } from "../../shared/intune/secret-omission"
 export { assertStorageAccountName } from "../../shared/storage-account"
 export { ProtectedBlobError, isImmutabilityRefusal } from "./request"
 import { createHash, randomUUID } from "node:crypto"
@@ -102,6 +103,7 @@ export interface BackupEngineDeps {
   enabledModules?: (tenantId: string) => ModuleId[]
   /** Backups older than this many days are deleted after each backup; 0 keeps everything. */
   retentionDays?: (tenantId: string) => number
+  omissionPolicy?: (request: BackupRequest, tokens: RunTokens) => Promise<OmissionOptions & { generation: string }>
   now?: () => Date
   /** Items read at the same time. Graph throttling (429) pauses every reader. */
   concurrency?: number
@@ -439,10 +441,18 @@ export class BackupEngine {
 
     const concurrency = this.deps.concurrency ?? CONCURRENCY
     const network = new NetworkCircuit(3 * concurrency, signal, deadline)
-    const storage = new BlobWriter(fetchImpl, request.storageAccountName, storageToken, network)
+    const policy = await this.deps.omissionPolicy?.(request, tokens)
+    const storage = new BlobWriter(fetchImpl, request.storageAccountName, storageToken, network, policy?.enabled)
     // The Backup Reader cannot create containers; New-TenuVaultStorage.ps1 creates the backup container for it.
     if (local || tokens.mode === "delegated") await storage.ensureContainer()
 
+    const checkPolicy = async () => {
+      if (policy && (await this.deps.omissionPolicy!(request, tokens)).generation !== policy.generation) {
+        throw new Error("The backup omission policy changed during this run. Run the backup again.")
+      }
+      network.signal.throwIfAborted()
+    }
+    network.signal.throwIfAborted()
     const scope = normalizeScope(request.scope ?? EVERYTHING)
     const readerExcluded = new Set(tokens.excludedTypes ?? [])
     const moduleOff = new Set(disabledFolders(this.deps.enabledModules?.(request.tenantId) ?? []))
@@ -477,7 +487,7 @@ export class BackupEngine {
     // Only a Backup Reader run keeps a value Microsoft refuses to decrypt masked; with the admin's sign-in a refused read fails the object as before.
     const keepMasked = tokens.mode === "app-only" ? (error: unknown) => error instanceof GraphError && error.status === 403 : undefined
     const maskedItems: Array<{ Folder: string; Id: string; Name: string }> = []
-    const graph = new GraphSession(fetchImpl, graphToken, network)
+    const graph = new GraphSession(fetchImpl, graphToken, network, policy?.enabled)
     const reader = {
       get: (path: string) => graph.get<Item>(`${GRAPH}/beta/${path}`),
       list: (path: string) => graph.list(graphUrl(path)) as Promise<Item[]>,
@@ -539,11 +549,13 @@ export class BackupEngine {
         countAuthFailure(error)
         failures++
         failedTypes.push(type.folder)
-        const reason = error instanceof Error ? error.message : String(error)
+        const reason = policy?.enabled ? "The collection could not be read. Check Graph access." : error instanceof Error ? error.message : String(error)
         Object.assign(result(type.folder), { state: "unreadable", reason })
         this.write(job, `Could not read ${type.label}: ${reason}`)
       }
     }, network.signal)
+
+    await checkPolicy()
 
     // Claim the folder before writing any policy, even when retention currently keeps everything.
     // The create-only write is atomic, so two writers that start in the same second cannot share
@@ -593,7 +605,9 @@ export class BackupEngine {
         // Included records the types this run attempted, so later app versions do not count types added since as covered.
         Scope: { Excluded: scope.excluded, Included: types.map((type) => type.folder) },
         Failures: failures,
-        SkippedTypes: skippedTypes,
+        SkippedTypes: [...new Set([...skippedTypes, ...omittedFolders(items)])],
+        ...(policy?.enabled ? { OmissionVersion: OMISSION_VERSION, OmissionScripts: policy.scripts, ActualSkippedTypes: skippedTypes } : {}),
+        ...(policy && policy.generation !== "default" ? { OmissionPolicyGeneration: policy.generation } : {}),
         FailedTypes: failedTypes,
         AuthMode: tokens.mode,
         ...(notReadable.length ? { AppOnlyExcludedTypes: notReadable } : {}),
@@ -613,15 +627,25 @@ export class BackupEngine {
       try {
         let masked = false
         // A list-only type's list entry already holds everything its snapshot keeps.
-        const detail = type.listOnly ? listSnapshot(type, item as Item) : await readObject(type, item.id, reader, keepMasked ? { keepMasked: (error) => (masked = keepMasked(error)) } : {})
-        const body = JSON.stringify(detail, null, 2)
-        await storage.put(`${backupFolder}/${type.folder}/${fileName}.json`, body)
-        const maskedView = withMaskedSecrets(type, detail)
-        items[`${type.folder}/${item.id}`] = {
+        const detail = type.listOnly ? listSnapshot(type, item as Item) : await readObject(type, item.id, reader, {
+          omitEncryptedOma: policy?.enabled,
+          ...(keepMasked ? { keepMasked: (error: unknown) => (masked = keepMasked(error)) } : {}),
+        })
+        const projected = policy?.enabled ? projectSecrets(type.folder, detail, policy.scripts) : null
+        const fields = projected?.fields ?? []
+        const omitted = fields.length > 0 ? fields : undefined
+        const stored = omitted ? omissionBody(projected!.snapshot, omitted) : detail
+        const body = JSON.stringify(stored, null, 2)
+        const record: BackupItems[string] = {
           file: `${fileName}.json`,
-          hash: snapshotHash(detail),
-          // What versions that could not read this type's assignments recorded, to compare with their backups.
-          ...(type.assignmentsFormerlyExpanded ? { hashWithEmptyAssignments: snapshotHash({ ...detail, assignments: [] }) } : {}),
+          hash: snapshotHash(omitted ? projected!.snapshot : detail),
+          ...(omitted ? { omitted, rawHash: createHash("sha256").update(body).digest("hex") } : {}),
+        }
+        await storage.put(`${backupFolder}/${snapshotPath(type.folder, record)}`, body)
+        const maskedView = omitted ? null : withMaskedSecrets(type, detail)
+        items[`${type.folder}/${item.id}`] = {
+          ...record,
+          ...(type.assignmentsFormerlyExpanded && !omitted ? { hashWithEmptyAssignments: snapshotHash({ ...detail, assignments: [] }) } : {}),
           ...(maskedView ? { hashWithMaskedSecrets: snapshotHash(maskedView) } : {}),
           ...(masked ? { secretsMasked: true as const } : {}),
         }
@@ -637,11 +661,12 @@ export class BackupEngine {
         // An expired sign-in fails every remaining item the same way, so it stops the backup once.
         if (error instanceof TokenError || (error instanceof GraphError && error.status === 401)) throw error
         failures++
-        const warning = `Could not back up "${displayName}": ${error instanceof Error ? error.message : String(error)}`
+        const reason = policy?.enabled ? "The policy could not be read or saved. Check Graph and storage access." : error instanceof Error ? error.message : String(error)
+        const warning = `Could not back up "${displayName}": ${reason}`
         if (error instanceof RequestTimeoutError) itemTimeoutWarnings.push(warning)
         const entry = result(type.folder)
         entry.failed++
-        if ((entry.errors ??= []).length < MAX_ITEM_ERRORS) entry.errors.push(`${displayName}: ${error instanceof Error ? error.message : String(error)}`)
+        if ((entry.errors ??= []).length < MAX_ITEM_ERRORS) entry.errors.push(`${displayName}: ${reason}`)
         this.write(job, warning)
       }
       done++
@@ -654,6 +679,7 @@ export class BackupEngine {
       }
     }, network.signal)
 
+    await checkPolicy()
     const ended = this.now()
     const totalPolicies = policyCount(counts)
     const saved = Object.values(counts).reduce((sum, count) => sum + count, 0)
@@ -668,7 +694,7 @@ export class BackupEngine {
     const commitTimer = setTimeout(() => commitController.abort(jobDeadlineError()), Math.max(0, commitDeadline - Date.now()))
     commitTimer.unref?.()
     const commitNetwork = new NetworkCircuit(3 * concurrency, commitController.signal, commitDeadline)
-    const commitStorage = new BlobWriter(fetchImpl, request.storageAccountName, storageToken, commitNetwork)
+    const commitStorage = new BlobWriter(fetchImpl, request.storageAccountName, storageToken, commitNetwork, policy?.enabled)
     try {
       // Once the PUT is sent it may land even when it reports a failure, so no failed manifest may follow it.
       await commitStorage.put(`${backupFolder}/metadata.json`, JSON.stringify(metadata, null, 2), network, false, () => { stopped.committing = true })
@@ -686,7 +712,7 @@ export class BackupEngine {
       this.write(job, "Older backups were kept: the Backup Reader cannot delete from Azure Storage. The next backup made with an admin's sign-in removes expired ones.", "info")
     } else if (deletesAllowed && failures === 0 && (this.deps.retentionDays?.(job.tenantId) ?? 0) > 0) {
       const retentionNetwork = new NetworkCircuit(3 * concurrency, signal, deadline)
-      const retentionStorage = new BlobWriter(fetchImpl, request.storageAccountName, storageToken, retentionNetwork)
+      const retentionStorage = new BlobWriter(fetchImpl, request.storageAccountName, storageToken, retentionNetwork, policy?.enabled)
       try {
         const unreadableOlder = await this.applyRetention(job, retentionStorage, backupFolder, restorableFolders(metadata), retentionNetwork.signal)
         if (unreadableOlder > 0) retentionWarnings++
@@ -716,7 +742,9 @@ export class BackupEngine {
     if (maskedItems.length) {
       this.write(job, `Saved ${maskedItems.length} object${maskedItems.length === 1 ? "" : "s"} with encrypted OMA-URI values masked (****): Microsoft refused the plain-text read, so these copies cannot be restored. A manual backup with your sign-in captures them when Microsoft returns the values.`, "warning")
     }
-    const warnings = failures + retentionWarnings + (maskedItems.length ? 1 : 0)
+    const omittedCount = Object.values(items).filter((item) => item.omitted).length
+    if (omittedCount) this.write(job, `Left values out of ${omittedCount} policies. These copies cannot be restored.`, "warning")
+    const warnings = failures + retentionWarnings + (maskedItems.length ? 1 : 0) + (omittedCount ? 1 : 0)
     results.warnings = warnings
     job.progressMessage =
       job.status === "Failed" ? "Backup failed: no policies could be saved" : warnings > 0 ? `Backup completed with ${warnings} warning${warnings === 1 ? "" : "s"}` : "Backup completed successfully"
@@ -739,7 +767,7 @@ export class BackupEngine {
     const deadline = Date.now() + FAILED_MANIFEST_GRACE_MS
     const network = new NetworkCircuit(3, controller.signal, deadline)
     const token = isLocalAccount(request.storageAccountName) ? async () => "" : tokens.storage
-    const storage = new BlobWriter(this.deps.fetch, request.storageAccountName, token, network)
+    const storage = new BlobWriter(this.deps.fetch, request.storageAccountName, token, network, metadata.OmissionVersion !== undefined)
     const recorded = metadata.Status === "Cancelled" ? "cancelled" : "failed"
     try {
       await storage.put(`${job.backupFolder}/metadata.json`, JSON.stringify(metadata, null, 2), undefined, true)

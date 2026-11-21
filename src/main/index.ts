@@ -1,4 +1,5 @@
 import { requestWindowsContent } from "./app-backup/windows-helper"
+import { OmissionPolicyStore } from "./backup/omission-policy"
 import { requireCaptureEnabled } from "./app-backup/capture-policy"
 import { checkCaptureMetadata } from "./app-backup/capture-preflight"
 import { restoreCapturedApp } from "./app-backup/restore"
@@ -90,7 +91,7 @@ import { knownFeedbackPage, type FeedbackSendResult, type FeedbackSnapshot } fro
 import { planGuard } from "./api/plan-gates"
 import { cisGuard } from "./api/cis-gate"
 import { DisclaimerAcknowledgements, disclaimerGuard } from "./disclaimer"
-import { migrateLegacyOibRuns, setOibStore } from "./oib/service"
+import { migrateLegacyOibRuns, setOibOmissionPolicy, setOibStore } from "./oib/service"
 import { setOibCacheDir } from "./oib/source"
 import { setFrameworkStore } from "./frameworks/workspaces"
 import { internalCisBenchmarksEnabled, isAdmittedAssessStatus, setCisBenchmarksPlanProvider, setCisEntitlementProvider, setFrameworkExportSaver, setInternalCisBenchmarksProvider } from "./frameworks/service"
@@ -433,7 +434,32 @@ async function bootstrap(): Promise<void> {
   // portal route, so no restore, revert or other change can ever run with them.
   const backupReader = new BackupReaderService(tokenStore, { fetch: bridgedFetch })
   const moduleSettings = new ModuleSettings(appStore)
+  const omissionPolicies = new OmissionPolicyStore(appStore, bridgedFetch)
+  const cloudPolicyAccount = (tenantId: string): string | undefined => {
+    const raw = appStore.get(`${RENDERER_STORAGE_PREFIX}tenuvault_cloud_backup_${tenantId.toLowerCase()}`)
+    if (!raw) return undefined
+    const config = JSON.parse(raw) as { tenantId?: string; storageAccount?: string }
+    if (config.tenantId !== tenantId.toLowerCase() || !config.storageAccount) throw new Error("The tenant's cloud backup setup could not be read.")
+    return config.storageAccount
+  }
+  const omissionAccess = (tenantId: unknown) => {
+    if (!isGuid(tenantId)) throw new Error("Choose a tenant.")
+    const profile = tenantProfile(tenantId)
+    if (!profile) throw new Error("Connect the tenant before changing backup settings.")
+    return {
+      tenantId,
+      destination: profile.storageAccountName,
+      cloud: cloudPolicyAccount(tenantId),
+      token: async () => (await tokenFor(tenantId, profile.clientId, "https://storage.azure.com/.default")).accessToken,
+    }
+  }
+  const readOmissionForTenant = (tenant: string) => {
+    const { tenantId, destination, cloud, token } = omissionAccess(tenant)
+    return omissionPolicies.read(tenantId, destination, cloud, token)
+  }
+  setOibOmissionPolicy(readOmissionForTenant)
   const engine = new BackupEngine({
+    omissionPolicy: (request, tokens) => omissionPolicies.read(request.tenantId, request.storageAccountName, cloudPolicyAccount(request.tenantId), tokens.storage),
     fetch: bridgedFetch,
     getToken: backupAccess.getToken,
     enabledModules: (tenantId) => moduleSettings.enabled(tenantId),
@@ -476,6 +502,7 @@ async function bootstrap(): Promise<void> {
     return account.clientId
   }
   const featureDeps: FeatureDeps = {
+    omissionPolicy: readOmissionForTenant,
     records,
     plan: (tenantId) => license.requireEntitlement(tenantId),
     sameLicense: (a, b) => {
@@ -1364,6 +1391,16 @@ async function bootstrap(): Promise<void> {
     } finally { importingArchive = false }
   })
   handleTrusted("backups:settings", () => backupSettings())
+  handleTrusted("backups:omission", (_event, tenantId: unknown) => {
+    const { tenantId: tenant, destination, cloud, token } = omissionAccess(tenantId)
+    return omissionPolicies.read(tenant, destination, cloud, token, true)
+  })
+  handleTrusted("backups:setOmission", async (_event, tenantId: unknown, enabled: unknown, scripts: unknown) => {
+    const { tenantId: tenant, destination, cloud, token } = omissionAccess(tenantId)
+    if (typeof enabled !== "boolean" || typeof scripts !== "boolean") throw new Error("Choose which backup values to leave out.")
+    if (engine.liveRuns(tenant).length) throw new Error("Wait for this tenant's backups to finish before changing the omission policy.")
+    await omissionPolicies.save(tenant, destination, cloud, token, { enabled, scripts })
+  })
   handleTrusted("backups:inventoryProblem", (_event, tenantId: unknown) => {
     if (!isGuid(tenantId)) throw new Error("Unknown tenant.")
     return localInventoryProblem(getCheckStore(), localFolder(), tenantId)

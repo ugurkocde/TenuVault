@@ -21,6 +21,7 @@ export interface ReadOptions {
    * Reader's read anyway. A masked snapshot is never
    * restorable (see the registry's restorable checks), so it can only record that the value exists.
    */
+  omitEncryptedOma?: boolean
   keepMasked?: (error: unknown) => boolean
 }
 
@@ -63,7 +64,8 @@ export async function readObject(type: IntuneType, id: string, graph: GraphReade
     }
     detail[extra.property] = entries
   }
-  for (const secret of type.secrets?.(detail) ?? []) {
+  if (options.omitEncryptedOma) await expandNested(detail, graph, new Set())
+  for (const secret of options.omitEncryptedOma ? [] : type.secrets?.(detail) ?? []) {
     let plain: Item
     try {
       plain = await graph.get(secret.path)
@@ -77,6 +79,21 @@ export async function readObject(type: IntuneType, id: string, graph: GraphReade
   }
   delete detail["@odata.context"]
   return detail
+}
+
+async function expandNested(value: unknown, graph: GraphReader, seen: Set<string>): Promise<void> {
+  if (!value || typeof value !== "object") return
+  for (const [key, entry] of Object.entries(value)) {
+    if (!key.endsWith("@odata.nextLink") || typeof entry !== "string") continue
+    const property = key.slice(0, -"@odata.nextLink".length)
+    const record = value as Item
+    const existing = record[property]
+    if (!Array.isArray(existing) || seen.has(entry) || seen.size >= 1000) throw new Error("Invalid expanded Graph collection")
+    seen.add(entry)
+    record[property] = [...existing, ...(await graph.list(entry))]
+    delete record[key]
+  }
+  for (const entry of Object.values(value)) await expandNested(entry, graph, seen)
 }
 
 /**

@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "vitest"
 import { createHash } from "node:crypto"
 import { INTUNE_TYPES, typeForFolder } from "../src/shared/intune/registry"
+import { verifyProjectedSnapshot } from "../src/portal/lib/policies/backup-manifest"
 import { listSnapshot } from "../src/shared/intune/read"
 import { comparableSnapshot } from "../src/shared/intune/compare"
 import { COMPLIANCE_SETTING_KEYS, COMPLIANCE_SETTINGS_ID } from "../src/shared/intune/compliance-settings"
@@ -101,7 +102,7 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
   it("carries a plain runbook version, which the app does not flag for upgrade", () => {
     const version = RUNBOOK_VERSION
     // 1.3.0 adds change reports on top of the first plain runbook, 1.2.0; 1.4.0 records how a run started.
-    expect(version).toBe("1.4.0")
+    expect(version).toBe("1.6.0")
     expect(PLAIN_CLOUD_RUNBOOK).toBe("1.2.0")
     expect(cloudRunbookNeedsUpgrade(version!)).toBe(false)
     expect(cloudRunbookNeedsUpgrade("1.1.0")).toBe(true)
@@ -207,6 +208,20 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
     expect(parseCloudStatus(JSON.parse(failedStatus!.body!), "11111111-2222-3333-4444-555555555555")).toMatchObject({ lastStatus: "Failed" })
     expect(failed!.calls.some((call) => call.method === "Put" && call.uri.includes("/tenuvault-backup-results/cloud-backup-outcomes/run-"))).toBe(true)
     expect(failed!.calls.some((call) => call.uri.includes("/intune-backups/backup-"))).toBe(false)
+  }, 60_000)
+
+  it.runIf(Boolean(pwsh))("uses the existing storage identity to omit credentials and stops on an enrolled policy read failure", () => {
+    const [, , , , , , , active, missing, graphError] = runPlainFixture()
+    const blobs = writtenBlobs(active!)
+    const folder = folderOf(blobs)
+    const projected = blobs.get(`${folder}/.omitted/DeviceConfigurations/Baseline Wi-Fi.json`)!
+    const manifest = JSON.parse(blobs.get(`${folder}/metadata.json`)!)
+    expect(manifest).toMatchObject({ OmissionVersion: 1, OmissionPolicyGeneration: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", SkippedTypes: ["DeviceConfigurations"], ActualSkippedTypes: [] })
+    expect(verifyProjectedSnapshot(projected, { ...manifest.Items["DeviceConfigurations/cfg-1"], id: "cfg-1" })).toHaveProperty("displayName", "Baseline Wi-Fi")
+    expect(blobs.has(`${folder}/DeviceConfigurations/Baseline Wi-Fi.json`)).toBe(false)
+    expect(JSON.stringify([active, missing, graphError])).not.toMatch(/omission-test-value|omission-test-secret-reference|getOmaSettingPlainTextValue/)
+    expect(missing!.error).toContain("omission policy could not be verified")
+    expect(missing!.calls.some(({ uri }) => uri.startsWith("https://graph.microsoft.com") || uri.includes("/intune-backups/backup-"))).toBe(false)
   }, 60_000)
 
   it.runIf(Boolean(pwsh))("saves a list-only type from its list entry, with the desktop snapshot and fingerprint", () => {

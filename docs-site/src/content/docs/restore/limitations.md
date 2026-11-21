@@ -146,3 +146,7 @@ The journal keeps up to 1,000 records. When it is full, TenuVault removes comple
 * [What gets backed up](/backups/coverage/)
 * [Multi Admin Approval and TenuVault](/restore/multi-admin-approval/)
 * [Troubleshooting](/troubleshooting/)
+
+## Credential availability
+
+Policies with omitted values require another backup to be restored. Microsoft Graph returns null for pre-shared keys on iOS and Windows Wi-Fi configuration profiles, so a restore of those profiles does not bring the key back in either backup mode.

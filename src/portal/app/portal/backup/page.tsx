@@ -388,6 +388,7 @@ export default function BackupRestorePage() {
                           <div>
                             <span className="text-xs text-gray-500">Items</span>
                             <p className="mt-0.5 font-medium text-gray-900">{backup.totalPolicies}</p>
+                            {!!backup.omittedPolicies && <p className="text-xs text-gray-500">{backup.omittedPolicies} with values left out</p>}
                           </div>
                           <div>
                             <span className="text-xs text-gray-500">Size</span>
@@ -595,6 +596,7 @@ function BackupDetails({ backup, first, storageAccountName, downloading, exporti
         </div>
       )}
 
+      {!!backup.omittedPolicies && <p className="mb-4 text-sm text-gray-600">{backup.omittedPolicies} policies had values left out. Restore preview lists which values are unavailable.</p>}
       <div className="mb-6 grid grid-cols-2 gap-4 text-sm lg:grid-cols-4">
         {[
           ["Items", String(backup.totalPolicies)],

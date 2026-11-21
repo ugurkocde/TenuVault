@@ -215,3 +215,7 @@ Skipped items, and failed items that left nothing behind, have no button. An inc
 * [What cannot be restored and restore write history](/restore/limitations/)
 * [Disaster recovery](/restore/disaster-recovery/)
 * [Drift detection](/drift/), for reverting a single changed policy
+
+## Policies with values left out
+
+Restore preview lists the fields left out and identifies policies you cannot select. A full restore processes eligible policies and lists the blocked ones in its results. Replace, copy, repair and retry all require a backup that contains the omitted values. A ZIP import preserves the restriction.

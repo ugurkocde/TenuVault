@@ -1,10 +1,13 @@
 import { coveredFolders, type ScopeMetadata } from "./scope"
+import type { OmittedField } from "./secret-omission"
 import { stoppedEarly } from "./backup-status"
 
 /** Per item fingerprints a backup's metadata.json holds, keyed by "<type folder>/<Intune ID>". */
 export type BackupItems = Record<string, {
   file: string
   hash: string
+  omitted?: OmittedField[]
+  rawHash?: string
   /**
    * For types whose assignments earlier versions could not read (assignmentsFormerlyExpanded): the hash
    * with `assignments: []`, as those versions recorded it.
@@ -52,7 +55,7 @@ export function comparable(metadata: BackupFingerprint | null | undefined): bool
  * Items added, changed and removed between an older and a newer backup. Only types both backups hold a
  * complete copy of are compared, so a backup that left apps out does not report every app as removed.
  */
-export function compareBackups(older: BackupFingerprint, newer: BackupFingerprint): ItemChange[] {
+export function compareBackups(older: BackupFingerprint, newer: BackupFingerprint, includeProjectionCandidates = false): ItemChange[] {
   const before = itemsOf(older)
   const after = itemsOf(newer)
   if (!before || !after) return []
@@ -66,7 +69,7 @@ export function compareBackups(older: BackupFingerprint, newer: BackupFingerprin
     if (!inScope(key)) continue
     const previous = before[key]
     if (!previous) changes.push({ ...split(key), change: "added", file: item.file })
-    else if (!sameItem(previous, item)) changes.push({ ...split(key), change: "modified", file: item.file, previousFile: previous.file })
+    else if ((includeProjectionCandidates || (!previous.omitted && !item.omitted)) && !sameItem(previous, item)) changes.push({ ...split(key), change: "modified", file: item.file, previousFile: previous.file })
   }
   for (const [key, item] of Object.entries(before)) {
     if (inScope(key) && !after[key]) changes.push({ ...split(key), change: "removed", file: item.file })
@@ -81,7 +84,9 @@ export function compareBackups(older: BackupFingerprint, newer: BackupFingerprin
  * assignments now is not a change.
  */
 export function sameItem(previous: BackupItems[string], item: BackupItems[string]): boolean {
+  // Projection pairs need an object comparison when their fingerprints disagree.
   if (previous.hash === item.hash) return true
+  if (previous.omitted || item.omitted) return false
   // A backup that could not decrypt a value is compared with the value masked on both sides.
   if ((previous.secretsMasked || item.secretsMasked) && previous.hashWithMaskedSecrets !== undefined) return previous.hashWithMaskedSecrets === item.hashWithMaskedSecrets
   return previous.hashWithEmptyAssignments === undefined && item.hashWithEmptyAssignments !== undefined && previous.hash === item.hashWithEmptyAssignments

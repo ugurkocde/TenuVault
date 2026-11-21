@@ -226,3 +226,7 @@ A refusal that retrying cannot fix (an unknown or expired certificate, a missing
 * [Create a storage account for TenuVault](/getting-started/create-storage-account/#optional-let-the-backup-reader-write-backups): the Azure administrator's half of step 3
 * [App registration and delegated permissions](/security/permissions/)
 * [Settings](/settings/#backup-reader): where the card and its controls are described
+
+## Secret omission
+
+The Backup Reader follows the tenant's **Leave secret values out of policy backups** setting. In this mode it does not request the decrypted values of OMA-URI strings. If the tenant uses a shared Azure policy, the Backup Reader uses its existing storage identity to read it even when it saves backups on this device. An unreadable policy stops the backup. [Backup coverage](/backups/coverage/#leave-secret-values-out-of-policy-backups)

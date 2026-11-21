@@ -170,6 +170,8 @@ export interface BackupMetadata {
   Status?: unknown
   status?: unknown
   TenantId?: unknown
+  OmissionVersion?: unknown
+  OmissionScripts?: unknown
   Trigger?: unknown
   [key: string]: unknown
 }

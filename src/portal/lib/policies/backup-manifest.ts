@@ -1,17 +1,22 @@
+import { hasOmissions, OMISSION_BLOCKER, OMISSION_MARKER, OMISSION_VERSION, type OmittedField } from "../../../shared/intune/secret-omission"
+import { readBytesCapped } from "../../../shared/capped-body"
+import { MAX_BACKUP_ARCHIVE_BYTES } from "../../../shared/constants"
 import { createHash } from "node:crypto"
 import { comparableSnapshot } from "../../../shared/intune/compare"
 import type { Item } from "../../../shared/intune/registry"
 import { manifestStatus, stoppedEarly } from "../../../shared/intune/backup-status"
 
 /** One recorded backup item: the Intune object ID and the fingerprint of its backed-up content. */
-export interface ManifestEntry { id: string; hash: string }
+export interface ManifestEntry { id: string; hash: string; omitted?: OmittedField[]; rawHash?: string }
 
 /** The fingerprint a backup records for a snapshot, without the fields Intune changes on every read or write. */
 export const snapshotHash = (snapshot: Item) => createHash("sha256").update(JSON.stringify(comparableSnapshot(snapshot))).digest("base64").slice(0, 22)
 
 /** Recorded backup items by blob path, or null for legacy backups that hold no inventory. */
 export function backupManifest(metadata: Record<string, any> | null, backupId: string): Map<string, ManifestEntry> | null {
+  if (metadata?.OmissionVersion !== undefined && metadata.OmissionVersion !== OMISSION_VERSION) throw new Error("Unsupported backup omission format")
   const items = metadata?.Items
+  if (metadata?.OmissionVersion !== undefined && items === undefined) throw new Error("The backup has no omission inventory.")
   if (items === undefined) return null
   if (!items || typeof items !== "object" || Array.isArray(items)) throw new Error("Invalid backup inventory manifest")
   const entries = new Map<string, ManifestEntry>()
@@ -24,7 +29,8 @@ export function backupManifest(metadata: Record<string, any> | null, backupId: s
     if (!folder || !id || typeof file !== "string" || !file || file.includes("/") || file.includes("\\") || typeof hash !== "string" || !hash) throw new Error("Invalid backup inventory manifest")
     const path = `${backupId}/${folder}/${file}`
     if (entries.has(path)) throw new Error("Invalid backup inventory manifest")
-    entries.set(path, { id, hash })
+    if (item.omitted !== undefined && (metadata?.OmissionVersion !== OMISSION_VERSION || !validOmissions(item.omitted) || !validRawHash(item.rawHash))) throw new Error("Invalid backup omission inventory")
+    entries.set(path, { id, hash, ...(item.omitted ? { omitted: item.omitted, rawHash: item.rawHash } : {}) })
   }
   return entries
 }
@@ -53,7 +59,7 @@ export function incompleteReason(metadata: Record<string, any> | null, manifest:
     if (unlisted.length) return "A backup file is not listed in the backup manifest. The backup was not restored."
     if (full) {
       const listed = new Set(paths)
-      const missing = [...manifest.keys()].filter((path) => !listed.has(path))
+      const missing = [...manifest.entries()].filter(([path, entry]) => !entry.omitted && !listed.has(path))
       if (missing.length) return `This backup is incomplete: ${missing.length} file(s) listed in the backup manifest are missing. Restore from a complete backup instead.`
     }
   }
@@ -75,5 +81,35 @@ export function checkRestoreManifest(metadata: Record<string, any> | null, backu
 
 /** Throws when a snapshot is not the object, or not the content, its backup manifest records. */
 export function verifySnapshot(snapshot: Item, expected: ManifestEntry | undefined): void {
+  if (expected?.omitted || hasOmissions(snapshot)) throw new Error(OMISSION_BLOCKER)
   if (expected && (snapshot.id !== expected.id || snapshotHash(snapshot) !== expected.hash)) throw new Error("This backup file does not match its recorded fingerprint. It was not restored.")
+}
+
+const validRawHash = (hash: unknown): hash is string => typeof hash === "string" && /^[a-f0-9]{64}$/.test(hash)
+const reasons = new Set(["encrypted-oma", "typed-secret", "enrollment-credential", "credential", "script"])
+
+export function validOmissions(value: unknown): value is OmittedField[] {
+  return Array.isArray(value) && value.length > 0 && value.every((field) =>
+    field && typeof field.path === "string" && field.path.startsWith("/") && reasons.has(field.reason))
+}
+
+export function verifyProjectedSnapshot(raw: string | Buffer, expected: ManifestEntry): Item {
+  const unreadable = () => new Error("The projected backup file does not match its omission inventory.")
+  if (!validOmissions(expected.omitted) || !validRawHash(expected.rawHash) || createHash("sha256").update(raw).digest("hex") !== expected.rawHash) throw unreadable()
+  let snapshot: Item
+  try { snapshot = JSON.parse(String(raw)) as Item } catch { throw unreadable() }
+  const marker = snapshot?.[OMISSION_MARKER]
+  if (!marker || typeof marker !== "object" || Array.isArray(marker) || marker.version !== OMISSION_VERSION || !validOmissions(marker.fields) ||
+      marker.fields.length !== expected.omitted.length || marker.fields.some((field, index) => field.path !== expected.omitted![index]!.path || field.reason !== expected.omitted![index]!.reason) ||
+      snapshot.id !== expected.id) throw unreadable()
+  const { [OMISSION_MARKER]: _marker, ...content } = snapshot
+  if (snapshotHash(content) !== expected.hash) throw unreadable()
+  return snapshot
+}
+
+
+export async function readProjectedSnapshot(response: Response, expected: ManifestEntry): Promise<Item> {
+  const raw = await readBytesCapped(response, MAX_BACKUP_ARCHIVE_BYTES)
+  if (!raw) throw new Error("The projected backup file is too large to read.")
+  return verifyProjectedSnapshot(Buffer.from(raw), expected)
 }

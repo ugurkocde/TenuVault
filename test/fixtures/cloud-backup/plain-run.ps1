@@ -23,6 +23,9 @@ $script:failGraphToken = $false
 $script:failDetail = $false
 $script:failReportList = $false
 $script:failCompliance = $false
+$script:omit = $false
+$script:policyMissing = $false
+$script:failOmittedRead = $false
 
 function Get-TvManagedIdentityToken {
     param([string]$Resource)
@@ -37,6 +40,11 @@ function Invoke-TvHttp {
     if ($script:failCompliance -and $Uri -like "https://graph.microsoft.com/beta/deviceManagement/deviceCompliancePolicies*") { throw [TvHttpError]::new(500, "HTTP 500") }
     $body = if ($null -ne $BodyBytes) { [Text.Encoding]::UTF8.GetString($BodyBytes) } else { $null }
     $script:calls.Add([pscustomobject]@{ uri = $Uri; method = $Method; contentType = $ContentType; ifNoneMatch = $Headers["If-None-Match"]; body = $body })
+    if ($Method -eq "Get" -and $Uri -like "*/.tenuvault-control/*") {
+        if (-not $script:omit -or ($script:policyMissing -and $Uri.EndsWith("secret-omission.json"))) { throw [TvHttpError]::new(404, "HTTP 404") }
+        $text = '{"version":1,"tenantId":"11111111-2222-3333-4444-555555555555","generation":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","enabled":true,"scripts":false}'
+        return @{ Status = 200; Bytes = [Text.Encoding]::UTF8.GetBytes($text); Text = $text }
+    }
     $text = '{"value":[]}'
     if ($Uri -eq "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations") {
         $text = '{"value":[{"id":"cfg-1","displayName":"Baseline Wi-Fi"}]}'
@@ -45,7 +53,11 @@ function Invoke-TvHttp {
         $text = '{"value":[{"id":"ap-1","serialNumber":"SN-0001","manufacturer":"Contoso","model":"Laptop 7","groupTag":"Sales","displayName":null,"userPrincipalName":"","lastContactedDateTime":"2026-11-01T10:00:00Z","enrollmentState":"enrolled","deviceAccountPassword":"secret","productKey":"PK-1","managedDeviceId":"md-1"}]}'
     } elseif ($Uri -like "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations/cfg-1*") {
         if ($script:failDetail) { throw [TvHttpError]::new(401, "HTTP 401") }
+        if ($script:failOmittedRead) { throw [TvHttpError]::new(400, "omission-test-value-397c6d") }
         $text = '{"@odata.context":"x","id":"cfg-1","displayName":"Baseline Wi-Fi","lastModifiedDateTime":"2026-11-01T10:00:00Z","assignments":[]}'
+        if ($script:omit) {
+            $text = '{"id":"cfg-1","displayName":"Baseline Wi-Fi","omaSettings":[{"@odata.type":"#microsoft.graph.omaSettingString","isEncrypted":true,"value":"omission-test-value-397c6d","secretReferenceValueId":"omission-test-secret-reference","omaUri":"./Secret"}],"settings":[{"@odata.type":"#microsoft.graph.deviceManagementConfigurationSecretSettingValue","value":"omission-test-value-397c6d"}]}'
+        }
     }
     return @{ Status = 200; Bytes = [Text.Encoding]::UTF8.GetBytes($text); Text = $text }
 }
@@ -105,4 +117,18 @@ foreach ($value in @("Manual", "Nightly")) {
     $output = @()
     try { $output = @(Invoke-TvBackup) } catch { $errorText = $_.Exception.Message }
     Write-Output (@{ calls = @($script:calls.ToArray()); output = @($output | ForEach-Object { [string]$_ }); error = $errorText } | ConvertTo-Json -Compress -Depth 5)
+}
+
+
+# Exercise the cloud producer with omission, a missing enrolled policy, and an error with an operand.
+$script:omit = $true
+foreach ($case in @("on", "missing", "graphError")) {
+    $script:calls.Clear()
+    $script:OutcomeSent = $false
+    $script:policyMissing = $case -eq "missing"
+    $script:failOmittedRead = $case -eq "graphError"
+    $errorText = $null
+    $output = @()
+    try { $output = @(Invoke-TvBackup) } catch { $errorText = $_.Exception.Message }
+    Write-Output (@{ calls = @($script:calls.ToArray()); output = @($output); error = $errorText } | ConvertTo-Json -Compress -Depth 5)
 }

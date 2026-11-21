@@ -53,3 +53,5 @@ For a customized OIB baseline, **OIB updates** offers the platform's latest OIB 
 
 - **With the tenant**: deviations between the version and the tenant's Settings Catalog policies, from the latest complete backup or a live read.
 - **With a framework**: OpenIntuneBaseline (the latest `main` commit), UK NCSC, your saved Microsoft, STIG or Custom packs, and the native framework comparisons (NIST, ISO 27001, Essential Eight, Cyber Essentials and others). These comparisons use the baseline instead of the tenant and are labelled "compared with baseline <name> v<n>, not with the live tenant". A baseline holds no assignments and no other policy types, so anything that depends on them is shown as unknown, never as matching or missing.
+
+When secret omission is enabled, rollback captures leave out the classified values. The rollback preview identifies the policies that need another recovery source. [Backup coverage](/backups/coverage/#leave-secret-values-out-of-policy-backups)

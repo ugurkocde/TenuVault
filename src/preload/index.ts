@@ -85,6 +85,8 @@ const bridge: TenuVaultPreloadBridge = {
     importRecoveryKey: (recoveryKey) => invoke("backups:importRecoveryKey", recoveryKey),
     verifyAzureStorage: (tenantId, clientId, storageAccountName) =>
       invoke("backups:verifyAzureStorage", tenantId, clientId, storageAccountName),
+    omission: (tenantId) => invoke("backups:omission", tenantId),
+    setOmission: (tenantId, enabled, scripts) => invoke("backups:setOmission", tenantId, enabled, scripts),
     scope: (tenantId) => invoke("backups:scope", tenantId),
     setScope: (tenantId, scope) => invoke("backups:setScope", tenantId, scope),
     failedAttempts: (tenantId) => invoke("backups:failedAttempts", tenantId),

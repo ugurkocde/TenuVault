@@ -159,3 +159,7 @@ If a stored backup keyring is malformed, TenuVault reports an error and preserve
 * [Choose where backups are stored](/getting-started/choose-storage/)
 * [Backup storage and retention](/backups/storage/)
 * [Disaster recovery](/restore/disaster-recovery/)
+
+## Omission and backup encryption
+
+The tenant's **Leave secret values out of policy backups** setting controls which values TenuVault saves. Azure backups remain plain JSON protected by Azure storage access and encryption at rest. Backups on this device remain encrypted with AES-256-GCM. Treat downloaded ZIPs and retained opaque policy payloads as sensitive. [Backup coverage](/backups/coverage/#leave-secret-values-out-of-policy-backups)

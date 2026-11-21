@@ -1,6 +1,7 @@
 import { readOwnedBackup, UNTAGGED_BACKUP } from "~/lib/policies/backup-owner"
 import { checkRestoreManifest, verifySnapshot } from "~/lib/policies/backup-manifest"
 import { grantedPermissions } from "../../../../shared/services/token"
+import { OMISSION_BLOCKER } from "../../../../shared/intune/secret-omission"
 import { validPolicyPath } from "~/lib/policies/restore"
 import { isGraphId, isGuid } from "../../../../shared/security"
 import { graphCaller, Restorer } from "~/lib/policies/graph-restore"
@@ -84,6 +85,7 @@ export async function POST(request: NextRequest) {
     if (!isGraphId(policyId)) {
       return NextResponse.json({ error: 'Invalid policy ID' }, { status: 400 })
     }
+    if (typeof backupPath === "string" && backupPath.split("/")[1] === ".omitted") return NextResponse.json({ error: OMISSION_BLOCKER }, { status: 400 })
     if (!validPolicyPath(backupPath, backupPath.split('/')[0] ?? '')) {
       return NextResponse.json({ error: 'Invalid policy backup path' }, { status: 400 })
     }
@@ -107,6 +109,7 @@ export async function POST(request: NextRequest) {
     if (!checked.ok) return NextResponse.json({ error: checked.error }, { status: 400 })
 
     // Fetch the policy content from the backup
+    if (checked.manifest?.get(backupPath)?.omitted) return NextResponse.json({ error: OMISSION_BLOCKER }, { status: 400 })
     const policyUrl = `https://${storageAccountName}.blob.core.windows.net/intune-backups/${backupPath.split("/").map(encodeURIComponent).join("/")}`
     console.log("Attempting to fetch policy from:", policyUrl)
     

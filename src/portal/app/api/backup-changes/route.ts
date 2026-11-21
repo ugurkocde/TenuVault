@@ -1,9 +1,9 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { decodeXml, listBlobPages } from "~/lib/storage/list"
 import { typeForFolder } from "../../../../shared/intune/registry"
-import { comparable, compareBackups, type BackupFingerprint } from "../../../../shared/intune/backup-changes"
+import { compareBackupFiles } from "~/lib/policies/compare-backups"
+import { comparable, type BackupFingerprint } from "../../../../shared/intune/backup-changes"
 import { compareObjects } from "../detect-drifts/route"
-import { withoutUnreadAssignments } from "../../../../shared/intune/read"
 import { readOwnedBackup } from "~/lib/policies/backup-owner"
 
 /** Changed items that also get a field by field comparison; the rest are listed without one. */
@@ -31,15 +31,6 @@ export async function POST(request: NextRequest) {
   const accessToken = (await tokenResponse.json()).access_token as string
 
   const container = `https://${storageAccountName}.blob.core.windows.net/intune-backups`
-  const read = async (path: string) => {
-    const response = await fetch(`${container}/${path.split("/").map(encodeURIComponent).join("/")}`, {
-      headers: { "x-ms-version": "2021-12-02", Authorization: `Bearer ${accessToken}` },
-    })
-    if (response.status === 404) return null
-    if (!response.ok) throw new Error(`Backup storage returned ${response.status}. Check storage access and retry.`)
-    return response.json()
-  }
-
   try {
     const readBlob = (name: string) => fetch(`${container}/${name.split("/").map(encodeURIComponent).join("/")}`, {
       headers: { "x-ms-version": "2021-12-02", Authorization: `Bearer ${accessToken}` },
@@ -73,27 +64,15 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ backupId, comparedWith: null, changes: [] })
     }
 
-    const changes = compareBackups(previous.metadata, current)
-    let detailed = 0
-    const items = await Promise.all(
-      changes.map(async (change) => {
-        const type = typeForFolder(change.folder)
-        const name = (change.file ?? "").replace(/\.json$/, "")
-        const base = { ...change, name, typeLabel: type?.label ?? change.folder, area: type?.area ?? "Other" }
-        if (change.change !== "modified" || detailed++ >= MAX_DETAILED) return base
-        const [before, after] = await Promise.all([
-          read(`${previous!.id}/${change.folder}/${change.previousFile}`),
-          read(`${backupId}/${change.folder}/${change.file}`),
-        ])
-        if (!before || !after) return base
-        // Field level changes, capped so one large policy does not flood the response.
-        const fields = compareObjects(...withoutUnreadAssignments(type, before, after)).slice(0, 50)
-        return { ...base, fields }
-      }),
-    )
+    const { entries, partial } = await compareBackupFiles(previous, { id: backupId, metadata: current }, readBlob, compareObjects, MAX_DETAILED)
+    const items = entries.map(({ change, fields }) => {
+      const type = typeForFolder(change.folder)
+      const name = (change.file ?? "").replace(/\.json$/, "")
+      return { ...change, name, typeLabel: type?.label ?? change.folder, area: type?.area ?? "Other", ...(fields ? { fields } : {}) }
+    })
     const order = { removed: 0, modified: 1, added: 2 }
     items.sort((a, b) => order[a.change] - order[b.change] || a.typeLabel.localeCompare(b.typeLabel) || a.name.localeCompare(b.name))
-    return NextResponse.json({ backupId, comparedWith: previous.id, changes: items })
+    return NextResponse.json({ backupId, comparedWith: previous.id, changes: items, partial })
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Changes could not be listed." }, { status: 500 })
   }

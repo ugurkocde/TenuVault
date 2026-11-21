@@ -7,7 +7,7 @@ description: Every control on the Settings page, what it does and when to use it
 
 Choose a section in the list on the left to open it: **Sign-in**, **Services and permissions**, **Storage and recovery**, **Background runner**, **Notifications**, **PDF branding**, **Updates**, **Appearance** and **About**. One section shows at a time, starting with **Sign-in**. When no tenant on this computer is on Pro or MSP, **Notifications** and **PDF branding** carry a **Pro** badge in the list; both sections still open. **Notifications** links to the [Alerts](/notifications/) page in the sidebar, where alerts, channels, change watching and deliveries are set up. On a narrow window the list becomes a row above the section.
 
-Settings apply to this computer only. Other admins who use TenuVault have their own settings.
+Most settings apply to this computer. The backup omission policy is shared when the tenant uses Azure producers.
 
 ## Appearance
 
@@ -46,6 +46,12 @@ To add or remove tenants, use **Tenants**. See [Manage tenants](/tenants/).
   </a>
   <figcaption>Sign-in lists each tenant with Sign in again and Change storage. Example connected tenants. Select the image to view it full size.</figcaption>
 </figure>
+
+### Leave secret values out of policy backups
+
+In **Sign-in**, find the tenant in the **Tenants** card and turn on **Leave secret values out of policy backups**. The setting is off by default. Turn on **Also leave out script content** if you also want to exclude script bodies.
+
+Before changing either option, pause backup schedules and wait for active backups to finish on every computer and in Azure. Upgrade every desktop and cloud runbook that backs up the tenant. For tenants with Azure producers, the storage account used by the cloud runbook holds the shared policy, including when the desktop saves backups to this device. For tenants with only device storage, set the option on each installation that runs backups. If you move a device-only setting to Azure, select **Apply policy to Azure backup storage** after pausing the writers. Changes apply to future backups. [Backup coverage](/backups/coverage/#leave-secret-values-out-of-policy-backups)
 
 ## Services and permissions
 

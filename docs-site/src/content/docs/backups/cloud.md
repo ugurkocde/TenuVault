@@ -171,3 +171,9 @@ To stop cloud backups for a tenant, run the setup script with `-Remove`: it dele
 * [Backup storage and retention](/backups/storage/)
 * [Backup Reader for scheduled backups](/backups/backup-reader/)
 * [Conditional Access and TenuVault](/security/conditional-access/)
+
+## Secret omission for cloud backups
+
+Republish runbook version 1.6.0 or later before enabling **Leave secret values out of policy backups**. Use the current setup script or Deploy to Azure upgrade. The runbook reads the tenant policy in the backup container with its existing managed identity. There is no job parameter for overriding it. An unreadable policy or a missing policy for an enrolled tenant fails the backup.
+
+Pause the schedule and drain active cloud and desktop backups before changing the policy. Use the same Azure policy account for all producers. When the desktop stores backups locally, paste the cloud setup into TenuVault so its local backup producer reads the same policy. [Settings reference](/settings/#leave-secret-values-out-of-policy-backups)

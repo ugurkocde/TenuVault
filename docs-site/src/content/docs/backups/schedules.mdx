@@ -193,3 +193,7 @@ To stop automatic restarts, open **Settings** > **Background runner**, click **R
 ## Related pages
 
 * [Set up and schedule Microsoft Intune backups](https://www.tenuvault.com/guides/intune-backup-setup): the setup guide, on the product site
+
+## Schedules and secret omission
+
+Scheduled backups follow the tenant's current policy. Pause schedules and wait for active runs to finish before changing what backups keep. For Azure schedules, republish the current runbook before enabling the option. [Cloud backups](/backups/cloud/#secret-omission-for-cloud-backups)

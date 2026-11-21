@@ -1,3 +1,4 @@
+import { hasOmissions, projectRollback, type OmissionOptions } from "../../shared/intune/secret-omission"
 import { approvalMessage } from "../../shared/intune/approval"
 import { randomUUID } from "node:crypto"
 import { graphCaller, readLive, Restorer, type GraphCall } from "../../portal/lib/policies/graph-restore"
@@ -49,6 +50,11 @@ const failure = (folder: string, error: string) =>
   folder === "DriverUpdateProfiles" && /^An error has occurred|forbidden/i.test(error) ? `${error.replace(/\.?\s*$/, ".")} ${DRIVER_LICENSE_NOTE}` : error
 
 let store: KeyValueStore | null = null
+let readOmissionPolicy: ((tenantId: string) => Promise<OmissionOptions>) | undefined
+
+export function setOibOmissionPolicy(read: typeof readOmissionPolicy): void {
+  readOmissionPolicy = read
+}
 const progress = new Map<string, OibProgress>()
 
 /** The encrypted app store that keeps runs and validation history; set once at startup. */
@@ -425,6 +431,7 @@ async function deploy(body: RecordJson, kind: OibRun["kind"]): Promise<OibRun> {
         await requireReusable(body, tenant, backup.folder, written)
         backupFolder = backup.folder
       }
+      const omission = await readOmissionPolicy?.(tenant)
       const run: OibRun = {
         runId: randomUUID(), tenantId: tenant, createdAt: new Date().toISOString(), kind, platform, reference: pack.catalog.reference, commit: pack.catalog.commit,
         ...(backupFolder ? { backupFolder } : {}), backupMode: backup.mode, ...(pilot ? { pilotGroupId: pilot.toLowerCase() } : {}), created: [], updated: [], failed: [], skipped: [],
@@ -460,7 +467,7 @@ async function deploy(body: RecordJson, kind: OibRun["kind"]): Promise<OibRun> {
           const type = typeForFolder(policy.folder)!
           let before: Item | undefined
           try {
-            before = await readLive(graph, type, item.targetId!)
+            before = await readLive(graph, type, item.targetId!, { omitEncryptedOma: omission?.enabled })
           } catch (error) {
             run.failed.push({ name: policy.name, error: `The current policy could not be read, so it was not changed: ${message(error)}` })
             continue
@@ -478,6 +485,9 @@ async function deploy(body: RecordJson, kind: OibRun["kind"]): Promise<OibRun> {
             continue
           }
           if (outcome.success || outcome.partial) {
+            before = projectRollback(policy.folder, before, omission)
+            const warnings = [...(outcome.warnings ?? [])]
+            if (hasOmissions(before)) warnings.push("Values were left out of the saved previous version. This update cannot be undone automatically.")
             run.updated.push({ folder: policy.folder, id: item.targetId!, name: policy.name, previousName: typeof previous === "string" ? previous : item.targetId!, before,
               ...(outcome.partial ? { partial: true } : {}), ...(outcome.warnings ? { warnings: outcome.warnings } : {}) })
             saveRun(run)

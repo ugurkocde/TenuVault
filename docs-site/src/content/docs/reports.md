@@ -111,3 +111,7 @@ Like the scheduled backups themselves, this runs only while TenuVault is running
 * [Compare backups](/backups/compare/): the changes of one backup in Backup History
 * [Drift detection](/drift/): act on recent changes, with revert and restore
 * [Notifications](/notifications/): alerts and Intune change digests in Teams, email or webhooks
+
+## Change reports with omitted values
+
+Desktop and cloud change reports compare the values available in both backups. Changes to retained fields, new policies and deleted policies can still appear. The report records when some values could not be compared. This also applies to comparisons across a change in the tenant's omission setting.

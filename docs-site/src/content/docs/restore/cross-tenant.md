@@ -119,3 +119,5 @@ For Dev to Prod promotion, select the production tenant and open **Changes** > *
 * [Disaster recovery](/restore/disaster-recovery/)
 * [What cannot be restored](/restore/limitations/)
 * [Plans and features](/licensing/)
+
+Cross-tenant restore blocks policies with omitted values. Choose a backup that includes the values needed for those policies before copying them.

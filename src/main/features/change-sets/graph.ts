@@ -1,5 +1,6 @@
 import { approvalMessage, type ApprovalSignal } from "../../../shared/intune/approval"
 import { readLive, type GraphCall } from "../../../portal/lib/policies/graph-restore"
+import type { ReadOptions } from "../../../shared/intune/read"
 import { buildRestorePlan, buildUpdatePlan, resolveStep } from "../../../shared/intune/restore-plan"
 import type { IntuneType, Item, Json, Step } from "../../../shared/intune/registry"
 import { isGraphId } from "../../../shared/security"
@@ -91,7 +92,7 @@ export async function getOne(graph: GraphCall, path: string): Promise<Item | nul
 }
 
 /** The live object as a backup reads it, or null when it does not exist. */
-export async function readCurrent(graph: GraphCall, type: IntuneType, id: string): Promise<Item | null> {
+export async function readCurrent(graph: GraphCall, type: IntuneType, id: string, options?: ReadOptions): Promise<Item | null> {
   let failedStatus = 0
   const tracking: GraphCall = async (method, path, body, options) => {
     const response = await graph(method, path, body, options)
@@ -99,7 +100,7 @@ export async function readCurrent(graph: GraphCall, type: IntuneType, id: string
     return response
   }
   try {
-    return (await readLive(tracking, type, id)) ?? null
+    return (await readLive(tracking, type, id, options)) ?? null
   } catch (error) {
     const status = error instanceof Error && "status" in error && typeof error.status === "number" ? error.status : failedStatus || 502
     throw new GraphReadError(error instanceof Error ? error.message : String(error), status)
@@ -122,12 +123,12 @@ export interface Observation {
 }
 
 /** Reads what one operation would change in the target and fingerprints it. */
-export async function observe(graph: GraphCall, type: IntuneType, operation: { action: OperationAction; targetId: string | null; name: string }, memo?: ListingMemo): Promise<Observation> {
+export async function observe(graph: GraphCall, type: IntuneType, operation: { action: OperationAction; targetId: string | null; name: string }, memo?: ListingMemo, options?: ReadOptions): Promise<Observation> {
   if (operation.action === "create") {
     const ids = await sameNameIds(graph, type, operation.name, memo)
     return { snapshot: null, redacted: false, sameNameIds: ids, fingerprint: operationFingerprint("create", { snapshot: null, sameNameIds: ids }) }
   }
-  const live = await readCurrent(graph, type, operation.targetId!)
+  const live = await readCurrent(graph, type, operation.targetId!, options)
   if (!live) return { snapshot: null, redacted: false, sameNameIds: [], fingerprint: "missing" }
   const { snapshot, redacted } = sanitizeSnapshot(type, live)
   return { snapshot, redacted, sameNameIds: [], fingerprint: operationFingerprint(operation.action, { snapshot, sameNameIds: [] }) }
