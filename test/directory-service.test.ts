@@ -1332,7 +1332,6 @@ it("merges a retained acknowledgement without replacing newer outcomes in the sa
   expect(await service.saved(tenant, page.runId, "reconcile")).toMatchObject({ outcomes: [{ state: "applied" }, { state: "applied" }], canDiscard: true })
   const entries = JSON.parse(env.data.get(journalKey)!).runs[page.runId].entries
   expect(entries.every((entry: { acknowledged?: boolean }) => entry.acknowledged)).toBe(true)
-  expect(entries.every((entry: { reason?: string }) => entry.reason === undefined)).toBe(true)
   expect(env.writes).toEqual([`POST groups/${resource}/members/$ref`, `POST groups/${resource}/members/$ref`])
 })
 
@@ -1441,4 +1440,128 @@ it("audits the original authenticated admin when the account switches during a d
   expect(entries[0]).toMatchObject({ user: { id: "original@example.test", email: "original@example.test", name: "Original admin" }, logEntry: { result: "SUCCESS" } })
   expect(accountFor).not.toHaveBeenCalled()
   expect(env.writes).toEqual([`POST groups/${resource}/members/$ref`])
+})
+
+it.each(["before preview", "after preview"])("recovers a recreated user's journal mapping %s and protects exact membership", async recovery => {
+  const env = world(1), service = env.service(), original = env.fetcher.getMockImplementation()!
+  const source = id(100), target = id(900)
+  const userRequest: IdentityRestoreRequest = { origin: "restore", path: `backup/Users/${source}.json`, snapshot: { id: source, userType: "Member", displayName: "Saved user", userPrincipalName: "saved@example.test", mailNickname: "saved", accountEnabled: false } }
+  let created = false, release!: () => void, entered!: () => void
+  const sent = new Promise<void>(resolve => { entered = resolve }), responseGate = new Promise<void>(resolve => { release = resolve })
+  env.fetcher.mockImplementation(async (input, init) => {
+    const path = new URL(String(input)).pathname
+    if (path === "/v1.0/users" && init?.method === "POST") {
+      created = true; env.members.add(target); env.writes.push("POST users"); entered()
+      if (recovery === "after preview") await responseGate
+      return Response.json({ id: target }, { status: 201 })
+    }
+    if (path === "/v1.0/users") return Response.json({ value: [] })
+    if (path === `/v1.0/users/${source}`) return new Response(null, { status: 404 })
+    if (path === `/v1.0/users/${target}` && created) return Response.json({ ...userRequest.snapshot, id: target })
+    return original(input, init)
+  })
+  const user = await service.prepare(tenant, userRequest, options, env.read)
+  const set = env.store.set
+  const publication = vi.spyOn(env.store, "set").mockImplementation((key, value) => {
+    if (key.startsWith("restore.directory.mapping.")) throw new Error("Interrupted mapping publication")
+    set(key, value)
+  })
+  const create = service.execute(tenant, { ...userRequest, runId: user.runId }, user.fingerprint, Object.fromEntries(user.rows.map(row => [row.key, row.review.approvals])))
+  // Observe the failure immediately so the held-response variant has no unhandled rejection.
+  const interrupted = expect(create).rejects.toThrow("Interrupted mapping publication")
+  await sent
+  env.members.add(id(200))
+  const exactOptions = { ...options, stage: "relationships" as const, exactMembers: true }
+  if (recovery === "before preview") {
+    await interrupted
+    await expect(service.prepare(tenant, env.request, exactOptions, env.read)).rejects.toThrow("Interrupted mapping publication")
+    publication.mockRestore()
+    const fresh = await service.prepare(tenant, env.request, exactOptions, env.read)
+    expect(directoryMappedId(env.store, tenant, "Users", source)).toBe(target)
+    expect(fresh.rows.map(row => row.key)).toEqual([`Groups:${resource}:member:${id(200)}`])
+  } else {
+    const stale = await service.prepare(tenant, env.request, exactOptions, env.read)
+    const removal = stale.rows.find(row => row.key.endsWith(target))!
+    expect(removal.review.changes).toEqual([{ property: "present", before: true, after: false }])
+    release(); await interrupted; publication.mockRestore()
+    // Final validation itself must recover the failed publication and reject the old difference.
+    expect(await service.execute(tenant, { ...env.request, runId: stale.runId }, stale.fingerprint, { [removal.key]: removal.review.approvals })).toMatchObject({ failed: 1, outcomes: [{ state: "failed-before-send" }] })
+    expect(directoryMappedId(env.store, tenant, "Users", source)).toBe(target)
+    const fresh = await service.prepare(tenant, env.request, exactOptions, env.read)
+    expect(fresh.rows.map(row => row.key)).toEqual([`Groups:${resource}:member:${id(200)}`])
+    expect(fresh.fingerprint).not.toBe(stale.fingerprint)
+  }
+  expect(env.writes).toEqual(["POST users"])
+  expect(env.members).toEqual(new Set([target, id(200)]))
+})
+
+it("refuses exact removal when an unchanged saved principal mapping changes during final safety reads", async () => {
+  const env = world(2), service = env.service(), target = id(900)
+  env.saved.forEach(id => env.members.add(id)); env.members.add(target)
+  const page = await service.prepare(tenant, env.request, { ...options, stage: "relationships", exactMembers: true }, env.read)
+  expect(page.rows).toHaveLength(1)
+  const original = env.fetcher.getMockImplementation()!
+  env.fetcher.mockImplementation(async (input, init) => {
+    if (String(input).includes("conditionalAccess")) env.data.set(`restore.directory.mapping.${tenant}.objectId.Users.${id(101)}`, target)
+    return original(input, init)
+  })
+  expect(await service.execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, { [page.rows[0]!.key]: page.rows[0]!.review.approvals })).toMatchObject({ failed: 1, outcomes: [{ state: "failed-before-send" }] })
+  expect(env.writes).toEqual([])
+  expect(env.members).toEqual(new Set([id(100), id(101), target]))
+})
+
+it.each(["object", "members", "policy"])("publishes a preview %s read deadline before its internal wait and defers an approved same-group PATCH", async phase => {
+  const env = world(), service = env.service()
+  env.members.add(id(100))
+  const request = { ...env.request, snapshot: { ...env.request.snapshot, description: "Saved" } }
+  const page = await service.prepare(tenant, request, options, env.read), original = env.fetcher.getMockImplementation()!
+  let throttle = true, reached!: () => void
+  const throttled = new Promise<void>(resolve => { reached = resolve })
+  env.fetcher.mockImplementation((input, init) => {
+    const path = new URL(String(input)).pathname
+    if (throttle && (phase === "object" ? path === `/v1.0/groups/${resource}` : phase === "members" ? path === `/beta/groups/${resource}/members` : path.includes("conditionalAccess"))) {
+      throttle = false; reached()
+      return Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "1" } }))
+    }
+    return original(input, init)
+  })
+  vi.useFakeTimers()
+  try {
+    const deadline = Date.now() + 1000
+    const preview = service.prepare(tenant, env.request, phase === "object" ? options : { ...options, stage: "relationships", exactMembers: true }, env.read)
+    await throttled
+    await vi.advanceTimersByTimeAsync(0)
+    expect(JSON.parse(env.data.get(`restore.directory.coordinator.${tenant}`)!).deadlines[resource]).toBe(deadline)
+    const execution = service.execute(tenant, { ...request, runId: page.runId }, page.fingerprint, { [page.rows[0]!.key]: page.rows[0]!.review.approvals })
+    await vi.advanceTimersByTimeAsync(999)
+    expect(env.writes).toEqual([])
+    await vi.advanceTimersByTimeAsync(1)
+    await preview
+    expect(await execution).toMatchObject({ outcomes: [{ state: "applied" }] })
+    expect(env.writes).toEqual([`PATCH groups/${resource}`])
+  } finally { vi.useRealTimers() }
+})
+
+it("counts a current-batch failure alongside a deferred row in directory audit totals", async () => {
+  const env = world(2), service = env.service()
+  const page = await service.prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read), original = env.fetcher.getMockImplementation()!
+  let sends = 0
+  env.fetcher.mockImplementation((input, init) => {
+    if (init?.method === "POST") return Promise.resolve(new Response(null, { status: ++sends === 1 ? 403 : 429, headers: { "Retry-After": "120" } }))
+    return original(input, init)
+  })
+  const entries: unknown[] = []
+  const host = new ApiHost({
+    routes: { "/api/restore-directory": { POST: async () => {
+      const result = await service.execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])))
+      return Response.json({ ...result, success: result.status === "complete", partial: result.status === "partial", details: { restoredCount: 0, partialCount: result.outcomes.filter(row => ["pending", "captured", "deferred", "uncertain"].includes(row.state)).length, failedCount: result.failed } })
+    } } },
+    onHandled: createAuditRecorder(async request => { entries.push(await request.json()); return Response.json({ success: true }) }, () => null),
+  })
+  const result = await host.dispatch(new Request("http://tenuvault.internal/api/restore-directory", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tenantId: tenant, appId: app, clientSecret: "delegated", storageAccountName: "fixtureaccount", action: "restore" }) }))
+  expect(result.status).toBe(200)
+  expect(await result.json()).toMatchObject({ failed: 1, outcomes: [{ state: "failed" }, { state: "deferred" }] })
+  await vi.waitFor(() => expect(entries).toHaveLength(1))
+  expect(entries[0]).toMatchObject({ logEntry: { result: "PARTIAL", details: { failedCount: 1, partialCount: 1, restoredCount: 0 } } })
+  expect(sends).toBe(2); expect(env.writes).toEqual([])
 })

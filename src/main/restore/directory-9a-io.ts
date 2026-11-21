@@ -33,7 +33,7 @@ export function directoryPermissions(step: GuardedStep): string[] {
   return action === "create" ? ["User.Create"] : ["User.ReadUpdate.All", ...(step.desired.accountEnabled !== undefined ? ["User.EnableDisableAccount.All", "User.Read.All"] : [])]
 }
 /** The same operation evidence gates the preview and the final transport. */
-export function directory9aIO(token: string, actor: RestoreActor, safety: GuardedIO["references"], fetchImpl: typeof fetch = fetch, scan?: GuardedIO["replacedReferences"], wait?: (ms: number) => Promise<void>, signal?: AbortSignal, retryReads = true): GuardedIO & { review: (step: GuardedStep, preimage?: Item | null) => Promise<ReturnType<typeof directoryReview>>; ids: (id: string, kind: "members" | "owners") => AsyncIterable<string>; locate: (folder: "Users" | "Groups", sourceId: string) => Promise<{ action: "update" | "recycle" | "create"; current: Item | null }> } {
+export function directory9aIO(token: string, actor: RestoreActor, safety: GuardedIO["references"], fetchImpl: typeof fetch = fetch, scan?: GuardedIO["replacedReferences"], wait?: (ms: number) => Promise<void>, signal?: AbortSignal, retryReads = true, onReadThrottled?: (retryAt: number) => void): GuardedIO & { review: (step: GuardedStep, preimage?: Item | null) => Promise<ReturnType<typeof directoryReview>>; ids: (id: string, kind: "members" | "owners") => AsyncIterable<string>; locate: (folder: "Users" | "Groups", sourceId: string) => Promise<{ action: "update" | "recycle" | "create"; current: Item | null }> } {
   requireRestoreActor(token, actor)
   // Preview inventories can retry individual reads. Journalled execution uses raw
   // reads so every throttle reaches its durable entry or restarts the whole writer.
@@ -61,6 +61,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
       })
       if (response.status === 429) {
         const retryAt = directoryRetryAt(response, attempt)
+        if (method === "GET") onReadThrottled?.(retryAt)
         if (method !== "GET" || !retryReads) throw new DirectoryThrottledError(response)
         try {
           if (attempt >= DIRECTORY_RETRIES) throw new DirectoryThrottledError(response)
@@ -238,7 +239,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
   return {
     ids,
     token, type: folder => typeForFolder(folder)!, ...(scan ? { replacedReferences: scan } : {}), review,
-    read: (step, id, readSignal) => retryReads || (readSignal && readSignal !== signal) ? directory9aIO(token, actor, safety, fetchImpl, scan, wait, readSignal ?? signal, false).read(step, id, readSignal) : read(step, id),
+    read: (step, id, readSignal) => retryReads || (readSignal && readSignal !== signal) ? directory9aIO(token, actor, safety, fetchImpl, scan, wait, readSignal ?? signal, false, onReadThrottled).read(step, id, readSignal) : read(step, id),
     locate: async (folder, sourceId) => {
       const path = `${folder === "Users" ? "users" : "groups"}/${identity(sourceId)}`
       const current = await request(path)
@@ -251,7 +252,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
       return (await find(step)).map(item => step.directory?.action === "invite" ? { id: item.id!, ...sent } : item)
     },
     references: async (step, current, desired, readSignal) => {
-      if (retryReads || (readSignal && readSignal !== signal)) return directory9aIO(token, actor, safety, fetchImpl, scan, wait, readSignal ?? signal, false).references(step, current, desired, readSignal)
+      if (retryReads || (readSignal && readSignal !== signal)) return directory9aIO(token, actor, safety, fetchImpl, scan, wait, readSignal ?? signal, false, onReadThrottled).references(step, current, desired, readSignal)
       const result = await review(step)
       if (result.blocker) throw new RestoreSafetyError(result.blocker)
       const refs = await safety(step, current, desired)
@@ -259,7 +260,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
       return refs
     },
     write: async (step, body, targetId, beforeSend, run, writeSignal, onUnapplied) => {
-      if (retryReads || (writeSignal && writeSignal !== signal)) return directory9aIO(token, actor, safety, fetchImpl, scan, wait, writeSignal ?? signal, false).write(step, body, targetId, beforeSend, run, writeSignal, onUnapplied)
+      if (retryReads || (writeSignal && writeSignal !== signal)) return directory9aIO(token, actor, safety, fetchImpl, scan, wait, writeSignal ?? signal, false, onReadThrottled).write(step, body, targetId, beforeSend, run, writeSignal, onUnapplied)
       return retryDirectoryWrite(async () => {
         if (signal?.aborted) throw new RestoreWriteDeferredError("The directory write was cancelled before sending.")
         requireRestoreActor(token, actor)

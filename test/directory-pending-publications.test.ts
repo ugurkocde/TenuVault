@@ -30,3 +30,13 @@ it("drops expired unsaved deadlines from the guard while retaining unsaved outco
     expect(save).toHaveBeenCalledTimes(2)
   } finally { vi.useRealTimers() }
 })
+
+it("expires unsaved deadlines using the injected service clock", () => {
+  let now = 100
+  const tenant = new DirectoryPendingPublications(() => now).forTenant("tenant")
+  expect(() => tenant.retain(() => { throw new Error("Unavailable") }, 200)).toThrow("Unavailable")
+  now = 199
+  expect(() => tenant.beforeSend()).toThrow("unsaved Microsoft Graph")
+  now = 200
+  expect(() => tenant.beforeSend()).not.toThrow()
+})

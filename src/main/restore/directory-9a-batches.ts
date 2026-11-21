@@ -84,7 +84,7 @@ export async function executeDirectoryBatches(store: PartitionedRestoreStore, id
     // A confirmed create is resolved once both identities and its mapping are durable.
     const created = result.run.entries.filter(entry => entry.step.operation === "create" && entry.state === "applied").flatMap(entry => [entry.step.sourceId, entry.targetId!])
     if (created.length) objectState.releaseCreated(created)
-    if (result.run.entries.some(entry => ["pending", "captured", "deferred", "uncertain"].includes(entry.state))) return { status: "partial", batches: state.batch, failed: state.failed }
+    if (result.run.entries.some(entry => ["pending", "captured", "deferred", "uncertain"].includes(entry.state))) return { status: "partial", batches: state.batch, failed: state.failed + result.run.entries.filter(entry => ["blocked", "failed", "failed-before-send"].includes(entry.state)).length }
     state.warning ||= !!result.run.referenceWarning
     state.failed += result.run.entries.filter(entry => entry.state !== "applied").length
     state.cursor = page.next; state.batch++; state.done = page.next === null; save()

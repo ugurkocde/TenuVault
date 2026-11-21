@@ -4,7 +4,9 @@ import { RestoreWriteDeferredError } from "../../shared/intune/restore-guards"
 // after restart recovers only durable evidence, just like its retained outcomes.
 export class DirectoryPendingPublications {
   private readonly tenants = new Map<string, Set<{ save: () => void; retryAt?: number }>>()
+  constructor(private readonly now: () => number = Date.now) {}
   forTenant(tenant: string) {
+    const now = this.now
     const key = tenant.toLowerCase()
     let pending = this.tenants.get(key)
     if (!pending) { pending = new Set(); this.tenants.set(key, pending) }
@@ -25,7 +27,7 @@ export class DirectoryPendingPublications {
       beforeSend() {
         let retryAt = 0
         for (const entry of pending) {
-          if ((entry.retryAt ?? 0) <= Date.now()) delete entry.retryAt
+          if ((entry.retryAt ?? 0) <= now()) delete entry.retryAt
           retryAt = Math.max(retryAt, entry.retryAt ?? 0)
         }
         if (retryAt) throw new RestoreWriteDeferredError("An unsaved Microsoft Graph Retry-After deadline defers directory writes for this tenant. Resume after the deadline.", retryAt)

@@ -1,3 +1,4 @@
+import { DirectoryPrincipalMappings } from "./directory-principal-mappings"
 import { DirectoryPendingPublications } from "./directory-pending-publications"
 import { captureDirectoryExecutionActor } from "../api/execution-metadata"
 import { directoryPagePrefix, directoryObjectState } from "./directory-object-state"
@@ -29,12 +30,12 @@ import type { RestoreConnection } from "./service"
 import type { IdentityRestoreRequest } from "./dispatch"
 
 export interface DirectoryOptions { stage: "object" | "relationships"; exactMembers: boolean; exactOwners: boolean; previousRunId?: string }
-export interface DirectoryPage { inventory?: { id: string; count: number; offset: number; targetId: string }; run: GuardedRun; rows: Array<{ key: string; review: DirectoryReview }>; more: boolean; options: DirectoryOptions; selection?: string[] }
+export interface DirectoryPage { inventory?: { id: string; count: number; offset: number; targetId: string; principalMappings?: { parts: number; fingerprint: string } }; run: GuardedRun; rows: Array<{ key: string; review: DirectoryReview }>; more: boolean; options: DirectoryOptions; selection?: string[] }
 const fail = (message: string): never => { throw new RestoreSafetyError(message) }
 const key = (tenant: string, id: string) => `restore.directory.review.${tenant.toLowerCase()}.${id}`
 /** Owned backup readers are supplied by the authenticated route, never by the renderer. */
 export class DirectoryRestoreService {
-  private readonly pending = new DirectoryPendingPublications()
+  private readonly pending = new DirectoryPendingPublications(() => this.now())
   private readonly running = new Map<string, AbortController>()
   constructor(private readonly store: PartitionedRestoreStore, private readonly recovery: RecoveryAccounts, private readonly connection: (tenant: string) => Promise<RestoreConnection>, private readonly fetchImpl: typeof fetch = fetch, private readonly protectedAppIds: (tenant: string) => readonly string[] = () => [], private readonly settings?: Pick<ModuleSettings, "get">, private readonly now: () => number = Date.now) {}
   private async context(tenant: string, onThrottled?: (retryAt: number) => void, validatedConnection?: RestoreConnection) {
@@ -61,9 +62,13 @@ export class DirectoryRestoreService {
       const granted = grantedPermissions(connection.token)
       // Unrelated policy reads are advisory and never add a permission to directory restore.
       if (!granted || INTUNE_TYPES.some(type => type.restoreSafety !== "identity" && !type.singleton && !type.staticIds && !REFERENCE_SCAN_EXCLUDED.has(type.folder) && !canBackUp(type.folder, granted))) throw new Error("Reference scan read access is unavailable")
-      return referenceMatches(connection.token, mappings, this.fetchImpl, { signal })
-    })
-    const applicationIO = directory9bIO(connection.token, actor, this.fetchImpl, () => this.protectedAppIds(tenant), () => this.settings?.get(tenant).entra)
+      return referenceMatches(connection.token, mappings, async (input, init) => {
+        const response = await this.fetchImpl(input, init)
+        if (response.status === 429) onThrottled?.(new DirectoryThrottledError(response).retryAt!)
+        return response
+      }, { signal })
+    }, undefined, undefined, true, onThrottled)
+    const applicationIO = directory9bIO(connection.token, actor, this.fetchImpl, () => this.protectedAppIds(tenant), () => this.settings?.get(tenant).entra, undefined, onThrottled)
     for (const adapter of [io, applicationIO]) {
       adapter.now = this.now
       adapter.persistRetry = (_step, journal, coordinator, retryAt) => this.persistRetry(tenant, retryAt, journal, coordinator)
@@ -116,7 +121,7 @@ export class DirectoryRestoreService {
     this.requireAccess(tenant, folder!)
     const snapshot = request.snapshot, sourceId = snapshot.id
     if (!isGuid(sourceId)) fail("The directory source ID is missing.")
-    const { actor, io } = await this.context(tenant)
+    const { actor, io } = await this.context(tenant, retryAt => this.recordSourceThrottle(tenant, folder!, sourceId as string, retryAt))
     directoryObjectState(this.store, tenant, "").recoverMappings([{ folder: folder!, sourceId: sourceId as string }])
     const mapped = directoryMappedId(this.store, tenant, folder!, sourceId as string)
     const object = await directoryObjectStep(folder as "Users" | "Groups", snapshot, io, undefined, mapped)
@@ -145,7 +150,8 @@ export class DirectoryRestoreService {
     else if (!inventory) {
       if (object.directory?.action !== "update") fail("Restore the directory object before reviewing its relationships.")
       const target = object.targetId!
-      const mapPrincipal = async (id: string) => directoryMappedId(this.store, tenant, "Users", id) ?? directoryMappedId(this.store, tenant, "Groups", id) ?? id
+      const principalMappings = new DirectoryPrincipalMappings(this.store, tenant, run.id)
+      const mapPrincipal = async (id: string) => principalMappings.capture(id)
       const saved = async function* (kind: "members" | "owners") {
         const declaration = snapshot[kind] as Item | undefined
         if (declaration?.format !== "sorted-id-shards-v1" || declaration.complete !== true || !Number.isSafeInteger(declaration.count) || Number(declaration.count) < 0 || Number(declaration.count) > 500_000 || declaration.shards !== Math.ceil(Number(declaration.count) / LARGE_SHARD_ITEMS) || typeof declaration.hash !== "string") fail("The saved relationship inventory is incomplete.")
@@ -163,8 +169,8 @@ export class DirectoryRestoreService {
       }
       const empty = async function* () {}
       steps = directoryRelationshipSteps(folder as "Users" | "Groups", sourceId as string, target, snapshot, io, {
-        members: { saved: folder === "Groups" ? mappedDirectoryIds(saved("members"), mapPrincipal) : empty(), current: folder === "Groups" ? mappedDirectoryIds(io.ids(target, "members"), async id => id) : empty() },
-        owners: { saved: folder === "Groups" ? mappedDirectoryIds(saved("owners"), mapPrincipal) : empty(), current: folder === "Groups" ? mappedDirectoryIds(io.ids(target, "owners"), async id => id) : empty() },
+        members: { saved: folder === "Groups" ? mappedDirectoryIds(saved("members"), mapPrincipal) : empty(), current: folder === "Groups" ? mappedDirectoryIds(io.ids(target, "members"), async id => { principalMappings.capture(id); return id }) : empty() },
+        owners: { saved: folder === "Groups" ? mappedDirectoryIds(saved("owners"), mapPrincipal) : empty(), current: folder === "Groups" ? mappedDirectoryIds(io.ids(target, "owners"), async id => { principalMappings.capture(id); return id }) : empty() },
         exactMembers: options.exactMembers, exactOwners: options.exactOwners, mapPrincipal, savedIdsAreTargets: true,
       }, false)
       // Persist the complete immutable difference once, with at most 50 unresolved rows per record.
@@ -179,7 +185,9 @@ export class DirectoryRestoreService {
           if (chunk.length === 50) { this.store.set(inventoryKey(part++), JSON.stringify(chunk)); chunk = [] }
         }
         if (chunk.length) this.store.set(inventoryKey(part++), JSON.stringify(chunk))
+        inventory.principalMappings = principalMappings.finish()
       } catch (error) {
+        principalMappings.discard()
         for (let index = 0; index < part; index++) this.store.delete(inventoryKey(index))
         throw error
       }
@@ -221,7 +229,7 @@ export class DirectoryRestoreService {
     const folder = request.path.split("/")[1]!, snapshot = request.snapshot
     const sourceId = request.path.split("/")[2]?.replace(/\.json$/, "")
     if (!directoryObjectId(folder, sourceId) || !directoryObjectId(folder, snapshot.id) || (folder === "OAuth2PermissionGrants" ? sourceId !== snapshot.id : sourceId!.toLowerCase() !== String(snapshot.id).toLowerCase())) fail("The selected backup filename does not match the saved application object ID.")
-    const { actor, applicationIO: io } = await this.context(tenant)
+    const { actor, applicationIO: io } = await this.context(tenant, retryAt => this.recordSourceThrottle(tenant, folder, sourceId!, retryAt))
     const readSource = async (sourceFolder: string, id: string): Promise<Item> => {
       if (!["ServicePrincipals", "Applications"].includes(sourceFolder) || !isGuid(id)) fail("Invalid saved app reference.")
       const item = await read(`${request.path.split("/")[0]}/${sourceFolder}/${id}.json`)
@@ -279,7 +287,7 @@ export class DirectoryRestoreService {
     return this.view(page)
   }
   private view(page: DirectoryPage) {
-    return { canDiscard: !directoryObjectState(this.store, page.run.tenant, page.run.id).discarded() && !this.history(page).some(({ run }) => run.entries.some(entry => entry.state === "uncertain")), runId: page.run.id, selection: page.selection, fingerprint: restoreFingerprint({ source: page.run.source!, rows: page.rows as unknown as Item["rows"], options: page.options as unknown as Item }), rows: page.rows, more: page.more, options: page.options }
+    return { canDiscard: !directoryObjectState(this.store, page.run.tenant, page.run.id).discarded() && !this.history(page).some(({ run }) => run.entries.some(entry => entry.state === "uncertain")), runId: page.run.id, selection: page.selection, fingerprint: restoreFingerprint({ source: page.run.source!, rows: page.rows as unknown as Item["rows"], options: page.options as unknown as Item, ...(page.inventory?.principalMappings ? { principalMappings: page.inventory.principalMappings.fingerprint } : {}) }), rows: page.rows, more: page.more, options: page.options }
   }
   async resume(tenant: string, request: IdentityRestoreRequest) {
     const operation = this.register(tenant, request.runId!)
@@ -321,6 +329,10 @@ export class DirectoryRestoreService {
     const io = { ...rawIO, write: ((step, body, targetId, beforeSend, run, signal, onUnapplied) => rawIO.write(step, body, targetId, () => {
       this.requireAccess(tenant, step.folder)
       if (signal?.aborted) throw new RestoreWriteDeferredError("The directory write was cancelled before sending.")
+      if (page.inventory) {
+        if (!page.inventory.principalMappings) fail("Preview these relationships again to verify their principal mappings.")
+        new DirectoryPrincipalMappings(this.store, tenant, page.inventory.id).validate(page.inventory.principalMappings!)
+      }
       this.pending.forTenant(tenant).beforeSend()
       beforeSend()
       captureDirectoryExecutionActor(connection)
@@ -334,6 +346,9 @@ export class DirectoryRestoreService {
       return { entries: entries.slice(start, end), next: end < entries.length ? String(end) : null }
     } }, io, operationSignal)
     return this.results(page, result)
+  }
+  private recordSourceThrottle(tenant: string, folder: string, sourceId: string, retryAt: number) {
+    this.persistRetry(tenant, retryAt, () => {}, () => directoryObjectState(this.store, tenant, "").recordThrottle({ folder, sourceId }, retryAt))
   }
   private recordPageThrottle(page: DirectoryPage, retryAt: number) {
     const objects = directoryObjectState(this.store, page.run.tenant, page.run.id)

@@ -17,7 +17,7 @@ const collection = (folder: string) => {
   throw new RestoreSafetyError("Outside application restore scope.")
 }
 /** Application operations plug into the existing directory journal, batching and approval service. */
-export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typeof fetch = fetch, protectedAppIds: () => readonly string[] = () => [], settings: () => ModuleSetting | undefined = () => undefined, wait?: (ms: number) => Promise<void>) {
+export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typeof fetch = fetch, protectedAppIds: () => readonly string[] = () => [], settings: () => ModuleSetting | undefined = () => undefined, wait?: (ms: number) => Promise<void>, onReadThrottled?: (retryAt: number) => void) {
   requireRestoreActor(token, actor)
   const request = async (path: string, method = "GET", body?: Item, signal?: AbortSignal): Promise<Item | null> => {
     if (signal?.aborted) throw new RestoreWriteDeferredError("The application request was cancelled before sending.")
@@ -28,7 +28,11 @@ export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typ
     })
     if (response.status === 404 && method === "GET") return null
     if (!response.ok) {
-      if (response.status === 429) throw new DirectoryThrottledError(response)
+      if (response.status === 429) {
+        const error = new DirectoryThrottledError(response)
+        if (method === "GET") onReadThrottled?.(error.retryAt!)
+        throw error
+      }
       if (method === "GET" && (response.status === 408 || response.status >= 500)) throw new DirectoryReadDeferredError()
       // A dispatched PATCH may have committed before a timeout or gateway failure.
       // Keep the durable send marker uncertain so restart reconciles by read-back only.
