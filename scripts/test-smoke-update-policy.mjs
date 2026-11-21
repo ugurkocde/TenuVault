@@ -8,6 +8,7 @@
 import { spawn, spawnSync } from "node:child_process"
 import { lstatSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir, userInfo } from "node:os"
+import { createServer } from "node:net"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
 import { disableAutoUpdate } from "./smoke-update-policy.mjs"
@@ -32,6 +33,23 @@ const powershell = (script) => run(join(process.env.SystemRoot ?? "C:\\Windows",
 const work = mkdtempSync(join(tmpdir(), "tenuvault-policy-test-"))
 const holders = new Set()
 let failures = 0
+
+/**
+ * Runs fn holding the smoke runs' lock (the loopback port 47319), so no smoke run is changing the
+ * store while a fixture is put in or taken out. Throws when another run holds it.
+ */
+async function locked(fn) {
+  const server = createServer()
+  await new Promise((resolve, reject) => {
+    server.once("error", (error) => reject(new Error(`a smoke run holds the policy lock, so the store was not touched: ${error.message}`)))
+    server.listen({ port: 47319, host: "127.0.0.1", exclusive: true }, resolve)
+  })
+  try {
+    return await fn()
+  } finally {
+    await new Promise((resolve) => server.close(resolve))
+  }
+}
 
 function assert(condition, message) {
   if (!condition) throw new Error(message)
@@ -104,12 +122,13 @@ function plantKey(values) {
   assert(result.status === 0, `could not create the fixture key: ${result.stderr}`)
 }
 
-/** Removes only what carries the fixture mark or a smoke run's mark. */
-function clear() {
+/** Removes only what carries the fixture mark or a smoke run's mark, holding the lock. */
+const clear = () => locked(clearUnlocked)
+function clearUnlocked() {
   if (platform === "darwin") {
     for (const path of [FILE, USER_FILE, STAGE]) {
       if (!present(path)) continue
-      const marked = ["TenuVaultSmokeRun", FIXTURE].some((key) => sudo(["/usr/bin/plutil", "-extract", key, "xml1", "-o", "/dev/null", path]).status === 0)
+      const marked = ["TenuVaultSmokeRun", FIXTURE].some((key) => sudo(["/usr/bin/plutil", "-extract", key, "xml1", "-o", "-", path]).status === 0)
       if (marked) sudo(["/bin/rm", "-f", path])
     }
     return
@@ -176,22 +195,20 @@ try {
   await check("refuses to edit a policy it did not write, and leaves it byte for byte", async () => {
     try {
       // A root-only binary profile on macOS, a value of 0 on Windows.
-      if (platform === "darwin") plant(FILE, "<key>DisableAutoUpdate</key><false/><key>Other</key><string>kept</string>", "600")
-      else plantKey({ DisableAutoUpdate: ["DWord", 0] })
+      await locked(() => (platform === "darwin" ? plant(FILE, "<key>DisableAutoUpdate</key><false/><key>Other</key><string>kept</string>", "600") : plantKey({ DisableAutoUpdate: ["DWord", 0] })))
       await refuses(/does not edit/)
     } finally {
-      clear()
+      await clear()
     }
   })
 
   await check("refuses when another policy for TenuVault applies, even where it would not write", async () => {
     try {
       // A user profile that leaves updates on (macOS); a key with another policy only (Windows).
-      if (platform === "darwin") plant(USER_FILE, "<key>DisableAutoUpdate</key><false/>")
-      else plantKey({ DisableSetupDiagnostics: ["DWord", 1] })
+      await locked(() => (platform === "darwin" ? plant(USER_FILE, "<key>DisableAutoUpdate</key><false/>") : plantKey({ DisableSetupDiagnostics: ["DWord", 1] })))
       await refuses(/does not edit/)
     } finally {
-      clear()
+      await clear()
     }
   })
 
@@ -210,19 +227,28 @@ try {
     await roundTrip()
   })
 
-  await check("removes what a run killed halfway through its write left", async () => {
-    try {
-      // macOS: the staged file, not yet renamed. Windows: the key with the mark but not the value.
-      if (platform === "darwin") plant(STAGE, "<key>DisableAutoUpdate</key><true/><key>TenuVaultSmokeRun</key><string>1@x</string>")
-      else {
-        const result = powershell(`New-Item -Path '${HKCU}' | Out-Null\nNew-ItemProperty -LiteralPath '${HKCU}' -Name TenuVaultSmokeRun -PropertyType String -Value '1@x' | Out-Null`)
-        assert(result.status === 0, `could not plant the mark: ${result.stderr}`)
+  // What a kill partway through a write leaves. macOS: the staged file, not yet renamed. Windows:
+  // the key with the mark but not the value, or the key alone. --clean must remove each of them.
+  const halfway = platform === "darwin"
+    ? { "the staged file": () => plant(STAGE, "<key>DisableAutoUpdate</key><true/><key>TenuVaultSmokeRun</key><string>1@x</string>") }
+    : {
+        "the mark without the value": () => assert(powershell(`New-Item -Path '${HKCU}' | Out-Null\nNew-ItemProperty -LiteralPath '${HKCU}' -Name TenuVaultSmokeRun -PropertyType String -Value '1@x' | Out-Null`).status === 0, "could not plant the mark"),
+        "an empty key": () => assert(powershell(`New-Item -Path '${HKCU}' | Out-Null`).status === 0, "could not create the key"),
       }
-      await roundTrip()
-    } finally {
-      clear()
-    }
-  })
+  for (const [left, put] of Object.entries(halfway)) {
+    await check(`--clean removes ${left} a run killed halfway through its write left`, async () => {
+      try {
+        await locked(put)
+        assert(snapshot() !== null, "nothing was planted")
+        const cleaned = run(process.execPath, [join(import.meta.dirname, "smoke-update-policy.mjs"), "--clean"])
+        assert(cleaned.status === 0, `--clean failed: ${cleaned.stderr || cleaned.stdout}`)
+        assert(snapshot() === null, `--clean left ${left}`)
+        await roundTrip()
+      } finally {
+        await clear()
+      }
+    })
+  }
 
   await check("--clean removes what a killed run left", async () => {
     const child = await holder()
@@ -234,7 +260,7 @@ try {
   })
 } finally {
   for (const child of holders) await kill(child)
-  clear()
+  await clear().catch((error) => console.log(`Cleanup skipped: ${error.message}`))
   rmSync(work, { recursive: true, force: true })
 }
 

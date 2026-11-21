@@ -15,16 +15,21 @@
  * - A run only ever works on an empty store. When updates are already off by policy it changes
  *   nothing; when any other TenuVault policy exists (device or user profile, HKLM or HKCU key) it
  *   refuses, so no one else's settings are ever changed or put back.
- * - What a run writes says so, and appears and disappears in one step: one plist file renamed
- *   into place (macOS), one registry key created and deleted whole (Windows), each carrying the
- *   value TenuVaultSmokeRun next to the policy.
+ * - What a run writes says so: the value TenuVaultSmokeRun sits next to the policy, in one plist
+ *   file renamed into place (macOS) or in one registry key the run creates (Windows). The policy
+ *   never exists without the mark.
  * - Before it looks at the store, a run waits until no process from a killed run is still
- *   writing it. The next run that holds the lock and finds a marked store removes it first.
+ *   writing it. The next run that holds the lock removes a marked store, and on Windows an empty
+ *   policy key (a run killed right after creating it), before anything else.
+ *
+ * Out of scope: a configuration profile or Group Policy delivered for the first time in the
+ * moment between a run's check of the store and its write or removal. The harness is for CI
+ * runners and developer machines, and it refuses to start where any TenuVault policy exists.
  *
  * `node scripts/smoke-update-policy.mjs --clean` removes what a killed run left, without a smoke run.
  */
 import { spawn, spawnSync } from "node:child_process"
-import { lstatSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { lstatSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { createServer } from "node:net"
 import { tmpdir, userInfo } from "node:os"
 import { join } from "node:path"
@@ -34,7 +39,7 @@ const DOMAIN = "com.tenuvault.desktop"
 const NAME = "DisableAutoUpdate"
 const MARK = "TenuVaultSmokeRun"
 const LOCK_PORT = 47319
-const run = (command, args, options = {}) => spawnSync(command, args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, ...options })
+const run = (command, args, options = {}) => spawnSync(command, args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, timeout: 30_000, ...options })
 const failed = (result) => (result.error?.message || result.stderr?.toString() || result.stdout?.toString() || `exit ${result.status}`).trim()
 const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
 
@@ -104,8 +109,9 @@ const plistMark = (file) => {
 
 /** sudo commands of any process that name the store: a killed run's install, mv or rm. */
 function macosWriters() {
-  const listed = run("/bin/ps", ["-axo", "stat=,command="])
-  if (listed.status !== 0) return null
+  // -ww: whole command lines. ps can report an error on stderr and still exit 0.
+  const listed = run("/bin/ps", ["-axww", "-o", "stat=,command="], { timeout: 5000 })
+  if (listed.status !== 0 || listed.stderr.trim() || !listed.stdout.trim()) return null
   return listed.stdout.split("\n").filter((line) => {
     const [, stat = "", command = ""] = /^\s*(\S+)\s+(.*)$/.exec(line) ?? []
     // Only the programs a run writes with, not a shell whose script mentions them, and not a
@@ -221,7 +227,8 @@ const dwordOne = (key) => key?.kind === "DWord" && key.disable === 1
 /** The smoke's own writes: their command lines carry the WRITER tag. */
 function windowsWriters() {
   const result = powershell(`@(Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -like '*${WRITER}*' -and $_.CommandLine -notlike '*Get-CimInstance*' }).Count`)
-  return result.status === 0 ? Array.from({ length: Number(result.stdout.trim()) || 0 }) : null
+  const count = result.stdout?.trim() ?? ""
+  return result.status === 0 && /^\d+$/.test(count) ? Array.from({ length: Number(count) }) : null
 }
 
 /**
@@ -246,6 +253,15 @@ function windowsRecover() {
   if (waited) return waited
   const now = windowsRead()
   if (now.error) return now.error
+  if (now.hkcu && now.hkcu.mark == null && now.hkcu.values === 0 && now.hkcu.subkeys === 0) {
+    // An empty policy key holds no policy: what a run killed right after creating it leaves.
+    const removed = powershell(`# ${WRITER}
+$key = Get-Item -LiteralPath ${quote(HKCU)} -ErrorAction SilentlyContinue
+if ($null -ne $key -and $key.ValueCount -eq 0 -and $key.SubKeyCount -eq 0) { Remove-Item -LiteralPath ${quote(HKCU)} }`)
+    if (removed.status !== 0) return `could not remove the empty key ${HKCU}: ${failed(removed)}`
+    console.log(`Removed the empty key ${HKCU} a killed smoke run left.`)
+    return null
+  }
   if (now.hkcu?.mark == null) return null
   const failure = windowsRemove(String(now.hkcu.mark))
   if (failure) return `could not remove the ${NAME} policy a killed smoke run left: ${failure}`
@@ -263,14 +279,18 @@ function windowsChange(id) {
   return {
     apply() {
       // New-Item fails when the key appeared meanwhile, so an administrator's key is never taken
-      // over. The mark goes in first; a key this write created is removed again if it fails.
+      // over. The mark goes in first. When a later step fails, only the mark is taken back, and
+      // the key only while it is empty, so a value someone else added meanwhile stays.
       const result = powershell(`# ${WRITER}
 New-Item -Path ${quote(HKCU)} | Out-Null
 try {
   New-ItemProperty -LiteralPath ${quote(HKCU)} -Name '${MARK}' -PropertyType String -Value ${quote(id)} | Out-Null
   New-ItemProperty -LiteralPath ${quote(HKCU)} -Name '${NAME}' -PropertyType DWord -Value 1 | Out-Null
 } catch {
-  Remove-Item -LiteralPath ${quote(HKCU)} -Recurse
+  $key = Get-Item -LiteralPath ${quote(HKCU)} -ErrorAction SilentlyContinue
+  if ($null -ne $key -and [string]$key.GetValue('${MARK}', '') -eq ${quote(id)} -and $null -eq $key.GetValue('${NAME}', $null)) { Remove-ItemProperty -LiteralPath ${quote(HKCU)} -Name '${MARK}' }
+  $key = Get-Item -LiteralPath ${quote(HKCU)} -ErrorAction SilentlyContinue
+  if ($null -ne $key -and $key.ValueCount -eq 0 -and $key.SubKeyCount -eq 0) { Remove-Item -LiteralPath ${quote(HKCU)} }
   throw
 }`)
       return result.status === 0 ? null : failed(result)
@@ -334,7 +354,10 @@ export async function disableAutoUpdate(platform = process.platform) {
   return error ? { error, restore } : { restore }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href && process.argv[2] === "--clean") {
+const entry = (() => {
+  try { return process.argv[1] && pathToFileURL(realpathSync(process.argv[1])).href } catch { return null }
+})()
+if (entry && import.meta.url === entry && process.argv[2] === "--clean") {
   if (process.platform !== "darwin" && process.platform !== "win32") process.exit(0)
   const held = await lockAndRecover(process.platform)
   if (held.error) {

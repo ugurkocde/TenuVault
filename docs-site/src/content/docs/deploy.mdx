@@ -91,7 +91,7 @@ To turn updates back on, delete the value or set it to `0`.
 
 Set the managed preference `DisableAutoUpdate` to `true` (boolean) for the preference domain `com.tenuvault.desktop`.
 
-TenuVault reads the policy only from a configuration profile, which macOS keeps in `/Library/Managed Preferences/com.tenuvault.desktop.plist` for the whole device and in `/Library/Managed Preferences/<user name>/com.tenuvault.desktop.plist` for one user. The value must be a boolean. A value written with `defaults write` to a user's own preferences does not lock updates: the user and any app they run can change it. Earlier versions also read the user's own preferences, so if you set the policy that way, deploy it as a profile instead.
+Deploy it with a configuration profile. TenuVault reads the policy only from the files where macOS keeps the settings of configuration profiles, which only an administrator can write: `/Library/Managed Preferences/com.tenuvault.desktop.plist` for the whole device and `/Library/Managed Preferences/<user name>/com.tenuvault.desktop.plist` for one user. The value must be a boolean. A value written with `defaults write` to a user's own preferences does not lock updates: the user and any app they run can change it. Earlier versions also read the user's own preferences, so if you set the policy that way, deploy it as a profile instead.
 
 To deploy it with Intune:
 
