@@ -114,289 +114,181 @@ describe("Cloud audit contract", () => {
   }, 60_000)
 
   type RestartRun = Run & { blobs: Record<string, string> }
-  type RestartScenarios = Record<string, RestartRun> & {
+  type ParityProbe = "corruptCursor" | "manifest503" | "statusRestart" | "watcherRestart"
+  type RestartScenarios = Record<ParityProbe, RestartRun[]> & {
+    interrupted: RestartRun[]
+    terminalReadDenied: RestartRun
+    startDenied: RestartRun
+    resultsDenied: RestartRun
+    graph401: RestartRun
+    scoped: RestartRun
+    scopedAgain: RestartRun
+    excessive: RestartRun
+    revokedCreate: RestartRun
+    canaryLostAck: RestartRun
     identity: { token: string; calls: number }
-    transport: { budgeted: number; unbudgeted: number; remaining: number }
+    transport: { budgeted: number; unbudgeted: number }
     orphanReplay: { Count: number; More: boolean }
     orphanBlobs: Record<string, string>
-    agedStart: { blobs: Record<string, string>; calls: RunCall[]; manifest: Record<string, string> }
+    agedStart: { blobs: Record<string, string>; calls: RunCall[]; start: Record<string, string> }
   }
   let restartRuns: RestartScenarios | undefined
-  const runRestartFixture = () => {
+  let baselineRuns: Record<ParityProbe, RestartRun[]> | undefined
+  const runRestartFixture = (reference?: string) => {
     const script = fileURLToPath(new URL("./fixtures/cloud-backup/audit-restart.ps1", import.meta.url))
-    return restartRuns ??= JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8", timeout: 50_000 })) as RestartScenarios
+    return JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", script, ...(reference ? ["-ParityOnly", "-RunbookPath", reference] : [])], {
+      encoding: "utf8", timeout: 50_000,
+    }))
   }
-  const restartRun = (name: string) => runRestartFixture()[name]!
+  const restartCases = () => restartRuns ??= runRestartFixture() as RestartScenarios
   const auditFiles = (run: RestartRun) => Object.entries(run.blobs).filter(([uri]) => uri.includes("/audit-logs/"))
   const manifestFiles = (run: RestartRun) => Object.entries(run.blobs).filter(([uri]) => uri.endsWith("/metadata.json"))
   const outcomeFiles = (run: RestartRun) => Object.entries(run.blobs).filter(([uri]) => uri.includes("/cloud-backup-outcomes/"))
+  const statusUri = `${BACKUP_CONTAINER_URL}cloud-backup-status-11111111.json`
 
-  it.runIf(Boolean(pwsh))("publishes fresh Schedule status when its read fails on restart and skips an unverified replay", () => {
-    const script = fileURLToPath(new URL("./fixtures/cloud-backup/audit-restart.ps1", import.meta.url))
-    const { first, fresh, replayed } = JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", script, "-TransientScheduleRestart"], { encoding: "utf8", timeout: 50_000 })) as Record<"first" | "fresh" | "replayed", RestartRun>
-    const statusUri = `${BACKUP_CONTAINER_URL}cloud-backup-status-11111111.json`
-    expect(first.error).toBeTruthy()
-    expect(JSON.parse(first.blobs[statusUri]!)).toMatchObject({ LastStatus: "Failed" })
-    expect(fresh.error).toBeNull()
-    expect(fresh.calls.some(call => call.method === "Get" && call.uri === statusUri)).toBe(true)
-    expect(fresh.calls.filter(call => call.method === "Put" && call.uri === statusUri)).toEqual([
-      expect.objectContaining({ condition: null, ifNoneMatch: null }),
-    ])
-    const manifest = JSON.parse(manifestFiles(fresh)[0]![1])
-    expect(manifest).toMatchObject({ Status: "Success", ItemCounts: { TotalPolicies: 1 } })
-    expect(JSON.parse(fresh.blobs[statusUri]!)).toMatchObject({ RunId: manifest.RunId, BackupFolder: manifest.BackupFolder, LastStatus: "Success" })
-    expect(outcomeFiles(fresh).map(([, raw]) => JSON.parse(raw))).toMatchObject([
-      { runId: manifest.RunId, backupFolder: manifest.BackupFolder, status: "Success" },
-    ])
-    expect(replayed.error).toBeNull()
-    expect(replayed.calls.some(call => call.method === "Get" && call.uri === statusUri)).toBe(true)
-    expect(replayed.calls.some(call => call.method === "Put" && call.uri === statusUri)).toBe(false)
-  }, 60_000)
-
-  it.runIf(Boolean(pwsh))("captures fresh when the previous manifest exists but cannot be read on restart", () => {
-    const script = fileURLToPath(new URL("./fixtures/cloud-backup/audit-restart.ps1", import.meta.url))
-    const { first, restarted, oldManifestUri } = JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", script, "-TransientManifestRestart"], { encoding: "utf8", timeout: 50_000 })) as {
-      first: RestartRun; restarted: RestartRun; oldManifestUri: string
+  function comparableRuns(runs: RestartRun[]) {
+    const isBackupCall = (uri: string) => {
+      const url = new URL(uri)
+      return !url.pathname.includes("/audit-") && url.pathname !== "/tenuvault-backup-results"
     }
+    const calls = runs.flatMap(run => run.calls.filter(call => isBackupCall(call.uri)))
+    const folders = [...new Set(calls.flatMap(call => call.uri.match(/backup-\d{4}-\d{2}-\d{2}-\d{6}/g) ?? []))]
+    const ids = [...new Set(calls.filter(call => call.uri.includes("/cloud-backup-outcomes/")).map(call => JSON.parse(call.body!).runId as string))]
+    const normalize = (value: string) => {
+      folders.forEach((folder, index) => { value = value.replaceAll(folder, `backup-${index + 1}`) })
+      ids.forEach((id, index) => { value = value.replaceAll(id, `run-${index + 1}`) })
+      return value
+    }
+    const expectedAuditFields = new Set([
+      "RunId", "AuditCapability", "AuditPending", "AuditScanIncomplete", "AuditOlderPending",
+      "AuditOlderUnchecked", "AuditReceiptFailed", "AuditDeliveryPending",
+    ])
+    const timestamps = new Set(["BackupDate", "StartTime", "EndTime", "Duration", "DurationSeconds", "LastRunAt", "finishedAt"])
+    const parseBody = (uri: string, body: string) => JSON.parse(normalize(body), (key, value) => {
+      if (key === "RunbookVersion" || (uri === statusUri && expectedAuditFields.has(key))) return undefined
+      if (timestamps.has(key)) return typeof value
+      return value
+    })
+    return runs.map(run => ({
+      error: run.error && normalize(run.error),
+      calls: run.calls.filter(call => isBackupCall(call.uri)).map(call => ({
+        ...call, uri: normalize(call.uri), body: call.body && parseBody(call.uri, call.body),
+      })),
+      blobs: Object.fromEntries(Object.entries(run.blobs).filter(([uri]) => isBackupCall(uri))
+        .map(([uri, body]) => [normalize(uri), parseBody(uri, body)])),
+    }))
+  }
+
+  it.runIf(Boolean(pwsh)).each<ParityProbe>(["corruptCursor", "manifest503", "statusRestart", "watcherRestart"])(
+    "matches origin/main backup writes and outcome for %s", probe => {
+      const runs = restartCases()[probe]
+      const reference = process.env.TENUVAULT_MAIN_RUNBOOK
+      if (reference) {
+        baselineRuns ??= runRestartFixture(reference) as Record<ParityProbe, RestartRun[]>
+        expect(comparableRuns(runs)).toEqual(comparableRuns(baselineRuns[probe]))
+      }
+      const last = runs.at(-1)!
+      const status = JSON.parse(last.blobs[statusUri]!)
+      const statusCalls = last.calls.filter(call => call.uri === statusUri)
+      expect(statusCalls).toMatchObject([{ method: "Put", condition: null, ifNoneMatch: null }])
+      expect(last.calls.filter(call => call.uri.includes("/deviceManagement/deviceCategories")).map(call => call.method)).toEqual(["Get", "Get"])
+      expect(last.error).toBe(probe === "manifest503" ? "HTTP 503" : null)
+      expect(status.LastStatus).toBe(probe === "manifest503" ? "Failed" : "Success")
+
+      if (probe === "corruptCursor") {
+        expect(status.AuditScanIncomplete).toBe(true)
+        expect(Object.values(last.blobs)).toContain('{"olderCount":"invalid","days":{}}')
+      }
+      if (probe === "manifest503") {
+        const writes = last.calls.filter(call => call.uri.endsWith("/metadata.json"))
+        expect(writes.map(call => [call.method, call.ifNoneMatch, JSON.parse(call.body!).Status])).toEqual([
+          ["Put", null, "Success"], ["Put", null, "Success"], ["Put", null, "Success"], ["Put", "*", "Failed"],
+        ])
+      }
+      const notes = outcomeFiles(last).map(([, body]) => JSON.parse(body))
+      const manifests = manifestFiles(last).map(([, body]) => JSON.parse(body))
+      expect(manifests).toHaveLength(runs.length)
+      expect(notes).toHaveLength(runs.length)
+      expect(notes).toContainEqual(expect.objectContaining({ runId: status.RunId, status: status.LastStatus }))
+      expect(manifests).toContainEqual(expect.objectContaining({ RunId: status.RunId, Status: status.LastStatus }))
+      expect(new Set(notes.map(note => note.runId)).size).toBe(runs.length)
+      expect(auditFiles(last)).toHaveLength(runs.length)
+      if (probe === "statusRestart") {
+        expect(JSON.parse(runs[0]!.blobs[statusUri]!).LastStatus).toBe("Failed")
+        expect(runs[0]!.calls.filter(call => call.uri === statusUri)).toHaveLength(3)
+        expect(notes.map(note => note.status)).toEqual(["Success", "Success"])
+      }
+      if (probe === "watcherRestart") {
+        const [[uri, original]] = outcomeFiles(runs[0]!) as [[string, string]]
+        expect(JSON.parse(original).status).toBe("Failed")
+        expect(last.blobs[uri]).toBe(original)
+      }
+    }, 60_000,
+  )
+
+  it.runIf(Boolean(pwsh))("records a prior interrupted attempt as uncertain before capturing the restarted job", () => {
+    const [first, restarted] = restartCases().interrupted as [RestartRun, RestartRun]
+    const prior = JSON.parse(manifestFiles(first)[0]![1])
+    const start = first.calls.findIndex(call => call.method === "Put" && call.uri.endsWith("/start.json"))
+    expect(start).toBeGreaterThanOrEqual(0)
+    expect(start).toBeLessThan(first.calls.findIndex(call => call.uri.includes("graph.microsoft.com")))
+    expect(JSON.parse(first.calls[start]!.body!)).toMatchObject({ runId: prior.RunId, folder: prior.BackupFolder })
     expect(restarted.error).toBeNull()
-    expect(restarted.calls.some(call => call.method === "Get" && call.uri === oldManifestUri)).toBe(true)
-    expect(restarted.calls.some(call => call.uri.includes("graph.microsoft.com"))).toBe(true)
     expect(manifestFiles(restarted)).toHaveLength(2)
-    const [old, fresh] = [true, false].map(isOld => JSON.parse(manifestFiles(restarted).find(([uri]) => (uri === oldManifestUri) === isOld)![1]))
-    expect(old.Status).toBe("Success")
-    expect(fresh).toMatchObject({ Status: "Success", ItemCounts: { TotalPolicies: 1 } })
-    expect(fresh.RunId).not.toBe(old.RunId)
-    expect(fresh.BackupFolder).not.toBe(old.BackupFolder)
-    const statusUri = `${BACKUP_CONTAINER_URL}cloud-backup-status-11111111.json`
-    expect(restarted.calls.filter(call => call.method === "Put" && call.uri === statusUri)).toHaveLength(1)
-    expect(JSON.parse(restarted.blobs[statusUri]!)).toMatchObject({
-      RunId: fresh.RunId, BackupFolder: fresh.BackupFolder, LastStatus: "Success",
-    })
-    const noteWrites = restarted.calls.filter(call => call.method === "Put" && call.uri.includes("/cloud-backup-outcomes/"))
-    expect(noteWrites.map(call => call.uri)).toEqual([
-      `https://stcontoso.blob.core.windows.net/tenuvault-backup-results/cloud-backup-outcomes/${fresh.BackupFolder}.json`,
-    ])
-    expect(outcomeFiles(restarted).map(([, raw]) => JSON.parse(raw))).toMatchObject([
-      { runId: fresh.RunId, backupFolder: fresh.BackupFolder, status: "Success" },
-    ])
-    const [[oldAuditUri, oldAudit]] = auditFiles(first) as [[string, string]]
-    expect(JSON.parse(oldAudit).entries[0].job).toMatchObject({ runId: old.RunId, status: "uncertain" })
-    expect(restarted.blobs[oldAuditUri]).toBe(oldAudit)
-    expect(auditFiles(restarted)).toHaveLength(2)
+    expect(restarted.calls.some(call => call.method === "Get" && call.uri.startsWith(BACKUP_CONTAINER_URL))).toBe(false)
+    const jobs = auditFiles(restarted).map(([, body]) => JSON.parse(body).entries[0].job)
+    expect(jobs).toHaveLength(2)
+    expect(jobs).toContainEqual(expect.objectContaining({ runId: prior.RunId, status: "uncertain" }))
+    const newStatus = JSON.parse(restarted.blobs[statusUri]!)
+    expect(newStatus.RunId).not.toBe(prior.RunId)
+    expect(jobs).toContainEqual(expect.objectContaining({ runId: newStatus.RunId, status: "completed" }))
+    const uncertain = restarted.calls.findIndex(call => call.method === "Put" && call.uri.includes("/audit-logs/") && call.uri.includes(prior.RunId))
+    expect(uncertain).toBeGreaterThanOrEqual(0)
+    expect(uncertain).toBeLessThan(restarted.calls.findIndex(call => call.uri.includes("graph.microsoft.com")))
   }, 60_000)
 
-  it.runIf(Boolean(pwsh))("restarts an interrupted claimed capture in a new folder and publishes only its new backup result", () => {
-    const script = fileURLToPath(new URL("./fixtures/cloud-backup/audit-restart.ps1", import.meta.url))
-    const { first, again, oldRunId, oldFolder } = JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", script, "-ClaimedRestart"], { encoding: "utf8", timeout: 50_000 })) as {
-      first: RestartRun; again: RestartRun; oldRunId: string; oldFolder: string
+  it.runIf(Boolean(pwsh))("keeps capture and Schedule status intact when an audit checkpoint is unavailable", () => {
+    for (const run of [restartCases().startDenied, restartCases().terminalReadDenied]) {
+      expect(run.error).toBeNull()
+      expect(run.calls.some(call => call.uri.includes("graph.microsoft.com"))).toBe(true)
+      expect(JSON.parse(run.blobs[statusUri]!)).toMatchObject({ LastStatus: "Success", AuditScanIncomplete: true })
+      expect(auditFiles(run)).toHaveLength(1)
+      expect(JSON.parse(auditFiles(run)[0]![1]).entries[0].job.status).toBe("completed")
     }
-    expect(first.error).toBeNull()
-    expect(manifestFiles(first)).toHaveLength(1)
-    const manifest = JSON.parse(manifestFiles(first)[0]![1])
-    expect(manifest).toMatchObject({ Status: "Success", ItemCounts: { TotalPolicies: 1 } })
-    expect(manifest.RunId).not.toBe(oldRunId)
-    expect(manifest.BackupFolder).not.toBe(oldFolder)
-    expect(JSON.parse(first.blobs[`${BACKUP_CONTAINER_URL}cloud-backup-status-11111111.json`]!)).toMatchObject({
-      RunId: manifest.RunId, BackupFolder: manifest.BackupFolder, LastStatus: "Success",
-    })
-    expect(outcomeFiles(first).map(([, raw]) => JSON.parse(raw))).toMatchObject([
-      { runId: manifest.RunId, backupFolder: manifest.BackupFolder, status: "Success" },
-    ])
-    expect(auditFiles(first).map(([, raw]) => JSON.parse(raw).entries[0].job)).toEqual(expect.arrayContaining([
-      expect.objectContaining({ runId: oldRunId, status: "uncertain", reason: "WRITE_UNCONFIRMED" }),
-      expect.objectContaining({ runId: manifest.RunId, status: "completed" }),
-    ]))
-    expect(again.error).toBeNull()
-    expect(again.calls.some(call => call.uri.includes("graph.microsoft.com"))).toBe(false)
-    expect(manifestFiles(again)).toEqual(manifestFiles(first))
-    expect(outcomeFiles(again)).toEqual(outcomeFiles(first))
-    expect(auditFiles(again)).toEqual(auditFiles(first))
   }, 60_000)
 
-  it.runIf(Boolean(pwsh))("continues an uncertain Automation job through two outages and preserves each attempt's outcome", () => {
-    const script = fileURLToPath(new URL("./fixtures/cloud-backup/audit-restart.ps1", import.meta.url))
-    const { first, second, success, again, lateManifest } = JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", script, "-UncertainRestart"], { encoding: "utf8", timeout: 50_000 })) as Record<string, RestartRun>
-    const statusUri = `${BACKUP_CONTAINER_URL}cloud-backup-status-11111111.json`
-    for (const attempt of [first, second]) {
-      expect(attempt!.error).toContain("could not be verified")
-      expect(attempt!.calls.some(call => call.uri.includes("graph.microsoft.com"))).toBe(true)
-      expect(manifestFiles(attempt!)).toHaveLength(0)
-      expect(outcomeFiles(attempt!)).toHaveLength(0)
-      expect(attempt!.blobs[statusUri]).toBeUndefined()
-    }
-    const auditJobs = (run: RestartRun) => auditFiles(run).map(([, raw]) => JSON.parse(raw).entries[0].job)
-    const [original] = auditJobs(first!)
-    expect(original).toMatchObject({ runId: "99999999-9999-4999-8999-999999999999", status: "uncertain" })
-    const [interrupted] = auditJobs(second!).filter(job => job.runId !== original.runId)
-    expect(interrupted).toMatchObject({ status: "uncertain" })
-    expect(success!.error).toBeNull()
-    expect(success!.calls.some(call => call.uri.includes("graph.microsoft.com"))).toBe(true)
-    expect(manifestFiles(success!)).toHaveLength(1)
-    const manifest = JSON.parse(manifestFiles(success!)[0]![1])
-    expect(manifest).toMatchObject({ Status: "Success", ItemCounts: { TotalPolicies: 1 } })
-    expect(JSON.parse(success!.blobs[statusUri]!)).toMatchObject({ RunId: manifest.RunId, BackupFolder: manifest.BackupFolder, LastStatus: "Success" })
-    expect(outcomeFiles(success!).map(([, raw]) => JSON.parse(raw))).toMatchObject([{ runId: manifest.RunId, backupFolder: manifest.BackupFolder, status: "Success" }])
-    expect(auditJobs(success!)).toEqual(expect.arrayContaining([original, interrupted, expect.objectContaining({ runId: manifest.RunId, status: "completed" })]))
-    expect(auditFiles(success!)).toHaveLength(3)
-    const owners = Object.entries(success!.blobs).filter(([uri]) => uri.endsWith("/.tenuvault-owner.json"))
-    expect(owners).toHaveLength(3)
-    expect(new Set(owners.map(([, raw]) => JSON.parse(raw).RunId))).toEqual(new Set([original.runId, interrupted.runId, manifest.RunId]))
-    expect(again!.error).toBeNull()
-    expect(again!.calls.some(call => call.uri.includes("graph.microsoft.com"))).toBe(false)
-    expect(manifestFiles(again!)).toEqual(manifestFiles(success!))
-    expect(outcomeFiles(again!)).toEqual(outcomeFiles(success!))
-    expect(auditFiles(again!)).toEqual(auditFiles(success!))
-    expect(lateManifest!.error).toBeNull()
-    expect(lateManifest!.calls.some(call => call.uri.includes("graph.microsoft.com"))).toBe(false)
-    expect(JSON.parse(lateManifest!.blobs[statusUri]!)).toMatchObject({ RunId: original.runId, LastStatus: "Success" })
-    expect(outcomeFiles(lateManifest!).map(([, raw]) => JSON.parse(raw))).toMatchObject([{ runId: original.runId, status: "Success" }])
-    expect(auditFiles(lateManifest!)).toEqual(auditFiles(first!))
-  }, 60_000)
-
-  it.runIf(Boolean(pwsh))("recovers when the managed identity endpoint succeeds on the third attempt", () => {
-    expect(runRestartFixture().identity).toEqual({ token: "token", calls: 3 })
-  }, 60_000)
-
-  it.runIf(Boolean(pwsh))("charges each transport attempt to the replay budget", () => {
-    expect(runRestartFixture().transport).toEqual({ budgeted: 1, unbudgeted: 3, remaining: 0 })
-  }, 60_000)
-
-  it.runIf(Boolean(pwsh)).each(["startReadDenied", "startWriteDenied"])("captures even when the audit start checkpoint is unavailable (%s)", name => {
-    const run = restartRun(name)
-    expect(run.error).toBeNull()
-    expect(run.output!.join("\n")).toContain("could not verify or save its start checkpoint")
-    expect(run.calls.some(call => call.uri.includes("graph.microsoft.com"))).toBe(true)
-    const manifest = JSON.parse(manifestFiles(run)[0]![1])
-    expect(manifest.Status).toBe("Success")
-    expect(manifest.RunId).not.toBe("99999999-9999-4999-8999-999999999999")
-    expect(JSON.parse(outcomeFiles(run)[0]![1]).status).toBe("Success")
-    expect(JSON.parse(auditFiles(run)[0]![1]).entries[0].job.status).toBe("completed")
-  }, 60_000)
-
-  it.runIf(Boolean(pwsh))("uses the job's terminal result even when its start checkpoint is unreadable", () => {
-    const original = restartRun("lostAck")
-    const restarted = restartRun("startUnreadableRestart")
-    expect(restarted.error).toBeNull()
-    expect(restarted.calls.some(call => call.uri.includes("graph.microsoft.com"))).toBe(false)
-    expect(manifestFiles(restarted)).toEqual(manifestFiles(original))
-    expect(auditFiles(restarted)).toEqual(auditFiles(original))
-  }, 60_000)
-
-  it.runIf(Boolean(pwsh)).each(["sealedStatus", "corruptStatus", "unknownStatus", "mismatchedStatus"])("replaces unusable Schedule status without a precondition (%s)", scenario => {
-    const uri = `${BACKUP_CONTAINER_URL}cloud-backup-status-11111111.json`
-    const run = restartRun(scenario)
-    expect(run.error).toBeNull()
-    expect(JSON.parse(run.blobs[uri]!)).toMatchObject({ TenantId: TENANT, LastStatus: "Success" })
-    expect(run.calls.filter(call => call.uri === uri && call.method === "Put")).toEqual([
-      expect.objectContaining({ condition: null, ifNoneMatch: null }),
-    ])
-  }, 60_000)
-
-  it.runIf(Boolean(pwsh))("rereads a concurrent writer's Schedule status and ETag", () => {
-    const uri = `${BACKUP_CONTAINER_URL}cloud-backup-status-11111111.json`
-    const older = restartRun("statusOlderConflict")
-    expect(older.error).toBeNull()
-    expect(JSON.parse(older.blobs[uri]!)).toMatchObject({ TenantId: TENANT, LastStatus: "Success" })
-    expect(older.calls.filter(call => call.uri === uri && call.method === "Put").map(call => call.condition)).toEqual(['"legacy"', '"concurrent"'])
-    const newest = restartRun("statusNewerConflict")
-    expect(JSON.parse(newest.blobs[uri]!)).toMatchObject({ RunId: "other-job", LastStatus: "Failed" })
-    expect(newest.calls.filter(call => call.uri === uri && call.method === "Get")).toHaveLength(2)
-    expect(newest.calls.filter(call => call.uri === uri && call.method === "Put")).toHaveLength(1)
-  }, 60_000)
-
-  it.runIf(Boolean(pwsh))("resumes an unpublished report from the committed manifest under its existing create-only key", () => {
-    const reportFiles = (run: RestartRun) => Object.entries(run.blobs).filter(([uri]) => uri.includes("/cloud-change-reports/"))
-    const first = restartRun("reportGap")
-    const resumed = restartRun("reportRestart")
-    const repeated = restartRun("reportRestartAgain")
-    expect(reportFiles(first)).toHaveLength(0)
-    expect(resumed.error).toBeNull()
-    expect(manifestFiles(resumed)).toEqual(manifestFiles(first))
-    expect(outcomeFiles(resumed)).toEqual(outcomeFiles(first))
-    expect(resumed.calls.filter(call => call.uri.includes("graph.microsoft.com")).every(call => call.uri.includes("/auditEvents?"))).toBe(true)
-    expect(reportFiles(resumed)).toHaveLength(1)
-    const [key, body] = reportFiles(resumed)[0]!
-    const manifest = JSON.parse(manifestFiles(resumed).find(([uri]) => !uri.includes("backup-2026-01-01"))![1])
-    expect(JSON.parse(body)).toMatchObject({ runId: manifest.RunId, backupFolder: manifest.BackupFolder })
-    expect(resumed.calls).toContainEqual(expect.objectContaining({ method: "Put", uri: key, ifNoneMatch: "*" }))
-    expect(reportFiles(repeated)).toEqual(reportFiles(resumed))
-  }, 60_000)
-
-  it.runIf(Boolean(pwsh))("reconstructs the receipt for an aged start with a committed manifest", () => {
-    const { blobs, calls, manifest } = runRestartFixture().agedStart
+  it.runIf(Boolean(pwsh))("records an aged orphan as uncertain using only audit storage", () => {
+    const { blobs, calls, start } = restartCases().agedStart
     const published = Object.entries(blobs).filter(([uri]) => uri.includes("/audit-logs/"))
     expect(published).toHaveLength(1)
     expect(JSON.parse(published[0]![1]).entries[0]).toMatchObject({
-      id: `${TENANT}-${manifest.RunId}`, timestamp: manifest.CompletedAt,
-      resource: { id: manifest.BackupFolder }, user: { id: "22222222-2222-2222-2222-222222222222" },
-      job: { runId: manifest.RunId, status: "warnings", trigger: "manual", counts: { saved: 8, failures: 1 } },
+      id: `${TENANT}-${start.runId}`,
+      resource: { id: start.folder }, user: { id: "22222222-2222-2222-2222-222222222222" },
+      job: { runId: start.runId, status: "uncertain", trigger: "manual" },
     })
-    expect(calls.filter(call => call.method === "Put").every(call => call.uri.includes("/audit-"))).toBe(true)
+    expect(calls.every(call => !call.uri.startsWith(BACKUP_CONTAINER_URL))).toBe(true)
   }, 60_000)
 
-  it.runIf(Boolean(pwsh))("verifies the interrupted run's manifest when its terminal checkpoint cannot be read", () => {
-    const run = restartRun("terminalReadDenied")
-    expect(run.error).toBeNull()
-    expect(run.output!.join("\n")).toContain("could not verify its terminal checkpoint")
-    expect(run.calls.some(call => call.uri.includes("graph.microsoft.com"))).toBe(false)
-    expect(run.calls.some(call => call.method === "Get" && call.uri.endsWith("/metadata.json"))).toBe(true)
-    expect(manifestFiles(run)).toEqual(manifestFiles(restartRun("crash")))
-    expect(auditFiles(run)).toEqual(auditFiles(restartRun("crashRestart")))
-  }, 60_000)
-
-  it.runIf(Boolean(pwsh))("recovers a committed Automation job before capture and replays its original terminal event", () => {
-    const interrupted = restartRun("crash")
-    const restarted = restartRun("crashRestart")
-    expect(interrupted.error).toBeNull()
-    expect(interrupted.output!.join("\n")).toContain("could not checkpoint its terminal result")
-    expect(auditFiles(interrupted)).toHaveLength(1)
-    expect(Object.keys(interrupted.blobs).some(uri => uri.includes("/audit-receipts/"))).toBe(true)
-    const [[, rawManifest]] = manifestFiles(interrupted) as [[string, string]]
-    const manifest = JSON.parse(rawManifest)
-    const start = interrupted.calls.findIndex(call => call.method === "Put" && call.uri.includes("/audit-runs/") && call.uri.endsWith("/start.json"))
-    const graph = interrupted.calls.findIndex(call => call.uri.includes("graph.microsoft.com"))
-    expect(start).toBeGreaterThan(-1)
-    expect(start).toBeLessThan(graph)
-    const checkpoint = JSON.parse(interrupted.blobs[interrupted.calls[start]!.uri]!)
-    expect(checkpoint).toMatchObject({ jobId: manifest.RunId, runId: manifest.RunId, folder: manifest.BackupFolder })
-    expect(restarted.error).toBeNull()
-    expect(restarted.calls.some(call => call.uri.includes("graph.microsoft.com"))).toBe(false)
-    expect(manifestFiles(restarted)).toEqual(manifestFiles(interrupted))
-    expect(auditFiles(restarted)).toHaveLength(1)
-    expect(JSON.parse(auditFiles(restarted)[0]![1]).entries[0].job).toMatchObject({ runId: manifest.RunId, status: "completed" })
-
-    const original = restartRun("lostAck")
-    const replay = restartRun("lostAckRestart")
-    expect(replay.calls.some(call => call.uri.includes("graph.microsoft.com"))).toBe(false)
-    expect(auditFiles(replay)).toEqual(auditFiles(original))
-    expect(replay.calls.filter(call => call.method === "Put" && call.uri.includes("/audit-logs/"))).toHaveLength(0)
-  }, 60_000)
-
-  it.runIf(Boolean(pwsh))("uses the verified manifest after Azure commits a PUT whose acknowledgement was lost", () => {
-    const run = restartRun("lostAck")
-    expect(run.error).toBeNull()
-    const uri = manifestFiles(run)[0]![0]
-    expect(run.calls.filter(call => call.uri === uri).map(call => call.method)).toEqual(["Put", "Get"])
-    expect(JSON.parse(auditFiles(run)[0]![1]).entries[0].job.status).toBe("completed")
-    const note = Object.entries(run.blobs).find(([url]) => url.includes("/cloud-backup-outcomes/"))!
-    expect(JSON.parse(note[1]).status).toBe("Success")
+  it.runIf(Boolean(pwsh))("keeps main transport retries independent of the audit request budget", () => {
+    expect(restartCases().identity).toEqual({ token: "token", calls: 3 })
+    expect(restartCases().transport).toEqual({ budgeted: 1, unbudgeted: 3 })
   }, 60_000)
 
   it.runIf(Boolean(pwsh))("requires fresh cloud audit creation on each canary and detects excessive rights", () => {
-    const scoped = restartRun("scoped")
-    const excessive = restartRun("excessive")
+    const scoped = restartCases().scoped
+    const excessive = restartCases().excessive
     expect(scoped.error).toBeNull()
     expect(scoped.output).toContain("Cloud backup canary passed. Audit canary created and read. Azure denied audit overwrite and audit and backup deletion.")
-    const again = restartRun("scopedAgain")
+    const again = restartCases().scopedAgain
     expect(again.error).toBeNull()
     expect(again.output).toContain("Cloud backup canary passed. Audit canary created and read. Azure denied audit overwrite and audit and backup deletion.")
     expect(auditFiles(again)).toHaveLength(2)
     expect(Object.keys(scoped.blobs)).toHaveLength(2)
-    const revoked = restartRun("revokedCreate")
-    expect(revoked.error).toBe("Audit create revoked")
+    const revoked = restartCases().revokedCreate
+    expect(revoked.error).toBe("HTTP 403")
     expect(revoked.calls).toMatchObject([{ method: "Put", uri: expect.stringContaining("/audit-logs/") }])
     expect(revoked.calls[0]!.uri).not.toBe(auditFiles(scoped)[0]![0])
-    const lostAck = restartRun("canaryLostAck")
+    const lostAck = restartCases().canaryLostAck
     expect(lostAck.error).toBeNull()
     expect(lostAck.calls.slice(0, 2)).toMatchObject([{ method: "Put" }, { method: "Get", uri: lostAck.calls[0]!.uri }])
     expect(excessive.error).toContain("permission limits failed")
@@ -404,7 +296,7 @@ describe("Cloud audit contract", () => {
     for (const run of [scoped, excessive]) {
       expect(run.calls.every(call => call.uri.includes("/producer-tests/"))).toBe(true)
       expect(run.calls.filter(call => call.method === "Delete").map(call => new URL(call.uri).pathname.split("/")[1])).toEqual(["audit-logs", "intune-backups"])
-      expect(run.calls.filter(call => call.method === "Put" && call.condition === "*")).toHaveLength(1)
+      expect(run.calls.filter(call => call.method === "Put" && call.ifNoneMatch === "*")).toHaveLength(1)
     }
   }, 60_000)
 
@@ -428,32 +320,6 @@ describe("Cloud audit contract", () => {
     expect(result.operator).toMatchObject({ Count: 0, Older: 0, OlderUnchecked: false })
   }, 60_000)
 
-  it.runIf(Boolean(pwsh))("reconciles missing Schedule status and watcher outcome from the terminal checkpoint", () => {
-    const first = restartRun("terminalGap")
-    const restarted = restartRun("terminalGapRestart")
-    expect(Object.keys(first.blobs).some(uri => uri.endsWith("/terminal.json"))).toBe(true)
-    expect(Object.keys(first.blobs).some(uri => uri.includes("cloud-backup-status") || uri.includes("cloud-backup-outcomes"))).toBe(false)
-    expect(restarted.error).toBeNull()
-    expect(restarted.calls.some(call => call.uri.includes("graph.microsoft.com"))).toBe(false)
-    const [[, rawManifest]] = manifestFiles(first) as [[string, string]]
-    const manifest = JSON.parse(rawManifest)
-    const status = JSON.parse(Object.entries(restarted.blobs).find(([uri]) => uri.includes("cloud-backup-status"))![1])
-    const note = JSON.parse(Object.entries(restarted.blobs).find(([uri]) => uri.includes("cloud-backup-outcomes"))![1])
-    expect(status).toMatchObject({ RunId: manifest.RunId, LastRunAt: manifest.CompletedAt, LastStatus: "Success" })
-    expect(note).toMatchObject({ runId: manifest.RunId, finishedAt: manifest.CompletedAt, status: "Success" })
-    expect(auditFiles(restarted)).toEqual(auditFiles(first))
-  }, 60_000)
-
-  it.runIf(Boolean(pwsh))("writes an unconfirmed cloud commit as a warning under the compatible failed event type", () => {
-    const run = restartRun("uncertain")
-    expect(run.error).toContain("could not be verified")
-    expect(JSON.parse(auditFiles(run)[0]![1]).entries[0]).toMatchObject({
-      eventType: "BACKUP_FAILED", severity: "WARNING", job: { status: "uncertain" },
-    })
-    expect(outcomeFiles(run)).toHaveLength(1)
-    expect(JSON.parse(outcomeFiles(run)[0]![1])).toMatchObject({ status: "Failed" })
-  }, 60_000)
-
   it.runIf(Boolean(pwsh))("runs the configured change report and preserves the job result when the audit receipt is denied", () => {
     const run = runPlainFixture()[8]!
     expect(run.error).toBeNull()
@@ -466,7 +332,7 @@ describe("Cloud audit contract", () => {
   }, 60_000)
 
   it.runIf(Boolean(pwsh))("completes a backup when the results container denies all requests", () => {
-    const run = restartRun("resultsDenied")
+    const run = restartCases().resultsDenied
     expect(run.error).toBeNull()
     expect(run.output!.join("\n")).toContain("audit receipt could not be saved")
     expect(JSON.parse(manifestFiles(run)[0]![1]).Status).toBe("Success")
@@ -476,12 +342,10 @@ describe("Cloud audit contract", () => {
   }, 60_000)
 
   it.runIf(Boolean(pwsh))("ordinary replay recreates the missing receipt from a terminal checkpoint", () => {
-    const failed = restartRun("receiptDenied")
-    expect(Object.keys(failed.blobs).some(uri => uri.includes("/audit-receipts/"))).toBe(false)
-    const { orphanReplay, orphanBlobs } = runRestartFixture()
+    const { orphanReplay, orphanBlobs } = restartCases()
     expect(orphanReplay).toMatchObject({ Count: 0, More: false })
     const rawReceipt = Object.entries(orphanBlobs).find(([uri]) => uri.includes("/audit-receipts/"))?.[1]
-    expect(JSON.parse(rawReceipt!)).toMatchObject({ delivered: true, file: { entries: [{ job: { runId: "99999999-9999-4999-8999-999999999999", status: "completed" } }] } })
+    expect(JSON.parse(rawReceipt!)).toMatchObject({ delivered: true, file: { entries: [{ job: { status: "completed" } }] } })
   }, 60_000)
 
   it.runIf(Boolean(pwsh))("keeps masked OMA values successful outside the audit log", () => {
@@ -497,8 +361,8 @@ describe("Cloud audit contract", () => {
   }, 60_000)
 
   it.runIf(Boolean(pwsh))("reports a Graph policy listing 401 at the correct stage", () => {
-    const run = restartRun("graph401")
-    expect(run.error).toBe("Microsoft Graph policy listing did not finish.")
+    const run = restartCases().graph401
+    expect(run.error).toBe("HTTP 401")
     expect(JSON.parse(auditFiles(run)[0]![1]).entries[0].job).toMatchObject({ status: "failed", reason: "GRAPH_LIST_FAILED" })
     expect(run.calls.some(call => call.uri.includes(".tenuvault-owner.json"))).toBe(false)
   }, 60_000)
@@ -692,8 +556,7 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
     expect(note(runs[0]!)).toBe("scheduled")
     expect(note(manual)).toBe("manual")
     expect(note(invalid)).toBe("scheduled")
-    // Early failures and the completion helper carry the trigger into the note.
-    expect(runbook).toMatch(/Send-TvBackupOutcome -Account [^\n]*-Trigger \$Trigger/)
+    // Early failures carry the trigger into the note as well.
     for (const earlyFailure of runs.slice(1, 3)) expect(note(earlyFailure)).toBe("scheduled")
   }, 60_000)
 

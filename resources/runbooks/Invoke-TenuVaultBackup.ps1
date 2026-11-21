@@ -437,7 +437,7 @@ function Invoke-TvHttp {
         [long]$MaxBytes = 0,
         [int]$BudgetMs = 0
     )
-    $clock = [System.Diagnostics.Stopwatch]::StartNew()
+    $clock = if ($BudgetMs) { [System.Diagnostics.Stopwatch]::StartNew() }
     $attempts = if ($BudgetMs) { 1 } else { 3 }
     $lastError = $null
     foreach ($attempt in 1..$attempts) {
@@ -462,8 +462,10 @@ function Invoke-TvHttp {
             if ($cancel -and $cancel.IsCancellationRequested) { throw [TvAuditBudgetError]::new() }
             throw [TvHttpError]::new(0, (Get-TvSafeError $_.Exception.Message))
         } finally {
-            if ($cancel) { $cancel.Dispose() }
-            $request.Dispose()
+            if ($cancel) {
+                $cancel.Dispose()
+                $request.Dispose()
+            }
         }
         $status = [int]$response.StatusCode
         $retryAfter = if ($response.Headers.RetryAfter -and $response.Headers.RetryAfter.Delta) { $response.Headers.RetryAfter.Delta } else { $null }
@@ -548,7 +550,7 @@ function Set-TvBlob {
 # ---------------------------------------------------------------------------
 # The result note for the notification watcher (mirror src/shared/notifications/cloud-outcome.ts)
 # ---------------------------------------------------------------------------
-# The notification watcher leaves backup snapshots unopened: backups from runbooks
+# The notification watcher never opens backups or the status blob: backups from runbooks
 # before 1.2.0 are sealed with the recovery key, which it never has, and policy content stays
 # out of its reach. So it alerts on this note. The note goes to a container of its
 # own, never to intune-backups and never to the watcher's state container (where this
@@ -572,8 +574,7 @@ function Send-TvBackupOutcome {
         [int]$Failures = 0,
         [string[]]$FailedTypes = @(),
         # How the run started (Get-TvRunTrigger), so the watcher's alert names a run started by hand.
-        [ValidateSet("scheduled", "manual")][string]$Trigger = "scheduled",
-        [string]$FinishedAt
+        [ValidateSet("scheduled", "manual")][string]$Trigger = "scheduled"
     )
     # One note per run: the failure path can follow a Failed result that was already noted.
     if ($script:OutcomeSent) { return }
@@ -584,7 +585,7 @@ function Send-TvBackupOutcome {
         runId         = $RunId
         status        = $Status
         backupFolder  = if ($BackupFolder) { $BackupFolder } else { $null }
-        finishedAt    = if ($FinishedAt) { $FinishedAt } else { [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", [Globalization.CultureInfo]::InvariantCulture) }
+        finishedAt    = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", [Globalization.CultureInfo]::InvariantCulture)
         totalPolicies = if ($null -ne $TotalPolicies) { [int]$TotalPolicies } else { $null }
         failures      = [int]$Failures
         failedTypes   = @($FailedTypes | Where-Object { $_ } | Select-Object -First 10 | ForEach-Object { [string]$_ })
@@ -658,7 +659,7 @@ function New-TvAuditFile {
 }
 
 class TvAuditBudgetError : System.Exception {
-    TvAuditBudgetError() : base("The audit replay reached its request or time budget.") { }
+    TvAuditBudgetError() : base("Cloud backup audit reached its request or time budget.") { }
 }
 
 function Get-TvAuditRequestBudget {
@@ -711,9 +712,10 @@ function ConvertTo-TvSafeAuditFile {
     $job = $entry.job
     $tenant = $Context.TenantId.ToLowerInvariant()
     $guid = '^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$'
-    if ($entry.user.tenantId -cne $tenant -or $job.runId -notmatch $guid -or $entry.id -cne "$tenant-$($job.runId)" -or
+    if ($Receipt.delivered -isnot [bool] -or $entry.user.tenantId -cne $tenant -or $job.runId -notmatch $guid -or $entry.id -cne "$tenant-$($job.runId)" -or
         $entry.timestamp -notmatch '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$' -or
         $ReceiptPath -cne "/audit-receipts/$tenant/$($entry.timestamp.Substring(0, 10))-$($job.runId).json") { throw "Invalid cloud audit receipt." }
+    [void][DateTime]::ParseExact($entry.timestamp, "yyyy-MM-ddTHH:mm:ss.fffZ", [Globalization.CultureInfo]::InvariantCulture)
     $status = switch ($job.status) { "completed" { "Success" } "warnings" { "CompletedWithWarnings" } "failed" { "Failed" } "uncertain" { "Uncertain" } default { throw "Invalid cloud audit status." } }
     $folder = if ($entry.resource.id -match '^backup-\d{4}-\d{2}-\d{2}-\d{6}$') { $entry.resource.id }
     $reason = if ($job.reason -in @("BACKUP_FAILED", "BACKUP_WARNINGS", "FOLDER_CLAIM_FAILED", "GRAPH_START_FAILED", "GRAPH_LIST_FAILED", "WRITE_UNCONFIRMED")) { $job.reason }
@@ -734,8 +736,7 @@ function Publish-TvAuditReceipt {
     param([hashtable]$Context, [string]$ReceiptPath, [object]$Receipt, [switch]$WithoutReceipt)
     $safe = ConvertTo-TvSafeAuditFile $Context $ReceiptPath $Receipt
     $safeEntry = $safe.entries[0]
-    $day = $safe.date -replace "-", "/"
-    $path = "/$day/audit-log-$($safe.date.Replace('-', ''))-event-$($safeEntry.id).json"
+    $path = Get-TvAuditEventPath $Context.TenantId.ToLowerInvariant() $safe.date $safeEntry.job.runId
     Set-TvAuditImmutable $Context "audit-logs" $path ($safe | ConvertTo-Json -Depth 10 -Compress) @{
         "x-ms-meta-audit_timestamp" = $safeEntry.timestamp; "x-ms-meta-audit_entries" = "1"
     }
@@ -745,8 +746,12 @@ function Publish-TvAuditReceipt {
 }
 
 function Read-TvAuditRecord {
-    param([hashtable]$Context, [string]$Path)
-    try { return ConvertFrom-TvJson (Invoke-TvAuditStorage $Context $script:OutcomeContainer $Path).Text }
+    param([hashtable]$Context, [string]$Path, [string]$Container = $script:OutcomeContainer)
+    try {
+        $record = ConvertFrom-TvJson (Invoke-TvAuditStorage $Context $Container $Path).Text
+        if ($record -isnot [System.Collections.IDictionary]) { throw "Invalid cloud audit record." }
+        return $record
+    }
     catch [TvHttpError] { if ($_.Exception.Status -ne 404) { throw } }
 }
 
@@ -754,6 +759,7 @@ function Read-TvAuditPage {
     param([hashtable]$Context, [string]$Prefix, [string]$Marker, [string]$BeforeDate = "")
     $query = "?restype=container&comp=list&maxresults=5&prefix=$([uri]::EscapeDataString($Prefix))&marker=$([uri]::EscapeDataString($Marker))"
     [xml]$listing = (Invoke-TvAuditStorage $Context $script:OutcomeContainer $query).Text
+    if (-not $listing.EnumerationResults) { throw "Invalid cloud audit receipt listing." }
     $remaining = 0
     $reachedRecent = $false
     foreach ($blob in @($listing.EnumerationResults.Blobs.Blob)) {
@@ -766,13 +772,67 @@ function Read-TvAuditPage {
         }
         try {
             $receipt = Read-TvAuditRecord $Context "/$name"
-            if ($receipt -and -not $receipt.delivered) { Publish-TvAuditReceipt $Context "/$name" $receipt }
+            if ($null -eq $receipt) { continue }
+            [void](ConvertTo-TvSafeAuditFile $Context "/$name" $receipt)
         } catch [TvAuditBudgetError] { throw }
-        catch { $remaining++; Write-Warning "A cloud backup audit receipt is waiting for delivery." }
+        catch {
+            $remaining++
+            $Context.AuditReplayIncomplete = $true
+            Write-Warning -WarningAction Continue "A cloud backup audit receipt could not be checked."
+            continue
+        }
+        if (-not $receipt.delivered) {
+            try { Publish-TvAuditReceipt $Context "/$name" $receipt }
+            catch [TvAuditBudgetError] { throw }
+            catch { $remaining++; Write-Warning -WarningAction Continue "A cloud backup audit receipt is waiting for delivery." }
+        }
     }
     $next = if (-not $reachedRecent) { [string]$listing.EnumerationResults.NextMarker } else { "" }
     if ($next -and $next -ceq $Marker) { throw "Storage returned a repeated audit receipt cursor." }
     return @{ Count = $remaining; Next = $next }
+}
+
+function Get-TvAuditReceiptPath {
+    param([string]$Tenant, [string]$Date, [string]$RunId)
+    return "/audit-receipts/$Tenant/$Date-$RunId.json"
+}
+
+function Get-TvAuditEventPath {
+    param([string]$Tenant, [string]$Date, [string]$RunId)
+    return "/$($Date.Replace('-', '/'))/audit-log-$($Date.Replace('-', ''))-event-$Tenant-$RunId.json"
+}
+
+function Get-TvInterruptedAuditReceipt {
+    param([hashtable]$Context, [object]$Checkpoint, [datetime]$Started)
+    $tenant = $Context.TenantId.ToLowerInvariant()
+    $id = $Checkpoint.runId
+    $terminal = Read-TvAuditRecord $Context "/audit-runs/$tenant/$id/terminal.json"
+    if ($null -ne $terminal) {
+        [void](ConvertTo-TvSafeAuditFile $Context (Get-TvAuditReceiptPath $tenant $terminal.file.date $id) $terminal)
+        return
+    }
+    # An attempt can cross midnight. Check the two possible terminal dates when the
+    # checkpoint is absent, since a receipt or an event may have been saved independently.
+    foreach ($day in @($Started, $Started.AddDays(1))) {
+        $date = $day.ToString("yyyy-MM-dd", [Globalization.CultureInfo]::InvariantCulture)
+        $path = Get-TvAuditReceiptPath $tenant $date $id
+        $receipt = Read-TvAuditRecord $Context $path
+        if ($null -ne $receipt) {
+            [void](ConvertTo-TvSafeAuditFile $Context $path $receipt)
+            return
+        }
+        $file = Read-TvAuditRecord $Context (Get-TvAuditEventPath $tenant $date $id) "audit-logs"
+        if ($null -ne $file) {
+            [void](ConvertTo-TvSafeAuditFile $Context $path @{ file = $file; delivered = $true })
+            return
+        }
+    }
+    $timestamp = $Started.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", [Globalization.CultureInfo]::InvariantCulture)
+    $file = New-TvAuditFile $Context $id "Uncertain" $Checkpoint.folder 0 0 $Checkpoint.trigger "WRITE_UNCONFIRMED" $timestamp
+    $principal = if ($Checkpoint.principalId -match '^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$') { $Checkpoint.principalId }
+    $file.entries[0].user.id = if ($principal) { $principal } else { "unknown" }
+    $file.entries[0].job.registrationId = $principal
+    return @{ delivered = $false; file = $file }
 }
 
 function Restore-TvAuditReceipts {
@@ -781,51 +841,39 @@ function Restore-TvAuditReceipts {
     $prefix = "audit-runs/$tenant/"
     $query = "?restype=container&comp=list&maxresults=5&prefix=$([uri]::EscapeDataString($prefix))&marker=$([uri]::EscapeDataString($Marker))"
     [xml]$listing = (Invoke-TvAuditStorage $Context $script:OutcomeContainer $query).Text
+    if (-not $listing.EnumerationResults) { throw "Invalid cloud audit checkpoint listing." }
     foreach ($blob in @($listing.EnumerationResults.Blobs.Blob)) {
         $name = [string]$blob.Name
         if ($name -cnotmatch "^audit-runs/$tenant/([a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})/(start|terminal)\.json$") { continue }
         $id = $Matches[1]
         $kind = $Matches[2]
-        if ($kind -eq "start") {
-            try {
-                $checkpoint = Read-TvAuditRecord $Context "/$name"
-                if (-not $checkpoint) { continue }
+        try {
+            $checkpoint = Read-TvAuditRecord $Context "/$name"
+            if ($null -eq $checkpoint) { continue }
+            if ($kind -eq "start") {
+                # Another job may be active. Wait past the sandbox's three-hour
+                # execution limit before labeling a checkpoint from another job.
                 $start = Get-TvStartCheckpointTime $checkpoint $id
-                # Wait past the cloud sandbox's three-hour execution limit before looking
-                # for an orphan. Recover only the audit receipt from a confirmed manifest.
-                if ($start -gt [DateTime]::UtcNow.AddHours(-4) -or
-                    (Read-TvAuditRecord $Context "/$prefix$id/terminal.json")) { continue }
-                $manifest = Get-TvRunManifest $Context $checkpoint.folder $id
-                if (-not $manifest) { continue }
-                $principalId = if ($checkpoint.principalId -match '^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$') { $checkpoint.principalId }
-                $checkpoint = New-TvManifestAuditReceipt $Context $id $manifest $checkpoint.trigger
-                $checkpoint.file.entries[0].user.id = if ($principalId) { $principalId } else { "unknown" }
-                $checkpoint.file.entries[0].job.registrationId = $principalId
-            } catch [TvAuditBudgetError] { throw }
-            catch {
-                $Context.AuditOrphanScanIncomplete = $true
-                Write-Warning "A cloud backup audit start checkpoint could not be reconciled."
+                if ($start -gt [DateTime]::UtcNow.AddHours(-4)) { continue }
+                $checkpoint = Get-TvInterruptedAuditReceipt $Context $checkpoint $start
+                if (-not $checkpoint) { continue }
+            }
+            $date = [string]$checkpoint.file.date
+            $path = Get-TvAuditReceiptPath $tenant $date $id
+            $file = ConvertTo-TvSafeAuditFile $Context $path $checkpoint
+            $existing = Read-TvAuditRecord $Context $path
+            if ($null -ne $existing) {
+                [void](ConvertTo-TvSafeAuditFile $Context $path $existing)
                 continue
             }
-        } else {
-            $checkpoint = Read-TvAuditRecord $Context "/$name"
-            if (-not $checkpoint) { continue }
+            $receipt = @{ delivered = $false; file = $file }
+            Set-TvAuditImmutable $Context $script:OutcomeContainer $path ($receipt | ConvertTo-Json -Depth 12 -Compress)
+            if ([string]::CompareOrdinal($date, $Cutoff) -lt 0) { $Context.RecoveredOlderReceipts++ }
+        } catch [TvAuditBudgetError] { throw }
+        catch {
+            $Context.AuditReplayIncomplete = $true
+            Write-Warning -WarningAction Continue "A cloud backup audit checkpoint could not be checked."
         }
-        $date = [string]$checkpoint.file.date
-        if ($checkpoint.file.entries[0].job.runId -cne $id -or $date -notmatch '^\d{4}-\d{2}-\d{2}$') { continue }
-        $path = "/audit-receipts/$tenant/$date-$id.json"
-        if (Read-TvAuditRecord $Context $path) { continue }
-        try { $file = ConvertTo-TvSafeAuditFile $Context $path $checkpoint }
-        catch { Write-Warning "A cloud backup audit checkpoint could not be verified."; continue }
-        $receipt = @{ delivered = $false; file = $file }
-        try {
-            [void](Invoke-TvAuditStorage $Context $script:OutcomeContainer $path "Put" ($receipt | ConvertTo-Json -Depth 12 -Compress) @{ "If-None-Match" = "*" })
-        } catch [TvHttpError] {
-            if ($_.Exception.Status -in @(409, 412)) { continue }
-            throw
-        }
-        # Older orphans are put back into the receipt history for operator replay.
-        if ([string]::CompareOrdinal($date, $Cutoff) -lt 0) { $Context.RecoveredOlderReceipts++ }
     }
     $next = [string]$listing.EnumerationResults.NextMarker
     if ($next -and $next -ceq $Marker) { throw "Storage returned a repeated audit checkpoint cursor." }
@@ -836,7 +884,22 @@ function Read-TvAuditCursor {
     param([hashtable]$Context, [string]$Path)
     try {
         $response = Invoke-TvAuditStorage $Context $script:OutcomeContainer $Path
-        return @{ State = ConvertFrom-TvJson $response.Text; ETag = $response.ETag; StateLoaded = $true }
+        $state = ConvertFrom-TvJson $response.Text
+        if ($state -isnot [System.Collections.IDictionary] -or $state.days -isnot [System.Collections.IDictionary]) { throw "Invalid cloud audit cursor." }
+        $counts = @($state.olderCount, $state.historyCount, $state.nextDay)
+        foreach ($date in $state.days.Keys) {
+            $day = $state.days[$date]
+            if ($day -isnot [System.Collections.IDictionary] -or $date -notmatch '^\d{4}-\d{2}-\d{2}$' -or
+                ($null -ne $day.marker -and $day.marker -isnot [string])) { throw "Invalid cloud audit day cursor." }
+            $counts += @($day.count, $day.passCount)
+        }
+        foreach ($count in $counts) {
+            if ($null -ne $count -and ($count -isnot [long] -or $count -lt 0 -or $count -gt [int]::MaxValue)) { throw "Invalid cloud audit cursor count." }
+        }
+        foreach ($marker in @($state.checkpointMarker, $state.historyMarker, $state.historyCutoff, $state.checkedThrough)) {
+            if ($null -ne $marker -and $marker -isnot [string]) { throw "Invalid cloud audit cursor marker." }
+        }
+        return @{ State = $state; ETag = $response.ETag; StateLoaded = $true }
     } catch [TvHttpError] {
         if ($_.Exception.Status -ne 404) { throw }
         return @{ State = @{ days = @{}; olderCount = 0 } }
@@ -852,13 +915,14 @@ function Save-TvAuditCursor {
 }
 
 function Invoke-TvAuditReplay {
-    param([hashtable]$Context, [switch]$IncludeOlder, [datetime]$Today = [DateTime]::UtcNow.Date)
+    param([hashtable]$Context, [switch]$IncludeOlder, [datetime]$Today = [DateTime]::UtcNow.Date, [double]$Seconds = 25)
     $tenant = $Context.TenantId.ToLowerInvariant()
     $prefix = "audit-receipts/$tenant/"
     $path = "/audit-cursors/$tenant.json"
-    $cutoff = $Today.AddDays(-13).ToString("yyyy-MM-dd")
-    $budget = @{ Clock = [System.Diagnostics.Stopwatch]::StartNew(); Seconds = 22; Requests = 127 }
+    $cutoff = $Today.AddDays(-13).ToString("yyyy-MM-dd", [Globalization.CultureInfo]::InvariantCulture)
+    $budget = @{ Clock = [System.Diagnostics.Stopwatch]::StartNew(); Seconds = $Seconds * 0.88; Requests = 127 }
     $Context.AuditBudget = $budget
+    $Context.AuditReplayIncomplete = $false
     $incomplete = $false
     $state = $null
     try {
@@ -885,19 +949,17 @@ function Invoke-TvAuditReplay {
         } else {
             # Check one terminal checkpoint page per run, sharing the receipt replay budget.
             $Context.RecoveredOlderReceipts = 0
-            $Context.AuditOrphanScanIncomplete = $false
             try {
                 $state.checkpointMarker = Restore-TvAuditReceipts $Context ([string]$state.checkpointMarker) $cutoff
             } catch {
                 $incomplete = $true
-                Write-Warning "Cloud backup audit checkpoints could not be fully checked."
+                Write-Warning -WarningAction Continue "Cloud backup audit checkpoints could not be fully checked."
             }
-            $incomplete = $incomplete -or $Context.AuditOrphanScanIncomplete
             if ($Context.RecoveredOlderReceipts -gt 0) {
                 $state.olderCount += $Context.RecoveredOlderReceipts
                 $state.checkedThrough = $null
             }
-            $dates = @(0..13 | ForEach-Object { $Today.AddDays(-$_).ToString("yyyy-MM-dd") })
+            $dates = @(0..13 | ForEach-Object { $Today.AddDays(-$_).ToString("yyyy-MM-dd", [Globalization.CultureInfo]::InvariantCulture) })
             # One page per day per pass. A busy date can never consume every run's budget.
             $offset = [int]$state.nextDay % $dates.Count
             $dates = @(0..13 | ForEach-Object { $dates[($_ + $offset) % $dates.Count] })
@@ -925,42 +987,45 @@ function Invoke-TvAuditReplay {
     } catch [TvAuditBudgetError] { $incomplete = $true }
     catch {
         $incomplete = $true
-        Write-Warning "Cloud backup audit receipt history could not be fully checked."
+        Write-Warning -WarningAction Continue "Cloud backup audit receipt history could not be fully checked."
     }
     if ($state) {
         try {
-            # Reserve one final request and three seconds to checkpoint the scan.
+            # Reserve one final request and time to checkpoint the scan.
             $budget.Requests = 1
-            $budget.Seconds = 25
+            $budget.Seconds = $Seconds
             Save-TvAuditCursor $Context $path $cursor
         } catch {
             $incomplete = $true
-            Write-Warning "Cloud backup could not save its audit receipt cursor. The next run will retry."
+            Write-Warning -WarningAction Continue "Cloud backup could not save its audit receipt cursor. The next run will retry."
         }
     }
     $Context.Remove("AuditBudget")
-    $older = [Math]::Max([int]$state.olderCount, [int]$state.historyCount)
+    $older = [Math]::Max([long]$state.olderCount, [long]$state.historyCount)
     $remaining = $older
-    if ($state.days) { foreach ($day in $state.days.Values) { $remaining += [int]$day.count } }
-    return @{ Count = $remaining; Older = $older; More = $incomplete -or [bool]@($state.days.Values | Where-Object { $_.marker }).Count; OlderUnchecked = $state.checkedThrough -cne $cutoff }
+    foreach ($day in $state.days.Values) { $remaining += $day.count }
+    return @{ Count = $remaining; Older = $older; More = $incomplete -or $Context.AuditReplayIncomplete -or [bool]@($state.days.Values | Where-Object { $_.marker }).Count; OlderUnchecked = $state.checkedThrough -cne $cutoff }
 }
 
 function Save-TvAuditReceipt {
     param([hashtable]$Context, [object]$Receipt)
     $file = $Receipt.file
     $runId = $file.entries[0].job.runId
-    $path = "/audit-receipts/$($Context.TenantId.ToLowerInvariant())/$($file.date)-$runId.json"
+    $path = Get-TvAuditReceiptPath $Context.TenantId.ToLowerInvariant() $file.date $runId
     $created = $false
     try {
         $existing = Read-TvAuditRecord $Context $path
-        if ($existing.delivered) { return }
-        if ($existing) { $Receipt = $existing }
-        else {
+        if ($null -ne $existing) {
+            [void](ConvertTo-TvSafeAuditFile $Context $path $existing)
+            if ($existing.delivered) { return }
+            $Receipt = $existing
+        } else {
             Set-TvAuditImmutable $Context $script:OutcomeContainer $path ($Receipt | ConvertTo-Json -Depth 12 -Compress)
             $created = $true
         }
     } catch {
         $Context.AuditReceiptFailed = $true
+        $Context.AuditScanIncomplete = $true
         Write-Error "Cloud backup audit receipt could not be saved. Check access to the backup results container." -ErrorId "TenuVaultAuditReceiptFailed" -ErrorAction Continue
         try { Publish-TvAuditReceipt $Context $path $Receipt -WithoutReceipt }
         catch { $Context.AuditPending++ }
@@ -970,7 +1035,7 @@ function Save-TvAuditReceipt {
     catch {
         $Context.AuditPending++
         if ($created) { Register-TvPendingReceipt $Context $file.date }
-        Write-Warning "Cloud backup audit delivery is pending. The backup result is recorded separately."
+        Write-Warning -WarningAction Continue "Cloud backup audit delivery is pending. The backup result is recorded separately."
     }
 }
 
@@ -983,30 +1048,29 @@ function Register-TvPendingReceipt {
         if (-not $day) { $day = @{ count = 0 }; $cursor.State.days[$Date] = $day }
         $day.count++
         Save-TvAuditCursor $Context $path $cursor
-    } catch { Write-Warning "A pending audit receipt was saved but could not be added to the receipt count." }
+    } catch {
+        $Context.AuditScanIncomplete = $true
+        Write-Warning -WarningAction Continue "A pending audit receipt was saved but could not be added to the receipt count."
+    }
 }
 
 function Write-TvTerminalAudit {
-    param([hashtable]$Context, [string]$RunId, [string]$Status, [string]$BackupFolder, [int]$Saved, [int]$Failures, [string]$Trigger, [string]$Reason, [string]$Timestamp, [string[]]$FailedTypes = @(), [string]$BackupStatus = $Status, [string]$NextRunId)
-    $file = New-TvAuditFile $Context $RunId $Status $BackupFolder $Saved $Failures $Trigger $Reason $Timestamp
-    $receipt = [ordered]@{ delivered = $false; file = $file; backupStatus = $BackupStatus; failedTypes = @($FailedTypes | Where-Object { $_ -match "^[A-Za-z]{1,50}$" } | Select-Object -First 10) }
-    if ($NextRunId) { $receipt.nextRunId = $NextRunId }
-    Write-TvTerminalReceipt $Context $receipt
+    param([hashtable]$Context, [string]$RunId, [string]$Status, [string]$BackupFolder, [int]$Saved, [int]$Failures, [string]$Trigger, [string]$Reason)
+    $file = New-TvAuditFile $Context $RunId $Status $BackupFolder $Saved $Failures $Trigger $Reason
+    Write-TvTerminalReceipt $Context @{ delivered = $false; file = $file }
 }
 
 function Write-TvTerminalReceipt {
     param([hashtable]$Context, [object]$Receipt)
-    if ($Context.AuditTerminalRecorded) { return }
-    $Context.AuditTerminalRecorded = $true
-    $Context.TerminalTimestamp = $Receipt.file.entries[0].timestamp
-    if ($Context.RunCheckpointPath) {
-        try {
-            Set-TvAuditImmutable $Context $script:OutcomeContainer "$($Context.RunCheckpointPath)/terminal.json" ($receipt | ConvertTo-Json -Depth 12 -Compress)
-        } catch {
-            Write-Error "Cloud backup audit could not checkpoint its terminal result. Check access to the backup results container." -ErrorAction Continue
-        }
+    $tenant = $Context.TenantId.ToLowerInvariant()
+    $id = $Receipt.file.entries[0].job.runId
+    try {
+        Set-TvAuditImmutable $Context $script:OutcomeContainer "/audit-runs/$tenant/$id/terminal.json" ($Receipt | ConvertTo-Json -Depth 12 -Compress)
+    } catch {
+        $Context.AuditScanIncomplete = $true
+        Write-Warning -WarningAction Continue "Cloud backup audit could not checkpoint its terminal result."
     }
-    Save-TvAuditReceipt $Context $receipt
+    Save-TvAuditReceipt $Context $Receipt
 }
 
 function Get-TvAutomationJobId {
@@ -1019,66 +1083,83 @@ function Get-TvAutomationJobId {
 
 function Get-TvStartCheckpointTime {
     param([object]$Checkpoint, [string]$RunId, [string]$JobId)
-    $start = [DateTime]::Parse([string]$Checkpoint.startedAt, [Globalization.CultureInfo]::InvariantCulture).ToUniversalTime()
-    if ($Checkpoint.runId -cne $RunId -or $Checkpoint.jobId -cnotmatch '^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$' -or
-        ($JobId -and $Checkpoint.jobId -cne $JobId) -or
-        $Checkpoint.folder -cne "backup-$(ConvertTo-TvFolderTimestamp $start)" -or $Checkpoint.trigger -notin @("manual", "scheduled")) {
-        throw "Cloud backup could not verify its Automation job checkpoint."
+    $culture = [Globalization.CultureInfo]::InvariantCulture
+    $start = [DateTime]::ParseExact([string]$Checkpoint.startedAt, "o", $culture, [Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()
+    if ($Checkpoint.runId -cne $RunId -or ($JobId -and $Checkpoint.jobId -cne $JobId) -or
+        $Checkpoint.folder -cne "backup-$(ConvertTo-TvFolderTimestamp $start)" -or $Checkpoint.trigger -cnotin @("manual", "scheduled")) {
+        throw "Invalid cloud backup audit start checkpoint."
     }
     return $start
 }
 
-function Get-TvRunManifest {
-    param([hashtable]$Context, [string]$BackupFolder, [string]$RunId)
-    try { $metadata = Read-TvPlainJson $Context "$BackupFolder/metadata.json" }
-    catch [TvHttpError] { if ($_.Exception.Status -eq 404) { return $null }; throw }
-    if ($metadata.TenantId -ne $Context.TenantId -or $metadata.RunId -cne $RunId -or
-        $metadata.BackupFolder -cne $BackupFolder -or $metadata.Status -notin @("Success", "CompletedWithWarnings", "Failed")) {
-        throw "The backup manifest does not confirm this run."
-    }
-    return $metadata
-}
-
-class TvCommitUnconfirmedError : System.Exception {
-    TvCommitUnconfirmedError() : base("The backup manifest commit could not be verified.") { }
-}
-
-function Save-TvBackupManifest {
-    param([hashtable]$Context, [string]$BackupFolder, [string]$RunId, [object]$Metadata)
+function Write-TvAuditStart {
+    param([hashtable]$Context, [datetime]$Started, [string]$Trigger)
+    $Context.AuditBudget = @{ Clock = [System.Diagnostics.Stopwatch]::StartNew(); Seconds = 2; Requests = 16 }
     try {
-        Set-TvBlob $Context.StorageAccount "$BackupFolder/metadata.json" ($Metadata | ConvertTo-Json -Depth 100) $Context.StorageToken -CreateOnly
-        return $Metadata
+        $tenant = $Context.TenantId.ToLowerInvariant()
+        $run = $Context.RunId
+        $job = Get-TvAutomationJobId
+        $start = [ordered]@{ jobId = $job; runId = $run; folder = "backup-$(ConvertTo-TvFolderTimestamp $Started)"
+            startedAt = $Started.ToString("o", [Globalization.CultureInfo]::InvariantCulture); trigger = $Trigger
+            principalId = Get-TvAuditPrincipal $Context.StorageToken $tenant }
+        Set-TvAuditImmutable $Context $script:OutcomeContainer "/audit-runs/$tenant/$run/start.json" ($start | ConvertTo-Json -Compress)
+        if ($job) {
+            # The job index is only a hint for audit recovery. Each attempt gets its own
+            # immutable start and terminal records, including attempts without a job ID.
+            $path = "/audit-jobs/$tenant/$job.json"
+            $priorId = $null
+            try {
+                $previous = Read-TvAuditRecord $Context $path
+                if ($null -ne $previous) {
+                    if ($previous.runId -cnotmatch '^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$') { throw "Invalid cloud audit job index." }
+                    $priorId = $previous.runId
+                }
+            } catch {
+                $Context.AuditScanIncomplete = $true
+                Write-Warning -WarningAction Continue "Cloud backup audit could not check the previous attempt for this job."
+            }
+            [void](Invoke-TvAuditStorage $Context $script:OutcomeContainer $path "Put" (@{ runId = $run } | ConvertTo-Json -Compress))
+            if ($priorId) {
+                try {
+                    $checkpoint = Read-TvAuditRecord $Context "/audit-runs/$tenant/$priorId/start.json"
+                    $start = Get-TvStartCheckpointTime $checkpoint $priorId $job
+                    $receipt = Get-TvInterruptedAuditReceipt $Context $checkpoint $start
+                    if ($receipt) { Write-TvTerminalReceipt $Context $receipt }
+                } catch {
+                    $Context.AuditScanIncomplete = $true
+                    Write-Warning -WarningAction Continue "Cloud backup audit could not check the interrupted attempt."
+                }
+            }
+        }
     } catch {
-        $failure = $_
-        try { $saved = Get-TvRunManifest $Context $BackupFolder $RunId }
-        catch { throw [TvCommitUnconfirmedError]::new() }
-        if ($saved) { return $saved }
-        if ($failure.Exception -is [TvHttpError] -and $failure.Exception.Status -in @(400, 401, 403, 404)) { throw $failure }
-        throw [TvCommitUnconfirmedError]::new()
+        $Context.AuditScanIncomplete = $true
+        Write-Warning -WarningAction Continue "Cloud backup audit could not save its start checkpoint or job index."
+    } finally { $Context.Remove("AuditBudget") }
+}
+
+function Complete-TvAuditRun {
+    param([hashtable]$Context, [string]$Status, [string]$BackupFolder, [int]$Saved, [int]$Failures, [string]$Trigger, [string]$Reason)
+    if ($Context.AuditTerminalRecorded) { return }
+    $Context.AuditTerminalRecorded = $true
+    $Context.AuditBudget = @{ Clock = [System.Diagnostics.Stopwatch]::StartNew(); Seconds = 3; Requests = 10 }
+    try {
+        Write-TvTerminalAudit $Context $Context.RunId $Status $BackupFolder $Saved $Failures $Trigger $Reason
+    } catch {
+        $Context.AuditScanIncomplete = $true
+        Write-Warning -WarningAction Continue "Cloud backup audit could not record its terminal result."
+    } finally { $Context.Remove("AuditBudget") }
+
+    try {
+        $replay = Invoke-TvAuditReplay $Context -Seconds 2
+        $Context.AuditPending = [Math]::Max([long]$Context.AuditPending, [long]$replay.Count)
+        $Context.AuditScanIncomplete = $Context.AuditScanIncomplete -or $replay.More
+        $Context.AuditOlderPending = $replay.Older
+        $Context.AuditOlderUnchecked = $replay.OlderUnchecked
+    } catch {
+        $Context.AuditScanIncomplete = $true
+        $Context.AuditOlderUnchecked = $true
+        Write-Warning -WarningAction Continue "Cloud backup audit receipt history could not be fully checked."
     }
-}
-
-function New-TvManifestAuditReceipt {
-    param([hashtable]$Context, [string]$RunId, [object]$Metadata, [string]$Trigger)
-    $status = [string]$Metadata.Status
-    $auditStatus = if ($status -eq "Success" -and @($Metadata.MaskedSecretItems | Where-Object { $_ }).Count) { "CompletedWithWarnings" } else { $status }
-    $reason = if ($auditStatus -eq "CompletedWithWarnings") { "BACKUP_WARNINGS" } elseif ($auditStatus -eq "Failed") { "BACKUP_FAILED" }
-    $file = New-TvAuditFile $Context $RunId $auditStatus $Metadata.BackupFolder $Metadata.ItemCounts.TotalPolicies $Metadata.Failures $Trigger $reason $Metadata.CompletedAt
-    if ($Metadata.RunbookVersion -match '^\d{1,4}\.\d{1,4}\.\d{1,4}$') { $file.entries[0].job.producerVersion = $Metadata.RunbookVersion }
-    return [ordered]@{ delivered = $false; file = $file; backupStatus = $status
-        failedTypes = @($Metadata.FailedTypes | Where-Object { $_ -match "^[A-Za-z]{1,50}$" } | Select-Object -First 10) }
-}
-
-function Complete-TvCloudBackup {
-    param([hashtable]$Context, [string]$RunId, [object]$Metadata, [string]$Trigger, [switch]$Replay)
-    $status = [string]$Metadata.Status
-    $folder = [string]$Metadata.BackupFolder
-    $total = [int]$Metadata.ItemCounts.TotalPolicies
-    $failures = [int]$Metadata.Failures
-    Write-TvTerminalReceipt $Context (New-TvManifestAuditReceipt $Context $RunId $Metadata $Trigger)
-    Set-TvCloudStatus $Context $status "Backup $status, $total policies." $folder $Metadata.CompletedAt -Replay:$Replay
-    Send-TvBackupOutcome -Account $Context.StorageAccount -Token $Context.StorageToken -TenantId $Context.TenantId -RunId $RunId -Status $status -BackupFolder $folder -TotalPolicies $total -Failures $failures -FailedTypes @($Metadata.FailedTypes) -Trigger $Trigger -FinishedAt $Metadata.CompletedAt
-    if ($status -eq "Failed") { throw "The backup saved no policies. See the runbook output above." }
 }
 
 function Test-TvProducerAuditAccess {
@@ -2837,8 +2918,7 @@ function Read-TvPlainJson {
     $target = Get-TvBlobTarget $Context.StorageAccount $BlobName
     $file = ($BlobName -split "/")[-1]
     $tooLarge = "$file is larger than the 32 MiB TenuVault reads."
-    $requestBudget = Get-TvAuditRequestBudget $Context
-    try { $result = Invoke-TvHttp -Uri $target.Uri -Token $Context.StorageToken -Method "Get" -Headers @{ "x-ms-version" = "2021-12-02" } -MaxBytes $script:MaxBlobBytes @requestBudget }
+    try { $result = Invoke-TvHttp -Uri $target.Uri -Token $Context.StorageToken -Method "Get" -Headers @{ "x-ms-version" = "2021-12-02" } -MaxBytes $script:MaxBlobBytes }
     catch [TvOversizedError] { throw [TvOversizedError]::new($tooLarge) }
     catch [TvReadTimeoutError] { throw [TvReadTimeoutError]::new("$file did not arrive within $($script:BodyReadSeconds) seconds.") }
     if ($result.Bytes.Length -gt $script:MaxBlobBytes) { throw [TvOversizedError]::new($tooLarge) }
@@ -3080,18 +3160,6 @@ function Invoke-TvChangeReport {
     }
 }
 
-function Resume-TvChangeReport {
-    param([hashtable]$Context, [string]$Folder, [string]$RunId, [string]$Trigger, [object]$Metadata)
-    try {
-        if ((Get-TvChangeReportLevel) -eq "off") { return }
-        if (-not $Metadata) { $Metadata = Get-TvRunManifest $Context $Folder $RunId }
-        if ($Metadata.Status -ne "Success") { return }
-        $types = @(Get-TvTypes | Where-Object { $Metadata.Scope.Included -contains $_.Folder })
-        $graphToken = Get-TvManagedIdentityToken "https://graph.microsoft.com/"
-        Invoke-TvChangeReport -Context $Context -BackupFolder $Folder -Metadata $Metadata -Types $types -GraphToken $graphToken -RunId $RunId -RunTrigger $Trigger
-    } catch { Write-Output "No change report was made: $(Get-TvSafeError $_.Exception.Message)" }
-}
-
 # ---------------------------------------------------------------------------
 # One backup run
 # ---------------------------------------------------------------------------
@@ -3101,70 +3169,32 @@ function Set-TvCloudStatus {
         [Parameter(Mandatory)][hashtable]$Context,
         [Parameter(Mandatory)][string]$Status,
         [Parameter(Mandatory)][string]$Message,
-        [AllowNull()][string]$BackupFolder,
-        [string]$FinishedAt,
-        [switch]$Replay
+        [AllowNull()][string]$BackupFolder
     )
-    if (-not $FinishedAt) { $FinishedAt = $Context.TerminalTimestamp }
-    if (-not $FinishedAt) { $FinishedAt = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", [Globalization.CultureInfo]::InvariantCulture) }
-    $blobName = "$script:StatusBlobPrefix$($Context.TenantId.Substring(0, 8).ToLowerInvariant()).json"
-    $path = "/$blobName"
     $body = [ordered]@{
-        RunId          = $Context.RunId
-        LastRunAt      = $FinishedAt
+        LastRunAt      = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", [Globalization.CultureInfo]::InvariantCulture)
         LastStatus     = $Status
         LastMessage    = $Message
         BackupFolder   = $BackupFolder
         RunbookVersion = $script:RunbookVersion
         Source         = "TenuVault Cloud Backup"
         TenantId       = $Context.TenantId.ToLowerInvariant()
+        RunId          = $Context.RunId
         AuditCapability = $true
-        AuditPending = [int]$Context.AuditPending
+        AuditPending = $Context.AuditPending
         AuditScanIncomplete = [bool]$Context.AuditScanIncomplete
-        AuditOlderPending = [int]$Context.AuditOlderPending
+        AuditOlderPending = $Context.AuditOlderPending
         AuditOlderUnchecked = [bool]$Context.AuditOlderUnchecked
         AuditReceiptFailed = [bool]$Context.AuditReceiptFailed
-        AuditDeliveryPending = ([int]$Context.AuditPending -gt 0)
+        AuditDeliveryPending = ($Context.AuditPending -gt 0)
     } | ConvertTo-Json
-    try {
-        for ($attempt = 1; $attempt -le 3; $attempt++) {
-            $options = @{ "If-None-Match" = "*" }
-            try {
-                $response = Invoke-TvAuditStorage $Context $script:Container $path
-                $previous = ConvertFrom-TvJson $response.Text
-                if (-not $response.ETag -or $previous -isnot [System.Collections.IDictionary] -or
-                    $previous.TenantId -isnot [string] -or $previous.TenantId -ne $Context.TenantId -or
-                    ($null -ne $previous.RunId -and $previous.RunId -isnot [string]) -or
-                    $previous.LastStatus -notin @("Success", "CompletedWithWarnings", "Failed", "Uncertain")) {
-                    throw "The previous Schedule status could not be verified."
-                }
-                [void][DateTime]::ParseExact([string]$previous.LastRunAt, "yyyy-MM-ddTHH:mm:ss.fffZ", [Globalization.CultureInfo]::InvariantCulture)
-                if ($previous.RunId -ne $Context.RunId -and [string]::CompareOrdinal($previous.LastRunAt, $FinishedAt) -gt 0) { return }
-                $options = @{ "If-Match" = $response.ETag }
-            } catch {
-                if ($_.Exception -isnot [TvHttpError] -or $_.Exception.Status -ne 404) {
-                    # A fresh capture uses the normal status write when the read cannot verify a prior result.
-                    if ($Replay) { throw }
-                    Set-TvBlob $Context.StorageAccount $blobName $body $Context.StorageToken
-                    return
-                }
-            }
-            try {
-                [void](Invoke-TvAuditStorage $Context $script:Container $path "Put" $body $options)
-                return
-            } catch [TvHttpError] {
-                if ($_.Exception.Status -ne 412 -or $attempt -eq 3) { throw }
-            }
-        }
-    }
+    try { Set-TvBlob $Context.StorageAccount "$script:StatusBlobPrefix$($Context.TenantId.Substring(0, 8).ToLowerInvariant()).json" $body $Context.StorageToken }
     catch { Write-Output "Could not record the cloud backup status: $(Get-TvSafeError $_.Exception.Message)" }
 }
 
 function Invoke-TvBackup {
-    $script:OutcomeSent = $false
     $started = [DateTime]::UtcNow
-    $jobId = Get-TvAutomationJobId
-    $runId = if ($jobId) { $jobId } else { [guid]::NewGuid().ToString() }
+    $runId = [guid]::NewGuid().ToString()
     $runInfo = Get-TvRunTrigger $Trigger
     $runTrigger = $runInfo.Trigger
     $tenantId = Get-TvRequiredVariable "TenuVaultTenantId"
@@ -3178,151 +3208,24 @@ function Invoke-TvBackup {
     if ([string](Get-TvAutomationVariable "TenuVaultIncludeConditionalAccess") -ne "true") { $excluded = @($excluded) + $script:ConditionalAccessFolders }
     $appOnlyExcluded = Get-TvFolderList (Get-TvAutomationVariable "TenuVaultAppOnlyExcluded")
 
+    Write-Output "Backing up tenant $tenantId to storage account $storageAccount (runbook $script:RunbookVersion, run $runId)."
     if ($runInfo.Warning) { Write-Output $runInfo.Warning }
     # The storage token comes first: the status blob and the result note need only it, so
     # every later failure (Graph token, a scope that leaves nothing) is still recorded and
     # reaches the notification watcher as Failed. A run that cannot even get a storage token
     # is reported by the Azure Monitor alert on failed jobs.
-    try { $storageToken = Get-TvManagedIdentityToken "https://storage.azure.com/" }
-    catch { throw "Cloud backup could not acquire a storage token. No audit receipt was saved." }
-    $context = @{ TenantId = $tenantId; StorageAccount = $storageAccount; StorageToken = $storageToken; RunId = $runId; AuditPending = 0 }
+    $storageToken = Get-TvManagedIdentityToken "https://storage.azure.com/"
+    $context = @{ TenantId = $tenantId; StorageAccount = $storageAccount; StorageToken = $storageToken; RunId = $runId; AuditPending = 0; AuditOlderPending = 0 }
     if ($AuditCanary) {
         Test-TvProducerAuditAccess $context
         return
     }
-    $auditReplay = Invoke-TvAuditReplay $context -IncludeOlder:$ReplayOlderAudit
     if ($ReplayOlderAudit) {
+        $auditReplay = Invoke-TvAuditReplay $context -IncludeOlder
         Write-Output "Older audit replay checked one page. Pending across checked pages: $($auditReplay.Count). Older receipts still unchecked: $($auditReplay.OlderUnchecked)."
         return
     }
-    $context.AuditPending = $auditReplay.Count
-    $context.AuditScanIncomplete = $auditReplay.More
-    $context.AuditOlderPending = $auditReplay.Older
-    $context.AuditOlderUnchecked = $auditReplay.OlderUnchecked
-    $backupFolder = "backup-$(ConvertTo-TvFolderTimestamp $started)"
-    $nextRunId = $null
-    $attempts = [System.Collections.Generic.HashSet[string]]::new()
-    $attemptIdPattern = '^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$'
-    while ($jobId) {
-        if ($nextRunId) {
-            $runId = $nextRunId
-            $nextRunId = $null
-            $context.RunId = $runId
-            $context.Remove("AuditTerminalRecorded")
-            $context.Remove("TerminalTimestamp")
-            $started = [DateTime]::UtcNow
-            if ($backupFolder -ceq "backup-$(ConvertTo-TvFolderTimestamp $started)") {
-                Start-Sleep -Seconds 1
-                $started = [DateTime]::UtcNow
-            }
-            $backupFolder = "backup-$(ConvertTo-TvFolderTimestamp $started)"
-        }
-        [void]$attempts.Add($runId)
-        $context.RunCheckpointPath = "/audit-runs/$($tenantId.ToLowerInvariant())/$runId"
-        $receipt = $null
-        $terminalUnreadable = $false
-        try {
-            # The terminal result is keyed by the attempt, independently of start.json.
-            $receipt = Read-TvAuditRecord $context "$($context.RunCheckpointPath)/terminal.json"
-            if ($receipt) {
-                $entry = $receipt.file.entries[0]
-                if ($entry.job.runId -cne $runId -or $entry.user.tenantId -ne $tenantId -or
-                    $entry.timestamp -notmatch '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$' -or
-                    $entry.job.status -notin @("completed", "warnings", "uncertain", "failed")) { throw "Invalid terminal checkpoint." }
-            }
-        } catch {
-            $receipt = $null
-            $terminalUnreadable = $true
-            Write-Error "Cloud backup audit could not verify its terminal checkpoint. Checking the backup folder." -ErrorAction Continue
-        }
-
-        $folder = $null
-        $priorTrigger = $runInfo.Trigger
-        $continuationUnreadable = $false
-        $continuationPath = "$($context.RunCheckpointPath)/continuation.json"
-        if ($receipt) {
-            $folder = if ($entry.resource.id -match '^backup-\d{4}-\d{2}-\d{2}-\d{6}$') { $entry.resource.id }
-            $priorTrigger = if ($entry.job.trigger -eq "manual") { "manual" } else { "scheduled" }
-            Save-TvAuditReceipt $context $receipt
-            try {
-                $nextRunId = [string]$receipt.nextRunId
-                if (-not $nextRunId) { $nextRunId = [string](Read-TvAuditRecord $context $continuationPath).nextRunId }
-                if ($nextRunId -and ($nextRunId -cnotmatch $attemptIdPattern -or $attempts.Contains($nextRunId))) {
-                    throw "Invalid continuation checkpoint."
-                }
-            } catch {
-                $nextRunId = $null
-                $continuationUnreadable = $true
-                $context.AuditScanIncomplete = $true
-                Write-Warning "Cloud backup could not verify its continuation checkpoint."
-            }
-            if ($nextRunId) {
-                if ($folder) { $backupFolder = $folder }
-                continue
-            }
-        } else {
-            $checkpointPath = "$($context.RunCheckpointPath)/start.json"
-            try {
-                $checkpoint = Read-TvAuditRecord $context $checkpointPath
-                if ($checkpoint) {
-                    [void](Get-TvStartCheckpointTime $checkpoint $runId $jobId)
-                    $folder = [string]$checkpoint.folder
-                    $priorTrigger = [string]$checkpoint.trigger
-                } else {
-                    if ($terminalUnreadable) { throw "The previous run could not be verified." }
-                    $startedAt = $started.ToString("o", [Globalization.CultureInfo]::InvariantCulture)
-                    $checkpoint = [ordered]@{ jobId = $jobId; runId = $runId; folder = $backupFolder; startedAt = $startedAt; trigger = $runTrigger
-                        principalId = Get-TvAuditPrincipal $storageToken $tenantId }
-                    Set-TvAuditImmutable $context $script:OutcomeContainer $checkpointPath ($checkpoint | ConvertTo-Json -Compress)
-                    break
-                }
-            } catch {
-                $context.Remove("RunCheckpointPath")
-                $context.AuditScanIncomplete = $true
-                $runId = [guid]::NewGuid().ToString()
-                $context.RunId = $runId
-                Write-Error "Cloud backup audit could not verify or save its start checkpoint. Check access to the backup results container." -ErrorAction Continue
-                break
-            }
-        }
-
-        # Only a verified terminal manifest can stand in for a fresh capture.
-        if ($folder -and -not $continuationUnreadable) {
-            $manifest = $null
-            try { $manifest = Get-TvRunManifest $context $folder $runId }
-            catch { Write-Warning "Cloud backup could not verify the previous manifest." }
-            if ($manifest) {
-                if ($receipt) { $context.AuditTerminalRecorded = $true }
-                if ($terminalUnreadable) { $context.Remove("RunCheckpointPath") }
-                Complete-TvCloudBackup $context $runId $manifest $priorTrigger -Replay
-                if ($manifest.Status -eq "Success") { Resume-TvChangeReport $context $folder $runId $priorTrigger $manifest }
-                return
-            }
-        }
-
-        # The prior attempt is unconfirmed. Preserve its audit record and link a fresh
-        # attempt. Only a verified manifest or the new capture publishes a backup result.
-        $nextRunId = [guid]::NewGuid().ToString()
-        if ($folder) { $backupFolder = $folder }
-        if ($receipt) {
-            try {
-                Set-TvAuditImmutable $context $script:OutcomeContainer $continuationPath (@{ nextRunId = $nextRunId } | ConvertTo-Json -Compress)
-            } catch {
-                # A competing restart may have saved its link first.
-                $savedId = $null
-                try { $savedId = [string](Read-TvAuditRecord $context $continuationPath).nextRunId } catch { }
-                if ($savedId -cmatch $attemptIdPattern -and -not $attempts.Contains($savedId)) { $nextRunId = $savedId }
-                else {
-                    $context.AuditScanIncomplete = $true
-                    Write-Warning "Cloud backup could not save its continuation checkpoint."
-                }
-            }
-        } else {
-            if ($terminalUnreadable) { $context.Remove("RunCheckpointPath") }
-            Write-TvTerminalAudit $context $runId "Uncertain" $folder 0 0 $priorTrigger "WRITE_UNCONFIRMED" -NextRunId $nextRunId
-        }
-    }
-    Write-Output "Backing up tenant $tenantId to storage account $storageAccount (runbook $script:RunbookVersion, run $runId)."
+    Write-TvAuditStart $context $started $runTrigger
     try {
         $graphToken = Get-TvManagedIdentityToken "https://graph.microsoft.com/"
 
@@ -3333,17 +3236,17 @@ function Invoke-TvBackup {
         $types = @($allTypes | Where-Object { $excluded -notcontains $_.Folder -and $appOnlyExcluded -notcontains $_.Folder })
         if (-not $types.Count) { throw "The configured scope leaves nothing to back up." }
     } catch {
-        Write-TvTerminalAudit $context $runId "Failed" "" 0 1 $runTrigger "GRAPH_START_FAILED"
-        Set-TvCloudStatus $context "Failed" "Microsoft Graph or backup scope could not be initialized." $null
-        Send-TvBackupOutcome -Account $storageAccount -Token $storageToken -TenantId $tenantId -RunId $runId -Status "Failed" -BackupFolder $null -TotalPolicies $null -Trigger $runTrigger -FinishedAt $context.TerminalTimestamp
-        throw "Could not get a managed identity token for Microsoft Graph or initialize the backup scope."
+        Complete-TvAuditRun $context "Failed" "" 0 1 $runTrigger "GRAPH_START_FAILED"
+        Set-TvCloudStatus $context "Failed" (Get-TvSafeError $_.Exception.Message) $null
+        Send-TvBackupOutcome -Account $storageAccount -Token $storageToken -TenantId $tenantId -RunId $runId -Status "Failed" -BackupFolder $null -TotalPolicies $null -Trigger $runTrigger
+        throw
     }
     if ($excluded.Count) { Write-Output "Leaving out $($excluded.Count) of $($known.Count) types: $($excluded -join ', ')." }
     if ($notReadable.Count) { Write-Output "Leaving out $($notReadable.Count) type(s) the cloud identity has no permission for: $($notReadable -join ', '). Desktop backups include them." }
 
     # List everything first, like the desktop engine, so a denied list is reported per type.
     # A run that stops anywhere before the write phase still records why.
-    $startFailure = "GRAPH_LIST_FAILED"
+    $auditStartFailure = "GRAPH_LIST_FAILED"
     try {
     $counts = [ordered]@{}
     foreach ($type in $types) { $counts[$type.Folder] = 0 }
@@ -3385,13 +3288,14 @@ function Invoke-TvBackup {
             } else {
                 $failures++
                 $failedTypes.Add([string]$type.Folder)
-                Write-Output "Could not read $($type.Label): request status $status."
+                Write-Output "Could not read $($type.Label): $(Get-TvSafeError $_.Exception.Message)"
             }
         }
     }
 
     # Claim the folder before writing any policy. The create-only write is atomic.
-    $startFailure = "FOLDER_CLAIM_FAILED"
+    $auditStartFailure = "FOLDER_CLAIM_FAILED"
+    $backupFolder = "backup-$(ConvertTo-TvFolderTimestamp $started)"
     $owner = [ordered]@{ Source = "TenuVault Cloud Backup"; TenantId = $tenantId.ToLowerInvariant(); RunId = $runId } | ConvertTo-Json -Compress
     try {
         Set-TvBlob $storageAccount "$backupFolder/.tenuvault-owner.json" $owner $storageToken -CreateOnly
@@ -3402,11 +3306,10 @@ function Invoke-TvBackup {
         throw
     }
     } catch {
-        Write-TvTerminalAudit $context $runId "Failed" "" 0 ([Math]::Max(1, $failures)) $runTrigger $startFailure
-        $startMessage = if ($startFailure -eq "GRAPH_LIST_FAILED") { "Microsoft Graph policy listing did not finish." } else { "The backup folder could not be claimed." }
-        Set-TvCloudStatus $context "Failed" $startMessage $null
-        Send-TvBackupOutcome -Account $storageAccount -Token $storageToken -TenantId $tenantId -RunId $runId -Status "Failed" -BackupFolder $null -TotalPolicies $null -Failures $failures -FailedTypes @($failedTypes) -Trigger $runTrigger -FinishedAt $context.TerminalTimestamp
-        throw $startMessage
+        Complete-TvAuditRun $context "Failed" "" 0 ([Math]::Max(1, $failures)) $runTrigger $auditStartFailure
+        Set-TvCloudStatus $context "Failed" (Get-TvSafeError $_.Exception.Message) $null
+        Send-TvBackupOutcome -Account $storageAccount -Token $storageToken -TenantId $tenantId -RunId $runId -Status "Failed" -BackupFolder $null -TotalPolicies $null -Failures $failures -FailedTypes @($failedTypes) -Trigger $runTrigger
+        throw
     }
 
     $items = [ordered]@{}
@@ -3446,10 +3349,10 @@ function Invoke-TvBackup {
                         if (++$consecutiveAuth -ge 5) { throw "Backup stopped: Microsoft Graph refused five reads in a row. Earlier policies in this run were saved; the backup is incomplete." }
                     } else { $consecutiveAuth = 0 }
                     $failures++
-                    Write-Output "Could not back up an item in $($type.Folder)."
+                    Write-Output "Could not back up `"$displayName`": $(Get-TvSafeError $_.Exception.Message)"
                 } catch {
                     $failures++
-                    Write-Output "Could not back up an item in $($type.Folder)."
+                    Write-Output "Could not back up `"$displayName`": $(Get-TvSafeError $_.Exception.Message)"
                 }
             }
             if ($list.Items.Count) { Write-Output "Backed up $($counts[$type.Folder]) $($type.Label)." }
@@ -3476,7 +3379,6 @@ function Invoke-TvBackup {
             BackupFolder   = $backupFolder
             StartTime      = ConvertTo-TvDisplayTime $started
             EndTime        = ConvertTo-TvDisplayTime $ended
-            CompletedAt    = $ended.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", [Globalization.CultureInfo]::InvariantCulture)
             Duration       = if ($seconds -lt 60) { "${seconds}s" } else { "{0}m {1}s" -f [Math]::Floor($seconds / 60), ($seconds % 60) }
             DurationSeconds = $seconds
             ItemCounts     = $itemCounts
@@ -3496,10 +3398,14 @@ function Invoke-TvBackup {
         if ($notReadable.Count) { $metadata.AppOnlyExcludedTypes = $notReadable }
         if ($maskedItems.Count) { $metadata.MaskedSecretItems = @($maskedItems) }
         $metadata.Items = $sortedItems
-        $metadata = Save-TvBackupManifest $context $backupFolder $runId $metadata
-        $status = [string]$metadata.Status
+        Set-TvBlob $storageAccount "$backupFolder/metadata.json" ($metadata | ConvertTo-Json -Depth 100) $storageToken
         Write-Output "Backup completed: $totalPolicies policies in $($metadata.Duration) ($status). Older backups were kept: the cloud identity cannot delete. The next desktop backup made with an admin's sign-in applies retention."
-        Complete-TvCloudBackup $context $runId $metadata $runTrigger
+        $auditStatus = if ($status -eq "Success" -and $maskedItems.Count) { "CompletedWithWarnings" } else { $status }
+        $auditReason = if ($auditStatus -eq "CompletedWithWarnings") { "BACKUP_WARNINGS" } elseif ($auditStatus -eq "Failed") { "BACKUP_FAILED" }
+        Complete-TvAuditRun $context $auditStatus $backupFolder $totalPolicies $failures $runTrigger $auditReason
+        Set-TvCloudStatus $context $status "Backup $status, $totalPolicies policies." $backupFolder
+        Send-TvBackupOutcome -Account $storageAccount -Token $storageToken -TenantId $tenantId -RunId $runId -Status $status -BackupFolder $backupFolder -TotalPolicies $totalPolicies -Failures $failures -FailedTypes @($failedTypes) -Trigger $runTrigger
+        if ($status -eq "Failed") { throw "The backup saved no policies. See the runbook output above." }
         # Only a complete backup is compared, like the desktop app's report after a scheduled backup:
         # items a backup with warnings could not read would show up as deleted.
         # The report is optional: nothing it does may change the backup's result.
@@ -3510,14 +3416,7 @@ function Invoke-TvBackup {
             try { if ((Get-TvChangeReportLevel) -ne "off") { Write-Output "No change report: the backup completed with warnings." } } catch { }
         }
     } catch {
-        if ($context.AuditTerminalRecorded) { throw }
-        if ($_.Exception -is [TvCommitUnconfirmedError]) {
-            Write-TvTerminalAudit $context $runId "Uncertain" $backupFolder 0 0 $runTrigger "WRITE_UNCONFIRMED"
-            Set-TvCloudStatus $context "Uncertain" "The backup manifest commit could not be verified." $backupFolder
-            Send-TvBackupOutcome -Account $storageAccount -Token $storageToken -TenantId $tenantId -RunId $runId -Status "Failed" -BackupFolder $backupFolder -TotalPolicies $totalPolicies -Failures ([Math]::Max(1, $failures)) -FailedTypes @($failedTypes) -Trigger $runTrigger -FinishedAt $context.TerminalTimestamp
-            throw
-        }
-        $reason = if ($_.Exception -is [TvHttpError]) { "HTTP $($_.Exception.Status)" } else { "The backup did not finish." }
+        $reason = Get-TvSafeError $_.Exception.Message
         # Record the claimed folder as a failed backup, create-only, like the desktop engine.
         try {
             $ended = [DateTime]::UtcNow
@@ -3532,7 +3431,6 @@ function Invoke-TvBackup {
             $failed = [ordered]@{
                 BackupDate = ConvertTo-TvFolderTimestamp $started; BackupFolder = $backupFolder
                 StartTime = ConvertTo-TvDisplayTime $started; EndTime = ConvertTo-TvDisplayTime $ended
-                CompletedAt = $ended.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", [Globalization.CultureInfo]::InvariantCulture)
                 Duration = if ($seconds -lt 60) { "${seconds}s" } else { "{0}m {1}s" -f [Math]::Floor($seconds / 60), ($seconds % 60) }
                 DurationSeconds = $seconds; ItemCounts = $itemCounts; Status = "Failed"
                 RunbookVersion = $script:RunbookVersion; BackupFormat = "Individual policy files with Intune-compatible JSON"
@@ -3545,12 +3443,10 @@ function Invoke-TvBackup {
             if ($maskedItems.Count) { $failed.MaskedSecretItems = @($maskedItems) }
             Set-TvBlob $storageAccount "$backupFolder/metadata.json" ($failed | ConvertTo-Json -Depth 100) $storageToken -CreateOnly
         } catch { Write-Output "Could not record this backup as Failed: $(Get-TvSafeError $_.Exception.Message). It is listed as incomplete." }
-        if (-not $context.AuditTerminalRecorded) {
-            Write-TvTerminalAudit $context $runId "Failed" $backupFolder $totalPolicies ([Math]::Max(1, $failures)) $runTrigger "BACKUP_FAILED"
-            Set-TvCloudStatus $context "Failed" "The backup did not finish." $backupFolder
-        }
-        Send-TvBackupOutcome -Account $storageAccount -Token $storageToken -TenantId $tenantId -RunId $runId -Status "Failed" -BackupFolder $backupFolder -TotalPolicies $totalPolicies -Failures ([Math]::Max(1, $failures)) -FailedTypes @($failedTypes) -Trigger $runTrigger -FinishedAt $context.TerminalTimestamp
-        throw $reason
+        Complete-TvAuditRun $context "Failed" $backupFolder $totalPolicies ([Math]::Max(1, $failures)) $runTrigger "BACKUP_FAILED"
+        Set-TvCloudStatus $context "Failed" $reason $backupFolder
+        Send-TvBackupOutcome -Account $storageAccount -Token $storageToken -TenantId $tenantId -RunId $runId -Status "Failed" -BackupFolder $backupFolder -TotalPolicies $totalPolicies -Failures ([Math]::Max(1, $failures)) -FailedTypes @($failedTypes) -Trigger $runTrigger
+        throw
     }
 }
 

@@ -41,7 +41,7 @@ The **User** column shows the signed-in administrator, Backup Reader service pri
 :::note
 Automatic backups that TenuVault refused to run because of the license are not in the audit log, because the tenant's storage is not opened without a license. They are listed on the **Schedule** tab. See [Schedule backups](/backups/schedules/#license-and-plan-checks).
 
-Backup Reader and cloud backups record the same run ID in backup metadata and the audit event. Their Microsoft Entra sign-in histories can group several runs that reused a token.
+Backup Reader and cloud backups record the same run ID in backup metadata and the audit event. Their Microsoft Entra sign-in histories can group several runs that reused a token. If Azure Automation restarts a cloud job, the restarted job runs a new backup. An earlier attempt with a start checkpoint and no terminal audit event appears as **Uncertain** once audit storage can be checked.
 :::
 
 ## Where the log is stored
