@@ -18,6 +18,7 @@ const whatsNewDialog = vi.hoisted(() => vi.fn((_props: { open: boolean; returnFo
 // Records whether the Help menu was still in the page when the window was captured.
 const feedbackCapture = vi.hoisted(() => vi.fn(async (_page?: string) => { menuAtCapture.push(document.querySelector('[role="menu"]') !== null); return null }))
 const menuAtCapture = vi.hoisted(() => [] as boolean[])
+const discardCapture = vi.hoisted(() => vi.fn(async (_id: string) => undefined))
 
 vi.mock("../../src/renderer/lib/bridge", () => ({
   bridge: {
@@ -26,7 +27,7 @@ vi.mock("../../src/renderer/lib/bridge", () => ({
     schedules: { list: async () => [] },
     license: { open: async () => undefined, tenantTrialAction: trialAction },
     preferences: { get: async () => ({}), set: async () => ({}) },
-    feedback: { capture: feedbackCapture, discardCapture: async () => undefined },
+    feedback: { capture: feedbackCapture, discardCapture },
   },
 }))
 vi.mock("../../src/renderer/lib/license", async (original) => ({
@@ -520,6 +521,56 @@ describe("sidebar groups and Help", () => {
     await act(async () => { finishCapture(); await new Promise((resolve) => setTimeout(resolve, 80)) })
     expect(feedbackCapture).toHaveBeenCalledTimes(2)
     expect(feedbackCapture.mock.calls[1]![0]).toBe(feedbackPageLabel("/portal/settings"))
+  })
+
+  describe("captures that the page changes under", () => {
+    const held: Array<() => void> = []
+    const holdCaptures = (count: number) => {
+      for (let index = 1; index <= count; index++) {
+        feedbackCapture.mockImplementationOnce(() => new Promise((resolve) => { held.push(() => resolve({ id: `s${index}` } as never)) }))
+      }
+    }
+    const settle = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, 80)) })
+    const start = async () => {
+      licenseStatus.current = statusFor("pro")
+      selectTenant()
+      let go: (path: string) => void = () => undefined
+      function Navigator() { go = useNavigate(); return null }
+      const container = await render(createElement("div", null, createElement(Navigator), createElement(DesktopLayout)))
+      await openHelp(container)
+      await choose("Share feedback")
+      return (path: string) => act(async () => go(path))
+    }
+    afterEach(() => { held.splice(0) })
+
+    it("captures again after a round trip back to the same page", async () => {
+      holdCaptures(1)
+      const go = await start()
+      // Settings may be what the window showed while it was captured, even though Dashboard is back.
+      await go("/portal/settings")
+      await go("/portal/dashboard")
+      await act(async () => held.shift()!())
+      await settle()
+      expect(feedbackCapture.mock.calls.map(([page]) => page)).toEqual(["Dashboard", "Dashboard"])
+      expect(discardCapture.mock.calls.map(([id]) => id)).toEqual(["s1"])
+    })
+
+    it("names no page in the last capture when the page keeps changing, and keeps that capture", async () => {
+      holdCaptures(3)
+      const go = await start()
+      await go("/portal/settings")
+      await act(async () => held.shift()!())
+      await settle()
+      await go("/portal/drift")
+      await act(async () => held.shift()!())
+      await settle()
+      await go("/portal/audit")
+      await act(async () => held.shift()!())
+      await settle()
+      expect(feedbackCapture.mock.calls.map(([page]) => page)).toEqual(["Dashboard", "Settings", undefined])
+      // The draft the dialog opens with is the last capture, which is still valid.
+      expect(discardCapture.mock.calls.map(([id]) => id)).toEqual(["s1", "s2"])
+    })
   })
 
   it("ignores a choice made in a dismissed menu while it animates out", async () => {
