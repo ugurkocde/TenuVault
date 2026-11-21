@@ -12,7 +12,7 @@ const selectedTenantState = vi.hoisted(() => ({ current: null as unknown }))
 const routerPush = vi.hoisted(() => vi.fn())
 const trialAction = vi.hoisted(() => vi.fn(async () => undefined))
 const whatsNewState = vi.hoisted(() => ({ current: null as { hasUnseen: boolean } | null }))
-const supportDialog = vi.hoisted(() => vi.fn((_props: { open: boolean }) => null))
+const supportDialog = vi.hoisted(() => vi.fn((_props: { open: boolean; returnFocus?: { current: HTMLElement | null } }) => null))
 const whatsNewDialog = vi.hoisted(() => vi.fn((_props: { open: boolean }) => null))
 // Records whether the Help menu was still in the page when the window was captured.
 const feedbackCapture = vi.hoisted(() => vi.fn(async () => { menuAtCapture.push(document.querySelector('[role="menu"]') !== null); return null }))
@@ -457,6 +457,30 @@ describe("sidebar groups and Help", () => {
     await choose("Share feedback")
     expect(feedbackCapture).toHaveBeenCalledTimes(1)
     expect(menuAtCapture).toEqual([false])
+  })
+
+  it("keeps Help closed until a chosen item has done its work, and hands focus back to Help even if it moved", async () => {
+    licenseStatus.current = statusFor("pro")
+    selectTenant()
+    const container = await render(createElement(DesktopLayout))
+    const trigger = await openHelp(container)
+    await act(async () => { menuItem("Share feedback")!.click() })
+    // Reopening Help before the window is captured does nothing, so the menu cannot be in the screenshot.
+    await act(async () => { trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })) })
+    expect(document.querySelector('[role="menu"]')).toBeNull()
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 80)) })
+    expect(feedbackCapture).toHaveBeenCalledTimes(1)
+    expect(menuAtCapture).toEqual([false])
+
+    await openHelp(container)
+    expect(document.querySelector('[role="menu"]')).not.toBeNull()
+    await act(async () => { menuItem("Support")!.click() })
+    // Focus moves elsewhere before the queued item runs: Support still returns to Help.
+    container.querySelector<HTMLAnchorElement>('a[href="/portal/settings"]')!.focus()
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 80)) })
+    const props = supportDialog.mock.lastCall?.[0] as { open: boolean; returnFocus?: { current: HTMLElement | null } }
+    expect(props.open).toBe(true)
+    expect(props.returnFocus?.current).toBe(trigger)
   })
 
   it("marks Help and What's new while an installed build is unseen", async () => {

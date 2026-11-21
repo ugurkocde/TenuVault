@@ -66,7 +66,7 @@ export function NavFoldGroup({ label, open, holdsActive, onToggle, children }: {
         aria-expanded={open}
         aria-controls={`nav-items-${label}`}
         onClick={onToggle}
-        className="group/fold flex w-full items-center gap-1 rounded-lg px-4 pb-1 pt-2.5 text-left text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+        className="group/fold flex w-full items-center gap-1 rounded-lg px-4 pb-1 pt-2.5 text-left text-xs font-medium text-muted-foreground motion-safe:transition-colors hover:text-foreground"
       >
         {label}
         <ChevronDown
@@ -128,13 +128,17 @@ export function useHoverPill(routeKey: string) {
       if (pointer && instant && typeof document.elementFromPoint === "function") hovered = rowOf(document.elementFromPoint(pointer.x, pointer.y))
       const active = rowOf(nav.querySelector('[aria-current="page"]'))
       const target = usable(hovered) && hovered !== active ? hovered : null
-      window.clearTimeout(hideTimer)
       if (!target) {
-        pill.dataset.shown = "false"
         // Once faded, the pill leaves the layout, so its old position never adds to the scroll height.
-        hideTimer = window.setTimeout(() => { if (pill.dataset.shown === "false") pill.style.display = "none" }, 200)
+        // The timer starts once, when the pill goes, so a fold that syncs every frame cannot keep it waiting.
+        if (pill.dataset.shown !== "false") {
+          pill.dataset.shown = "false"
+          window.clearTimeout(hideTimer)
+          hideTimer = window.setTimeout(() => { if (pill.dataset.shown === "false") pill.style.display = "none" }, 200)
+        }
         return
       }
+      window.clearTimeout(hideTimer)
       const appearing = pill.dataset.shown !== "true"
       pill.style.display = ""
       // A pill that was hidden appears in place instead of sliding in from where it last was.
@@ -196,5 +200,6 @@ export function useHoverPill(routeKey: string) {
   // A new page: the pill steps off the row that just became the open page.
   useEffect(() => { syncRef.current() }, [routeKey])
 
-  return { on, navRef: setNav }
+  // setNav is stable, so the nav's callback ref does not detach and re-attach on every render.
+  return { on, nav, navRef: setNav }
 }

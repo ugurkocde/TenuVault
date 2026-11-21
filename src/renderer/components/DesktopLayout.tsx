@@ -5,7 +5,7 @@ import { openCheckout } from "../lib/purchase"
 import { TenantTrialNotices, TrialActions, TrialUsage, TrialChanges, trialEndVisible } from "./TenantTrial"
 import { CommunityChoiceBanner } from "./CommunityTenantPicker"
 import { isAppBackupPath, desktopRouteBoundaryKey } from "../lib/app-backup-route"
-import { useEffect, useRef, useState, type ComponentType, type ReactNode, type RefObject } from "react"
+import { useEffect, useRef, useState, type ComponentType, type ReactNode } from "react"
 import { Link, Outlet, useLocation } from "react-router-dom"
 import {
   Activity,
@@ -65,7 +65,6 @@ import { NAV_PLAN_FEATURES, NavPlanBadge } from "./NavPlanBadge"
 import { FrameworkNavigation } from "./FrameworkNavigation"
 import { OibJobIndicator } from "./oib/JobIndicator"
 import { NavFoldGroup, useFoldedGroups, useHoverPill } from "./SidebarNavigation"
-import { focusedElement } from "../lib/return-focus"
 
 interface NavItem {
   name: string
@@ -334,18 +333,29 @@ function afterPaint(run: () => void) {
  * Help at the foot of the sidebar: the release notes and feedback, with Support as the panel's last
  * row. It opens upward with the same motion as the tenant switcher. The release notes keep
  * their dot on the Help entry while an installed build is unseen. A chosen item runs once the menu has
- * closed and returned focus to Help, so the dialog it opens hands focus back there.
+ * closed and painted, and the dialog it opens hands focus back to Help. Until that item has done its
+ * work (for Share feedback, until the window is captured) Help does not open again, so the menu can
+ * never be in the feedback screenshot.
  */
-function HelpMenu({ linkClass, onFeedback, onSupport }: { linkClass: (active: boolean) => string; onFeedback: () => void; onSupport: () => void }) {
+function HelpMenu({ linkClass, onFeedback, onSupport }: {
+  linkClass: (active: boolean) => string
+  onFeedback: (opener: HTMLElement | null) => Promise<void>
+  onSupport: (opener: HTMLElement | null) => void
+}) {
   const { state } = useWhatsNew()
+  const [open, setOpen] = useState(false)
   const [whatsNewOpen, setWhatsNewOpen] = useState(false)
   const helpRef = useRef<HTMLButtonElement>(null)
-  const pending = useRef<(() => void) | null>(null)
-  const choose = (run: () => void) => () => { pending.current = run }
+  const pending = useRef<(() => void | Promise<void>) | null>(null)
+  const launching = useRef(false)
+  const choose = (run: () => void | Promise<void>) => () => {
+    pending.current = run
+    launching.current = true
+  }
   const unseen = Boolean(state?.hasUnseen)
   return (
     <>
-      <DropdownMenu>
+      <DropdownMenu open={open} onOpenChange={(next) => { if (!next || !launching.current) setOpen(next) }}>
         <DropdownMenuTrigger asChild>
           <button ref={helpRef} type="button" className={cn(linkClass(false), "w-full")} aria-label={unseen ? "Help, new changes since you last looked" : undefined}>
             <CircleHelp className="h-[18px] w-[18px]" aria-hidden="true" />
@@ -361,7 +371,10 @@ function HelpMenu({ linkClass, onFeedback, onSupport }: { linkClass: (active: bo
           onCloseAutoFocus={() => {
             const run = pending.current
             pending.current = null
-            if (run) afterPaint(run)
+            if (!run) return
+            afterPaint(() => {
+              void Promise.resolve(run()).catch(() => undefined).finally(() => { launching.current = false })
+            })
           }}
         >
           <div className="space-y-px p-1.5">
@@ -370,13 +383,13 @@ function HelpMenu({ linkClass, onFeedback, onSupport }: { linkClass: (active: bo
               What&apos;s new
               {unseen && <><span aria-hidden="true" className="ml-auto size-2 rounded-full bg-blue-600" /><span className="sr-only">, new changes since you last looked</span></>}
             </DropdownMenuItem>
-            <DropdownMenuItem onSelect={choose(onFeedback)} className="gap-3 rounded-2xl px-3 py-2">
+            <DropdownMenuItem onSelect={choose(() => onFeedback(helpRef.current))} className="gap-3 rounded-2xl px-3 py-2">
               <MessageSquareHeart className="h-4 w-4" aria-hidden="true" />
               Share feedback
             </DropdownMenuItem>
           </div>
           <div className="border-t bg-secondary/60 p-1.5">
-            <DropdownMenuItem onSelect={choose(onSupport)} className="group/support gap-3 rounded-2xl px-2 py-2">
+            <DropdownMenuItem onSelect={choose(() => onSupport(helpRef.current))} className="group/support gap-3 rounded-2xl px-2 py-2">
               <span aria-hidden="true" className="flex size-8 flex-shrink-0 items-center justify-center rounded-full border bg-card text-muted-foreground"><LifeBuoy className="h-4 w-4" /></span>
               <span className="min-w-0 flex-1">
                 <span className="block text-[13px] font-medium">Support</span>
@@ -414,10 +427,9 @@ function LicenseNavBadge() {
  * Whether the element's content is taller than the element. Watches the element and its children, so
  * expanding a section of the sidebar updates it.
  */
-function useOverflowing(ref: RefObject<HTMLElement | null>): boolean {
+function useOverflowing(element: HTMLElement | null): boolean {
   const [overflowing, setOverflowing] = useState(false)
   useEffect(() => {
-    const element = ref.current
     if (!element) return
     const measure = () => setOverflowing(element.scrollHeight > element.clientHeight + 1)
     if (typeof ResizeObserver === "undefined") return measure()
@@ -435,7 +447,7 @@ function useOverflowing(ref: RefObject<HTMLElement | null>): boolean {
       resize.disconnect()
       children.disconnect()
     }
-  }, [ref])
+  }, [element])
   return overflowing
 }
 
@@ -453,29 +465,29 @@ export function DesktopLayout() {
   const [supportOpen, setSupportOpen] = useState(false)
   const [feedback, setFeedback] = useState<{ open: boolean; snapshot: FeedbackSnapshot | null }>({ open: false, snapshot: null })
   const capturingFeedback = useRef(false)
-  // The window is captured before the dialog opens, so the dialog is not in the screenshot.
-  // Dialogs opened from Help or the first-run header hand focus back to what opened them.
+  // Dialogs opened from Help or the first-run header hand focus back to the control that opened them.
   const supportReturn = useRef<HTMLElement | null>(null)
   const feedbackReturn = useRef<HTMLElement | null>(null)
-  const openSupport = () => {
-    supportReturn.current = focusedElement()
+  const openSupport = (opener: HTMLElement | null) => {
+    supportReturn.current = opener
     setSupportOpen(true)
   }
-  const openFeedback = async () => {
+  // The window is captured before the dialog opens, so the dialog is not in the screenshot.
+  const openFeedback = async (opener: HTMLElement | null) => {
     if (capturingFeedback.current || feedback.open) return
     capturingFeedback.current = true
-    feedbackReturn.current = focusedElement()
+    feedbackReturn.current = opener
     const snapshot = await bridge.feedback.capture(feedbackPageLabel(pathname)).catch(() => null)
     capturingFeedback.current = false
     setFeedback({ open: true, snapshot })
   }
-  const navRef = useRef<HTMLElement>(null)
-  const navOverflowing = useOverflowing(navRef)
   // Until a tenant is connected the guided setup is the only job, so it gets the window to itself.
   // The page keeps its place in the tree either way, so connecting the first tenant during the
   // setup only brings in the sidebar and never remounts the setup.
   const focus = tenants.length === 0 && pathname === "/portal/onboarding"
   const hoverPill = useHoverPill(pathname)
+  // Measured on the mounted nav, so a sidebar that appears after the first-run setup is watched too.
+  const navOverflowing = useOverflowing(hoverPill.nav)
   const { folded, toggle: toggleGroup } = useFoldedGroups()
   // Baselines also holds CIS Benchmarks, the framework catalog and custom baselines.
   const holdsActive = (group: NavGroup) =>
@@ -550,8 +562,8 @@ export function DesktopLayout() {
           <nav aria-label="Help" className="flex items-center gap-1">
             <SetupCallLink source="setup-header" variant="nav" className={quiet} />
             <Link to="/license" className={quiet}>License</Link>
-            <button type="button" onClick={() => void openFeedback()} className={quiet}>Share feedback</button>
-            <button type="button" onClick={openSupport} className={quiet}>Support</button>
+            <button type="button" onClick={(event) => void openFeedback(event.currentTarget)} className={quiet}>Share feedback</button>
+            <button type="button" onClick={(event) => openSupport(event.currentTarget)} className={quiet}>Support</button>
           </nav>
         </header>
       ) : (
@@ -567,7 +579,7 @@ export function DesktopLayout() {
 
         {/* min-h-0 lets the list shrink and scroll inside the panel instead of pushing past it. Only while it
             scrolls does it keep the wheel to itself; otherwise the wheel over the sidebar scrolls the page. */}
-        <nav ref={(element) => { navRef.current = element; hoverPill.navRef(element) }} aria-label="Main navigation" data-pills={hoverPill.on ? "on" : undefined} className={cn("tv-nav relative min-h-0 flex-1 overflow-y-auto px-3 py-1", navOverflowing && "overscroll-contain")}>
+        <nav ref={hoverPill.navRef} aria-label="Main navigation" data-pills={hoverPill.on ? "on" : undefined} className={cn("tv-nav relative min-h-0 flex-1 overflow-y-auto px-3 py-1", navOverflowing && "overscroll-contain")}>
           <span aria-hidden="true" className="tv-pill" />
           {groups.map((group) => group.label ? (
             <NavFoldGroup key={group.label} label={group.label} open={!folded.has(group.label)} holdsActive={holdsActive(group)} onToggle={() => toggleGroup(group.label!)}>
@@ -591,7 +603,7 @@ export function DesktopLayout() {
             License
             <LicenseNavBadge />
           </Link>
-          <HelpMenu linkClass={linkClass} onFeedback={() => void openFeedback()} onSupport={openSupport} />
+          <HelpMenu linkClass={linkClass} onFeedback={openFeedback} onSupport={openSupport} />
         </div>
       </aside>
       )}

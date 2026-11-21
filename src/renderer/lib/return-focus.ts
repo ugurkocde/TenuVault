@@ -13,8 +13,3 @@ export function returnFocusTo(target: RefObject<HTMLElement | null> | undefined)
     element.focus()
   }
 }
-
-/** The focused element, to hand focus back to once a dialog it opens has closed. */
-export function focusedElement(): HTMLElement | null {
-  return document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : null
-}

@@ -11,7 +11,6 @@ vi.mock("../../src/renderer/lib/license", async (original) => ({
 }))
 
 import { SupportDialog } from "../../src/renderer/components/SupportDialog"
-import { focusedElement } from "../../src/renderer/lib/return-focus"
 
 const roots: Root[] = []
 afterEach(() => {
@@ -24,7 +23,7 @@ function Opener() {
   const [open, setOpen] = useState(false)
   const back = useRef<HTMLElement | null>(null)
   return createElement("div", null,
-    createElement("button", { type: "button", id: "opener", onClick: () => { back.current = focusedElement(); setOpen(true) } }, "Help"),
+    createElement("button", { type: "button", id: "opener", onClick: (event: { currentTarget: HTMLElement }) => { back.current = event.currentTarget; setOpen(true) } }, "Help"),
     createElement(SupportDialog, { open, onOpenChange: setOpen, returnFocus: back }))
 }
 

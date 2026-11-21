@@ -233,6 +233,7 @@ html:has([data-flow-shell]) {
 @media (prefers-reduced-motion: reduce) {
   .tv-fold, .tv-fold-inner, .tv-fold-caret, .tv-pill { transition: none; }
   .tv-pop[data-state] { animation: none; }
+  .tv-pop, .tv-pop * { transition: none; }
 }
 
 /* Sync (pages/SyncPage, features/sync). Every state comes from a request or a stored record;

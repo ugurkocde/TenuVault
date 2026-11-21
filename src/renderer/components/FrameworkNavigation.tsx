@@ -25,6 +25,8 @@ export function FrameworkNavigation() {
     <div data-nav-row="" className={`flex items-center rounded-full transition-colors ${tone}`}>
       <Link to="/portal/frameworks" aria-current={overview ? "page" : undefined} className="flex min-h-8 min-w-0 flex-1 items-center gap-3 rounded-full py-1.5 pl-4 text-sm font-medium">
         <ShieldCheck className="h-[18px] w-[18px] shrink-0" aria-hidden="true" /><span className="flex-1 text-left">Frameworks</span>
+        {/* The open page is inside the folded list: mark it the way a folded sidebar group is marked. */}
+        {!open && active && !overview && <><span aria-hidden="true" className="size-1.5 rounded-full bg-coral-500" /><span className="sr-only">, holds the open page</span></>}
         {running.size > 0 && <LoaderCircle className="h-4 w-4 animate-spin" aria-label={`${running.size} comparison${running.size === 1 ? "" : "s"} running`} />}
       </Link>
       <button type="button" aria-expanded={open} aria-controls="framework-navigation" aria-label={open ? "Collapse framework list" : "Expand framework list"} onClick={() => setOpen(!open)} className="mr-1 flex size-7 min-h-7 shrink-0 items-center justify-center rounded-full">
