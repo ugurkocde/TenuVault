@@ -117,16 +117,13 @@ export async function withAbort<T>(request: () => Promise<T>, signal: AbortSigna
 }
 
 export async function graphError(response: Response): Promise<string> {
-  const text = await response.text()
-  try {
-    const message = (JSON.parse(text) as { error?: { message?: string } }).error?.message
-    if (response.status === 403) {
-      return `Access denied by Microsoft Graph${message ? `: ${message}` : ""}. Check that your account has an Intune role and the app registration has the Intune permissions.`
-    }
-    return message ?? `Microsoft Graph returned ${response.status}`
-  } catch {
-    return `Microsoft Graph returned ${response.status}`
-  }
+  // Finish the bounded response read so body transport failures still count toward the circuit.
+  await response.text()
+  const status = response.status
+  if (status === 403) return "Access denied by Microsoft Graph (HTTP 403). Check that your account has an Intune role and the app registration has the Intune permissions."
+  if (status === 401) return "Microsoft Graph authentication failed (HTTP 401)."
+  if (status === 429) return "Microsoft Graph throttled the request (HTTP 429)."
+  return `Microsoft Graph request failed (HTTP ${status}).`
 }
 
 /** The message for a failed storage response. A network error response rejects with a StorageUnreachableError instead. */

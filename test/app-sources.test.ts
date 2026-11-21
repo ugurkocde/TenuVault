@@ -2,7 +2,7 @@ import { appendFileSync, writeFileSync, utimesSync } from "node:fs"
 import { afterEach, afterAll, beforeAll, describe, expect, it, vi } from "vitest"
 import JSZip from "jszip"
 import { randomBytes, randomUUID } from "node:crypto"
-import { mkdtemp, mkdir, writeFile, readFile, readdir, rm, cp, symlink, lstat, chmod } from "node:fs/promises"
+import { realpath, mkdtemp, mkdir, writeFile, readFile, readdir, rm, cp, symlink, lstat, chmod } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { spawnSync } from "node:child_process"
@@ -15,7 +15,7 @@ const tenant = "11111111-1111-1111-1111-111111111111", other = "22222222-2222-22
 const roots: string[] = []
 const master = randomBytes(32)
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))) })
-async function root() { const value = await mkdtemp(join(tmpdir(), "app-source-test-")); roots.push(value); return value }
+async function root() { const value = await realpath(await mkdtemp(join(tmpdir(), "app-source-test-"))); roots.push(value); return value }
 async function packageFile(folder: string, options: { extra?: string; xml?: string; bytes?: number } = {}) {
   const zip = new JSZip()
   zip.file("IntuneWinPackage/Metadata/Detection.xml", options.xml ?? "<ApplicationInfo><EncryptionInfo/></ApplicationInfo>")

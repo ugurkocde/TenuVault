@@ -153,6 +153,7 @@ interface Outcome {
   warnings?: string[]
   targetTenantId?: string
   retryable?: boolean
+  retryJobId?: string
   partial?: boolean
   policyId?: string
   repairToken?: string
@@ -519,7 +520,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
     try { dependencyMappings = copying ? reviewedDependencyMappings(mappingJson, mappingsConfirmed, copyTargets.length) : undefined }
     catch (error) { setReviewError(error instanceof Error ? error.message : String(error)); setStep("review"); return }
     const previous = retry ? result?.results ?? [] : []
-    const batches = retry ? retryBatches(previous) : [{ paths }]
+    const batches: ReturnType<typeof retryBatches> = retry ? retryBatches(previous) : [{ paths }]
     if (!batches.length) return
     const completed: Outcome[] = []
     const attempted: typeof batches = []
@@ -548,7 +549,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
           : []
         if (copying && !targets.length) throw new Error("The original target tenant is no longer connected.")
         attempted.push(batch)
-        const data = await post<{ success: boolean; message: string; details?: { restoredCount: number; unchangedCount?: number; results: Outcome[] } }>("/api/restore-backup", {
+        const data = await post<{ success: boolean; jobId?: string; message: string; details?: { restoredCount: number; unchangedCount?: number; results: Outcome[] } }>("/api/restore-backup", {
           ...tenant.credentials,
           storageAccountName: tenant.storageAccountName,
           backupId,
@@ -560,11 +561,12 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
           mode: copying ? "copy" : mode,
           assignments: copying ? false : assignments,
           progressId: id,
+          retryOf: batch.retryOf,
           ...(copying
             ? { targetTenants: targets.map((target) => ({ tenantId: target.tenantId, appId: target.appId })) }
             : {}),
         })
-        completed.push(...(data.details?.results ?? []))
+        completed.push(...(data.details?.results ?? []).map(outcome => ({ ...outcome, retryJobId: data.jobId })))
       }
       const outcomes = mergeOutcomes(previous, completed)
       const handled = outcomes.filter((outcome) => outcome.success).length

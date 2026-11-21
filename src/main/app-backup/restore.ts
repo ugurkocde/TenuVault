@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto"
 import { setTimeout as delay } from "node:timers/promises"
+import { beginRestoreAudit, recordRestorePreparationFailure } from "../../portal/lib/audit/restore"
 import type { AppRestoreProgress, AppRestoreResult, CapturedAppSource } from "../../shared/app-sources/types"
+import type { AuditJobItem } from "~/lib/audit/types"
 import type { AppSourceStore } from "../app-sources/store"
 import type { ContentEncryption } from "./content-stream"
 import { encryptRestoreContent, newRestoreSecrets, type RestoreSecrets } from "./restore-encryption"
-import { putRestoreBlock, type RestoreGraph } from "./restore-graph"
+import { putRestoreBlock, restoreGraph, type RestoreGraph } from "./restore-graph"
 import { assertRestoredSettings, restoreBody, snapshotHash, type AppRestoreSnapshot } from "./restore-snapshot"
 
 const BASE = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps"
@@ -18,8 +20,79 @@ interface RestoreRecord {
 export interface RestoreOptions {
   graph: RestoreGraph; fetch: typeof fetch; signal: AbortSignal
   progress: (value: AppRestoreProgress) => void
+  audit?: (value: AppRestoreAuditObservation) => void
   wait?: (milliseconds: number, signal: AbortSignal) => Promise<void>
 }
+export interface AppRestoreAuditObservation {
+  operationId: string
+  appId?: string
+  creationApplied?: boolean
+  metadataVerified?: boolean
+  publicationApplied?: boolean
+  publicationVerified?: boolean
+  unchanged?: boolean
+  dispatched?: boolean
+  wrote?: boolean
+}
+
+export async function restoreAppWithAudit(store: AppSourceStore, source: CapturedAppSource, snapshot: AppRestoreSnapshot, target: string, name: string, options: {
+  getGraphToken: () => Promise<string>; fetch: typeof fetch; signal: AbortSignal; progress: RestoreOptions["progress"]; operationId: string
+}): Promise<AppRestoreResult> {
+  const { getGraphToken, fetch, signal, progress, operationId } = options
+  const preparation = { destination: target, sourceTenantId: source.receipt.tenantId, sourceBackupId: source.id, operationId,
+    runId: randomUUID(), action: "Restore app backup" }
+  const original: AuditJobItem = { folder: "Apps", sourceId: source.receipt.appId, outcome: "unattempted",
+    planned: [{ operation: "create", field: "metadata" }, { operation: "publish", field: "content" }] }
+  let audit: ReturnType<typeof beginRestoreAudit>
+  let observed: AppRestoreAuditObservation | undefined
+  let authenticated = false
+  const graph = restoreGraph(async () => {
+    if (authenticated) return getGraphToken()
+    // Use the existing first Graph read for sign-in, after local restore validation.
+    const graphToken = await getGraphToken()
+    authenticated = true
+    audit = beginRestoreAudit({ ...preparation, operationId: observed?.operationId ?? operationId, graphToken, items: [original] })
+    audit?.started(0)
+    return graphToken
+  }, fetch, signal)
+  try {
+    return await restoreCapturedApp(store, source, snapshot, target, name, {
+      graph, fetch, signal, progress,
+      audit: state => {
+        if (observed?.operationId !== state.operationId) audit?.correlate(state.operationId)
+        observed = state
+        audit?.item(0, appRestoreAuditItem(original, state))
+      },
+    })
+  } catch (error) {
+    if (audit) {
+      audit.item(0, appRestoreAuditItem(original, observed, true))
+    } else {
+      void recordRestorePreparationFailure({ ...preparation, operationId: observed?.operationId ?? operationId }, signal.aborted)
+        .catch(() => console.warn("[audit] Restore preparation failure could not be recorded"))
+    }
+    throw error
+  } finally { audit?.finish() }
+}
+
+export function appRestoreAuditItem(original: AuditJobItem, state: AppRestoreAuditObservation | undefined, failed = false): AuditJobItem {
+  return {
+    ...original, targetId: state?.appId,
+    outcome: failed ? state?.wrote ? "partial" : state?.dispatched ? "uncertain" : "failed"
+      : state?.publicationVerified ? state.unchanged ? "unchanged" : "created"
+        : state?.wrote ? "partial" : "uncertain",
+    reason: failed ? "APP_RESTORE_FAILED" : undefined,
+    applied: [
+      ...(state?.creationApplied ? [{ operation: "create", field: "metadata" } as const] : []),
+      ...(state?.publicationApplied ? [{ operation: "publish", field: "content" } as const] : []),
+    ],
+    verified: [
+      ...(state?.metadataVerified ? [{ operation: "create", field: "metadata" } as const] : []),
+      ...(state?.publicationVerified ? [{ operation: "publish", field: "content" } as const] : []),
+    ],
+  }
+}
+
 const pause = (ms: number, signal: AbortSignal) => delay(ms, undefined, { signal })
 async function all(graph: RestoreGraph, initial: string): Promise<Record<string, unknown>[]> {
   const values: Record<string, unknown>[] = []; let next: string | null = initial, count = 0, bytes = 0
@@ -48,7 +121,6 @@ async function restoreOwnedApp(store: AppSourceStore, source: CapturedAppSource,
   const report = (phase: AppRestoreProgress["phase"], uploadedBytes = 0) => progress({ phase, uploadedBytes, totalBytes })
   signal.throwIfAborted()
   report("verifying")
-  // Prove destination access before allocating a journal or writing to Microsoft.
   await graph("GET", `${BASE}?$select=id&$top=1`)
   let record = await store.readRestoreRecord<RestoreRecord>(source.tenantId, source.id, target)
   if (record) {
@@ -59,6 +131,18 @@ async function restoreOwnedApp(store: AppSourceStore, source: CapturedAppSource,
   } else {
     record = { schema: 1, id: randomUUID(), sourceId: source.id, target, name: name.trim(), settingsHash, secrets: newRestoreSecrets(), creationStarted: false }
   }
+  const observed: AppRestoreAuditObservation = { operationId: record.id }
+  const audit = (evidence: Partial<AppRestoreAuditObservation> = {}) => {
+    Object.assign(observed, { appId: record.appId }, evidence)
+    options.audit?.({ ...observed })
+  }
+  const write = async <T>(run: () => Promise<T>, evidence: Partial<AppRestoreAuditObservation> = {}): Promise<T> => {
+    if (!observed.dispatched) audit({ dispatched: true })
+    const value = await run()
+    if (!observed.wrote || Object.keys(evidence).length) audit({ wrote: true, ...evidence })
+    return value
+  }
+  audit()
   const save = () => store.writeRestoreRecord(source.tenantId, source.id, target, record)
   const marker = `[TenuVault restore ${record.id}]`
   body.notes = [typeof body.notes === "string" ? body.notes : "", marker].filter(Boolean).join("\n")
@@ -71,6 +155,7 @@ async function restoreOwnedApp(store: AppSourceStore, source: CapturedAppSource,
     const found = (await all(graph, `${BASE}?$select=id,notes&$top=100`)).filter(app => typeof app.notes === "string" && app.notes.split("\n").includes(marker))
     if (found.length !== 1) throw new Error("The earlier app creation could not be confirmed. Check Intune before retrying. TenuVault will not create a duplicate automatically.")
     record.appId = identifier(found[0]!.id); await save()
+    audit()
   }
   if (!record.appId) {
     report("creating"); record.creationStarted = true; await save()
@@ -79,27 +164,31 @@ async function restoreOwnedApp(store: AppSourceStore, source: CapturedAppSource,
       // can create the app; unknown POST outcomes still require reconciliation.
       record.creationStarted = false; await save(); signal.throwIfAborted()
     }
-    record.appId = identifier((await graph("POST", BASE, body)).id); await save()
+    record.appId = identifier((await write(() => graph("POST", BASE, body), { creationApplied: true })).id)
+    audit()
+    await save()
   }
   const appUrl = `${BASE}/${record.appId}`, contentUrl = `${appUrl}/microsoft.graph.win32LobApp/contentVersions`
   const existing = await graph("GET", appUrl)
   if (existing["@odata.type"] !== "#microsoft.graph.win32LobApp" || typeof existing.notes !== "string" || !existing.notes.split("\n").includes(marker)) throw new Error("The destination app no longer belongs to this restore. No changes were made to it.")
   assertRestoredSettings(body, existing)
+  audit({ metadataVerified: true })
   if (record.completed) {
     if (existing.committedContentVersion !== record.version || existing.publishingState !== "published") throw new Error("The previously restored destination app has changed. Review it in Intune.")
+    audit({ publicationVerified: true, unchanged: true })
     report("completed", totalBytes); return result()
   }
   if ((await all(graph, `${appUrl}/assignments`)).length) throw new Error("This destination app was assigned while the restore was incomplete. Remove its assignments in Intune before continuing.")
   if (!record.version) {
     const versions = await all(graph, contentUrl)
     if (versions.length > 1) throw new Error("The destination has unexpected content versions. Review it in Intune.")
-    record.version = versionId(versions[0]?.id ?? (await graph("POST", contentUrl, {})).id); await save()
+    record.version = versionId(versions[0]?.id ?? (await write(() => graph("POST", contentUrl, {}))).id); await save()
   }
   const filesUrl = `${contentUrl}/${record.version}/files`
   if (!record.fileId) {
     const files = await all(graph, filesUrl)
     if (files.length > 1) throw new Error("The destination has unexpected content files. Review it in Intune.")
-    record.fileId = identifier(files[0]?.id ?? (await graph("POST", filesUrl, { "@odata.type": "#microsoft.graph.mobileAppContentFile", name: `${record.id}.intunewin`, size: source.bytes, sizeEncrypted: totalBytes, manifest: null, isDependency: false })).id); await save()
+    record.fileId = identifier(files[0]?.id ?? (await write(() => graph("POST", filesUrl, { "@odata.type": "#microsoft.graph.mobileAppContentFile", name: `${record.id}.intunewin`, size: source.bytes, sizeEncrypted: totalBytes, manifest: null, isDependency: false }))).id); await save()
   }
   const fileUrl = `${filesUrl}/${record.fileId}`
   const poll = async (states: string[]) => {
@@ -126,7 +215,7 @@ async function restoreOwnedApp(store: AppSourceStore, source: CapturedAppSource,
     if (!ready.includes(String(file.uploadState))) file = await poll(ready)
     const expiry = Date.parse(String(file.azureStorageUriExpirationDateTime))
     if (Number.isFinite(expiry) && expiry <= Date.now() + 60000) {
-      await graph("POST", `${fileUrl}/renewUpload`)
+      await write(() => graph("POST", `${fileUrl}/renewUpload`))
       file = await poll(["azureStorageUriRenewalSuccess"])
     }
     let sas = String(file.azureStorageUri ?? ""), renewed = Date.now()
@@ -135,11 +224,11 @@ async function restoreOwnedApp(store: AppSourceStore, source: CapturedAppSource,
     const upload = async () => {
       signal.throwIfAborted()
       if (Date.now() - renewed > 6 * 60_000) {
-        await graph("POST", `${fileUrl}/renewUpload`); const renewedFile = await poll(["azureStorageUriRenewalSuccess"])
+        await write(() => graph("POST", `${fileUrl}/renewUpload`)); const renewedFile = await poll(["azureStorageUriRenewalSuccess"])
         sas = String(renewedFile.azureStorageUri ?? ""); renewed = Date.now()
       }
       const id = Buffer.from(String(ids.length).padStart(6, "0")).toString("base64")
-      await putRestoreBlock(sas, { comp: "block", blockid: id }, block.subarray(0, used), fetchImpl, signal)
+      await write(() => putRestoreBlock(sas, { comp: "block", blockid: id }, block.subarray(0, used), fetchImpl, signal))
       ids.push(id); uploaded += used; used = 0; report("uploading", uploaded)
     }
     report("uploading")
@@ -154,19 +243,20 @@ async function restoreOwnedApp(store: AppSourceStore, source: CapturedAppSource,
     if (used) await upload()
     if (uploaded !== totalBytes || !second.profile) throw new Error("The uploaded installer length is invalid.")
     signal.throwIfAborted()
-    await putRestoreBlock(sas, { comp: "blocklist" }, `<?xml version="1.0" encoding="utf-8"?><BlockList>${ids.map(id => `<Latest>${id}</Latest>`).join("")}</BlockList>`, fetchImpl, signal)
+    await write(() => putRestoreBlock(sas, { comp: "blocklist" }, `<?xml version="1.0" encoding="utf-8"?><BlockList>${ids.map(id => `<Latest>${id}</Latest>`).join("")}</BlockList>`, fetchImpl, signal))
     report("committing", totalBytes)
-    await graph("POST", `${fileUrl}/commit`, { fileEncryptionInfo: second.profile })
+    await write(() => graph("POST", `${fileUrl}/commit`, { fileEncryptionInfo: second.profile }))
     file = await poll(["commitFileSuccess"])
   }
   if (file.isCommitted !== true || Number(file.size) !== source.bytes || Number(file.sizeEncrypted) !== totalBytes) throw new Error("Intune did not confirm the complete installer content.")
   report("publishing", totalBytes)
-  await graph("PATCH", appUrl, { "@odata.type": "#microsoft.graph.win32LobApp", committedContentVersion: record.version })
+  await write(() => graph("PATCH", appUrl, { "@odata.type": "#microsoft.graph.win32LobApp", committedContentVersion: record.version }), { publicationApplied: true })
   for (let attempt = 0; attempt < 90; attempt++) {
     const app = await graph("GET", appUrl)
     if (app.committedContentVersion === record.version && app.publishingState === "published") {
       assertRestoredSettings(body, app)
       if ((await all(graph, `${appUrl}/assignments`)).length) throw new Error("The app was published, but assignments were added outside this restore. Review them in Intune.")
+      audit({ publicationVerified: true })
       record.completed = true; await save(); report("completed", totalBytes); return result()
     }
     await wait(2000, signal)

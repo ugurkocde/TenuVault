@@ -631,8 +631,8 @@ async function recordApplyAudit(deps: FeatureDeps, tenant: string, record: Store
       logEntry,
     })
     if (!logged.ok) throw new Error(`Audit write failed (${logged.status})`)
-  } catch (error) {
-    console.error("[audit] Failed to record change set apply:", error)
+  } catch {
+    console.error("[audit] Failed to record change set apply")
   }
 }
 

@@ -8,6 +8,8 @@ import { POST as downloadBackup } from "../src/portal/app/api/download-backup/ro
 import { POST as backupChanges } from "../src/portal/app/api/backup-changes/route"
 import { UNTAGGED_BACKUP } from "../src/portal/lib/policies/backup-owner"
 import { INVALID_MANIFEST_TENANT } from "../src/shared/backup-ownership"
+import { AuditSink, setMainAuditSink } from "../src/main/api/audit-sink"
+import { AuditStorageService } from "../src/portal/lib/audit/storage"
 import { endlessBody } from "./helpers"
 
 const OWN = "11111111-1111-1111-1111-111111111111"
@@ -17,7 +19,10 @@ const policyPath = `${backupId}/DeviceConfigurations/Example.json`
 const snapshot = { id: "original", displayName: "Example", "@odata.type": "#microsoft.graph.windows10CustomConfiguration", omaSettings: [] }
 const base = { tenantId: OWN, appId: "app", clientSecret: "placeholder", storageAccountName: "storage", backupId, subscriptionId: "sub", resourceGroupName: "rg" }
 const request = (path: string, data: object) => new NextRequest(`http://tenuvault.internal${path}`, { method: "POST", body: JSON.stringify(data) })
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => {
+  setMainAuditSink(undefined)
+  vi.unstubAllGlobals()
+})
 
 /** Stubs token and blob reads; records every Graph call. */
 function stubStorage(blobs: Record<string, unknown>) {
@@ -52,6 +57,31 @@ const routes: Array<[string, (request: NextRequest) => Promise<Response>, object
   ["/api/download-backup", downloadBackup as never, {}],
   ["/api/backup-changes", backupChanges as never, {}],
 ]
+
+it.each([false, true])("records preflight ownership refusal under the restore destination (cross tenant: %s)", async crossTenant => {
+  const destination = crossTenant ? OTHER : OWN
+  const graph = stubStorage(crossTenant ? { [`${backupId}/metadata.json`]: { TenantId: OTHER } } : {})
+  const account = crossTenant ? "targetstore" : "sourcestore"
+  const deliver = vi.fn<AuditStorageService["deliver"]>(async () => {})
+  const bind = vi.fn((tenantId: string) => ({
+    tenantId, storageAccountName: account, user: { id: tenantId, email: "", name: "Admin" },
+  }))
+  const transport = vi.fn(async () => Object.assign(new AuditStorageService({ storageAccountName: account, accessToken: "" }), { deliver }))
+  setMainAuditSink(new AuditSink({ bind, transport }))
+  const response = await restoreBackup(request("/api/restore-backup", {
+    ...base,
+    ...(crossTenant ? { targetTenants: [{ tenantId: OTHER, appId: OTHER }] } : { mode: "replace" }),
+  }))
+  expect(response.status).toBe(crossTenant ? 403 : 400)
+  expect(graph).toEqual([])
+  expect(bind.mock.calls).toEqual([[destination]])
+  expect(transport).toHaveBeenCalledExactlyOnceWith(account, expect.objectContaining({
+    eventType: "RESTORE_FAILED",
+    user: expect.objectContaining({ tenantId: destination }),
+    job: expect.objectContaining({ status: "failed", sourceBackupId: backupId, reason: "RESTORE_PREPARATION_FAILED" }),
+  }))
+  expect(deliver).toHaveBeenCalledTimes(1)
+})
 
 describe("backup routes refuse another tenant's backup", () => {
   it.each(routes)("%s answers 403 for a backup recorded for another tenant, before any Graph call", async (path, handler, extra) => {

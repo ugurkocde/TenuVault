@@ -30,7 +30,7 @@ export class BlobWriter {
    * A create-only body must be unique to its writer (the engine includes the run id), so a retry
    * that finds identical bytes knows its own earlier attempt created the blob.
    */
-  async put(name: string, body: string, beforeCommit?: NetworkCircuit, createOnly = false, onDispatch?: () => void): Promise<void> {
+  async put(name: string, body: string, beforeCommit?: NetworkCircuit, createOnly = false, onDispatch?: () => void, onUnconfirmed?: () => void): Promise<void> {
     const path = `${BACKUP_CONTAINER}/${name.split("/").map(encodeURIComponent).join("/")}`
     // The earlier PUT may have landed. Read it back and compare it with what this writer sent.
     const landed = async (response: Response, signal: AbortSignal) => {
@@ -61,7 +61,7 @@ export class BlobWriter {
         if (await landed(response, signal)) return
       }
       throw new StorageError(await storageError(response, this.account))
-    }, beforeCommit, onDispatch)
+    }, beforeCommit, onDispatch, onUnconfirmed)
   }
 
   /** Lists blob names and, with a delimiter, virtual folders under a prefix. */
@@ -124,7 +124,7 @@ export class BlobWriter {
     })
   }
 
-  private async request<T>(path: string, init: RequestInit, read: (response: Response, signal: AbortSignal, ambiguous: boolean) => Promise<T>, beforeCommit?: NetworkCircuit, onDispatch?: () => void): Promise<T> {
+  private async request<T>(path: string, init: RequestInit, read: (response: Response, signal: AbortSignal, ambiguous: boolean) => Promise<T>, beforeCommit?: NetworkCircuit, onDispatch?: () => void, onUnconfirmed?: () => void): Promise<T> {
     let ambiguous = false
     for (let attempt = 0; ; attempt++) {
       this.network?.signal.throwIfAborted()
@@ -160,6 +160,7 @@ export class BlobWriter {
           return result
         }, this.network?.signal, init.signal ?? undefined)
       } catch (error) {
+        if (attempted && (!response || response.ok || response.status === 408 || response.status >= 500)) onUnconfirmed?.()
         this.network?.signal.throwIfAborted()
         beforeCommit?.signal.throwIfAborted()
         if (response && (response.status === 401 || response.status === 403) && !(error instanceof ProtectedBlobError)) {

@@ -80,6 +80,16 @@
       "defaultValue": "UTC",
       "metadata": { "description": "IANA timezone for the schedule, for example Europe/Berlin. Daylight saving follows the timezone." }
     },
+    "enableAudit": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": { "description": "Set false if Azure Policy blocks the audit container or its role grants. Skips audit resources and outputs. Use incremental deployment." }
+    },
+    "auditOnly": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": { "description": "Set true for an incremental upgrade of an existing Automation account with enableAudit enabled. Only deploy the private audit container and its dedicated role and assignment. Existing writer grants, variables, runbook and schedule are kept." }
+    },
     "runbookUri": {
       "type": "string",
       "defaultValue": "https://raw.githubusercontent.com/ugurkocde/TenuVault/main/resources/runbooks/Invoke-TenuVaultBackup.ps1",
@@ -106,10 +116,16 @@
       { "name": "[concat('TenuVaultTenantName-', variables('tenantKey'))]", "value": "[parameters('tenantName')]" },
       { "name": "[concat('TenuVaultChangeReportActors-', variables('tenantKey'))]", "value": "[if(parameters('changeReportActors'), 'true', 'false')]" }
     ],
-    "writerRoleName": "TenuVault Backup Writer"
+    "writerRoleName": "TenuVault Backup Writer",
+    "auditContainer": "audit-logs",
+    "auditContainerScope": "[concat('Microsoft.Storage/storageAccounts/', parameters('storageAccountName'), '/blobServices/default/containers/', variables('auditContainer'))]",
+    "auditRoleId": "[guid(toLower(resourceGroup().id), 'TenuVault Audit Writer')]",
+    "auditRoleName": "[concat('TenuVault Audit Writer ', variables('auditRoleId'))]",
+    "auditAssignmentId": "[guid(toLower(variables('auditContainerScope')), toLower(parameters('automationAccountName')), variables('auditRoleName'))]"
   },
   "resources": [
     {
+      "condition": "[not(parameters('auditOnly'))]",
       "type": "Microsoft.Automation/automationAccounts",
       "apiVersion": "2023-11-01",
       "name": "[parameters('automationAccountName')]",
@@ -122,6 +138,7 @@
       }
     },
     {
+      "condition": "[not(parameters('auditOnly'))]",
       "type": "Microsoft.Authorization/roleDefinitions",
       "apiVersion": "2022-04-01",
       "name": "[guid(variables('writerRoleName'), resourceGroup().id)]",
@@ -145,6 +162,7 @@
       }
     },
     {
+      "condition": "[not(parameters('auditOnly'))]",
       "type": "Microsoft.Authorization/roleAssignments",
       "apiVersion": "2022-04-01",
       "name": "[guid(variables('containerScope'), parameters('automationAccountName'), variables('writerRoleName'))]",
@@ -160,12 +178,14 @@
       }
     },
     {
+      "condition": "[not(parameters('auditOnly'))]",
       "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
       "apiVersion": "2023-01-01",
       "name": "[concat(parameters('storageAccountName'), '/default/', variables('outcomeContainer'))]",
       "properties": { "publicAccess": "None" }
     },
     {
+      "condition": "[not(parameters('auditOnly'))]",
       "type": "Microsoft.Authorization/roleAssignments",
       "apiVersion": "2022-04-01",
       "name": "[guid(variables('outcomeContainerScope'), parameters('automationAccountName'), variables('writerRoleName'))]",
@@ -182,11 +202,76 @@
       }
     },
     {
+      "condition": "[parameters('enableAudit')]",
+      "type": "Microsoft.Authorization/roleDefinitions",
+      "apiVersion": "2022-04-01",
+      "name": "[variables('auditRoleId')]",
+      "dependsOn": [
+        "[extensionResourceId(resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('storageAccountName'), 'default', variables('container')), 'Microsoft.Authorization/roleAssignments', guid(variables('containerScope'), parameters('automationAccountName'), variables('writerRoleName')))]",
+        "[extensionResourceId(resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('storageAccountName'), 'default', variables('outcomeContainer')), 'Microsoft.Authorization/roleAssignments', guid(variables('outcomeContainerScope'), parameters('automationAccountName'), variables('writerRoleName')))]",
+        "[resourceId('Microsoft.Automation/automationAccounts/jobSchedules', parameters('automationAccountName'), guid(variables('scheduleName'), variables('runbookName')))]",
+        "automationVariables"
+      ],
+      "properties": {
+        "roleName": "[variables('auditRoleName')]",
+        "description": "TenuVault audit writer: reads and creates blobs. Assigned only on the audit container.",
+        "type": "CustomRole",
+        "permissions": [
+          {
+            "actions": [],
+            "notActions": [],
+            "dataActions": [
+              "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read",
+              "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/add/action"
+            ],
+            "notDataActions": []
+          }
+        ],
+        "assignableScopes": ["[resourceGroup().id]"]
+      }
+    },
+    {
+      "condition": "[parameters('enableAudit')]",
+      "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
+      "apiVersion": "2023-01-01",
+      "name": "[concat(parameters('storageAccountName'), '/default/', variables('auditContainer'))]",
+      "dependsOn": [
+        "[extensionResourceId(resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('storageAccountName'), 'default', variables('container')), 'Microsoft.Authorization/roleAssignments', guid(variables('containerScope'), parameters('automationAccountName'), variables('writerRoleName')))]",
+        "[extensionResourceId(resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('storageAccountName'), 'default', variables('outcomeContainer')), 'Microsoft.Authorization/roleAssignments', guid(variables('outcomeContainerScope'), parameters('automationAccountName'), variables('writerRoleName')))]",
+        "[resourceId('Microsoft.Automation/automationAccounts/jobSchedules', parameters('automationAccountName'), guid(variables('scheduleName'), variables('runbookName')))]",
+        "automationVariables"
+      ],
+      "properties": { "publicAccess": "None" }
+    },
+    {
+      "condition": "[parameters('enableAudit')]",
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "[variables('auditAssignmentId')]",
+      "scope": "[concat('Microsoft.Storage/storageAccounts/', parameters('storageAccountName'), '/blobServices/default/containers/', variables('auditContainer'))]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Authorization/roleDefinitions', variables('auditRoleId'))]",
+        "[resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName'))]",
+        "[resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('storageAccountName'), 'default', variables('auditContainer'))]",
+        "[extensionResourceId(resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('storageAccountName'), 'default', variables('container')), 'Microsoft.Authorization/roleAssignments', guid(variables('containerScope'), parameters('automationAccountName'), variables('writerRoleName')))]",
+        "[extensionResourceId(resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('storageAccountName'), 'default', variables('outcomeContainer')), 'Microsoft.Authorization/roleAssignments', guid(variables('outcomeContainerScope'), parameters('automationAccountName'), variables('writerRoleName')))]",
+        "[resourceId('Microsoft.Automation/automationAccounts/jobSchedules', parameters('automationAccountName'), guid(variables('scheduleName'), variables('runbookName')))]"
+      ],
+      "properties": {
+        "roleDefinitionId": "[resourceId('Microsoft.Authorization/roleDefinitions', variables('auditRoleId'))]",
+        "principalId": "[reference(resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName')), '2023-11-01', 'full').identity.principalId]",
+        "principalType": "ServicePrincipal"
+      }
+    },
+    {
+      "condition": "[not(parameters('auditOnly'))]",
       "type": "Microsoft.Automation/automationAccounts/runbooks",
       "apiVersion": "2023-11-01",
       "name": "[concat(parameters('automationAccountName'), '/', variables('runbookName'))]",
       "location": "[parameters('location')]",
-      "dependsOn": ["[resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName'))]"],
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName'))]"
+      ],
       "properties": {
         "description": "TenuVault scheduled Intune backup in Azure",
         "runbookType": "PowerShell72",
@@ -199,6 +284,7 @@
       }
     },
     {
+      "condition": "[not(parameters('auditOnly'))]",
       "copy": {
         "name": "automationVariables",
         "count": "[length(variables('variableValues'))]"
@@ -213,6 +299,7 @@
       }
     },
     {
+      "condition": "[not(parameters('auditOnly'))]",
       "type": "Microsoft.Automation/automationAccounts/schedules",
       "apiVersion": "2023-11-01",
       "name": "[concat(parameters('automationAccountName'), '/', variables('scheduleName'))]",
@@ -228,6 +315,7 @@
       }
     },
     {
+      "condition": "[not(parameters('auditOnly'))]",
       "type": "Microsoft.Automation/automationAccounts/jobSchedules",
       "apiVersion": "2023-11-01",
       "name": "[concat(parameters('automationAccountName'), '/', guid(variables('scheduleName'), variables('runbookName')))]",
@@ -243,6 +331,8 @@
     }
   ],
   "outputs": {
+    "auditContainer": { "condition": "[parameters('enableAudit')]", "type": "string", "value": "[variables('auditContainer')]" },
+    "auditCapability": { "condition": "[parameters('enableAudit')]", "type": "string", "value": "Runbook 1.5.0 or later records audit events. Check Schedule or the Automation job output for delivery status." },
     "managedIdentityPrincipalId": {
       "type": "string",
       "value": "[reference(resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName')), '2023-11-01', 'full').identity.principalId]",
@@ -254,6 +344,7 @@
       "metadata": { "description": "Read-only Microsoft Graph application roles for the managed identity. Until they are assigned every run fails with access denied, on purpose." }
     },
     "pasteIntoTenuVault": {
+      "condition": "[not(parameters('auditOnly'))]",
       "type": "string",
       "value": "[concat('tenantId=', parameters('tenantId'), '\nsubscriptionId=', subscription().subscriptionId, '\nresourceGroup=', resourceGroup().name, '\nautomationAccount=', parameters('automationAccountName'), '\nstorageAccount=', parameters('storageAccountName'), '\nscheduleName=', variables('scheduleName'), '\nfrequency=', if(equals(parameters('frequency'), 'Week'), 'weekly', 'daily'), '\ntime=', substring(parameters('scheduleStartTime'), 11, 5), '\nweekDay=', parameters('weekDay'), '\ntimeZone=', parameters('timeZone'), '\ntenantKey=', variables('tenantKey'), '\nlinked=true')]",
       "metadata": { "description": "Paste this block into TenuVault (Backup and Restore > Schedule > Where backups run > In Azure) so the app can show the cloud runner and its status." }

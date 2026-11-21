@@ -1,3 +1,4 @@
+import { recordBackupAudit } from "../src/main/backup/audit"
 import { EventEmitter } from "node:events"
 import { readFileSync } from "node:fs"
 import type { BrowserWindow } from "electron"
@@ -48,7 +49,14 @@ function tenantProfileFixture(metadata: { name?: string; domain?: string }) {
 
 // Exercise the main-process runner with the real engine, without starting Electron.
 function unattendedFixture(getToken: () => Promise<string>) {
-  const engine = new BackupEngine({ fetch: vi.fn(async () => new Response(null, { status: 201 })), getToken })
+  const dispatch = vi.fn(async (input: unknown) => input)
+  const engine = new BackupEngine({
+    fetch: vi.fn(async () => new Response(null, { status: 201 })), getToken,
+    onFinished: (job, request, tokens) => {
+      if (tokens) void recordBackupAudit({ record: async (_binding, input) => { await dispatch(input) } },
+        job, request, tokens, { id: "admin", email: "", name: "Admin" }, "1.0.0")
+    },
+  })
   const start = vi.spyOn(engine, "start")
   const source = index.slice(index.indexOf("const refusals ="), index.indexOf("const scheduler = new BackupScheduler"))
   const dependencies = {
@@ -86,7 +94,7 @@ function unattendedFixture(getToken: () => Promise<string>) {
   const run = new Function(...Object.keys(dependencies), transformSync(source, { loader: "ts" }).code + "\nreturn runScheduledBackup;")(
     ...Object.values(dependencies),
   ) as (tenantId: string, trigger: Trigger, afterFailure?: boolean) => Promise<ScheduledRunResult>
-  return { run, start, engine, dispatch: dependencies.host.dispatch }
+  return { run, start, engine, dispatch }
 }
 
 function windowFixture(loading = false) {
@@ -185,8 +193,7 @@ describe("unattended backup notifications", () => {
     expect(joined.status).toBe("Cancelled")
     expect(notifications.created).toEqual([])
     expect(dispatch).toHaveBeenCalledOnce()
-    const request = dispatch.mock.calls[0]![0] as Request
-    expect((await request.json()).logEntry).toMatchObject({ eventType: "BACKUP_CANCELLED", result: "PARTIAL", severity: "INFO" })
+    expect(dispatch.mock.calls[0]![0]).toMatchObject({ eventType: "BACKUP_CANCELLED", result: "PARTIAL", severity: "INFO" })
   })
 
   it("runs a scheduled backup of its own when the manual backup it joined is cancelled", async () => {
@@ -258,29 +265,29 @@ describe("unattended backup notifications", () => {
     await tickAt(process, 15, 0)
     await tickAt(process, 15, 15)
     expect(titles()).toEqual(["Scheduled backup of Contoso failed"])
-    expect(audits()).toBe(1)
-    expect((await (dispatches[0]!.mock.calls[0]![0] as Request).json()).logEntry).toMatchObject({ eventType: "BACKUP_FAILED", result: "FAILURE" })
+    expect(audits()).toBe(2)
+    expect(dispatches[0]!.mock.calls[0]![0]).toMatchObject({ eventType: "BACKUP_FAILED", result: "FAILURE" })
     process = start()
     await tickAt(process, 15, 30)
     expect(titles()).toHaveLength(1)
-    expect(audits()).toBe(1)
+    expect(audits()).toBe(3)
     expect(process.scheduler.list()[0]).toMatchObject({ attempts: 0, lastStatus: "Failed" })
     // The next slot reports its first connection failure again.
     await tickAt(process, 16, 0)
     await tickAt(process, 16, 15)
     expect(titles()).toHaveLength(2)
-    expect(audits()).toBe(2)
+    expect(audits()).toBe(5)
     // Counted failures, successes and tray backups are reported every time.
     const reached = failure
     failure = new Error("Sign in to this tenant first.")
     await tickAt(process, 16, 30)
     expect(titles()).toHaveLength(3)
-    expect(audits()).toBe(3)
+    expect(audits()).toBe(6)
     failure = reached
     await process.run(tenant.tenantId, "tray")
     await process.run(tenant.tenantId, "tray")
     expect(titles().slice(3)).toEqual(["Tray backup of Contoso failed", "Tray backup of Contoso failed"])
-    expect(audits()).toBe(5)
+    expect(audits()).toBe(8)
     expect(reportsResult(true, { status: "Failed", message: "Sign in to this tenant first." })).toBe(true)
     expect(reportsResult(true, { status: "Completed", message: "Done" })).toBe(true)
     expect(reportsResult(true, { status: "Failed", message: "Unreachable", unreachable: true })).toBe(false)
@@ -322,7 +329,7 @@ describe("unattended backup notifications", () => {
     now = new Date(2026, 9, 16, 2, 30)
     await scheduler.tick()
     expect(notifications.created).toHaveLength(2)
-    expect(audits()).toBe(2)
+    expect(audits()).toBe(3)
     // The attempt that never finished still counts toward today's budget.
     expect(scheduler.list()[0]).toMatchObject({ attempts: 1, lastStatus: "Failed", attemptSlot: new Date(2026, 9, 16, 2).toISOString() })
   })

@@ -1,3 +1,4 @@
+import { projectEntry } from './projection'
 import { queueEvent } from './outbox'
 import { 
   type AuditLogEntry, 
@@ -77,7 +78,7 @@ class AuditLogger {
       name: 'System',
     }
 
-    return {
+    return projectEntry({
       id: randomUUID(),
       timestamp: new Date().toISOString(),
       eventType: input.eventType,
@@ -87,10 +88,11 @@ class AuditLogger {
       resource: input.resource,
       result: input.result || AuditResult.SUCCESS,
       context,
+      job: input.job,
       details: input.details,
       duration: input.duration,
       tags: input.tags,
-    }
+    })
   }
 
   async queue(input: CreateAuditLogInput): Promise<AuditLogEntry> {
@@ -128,7 +130,7 @@ class AuditLogger {
 
   private startFlushInterval(): void {
     this.flushInterval = setInterval(() => {
-      void this.flush().catch((error) => console.error("[AUDIT] Events remain queued:", error))
+      void this.flush().catch(() => console.error("[AUDIT] Events remain queued"))
     }, 5000) // Flush every 5 seconds
   }
 
@@ -254,7 +256,7 @@ let loggerInstance: AuditLogger | null = null
 
 export function initializeAuditLogger(config: AuditLoggerConfig): AuditLogger {
   if (loggerInstance) {
-    void loggerInstance.destroy().catch((error) => console.error("[AUDIT] Pending events remain in the retry queue:", error))
+    void loggerInstance.destroy().catch(() => console.error("[AUDIT] Pending events remain in the retry queue"))
   }
   loggerInstance = new AuditLogger(config)
   return loggerInstance

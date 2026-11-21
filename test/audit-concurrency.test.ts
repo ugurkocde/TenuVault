@@ -24,7 +24,7 @@ it('preserves concurrent writers across separate local store instances and makes
   const logs = await service().queryAllLogs({ startDate: new Date('2026-09-26T00:00:00Z'), endDate: new Date('2026-09-26T23:59:59Z') })
   expect(logs).toHaveLength(21)
   expect(new Set(logs.map((log) => log.id)).size).toBe(21)
-  await expect(service().writeLog({ ...entry('same'), action: 'Different event' })).rejects.toThrow('already exists')
+  await expect(service().writeLog({ ...entry('same'), action: 'Download backup' })).rejects.toThrow('already exists')
 })
 it('uses a conditional immutable PUT and never reads or overwrites the shared daily file', async () => {
   const fetch = vi.fn(async () => new Response(null, { status: 201 })); vi.stubGlobal('fetch', fetch)

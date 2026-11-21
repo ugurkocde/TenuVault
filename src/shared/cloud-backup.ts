@@ -36,6 +36,13 @@ export interface CloudBackupStatus {
   lastMessage: string
   backupFolder: string | null
   runbookVersion: string
+  auditCapability?: boolean
+  auditStatusUnavailable?: boolean
+  auditPending?: number
+  auditScanIncomplete?: boolean
+  auditOlderPending?: number
+  auditOlderUnchecked?: boolean
+  auditReceiptFailed?: boolean
 }
 
 const GUID = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i
@@ -49,6 +56,14 @@ export function cloudTenantKey(tenantId: string): string {
 /** The status blob the runbook writes at the end of every run. */
 export function cloudStatusBlobName(tenantId: string): string {
   return `cloud-backup-status-${cloudTenantKey(tenantId)}.json`
+}
+
+export function cloudAuditStatusBlobName(value: unknown, tenantId: string): string | null {
+  const status = value as Record<string, unknown> | null
+  if (status?.AuditStatusInResults !== true || status.AuditCapability !== true ||
+    typeof status.TenantId !== "string" || status.TenantId.toLowerCase() !== tenantId.toLowerCase() ||
+    status.Source !== "TenuVault Cloud Backup" || typeof status.RunId !== "string" || !GUID.test(status.RunId)) return null
+  return `audit-status/${tenantId.toLowerCase()}/${status.RunId.toLowerCase()}.json`
 }
 
 const TEMPLATE_URL =
@@ -103,18 +118,33 @@ export function parseCloudSetup(text: string): CloudBackupConfig | null {
 }
 
 /** Reads the runbook's status blob body, or null when it does not describe this tenant. */
-export function parseCloudStatus(value: unknown, tenantId: string): CloudBackupStatus | null {
+export function parseCloudStatus(value: unknown, tenantId: string, auditStatus?: unknown): CloudBackupStatus | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null
   const record = value as Record<string, unknown>
   if (typeof record.TenantId !== "string" || record.TenantId.toLowerCase() !== tenantId.toLowerCase()) return null
   if (record.Source !== "TenuVault Cloud Backup") return null
   const text = (name: string) => (typeof record[name] === "string" ? record[name] : "")
+  const auditRecord = auditStatus as Record<string, unknown> | null | undefined
+  const audit = record.AuditStatusInResults !== true ? record
+    : typeof record.RunId === "string" && auditRecord?.RunId === record.RunId && auditRecord.TenantId === record.TenantId
+      ? auditRecord : null
   return {
     lastRunAt: text("LastRunAt"),
     lastStatus: text("LastStatus"),
     lastMessage: text("LastMessage"),
     backupFolder: typeof record.BackupFolder === "string" ? record.BackupFolder : null,
     runbookVersion: text("RunbookVersion"),
+    ...(record.AuditCapability === true ? {
+      auditCapability: true,
+      ...(audit ? {
+        auditPending: typeof audit.AuditPending === "number" && Number.isSafeInteger(audit.AuditPending) && audit.AuditPending >= 0 ? audit.AuditPending : undefined,
+        auditScanIncomplete: audit.AuditScanIncomplete === true,
+        ...(typeof audit.AuditOlderPending === "number" && Number.isSafeInteger(audit.AuditOlderPending) && audit.AuditOlderPending >= 0
+          ? { auditOlderPending: audit.AuditOlderPending } : {}),
+        ...(audit.AuditOlderUnchecked === true ? { auditOlderUnchecked: true } : {}),
+        auditReceiptFailed: audit.AuditReceiptFailed === true,
+      } : { auditStatusUnavailable: true }),
+    } : {}),
   }
 }
 

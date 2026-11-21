@@ -138,7 +138,7 @@ export function auditDateWindowTests(zone: string, originalTZ: string | undefine
       expect((await store.list(ACCOUNT, 'audit-logs')).map(blob => blob.name).sort()).toEqual([legacyPath, currentPath].sort())
 
       const filter = auditDateFilter({ startDate: '2026-01-15', endDate: '2026-01-15' })
-      expect(await service.queryAllLogs({ startDate: new Date(filter.startDate!), endDate: new Date(filter.endDate!) })).toEqual([retry])
+      expect(await service.queryAllLogs({ startDate: new Date(filter.startDate!), endDate: new Date(filter.endDate!) })).toMatchObject([{ id: retry.id, timestamp: retry.timestamp }])
       for (const offset of [0, 1]) {
         const logs = await queryLogs(request('logs', { filter: { ...filter, limit: 1, offset } }))
         expect(logs.status).toBe(200)
