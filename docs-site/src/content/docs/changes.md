@@ -36,7 +36,7 @@ To copy policies to several tenants, or to keep updating the same policies in a 
 
 ### Before you start
 
-* Connect both tenants and make sure your license covers both. On Pro the source must be the other tenant of the same license, or, during a trial, another tenant that also runs a Pro trial; the app enforces this. If no other tenant is connected, the screen says "Connect the development tenant covered by the same license to promote from it. Two tenants that each run a Pro trial also work."
+* Connect both tenants and make sure one license covers both, or that each of them runs a Pro trial. On Pro the source must be the other tenant of the same license, or, during a trial, another tenant that also runs a Pro trial; the app enforces this. If no other tenant is connected, the screen says "Connect the development tenant covered by the same license to promote from it. Two tenants that each run a Pro trial also work."
 * Supported types are Settings Catalog policies, compliance policies, endpoint security policies and device configuration profiles. Other policy types cannot be promoted and are blocked with an explicit finding when planned.
 
 ### Plan a promotion
