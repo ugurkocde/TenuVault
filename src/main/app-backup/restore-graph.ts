@@ -8,14 +8,22 @@ export type RestoreGraph = (method: "GET" | "POST" | "PATCH", path: string, body
 export function restoreGraph(token: () => Promise<string>, fetchImpl: typeof fetch, signal: AbortSignal): RestoreGraph {
   return async (method, path, body) => {
     const url = new URL(path, BASE)
-    if (url.origin !== "https://graph.microsoft.com" || !(url.pathname === "/beta/deviceAppManagement/mobileApps" || url.pathname.startsWith("/beta/deviceAppManagement/mobileApps/")) || url.username || url.password || url.hash) throw new Error("Invalid restore metadata request.")
+    if (url.origin !== "https://graph.microsoft.com" || !(url.pathname === "/beta/deviceAppManagement/mobileApps" || url.pathname.startsWith("/beta/deviceAppManagement/mobileApps/")) || url.username || url.password || url.hash) throw new FetchPreconditionError("Invalid restore metadata request.")
     // Intune's void actions can return 200 with an empty body as well as 204.
     // Their result is verified by subsequent file/app reads in the restore engine.
     const voidResponse = method === "PATCH" || (method === "POST" && /\/contentVersions\/\d+\/files\/[a-f0-9-]{36}\/(?:renewUpload|commit)$/.test(url.pathname))
-    signal.throwIfAborted()
+    let authorization: string, payload: string | undefined
+    try {
+      signal.throwIfAborted()
+      authorization = `Bearer ${await token()}`
+      payload = body ? JSON.stringify(body) : undefined
+      signal.throwIfAborted()
+    } catch (error) {
+      throw new FetchPreconditionError(error)
+    }
     let response: Response
     try {
-      response = await fetchImpl(url.href, { method, redirect: "error", credentials: "omit", headers: { authorization: `Bearer ${await token()}`, "content-type": "application/json" }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.any([signal, AbortSignal.timeout(60000)]) })
+      response = await fetchImpl(url.href, { method, redirect: "error", credentials: "omit", headers: { authorization, "content-type": "application/json" }, body: payload, signal: AbortSignal.any([signal, AbortSignal.timeout(60000)]) })
     } catch (error) { if (error instanceof FetchPreconditionError) throw error; signal.throwIfAborted(); throw new Error("The destination request was interrupted. Retry to reconcile the existing restore; a second app will not be created automatically.") }
     if (![200, 201, 204].includes(response.status)) { await response.body?.cancel(); throw new Error(`The destination tenant refused the restore request (HTTP ${response.status}). Check Microsoft sign-in, Intune permissions and service availability.`) }
     if (response.status === 204) { await response.body?.cancel(); if (voidResponse) return {}; throw new Error("The destination returned no metadata.") }

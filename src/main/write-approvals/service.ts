@@ -17,7 +17,8 @@ type OpenStore = StorageSession & { policy: Policy | null; etag?: string; server
 type Permit = { request: WriteApproval; decision: WriteDecision; context: OpenStore }
 type Execution = { tenants: Set<string>; permits: Map<string, Permit>; inactive: Map<string, { profile: string | null; context: OpenStore | null }> }
 type Store = { get(key: string): string | null; set(key: string, value: string): void }
-type Event = { action: string; tenant: string; account: string; actor: ApprovalActor; generation: number; requestId?: string; requester?: string; approver?: string }
+type Event = { action: string; tenant: string; account: string; actor: ApprovalActor; generation: number; requestId?: string; requester?: string; approver?: string; receipt?: { id: string; at: number } }
+type DecisionReceipt = { event: Event & { receipt: NonNullable<Event["receipt"]> }; path: string; record: WriteApproval | WriteDecision; committed: boolean }
 
 export interface ApprovalOperation {
   tenant: string
@@ -116,6 +117,7 @@ export class WriteApprovals {
   private readonly execution = new AsyncLocalStorage<Execution>()
   private readonly applying = new Set<string>()
   private readonly creating = new Set<string>()
+  private readonly auditFlushes = new Map<string, Promise<void>>()
   private profileWork: Promise<unknown> = Promise.resolve()
 
   constructor(private readonly deps: ApprovalDependencies) {}
@@ -136,11 +138,11 @@ export class WriteApprovals {
     return createHmac("sha256", Buffer.from(key, "hex")).update(canonicalJson(value)).digest("hex")
   }
 
-  private async open(raw: string, expectedActor?: ApprovalActor, beforePolicy?: (session: StorageSession) => Promise<void>, cached?: OpenStore, verifyPrevious = true): Promise<OpenStore | null> {
+  private async open(raw: string, expectedActor?: ApprovalActor, beforePolicy?: (session: StorageSession) => Promise<void>, cached?: OpenStore, storageChange = false): Promise<OpenStore | null> {
     if (!isGuid(raw)) throw new WriteApprovalError("A valid destination tenant is required.")
     const tenant = raw.toLowerCase()
     const profile = this.deps.profile(tenant)
-    if (verifyPrevious) await this.verifyPreviousAccounts(tenant, profile)
+    if (!storageChange) await this.verifyPreviousAccounts(tenant, profile)
     const pinned = this.deps.store.get(bindingKey(tenant)) || null
     if (!profile) {
       if (pinned) throw new WriteApprovalError("Reconnect the destination tenant to verify its write approval policy.")
@@ -166,7 +168,8 @@ export class WriteApprovals {
       : await blobs.get(policyPath(tenant))
     if (!this.deps.current(tenant, actor)) throw new WriteApprovalError("The destination account changed while checking approvals.")
     if (!blob) {
-      if (pinned || this.deps.store.get(bindingSeenKey(tenant, account))) throw new WriteApprovalError("The enrolled tenant approval policy is missing from shared storage.")
+      const seen = this.deps.store.get(bindingSeenKey(tenant, account))
+      if (pinned || (seen && !(storageChange && seen === "disabled"))) throw new WriteApprovalError("The enrolled tenant approval policy is missing from shared storage.")
       return { tenant, account, actor, blobs, policy: null }
     }
     const policy = (blob.value === undefined && cached?.etag === blob.etag ? cached.policy : blob.value) as Policy | null
@@ -174,7 +177,7 @@ export class WriteApprovals {
       || !validGeneration(policy.generation) || typeof policy.enabled !== "boolean" || !isGuid(policy.requester)
       || (!policy.enabled && (!isGuid(policy.approver) || !isGuid(policy.requestId) || policy.approver === policy.requester))
       || typeof policy.minimumVersion !== "string" || !versionParts(policy.minimumVersion)) throw invalid()
-    this.deps.store.set(bindingSeenKey(tenant, account), "1")
+    this.deps.store.set(bindingSeenKey(tenant, account), policy.enabled ? "1" : "disabled")
     if (policy.enabled) this.deps.store.set(bindingKey(tenant), account)
     else if (pinned) this.deps.store.set(bindingKey(tenant), "")
     if (policy.enabled && !atLeast(this.deps.version, policy.minimumVersion)) throw new WriteApprovalError(`This tenant requires TenuVault ${policy.minimumVersion} or later.`)
@@ -190,7 +193,8 @@ export class WriteApprovals {
     for (const old of previous) {
       const account = old.storageAccountName
       if (this.deps.store.get(bindingKey(tenant))) break
-      if (profile?.storageAccountName.toLowerCase() !== account) {
+      const seen = this.deps.store.get(bindingSeenKey(tenant, account))
+      if (seen && profile?.storageAccountName.toLowerCase() !== account) {
         const { actor, blobs } = await this.deps.open(tenant, profile?.clientId ?? old.clientId, account)
         if (!actorValid(actor)) throw new WriteApprovalError("Sign in to check the tenant's prior approval policy.")
         const blob = await blobs.get(policyPath(tenant))
@@ -200,29 +204,38 @@ export class WriteApprovals {
           || !validGeneration(policy.generation) || typeof policy.enabled !== "boolean" || !isGuid(policy.requester)
           || !versionParts(policy.minimumVersion ?? "") || (!policy.enabled && (!isGuid(policy.approver) || !isGuid(policy.requestId) || policy.approver === policy.requester)))) throw invalid()
         if (policy?.enabled) this.deps.store.set(bindingKey(tenant), account)
-        if (!blob && this.deps.store.get(bindingSeenKey(tenant, account))) throw new WriteApprovalError("The enrolled tenant approval policy is missing from shared storage.")
+        if (!blob && seen !== "disabled") throw new WriteApprovalError("The enrolled tenant approval policy is missing from shared storage.")
       }
       this.deps.store.set(previousAccountsKey(tenant), JSON.stringify(this.previousAccounts(tenant).filter(entry => entry.storageAccountName !== account)))
     }
   }
 
+  private tracksStorage(tenant: string): boolean {
+    const account = this.deps.profile(tenant)?.storageAccountName.toLowerCase()
+    return Boolean(this.deps.store.get(bindingKey(tenant)) || account && this.deps.store.get(bindingSeenKey(tenant, account)))
+  }
+
   /** Verify the account before replacing its profile. Keep enrollment independent of that profile. */
-  async beforeStorageChange(tenant: string, nextAccount?: string, confirm?: (account: string) => Promise<boolean>): Promise<void> {
+  async beforeStorageChange(tenant: string, nextAccount?: string, confirm?: (account: string, recheck: boolean) => Promise<boolean>, signedIn = true): Promise<void> {
     const profile = this.deps.profile(tenant)
     const previous = profile?.storageAccountName.toLowerCase()
     const pinned = this.deps.store.get(bindingKey(tenant))
     const next = nextAccount?.toLowerCase()
     if (next === previous && (!pinned || next === pinned)) return
     if (pinned && (!next || next === pinned)) return
+    if (!signedIn && !next && !this.tracksStorage(tenant)) return
     let context: OpenStore | null
     try {
-      context = await this.open(tenant, undefined, undefined, undefined, false)
+      context = await this.open(tenant, undefined, undefined, undefined, true)
     } catch (error) {
       if (pinned || !profile || !previous || error instanceof WriteApprovalError || !confirm) throw error
-      if (!await confirm(previous)) throw new WriteApprovalError("The storage change was cancelled.")
-      const accounts = this.previousAccounts(tenant)
-      if (!accounts.some(entry => entry.storageAccountName === previous)) {
-        this.deps.store.set(previousAccountsKey(tenant), JSON.stringify([...accounts, { ...profile, storageAccountName: previous }]))
+      const recheck = this.tracksStorage(tenant)
+      if (!await confirm(previous, recheck)) throw new WriteApprovalError("The storage change was cancelled.")
+      if (recheck) {
+        const accounts = this.previousAccounts(tenant)
+        if (!accounts.some(entry => entry.storageAccountName === previous)) {
+          this.deps.store.set(previousAccountsKey(tenant), JSON.stringify([...accounts, { ...profile, storageAccountName: previous }]))
+        }
       }
       return
     }
@@ -239,6 +252,7 @@ export class WriteApprovals {
   async inbox(tenant: string): Promise<WriteApprovalInbox> {
     const context = await this.open(tenant)
     if (!context) return { available: false, enabled: false, requests: [] }
+    await this.flushDecisionReceipts(context)
     const { account, actor, policy, blobs } = context
     const prefix = `${namespace(context.tenant)}requests/`
     const names = await blobs.list(prefix)
@@ -300,6 +314,68 @@ export class WriteApprovals {
     })
   }
 
+  private decisionReceipts(tenant: string): DecisionReceipt[] {
+    return JSON.parse(this.deps.store.get(`write-approval.decision-receipts.${tenant}`) ?? "[]") as DecisionReceipt[]
+  }
+
+  private updateDecisionReceipt(tenant: string, id: string, receipt?: DecisionReceipt): void {
+    const pending = this.decisionReceipts(tenant).filter(entry => entry.event.receipt.id !== id)
+    if (receipt) pending.push(receipt)
+    this.deps.store.set(`write-approval.decision-receipts.${tenant}`, JSON.stringify(pending))
+  }
+
+  private flushDecisionReceipts(c: OpenStore): Promise<void> {
+    const existing = this.auditFlushes.get(c.tenant)
+    if (existing) return existing
+    const flush = Promise.resolve().then(async () => {
+      for (const entry of this.decisionReceipts(c.tenant)) {
+        const { id } = entry.event.receipt
+        try {
+          if (!entry.committed) {
+            if (c.account !== entry.event.account) continue
+            const blob = await c.blobs.get(entry.path)
+            if (!blob) continue
+            if (canonicalJson(blob.value) !== canonicalJson(entry.record)) continue
+            this.updateDecisionReceipt(c.tenant, id, { ...entry, committed: true })
+          }
+          await this.deps.audit(entry.event)
+          this.updateDecisionReceipt(c.tenant, id)
+        } catch (error) {
+          console.warn("[write approvals] Decision audit receipt remains queued", error)
+        }
+      }
+    }).finally(() => this.auditFlushes.delete(c.tenant))
+    this.auditFlushes.set(c.tenant, flush)
+    return flush
+  }
+
+  private async commitDecision(c: OpenStore, request: WriteApproval, path: string, record: WriteDecision | WriteApproval,
+    action: string, at: number, etag?: string): Promise<void> {
+    this.checkActor(c.tenant, c.actor)
+    const id = randomUUID()
+    const entry: DecisionReceipt = {
+      event: { action, tenant: c.tenant, account: c.account, actor: c.actor, generation: request.generation, requestId: request.id,
+        requester: request.requester.oid, approver: "decision" in record ? record.actor.oid : undefined, receipt: { id, at } },
+      path, record, committed: false,
+    }
+    this.updateDecisionReceipt(c.tenant, id, entry)
+    const committed = await c.blobs.put(path, record, etag).catch(async error => {
+      const current = await c.blobs.get(path).catch(() => null)
+      if (current && canonicalJson(current.value) === canonicalJson(record)) return true
+      throw error
+    })
+    if (!committed) {
+      this.updateDecisionReceipt(c.tenant, id)
+      throw new WriteApprovalError(stateChanged)
+    }
+    try {
+      this.updateDecisionReceipt(c.tenant, id, { ...entry, committed: true })
+      await this.flushDecisionReceipts(c)
+    } catch (error) {
+      console.warn("[write approvals] Could not flush the committed decision audit receipt", error)
+    }
+  }
+
   async enable(tenant: string): Promise<void> {
     return this.withStorageProfiles(() => this.enablePolicy(tenant))
   }
@@ -329,6 +405,7 @@ export class WriteApprovals {
       this.checkDeadline(c.tenant)
       const policy: Policy = { ...c.policy, enabled: false, generation: c.policy.generation + 1, requester: c.actor.oid, approver: permit.decision.actor.oid, requestId: permit.request.id }
       if (!this.deps.current(c.tenant, c.actor) || !await c.blobs.put(policyPath(c.tenant), policy, c.etag)) throw new WriteApprovalError(stateChanged)
+      this.deps.store.set(bindingSeenKey(c.tenant, c.account), "disabled")
       this.deps.store.set(bindingKey(c.tenant), "")
       await this.receipt(c, "Tenant write approval disabled", permit.request, permit.decision)
     })
@@ -344,8 +421,7 @@ export class WriteApprovals {
     if (r.state !== "pending") throw new WriteApprovalError(stateChanged)
     if (action === "cancel") {
       if (r.requester.oid !== c.actor.oid) throw new WriteApprovalError("Only the requester can cancel this request.")
-      if (!this.deps.current(c.tenant, c.actor) || !await c.blobs.put(path, { ...r, state: "cancelled" }, blob!.etag)) throw new WriteApprovalError(stateChanged)
-      await this.receipt(c, "Tenant write approval cancelled", r)
+      await this.commitDecision(c, r, path, { ...r, state: "cancelled" }, "Tenant write approval cancelled", this.time(blob, c), blob!.etag)
       return
     }
     if (r.requester.oid === c.actor.oid) throw new WriteApprovalError("A different signed-in admin must decide this request.")
@@ -356,8 +432,7 @@ export class WriteApprovals {
       schema: 1, requestId: r.id, generation: r.generation, contentHash: r.contentHash, targetFingerprint: r.targetFingerprint,
       actor: c.actor, at, decision: action === "approve" ? "approved" : "rejected",
     }
-    if (!this.deps.current(c.tenant, c.actor) || !await c.blobs.put(decisionPath(c.tenant, id), decision)) throw new WriteApprovalError(stateChanged)
-    await this.receipt(c, action === "approve" ? "Tenant write approved" : "Tenant write rejected", r, decision)
+    await this.commitDecision(c, r, decisionPath(c.tenant, id), decision, action === "approve" ? "Tenant write approved" : "Tenant write rejected", at)
   }
 
   async run<T>(operations: ApprovalOperation[], work: () => Promise<T>): Promise<T> {
@@ -502,6 +577,7 @@ export class WriteApprovals {
   }
 
   claimed(tenant: string): boolean { return this.execution.getStore()?.permits.has(tenant.toLowerCase()) === true }
+  hasClaimedDestination(): boolean { return (this.execution.getStore()?.permits.size ?? 0) > 0 }
 
   async active(tenant: string): Promise<boolean> {
     return (await this.open(tenant))?.policy?.enabled === true
@@ -547,7 +623,20 @@ export class WriteApprovals {
 let runtime: WriteApprovals | undefined
 export function setWriteApprovals(service: WriteApprovals | undefined): void { runtime = service }
 export function hasWriteApproval(tenant: string): boolean { return runtime?.claimed(tenant) ?? false }
+export function hasClaimedDestination(): boolean { return runtime?.hasClaimedDestination() ?? false }
 export function approvalsEnabled(tenant: string): Promise<boolean> { return runtime?.active(tenant) ?? Promise.resolve(false) }
+/** Only an enrolled destination makes unreadable peers a batch-level refusal. */
+export async function enrolledBatchDestinations(tenants: string[]): Promise<Set<string>> {
+  const checks = await Promise.allSettled(tenants.map(approvalsEnabled))
+  const enrolled = new Set(tenants.filter((_, index) => {
+    const result = checks[index]
+    return result?.status === "fulfilled" && result.value
+  }))
+  if (enrolled.size) {
+    for (const result of checks) if (result.status === "rejected") throw result.reason
+  }
+  return enrolled
+}
 export function withWriteApproval<T>(operations: ApprovalOperation[], work: () => Promise<T>): Promise<T> {
   return runtime?.run(operations, work) ?? work()
 }

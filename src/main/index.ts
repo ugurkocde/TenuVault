@@ -401,7 +401,8 @@ async function bootstrap(): Promise<void> {
       const session = auth.approvalSession(tenant)
       return session?.actor?.oid === actor.oid && session.current()
     },
-    audit: approvalAudit(tenant => signedInClient(tenant), request => host.dispatch(request)),
+    audit: approvalAudit(tenant => signedInClient(tenant), request => host.dispatch(request),
+      async (tenant, client) => (await tokenFor(tenant, client, RESOURCE_SCOPES.storage)).accessToken),
   })
   setWriteApprovals(writeApprovals)
   setRestoreUploadGuard(async tenant => {
@@ -1417,15 +1418,17 @@ async function bootstrap(): Promise<void> {
       const before = read(appStore.get(tenantStorageKey))
       const after = read(next)
       for (const tenant of new Set([...before.keys(), ...after.keys()])) {
-        await writeApprovals.beforeStorageChange(tenant, after.get(tenant), async account => {
+        await writeApprovals.beforeStorageChange(tenant, after.get(tenant), async (account, recheck) => {
           const result = await dialog.showMessageBox(mainWindow!, {
             type: "warning", title: "Confirm storage change",
             message: `TenuVault could not verify tenant approvals in ${account}.`,
-            detail: "Continue with the storage change? TenuVault will check this account again before allowing tenant configuration writes.",
+            detail: recheck
+              ? "Continue with the storage change? TenuVault will check this account again before allowing tenant configuration writes."
+              : "Continue with the storage change?",
             buttons: ["Cancel", "Continue with storage change"], defaultId: 0, cancelId: 0,
           })
           return result.response === 1
-        })
+        }, Boolean(accounts.get(tenant)))
       }
       if (next === null) appStore.delete(tenantStorageKey)
       else appStore.set(tenantStorageKey, next)

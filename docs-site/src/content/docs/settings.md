@@ -109,7 +109,14 @@ Choose **Request to turn off** to ask a second admin to approve disabling the cu
 
 A request with an uncertain apply outcome stays claimed. Check the outcome in Intune and reconcile any uncertain restore writes before choosing **Close interrupted apply**. Any retry that writes needs fresh approval. Finished requests remain in the inbox for at least 30 days after their approval window closes. Unreadable requests are flagged separately and cannot be approved. Use [Intune Multi Admin Approval](/restore/multi-admin-approval/) separately for operations that Intune subjects to its own review.
 
-If TenuVault cannot read the prior Azure storage account and this installation has no known approval binding, you can confirm a storage change or tenant removal. TenuVault remembers the unverified account and checks it again before the tenant's next configuration write. If the prior account has approvals enabled, reconnect it and follow the approval process there. Signing out or releasing a license does not require a storage check.
+If TenuVault cannot read the prior Azure storage account and this installation has no active approval binding, you can confirm a storage change or tenant removal. TenuVault remembers the account only if this installation previously saw an approval policy there. If the last policy it saw was off and the policy or backup container is now missing, you can leave that account. Signing out or releasing a license does not require a storage check.
+
+**Known limits**
+
+- A new Azure storage account can block tenant configuration writes for a few minutes while Azure role assignments take effect. Retry after the signed-in account can read the backup container.
+- Approval applies when a write's final policy check runs after activation is committed. A write can still complete if its final check passed just before another admin enabled approval on another computer.
+
+If the inbox cannot reload after you save a decision, TenuVault confirms the decision was saved. Refresh approvals to reload the inbox and retry any pending decision audit receipts.
 
 ### Restore write history
 

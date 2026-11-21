@@ -27,6 +27,7 @@ export function TenantApprovals({ active, initialTenant, highlight = [] }: { act
 function ApprovalInbox({ tenant, highlight }: { tenant: string; highlight: string[] }) {
   const [inbox, setInbox] = useState<WriteApprovalInbox | null>(null)
   const [error, setError] = useState("")
+  const [notice, setNotice] = useState("")
   const [busy, setBusy] = useState(false)
   const [closeRequest, setCloseRequest] = useState<string>()
   const [confirm, setConfirm] = useState(false)
@@ -36,6 +37,7 @@ function ApprovalInbox({ tenant, highlight }: { tenant: string; highlight: strin
     const issued = ++generation.current
     setBusy(true)
     setError("")
+    setNotice("")
     async function request(name: string) {
       const response = await fetch("/api/tenant-write-approvals", {
         method: "POST",
@@ -44,11 +46,22 @@ function ApprovalInbox({ tenant, highlight }: { tenant: string; highlight: strin
       })
       const data = await response.json()
       if (!response.ok) throw new Error(data.error || "Tenant approvals could not be loaded.")
-      return data as WriteApprovalInbox
+      return data as WriteApprovalInbox & { committed?: true }
     }
     try {
       const data = await request(action)
-      if (issued === generation.current) setInbox(data)
+      if (issued !== generation.current) return
+      if (data.committed) {
+        try {
+          const refreshed = await request("list")
+          if (issued === generation.current) setInbox(refreshed)
+        } catch {
+          if (issued === generation.current) {
+            setInbox(null)
+            setNotice("Decision saved. Refresh approvals to reload the inbox.")
+          }
+        }
+      } else setInbox(data)
     } catch (failure) {
       if (issued !== generation.current) return
       setError(failure instanceof Error ? failure.message : "Tenant approvals could not be loaded.")
@@ -80,6 +93,7 @@ function ApprovalInbox({ tenant, highlight }: { tenant: string; highlight: strin
       </Button>}
     </div>
     {error && <p role="alert" className="break-words text-sm text-red-700">{error}</p>}
+    {notice && <p role="status" className="text-sm text-muted-foreground">{notice}</p>}
     {inbox && <p className="text-sm text-muted-foreground">
       {!inbox.available ? "Use shared Azure storage to request approval from another admin."
         : inbox.enabled ? `On. This tenant requires TenuVault ${inbox.minimumVersion} or later.` : "Off for this tenant."}

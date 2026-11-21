@@ -40,6 +40,10 @@ export interface SyncRunRecord extends ListedRecord {
    * sync has no promotion and no error. Runs stored before skipping existed have no `skipped`.
    */
   targets: Array<{ targetTenantId: string; promotionId: string | null; error: string | null; skipped?: SyncSkip[] }>
+  groupedApply?: {
+    destinations: Array<{ id: string; contentHash: string; targetFingerprint: string }>
+    backup: "new" | "none"
+  }
 }
 
 /** A selected policy a target's plan left out; nothing is written for it. */

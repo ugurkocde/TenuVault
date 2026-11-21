@@ -202,3 +202,13 @@ it("keeps the OIB audit after a tally recorder throws", async () => {
   await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce())
   expect(tally).toHaveBeenCalledOnce()
 })
+
+it("does not audit a restore retry preflight that returns the per-destination path", async () => {
+  const dispatch = vi.fn(async () => Response.json({ success: true }))
+  const notice = vi.fn()
+  const handled = createAuditRecorder(dispatch, () => null, notice)
+  handled(new Request("http://tenuvault.internal/api/restore-backup", { method: "POST" }), JSON.stringify(credentials), Response.json({ legacy: true }))
+  await new Promise(resolve => setTimeout(resolve, 0))
+  expect(dispatch).not.toHaveBeenCalled()
+  expect(notice).not.toHaveBeenCalled()
+})

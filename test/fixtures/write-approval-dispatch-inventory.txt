@@ -21,12 +21,15 @@ src/main/api/network-error.ts: fetchImpl(input, init)
 src/main/app-backup/account.ts: fetchImpl("https://graph.microsoft.com/beta/deviceManagement?$select=intuneAccountId") method "GET"
 src/main/app-backup/assignment-graph.ts: fetchImpl(url.href) method "GET"
 src/main/app-backup/graph-read.ts: fetchImpl(url) method "GET"
+src/main/app-backup/restore-graph.ts: FetchPreconditionError("Invalid restore metadata request.")
+src/main/app-backup/restore-graph.ts: FetchPreconditionError(error)
 src/main/app-backup/restore-graph.ts: fetchImpl(url.href) method "PUT"
 src/main/app-backup/restore-graph.ts: fetchImpl(url.href) method method
+src/main/app-backup/restore.ts: FetchPreconditionError(signal.reason)
+src/main/app-backup/restore.ts: graph(POST, BASE)
 src/main/app-backup/restore.ts: graph(method, path)
 src/main/app-backup/restore.ts: graph(method, path)
 src/main/app-backup/restore.ts: send(PATCH, appUrl)
-src/main/app-backup/restore.ts: send(POST, BASE)
 src/main/app-backup/restore.ts: send(POST, `${fileUrl}/commit`)
 src/main/app-backup/restore.ts: send(POST, `${fileUrl}/renewUpload`)
 src/main/app-backup/restore.ts: send(POST, `${fileUrl}/renewUpload`)
@@ -128,7 +131,7 @@ src/main/storage/azure-seal.ts: fetchImpl(input, init)
 src/main/storage/azure-seal.ts: fetchImpl(input, init)
 src/main/whats-new.ts: this.fetchImpl(`https://api.github.com/repos/${repository}/releases?per_page=${MAX_RELEASES}`, { headers: { Accept: "application/vnd.github+json", "User-Agent": `TenuVault/${this.options.currentV)
 src/main/write-approvals/audit.ts: Request(`${INTERNAL_API_ORIGIN}/api/audit/log`) method "POST"
-src/main/write-approvals/audit.ts: dispatch(new Request(`${INTERNAL_API_ORIGIN}/api/audit/log`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tenantId: tenant, storageAccountName: account, appId: client(tenant), clientSecret: DELEGATED_CLIENT_SECRET, user: { id: actor.oid, email: "", name: actor.label }, logEntry: { eventType: AuditEventType.CONFIG_UPDATED, action, resource: { type: "tenant-write-approval", id: event.requestId ?? tenant, name: "Tenant write approval" }, result: AuditResult.SUCCESS, severity: AuditSeverity.INFO, details, }, }), }))
+src/main/write-approvals/audit.ts: dispatch(new Request(`${INTERNAL_API_ORIGIN}/api/audit/log`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tenantId: tenant, storageAccountName: account, appId: client(tenant), clientSecret: DELEGATED_CLIENT_SECRET, user, logEntry, }), }))
 src/main/write-approvals/blob.ts: fetchImpl(target, { ...init, cache: "no-store", redirect: "error", signal: AbortSignal.timeout(15_000), headers: { ...)
 src/main/write-approvals/blob.ts: request(`${root}?${query}`)
 src/main/write-approvals/blob.ts: request(url(name)) method "DELETE"

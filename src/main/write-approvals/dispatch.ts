@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks"
-import { WriteApprovalError, type WriteApprovals } from "./service"
+import { hasClaimedDestination, hasWriteApproval, WriteApprovalError, type WriteApprovals } from "./service"
 import { canonicalJson } from "../features/change-sets/model"
 import type { ApprovalActor } from "../../shared/write-approvals"
 
@@ -28,8 +28,8 @@ export function sameObservation(expected: unknown, observe: () => Promise<unknow
 
 export function setRestoreUploadGuard(guard: typeof uploadGuard): void { uploadGuard = guard }
 export async function authorizeRestoreUpload(tenant: string | undefined): Promise<void> {
-  if (uploadGuard) {
-    if (!tenant) throw new WriteApprovalError("The installer upload has no verified destination.")
+  if (uploadGuard && hasClaimedDestination()) {
+    if (!tenant || !hasWriteApproval(tenant)) throw new WriteApprovalError("The installer upload has no approved destination.")
     await checkpoint.getStore()?.()
     await uploadGuard(tenant)
   }

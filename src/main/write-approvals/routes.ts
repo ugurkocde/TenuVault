@@ -21,7 +21,9 @@ export function writeApprovalRoutes(approvals: WriteApprovals): Record<string, R
               break
             case "approve":
             case "reject":
-            case "cancel": await approvals.decide(body.tenantId, body.requestId, body.action); break
+            case "cancel":
+              await approvals.decide(body.tenantId, body.requestId, body.action)
+              return Response.json({ committed: true })
             default: return Response.json({ error: "Unknown approval action." }, { status: 400 })
           }
           return Response.json(await approvals.inbox(body.tenantId))

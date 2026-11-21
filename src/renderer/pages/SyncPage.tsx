@@ -245,6 +245,10 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
     try {
       const detail = await fetchRun(id)
       if (!current()) return
+      if (detail.run.groupedApply) {
+        setRunId(id)
+        return
+      }
       const named = new Map(detail.targets.flatMap((target) => target.promotion?.items ?? []).map((item) => [policyKey(item.folder, item.sourceId), item.sourceName]))
       setChosen(Object.fromEntries(detail.run.items.map((item) => {
         const key = policyKey(item.folder, item.sourceId)
@@ -339,6 +343,22 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
     }
   }
 
+  const group = run.data?.run.groupedApply
+  const groupedTargets = group ? runTargets.filter(target => group.destinations.some(item => item.id === target.promotionId)) : []
+  const resumeGroup = () => {
+    if (!runId || !group || pending(runId)) return
+    setStep(4)
+    const batch = applySyncBatch(source, runId).then(result => ({ result, error: undefined }), error => ({ result: undefined, error }))
+    for (const target of groupedTargets) {
+      void work(runId, target, async (_, promotionId) => {
+        const response = await batch
+        if (response.error) throw response.error
+        const result = response.result?.results?.find(item => item.id === promotionId)
+        if (!result || result.error) throw new Error(result?.error ?? "No result was returned for this destination.")
+      })
+    }
+  }
+
   const retry = (target: SyncTarget) => {
     const changeSet = target.changeSet
     if (!changeSet || !runId) return
@@ -420,7 +440,22 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
         />
       )}
 
-      {step === 3 && (
+      {step === 3 && group && (
+        <section aria-label="Review" className={`${card} space-y-4 p-6`}>
+          <h2 className="text-lg font-semibold">Review saved sync</h2>
+          <ul className="list-disc pl-5 text-sm">
+            {groupedTargets.map(target => <li key={target.targetTenantId}>{tenantOf(target.targetTenantId)?.name ?? target.targetTenantId}</li>)}
+          </ul>
+          <p className="text-sm">{group.backup === "new" ? "Back up the affected policies before syncing." : "Sync without a pre-change backup."}</p>
+          {planError && <p role="alert" className="text-sm text-red-700">{planError}</p>}
+          <div className="flex justify-between gap-3">
+            <Button variant="outline" onClick={() => setStep(4)}>Back to results</Button>
+            <Button disabled={planning || !!planError || pending(runId)} onClick={resumeGroup}>Apply reviewed sync</Button>
+          </div>
+        </section>
+      )}
+
+      {step === 3 && !group && (
         <ReviewStep
           targets={runTargets}
           reviews={reviews}
@@ -460,7 +495,8 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
               retrying={shownActive.size > 0}
               tenantOf={tenantOf}
               onChanged={() => { void run.refetch(); void runs.refetch(); refreshStatus() }}
-              onContinue={(runTargets.some(awaitingReview) || runTargets.length > 1 && Object.values(shownErrors).some(error => /tenant approval .* pending/i.test(error))) && runId ? () => void continueReview(runId) : undefined}
+              onContinue={runTargets.some(awaitingReview) && runId ? () => void continueReview(runId) : undefined}
+              onContinueGrouped={run.data.run.groupedApply && runId && !planning ? () => void continueReview(runId) : undefined}
               onDiscard={runId && runTargets.length > 0 && discardable(runTargets) && !shownActive.size ? () => void discardRun(runId) : undefined}
               discard={discarding}
             />

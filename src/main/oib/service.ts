@@ -1,4 +1,4 @@
-import { approvalsEnabled, hasWriteApproval, verifyApprovalSource, withWriteApproval, type ApprovalOperation } from "../write-approvals/service"
+import { enrolledBatchDestinations, hasWriteApproval, verifyApprovalSource, withWriteApproval, type ApprovalOperation } from "../write-approvals/service"
 import { sameObservation, withWriteCheckpoint } from "../write-approvals/dispatch"
 import { approvalMessage } from "../../shared/intune/approval"
 import { randomUUID } from "node:crypto"
@@ -372,9 +372,12 @@ async function backUp(body: RecordJson, tenant: string, folders: string[], repor
 /** Progress of one running job under its key; every update keeps the job's kind and start time. */
 function tracker(key: string, kind: OibProgress["kind"]) {
   const startedAt = new Date().toISOString()
-  return (update: Partial<OibProgress> & { stage: string }) => {
-    progress.set(key, { done: 0, total: 0, ...update, kind, startedAt })
+  let last: OibProgress | undefined
+  const report = (update: Partial<OibProgress> & { stage: string }) => {
+    last = { done: 0, total: 0, ...update, kind, startedAt }
+    progress.set(key, last)
   }
+  return Object.assign(report, { clear: () => { if (last && progress.get(key) === last) progress.delete(key) } })
 }
 
 function deployItems(value: unknown, kind: OibRun["kind"]): DeployItem[] {
@@ -580,9 +583,18 @@ export async function deployReviewedBatches(body: RecordJson, admit: (child: Rec
   const batches = body.batches as RecordJson[]
   if (tenantOf(body.tenantId) !== tenantOf(batches[0]!.tenantId)) throw new FrameworkError("Choose a primary deployment tenant.")
   const tenants = [...new Set(batches.map(child => tenantOf(child.tenantId)))]
-  const enrolled = new Set((await Promise.all(tenants.map(approvalsEnabled))).flatMap((enabled, index) => enabled ? [tenants[index]!] : []))
+  const enrolled = await enrolledBatchDestinations(tenants)
   if (!enrolled.size) return Response.json({ legacy: true })
   if (batches.length > OIB_REVIEWED_BATCH_LIMIT) throw new FrameworkError(`Select at most ${OIB_REVIEWED_BATCH_LIMIT} deployment batches when tenant approval is enabled.`)
+  const report = tracker(tenants[0]!, "deploy")
+  try {
+    return await prepareReviewedBatches(batches, tenants[0]!, enrolled, admit, report)
+  } finally {
+    report.clear()
+  }
+}
+
+async function prepareReviewedBatches(batches: RecordJson[], primary: string, enrolled: Set<string>, admit: (child: RecordJson) => Promise<Response | null>, report: ReturnType<typeof tracker>): Promise<Response> {
   const results: Array<{ tenant: string; platform: unknown; batchIndex: number; run?: OibRun; error?: string }> = []
   const stopped = new Map<string, string>()
   const prepared = new Map<string, Array<Awaited<ReturnType<typeof prepareDeployment>> & { batchIndex: number }>>()
@@ -594,10 +606,10 @@ export async function deployReviewedBatches(body: RecordJson, admit: (child: Rec
       results.push({ tenant, platform: child.platform, batchIndex, error })
       continue
     }
-    const blocked = await admit({ ...child, bulk: tenant !== tenants[0] })
+    const blocked = await admit({ ...child, bulk: tenant !== primary })
     if (blocked) return blocked
     const list = prepared.get(tenant) ?? []
-    list.push({ ...await prepareDeployment(child, "deploy"), batchIndex })
+    list.push({ ...await prepareDeployment(child, "deploy", report), batchIndex })
     prepared.set(tenant, list)
   }
   const operations = [...prepared].map(([tenant, entries]): ApprovalOperation => {

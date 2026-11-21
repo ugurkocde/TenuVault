@@ -1,4 +1,4 @@
-import { approvalsEnabled, hasWriteApproval, verifyApprovalSource, withWriteApproval, WriteApprovalError } from "../../../../main/write-approvals/service"
+import { approvalsEnabled, enrolledBatchDestinations, hasWriteApproval, verifyApprovalSource, withWriteApproval, WriteApprovalError } from "../../../../main/write-approvals/service"
 import { sameObservation, withExemptGraphCaller } from "../../../../main/write-approvals/dispatch"
 import { restoreApprovals, dismissRestoreApproval, saveRestoreApproval } from "../../../../main/storage/restore-approvals"
 import { parseDependencyMappings } from "../../../../shared/intune/recovery"
@@ -121,6 +121,9 @@ export async function POST(request: NextRequest) {
       || repairSelections.length > 0 && (restoreType !== "selective" || (destinations?.length ?? 0) > 1 || !validSelections(repairSelections))) {
       return NextResponse.json({ error: "Choose unique destinations and valid restore selections for each destination." }, { status: 400 })
     }
+    if (hasTargetSelections && destinations!.length > 1 && !(await enrolledBatchDestinations(destinations!.map(target => target.tenantId.toLowerCase()))).size) {
+      return NextResponse.json({ legacy: true })
+    }
     const repairScope = (target: string) => JSON.stringify([tenantId, storageAccountName, backupId, target.toLowerCase(), mode, assignments, dependencyMappings])
 
     // Get access tokens for both Storage and Graph API
@@ -179,7 +182,14 @@ export async function POST(request: NextRequest) {
 
     const targets = destinations
       ? await Promise.all(destinations.map(async (target) => {
-          const token = await getAccessToken(target.tenantId, target.appId, clientSecret, "https://graph.microsoft.com/.default")
+          let token: string
+          try {
+            token = await getAccessToken(target.tenantId, target.appId, clientSecret, "https://graph.microsoft.com/.default")
+          } catch (error) {
+            if (destinations.length !== 1) throw error
+            const message = error instanceof Error ? error.message : String(error)
+            return { notSent: message, targetTenantId: target.tenantId.toLowerCase(), selection: target.selectedPolicies }
+          }
           const graph = graphCaller(token, fetch, { tenant: target.tenantId, refreshToken: () => getAccessToken(target.tenantId, target.appId, clientSecret, "https://graph.microsoft.com/.default", true) })
           const options = { writeApprovalTenant: target.tenantId, mode: "copy" as const, assignments: false, prefix: "", crossTenant: true, repairScope: repairScope(target.tenantId), granted: grantedPermissions(token) }
           return { targetTenantId: target.tenantId.toLowerCase(), restorer: new Restorer(graph, options), selection: target.selectedPolicies }
@@ -190,8 +200,19 @@ export async function POST(request: NextRequest) {
             { writeApprovalTenant: tenantId, mode, assignments, approvalContext: requesterContext(graphToken, tenantId, body.justification), repairScope: repairScope(tenantId), granted: grantedPermissions(graphToken) }),
           selection: undefined,
         }]
+    const refused = targets.find(target => "notSent" in target)
+    if (refused && "notSent" in refused) {
+      const message = `Write not sent: ${refused.notSent}`
+      const results = (refused.selection?.map(item => item.path) ?? paths).map(path => ({
+        path, targetTenantId: refused.targetTenantId, success: false, writeNotSent: true, retryable: true, error: message,
+      }))
+      return NextResponse.json({ success: false, jobId, status: "Failed", message, details: {
+        restoredCount: 0, failedCount: results.length, duration: Math.round((Date.now() - startTime.getTime()) / 1000), results,
+      } })
+    }
+    const readyTargets = targets.filter(target => target.restorer !== undefined)
     try {
-      if (dependencyMappings.length) for (const { restorer } of targets) await restorer.mapDependencies(dependencyMappings)
+      if (dependencyMappings.length) for (const { restorer } of readyTargets) await restorer.mapDependencies(dependencyMappings)
     } catch (error) {
       if (error instanceof DependencyMappingError && error.status === 404) return NextResponse.json({ error: error.message }, { status: 400 })
       throw error
@@ -201,7 +222,7 @@ export async function POST(request: NextRequest) {
     if (!checked.ok) return NextResponse.json({ error: checked.error }, { status: 400 })
     const manifest = checked.manifest
 
-    const admissions = targets.map(target => {
+    const admissions = readyTargets.map(target => {
       const ordered = restoreOrder(target.selection?.map(item => item.path) ?? paths)
       const repairs = new Map((target.selection ?? repairSelections).map(item => [item.path, item.repairToken]))
       const snapshots = new Map<string, { snapshot: Item; state: Awaited<ReturnType<Restorer["approvalObservation"]>> }>()
@@ -219,11 +240,12 @@ export async function POST(request: NextRequest) {
           observe: async () => {
             verifyApprovalSource(tenantId, storageAccountName)
             const observed = []
-            const planned = new Map<string, { creation: string; sourceId: string }>()
+            const planned: NonNullable<Parameters<Restorer["approvalObservation"]>[3]> = new Map()
             for (const path of ordered) {
               const snapshot = repairs.get(path) ? {} : await readSnapshot(path, storageAccountName, storageToken, manifest?.get(path))
               const state = await target.restorer.approvalObservation(path, snapshot, repairs.get(path), planned)
               if (state.creates) planned.set(state.creates.graphPath.toLowerCase(), { creation: path, sourceId: state.creates.sourceId })
+              if (state.reuses) planned.set(state.reuses.graphPath.toLowerCase(), { creation: path, sourceId: state.reuses.sourceId, reused: state.reuses.reused })
               snapshots.set(path, { snapshot, state })
               observed.push(state)
             }

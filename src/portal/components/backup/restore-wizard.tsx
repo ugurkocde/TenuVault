@@ -155,6 +155,8 @@ interface Outcome {
   warnings?: string[]
   targetTenantId?: string
   retryable?: boolean
+  writeNotSent?: boolean
+  writeMayHaveCompleted?: boolean
   partial?: boolean
   policyId?: string
   repairToken?: string
@@ -539,8 +541,8 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
         .then((state) => progressId.current === polledId && setProgress({ ...state, total, done: completed.length + state.done, results: mergeOutcomes(previous, [...completed, ...state.results]) }))
         .catch(() => undefined)
     }, 700)
+    let groupedRetry = copying && retry && batches.length > 1
     try {
-      const groupedRetry = copying && retry
       const selections = (batch: (typeof batches)[number]) => batch.paths.map(path => ({
         path, repairToken: previous.find(item => item.path === path && item.targetTenantId?.toLowerCase() === batch.targetTenantId)?.repairToken,
       }))
@@ -555,7 +557,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
           : []
         if (copying && (!targets.length || groupedRetry && targets.length !== batches.length)) throw new Error("The original target tenant is no longer connected.")
         attempted.push(...(groupedRetry ? batches : [batch]))
-        const data = await post<{ success: boolean; message: string; details?: { restoredCount: number; unchangedCount?: number; results: Outcome[] } }>("/api/restore-backup", {
+        const data = await post<{ legacy?: boolean; success: boolean; message: string; details?: { restoredCount: number; unchangedCount?: number; results: Outcome[] } }>("/api/restore-backup", {
           ...tenant.credentials,
           storageAccountName: tenant.storageAccountName,
           backupId,
@@ -571,6 +573,12 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
             ? { targetTenants: targets.map(target => ({ tenantId: target.tenantId, appId: target.appId, ...(groupedRetry ? { selectedPolicies: selections(batches.find(entry => entry.targetTenantId === target.tenantId.toLowerCase())!) } : {}) })) }
             : {}),
         })
+        if (data.legacy && groupedRetry) {
+          attempted.length = 0
+          groupedRetry = false
+          requests.push(...batches)
+          continue
+        }
         completed.push(...(data.details?.results ?? []))
       }
       const outcomes = mergeOutcomes(previous, completed)
@@ -593,12 +601,12 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
           .map((path) => ({ ...outcome, path, targetTenantId })))
       }
       // A refused disclaimer wrote nothing, so the batch it stopped stays open for another try.
-      const refused = error instanceof NotAccepted ? attempted.splice(copying && retry ? 0 : -1) : []
+      const refused = error instanceof NotAccepted ? attempted.splice(groupedRetry ? 0 : -1) : []
       const notStarted = refused.flatMap(batch => missing(batch, { success: false, retryable: true, error: "Not started: the disclaimer was not accepted." }))
       // A lost response leaves the write outcome unknown. Keep completed results and
       // block blind repetition of every attempted item whose result is missing.
       const known = mergeOutcomes(previous, completed)
-      const unknown = attempted.flatMap((batch) => missing(batch, { success: false, retryable: false, error: "Outcome unknown. Check Intune before attempting another restore." }))
+      const unknown = attempted.flatMap((batch) => missing(batch, { success: false, retryable: false, writeMayHaveCompleted: true, error: "Outcome unknown. Check Intune before attempting another restore." }))
       setResult({ outcome: known.some((item) => item.success) ? "partial" : "failed",
         message: `Restore interrupted: ${error instanceof Error ? error.message : String(error)}`, results: mergeOutcomes(known, [...notStarted, ...unknown]) })
     } finally {
@@ -1218,7 +1226,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
                     {outcome.approvalState === "required" && <Button variant="outline" className="mt-2" aria-controls="restore-approval-list" onClick={() => setApprovalOpenRevision(value => value + 1)}>Submit for approval</Button>}
                     {outcome.partial && !outcome.approvalId && outcome.policyId && <span className="block text-xs text-amber-800">Incomplete object: {outcome.policyId}. {outcome.repairToken ? "Retry repairs the remaining steps without creating another object while the repair is available." : "Check and repair it in Intune."}</span>}
                     {/* A skipped item was refused before any write, so there is nothing to check. */}
-                    {outcome.retryable === false && !outcome.success && !outcome.approvalId && (!outcome.approval || outcome.partial) && outcome.action !== "skipped" && <span className="block text-xs text-amber-800">Check this item in {adminCenter(itemByPath.get(outcome.path)?.folder)} before retrying; a write may already have completed.</span>}
+                    {outcome.writeMayHaveCompleted && !outcome.writeNotSent && !outcome.success && !outcome.approvalId && <span className="block text-xs text-amber-800">Check this item in {adminCenter(itemByPath.get(outcome.path)?.folder)} before retrying; a write may already have completed.</span>}
                     {outcome.warnings?.map((warning) => (
                       <span key={warning} className="block text-xs text-amber-800">
                         <LinkedMessage text={warning} />

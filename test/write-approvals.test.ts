@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs"
-import { graphCaller } from "../src/portal/lib/policies/graph-restore"
+import { graphCaller, Restorer } from "../src/portal/lib/policies/graph-restore"
 import { afterEach, expect, it, vi } from "vitest"
 import { ApiHost } from "../src/main/api/host"
 import { createBridgedFetch } from "../src/main/api/fetch-bridge"
@@ -11,6 +11,11 @@ import { POST as driftRoute } from "../src/portal/app/api/revert-policy/route"
 import { localStorageAccountName, DELEGATED_CLIENT_SECRET, INTERNAL_API_ORIGIN } from "../src/shared/constants"
 import { WRITE_APPROVAL_LIFETIME } from "../src/shared/write-approvals"
 import { approvalTenant, secondTenant, requester, reviewer, approvalAccount, writeApprovalFixture } from "./helpers/write-approval-fixture"
+import { memoryStore } from "./helpers"
+import { saveWrite, setRestoreJournalStore } from "../src/main/storage/restore-journal"
+import { FetchPreconditionError } from "../src/main/api/network-error"
+import { writeOperation } from "../src/main/features/change-sets/graph"
+import { typeForFolder } from "../src/shared/intune/registry"
 
 afterEach(() => { setWriteApprovals(undefined); vi.unstubAllGlobals() })
 
@@ -428,6 +433,123 @@ it("preflights a whole cross-tenant selective retry before sending the approved 
   expect(mutations).toEqual(["First", "Second"])
 })
 
+it("retries unenrolled restore destinations individually when a destination sign-in expired", async () => {
+  const source = "33333333-3333-4333-8333-333333333333"
+  const { profile, state } = writeApprovalFixture()
+  const { service } = profile()
+  setWriteApprovals(service)
+  state.failedReads.add(`.tenuvault-controls/${tenant}/write-approval/policy.json`)
+  const selection = (name: string) => [{ path: `fixture/DeviceCategories/${name}.json` }]
+  const mutations: string[] = []
+  const send = createBridgedFetch({
+    dispatch: async () => new Response(null, { status: 404 }),
+    getDelegatedToken: async id => {
+      if (id === tenant) throw new Error("Sign in again")
+      return { accessToken: id, expiresOn: null }
+    },
+    authorizeGraph: graphDispatchGuard(service, token => ({ tenant: token, actor: requester, current: () => true })),
+    fetch: async (input, init) => {
+      const req = new Request(input, init)
+      if (req.url.endsWith("metadata.json")) return Response.json({ TenantId: source, Status: "Success", Failures: 0 })
+      if (req.url.endsWith("second.json")) return Response.json({ id: requester.oid, displayName: "Second" })
+      mutations.push(String((await req.json()).displayName))
+      return Response.json({ id: reviewer.oid })
+    },
+  })
+  vi.stubGlobal("fetch", send)
+  const host = new ApiHost({ routes: { "/api/restore-backup": { POST: restoreRoute } } })
+  const post = (selectedPolicies: ReturnType<typeof selection>, targetTenants: unknown[]) => host.dispatch(new Request(`${INTERNAL_API_ORIGIN}/api/restore-backup`, {
+    method: "POST", body: JSON.stringify({ tenantId: source, appId: requester.oid, clientSecret: DELEGATED_CLIENT_SECRET, storageAccountName: approvalAccount,
+      backupId: "fixture", restoreType: "selective", selectedPolicies, targetTenants }),
+  }))
+  const targets = [tenant, secondTenant].map(id => ({ tenantId: id, appId: requester.oid }))
+  const first = selection("first"), second = selection("second")
+  expect(await (await post([...first, ...second], [{ ...targets[0], selectedPolicies: first }, { ...targets[1], selectedPolicies: second }])).json()).toEqual({ legacy: true })
+  expect(await (await post(first, [targets[0]])).json()).toMatchObject({ details: { results: [{ targetTenantId: tenant, writeNotSent: true, retryable: true }] } })
+  expect(await (await post(second, [targets[1]])).json()).toMatchObject({ success: true })
+  expect(mutations).toEqual(["Second"])
+})
+
+it("retains a committed decision when its audit and inbox reads fail, then retries the same receipt after restart", async () => {
+  const { profile, state, audits } = writeApprovalFixture()
+  const origin = profile(), second = profile(reviewer)
+  await origin.service.enable(tenant)
+  await expect(origin.service.run([prepare().operation], async () => {})).rejects.toThrow("pending")
+  const { request } = (await second.service.inbox(tenant)).requests[0]!
+  const inbox = vi.spyOn(second.service, "inbox").mockRejectedValue(new Error("The inbox cannot be read"))
+  const host = new ApiHost({ routes: writeApprovalRoutes(second.service) })
+  state.auditAvailable = false
+  const response = await host.dispatch(new Request(`${INTERNAL_API_ORIGIN}/api/tenant-write-approvals`, {
+    method: "POST", body: JSON.stringify({ tenantId: tenant, action: "approve", requestId: request.id }),
+  }))
+  expect(response.status).toBe(200)
+  expect(await response.json()).toEqual({ committed: true })
+  expect(inbox).not.toHaveBeenCalled()
+  state.auditAvailable = true
+  const restart = profile(reviewer, second.store)
+  expect((await restart.service.inbox(tenant)).requests[0]!.decision?.decision).toBe("approved")
+  await restart.service.inbox(tenant)
+  expect(audits.filter(event => event.action === "Tenant write approved")).toEqual([
+    expect.objectContaining({ requestId: request.id, approver: reviewer.oid, receipt: { id: expect.any(String), at: expect.any(Number) } }),
+  ])
+})
+
+it("distinguishes a pre-dispatch refusal from a lost Graph response for change sets and restore copies", async () => {
+  const type = typeForFolder("DeviceCategories")!
+  const proposed = { displayName: "Test category" }
+  const path = "fixture/DeviceCategories/source.json"
+  const graph = vi.fn(async () => { throw new FetchPreconditionError("The policy changed") })
+  expect(await writeOperation(graph, type, { action: "create", proposed, assignments: null, targetId: null, current: null }, vi.fn()))
+    .toMatchObject({ state: "not-sent", partial: false, message: "The policy changed" })
+  const restorer = new Restorer(graph, { mode: "copy", assignments: false })
+  expect(await restorer.restore(path, proposed)).toMatchObject({ success: false, writeNotSent: true, error: "Write not sent: The policy changed" })
+  graph.mockRejectedValue(new Error("Lost Graph response"))
+  expect(await writeOperation(graph, type, { action: "create", proposed, assignments: null, targetId: null, current: null }, vi.fn()))
+    .toMatchObject({ state: "unknown" })
+  expect(await restorer.restore(path, proposed)).toMatchObject({ success: false, writeMayHaveCompleted: true })
+})
+
+it.each([false, true])("assigns a protected Endpoint Security intent only after verifying updated settings, settings changed %s", async changed => {
+  const { profile } = writeApprovalFixture()
+  const first = profile(), second = profile(reviewer)
+  setWriteApprovals(first.service)
+  await first.service.enable(tenant)
+  const settings = [{ definitionId: "setting-id", valueJson: "true" }]
+  const assignments = [{ target: { "@odata.type": "#microsoft.graph.groupAssignmentTarget", groupId: secondTenant } }]
+  const snapshot = { id: requester.oid, templateId: reviewer.oid, displayName: "Intent", description: "Restored", roleScopeTagIds: ["0"], settings, assignments }
+  let liveSettings = [{ ...settings[0]!, valueJson: "false", id: "generated" }]
+  let live = { ...snapshot, description: "Before" }
+  const writes: string[] = []
+  const transport = createBridgedFetch({
+    dispatch: async () => new Response(null, { status: 404 }),
+    getDelegatedToken: async () => ({ accessToken: "fixture", expiresOn: null }),
+    authorizeGraph: graphDispatchGuard(first.service, () => ({ tenant, actor: requester, current: () => true })),
+    fetch: async (input, init) => {
+      const request = new Request(input, init)
+      const path = new URL(request.url).pathname
+      if (request.method === "GET") {
+        if (path.endsWith("/settings")) return Response.json({ value: liveSettings })
+        if (path.endsWith("/assignments")) return Response.json({ value: [] })
+        if (path.includes("/groups/")) return Response.json({ id: secondTenant })
+        return Response.json(live)
+      }
+      writes.push(path.split("/").at(-1)!)
+      if (request.method === "PATCH") live = { ...live, ...await request.json() }
+      if (path.endsWith("/updateSettings") && !changed) liveSettings = [{ ...settings[0]!, id: "generated" }]
+      return new Response(null, { status: 204 })
+    },
+  })
+  const restorer = new Restorer(graphCaller("fixture", transport), { writeApprovalTenant: tenant, mode: "replace", assignments: true })
+  const path = "fixture/EndpointSecurityIntents/intent.json"
+  let review: Awaited<ReturnType<typeof restorer.approvalObservation>>
+  const run = () => first.service.run([{ ...prepare().operation, observe: async () => review = await restorer.approvalObservation(path, snapshot) }],
+    () => restorer.restore(path, snapshot, undefined, review))
+  await expect(run()).rejects.toThrow("pending")
+  await second.service.decide(tenant, (await second.service.inbox(tenant)).requests[0]!.request.id, "approve")
+  expect(await run()).toMatchObject(changed ? { success: false, partial: true } : { success: true })
+  expect(writes).toEqual([requester.oid, "updateSettings", ...(changed ? [] : ["assign"])])
+})
+
 it("binds the resolved Autopilot device and its actual update steps even though it cannot be created", async () => {
   const { Restorer } = await import("../src/portal/lib/policies/graph-restore")
   const { state, profile } = writeApprovalFixture()
@@ -575,14 +697,57 @@ it("allows a tenant with no backup container and fails closed if an enrolled con
   expect(dispatch).toHaveBeenCalledTimes(1)
 })
 
-it.each([undefined, "anotheraccount"])("requires confirmation to leave unreadable storage and verifies it before writes, next account %s", async next => {
+it.each([undefined, "anotheraccount"])("allows writes after confirming a move or removal from never-enrolled unreadable storage, next account %s", async next => {
+  const { profile, state } = writeApprovalFixture()
+  const origin = profile()
+  const { graph, dispatch } = runTransport(origin.service)
+  const confirm = vi.fn(async () => true)
+  state.blockedAccounts.add(approvalAccount)
+  await origin.service.beforeStorageChange(tenant, next, confirm)
+  expect(confirm).toHaveBeenCalledWith(approvalAccount, false)
+  expect(origin.store.get(`write-approval.unverified.${tenant}`)).toBeNull()
+  state.account = next ?? "readdedaccount"
+  // Installations updated from round two may already have an unverified entry without any observation.
+  origin.store.set(`write-approval.unverified.${tenant}`, JSON.stringify([{ clientId: requester.oid, storageAccountName: approvalAccount }]))
+  await graph()
+  expect(dispatch).toHaveBeenCalledOnce()
+})
+
+it("removes a signed-out Azure profile without a check or prompt if it has no approval history", async () => {
+  const { profile, state } = writeApprovalFixture()
+  const { service } = profile()
+  const confirm = vi.fn(async () => false)
+  state.blockedAccounts.add(approvalAccount)
+  await service.beforeStorageChange(tenant, undefined, confirm, false)
+  expect(confirm).not.toHaveBeenCalled()
+})
+
+it.each([undefined, "anotheraccount"])("allows leaving a missing disabled policy, next account %s", async next => {
+  const { profile, state } = writeApprovalFixture()
+  const origin = profile(), other = profile(reviewer)
+  await origin.service.enable(tenant)
+  await expect(origin.service.disable(tenant)).rejects.toThrow("pending")
+  await other.service.decide(tenant, (await other.service.inbox(tenant)).requests[0]!.request.id, "approve")
+  await origin.service.disable(tenant)
+  state.containerMissing = true
+  await expect(origin.service.active(tenant)).rejects.toThrow("policy is missing")
+  const confirm = vi.fn(async () => false)
+  await expect(origin.service.beforeStorageChange(tenant, next, confirm)).resolves.toBeUndefined()
+  expect(confirm).not.toHaveBeenCalled()
+})
+
+it.each([undefined, "anotheraccount"])("remembers unreadable storage only after seeing a policy there, next account %s", async next => {
   const { profile, state } = writeApprovalFixture()
   const origin = profile(), other = profile(reviewer)
   const { graph, dispatch } = runTransport(origin.service)
+  await origin.service.enable(tenant)
+  await expect(origin.service.disable(tenant)).rejects.toThrow("pending")
+  await other.service.decide(tenant, (await other.service.inbox(tenant)).requests[0]!.request.id, "approve")
+  await origin.service.disable(tenant)
   state.blockedAccounts.add(approvalAccount)
   const refused = vi.fn(async () => false)
   await expect(origin.service.beforeStorageChange(tenant, next, refused)).rejects.toThrow("cancelled")
-  expect(refused).toHaveBeenCalledWith(approvalAccount)
+  expect(refused).toHaveBeenCalledWith(approvalAccount, true)
   await origin.service.beforeStorageChange(tenant, next, async () => true)
   state.account = next ?? localStorageAccountName(tenant)
   await expect(graph()).rejects.toThrow("could not be verified")
@@ -662,15 +827,21 @@ it("requires the caller-bound exemption to withdraw an Intune request", async ()
   expect(dispatch).toHaveBeenCalledTimes(1)
 })
 
-it.each([false, true])("resolves a named location from its approved creation, with an intervening edit: %s", async edited => {
-  const { profile } = writeApprovalFixture()
+it.each([
+  { reused: false, edited: false }, { reused: false, edited: true },
+  { reused: true, edited: false }, { reused: true, edited: true },
+])("resolves the reviewed named location, prior recreation $reused and intervening edit $edited", async ({ reused, edited }) => {
+  const { profile, state } = writeApprovalFixture()
   const origin = profile(), second = profile(reviewer)
   setWriteApprovals(origin.service)
   await origin.service.enable(tenant)
   const location = { id: requester.oid, "@odata.type": "#microsoft.graph.ipNamedLocation", displayName: "Office", ipRanges: [] }
   const policy = { id: tenant, displayName: "Require MFA", state: "disabled", conditions: { locations: { includeLocations: [requester.oid] } } }
   const writes: Record<string, unknown>[] = []
-  let created: Record<string, unknown> | undefined
+  setRestoreJournalStore(memoryStore())
+  let created: Record<string, unknown> | undefined = reused ? { ...location, id: reviewer.oid } : undefined
+  if (reused) saveWrite({ key: "prior-location", tenant, method: "POST", path: "identity/conditionalAccess/namedLocations",
+    at: new Date().toISOString(), state: "complete", objectId: reviewer.oid, sourceId: requester.oid, label: "Office" })
   const transport = createBridgedFetch({
     dispatch: async () => new Response(null, { status: 404 }),
     getDelegatedToken: async () => ({ accessToken: "fixture", expiresOn: null }),
@@ -700,15 +871,19 @@ it.each([false, true])("resolves a named location from its approved creation, wi
   const host = new ApiHost({ routes: { "/api/restore-backup": { POST: restoreRoute } } })
   const run = () => host.dispatch(new Request(`${INTERNAL_API_ORIGIN}/api/restore-backup`, { method: "POST", body: JSON.stringify({
     tenantId: tenant, appId: requester.oid, clientSecret: DELEGATED_CLIENT_SECRET, storageAccountName: approvalAccount,
-    backupId: "fixture", restoreType: "selective",
+    backupId: "fixture", restoreType: "selective", mode: reused ? "replace" : "copy",
     selectedPolicies: [{ path: "fixture/ConditionalAccessPolicies/mfa.json" }, { path: "fixture/NamedLocations/office.json" }],
   }) }))
   expect((await run()).status).toBe(409)
   await second.service.decide(tenant, (await second.service.inbox(tenant)).requests[0]!.request.id, "approve")
+  if (reused && edited) state.beforeAudit = event => {
+    if (event.action.endsWith("claimed")) created!.isTrusted = true
+  }
   const result = await (await run()).json()
   expect(result.success).toBe(!edited)
-  expect(writes).toHaveLength(edited ? 1 : 2)
-  if (!edited) expect(writes[1]).toMatchObject({ conditions: { locations: { includeLocations: [reviewer.oid] } } })
+  expect(writes).toHaveLength(Number(!reused) + Number(!edited))
+  if (!edited) expect(writes.at(-1)).toMatchObject({ conditions: { locations: { includeLocations: [reviewer.oid] } } })
+  if (edited) expect(result.details.results.at(-1)).toMatchObject({ writeNotSent: true, error: expect.stringContaining("Write not sent") })
 })
 
 
@@ -717,4 +892,10 @@ it("documents request creation as the start of the seven-day deadline", () => {
     const guide = readFileSync(new URL(`../docs-site/src/content/docs/${doc}`, import.meta.url), "utf8")
     expect(guide).toContain("The deadline is seven days from request creation. The Tenant approvals inbox shows the expiry.")
   }
+})
+
+it("documents Azure role propagation and the remote activation boundary", () => {
+  const settings = readFileSync(new URL("../docs-site/src/content/docs/settings.md", import.meta.url), "utf8")
+  expect(settings).toMatch(/block tenant configuration writes for a few minutes while Azure role assignments take effect/)
+  expect(settings).toMatch(/final policy check runs after activation is committed/)
 })

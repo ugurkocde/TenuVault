@@ -328,7 +328,8 @@ async function twoAdminApprovals(standIn) {
     const id = inbox.requests?.[0]?.request?.id
     assert(id && inbox.actor.oid !== inbox.requests[0].request.requester.oid, "the second profile did not see a distinct requester")
     assert((await control(origin, "approve", { requestId: id })).status === 409, "requester approved their own write")
-    assert((await control(approver, "approve", { requestId: id })).requests?.[0]?.decision?.decision === "approved", "review was not saved")
+    assert((await control(approver, "approve", { requestId: id })).committed, "review was not saved")
+    assert((await control(approver, "list")).requests?.[0]?.decision?.decision === "approved", "saved review was missing from the inbox")
     const applied = await apply(origin)
     assert(applied.success && standIn.approvals.writes() === 1, `approved restore did not apply once: ${applied.error}`)
     assert((await apply(origin)).error?.includes("pending"), "the next copy reused the finished request")

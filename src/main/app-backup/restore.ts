@@ -170,14 +170,15 @@ async function restoreOwnedApp(store: AppSourceStore, source: CapturedAppSource,
       return withWriteCheckpoint(checkpoint, () => graph(method, path, payload))
     }
     if (!record.appId) {
-      report("creating"); record.creationStarted = true; await save()
-      if (signal.aborted) {
-        // No request has been dispatched. Persist that fact so a deliberate retry
-        // can create the app; unknown POST outcomes still require reconciliation.
-        record.creationStarted = false; await save(); signal.throwIfAborted()
-      }
+      await checkpoint()
+      signal.throwIfAborted()
+      report("creating")
+      record.creationStarted = true
+      await save()
+      const create = () => graph("POST", BASE, body)
       try {
-        record.appId = identifier((await send("POST", BASE, body)).id)
+        if (signal.aborted) throw new FetchPreconditionError(signal.reason)
+        record.appId = identifier((await (expected ? withWriteCheckpoint(checkpoint, create) : create())).id)
       } catch (error) {
         if (error instanceof FetchPreconditionError) { record.creationStarted = false; await save() }
         throw error

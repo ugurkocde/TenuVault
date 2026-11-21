@@ -130,9 +130,10 @@ async function recordRestore(bodyText: string, response: Response, dispatch: (re
   if (["detect", "list", "dismiss"].includes(body.approvalAction ?? "")) return
   const data = await response.json().catch(() => ({})) as {
     outcome?: { success: boolean; partial?: boolean; approval?: unknown; approvalState?: string; policyId?: string; path: string; error?: string; intuneApprover?: import("../storage/restore-approvals").RestoreApproval["approver"] }
-    success?: boolean; jobId?: string; policyId?: string; status?: string; error?: string; partial?: boolean
+    legacy?: boolean; success?: boolean; jobId?: string; policyId?: string; status?: string; error?: string; partial?: boolean
     details?: { restoredCount: number; partialCount?: number; failedCount: number; approvalCount?: number; duration: number; results: { path: string; success: boolean; policyId?: string; error?: string }[] }
   }
+  if (data.legacy) return
   const approvalAction = body.approvalAction
   if (approvalAction && data.outcome) {
     data.success = data.outcome.success || (approvalAction === "submit" && data.outcome.approvalState === "submitted")

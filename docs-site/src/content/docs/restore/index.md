@@ -223,3 +223,5 @@ Open **Settings > Storage and recovery > Tenant approvals** and select the desti
 * [Drift detection](/drift/), for reverting a single changed policy
 
 If an Intune request already completed a step before tenant approvals were enabled, and that step has no verified saved state, open **Intune Multi Admin Approval**, select **Withdraw**, then submit the restore again.
+
+If a final check refuses a write before it reaches Microsoft Graph, the result says **Write not sent**. Review the reason before starting a fresh restore. When an earlier step completed, the result still reports the partial restore.

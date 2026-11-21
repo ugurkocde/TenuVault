@@ -689,7 +689,10 @@ it("checks enrollment before limiting grouped OIB batches", async () => {
   expect(admit).not.toHaveBeenCalled()
 })
 
-it("shows Loading the OIB pack while acquiring the deployment token", async () => {
+it.each([false, true])("shows and clears Loading the OIB pack while preparing a deployment, grouped %s", async grouped => {
+  const { service } = writeApprovalFixture().profile()
+  setWriteApprovals(service)
+  if (grouped) await service.enable(tenantId)
   const network = world({ policies: [] }, [])
   let observed: OibProgress | undefined
   vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -697,8 +700,29 @@ it("shows Loading the OIB pack while acquiring the deployment token", async () =
     return network(input, init)
   })
   await source()
-  await handleOib({ ...base, action: "oib-deploy", commit, backup: { mode: "none" }, items: [{ source: SC, mode: "create" }] })
+  const child = { ...base, action: "oib-deploy", commit, backup: { mode: "none" }, items: [{ source: SC, mode: "create" }] }
+  if (grouped) {
+    const response = await reviewedOibRoute(async body => body.tenantId === secondTenant ? new Response(null, { status: 403 }) : null)(
+      new Request("http://local", { method: "POST", body: JSON.stringify({ tenantId, batches: [child, { ...child, tenantId: secondTenant }] }) }),
+    )
+    expect(response.status).toBe(403)
+  } else await handleOib(child)
   expect(observed?.stage).toBe("Loading the OIB pack")
+  expect(await handleOib({ action: "oib-progress", tenantId })).toBeNull()
+})
+
+it("falls back to individual OIB deployments only when no readable policy is enabled", async () => {
+  const { profile, state } = writeApprovalFixture()
+  const { service } = profile()
+  setWriteApprovals(service)
+  state.failedReads.add(`.tenuvault-controls/${secondTenant}/write-approval/policy.json`)
+  const batches = [tenantId, secondTenant].map(tenantId => ({ ...base, tenantId, action: "oib-deploy" }))
+  const admit = vi.fn(async () => null)
+  const post = () => reviewedOibRoute(admit)(new Request("http://local", { method: "POST", body: JSON.stringify({ tenantId, batches }) }))
+  expect(await (await post()).json()).toEqual({ legacy: true })
+  await service.enable(tenantId)
+  expect((await post()).status).toBe(409)
+  expect(admit).not.toHaveBeenCalled()
 })
 
 it("keeps the legacy no-storage skip for an unenrolled destination in a reviewed group", async () => {

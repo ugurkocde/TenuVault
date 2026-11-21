@@ -140,6 +140,53 @@ describe("cross-tenant restore engine", () => {
     await restoreCapturedApp(new AppSourceStore(f.root, () => [f.master]), f.source, snapshot, target, "Restored", options(d))
     expect(d.calls.filter(([m, p]) => m === "POST" && p.endsWith("/mobileApps"))).toHaveLength(1)
   })
+  it("keeps the creation journal clear if the preliminary approval check refuses the first POST", async () => {
+    const f = await fixture(), d = destination()
+    const { profile, state } = writeApprovalFixture()
+    const first = profile(), second = profile(reviewer)
+    setWriteApprovals(first.service)
+    await first.service.enable(target)
+    let readsAfterClaim: number | undefined
+    state.beforeAudit = event => { if (event.action.endsWith("claimed")) readsAfterClaim = 0 }
+    const opts = options(d)
+    opts.graph = async (method, url, body) => {
+      if (method === "GET" && readsAfterClaim !== undefined && ++readsAfterClaim === 2) throw new Error("Destination read was refused")
+      return d.graph(method, url, body)
+    }
+    const run = () => restoreCapturedApp(f.store, f.source, snapshot, target, "Restored", opts)
+    await expect(run()).rejects.toThrow("pending")
+    await second.service.decide(target, (await second.service.inbox(target)).requests[0]!.request.id, "approve")
+    await expect(run()).rejects.toThrow("Destination read was refused")
+    expect(await f.store.readRestoreRecord(tenant, f.source.id, target)).toMatchObject({ creationStarted: false })
+    expect(d.calls.every(([method]) => method === "GET")).toBe(true)
+    await expect(run()).rejects.toThrow("pending")
+  })
+
+  it("clears the creation flag after a sign-in failure before Graph dispatch", async () => {
+    const f = await fixture(), d = destination()
+    const opts = options(d)
+    const send = vi.fn()
+    const blocked = restoreGraph(async () => { throw new Error("Sign in again") }, send, opts.signal)
+    opts.graph = (method, url, body) => method === "POST" ? blocked(method, url, body) : d.graph(method, url, body)
+    await expect(restoreCapturedApp(f.store, f.source, snapshot, target, "Restored", opts)).rejects.toThrow("Sign in again")
+    expect(send).not.toHaveBeenCalled()
+    expect(await f.store.readRestoreRecord(tenant, f.source.id, target)).toMatchObject({ creationStarted: false })
+  })
+
+  it("uploads every block without an Azure policy check when App Backup is unenrolled", async () => {
+    const f = await fixture(snapshot, true), d = destination()
+    const { profile, state } = writeApprovalFixture()
+    const { service } = profile()
+    setWriteApprovals(service)
+    const guard = vi.fn(async tenant => { await service.authorize(tenant, requester) })
+    setRestoreUploadGuard(guard)
+    try {
+      await restoreCapturedApp(f.store, f.source, snapshot, target, "Restored", options(d))
+      expect(d.fetcher.mock.calls.length).toBeGreaterThan(2)
+      expect(guard).not.toHaveBeenCalled()
+      expect(state.policyReads).toBe(1)
+    } finally { setRestoreUploadGuard(undefined) }
+  })
   it("refuses changed settings on a completed retry without rewriting the app", async () => {
     const f = await fixture(), d = destination()
     await restoreCapturedApp(f.store, f.source, snapshot, target, "Restored", options(d))

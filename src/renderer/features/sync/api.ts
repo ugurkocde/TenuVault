@@ -65,7 +65,7 @@ export const previewSyncTarget = (target: Tenant, id: string) => featureCall<Syn
 export const approveSyncTarget = (target: Tenant, id: string, preview: Pick<ChangeSetPreview, "contentHash" | "targetFingerprint">, backup: SyncBackup) =>
   featureCall(PATH, target, "approve", { id, contentHash: preview.contentHash, targetFingerprint: preview.targetFingerprint, backup })
 export const applySyncTarget = (target: Tenant, id: string, contentHash: string, backup: SyncBackup) => featureCall(PATH, target, "apply", { id, contentHash, confirm: true, backup })
-export const applySyncBatch = (source: Tenant, id: string, destinations: Array<{ id: string; contentHash: string; targetFingerprint: string }>, backup: SyncBackup) =>
+export const applySyncBatch = (source: Tenant, id: string, destinations?: Array<{ id: string; contentHash: string; targetFingerprint: string }>, backup?: SyncBackup) =>
   featureCall<{ legacy?: boolean; results?: Array<{ id: string; error?: string }> }>(PATH, source, "apply-batch", { id, destinations, backup, confirm: true })
 /** A retry names no backup choice: the route applies the one the target was approved with. */
 export const retrySyncTarget = (target: Tenant, id: string, contentHash: string) => featureCall(PATH, target, "retry", { id, contentHash, confirm: true })

@@ -11,6 +11,7 @@ import { MAX_RECORDS } from "../src/main/features/records"
 import { fakeDeps, seedRecords, TENANT_A, TENANT_B } from "./feature-helpers"
 import { COMPLETE_BACKUP_METADATA, FakeTenant, setting, wire } from "./feature-change-sets-fakes"
 import { writeOperation } from "../src/main/features/change-sets/graph"
+import { FetchPreconditionError } from "../src/main/api/network-error"
 
 beforeEach(() => setWriteApprovals(unenrolledApprovals("azure")))
 
@@ -400,6 +401,32 @@ describe("change-set engine", () => {
     expect(applied.results["op-1"]!.status).toBe("uncertain")
     expect(applied.results["op-1"]!.readBack).toBe("denied")
     expect(applied.status).toBe("uncertain")
+  })
+
+  it("records an unsent follow-up without marking the creation uncertain or dropping it from rollback", async () => {
+    const context = setup()
+    const record = await createChangeSet(context.deps, TENANT_A, {
+      title: "Create an assigned policy", operations: [{
+        folder: "ConfigurationPolicies", action: "create",
+        proposed: { name: "Defender", platforms: "windows10", technologies: "mdm" },
+        assignments: [{ target: { "@odata.type": "#microsoft.graph.allDevicesAssignmentTarget" } }],
+      }],
+    }, "Admin")
+    const preview = await approve(context, record.id)
+    const original = context.tenant.graph.bind(context.tenant)
+    context.tenant.graph = (journaled: boolean) => {
+      const inner = original(journaled)
+      return async (method, path, body) => {
+        if (method === "POST" && path.endsWith("/assign")) throw new FetchPreconditionError("The policy changed")
+        return inner(method, path, body)
+      }
+    }
+    const applied = (await context.post({ action: "apply", id: record.id, contentHash: preview.contentHash, confirm: true })).body.changeSet as ChangeSetRecord
+    expect(applied.status).toBe("partial")
+    expect(applied.results["op-1"]).toMatchObject({ status: "failed", writeNotSent: true, partial: true,
+      objectId: expect.any(String), message: "Write not sent: The policy changed (Earlier steps were sent.)" })
+    const rollback = await previewRollback(context.deps, TENANT_A, record.id)
+    expect(rollback.operations).toEqual([expect.objectContaining({ key: "op-1", targetId: applied.results["op-1"]!.objectId })])
   })
 
   it("drops old change sets that never wrote and nothing refers to instead of failing at the record cap", async () => {

@@ -1,4 +1,4 @@
-import { approvalsEnabled, withWriteApproval } from "../../write-approvals/service"
+import { enrolledBatchDestinations, withWriteApproval } from "../../write-approvals/service"
 import type { RouteModule } from "../../api/host"
 import { allows, type Plan } from "../../../shared/plans"
 import type { FeatureDeps } from "../deps"
@@ -302,44 +302,69 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
       return previewPromotion(deps, tenantId, target.id, syncCheck(deps, tenantId, target.id))
     },
     approve: ({ tenantId, body, actor }) => approveSyncTarget(deps, tenantId, body, actor),
-    "apply-batch": async ({ tenantId, body }) => {
+    "apply-batch": async ({ tenantId, body, actor }) => {
       const run = syncRun(deps, tenantId, body)
       requireNotDiscarded(run)
-      if (!Array.isArray(body.destinations) || body.destinations.length < 2 || body.destinations.length > run.targets.length) {
+      if (body.confirm !== true) throw new FeatureError("Confirm the reviewed Sync batch before applying.")
+      const resuming = body.destinations === undefined
+      if (!resuming && run.groupedApply) throw new FeatureError("Continue to review the saved Sync group from the result screen.", 409)
+      const selection = resuming ? run.groupedApply?.destinations : body.destinations
+      if (!Array.isArray(selection) || selection.length < 2 || selection.length > run.targets.length) {
         throw new FeatureError("Select at least two targets from this Sync run.")
       }
+      const backup = resuming ? run.groupedApply!.backup : approvedBackup(body)
       const selected = new Set<string>()
-      const destinations = body.destinations.map((entry: unknown) => {
+      const destinations = selection.map((entry: unknown) => {
         if (!entry || typeof entry !== "object" || Array.isArray(entry)) throw new FeatureError("Invalid Sync destination.")
         const request = entry as Body
         const id = recordId(request, "Sync target")
         const target = run.targets.find(candidate => candidate.promotionId === id)
         if (!target || selected.has(target.targetTenantId)) throw new FeatureError("Select each destination from this Sync run once.")
         selected.add(target.targetTenantId)
-        return { id, tenant: target.targetTenantId, request: { ...request, backup: approvedBackup(body) } as Body }
+        const reviewed = { id, contentHash: hashField(request, "contentHash"), targetFingerprint: hashField(request, "targetFingerprint") }
+        return { id, tenant: target.targetTenantId, reviewed, request: { ...reviewed, backup } }
       })
-      const controlled = await Promise.all(destinations.map(destination => approvalsEnabled(destination.tenant)))
-      if (!controlled.some(Boolean)) return { legacy: true }
+      const controlled = await enrolledBatchDestinations(destinations.map(destination => destination.tenant))
+      if (!controlled.size && !resuming) return { legacy: true }
       await requireSyncTenants(deps, tenantId, run.targets.map(target => target.targetTenantId))
-      const prepared: Array<Awaited<ReturnType<typeof preparePromotionApply>> & { id: string }> = []
-      for (const [index, { id, tenant, request }] of destinations.entries()) {
+      const prepare = async ({ id, tenant, request }: typeof destinations[number]) => {
         const actor = deps.actor(tenant)?.name ?? null
-        await approveSyncTarget(deps, tenant, request, actor)
+        if (!resuming) await approveSyncTarget(deps, tenant, request, actor)
+        else boundBackup(syncTarget(deps, tenant, request), request)
         const apply = await preparePromotionApply(deps, tenant, id, {
           contentHash: hashField(request, "contentHash"), confirmed: body.confirm === true,
           resolveBackup: () => boundBackup(syncTarget(deps, tenant, request), request),
           check: syncCheck(deps, tenant, id),
           onSettled: () => { recordSyncLinks(deps, tenant, tenantId) },
         }, actor)
-        if (!controlled[index]) await apply.operation.observe()
-        prepared.push({ id, ...apply })
+        return { id, ...apply }
       }
-      return withWriteApproval(prepared.map(entry => entry.operation), async () => ({
-        results: await Promise.all(prepared.map(async ({ id, work }) => {
-          try { await work(); return { id } }
-          catch (error) { return { id, error: error instanceof Error ? error.message : String(error) } }
-        })),
-      }))
+      const settle = async <T,>(id: string, work: () => Promise<T>) => {
+        try { await work(); return { id } }
+        catch (error) { return { id, error: error instanceof Error ? error.message : String(error) } }
+      }
+      const updateGroup = (groupedApply: SyncRunRecord["groupedApply"]) => deps.records.update<SyncRunRecord>(DOMAINS.syncRuns, tenantId, run.id,
+        current => ({ ...current, groupedApply }), { actor, reason: groupedApply ? "Saved the reviewed Sync selection" : "Finished the grouped Sync attempt" })
+      if (!controlled.size) {
+        const results = await Promise.all(destinations.map(destination => settle(destination.id, () => {
+          const { id, tenant, request } = destination
+          return applySync(deps, tenant, id, { contentHash: request.contentHash, confirmed: true,
+            resolveBackup: () => boundBackup(syncTarget(deps, tenant, request), request) }, deps.actor(tenant)?.name ?? null)
+        })))
+        updateGroup(undefined)
+        return { results }
+      }
+      const prepared: Array<Awaited<ReturnType<typeof prepare>>> = []
+      for (const destination of destinations) {
+        const apply = await prepare(destination)
+        if (!controlled.has(destination.tenant)) await apply.operation.observe()
+        prepared.push(apply)
+      }
+      if (!resuming) updateGroup({ destinations: destinations.map(destination => destination.reviewed), backup })
+      return withWriteApproval(prepared.map(entry => entry.operation), async () => {
+        updateGroup(undefined)
+        return { results: await Promise.all(prepared.map(({ id, work }) => settle(id, work))) }
+      })
     },
     reject: async ({ tenantId, body, actor }) => {
       const target = syncTarget(deps, tenantId, body)

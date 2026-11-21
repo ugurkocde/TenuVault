@@ -980,7 +980,8 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
         }
       }
       if (stopIfCisRevoked()) break operations
-      const attempt: OperationResult = { ...current, status: "writing", attempts: current.attempts + 1, message: null, readBack: null, at: at() }
+      const { writeNotSent: _previousRefusal, ...previous } = current
+      const attempt: OperationResult = { ...previous, status: "writing", attempts: current.attempts + 1, message: null, readBack: null, at: at() }
       saveResult(deps, tenant, id, operation.key, attempt, actor, `Writing ${operation.name}`)
       const protectedWrite = hasWriteApproval(tenant)
       const resultWriter = protectedWrite ? guardedOperationWriter(operation, type, gated, writer, approvedTargets.get(operation.key), hash => {
@@ -997,6 +998,13 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
       }
       if (outcome.state === "rejected") {
         saveResult(deps, tenant, id, operation.key, { ...attempt, status: "failed", objectId: outcome.objectId, message: `Microsoft Graph rejected the write; nothing was changed. ${outcome.message}`, at: at() }, actor, `${operation.name} was rejected`)
+        continue
+      }
+      if (outcome.state === "not-sent") {
+        saveResult(deps, tenant, id, operation.key, {
+          ...attempt, status: "failed", objectId: outcome.objectId, partial: outcome.partial, writeNotSent: true,
+          message: `Write not sent: ${outcome.message}${outcome.partial ? " (Earlier steps were sent.)" : ""}`, at: at(),
+        }, actor, `Write not sent for ${operation.name}`)
         continue
       }
       if (outcome.state === "unknown") {
@@ -1052,7 +1060,7 @@ function inverseOperations(deps: FeatureDeps, tenantId: string, record: ChangeSe
     const result = record.results[operation.key] ?? emptyResult()
     const object = record.preChange.objects.find((entry) => entry.key === operation.key)
     const snapshot = captured[operation.key]?.body ?? null
-    if (result.status === "pending" || result.status === "failed") continue
+    if (result.status === "pending" || (result.status === "failed" && !result.partial)) continue
     const warnings = result.status === "verified" ? [] : [`The outcome of "${operation.name}" was ${result.status}; the rollback is based on the captured state and live state is re-read at review.`]
     const source = { tenantId: record.targetTenantId, objectId: operation.targetId, version: record.preChange.capturedAt, label: `Pre-change capture of "${record.title}"` }
     if (operation.action === "create") {
