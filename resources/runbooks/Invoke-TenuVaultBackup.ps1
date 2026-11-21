@@ -20,6 +20,11 @@
     blob, and the only ones it reads are earlier plain backups of the tenant, for the opt-in change
     report. Sealed backups are recognised by their first bytes and skipped, never opened.
 
+    The tenant's omission policy is read from the reserved .tenuvault-control prefix in the same
+    intune-backups container. Use Settings in TenuVault to change it after pausing and draining all
+    producers. The runbook has no per-run override. A missing policy for an enrolled tenant or an
+    unreadable policy fails the backup.
+
     The type table below mirrors src/shared/intune/registry.ts in the desktop app (paths, expands,
     selects, extras, the singleton and the built-in skips). test/cloud-backup-runbook.test.ts
     fails when the two drift apart. Encrypted OMA-URI values are handled like the desktop Backup
@@ -46,6 +51,8 @@
                                  backup, leave a change report for the notification watcher.
       TenuVaultChangeReportActors "false" leaves out who made each change.
       TenuVaultTenantName        The tenant's name in change reports; the tenant id without it.
+      TENUVAULT_OMISSION_ACCOUNT Outside Automation, comma-separated storage accounts already
+                                 enrolled in omission. Unset or empty means no enrollment.
     TenuVaultKeyVault, set by setups before 1.2.0, is no longer read.
 
     Dot source the file with -LibraryOnly to load the library functions without running a backup.
@@ -66,7 +73,7 @@ param(
     [switch]$AuditCanaryWait
 )
 
-$script:RunbookVersion = "1.5.0"
+$script:RunbookVersion = "1.6.0"
 $script:GraphBeta = "https://graph.microsoft.com/beta"
 $script:Container = "intune-backups"
 # One status blob per tenant, so status blobs never collide when tenants share tooling.
@@ -153,7 +160,7 @@ function Get-TvUniqueName {
 # ---------------------------------------------------------------------------
 
 $script:VolatileKeys = [System.Collections.Generic.HashSet[string]]::new(
-    [string[]]@("lastModifiedDateTime", "createdDateTime", "modifiedDateTime", "version", "secretReferenceValueId"))
+    [string[]]@("lastModifiedDateTime", "createdDateTime", "modifiedDateTime", "version", "secretReferenceValueId", "_tenuvaultOmaMasked"))
 
 function Test-TvVolatileKey {
     param([Parameter(Mandatory)][string]$Key)
@@ -364,6 +371,7 @@ $script:HttpClient.Timeout = [TimeSpan]::FromSeconds(90)
 
 class TvHttpError : System.Exception {
     [int]$Status
+    [string]$ServiceCode
     TvHttpError([int]$status, [string]$message) : base($message) { $this.Status = $status }
 }
 
@@ -460,12 +468,14 @@ function Invoke-TvHttp {
             $lastError = $_
             if ($attempt -lt $attempts) { Start-Sleep -Seconds $attempt; continue }
             if ($cancel -and $cancel.IsCancellationRequested) { throw [TvAuditBudgetError]::new() }
+            if ($safeBackupErrors) { throw [TvHttpError]::new(0, "The service did not respond.") }
             throw [TvHttpError]::new(0, (Get-TvSafeError $_.Exception.Message))
         } finally {
             if ($cancel) { $cancel.Dispose() }
             $request.Dispose()
         }
         $status = [int]$response.StatusCode
+        $serviceCode = if ($response.Headers.Contains("x-ms-error-code")) { @($response.Headers.GetValues("x-ms-error-code"))[0] }
         $retryAfter = if ($response.Headers.RetryAfter -and $response.Headers.RetryAfter.Delta) { $response.Headers.RetryAfter.Delta } else { $null }
         $bodyMs = if ($BudgetMs) { [Math]::Max(1, $BudgetMs - [int]$clock.ElapsedMilliseconds) } else { $script:BodyReadSeconds * 1000 }
         try {
@@ -493,7 +503,7 @@ function Invoke-TvHttp {
         }
         $retryable = $status -in @(429, 500, 502, 503, 504)
         $message = "HTTP $status"
-        $bodyText = [Text.Encoding]::UTF8.GetString($bytes)
+        $bodyText = if ($safeBackupErrors) { "" } else { [Text.Encoding]::UTF8.GetString($bytes) }
         try {
             $parsed = $bodyText | ConvertFrom-Json -ErrorAction Stop
             $detail = Get-TvProp (Get-TvProp $parsed "error") "message"
@@ -504,6 +514,9 @@ function Invoke-TvHttp {
             if ($code) { $message = "HTTP $status $code" }
         }
         $lastError = [TvHttpError]::new($status, (Get-TvSafeError $message))
+        $lastError.ServiceCode = if ($serviceCode) { $serviceCode } else {
+            [regex]::Match([Text.Encoding]::UTF8.GetString($bytes), "<Code>(BlobNotFound|ContainerNotFound)</Code>").Groups[1].Value
+        }
         if ($retryable -and $attempt -lt $attempts) {
             $delay = $attempt
             if ($retryAfter) { $delay = [Math]::Ceiling($retryAfter.TotalSeconds) }
@@ -716,7 +729,7 @@ function ConvertTo-TvSafeAuditFile {
         $ReceiptPath -cne "/audit-receipts/$tenant/$($entry.timestamp.Substring(0, 10))-$($job.runId).json") { throw "Invalid cloud audit receipt." }
     $status = switch ($job.status) { "completed" { "Success" } "warnings" { "CompletedWithWarnings" } "failed" { "Failed" } "uncertain" { "Uncertain" } default { throw "Invalid cloud audit status." } }
     $folder = if ($entry.resource.id -match '^backup-\d{4}-\d{2}-\d{2}-\d{6}$') { $entry.resource.id }
-    $reason = if ($job.reason -in @("BACKUP_FAILED", "BACKUP_WARNINGS", "FOLDER_CLAIM_FAILED", "GRAPH_START_FAILED", "GRAPH_LIST_FAILED", "WRITE_UNCONFIRMED")) { $job.reason }
+    $reason = if ($job.reason -in @("BACKUP_FAILED", "BACKUP_WARNINGS", "BACKUP_VALUES_OMITTED", "FOLDER_CLAIM_FAILED", "GRAPH_START_FAILED", "GRAPH_LIST_FAILED", "OMISSION_POLICY_UNVERIFIED", "WRITE_UNCONFIRMED")) { $job.reason }
     $trigger = if ($job.trigger -eq "manual") { "manual" } else { "scheduled" }
     $safe = New-TvAuditFile $Context $job.runId $status $folder ([int]$job.counts.saved) ([int]$job.counts.failures) $trigger $reason
     $safeEntry = $safe.entries[0]
@@ -1061,8 +1074,11 @@ function Save-TvBackupManifest {
 function New-TvManifestAuditReceipt {
     param([hashtable]$Context, [string]$RunId, [object]$Metadata, [string]$Trigger)
     $status = [string]$Metadata.Status
-    $auditStatus = if ($status -eq "Success" -and @($Metadata.MaskedSecretItems | Where-Object { $_ }).Count) { "CompletedWithWarnings" } else { $status }
-    $reason = if ($auditStatus -eq "CompletedWithWarnings") { "BACKUP_WARNINGS" } elseif ($auditStatus -eq "Failed") { "BACKUP_FAILED" }
+    $omitted = $Metadata.OmissionEnabled -eq $true -and @($Metadata.Items.Values | Where-Object { $_.omitted }).Count -gt 0
+    $auditStatus = if ($status -eq "Success" -and ($omitted -or @($Metadata.MaskedSecretItems | Where-Object { $_ }).Count)) { "CompletedWithWarnings" } else { $status }
+    $reason = if ($status -eq "Success" -and $omitted) { "BACKUP_VALUES_OMITTED" }
+        elseif ($auditStatus -eq "CompletedWithWarnings") { "BACKUP_WARNINGS" }
+        elseif ($auditStatus -eq "Failed") { "BACKUP_FAILED" }
     $file = New-TvAuditFile $Context $RunId $auditStatus $Metadata.BackupFolder $Metadata.ItemCounts.TotalPolicies $Metadata.Failures $Trigger $reason $Metadata.CompletedAt
     if ($Metadata.RunbookVersion -match '^\d{1,4}\.\d{1,4}\.\d{1,4}$') { $file.entries[0].job.producerVersion = $Metadata.RunbookVersion }
     return [ordered]@{ delivered = $false; file = $file; backupStatus = $status
@@ -1138,7 +1154,11 @@ function Get-TvGraphUrl {
 function Invoke-TvGraphGet {
     param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Token)
     $result = Invoke-TvHttp -Uri (Get-TvGraphUrl $Path) -Token $Token -Method "Get" -Headers @{ Accept = "application/json" }
-    return ConvertFrom-TvJson $result.Text
+    try { return ConvertFrom-TvJson $result.Text }
+    catch {
+        if ($safeBackupErrors) { throw "Microsoft Graph returned invalid JSON." }
+        throw
+    }
 }
 
 function Invoke-TvGraphList {
@@ -1167,6 +1187,12 @@ function Get-TvDetailPath {
 }
 
 # The encrypted OMA-URI settings of a device configuration profile, like the registry secrets.
+function Test-TvEncryptedOmaSetting {
+    param($Setting)
+    $encrypted = Get-TvProp $Setting "isEncrypted"
+    return $encrypted -is [bool] -and $encrypted
+}
+
 function Get-TvEncryptedOmaSettings {
     param([Parameter(Mandatory)][object]$Detail)
     $settings = Get-TvProp $Detail "omaSettings"
@@ -1195,6 +1221,210 @@ function Get-TvListSnapshot {
     $copy = Copy-TvDeep $Item
     Remove-TvProp $copy "@odata.context"
     return $copy
+}
+
+# BEGIN GENERATED SECRET RULES
+$script:SecretRules = @'
+{
+  "version": 1,
+  "typedSecretSuffix": "SecretSettingValue",
+  "androidFolder": "AndroidEnrollmentProfiles",
+  "androidFields": ["tokenValue", "qrCodeContent", "qrCodeImage", "wifiPassword"],
+  "credentials": [
+    { "folder": "DeviceConfigurations", "subtype": "VpnConfiguration$", "field": "password" },
+    { "folder": "DeviceConfigurations", "subtype": "VpnConfiguration$", "field": "sharedSecret" },
+    { "folder": "DeviceConfigurations", "subtype": "VpnConfiguration$", "field": "preSharedKey" },
+    { "folder": "DeviceConfigurations", "subtype": "EasEmailProfileConfiguration$", "field": "password" },
+    { "folder": "DeviceConfigurations", "subtype": "ImportedPFXCertificateProfile$", "field": "password" },
+    { "folder": "DeviceConfigurations", "subtype": "ImportedPFXCertificateProfile$", "field": "pfx" },
+    { "folder": "DeviceConfigurations", "subtype": "(?:ImportedPFX|Pkcs)CertificateProfile$", "field": "privateKey" },
+    { "folder": "DeviceConfigurations", "subtype": "(?:ImportedPFX|Pkcs)CertificateProfile$", "field": "certificatePassword" },
+    { "folder": "DeviceConfigurations", "subtype": "ScepCertificateProfile$", "field": "challengePassword" },
+    { "folder": "AppleAutomatedEnrollment", "subtype": "depOnboardingSetting$", "field": "token" },
+    { "folder": "AppleAutomatedEnrollment", "subtype": "depOnboardingSetting$", "field": "appleToken" },
+    { "folder": "EnrollmentConfigurations", "subtype": "EnrollmentConfiguration$", "field": "enrollmentToken" },
+    { "folder": "AutopilotDevices", "subtype": "windowsAutopilotDeviceIdentity$", "field": "deviceAccountPassword" }
+  ],
+  "scripts": {
+    "PowerShellScripts": ["scriptContent"],
+    "ShellScripts": ["scriptContent"],
+    "CustomAttributeScripts": ["scriptContent"],
+    "ComplianceScripts": ["detectionScriptContent", "scriptContent", "ruleContent", "rulesContent"],
+    "Remediations": ["detectionScriptContent", "remediationScriptContent"]
+  }
+}
+'@ | ConvertFrom-Json -AsHashtable
+# END GENERATED SECRET RULES
+
+function Get-TvSettingIdentity ($Value, [string]$Parent, [string]$Member) {
+    $definition = Get-TvProp $Value "settingDefinitionId"
+    if ($definition -is [string]) { return "definition:${definition}" }
+    if ($Parent) { return "$Parent/$Member" }
+    return ""
+}
+
+function Test-TvSettingSecret ($Value) {
+    $type = [string](Get-TvProp $Value "@odata.type")
+    return (Get-TvProp $Value "valueState") -ceq "encryptedValueToken" -or
+        $type.EndsWith($script:SecretRules.typedSecretSuffix, [StringComparison]::OrdinalIgnoreCase)
+}
+
+function Get-TvOmittedIdentities ($Folder, $Older, $Newer, $Reasons) {
+    $identities = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    function Find-TvOmittedIdentity ($Value, [string]$Path, [string]$Parent, [string]$Member, [bool]$Oma, $Markers) {
+        if ($Value -is [System.Collections.IList]) {
+            for ($i = 0; $i -lt $Value.Count; $i++) { Find-TvOmittedIdentity $Value[$i] "$Path/$i" $Parent $Member $Oma $Markers }
+        } elseif ($Value -is [System.Collections.IDictionary]) {
+            $identity = Get-TvSettingIdentity $Value $Parent $Member
+            $uri = Get-TvProp $Value "omaUri"
+            if ($Folder -ceq "DeviceConfigurations" -and $Oma -and $Reasons.Contains("encrypted-oma") -and (Test-TvEncryptedOmaSetting $Value) -and $uri -is [string]) {
+                [void]$identities.Add("oma:${uri}")
+            }
+            if ($identity -and $Reasons.Contains("typed-secret") -and ((Test-TvSettingSecret $Value) -or $Markers -ccontains "$Path/value" -or $Markers -ccontains "$Path/valueState")) {
+                [void]$identities.Add($identity)
+            }
+            foreach ($key in @(Get-TvKeys $Value)) {
+                $pointer = "$Path/$($key.Replace('~', '~0').Replace('/', '~1'))"
+                Find-TvOmittedIdentity $Value[$key] $pointer $identity $key (-not $Path -and $key -ceq "omaSettings") $Markers
+            }
+        }
+    }
+    foreach ($snapshot in @($Older, $Newer)) {
+        $markers = @($snapshot._tenuvaultOmitted.fields | Where-Object { $_.reason -ceq "typed-secret" } | ForEach-Object { $_.path })
+        Find-TvOmittedIdentity $snapshot "" "" "" $false $markers
+    }
+    return , $identities
+}
+
+function Protect-TvSnapshotFields {
+    param($Folder, $Snapshot, [bool]$Scripts, $Reasons = $null, $Identities = $null)
+    $rules = $script:SecretRules
+    $fields = [System.Collections.Generic.List[object]]::new()
+    $subtype = [string](Get-TvProp $Snapshot "@odata.type")
+    $credentials = @($rules.credentials | Where-Object { $_.folder -ceq $Folder -and $subtype -match $_.subtype } | ForEach-Object { $_.field })
+    $scriptFields = if ($Scripts) { Get-TvProp $rules.scripts $Folder } else { @() }
+    function Visit-TvSnapshotField ($Value, [string]$Path, [bool]$Oma, [string]$Parent, [string]$Member) {
+        if ($Value -is [System.Collections.IList]) {
+            $array = [System.Collections.Generic.List[object]]::new()
+            for ($i = 0; $i -lt $Value.Count; $i++) { $array.Add((Visit-TvSnapshotField $Value[$i] "$Path/$i" $Oma $Parent $Member)) }
+            return , $array.ToArray()
+        }
+        if ($Value -isnot [System.Collections.IDictionary]) { return , $Value }
+        $identity = Get-TvSettingIdentity $Value $Parent $Member
+        $encrypted = $Folder -ceq "DeviceConfigurations" -and $Oma -and ((Test-TvEncryptedOmaSetting $Value) -or ($Identities -and $Identities.Contains("oma:$(Get-TvProp $Value 'omaUri')")))
+        $secret = (Test-TvSettingSecret $Value) -or ($Identities -and $Identities.Contains($identity))
+        $copy = [ordered]@{}
+        $normalizeSecretType = $secret -and $null -ne $Reasons -and $Reasons.Contains("typed-secret")
+        if ($normalizeSecretType) { $copy["@odata.type"] = "#microsoft.graph.$($rules.typedSecretSuffix)" }
+        $keys = [string[]]@(Get-TvKeys $Value)
+        [Array]::Sort($keys, [StringComparer]::Ordinal)
+        foreach ($key in $keys) {
+            if ($normalizeSecretType -and $key -ceq "@odata.type") { continue }
+            if ((-not $Path -and $key -ceq "_tenuvaultOmitted") -or ($encrypted -and ($key -ceq "_tenuvaultOmaMasked" -or ($key -ceq "isEncrypted" -and $null -ne $Reasons -and $Reasons.Contains("encrypted-oma"))))) { continue }
+            $property = $Value[$key]
+            $pointer = "$Path/$($key.Replace('~', '~0').Replace('/', '~1'))"
+            $reason = $null
+            if ($encrypted -and $key -cin @("value", "secretReferenceValueId")) { $reason = "encrypted-oma" }
+            elseif ($secret -and $key -cin @("value", "valueState")) { $reason = "typed-secret" }
+            elseif (($null -ne $property -or $null -ne $Reasons) -and $credentials -ccontains $key) { $reason = "credential" }
+            elseif (-not $Path -and ($null -ne $property -or $null -ne $Reasons)) {
+                if ($Folder -ceq $rules.androidFolder -and $rules.androidFields -ccontains $key) { $reason = "enrollment-credential" }
+                elseif ($scriptFields -ccontains $key) { $reason = "script" }
+            }
+            if ($reason -and ($null -eq $Reasons -or $Reasons.Contains($reason))) {
+                $fields.Add([ordered]@{ path = $pointer; reason = $reason })
+            } else {
+                $copy[$key] = Visit-TvSnapshotField $property $pointer (-not $Path -and $key -ceq "omaSettings") $identity $key
+            }
+        }
+        return , $copy
+    }
+    return @{ Snapshot = (Visit-TvSnapshotField $Snapshot "" $false "" ""); Fields = $fields.ToArray() }
+}
+
+function Get-TvRawHash {
+    param([byte[]]$Bytes)
+    return [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($Bytes)).ToLowerInvariant()
+}
+
+function Get-TvOmissionPolicy {
+    param([hashtable]$Context)
+    $tenant = $Context.TenantId.ToLowerInvariant()
+    $path = ".tenuvault-control/$tenant/secret-omission.json"
+    $bindingName = "TenuVaultOmissionAccount-$($tenant.Substring(0, 8))"
+    $binding = $null
+    $bindingVerified = $true
+    if (Get-Command Get-AutomationVariable -ErrorAction SilentlyContinue) {
+        try {
+            $binding = Get-AutomationVariable -Name $bindingName -ErrorAction Stop
+        } catch {
+            $bindingVerified = $_.CategoryInfo.Category -eq [System.Management.Automation.ErrorCategory]::ObjectNotFound
+        }
+    } else {
+        $binding = $env:TENUVAULT_OMISSION_ACCOUNT
+    }
+    $bindingVerified = $bindingVerified -and ($null -eq $binding -or ($binding -is [string] -and
+        ($binding -ceq "" -or $binding -cmatch "^[a-z0-9]{3,24}(,[a-z0-9]{3,24})*$")))
+    $enrolled = @(([string]$binding).Split(",") | Where-Object { $_ -cmatch "^[a-z0-9]{3,24}$" })
+    $bound = $enrolled -ccontains $Context.StorageAccount
+    try { $policy = Read-TvPlainJson $Context $path }
+    catch [TvHttpError] {
+        if (-not $bound -and $_.Exception.Status -eq 404 -and $_.Exception.ServiceCode -cin @("BlobNotFound", "ContainerNotFound")) {
+            if (-not $bindingVerified) {
+                throw "The tenant's backup omission policy could not be verified because the Automation enrollment variable could not be read. Retry the backup or rerun cloud backup setup."
+            }
+            if ($enrolled.Count -gt 0) {
+                throw "Cloud backup stopped because omission was enrolled on another storage account and '$($Context.StorageAccount)' has no omission policy. Enable omission on the new account or explicitly set it off before retrying."
+            }
+            return [ordered]@{ version = 1; tenantId = $tenant; enabled = $false; scripts = $false; generation = "default" }
+        }
+        throw "The tenant's backup omission policy could not be verified (storage HTTP $($_.Exception.Status)). Check that the storage identity can read it and try again."
+    }
+    catch { throw "The tenant's backup omission policy could not be verified. Check that it is valid and that storage is reachable, then try again." }
+    if (-not (Test-TvJsNumber $policy.version) -or $policy.version -ne 1 -or $policy.tenantId -isnot [string] -or $policy.tenantId -cne $tenant -or
+        $policy.enabled -isnot [bool] -or $policy.scripts -isnot [bool] -or
+        $policy.generation -isnot [string] -or ($policy.generation -cnotmatch '^[a-f0-9-]{36}$' -and
+        ($policy.generation -cne "default" -or $policy.enabled -or $bound -or -not $bindingVerified)) -or
+        (-not $policy.enabled -and $policy.scripts)) {
+        throw "The tenant's backup omission policy could not be verified. Check its storage and try again."
+    }
+    if ($policy.enabled -and -not $bound -and (Get-Command Set-AutomationVariable -ErrorAction SilentlyContinue)) {
+        if (-not $bindingVerified) { throw "Could not verify omission enrollment. Retry the backup before updating the Automation enrollment variable." }
+        try { Set-AutomationVariable -Name $bindingName -Value (($enrolled + $Context.StorageAccount) -join ",") -ErrorAction Stop | Out-Null }
+        catch { throw "Could not record omission enrollment. Rerun the cloud backup setup to provision its Automation variable before running this backup." }
+    }
+    return , $policy
+}
+
+function Add-TvOmissionMetadata {
+    param($Metadata, $Policy, $SkippedTypes, $OmittedTypes)
+    if ($Policy.enabled) {
+        $Metadata.OmissionVersion = $script:SecretRules.version
+        $Metadata.OmissionScripts = $Policy.scripts
+        $Metadata.ActualSkippedTypes = @($SkippedTypes)
+        $Metadata.SkippedTypes = @(@($SkippedTypes) + @($OmittedTypes) | Select-Object -Unique)
+    }
+    $Metadata.OmissionEnabled = $Policy.enabled
+    $Metadata.OmissionPolicyGeneration = $Policy.generation
+}
+
+function Expand-TvNestedCollections {
+    param($Value, [string]$Token, [System.Collections.Generic.HashSet[string]]$Seen)
+    if ($Value -is [System.Collections.IList]) {
+        foreach ($entry in $Value) { Expand-TvNestedCollections $entry $Token $Seen }
+        return
+    }
+    if ($Value -isnot [System.Collections.IDictionary]) { return }
+    foreach ($key in @(Get-TvKeys $Value)) {
+        $link = Get-TvProp $Value $key
+        if (-not $key.EndsWith("@odata.nextLink") -or $link -isnot [string]) { continue }
+        $property = $key.Substring(0, $key.Length - "@odata.nextLink".Length)
+        $existing = Get-TvProp $Value $property
+        if ($existing -isnot [System.Collections.IList] -or $Seen.Count -ge 1000 -or -not $Seen.Add($link)) { throw "Invalid expanded Graph collection." }
+        Set-TvProp $Value $property @(@($existing) + @(Invoke-TvGraphList $link $Token))
+        Remove-TvProp $Value $key
+    }
+    foreach ($key in @(Get-TvKeys $Value)) { Expand-TvNestedCollections $Value[$key] $Token $Seen }
 }
 
 function Read-TvObject {
@@ -1248,15 +1478,25 @@ function Read-TvObject {
         }
         Set-TvProp $detail $extra.Property @($entries)
     }
-    if ($Type.HasSecrets) {
-        foreach ($setting in Get-TvEncryptedOmaSettings $detail) {
-            $reference = ([string](Get-TvProp $setting "secretReferenceValueId")).Replace("'", "''")
+    if ($Outcome.OmitEncryptedOma) { Expand-TvNestedCollections $detail $Token ([System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)) }
+    if ($Type.HasSecrets -and -not $Outcome.OmitEncryptedOma) {
+        $settings = @(Get-TvProp $detail "omaSettings")
+        for ($index = 0; $index -lt $settings.Count; $index++) {
+            $setting = $settings[$index]
+            $ref = Get-TvProp $setting "secretReferenceValueId"
+            if ((Get-TvProp $setting "isEncrypted") -ne $true -or $ref -isnot [string]) { continue }
+            $reference = $ref.Replace("'", "''")
             $secretPath = "deviceManagement/deviceConfigurations/$encodedId/getOmaSettingPlainTextValue(secretReferenceValueId='$([uri]::EscapeDataString($reference))')"
             try {
                 $plain = Invoke-TvGraphGet $secretPath $Token
                 $value = Get-TvProp $plain "value"
                 if ($value -isnot [string]) { throw "Microsoft Graph did not return an encrypted setting's value" }
                 Set-TvProp $setting "value" $value
+                $subtype = [string](Get-TvProp $setting "@odata.type")
+                if ($value -ceq "****" -or ($subtype -match "omaSettingStringXml$" -and $value -ceq "PGEvPg==") -or
+                    ($subtype -match "omaSettingBase64$" -and $value -ceq "KioqKg==")) {
+                    $Outcome.HydratedOmaMasks = @($Outcome.HydratedOmaMasks | Where-Object { $null -ne $_ }) + $index
+                }
             } catch [TvHttpError] {
                 if ($_.Exception.Status -ne 403) { throw }
                 # Microsoft refused the plain-text read: keep the masked value, like the Backup Reader.
@@ -1536,7 +1776,7 @@ function Get-TvReportSafe {
 # Comparison (mirror compareObjects, documentItem and redactedChanges in /api/detect-drifts)
 # ---------------------------------------------------------------------------
 
-$script:CompareSkipped = [System.Collections.Generic.HashSet[string]]::new([string[]]@('@odata.context', 'lastModifiedDateTime', 'createdDateTime', 'modifiedDateTime', 'id', 'version', 'description', 'settings@odata.context', 'secretReferenceValueId'))
+$script:CompareSkipped = [System.Collections.Generic.HashSet[string]]::new([string[]]@('@odata.context', 'lastModifiedDateTime', 'createdDateTime', 'modifiedDateTime', 'id', 'version', 'description', 'settings@odata.context', 'secretReferenceValueId', '_tenuvaultOmaMasked'))
 
 # skippedKey: fields the comparison leaves out, annotations included.
 function Test-TvSkippedKey {
@@ -1705,6 +1945,10 @@ function Get-TvEmptyLike {
 # Every setting of an added or deleted item, as changes from or to "not set".
 function Get-TvDocumentedRows {
     param([AllowNull()][object]$Content, [ValidateSet("added", "deleted")][string]$Change)
+    if ($null -ne (Get-TvProp $Content "_tenuvaultOmitted")) {
+        $Content = Copy-TvDeep $Content
+        Remove-TvProp $Content "_tenuvaultOmitted"
+    }
     $redacted = Get-TvReportSafe $Content
     $empty = Get-TvEmptyLike $redacted
     $rows = [System.Collections.Generic.List[object]]::new()
@@ -2111,13 +2355,21 @@ $script:ConditionalAccessLabels = @("Conditional Access policies", "Named locati
 function Get-TvCoveredFolders {
     param([AllowNull()][object]$Metadata, [Parameter(Mandatory)][string[]]$Known)
     $scope = Get-TvProp $Metadata "Scope"
-    $recorded = Get-TvProp $scope "Included"
+    $recorded = Get-TvMember $scope "Included"
     $attempted = if (Test-TvJsArray $recorded) { @($recorded | Where-Object { $_ -is [string] }) } else { $script:LegacyFolders }
     $missing = @()
-    foreach ($field in @("Excluded", "SkippedTypes", "FailedTypes", "AppOnlyExcludedTypes")) {
+    foreach ($field in @("Excluded", "FailedTypes", "AppOnlyExcludedTypes")) {
         $source = if ($field -eq "Excluded") { Get-TvProp $scope "Excluded" } else { Get-TvProp $Metadata $field }
-        if (Test-TvJsArray $source) { $missing += @($source | Where-Object { $_ -is [string] }) }
+        $missing += @($source | Where-Object { $_ -is [string] })
     }
+    $skips = @(Get-TvProp $Metadata "SkippedTypes")
+    $actual = Get-TvMember $Metadata "ActualSkippedTypes"
+    $inventory = Get-TvProp $Metadata "Items"
+    if ((Get-TvProp $Metadata "OmissionVersion") -eq $script:SecretRules.version -and (Test-TvJsArray $actual) -and $inventory -is [System.Collections.IDictionary]) {
+        $projected = @($inventory.Keys | Where-Object { $null -ne (Get-TvProp $inventory[$_] "omitted") } | ForEach-Object { ($_ -split "/")[0] })
+        $skips = @($skips | Where-Object { $projected -cnotcontains $_ }) + @($actual)
+    }
+    $missing += @($skips | Where-Object { $_ -is [string] })
     return , @($Known | Where-Object { $attempted -ccontains $_ -and $missing -cnotcontains $_ })
 }
 
@@ -2151,6 +2403,46 @@ function Get-TvChangeSeverity {
 
 # The changed items between two backups as drift entries. $ReadItem returns an item's parsed
 # content for (backup name, "<folder>/<file>") or throws; $Types is the runbook type table.
+# A paged collection in either snapshot leaves that collection unavailable in both views.
+function Remove-TvPartialCollections {
+    param($Older, $Newer, [switch]$KeepCollections)
+    $partial = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    function Get-TvPartialPath ([string]$Path, [string]$Key) {
+        return "$Path/$($Key.Replace('~', '~0').Replace('/', '~1'))"
+    }
+    function Find-TvPartialCollection ($Value, [string]$Path) {
+        if ($Value -is [System.Collections.IList]) {
+            foreach ($item in $Value) { Find-TvPartialCollection $item "$Path/[]" }
+        } elseif ($Value -is [System.Collections.IDictionary]) {
+            foreach ($key in @(Get-TvKeys $Value)) {
+                $entry = $Value[$key]
+                if ($key.EndsWith("@odata.nextLink") -and $entry -is [string]) {
+                    $property = $key.Substring(0, $key.Length - "@odata.nextLink".Length)
+                    [void]$partial.Add((Get-TvPartialPath $Path $property))
+                } else { Find-TvPartialCollection $entry (Get-TvPartialPath $Path $key) }
+            }
+        }
+    }
+    function Clear-TvPartialCollection ($Value, [string]$Path) {
+        if ($Value -is [System.Collections.IList]) {
+            foreach ($item in $Value) { Clear-TvPartialCollection $item "$Path/[]" }
+        } elseif ($Value -is [System.Collections.IDictionary]) {
+            foreach ($key in @(Get-TvKeys $Value)) {
+                $next = Get-TvPartialPath $Path $key
+                if ($key.EndsWith("@odata.nextLink") -or $partial.Contains($next)) { Remove-TvProp $Value $key }
+                else { Clear-TvPartialCollection $Value[$key] $next }
+            }
+        }
+    }
+    Find-TvPartialCollection $Older ""
+    Find-TvPartialCollection $Newer ""
+    if ($partial.Count -and -not $KeepCollections) {
+        Clear-TvPartialCollection $Older ""
+        Clear-TvPartialCollection $Newer ""
+    }
+    return @($partial | Sort-Object)
+}
+
 function Get-TvBackupDrifts {
     param(
         [Parameter(Mandatory)][hashtable]$Older,
@@ -2161,13 +2453,21 @@ function Get-TvBackupDrifts {
     $known = [string[]]@($Types | ForEach-Object { $_.Folder })
     $byFolder = @{}
     foreach ($type in $Types) { $byFolder[$type.Folder] = $type }
+    $omission = (Get-TvProp $Older.Metadata "OmissionVersion") -eq $script:SecretRules.version -or
+        (Get-TvProp $Newer.Metadata "OmissionVersion") -eq $script:SecretRules.version
+    $omitScripts = (Get-TvProp $Older.Metadata "OmissionScripts") -eq $true -or (Get-TvProp $Newer.Metadata "OmissionScripts") -eq $true
     $before = Get-TvProp $Older.Metadata "Items"
     $after = Get-TvProp $Newer.Metadata "Items"
     $olderCovered = Get-TvCoveredFolders $Older.Metadata $known
     $shared = @((Get-TvCoveredFolders $Newer.Metadata $known) | Where-Object { $olderCovered -ccontains $_ })
     $drifts = [System.Collections.Generic.List[object]]::new()
     $warnings = [System.Collections.Generic.List[string]]::new()
+    $excludedPaths = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     $tasks = [System.Collections.Generic.List[object]]::new()
+    if (@((Get-TvKeys $before) | Where-Object { $null -ne (Get-TvProp $before[$_] "omitted") }).Count -or
+        @((Get-TvKeys $after) | Where-Object { $null -ne (Get-TvProp $after[$_] "omitted") }).Count) {
+        $warnings.Add("Some values could not be compared because they were left out of a backup.")
+    }
     foreach ($key in (Get-TvKeys $after)) {
         $folder = $key.Substring(0, $key.IndexOf("/"))
         if ($shared -cnotcontains $folder) { continue }
@@ -2175,6 +2475,12 @@ function Get-TvBackupDrifts {
         $previous = Get-TvProp $before $key
         if ($null -eq $previous) { $tasks.Add(@{ Change = "added"; Folder = $folder; Newer = $item }) }
         elseif (-not (Test-TvSameItem $previous $item)) { $tasks.Add(@{ Change = "modified"; Folder = $folder; Newer = $item; Older = $previous }) }
+        elseif ($omission -or $null -ne (Get-TvProp $previous "omitted") -or $null -ne (Get-TvProp $item "omitted")) {
+            foreach ($path in @(@(Get-TvProp $previous "partialCollections") + @(Get-TvProp $item "partialCollections") | Where-Object { $_ } | Select-Object -Unique)) {
+                [void]$excludedPaths.Add($path)
+                $warnings.Add("Could not compare $path in ${key}: an earlier backup contains only part of the collection.")
+            }
+        }
     }
     foreach ($key in (Get-TvKeys $before)) {
         $folder = $key.Substring(0, $key.IndexOf("/"))
@@ -2186,7 +2492,17 @@ function Get-TvBackupDrifts {
         $read = {
             param($backup, $record)
             $file = "$($task.Folder)/$(Get-TvProp $record 'file')"
-            try { return , (& $ReadItem $backup.Name $file) }
+            try {
+                $fields = Get-TvProp $record "omitted"
+                if ($null -ne $fields) { $file = ".omitted/$file" }
+                $value = & $ReadItem $backup.Name $file (Get-TvProp $record "rawHash")
+                if ($null -ne $fields) {
+                    $marker = Get-TvProp $value "_tenuvaultOmitted"
+                    if ((Get-TvProp $marker "version") -ne $script:SecretRules.version -or
+                        (ConvertTo-TvCanonicalJson (Get-TvProp $marker "fields")) -cne (ConvertTo-TvCanonicalJson $fields)) { throw "The projected backup file has invalid omission metadata." }
+                }
+                return , $value
+            }
             catch { $warnings.Add("$file ($($backup.Name)): $(Get-TvSafeError $_.Exception.Message)"); return $null }
         }
         $nameOf = {
@@ -2199,6 +2515,7 @@ function Get-TvBackupDrifts {
         $entry = $null
         if ($task.Change -eq "added") {
             $content = & $read $Newer $task.Newer
+            if ($omission -and $null -ne $content) { $content = (Protect-TvSnapshotFields $task.Folder $content $omitScripts).Snapshot }
             $name = & $nameOf $content $task.Newer
             $rows = if ($null -ne $content) { Get-TvDocumentedRows $content "added" } else { $null }
             $entry = [ordered]@{ changeType = "added"; type = $policyType; configName = $name; configId = [string](Get-TvProp $content "id"); severity = Get-TvChangeSeverity $policyType "added" $null; changes = $rows; fromBackup = $Older.Name }
@@ -2206,6 +2523,7 @@ function Get-TvBackupDrifts {
             if (@($restored).Count) { $entry.likelyRestoredCopy = $true }
         } elseif ($task.Change -eq "deleted") {
             $content = & $read $Older $task.Older
+            if ($omission -and $null -ne $content) { $content = (Protect-TvSnapshotFields $task.Folder $content $omitScripts).Snapshot }
             $name = & $nameOf $content $task.Older
             $rows = if ($null -ne $content) { Get-TvDocumentedRows $content "deleted" } else { $null }
             $entry = [ordered]@{ changeType = "deleted"; type = $policyType; configName = $name; configId = [string](Get-TvProp $content "id"); severity = Get-TvChangeSeverity $policyType "deleted" $null; changes = $rows; fromBackup = $Older.Name }
@@ -2219,6 +2537,31 @@ function Get-TvBackupDrifts {
                 $oldContent = Copy-TvDeep $oldContent; $newContent = Copy-TvDeep $newContent
                 $oldContent.Remove("assignments"); if ($newContent -is [System.Collections.IDictionary]) { $newContent.Remove("assignments") }
             }
+            $reasons = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+            if ($omission) {
+                foreach ($reason in @("encrypted-oma", "typed-secret", "enrollment-credential", "credential")) { [void]$reasons.Add($reason) }
+                if ($omitScripts) { [void]$reasons.Add("script") }
+            }
+            foreach ($record in @($task.Older, $task.Newer)) {
+                foreach ($field in @(Get-TvProp $record "omitted")) {
+                    if ($field) { [void]$reasons.Add([string](Get-TvProp $field "reason")) }
+                }
+            }
+            $projectedComparison = $reasons.Count -gt 0
+            if ($projectedComparison -and ((Get-TvProp $task.Older "secretsMasked") -eq $true -or (Get-TvProp $task.Newer "secretsMasked") -eq $true)) {
+                [void]$reasons.Add("encrypted-oma")
+            }
+            if ($reasons.Count) {
+                $identities = Get-TvOmittedIdentities $task.Folder $oldContent $newContent $reasons
+                $oldContent = (Protect-TvSnapshotFields $task.Folder $oldContent $reasons.Contains("script") $reasons $identities).Snapshot
+                $newContent = (Protect-TvSnapshotFields $task.Folder $newContent $reasons.Contains("script") $reasons $identities).Snapshot
+            }
+            if ($projectedComparison) {
+                foreach ($path in @(Remove-TvPartialCollections $oldContent $newContent)) {
+                    [void]$excludedPaths.Add($path)
+                    $warnings.Add("Could not compare $path in $($task.Folder)/$(Get-TvProp $task.Older 'file'): an earlier backup contains only part of the collection.")
+                }
+            }
             $rows = Get-TvRedactedChangeRows $oldContent $newContent
             if ($rows.Count -eq 0) { continue }
             $name = & $nameOf $newContent $task.Older
@@ -2229,7 +2572,7 @@ function Get-TvBackupDrifts {
         }
         $drifts.Add($entry)
     }
-    return @{ Drifts = $drifts; Warnings = $warnings }
+    return @{ Drifts = $drifts; Warnings = $warnings; ExcludedPaths = @($excludedPaths | Sort-Object) }
 }
 
 # ---------------------------------------------------------------------------
@@ -2833,7 +3176,7 @@ $script:MaxBlobBytes = 33554432
 # buffered or parsed. A sealed blob throws TvSealedBlobError, a larger one TvOversizedError, a
 # missing one TvHttpError 404, and anything that is not a JSON object a plain error.
 function Read-TvPlainJson {
-    param([Parameter(Mandatory)][hashtable]$Context, [Parameter(Mandatory)][string]$BlobName)
+    param([Parameter(Mandatory)][hashtable]$Context, [Parameter(Mandatory)][string]$BlobName, [string]$RawHash)
     $target = Get-TvBlobTarget $Context.StorageAccount $BlobName
     $file = ($BlobName -split "/")[-1]
     $tooLarge = "$file is larger than the 32 MiB TenuVault reads."
@@ -2842,6 +3185,7 @@ function Read-TvPlainJson {
     catch [TvOversizedError] { throw [TvOversizedError]::new($tooLarge) }
     catch [TvReadTimeoutError] { throw [TvReadTimeoutError]::new("$file did not arrive within $($script:BodyReadSeconds) seconds.") }
     if ($result.Bytes.Length -gt $script:MaxBlobBytes) { throw [TvOversizedError]::new($tooLarge) }
+    if ($RawHash -and (Get-TvRawHash $result.Bytes) -cne $RawHash) { throw "The projected backup file does not match its recorded fingerprint." }
     if (Test-TvSealedBlob $result.Bytes) { throw [TvSealedBlobError]::new("The backup file is sealed with a key from before plain Azure backups, which TenuVault in Azure does not have.") }
     try { $value = ConvertFrom-TvJson ([Text.Encoding]::UTF8.GetString($result.Bytes)) } catch { throw "The backup file is not valid JSON." }
     if ($value -isnot [System.Collections.IDictionary]) { throw "The backup file is not a JSON object." }
@@ -3028,7 +3372,7 @@ function Invoke-TvChangeReport {
         if ($previous.Sealed) { Write-Output "Skipped $($previous.Sealed) newer backup(s) sealed before plain Azure backups: TenuVault in Azure cannot open them. Comparing with $($previous.Name)." }
         $older = @{ Name = $previous.Name; Metadata = $previous.Metadata }
         $newer = @{ Name = $BackupFolder; Metadata = $Metadata }
-        $readItem = { param($backup, $file) Read-TvPlainJson $Context "$backup/$file" }
+        $readItem = { param($backup, $file, $rawHash) Read-TvPlainJson $Context "$backup/$file" $rawHash }
         $compared = Get-TvBackupDrifts -Older $older -Newer $newer -Types $Types -ReadItem $readItem
         $rows = [System.Collections.Generic.List[object]]::new()
         foreach ($entry in $compared.Drifts) { foreach ($row in @($entry.changes | Where-Object { $null -ne $_ })) { $rows.Add($row) } }
@@ -3086,6 +3430,7 @@ function Resume-TvChangeReport {
         if ((Get-TvChangeReportLevel) -eq "off") { return }
         if (-not $Metadata) { $Metadata = Get-TvRunManifest $Context $Folder $RunId }
         if ($Metadata.Status -ne "Success") { return }
+        $safeBackupErrors = $Metadata.OmissionEnabled -eq $true
         $types = @(Get-TvTypes | Where-Object { $Metadata.Scope.Included -contains $_.Folder })
         $graphToken = Get-TvManagedIdentityToken "https://graph.microsoft.com/"
         Invoke-TvChangeReport -Context $Context -BackupFolder $Folder -Metadata $Metadata -Types $types -GraphToken $graphToken -RunId $RunId -RunTrigger $Trigger
@@ -3323,6 +3668,18 @@ function Invoke-TvBackup {
         }
     }
     Write-Output "Backing up tenant $tenantId to storage account $storageAccount (runbook $script:RunbookVersion, run $runId)."
+    $safeBackupErrors = $true
+    try {
+        $policy = Get-TvOmissionPolicy $context
+    } catch {
+        # Get-TvOmissionPolicy reports only local guidance and storage status codes.
+        $message = $_.Exception.Message
+        Write-TvTerminalAudit $context $runId "Failed" "" 0 1 $runTrigger "OMISSION_POLICY_UNVERIFIED"
+        Set-TvCloudStatus $context "Failed" $message $null
+        Send-TvBackupOutcome -Account $storageAccount -Token $storageToken -TenantId $tenantId -RunId $runId -Status "Failed" -BackupFolder $null -TotalPolicies $null -Trigger $runTrigger -FinishedAt $context.TerminalTimestamp
+        throw $message
+    }
+    $safeBackupErrors = $policy.enabled
     try {
         $graphToken = Get-TvManagedIdentityToken "https://graph.microsoft.com/"
 
@@ -3401,6 +3758,7 @@ function Invoke-TvBackup {
         }
         throw
     }
+
     } catch {
         Write-TvTerminalAudit $context $runId "Failed" "" 0 ([Math]::Max(1, $failures)) $runTrigger $startFailure
         $startMessage = if ($startFailure -eq "GRAPH_LIST_FAILED") { "Microsoft Graph policy listing did not finish." } else { "The backup folder could not be claimed." }
@@ -3411,6 +3769,7 @@ function Invoke-TvBackup {
 
     $items = [ordered]@{}
     $maskedItems = [System.Collections.Generic.List[object]]::new()
+    $omittedTypes = [System.Collections.Generic.HashSet[string]]::new()
     try {
         foreach ($type in $types) {
             $list = $lists[$type.Folder]
@@ -3421,27 +3780,47 @@ function Invoke-TvBackup {
                 $displayName = Get-TvItemName $type $item
                 $fileName = Get-TvUniqueName (Get-TvSafeFileName $displayName) $id $used
                 try {
-                    $outcome = @{ Masked = $false }
+                    $outcome = @{ Masked = $false; HydratedOmaMasks = @(); OmitEncryptedOma = $policy.enabled }
                     # A list-only type's list entry already holds everything its snapshot keeps.
                     $detail = if ($type.ListOnly) { Get-TvListSnapshot $type $item } else { Read-TvObject $type $id $graphToken $outcome }
-                    $body = $detail | ConvertTo-Json -Depth 100
-                    Set-TvBlob $storageAccount "$backupFolder/$($type.Folder)/$fileName.json" $body $storageToken
+                    $projection = if ($policy.enabled) { Protect-TvSnapshotFields $type.Folder $detail $policy.scripts }
+                    $relative = "$($type.Folder)/$fileName.json"
+                    $omitted = $projection -and $projection.Fields.Count -gt 0
+                    if ($omitted) { $detail = $projection.Snapshot }
                     $record = [ordered]@{ file = "$fileName.json"; hash = Get-TvSnapshotHash $detail }
-                    if ($type.AssignmentsFormerlyExpanded) {
+                    if ($omitted) {
+                        $relative = ".omitted/$relative"
+                        $record.omitted = $projection.Fields
+                        Set-TvProp $detail "_tenuvaultOmitted" ([ordered]@{ version = $script:SecretRules.version; fields = $projection.Fields })
+                    }
+                    $body = $detail | ConvertTo-Json -Depth 100
+                    if ($policy.enabled) {
+                        $partialCollections = @(Remove-TvPartialCollections $detail $null -KeepCollections)
+                        if ($partialCollections.Count) { $record.partialCollections = $partialCollections }
+                    }
+                    if ($outcome.HydratedOmaMasks.Count) { $record.hydratedOmaMasks = $outcome.HydratedOmaMasks }
+                    if ($omitted) { $record.rawHash = Get-TvRawHash ([Text.Encoding]::UTF8.GetBytes($body)) }
+                    if ($type.AssignmentsFormerlyExpanded -and -not $omitted) {
                         $without = Copy-TvDeep $detail
                         Set-TvProp $without "assignments" @()
                         $record.hashWithEmptyAssignments = Get-TvSnapshotHash $without
                     }
-                    $maskedView = Get-TvMaskedView $detail
+                    $maskedView = if (-not $omitted) { Get-TvMaskedView $detail }
                     if ($maskedView) { $record.hashWithMaskedSecrets = Get-TvSnapshotHash $maskedView }
-                    if ($outcome.Masked) {
+                    $masked = if ($outcome.Masked) {
                         $record.secretsMasked = $true
-                        $maskedItems.Add([ordered]@{ Folder = [string]$type.Folder; Id = $id; Name = $displayName })
+                        [ordered]@{ Folder = [string]$type.Folder; Id = $id; Name = $displayName }
                     }
+                    Set-TvBlob $storageAccount "$backupFolder/$relative" $body $storageToken
+                    if ($omitted) { [void]$omittedTypes.Add([string]$type.Folder) }
+                    if ($masked) { $maskedItems.Add($masked) }
                     $items["$($type.Folder)/$id"] = $record
                     $counts[$type.Folder]++
                 } catch [TvHttpError] {
-                    if ($_.Exception.Status -eq 401) { throw }
+                    if ($_.Exception.Status -eq 401) {
+                        if ($policy.enabled) { throw "A backup service refused authentication (HTTP 401)." }
+                        throw
+                    }
                     if ($_.Exception.Status -in @(401, 403)) {
                         if (++$consecutiveAuth -ge 5) { throw "Backup stopped: Microsoft Graph refused five reads in a row. Earlier policies in this run were saved; the backup is incomplete." }
                     } else { $consecutiveAuth = 0 }
@@ -3475,6 +3854,7 @@ function Invoke-TvBackup {
             BackupDate     = ConvertTo-TvFolderTimestamp $started
             BackupFolder   = $backupFolder
             StartTime      = ConvertTo-TvDisplayTime $started
+            StartedAt      = $started.ToString("o")
             EndTime        = ConvertTo-TvDisplayTime $ended
             CompletedAt    = $ended.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", [Globalization.CultureInfo]::InvariantCulture)
             Duration       = if ($seconds -lt 60) { "${seconds}s" } else { "{0}m {1}s" -f [Math]::Floor($seconds / 60), ($seconds % 60) }
@@ -3496,8 +3876,10 @@ function Invoke-TvBackup {
         if ($notReadable.Count) { $metadata.AppOnlyExcludedTypes = $notReadable }
         if ($maskedItems.Count) { $metadata.MaskedSecretItems = @($maskedItems) }
         $metadata.Items = $sortedItems
+        Add-TvOmissionMetadata $metadata $policy $skippedTypes $omittedTypes
         $metadata = Save-TvBackupManifest $context $backupFolder $runId $metadata
         $status = [string]$metadata.Status
+        if ($omittedTypes.Count) { Write-Output "Left out values in $($omittedTypes.Count) policy type(s). Affected copies cannot be restored." }
         Write-Output "Backup completed: $totalPolicies policies in $($metadata.Duration) ($status). Older backups were kept: the cloud identity cannot delete. The next desktop backup made with an admin's sign-in applies retention."
         Complete-TvCloudBackup $context $runId $metadata $runTrigger
         # Only a complete backup is compared, like the desktop app's report after a scheduled backup:
@@ -3531,7 +3913,7 @@ function Invoke-TvBackup {
             foreach ($key in @($items.Keys | Sort-Object)) { $sortedItems[$key] = $items[$key] }
             $failed = [ordered]@{
                 BackupDate = ConvertTo-TvFolderTimestamp $started; BackupFolder = $backupFolder
-                StartTime = ConvertTo-TvDisplayTime $started; EndTime = ConvertTo-TvDisplayTime $ended
+                StartTime = ConvertTo-TvDisplayTime $started; StartedAt = $started.ToString("o"); EndTime = ConvertTo-TvDisplayTime $ended
                 CompletedAt = $ended.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", [Globalization.CultureInfo]::InvariantCulture)
                 Duration = if ($seconds -lt 60) { "${seconds}s" } else { "{0}m {1}s" -f [Math]::Floor($seconds / 60), ($seconds % 60) }
                 DurationSeconds = $seconds; ItemCounts = $itemCounts; Status = "Failed"
@@ -3543,6 +3925,7 @@ function Invoke-TvBackup {
             }
             if ($notReadable.Count) { $failed.AppOnlyExcludedTypes = $notReadable }
             if ($maskedItems.Count) { $failed.MaskedSecretItems = @($maskedItems) }
+            Add-TvOmissionMetadata $failed $policy $skippedTypes $omittedTypes
             Set-TvBlob $storageAccount "$backupFolder/metadata.json" ($failed | ConvertTo-Json -Depth 100) $storageToken -CreateOnly
         } catch { Write-Output "Could not record this backup as Failed: $(Get-TvSafeError $_.Exception.Message). It is listed as incomplete." }
         if (-not $context.AuditTerminalRecorded) {

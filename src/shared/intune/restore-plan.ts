@@ -1,4 +1,5 @@
 import { cleanAssignment, COMMON_READ_ONLY, itemName, type IntuneType, type Item, type Json, type Step } from "./registry"
+import { hasOmissions, OMISSION_BLOCKER } from "./secret-omission"
 import { isGraphId } from "../security"
 
 /**
@@ -28,6 +29,7 @@ const SINGLETON = "This is a tenant-wide setting, not a policy. Restore replaces
 
 /** Why a snapshot cannot be recreated, or undefined when it can. */
 export function restoreBlocker(type: IntuneType, snapshot: Item): string | undefined {
+  if (hasOmissions(snapshot)) return OMISSION_BLOCKER
   if (type.restore === "metadata") return type.limitation ?? "This type is backed up for reference only."
   if (type.restore === "singleton") return SINGLETON
   return type.restorable?.(snapshot)
@@ -117,6 +119,7 @@ export function buildRestorePlan(type: IntuneType, snapshot: Item, options: Plan
  * Assignments are replaced as a whole when requested.
  */
 export function buildUpdatePlan(type: IntuneType, snapshot: Item, id: string, options: PlanOptions & { current?: Item } = {}): Step[] {
+  if (hasOmissions(snapshot)) throw new NotRestorableError(OMISSION_BLOCKER)
   if (type.restore === "metadata") throw new NotRestorableError(type.limitation ?? "This type is backed up for reference only.")
   if (options.includeAssignments && (type.assign === "post" || type.folder === "RoleDefinitions")) {
     throw new NotRestorableError(`Assignment replacement is not supported for ${type.label}. Turn off Restore assignments and reconcile assignments in Intune.`)

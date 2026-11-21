@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { applyChangeSet, approveChangeSet, createChangeSet, createRollbackChangeSet, previewChangeSet, rejectChangeSet } from "../src/main/features/change-sets/engine"
+import { applyChangeSet, approveChangeSet, createChangeSet, createRollbackChangeSet, getChangeSet, previewChangeSet, rejectChangeSet } from "../src/main/features/change-sets/engine"
 import type { ChangeSetRecord } from "../src/main/features/change-sets/model"
 import { DOMAINS } from "../src/main/features/domains"
 import { fakeDeps, TENANT_A, TENANT_B } from "./feature-helpers"
@@ -140,6 +140,32 @@ describe("change set audit entries", () => {
     })
     expect(context.audit[0]!.logEntry.details?.error?.code).toBe("CHANGE_SET_APPLY_FAILED")
     expect(context.audit[0]!.logEntry.details?.error?.message).toContain("nothing was written")
+  })
+
+  it("stores only the HTTP status when Graph echoes an operand during omission-aware capture", async () => {
+    const context = setup()
+    context.deps.omissionPolicy = async () => ({ enabled: true, scripts: false, generation: "on" })
+    const live = context.tenant.addPolicy({ name: "Firewall" })
+    const record = await createChangeSet(context.deps, TENANT_A, {
+      title: "Change firewall", origin: { workflow: "promotion", recordId: "promotion-1" },
+      operations: [{ folder: "ConfigurationPolicies", action: "update", targetId: String(live.id), proposed: { ...live, description: "Updated" } }],
+    }, "Admin")
+    const preview = await previewChangeSet(context.deps, TENANT_A, record.id)
+    await approveChangeSet(context.deps, TENANT_A, record.id, { contentHash: preview.contentHash, targetFingerprint: preview.targetFingerprint, reviewer: "Reviewer" }, "Admin")
+    const previous = context.deps.graph
+    const canary = "secret echoed by Graph in change-set capture"
+    context.deps.graph = async (...args) => {
+      const graph = await previous(...args)
+      return async (...call) => call[0] === "GET" && call[1].includes(String(live.id))
+        ? { status: 400, body: { error: { message: canary } } }
+        : graph(...call)
+    }
+    await expect(applyChangeSet(context.deps, TENANT_A, record.id, { contentHash: preview.contentHash, confirmed: true }, "Admin")).rejects.toThrow("HTTP 400")
+    const saved = getChangeSet(context.deps, TENANT_A, record.id)
+    expect(saved.lastError).toContain("HTTP 400")
+    expect(context.audit[0]?.logEntry.details?.error?.message).toContain("HTTP 400")
+    expect(JSON.stringify([saved, context.audit])).not.toContain(canary)
+    expect(context.tenant.writeCount()).toBe(0)
   })
 
   it("numbers retry attempts distinctly across backup failures and the later success", async () => {

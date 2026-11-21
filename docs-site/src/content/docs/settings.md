@@ -7,7 +7,7 @@ description: Every control on the Settings page, what it does and when to use it
 
 Choose a section in the list on the left to open it: **Sign-in**, **Services and permissions**, **Storage and recovery**, **Background runner**, **Notifications**, **PDF branding**, **Updates**, **Appearance** and **About**. One section shows at a time, starting with **Sign-in**. When no tenant on this computer is on Pro or MSP, **Notifications** and **PDF branding** carry a **Pro** badge in the list; both sections still open. **Notifications** links to the [Alerts](/notifications/) page in the sidebar, where alerts, channels, change watching and deliveries are set up. On a narrow window the list becomes a row above the section.
 
-Settings apply to this computer only. Other admins who use TenuVault have their own settings.
+Most settings apply to this computer. The backup omission policy is shared by producers that write to the same Azure storage account.
 
 ## Appearance
 
@@ -38,6 +38,8 @@ If no tenant is connected, the card shows **No tenants yet.** with a link to **S
 
 New backups go to the location you choose. Existing backups stay where they are and are only listed while that location is selected. Azure storage needs the Pro or MSP plan. For the options and errors, see [Choose where backups are stored](/getting-started/choose-storage/).
 
+If this installation has recorded secret omission enrollment for the current location, enable omission at the destination before switching to keep leaving out values. You can also confirm that new backups at the destination may contain secret values. TenuVault stops the enrolled move if it cannot verify the destination's omission setting. An installation that has never enrolled the current location can switch storage without an omission check.
+
 To add or remove tenants, use **Tenants**. See [Manage tenants](/tenants/).
 
 <figure class="docs-screenshot">
@@ -46,6 +48,22 @@ To add or remove tenants, use **Tenants**. See [Manage tenants](/tenants/).
   </a>
   <figcaption>Sign-in lists each tenant with Sign in again and Change storage. Example connected tenants. Select the image to view it full size.</figcaption>
 </figure>
+
+### Leave secret values out of policy backups
+
+In **Sign-in**, find the tenant in the **Tenants** card and turn on **Leave secret values out of policy backups**. The setting is off by default. Turn on **Also leave out script content** if you also want to exclude script bodies.
+
+Upgrade each desktop installation and Azure runbook that backs up the tenant. Settings checks the published runbook version reported by the last job. If that status shows a version older than 1.6.0, upgrade the runbook and run a backup to refresh its status, or confirm that cloud jobs have stopped. If the version is unknown, confirm that every cloud runbook for this tenant has been upgraded or stopped.
+
+Each producer reads the policy from its own destination. Settings saves it to the selected desktop storage and to any cloud storage account registered in the app. Set the option on each installation that saves to its own device. Check the policy after changing either storage account. After a cloud storage move, if the runbook has recorded enrollment and the new account has no policy, it stops until you enable omission or explicitly save it as off in the new account. Settings and Backup History name producers whose backups start after activation without recording omission. [Cloud backup storage moves](/backups/cloud/#secret-omission-for-cloud-backups)
+
+Turning the option on applies to backups and rollback captures that start afterwards. A run already in progress finishes with its original policy. Earlier backups keep their values until retention removes them. Older installations and runbooks can still make backups with values, so check the warnings after an upgrade or a storage move.
+
+[Backup coverage](/backups/coverage/#leave-secret-values-out-of-policy-backups) lists the affected values and restore limits.
+
+If a backup cannot verify the omission policy in its destination, the job stops before saving policy snapshots. Check the storage identity's read access and the policy file before retrying.
+
+An Azure immutability policy or legal hold can allow the first policy save and prevent later changes. If the setting cannot be changed, ask your Azure administrator to configure a destination where the omission policy blob can be updated.
 
 ## Services and permissions
 

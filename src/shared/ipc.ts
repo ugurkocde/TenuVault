@@ -520,6 +520,8 @@ export interface TenuVaultBridge {
     /** Throws with an actionable message when the admin cannot write backups to the account. */
     verifyAzureStorage: (tenantId: string, clientId: string, storageAccountName: string) => Promise<void>
     /** What the tenant backs up on schedule and by default. */
+    omission: (tenantId: string) => Promise<import("./intune/secret-omission").OmissionOptions & { cloudRunbook?: string; inconsistent?: boolean; policyUnavailable?: boolean; historyUnavailable?: boolean; warnings?: Array<{ folder: string; account: string; producer: string }> }>
+    setOmission: (tenantId: string, enabled: boolean, scripts: boolean, cloudStopped?: boolean) => Promise<void>
     scope: (tenantId: string) => Promise<BackupScopeSetting>
     setScope: (tenantId: string, scope: BackupScope) => Promise<BackupScopeSetting>
     /** The tenant's failed backup attempts, newest first. */
@@ -643,6 +645,7 @@ export interface TenuVaultBridge {
     getItemSync: (key: string) => string | null
     setItem: (key: string, value: string) => Promise<void>
     removeItem: (key: string) => Promise<void>
+    changeTenantAccount: (tenantId: string, previous: string, resources: TenantStorageResources) => Promise<boolean>
   }
   app: {
     info: () => Promise<AppInfo>
@@ -685,6 +688,15 @@ export interface TenuVaultBridge {
 }
 
 /** Plan failures cross the preload boundary as data, then become renderer errors. */
+export interface TenantStorageResources {
+  storageAccountName: string
+  subscriptionId: string
+  subscriptionName: string
+  resourceGroupName: string
+  resourceGroupLocation?: string
+  automationAccountName: string
+}
+
 export type TenuVaultPreloadBridge = Omit<TenuVaultBridge, "auth" | "license" | "schedules" | "pdfBranding" | "backupReader" | "appSources"> & {
   appSources: Omit<TenuVaultBridge["appSources"], "restore"> & {
     restore: (...args: Parameters<TenuVaultBridge["appSources"]["restore"]>) => Promise<Awaited<ReturnType<TenuVaultBridge["appSources"]["restore"]>> | PlanIpcError>

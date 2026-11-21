@@ -16,11 +16,16 @@ export interface DependencyReference {
 }
 
 /** Every reference to another tenant object in the actual outbound payload. */
-export function dependencyReferences(body: Item): DependencyReference[] {
+export const REFERENCE_SETTING_VALUE = "#microsoft.graph.deviceManagementConfigurationReferenceSettingValue"
+
+export function dependencyReferences(body: Item, includeReferenceSettings = false): DependencyReference[] {
   const references: DependencyReference[] = []
   const check = (value: Json, key: string, path: string): void => {
     if (Array.isArray(value)) { value.forEach((entry, index) => check(entry, key, `${path}[${index}]`)); return }
     if (value && typeof value === 'object') {
+      if (includeReferenceSettings && value["@odata.type"] === REFERENCE_SETTING_VALUE && typeof value.value === "string" && value.value) {
+        references.push({ path: `${path}.value`, key: "referenceSettingValue", id: value.value })
+      }
       for (const [child, entry] of Object.entries(value)) check(entry, child, `${path}.${child}`)
       return
     }

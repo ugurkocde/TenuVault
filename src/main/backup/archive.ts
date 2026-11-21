@@ -1,9 +1,9 @@
+import { hasOmissions, OMISSION_VERSION, snapshotPath } from "../../shared/intune/secret-omission"
 import JSZip from 'jszip'
 import type { Readable } from 'node:stream'
 import { createHash } from 'node:crypto'
 import { typeForFolder } from '../../shared/intune/registry'
-import { comparableSnapshot } from '../../shared/intune/compare'
-const snapshotHash = (value: Record<string, any>) => createHash('sha256').update(JSON.stringify(comparableSnapshot(value))).digest('base64').slice(0, 22)
+import { snapshotHash, verifyProjectedSnapshot, type ManifestEntry } from "../../portal/lib/policies/backup-manifest"
 import { LocalBlobStore } from '../storage/local-blob-store'
 import { MAX_BACKUP_ARCHIVE_FILES, MAX_BACKUP_ARCHIVE_TOTAL_BYTES } from '../../shared/constants'
 
@@ -56,7 +56,7 @@ export async function reviewArchive(raw: Buffer): Promise<ReviewedArchive> {
   const files = new Map<string, Buffer>(); let total = 0
   for (const entry of Object.values(zip.files)) {
     if (entry.dir) continue
-    if (entry.name !== 'metadata.json' && entry.name !== 'tenuvault-manifest.json' && !/^[A-Za-z0-9]+\/[^/]+\.json$/.test(entry.name)) throw new Error('Archive contains an unsupported file')
+    if (entry.name !== 'metadata.json' && entry.name !== 'tenuvault-manifest.json' && !/^(?:\.omitted\/)?[A-Za-z0-9]+\/[^/]+\.json$/.test(entry.name)) throw new Error('Archive contains an unsupported file')
     const content = await bounded(entry, MAX - total); total += content.length; files.set(entry.name, content)
   }
   const parse = (name: string): unknown => { try { return JSON.parse(files.get(name)?.toString('utf8') ?? '') } catch { throw new Error(`Missing or invalid ${name}`) } }
@@ -67,8 +67,13 @@ export async function reviewArchive(raw: Buffer): Promise<ReviewedArchive> {
   for (const [identity, item] of Object.entries(metadata.Items)) {
     const [folder, id, ...rest] = identity.split('/')
     if (!folder || !id || rest.length || !typeForFolder(folder) || !object(item) || typeof item.file !== 'string' || !/^[^/\\]+\.json$/.test(item.file)) throw new Error('Unsupported backup item')
-    const path = `${folder}/${item.file}`, snapshot = parse(path)
-    if (expected.has(path) || !object(snapshot) || snapshot.id !== id || snapshotHash(snapshot) !== item.hash) throw new Error('Backup contents do not match the export inventory')
+    const path = snapshotPath(folder, { file: item.file, omitted: item.omitted })
+    const snapshot = parse(path)
+    if (expected.has(path) || !object(snapshot) || snapshot.id !== id) throw new Error('Backup contents do not match the export inventory')
+    if (item.omitted !== undefined) {
+      if (metadata.OmissionVersion !== OMISSION_VERSION) throw new Error("Invalid backup omission inventory")
+      verifyProjectedSnapshot(files.get(path)!, { ...item, id } as ManifestEntry)
+    } else if (hasOmissions(snapshot) || snapshotHash(snapshot) !== item.hash) throw new Error('Backup contents do not match the export inventory')
     expected.add(path); counts[folder] = (counts[folder] ?? 0) + 1
   }
   if (files.size !== expected.size + 2 || metadata.ItemCounts.TotalPolicies !== policyTotal(counts) || Object.entries(metadata.ItemCounts).some(([folder, count]) => folder !== 'TotalPolicies' && count !== (counts[folder] ?? 0))) throw new Error('Backup archive is incomplete or contains extra files')

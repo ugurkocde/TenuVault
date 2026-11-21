@@ -32,7 +32,13 @@ async function startFixture({ inspectorPort, desktopDir, evaluate, assert }) {
   })
   let breakpointId
   let invocation
+  const originalProfiles = await evaluate(`window.tenuvault.storage.getItemSync("tenuvault_tenants")`)
   try {
+    // The main process validates the requested destination against the saved profile even for
+    // jobs started directly in the engine. Only its storage token is faked here.
+    const profiles = JSON.parse(originalProfiles ?? "[]")
+    profiles.push({ id: 9999, name: "Cancellation fixture", credentials: { tenantId: "99999999-9999-9999-9999-999999999999", appId: "smoke" }, resources: { storageAccountName: "smokefixture" } })
+    await evaluate(`window.tenuvault.storage.setItem("tenuvault_tenants", ${JSON.stringify(JSON.stringify(profiles))})`)
     await send("Debugger.enable")
     const source = readFileSync(join(desktopDir, "out/main/index.js"), "utf8")
     const lineNumber = source.split("\n").findIndex(line => line.includes("const job = engine.cancel(jobId)"))
@@ -68,6 +74,9 @@ async function startFixture({ inspectorPort, desktopDir, evaluate, assert }) {
     await send("Debugger.resume").catch(() => {})
     socket.close()
     await invocation
+    await evaluate(originalProfiles == null
+      ? `window.tenuvault.storage.removeItem("tenuvault_tenants")`
+      : `window.tenuvault.storage.setItem("tenuvault_tenants", ${JSON.stringify(originalProfiles)})`)
   }
 }
 

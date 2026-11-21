@@ -138,6 +138,16 @@ When a retry reuses a reconciled creation, TenuVault reads the object in the rec
 
 The journal keeps up to 1,000 records. When it is full, TenuVault removes completed records and reconciliations older than one hour. Uncertain writes are never removed. If only uncertain and recent records remain, restores stop with "Restore journal is full. Review write history in Settings before continuing; recent reconciliations stay protected for one hour." Resolve the uncertain records to continue.
 
+## Credential availability
+
+Policies with omitted values require another backup to be restored. Microsoft Graph returns null for pre-shared keys on Android, iOS, macOS and Windows Wi-Fi configuration profiles, so a restore of those profiles does not bring the key back in either backup mode.
+
+A full restore also skips policies that reference an omitted dependency when that dependency cannot be verified in the destination tenant. For example, a policy set can depend on an omitted device configuration, and a Settings Catalog policy can depend on an omitted reusable setting. The result names the reference. Restore the dependency from a backup that includes its values before retrying the dependent policy.
+
+## Missing change details
+
+A job that stops unexpectedly can contain both recorded item outcomes and items whose write outcome is uncertain or unattempted. Review uncertain items in Intune before retrying. Older audit entries can show **Change details unavailable**. See [Audit Log](/audit-log/) for the fields kept in new events.
+
 ## Related pages
 
 * [Intune restore](https://www.tenuvault.com/intune-restore): what restores automatically and what does not, on the product site
@@ -146,7 +156,3 @@ The journal keeps up to 1,000 records. When it is full, TenuVault removes comple
 * [What gets backed up](/backups/coverage/)
 * [Multi Admin Approval and TenuVault](/restore/multi-admin-approval/)
 * [Troubleshooting](/troubleshooting/)
-
-### Missing change details
-
-A job that stops unexpectedly can contain both recorded item outcomes and items whose write outcome is uncertain or unattempted. Review uncertain items in Intune before retrying. Older audit entries can show **Change details unavailable**. See [Audit Log](/audit-log/) for the fields kept in new events.

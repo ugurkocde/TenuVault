@@ -154,6 +154,38 @@ describe("tenantStorage", () => {
     expect(bridge.license.releaseTenant).not.toHaveBeenCalled()
   })
 
+  it("reloads the saved tenant list when main rejects an optimistic storage change", async () => {
+    const profile = { credentials: { tenantId: "saved-tenant" }, resources: { storageAccountName: "savedaccount" } }
+    const other = { credentials: { tenantId: "orphaned-tenant" } }
+    const stored = JSON.stringify([profile, other])
+    const next = JSON.stringify([{ ...profile, resources: { storageAccountName: "differentaccount" } }])
+    bridge.storage.getItemSync.mockReturnValue(stored)
+    bridge.storage.setItem.mockRejectedValueOnce(new Error("Use Change storage"))
+    const { tenantStorage } = await import("../src/renderer/overrides/tenant-storage")
+
+    expect(tenantStorage.getItem(TENANTS_KEY)).toBe(stored)
+    tenantStorage.setItem(TENANTS_KEY, next)
+    expect(tenantStorage.getItem(TENANTS_KEY)).toBe(next)
+    await setImmediate()
+    expect(tenantStorage.getItem(TENANTS_KEY)).toBe(stored)
+    expect(bridge.license.releaseTenant).not.toHaveBeenCalled()
+  })
+
+  it("keeps a newer save and releases tenants removed by that saved list after an older save fails", async () => {
+    const profile = { credentials: { tenantId: "saved-tenant" } }
+    const other = { credentials: { tenantId: "orphaned-tenant" } }
+    bridge.storage.getItemSync.mockReturnValue(JSON.stringify([profile, other]))
+    bridge.storage.setItem.mockRejectedValueOnce(new Error("Use Change storage"))
+    const { tenantStorage } = await import("../src/renderer/overrides/tenant-storage")
+
+    tenantStorage.setItem(TENANTS_KEY, JSON.stringify([{ ...profile, name: "First" }]))
+    const next = JSON.stringify([{ ...profile, name: "Second" }])
+    tenantStorage.setItem(TENANTS_KEY, next)
+    await setImmediate()
+    expect(tenantStorage.getItem(TENANTS_KEY)).toBe(next)
+    expect(bridge.license.releaseTenant).toHaveBeenCalledExactlyOnceWith("orphaned-tenant")
+  })
+
   it.each(["[]", " [ ] ", "", "[{}]", '[{"id":1,"name":"No credentials"}]'])("preserves an unreadable list instead of saving a value without tenant ids: %s", async (value) => {
     bridge.storage.getItemSync.mockReturnValue("{broken")
     const { tenantStorage } = await import("../src/renderer/overrides/tenant-storage")

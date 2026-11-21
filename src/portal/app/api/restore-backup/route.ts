@@ -4,11 +4,12 @@ import { beginRestoreAudit, recordRestorePreparationFailure, restoreAuditItem } 
 import { restoreApprovals, dismissRestoreApproval, saveRestoreApproval } from "../../../../main/storage/restore-approvals"
 import { parseDependencyMappings } from "../../../../shared/intune/recovery"
 import { createHash, randomUUID } from "node:crypto"
-import { checkRestoreManifest, verifySnapshot, type ManifestEntry } from "~/lib/policies/backup-manifest"
+import { checkRestoreManifest, omittedDependencyMap, verifySnapshot, type ManifestEntry } from "~/lib/policies/backup-manifest"
 import { readOwnedBackup, UNTAGGED_BACKUP } from "~/lib/policies/backup-owner"
 import { validPolicyPath } from "~/lib/policies/restore"
 import { graphCaller, Restorer, ApprovalCompletionRefused, DependencyMappingError, RestoreReconcileRequired, type RestoreOutcome } from "~/lib/policies/graph-restore"
 import { PROGRESS_ID, startProgress } from "~/lib/policies/restore-progress"
+import { OMISSION_BLOCKER } from "../../../../shared/intune/secret-omission"
 import { restoreOrder, type Item } from "../../../../shared/intune/registry"
 import { grantedPermissions } from "../../../../shared/services/token"
 import { type NextRequest, NextResponse } from "next/server"
@@ -51,8 +52,10 @@ async function readSnapshot(policyPath: string, storageAccountName: string, stor
 
 async function restoreSinglePolicy(restorer: Restorer, policyPath: string, storageAccountName: string, storageToken: string, expected?: ManifestEntry, repairToken?: string): Promise<RestoreOutcome> {
   try {
+    if (expected?.omitted) return { success: false, path: policyPath, action: "skipped", retryable: false, error: OMISSION_BLOCKER }
     if (repairToken) return await restorer.repair(policyPath, repairToken)
-    return await restorer.restore(policyPath, await readSnapshot(policyPath, storageAccountName, storageToken, expected))
+    const snapshot = await readSnapshot(policyPath, storageAccountName, storageToken, expected)
+    return await restorer.restore(policyPath, snapshot)
   } catch (error) {
     return { success: false, path: policyPath, error: error instanceof Error ? error.message : "Unknown error" }
   }
@@ -91,6 +94,9 @@ export async function POST(request: NextRequest) {
     }
     if (progressId !== undefined && (typeof progressId !== 'string' || !PROGRESS_ID.test(progressId))) {
       return NextResponse.json({ error: 'Invalid progress ID' }, { status: 400 })
+    }
+    if (restoreType === "selective" && Array.isArray(selectedPolicies) && selectedPolicies.some((item) => typeof item?.path === "string" && item.path.split("/")[1] === ".omitted")) {
+      return NextResponse.json({ error: OMISSION_BLOCKER }, { status: 400 })
     }
     if (restoreType === 'selective' && (!Array.isArray(selectedPolicies) || !selectedPolicies.length || selectedPolicies.some((p: any) => !validPolicyPath(p?.path, backupId)) || new Set(selectedPolicies.map((p: any) => p.path)).size !== selectedPolicies.length)) {
       return NextResponse.json({ error: 'Select unique policy files from the chosen backup' }, { status: 400 })
@@ -188,6 +194,14 @@ export async function POST(request: NextRequest) {
       paths = policyFiles
     }
 
+    const checked = checkRestoreManifest(metadata, backupId, paths, restoreType !== 'selective')
+    if (!checked.ok) return NextResponse.json({ error: checked.error }, { status: 400 })
+    const manifest = checked.manifest
+    const omittedDependencies = omittedDependencyMap(manifest)
+    if (restoreType !== "selective" && manifest) {
+      paths = [...new Set([...paths, ...[...manifest].filter(([, entry]) => entry.omitted).map(([path]) => path)])]
+    }
+
     const auditProgress: { save?: (result: RestoreOutcome) => void; submitted?: (result: RestoreOutcome) => void } = {}
     const onProgress = (result: RestoreOutcome) => auditProgress.save?.(result)
     const onSubmitted = (result: RestoreOutcome) => auditProgress.submitted?.(result)
@@ -198,20 +212,16 @@ export async function POST(request: NextRequest) {
           return {
             targetTenantId: target.tenantId.toLowerCase(), graphToken: targetToken,
             restorer: new Restorer(graphCaller(targetToken, fetch, { tenant: target.tenantId, refreshToken: () => getAccessToken(target.tenantId, target.appId, clientSecret, "https://graph.microsoft.com/.default", true) }),
-              { mode: 'copy', assignments: false, prefix: '', crossTenant: true, repairScope: repairScope(target.tenantId), granted: grantedPermissions(targetToken), operationId: correlated, auditProgress: onProgress, auditSubmitted: onSubmitted }),
+              { mode: 'copy', assignments: false, prefix: '', crossTenant: true, omittedDependencies, repairScope: repairScope(target.tenantId), granted: grantedPermissions(targetToken), operationId: correlated, auditProgress: onProgress, auditSubmitted: onSubmitted }),
           }
         }))
-      : [{ graphToken, restorer: new Restorer(graphCaller(graphToken, fetch, { tenant: tenantId, refreshToken: () => getAccessToken(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default", true) }), { mode, assignments, approvalContext: requesterContext(graphToken, tenantId, body.justification), repairScope: repairScope(tenantId), granted: grantedPermissions(graphToken), operationId: correlated, auditProgress: onProgress, auditSubmitted: onSubmitted }) }]
+      : [{ graphToken, restorer: new Restorer(graphCaller(graphToken, fetch, { tenant: tenantId, refreshToken: () => getAccessToken(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default", true) }), { mode, assignments, omittedDependencies, approvalContext: requesterContext(graphToken, tenantId, body.justification), repairScope: repairScope(tenantId), granted: grantedPermissions(graphToken), operationId: correlated, auditProgress: onProgress, auditSubmitted: onSubmitted }) }]
     try {
       if (dependencyMappings.length) for (const { restorer } of targets) await restorer.mapDependencies(dependencyMappings)
     } catch (error) {
       if (error instanceof DependencyMappingError && error.status === 404) return NextResponse.json({ error: error.message }, { status: 400 })
       throw error
     }
-
-    const checked = checkRestoreManifest(metadata, backupId, paths, restoreType !== 'selective')
-    if (!checked.ok) return NextResponse.json({ error: checked.error }, { status: 400 })
-    const manifest = checked.manifest
 
     const progress = progressId ? startProgress(progressId, paths.length * targets.length) : null
     preparationFailed = undefined

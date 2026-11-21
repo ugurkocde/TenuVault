@@ -46,6 +46,18 @@ describe.each(["oib", "change-set"] as const)("%s backup checks", (workflow) => 
     await expect(backupBeforeWrite(context.options)).rejects.toMatchObject({ status: 502, message: expect.stringContaining("could not be read") })
   })
 
+  it("explains the omission setting when the newest backup lacks recovery values", async () => {
+    const context = setup(workflow)
+    const post = context.post.getMockImplementation()!
+    const metadata = {
+      ...COMPLETE_BACKUP_METADATA, OmissionVersion: 1, ActualSkippedTypes: [], SkippedTypes: ["ConfigurationPolicies"],
+      Items: { "ConfigurationPolicies/policy": { omitted: [{ path: "/settings/0/value", reason: "typed-secret" }] } },
+    }
+    context.post.mockImplementation((path, body) => path === "/api/list-backup-contents"
+      ? Promise.resolve({ ok: true, status: 200, json: { content: { metadata } } }) : post(path, body))
+    await expect(backupBeforeWrite(context.options)).rejects.toThrow(/Values were left out of the newest backup.*turn off the relevant omission setting/)
+  })
+
   it("does not count time spent queued behind another backup toward the timeout", async () => {
     const context = setup(workflow)
     context.post.mockResolvedValueOnce({ ok: true, status: 200, json: { jobId: "fixture-job" } })

@@ -29,10 +29,11 @@ Setup creates or reuses, in your subscription:
 | Resource group `rg-tenuvault-backups` | Holds the cloud backup resources. Reuse the storage account's group. |
 | Automation account `aa-tenuvault` with a system assigned managed identity | Runs the runbook. One account serves one Entra tenant: a managed identity belongs to its own tenant and cannot read Intune in another, so an MSP sets up an account in each customer tenant's subscription. |
 | Runbook `Invoke-TenuVaultBackup` (PowerShell 7.2) | Reads Intune and writes one backup per run, in the desktop backup format. 7.2 is required: the default 5.1 runtime lacks the .NET JSON parser the runbook uses. |
-| Automation variables with a per-tenant suffix | Tenant id, storage account, scope. No secrets in variables. Set `TenuVaultIncludeConditionalAccess` to `true` (and grant the managed identity `Policy.Read.All`) to include [Conditional Access](/backups/conditional-access/). |
+| Automation variables with a per-tenant suffix | Tenant id, storage account, scope and the list of accounts where the cloud producer has recorded secret omission. The setup script initializes enrollment. In Deploy to Azure, use `initializeOmissionEnrollment` to create a missing enrollment variable. Set `TenuVaultIncludeConditionalAccess` to `true` and grant the managed identity `Policy.Read.All` to include [Conditional Access](/backups/conditional-access/). |
 | Custom role **TenuVault Backup Writer** on the `intune-backups` container | Read and write blobs, no delete. The runbook cannot remove backups. |
 | Schedule `TenuVaultBackup-<tenant>` and its runbook link | Daily or weekly, in the timezone you choose. |
 | Optional Azure Monitor action group and metric alert | Emails you when Automation jobs fail. Setup refuses to finish without an explicit choice. |
+| Optional ARM deployment script and temporary Azure Container Instances and storage resources | Created only when you supply `omissionMigrationIdentityId`. The script uses the existing identity you supply and its existing role assignments to attempt to copy the omission policy. |
 
 Microsoft Graph application roles are the one part Azure role assignments and ARM templates cannot grant. A Global Administrator assigns the read-only roles below to the managed identity. They are the same set as the [Backup Reader](/backups/backup-reader/#permissions):
 
@@ -88,6 +89,8 @@ Running the script again with new values updates the variables, republishes the 
 ### Deploy to Azure
 
 The **Deploy to Azure** button in the app opens the template `resources/cloud-backup/azuredeploy.json` from the TenuVault repository in the Azure portal. The link cannot carry the choices made in the app with it: fill in tenant, storage account, frequency, day, timezone, scope and the first run time in the template as well, including the `excludedFolders` parameter when step 2 is a custom choice, since scope alone does not carry custom exclusions (its defaults are daily and everything except apps, and the first run's time of day becomes the schedule), and deploy it into the storage account's resource group. One scope difference applies to both setup paths: even the **Everything** scope leaves out device categories and device clean-up rules unless the device inventory role above is granted, through the template's `includeDeviceCategories` parameter or the script's `-IncludeDeviceCategories`. Cloud backups record that as a permission exclusion, never silently. The outputs name the managed identity and list the Graph roles a Global Administrator still has to assign: until then every run fails with access denied, on purpose, and the failure alert is up to you. The setup script remains the fuller path.
+
+Set `initializeOmissionEnrollment` to true on the first deployment or after confirming the enrollment variable is missing. Leave it false on subsequent deployments to keep the recorded enrollment. To request a policy copy during a storage move, set `omissionMigrationIdentityId` to an existing identity with access to both accounts. Leave `omissionCheckNonce` at its generated default to rerun migration when that identity is supplied.
 
 ### Test it now
 
@@ -185,3 +188,23 @@ To stop cloud backups for a tenant, run the setup script with `-Remove`: it dele
 * [Backup storage and retention](/backups/storage/)
 * [Backup Reader for scheduled backups](/backups/backup-reader/)
 * [Conditional Access and TenuVault](/security/conditional-access/)
+
+## Secret omission for cloud backups
+
+Republish runbook version 1.6.0 or later before enabling **Leave secret values out of policy backups**. Use the current setup script or Deploy to Azure upgrade. Run a backup after upgrading to refresh the version shown in Settings. The runbook reads the tenant policy in the backup container with its existing managed identity. There is no job parameter for overriding it. When the producer has never recorded enrollment, a confirmed Azure Blob or container not found response means omission is off. An unreadable or invalid policy stops the backup. A missing policy also stops the backup if the producer has recorded enrollment on any account.
+
+The runbook reads its destination policy once and writes each snapshot as it is captured. An active run finishes with the policy it started with and records it in its manifest. After you turn omission on, check Settings and Backup History for later backups from producers that did not record omission. [Settings reference](/settings/#leave-secret-values-out-of-policy-backups)
+
+When moving cloud backups, the setup script keeps a valid omission policy already on the destination or attempts to copy a readable source policy before it repoints the runbook. The move proceeds if the copy fails. Setup warns when the producer has recorded enrollment and it could not verify a destination policy. The ARM template attempts the same copy when you provide **omissionMigrationIdentityId**. The **omissionPolicyMigration** output describes the result. After the move, the runbook follows the destination policy whether omission is on or off. If the producer has recorded enrollment and the destination has no policy, enable omission on the new account or explicitly save it as off before retrying the backup. A move before the first run records enrollment can default to off when the destination has no policy.
+
+To explicitly leave omission off when the destination has no policy, an Azure storage administrator can create `.tenuvault-control/<tenant-id>/secret-omission.json` in the new account's `intune-backups` container with the following content. Use the lowercase tenant ID and a new GUID for the generation. Keep any policy already present.
+
+```json
+{"version":1,"tenantId":"<tenant-id>","generation":"<new-guid>","enabled":false,"scripts":false}
+```
+
+The migration identity needs permission to read the Automation variables and the exact `.tenuvault-control/<tenant-id>/secret-omission.json` blob in both accounts. Grant create-only access to that same path in the destination with the `Microsoft.Storage/storageAccounts/blobServices/containers/blobs/add/action` data action. Scope the blob data permissions with a role assignment condition on the exact blob path. The deployer must be allowed to attach the identity, for example through the Managed Identity Operator role on that identity. [Azure Blob create permissions](https://learn.microsoft.com/en-us/rest/api/storageservices/put-blob) and [deployment script identity permissions](https://learn.microsoft.com/en-us/azure/azure-resource-manager/templates/deployment-script-template).
+
+For older Automation accounts without the per-tenant enrollment variable, rerun the current setup script or deploy once with **initializeOmissionEnrollment** set to true. Rerun setup before enabling omission if you upgraded through a manual runbook import. When exercising the runbook outside Azure Automation, use `TENUVAULT_OMISSION_ACCOUNT` for the comma-separated list of enrolled storage accounts. Leave it unset or empty for a never-enrolled setup.
+
+If the policy blob is missing and the runbook cannot verify Automation enrollment, the run stops before reading tenant policies. Retry the run, or rerun cloud backup setup if the enrollment variable still cannot be read.

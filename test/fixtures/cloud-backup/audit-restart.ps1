@@ -46,6 +46,11 @@ if (-not ($Baseline -or $ClaimedRestart -or $UncertainRestart -or $TransientMani
 function Invoke-TvHttp {
     param([string]$Uri, [string]$Token, [string]$Method, [hashtable]$Headers, [byte[]]$BodyBytes, [string]$ContentType, [long]$MaxBytes, [int]$BudgetMs)
     $script:calls.Add(@{ uri = $Uri; method = $Method; condition = $Headers["If-Match"]; ifNoneMatch = $Headers["If-None-Match"] })
+    if ($Uri -like "*/.tenuvault-control/*") {
+        $missing = [TvHttpError]::new(404, "Missing blob")
+        $missing.ServiceCode = "BlobNotFound"
+        throw $missing
+    }
     if ($script:scenario -eq "resultsDenied" -and $Uri -like "*/tenuvault-backup-results*") {
         throw [TvHttpError]::new(403, "Results container denied")
     }

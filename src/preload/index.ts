@@ -85,6 +85,8 @@ const bridge: TenuVaultPreloadBridge = {
     importRecoveryKey: (recoveryKey) => invoke("backups:importRecoveryKey", recoveryKey),
     verifyAzureStorage: (tenantId, clientId, storageAccountName) =>
       invoke("backups:verifyAzureStorage", tenantId, clientId, storageAccountName),
+    omission: (tenantId) => invoke("backups:omission", tenantId),
+    setOmission: (tenantId, enabled, scripts, cloudStopped) => invoke("backups:setOmission", tenantId, enabled, scripts, cloudStopped),
     scope: (tenantId) => invoke("backups:scope", tenantId),
     setScope: (tenantId, scope) => invoke("backups:setScope", tenantId, scope),
     failedAttempts: (tenantId) => invoke("backups:failedAttempts", tenantId),
@@ -159,6 +161,7 @@ const bridge: TenuVaultPreloadBridge = {
     getItemSync: (key) => ipcRenderer.sendSync("storage:getSync", key) as string | null,
     setItem: (key, value) => invoke("storage:set", key, value),
     removeItem: (key) => invoke("storage:remove", key),
+    changeTenantAccount: (tenantId, previous, resources) => invoke("storage:changeTenantAccount", tenantId, previous, resources),
   },
   app: {
     info: () => invoke("app:info"),

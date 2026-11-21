@@ -141,12 +141,32 @@ export const PLAIN_CLOUD_RUNBOOK = "1.2.0"
  * from Key Vault (before 1.2.0), so setup should run again. Unknown versions are not flagged.
  */
 export function cloudRunbookNeedsUpgrade(version: string): boolean {
+  return cloudRunbookBefore(version, PLAIN_CLOUD_RUNBOOK)
+}
+
+export const OMISSION_CLOUD_RUNBOOK = "1.6.0"
+
+export function cloudRunbookLacksOmission(version: string): boolean {
+  return cloudRunbookBefore(version, OMISSION_CLOUD_RUNBOOK)
+}
+
+export function requireCloudOmissionSupport(version: string | undefined, cloudStopped: unknown): void {
+  if (cloudStopped === true) return
+  if (!version || !/^\d+\.\d+\.\d+$/.test(version.trim())) {
+    throw new Error("Confirm that every cloud runbook for this tenant has been upgraded or stopped before enabling omission.")
+  }
+  if (cloudRunbookLacksOmission(version)) {
+    throw new Error(`Cloud runbook ${version} must be upgraded, or cloud backups must be stopped, before enabling omission.`)
+  }
+}
+
+function cloudRunbookBefore(version: string, minimum: string): boolean {
   const parse = (text: string) => /^(\d+)\.(\d+)\.(\d+)$/.exec(text.trim())?.slice(1).map(Number)
   const current = parse(version)
-  const plain = parse(PLAIN_CLOUD_RUNBOOK)!
+  const required = parse(minimum)!
   if (!current) return false
   for (let index = 0; index < 3; index++) {
-    if (current[index]! !== plain[index]!) return current[index]! < plain[index]!
+    if (current[index]! !== required[index]!) return current[index]! < required[index]!
   }
   return false
 }

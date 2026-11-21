@@ -1,5 +1,6 @@
 "use client"
 
+import type { OmittedField } from "../../../shared/intune/secret-omission"
 import { RestoreApprovals } from "./restore-approvals"
 import { reviewedDependencyMappings, type RecoveryReadiness } from "../../../shared/intune/recovery"
 import { settingDefinitionIds, type DeprecatedSettingHit } from "../../../shared/intune/settings-catalog"
@@ -89,6 +90,7 @@ interface BackupItem {
   replaceBlocker?: string
   readiness?: RecoveryReadiness
   snapshot?: unknown
+  omitted?: OmittedField[]
 }
 
 /** The deprecated-settings check for the chosen backup, against the Settings Catalog as read now. */
@@ -342,16 +344,16 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
       const listed: BackupItem[] = contents.content.groups.flatMap((group) =>
         group.policies.map((policy) => ({ path: policy.path, folder: group.folder, label: group.label, area: group.area, name: policy.displayName ?? policy.path, blocker: group.limitation })),
       )
-      const details: Record<string, { name: string; blocker?: string; replaceBlocker?: string; snapshot?: unknown; readiness?: RecoveryReadiness }> = {}
+      const details: Record<string, { name: string; blocker?: string; replaceBlocker?: string; snapshot?: unknown; readiness?: RecoveryReadiness; omitted?: OmittedField[] }> = {}
       for (let start = 0; start < listed.length; start += PREVIEW_CHUNK) {
-        const preview = await post<{ items: Array<{ path: string; name: string; blocker?: string; replaceBlocker?: string; snapshot?: unknown; readiness?: RecoveryReadiness }> }>(
+        const preview = await post<{ items: Array<{ path: string; name: string; blocker?: string; replaceBlocker?: string; snapshot?: unknown; readiness?: RecoveryReadiness; omitted?: OmittedField[] }> }>(
           "/api/restore-preview",
           { ...credentials, paths: listed.slice(start, start + PREVIEW_CHUNK).map((item) => item.path) },
           controller.signal,
         )
         for (const item of preview.items) details[item.path] = item
       }
-      setItems(listed.map((item) => ({ ...item, name: details[item.path]?.name ?? item.name, blocker: details[item.path]?.blocker ?? item.blocker, replaceBlocker: details[item.path]?.replaceBlocker, snapshot: details[item.path]?.snapshot, readiness: details[item.path]?.readiness })))
+      setItems(listed.map((item) => ({ ...item, name: details[item.path]?.name ?? item.name, blocker: details[item.path]?.blocker ?? item.blocker, replaceBlocker: details[item.path]?.replaceBlocker, snapshot: details[item.path]?.snapshot, readiness: details[item.path]?.readiness, omitted: details[item.path]?.omitted })))
     })().catch((error: unknown) => {
       if (error instanceof DOMException && error.name === "AbortError") return
       showPlanError(error)
@@ -845,6 +847,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
                                     <span className="min-w-0">
                                       <span className={cn("block break-words", selectionBlocker(item) ? "text-gray-500" : "text-gray-900")}>{item.name}</span>
                                       {(selectionBlocker(item) || item.blocker) && <span className="block text-xs text-gray-500"><LinkedMessage text={selectionBlocker(item) || "Replace only: this object cannot be copied."} /></span>}
+                                      {item.omitted?.map((field) => <span key={field.path} className="block break-all text-xs text-gray-500">{field.path}</span>)}
                                       {deprecatedByPath.get(item.path) && (
                                         <span className="mt-0.5 flex items-start gap-1 text-xs text-amber-800">
                                           <AlertTriangle className="mt-px h-3.5 w-3.5 flex-shrink-0" aria-hidden="true" />

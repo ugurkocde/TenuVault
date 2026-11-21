@@ -27,7 +27,7 @@ vi.mock("~/contexts/TenantContext", () => ({
   useTenantOperations: () => ({ updateTenant: state.updateTenant }),
 }))
 vi.mock("@desktop/lib/license", () => ({ useTenantPlan: () => null }))
-vi.mock("@desktop/lib/bridge", () => ({ bridge: { license: { open: vi.fn() } } }))
+vi.mock("@desktop/lib/bridge", () => ({ bridge: { license: { open: vi.fn() }, backups: { omission: vi.fn().mockRejectedValue(new Error("Omission status unavailable")) } } }))
 vi.mock("@desktop/lib/backup-list", () => ({ useBackupList: () => ({ backups: [], loading: false, error: "", unresolved: 0, refresh: vi.fn() }) }))
 vi.mock("@desktop/components/BackupSchedulePanel", () => ({ BackupSchedulePanel: () => null }))
 vi.mock("@desktop/components/FirstBackupNote", () => ({ FirstBackupNote: () => createElement("p", null, "First backup note") }))

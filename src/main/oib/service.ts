@@ -1,3 +1,4 @@
+import { hasOmissions, projectRollback, type OmissionOptions } from "../../shared/intune/secret-omission"
 import { approvalMessage } from "../../shared/intune/approval"
 import { randomUUID } from "node:crypto"
 import { graphCaller, readLive, Restorer, type GraphCall } from "../../portal/lib/policies/graph-restore"
@@ -49,6 +50,11 @@ const failure = (folder: string, error: string) =>
   folder === "DriverUpdateProfiles" && /^An error has occurred|forbidden/i.test(error) ? `${error.replace(/\.?\s*$/, ".")} ${DRIVER_LICENSE_NOTE}` : error
 
 let store: KeyValueStore | null = null
+let readOmissionPolicy: ((tenantId: string, enrolledOnly?: boolean) => Promise<OmissionOptions & { generation?: string }>) | undefined
+
+export function setOibOmissionPolicy(read: typeof readOmissionPolicy): void {
+  readOmissionPolicy = read
+}
 const progress = new Map<string, OibProgress>()
 
 /** The encrypted app store that keeps runs and validation history; set once at startup. */
@@ -328,15 +334,21 @@ async function inspectBackup(body: RecordJson, tenant: string, backup: BackupLis
 async function backupOptions(body: RecordJson): Promise<OibBackupOptions> {
   const tenant = tenantOf(body.tenantId)
   const folders = foldersOf(body.folders)
-  if (!hasStorage(body)) return { recent: null }
+  const omission = await readOmissionPolicy?.(tenant, true)
+  const notice = omission?.enabled ? { omissionNotice: "Values left out of a saved previous version cannot be undone automatically. Keep a backup containing those values if you need to restore them." } : {}
+  if (!hasStorage(body)) return { recent: null, ...notice }
   // A failed or cancelled backup holds only part of the tenant, so it never hides an older finished one.
-  const finished = (await tenantBackups(body, tenant)).filter((backup) => !["running", "incomplete", "failed", "cancelled"].includes(normalizeBackupStatus(backup)))
+  const backups = await tenantBackups(body, tenant).catch((error: unknown) => {
+    if (!omission?.enabled) throw error
+    return []
+  })
+  const finished = backups.filter((backup) => !["running", "incomplete", "failed", "cancelled"].includes(normalizeBackupStatus(backup)))
   for (const backup of finished.slice(0, RECENT_CANDIDATES)) {
     // A backup that cannot be read is passed over, like one recorded for another tenant.
     const recent = await inspectBackup(body, tenant, backup, folders).catch(() => null)
-    if (recent) return { recent }
+    if (recent) return { recent, ...notice }
   }
-  return { recent: null }
+  return { recent: null, ...notice }
 }
 
 /** Accepts a backup chosen for reuse only after checking it here; nothing the renderer says about it is trusted. */
@@ -425,17 +437,19 @@ async function deploy(body: RecordJson, kind: OibRun["kind"]): Promise<OibRun> {
         await requireReusable(body, tenant, backup.folder, written)
         backupFolder = backup.folder
       }
+      const omission = await readOmissionPolicy?.(tenant)
       const run: OibRun = {
         runId: randomUUID(), tenantId: tenant, createdAt: new Date().toISOString(), kind, platform, reference: pack.catalog.reference, commit: pack.catalog.commit,
+        omission: { enabled: omission?.enabled ?? false, scripts: omission?.scripts ?? false, generation: omission?.generation ?? "default" },
         ...(backupFolder ? { backupFolder } : {}), backupMode: backup.mode, ...(pilot ? { pilotGroupId: pilot.toLowerCase() } : {}), created: [], updated: [], failed: [], skipped: [],
       }
       report({ stage: "Checking existing policies" })
       const creates = chosen.filter((item) => item.mode === "create")
       // The refresh-capable caller: the token from before a long pre-deploy backup may have expired since.
       const existing = creates.length ? await inventory(graph, creates.map((item) => item.policy.folder)) : []
-      const creator = new Restorer(graph, { mode: "copy", prefix: "", assignments: !!pilot })
+      const creator = new Restorer(graph, { mode: "copy", prefix: "", assignments: !!pilot, statusOnlyWriteErrors: omission?.enabled })
       // A policy deleted after it was read is reported, never recreated under an ID the run would not record.
-      const replacer = new Restorer(graph, { mode: "replace", assignments: false, recreateMissing: false })
+      const replacer = new Restorer(graph, { mode: "replace", assignments: false, recreateMissing: false, statusOnlyWriteErrors: omission?.enabled, readOptions: { omitEncryptedOma: omission?.enabled } })
       const assignments = pilot ? [{ target: { "@odata.type": "#microsoft.graph.groupAssignmentTarget", groupId: pilot } }] : []
       for (const [index, item] of chosen.entries()) {
         const { policy } = item
@@ -460,7 +474,7 @@ async function deploy(body: RecordJson, kind: OibRun["kind"]): Promise<OibRun> {
           const type = typeForFolder(policy.folder)!
           let before: Item | undefined
           try {
-            before = await readLive(graph, type, item.targetId!)
+            before = await readLive(graph, type, item.targetId!, { omitEncryptedOma: omission?.enabled })
           } catch (error) {
             run.failed.push({ name: policy.name, error: `The current policy could not be read, so it was not changed: ${message(error)}` })
             continue
@@ -478,8 +492,11 @@ async function deploy(body: RecordJson, kind: OibRun["kind"]): Promise<OibRun> {
             continue
           }
           if (outcome.success || outcome.partial) {
+            before = projectRollback(policy.folder, before, omission)
+            const warnings = [...(outcome.warnings ?? [])]
+            if (hasOmissions(before)) warnings.push("Values were left out of the saved previous version. This update cannot be undone automatically.")
             run.updated.push({ folder: policy.folder, id: item.targetId!, name: policy.name, previousName: typeof previous === "string" ? previous : item.targetId!, before,
-              ...(outcome.partial ? { partial: true } : {}), ...(outcome.warnings ? { warnings: outcome.warnings } : {}) })
+              ...(outcome.partial ? { partial: true } : {}), ...(warnings.length ? { warnings } : {}) })
             saveRun(run)
           }
           if (outcome.missing) run.failed.push({ name: policy.name, error: "The tenant policy no longer exists. Compare again." })
@@ -507,6 +524,7 @@ async function undo(body: RecordJson): Promise<UndoResult> {
       report({ stage: "Signing in" })
       const { token } = await tokenFor(body)
       const graph = graphCaller(token, fetch, { tenant, refreshToken: async () => (await tokenFor(body, true)).token })
+      const omission = await readOmissionPolicy?.(tenant)
       const results: UndoResult["results"] = []
       const created: OibRun["created"] = []
       const updated: OibRun["updated"] = []
@@ -518,18 +536,26 @@ async function undo(body: RecordJson): Promise<UndoResult> {
           created.push(item)
           continue
         }
-        const response = await graph("DELETE", `${type.path}/${item.id}`)
+        let response: Awaited<ReturnType<GraphCall>>
+        try { response = await graph("DELETE", `${type.path}/${item.id}`) }
+        catch (error) {
+          if (!omission?.enabled) throw error
+          results.push({ name: item.name, id: item.id, action: "removed", done: false, error: "Microsoft Graph did not confirm the delete. Check Intune before retrying." })
+          created.push(item)
+          continue
+        }
         // Settings Catalog answers 400 ResourceNotFound for deleted policies instead of 404.
         const gone = response.status < 300 || response.status === 404 || (response.status === 400 && /ResourceNotFound/i.test(JSON.stringify(response.body)))
         if (gone) results.push({ name: item.name, id: item.id, action: "removed", done: true })
         else {
           const error = (response.body.error as Item | undefined)?.message
-          results.push({ name: item.name, id: item.id, action: "removed", done: false, error: response.approval ? approvalMessage(response.approval, type.label) : typeof error === "string" && error ? error : `Microsoft Graph returned ${response.status}` })
+          results.push({ name: item.name, id: item.id, action: "removed", done: false, error: response.approval ? approvalMessage(response.approval, type.label) : omission?.enabled ? `Microsoft Graph returned HTTP ${response.status}.` : typeof error === "string" && error ? error : `Microsoft Graph returned ${response.status}` })
           created.push(item)
         }
       }
       // A policy the admin deleted since the run stays deleted: undo does not recreate it as a new, untracked policy.
-      const restorer = new Restorer(graph, { mode: "replace", assignments: false, recreateMissing: false })
+      const restorer = new Restorer(graph, { mode: "replace", assignments: false, recreateMissing: false,
+        statusOnlyWriteErrors: omission?.enabled, readOptions: { omitEncryptedOma: run.omission?.enabled, statusOnlyErrors: omission?.enabled } })
       for (const item of run.updated) {
         report({ stage: `Restoring ${item.previousName}`, done: results.length, total })
         if (!item.before) {

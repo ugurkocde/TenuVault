@@ -48,7 +48,9 @@ export async function backupBeforeWrite(options: BackupOptions): Promise<string>
       if (!gaps.succeeded) fail(`The ${backup} ${backupFolder} is not complete (${describeStatus(gaps)}), so ${stopped}. Check the backup log, fix the cause and ${oib ? "try again" : "apply again"}.`)
       if (gaps.missing.length) {
         const typesWritten = oib ? "policy type this run changes" : "type this change set writes"
-        const retry = oib ? "Grant the missing permissions and try again." : "Include those types in the backup scope, grant the missing permissions and apply again."
+        const retry = gaps.missing.some(({ reason }) => reason === "omitted")
+          ? "Values were left out of the newest backup for the affected types. If your storage policy permits it, turn off the relevant omission setting and run a new pre-change backup."
+          : oib ? "Grant the missing permissions and try again." : "Include those types in the backup scope, grant the missing permissions and apply again."
         fail(`The ${backup} ${backupFolder} did not collect every ${typesWritten} (${describeMissing(gaps)}), so ${stopped}. ${retry}`)
       }
       return backupFolder

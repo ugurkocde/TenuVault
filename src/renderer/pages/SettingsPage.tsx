@@ -1,3 +1,4 @@
+import { cloudRunbookLacksOmission } from "../../shared/cloud-backup"
 import type { WriteRecord } from "../../main/storage/restore-journal"
 import { getAppearance, setAppearance, type Appearance } from "../lib/appearance"
 import { useEffect, useId, useRef, useState, type ReactNode } from "react"
@@ -20,7 +21,7 @@ import { RecoveryKeyImport } from "../components/RecoveryKeyImport"
 import { RecoveryKeyNotice } from "../components/RecoveryKeyNotice"
 import { bridge } from "../lib/bridge"
 import { localTenantIds, useBackupSettings, useLocalInventoryProblems } from "../lib/local-inventory"
-import { changeTenantStorage, savedAzureStorage, LOCAL_SWITCH_CONFIRMATION, type StorageChoice } from "../lib/storage"
+import { saveTenantStorage, savedAzureStorage, LOCAL_SWITCH_CONFIRMATION, type StorageChoice } from "../lib/storage"
 import { toast } from "../lib/toast"
 import { tenantPlan, useLicense } from "../lib/license"
 import { anyTenantIncludes } from "../lib/selected-plan"
@@ -404,6 +405,81 @@ export function ProxySignInSettings() {
   )
 }
 
+function TenantOmissionSettings({ tenantId }: { tenantId: string }) {
+  const { confirm, confirmDialog } = useConfirm()
+  const [options, setOptions] = useState<Awaited<ReturnType<typeof bridge.backups.omission>> | null>(null)
+  const [busy, setBusy] = useState(true)
+  const [cloudStopped, setCloudStopped] = useState(false)
+  const [error, setError] = useState("")
+  useEffect(() => {
+    let current = true
+    void bridge.backups.omission(tenantId).then(value => {
+      if (current) setOptions(value)
+    }).catch((failure: unknown) => {
+      if (current) setError(failure instanceof Error ? failure.message : String(failure))
+    }).finally(() => {
+      if (current) setBusy(false)
+    })
+    return () => { current = false }
+  }, [tenantId])
+
+  const change = async (enabled: boolean, scripts: boolean) => {
+    if (!await confirm({
+      title: "Change what policy backups keep?",
+      description: "Upgrade every desktop and cloud runbook that backs up this tenant. This change applies to backups and rollback captures that start after you save it. Backups already in progress finish with their original setting.",
+      confirmLabel: "Confirm and save",
+    })) return
+    setBusy(true)
+    setError("")
+    try {
+      await bridge.backups.setOmission(tenantId, enabled, scripts, cloudStopped)
+      setOptions(await bridge.backups.omission(tenantId))
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : String(failure))
+      const current = await bridge.backups.omission(tenantId).catch(() => null)
+      if (current) setOptions(current)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const version = options?.cloudRunbook?.trim()
+  const cloudOld = !!version && cloudRunbookLacksOmission(version)
+  const cloudUnknown = !version || !/^\d+\.\d+\.\d+$/.test(version)
+  const cloudNeedsConfirmation = (cloudOld || cloudUnknown) && !cloudStopped
+  const controlsDisabled = busy || !options || options.policyUnavailable
+  return (
+    <div className="mt-3 space-y-2 text-sm">
+      {confirmDialog}
+      {options && (cloudOld || cloudUnknown) && <div className="space-y-2">
+        <p role="alert">{cloudOld ? `Cloud runbook ${version} does not honor this setting. Upgrade it and run a backup to refresh its status, or stop cloud backups before enabling omission.` : "The cloud runbook version could not be confirmed."}</p>
+        <label className="flex items-center gap-2">
+          <input type="checkbox" checked={cloudStopped} disabled={busy} onChange={(event) => setCloudStopped(event.target.checked)} />
+          {cloudOld ? "I stopped cloud backups and waited for running jobs to finish." : "Every cloud runbook for this tenant has been upgraded or stopped."}
+        </label>
+      </div>}
+      <label className="flex items-center gap-2">
+        <input type="checkbox" checked={options?.enabled ?? false} disabled={controlsDisabled || (!options?.enabled && cloudNeedsConfirmation)} onChange={(event) => void change(event.target.checked, false)} />
+        Leave secret values out of policy backups
+      </label>
+      {options?.enabled && <label className="flex items-center gap-2 pl-5">
+        <input type="checkbox" checked={options.scripts} disabled={controlsDisabled || cloudNeedsConfirmation} onChange={(event) => void change(true, event.target.checked)} />
+        Also leave out script content
+      </label>}
+      {options?.policyUnavailable && <p role="alert">The omission policy could not be verified. Check that this storage is available.</p>}
+      {options?.inconsistent && <div>
+        <p role="alert">Desktop and cloud storage have different omission settings.</p>
+        <Button size="sm" variant="outline" disabled={busy || (options.enabled && cloudNeedsConfirmation)} onClick={() => void change(options.enabled, options.scripts)}>
+          Apply this setting to both accounts
+        </Button>
+      </div>}
+      {options?.warnings?.map(({ folder, account, producer }) => <p key={`${account}/${folder}`} role="alert">{producer} did not record omission for {folder} in {account}.</p>)}
+      {options?.historyUnavailable && <p role="alert">Some backup history could not be checked for omission.</p>}
+      {error && <p role="alert" className="text-red-700">{error}</p>}
+    </div>
+  )
+}
+
 function TenantSettings({ active }: { active: boolean }) {
   const { confirm, confirmDialog } = useConfirm()
   const tenants = useTenants()
@@ -414,6 +490,7 @@ function TenantSettings({ active }: { active: boolean }) {
   // The Change storage dialog closes while its section is hidden; its chooser draft lives here so the reopened dialog picks up where the admin left off.
   const [storageDraft, setStorageDraft] = useState<StorageChooserDraft | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
+  const [savingStorage, setSavingStorage] = useState(false)
 
   const refresh = () => void bridge.auth.accounts().then(setAccounts)
   useEffect(refresh, [])
@@ -433,12 +510,19 @@ function TenantSettings({ active }: { active: boolean }) {
   }
 
   const saveStorage = async () => {
-    if (!editing?.credentials || !choice) return
-    if (choice.kind === "local" && editing.resources?.storageAccountName && !editing.resources.storageAccountName.startsWith(LOCAL_STORAGE_PREFIX) && !await confirm(LOCAL_SWITCH_CONFIRMATION)) return
-    updateTenant(editing.id, changeTenantStorage(editing, choice))
-    toast(`Backups for ${editing.name} now go to ${choice.kind === "local" ? "this device" : choice.storageAccountName}.`, "success")
-    setStorageDraft(null)
-    setEditing(null)
+    if (!editing?.credentials || !choice || savingStorage) return
+    setSavingStorage(true)
+    try {
+      if (choice.kind === "local" && editing.resources?.storageAccountName && !editing.resources.storageAccountName.startsWith(LOCAL_STORAGE_PREFIX) && !await confirm(LOCAL_SWITCH_CONFIRMATION)) return
+      if (!await saveTenantStorage(editing, choice, bridge.storage.changeTenantAccount, updateTenant)) return
+      toast(`Backups for ${editing.name} now go to ${choice.kind === "local" ? "this device" : choice.storageAccountName}.`, "success")
+      setStorageDraft(null)
+      setEditing(null)
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "Could not change backup storage.", "error")
+    } finally {
+      setSavingStorage(false)
+    }
   }
 
   return (
@@ -467,6 +551,7 @@ function TenantSettings({ active }: { active: boolean }) {
                     <p className="truncate text-xs text-gray-500">
                       {account ? `Signed in as ${account.username}` : "Not signed in"} · Backups: {storageLabel(tenant.resources?.storageAccountName)}
                     </p>
+                    {active && account && tenantId && tenant.resources?.storageAccountName && <TenantOmissionSettings key={`${tenantId}:${tenant.resources.storageAccountName}`} tenantId={tenantId} />}
                   </div>
                   <Button variant="outline" size="sm" onClick={() => void signIn(tenant)} disabled={busy === tenantId || !tenant.credentials}>
                     {busy === tenantId && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
@@ -482,7 +567,7 @@ function TenantSettings({ active }: { active: boolean }) {
         )}
       </CardContent>
 
-      <Dialog open={active && Boolean(editing)} onOpenChange={(open) => { if (!open) { setStorageDraft(null); setEditing(null) } }}>
+      <Dialog open={active && Boolean(editing)} onOpenChange={(open) => { if (!open && !savingStorage) { setStorageDraft(null); setEditing(null) } }}>
         <DialogContent className="sm:max-w-[620px]">
           <DialogHeader>
             <DialogTitle>Backup storage for {editing?.name}</DialogTitle>
@@ -503,8 +588,8 @@ function TenantSettings({ active }: { active: boolean }) {
             />
           )}
           <DialogFooter>
-            <Button variant="outline" onClick={() => { setStorageDraft(null); setEditing(null) }}>Cancel</Button>
-            <Button disabled={!choice} onClick={saveStorage}>Save</Button>
+            <Button variant="outline" disabled={savingStorage} onClick={() => { setStorageDraft(null); setEditing(null) }}>Cancel</Button>
+            <Button disabled={!choice || savingStorage} onClick={saveStorage}>Save</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

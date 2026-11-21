@@ -205,6 +205,14 @@ Skipped items, and failed items that left nothing behind, have no button. An inc
 * Restores are recorded in the tenant's [audit log](/audit-log/).
 * Restored or overwritten items reach devices at their next check-in. Unassigned copies do not reach any device until you assign them in Intune.
 
+## Policies with values left out
+
+Restore preview lists the fields left out and identifies policies you cannot select. A full restore processes eligible policies and lists the blocked ones in its results. Replace, copy, repair and retry all require a backup that contains the omitted values. A ZIP import preserves the restriction.
+
+## Restore history in Audit Log
+
+Open **Job details** in the destination tenant’s [Audit Log](/audit-log/) for item outcomes, applied field names and the operation and run IDs. Audit delivery is independent of the restore result.
+
 ## Related pages
 
 * [Intune restore](https://www.tenuvault.com/intune-restore): restore modes, plans and limits, on the product site
@@ -215,7 +223,3 @@ Skipped items, and failed items that left nothing behind, have no button. An inc
 * [What cannot be restored and restore write history](/restore/limitations/)
 * [Disaster recovery](/restore/disaster-recovery/)
 * [Drift detection](/drift/), for reverting a single changed policy
-
-### Restore history in Audit Log
-
-Open **Job details** in the destination tenant’s [Audit Log](/audit-log/) for item outcomes, applied field names and the operation and run IDs. Audit delivery is independent of the restore result.
