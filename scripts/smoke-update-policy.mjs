@@ -22,9 +22,12 @@
  *   writing it. The next run that holds the lock removes a marked store, and on Windows an empty
  *   policy key (a run killed right after creating it), before anything else.
  *
- * Out of scope: a configuration profile or Group Policy delivered for the first time in the
- * moment between a run's check of the store and its write or removal. The harness is for CI
- * runners and developer machines, and it refuses to start where any TenuVault policy exists.
+ * Out of scope (owner decision, 2026-11-21): a configuration profile or Group Policy for TenuVault
+ * delivered for the first time while a smoke run holds the policy, from its check of the store to
+ * its removal. A policy identical to the smoke run's (DWORD 1, or a profile carrying the same
+ * mark) cannot be told apart and is removed with it, until the next profile or policy refresh.
+ * The harness is for CI runners and developer machines, and it refuses to start where any
+ * TenuVault policy exists.
  *
  * `node scripts/smoke-update-policy.mjs --clean` removes what a killed run left, without a smoke run.
  */
