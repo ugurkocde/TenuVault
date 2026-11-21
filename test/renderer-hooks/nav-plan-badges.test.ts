@@ -26,7 +26,7 @@ vi.mock("../../src/renderer/lib/bridge", () => ({
     schedules: { list: async () => [] },
     license: { open: async () => undefined, tenantTrialAction: trialAction },
     preferences: { get: async () => ({}), set: async () => ({}) },
-    feedback: { capture: feedbackCapture },
+    feedback: { capture: feedbackCapture, discardCapture: async () => undefined },
   },
 }))
 vi.mock("../../src/renderer/lib/license", async (original) => ({
@@ -503,6 +503,25 @@ describe("sidebar groups and Help", () => {
     expect(feedbackPageLabel("/portal/settings")).not.toBe(feedbackPageLabel("/portal/dashboard"))
   })
 
+  it("captures again when the page changes while the window is being captured", async () => {
+    licenseStatus.current = statusFor("pro")
+    selectTenant()
+    let finishCapture: () => void = () => undefined
+    feedbackCapture.mockImplementationOnce(() => new Promise((resolve) => { finishCapture = () => resolve(null) }))
+    let go: (path: string) => void = () => undefined
+    function Navigator() { go = useNavigate(); return null }
+    const container = await render(createElement("div", null, createElement(Navigator), createElement(DesktopLayout)))
+    await openHelp(container)
+    await choose("Share feedback")
+    expect(feedbackCapture).toHaveBeenCalledTimes(1)
+    expect(feedbackCapture.mock.calls[0]![0]).toBe("Dashboard")
+    // Settings paints while the capture is still running, so that screenshot may show either page.
+    await act(async () => go("/portal/settings"))
+    await act(async () => { finishCapture(); await new Promise((resolve) => setTimeout(resolve, 80)) })
+    expect(feedbackCapture).toHaveBeenCalledTimes(2)
+    expect(feedbackCapture.mock.calls[1]![0]).toBe(feedbackPageLabel("/portal/settings"))
+  })
+
   it("ignores a choice made in a dismissed menu while it animates out", async () => {
     // jsdom applies no stylesheets: give the menu its exit animation, so it stays mounted after Escape
     // until the animation ends, as it does in the app.
@@ -658,6 +677,9 @@ describe("folding sidebar groups", () => {
     expect(fold).not.toMatch(/opacity|filter|blur/)
     // Folded rows are hidden once the fold has closed.
     expect(fold).toMatch(/data-open="false"\] > \.tv-fold-inner \{[^}]*visibility: hidden/)
+    // With reduced motion the closed rule's delayed visibility change goes too, so rows hide at once.
+    const reduced = css.slice(css.indexOf("@media (prefers-reduced-motion: reduce)", css.indexOf(".tv-fold {")))
+    expect(reduced.slice(0, reduced.indexOf("\n}"))).toContain(".tv-fold[data-open] > .tv-fold-inner { transition: none; }")
   })
 
   it("marks the entry of the open page for the sliding pill", async () => {

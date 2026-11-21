@@ -499,7 +499,16 @@ export function DesktopLayout() {
     if (capturingFeedback.current || feedback.open) return
     capturingFeedback.current = true
     feedbackReturn.current = opener
-    const snapshot = await bridge.feedback.capture(feedbackPageLabel(currentPath.current)).catch(() => null)
+    let snapshot: FeedbackSnapshot | null = null
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const path = currentPath.current
+      snapshot = await bridge.feedback.capture(feedbackPageLabel(path)).catch(() => null)
+      if (currentPath.current === path) break
+      // The page changed while the window was captured, so the screenshot may show either one: take
+      // it again once the new page has painted, so the page named matches the one in the picture.
+      if (snapshot) void bridge.feedback.discardCapture(snapshot.id).catch(() => undefined)
+      await new Promise<void>((resolve) => afterPaint(resolve))
+    }
     capturingFeedback.current = false
     setFeedback({ open: true, snapshot })
   }

@@ -239,6 +239,8 @@ html:has([data-flow-shell]) {
 
 @media (prefers-reduced-motion: reduce) {
   .tv-fold, .tv-fold-inner, .tv-fold-caret, .tv-pill { transition: none; }
+  /* As specific as the folded rule, so a fold hides its rows at once instead of after its delay. */
+  .tv-fold[data-open] > .tv-fold-inner { transition: none; }
   .tv-pop[data-state] { animation: none; }
   .tv-pop, .tv-pop * { transition: none; }
 }

@@ -66,7 +66,7 @@ export function NavFoldGroup({ label, open, holdsActive, onToggle, children }: {
         aria-expanded={open}
         aria-controls={`nav-items-${label}`}
         onClick={onToggle}
-        className="group/fold flex w-full items-center gap-1 rounded-lg px-4 pb-1 pt-2.5 text-left text-xs font-medium text-muted-foreground motion-safe:transition-colors hover:text-foreground"
+        className="group/fold relative z-[1] flex w-full items-center gap-1 rounded-lg px-4 pb-1 pt-2.5 text-left text-xs font-medium text-muted-foreground motion-safe:transition-colors hover:text-foreground"
       >
         {label}
         <ChevronDown
