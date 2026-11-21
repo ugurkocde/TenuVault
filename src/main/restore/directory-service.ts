@@ -96,6 +96,7 @@ export class DirectoryRestoreService {
   }
   private async pageConnection(page: DirectoryPage) {
     // Online actions retain the tenant-wide publication gate as well as this page's recovery requirement.
+    directoryObjectState(this.store, page.run.tenant, page.run.id, this.now).recoverRetryDeadlines()
     this.pending.forTenant(page.run.tenant).flush()
     this.pending.forTenant(page.run.tenant).flush(page.run.id)
     const connection = await this.ownerConnection(page)
@@ -117,9 +118,12 @@ export class DirectoryRestoreService {
   private save(page: DirectoryPage) { this.store.set(key(page.run.tenant, page.run.id), JSON.stringify(page)) }
   async prepare(tenant: string, request: IdentityRestoreRequest, options: DirectoryOptions, read: (path: string) => Promise<unknown>) {
     if (options.previousRunId !== undefined) await this.verifySavedOwner(tenant, options.previousRunId)
+    directoryObjectState(this.store, tenant, "", this.now).recoverRetryDeadlines()
     this.pending.forTenant(tenant).flush(options.previousRunId)
-    try { return await this.preparePage(tenant, request, options, read) }
+    let discardUnpublished: (() => void) | undefined
+    try { return await this.preparePage(tenant, request, options, read, discard => { discardUnpublished = discard }) }
     catch (error) {
+      discardUnpublished?.()
       if (isRestorePersistenceError(error)) throw error
       if (error instanceof RestoreWriteDeferredError && error.retryAt !== undefined) {
         const folder = request.path.split("/")[1]!, sourceId = String(request.snapshot.id)
@@ -132,9 +136,9 @@ export class DirectoryRestoreService {
       throw error
     }
   }
-  private async preparePage(tenant: string, request: IdentityRestoreRequest, options: DirectoryOptions, read: (path: string) => Promise<unknown>) {
+  private async preparePage(tenant: string, request: IdentityRestoreRequest, options: DirectoryOptions, read: (path: string) => Promise<unknown>, onInventory: (discard: () => void) => void) {
     const folder = request.path.split("/")[1]
-    if (DIRECTORY_9B_FOLDERS.includes(folder ?? "")) return this.prepareApplications(tenant, request, options, read)
+    if (DIRECTORY_9B_FOLDERS.includes(folder ?? "")) return this.prepareApplications(tenant, request, options, read, onInventory)
     if (!["Users", "Groups"].includes(folder ?? "") || request.origin !== "restore") fail("Directory restore requires an owned same-tenant backup.")
     this.requireAccess(tenant, folder!)
     const snapshot = request.snapshot, sourceId = snapshot.id
@@ -197,19 +201,18 @@ export class DirectoryRestoreService {
       inventory = { id: run.id, count: 0, offset: 0, targetId: target }
       let chunk: typeof object[] = [], part = 0
       const inventoryKey = (part: number) => `restore.directory.inventory.${tenant.toLowerCase()}.${run.id}.${part}`
-      try {
-        for await (const step of steps) {
-          if (++inventory.count > 1_000_000) fail("The directory difference limit was reached.")
-          chunk.push(step)
-          if (chunk.length === 50) { this.store.set(inventoryKey(part++), JSON.stringify(chunk)); chunk = [] }
-        }
-        if (chunk.length) this.store.set(inventoryKey(part++), JSON.stringify(chunk))
-        inventory.principalMappings = principalMappings.finish()
-      } catch (error) {
+      onInventory(() => {
+        if (this.store.get(key(tenant, run.id))) return
         principalMappings.discard()
         for (let index = 0; index < part; index++) this.store.delete(inventoryKey(index))
-        throw error
+      })
+      for await (const step of steps) {
+        if (++inventory.count > 1_000_000) fail("The directory difference limit was reached.")
+        chunk.push(step)
+        if (chunk.length === 50) { this.store.set(inventoryKey(part++), JSON.stringify(chunk)); chunk = [] }
       }
+      if (chunk.length) this.store.set(inventoryKey(part++), JSON.stringify(chunk))
+      inventory.principalMappings = principalMappings.finish()
     }
     if (inventory) {
       const raw = this.store.get(`restore.directory.inventory.${tenant.toLowerCase()}.${inventory.id}.${inventory.offset / 50}`)
@@ -245,7 +248,7 @@ export class DirectoryRestoreService {
     this.save(page)
     return this.view(page)
   }
-  private async prepareApplications(tenant: string, request: IdentityRestoreRequest, options: DirectoryOptions, read: (path: string) => Promise<unknown>) {
+  private async prepareApplications(tenant: string, request: IdentityRestoreRequest, options: DirectoryOptions, read: (path: string) => Promise<unknown>, onInventory: (discard: () => void) => void) {
     if (request.origin !== "restore") fail("Application access requires an owned same-tenant backup. Imported grants and cross-tenant restores are refused.")
     requireApplicationRestoreAccess(this.settings?.get(tenant).entra)
     const folder = request.path.split("/")[1]!, snapshot = request.snapshot
@@ -276,17 +279,16 @@ export class DirectoryRestoreService {
       } else {
         inventory = { id: run.id, count: 0, offset: 0, targetId: object.targetId! }
         let chunk: GuardedStep[] = [], part = 0
-        try {
-          for await (const step of applicationRelationshipSteps(request.path, snapshot, object.targetId!, io, read, readSource)) {
-            if (++inventory.count > 1_000_000) fail("The application difference limit was reached.")
-            chunk.push(step)
-            if (chunk.length === 50) { this.store.set(`restore.directory.inventory.${tenant.toLowerCase()}.${run.id}.${part++}`, JSON.stringify(chunk)); chunk = [] }
-          }
-          if (chunk.length) this.store.set(`restore.directory.inventory.${tenant.toLowerCase()}.${run.id}.${part++}`, JSON.stringify(chunk))
-        } catch (error) {
+        onInventory(() => {
+          if (this.store.get(key(tenant, run.id))) return
           for (let index = 0; index < part; index++) this.store.delete(`restore.directory.inventory.${tenant.toLowerCase()}.${run.id}.${index}`)
-          throw error
+        })
+        for await (const step of applicationRelationshipSteps(request.path, snapshot, object.targetId!, io, read, readSource)) {
+          if (++inventory.count > 1_000_000) fail("The application difference limit was reached.")
+          chunk.push(step)
+          if (chunk.length === 50) { this.store.set(`restore.directory.inventory.${tenant.toLowerCase()}.${run.id}.${part++}`, JSON.stringify(chunk)); chunk = [] }
         }
+        if (chunk.length) this.store.set(`restore.directory.inventory.${tenant.toLowerCase()}.${run.id}.${part++}`, JSON.stringify(chunk))
       }
       const raw = this.store.get(`restore.directory.inventory.${tenant.toLowerCase()}.${inventory.id}.${inventory.offset / 50}`)
       if (!raw && inventory.offset < inventory.count) fail("The application relationship inventory is unavailable.")
@@ -341,7 +343,12 @@ export class DirectoryRestoreService {
   }
   private view(page: DirectoryPage) {
     const runs = this.history(page), entries = runs.flatMap(({ run }) => run.entries)
-    return { outcomes: this.outcomes(page, runs), ...this.pageState(page, entries), canDiscard: !directoryObjectState(this.store, page.run.tenant, page.run.id).discarded() && !entries.some(entry => entry.state === "uncertain"), runId: page.run.id, selection: page.selection, fingerprint: restoreFingerprint({ source: page.run.source!, rows: page.rows as unknown as Item["rows"], options: page.options as unknown as Item, ...(page.inventory?.principalMappings ? { principalMappings: page.inventory.principalMappings.fingerprint } : {}) }), rows: page.rows, more: page.more, options: page.options }
+    const discardEntries = runs.flatMap(({ batch, run }) => {
+      const recovered = structuredClone(run)
+      recoverDirectoryRejections(this.store, recovered, directoryPagePrefix(page.run.tenant, page.run.id) + `batch.${batch}.`, this.now)
+      return recovered.entries
+    })
+    return { outcomes: this.outcomes(page, runs), ...this.pageState(page, entries), canDiscard: !directoryObjectState(this.store, page.run.tenant, page.run.id).discarded() && !discardEntries.some(entry => entry.state === "uncertain"), runId: page.run.id, selection: page.selection, fingerprint: restoreFingerprint({ source: page.run.source!, rows: page.rows as unknown as Item["rows"], options: page.options as unknown as Item, ...(page.inventory?.principalMappings ? { principalMappings: page.inventory.principalMappings.fingerprint } : {}) }), rows: page.rows, more: page.more, options: page.options }
   }
   private pageState(page: DirectoryPage, entries: GuardedRun["entries"]) {
     const discarded = directoryObjectState(this.store, page.run.tenant, page.run.id).discarded()
@@ -421,7 +428,9 @@ export class DirectoryRestoreService {
     // Retain the deadline tenant-wide even if both durable publications fail.
     this.persistRetry(page.run.tenant, retryAt, () => {
       // A write may have completed since the actor read was throttled. Never replay its old outcome.
-      for (const { batch, run } of this.history(page)) {
+      const runs = this.history(page)
+      objects.trackRetryJournals(runs.map(({ batch, run }) => directoryPagePrefix(run.tenant, run.id) + `batch.${batch}.`), retryAt)
+      for (const { batch, run } of runs) {
         for (const entry of run.entries) entry.retryAt = Math.max(entry.retryAt ?? 0, retryAt)
         new GuardedRunJournal({ get: name => this.store.get(directoryPagePrefix(run.tenant, run.id) + `batch.${batch}.` + name), set: (name, value) => this.store.set(directoryPagePrefix(run.tenant, run.id) + `batch.${batch}.` + name, value), delete: () => fail("History cannot be deleted.") }).save(run)
       }
@@ -461,7 +470,8 @@ export class DirectoryRestoreService {
     const controller = new AbortController()
     this.running.set(runningKey, controller)
     try {
-      const state = directoryObjectState(this.store, tenant, id)
+      const state = directoryObjectState(this.store, tenant, id, this.now)
+      state.recoverRetryDeadlines()
       if (action === "discard") {
         this.pending.forTenant(tenant).flush(page.run.id)
         for (const { batch, run } of this.history(page)) {

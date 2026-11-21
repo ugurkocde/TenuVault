@@ -35,8 +35,9 @@ export class DirectoryPrincipalMappings {
   }
   private flush() {
     if (!this.records.length) return
-    this.store.set(this.key(this.parts), JSON.stringify(this.records))
-    this.parts++; this.records = []
+    const part = this.parts++
+    this.store.set(this.key(part), JSON.stringify(this.records))
+    this.records = []
   }
   finish() { this.flush(); return { parts: this.parts, fingerprint: this.hash.digest("hex") } }
   discard() { for (let part = 0; part < this.parts; part++) this.store.delete(this.key(part)) }

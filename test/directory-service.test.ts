@@ -2669,6 +2669,11 @@ it.each(["matching", "wrong step", "wrong attempt"])("discards a coordinator-onl
     if (marker === "wrong attempt") coordinator.locks[resource].rejected.attempt++
     env.data.set(coordinatorKey, JSON.stringify(coordinator))
     unavailable = false; spy.mockRestore()
+    const beforeResume = new Map(env.data)
+    const resumed = await env.service().resume(tenant, { ...env.request, runId: page.runId })
+    expect(resumed.canDiscard).toBe(marker === "matching")
+    expect(resumed.outcomes[0]!.state).toBe("uncertain")
+    expect(env.data).toEqual(beforeResume)
     const calls = env.fetcher.mock.calls.length, online = vi.fn(async () => { throw new Error("Proxy still requires authentication") })
     env.fetcher.mockImplementation(async () => new Response(null, { status: 407 }))
     const restarted = new DirectoryRestoreService(env.store, new RecoveryAccounts(env.store), online, env.connection, env.fetcher, () => [], env.settings)
@@ -2682,5 +2687,81 @@ it.each(["matching", "wrong step", "wrong attempt"])("discards a coordinator-onl
       expect(JSON.parse(env.data.get(journalKey)!).runs[page.runId].entries[0].state).toBe("uncertain")
     }
     expect(online).not.toHaveBeenCalled(); expect(env.fetcher).toHaveBeenCalledTimes(calls); expect(posts).toBe(1); expect(env.writes).toEqual([])
+  } finally { spy.mockRestore() }
+})
+
+
+it.each(["coordinator saved", "journal only"])("recovers a completed page's released-lock deadline from %s before another group PATCH", async publication => {
+  vi.useFakeTimers({ toFake: ["Date"] })
+  let time = Date.now()
+  const env = world(0, false, () => time), service = env.service()
+  env.group.description = "Live"
+  const request = { ...env.request, snapshot: { ...env.request.snapshot, description: "First" } }
+  const page = await service.prepare(tenant, request, options, env.read)
+  const approvals = Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals]))
+  expect(await service.execute(tenant, { ...request, runId: page.runId }, page.fingerprint, approvals)).toMatchObject({ status: "complete" })
+  const coordinatorKey = `restore.directory.coordinator.${tenant}`, journalKey = directoryPagePrefix(tenant, page.runId) + `batch.0.restore.guarded.${tenant}`
+  expect(JSON.parse(env.data.get(coordinatorKey)!).locks).toEqual({})
+  const original = env.fetcher.getMockImplementation()!, deadline = time + 120_000
+  env.fetcher.mockImplementation((input, init) => new URL(String(input)).pathname === "/v1.0/applications" ? Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": new Date(deadline).toUTCString() } })) : original(input, init))
+  const set = env.store.set, spy = vi.spyOn(env.store, "set").mockImplementation((key, value) => {
+    if (publication === "journal only" && key === coordinatorKey) throw new Error("Coordinator unavailable")
+    set(key, value)
+  })
+  try {
+    await expect(service.saved(tenant, page.runId, "reconcile")).rejects.toThrow(publication === "journal only" ? "retry deadline could not be saved" : "throttled")
+    const retryAt = JSON.parse(env.data.get(journalKey)!).runs[page.runId].entries[0].retryAt
+    expect(retryAt).toBeGreaterThan(time); expect(retryAt).toBeLessThanOrEqual(deadline)
+    expect(JSON.parse(env.data.get(coordinatorKey)!).locks).toEqual({})
+    spy.mockRestore(); env.fetcher.mockImplementation(original)
+    const replacementRequest = { ...request, snapshot: { ...request.snapshot, description: "Second" } }
+    // A fresh service recovers the journal half during the next tenant operation.
+    const replacement = await env.service().prepare(tenant, replacementRequest, options, env.read)
+    expect(JSON.parse(env.data.get(coordinatorKey)!).deadlines[resource]).toBe(retryAt)
+    // Restart again to prove the target-indexed coordinator half is durable.
+    const restarted = env.service(), replacementApprovals = Object.fromEntries(replacement.rows.map(row => [row.key, row.review.approvals]))
+    expect(await restarted.execute(tenant, { ...replacementRequest, runId: replacement.runId }, replacement.fingerprint, replacementApprovals)).toMatchObject({ outcomes: [{ state: "deferred", retryAt }] })
+    expect(env.writes).toEqual([`PATCH groups/${resource}`])
+    time = retryAt; vi.setSystemTime(time)
+    expect(await env.service().execute(tenant, { ...replacementRequest, runId: replacement.runId }, replacement.fingerprint, replacementApprovals)).toMatchObject({ status: "complete", outcomes: [{ state: "applied" }] })
+    expect(env.writes).toEqual([`PATCH groups/${resource}`, `PATCH groups/${resource}`])
+    expect(JSON.parse(env.data.get(coordinatorKey)!).deadlines).toEqual({})
+    expect(env.data.has(`restore.directory.retry-journals.${tenant}`)).toBe(false)
+  } finally { spy.mockRestore(); vi.useRealTimers() }
+})
+
+it.each(["review", "page save", "principal save after publication"])("removes unpublished first-page inventory and principal records after repeated %s failures", async phase => {
+  const env = world(1001), original = env.fetcher.getMockImplementation()!
+  if (phase === "review") env.fetcher.mockImplementation((input, init) => new URL(String(input)).pathname.startsWith("/v1.0/identity/conditionalAccess/") ? Promise.resolve(new Response(null, { status: 503 })) : original(input, init))
+  const set = env.store.set, spy = vi.spyOn(env.store, "set").mockImplementation((key, value) => {
+    if (phase === "page save" && key.startsWith("restore.directory.review.")) throw new Error("Preview save unavailable")
+    set(key, value)
+    if (phase === "principal save after publication" && key.startsWith("restore.directory.principals.")) throw new Error("Preview save unavailable")
+  })
+  try {
+    const before = new Map(env.data)
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await expect(env.service().prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read)).rejects.toThrow(phase === "review" ? "temporary Microsoft Graph read failure" : "Preview save unavailable")
+      expect(env.data).toEqual(before)
+      expect([...env.data.keys()].filter(key => /^restore\.directory\.(inventory|principals|review)\./.test(key))).toEqual([])
+    }
+    expect(env.writes).toEqual([])
+  } finally { spy.mockRestore() }
+})
+
+it("retains first-page inventory when the review save publishes before reporting a storage failure", async () => {
+  const env = world(1), set = env.store.set
+  const spy = vi.spyOn(env.store, "set").mockImplementation((key, value) => {
+    set(key, value)
+    if (key.startsWith("restore.directory.review.")) throw new Error("Review sync failed after publication")
+  })
+  try {
+    await expect(env.service().prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read)).rejects.toThrow("Review sync failed after publication")
+    const review = [...env.data.entries()].find(([key]) => key.startsWith("restore.directory.review."))!
+    const page = JSON.parse(review[1])
+    expect(env.data.has(`restore.directory.inventory.${tenant}.${page.inventory.id}.0`)).toBe(true)
+    expect(env.data.has(`restore.directory.principals.${tenant}.${page.inventory.id}.0`)).toBe(true)
+    expect(await env.service().resume(tenant, { ...env.request, runId: page.run.id })).toMatchObject({ runId: page.run.id, rows: [{ key: page.rows[0].key }] })
+    expect(env.writes).toEqual([])
   } finally { spy.mockRestore() }
 })

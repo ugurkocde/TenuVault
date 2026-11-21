@@ -643,3 +643,22 @@ it("keeps the previous page ID and exact options when the next preview must retr
   expect(JSON.parse(String(fetcher.mock.calls[2]![1]?.body))).toEqual(JSON.parse(String(fetcher.mock.calls[1]![1]?.body)))
   expect(document.body.textContent).toContain("Saved page: next.")
 })
+
+
+it("shows Discard after Resume recovers a coordinator-only rejection without confirmation or execution", async () => {
+  const fetcher = vi.fn(async (_input: unknown, init?: RequestInit) => {
+    const action = JSON.parse(String(init?.body)).action
+    return Response.json(action === "preview" ? { ...page, canDiscard: false } : action === "resume" ? { ...page, canDiscard: true, unresolved: true, outcomes: [{ key: "member", state: "uncertain" }] } : { ...page, discarded: true, canDiscard: false })
+  })
+  vi.stubGlobal("fetch", fetcher)
+  root = createRoot(document.body.appendChild(document.createElement("div")))
+  await act(async () => root.render(createElement(DirectoryRestore, props)))
+  await click("Review directory restore"); await click("Preview directory changes")
+  expect(button("Discard saved restore")).toBeUndefined()
+  await click("Resume saved page")
+  expect(button("Discard saved restore").disabled).toBe(false)
+  expect(document.querySelector('[aria-label="Directory page results"]')!.textContent).toContain("The result is being confirmed")
+  await click("Discard saved restore")
+  expect(document.body.textContent).toContain("Saved restore discarded")
+  expect(fetcher.mock.calls.map(([, init]) => JSON.parse(String(init?.body)).action)).toEqual(["preview", "resume", "discard"])
+})
