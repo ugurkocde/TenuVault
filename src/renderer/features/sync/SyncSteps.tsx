@@ -215,7 +215,7 @@ export function ChooseTargets({ sourceName, options, loading, error, tenantOf, l
                   <span className="mt-3 block truncate text-sm font-semibold text-gray-900">{name}</span>
                   <span className="block truncate text-xs text-gray-500">{tenant?.domain || option.tenantId}</span>
                   <span className="mt-3 flex min-h-6 flex-wrap gap-1.5">
-                    {option.eligible && !option.multiple && <Chip>On your Pro license</Chip>}
+                    {option.eligible && !option.multiple && <Chip>Available on Pro</Chip>}
                     {reason && <Chip>{reason.chip}</Chip>}
                     {count > 0 && <Chip tone="success">{plural(count, "policy", "policies")} linked</Chip>}
                   </span>
@@ -228,7 +228,7 @@ export function ChooseTargets({ sourceName, options, loading, error, tenantOf, l
           <p className="mt-3 flex items-center gap-2.5 rounded-2xl bg-secondary px-4 py-3 text-sm text-gray-700">
             <Info className="h-4 w-4 shrink-0" aria-hidden="true" />
             <span>
-              Pro syncs between the two tenants of your license. Syncing to more tenants is part of MSP.{" "}
+              Pro syncs between the two tenants of your license, or between two tenants that each run a Pro trial. Syncing to more tenants is part of MSP.{" "}
               <button type="button" className="font-semibold underline underline-offset-2" onClick={() => void bridge.license.open("buy", { source: "sync-targets" })}>See plans</button>
             </span>
           </p>

@@ -22,7 +22,7 @@ Open **Frameworks** in the sidebar and select **My baselines** at the top of the
 | --- | --- | --- | --- |
 | Create, edit, deploy, rebase and compare baselines | No | Yes | Yes |
 | Read baselines, versions, deployments and comparisons stored earlier | Yes | Yes | Yes |
-| Deploy into another tenant | No | The other tenant of the same license | Any connected MSP tenant |
+| Deploy into another tenant | No | The other tenant of the same license, or another Pro trial tenant when the source runs a trial | Any connected MSP tenant |
 
 On a plan without custom baselines, **My baselines** in the sidebar and on the OpenIntuneBaseline page shows a **Pro** badge. It still opens the list, which shows what Pro and MSP add and any baselines stored earlier.
 

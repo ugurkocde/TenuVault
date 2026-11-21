@@ -68,7 +68,7 @@ export function DeployPanel({ tenant, baseline, version, allowed, plan, deployme
                 {targets.map((entry) => <option key={entry.id} value={entry.credentials!.tenantId}>{entry.name}{entry.credentials!.tenantId === owner ? " (this baseline's tenant)" : ""}</option>)}
               </select>
             </label>
-            <p className="self-end text-xs text-gray-500">{other ? (plan && allows(plan, "portfolio") ? "MSP: any connected tenant on MSP." : "Pro: only the other tenant covered by the same license. Both licenses are checked.") : "The baseline's own tenant."}</p>
+            <p className="self-end text-xs text-gray-500">{other ? (plan && allows(plan, "portfolio") ? "MSP: any connected tenant on MSP." : "Pro: only the other tenant covered by the same license, or another tenant on a Pro trial when this one runs a trial too. Both licenses are checked.") : "The baseline's own tenant."}</p>
           </div>
           <fieldset className="space-y-1">
             <legend className="text-xs text-gray-500">Policies (none selected deploys all)</legend>

@@ -62,7 +62,7 @@ export default function SyncPage() {
             "Pick policies in one tenant and copy them to another, for example from a lab tenant to production.",
             "Every target is reviewed against its live state before anything is written, with a backup first unless you skip it.",
             "The next sync updates the policies it created, so nothing is duplicated. Sync never runs on its own.",
-            "Pro syncs between the two tenants of your license. Syncing to more tenants is part of MSP.",
+            "Pro syncs between the two tenants of your license, or between two tenants that each run a Pro trial. Syncing to more tenants is part of MSP.",
           ]}
         />
       ) : (
@@ -104,7 +104,16 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
   const policies = useQuery({ queryKey: ["sync", "policies", sourceId, folder], queryFn: () => syncPolicies(source, folder), refetchOnWindowFocus: true })
   const options = useQuery({ queryKey: ["sync", "targets", sourceId], queryFn: () => syncTargets(source) })
   const eligible = (options.data?.targets ?? []).filter((option) => option.eligible).map((option) => option.tenantId).slice(0, 25)
-  const status = useQuery({ queryKey: ["sync", "status", sourceId, eligible.join()], queryFn: () => syncStatus(source, eligible), enabled: eligible.length > 0, staleTime: 10_000, refetchOnWindowFocus: true })
+  // A run may name more than one target only on MSP; otherwise every eligible target (several
+  // when the source and more than one other tenant run a Pro trial) is read on its own.
+  const multiple = options.data?.multiple === true
+  const status = useQuery({
+    queryKey: ["sync", "status", sourceId, eligible.join(), multiple],
+    queryFn: async () => multiple ? syncStatus(source, eligible) : { targets: (await Promise.all(eligible.map((id) => syncStatus(source, [id]).catch((error: unknown) => ({ targets: [{ targetTenantId: id, links: [], error: error instanceof Error ? error.message : String(error) }] }))))).flatMap((answer) => answer.targets) },
+    enabled: eligible.length > 0,
+    staleTime: 10_000,
+    refetchOnWindowFocus: true,
+  })
   const refreshStatus = () => {
     void queryClient.invalidateQueries({ queryKey: ["sync", "status", sourceId] })
     void queryClient.invalidateQueries({ queryKey: ["sync", "policies", sourceId] })

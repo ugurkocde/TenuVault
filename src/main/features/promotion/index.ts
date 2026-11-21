@@ -42,7 +42,8 @@ export async function policies(deps: FeatureDeps, tenantId: string, folder: stri
 /**
  * /api/promotion (#145). The selected tenant is the destination (its plan is checked by the
  * route); the source is named in `sourceTenantId` and in `targetTenants`, so its plan is
- * checked too. On Pro both must be the two tenants of the same license. No MSP bulk or
+ * checked too. On Pro both must be the two tenants of the same license, or two Pro trial
+ * tenants. No MSP bulk or
  * portfolio endpoint is used or unlocked.
  */
 export function routes(deps: FeatureDeps): Record<string, RouteModule> {
