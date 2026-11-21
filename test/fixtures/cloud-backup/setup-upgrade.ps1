@@ -321,7 +321,7 @@ foreach ($scenario in "rerun-keeps-report", "rerun-sets-report") {
 
 function Invoke-LinkedUpgrade {
     [CmdletBinding(SupportsShouldProcess)]
-    param([string]$Scenario, [hashtable]$ScheduleArguments = @{})
+    param([string]$Scenario, [hashtable]$ScheduleArguments = @{}, [string]$Scope = "policies")
     $runbook = $null
     $errorText = $null
     $output = @()
@@ -338,6 +338,12 @@ $script:variables["TenuVaultScope-$tenantKey"] = "everything"
 $script:variables["TenuVaultExcludedFolders-$tenantKey"] = "ConfigurationPolicies,Apps"
 $script:variables["TenuVaultAppOnlyExcluded-$tenantKey"] = ""
 Invoke-LinkedUpgrade -Scenario "linked-upgrade"
+
+Reset-OldSetup
+$script:variables["TenuVaultScope-$tenantKey"] = "policies"
+$script:variables["TenuVaultExcludedFolders-$tenantKey"] = "ConfigurationPolicies,Apps"
+$script:variables["TenuVaultAppOnlyExcluded-$tenantKey"] = ""
+Invoke-LinkedUpgrade -Scenario "linked-upgrade-everything" -Scope "everything"
 
 Reset-OldSetup
 $script:scheduleSettings.IsEnabled = $false

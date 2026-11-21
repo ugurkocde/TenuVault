@@ -388,11 +388,13 @@ describe("Cloud audit contract", () => {
     expect(resources.filter(resource => !audit.includes(resource)).every(resource => resource.condition?.includes("not(parameters('auditOnly'))"))).toBe(true)
     expect(template.outputs.pasteIntoTenuVault).toMatchObject({ condition: "[not(parameters('auditOnly'))]" })
     expect(template.parameters.auditOnly).toMatchObject({ type: "bool", defaultValue: false })
+    expect(template.parameters.scheduleStartTime).not.toHaveProperty("defaultValue")
     expect(template.parameters).not.toHaveProperty("deploySchedule")
     expect(template.parameters).not.toHaveProperty("publishRunbook")
     const main = process.env.TENUVAULT_TEST_MAIN_WORKTREE
     if (main) {
       const base = JSON.parse(readFileSync(join(main, "resources/cloud-backup/azuredeploy.json"), "utf8")) as typeof template
+      expect(template.parameters.scheduleStartTime).toEqual(base.parameters.scheduleStartTime)
       for (const kind of ["runbooks", "schedules", "jobSchedules"]) {
         const current = resources.find(resource => resource.type.endsWith("/" + kind))!
         const { condition, ...definition } = current
@@ -828,18 +830,19 @@ describe("New-TenuVaultCloudBackup.ps1", () => {
     if (baseline) expect(result).toEqual(scheduleResult(baseline.get(scenario)!))
   }, 60_000)
 
-  it.runIf(Boolean(pwsh))("writes the main scope defaults on a linked rerun without scope arguments", () => {
-    const scenario = "linked-upgrade"
+  it.runIf(Boolean(pwsh))("writes main's scope variables on default and Everything reruns", () => {
     const variableResult = ({ scope, exclusions, appOnlyExcluded, variableWrites }: SetupScenario) => ({
       scope, exclusions, appOnlyExcluded, variableWrites,
     })
-    const result = variableResult(setupRun(scenario))
-    expect(result).toEqual({
-      scope: "policies", exclusions: "", appOnlyExcluded: "DeviceCategories,DeviceCleanupRules",
-      variableWrites: ["TenantId", "StorageAccount", "Scope", "ExcludedFolders", "AppOnlyExcluded"].map(name => `TenuVault${name}-11111111`),
-    })
     const baseline = mainSetup()
-    if (baseline) expect(result).toEqual(variableResult(baseline.get(scenario)!))
+    for (const [scenario, scope] of [["linked-upgrade", "policies"], ["linked-upgrade-everything", "everything"]] as const) {
+      const result = variableResult(setupRun(scenario))
+      expect(result).toEqual({
+        scope, exclusions: "", appOnlyExcluded: "DeviceCategories,DeviceCleanupRules",
+        variableWrites: ["TenantId", "StorageAccount", "Scope", "ExcludedFolders", "AppOnlyExcluded"].map(name => `TenuVault${name}-11111111`),
+      })
+      if (baseline) expect(result).toEqual(variableResult(baseline.get(scenario)!))
+    }
   }, 60_000)
 
   it.runIf(Boolean(pwsh))("publishes, creates and links the schedule when audit provisioning is denied", () => {
