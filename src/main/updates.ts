@@ -26,11 +26,12 @@ export async function managedPreferenceEnabled(name: PolicyName, root = MANAGED_
   if (user) files.push(join(root, user, "com.tenuvault.desktop.plist"))
   for (const file of files) {
     try {
-      // plutil reads XML and binary property lists. By absolute path, like reg.exe below.
-      const { stdout } = await promisify(execFile)("/usr/bin/plutil", ["-extract", name, "raw", "-o", "-", file])
-      if (/^(true|1)$/i.test(stdout.trim())) return true
+      // plutil reads XML and binary property lists, and fails unless the value is a boolean, the
+      // documented type. By absolute path, like reg.exe below.
+      const { stdout } = await promisify(execFile)("/usr/bin/plutil", ["-extract", name, "raw", "-expect", "bool", "-o", "-", file])
+      if (stdout.trim() === "true") return true
     } catch {
-      // No profile, or the profile does not set this key.
+      // No profile, or the profile does not set this key to a boolean.
     }
   }
   return false

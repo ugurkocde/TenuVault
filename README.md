@@ -324,9 +324,11 @@ Settings, or for managed devices by policy: the DWORD `DisableAutoUpdate` = 1 un
 require signed builds.
 
 A packaged smoke run (`TENUVAULT_SMOKE_APP`) sets the same policy so the build under test never
-updates itself, and puts the earlier state back when it ends. On macOS that file is root's, so
-run `sudo -v` first (CI runners have passwordless sudo). A run that was killed leaves a marker in
-`~/.tenuvault-smoke/update-policy`, and the next run restores the earlier state before it starts.
+updates itself, and removes it when it ends. On macOS that file is root's, so run `sudo -v` first
+(CI runners have passwordless sudo). The policy it writes carries a `TenuVaultSmokeRun` mark, so
+the next run removes what a killed run left. One run at a time holds the policy (the lock is the
+loopback port 47319, `TENUVAULT_SMOKE_POLICY_PORT` to change it). A run refuses to start when a
+profile or registry value it did not write is already there and does not turn updates off.
 
 Signing turns on when these repository secrets exist, and release tags fail without them:
 

@@ -5,18 +5,19 @@ import { promisify } from "node:util"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 // On macOS the real plutil reads the fixtures. Elsewhere (CI runs the unit tests on Linux) a
-// stand-in answers like `plutil -extract <key> raw -o - <file>` for the XML fixtures below.
+// stand-in answers like `plutil -extract <key> raw -expect bool -o - <file>` for the XML fixtures below.
 const calls = vi.hoisted(() => [] as { command: string; args: string[] }[])
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>()
   const execFile = (command: string, args: string[], callback: (error: Error | null, stdout: string, stderr: string) => void) => {
     calls.push({ command, args })
     if (process.platform === "darwin") return actual.execFile(command, args, callback)
-    const [, key, , , , file = ""] = args
+    const [, key, , , , , , file = ""] = args
     try {
-      const value = new RegExp(`<key>${key}</key>\\s*(<true/>|<false/>|<integer>(\\d+)</integer>|<string>([^<]*)</string>)`).exec(readFileSync(file, "utf8"))
+      const value = new RegExp(`<key>${key}</key>\\s*(<true/>|<false/>|<integer>\\d+</integer>|<string>[^<]*</string>)`).exec(readFileSync(file, "utf8"))
       if (!value) throw new Error(`No value at that key path or invalid key path: ${key}`)
-      callback(null, `${value[1] === "<true/>" ? "true" : value[1] === "<false/>" ? "false" : value[2] ?? value[3]}\n`, "")
+      if (!/^<(true|false)\/>$/.test(value[1] ?? "")) throw new Error(`Value at [${key}] expected to be boolean`)
+      callback(null, `${value[1] === "<true/>" ? "true" : "false"}\n`, "")
     } catch (error) {
       callback(error as Error, "", String(error))
     }
@@ -70,13 +71,19 @@ describe("macOS managed preferences", () => {
     expect(await managedPreferenceEnabled("DisableAutoUpdate", root, null)).toBe(false)
   })
 
-  it("reads each policy by its own key and needs the value true", async () => {
+  it("reads each policy by its own key and needs the boolean true", async () => {
     profile("<key>DisableSetupDiagnostics</key>\n<true/>\n<key>DisableAutoUpdate</key>\n<false/>")
     expect(await managedPreferenceEnabled("DisableSetupDiagnostics", root, "admin")).toBe(true)
     expect(await managedPreferenceEnabled("DisableAutoUpdate", root, "admin")).toBe(false)
+    // A value of another type is a mistyped profile, not a policy.
     profile("<key>DisableAutoUpdate</key>\n<integer>1</integer>", "admin")
-    expect(await managedPreferenceEnabled("DisableAutoUpdate", root, "admin")).toBe(true)
-    profile("<key>DisableAutoUpdate</key>\n<integer>0</integer>", "admin")
+    expect(await managedPreferenceEnabled("DisableAutoUpdate", root, "admin")).toBe(false)
+    profile("<key>DisableAutoUpdate</key>\n<string>true</string>", "admin")
+    expect(await managedPreferenceEnabled("DisableAutoUpdate", root, "admin")).toBe(false)
+  })
+
+  it("is off when the profile does not have the key", async () => {
+    profile("<key>DisableSetupDiagnostics</key>\n<true/>")
     expect(await managedPreferenceEnabled("DisableAutoUpdate", root, "admin")).toBe(false)
   })
 
@@ -101,6 +108,6 @@ describe("macOS managed preferences", () => {
   it("runs plutil by absolute path", async () => {
     await managedPreferenceEnabled("DisableAutoUpdate", root, "admin")
     expect(calls.map((call) => call.command)).toEqual(["/usr/bin/plutil", "/usr/bin/plutil"])
-    expect(calls[1]?.args).toEqual(["-extract", "DisableAutoUpdate", "raw", "-o", "-", join(root, "admin", "com.tenuvault.desktop.plist")])
+    expect(calls[1]?.args).toEqual(["-extract", "DisableAutoUpdate", "raw", "-expect", "bool", "-o", "-", join(root, "admin", "com.tenuvault.desktop.plist")])
   })
 })
