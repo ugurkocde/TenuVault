@@ -87,9 +87,10 @@ export function TenantSwitcher() {
           <ChevronsUpDown className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent className="tv-pop w-72 overflow-hidden rounded-[1.375rem] p-0" align="start" sideOffset={6}>
-        <DropdownMenuLabel className="px-4 pb-1 pt-3 text-xs font-medium text-muted-foreground">Tenants</DropdownMenuLabel>
-        <div className="space-y-px px-1.5 pb-1.5">
+      {/* Capped to the room Radix finds below or above the switcher: the tenant list scrolls and Connect a tenant stays in view. */}
+      <DropdownMenuContent className="tv-pop flex max-h-[var(--radix-dropdown-menu-content-available-height)] w-72 flex-col overflow-hidden rounded-[1.375rem] p-0" align="start" sideOffset={6} collisionPadding={12}>
+        <DropdownMenuLabel className="shrink-0 px-4 pb-1 pt-3 text-xs font-medium text-muted-foreground">Tenants</DropdownMenuLabel>
+        <div className="min-h-0 flex-1 space-y-px overflow-y-auto px-1.5 pb-1.5">
           {tenants.map((tenant) => {
             const notLicensed = unlicensed(tenant.credentials?.tenantId)
             const trial = tenantLicense(status, tenant.credentials?.tenantId)?.trial
@@ -115,14 +116,14 @@ export function TenantSwitcher() {
             </>
           )}
         </div>
-        <div className="border-t bg-secondary/60 p-1.5">
+        <div className="shrink-0 border-t bg-secondary/60 p-1.5">
           <DropdownMenuItem onSelect={() => void navigate("/portal/onboarding")} className="group/connect gap-3 rounded-2xl px-2 py-2">
             <span aria-hidden="true" className="flex size-8 flex-shrink-0 items-center justify-center rounded-full border bg-card text-muted-foreground"><Plus className="h-4 w-4" /></span>
             <span className="min-w-0 flex-1">
               <span className="block text-[13px] font-medium">Connect a tenant</span>
               <span className="block text-xs text-muted-foreground">Add another tenant with the guided setup</span>
             </span>
-            <ArrowRight aria-hidden="true" className="h-3.5 w-3.5 text-muted-foreground transition-transform group-focus/connect:translate-x-0.5" />
+            <ArrowRight aria-hidden="true" className="h-3.5 w-3.5 text-muted-foreground motion-safe:transition-transform motion-safe:group-focus/connect:translate-x-0.5" />
           </DropdownMenuItem>
         </div>
       </DropdownMenuContent>

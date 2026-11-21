@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react"
+import { useEffect, useRef, useState, type ReactNode } from "react"
 import { ChevronDown } from "lucide-react"
 import { cn } from "~/lib/utils"
 
@@ -86,29 +86,32 @@ export function NavFoldGroup({ label, open, holdsActive, onToggle, children }: {
 }
 
 /**
- * Two pills behind the rows of the main navigation: a soft one that slides to the row under the
- * pointer and the filled one that glides to the open page. Rows opt in with `data-nav-row`; the open
- * page is the row holding `aria-current="page"`. While the pills run, desktop.css takes the rows' own
- * backgrounds away, so without ResizeObserver (tests) every row keeps its plain hover and active styles.
+ * A soft pill behind the rows of the main navigation that slides to the row under the pointer. Rows opt
+ * in with `data-nav-row`. The open page keeps its own filled background, so its label is readable at
+ * every moment, and the pill steps aside while the pointer is on it. While the pill runs, desktop.css
+ * takes the other rows' hover backgrounds away; without ResizeObserver (tests) the rows keep them.
+ *
+ * It works on the nav element itself (a callback ref), so a sidebar that unmounts and comes back, as
+ * it does around the first-run setup, gets a fresh pill bound to the new element.
  */
-export function useSlidingPills(navRef: RefObject<HTMLElement | null>, routeKey: string) {
-  const hoverRef = useRef<HTMLSpanElement>(null)
-  const activeRef = useRef<HTMLSpanElement>(null)
-  const syncRef = useRef<(instant?: boolean) => void>(() => undefined)
+export function useHoverPill(routeKey: string) {
+  const [nav, setNav] = useState<HTMLElement | null>(null)
+  const syncRef = useRef<() => void>(() => undefined)
   const [on, setOn] = useState(false)
 
   useEffect(() => {
-    const nav = navRef.current
-    const hoverPill = hoverRef.current
-    const activePill = activeRef.current
-    if (!nav || !hoverPill || !activePill || typeof ResizeObserver === "undefined") return
+    const pill = nav?.querySelector<HTMLElement>(":scope > .tv-pill")
+    if (!nav || !pill || typeof ResizeObserver === "undefined") return
     let hovered: HTMLElement | null = null
+    let pointer: { x: number; y: number } | null = null
     let followUntil = 0
     let frame = 0
+    let hideTimer = 0
 
     const rowOf = (element: Element | null) => element?.closest<HTMLElement>("[data-nav-row]") ?? null
-    const folded = (row: HTMLElement) => Boolean(row.closest('.tv-fold[data-open="false"]'))
-    const place = (pill: HTMLElement, row: HTMLElement, instant: boolean) => {
+    const usable = (row: HTMLElement | null): row is HTMLElement =>
+      Boolean(row && nav.contains(row) && row.getAttribute("aria-disabled") !== "true" && !row.closest('.tv-fold[data-open="false"]'))
+    const place = (row: HTMLElement, instant: boolean) => {
       const box = nav.getBoundingClientRect()
       const rect = row.getBoundingClientRect()
       if (instant) pill.style.transition = "none"
@@ -120,21 +123,25 @@ export function useSlidingPills(navRef: RefObject<HTMLElement | null>, routeKey:
         pill.style.transition = ""
       }
     }
-    // A pill that was hidden appears in place instead of sliding in from where it last was.
-    const show = (pill: HTMLElement, row: HTMLElement | null, instant: boolean) => {
-      if (!row || folded(row)) {
+    const sync = (instant = false) => {
+      // After a layout change the row under a resting pointer may be a different one, or gone.
+      if (pointer && instant && typeof document.elementFromPoint === "function") hovered = rowOf(document.elementFromPoint(pointer.x, pointer.y))
+      const active = rowOf(nav.querySelector('[aria-current="page"]'))
+      const target = usable(hovered) && hovered !== active ? hovered : null
+      window.clearTimeout(hideTimer)
+      if (!target) {
         pill.dataset.shown = "false"
+        // Once faded, the pill leaves the layout, so its old position never adds to the scroll height.
+        hideTimer = window.setTimeout(() => { if (pill.dataset.shown === "false") pill.style.display = "none" }, 200)
         return
       }
-      place(pill, row, instant || pill.dataset.shown !== "true")
+      const appearing = pill.dataset.shown !== "true"
+      pill.style.display = ""
+      // A pill that was hidden appears in place instead of sliding in from where it last was.
+      place(target, instant || appearing)
       pill.dataset.shown = "true"
     }
-    const sync = (instant = false) => {
-      const active = rowOf(nav.querySelector('[aria-current="page"]'))
-      show(activePill, active, instant)
-      show(hoverPill, hovered === active ? null : hovered, instant)
-    }
-    // While a group folds or unfolds, the rows move every frame; the pills follow them exactly.
+    // While a group folds or unfolds, the rows move every frame; the pill follows them exactly.
     const follow = () => {
       followUntil = performance.now() + 500
       if (frame) return
@@ -145,12 +152,15 @@ export function useSlidingPills(navRef: RefObject<HTMLElement | null>, routeKey:
       frame = requestAnimationFrame(tick)
     }
 
-    const onOver = (event: PointerEvent) => {
+    const onMove = (event: PointerEvent) => {
+      pointer = { x: event.clientX, y: event.clientY }
       const row = rowOf(event.target as Element)
-      hovered = row && row.getAttribute("aria-disabled") !== "true" ? row : null
+      if (row === hovered) return
+      hovered = row
       sync()
     }
     const onLeave = () => {
+      pointer = null
       hovered = null
       sync()
     }
@@ -159,30 +169,32 @@ export function useSlidingPills(navRef: RefObject<HTMLElement | null>, routeKey:
     }
     const onScroll = () => sync(true)
     const resize = new ResizeObserver(() => sync(true))
+    // The groups, not the pill: the pill resizing as it slides would otherwise snap itself into place.
     resize.observe(nav)
-    for (const child of nav.children) resize.observe(child)
+    for (const child of nav.children) if (child !== pill) resize.observe(child)
 
-    nav.addEventListener("pointerover", onOver)
+    nav.addEventListener("pointermove", onMove)
     nav.addEventListener("pointerleave", onLeave)
     nav.addEventListener("transitionrun", onTransition)
     nav.addEventListener("scroll", onScroll, { passive: true })
-    syncRef.current = sync
+    syncRef.current = () => sync()
     setOn(true)
     sync(true)
     return () => {
       resize.disconnect()
       cancelAnimationFrame(frame)
-      nav.removeEventListener("pointerover", onOver)
+      window.clearTimeout(hideTimer)
+      nav.removeEventListener("pointermove", onMove)
       nav.removeEventListener("pointerleave", onLeave)
       nav.removeEventListener("transitionrun", onTransition)
       nav.removeEventListener("scroll", onScroll)
       syncRef.current = () => undefined
       setOn(false)
     }
-  }, [navRef])
+  }, [nav])
 
-  // A new page: the filled pill glides to its row once React has marked it.
-  useEffect(() => { syncRef.current() }, [routeKey, on])
+  // A new page: the pill steps off the row that just became the open page.
+  useEffect(() => { syncRef.current() }, [routeKey])
 
-  return { on, hoverRef, activeRef }
+  return { on, navRef: setNav }
 }

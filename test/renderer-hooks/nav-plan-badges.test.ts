@@ -14,7 +14,9 @@ const trialAction = vi.hoisted(() => vi.fn(async () => undefined))
 const whatsNewState = vi.hoisted(() => ({ current: null as { hasUnseen: boolean } | null }))
 const supportDialog = vi.hoisted(() => vi.fn((_props: { open: boolean }) => null))
 const whatsNewDialog = vi.hoisted(() => vi.fn((_props: { open: boolean }) => null))
-const feedbackCapture = vi.hoisted(() => vi.fn(async () => null))
+// Records whether the Help menu was still in the page when the window was captured.
+const feedbackCapture = vi.hoisted(() => vi.fn(async () => { menuAtCapture.push(document.querySelector('[role="menu"]') !== null); return null }))
+const menuAtCapture = vi.hoisted(() => [] as boolean[])
 
 vi.mock("../../src/renderer/lib/bridge", () => ({
   bridge: {
@@ -81,6 +83,7 @@ afterEach(() => {
   signedInIds.current = new Set(["t-1"])
   selectedTenantState.current = null
   whatsNewState.current = null
+  menuAtCapture.length = 0
   vi.clearAllMocks()
 })
 
@@ -453,6 +456,7 @@ describe("sidebar groups and Help", () => {
     await openHelp(container)
     await choose("Share feedback")
     expect(feedbackCapture).toHaveBeenCalledTimes(1)
+    expect(menuAtCapture).toEqual([false])
   })
 
   it("marks Help and What's new while an installed build is unseen", async () => {

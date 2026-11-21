@@ -64,7 +64,8 @@ import { CisBenchmarksNavigation } from "./CisBenchmarksNavigation"
 import { NAV_PLAN_FEATURES, NavPlanBadge } from "./NavPlanBadge"
 import { FrameworkNavigation } from "./FrameworkNavigation"
 import { OibJobIndicator } from "./oib/JobIndicator"
-import { NavFoldGroup, useFoldedGroups, useSlidingPills } from "./SidebarNavigation"
+import { NavFoldGroup, useFoldedGroups, useHoverPill } from "./SidebarNavigation"
+import { focusedElement } from "../lib/return-focus"
 
 interface NavItem {
   name: string
@@ -338,6 +339,7 @@ function afterPaint(run: () => void) {
 function HelpMenu({ linkClass, onFeedback, onSupport }: { linkClass: (active: boolean) => string; onFeedback: () => void; onSupport: () => void }) {
   const { state } = useWhatsNew()
   const [whatsNewOpen, setWhatsNewOpen] = useState(false)
+  const helpRef = useRef<HTMLButtonElement>(null)
   const pending = useRef<(() => void) | null>(null)
   const choose = (run: () => void) => () => { pending.current = run }
   const unseen = Boolean(state?.hasUnseen)
@@ -345,7 +347,7 @@ function HelpMenu({ linkClass, onFeedback, onSupport }: { linkClass: (active: bo
     <>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <button type="button" className={cn(linkClass(false), "w-full")} aria-label={unseen ? "Help, new changes since you last looked" : undefined}>
+          <button ref={helpRef} type="button" className={cn(linkClass(false), "w-full")} aria-label={unseen ? "Help, new changes since you last looked" : undefined}>
             <CircleHelp className="h-[18px] w-[18px]" aria-hidden="true" />
             Help
             {unseen && <span aria-hidden="true" className="ml-auto size-2 rounded-full bg-blue-600" />}
@@ -380,12 +382,12 @@ function HelpMenu({ linkClass, onFeedback, onSupport }: { linkClass: (active: bo
                 <span className="block text-[13px] font-medium">Support</span>
                 <span className="block text-xs text-muted-foreground">Documentation, contact options and a free setup call</span>
               </span>
-              <ArrowRight aria-hidden="true" className="h-3.5 w-3.5 text-muted-foreground transition-transform group-focus/support:translate-x-0.5" />
+              <ArrowRight aria-hidden="true" className="h-3.5 w-3.5 text-muted-foreground motion-safe:transition-transform motion-safe:group-focus/support:translate-x-0.5" />
             </DropdownMenuItem>
           </div>
         </DropdownMenuContent>
       </DropdownMenu>
-      <WhatsNewDialog open={whatsNewOpen} onOpenChange={setWhatsNewOpen} />
+      <WhatsNewDialog open={whatsNewOpen} onOpenChange={setWhatsNewOpen} returnFocus={helpRef} />
     </>
   )
 }
@@ -452,16 +454,28 @@ export function DesktopLayout() {
   const [feedback, setFeedback] = useState<{ open: boolean; snapshot: FeedbackSnapshot | null }>({ open: false, snapshot: null })
   const capturingFeedback = useRef(false)
   // The window is captured before the dialog opens, so the dialog is not in the screenshot.
+  // Dialogs opened from Help or the first-run header hand focus back to what opened them.
+  const supportReturn = useRef<HTMLElement | null>(null)
+  const feedbackReturn = useRef<HTMLElement | null>(null)
+  const openSupport = () => {
+    supportReturn.current = focusedElement()
+    setSupportOpen(true)
+  }
   const openFeedback = async () => {
     if (capturingFeedback.current || feedback.open) return
     capturingFeedback.current = true
+    feedbackReturn.current = focusedElement()
     const snapshot = await bridge.feedback.capture(feedbackPageLabel(pathname)).catch(() => null)
     capturingFeedback.current = false
     setFeedback({ open: true, snapshot })
   }
   const navRef = useRef<HTMLElement>(null)
   const navOverflowing = useOverflowing(navRef)
-  const pills = useSlidingPills(navRef, pathname)
+  // Until a tenant is connected the guided setup is the only job, so it gets the window to itself.
+  // The page keeps its place in the tree either way, so connecting the first tenant during the
+  // setup only brings in the sidebar and never remounts the setup.
+  const focus = tenants.length === 0 && pathname === "/portal/onboarding"
+  const hoverPill = useHoverPill(pathname)
   const { folded, toggle: toggleGroup } = useFoldedGroups()
   // Baselines also holds CIS Benchmarks, the framework catalog and custom baselines.
   const holdsActive = (group: NavGroup) =>
@@ -522,10 +536,6 @@ export function DesktopLayout() {
     )
   }
 
-  // Until a tenant is connected the guided setup is the only job, so it gets the window to itself.
-  // The page keeps its place in the tree either way, so connecting the first tenant during the
-  // setup only brings in the sidebar and never remounts the setup.
-  const focus = tenants.length === 0 && pathname === "/portal/onboarding"
   const quiet = "rounded-full px-4 py-2 text-sm font-medium text-muted-foreground hover:bg-secondary hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
 
   return (
@@ -541,7 +551,7 @@ export function DesktopLayout() {
             <SetupCallLink source="setup-header" variant="nav" className={quiet} />
             <Link to="/license" className={quiet}>License</Link>
             <button type="button" onClick={() => void openFeedback()} className={quiet}>Share feedback</button>
-            <button type="button" onClick={() => setSupportOpen(true)} className={quiet}>Support</button>
+            <button type="button" onClick={openSupport} className={quiet}>Support</button>
           </nav>
         </header>
       ) : (
@@ -557,9 +567,8 @@ export function DesktopLayout() {
 
         {/* min-h-0 lets the list shrink and scroll inside the panel instead of pushing past it. Only while it
             scrolls does it keep the wheel to itself; otherwise the wheel over the sidebar scrolls the page. */}
-        <nav ref={navRef} aria-label="Main navigation" data-pills={pills.on ? "on" : undefined} className={cn("tv-nav relative min-h-0 flex-1 overflow-y-auto px-3 py-1", navOverflowing && "overscroll-contain")}>
-          <span ref={pills.hoverRef} aria-hidden="true" className="tv-pill tv-pill-hover" />
-          <span ref={pills.activeRef} aria-hidden="true" className="tv-pill tv-pill-active" />
+        <nav ref={(element) => { navRef.current = element; hoverPill.navRef(element) }} aria-label="Main navigation" data-pills={hoverPill.on ? "on" : undefined} className={cn("tv-nav relative min-h-0 flex-1 overflow-y-auto px-3 py-1", navOverflowing && "overscroll-contain")}>
+          <span aria-hidden="true" className="tv-pill" />
           {groups.map((group) => group.label ? (
             <NavFoldGroup key={group.label} label={group.label} open={!folded.has(group.label)} holdsActive={holdsActive(group)} onToggle={() => toggleGroup(group.label!)}>
               {group.items.map((item) => renderItem(item))}
@@ -582,7 +591,7 @@ export function DesktopLayout() {
             License
             <LicenseNavBadge />
           </Link>
-          <HelpMenu linkClass={linkClass} onFeedback={() => void openFeedback()} onSupport={() => setSupportOpen(true)} />
+          <HelpMenu linkClass={linkClass} onFeedback={() => void openFeedback()} onSupport={openSupport} />
         </div>
       </aside>
       )}
@@ -608,12 +617,14 @@ export function DesktopLayout() {
       <FrameworkJobNotifier />
       <CisJobNotifier />
       <DriftScanNotifier />
-      <SupportDialog open={supportOpen} onOpenChange={setSupportOpen} />
+      <SupportDialog open={supportOpen} onOpenChange={setSupportOpen} returnFocus={supportReturn} />
       <FeedbackDialog
         open={feedback.open}
         onOpenChange={(open) => setFeedback((current) => ({ open, snapshot: open ? current.snapshot : null }))}
         snapshot={feedback.snapshot}
-        onOpenSupport={() => setSupportOpen(true)}
+        returnFocus={feedbackReturn}
+        // Support opened from the feedback dialog returns to where feedback was opened from.
+        onOpenSupport={() => { supportReturn.current = feedbackReturn.current; setSupportOpen(true) }}
       />
       <WhatsNewAnnouncement />
     </div>

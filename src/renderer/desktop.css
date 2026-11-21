@@ -214,13 +214,12 @@ html:has([data-flow-shell]) {
 .tv-fold[data-open="false"] > .tv-fold-inner { opacity: 0; filter: blur(4px); }
 .tv-fold-caret { transition: opacity .15s ease-out, transform .45s var(--tv-fold-ease); }
 
-/* Sliding pills behind the main navigation rows: the soft one follows the pointer, the filled one the
-   open page. While they run the rows drop their own backgrounds and sit above the pills. */
-.tv-pill { position: absolute; left: 0; top: 0; z-index: 0; width: 0; height: 0; border-radius: 9999px; pointer-events: none; opacity: 0; }
+/* A soft pill behind the main navigation rows follows the pointer. While it runs, the rows other than
+   the open page drop their own hover background and sit above it; the open page keeps its fill. */
+.tv-pill { position: absolute; left: 0; top: 0; z-index: 0; width: 0; height: 0; border-radius: 9999px; pointer-events: none; opacity: 0; background: var(--secondary); transition: transform .18s cubic-bezier(0, 0, .2, 1), width .18s cubic-bezier(0, 0, .2, 1), height .18s cubic-bezier(0, 0, .2, 1), opacity .14s ease-out; }
 .tv-pill[data-shown="true"] { opacity: 1; }
-.tv-pill-hover { background: var(--secondary); transition: transform .18s cubic-bezier(0, 0, .2, 1), width .18s cubic-bezier(0, 0, .2, 1), height .18s cubic-bezier(0, 0, .2, 1), opacity .14s ease-out; }
-.tv-pill-active { background: var(--primary); transition: transform .32s cubic-bezier(.3, .9, .3, 1), width .32s cubic-bezier(.3, .9, .3, 1), height .32s cubic-bezier(.3, .9, .3, 1), opacity .2s ease-out; }
-.tv-nav[data-pills="on"] [data-nav-row] { position: relative; z-index: 1; background-color: transparent; transition-duration: .3s; }
+.tv-nav[data-pills="on"] [data-nav-row] { position: relative; z-index: 1; }
+.tv-nav[data-pills="on"] [data-nav-row]:not(.bg-primary) { background-color: transparent; }
 
 /* Sidebar menus (tenant switcher, Help): fade and scale in from the edge they open from, after the
    AccessGrid navigation panel. */
@@ -232,7 +231,7 @@ html:has([data-flow-shell]) {
 .tv-pop[data-state="closed"] { animation: tv-pop-out .15s cubic-bezier(.4, 0, 1, 1); }
 
 @media (prefers-reduced-motion: reduce) {
-  .tv-fold, .tv-fold-inner, .tv-fold-caret, .tv-pill-hover, .tv-pill-active { transition: none; }
+  .tv-fold, .tv-fold-inner, .tv-fold-caret, .tv-pill { transition: none; }
   .tv-pop[data-state] { animation: none; }
 }
 
