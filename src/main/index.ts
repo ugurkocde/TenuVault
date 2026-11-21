@@ -457,14 +457,14 @@ async function bootstrap(): Promise<void> {
       token: async () => (await tokenFor(tenantId, profile.clientId, "https://storage.azure.com/.default")).accessToken,
     }
   }
-  const readOmissionForTenant = (tenant: string) => {
+  const readOmissionForTenant = (tenant: string, enrolledOnly = false) => {
     const profile = tenantProfile(tenant)
-    return omissionPolicies.read(tenant, profile?.storageAccountName ?? localStorageAccountName(tenant),
-      async () => (await tokenFor(tenant, profile?.clientId ?? signedInClient(tenant), "https://storage.azure.com/.default")).accessToken)
+    return omissionPolicies.readForRollback(tenant, profile?.storageAccountName ?? localStorageAccountName(tenant),
+      async () => (await auth.getAccessToken(tenant, profile?.clientId ?? signedInClient(tenant), "https://storage.azure.com/.default")).accessToken, enrolledOnly)
   }
   setOibOmissionPolicy(readOmissionForTenant)
   const engine = new BackupEngine({
-    omissionPolicy: (request, tokens, signal) => omissionPolicies.read(request.tenantId, request.storageAccountName, tokens.storage, signal),
+    omissionPolicy: (request, storage, signal) => omissionPolicies.readForBackup(request.tenantId, request.storageAccountName, storage, signal),
     fetch: bridgedFetch,
     getToken: backupAccess.getToken,
     enabledModules: (tenantId) => moduleSettings.enabled(tenantId),

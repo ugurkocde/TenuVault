@@ -46,8 +46,12 @@ export class StorageError extends Error {}
 export class InventoryDamagedError extends StorageError {}
 
 /** The error for a failed storage response, keeping the local store's damage refusals apart. */
-export async function storageFailure(response: Response, account: string, hideDetails = false): Promise<StorageError> {
+export async function storageFailure(response: Response, account: string, hideDetails = false, detectImmutability = false): Promise<StorageError | ProtectedBlobError> {
   const code = response.headers.get("x-ms-error-code")
+  if (detectImmutability && (response.status === 409 || response.status === 403)) {
+    const storageCode = code ?? /<Code>([^<]+)<\/Code>/.exec(await response.clone().text())?.[1] ?? ""
+    if (isImmutabilityRefusal(response.status, storageCode)) return new ProtectedBlobError(storageCode)
+  }
   if (code === "InventoryIncomplete" || code === "BackupUnavailable") {
     const text = hideDetails ? "" : await response.text()
     const message = /<Message>([^<]+)<\/Message>/.exec(text)?.[1]

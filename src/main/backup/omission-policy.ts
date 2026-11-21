@@ -6,6 +6,7 @@ import { BACKUP_OWNER_FILE } from "../../shared/constants"
 import { resolveBackupOwnership } from "../../shared/backup-ownership"
 import { parseBackupName } from "../../shared/intune/backup-names"
 import { mapLimit } from "../../shared/map-limit"
+import { ProtectedBlobError, TokenError } from "./request"
 import { BlobWriter } from "./blob-writer"
 
 export interface BackupOmissionPolicy extends OmissionOptions {
@@ -20,7 +21,10 @@ interface Policy extends BackupOmissionPolicy {
 
 const OFF: BackupOmissionPolicy = { enabled: false, scripts: false, generation: "default" }
 const key = (tenant: string) => `backup.omission.${tenant}`
-const verificationError = () => new Error("The tenant's backup omission policy could not be verified. Check its storage and try again.")
+const verificationError = (cause?: unknown) => new Error(
+  "The tenant's backup omission policy could not be verified. Check that the policy is valid and that the storage identity can read it, then try again.",
+  { cause },
+)
 
 export function configuredCloudPolicyAccount(raw: string | undefined | null, tenantId: string): string | undefined {
   try {
@@ -44,6 +48,8 @@ function parse(value: unknown, tenantId: string): BackupOmissionPolicy {
 }
 
 export class OmissionPolicyStore {
+  private readonly warningHistory = new Map<string, { activation: number; folders: Map<string, string | null> }>()
+
   constructor(private readonly store: KeyValueStore, private readonly fetchImpl: typeof fetch) {}
 
   private bindingKey(tenant: string, account: string) {
@@ -55,6 +61,32 @@ export class OmissionPolicyStore {
   }
 
   async read(tenantId: string, destination: string, token: () => Promise<string>, signal?: AbortSignal): Promise<BackupOmissionPolicy> {
+    return this.readForBackup(tenantId, destination, this.writer(destination.toLowerCase(), token, signal), signal)
+  }
+
+  async readForBackup(tenantId: string, destination: string, storage: BlobWriter, signal?: AbortSignal): Promise<BackupOmissionPolicy> {
+    return this.readPolicy(tenantId, destination, storage, signal, false)
+  }
+
+  async readForRollback(tenantId: string, destination: string, silentToken: () => Promise<string>, enrolledOnly = false): Promise<BackupOmissionPolicy> {
+    const tenant = tenantId.toLowerCase()
+    const account = destination.toLowerCase()
+    // Review screens can use local settings or a binding already observed on this installation.
+    // A capture still checks its destination so it can discover enrollment enabled elsewhere.
+    if (enrolledOnly && !isLocalAccount(account) && !this.isEnrolled(tenant, account)) return OFF
+    const signal = AbortSignal.timeout(10_000)
+    const storage = this.writer(account, async () => {
+      try { return await silentToken() } catch (cause) { throw new TokenError("A silent storage token is unavailable.", { cause }) }
+    }, signal)
+    return this.readPolicy(tenantId, destination, storage, signal, true)
+  }
+
+  private isEnrolled(tenant: string, account: string) {
+    return Boolean(this.store.get(this.bindingKey(tenant, account)) || this.store.get(`${key(tenant)}.account`) === account)
+  }
+
+  private async readPolicy(tenantId: string, destination: string, storage: BlobWriter,
+    signal: AbortSignal | undefined, allowUnreadable: boolean): Promise<BackupOmissionPolicy> {
     const tenant = tenantId.toLowerCase()
     const account = destination.toLowerCase()
     signal?.throwIfAborted()
@@ -64,10 +96,15 @@ export class OmissionPolicyStore {
     }
 
     const binding = this.bindingKey(tenant, account)
-    const enrolled = this.store.get(binding) || this.store.get(`${key(tenant)}.account`) === account
-    const timeout = AbortSignal.timeout(10_000)
-    const value = await this.writer(account, token, signal ? AbortSignal.any([signal, timeout]) : timeout).readJson(omissionPolicyPath(tenant)).catch(() => null)
-    signal?.throwIfAborted()
+    const enrolled = this.isEnrolled(tenant, account)
+    let value: Record<string, unknown> | null
+    try {
+      value = await storage.readJson(omissionPolicyPath(tenant), true)
+    } catch (error) {
+      if (!allowUnreadable) signal?.throwIfAborted()
+      if (allowUnreadable && !enrolled) return OFF
+      throw verificationError(error)
+    }
     if (!value) {
       if (enrolled) throw verificationError()
       return OFF
@@ -80,15 +117,28 @@ export class OmissionPolicyStore {
 
   async warnings(tenant: string, account: string, policy: BackupOmissionPolicy, token: () => Promise<string>) {
     if (!policy.enabled || !policy.enabledAt) return []
-    const blobs = this.writer(account, isLocalAccount(account) ? async () => "" : token, AbortSignal.timeout(20_000))
+    const blobs = this.writer(account, isLocalAccount(account) ? async () => "" : token)
     const { prefixes } = await blobs.list("backup-", "/")
     const activation = Date.parse(policy.enabledAt)
+    // Each request has its own timeout. Reuse completed manifest results across Settings visits.
+    const cacheKey = `${tenant}/${account}`
+    const saved = this.warningHistory.get(cacheKey)
+    const history = saved?.activation === activation ? saved.folders : new Map<string, string | null>()
+    this.warningHistory.set(cacheKey, { activation, folders: history })
     const folders = prefixes.map((prefix) => prefix.replace(/\/$/, "")).filter((folder) =>
       Date.parse(parseBackupName(folder)?.timestamp ?? "") >= Math.floor(activation / 1000) * 1000)
+    const current = new Set(folders)
+    for (const folder of history.keys()) if (!current.has(folder)) history.delete(folder)
     const results = await mapLimit(folders, 6, async (folder) => {
+      const known = history.get(folder)
+      if (known !== undefined) return known === null ? null : { folder, account, producer: known }
       const manifest = await blobs.readJson(`${folder}/metadata.json`)
-      if (!manifest || manifest.OmissionEnabled === true ||
-          (typeof manifest.StartedAt === "string" && Date.parse(manifest.StartedAt) < activation)) return null
+      if (!manifest) return null // Running backups may publish their manifest after this scan.
+      if (manifest.OmissionEnabled === true ||
+          (typeof manifest.StartedAt === "string" && Date.parse(manifest.StartedAt) < activation)) {
+        history.set(folder, null)
+        return null
+      }
       let source = manifest.Source
       const owner = await resolveBackupOwnership(async (file) => {
         if (file === "metadata.json") return { kind: "found", value: manifest }
@@ -100,6 +150,7 @@ export class OmissionPolicyStore {
       const producer = source === "TenuVault Cloud Backup"
         ? `Cloud runbook${typeof manifest.RunbookVersion === "string" ? ` ${manifest.RunbookVersion}` : ""}`
         : manifest.AuthMode === "app-only" ? "Backup Reader" : "TenuVault Desktop"
+      history.set(folder, producer)
       return { folder, account, producer }
     })
     return results.filter((warning) => warning !== null)
@@ -121,7 +172,12 @@ export class OmissionPolicyStore {
       this.store.set(key(tenant), JSON.stringify(policy))
       return
     }
-    await blobs.put(omissionPolicyPath(tenant), JSON.stringify(policy), undefined, !current, undefined, current?.etag ?? undefined)
+    try {
+      await blobs.put(omissionPolicyPath(tenant), JSON.stringify(policy), undefined, !current, undefined, current?.etag ?? undefined)
+    } catch (error) {
+      if (!(error instanceof ProtectedBlobError)) throw error
+      throw new Error("The storage account's immutability policy or legal hold prevents updating the backup omission policy. Ask your Azure administrator to configure a destination where this policy blob can be updated.", { cause: error })
+    }
     if (policy.enabled) this.store.set(this.bindingKey(tenant, account), "true")
   }
 }

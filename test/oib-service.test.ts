@@ -305,6 +305,38 @@ describe("deployments", () => {
     })
   })
 
+  it.each([true, false])("reports Graph write errors according to the captured omission mode (%s)", async (enabled) => {
+    const canary = "write echoed sensitive operand"
+    const writes: string[] = []
+    const fetch = world({ policies: [{ id: EXISTING, name: "Old policy" }] }, writes)
+    vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if ((init?.method === "PUT" && url.endsWith(`configurationPolicies/${EXISTING}`)) ||
+          (init?.method === "POST" && url.endsWith("/assign"))) {
+        return Promise.resolve(Response.json({ error: { message: canary } }, { status: 400 }))
+      }
+      if (init?.method === "POST" && url.endsWith("/deviceCompliancePolicies")) {
+        return Promise.resolve(Response.json({ id: CREATED, displayName: "Created compliance policy" }))
+      }
+      return fetch(input, init)
+    })
+    setOibOmissionPolicy(async () => ({ enabled, scripts: false }))
+    await source()
+    const run = await handleOib({ ...base, action: "oib-deploy", commit, backup: { mode: "none" }, pilotGroupId: pilot,
+      items: [{ source: SC, mode: "update", targetId: EXISTING }, { source: COMPLIANCE, mode: "create" }],
+    }) as OibRun
+    expect(run.failed).toHaveLength(2)
+    expect(run.created[0]?.partial).toBe(true)
+    const stored = store.get(`oib:runs:${tenantId}`)!
+    if (enabled) {
+      expect(JSON.stringify(run)).not.toContain(canary)
+      expect(stored).not.toContain(canary)
+      expect(stored).toContain("HTTP 400")
+    } else {
+      expect(stored).toContain(canary)
+    }
+  })
+
   it("does not persist operands Graph echoes while reading an OIB update", async () => {
     const canary = "secret echoed by Graph in OIB capture"
     const writes: string[] = []

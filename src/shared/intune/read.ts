@@ -22,6 +22,8 @@ export interface ReadOptions {
    * restorable (see the registry's restorable checks), so it can only record that the value exists.
    */
   omitEncryptedOma?: boolean
+  expandNestedCollections?: boolean
+  beforeNestedExpansion?: (detail: Item) => void
   statusOnlyErrors?: boolean
   onMasked?: () => void
   keepMasked?: (error: unknown) => boolean
@@ -66,13 +68,7 @@ export async function readObject(type: IntuneType, id: string, graph: GraphReade
     }
     detail[extra.property] = entries
   }
-  if (options.omitEncryptedOma) await expandNested(detail, graph, new Set())
   for (const secret of options.omitEncryptedOma ? [] : type.secrets?.(detail) ?? []) {
-    if (!secret.path) {
-      secret.apply(MASKED_VALUE, true)
-      options.onMasked?.()
-      continue
-    }
     let plain: Item
     try {
       plain = await graph.get(secret.path)
@@ -86,6 +82,10 @@ export async function readObject(type: IntuneType, id: string, graph: GraphReade
     secret.apply(plain.value)
   }
   delete detail["@odata.context"]
+  if (options.expandNestedCollections ?? options.omitEncryptedOma) {
+    options.beforeNestedExpansion?.(detail)
+    await expandNested(detail, graph, new Set())
+  }
   return detail
 }
 

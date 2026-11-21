@@ -1,4 +1,4 @@
-import { backupManifest, readProjectedSnapshot } from "~/lib/policies/backup-manifest"
+import { backupManifest, readProjectedSnapshot, verifySnapshot } from "~/lib/policies/backup-manifest"
 import { hasOmissions, OMISSION_BLOCKER, type OmittedField } from "../../../../shared/intune/secret-omission"
 import { recoveryReadiness, type RecoveryReadiness } from "../../../../shared/intune/recovery"
 import { type NextRequest, NextResponse } from "next/server"
@@ -98,6 +98,7 @@ export async function POST(request: NextRequest) {
       if (!response.ok) return { path, folder: type.folder, name: fallbackName, live: "error", error: "The backup file could not be read.", blocker: "The backup file could not be read.", replaceBlocker: "The backup file could not be read." }
       const snapshot = entry?.omitted ? await readProjectedSnapshot(response, entry) : (await response.json()) as Item
       if (entry?.omitted || hasOmissions(snapshot)) return { path, folder: type.folder, name: itemName(type, snapshot), blocker: OMISSION_BLOCKER, replaceBlocker: OMISSION_BLOCKER, omitted: entry?.omitted }
+      if (entry?.hydratedOmaMasks) verifySnapshot(snapshot, entry)
       const item: PreviewItem = { path, folder: type.folder, name: itemName(type, snapshot), snapshot, readiness: recoveryReadiness(type, snapshot), ...restoreCapabilities(type, snapshot) }
       if (ownership) item.replaceBlocker = ownership
       if (live !== true || typeof snapshot.id !== "string") return item

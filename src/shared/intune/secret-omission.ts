@@ -66,7 +66,10 @@ export function projectSecrets(folder: string, snapshot: Item, scripts: boolean,
     const encrypted = folder === "DeviceConfigurations" && oma && (encryptedOmaSetting(value) || identities?.has(`oma:${value.omaUri}`))
     const secret = isSettingSecret(value) || identities?.has(identity)
     const copy: Item = {}
+    // A typed and an untyped token represent the same unavailable operand.
+    if (secret && reasons?.has("typed-secret")) copy["@odata.type"] = `#microsoft.graph.${rules.typedSecretSuffix}`
     for (const key of Object.keys(value).sort()) {
+      if (key === "@odata.type" && secret && reasons?.has("typed-secret")) continue
       if ((key === OMISSION_MARKER && !path) || (encrypted && (key === "_tenuvaultOmaMasked" || (key === "isEncrypted" && reasons?.has("encrypted-oma"))))) continue
       const property = value[key]!
       const pointer = `${path}/${escapePointer(key)}`
@@ -157,7 +160,7 @@ export function observablePair(folder: string, older: Item, newer: Item, masked 
       if (field && typeof field === "object" && !Array.isArray(field)) reasons.add(field.reason as OmittedField["reason"])
     }
   }
-  if (!reasons.size) return withoutPartialCollections(older, newer)
+  if (!policy?.enabled && !hasOmissions(older) && !hasOmissions(newer)) return [older, newer, []]
   const identities = omittedIdentities(folder, older, newer, reasons)
   return withoutPartialCollections(
     projectSecrets(folder, older, reasons.has("script"), reasons, identities).snapshot,

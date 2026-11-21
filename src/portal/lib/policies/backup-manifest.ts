@@ -3,11 +3,11 @@ import { readBytesCapped } from "../../../shared/capped-body"
 import { MAX_BACKUP_ARCHIVE_BYTES } from "../../../shared/constants"
 import { createHash } from "node:crypto"
 import { comparableSnapshot } from "../../../shared/intune/compare"
-import type { Item } from "../../../shared/intune/registry"
+import { rememberHydratedOmaMasks, type Item } from "../../../shared/intune/registry"
 import { manifestStatus, stoppedEarly } from "../../../shared/intune/backup-status"
 
 /** One recorded backup item: the Intune object ID and the fingerprint of its backed-up content. */
-export interface ManifestEntry { id: string; hash: string; omitted?: OmittedField[]; rawHash?: string }
+export interface ManifestEntry { id: string; hash: string; omitted?: OmittedField[]; rawHash?: string; hydratedOmaMasks?: number[] }
 
 export function omittedDependencyMap(manifest: ReadonlyMap<string, ManifestEntry> | null): Map<string, string> {
   return new Map([...(manifest ?? [])].flatMap(([path, entry]) =>
@@ -35,7 +35,9 @@ export function backupManifest(metadata: Record<string, any> | null, backupId: s
     const path = `${backupId}/${folder}/${file}`
     if (entries.has(path)) throw new Error("Invalid backup inventory manifest")
     if (item.omitted !== undefined && (metadata?.OmissionVersion !== OMISSION_VERSION || !validOmissions(item.omitted) || !validRawHash(item.rawHash))) throw new Error("Invalid backup omission inventory")
-    entries.set(path, { id, hash, ...(item.omitted ? { omitted: item.omitted, rawHash: item.rawHash } : {}) })
+    const hydratedOmaMasks = Array.isArray(item.hydratedOmaMasks) ? item.hydratedOmaMasks.filter((index: unknown) =>
+      typeof index === "number" && Number.isSafeInteger(index) && index >= 0) as number[] : undefined
+    entries.set(path, { id, hash, ...(hydratedOmaMasks?.length ? { hydratedOmaMasks } : {}), ...(item.omitted ? { omitted: item.omitted, rawHash: item.rawHash } : {}) })
   }
   return entries
 }
@@ -88,6 +90,7 @@ export function checkRestoreManifest(metadata: Record<string, any> | null, backu
 export function verifySnapshot(snapshot: Item, expected: ManifestEntry | undefined): void {
   if (expected?.omitted || hasOmissions(snapshot)) throw new Error(OMISSION_BLOCKER)
   if (expected && (snapshot.id !== expected.id || snapshotHash(snapshot) !== expected.hash)) throw new Error("This backup file does not match its recorded fingerprint. It was not restored.")
+  rememberHydratedOmaMasks(snapshot, expected?.hydratedOmaMasks)
 }
 
 const validRawHash = (hash: unknown): hash is string => typeof hash === "string" && /^[a-f0-9]{64}$/.test(hash)

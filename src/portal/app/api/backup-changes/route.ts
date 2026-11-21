@@ -72,7 +72,7 @@ export async function POST(request: NextRequest) {
     })
     const order = { removed: 0, modified: 1, added: 2 }
     items.sort((a, b) => order[a.change] - order[b.change] || a.typeLabel.localeCompare(b.typeLabel) || a.name.localeCompare(b.name))
-    return NextResponse.json({ backupId, comparedWith: previous.id, changes: items, partial, excludedPaths })
+    return NextResponse.json({ backupId, comparedWith: previous.id, changes: items, ...(partial ? { partial, excludedPaths } : {}) })
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Changes could not be listed." }, { status: 500 })
   }

@@ -19,7 +19,7 @@ const runbook = readFileSync(new URL("../resources/runbooks/Invoke-TenuVaultBack
 const RUNBOOK_VERSION = /\$script:RunbookVersion = "([^"]+)"/.exec(runbook)?.[1]
 const setup = readFileSync(new URL("../resources/New-TenuVaultCloudBackup.ps1", import.meta.url), "utf8")
 type RunCall = { uri: string; method: string; contentType: string | null; ifNoneMatch: string | null; ifMatch?: string | null; body: string | null }
-type Run = { calls: RunCall[]; error?: string | null; output?: string[] }
+type Run = { scenario?: string; calls: RunCall[]; error?: string | null; output?: string[] }
 let plainRuns: Run[] | undefined
 /** The scenarios of the plain-run fixture: a full run, an early failure, a failed manifest, and two runs with change reports on. */
 function runPlainFixture(): Run[] {
@@ -236,7 +236,7 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
     expect(saved).toBeGreaterThan(-1)
     expect(saved).toBeLessThan(interrupted.calls.findIndex(call => call.method === "Get" && call.uri.includes("/deviceConfigurations/cfg-1")))
     expect(JSON.parse([...writtenBlobs(interrupted)].find(([path]) => path.endsWith("metadata.json"))![1])).toMatchObject({ Status: "Failed", ItemCounts: { DeviceConfigurations: 1 } })
-    for (const immutable of runs.slice(11)) {
+    for (const immutable of runs.slice(11, 13)) {
       expect(immutable.error).toBeNull()
       expect(immutable.calls.some(call => call.method === "Put" && call.uri.endsWith("/metadata.json"))).toBe(true)
       expect(immutable.calls.every(call => !call.uri.includes(".blob.core.windows.net") || call.uri.startsWith("https://stcontoso."))).toBe(true)
@@ -323,9 +323,18 @@ it.runIf(Boolean(pwsh))("copies the omission policy before changing the cloud st
   const runs = execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8" }).trim().split(/\r?\n/)
     .filter(line => line.startsWith("{")).map(line => JSON.parse(line))
   expect(runs.find(run => run.scenario === "move-copies-policy")).toMatchObject({ error: null, actions: expect.arrayContaining(["copy-policy"]) })
-  expect(runs.find(run => run.scenario === "move-warns-on-denied")).toMatchObject({ error: null, output: expect.arrayContaining([expect.stringContaining("Enable omission again")]) })
+  expect(runs.find(run => run.scenario === "move-warns-on-denied")).toMatchObject({ error: null, output: expect.arrayContaining([expect.stringContaining("Verify the omission setting")]) })
+  expect(runs.find(run => run.scenario === "move-keeps-destination")).toMatchObject({
+    error: null, omissionBinding: "stprevious,stcontoso",
+    output: expect.arrayContaining([expect.stringContaining("Keeping the omission policy already set")]),
+  })
+  expect(runs.find(run => run.scenario === "move-keeps-destination").actions).not.toContain("copy-policy")
+  expect(runs.find(run => run.scenario === "upgrade-preserves-binding").omissionBinding).toBe("stprevious")
+  expect(runs.find(run => run.scenario === "upgrade-creates-binding").omissionBinding).toBe("")
+  expect(runs.find(run => run.scenario === "upgrade-keeps-unreadable-binding").omissionBinding).toBe("stprevious")
+  expect(template.parameters.initializeOmissionEnrollment).toMatchObject({ defaultValue: false })
   const migration = template.resources.find(resource => resource.type === "Microsoft.Resources/deploymentScripts")
-  expect(migration?.properties?.scriptContent).toContain('az storage blob download --account-name "$previous"')
+  expect(migration?.properties?.scriptContent).toContain('az storage blob download --account-name "$1"')
   expect(migration?.properties?.scriptContent).toContain("--if-none-match '*'")
   expect(template.outputs).toHaveProperty("omissionPolicyMigration")
   expect(template.resources.filter(resource => resource.type === "Microsoft.Automation/automationAccounts/variables")
@@ -609,4 +618,39 @@ describe("azuredeploy.json", () => {
     const role = resources.find((resource) => resource.type === "Microsoft.Authorization/roleDefinitions")!
     expect(JSON.stringify((role.properties as { permissions: unknown }).permissions)).not.toContain("delete")
   })
+})
+
+
+it.runIf(Boolean(pwsh))("cloud runs fail closed on unverified policies and preserve the off-mode OMA snapshot format", () => {
+  const runs = runPlainFixture()
+  for (const scenario of ["forbidden", "ambiguous404", "unavailable", "malformed"]) {
+    const run = runs.find(entry => entry.scenario === scenario)!
+    expect(run.error).toContain("omission policy could not be verified")
+    expect(run.calls.some(({ uri }) => uri.startsWith("https://graph.microsoft.com") || uri.includes("/intune-backups/backup-"))).toBe(false)
+  }
+  const off = runs.find(entry => entry.scenario === "containerMissing")!
+  expect(off.error).toBeNull()
+  expect(off.calls.filter(({ uri }) => uri.includes("getOmaSettingPlainTextValue"))).toHaveLength(1)
+  const blobs = writtenBlobs(off)
+  const folder = folderOf(blobs)
+  const snapshot = JSON.parse(blobs.get(`${folder}/DeviceConfigurations/Baseline Wi-Fi.json` )!)
+  expect(snapshot.omaSettings).toEqual([
+    { isEncrypted: true, value: "Graph value" },
+    { isEncrypted: true, secretReferenceValueId: "ref", value: "****" },
+  ])
+  const item = JSON.parse(blobs.get(`${folder}/metadata.json`)!).Items["DeviceConfigurations/cfg-1"]
+  expect(item).toHaveProperty("hydratedOmaMasks", [1])
+  expect(item).not.toHaveProperty("secretsMasked")
+  expect(item).not.toHaveProperty("partialCollections")
+}, 60_000)
+
+it.runIf(Boolean(pwsh))("keeps off-mode cloud report fields and compares matched typed and untyped tokens only under omission", () => {
+  const script = fileURLToPath(new URL("./fixtures/cloud-backup/omission-compare.ps1", import.meta.url))
+  const { off, on } = JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8" }))
+  expect(off.ExcludedPaths).toEqual([])
+  expect(off.Warnings).toEqual([])
+  expect(off.Drifts).toHaveLength(1)
+  expect(JSON.stringify(off.Drifts[0].changes)).toContain("nested.children")
+  expect(on.ExcludedPaths).toEqual(["/nested/children"])
+  expect(on.Drifts).toEqual([])
 })

@@ -19,13 +19,13 @@ import { POST as restore } from "../src/portal/app/api/restore-backup/route"
 import { POST as preview } from "../src/portal/app/api/restore-preview/route"
 import { POST as revert } from "../src/portal/app/api/revert-policy/route"
 import { POST as download } from "../src/portal/app/api/download-backup/route"
-import { compareObjects, POST as scan } from "../src/portal/app/api/detect-drifts/route"
+import { compareObjects, redactedChanges, POST as scan } from "../src/portal/app/api/detect-drifts/route"
 import { compareBackupFiles } from "../src/portal/lib/policies/compare-backups"
-import { snapshotHash, verifyProjectedSnapshot } from "../src/portal/lib/policies/backup-manifest"
+import { backupManifest, snapshotHash, verifyProjectedSnapshot, verifySnapshot } from "../src/portal/lib/policies/backup-manifest"
 import { Restorer, type GraphCall } from "../src/portal/lib/policies/graph-restore"
 import { buildChangeReport, changeReportMarkdown } from "../src/shared/reports/change-report"
 import { compareBackups } from "../src/shared/intune/backup-changes"
-import { INTUNE_TYPES, typeForFolder, type Item } from "../src/shared/intune/registry"
+import { INTUNE_TYPES, hydratedOmaMasks, typeForFolder, type Item } from "../src/shared/intune/registry"
 import { restorableFolders } from "../src/shared/intune/scope"
 import { buildRestorePlan, buildUpdatePlan, restoreBlocker } from "../src/shared/intune/restore-plan"
 import { observablePair, OMISSION_BLOCKER, omissionBody, projectSecrets } from "../src/shared/intune/secret-omission"
@@ -118,6 +118,21 @@ describe("shared omission rules", () => {
     ["omaSettingFuture", CANARY],
   ] as const
 
+  it("compares typed and untyped tokens equally without ignoring ordinary type annotations", () => {
+    const secret = { valueState: "encryptedValueToken", value: "old", "@odata.type": `#microsoft.graph.${rules.typedSecretSuffix}` }
+    const ordinary = { value: 2, "@odata.type": "#microsoft.graph.deviceManagementConfigurationIntegerSettingValue" }
+    const snapshot = (operand: Item, normal = ordinary, targetType = "#microsoft.graph.groupAssignmentTarget") => ({
+      settings: [{ settingInstance: { settingDefinitionId: "secret", simpleSettingValue: operand } },
+        { settingInstance: { settingDefinitionId: "ordinary", simpleSettingValue: normal } }],
+      assignments: [{ target: { "@odata.type": targetType, groupId: "group" } }],
+    })
+    const untyped = { valueState: "encryptedValueToken", value: "new" }
+    const compare = (newer: Item) => compareObjects(...observablePair("ConfigurationPolicies", snapshot(secret), newer, false,
+      { enabled: true, scripts: false }).slice(0, 2) as [Item, Item])
+    expect(compare(snapshot(untyped))).toEqual([])
+    expect(compare(snapshot(untyped, { ...ordinary, "@odata.type": "#microsoft.graph.deviceManagementConfigurationStringSettingValue" }, "#microsoft.graph.exclusionGroupAssignmentTarget"))).toHaveLength(2)
+  })
+
   it.each(omaSubtypes)("omits %s without requesting plaintext and tracks a refused hydration", async (subtype, placeholder) => {
     const snapshot = { id: "policy", omaSettings: [{ "@odata.type": `#microsoft.graph.${subtype}`, isEncrypted: true, value: placeholder, secretReferenceValueId: REF }] }
     const reader = {
@@ -144,6 +159,13 @@ describe("shared omission rules", () => {
       list: async () => [],
     })
     expect(restoreBlocker(TYPE, hydrated)).toBeUndefined()
+    const stored = JSON.stringify(hydrated)
+    expect(stored).not.toContain("_tenuvaultOmaMasked")
+    const restored = JSON.parse(stored)
+    expect(restoreBlocker(TYPE, restored)).toContain("masked OMA-URI")
+    const manifest = backupManifest({ Items: { "DeviceConfigurations/policy": { file: "Policy.json", hash: snapshotHash(hydrated), hydratedOmaMasks: hydratedOmaMasks(hydrated) } } }, "backup")
+    verifySnapshot(restored, manifest?.get("backup/DeviceConfigurations/Policy.json"))
+    expect(restoreBlocker(TYPE, restored)).toBeUndefined()
     const plan = buildRestorePlan(TYPE, hydrated)
     expect(plan.create.body.omaSettings).toEqual([{ "@odata.type": `#microsoft.graph.${subtype}`, value: placeholder }])
   })
@@ -334,6 +356,65 @@ describe("omission backup generations", () => {
     expect(job).toMatchObject({ status: "Failed", failures: 1 })
     expect(JSON.stringify(job)).not.toContain(CANARY)
     expect(JSON.stringify(await manifest())).not.toContain(CANARY)
+  })
+
+  it.each(["manual", "scheduled"] as const)("keeps the omission-off backup bytes and collection coverage for %s", async trigger => {
+    const fixture = setup(await temp())
+    const result = await fixture.run(trigger)
+    const raw = await result.read("DeviceConfigurations/Baseline.json")
+    expect(JSON.parse(raw)).toEqual({
+      ...config(),
+      extra: { settings: [], "settings@odata.nextLink": "https://graph.microsoft.com/beta/nested" },
+    })
+    expect(raw).not.toContain("_tenuvaultOmaMasked")
+    expect((await result.manifest()).Items["DeviceConfigurations/policy"]).not.toHaveProperty("partialCollections")
+    expect(fixture.paths.some(path => path.endsWith("/nested"))).toBe(false)
+  })
+
+  it("keeps the Graph value and emits no new masked warning when no reference is present", async () => {
+    const snapshot: Item = { id: "policy", omaSettings: [{ isEncrypted: true, value: null }, { isEncrypted: true, value: "From Graph", secretReferenceValueId: "" }] }
+    const get = vi.fn(async () => structuredClone(snapshot))
+    const onMasked = vi.fn()
+    const result = await readObject(TYPE, "policy", { get, list: async () => [] }, { onMasked })
+    expect(result).toEqual(snapshot)
+    expect(onMasked).not.toHaveBeenCalled()
+    expect(get).toHaveBeenCalledTimes(1)
+    expect(restoreBlocker(TYPE, result)).toBeUndefined()
+    expect(buildRestorePlan(TYPE, result).create.body.omaSettings).toEqual([{ value: null }, { value: "From Graph" }])
+  })
+
+  it("spends detail slots only on modified candidates and preserves an off-mode missing file", async () => {
+    const before = Object.fromEntries(Array.from({ length: 101 }, (_, index) =>
+      [`${FOLDER}/modified-${index}`, { file: `modified-${index}.json`, hash: "old", partialCollections: ["/nested/children"] }]))
+    const after = {
+      ...Object.fromEntries(Array.from({ length: 105 }, (_, index) => [`${FOLDER}/added-${index}`, { file: `added-${index}.json`, hash: "added" }])),
+      ...Object.fromEntries(Object.entries(before).map(([key, item]) => [key, { ...item, hash: "new" }])),
+    }
+    const read = vi.fn(async (path: string) => {
+      if (path.startsWith("old/") && path.endsWith("modified-0.json")) return new Response(null, { status: 404 })
+      return Response.json({ value: path.startsWith("old/") ? 1 : 2 })
+    })
+    const reserveProjectionRead = vi.fn(() => false)
+    const result = await compareBackupFiles(
+      { id: "old", metadata: { Items: before } }, { id: "new", metadata: { Items: after } }, read, compareObjects, 100, reserveProjectionRead,
+    )
+    expect(result).toMatchObject({ partial: false, excludedPaths: [] })
+    expect(result.entries.filter(entry => entry.fields)).toHaveLength(99)
+    expect(result.entries).toContainEqual({ change: expect.objectContaining({ change: "modified", id: "modified-0" }) })
+    expect(read).toHaveBeenCalledTimes(200)
+    expect(reserveProjectionRead).not.toHaveBeenCalled()
+  })
+
+  it("keeps observable nested changes in off-mode drift and report comparisons and ignores stored hydration markers", async () => {
+    const older = { id: "policy", omaSettings: [{ omaUri: "uri", value: "kept", _tenuvaultOmaMasked: false }],
+      nested: { children: [{ control: false }], "children@odata.nextLink": "https://graph.microsoft.com/beta/next" } }
+    const newer = { id: "policy", omaSettings: [{ omaUri: "uri", value: "kept" }], nested: { children: [{ control: true }] } }
+    const [left, right, excluded] = observablePair(FOLDER, older, newer, true)
+    expect(excluded).toEqual([])
+    const drift = compareObjects(left, right)
+    expect(drift).toMatchObject([{ field: "nested.children[0].control", oldValue: false, newValue: true }])
+    expect(redactedChanges(left, right)).toEqual(drift)
+    expect(observablePair(FOLDER, older, newer, false, { enabled: true, scripts: false })[2]).toEqual(["/nested/children"])
   })
 
   it("compares kept values through an off, on and masked transition", async () => {
@@ -661,7 +742,7 @@ function sharedStorage(graph: typeof fetch = async () => Response.json({ value: 
     }
     const name = decodeURIComponent(url.origin + url.pathname)
     const current = blobs.get(name)
-    if (request.method === "GET") return current ? new Response(current.body, { headers: { etag: current.etag } }) : new Response(null, { status: 404 })
+    if (request.method === "GET") return current ? new Response(current.body, { headers: { etag: current.etag } }) : new Response(null, { status: 404, headers: { "x-ms-error-code": "BlobNotFound" } })
     if (url.searchParams.get("restype") === "container") return new Response(null, { status: 201 })
     const body = await request.text()
     const latest = blobs.get(name)
@@ -690,7 +771,7 @@ it("only reads the producer account and lets both desktop identities back up to 
     const engine = new BackupEngine({
       fetch: storage.fetch, getToken: token, now: () => new Date(Date.UTC(2026, 0, 1, 0, 0, second)),
       unattendedTokens: () => ({ mode: "app-only", graph: token, storage: token }),
-      omissionPolicy: (request, tokens, signal) => policy.read(TENANT, request.storageAccountName, tokens.storage, signal),
+      omissionPolicy: (request, storage, signal) => policy.readForBackup(TENANT, request.storageAccountName, storage, signal),
     })
     return engine.waitForJob(engine.start({ ...azureRequest, trigger: second ? "scheduled" : "manual" }))
   }
@@ -713,7 +794,7 @@ it("streams snapshots before a mid-run Graph failure and records the saved item"
   }, true)
   const policy = new OmissionPolicyStore(memoryStore(), storage.fetch)
   const engine = new BackupEngine({ fetch: storage.fetch, getToken: token, concurrency: 1,
-    omissionPolicy: (request, tokens, signal) => policy.read(TENANT, request.storageAccountName, tokens.storage, signal) })
+    omissionPolicy: (request, storage, signal) => policy.readForBackup(TENANT, request.storageAccountName, storage, signal) })
   const job = await engine.waitForJob(engine.start(azureRequest))
   expect(job.status).toBe("Failed")
   const manifest = [...storage.blobs].find(([path]) => path.endsWith("/metadata.json"))!
@@ -740,7 +821,7 @@ it("lets a second producer run and keeps the original mode through an activation
   const admin = new OmissionPolicyStore(memoryStore(), storage.fetch)
   const createEngine = (offset: number) => new BackupEngine({
     fetch: storage.fetch, getToken: token, now: () => new Date(Date.now() + offset),
-    omissionPolicy: (request, tokens, signal) => admin.read(TENANT, request.storageAccountName, tokens.storage, signal),
+    omissionPolicy: (request, storage, signal) => admin.readForBackup(TENANT, request.storageAccountName, storage, signal),
   })
   const firstEngine = createEngine(0)
   const job = firstEngine.start(azureRequest)
@@ -757,7 +838,7 @@ it("lets a second producer run and keeps the original mode through an activation
   expect([...storage.blobs].find(([path]) => path.endsWith(`/${job.backupFolder}/DeviceConfigurations/Baseline.json`))?.[1].body).toContain(CANARY)
 })
 
-it("fails closed only for the account on which this installation saw omission enabled", async () => {
+it("requires confirmed absence for producers and allows unreadable storage for unbound rollback capture", async () => {
   const storage = sharedStorage()
   const store = memoryStore()
   const writer = new OmissionPolicyStore(store, storage.fetch)
@@ -766,7 +847,13 @@ it("fails closed only for the account on which this installation saw omission en
   const reader = new OmissionPolicyStore(store, storage.fetch)
   expect(await reader.read(TENANT, "stdesktop", token)).toMatchObject({ enabled: true })
   await expect(reader.read(TENANT, "stdesktop", denied)).rejects.toThrow("could not be verified")
-  expect(await reader.read(TENANT, "stcloud", denied)).toMatchObject({ enabled: false })
+  await expect(reader.read(TENANT, "stcloud", denied)).rejects.toThrow("could not be verified")
+  const silent = vi.fn(async () => { throw new Error("Sign in required") })
+  expect(await reader.readForRollback(TENANT, "stcloud", silent, true)).toMatchObject({ enabled: false })
+  expect(silent).not.toHaveBeenCalled()
+  expect(await reader.readForRollback(TENANT, "stcloud", silent)).toMatchObject({ enabled: false })
+  expect(silent).toHaveBeenCalledOnce()
+  await expect(reader.readForRollback(TENANT, "stdesktop", silent)).rejects.toThrow("could not be verified")
   expect(await reader.read(TENANT, ACCOUNT, denied)).toMatchObject({ enabled: false })
   await reader.save(TENANT, ACCOUNT, denied, { enabled: true, scripts: true })
   expect(await new OmissionPolicyStore(store, storage.fetch).read(TENANT, ACCOUNT, denied)).toMatchObject({ enabled: true, scripts: true })
@@ -787,9 +874,15 @@ it("names later producers that saved backups without omission, but ignores an in
     ["backup-2026-11-20-180002", { TenantId: TENANT, OmissionEnabled: true }],
     ["backup-2026-11-20-180003", { TenantId: "different" }],
   ] as const) storage.blobs.set(`${prefix}/${folder}/metadata.json`, { body: JSON.stringify(body), etag: "test" })
-  expect(await policy.warnings(TENANT, "stdesktop", { enabledAt, enabled: true, scripts: false, generation: "test" }, token)).toEqual([
-    { folder: later, account: "stdesktop", producer: "Cloud runbook 1.5.0" },
-  ])
+  const scan = () => policy.warnings(TENANT, "stdesktop", { enabledAt, enabled: true, scripts: false, generation: "test" }, token)
+  const expected = [{ folder: later, account: "stdesktop", producer: "Cloud runbook 1.5.0" }]
+  expect(await scan()).toEqual(expected)
+  storage.attemptedAccounts.length = 0
+  expect(await scan()).toEqual(expected)
+  expect(storage.attemptedAccounts.length).toBeLessThanOrEqual(3)
+  const next = "backup-2026-11-20-180004"
+  storage.blobs.set(`${prefix}/${next}/metadata.json`, { body: JSON.stringify({ TenantId: TENANT, AuthMode: "app-only" }), etag: "test" })
+  expect(await scan()).toEqual([...expected, { folder: next, account: "stdesktop", producer: "Backup Reader" }])
 })
 
 it.each(["token", "fetch", "backoff"])("cancels a default-off policy read during %s", async (stage) => {
@@ -804,7 +897,7 @@ it.each(["token", "fetch", "backoff"])("cancels a default-off policy read during
   const policies = new OmissionPolicyStore(memoryStore(), fetch)
   const engine = new BackupEngine({
     fetch, getToken: stage === "token" ? hang : token,
-    omissionPolicy: (request, tokens, signal) => policies.read(TENANT, request.storageAccountName, tokens.storage, signal),
+    omissionPolicy: (request, storage, signal) => policies.readForBackup(TENANT, request.storageAccountName, storage, signal),
   })
   const job = engine.start(azureRequest)
   await reached
@@ -828,4 +921,36 @@ it("never dispatches a snapshot after the job deadline even if the token arrives
   } finally {
     clock.mockRestore()
   }
+})
+
+
+it.each([403, 404, 503, 200, "network"] as const)("stops an unbound producer before writing when a policy read gives %s", async (status) => {
+  const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+    expect(String(input)).toContain("/secret-omission.json")
+    expect(init?.method).toBe("GET")
+    if (status === "network") throw new TypeError("network failed")
+    return new Response(status === 200 ? "invalid JSON" : null, { status, headers: { "retry-after": "0" } })
+  })
+  const policies = new OmissionPolicyStore(memoryStore(), fetch)
+  const engine = new BackupEngine({
+    fetch, getToken: token,
+    omissionPolicy: (request, storage, signal) => policies.readForBackup(request.tenantId, request.storageAccountName, storage, signal),
+  })
+  const job = await engine.waitForJob(engine.start(azureRequest))
+  expect(job.status).toBe("Failed")
+  expect(JSON.stringify(job)).toContain("omission policy could not be verified")
+  expect(fetch.mock.calls).toHaveLength(status === 503 || status === "network" ? 3 : 1)
+})
+
+it.each(["BlobNotFound", "ContainerNotFound"])("accepts a confirmed %s as an absent policy", async code => {
+  const policies = new OmissionPolicyStore(memoryStore(), async () => new Response(null, { status: 404, headers: { "x-ms-error-code": code } }))
+  await expect(policies.read(TENANT, "stdesktop", token)).resolves.toMatchObject({ enabled: false })
+})
+
+it("explains why a write-once destination refuses the second policy save", async () => {
+  const storage = sharedStorage(async () => { throw new Error("unexpected Graph call") }, true)
+  const policies = new OmissionPolicyStore(memoryStore(), storage.fetch)
+  await policies.save(TENANT, "stdesktop", token, { enabled: true, scripts: false })
+  await expect(policies.save(TENANT, "stdesktop", token, { enabled: false, scripts: false })).rejects.toThrow("immutability policy")
+  expect(await policies.read(TENANT, "stdesktop", token)).toMatchObject({ enabled: true })
 })

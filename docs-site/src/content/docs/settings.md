@@ -59,6 +59,10 @@ Turning the option on applies to backups and rollback captures that start afterw
 
 [Backup coverage](/backups/coverage/#leave-secret-values-out-of-policy-backups) lists the affected values and restore limits.
 
+If a backup cannot verify the omission policy in its destination, the job stops before saving policy snapshots. Check the storage identity's read access and the policy file before retrying.
+
+An Azure immutability policy or legal hold can allow the first policy save and prevent later changes. If the setting cannot be changed, ask your Azure administrator to configure a destination where the omission policy blob can be updated.
+
 ## Services and permissions
 
 Shows, for each connected tenant, which services TenuVault backs up and what the tenant's app registration allows for each one: read permissions for backups and drift detection, write permissions for restores. TenuVault reads this from the sign-in it already has, so the check sends no request to Microsoft and changes nothing. With more than one tenant, an overview at the top lists every tenant; select one to see its details.

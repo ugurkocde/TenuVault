@@ -190,6 +190,7 @@ function Write-Scenario {
         legacyVariableKept = $script:variables.ContainsKey($legacyKeyVaultVariable)
         changeReport = $script:variables["TenuVaultChangeReport-$tenantKey"]
         changeReportActors = $script:variables["TenuVaultChangeReportActors-$tenantKey"]
+        omissionBinding = $script:variables["TenuVaultOmissionAccount-$tenantKey"]
         tenantName = $script:variables["TenuVaultTenantName-$tenantKey"]
         variables = @($script:variables.Keys | Sort-Object)
         schedule = $script:schedule
@@ -279,13 +280,22 @@ function Invoke-WebRequest {
         $script:actions.Add("copy-policy")
         return @{ StatusCode = 201 }
     }
+    if ($script:destinationPolicy -and $Uri -like "https://stcontoso.*") { return @{ Content = $script:migrationPolicy } }
     if ($script:denyPrevious -or $Uri -notlike "https://stprevious.*") { throw "Access denied." }
     return @{ Content = $script:migrationPolicy }
 }
-foreach ($scenario in "move-copies-policy", "move-warns-on-denied") {
+foreach ($scenario in "move-copies-policy", "move-warns-on-denied", "move-keeps-destination", "upgrade-preserves-binding", "upgrade-creates-binding", "upgrade-keeps-unreadable-binding") {
     Reset-OldSetup
-    $script:variables["TenuVaultStorageAccount-$tenantKey"] = "stprevious"
-    $script:denyPrevious = $scenario -eq "move-warns-on-denied"
+    $script:variables["TenuVaultStorageAccount-$tenantKey"] = if ($scenario.StartsWith("move")) { "stprevious" } else { $StorageAccountName }
+    if ($scenario -in @("upgrade-preserves-binding", "upgrade-keeps-unreadable-binding", "move-keeps-destination")) {
+        $script:variables["TenuVaultOmissionAccount-$tenantKey"] = "stprevious"
+    }
+    if ($scenario -eq "upgrade-keeps-unreadable-binding") {
+        $script:translatedVariable = "TenuVaultOmissionAccount-$tenantKey"
+        $script:failList = $true
+    }
+    $script:denyPrevious = $scenario -in @("move-warns-on-denied", "move-keeps-destination")
+    $script:destinationPolicy = $scenario -eq "move-keeps-destination"
     $output = @()
     $errorText = $null
     try { $output = @(. $upgradeStep 3>&1 6>&1) } catch { $errorText = $_.Exception.Message }

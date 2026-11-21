@@ -438,6 +438,52 @@ describe("change-set engine", () => {
     await expect(createChangeSet(context.deps, TENANT_A, { title: "x", operations: [{ folder: "ConfigurationPolicies", action: "create", proposed: { name: "x", secret: REDACTED } }] }, null)).rejects.toThrow(/redacted/)
   })
 
+  it("refuses an untyped encrypted Settings Catalog token before storing the proposal", async () => {
+    const context = setup()
+    const token = "private token canary"
+    context.deps.omissionPolicy = async () => ({ enabled: true, scripts: false, generation: "active" })
+    const proposed = { name: "Token policy", settings: [{
+      settingInstance: { settingDefinitionId: "test", simpleSettingValue: { valueState: "encryptedValueToken", value: token } },
+    }] }
+    await expect(createChangeSet(context.deps, TENANT_A, { title: "Token containing proposal", operations: [
+      { folder: "ConfigurationPolicies", action: "create", proposed },
+    ] }, null)).rejects.toThrow("Remove the affected settings")
+    expect(context.deps.records.list(CONTENT_DOMAIN, TENANT_A)).toEqual([])
+    expect(context.tenant.writeCount()).toBe(0)
+  })
+
+  it.each([true, false])("validates a review after omission flips from %s and captures under the apply policy", async (reviewMode) => {
+    const context = setup()
+    let enabled = reviewMode
+    context.deps.omissionPolicy = async () => ({ enabled, scripts: false, generation: enabled ? "active" : "disabled" })
+    const { record, doomed } = await threeOperations(context)
+    const graph = context.deps.graph
+    context.deps.graph = async (...args) => {
+      const call = await graph(...args)
+      return (method, path, body, options) => path === "deviceManagement/nestedPage"
+        ? Promise.resolve({ status: 200, body: { value: [{ enabled: true }] } })
+        : call(method, path, body, options)
+    }
+    doomed.settings = [{
+      settingInstance: {
+        settingDefinitionId: "test", simpleSettingValue: { valueState: "encryptedValueToken", value: "example token" },
+        children: [], "children@odata.nextLink": "https://graph.microsoft.com/beta/deviceManagement/nestedPage",
+      },
+    }]
+    const review = await approve(context, record.id)
+    const saved = context.deps.records.get<ChangeSetRecord>(DOMAINS.changeSets, TENANT_A, record.id)
+    expect(saved?.review?.omission?.enabled).toBe(reviewMode)
+    enabled = !reviewMode
+    const preview = await context.post({ action: "preview", id: record.id })
+    expect(preview.body.approval).toMatchObject({ valid: true })
+    const applied = await context.post({ action: "apply", id: record.id, contentHash: review.contentHash, confirm: true })
+    expect(applied.body.changeSet.status).toBe("applied")
+    expect(context.tenant.writeCount()).toBe(3)
+    const capture = context.deps.records.get<ChangeSetContent>(CONTENT_DOMAIN, TENANT_A, applied.body.changeSet.preChange.captureId)
+    expect(capture?.omission?.enabled).toBe(!reviewMode)
+    expect(JSON.stringify(capture).includes("example token")).toBe(reviewMode)
+  })
+
   it.each([400, 503])("projects planner, read-back and both retry paths in omission mode (%s)", async (writeFailure) => {
     const context = setup()
     context.deps.omissionPolicy = async () => ({ enabled: true, scripts: false, generation: "stored-generation" })

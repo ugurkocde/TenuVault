@@ -10,7 +10,7 @@ import { GraphSession, type GraphItem } from "./graph-session"
 import { GRAPH, BlobClaimError, GraphError, InventoryDamagedError, ProtectedBlobError, RequestTimeoutError, StorageError, TokenError, isUnreachable } from "./request"
 import { isLocalAccount } from "../storage/blob-emulator"
 import { FetchApplicationError } from "../api/network-error"
-import { INTUNE_TYPES, itemName, typeForFolder, type IntuneType, type Item } from "../../shared/intune/registry"
+import { INTUNE_TYPES, hydratedOmaMasks, itemName, typeForFolder, type IntuneType, type Item } from "../../shared/intune/registry"
 import { listSnapshot, readObject, withMaskedSecrets } from "../../shared/intune/read"
 import { comparableSnapshot } from "../../shared/intune/compare"
 import type { BackupItems } from "../../shared/intune/backup-changes"
@@ -104,7 +104,7 @@ export interface BackupEngineDeps {
   enabledModules?: (tenantId: string) => ModuleId[]
   /** Backups older than this many days are deleted after each backup; 0 keeps everything. */
   retentionDays?: (tenantId: string) => number
-  omissionPolicy?: (request: BackupRequest, tokens: RunTokens, signal: AbortSignal) => Promise<BackupOmissionPolicy>
+  omissionPolicy?: (request: BackupRequest, storage: BlobWriter, signal: AbortSignal) => Promise<BackupOmissionPolicy>
   now?: () => Date
   /** Items read at the same time. Graph throttling (429) pauses every reader. */
   concurrency?: number
@@ -442,7 +442,8 @@ export class BackupEngine {
 
     const concurrency = this.deps.concurrency ?? CONCURRENCY
     const network = new NetworkCircuit(3 * concurrency, signal, deadline)
-    const policy = await this.deps.omissionPolicy?.(request, tokens, network.signal)
+    const policy = await this.deps.omissionPolicy?.(request,
+      new BlobWriter(fetchImpl, request.storageAccountName, storageToken, network, true), network.signal)
     const storage = new BlobWriter(fetchImpl, request.storageAccountName, storageToken, network, policy?.enabled)
     // The Backup Reader cannot create containers; New-TenuVaultStorage.ps1 creates the backup container for it.
     if (local || tokens.mode === "delegated") await storage.ensureContainer()
@@ -643,16 +644,18 @@ export class BackupEngine {
         const omitted = fields.length > 0 ? fields : undefined
         const stored = omitted ? omissionBody(projected!.snapshot, omitted) : detail
         const body = JSON.stringify(stored, null, 2)
-        const partialCollections = partialCollectionPaths(detail)
+        const partialCollections = policy?.enabled ? partialCollectionPaths(detail) : []
         const record: BackupItems[string] = {
           ...(partialCollections.length ? { partialCollections } : {}),
           file: `${fileName}.json`,
           hash: snapshotHash(omitted ? projected!.snapshot : detail),
           ...(omitted ? { omitted, rawHash: createHash("sha256").update(body).digest("hex") } : {}),
         }
+        const hydratedMasks = omitted ? [] : hydratedOmaMasks(detail)
         const maskedView = omitted ? null : withMaskedSecrets(type, detail)
         const entry = {
           ...record,
+          ...(hydratedMasks.length ? { hydratedOmaMasks: hydratedMasks } : {}),
           ...(type.assignmentsFormerlyExpanded && !omitted ? { hashWithEmptyAssignments: snapshotHash({ ...detail, assignments: [] }) } : {}),
           ...(maskedView ? { hashWithMaskedSecrets: snapshotHash(maskedView) } : {}),
           ...(masked ? { secretsMasked: true as const } : {}),

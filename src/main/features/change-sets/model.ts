@@ -123,6 +123,9 @@ export interface ChangeSetReview {
   /** Target state the reviewer saw: combined fingerprint and one per operation. */
   targetFingerprint: string
   operationFingerprints: Record<string, string>
+  omission?: ChangeSetContent["omission"]
+  /** An off-mode review also fingerprints what remains observable after enabling omission. */
+  projectedFingerprints?: Record<string, { secrets: string; scripts: string }>
   observedAt: string
   reviewer: string | null
   actor: string | null

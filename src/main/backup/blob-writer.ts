@@ -62,7 +62,7 @@ export class BlobWriter {
         || isImmutabilityRefusal(response.status, response.headers.get("x-ms-error-code") ?? ""))) {
         if (await landed(response, signal)) return
       }
-      throw new StorageError(await storageError(response, this.account, this.hideErrorDetails))
+      throw await storageFailure(response, this.account, this.hideErrorDetails, ifMatch !== undefined)
     }, beforeCommit, onDispatch)
   }
 
@@ -97,13 +97,17 @@ export class BlobWriter {
    * (damaged, or written by something else) throws a FetchApplicationError: it is unreadable, never
    * the same as a missing blob, so retention keeps it and counts the container as shared.
    */
-  async readJson(name: string): Promise<Record<string, unknown> | null> {
-    return (await this.readJsonWithETag(name))?.value ?? null
+  async readJson(name: string, confirmedMissing = false): Promise<Record<string, unknown> | null> {
+    return (await this.readJsonWithETag(name, confirmedMissing))?.value ?? null
   }
 
-  async readJsonWithETag(name: string): Promise<{ value: Record<string, unknown>; etag: string | null } | null> {
+  async readJsonWithETag(name: string, confirmedMissing = false): Promise<{ value: Record<string, unknown>; etag: string | null } | null> {
     return this.request(`${BACKUP_CONTAINER}/${name.split("/").map(encodeURIComponent).join("/")}`, { method: "GET" }, async (response) => {
-      if (response.status === 404) return null
+      if (response.status === 404) {
+        const code = response.headers.get("x-ms-error-code") ??
+          (confirmedMissing ? /<Code>([^<]+)<\/Code>/.exec(await response.clone().text())?.[1] : undefined)
+        if (!confirmedMissing || code === "BlobNotFound" || code === "ContainerNotFound") return null
+      }
       if (!response.ok) throw await storageFailure(response, this.account, this.hideErrorDetails)
       // Capped like every other backup read; an oversized file is unreadable, never buffered whole.
       const body = await readJsonCapped(response, MAX_BACKUP_ARCHIVE_BYTES)

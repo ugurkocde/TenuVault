@@ -118,13 +118,14 @@ export async function sameNameIds(graph: GraphCall, type: IntuneType, name: stri
 export interface Observation {
   /** Sanitized live object for update and delete; null when missing or for create. */
   snapshot: Item | null
+  alternateNestedSnapshot?: Item
   redacted: boolean
   sameNameIds: string[]
   fingerprint: string
 }
 
 /** Reads what one operation would change in the target and fingerprints it. */
-export async function observe(graph: GraphCall, type: IntuneType, operation: { action: OperationAction; targetId: string | null; name: string }, memo?: ListingMemo, omission?: OmissionOptions): Promise<Observation> {
+export async function observe(graph: GraphCall, type: IntuneType, operation: { action: OperationAction; targetId: string | null; name: string }, memo?: ListingMemo, omission?: OmissionOptions, compareDifferentReadMode = false): Promise<Observation> {
   if (operation.action === "create") {
     let ids: string[]
     try {
@@ -136,10 +137,19 @@ export async function observe(graph: GraphCall, type: IntuneType, operation: { a
     }
     return { snapshot: null, redacted: false, sameNameIds: ids, fingerprint: operationFingerprint("create", { snapshot: null, sameNameIds: ids }) }
   }
-  const live = await readCurrent(graph, type, operation.targetId!, { omitEncryptedOma: omission?.enabled })
+  let beforeExpansion: Item | undefined
+  const live = await readCurrent(graph, type, operation.targetId!, {
+    omitEncryptedOma: omission?.enabled,
+    ...(compareDifferentReadMode ? {
+      expandNestedCollections: true,
+      beforeNestedExpansion: (detail: Item) => { beforeExpansion = structuredClone(detail) },
+    } : {}),
+  })
   if (!live) return { snapshot: null, redacted: false, sameNameIds: [], fingerprint: "missing" }
-  const { snapshot, redacted } = sanitizeSnapshot(type, live)
-  return { snapshot, redacted, sameNameIds: [], fingerprint: operationFingerprint(operation.action, { snapshot: safeSnapshot(type, snapshot, omission), sameNameIds: [] }) }
+  const { snapshot, redacted } = sanitizeSnapshot(type, !omission?.enabled && beforeExpansion ? beforeExpansion : live)
+  const other = omission?.enabled ? beforeExpansion : compareDifferentReadMode ? live : undefined
+  return { snapshot, ...(other ? { alternateNestedSnapshot: sanitizeSnapshot(type, other).snapshot } : {}),
+    redacted, sameNameIds: [], fingerprint: operationFingerprint(operation.action, { snapshot: safeSnapshot(type, snapshot, omission), sameNameIds: [] }) }
 }
 
 export function safeSnapshot(type: IntuneType, snapshot: Item, omission?: OmissionOptions): Item {

@@ -87,7 +87,7 @@ export interface IntuneType {
    * The backup file stores the real value so restore can send it again. It is readable to everyone
    * who can read the backup: in Azure, everyone with read access to the container.
    */
-  secrets?: (item: Item) => Array<{ path: string | null; apply: (value: string, masked?: boolean) => void }>
+  secrets?: (item: Item) => Array<{ path: string; apply: (value: string, masked?: boolean) => void }>
   /** Extra query for the list GET, for example a $filter. */
   listQuery?: string
   extras?: Extra[]
@@ -285,15 +285,31 @@ const AOSP_PATCHABLE = ["displayName", "description", "wifiSsid", "wifiPassword"
 const MASKED_SECRET = "This backup holds a masked OMA-URI value. Create a new manual backup to restore it."
 // iOS, Windows, Android device owner and macOS Wi-Fi profiles return null for preSharedKey.
 export const encryptedOmaSetting = (setting: Item): boolean => setting.isEncrypted === true
-const hasMaskedSecret = (item: Item) => collection(item.omaSettings).some((setting) => {
-  if (!encryptedOmaSetting(setting)) return false
-  if (typeof setting.value !== "string") return true
-  if (typeof setting._tenuvaultOmaMasked === "boolean") return setting._tenuvaultOmaMasked
+const omaHydration = new WeakMap<Item, boolean>()
+const looksLikeOmaMask = (setting: Item): boolean => {
+  if (typeof setting.value !== "string") return false
   const subtype = String(setting["@odata.type"] ?? "").toLowerCase()
   if (subtype.endsWith("omasettingstringxml")) return setting.value === "PGEvPg==" || setting.value === "****"
   if (subtype.endsWith("omasettingbase64")) return setting.value === "KioqKg==" || setting.value === "****"
   return setting.value === "****"
-})
+}
+
+export function hydratedOmaMasks(item: Item): number[] {
+  return collection(item.omaSettings).flatMap((setting, index) =>
+    encryptedOmaSetting(setting) && looksLikeOmaMask(setting) && omaHydration.get(setting) === false ? [index] : [])
+}
+
+export function rememberHydratedOmaMasks(item: Item, indices: readonly number[] | undefined): void {
+  const settings = collection(item.omaSettings)
+  for (const index of indices ?? []) {
+    const setting = settings[index]
+    if (setting && encryptedOmaSetting(setting) && looksLikeOmaMask(setting)) omaHydration.set(setting, false)
+  }
+}
+
+const hasMaskedSecret = (item: Item) => collection(item.omaSettings).some((setting) =>
+  encryptedOmaSetting(setting) && (omaHydration.get(setting) ??
+    (typeof setting._tenuvaultOmaMasked === "boolean" ? setting._tenuvaultOmaMasked : looksLikeOmaMask(setting))))
 
 /** Dependencies and superseded apps an app points to, in the shape updateRelationships expects. */
 const appLinks = (app: Item): Item[] =>
@@ -330,12 +346,12 @@ export const INTUNE_TYPES: IntuneType[] = [
     expand: "assignments",
     secrets: (item) =>
       collection(item.omaSettings)
-        .filter(encryptedOmaSetting)
+        .filter((setting) => encryptedOmaSetting(setting) && typeof setting.secretReferenceValueId === "string" && setting.secretReferenceValueId.length > 0)
         .map((setting) => ({
-          path: typeof setting.secretReferenceValueId === "string" && setting.secretReferenceValueId ? `deviceManagement/deviceConfigurations/${encodeURIComponent(str(item.id))}/getOmaSettingPlainTextValue(secretReferenceValueId='${encodeURIComponent(str(setting.secretReferenceValueId).replaceAll("'", "''"))}')` : null,
+          path: `deviceManagement/deviceConfigurations/${encodeURIComponent(str(item.id))}/getOmaSettingPlainTextValue(secretReferenceValueId='${encodeURIComponent(str(setting.secretReferenceValueId).replaceAll("'", "''"))}')`,
           apply: (value: string, masked = false) => {
             setting.value = value
-            setting._tenuvaultOmaMasked = masked
+            omaHydration.set(setting, masked)
           },
         })),
     restore: "create",

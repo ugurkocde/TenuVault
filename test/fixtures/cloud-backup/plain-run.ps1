@@ -28,6 +28,9 @@ $script:binding = ""
 $script:failOmittedRead = $false
 $script:changeDuringCapture = $false
 $script:control = $null
+$script:policyStatus = 404
+$script:policyCode = "BlobNotFound"
+$script:omaParity = $false
 $script:binding = ""
 $script:writeOnce = $false
 $script:written = @{}
@@ -54,7 +57,11 @@ function Invoke-TvHttp {
     }
     if ($Uri -like "*/.tenuvault-control/*") {
         if ($Method -ne "Get") { throw "A producer must not write omission policy." }
-        if ($null -eq $script:control) { throw [TvHttpError]::new(404, "HTTP 404") }
+        if ($null -eq $script:control) {
+            $errorResponse = [TvHttpError]::new($script:policyStatus, "HTTP $script:policyStatus")
+            $errorResponse.ServiceCode = $script:policyCode
+            throw $errorResponse
+        }
         return @{ Status = 200; Bytes = [Text.Encoding]::UTF8.GetBytes($script:control); Text = $script:control }
     }
     if ($script:writeOnce -and $Method -eq "Put") {
@@ -69,6 +76,8 @@ function Invoke-TvHttp {
         $text = '{"value":[{"id":"ap-1","serialNumber":"SN-0001","manufacturer":"Contoso","model":"Laptop 7","groupTag":"Sales","displayName":null,"userPrincipalName":"","lastContactedDateTime":"2026-11-01T10:00:00Z","enrollmentState":"enrolled","deviceAccountPassword":"secret","productKey":"PK-1","managedDeviceId":"md-1"}]}'
     } elseif ($Uri -like "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations/cfg-0*") {
         $text = '{"id":"cfg-0","displayName":"First","assignments":[]}'
+    } elseif ($script:omaParity -and $Uri -like "*getOmaSettingPlainTextValue*") {
+        $text = '{"value":"****"}'
     } elseif ($Uri -like "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations/cfg-1*") {
         if ($script:changeDuringCapture) {
             $script:control = '{"version":1,"tenantId":"11111111-2222-3333-4444-555555555555","generation":"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb","enabled":true,"scripts":false}'
@@ -76,7 +85,9 @@ function Invoke-TvHttp {
         if ($script:failDetail) { throw [TvHttpError]::new(401, "HTTP 401") }
         if ($script:failOmittedRead) { throw [TvHttpError]::new(400, "omission-test-value-397c6d") }
         $text = '{"@odata.context":"x","id":"cfg-1","displayName":"Baseline Wi-Fi","lastModifiedDateTime":"2026-11-01T10:00:00Z","assignments":[]}'
-        if ($script:omit) {
+        if ($script:omaParity) {
+            $text = '{"id":"cfg-1","displayName":"Baseline Wi-Fi","omaSettings":[{"isEncrypted":true,"value":"Graph value"},{"isEncrypted":true,"secretReferenceValueId":"ref","value":"masked"}],"nested":{"children":[1],"children@odata.nextLink":"https://graph.microsoft.com/beta/next"}}'
+        } elseif ($script:omit) {
             $text = '{"id":"cfg-1","displayName":"Baseline Wi-Fi","omaSettings":[{"@odata.type":"#microsoft.graph.omaSettingString","isEncrypted":true,"value":"omission-test-value-397c6d","secretReferenceValueId":"omission-test-secret-reference","omaUri":"./Secret"}],"settings":[{"@odata.type":"#microsoft.graph.deviceManagementConfigurationSecretSettingValue","value":"omission-test-value-397c6d"}]}'
         }
     }
@@ -179,4 +190,17 @@ foreach ($run in @(1, 2)) {
     $errorText = $null
     try { $output = @(Invoke-TvBackup) } catch { $errorText = $_.Exception.Message }
     Write-Output (@{ calls = @($script:calls.ToArray()); error = $errorText } | ConvertTo-Json -Compress -Depth 5)
+}
+
+$script:writeOnce = $false
+foreach ($case in @("forbidden", "ambiguous404", "unavailable", "malformed", "containerMissing")) {
+    $script:calls.Clear()
+    $script:OutcomeSent = $false
+    $script:policyStatus = switch ($case) { "forbidden" { 403 }; "unavailable" { 503 }; default { 404 } }
+    $script:policyCode = if ($case -eq "containerMissing") { "ContainerNotFound" } else { "" }
+    $script:control = if ($case -eq "malformed") { "invalid JSON" } else { $null }
+    $script:omaParity = $case -eq "containerMissing"
+    $errorText = $null
+    try { $null = @(Invoke-TvBackup) } catch { $errorText = $_.Exception.Message }
+    Write-Output (@{ scenario = $case; calls = @($script:calls.ToArray()); error = $errorText } | ConvertTo-Json -Compress -Depth 5)
 }

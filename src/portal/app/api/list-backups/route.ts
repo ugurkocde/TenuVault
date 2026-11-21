@@ -380,7 +380,7 @@ export async function POST(request: NextRequest) {
         0, reserveComparisonRead,
       )
       current.changes = summarize(entries.map((entry) => entry.change))
-      current.partialComparison = partial
+      if (partial) current.partialComparison = true
       current.comparedWith = previous.id
     }
     for (const backup of backups) {

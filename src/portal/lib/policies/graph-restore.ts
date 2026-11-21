@@ -4,7 +4,7 @@ import { parseDependencyMappings } from "../../../shared/intune/recovery"
 import { hasOmissions, OMISSION_BLOCKER } from "../../../shared/intune/secret-omission"
 import { dependencyReferences, type DependencyReference } from "../../../shared/intune/dependencies"
 import { createHash, randomUUID } from "node:crypto"
-import { typeForFolder, type IntuneType, type Item, type Json, type Step } from "../../../shared/intune/registry"
+import { hydratedOmaMasks, rememberHydratedOmaMasks, typeForFolder, type IntuneType, type Item, type Json, type Step } from "../../../shared/intune/registry"
 
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 import { buildRestorePlan, buildUpdatePlan, NotRestorableError, resolveStep, restoreBlocker } from "../../../shared/intune/restore-plan"
@@ -53,6 +53,7 @@ export interface RestoreOptions {
   granted?: GrantedPermissions
   omittedDependencies?: ReadonlyMap<string, string>
   readOptions?: ReadOptions
+  statusOnlyWriteErrors?: boolean
 }
 
 export interface RestoreOutcome {
@@ -281,6 +282,7 @@ export class Restorer {
     const unpermitted = restorePermissionBlocker(type.folder, this.options.granted)
     if (unpermitted) return { success: false, path, action: "skipped", retryable: false, error: unpermitted }
     const source = this.remap(this.options.crossTenant ? forOtherTenant(snapshot) : snapshot)
+    if (source !== snapshot) rememberHydratedOmaMasks(source, hydratedOmaMasks(snapshot))
     // A backup that could not read the assignments must not replace the live ones with an empty list.
     const unread = this.options.assignments && !this.options.crossTenant && assignmentsUnread(type, snapshot)
     const assignments = this.options.assignments && !this.options.crossTenant && !unread
@@ -321,8 +323,12 @@ export class Restorer {
       if (blocker) return { success: false, path, action: "skipped", error: blocker }
       return withNote(await this.create(type, path, source, snapshot, assignments))
     } catch (error) {
-      return { success: false, path, retryable: false, error: error instanceof Error ? error.message : String(error) }
+      return { success: false, path, retryable: false, error: this.options.statusOnlyWriteErrors && !(error instanceof SafeGraphReadError) ? "Microsoft Graph could not complete the operation. Check Intune before retrying." : error instanceof Error ? error.message : String(error) }
     }
+  }
+
+  private writeFailure(type: IntuneType, body: Item, status: number): string {
+    return this.options.statusOnlyWriteErrors ? `Microsoft Graph returned HTTP ${status}.` : writeError(type, body, status)
   }
 
   /**
@@ -371,7 +377,7 @@ export class Restorer {
     if (references.blocking.length) return { success: false, path, action: "skipped", retryable: false, error: references.blocking.join(" ") }
     const created = await this.graph("POST", plan.create.path, plan.create.body, { sourceId: typeof snapshot.id === "string" ? snapshot.id : undefined })
     if (created.approval) return this.pauseApproval(type, path, { ...plan.create, kind: "content" }, [...plan.steps, ...plan.assignments], source, "created", created.approval, undefined, undefined, typeof snapshot.id === "string" ? snapshot.id : undefined)
-    if (created.status >= 300) return { success: false, path, retryable: created.status < 500 && created.status !== 408, error: writeError(type, created.body, created.status) }
+    if (created.status >= 300) return { success: false, path, retryable: created.status < 500 && created.status !== 408, error: this.writeFailure(type, created.body, created.status) }
     const id = String(created.body.id ?? "")
     if (!id) return { success: false, path, retryable: false, error: "Microsoft Graph did not return an ID. Check Intune before retrying." }
     if (typeof snapshot.id === "string" && !this.reviewed.has(snapshot.id.toLowerCase())) this.remapped.set(snapshot.id, id)
@@ -581,11 +587,13 @@ export class Restorer {
         response = await this.graph(step.method, step.path, step.body)
         if (!response.approval) {
           if (response.status < 300) continue
-          message = `${step.kind === "assignments" ? "Assignments" : "Settings"} could not be restored: ${writeError(type, response.body, response.status)}`
+          message = `${step.kind === "assignments" ? "Assignments" : "Settings"} could not be restored: ${this.writeFailure(type, response.body, response.status)}`
           safeToRetry = response.status < 500 && response.status !== 408
         }
       } catch (error) {
-        message = `Write outcome unknown: ${error instanceof Error ? error.message : String(error)}. Check Intune before retrying.`
+        message = this.options.statusOnlyWriteErrors
+          ? "Microsoft Graph did not confirm the write. Check Intune before retrying."
+          : `Write outcome unknown: ${error instanceof Error ? error.message : String(error)}. Check Intune before retrying.`
       }
       if (response?.approval) {
         let live = index === 0 ? baseline : undefined
