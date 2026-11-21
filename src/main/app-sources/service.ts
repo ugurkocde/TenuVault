@@ -166,7 +166,7 @@ export class AppSourceService {
           if (job?.tenant === tenant) job.restoreProgress = value
         }, operationId)
       } catch (error) {
-        void recordRestorePreparationFailure({ destination, sourceBackupId: sourceId, operationId, runId: randomUUID(), action: "Restore app backup" })
+        void recordRestorePreparationFailure({ destination, sourceTenantId: tenant, sourceBackupId: sourceId, operationId, runId: randomUUID(), action: "Restore app backup" })
           .catch(() => console.warn("[audit] App restore preparation failure could not be recorded"))
         throw error
       }

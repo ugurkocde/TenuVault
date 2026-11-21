@@ -1602,7 +1602,7 @@ async function bootstrap(): Promise<void> {
     loadRestoreSettings: async (tenant, appId) => readRestoreSnapshot(tenant, appId, (await auth.getAccessToken(tenant, signedInClient(tenant), RESOURCE_SCOPES.graph)).accessToken, bridgedFetch, "current-settings"),
     restore: (store, source, snapshot, target, name, signal, progress, operationId) => disclaimer.run([target], async () => {
       const getGraphToken = async () => (await auth.getAccessToken(target, signedInClient(target), RESOURCE_SCOPES.graph)).accessToken
-      const preparation = { destination: target, sourceBackupId: source.id, operationId,
+      const preparation = { destination: target, sourceTenantId: source.receipt.tenantId, sourceBackupId: source.id, operationId,
         runId: randomUUID(), action: "Restore app backup" }
       const graphToken = await restoreTokenWithAudit(getGraphToken, preparation)
       const original: AuditJobItem = { folder: "Apps", sourceId: source.receipt.appId, outcome: "unattempted",

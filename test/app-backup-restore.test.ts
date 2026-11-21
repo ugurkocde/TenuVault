@@ -267,7 +267,7 @@ describe("cross-tenant restore engine", () => {
   })
 })
 
-it("binds service restore to both configured tenants, captured provenance and the reviewed settings hash", async () => {
+it.each([true, false])("binds service restore to both configured tenants and the reviewed settings hash (destination storage: %s)", async (destinationHasStorage) => {
   const f = await fixture(), restore = vi.fn(async () => ({ appId: randomUUID(), tenantId: target, name: "Restored", contentVersion: "1", sourceId: f.source.id }))
   const service = new AppSourceService({ restore, restorePlan: async () => "pro", knownTenant: t => [tenant, target].includes(t), folder: () => f.root, keys: () => [f.master], setFolder: vi.fn(), pickFolder: vi.fn(), pickExport: vi.fn(), openFolder: vi.fn(), confirmNewStore: vi.fn(), checkDevice: vi.fn(), signIn: vi.fn(), details: vi.fn(), apps: vi.fn(), printDetails: vi.fn(), downloadScript: vi.fn() })
   expect((await service.restoreReview(tenant, f.source.id)).settingsHash).toBe(snapshotHash(snapshot))
@@ -276,16 +276,20 @@ it("binds service restore to both configured tenants, captured provenance and th
   setAuditOutboxStore(journal)
   setMainAuditSink(new AuditSink({
     store: journal,
-    bind: destination => ({ tenantId: destination, storageAccountName: account, user: { id: appId, name: "Admin", email: "" } }),
+    bind: destination => destination === tenant || destinationHasStorage && destination === target
+      ? { tenantId: destination, storageAccountName: account, user: { id: appId, name: "Admin", email: "" } }
+      : undefined,
     transport: async () => { throw new Error("Offline") },
   }))
   try {
     await expect(service.restore(tenant, operationId, f.source.id, target, "Restored", "0".repeat(64))).rejects.toThrow("The app settings changed. Review them before restoring.")
     expect(restore).not.toHaveBeenCalled()
     expect(pendingEvents(account)).toMatchObject([{
-      user: { tenantId: target },
-      job: { operationId, sourceBackupId: f.source.id, status: "failed", reason: "RESTORE_PREPARATION_FAILED" },
+      user: { tenantId: destinationHasStorage ? target : tenant, id: destinationHasStorage ? appId : "unknown" },
+      job: { operationId, sourceBackupId: f.source.id, status: "failed", reason: "RESTORE_PREPARATION_FAILED",
+        ...(!destinationHasStorage ? { destinationTenantId: target } : {}) },
     }])
+    if (destinationHasStorage) expect(pendingEvents(account)[0]?.job?.destinationTenantId).toBeUndefined()
   } finally {
     setMainAuditSink(undefined)
     setAuditOutboxStore()

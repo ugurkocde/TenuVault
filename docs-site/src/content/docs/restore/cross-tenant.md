@@ -122,4 +122,4 @@ For Dev to Prod promotion, select the production tenant and open **Changes** > *
 
 ### Destination history
 
-When you copy to other tenants, each destination has its own [audit event](/audit-log/) with the executing identity for that tenant. If a destination has backup storage configured, look for its event in that tenant’s Audit Log. Otherwise, open the source tenant’s Audit Log and check **Job details** for the destination tenant ID. Use the shared operation ID to relate the events.
+Policy copies and [App Backup restores](/apps/app-backup/) record a separate [audit event](/audit-log/) for each destination, with that tenant’s executing identity when available. If a destination has backup storage configured, look for its event in that tenant’s Audit Log. If only the source tenant has backup storage, open its Audit Log and check **Job details** for the destination tenant ID. Use the shared operation ID to relate the events.

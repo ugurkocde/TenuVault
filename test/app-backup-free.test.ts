@@ -32,6 +32,13 @@ describe("free App Backup account read", () => {
     await expect(readAppBackupAccount(tenant, token, fetcher)).rejects.toThrow("Sign in")
     expect(fetcher).not.toHaveBeenCalled()
   })
+  it("uses the verified App Backup capture's tenant for execution and token failure audit fallback", async () => {
+    const main = await readFile("src/main/index.ts", "utf8")
+    const start = main.indexOf("    restore: (store, source, snapshot")
+    const execution = main.slice(start, main.indexOf("    ensureKeys:", start))
+    expect(execution).toMatch(/const preparation = \{[^}]*sourceTenantId: source\.receipt\.tenantId[^}]*\}\s+const graphToken = await restoreTokenWithAudit\(getGraphToken, preparation\)/)
+    expect(execution).toContain("beginRestoreAudit({ ...preparation, graphToken, items: [original] })")
+  })
   it("keeps App Backup independent of billing without exempting other routes or privileged API access", async () => {
     for (const path of ["/portal/app-backup", "/portal/app-backup/versions"]) expect(isAppBackupPath(path)).toBe(true)
     for (const path of ["/portal/backup", "/portal/app-backup-other", "/api/app-backup/recovery-start", "/license"]) expect(isAppBackupPath(path)).toBe(false)

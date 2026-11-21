@@ -1,4 +1,4 @@
-param([string]$RunbookPath = (Join-Path $PSScriptRoot "../../../resources/runbooks/Invoke-TenuVaultBackup.ps1"), [switch]$Baseline, [switch]$ClaimedRestart)
+param([string]$RunbookPath = (Join-Path $PSScriptRoot "../../../resources/runbooks/Invoke-TenuVaultBackup.ps1"), [switch]$Baseline, [switch]$ClaimedRestart, [switch]$UncertainRestart)
 $ErrorActionPreference = "Stop"
 . $RunbookPath -LibraryOnly
 
@@ -34,7 +34,7 @@ $script:HttpClient | Add-Member ScriptMethod SendAsync {
     $script:transportCalls++
     throw "Transport unavailable"
 }
-if (-not ($Baseline -or $ClaimedRestart)) {
+if (-not ($Baseline -or $ClaimedRestart -or $UncertainRestart)) {
     $budget = @{ Clock = [System.Diagnostics.Stopwatch]::StartNew(); Seconds = 1; Requests = 1 }
     $budgetContext = @{ StorageAccount = "stcontoso"; StorageToken = "token"; AuditBudget = $budget }
     try { Invoke-TvAuditStorage $budgetContext "audit-logs" "/test.json" } catch { }
@@ -62,10 +62,10 @@ function Invoke-TvHttp {
     if ($Uri -like "https://graph.microsoft.com/*") {
         if ($script:scenario -eq "graph401") { throw [TvHttpError]::new(401, "Graph policy list refused") }
         $text = '{"value":[]}'
-        if ($ClaimedRestart -and $Uri -like "*/deviceManagement/deviceCategories") {
+        if (($ClaimedRestart -or $UncertainRestart) -and $Uri -like "*/deviceManagement/deviceCategories") {
             $text = '{"value":[{"id":"11111111-1111-1111-1111-111111111111","displayName":"Example"}]}'
         }
-        if ($ClaimedRestart -and $Uri -like "*/deviceManagement/deviceCategories/*") {
+        if (($ClaimedRestart -or $UncertainRestart) -and $Uri -like "*/deviceManagement/deviceCategories/*") {
             $text = '{"id":"11111111-1111-1111-1111-111111111111","displayName":"Example"}'
         }
     } elseif ($Uri -like "*/intune-backups?*comp=list*") {
@@ -82,6 +82,16 @@ function Invoke-TvHttp {
         $script:blobs.Remove($Uri)
         return @{ Status = 202 }
     } elseif ($Method -eq "Put") {
+        if ($script:scenario -eq "outage") {
+            if ($Uri.EndsWith("/metadata.json")) {
+                $body = [Text.Encoding]::UTF8.GetString($BodyBytes)
+                if (($body | ConvertFrom-Json).Status -eq "Success") { $script:unconfirmedManifest = @{ uri = $Uri; body = $body } }
+                throw [TvHttpError]::new(503, "Manifest storage unavailable")
+            }
+            if ($Uri -eq $script:statusUri -or $Uri -like "*/cloud-backup-outcomes/*") {
+                throw [TvHttpError]::new(503, "Result storage unavailable")
+            }
+        }
         if ($Uri -like "*/cloud-change-reports/*" -and $script:scenario -eq "reportGap") {
             throw [TvHttpError]::new(503, "Interrupted before report publication")
         }
@@ -122,6 +132,7 @@ function Invoke-TvHttp {
 
 function Run-Scenario {
     $script:calls.Clear()
+    $script:OutcomeSent = $false
     $message = $null
     $output = [System.Collections.Generic.List[string]]::new()
     try { Invoke-TvBackup 2>&1 3>&1 | ForEach-Object { $output.Add([string]$_) } } catch { $message = $_.Exception.Message }
@@ -130,6 +141,26 @@ function Run-Scenario {
         output = @($output | ForEach-Object { [string]$_ })
         blobs = $script:blobs.Clone()
     }
+}
+if ($UncertainRestart) {
+    Remove-Item Function:Start-Sleep
+    $env:TenuVaultExcludedFolders = (Get-TvTypes | Where-Object { $_.Folder -ne "DeviceCategories" }).Folder -join ","
+    $script:scenario = "outage"
+    $first = Run-Scenario
+    $firstManifest = $script:unconfirmedManifest
+    # The baseline allocates folders by wall clock, so allow its next second before retrying.
+    Start-Sleep -Seconds 1
+    $second = Run-Scenario
+    Start-Sleep -Seconds 1
+    $script:scenario = "restart"
+    $success = Run-Scenario
+    $again = Run-Scenario
+    # Independently model a delayed successful PUT from the original attempt.
+    $script:blobs = $first.blobs.Clone()
+    $script:blobs[$firstManifest.uri] = $firstManifest.body
+    $lateManifest = Run-Scenario
+    [Console]::WriteLine((@{ first = $first; second = $second; success = $success; again = $again; lateManifest = $lateManifest } | ConvertTo-Json -Compress -Depth 9))
+    return
 }
 if ($ClaimedRestart) {
     $env:TenuVaultExcludedFolders = (Get-TvTypes | Where-Object { $_.Folder -ne "DeviceCategories" }).Folder -join ","
