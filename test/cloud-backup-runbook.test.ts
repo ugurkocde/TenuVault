@@ -813,6 +813,7 @@ describe("New-TenuVaultCloudBackup.ps1", () => {
   }, 60_000)
 
   it.runIf(Boolean(pwsh))("follows main for disabled schedules, including stale markers and partial overrides", () => {
+    expect(setup).not.toContain("TenuVaultAuditPausedSchedule")
     const main = process.env.TENUVAULT_TEST_MAIN_WORKTREE
     const baseline = main ? readSetupScenarios(join(main, "resources/New-TenuVaultCloudBackup.ps1")) : undefined
     const scheduleResult = ({ error, schedule, enabled, link, scheduleSettings, actions }: SetupScenario) => ({

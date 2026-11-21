@@ -27,7 +27,11 @@ if ($start -lt 0 -or $end -le $start) { throw "The upgrade step markers were not
 $upgradeStep = [scriptblock]::Create($text.Substring($start, $end - $start))
 $scheduleStart = $text.IndexOf('# Schedule and link.')
 $scheduleEnd = $text.IndexOf('# Summary and next steps.')
-$scheduleStep = [scriptblock]::Create($text.Substring($scheduleStart, $scheduleEnd - $scheduleStart))
+$scheduleParameters = @'
+[CmdletBinding(SupportsShouldProcess)]
+param([string]$Time = "02:00", [switch]$GraphRolesGranted)
+'@
+$scheduleStep = [scriptblock]::Create($scheduleParameters + "`n" + $text.Substring($scheduleStart, $scheduleEnd - $scheduleStart))
 
 $ResourceGroupName = "rg-tenuvault-backups"
 $AutomationAccountName = "aa-tenuvault"
@@ -58,7 +62,6 @@ $plainRunbookVersion = "1.2.0"
 $triggerRunbookVersion = "1.4.0"
 $auditRunbookVersion = "1.5.0"
 $TimeZone = "UTC"
-$Time = "02:00"
 $Frequency = "Daily"
 $WeekDay = [DayOfWeek]::Sunday
 $oldRunbook = '$script:RunbookVersion = "1.1.0"'
@@ -298,13 +301,13 @@ foreach ($scenario in "rerun-keeps-report", "rerun-sets-report") {
 
 function Invoke-LinkedUpgrade {
     [CmdletBinding(SupportsShouldProcess)]
-    param([string]$Scenario, [string]$Time = "02:00", [switch]$GraphRolesGranted)
+    param([string]$Scenario, [hashtable]$ScheduleArguments = @{})
     $runbook = $null
     $errorText = $null
     $output = @()
     try {
         $output = @(. $upgradeStep 3>&1 6>&1)
-        $output += @(. $scheduleStep 3>&1 6>&1)
+        $output += @(& $scheduleStep @ScheduleArguments 3>&1 6>&1)
         if (Get-Command Test-TenuVaultPublishedAudit -ErrorAction SilentlyContinue) {
             $output += @(Test-TenuVaultPublishedAudit -Runbook $runbook 3>&1 6>&1)
         }
@@ -327,9 +330,9 @@ $script:failCanary = $false
 $script:actions.Clear()
 Invoke-LinkedUpgrade -Scenario "disabled-stale-marker"
 $script:actions.Clear()
-Invoke-LinkedUpgrade -Scenario "disabled-time-override" -Time "10:00"
+Invoke-LinkedUpgrade -Scenario "disabled-time-override" -ScheduleArguments @{ Time = "10:00" }
 $script:actions.Clear()
-Invoke-LinkedUpgrade -Scenario "disabled-explicit-replacement" -Time "10:00" -GraphRolesGranted
+Invoke-LinkedUpgrade -Scenario "disabled-explicit-replacement" -ScheduleArguments @{ Time = "10:00"; GraphRolesGranted = $true }
 
 # -Remove runs: complete, -WhatIf, one variable's own confirmation declined, -WhatIf while every
 # lookup fails, a complete removal whose variable list fails, and tenant B still on the vault.
