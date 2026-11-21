@@ -681,8 +681,18 @@ it.each(["actor", "read-back"])("keeps a %s throttle on the recreated live ident
     const state = JSON.parse(env.data.get(`restore.directory.coordinator.${tenant}`)!)
     expect(state.deadlines[id(900)]).toBe(deadline); expect(state.deadlines[resource]).toBeUndefined()
     env.group.description = "Saved"
+    const calls = env.fetcher.mock.calls.length
+    expect(await env.service().saved(tenant, page.runId, "reconcile")).toMatchObject({ outcomes: [{ state: "uncertain", retryAt: deadline }] })
+    expect(env.fetcher).toHaveBeenCalledTimes(calls)
+    const readBacks = () => env.fetcher.mock.calls.filter(([input]) => new URL(String(input)).pathname === `/v1.0/groups/${id(900)}`).length
+    const reads = readBacks()
+    expect(await execute(page, request)).toMatchObject({ outcomes: [{ state: "uncertain", retryAt: deadline }] })
+    expect(readBacks()).toBe(reads)
+    await vi.advanceTimersByTimeAsync(120_000)
     expect(await env.service().saved(tenant, page.runId, "reconcile")).toMatchObject({ outcomes: [{ state: "applied" }] })
     await env.service().saved(tenant, page.runId, "discard")
+    // Recheck the surviving live-ID deadline with the clock from before confirmation.
+    vi.setSystemTime(deadline - 120_000)
     const newer = { ...request, path: `newer/Groups/${id(900)}.json`, snapshot: { ...request.snapshot, id: id(900), description: "Newer" } }
     const replacement = await env.service().prepare(tenant, newer, options, env.read)
     expect(await execute(replacement, newer)).toMatchObject({ outcomes: [{ state: "deferred", retryAt: deadline }] })
@@ -714,7 +724,7 @@ it.each(["same batch", "next batch", "next page", "another page"])("excludes con
     else expect(result.outcomes.at(-1)?.state).toBe("deferred")
   }
   expect(env.members.size).toBe(1); expect(env.members.has(lagging.at(-1)!)).toBe(true)
-  expect(await execute(next, scope === "another page" ? [next.rows[1]!.key] : undefined)).toMatchObject({ outcomes: expect.arrayContaining([{ key: next.rows.at(-1)!.key, state: "deferred", reason: undefined, targetId: undefined, retryAt: undefined }]) })
+  expect(await execute(next, scope === "another page" ? [next.rows[1]!.key] : undefined)).toMatchObject({ outcomes: expect.arrayContaining([{ key: next.rows.at(-1)!.key, state: "deferred", reason: expect.stringContaining("Saved removals leave no verified member"), targetId: undefined, retryAt: undefined }]) })
   expect(env.writes).toHaveLength(count - 1)
 })
 
@@ -724,7 +734,7 @@ it("defers a survivor check when a recorded removal journal cannot be read", asy
   env.fetcher.mockImplementation((input, init) => String(input).includes("conditionalAccess") ? Promise.resolve(Response.json({ value: [{ conditions: { users: { includeGroups: [resource], excludeGroups: [] } } }] })) : original(input, init))
   const page = await env.service().prepare(tenant, env.request, { ...options, stage: "relationships", exactMembers: true }, env.read)
   env.data.set(`restore.directory.relationship-history.${tenant}.${resource}`, JSON.stringify(`restore.directory.${tenant}.${id(999)}.batch.0.`))
-  expect(await env.service().execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])))).toMatchObject({ failed: 0, outcomes: [{ state: "deferred" }, { state: "deferred" }] })
+  expect(await env.service().execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])))).toMatchObject({ failed: 0, outcomes: [{ state: "deferred", reason: expect.stringContaining("Saved relationship results could not establish a remaining member") }, { state: "deferred", reason: expect.stringContaining("Saved relationship results could not establish a remaining member") }] })
   expect(env.writes).toEqual([])
 })
 
@@ -799,4 +809,99 @@ it("counts a confirmed re-added member as a survivor after an earlier restore re
   await execute(empty, id(100), true)
   expect([...env.members]).toEqual([id(101)])
   expect(env.writes).toEqual([`DELETE groups/${resource}/members/${id(101)}/$ref`, `POST groups/${resource}/members/$ref`, `DELETE groups/${resource}/members/${id(100)}/$ref`])
+})
+
+it("keeps a removed survivor excluded when a failed re-add is confirmed only by stale read-back", async () => {
+  const env = world(2), original = env.fetcher.getMockImplementation()!
+  env.members.add(id(100)); env.members.add(id(101))
+  let stale = false, adds = 0
+  env.fetcher.mockImplementation((input, init) => {
+    const path = new URL(String(input)).pathname
+    if (path.includes("conditionalAccess")) return Promise.resolve(Response.json({ value: [{ conditions: { users: { includeGroups: [resource], excludeGroups: [] } } }] }))
+    if (init?.method === "POST" && path.endsWith("/members/$ref")) { adds++; return Promise.resolve(new Response(null, { status: 503 })) }
+    if (stale && path === `/beta/groups/${resource}/members`) return Promise.resolve(Response.json({ value: [id(100), id(101)].map(id => ({ id })) }))
+    if (stale && path === `/v1.0/groups/${resource}/members/${id(101)}`) return Promise.resolve(Response.json({ id: id(101) }))
+    return original(input, init)
+  })
+  const empty = { ...env.request, snapshot: { ...env.request.snapshot, members: { ...env.request.snapshot.owners } } }
+  const exact = { ...options, stage: "relationships" as const, exactMembers: true }
+  const removeA = await env.service().prepare(tenant, empty, exact, async () => [])
+  const removeB = await env.service().prepare(tenant, empty, exact, async () => [])
+  const execute = (page: typeof removeA, request: typeof env.request, principal: string) => {
+    const row = page.rows.find(row => row.review.principal?.id === principal)!
+    expect(row.review.blocker).toBeUndefined()
+    return env.service().execute(tenant, { ...request, runId: page.runId }, page.fingerprint, { [row.key]: row.review.approvals })
+  }
+  expect(await execute(removeB, empty, id(101))).toMatchObject({ outcomes: [{ state: "applied" }] })
+  const addB = await env.service().prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read)
+  expect(await execute(addB, env.request, id(101))).toMatchObject({ outcomes: [{ state: "uncertain" }] })
+  expect([...env.members]).toEqual([id(100)])
+  stale = true
+  expect(await env.service().saved(tenant, addB.runId, "reconcile")).toMatchObject({ outcomes: [{ state: "applied" }] })
+  const journal = JSON.parse(env.data.get(`restore.directory.${tenant}.${addB.runId}.batch.0.restore.guarded.${tenant}`)!)
+  expect(journal.runs[addB.runId].entries[0].acknowledged).toBeUndefined()
+  expect(await execute(removeA, empty, id(100))).toMatchObject({ failed: 0, outcomes: [{ state: "deferred", reason: expect.stringContaining("Saved removals leave no verified member") }] })
+  expect(adds).toBe(1)
+  expect(env.writes).toEqual([`DELETE groups/${resource}/members/${id(101)}/$ref`])
+  expect([...env.members]).toEqual([id(100)])
+})
+
+it.each(["matching", "wrong step", "wrong attempt"])("recovers a rejected group create from a coordinator-only deadline with a %s marker", async marker => {
+  const env = world(0, true), page = await env.service().prepare(tenant, env.request, options, env.read), original = env.fetcher.getMockImplementation()!
+  let posts = 0, failures = 0
+  env.fetcher.mockImplementation((input, init) => init?.method === "POST" && new URL(String(input)).pathname === "/v1.0/groups" && ++posts === 1 ? Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
+  vi.useFakeTimers()
+  try {
+    const deadline = Date.now() + 120_000, set = env.store.set
+    const spy = vi.spyOn(env.store, "set").mockImplementation((key, value) => {
+      if (key.includes(".restore.guarded.") && value.includes(String(deadline))) { failures++; throw new Error("Journal storage unavailable") }
+      set(key, value)
+    })
+    const execute = () => env.service().execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])))
+    await expect(execute()).rejects.toThrow("retry deadline could not be saved")
+    expect(failures).toBe(2); expect(posts).toBe(1); expect(env.writes).toEqual([])
+    const journalKey = `restore.directory.${tenant}.${page.runId}.batch.0.restore.guarded.${tenant}`
+    const entry = JSON.parse(env.data.get(journalKey)!).runs[page.runId].entries[0]
+    expect(entry).toMatchObject({ state: "uncertain", attempt: 1 })
+    const coordinatorKey = `restore.directory.coordinator.${tenant}`, state = JSON.parse(env.data.get(coordinatorKey)!)
+    expect(state.deadlines[resource]).toBe(deadline)
+    expect(state.locks[resource].rejected).toEqual({ step: entry.step.key, attempt: 1 })
+    if (marker === "wrong step") state.locks[resource].rejected.step = "different-step"
+    if (marker === "wrong attempt") state.locks[resource].rejected.attempt++
+    env.data.set(coordinatorKey, JSON.stringify(state))
+    spy.mockRestore()
+    const calls = env.fetcher.mock.calls.length
+    expect(await env.service().saved(tenant, page.runId, "reconcile")).toMatchObject({ outcomes: [{ state: "uncertain", retryAt: deadline }] })
+    expect(env.fetcher).toHaveBeenCalledTimes(calls)
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(await env.service().saved(tenant, page.runId, "reconcile")).toMatchObject({ outcomes: [{ state: marker === "matching" ? "deferred" : "uncertain", retryAt: deadline }] })
+    expect(posts).toBe(1)
+    if (marker === "matching") {
+      expect(await execute()).toMatchObject({ outcomes: [{ state: "applied", targetId: id(900) }] })
+      await execute()
+      expect(posts).toBe(2); expect(env.writes).toEqual(["POST groups"])
+    } else {
+      expect(await execute()).toMatchObject({ outcomes: [{ state: "uncertain" }] })
+      expect(posts).toBe(1); expect(env.writes).toEqual([])
+    }
+  } finally { vi.useRealTimers() }
+})
+
+it("preserves batch numbers across a journal gap when saving an actor throttle", async () => {
+  const env = world(21), page = await env.service().prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read)
+  expect(await env.service().execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])))).toMatchObject({ status: "complete", batches: 2 })
+  const prefix = `restore.directory.${tenant}.${page.runId}.`, first = prefix + `batch.0.restore.guarded.${tenant}`, second = prefix + `batch.1.restore.guarded.${tenant}`
+  const before = JSON.parse(env.data.get(second)!).runs[page.runId]
+  env.data.delete(first)
+  const original = env.fetcher.getMockImplementation()!
+  env.fetcher.mockImplementation((input, init) => new URL(String(input)).pathname === "/v1.0/applications" ? Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": "120" } })) : original(input, init))
+  vi.useFakeTimers()
+  try {
+    const deadline = Date.now() + 120_000
+    await expect(env.service().saved(tenant, page.runId, "reconcile")).rejects.toThrow("throttled")
+    expect(env.data.has(first)).toBe(false)
+    const after = JSON.parse(env.data.get(second)!).runs[page.runId]
+    expect(after).toEqual({ ...before, entries: before.entries.map((entry: object) => ({ ...entry, retryAt: deadline })) })
+    expect(env.writes).toHaveLength(21)
+  } finally { vi.useRealTimers() }
 })

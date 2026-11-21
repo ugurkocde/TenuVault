@@ -246,7 +246,7 @@ export class DirectoryRestoreService {
     return this.view(page)
   }
   private view(page: DirectoryPage) {
-    return { canDiscard: !directoryObjectState(this.store, page.run.tenant, page.run.id).discarded() && !this.history(page).some(run => run.entries.some(entry => entry.state === "uncertain")), runId: page.run.id, fingerprint: restoreFingerprint({ source: page.run.source!, rows: page.rows as unknown as Item["rows"], options: page.options as unknown as Item }), rows: page.rows, more: page.more, options: page.options }
+    return { canDiscard: !directoryObjectState(this.store, page.run.tenant, page.run.id).discarded() && !this.history(page).some(({ run }) => run.entries.some(entry => entry.state === "uncertain")), runId: page.run.id, fingerprint: restoreFingerprint({ source: page.run.source!, rows: page.rows as unknown as Item["rows"], options: page.options as unknown as Item }), rows: page.rows, more: page.more, options: page.options }
   }
   async resume(tenant: string, request: IdentityRestoreRequest) {
     const page = this.load(tenant, request.runId!)
@@ -298,9 +298,9 @@ export class DirectoryRestoreService {
   private recordPageThrottle(page: DirectoryPage, retryAt: number) {
     const objects = directoryObjectState(this.store, page.run.tenant, page.run.id)
     const runs = this.history(page)
-    const steps = runs.length ? runs.flatMap(run => run.entries.map(entry => ({ ...entry.step, targetId: entry.targetId ?? entry.step.targetId ?? directoryMappedId(this.store, run.tenant, entry.step.folder, entry.step.sourceId) }))) : page.run.entries.map(({ step }) => ({ ...step, targetId: step.targetId ?? directoryMappedId(this.store, page.run.tenant, step.folder, step.sourceId) }))
+    const steps = runs.length ? runs.flatMap(({ run }) => run.entries.map(entry => ({ ...entry.step, targetId: entry.targetId ?? entry.step.targetId ?? directoryMappedId(this.store, run.tenant, entry.step.folder, entry.step.sourceId) }))) : page.run.entries.map(({ step }) => ({ ...step, targetId: step.targetId ?? directoryMappedId(this.store, page.run.tenant, step.folder, step.sourceId) }))
     persistDirectoryRetry(() => {
-      for (const [batch, run] of runs.entries()) {
+      for (const { batch, run } of runs) {
         for (const entry of run.entries) entry.retryAt = Math.max(entry.retryAt ?? 0, retryAt)
         new GuardedRunJournal({ get: name => this.store.get(directoryPagePrefix(run.tenant, run.id) + `batch.${batch}.` + name), set: (name, value) => this.store.set(directoryPagePrefix(run.tenant, run.id) + `batch.${batch}.` + name, value), delete: () => fail("History cannot be deleted.") }).save(run)
       }
@@ -309,19 +309,18 @@ export class DirectoryRestoreService {
   private history(page: DirectoryPage) {
     const prefix = directoryPagePrefix(page.run.tenant, page.run.id)
     const cursor = JSON.parse(this.store.get(prefix + "cursor") ?? '{"batch":0}')
-    const runs: GuardedRun[] = []
+    const runs: Array<{ batch: number; run: GuardedRun }> = []
     for (let batch = 0; batch <= cursor.batch; batch++) {
       const journal = new GuardedRunJournal({ get: name => this.store.get(prefix + `batch.${batch}.` + name), set: () => fail("History is read-only."), delete: () => fail("History is read-only.") })
       const run = journal.load(page.run.tenant, page.run.id)
-      if (run) runs.push(run)
+      if (run) runs.push({ batch, run })
     }
     return runs
   }
-  private results(page: DirectoryPage, result: { status: "complete" | "partial"; batches: number; failed: number }) {
-    const runs = this.history(page)
-    return { ...result, canDiscard: !runs.some(run => run.entries.some(entry => entry.state === "uncertain")) && !directoryObjectState(this.store, page.run.tenant, page.run.id).discarded(),
-      outcomes: runs.flatMap(run => run.entries.map(entry => ({ key: entry.step.key, state: entry.state, reason: entry.reason, targetId: entry.targetId, retryAt: entry.retryAt }))),
-      replacedReferences: runs.flatMap(run => run.replacedReferences ?? []), warnings: [...new Set(runs.flatMap(run => run.referenceWarning ? [run.referenceWarning] : []))] }
+  private results(page: DirectoryPage, result: { status: "complete" | "partial"; batches: number; failed: number }, runs = this.history(page)) {
+    return { ...result, canDiscard: !runs.some(({ run }) => run.entries.some(entry => entry.state === "uncertain")) && !directoryObjectState(this.store, page.run.tenant, page.run.id).discarded(),
+      outcomes: runs.flatMap(({ run }) => run.entries.map(entry => ({ key: entry.step.key, state: entry.state, reason: entry.reason, targetId: entry.targetId, retryAt: entry.retryAt }))),
+      replacedReferences: runs.flatMap(({ run }) => run.replacedReferences ?? []), warnings: [...new Set(runs.flatMap(({ run }) => run.referenceWarning ? [run.referenceWarning] : []))] }
   }
   /** Saved-page actions trust only durable identity and journal data, never renderer snapshots. */
   async saved(tenant: string, id: string, action: "reconcile" | "discard") {
@@ -330,12 +329,20 @@ export class DirectoryRestoreService {
     const controller = new AbortController()
     this.running.set(runningKey, controller)
     try {
+      const state = directoryObjectState(this.store, tenant, id)
+      if (action === "reconcile") {
+        const runs = this.history(page)
+        for (const { run } of runs) for (const entry of run.entries) {
+          const retryAt = state.retryDeadline({ ...entry.step, targetId: entry.targetId ?? entry.step.targetId ?? directoryMappedId(this.store, tenant, entry.step.folder, entry.step.sourceId) })
+          if (retryAt !== undefined) entry.retryAt = Math.max(entry.retryAt ?? 0, retryAt)
+        }
+        if (runs.some(({ run }) => run.entries.some(entry => (entry.retryAt ?? 0) > Date.now()))) return { ...this.view(page), ...this.results(page, { status: "partial", batches: 0, failed: 0 }, runs) }
+      }
       const context = await this.context(tenant, retryAt => this.recordPageThrottle(page, retryAt))
       if (context.actor.userId !== page.run.actor.userId || context.actor.clientId !== page.run.actor.clientId) fail("Use the admin and connection that reviewed this page.")
-      const state = directoryObjectState(this.store, tenant, id)
       if (action === "discard") {
         state.recoverMappings(page.run.entries.map(entry => entry.step))
-        if (this.history(page).some(run => run.entries.some(entry => entry.state === "uncertain"))) fail("Confirm the uncertain result before discarding this saved restore.")
+        if (this.history(page).some(({ run }) => run.entries.some(entry => entry.state === "uncertain"))) fail("Confirm the uncertain result before discarding this saved restore.")
         state.release(true)
         if (!state.discarded()) fail("The discard marker could not be verified. This page remains saved.")
         return { discarded: true, canDiscard: false }

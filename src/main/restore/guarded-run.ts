@@ -31,6 +31,10 @@ export interface GuardedEntry {
   state: "pending" | "captured" | "deferred" | "uncertain" | "applied" | "blocked" | "failed" | "failed-before-send"
   /** Earliest retry of a confirmed, unapplied throttle, preserved across cancellation/restart. */
   retryAt?: number
+  /** Durable send attempt, also binds a confirmed throttle in the directory coordinator. */
+  attempt?: number
+  /** Only a successful write response, never reconciliation, acknowledges an addition. */
+  acknowledged?: true
   before?: Item | null
   sent?: Item
   targetId?: string
@@ -52,7 +56,7 @@ export interface GuardedIO {
   token: string
   /** Directory pages retain live object ownership across deferred and uncertain steps. */
   prepareStep?: (step: GuardedStep) => number | undefined
-  defer?: (step: GuardedStep, retryAt: number) => void
+  defer?: (step: GuardedStep, retryAt: number, rejected?: { step: string; attempt: number }) => void
   /** A complete scan of current Intune and Conditional Access references, after replacements. */
   replacedReferences?: (mappings: readonly RestoreMapping[], signal?: AbortSignal) => Promise<ReplacedReference[]>
   type: (folder: string) => IntuneType
@@ -163,11 +167,12 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
       if (reconcileOnly && entry.state !== "uncertain") continue
       const prerequisite = dependencies(step).find(required => run.entries.find(entry => entry.step.key === required)?.state !== "applied")
       if (prerequisite && entry.state !== "uncertain") { entry.state = "blocked"; entry.reason = `Prerequisite ${prerequisite} did not complete.`; journal.save(run); continue }
-      const defer = (retryAt: number) => {
+      const defer = (retryAt: number, rejected?: { step: string; attempt: number }) => {
         entry.retryAt = Math.max(entry.retryAt ?? 0, retryAt)
-        persistDirectoryRetry(() => journal.save(run), () => io.defer?.(step, entry.retryAt!))
+        persistDirectoryRetry(() => journal.save(run), () => io.defer?.(step, entry.retryAt!, rejected))
       }
       try {
+        if (entry.state === "uncertain" && (entry.retryAt ?? 0) > Date.now()) throw new RestoreWriteDeferredError("Microsoft Graph Retry-After has not elapsed. Confirm after the saved deadline.", entry.retryAt)
         if (entry.state === "uncertain") {
           // Neither absence nor repeated old values prove an unanswered write failed: Graph may be eventually consistent.
           // Only a matching read-back can settle it. Confirmed throttles never enter this path.
@@ -229,6 +234,8 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
           result = await io.write(step, desired, entry.targetId, () => {
             if (signal?.aborted) throw new RestoreWriteDeferredError("The directory write was cancelled before sending.")
             const retryAt = entry.retryAt
+            if (step.directory) entry.attempt = (entry.attempt ?? 0) + 1
+            delete entry.acknowledged
             entry.state = "uncertain"; delete entry.retryAt
             try { journal.save(run) }
             catch (error) {
@@ -236,12 +243,13 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
               throw error
             }
           }, run, signal, retryAt => {
-            entry.state = step.directory ? "deferred" : "captured"; delete entry.reason; defer(retryAt)
+            const rejected = entry.state === "uncertain" && entry.attempt !== undefined ? { step: step.key, attempt: entry.attempt } : undefined
+            entry.state = step.directory ? "deferred" : "captured"; delete entry.reason; defer(retryAt, rejected)
           })
         } catch (error) {
           if (error instanceof DirectoryRetryPersistenceError) throw error
           if (error instanceof RestoreWriteDeferredError || (["captured", "deferred"].includes(entry.state) && signal?.aborted)) {
-            entry.state = step.directory ? "deferred" : "captured"; delete entry.reason
+            entry.state = step.directory ? "deferred" : "captured"; entry.reason = error instanceof RestoreWriteDeferredError ? error.message : "The directory write was cancelled before sending."
             if (error instanceof RestoreWriteDeferredError && error.retryAt !== undefined) { defer(error.retryAt) }
           } else if (["captured", "deferred"].includes(entry.state)) {
             entry.state = "failed-before-send"
@@ -255,7 +263,9 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
         if (!isGraphId(id)) { entry.reason = "The write did not return an object ID. It must be read back before continuing."; journal.save(run); continue }
         entry.targetId = id
         rememberMapping(run.mappings, { kind: "objectId", folder: step.folder, source: step.sourceId, target: id })
-        entry.state = "applied"; saveConfirmed()
+        entry.state = "applied"
+        if (step.directory && step.desired.present === true) entry.acknowledged = true
+        saveConfirmed()
       } catch (error) {
         if (entry.state === "applied" || error instanceof DirectoryRetryPersistenceError) throw error
         if (entry.state === "uncertain" && error instanceof RestoreWriteDeferredError && error.retryAt !== undefined) {
@@ -263,7 +273,7 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
           entry.reason = "Microsoft Graph deferred confirmation of this unanswered write. Retry after the saved deadline."
         }
         if (entry.state !== "uncertain" && (error instanceof RestoreWriteDeferredError || signal?.aborted)) {
-          entry.state = step.directory ? "deferred" : "captured"; delete entry.reason
+          entry.state = step.directory ? "deferred" : "captured"; entry.reason = error instanceof RestoreWriteDeferredError ? error.message : "The directory write was cancelled before sending."
           if (error instanceof RestoreWriteDeferredError && error.retryAt !== undefined) { defer(error.retryAt) }
           journal.save(run); continue
         }

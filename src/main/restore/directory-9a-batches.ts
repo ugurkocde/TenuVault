@@ -51,7 +51,7 @@ export async function executeDirectoryBatches(store: PartitionedRestoreStore, id
       const retryAt = objectState.prepare(effective(step), batchKey)
       if (["member", "owner"].includes(step.directory?.action ?? "")) directoryRelationshipHistory(store, identity.tenant, effective(step).targetId ?? step.sourceId).track(batchKey)
       return retryAt
-    }, defer: (step, retryAt) => objectState.recordThrottle(effective(step), retryAt),
+    }, defer: (step, retryAt, rejected) => objectState.recordThrottle(effective(step), retryAt, rejected),
       write: (step, body, targetId, beforeSend, currentRun, writeSignal, onUnapplied) =>
         io.write(step, body, targetId, () => { objectState.beforeSend(effective(step)); beforeSend() }, currentRun, writeSignal, onUnapplied),
     }
@@ -61,7 +61,11 @@ export async function executeDirectoryBatches(store: PartitionedRestoreStore, id
     if (persisted) {
       let changed = false
       for (const entry of persisted.entries.filter(entry => entry.state === "uncertain")) {
-        const retryAt = objectState.retryDeadline({ ...effective(entry.step), targetId: entry.targetId ?? effective(entry.step).targetId })
+        const step = { ...effective(entry.step), targetId: entry.targetId ?? effective(entry.step).targetId }
+        const retryAt = objectState.retryDeadline(step)
+        if (retryAt !== undefined && objectState.rejected(step, batchKey, entry.attempt)) {
+          entry.state = "deferred"; entry.reason = "The unapplied directory request is deferred. Resume after Retry-After."; changed = true
+        }
         if (retryAt !== undefined && retryAt > (entry.retryAt ?? 0)) { entry.retryAt = retryAt; changed = true }
       }
       if (changed) journal.save(persisted)

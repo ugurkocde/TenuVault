@@ -320,10 +320,9 @@ it.each(["journal", "coordinator"])("recovers the deadline from the surviving %s
   expect(env.entry(page).state).toBe(surviving === "journal" ? "deferred" : "uncertain")
   spy.mockRestore()
   if (surviving === "coordinator") {
-    // A persistent journal outage retains the send marker. Matching read-back is needed before discard.
-    env.live.description = "Saved"
-    await env.service().saved(tenant, page.runId, "reconcile")
-    expect(env.entry(page)).toMatchObject({ state: "applied", retryAt: deadline })
+    // The coordinator proves this exact attempt was rejected, so recovery needs no matching read-back.
+    expect(await env.execute(page, request)).toMatchObject({ outcomes: [{ state: "deferred", retryAt: deadline }] })
+    expect(env.entry(page)).toMatchObject({ state: "deferred", retryAt: deadline })
   }
   await env.service().saved(tenant, page.runId, "discard")
   expect(JSON.parse(env.data.get(`restore.directory.coordinator.${tenant}`)!).deadlines[targetId]).toBe(deadline)
@@ -350,8 +349,14 @@ it.each(folders.flatMap(folder => ["preview", "execute", "resume", "reconcile", 
   throttle = false
   if (action === "reconcile" || action === "discard") {
     env.live[env.field] = "Saved"
-    await env.service().saved(tenant, page.runId, "reconcile")
+    const calls = env.graph.mock.calls.length
+    expect(await env.service().saved(tenant, page.runId, "reconcile")).toMatchObject({ outcomes: [{ state: "uncertain", retryAt: deadline }] })
+    expect(env.graph).toHaveBeenCalledTimes(calls)
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(await env.service().saved(tenant, page.runId, "reconcile")).toMatchObject({ outcomes: [{ state: "applied" }] })
     await env.service().saved(tenant, page.runId, "discard")
+    // Recheck the surviving deadline with the clock from before confirmation.
+    vi.setSystemTime(deadline - 120_000)
   }
   const newerRequest = env.request("newer", "Newer"), newer = await env.prepare(newerRequest)
   expect(await env.execute(newer, newerRequest)).toMatchObject({ outcomes: [{ state: "deferred", retryAt: deadline }] })

@@ -43,6 +43,8 @@ export function directoryRelationshipHistory(store: KeyValueStore, tenant: strin
             if (settled.has(principal)) continue
             if (entry.state === "applied" || entry.state === "uncertain" && step.desired.present === false) {
               if (typeof step.desired.present !== "boolean") return deferred()
+              // A stale matching read-back cannot undo a journalled removal.
+              if (step.desired.present && !entry.acknowledged) continue
               if (!step.desired.present) removed.add(principal)
               settled.add(principal)
             }
