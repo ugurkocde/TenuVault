@@ -76,7 +76,7 @@ export function NavFoldGroup({ label, open, holdsActive, onToggle, children }: {
             open ? "opacity-0 group-hover/fold:opacity-100 group-focus-visible/fold:opacity-100" : "-rotate-90",
           )}
         />
-        {!open && holdsActive && <><span aria-hidden="true" className="ml-0.5 size-1.5 rounded-full bg-coral-500" /><span className="sr-only">, holds the open page</span></>}
+        {!open && holdsActive && <><span aria-hidden="true" className="ml-0.5 size-1.5 rounded-full bg-coral-600" /><span className="sr-only">, holds the open page</span></>}
       </button>
       <Fold id={`nav-items-${label}`} open={open}>
         <div className="space-y-px">{children}</div>

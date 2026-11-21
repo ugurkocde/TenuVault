@@ -465,7 +465,8 @@ function useOverflowing(element: HTMLElement | null): boolean {
 
 export function DesktopLayout() {
   const { status: licenseStatus } = useLicense()
-  const { pathname, key: routeKey } = useLocation()
+  const location = useLocation()
+  const { pathname } = location
   const appBackupPage = isAppBackupPath(pathname)
   const tenants = useTenants()
   useScoreInvalidation()
@@ -492,21 +493,21 @@ export function DesktopLayout() {
   }
   // The window is captured before the dialog opens, so the dialog is not in the screenshot.
   // The page is read when the capture starts: a Help choice runs after the menu's exit, and the user
-  // may have moved to another page meanwhile, which is then the one in the screenshot. The route key
-  // changes on every navigation, also one that comes back to the same page.
-  const currentRoute = useRef({ pathname, key: routeKey })
-  useEffect(() => { currentRoute.current = { pathname, key: routeKey } }, [pathname, routeKey])
+  // may have moved to another page meanwhile, which is then the one in the screenshot. The count goes up
+  // on every navigation, also one back to the same page or to an entry already in the history.
+  const currentRoute = useRef({ pathname, count: 0 })
+  useEffect(() => { currentRoute.current = { pathname: location.pathname, count: currentRoute.current.count + 1 } }, [location])
   const openFeedback = async (opener: HTMLElement | null) => {
     if (capturingFeedback.current || feedback.open) return
     capturingFeedback.current = true
     feedbackReturn.current = opener
     let snapshot: FeedbackSnapshot | null = null
     for (let attempt = 0; ; attempt++) {
-      const { pathname: path, key } = currentRoute.current
+      const { pathname: path, count } = currentRoute.current
       // After the page changed under two captures, the last one names no page, so it cannot name the wrong one.
       const page = attempt < 2 ? feedbackPageLabel(path) : undefined
       snapshot = await bridge.feedback.capture(page).catch(() => null)
-      if (page === undefined || currentRoute.current.key === key) break
+      if (page === undefined || currentRoute.current.count === count) break
       // The page changed while the window was captured, so the screenshot may show either one: take
       // it again once the new page has painted, so the page named matches the one in the picture.
       if (snapshot) void bridge.feedback.discardCapture(snapshot.id).catch(() => undefined)

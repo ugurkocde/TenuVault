@@ -119,6 +119,9 @@ describe("tenant initials", () => {
     expect(tenantInitials("Ugur Koc Lab")).toBe("UK")
     expect(tenantInitials("(Test) Ärzte GmbH")).toBe("TÄ")
     expect(tenantInitials("A\u0308rzte")).toBe(tenantInitials("\u00c4rzte"))
+    // A letter whose capital is two letters still takes one place.
+    expect(tenantInitials("Aßlar")).toBe("AS")
+    expect(tenantInitials("ßtraße GmbH")).toBe("SG")
     expect(tenantInitials("")).toBe("?")
     expect(tenantInitials(undefined)).toBe("?")
   })

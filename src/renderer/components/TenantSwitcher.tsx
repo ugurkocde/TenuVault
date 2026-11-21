@@ -18,7 +18,8 @@ export function tenantInitials(name: string | undefined): string {
   const words = (name ?? "").normalize("NFC").trim().split(/\s+/).map((word) => word.replace(/[^\p{L}\p{N}]/gu, "")).filter(Boolean)
   if (words.length === 0) return "?"
   const letters = words.length > 1 ? [...words[0]!].slice(0, 1).concat([...words[1]!].slice(0, 1)) : [...words[0]!].slice(0, 2)
-  return letters.join("").toUpperCase()
+  // One character per letter even where the capital is longer (ß becomes SS), so the badge keeps two.
+  return letters.map((letter) => [...letter.toUpperCase()][0]).join("")
 }
 
 /** A tenant's initials on a tinted square: coral while the license covers it, amber when it does not. */

@@ -534,12 +534,12 @@ describe("sidebar groups and Help", () => {
     const start = async () => {
       licenseStatus.current = statusFor("pro")
       selectTenant()
-      let go: (path: string) => void = () => undefined
-      function Navigator() { go = useNavigate(); return null }
+      let navigate: ReturnType<typeof useNavigate> = () => undefined
+      function Navigator() { navigate = useNavigate(); return null }
       const container = await render(createElement("div", null, createElement(Navigator), createElement(DesktopLayout)))
       await openHelp(container)
       await choose("Share feedback")
-      return (path: string) => act(async () => go(path))
+      return (to: string | number) => act(async () => { if (typeof to === "number") void navigate(to); else void navigate(to) })
     }
     afterEach(() => { held.splice(0) })
 
@@ -553,6 +553,22 @@ describe("sidebar groups and Help", () => {
       await settle()
       expect(feedbackCapture.mock.calls.map(([page]) => page)).toEqual(["Dashboard", "Dashboard"])
       expect(discardCapture.mock.calls.map(([id]) => id)).toEqual(["s1"])
+    })
+
+    it("captures again after Back and Forward return to the same history entry", async () => {
+      holdCaptures(2)
+      const go = await start()
+      await go("/portal/settings")
+      await act(async () => held.shift()!())
+      await settle()
+      expect(feedbackCapture.mock.calls.map(([page]) => page)).toEqual(["Dashboard", "Settings"])
+      // Dashboard may be in this screenshot, though Forward brings back the very same Settings entry.
+      await go(-1)
+      await go(1)
+      await act(async () => held.shift()!())
+      await settle()
+      expect(feedbackCapture.mock.calls.map(([page]) => page)).toEqual(["Dashboard", "Settings", undefined])
+      expect(discardCapture.mock.calls.map(([id]) => id)).toEqual(["s1", "s2"])
     })
 
     it("names no page in the last capture when the page keeps changing, and keeps that capture", async () => {
