@@ -6,6 +6,7 @@ export async function directoryRestoreRequest(tenant: string, request: IdentityR
   if (!service) throw new Error("A signed-in desktop connection is required.")
   if (body.action === "preview") return service.prepare(tenant, request, body.options, read)
   if (!request.runId) throw new Error("Review this directory object first.")
+  if (body.action === "reconcile" || body.action === "discard") return service.saved(tenant, request.runId, body.action)
   if (body.action === "resume") return service.resume(tenant, request)
   if (body.action === "cancel") return service.cancel(tenant, request.runId)
   if (body.action !== "restore" || typeof body.fingerprint !== "string" || !body.approvals || Object.values(body.approvals).some(value => !Array.isArray(value) || value.some(kind => typeof kind !== "string"))) throw new Error("Approve each directory row separately.")

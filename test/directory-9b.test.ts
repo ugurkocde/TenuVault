@@ -340,7 +340,7 @@ it.each(optOutVariants)("reconciles a sent but uncertain write after %s opt-out 
   const approvals = { [page.rows[0]!.key]: page.rows[0]!.review.approvals }
   expect(await env.service().execute(actor.tenantId, { ...request, runId: page.runId }, page.fingerprint, approvals)).toMatchObject({ status: "partial", outcomes: [{ state: "uncertain" }] })
   optOut(env.settings, variant)
-  expect(await env.service().resume(actor.tenantId, { ...request, runId: page.runId })).toEqual(page)
+  expect(await env.service().resume(actor.tenantId, { ...request, runId: page.runId })).toEqual({ ...page, canDiscard: false })
   expect(await env.service().execute(actor.tenantId, { ...request, runId: page.runId }, page.fingerprint, approvals)).toMatchObject({ status: "complete", outcomes: [{ state: "applied" }] })
   expect(env.writes).toHaveLength(1)
 })
@@ -355,7 +355,7 @@ it.each([408, 500, 502, 503, 504])("reconciles a committed PATCH followed by HTT
   const first = await env.service().execute(actor.tenantId, { ...request, runId: page.runId }, page.fingerprint, approvals)
   expect(first).toMatchObject({ status: "partial", outcomes: [{ state: "uncertain" }] })
   expect(env.writes).toHaveLength(1)
-  expect(await env.service().resume(actor.tenantId, { ...request, runId: page.runId })).toEqual(page)
+  expect(await env.service().resume(actor.tenantId, { ...request, runId: page.runId })).toEqual({ ...page, canDiscard: false })
   const resumed = await env.service().execute(actor.tenantId, { ...request, runId: page.runId }, page.fingerprint, approvals)
   expect(resumed).toMatchObject({ status: "complete", outcomes: [{ state: "applied" }] })
   expect(env.writes).toHaveLength(1)
@@ -686,7 +686,7 @@ it.each(["success", "503", "timeout"])("keeps cancellation plus %s during the fi
   const saved = { ...request, runId: page.runId }, approvals = { [page.rows[0]!.key]: page.rows[0]!.review.approvals }
   const pending = service.execute(actor.tenantId, saved, page.fingerprint, approvals)
   await finalRead; await service.cancel(actor.tenantId, page.runId); release()
-  expect(await pending).toMatchObject({ status: "partial", failed: 0, outcomes: [{ state: "captured" }] })
+  expect(await pending).toMatchObject({ status: "partial", failed: 0, outcomes: [{ state: "deferred" }] })
   expect(env.writes).toEqual([])
   const restarted = env.service()
   expect(await restarted.resume(actor.tenantId, saved)).toEqual(page)
@@ -709,7 +709,7 @@ it("persists a confirmed 429 as unapplied and repeats final reads before exactly
     expect(sends).toBe(1)
     const journal = [...env.data.entries()].find(([key]) => key.includes("batch.0.restore.guarded."))!
     const entry = JSON.parse(journal[1]).runs[page.runId].entries[0]
-    expect(entry.state).toBe("captured")
+    expect(entry.state).toBe("deferred")
     expect(entry.retryAt).toBe(Date.now() + 2000)
     await vi.advanceTimersByTimeAsync(1999)
     expect(sends).toBe(1)
@@ -734,7 +734,7 @@ it("cancels a 429 backoff and resumes the saved page without violating Retry-Aft
     const pending = service.execute(actor.tenantId, saved, page.fingerprint, approvals)
     await vi.advanceTimersByTimeAsync(0)
     await service.cancel(actor.tenantId, page.runId)
-    expect(await pending).toMatchObject({ status: "partial", failed: 0, outcomes: [{ state: "captured" }] })
+    expect(await pending).toMatchObject({ status: "partial", failed: 0, outcomes: [{ state: "deferred" }] })
     expect(sends).toBe(1); expect(env.writes).toEqual([])
     const restarted = env.service()
     expect(await restarted.resume(actor.tenantId, saved)).toEqual(page)
@@ -788,7 +788,7 @@ it.each(["120", "1"])("defers a confirmed application throttle at Retry-After %s
   const run = runFor(candidate), original = env.fetcher.getMockImplementation()!
   env.fetcher.mockImplementation((url, init) => init?.method === "PATCH" ? Promise.resolve(new Response(null, { status: 429, headers: { "Retry-After": header } })) : original(url, init))
   const result = await executeGuardedRun(new GuardedRunJournal(env.store), run, io)
-  expect(result).toMatchObject({ status: "partial", run: { entries: [{ state: "captured", retryAt: expect.any(Number) }] } })
+  expect(result).toMatchObject({ status: "partial", run: { entries: [{ state: "deferred", retryAt: expect.any(Number) }] } })
   expect(env.fetcher.mock.calls.filter(([, init]) => init?.method === "PATCH")).toHaveLength(header === "120" ? 1 : 5)
   expect(wait).toHaveBeenCalledTimes(header === "120" ? 0 : 4)
   expect(env.writes).toEqual([])

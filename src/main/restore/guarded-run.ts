@@ -28,7 +28,7 @@ export interface GuardedStep {
 }
 export interface GuardedEntry {
   step: GuardedStep
-  state: "pending" | "captured" | "uncertain" | "applied" | "blocked" | "failed" | "failed-before-send"
+  state: "pending" | "captured" | "deferred" | "uncertain" | "applied" | "blocked" | "failed" | "failed-before-send"
   /** Earliest retry of a confirmed, unapplied throttle, preserved across cancellation/restart. */
   retryAt?: number
   before?: Item | null
@@ -50,7 +50,7 @@ export interface GuardedRun {
 }
 export interface GuardedIO {
   token: string
-  /** Directory batches arbitrate reviewed plans independently from uncertain sends. */
+  /** Directory pages retain live object ownership across deferred and uncertain steps. */
   prepareStep?: (step: GuardedStep) => number | undefined
   defer?: (step: GuardedStep, retryAt: number) => void
   /** A complete scan of current Intune and Conditional Access references, after replacements. */
@@ -212,20 +212,21 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
         guardRestoreItem(run.actor, step.folder, entry.targetId ?? step.targetId ?? mapped, refs, step.allowRemoval === true, guardedProtections(step))
         // Only touched objects are captured, never a whole service. A failed save prevents the write.
         entry.before = current; entry.sent = desired; entry.targetId = entry.targetId ?? step.targetId ?? mapped; entry.state = "captured"; journal.save(run)
-        if (signal?.aborted) break
+        if (signal?.aborted) { entry.state = step.directory ? "deferred" : "captured"; journal.save(run); break }
         let result: { id?: string }
         try {
           result = await io.write(step, desired, entry.targetId, () => {
+            if (signal?.aborted) throw new RestoreWriteDeferredError("The directory write was cancelled before sending.")
             entry.state = "uncertain"; delete entry.retryAt; journal.save(run)
           }, run, signal, retryAt => {
-            entry.state = "captured"; entry.retryAt = retryAt; delete entry.reason; journal.save(run)
+            entry.state = step.directory ? "deferred" : "captured"; entry.retryAt = retryAt; delete entry.reason; journal.save(run)
             io.defer?.(step, retryAt)
           })
         } catch (error) {
-          if (error instanceof RestoreWriteDeferredError || (entry.state === "captured" && signal?.aborted)) {
-            entry.state = "captured"; delete entry.reason
+          if (error instanceof RestoreWriteDeferredError || (["captured", "deferred"].includes(entry.state) && signal?.aborted)) {
+            entry.state = step.directory ? "deferred" : "captured"; delete entry.reason
             if (error instanceof RestoreWriteDeferredError && error.retryAt !== undefined) { entry.retryAt = error.retryAt; journal.save(run); io.defer?.(step, error.retryAt) }
-          } else if (entry.state === "captured") {
+          } else if (["captured", "deferred"].includes(entry.state)) {
             entry.state = "failed-before-send"
             entry.reason = "The write was not sent. Preview this item again."
           } else if (error instanceof RestoreWriteRefusedError) {
@@ -240,7 +241,7 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
         entry.state = "applied"; journal.save(run)
       } catch (error) {
         if (entry.state !== "uncertain" && (error instanceof RestoreWriteDeferredError || signal?.aborted)) {
-          delete entry.reason
+          entry.state = step.directory ? "deferred" : "captured"; delete entry.reason
           if (error instanceof RestoreWriteDeferredError && error.retryAt !== undefined) { entry.retryAt = error.retryAt; journal.save(run); io.defer?.(step, error.retryAt) }
           journal.save(run); continue
         }

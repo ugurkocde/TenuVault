@@ -13,6 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "~
 import { Alert, AlertDescription } from "~/components/ui/alert"
 import { BackupProgressModal } from "~/components/tenants/backup-progress-modal"
 import { BackupChangesDialog } from "~/components/backup/backup-changes-dialog"
+import { DirectoryRestore } from "~/components/backup/directory-restore"
 import { RestoreWizard } from "~/components/backup/restore-wizard"
 import { formatDate, formatDuration, formatSize, statusKind, statusLabel, TRIGGER_LABEL, unresolvedNotice, type BackupSummary, type BackupTenant, type StatusKind } from "~/components/backup/types"
 import { BackupSchedulePanel } from "@desktop/components/BackupSchedulePanel"
@@ -469,6 +470,7 @@ export default function BackupRestorePage() {
         </div>
       )}
 
+      {tenant && <div hidden={activeTab !== "restore"}><DirectoryRestore key={`${tenant.credentials.tenantId}:${tenant.credentials.appId}`} tenant={tenant} /></div>}
       {/* Sidebar filters can also change the tab. Keep restore progress and results mounted. */}
       {tenant && !isLoading && !blockingError && (
         <div hidden={activeTab !== "restore"}>

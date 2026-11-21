@@ -9,31 +9,43 @@ import type { DirectoryReview } from "../../../main/restore/directory-9a"
 interface Review { runId: string; fingerprint: string; more: boolean; rows: Array<{ key: string; review: DirectoryReview }> }
 const approvalLabel: Record<string, string> = { "directory-item": "Approve this individual change", "privileged-relationship": "Approve this privileged relationship", "security-response": "Approve undoing the apparent security response", "recycle-relationships": "Approve recovered relationships and account state", "exact-group": "Approve this removal for this group" }
 /** A bounded page of explicit approvals, outside restore all and row selection. */
-export function DirectoryRestore({ tenant, backupId, path }: { tenant: BackupTenant; backupId: string; path: string }) {
-  const [open, setOpen] = useState(false), [busy, setBusy] = useState(false)
+export function DirectoryRestore({ tenant, backupId = "", path = "" }: { tenant: BackupTenant; backupId?: string; path?: string }) {
+  const savedOnly = !backupId || !path
+  const [open, setOpen] = useState(savedOnly), [busy, setBusy] = useState(false)
   const [stage, setStage] = useState("object"), [exactMembers, setExactMembers] = useState(false), [exactOwners, setExactOwners] = useState(false)
   const [review, setReview] = useState<Review | null>(null), [approvals, setApprovals] = useState<Record<string, string[]>>({}), [message, setMessage] = useState("")
   const [references, setReferences] = useState<ReplacedReference[]>([])
-  const [outcomes, setOutcomes] = useState<Array<{ key: string; state: string; reason?: string; targetId?: string }>>([])
+  const [outcomes, setOutcomes] = useState<Array<{ key: string; state: string; reason?: string; targetId?: string; retryAt?: number }>>([])
+  const [canDiscard, setCanDiscard] = useState(false)
   const [resumeId, setResumeId] = useState("")
   const generation = useRef(0)
   useEffect(() => () => { generation.current++ }, [tenant.credentials.tenantId, tenant.credentials.appId, backupId, path])
-  const invalidate = () => { generation.current++; setReview(null); setApprovals({}); setOutcomes([]); setReferences([]); setMessage("") }
-  const send = async (action: "preview" | "restore" | "cancel" | "resume" | "next") => {
+  const invalidate = () => { generation.current++; setCanDiscard(false); setReview(null); setApprovals({}); setOutcomes([]); setReferences([]); setMessage("") }
+  const send = async (action: "preview" | "restore" | "cancel" | "resume" | "next" | "reconcile" | "discard") => {
     const run = action === "cancel" ? generation.current : ++generation.current
     if (action !== "cancel") setBusy(true)
     setMessage("")
     try {
-      const response = await fetch("/api/restore-directory", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...tenant.credentials, storageAccountName: tenant.storageAccountName, backupId, path, action: action === "next" ? "preview" : action, ...(action === "next" ? { previousRunId: review?.runId } : {}), stage, exactMembers, exactOwners, approvals, runId: action === "resume" ? resumeId : review?.runId, fingerprint: review?.fingerprint, mode: "replace", restoreType: "selective", selectedPolicies: [path] }) })
+      const response = await fetch("/api/restore-directory", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...tenant.credentials, storageAccountName: tenant.storageAccountName, backupId, path, action: action === "next" ? "preview" : action, ...(action === "next" ? { previousRunId: review?.runId } : {}), stage, exactMembers, exactOwners, approvals, runId: action === "resume" || action === "reconcile" ? (resumeId || review?.runId) : action === "discard" ? (review?.runId ?? resumeId) : review?.runId, fingerprint: review?.fingerprint, mode: "replace", restoreType: "selective", selectedPolicies: [path] }) })
       const data = await response.json()
       if (generation.current !== run) return
       if (!response.ok) throw new Error(data.error ?? "Directory restore could not finish.")
+      setCanDiscard(data.canDiscard === true)
+      if (action === "reconcile" && data.rows) setReview(data)
       if (action === "preview" || action === "resume" || action === "next") { setReview(data); if (data.options) { setStage(data.options.stage); setExactMembers(data.options.exactMembers); setExactOwners(data.options.exactOwners) } setApprovals({}); setOutcomes([]); setReferences([]); setMessage(data.rows.length ? "Review each row separately." : "No relationship differences remain in this page.") }
-      else if (action === "cancel") setMessage("Cancellation requested. In-flight writes are reconciled before a retry.")
-      else { setOutcomes(data.outcomes ?? []); setReferences(data.replacedReferences ?? []); setMessage(data.status === "complete" ? "Directory page completed. Preview again for remaining differences." : `Directory restore is partial. Applied changes are retained. Review the results and warnings. Resume unanswered steps with the same approvals. ${(data.warnings ?? []).join(" ")}`) }
+      else if (action === "cancel") setMessage(data.cancelled ? "Cancellation requested. In-flight results will be confirmed before continuing." : "No active restore was cancelled.")
+      else if (action === "discard") { setCanDiscard(false); setReview(null); setOutcomes([]); setMessage("Saved restore discarded. This page can never send again.") }
+      else { setOutcomes(data.outcomes ?? []); setReferences(data.replacedReferences ?? []); setMessage(data.status === "complete" ? "Directory page completed. Preview again for remaining differences." : `Directory restore is partial. Applied changes are retained. Review the results and warnings. Resume throttled steps after the retry time. Confirm uncertain results before continuing. ${(data.warnings ?? []).join(" ")}`) }
     } catch (error) { if (generation.current === run) setMessage(error instanceof Error ? error.message : "Directory restore could not finish.") }
     finally { if (action !== "cancel" && generation.current === run) setBusy(false) }
   }
+  const resultRows = outcomes.length > 0 && <div className="max-h-64 space-y-2 overflow-auto" aria-label="Directory page results">{outcomes.map(outcome => <p key={outcome.key} className="break-all">{review?.rows.find(row => row.key === outcome.key)?.review.privilege ?? "Change"}: {outcome.state === "deferred" ? (outcome.retryAt ? `Throttled by Microsoft Graph. Earliest retry: ${new Date(outcome.retryAt).toLocaleString()}.` : "Deferred before dispatch. Resume to continue.") : outcome.state === "uncertain" ? "The result is being confirmed." : `${outcome.state}.`} {outcome.targetId && <>Target ID: {outcome.targetId}. </>}{outcome.reason}</p>)}</div>
+  if (savedOnly) return <div className="my-4 space-y-3 rounded-lg border p-4 text-sm">
+    <p className="font-medium">Saved directory restores</p>
+    <p>Confirm saved results even when the backup has been deleted. Confirmation only reads Microsoft Graph. Discard is available after every uncertain result is resolved and never undoes applied changes.</p>
+    <div className="flex flex-wrap items-end gap-2"><label>Saved directory page ID<input className="block w-full rounded border bg-card p-1" disabled={busy} value={resumeId} onChange={event => { invalidate(); setResumeId(event.target.value) }} /></label><Button size="sm" variant="outline" disabled={busy || !resumeId} onClick={() => void send("reconcile")}>Confirm saved page results</Button>{canDiscard && <Button size="sm" variant="outline" disabled={busy} onClick={() => void send("discard")}>Discard saved restore</Button>}</div>
+    {resultRows}<p role="status" aria-live="polite">{message}</p>
+  </div>
   const applications = ["Applications", "ServicePrincipals", "OAuth2PermissionGrants"].includes(path.split("/")[1]!)
   const selected = review?.rows.some(row => !row.review.blocker && row.review.approvals.every(kind => approvals[row.key]?.includes(kind)))
   return <div className="px-4 pb-3 pl-11 text-sm" data-no-select>
@@ -48,7 +60,7 @@ export function DirectoryRestore({ tenant, backupId, path }: { tenant: BackupTen
         <label className="flex items-start gap-2"><input type="checkbox" disabled={busy} checked={exactOwners} onChange={event => { setExactOwners(event.target.checked); invalidate() }} />Exact ownership for this group, remove owners absent from the backup</label>
       </>}
       <Button size="sm" variant="outline" disabled={busy} onClick={() => void send("preview")}>Preview directory changes</Button>
-      <div className="flex flex-wrap items-end gap-2"><label className="min-w-0">Saved page ID<input className="block w-full rounded border bg-white p-1 text-gray-900" disabled={busy} value={resumeId} onChange={event => setResumeId(event.target.value)} /></label><Button size="sm" variant="outline" disabled={busy || !resumeId} onClick={() => void send("resume")}>Resume saved page</Button></div>
+      <div className="flex flex-wrap items-end gap-2"><label className="min-w-0">Saved page ID<input className="block w-full rounded border bg-white p-1 text-gray-900" disabled={busy} value={resumeId} onChange={event => setResumeId(event.target.value)} /></label><Button size="sm" variant="outline" disabled={busy || !resumeId} onClick={() => void send("resume")}>Resume saved page</Button><Button size="sm" variant="outline" disabled={busy || !(review?.runId ?? resumeId)} onClick={() => void send("reconcile")}>Confirm this page's results</Button>{canDiscard && <Button size="sm" variant="outline" disabled={busy} onClick={() => void send("discard")}>Discard saved restore</Button>}</div>
       {review && <><p>Saved page: <span className="break-all">{review.runId}</span>. Up to 50 changes per page, executed in batches of 20.</p>
         <div className="max-h-96 space-y-3 overflow-auto">{review.rows.map(({ key, review: row }) => <div key={key} className="space-y-2 rounded border bg-white p-3 text-gray-900">
           <p className="break-words"><strong>{row.principal ? `${row.principal.name} (${row.principal.type})` : row.resource.name}</strong>: {row.privilege} on {row.resource.name} ({row.resource.type})</p>
@@ -60,7 +72,7 @@ export function DirectoryRestore({ tenant, backupId, path }: { tenant: BackupTen
         {review.more && <div className="space-y-2"><p>More changes remain. Completed differences are omitted. Blocked rows do not prevent reviewing the next page.</p><Button size="sm" variant="outline" disabled={busy} onClick={() => void send("next")}>Preview next page</Button></div>}
         <div className="flex flex-wrap gap-2"><Button size="sm" disabled={busy || !selected} onClick={() => void send("restore")}>Execute approved changes or resume page</Button>{busy && <Button size="sm" variant="outline" onClick={() => void send("cancel")}>Cancel directory restore</Button>}</div>
       </>}
-      {outcomes.length > 0 && <div className="max-h-64 space-y-2 overflow-auto" aria-label="Directory page results">{outcomes.map(outcome => <p key={outcome.key} className="break-all">{review?.rows.find(row => row.key === outcome.key)?.review.privilege ?? "Change"}: {outcome.state}. {outcome.targetId && <>Target ID: {outcome.targetId}. </>}{outcome.reason}</p>)}</div>}
+      {resultRows}
       {references.length > 0 && <div className="max-h-64 space-y-2 overflow-auto"><p>Policies that still reference old IDs need review:</p>{references.map((reference, index) => <p className="break-all" key={index}>{reference.path}, {reference.property}. Old ID: {reference.mapping.source}. New ID: {reference.mapping.target}.</p>)}</div>}
       <p role="status" aria-live="polite">{message}</p>
     </div>}

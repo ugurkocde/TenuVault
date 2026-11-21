@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto"
 import { expect, it, vi } from "vitest"
 import { DirectoryRestoreService } from "../src/main/restore/directory-service"
+import { ModuleSettings } from "../src/main/services/settings"
 import { RecoveryAccounts } from "../src/main/restore/safety-resolvers"
 import { restoreFingerprint } from "../src/main/restore/guarded-run"
 import { LARGE_SHARD_ITEMS } from "../src/shared/large-backup"
@@ -13,6 +14,8 @@ function world(count = 0, missing = false) {
   let target = missing ? "" : resource
   const data = new Map<string, string>(), members = new Set<string>(), writes: string[] = []
   const store = { partitioned: true as const, get: (key: string) => data.get(key) ?? null, set: (key: string, value: string) => { data.set(key, value) }, delete: (key: string) => { data.delete(key) } }
+  const settings = new ModuleSettings(store)
+  settings.setChoice(tenant, { entra: { access: "restore", areas: ["usersAndDevices", "groups"] } })
   const group: Item = { id: resource, displayName: "Group", mailNickname: "group", groupTypes: [], mailEnabled: false, securityEnabled: true, isAssignableToRole: false }
   const saved = Array.from({ length: count }, (_, n) => id(100 + n))
   const declaration = { format: "sorted-id-shards-v1", count, shards: Math.ceil(count / LARGE_SHARD_ITEMS), complete: true, hash: createHash("sha256").update(saved.map(value => JSON.stringify(value) + "\n").join("")).digest("hex") }
@@ -41,10 +44,10 @@ function world(count = 0, missing = false) {
     return new Response(null, { status: 404 })
   })
   const connection = async () => ({ token, tenantId: tenant, clientId: app, userId: admin })
-  const service = () => new DirectoryRestoreService(store, new RecoveryAccounts(store), connection, fetcher)
+  const service = () => new DirectoryRestoreService(store, new RecoveryAccounts(store), connection, fetcher, () => [], settings)
   const request = { path: `backup/Groups/${resource}.json`, snapshot, origin: "restore" as const }
   const read = async (name: string) => { const part = Number(name.match(/(\d+)\.json$/)?.[1] ?? 0); return saved.slice(part * LARGE_SHARD_ITEMS, (part + 1) * LARGE_SHARD_ITEMS) }
-  return { service, request, group, saved, read, data, writes, members, fetcher }
+  return { service, settings, store, connection, request, group, saved, read, data, writes, members, fetcher }
 }
 it("executes a real 50-row relationship preview in bounded batches and resumes without duplicates", async () => {
   const env = world(65), service = env.service()
@@ -269,7 +272,7 @@ it("cancels the production adapter's throttle wait and resumes after restart", a
   try {
     const pending = service.execute(tenant, request, page.fingerprint, approvals)
     await throttled; await service.cancel(tenant, page.runId)
-    expect(await pending).toMatchObject({ status: "partial", outcomes: [{ state: "captured" }] })
+    expect(await pending).toMatchObject({ status: "partial", outcomes: [{ state: "deferred" }] })
     expect(attempts).toBe(1); expect(env.writes).toEqual([])
     const resumed = env.service().execute(tenant, request, page.fingerprint, approvals)
     await vi.advanceTimersByTimeAsync(59_999)
@@ -301,7 +304,7 @@ it.each((["Users", "Groups"] as const).flatMap(folder => ["success", "503", "tim
   const saved = { ...request, runId: page.runId }, approvals = { [page.rows[0]!.key]: page.rows[0]!.review.approvals }
   const pending = service.execute(tenant, saved, page.fingerprint, approvals)
   await finalRead; await service.cancel(tenant, page.runId); release()
-  expect(await pending).toMatchObject({ status: "partial", failed: 0, outcomes: [{ state: "captured" }] })
+  expect(await pending).toMatchObject({ status: "partial", failed: 0, outcomes: [{ state: "deferred" }] })
   expect(env.writes).toEqual([])
   const restarted = env.service()
   expect(await restarted.resume(tenant, saved)).toEqual(page)
@@ -310,7 +313,7 @@ it.each((["Users", "Groups"] as const).flatMap(folder => ["success", "503", "tim
   expect(env.writes).toEqual([`PATCH ${target}`])
 })
 
-it("defers a confirmed group-create POST throttle without locking out a newer reviewed backup", async () => {
+it("keeps a throttled group create owned until discard before another backup can create", async () => {
   const env = world(0, true), original = env.fetcher.getMockImplementation()!
   const page = await env.service().prepare(tenant, env.request, options, env.read)
   let sends = 0
@@ -318,17 +321,20 @@ it("defers a confirmed group-create POST throttle without locking out a newer re
   const approvals = { [page.rows[0]!.key]: page.rows[0]!.review.approvals }
   vi.useFakeTimers()
   try {
-    expect(await env.service().execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, approvals)).toMatchObject({ status: "partial", failed: 0, outcomes: [{ state: "captured" }] })
+    expect(await env.service().execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, approvals)).toMatchObject({ status: "partial", failed: 0, outcomes: [{ state: "deferred" }] })
     expect([...env.data.keys()].some(key => key.startsWith("restore.directory.unanswered."))).toBe(false)
     const newerRequest = { ...env.request, path: env.request.path.replace("backup/", "newer/") }
     const newer = await env.service().prepare(tenant, newerRequest, options, env.read)
     const newerApprovals = { [newer.rows[0]!.key]: newer.rows[0]!.review.approvals }
-    expect(await env.service().execute(tenant, { ...newerRequest, runId: newer.runId }, newer.fingerprint, newerApprovals)).toMatchObject({ status: "partial", failed: 0, outcomes: [{ state: "pending" }] })
+    expect(await env.service().execute(tenant, { ...newerRequest, runId: newer.runId }, newer.fingerprint, newerApprovals)).toMatchObject({ status: "partial", failed: 1, outcomes: [{ state: "blocked", reason: expect.stringContaining("owns this object") }] })
     expect(sends).toBe(1); expect(env.writes).toEqual([])
+    await env.service().saved(tenant, newer.runId, "discard")
+    await env.service().saved(tenant, page.runId, "discard")
+    const replacement = await env.service().prepare(tenant, newerRequest, options, env.read)
     await vi.advanceTimersByTimeAsync(120_000)
     // The advisory reference scan still reports its existing missing read access.
-    expect(await env.service().execute(tenant, { ...newerRequest, runId: newer.runId }, newer.fingerprint, newerApprovals)).toMatchObject({ status: "partial", failed: 0, outcomes: [{ state: "applied", targetId: id(900) }] })
-    expect(await env.service().execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, approvals)).toMatchObject({ status: "partial", failed: 1, outcomes: [{ state: "blocked", reason: expect.stringContaining("superseded") }] })
+    expect(await env.service().execute(tenant, { ...newerRequest, runId: replacement.runId }, replacement.fingerprint, { [replacement.rows[0]!.key]: replacement.rows[0]!.review.approvals })).toMatchObject({ status: "partial", failed: 0, outcomes: [{ state: "applied", targetId: id(900) }] })
+    await expect(env.service().execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, approvals)).rejects.toThrow("discarded")
     expect(sends).toBe(2); expect(env.writes).toEqual(["POST groups"])
   } finally { vi.useRealTimers() }
 })
@@ -344,5 +350,93 @@ it("keeps a same-page unanswered relationship locked and refuses later rows for 
   const request = { ...env.request, runId: page.runId }, approvals = Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals]))
   for (let restart = 0; restart < 3; restart++) expect(await env.service().execute(tenant, request, page.fingerprint, approvals)).toMatchObject({ status: "partial", outcomes: [{ state: "uncertain" }, { state: "blocked", reason: expect.stringContaining("unanswered write") }] })
   expect(sends).toBe(1); expect(env.writes).toEqual([])
-  expect([...env.data.keys()].filter(key => key.startsWith("restore.directory.unanswered."))).toHaveLength(1)
+  expect(Object.keys(JSON.parse(env.data.get(`restore.directory.coordinator.${tenant}`)!).locks)).toHaveLength(1)
+})
+
+it("never sends the 21st member from a discarded page after a completed first batch", async () => {
+  const env = world(21), service = env.service(), original = env.fetcher.getMockImplementation()!
+  const page = await service.prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read)
+  let sends = 0, release!: () => void, reached!: () => void
+  const twentieth = new Promise<void>(resolve => { reached = resolve })
+  env.fetcher.mockImplementation(async (input, init) => {
+    if (init?.method === "POST" && ++sends === 20) { reached(); await new Promise<void>(resolve => { release = resolve }) }
+    return original(input, init)
+  })
+  const request = { ...env.request, runId: page.runId }, approvals = Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals]))
+  const pending = service.execute(tenant, request, page.fingerprint, approvals)
+  await twentieth
+  await expect(service.saved(tenant, page.runId, "discard")).rejects.toThrow("already running")
+  expect(await service.cancel(tenant, page.runId)).toEqual({ cancelled: true }); release()
+  expect(await pending).toMatchObject({ status: "partial" })
+  expect(env.writes).toHaveLength(20)
+  await service.saved(tenant, page.runId, "discard")
+  await expect(env.service().execute(tenant, request, page.fingerprint, approvals)).rejects.toThrow("discarded")
+  expect(sends).toBe(20); expect(env.members.has(id(120))).toBe(false)
+})
+
+it.each(["current", "legacy"])("recovers a journalled group create before planning when %s mapping publication was interrupted", async version => {
+  const env = world(0, true), page = await env.service().prepare(tenant, env.request, options, env.read)
+  const set = env.store.set, publish = vi.spyOn(env.store, "set")
+  let interrupted = false
+  publish.mockImplementation((key, value) => {
+    if (!interrupted && key.startsWith("restore.directory.mapping.")) { interrupted = true; throw new Error("Interrupted mapping publication") }
+    set(key, value)
+  })
+  const request = { ...env.request, runId: page.runId }, approvals = { [page.rows[0]!.key]: page.rows[0]!.review.approvals }
+  await expect(env.service().execute(tenant, request, page.fingerprint, approvals)).rejects.toThrow("Interrupted mapping")
+  if (version === "legacy") {
+    env.data.delete(`restore.directory.coordinator.${tenant}`)
+    env.data.set(`restore.directory.unanswered.${tenant}.Groups.${resource}`, `restore.directory.${tenant}.${page.runId}.batch.0.`)
+  }
+  const recovered = await env.service().prepare(tenant, env.request, options, env.read)
+  expect(recovered.rows[0]!.review.resource.id).toBe(id(900))
+  expect(env.writes).toEqual(["POST groups"])
+  expect(Object.keys(JSON.parse(env.data.get(`restore.directory.coordinator.${tenant}`)!).locks).sort()).toEqual([resource, id(900)].sort())
+  await env.service().execute(tenant, request, page.fingerprint, approvals)
+  expect(env.writes).toEqual(["POST groups"])
+  expect(JSON.parse(env.data.get(`restore.directory.coordinator.${tenant}`)!).locks).toEqual({})
+})
+
+it("locks a recreated live group ID across backups with different source IDs", async () => {
+  const env = world(0, true), page = await env.service().prepare(tenant, env.request, options, env.read)
+  await env.service().execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, { [page.rows[0]!.key]: page.rows[0]!.review.approvals })
+  const oldRequest = { ...env.request, snapshot: { ...env.request.snapshot, description: "Old source update" } }
+  const old = await env.service().prepare(tenant, oldRequest, options, env.read), original = env.fetcher.getMockImplementation()!
+  let patches = 0
+  env.fetcher.mockImplementation((input, init) => {
+    if (init?.method === "PATCH") { patches++; return Promise.resolve(new Response(null, { status: 503 })) }
+    return original(input, init)
+  })
+  expect(await env.service().execute(tenant, { ...oldRequest, runId: old.runId }, old.fingerprint, { [old.rows[0]!.key]: old.rows[0]!.review.approvals })).toMatchObject({ outcomes: [{ state: "uncertain", targetId: id(900) }] })
+  const newerRequest = { ...oldRequest, path: `newer/Groups/${id(900)}.json`, snapshot: { ...oldRequest.snapshot, id: id(900), description: "New source update" } }
+  const newer = await env.service().prepare(tenant, newerRequest, options, env.read)
+  expect(await env.service().execute(tenant, { ...newerRequest, runId: newer.runId }, newer.fingerprint, { [newer.rows[0]!.key]: newer.rows[0]!.review.approvals })).toMatchObject({ outcomes: [{ state: "blocked", reason: expect.stringContaining("owns this object") }] })
+  expect(patches).toBe(1); expect(env.writes).toEqual(["POST groups"])
+})
+
+it("records cancellation while execute is awaiting its first connection and sends nothing", async () => {
+  const env = world(), page = await env.service().prepare(tenant, { ...env.request, snapshot: { ...env.request.snapshot, description: "Saved" } }, options, env.read)
+  let release!: () => void
+  const connection = () => new Promise<Awaited<ReturnType<typeof env.connection>>>(resolve => { release = () => { void env.connection().then(resolve) } })
+  const service = new DirectoryRestoreService(env.store, new RecoveryAccounts(env.store), connection, env.fetcher, () => [], env.settings)
+  const request = { ...env.request, snapshot: { ...env.request.snapshot, description: "Saved" }, runId: page.runId }
+  expect(await service.cancel(tenant, page.runId)).toEqual({ cancelled: false })
+  const pending = service.execute(tenant, request, page.fingerprint, { [page.rows[0]!.key]: page.rows[0]!.review.approvals })
+  expect(await service.cancel(tenant, page.runId)).toEqual({ cancelled: true }); release()
+  expect(await pending).toMatchObject({ status: "partial" }); expect(env.writes).toEqual([])
+  expect(await service.cancel(tenant, page.runId)).toEqual({ cancelled: false })
+})
+
+it.each((["Users", "Groups"] as const).flatMap(folder => ["area", "service", "access"].map(change => ({ folder, change }))))("checks $folder $change opt-out at preview and at final dispatch", async ({ folder, change }) => {
+  const env = world(), service = env.service()
+  const request: IdentityRestoreRequest = folder === "Groups" ? { ...env.request, snapshot: { ...env.request.snapshot, description: "Saved" } } : { path: `backup/Users/${id(100)}.json`, origin: "restore", snapshot: { id: id(100), displayName: "Saved", userType: "Member" } }
+  const page = await service.prepare(tenant, request, options, env.read), original = env.fetcher.getMockImplementation()!
+  let reads = 0
+  env.fetcher.mockImplementation(async (input, init) => {
+    if (new URL(String(input)).pathname.endsWith(`/${request.snapshot.id}`) && init?.method === "GET" && ++reads === (folder === "Groups" ? 6 : 5)) env.settings.setChoice(tenant, change === "service" ? {} : { entra: { access: change === "access" ? "backup" : "restore", areas: change === "area" ? [] : ["usersAndDevices", "groups"] } })
+    return original(input, init)
+  })
+  expect(await service.execute(tenant, { ...request, runId: page.runId }, page.fingerprint, { [page.rows[0]!.key]: page.rows[0]!.review.approvals })).toMatchObject({ outcomes: [{ state: "failed-before-send" }] })
+  expect(env.writes).toEqual([])
+  await expect(service.prepare(tenant, request, options, env.read)).rejects.toThrow("Backup and restore access")
 })

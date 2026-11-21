@@ -61,3 +61,44 @@ it("shows staged application risks without offering execution or exact-owner rem
   expect(document.querySelectorAll('input[type="checkbox"]')).toHaveLength(0)
   expect((button("Execute approved changes or resume page") as HTMLButtonElement).disabled).toBe(true)
 })
+
+it("shows Graph throttle deadlines, confirms uncertain results and offers discard only when allowed", async () => {
+  const retryAt = Date.UTC(2026, 10, 20, 18)
+  const fetcher = vi.fn(async (_input: unknown, init?: RequestInit) => {
+    const action = JSON.parse(String(init?.body)).action
+    return Response.json(action === "preview" ? { ...page, canDiscard: true } : { ...page, status: "partial", canDiscard: action !== "restore", outcomes: [{ key: "member", state: action === "restore" ? "uncertain" : "deferred", retryAt }] })
+  })
+  vi.stubGlobal("fetch", fetcher)
+  root = createRoot(document.body.appendChild(document.createElement("div")))
+  await act(async () => root.render(createElement(DirectoryRestore, props)))
+  await click("Review directory restore"); await click("Preview directory changes")
+  expect(button("Discard saved restore")).toBeDefined()
+  await act(async () => document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]').forEach(input => input.click()))
+  await click("Execute approved changes or resume page")
+  expect(document.body.textContent).toContain("The result is being confirmed.")
+  expect(button("Discard saved restore")).toBeUndefined()
+  await click("Confirm this page's results")
+  expect(document.body.textContent).toContain("Throttled by Microsoft Graph. Earliest retry:")
+  expect(document.body.textContent).toContain(new Date(retryAt).toLocaleString())
+  expect(button("Discard saved restore")).toBeDefined()
+})
+
+it("offers journal confirmation and discard with no backup props or mutation controls", async () => {
+  const fetcher = vi.fn(async (_input: unknown, init?: RequestInit) => Response.json(JSON.parse(String(init?.body)).action === "discard" ? { discarded: true, canDiscard: false } : { ...page, canDiscard: true, outcomes: [{ key: "member", state: "applied" }], status: "complete" }))
+  vi.stubGlobal("fetch", fetcher)
+  root = createRoot(document.body.appendChild(document.createElement("div")))
+  await act(async () => root.render(createElement(DirectoryRestore, { tenant })))
+  expect(document.body.textContent).toContain("Saved directory restores")
+  expect(button("Preview directory changes")).toBeUndefined()
+  expect(button("Execute approved changes or resume page")).toBeUndefined()
+  await act(async () => {
+    const input = document.querySelector("input")!
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "saved-page")
+    input.dispatchEvent(new Event("input", { bubbles: true }))
+  })
+  await click("Confirm saved page results")
+  expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toMatchObject({ action: "reconcile", runId: "saved-page", backupId: "", path: "" })
+  await click("Discard saved restore")
+  expect(JSON.parse(String(fetcher.mock.calls[1]![1]?.body))).toMatchObject({ action: "discard", runId: "run" })
+  expect(document.body.textContent).toContain("This page can never send again.")
+})

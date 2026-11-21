@@ -15,7 +15,14 @@ async function token(tenantId: string, appId: string, clientSecret: string, scop
 export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => ({}))
   const { tenantId, appId, clientSecret, storageAccountName, backupId, path, action } = body
-  if (![tenantId, appId, clientSecret, storageAccountName, backupId, path].every(value => typeof value === "string" && value) || !/^[a-zA-Z0-9_-]+$/.test(backupId) || !validPolicyPath(path, backupId) || !["preview", "restore", "cancel", "resume"].includes(action) || !["object", "relationships"].includes(body.stage)) return NextResponse.json({ error: "Choose one directory object from this backup." }, { status: 400 })
+  if (["reconcile", "discard", "cancel"].includes(action)) {
+    if (![tenantId, appId, clientSecret, body.runId].every(value => typeof value === "string" && value)) return NextResponse.json({ error: "Enter the saved directory page ID." }, { status: 400 })
+    try {
+      const result = await directoryRestoreRequest(tenantId, { path: "", snapshot: {}, origin: "restore", runId: body.runId }, { action, options: { stage: "object", exactMembers: false, exactOwners: false } }, async () => { throw new Error("Saved-page actions do not read backups.") })
+      return NextResponse.json(result)
+    } catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "The saved directory page could not be read." }, { status: 409 }) }
+  }
+  if (![tenantId, appId, clientSecret, storageAccountName, backupId, path].every(value => typeof value === "string" && value) || !/^[a-zA-Z0-9_-]+$/.test(backupId) || !validPolicyPath(path, backupId) || !["preview", "restore", "cancel", "resume", "reconcile", "discard"].includes(action) || !["object", "relationships"].includes(body.stage)) return NextResponse.json({ error: "Choose one directory object from this backup." }, { status: 400 })
   const type = typeForFolder(path.split("/")[1] ?? "")
   if (!type || (!["Users", "Groups"].includes(type.folder) && !DIRECTORY_9B_FOLDERS.includes(type.folder)) || (!DIRECTORY_9B_FOLDERS.includes(type.folder) && ["none", "metadata"].includes(restoreCapability(type)))) return NextResponse.json({ error: "This type remains backup-only." }, { status: 409 })
   try {
@@ -39,7 +46,7 @@ export async function POST(request: NextRequest) {
     })
     if (action === "restore" && "outcomes" in result) {
       const restoredCount = result.outcomes.filter(row => row.state === "applied").length
-      const partialCount = result.outcomes.filter(row => ["pending", "captured", "uncertain"].includes(row.state)).length
+      const partialCount = result.outcomes.filter(row => ["pending", "captured", "deferred", "uncertain"].includes(row.state)).length
       return NextResponse.json({ ...result, success: result.status === "complete", partial: result.status === "partial", details: { restoredCount, partialCount, failedCount: result.failed, duration: 0, results: [] } })
     }
     return NextResponse.json(result)

@@ -1,4 +1,4 @@
-import { directoryObjectState } from "./directory-object-state"
+import { directoryPagePrefix, directoryObjectState } from "./directory-object-state"
 import { DirectoryThrottledError } from "./directory-retry"
 import { directory9bIO } from "./directory-9b-io"
 import { applicationObjectStep, applicationRelationshipSteps } from "./directory-9b-plan"
@@ -12,7 +12,7 @@ import { grantedPermissions } from "../../shared/services/token"
 import { referenceMatches, REFERENCE_SCAN_EXCLUDED } from "./reference-scanner"
 import { isGuid } from "../../shared/security"
 import { directoryObjectId } from "../../shared/intune/entra-directory"
-import { RestoreSafetyError } from "../../shared/intune/restore-guards"
+import { RestoreSafetyError, RestoreWriteDeferredError } from "../../shared/intune/restore-guards"
 import { relationPath, LARGE_SHARD_ITEMS } from "../../shared/large-backup"
 import type { PartitionedRestoreStore } from "../storage/directory-restore-store"
 import { directory9aIO, directoryAdmission } from "./directory-9a-io"
@@ -62,6 +62,12 @@ export class DirectoryRestoreService {
     })
     return { actor, io, applicationIO: directory9bIO(connection.token, actor, this.fetchImpl, () => this.protectedAppIds(tenant), () => this.settings?.get(tenant).entra) }
   }
+  private requireAccess(tenant: string, folder: string) {
+    const setting = this.settings?.get(tenant).entra
+    if (DIRECTORY_9B_FOLDERS.includes(folder)) return requireApplicationRestoreAccess(setting)
+    const area = folder === "Users" ? "usersAndDevices" : "groups"
+    if (!setting?.enabled || setting.access !== "restore" || setting.areas[area] !== true) fail(`Enable Entra ID and the ${folder} area with Backup and restore access before restoring.`)
+  }
   private load(tenant: string, id: string): DirectoryPage {
     if (!isGuid(id)) fail("Select a saved directory preview.")
     const raw = this.store.get(key(tenant, id))
@@ -73,6 +79,7 @@ export class DirectoryRestoreService {
     const folder = request.path.split("/")[1]
     if (DIRECTORY_9B_FOLDERS.includes(folder ?? "")) return this.prepareApplications(tenant, request, options, read)
     if (!["Users", "Groups"].includes(folder ?? "") || request.origin !== "restore") fail("Directory restore requires an owned same-tenant backup.")
+    this.requireAccess(tenant, folder!)
     const snapshot = request.snapshot, sourceId = snapshot.id
     if (!isGuid(sourceId)) fail("The directory source ID is missing.")
     const { actor, io } = await this.context(tenant)
@@ -223,7 +230,7 @@ export class DirectoryRestoreService {
     return this.view(page)
   }
   private view(page: DirectoryPage) {
-    return { runId: page.run.id, fingerprint: restoreFingerprint({ source: page.run.source!, rows: page.rows as unknown as Item["rows"], options: page.options as unknown as Item }), rows: page.rows, more: page.more, options: page.options }
+    return { canDiscard: !directoryObjectState(this.store, page.run.tenant, page.run.id).discarded() && !this.history(page).some(run => run.entries.some(entry => entry.state === "uncertain")), runId: page.run.id, fingerprint: restoreFingerprint({ source: page.run.source!, rows: page.rows as unknown as Item["rows"], options: page.options as unknown as Item }), rows: page.rows, more: page.more, options: page.options }
   }
   async resume(tenant: string, request: IdentityRestoreRequest) {
     const { actor } = await this.context(tenant), page = this.load(tenant, request.runId!)
@@ -233,45 +240,92 @@ export class DirectoryRestoreService {
   async execute(tenant: string, request: IdentityRestoreRequest, fingerprint: string, approvals: Record<string, string[]>) {
     const page = this.load(tenant, request.runId!)
     if (request.origin !== "restore" || page.run.origin !== request.origin || page.run.source?.path !== request.path || page.run.source.fingerprint !== restoreFingerprint(request.snapshot) || this.view(page).fingerprint !== fingerprint) fail("The backup or preview changed. Preview this object again.")
-    const context = await this.context(tenant, retryAt => {
-      // A refused actor lookup cannot settle an earlier dispatch. Keep its lock,
-      // but let every later reviewed plan inherit the tenant/object deadline.
-      const objects = directoryObjectState(this.store, tenant, `restore.directory.${encodeURIComponent(tenant)}.${encodeURIComponent(page.run.id)}.batch.0.`)
-      for (const entry of page.run.entries) objects.recordThrottle(entry.step, retryAt)
-    }), actor = context.actor
-    const io = DIRECTORY_9B_FOLDERS.includes(request.path.split("/")[1]!) ? context.applicationIO : context.io
-    if (actor.userId !== page.run.actor.userId || actor.clientId !== page.run.actor.clientId) fail("Resume with the admin and connection that reviewed this page.")
-    const selection = page.rows.filter(row => !row.review.blocker && row.review.approvals.every(kind => approvals[row.key]?.includes(kind))).map(row => row.key)
-    if (!selection.length || (page.selection && JSON.stringify(page.selection) !== JSON.stringify(selection))) fail("Approve each selected row separately. A resumed page must keep its original selection.")
-    page.selection = selection; this.save(page)
-    const entries = page.run.entries.filter(entry => selection.includes(entry.step.key))
-    for (const entry of entries) for (const kind of page.rows.find(row => row.key === entry.step.key)!.review.approvals) approveDirectory(entry.step, page.run, kind)
     const controller = new AbortController(), runningKey = key(tenant, page.run.id)
     if (this.running.has(runningKey)) fail("This directory page is already running.")
     this.running.set(runningKey, controller)
     try {
+      const context = await this.context(tenant, retryAt => {
+        // A refused actor lookup cannot settle an earlier dispatch. Keep its lock,
+        // but let every later reviewed plan inherit the tenant/object deadline.
+        const objects = directoryObjectState(this.store, tenant, page.run.id)
+        for (const entry of page.run.entries) objects.recordThrottle(entry.step, retryAt)
+      }), actor = context.actor
+      const rawIO = DIRECTORY_9B_FOLDERS.includes(request.path.split("/")[1]!) ? context.applicationIO : context.io
+      const io = { ...rawIO, write: ((step, body, targetId, beforeSend, run, signal, onUnapplied) => rawIO.write(step, body, targetId, () => {
+        this.requireAccess(tenant, step.folder)
+        if (signal?.aborted) throw new RestoreWriteDeferredError("The directory write was cancelled before sending.")
+        beforeSend()
+      }, run, signal, onUnapplied)) as typeof rawIO.write }
+      if (actor.userId !== page.run.actor.userId || actor.clientId !== page.run.actor.clientId) fail("Resume with the admin and connection that reviewed this page.")
+      const selection = page.rows.filter(row => !row.review.blocker && row.review.approvals.every(kind => approvals[row.key]?.includes(kind))).map(row => row.key)
+      if (!selection.length || (page.selection && JSON.stringify(page.selection) !== JSON.stringify(selection))) fail("Approve each selected row separately. A resumed page must keep its original selection.")
+      page.selection = selection; this.save(page)
+      const entries = page.run.entries.filter(entry => selection.includes(entry.step.key))
+      for (const entry of entries) for (const kind of page.rows.find(row => row.key === entry.step.key)!.review.approvals) approveDirectory(entry.step, page.run, kind)
       const { entries: _entries, mappings: _mappings, ...identity } = page.run
       const result = await executeDirectoryBatches(this.store, { ...identity, actor }, { fingerprint, page: async (cursor, limit) => {
         const start = Number(cursor ?? 0), end = Math.min(entries.length, start + limit)
         return { entries: entries.slice(start, end), next: end < entries.length ? String(end) : null }
       } }, io, controller.signal)
-      const outcomes = [], warnings = new Set<string>(), replacedReferences = []
-      for (let batch = 0; batch <= result.batches; batch++) {
-        const prefix = `restore.directory.${encodeURIComponent(tenant)}.${encodeURIComponent(page.run.id)}.batch.${batch}.`
-        const journal = new GuardedRunJournal({ get: name => this.store.get(prefix + name), set: () => fail("History is read-only."), delete: () => fail("History is read-only.") })
-        const run = journal.load(tenant, page.run.id)
-        if (run) {
-          replacedReferences.push(...(run.replacedReferences ?? []))
-          if (run.referenceWarning) warnings.add(run.referenceWarning)
-          outcomes.push(...run.entries.map(entry => ({ key: entry.step.key, state: entry.state, reason: entry.reason, targetId: entry.targetId })))
+      return this.results(page, result)
+
+    } finally { this.running.delete(runningKey) }
+  }
+  private history(page: DirectoryPage) {
+    const prefix = directoryPagePrefix(page.run.tenant, page.run.id)
+    const cursor = JSON.parse(this.store.get(prefix + "cursor") ?? '{"batch":0}')
+    const runs: GuardedRun[] = []
+    for (let batch = 0; batch <= cursor.batch; batch++) {
+      const journal = new GuardedRunJournal({ get: name => this.store.get(prefix + `batch.${batch}.` + name), set: () => fail("History is read-only."), delete: () => fail("History is read-only.") })
+      const run = journal.load(page.run.tenant, page.run.id)
+      if (run) runs.push(run)
+    }
+    return runs
+  }
+  private results(page: DirectoryPage, result: { status: "complete" | "partial"; batches: number; failed: number }) {
+    const runs = this.history(page)
+    return { ...result, canDiscard: !runs.some(run => run.entries.some(entry => entry.state === "uncertain")) && !directoryObjectState(this.store, page.run.tenant, page.run.id).discarded(),
+      outcomes: runs.flatMap(run => run.entries.map(entry => ({ key: entry.step.key, state: entry.state, reason: entry.reason, targetId: entry.targetId, retryAt: entry.retryAt }))),
+      replacedReferences: runs.flatMap(run => run.replacedReferences ?? []), warnings: [...new Set(runs.flatMap(run => run.referenceWarning ? [run.referenceWarning] : []))] }
+  }
+  /** Saved-page actions trust only durable identity and journal data, never renderer snapshots. */
+  async saved(tenant: string, id: string, action: "reconcile" | "discard") {
+    const page = this.load(tenant, id), runningKey = key(tenant, id)
+    if (this.running.has(runningKey)) fail("This directory page is already running.")
+    const controller = new AbortController()
+    this.running.set(runningKey, controller)
+    try {
+      const context = await this.context(tenant)
+      if (context.actor.userId !== page.run.actor.userId || context.actor.clientId !== page.run.actor.clientId) fail("Use the admin and connection that reviewed this page.")
+      const state = directoryObjectState(this.store, tenant, id)
+      if (action === "discard") {
+        if (this.history(page).some(run => run.entries.some(entry => entry.state === "uncertain"))) fail("Confirm the uncertain result before discarding this saved restore.")
+        for (const { step } of page.run.entries) {
+          directoryMappedId(this.store, tenant, step.folder, step.sourceId)
+          const retryAt = JSON.parse(this.store.get(`restore.directory.object.${encodeURIComponent(tenant.toLowerCase())}.${step.folder}.${step.sourceId.toLowerCase()}`) ?? "{}").retryAt
+          if (typeof retryAt === "number") state.recordThrottle(step, retryAt)
         }
+        state.recoverMappings(); state.release(true)
+        return { discarded: true, canDiscard: false }
       }
-      return { ...result, outcomes, replacedReferences, warnings: [...warnings] }
+      const entries = page.run.entries.filter(entry => page.selection?.includes(entry.step.key))
+      if (!entries.length) fail("This saved page has no executed selection to reconcile.")
+      // Recover the approved input from the immutable batch plans. No backup is needed.
+      const prefix = directoryPagePrefix(tenant, id)
+      const plan = JSON.parse(this.store.get(prefix + "batch.0.plan") ?? "null")
+      if (!plan) fail("This saved page has no journal to reconcile.")
+      const { entries: _entries, mappings: _mappings, ...identity } = page.run
+      const result = await executeDirectoryBatches(this.store, { ...identity, actor: context.actor }, { fingerprint: this.view(page).fingerprint, page: async (cursor, limit) => {
+        const start = Number(cursor ?? 0), end = Math.min(entries.length, start + limit)
+        return { entries: entries.slice(start, end), next: end < entries.length ? String(end) : null }
+      } }, DIRECTORY_9B_FOLDERS.includes(entries[0]!.step.folder) ? context.applicationIO : context.io, controller.signal, 20, true)
+      return { ...this.view(page), ...this.results(page, result) }
     } finally { this.running.delete(runningKey) }
   }
   async cancel(tenant: string, id: string) {
-    await this.context(tenant); this.load(tenant, id)
-    this.running.get(key(tenant, id))?.abort()
-    return { cancelled: true }
+    this.load(tenant, id)
+    const controller = this.running.get(key(tenant, id))
+    controller?.abort()
+    return { cancelled: !!controller?.signal.aborted }
   }
 }

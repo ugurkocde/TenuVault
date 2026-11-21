@@ -325,7 +325,7 @@ it("cancels a throttled write promptly and resumes its definitely unapplied atte
   let result: Awaited<typeof pending>
   try { result = await Promise.race([pending, new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Cancellation did not interrupt backoff")), 100))]) }
   finally { release(); await pending }
-  expect(env.attempts()).toBe(1); expect(result.run.entries[0]!.state).toBe("captured")
+  expect(env.attempts()).toBe(1); expect(result.run.entries[0]!.state).toBe("deferred")
   expect((await executeGuardedRun(journal, run, directory9aIO(token(), actor, refs, env.fetcher))).status).toBe("complete")
   expect(env.attempts()).toBe(2); expect(env.applied()).toBe(1)
 })
@@ -406,7 +406,7 @@ it.each(["Users", "Groups"] as const)("records a confirmed %s PATCH throttle as 
   const safety = vi.fn(refs), store = storage(), journal = new GuardedRunJournal(store), waits: number[] = []
   const io = directory9aIO(token(), actor, safety, fetcher, undefined, async ms => {
     waits.push(ms)
-    expect(journal.load(actor.tenantId, "run")!.entries[0]).toMatchObject({ state: "captured", retryAt: expect.any(Number) })
+    expect(journal.load(actor.tenantId, "run")!.entries[0]).toMatchObject({ state: "deferred", retryAt: expect.any(Number) })
     expect(attempts).toBe(1)
   })
   step.preview = restoreFingerprint(await io.read(step))

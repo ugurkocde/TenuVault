@@ -1,12 +1,33 @@
 import type { PartitionedRestoreStore } from "../storage/directory-restore-store"
 import type { KeyValueStore } from "../storage/secure-store"
 import { GuardedRunJournal, executeGuardedRun, restoreFingerprint, type GuardedRun, type GuardedIO } from "./guarded-run"
-import { directoryObjectState } from "./directory-object-state"
+import { directoryMappingKey, directoryPagePrefix, directoryObjectState } from "./directory-object-state"
 import { RestoreSafetyError } from "../../shared/intune/restore-guards"
 import type { Item } from "../../shared/intune/registry"
 
-const mappingKey = (tenant: string, folder: string, sourceId: string) => `restore.directory.mapping.${encodeURIComponent(tenant.toLowerCase())}.objectId.${folder}.${sourceId.toLowerCase()}`
-export const directoryMappedId = (store: KeyValueStore, tenant: string, folder: string, sourceId: string): string | undefined => store.get(mappingKey(tenant, folder, sourceId)) ?? undefined
+export const directoryMappedId = (store: KeyValueStore, tenant: string, folder: string, sourceId: string): string | undefined => {
+  // Adopt verified older ownership without reviving automatic supersession.
+  const oldKey = `restore.directory.object.${encodeURIComponent(tenant.toLowerCase())}.${folder}.${sourceId.toLowerCase()}`
+  const old = JSON.parse(store.get(oldKey) ?? "{}")
+  const unanswered = store.get(`restore.directory.unanswered.${encodeURIComponent(tenant.toLowerCase())}.${folder}.${sourceId.toLowerCase()}`)
+  const legacy = unanswered ?? old.owner
+  if (legacy) {
+    const prefix = `restore.directory.${encodeURIComponent(tenant)}.`
+    const page = legacy.startsWith(prefix) ? legacy.slice(prefix.length).split(".batch.")[0] : undefined
+    if (!page) throw new RestoreSafetyError("The earlier directory lock could not be verified.")
+    const journal = new GuardedRunJournal({ get: name => store.get(legacy + name), set: () => { throw new Error("Read-only history") }, delete: () => { throw new Error("Read-only history") } })
+    const entries = journal.load(tenant, decodeURIComponent(page))?.entries.filter(entry => entry.step.folder === folder && entry.step.sourceId.toLowerCase() === sourceId.toLowerCase())
+    if (unanswered && !entries?.length) throw new RestoreSafetyError("The earlier directory lock has no verifiable journal.")
+    const coordinator = directoryObjectState(store, tenant, decodeURIComponent(page))
+    for (const entry of entries ?? []) {
+      if (unanswered || ["pending", "captured", "deferred", "uncertain"].includes(entry.state)) coordinator.prepare(entry.step, legacy)
+      if (typeof old.retryAt === "number") coordinator.recordThrottle(entry.step, old.retryAt)
+    }
+    if (entries?.length) store.delete(oldKey)
+  }
+  directoryObjectState(store, tenant, "").recoverMappings()
+  return store.get(directoryMappingKey(tenant, folder, sourceId)) ?? undefined
+}
 
 export interface DirectoryBatchSource {
   /** Stable immutable backup/index fingerprint. A cursor resumes this exact source. */
@@ -14,10 +35,13 @@ export interface DirectoryBatchSource {
   page: (cursor: string | null, limit: number) => Promise<{ entries: GuardedRun["entries"]; next: string | null }>
 }
 /** Each batch has its own durable 8a journal partition. Neither previews nor journal saves grow with the directory. */
-export async function executeDirectoryBatches(store: PartitionedRestoreStore, identity: Omit<GuardedRun, "entries" | "mappings">, source: DirectoryBatchSource, io: GuardedIO, signal?: AbortSignal, limit = 20): Promise<{ status: "complete" | "partial"; batches: number; failed: number }> {
+export async function executeDirectoryBatches(store: PartitionedRestoreStore, identity: Omit<GuardedRun, "entries" | "mappings">, source: DirectoryBatchSource, io: GuardedIO, signal?: AbortSignal, limit = 20, reconcileOnly = false): Promise<{ status: "complete" | "partial"; batches: number; failed: number }> {
   if (store.partitioned !== true) throw new RestoreSafetyError("Directory restores require partitioned durable storage, not the whole app-state store.")
   if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new RestoreSafetyError("The directory batch budget must be 1 to 100 steps.")
-  const prefix = `restore.directory.${encodeURIComponent(identity.tenant)}.${encodeURIComponent(identity.id)}.`
+  const prefix = directoryPagePrefix(identity.tenant, identity.id)
+  const objectState = directoryObjectState(store, identity.tenant, identity.id)
+  objectState.assertActive()
+  objectState.recoverMappings()
   const binding = restoreFingerprint({ ...identity, actor: { ...identity.actor, recoveryAccountIds: [] }, sourceFingerprint: source.fingerprint } as unknown as Item)
   const saved = store.get(prefix + "cursor")
   const state: { binding: string; cursor: string | null; batch: number; done: boolean; failed: number; warning?: boolean } = saved ? JSON.parse(saved) : { binding, cursor: null, batch: 0, done: false, failed: 0 }
@@ -25,6 +49,7 @@ export async function executeDirectoryBatches(store: PartitionedRestoreStore, id
   const save = () => store.set(prefix + "cursor", JSON.stringify(state))
   save()
   while (!state.done && !signal?.aborted) {
+    objectState.assertActive()
     const batchKey = prefix + `batch.${state.batch}.`
     const partition: KeyValueStore = { get: key => store.get(batchKey + key), set: (key, value) => store.set(batchKey + key, value), delete: key => store.delete(batchKey + key) }
     const journal = new GuardedRunJournal(partition)
@@ -38,24 +63,22 @@ export async function executeDirectoryBatches(store: PartitionedRestoreStore, id
       const mapped = directoryMappedId(store, identity.tenant, step.folder, step.sourceId)
       if (mapped && !run.mappings.some(mapping => mapping.folder === step.folder && mapping.source === step.sourceId)) run.mappings.push({ kind: "objectId", folder: step.folder, source: step.sourceId, target: mapped })
     }
-    const objectState = directoryObjectState(store, identity.tenant, batchKey)
-    const guardedIO: GuardedIO = { ...io, prepareStep: objectState.prepare, defer: objectState.defer,
+    const guardedIO: GuardedIO = { ...io, prepareStep: step => {
+      if (journal.load(identity.tenant, identity.id)?.entries.some(entry => entry.state === "uncertain" && (entry.targetId ?? entry.step.targetId ?? entry.step.sourceId).toLowerCase() === (step.targetId ?? step.sourceId).toLowerCase())) throw new RestoreSafetyError("This page has an unanswered write for this object. Confirm its result first.")
+      return objectState.prepare(step, batchKey)
+    }, defer: objectState.recordThrottle,
       write: (step, body, targetId, beforeSend, currentRun, writeSignal, onUnapplied) =>
         io.write(step, body, targetId, () => { objectState.beforeSend(step); beforeSend() }, currentRun, writeSignal, onUnapplied),
     }
-    const result = await executeGuardedRun(journal, run, guardedIO, signal)
-    // Publish confirmed mappings before releasing conflict locks, including cancelled batches.
-    for (const mapping of result.run.mappings) {
-      const key = mappingKey(identity.tenant, mapping.folder, mapping.source)
-      const previous = store.get(key)
-      if (previous && previous !== mapping.target) throw new RestoreSafetyError("An ambiguous directory mapping was refused.")
-      store.set(key, mapping.target)
-    }
-    for (const entry of result.run.entries) objectState.settle(entry.step, result.run.entries.some(other => other.step.folder === entry.step.folder && other.step.sourceId.toLowerCase() === entry.step.sourceId.toLowerCase() && other.state === "uncertain"))
-    if (result.run.entries.some(entry => ["pending", "captured", "uncertain"].includes(entry.state))) return { status: "partial", batches: state.batch, failed: state.failed }
+    const result = await executeGuardedRun(journal, run, guardedIO, signal, reconcileOnly)
+    objectState.recoverMappings()
+    // A confirmed create is resolved once both identities and its mapping are durable.
+    objectState.releaseCreated(result.run.entries.filter(entry => entry.step.operation === "create" && entry.state === "applied").flatMap(entry => [entry.step.sourceId, entry.targetId!]))
+    if (result.run.entries.some(entry => ["pending", "captured", "deferred", "uncertain"].includes(entry.state))) return { status: "partial", batches: state.batch, failed: state.failed }
     state.warning ||= !!result.run.referenceWarning
     state.failed += result.run.entries.filter(entry => entry.state !== "applied").length
     state.cursor = page.next; state.batch++; state.done = page.next === null; save()
   }
+  if (state.done) objectState.release()
   return { status: state.done && state.failed === 0 && !state.warning ? "complete" : "partial", batches: state.batch, failed: state.failed }
 }
