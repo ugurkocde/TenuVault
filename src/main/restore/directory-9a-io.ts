@@ -76,11 +76,11 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
         continue
       }
       if (method === "GET" && response.status === 404) return directoryReadAbsent(response, url)
-      if (method !== "GET") await directoryWriteAuthorization(response)
+      await directoryWriteAuthorization(response, method === "GET")
       if (method !== "GET" && response.status >= 400 && response.status < 500 && response.status !== 408) throw new RestoreWriteRefusedError(response.status)
       if (method === "GET" && (response.status === 408 || response.status >= 500)) throw new DirectoryReadDeferredError()
       if (!response.ok) throw new Error("Directory request was not confirmed. No response body is retained.")
-      if (method !== "GET" && (method !== "POST" || /^(?:users|groups)$|\/\$ref$/.test(url.pathname.replace(/^\/v1\.0\//, "")))) return directoryWriteResponse(response, method, url)
+      if (method !== "GET" && (method !== "POST" || /^(?:users|groups)$|\/\$ref$/.test(url.pathname.replace(/^\/v1\.0\//, "")))) return directoryWriteResponse(response, method, url, body)
       if (method === "GET" && !/^application\/(?:[\w.+-]+\+)?json(?:\s*;|$)/i.test(response.headers.get("Content-Type") ?? "")) throw new DirectoryReadDeferredError()
       if (response.status === 204) {
         if (method === "GET") throw new DirectoryReadDeferredError()
@@ -143,7 +143,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
     const value = step.directory?.action === "invite" ? body.invitedUserEmailAddress : body.userPrincipalName
     if (typeof value !== "string") throw new RestoreSafetyError("A unique user create key is required.")
     const matches: Item[] = []
-    for await (const user of list(`users?$select=id,displayName,userPrincipalName,mailNickname,accountEnabled&$filter=${encodeURIComponent(`${field} eq '${value.replaceAll("'", "''")}'`)}`)) { matches.push(user); if (matches.length > 1) break }
+    for await (const user of list(`users?$select=id,displayName,userPrincipalName,mailNickname,accountEnabled,userType&$filter=${encodeURIComponent(`${field} eq '${value.replaceAll("'", "''")}'`)}`)) { matches.push(user); if (matches.length > 1) break }
     return matches
   }
   const resolvePrincipal = async (id: string): Promise<Item | null> => {

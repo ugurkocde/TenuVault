@@ -477,19 +477,20 @@ it("refuses an uppercase Microsoft owner tenant on an application at preview and
   await expect(env.io.write(candidate, candidate.desired, candidate.targetId, () => {}, run)).rejects.toThrow("Microsoft first-party")
   expect(env.writes).toEqual([])
 })
-it.each(["microsoft", "microsoft-uppercase", "unresolved", "ambiguous", "missing-owner", "wrong-type", "wrong-appId"])("refuses an Application with %s identity at preview and final send", async variant => {
+it.each(["microsoft", "microsoft-uppercase", "failed lookup", "ambiguous", "missing-owner", "wrong-type", "wrong-appId"])("refuses an Application with %s identity at preview and final send", async variant => {
   const env = world(), candidate = await applicationObjectStep("Applications", { ...app, displayName: "Saved" }, env.io, async () => app)
   await env.io.preview(candidate)
   const run = runFor(candidate), original = env.fetcher.getMockImplementation()!
   env.fetcher.mockImplementation((url, init) => {
     if (new URL(String(url)).pathname === "/v1.0/servicePrincipals") {
+      if (variant === "failed lookup") return Promise.resolve(Response.json({ error: { code: "Authorization_RequestDenied" } }, { status: 403 }))
       const principal = { ...app }
       if (variant === "microsoft") principal.appOwnerOrganizationId = MICROSOFT_ORGANIZATION_ID
       if (variant === "microsoft-uppercase") principal.appOwnerOrganizationId = MICROSOFT_ORGANIZATION_ID.toUpperCase()
       if (variant === "missing-owner") delete (principal as Item).appOwnerOrganizationId
       if (variant === "wrong-type") principal.servicePrincipalType = "ManagedIdentity"
       if (variant === "wrong-appId") principal.appId = id(88)
-      return Promise.resolve(Response.json({ value: variant === "unresolved" ? [] : variant === "ambiguous" ? [principal, principal] : [principal] }))
+      return Promise.resolve(Response.json({ value: variant === "ambiguous" ? [principal, principal] : [principal] }))
     }
     return original(url, init)
   })
@@ -924,4 +925,41 @@ it("defers a repeated application nextLink before fetching it again", async () =
   })
   await expect(async () => { for await (const _item of env.io.list("servicePrincipals")) {} }).rejects.toThrow("temporary Microsoft Graph read failure")
   expect(reads).toBe(2); expect(env.writes).toEqual([])
+})
+
+it("previews and restores a home-tenant application name without a service principal", async () => {
+  const env = world(), original = env.fetcher.getMockImplementation()!, data = new Map<string, string>()
+  const store = { partitioned: true as const, get: (key: string) => data.get(key) ?? null, set: (key: string, value: string) => { data.set(key, value) }, delete: (key: string) => { data.delete(key) } }
+  const application = { id: app.id, appId: app.appId, displayName: "API", description: null, notes: null }
+  env.objects.set(`applications/${app.id}`, application)
+  env.fetcher.mockImplementation((input, init) => new URL(String(input)).pathname === "/v1.0/servicePrincipals" && new URL(String(input)).searchParams.get("$filter")?.includes(app.appId) ? Promise.resolve(Response.json({ value: [] })) : original(input, init))
+  const candidate = await applicationObjectStep("Applications", { ...application, displayName: "Saved" }, env.io, async () => application)
+  expect(await env.io.preview(candidate)).toMatchObject({ changes: [{ property: "displayName", before: "API", after: "Saved" }] })
+  const run = runFor(candidate), journal = new GuardedRunJournal(store)
+  approveDirectory(candidate, run, "directory-item")
+  expect((await executeGuardedRun(journal, run, env.io)).run.entries[0]!.state).toBe("applied")
+  expect(application.displayName).toBe("Saved")
+  await executeGuardedRun(journal, run, env.io)
+  expect(env.writes).toEqual([`applications/${app.id}`])
+})
+it.each(["desktop appId", "backup reader appId", "marked notes", "marked name"])("protects an application without a service principal by %s", async marker => {
+  const env = world(), original = env.fetcher.getMockImplementation()!
+  const application = { id: app.id, appId: marker === "desktop appId" ? TENUVAULT_DESKTOP_APP_ID : marker === "backup reader appId" ? id(99) : app.appId, displayName: marker === "marked name" ? "TenuVault Backup Reader" : "API", description: null, notes: marker === "marked notes" ? "TenuVault Backup Reader: owned registration" : null }
+  env.objects.set(`applications/${app.id}`, application)
+  env.fetcher.mockImplementation((input, init) => new URL(String(input)).pathname === "/v1.0/servicePrincipals" ? Promise.resolve(Response.json({ value: [] })) : original(input, init))
+  const io = directory9bIO(token, actor, env.fetcher, () => [id(99)], () => env.settings.get(actor.tenantId).entra)
+  await expect(io.preview(step("update"))).rejects.toThrow("protected")
+  expect(env.writes).toEqual([])
+})
+it.each(["ambiguous", "failed"])("defers %s optional service principal evidence instead of treating it as absent", async failure => {
+  const env = persisted(), candidate = await applicationObjectStep("Applications", { ...app, displayName: "Saved" }, env.io, async () => app)
+  await env.io.preview(candidate)
+  const run = runFor(candidate), journal = new GuardedRunJournal(env.store), original = env.fetcher.getMockImplementation()!
+  approveDirectory(candidate, run, "directory-item")
+  env.fetcher.mockImplementation((input, init) => new URL(String(input)).pathname === "/v1.0/servicePrincipals" ? Promise.resolve(failure === "ambiguous" ? Response.json({ value: [app, app] }) : Response.json({ error: { code: "Authorization_RequestDenied" } }, { status: 403 })) : original(input, init))
+  expect((await executeGuardedRun(journal, run, env.io)).run.entries[0]!.state).toBe("deferred")
+  expect(env.writes).toEqual([])
+  env.fetcher.mockImplementation(original)
+  expect((await executeGuardedRun(journal, run, env.io)).run.entries[0]!.state).toBe("applied")
+  expect(env.writes).toEqual([`applications/${app.id}`])
 })

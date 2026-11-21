@@ -39,14 +39,15 @@ function world(folder: typeof folders[number], wrapped = false) {
     if (path.startsWith("identity/conditionalAccess/") || path.endsWith("/memberOf")) return Response.json({ value: [] })
     return new Response(null, { status: 404 })
   })
-  const service = () => new DirectoryRestoreService(store, new RecoveryAccounts(store), async () => ({ token: token(), tenantId: tenant, clientId, userId }), async () => ({ tenantId: tenant, clientId, userId }), wrapped ? withNetworkErrors(rejectProxyAuthResponses(graph)) : graph, () => [], settings)
+  const connection = vi.fn(async () => ({ token: token(), tenantId: tenant, clientId, userId }))
+  const service = () => new DirectoryRestoreService(store, new RecoveryAccounts(store), connection, async () => ({ tenantId: tenant, clientId, userId }), wrapped ? withNetworkErrors(rejectProxyAuthResponses(graph)) : graph, () => [], settings)
   const request = (backup = "backup", value = "Saved") => ({ path: `${backup}/${folder}/${targetId}.json`, origin: "restore" as const, snapshot: { ...live, [field]: value } })
   const prepare = async (requestValue = request()) => service().prepare(tenant, requestValue, options, async () => requestValue.snapshot)
   type Page = Awaited<ReturnType<typeof prepare>>
   const execute = (page: Page, requestValue = request()) => service().execute(tenant, { ...requestValue, runId: page.runId }, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])))
   const locks = () => Object.keys(JSON.parse(data.get(`restore.directory.coordinator.${tenant}`) ?? '{"locks":{}}').locks)
   const entry = (page: Page) => JSON.parse([...data.entries()].find(([key]) => key.includes(`${page.runId}.batch.0.restore.guarded.`))![1]).runs[page.runId].entries[0]
-  return { setScopes: (value: string) => { scopes = value }, settings, data, store, graph, live, writes, targetPath, field, service, request, prepare, execute, locks, entry }
+  return { connection, setScopes: (value: string) => { scopes = value }, settings, data, store, graph, live, writes, targetPath, field, service, request, prepare, execute, locks, entry }
 }
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals() })
 
@@ -648,7 +649,7 @@ it.each(folders)("resumes a known unapplied %s Graph role denial with fresh perm
     if (init?.method === "PATCH") { sends++; if (denied) return Promise.resolve(Response.json({ error: { code: "Authorization_RequestDenied", message: "Never retain this Graph body" } }, { status: 403 })) }
     return original(input, init)
   })
-  expect(await env.execute(page, request)).toMatchObject({ status: "partial", failed: 0, outcomes: [{ state: "deferred", reason: expect.stringContaining("lacks the Entra role") }] })
+  expect(await env.execute(page, request)).toMatchObject({ status: "partial", failed: 0, outcomes: [{ state: "deferred", reason: "Your Entra role does not allow this change. Activate the role, then resume." }] })
   expect([...env.data.values()].join()).not.toContain("Never retain this Graph body")
   expect(env.entry(page).acknowledged).toBeUndefined()
   env.setScopes("User.Read.All Group.Read.All Application.Read.All Policy.Read.All")
@@ -670,4 +671,42 @@ it("finishes a user name preview and restore when Conditional Access targets onl
   expect(page.rows[0]!.review.blocker).toBeUndefined()
   expect(await env.execute(page, request)).toMatchObject({ status: "complete", outcomes: [{ state: "applied" }] })
   expect(env.writes).toEqual([{ displayName: "Saved" }])
+})
+
+it.each(folders.flatMap(folder => ["initial", "references", "final", "write"].map(phase => ({ folder, phase }))))("resumes $folder after a Graph authorization failure at $phase with a fresh connection and all checks", async ({ folder, phase }) => {
+  const env = world(folder), request = env.request(), page = await env.prepare(request), original = env.graph.getMockImplementation()!
+  let reads = 0, denied = false, sends = 0
+  const denyAt = phase === "initial" ? 1 : phase === "references" ? (folder === "Applications" ? 3 : 2) : folder === "Applications" ? 5 : folder === "Groups" ? 5 : 4
+  env.graph.mockImplementation((input, init) => {
+    if (init?.method === "PATCH") {
+      sends++
+      if (phase === "write" && !denied) { denied = true; return Promise.resolve(Response.json({ error: { code: "InvalidAuthenticationToken", message: "Never retain authorization body" } }, { status: 401 })) }
+    }
+    if (phase !== "write" && init?.method === "GET" && new URL(String(input)).pathname === `/v1.0/${env.targetPath}` && ++reads === denyAt) {
+      denied = true; return Promise.resolve(Response.json({ error: { code: "Authorization_RequestDenied", message: "Never retain authorization body" } }, { status: 403 }))
+    }
+    return original(input, init)
+  })
+  expect(await env.execute(page, request)).toMatchObject({ status: "partial", failed: 0, outcomes: [{ state: "deferred" }] })
+  expect(denied).toBe(true); expect(sends).toBe(phase === "write" ? 1 : 0)
+  expect(env.writes).toEqual([]); expect(env.locks()).toHaveLength(1)
+  expect([...env.data.values()].join()).not.toContain("Never retain authorization body")
+  const connections = env.connection.mock.calls.length
+  env.setScopes("Application.Read.All User.Read.All Group.Read.All Policy.Read.All")
+  expect(await env.execute(page, request)).toMatchObject({ failed: 0, outcomes: [{ state: "deferred" }] })
+  expect(env.connection.mock.calls.length).toBeGreaterThan(connections)
+  env.setScopes("Application.Read.All Application.ReadWrite.All User.ReadUpdate.All User.Read.All Group.ReadWrite.All Group.Read.All Policy.Read.All")
+  await expect(env.service().execute(tenant, { ...request, runId: page.runId }, page.fingerprint, {})).rejects.toThrow("Approve each selected row separately")
+  expect(env.writes).toEqual([])
+  expect(await env.execute(page, request)).toMatchObject({ status: "complete", outcomes: [{ state: "applied" }] })
+  await env.execute(page, request)
+  expect(env.writes).toEqual([{ [env.field]: "Saved" }]); expect(env.locks()).toEqual([])
+  expect(sends).toBe(phase === "write" ? 2 : 1)
+})
+it.each(folders)("keeps a non-authorization %s Graph 403 failed with the sanitized refusal", async folder => {
+  const env = world(folder), request = env.request(), page = await env.prepare(request), original = env.graph.getMockImplementation()!
+  env.graph.mockImplementation((input, init) => init?.method === "PATCH" ? Promise.resolve(Response.json({ error: { code: "Request_BadRequest", message: "Never retain refusal body" } }, { status: 403 })) : original(input, init))
+  expect(await env.execute(page, request)).toMatchObject({ failed: 1, outcomes: [{ state: "failed", reason: "Microsoft Graph refused this write (403). Review restore access in Services in Settings and preview this item again." }] })
+  expect([...env.data.values()].join()).not.toContain("Never retain refusal body")
+  expect(env.writes).toEqual([])
 })

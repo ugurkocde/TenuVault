@@ -7,7 +7,10 @@ export class DirectoryReadDeferredError extends RestoreWriteDeferredError {
 
 /** The signed-in admin can resume after activating the required Entra role. */
 export class DirectoryRoleDeferredError extends RestoreWriteDeferredError {
-  constructor() { super("The signed-in admin lacks the Entra role for this change. Activate the required role, then resume to repeat permission and approval checks.") }
+  constructor() { super("Your Entra role does not allow this change. Activate the role, then resume.") }
+}
+export class DirectoryAuthenticationDeferredError extends RestoreWriteDeferredError {
+  constructor() { super("Microsoft Graph rejected the connection's authentication. Resume with a fresh connection to repeat permission and approval checks.") }
 }
 
 export class DirectoryThrottledError extends RestoreWriteDeferredError {
@@ -18,7 +21,7 @@ export async function retryDirectoryWrite<T>(attemptWrite: () => Promise<T>, onU
   for (let attempt = 0; ; attempt++) {
     try { return await attemptWrite() }
     catch (error) {
-      if (error instanceof DirectoryRoleDeferredError) {
+      if (error instanceof DirectoryRoleDeferredError || error instanceof DirectoryAuthenticationDeferredError) {
         onUnapplied?.(Date.now())
         throw error
       }

@@ -1,6 +1,7 @@
 import { restoreTenantKey } from "./restore-tenant-key"
 import { isProxyAuthResponse } from "../api/network-error"
 import { DirectoryRetryPersistenceError, persistDirectoryRetry, waitForDirectoryRetry } from "./directory-retry"
+import { directoryCreateMatches } from "./directory-write-response"
 import { requireConfigurationApproval } from "./entra-configuration"
 import { isGraphId, isGuid } from "../../shared/security"
 import { operationProtections, restoreMatrixRow } from "../../shared/intune/restore-matrix"
@@ -180,6 +181,16 @@ export class GuardedRunJournal {
   }
 }
 const active = new Set<string>()
+const directoryCreate = (step: GuardedStep) => step.directory?.action === "create" && ["Users", "Groups"].includes(step.folder)
+function matchesSent(step: GuardedStep, value: Item, sent: Item): boolean {
+  const snapshot = writableSnapshot(value, Object.keys(sent)), approved = { ...sent }
+  if (directoryCreate(step)) {
+    if (!directoryCreateMatches(step.folder, value, sent)) return false
+    const key = step.folder === "Users" ? "userPrincipalName" : "mailNickname"
+    for (const item of [snapshot, approved]) if (typeof item[key] === "string") item[key] = item[key].trim().toLowerCase()
+  }
+  return restoreFingerprint(snapshot) === restoreFingerprint(approved)
+}
 
 /**
  * The only writer for new services. Later layers supply verified request builders. Production safety
@@ -233,8 +244,12 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
         if (entry.state === "uncertain") {
           // Neither absence nor repeated old values prove an unanswered write failed: Graph may be eventually consistent.
           // Only a matching read-back can settle it. Confirmed throttles never enter this path.
-          const matches = step.operation === "create" ? await io.findCreated(step, entry.sent!, signal) : [await io.read(step, entry.targetId, signal)].filter((item): item is Item => item !== null)
-          if (matches.length !== 1 || restoreFingerprint(writableSnapshot(matches[0]!, Object.keys(entry.sent!))) !== restoreFingerprint(entry.sent!)) {
+          let matches = step.operation === "create" && !(directoryCreate(step) && entry.targetId) ? await io.findCreated(step, entry.sent!, signal) : [await io.read(step, entry.targetId, signal)].filter((item): item is Item => item !== null)
+          if (directoryCreate(step) && !entry.targetId && matches.length === 1 && isGuid(matches[0]!.id)) {
+            entry.targetId = matches[0]!.id; journal.save(run)
+            matches = [await io.read(step, entry.targetId, signal)].filter((item): item is Item => item !== null)
+          }
+          if (matches.length !== 1 || !matchesSent(step, matches[0]!, entry.sent!) || directoryCreate(step) && (!isGuid(entry.targetId) || String(matches[0]!.id).toLowerCase() !== entry.targetId.toLowerCase())) {
             entry.reason = "The unanswered write could not be uniquely reconciled. Review this item before continuing."
             journal.save(run); continue
           }
@@ -337,6 +352,13 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
         const id = result.id ?? entry.targetId
         if (!isGraphId(id) || (step.directory && ["Users", "Groups", "Applications"].includes(step.folder) && !isGuid(id))) { entry.reason = "The write did not return an object ID. It must be read back before continuing."; journal.save(run); continue }
         entry.targetId = id
+        if (directoryCreate(step)) {
+          entry.reason = "The created object must be verified by its returned ID before publishing its mapping."
+          journal.save(run)
+          // Finish confirmation of the dispatched create even if cancellation stopped later writes.
+          const created = await io.read(step, id)
+          if (!created || String(created.id).toLowerCase() !== id.toLowerCase() || !matchesSent(step, created, entry.sent!)) continue
+        }
         rememberMapping(run.mappings, { kind: "objectId", folder: step.folder, source: step.sourceId, target: id })
         entry.state = "applied"; delete entry.reason
         if (step.directory && (typeof step.desired.present === "boolean" || ["update", "manager"].includes(step.directory.action))) { entry.acknowledged = true; entry.acknowledgedAt = (io.now ?? Date.now)() }

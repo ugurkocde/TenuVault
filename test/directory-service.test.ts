@@ -608,8 +608,12 @@ it.each([1, Infinity])("never repeats a confirmed group create after %s applied-
     expect(await execute(page)).toMatchObject({ outcomes: [{ state: "applied", targetId: id(900) }] })
   } else {
     expect(await execute(fresh)).toMatchObject({ outcomes: [{ state: "blocked", reason: expect.stringContaining("owns this object") }] })
+    const graph = env.fetcher.getMockImplementation()!
+    env.fetcher.mockImplementation((input, init) => new URL(String(input)).pathname === `/v1.0/groups/${id(900)}` ? Promise.resolve(graphNotFound()) : graph(input, init))
     expect(await env.service().saved(tenant, page.runId, "reconcile")).toMatchObject({ outcomes: [{ state: "uncertain" }] })
     await expect(env.service().saved(tenant, page.runId, "discard")).rejects.toThrow("uncertain")
+    env.fetcher.mockImplementation(graph)
+    expect(await env.service().saved(tenant, page.runId, "reconcile")).toMatchObject({ outcomes: [{ state: "applied", targetId: id(900) }] })
   }
   expect(env.writes).toEqual(["POST groups"])
 })
@@ -1602,6 +1606,7 @@ it.each(["preview", "final validation"].flatMap(phase => [false, true].map(missi
     const path = new URL(String(input)).pathname
     if (path === "/v1.0/users" && init?.method === "POST") { created = true; env.writes.push("POST users"); throw new Error("Response lost after create") }
     if (path === "/v1.0/users") return Response.json({ value: confirmed ? [{ ...userRequest.snapshot, id: target }] : [] })
+    if (path === `/v1.0/users/${target}`) return Response.json({ ...unsetUserFields, ...userRequest.snapshot, id: target })
     if (path === `/v1.0/users/${source}`) return graphNotFound()
     return original(input, init)
   })
@@ -1846,6 +1851,7 @@ it.each(["execute", "saved confirmation"])("cancels uncertain user-create lookup
   env.fetcher.mockImplementation(async (input, init) => {
     const path = new URL(String(input)).pathname
     if (path === "/v1.0/users" && init?.method === "POST") { created = true; env.writes.push("POST users"); throw new Error("Create response lost") }
+    if (path === `/v1.0/users/${target}`) return Response.json({ ...unsetUserFields, ...request.snapshot, id: target })
     if (path === `/v1.0/users/${source}`) return graphNotFound()
     if (path === "/v1.0/users") {
       if (!confirming) return Response.json({ value: created ? [{ ...request.snapshot, id: target }] : [] })
@@ -1956,6 +1962,7 @@ it.each(["execute", "saved confirmation"])("defers uncertain user-create confirm
   env.fetcher.mockImplementation(async (input, init) => {
     const path = new URL(String(input)).pathname
     if (path === "/v1.0/users" && init?.method === "POST") { posts++; throw new Error("Create response lost") }
+    if (path === `/v1.0/users/${target}`) return Response.json({ ...unsetUserFields, ...request.snapshot, id: target })
     if (path === `/v1.0/users/${source}`) return graphNotFound()
     if (path === "/v1.0/users") {
       if (!confirming) return Response.json({ value: [] })
@@ -3048,4 +3055,53 @@ it.each([false, true])("requires read-back after an unexpected group member $ref
   if (removing) env.members.delete(id(100)); else env.members.add(id(100))
   expect(await env.service().saved(tenant, page.runId, "reconcile")).toMatchObject({ outcomes: [{ state: "applied" }] })
   expect(sends).toBe(1); expect(env.writes).toEqual([])
+})
+
+it("keeps a user create with a different response UPN uncertain without publishing a mapping", async () => {
+  const env = world(), original = env.fetcher.getMockImplementation()!, source = id(100), target = id(900)
+  const snapshot = { ...unsetUserFields, id: source, userType: "Member", displayName: "Saved user", userPrincipalName: "saved@example.test", mailNickname: "saved", accountEnabled: false }
+  const request = { origin: "restore" as const, path: `backup/Users/${source}.json`, snapshot }
+  let posts = 0
+  env.fetcher.mockImplementation((input, init) => {
+    const url = new URL(String(input))
+    if (url.pathname === "/v1.0/users" && init?.method === "POST") { posts++; return Promise.resolve(Response.json({ ...snapshot, id: target, userPrincipalName: "other@example.test" }, { status: 201 })) }
+    if (url.pathname === `/v1.0/users/${source}`) return Promise.resolve(graphNotFound())
+    if (url.pathname === "/v1.0/users") return Promise.resolve(Response.json({ value: [] }))
+    return original(input, init)
+  })
+  const page = await env.service().prepare(tenant, request, options, env.read)
+  const execute = () => env.service().execute(tenant, { ...request, runId: page.runId }, page.fingerprint, { [page.rows[0]!.key]: page.rows[0]!.review.approvals })
+  expect(await execute()).toMatchObject({ failed: 0, outcomes: [{ state: "uncertain" }] })
+  expect(directoryMappedId(env.store, tenant, "Users", source)).toBeUndefined()
+  expect(await execute()).toMatchObject({ outcomes: [{ state: "uncertain" }] })
+  expect(posts).toBe(1)
+  expect(directoryMappedId(env.store, tenant, "Users", source)).toBeUndefined()
+})
+it.each(["Users", "Groups"])("verifies the returned %s create ID before mapping and resumes only by keyed read", async folder => {
+  const env = world(0, true), original = env.fetcher.getMockImplementation()!, source = folder === "Groups" ? resource : id(100), target = id(900)
+  const snapshot = folder === "Groups" ? env.request.snapshot : { ...unsetUserFields, id: source, userType: "Member", displayName: "Saved user", userPrincipalName: "saved@example.test", mailNickname: "saved", accountEnabled: false }
+  const request = { origin: "restore" as const, path: `backup/${folder}/${source}.json`, snapshot }
+  const path = folder === "Groups" ? "groups" : "users"
+  let posts = 0, keyedReads = 0, healthy = false
+  env.fetcher.mockImplementation((input, init) => {
+    const url = new URL(String(input))
+    if (url.pathname === `/v1.0/${path}` && init?.method === "POST") { posts++; return Promise.resolve(Response.json({ ...snapshot, id: target }, { status: 201 })) }
+    if (url.pathname === `/v1.0/${path}/${source}`) return Promise.resolve(graphNotFound())
+    if (url.pathname === `/v1.0/${path}/${target}`) {
+      keyedReads++
+      expect(directoryMappedId(env.store, tenant, folder, source)).toBeUndefined()
+      return Promise.resolve(Response.json({ ...snapshot, id: target, ...(healthy ? {} : folder === "Groups" ? { mailNickname: "other" } : { userPrincipalName: "other@example.test" }) }))
+    }
+    if (url.pathname === "/v1.0/users") return Promise.resolve(Response.json({ value: [] }))
+    return original(input, init)
+  })
+  const page = await env.service().prepare(tenant, request, options, env.read)
+  const approvals = { [page.rows[0]!.key]: page.rows[0]!.review.approvals }
+  expect(await env.service().execute(tenant, { ...request, runId: page.runId }, page.fingerprint, approvals)).toMatchObject({ outcomes: [{ state: "uncertain", targetId: target }] })
+  expect(posts).toBe(1); expect(keyedReads).toBe(1)
+  expect(directoryMappedId(env.store, tenant, folder, source)).toBeUndefined()
+  healthy = true
+  expect(await env.service().saved(tenant, page.runId, "reconcile")).toMatchObject({ outcomes: [{ state: "applied", targetId: target }] })
+  expect(posts).toBe(1); expect(keyedReads).toBe(2)
+  expect(directoryMappedId(env.store, tenant, folder, source)).toBe(target)
 })

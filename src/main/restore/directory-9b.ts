@@ -26,7 +26,7 @@ export function restorableApp(item: Item, folder: string, requireOwner = false, 
   if ([TENUVAULT_DESKTOP_APP_ID, ...protectedAppIds].some(id => appIdentity(id) === appId)
     || typeof item.notes === "string" && /^(?:Used by the TenuVault desktop app|TenuVault Backup Reader:)/i.test(item.notes)
     || typeof item.displayName === "string" && /^TenuVault (?:Desktop|Backup Reader)$/i.test(item.displayName)) throw new RestoreSafetyError("TenuVault-owned app registrations are protected.")
-  if (folder === "Applications" && (ownerTenant === MICROSOFT_ORGANIZATION_ID || requireOwner && (!ownerTenant || item.servicePrincipalType !== "Application"))) throw new RestoreSafetyError("Microsoft first-party or unresolved app registrations are never restorable.")
+  if (folder === "Applications" && (ownerTenant === MICROSOFT_ORGANIZATION_ID || requireOwner && (!ownerTenant || item.servicePrincipalType !== undefined && item.servicePrincipalType !== "Application"))) throw new RestoreSafetyError("Microsoft first-party or unresolved app registrations are never restorable.")
   if (folder === "ServicePrincipals" && (ownerTenant === MICROSOFT_ORGANIZATION_ID || item.servicePrincipalType !== "Application" || !ownerTenant)) throw new RestoreSafetyError("Microsoft first-party or unresolved enterprise apps are never restorable.")
 }
 export function appPayload(folder: string, action: string, source: Item): Item {

@@ -182,7 +182,7 @@ it("journal and batch engine: processes 50,000 members and 2,000 users, persists
       if (writes === 23) controller.abort()
       return Response.json({ id: total === 2000 ? id : group.id })
     })
-    const io: GuardedIO = { token: token(), type: folder => typeForFolder(folder)!, replacedReferences: async () => [], read: async () => total === 2000 ? null : ({ id: group.id }), findCreated: async () => [], references: refs, write: async (_step, body, _target, before) => { before(); return (await fetcher("https://graph.microsoft.com/v1.0/$batch", { method: "POST", body: JSON.stringify(body) })).json() } }
+    const io: GuardedIO = { token: token(), type: folder => typeForFolder(folder)!, replacedReferences: async () => [], read: async (step, targetId) => total === 2000 ? targetId && applied.has(targetId) ? { ...step.desired, id: targetId, userType: "Member" } : null : ({ id: group.id }), findCreated: async () => [], references: refs, write: async (_step, body, _target, before) => { before(); return (await fetcher("https://graph.microsoft.com/v1.0/$batch", { method: "POST", body: JSON.stringify(body) })).json() } }
     const originalSet = store.set
     store.set = (key, value) => { largest = Math.max(largest, value.length); originalSet(key, value) }
     const identity = { ...runFor(stepFor("member")), entries: undefined, mappings: undefined }

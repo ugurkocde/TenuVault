@@ -32,7 +32,7 @@ export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typ
       throw error
     })
     if (response.status === 404 && method === "GET") return directoryReadAbsent(response, new URL(root + path))
-    if (method !== "GET") await directoryWriteAuthorization(response)
+    await directoryWriteAuthorization(response, method === "GET")
     if (!response.ok) {
       if (response.status === 429) {
         const error = new DirectoryThrottledError(response)
@@ -87,26 +87,35 @@ export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typ
     restorableApp(item, folder, false, protectedAppIds())
     if (expectedAppId && appIdentity(item.appId) !== appIdentity(expectedAppId)) throw new RestoreSafetyError("The saved application app ID does not match the live target.")
     if (folder !== "Applications" || deleted) return item
-    // appOwnerOrganizationId is documented on servicePrincipal, not application.
-    // Resolve the same appId and apply the established first-party check to its owner.
-    const principal = await resolveApp(appIdentity(item.appId), signal)
-    restorableApp(principal, "ServicePrincipals", true, protectedAppIds())
+    // A keyed /applications read establishes home-tenant ownership even when
+    // this registration has no service principal. Validate any principal found.
+    const principal = await lookupApp(appIdentity(item.appId), signal)
+    if (principal) {
+      restorableApp(principal, "ServicePrincipals", true, protectedAppIds())
+      if (appIdentity(principal.appOwnerOrganizationId) !== appIdentity(actor.tenantId)) throw new RestoreSafetyError("The service principal does not belong to this application's home tenant.")
+    }
     const live = await request(`applications/${appIdentity(id)}?$select=id,appId,displayName,description,notes`, "GET", undefined, signal)
     if (!live || appIdentity(live.id) !== appIdentity(id) || appIdentity(live.appId) !== appIdentity(item.appId)) throw new RestoreSafetyError("The application target identity changed.")
     restorableApp(live, folder, false, protectedAppIds())
     if (expectedAppId && appIdentity(live.appId) !== appIdentity(expectedAppId)) throw new RestoreSafetyError("The saved application app ID does not match the live target.")
-    return { ...live, appOwnerOrganizationId: principal.appOwnerOrganizationId!, servicePrincipalType: principal.servicePrincipalType!, servicePrincipalId: principal.id! }
+    return { ...live, appOwnerOrganizationId: actor.tenantId, ...(principal ? { servicePrincipalType: principal.servicePrincipalType!, servicePrincipalId: principal.id! } : {}) }
   }
-  const resolveApp = async (appId: string, signal?: AbortSignal): Promise<Item> => {
+  const lookupApp = async (appId: string, signal?: AbortSignal): Promise<Item | null> => {
     const matches: Item[] = []
     for await (const item of list(`servicePrincipals?$filter=${encodeURIComponent(`appId eq '${appIdentity(appId)}'`)}&$select=id,appId,displayName,appOwnerOrganizationId,servicePrincipalType,appRoles,oauth2PermissionScopes`, signal)) {
       if (String(item.appId).toLowerCase() !== appId.toLowerCase()) throw new RestoreSafetyError("The app ID lookup returned another application.")
       matches.push(item)
       if (matches.length > 1) break
     }
-    if (matches.length !== 1) throw new RestoreSafetyError("An app ID is unresolved or ambiguous. This relationship is blocked.")
+    if (matches.length > 1) throw new RestoreWriteDeferredError("An app ID is ambiguous. Resume to repeat its safety checks.")
+    if (!matches.length) return null
     appIdentity(matches[0]!.id)
     return { ...matches[0]!, "@odata.type": "#microsoft.graph.servicePrincipal" }
+  }
+  const resolveApp = async (appId: string, signal?: AbortSignal): Promise<Item> => {
+    const principal = await lookupApp(appId, signal)
+    if (!principal) throw new RestoreSafetyError("An app ID is unresolved or ambiguous. This relationship is blocked.")
+    return principal
   }
   const resolveUser = async (id: string, signal?: AbortSignal): Promise<Item> => {
     const user = await request(`users/${appIdentity(id)}?$select=id,displayName,onPremisesSyncEnabled`, "GET", undefined, signal)

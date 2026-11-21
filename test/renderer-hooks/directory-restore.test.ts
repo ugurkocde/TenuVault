@@ -662,3 +662,16 @@ it("shows Discard after Resume recovers a coordinator-only rejection without con
   expect(document.body.textContent).toContain("Saved restore discarded")
   expect(fetcher.mock.calls.map(([, init]) => JSON.parse(String(init?.body)).action)).toEqual(["preview", "resume", "discard"])
 })
+
+it("shows the role authorization reason instead of a throttle label after resume", async () => {
+  const reason = "Your Entra role does not allow this change. Activate the role, then resume."
+  const outcome = { key: "member", state: "deferred", retryAt: Date.now() - 1000, reason }
+  vi.stubGlobal("fetch", vi.fn(async (_input: unknown, init?: RequestInit) => Response.json(JSON.parse(String(init?.body)).action === "resume" ? { ...page, outcomes: [outcome] } : page)))
+  root = createRoot(document.body.appendChild(document.createElement("div")))
+  await act(async () => root.render(createElement(DirectoryRestore, props)))
+  await click("Review directory restore"); await click("Preview directory changes"); await click("Resume saved page")
+  const results = document.querySelector('[aria-label="Directory page results"]')!
+  expect(results.textContent).toContain(reason)
+  expect(results.textContent).not.toContain("Throttled by Microsoft Graph")
+  expect(results.textContent).not.toContain("Deferred before dispatch")
+})
