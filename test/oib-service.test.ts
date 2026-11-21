@@ -763,6 +763,44 @@ it("keeps the legacy no-storage skip for an unenrolled destination in a reviewed
   expect(writes).toHaveLength(1)
 })
 
+it.each(["before apply", "after claim"])("refuses protected undo when the restored scope tag assignment changes %s", async timing => {
+  const { profile, state } = writeApprovalFixture()
+  const first = profile(), second = profile(reviewer)
+  setWriteApprovals(first.service)
+  await first.service.enable(tenantId)
+  const before = { ...settingsCatalog("Previous policy"), id: EXISTING }
+  const run: OibRun = { runId: "scoped-undo", tenantId, createdAt: "2026-11-20T00:00:00Z", kind: "deploy", platform: "windows", reference: "r",
+    created: [], updated: [{ id: EXISTING, folder: "ConfigurationPolicies", name: "Updated policy", previousName: "Previous policy", before }], failed: [] }
+  store.set(`oib:runs:${tenantId}`, JSON.stringify([run]))
+  const writes: string[] = []
+  let groupId = pilot
+  const graph = world({ policies: [{ id: EXISTING, name: "Updated policy", value: 2, tags: ["0"] }] }, writes)
+  vi.stubGlobal("fetch", createBridgedFetch({
+    dispatch: async () => new Response(null, { status: 404 }),
+    getDelegatedToken: async () => ({ accessToken: "fixture", expiresOn: null }),
+    authorizeGraph: graphDispatchGuard(first.service, () => ({ tenant: tenantId, actor: requester, current: () => true })),
+    fetch: async (input, init) => {
+      const url = String(input)
+      if (url.endsWith("/roleScopeTags/7")) return Response.json({ id: "7", displayName: "Pilot" })
+      if (url.endsWith("/roleScopeTags/7/assignments")) return Response.json({ value: [{ target: { groupId } }] })
+      return graph(input, init)
+    },
+  }))
+  const undo = () => handleOib({ ...base, action: "oib-undo", clientSecret: DELEGATED_CLIENT_SECRET, runId: run.runId })
+  await expect(undo()).rejects.toThrow("pending")
+  await second.service.decide(tenantId, (await second.service.inbox(tenantId)).requests[0]!.request.id, "approve")
+  if (timing === "before apply") {
+    groupId = secondTenant
+    await expect(undo()).rejects.toThrow("changed after request")
+  } else {
+    state.beforeAudit = event => { if (event.action.endsWith("claimed")) groupId = secondTenant }
+    expect(await undo()).toMatchObject({
+      run: { runId: run.runId }, results: [{ id: EXISTING, done: false, error: expect.stringContaining("changed after review") }],
+    })
+  }
+  expect(writes).toEqual([])
+})
+
 it("persists completed deletes and audits the remaining work when protected undo stops", async () => {
   const { profile } = writeApprovalFixture()
   const first = profile(), second = profile(reviewer)

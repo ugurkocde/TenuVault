@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs"
 import { graphCaller, Restorer } from "../src/portal/lib/policies/graph-restore"
 import { afterEach, expect, it, vi } from "vitest"
 import { planGuard } from "../src/main/api/plan-gates"
+import { graphTokenSessions } from "../src/main/write-approvals/graph-sessions"
 import { ApiHost } from "../src/main/api/host"
 import { createBridgedFetch } from "../src/main/api/fetch-bridge"
 import { graphDispatchGuard, sameObservation, withWriteCheckpoint, withExemptGraphCaller } from "../src/main/write-approvals/dispatch"
@@ -247,6 +248,62 @@ it.each([
   expect(writes).toBe(1)
 })
 
+
+it("lets Graph refresh an expired token held by a restore while another request signs in", async () => {
+  const { profile } = writeApprovalFixture()
+  const { service } = profile()
+  const expiredToken = "approval-off-expired"
+  const freshToken = "approval-off-fresh"
+  const session = { tenant, actor: requester, current: () => true }
+  let entered!: () => void, release!: () => void
+  const ready = new Promise<void>(resolve => { entered = resolve })
+  const resume = new Promise<void>(resolve => { release = resolve })
+  const attempts: string[] = []
+  const getToken = (token: string, expiresOn: Date) => {
+    graphTokenSessions.remember(token, session, expiresOn)
+    return token
+  }
+  const transport = createBridgedFetch({
+    dispatch: async () => new Response(null, { status: 404 }),
+    getDelegatedToken: async () => { throw new Error("No delegated exchange expected") },
+    authorizeGraph: graphDispatchGuard(service, token => graphTokenSessions.get(token)),
+    fetch: async (input, init) => {
+      const authorization = new Request(input, init).headers.get("authorization")!
+      attempts.push(authorization)
+      return authorization === `Bearer ${expiredToken}` ? new Response(null, { status: 401 }) : Response.json({ id: requester.oid })
+    },
+  })
+  const host = new ApiHost({ routes: {
+    "/api/restore": { POST: async () => {
+      const expiry = new Date(Date.now() + 60_000)
+      const send = graphCaller(getToken(expiredToken, expiry), transport, {
+        refreshToken: async () => getToken(freshToken, new Date(Date.now() + 60_000)),
+      })
+      entered()
+      await resume
+      return Response.json(await send("POST", "deviceManagement/deviceCategories"))
+    } },
+    "/api/other": { POST: () => {
+      getToken(freshToken, new Date(Date.now() + 60_000))
+      return new Response(null, { status: 204 })
+    } },
+  } })
+  const dispatch = (path: string) => host.dispatch(new Request(INTERNAL_API_ORIGIN + path, { method: "POST" }))
+  const restore = dispatch("/api/restore")
+  await ready
+  const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 120_000)
+  try {
+    expect((await dispatch("/api/other")).status).toBe(204)
+    expect(graphTokenSessions.get(expiredToken)).toBeUndefined()
+    release()
+    expect(await (await restore).json()).toMatchObject({ status: 200, body: { id: requester.oid } })
+    expect(attempts).toEqual([`Bearer ${expiredToken}`, `Bearer ${freshToken}`])
+    expect(graphTokenSessions.get(expiredToken)).toBeUndefined()
+  } finally {
+    release()
+    clock.mockRestore()
+  }
+})
 
 it.each([401, 429])("checks the destination and identity again before a Graph retry after %i", async status => {
   const { profile } = writeApprovalFixture()

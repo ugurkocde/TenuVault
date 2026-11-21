@@ -2,7 +2,7 @@ import { enrolledBatchDestinations, hasWriteApproval, verifyApprovalSource, with
 import { sameObservation, withWriteCheckpoint } from "../write-approvals/dispatch"
 import { approvalMessage } from "../../shared/intune/approval"
 import { randomUUID } from "node:crypto"
-import { approvalFingerprint, graphCaller, readLive, Restorer, type GraphCall } from "../../portal/lib/policies/graph-restore"
+import { approvalFingerprint, graphCaller, readLive, Restorer, type GraphCall, type RestoreObservation } from "../../portal/lib/policies/graph-restore"
 import { INTERNAL_API_ORIGIN } from "../../shared/constants"
 import { record, type RecordJson } from "../../shared/frameworks/policies"
 import { normalizeBackupStatus } from "../../portal/lib/backup-health"
@@ -663,6 +663,10 @@ async function undo(body: RecordJson): Promise<UndoResult> {
       const { token } = await tokenFor(body)
       const graph = graphCaller(token, fetch, { tenant, refreshToken: async () => (await tokenFor(body, true)).token })
       const states = new Map<string, unknown>()
+      const restorations = new Map<OibRun["updated"][number], RestoreObservation>()
+      const restoreOptions = { writeApprovalTenant: tenant, mode: "replace", assignments: false, recreateMissing: false } as const
+      const reviewedRestorer = new Restorer(graph, { ...restoreOptions, exactTargetId: true })
+      const restorePath = (item: OibRun["updated"][number]) => `oib/${item.folder}/${item.id}.json`
       const read = async (item: { folder: string; id: string }) => {
         const type = typeForFolder(item.folder)
         const live = type && OBJECT_ID.test(item.id) ? await readLive(graph, type, item.id) : undefined
@@ -677,6 +681,12 @@ async function undo(body: RecordJson): Promise<UndoResult> {
             const state = await read(item)
             states.set(item.id, state)
             observed.push([item.id, state])
+          }
+          for (const item of run.updated) {
+            if (!item.before) continue
+            const review = await reviewedRestorer.approvalObservation(restorePath(item), { ...item.before, id: item.id })
+            restorations.set(item, review)
+            observed.push([item.id, review.content, review.target])
           }
           return { content: run, target: observed }
         },
@@ -712,7 +722,7 @@ async function undo(body: RecordJson): Promise<UndoResult> {
           }
         }
         const protectedWrite = hasWriteApproval(tenant)
-        const restorer = new Restorer(graph, { writeApprovalTenant: tenant, mode: "replace", assignments: false, recreateMissing: false, exactTargetId: protectedWrite })
+        const restorer = protectedWrite ? reviewedRestorer : new Restorer(graph, restoreOptions)
         for (const item of run.updated) {
           report({ stage: `Restoring ${item.previousName}`, done: results.length, total })
           const result = { name: item.previousName, id: item.id, action: "restored" as const }
@@ -721,7 +731,7 @@ async function undo(body: RecordJson): Promise<UndoResult> {
             continue
           }
           const snapshot = protectedWrite ? { ...item.before, id: item.id } : item.before
-          const outcome = await restorer.restore(`oib/${item.folder}/${item.id}.json`, snapshot, protectedWrite ? sameObservation(states.get(item.id), () => read(item)) : undefined)
+          const outcome = await restorer.restore(restorePath(item), snapshot, protectedWrite ? sameObservation(states.get(item.id), () => read(item)) : undefined, restorations.get(item))
           if (outcome.success || (!protectedWrite && outcome.missing)) {
             remaining.updated.splice(remaining.updated.indexOf(item), 1)
             saveRun(remaining)

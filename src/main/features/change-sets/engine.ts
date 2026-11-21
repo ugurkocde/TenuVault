@@ -2,6 +2,7 @@ import { hasWriteApproval, withWriteApproval, type ApprovalOperation } from "../
 import { sameObservation, withWriteCheckpoint } from "../../write-approvals/dispatch"
 import { AuditEventType, AuditResult, AuditSeverity, type CreateAuditLogInput } from "../../../portal/lib/audit/types"
 import { verifiedMutation, type GraphCall } from "../../../portal/lib/policies/graph-restore"
+import { dependencyReferences } from "../../../shared/intune/dependencies"
 import { typeForFolder, type IntuneType, type Item } from "../../../shared/intune/registry"
 import { isGraphId } from "../../../shared/security"
 import { replaceTenantVariables } from "../../../shared/oib/variables"
@@ -15,7 +16,7 @@ import { targetStateHash } from "../promotion/targets"
 import { withTenantWrite } from "../write-lock"
 import { cisBenchmarksAllowed } from "../../frameworks/service"
 import { requirePreChangeBackup } from "./backup"
-import { createListingMemo, GraphReadError, observe, observeCurrent, readBack, readCurrent, sameNameIds, writeOperation, type Observation } from "./graph"
+import { changeOperationPlan, createListingMemo, GraphReadError, observe, observeCurrent, readBack, readCurrent, sameNameIds, writeOperation, type Observation } from "./graph"
 import {
   assignmentTargets,
   combinedFingerprint,
@@ -692,7 +693,7 @@ async function reconcile(graph: GraphCall, type: IntuneType, operation: ChangeOp
 }
 
 /** The next approved step checks the original observation, then the last verified live state. */
-function guardedOperationWriter(operation: ChangeOperation, type: IntuneType, reader: GraphCall, writer: GraphCall, expected: unknown, checkDependencies: () => Promise<void>, saveStep: (hash: string) => void): GraphCall {
+function guardedOperationWriter(operation: ChangeOperation, type: IntuneType, reader: GraphCall, writer: GraphCall, expected: unknown, checkDependencies: (body: Item | undefined) => Promise<void>, saveStep: (hash: string) => void): GraphCall {
   let id = operation.targetId
   let prior: Item | undefined
   const targetState = async () => {
@@ -712,7 +713,7 @@ function guardedOperationWriter(operation: ChangeOperation, type: IntuneType, re
   return async (method, path, body, options) => {
     const response = await withWriteCheckpoint(async () => {
       await check()
-      await checkDependencies()
+      await checkDependencies(body)
     }, () => writer(method, path, body, options))
     if (response.status < 300 && method !== "DELETE") {
       if (!id && typeof response.body.id === "string") id = response.body.id
@@ -747,6 +748,9 @@ function assignmentLabels(assignments: Item[] | null | undefined, direction: str
   })
 }
 
+const scopeTagsIn = (body: Item): string[] => dependencyReferences(body)
+  .filter(ref => ref.key === "roleScopeTagIds").map(ref => ref.id.toLowerCase())
+
 export async function prepareChangeSetApply(deps: FeatureDeps, tenant: string, id: string, input: ApplyInput, actor: Actor) {
   if (input.confirmed !== true) throw new FeatureError("Confirm the change, including its irreversible steps, before applying.")
   const record = getChangeSet(deps, tenant, id)
@@ -777,14 +781,18 @@ export async function prepareChangeSetApply(deps: FeatureDeps, tenant: string, i
   const approvedTargets = new Map<string, unknown>()
   const mapped = (kind: ChangeSetRecord["dependencies"][number]["kind"]) =>
     [...new Set(record.dependencies.flatMap(ref => ref.kind === kind && ref.targetId ? [ref.targetId.toLowerCase()] : []))].sort()
-  const dependencyReads = { policyId: null, filterIds: mapped("filter"), scopeTagIds: mapped("scopeTag"), reusableSettingIds: mapped("reusableSetting"), groupIds: mapped("group") }
-  const observeDependencies = async (graph: GraphCall) => {
+  const dependencyReads = { policyId: null, filterIds: mapped("filter"), reusableSettingIds: mapped("reusableSetting"), groupIds: mapped("group") }
+  const observeDependencies = async (graph: GraphCall, scopeTagIds: string[]) => {
     const dependencyErrors = (await input.dependencyCheck?.()) ?? []
     if (dependencyErrors.length) markStale(deps, tenant, id, dependencyErrors.join(" "), actor)
-    return targetStateHash(graph, dependencyReads, undefined, undefined, true)
+    return targetStateHash(graph, { ...dependencyReads, scopeTagIds }, undefined, undefined, true)
   }
-  let approvedDependencies: string
-  const checkDependencies = (graph: GraphCall) => sameObservation(approvedDependencies, () => observeDependencies(graph))()
+  let approvedDependencies: { scopeTagIds: string[]; hash: string }
+  const checkDependencies = async (graph: GraphCall, body: Item | undefined) => {
+    const { scopeTagIds, hash } = approvedDependencies
+    if (body && scopeTagsIn(body).some(id => !scopeTagIds.includes(id))) throw new FeatureError("The outbound scope tags changed after review.", 409)
+    await sameObservation(hash, () => observeDependencies(graph, scopeTagIds))()
+  }
   const approval: ApprovalOperation = {
     tenant,
     reference: ["change-set", id],
@@ -805,14 +813,20 @@ export async function prepareChangeSetApply(deps: FeatureDeps, tenant: string, i
     },
     observe: async () => {
       const graph = await reader(deps, tenant, recoveryScope(record))
-      approvedDependencies = await observeDependencies(graph)
+      const scopeTags = new Set(mapped("scopeTag"))
       const listing = createListingMemo()
       const observations = []
       for (const [index, operation] of record.operations.entries()) {
         const result = record.results[operation.key]
         if (result?.status === "verified" || (result?.status === "approval" && result.partial)) continue
-        const observed = await observe(graph, typeOf(operation.folder), operation, listing, true)
+        const type = typeOf(operation.folder)
+        const observed = await observe(graph, type, operation, listing, true)
         const checked = checkedObservation(observed)
+        const entry = entries[operation.key]!
+        const { create, steps } = changeOperationPlan(type, operation.action, operation.targetId, entry.body, observed.snapshot)
+        const bodies = create ? [create.body, ...steps.map(step => step.body)] : steps.map(step => step.body)
+        if (operation.action !== "delete" && type.assign && type.assign !== "post") bodies.push(...entry.assignments ?? [])
+        for (const body of bodies) for (const tag of scopeTagsIn(body)) scopeTags.add(tag)
         if (operation.setsAssignments) {
           const summary = approval.summary.operations![index]!
           const previous = observed.snapshot?.assignments
@@ -826,7 +840,9 @@ export async function prepareChangeSetApply(deps: FeatureDeps, tenant: string, i
         observations.push([operation.key, checked, observed.snapshot, observed.sameNameIds])
         if (!record.preChange && observed.fingerprint !== review.operationFingerprints[operation.key]) markStale(deps, tenant, id, `${operation.name} changed in the target tenant after review.`, actor)
       }
-      return { content: [record.contentHash, record.origin, backupChoice, entries, record.dependencies, review.targetFingerprint], target: [approvedDependencies, observations] }
+      const scopeTagIds = [...scopeTags].sort()
+      approvedDependencies = { scopeTagIds, hash: await observeDependencies(graph, scopeTagIds) }
+      return { content: [record.contentHash, record.origin, backupChoice, entries, record.dependencies, review.targetFingerprint], target: [approvedDependencies.hash, observations] }
     },
   }
   return { record, review, backupChoice, backupSkipped, recovery, entries, approvedTargets, checkDependencies, operation: approval }
@@ -997,7 +1013,7 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
       const attempt: OperationResult = { ...previous, status: "writing", attempts: current.attempts + 1, message: null, readBack: null, at: at() }
       saveResult(deps, tenant, id, operation.key, attempt, actor, `Writing ${operation.name}`)
       const protectedWrite = hasWriteApproval(tenant)
-      const resultWriter = protectedWrite ? guardedOperationWriter(operation, type, gated, writer, approvedTargets.get(operation.key), () => checkDependencies(gated), hash => {
+      const resultWriter = protectedWrite ? guardedOperationWriter(operation, type, gated, writer, approvedTargets.get(operation.key), body => checkDependencies(gated, body), hash => {
         attempt.verifiedPostStepHash = hash
         saveResult(deps, tenant, id, operation.key, attempt, actor, `Verified a step for ${operation.name}`)
       }) : writer

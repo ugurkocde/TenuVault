@@ -100,6 +100,17 @@ describe("disclaimerGuard", () => {
     expect(await guard(post("/api/oib", { action: "oib-deploy", tenantId: A }))).toBeNull()
   })
 
+  it("checks restore retry destinations before enforcing their write disclaimers", async () => {
+    const acks = new DisclaimerAcknowledgements(memoryStore())
+    const guard = disclaimerGuard(acks)
+    const restorePath = "/api/restore-backup"
+    expect(await guard(post(restorePath, { tenantId: A, approvalAction: "check-destinations", destinationIds: [B] }))).toBeNull()
+    const write = () => guard(post(restorePath, { tenantId: A, mode: "copy", targetTenants: [{ tenantId: B }] }))
+    expect(await (await write())?.json()).toMatchObject({ acknowledgement: { tenantIds: [B] } })
+    acks.accept([B], () => null)
+    expect(await write()).toBeNull()
+  })
+
   it("asks only for the copy targets that have not accepted", async () => {
     const acks = new DisclaimerAcknowledgements(memoryStore())
     acks.accept([B], () => null)

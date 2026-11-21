@@ -1,6 +1,6 @@
 import { setApprovedRestoreRepairStore } from "../portal/lib/policies/graph-restore"
 import { reviewedOibRoute } from "./oib/service"
-import { createHash } from "node:crypto"
+import { graphTokenSessions } from "./write-approvals/graph-sessions"
 import { WriteApprovals, setWriteApprovals, WriteApprovalError } from "./write-approvals/service"
 import { graphDispatchGuard, setRestoreUploadGuard } from "./write-approvals/dispatch"
 import { approvalBlobs } from "./write-approvals/blob"
@@ -355,14 +355,10 @@ async function bootstrap(): Promise<void> {
 
   // Background requests never open a sign-in window; the renderer shows a prompt instead.
   const lastPrompt = new Map<string, number>()
-  const graphSessions = new Map<string, NonNullable<ReturnType<AuthManager["approvalSession"]>> & { expires: number }>()
-  const tokenKey = (token: string) => createHash("sha256").update(token).digest("hex")
   const observeGraphToken = (tenantId: string, token: Awaited<ReturnType<AuthManager["getAccessToken"]>>) => {
     const identity = auth.tokenApprovalSession(token)
     if (identity?.current() && identity.actor?.oid === delegatedApprovalActor(token, tenantId)?.oid) {
-      const time = Date.now()
-      for (const [key, entry] of graphSessions) if (entry.expires <= time) graphSessions.delete(key)
-      graphSessions.set(tokenKey(token.accessToken), { ...identity, expires: token.expiresOn?.getTime() ?? time + 3_600_000 })
+      graphTokenSessions.remember(token.accessToken, identity, token.expiresOn)
     }
     return token.accessToken
   }
@@ -418,7 +414,7 @@ async function bootstrap(): Promise<void> {
     // Azure backups are written as plain JSON; backups sealed by earlier versions open with the device keyring.
     fetch: legacyAzureReader(withNetworkErrors(chromiumFetch), () => backupKeys.keyring()),
     authorizeTenant,
-    authorizeGraph: graphDispatchGuard(writeApprovals, token => graphSessions.get(tokenKey(token))),
+    authorizeGraph: graphDispatchGuard(writeApprovals, token => graphTokenSessions.get(token)),
     handleLocalBlob: (request) => handleLocalBlobRequest(getLocalStore(), request),
     getDelegatedToken: async (tenant, clientId, scope, forceRefresh) => {
       const result = await tokenFor(tenant, clientId, scope, forceRefresh)
@@ -1584,10 +1580,10 @@ async function bootstrap(): Promise<void> {
       pushLicense()
     },
     loadRestoreSettings: async (tenant, appId) => readRestoreSnapshot(tenant, appId, (await auth.getAccessToken(tenant, signedInClient(tenant), RESOURCE_SCOPES.graph)).accessToken, bridgedFetch, "current-settings"),
-    restore: (store, source, snapshot, target, name, signal, progress) => disclaimer.run([target], () => restoreCapturedApp(store, source, snapshot, target, name, {
+    restore: (store, source, snapshot, target, name, signal, progress) => disclaimer.run([target], () => graphTokenSessions.run(() => restoreCapturedApp(store, source, snapshot, target, name, {
       graph: restoreGraph(async () => observeGraphToken(target, await auth.getAccessToken(target, signedInClient(target), RESOURCE_SCOPES.graph)), bridgedFetch, signal),
       fetch: bridgedFetch, signal, progress,
-    })),
+    }))),
     ensureKeys: () => { backupKeys.keyring() },
     capture: async (tenant, appId, jobId, store, signal, progress) => {
       if (process.platform !== "win32") throw new Error("Back up Win32 installers on a Windows PC enrolled in this Intune tenant.")

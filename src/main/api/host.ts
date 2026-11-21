@@ -2,6 +2,7 @@ import { assertStorageAccountName } from "../../shared/storage-account"
 import type { ApiRequest, ApiResponse } from "../../shared/ipc"
 import { INTERNAL_API_ORIGIN } from "../../shared/constants"
 import { NextRequest } from "./next-server-shim"
+import { graphTokenSessions } from "../write-approvals/graph-sessions"
 import { withRouteTenant } from "../storage/blob-emulator"
 
 /** Largest request body accepted over IPC, matching the 8 MB policies limit the routes enforce. */
@@ -59,7 +60,7 @@ export class ApiHost {
     const body = request.method === "GET" || request.method === "HEAD" ? "" : await request.clone().text()
     let response: Response
     try {
-      response = await withRouteTenant(tenantId, () => handler(new NextRequest(request)), storageAccountName)
+      response = await graphTokenSessions.run(() => withRouteTenant(tenantId, () => handler(new NextRequest(request)), storageAccountName))
     } catch (error) {
       console.error(`[api] ${request.method} ${url.pathname} failed:`, error)
       response = Response.json(

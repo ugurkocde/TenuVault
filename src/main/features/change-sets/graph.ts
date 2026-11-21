@@ -1,6 +1,6 @@
 import { approvalMessage, type ApprovalSignal } from "../../../shared/intune/approval"
 import { readLive, type GraphCall } from "../../../portal/lib/policies/graph-restore"
-import { buildRestorePlan, buildUpdatePlan, resolveStep } from "../../../shared/intune/restore-plan"
+import { buildRestorePlan, buildUpdatePlan, resolveStep, type RestorePlan } from "../../../shared/intune/restore-plan"
 import type { IntuneType, Item, Json, Step } from "../../../shared/intune/registry"
 import { isGraphId } from "../../../shared/security"
 import { FetchPreconditionError } from "../../api/network-error"
@@ -168,6 +168,20 @@ async function send(graph: GraphCall, method: Step["method"], path: string, body
   }
 }
 
+/** Builds the content requests shared by approval observation and dispatch. */
+export function changeOperationPlan(
+  type: IntuneType,
+  action: OperationAction,
+  targetId: string | null,
+  proposed: Item | null,
+  current: Item | null,
+): { create: RestorePlan["create"] | null; steps: Step[] } {
+  if (action === "delete") return { create: null, steps: [] }
+  const { assignments: _ignored, ...body } = proposed ?? {}
+  if (action === "create") return buildRestorePlan(type, body, { includeAssignments: false })
+  return { create: null, steps: buildUpdatePlan(type, body, targetId!, { includeAssignments: false, current: current ?? {} }) }
+}
+
 /**
  * Writes one operation with the journaled caller. `onCreated` runs as soon as Graph returns
  * a created ID, before any follow-up step, so an interruption still leaves the ID on record.
@@ -192,17 +206,16 @@ export async function writeOperation(
     if (!sent.ok) return sent.rejected ? { state: "rejected", objectId: input.targetId, message: sent.message } : { state: "unknown", objectId: input.targetId, message: sent.message }
     return { state: "written", objectId: input.targetId! }
   }
-  const { assignments: _ignored, ...proposed } = input.proposed ?? {}
-  if (input.action === "create") {
-    const plan = buildRestorePlan(type, proposed as Item, { includeAssignments: false })
-    const created = await send(graph, "POST", plan.create.path, plan.create.body)
+  const { create, steps } = changeOperationPlan(type, input.action, input.targetId, input.proposed, input.current)
+  if (create) {
+    const created = await send(graph, create.method, create.path, create.body)
     if (!created.ok && created.approval) return blocked(created, null)
     if (!created.ok && created.notSent) return unsent(created, null)
     if (!created.ok) return created.rejected ? { state: "rejected", objectId: null, message: created.message } : { state: "unknown", objectId: null, message: created.message }
     const id = created.body.id
     if (!isGraphId(id)) return { state: "unknown", objectId: null, message: "Microsoft Graph did not return a valid ID for the created object. Check Intune before retrying." }
     onCreated(id)
-    for (const step of plan.steps.map((entry) => resolveStep(entry, id))) {
+    for (const step of steps.map((entry) => resolveStep(entry, id))) {
       const sent = await send(graph, step.method, step.path, step.body)
       if (!sent.ok && sent.approval) return blocked(sent, id, true)
       if (!sent.ok && sent.notSent) return unsent(sent, id, true)
@@ -214,7 +227,6 @@ export async function writeOperation(
     if (!assigned.ok) return { state: "unknown", objectId: id, message: `The object was created but its reviewed assignments failed: ${assigned.message}` }
     return { state: "written", objectId: id }
   }
-  const steps = buildUpdatePlan(type, proposed as Item, input.targetId!, { includeAssignments: false, current: input.current ?? {} })
   for (const [index, step] of steps.entries()) {
     const sent = await send(graph, step.method, step.path, step.body)
     if (!sent.ok) {
