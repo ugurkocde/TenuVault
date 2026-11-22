@@ -225,7 +225,7 @@ async function staleDependencies(deps: FeatureDeps, tenantId: string, promotion:
  */
 export async function previewPromotion(deps: FeatureDeps, tenantId: string, id: string, check?: PlanCheck): Promise<PromotionPreview> {
   const promotion = syncPromotion(deps, tenantId, id)
-  if (!promotion.changeSetId) throw new FeatureError("This promotion is blocked. Resolve its findings and plan again.", 409)
+  if (!promotion.changeSetId) throw new FeatureError(`This ${noun(promotion)} is blocked. Resolve its findings and plan again.`, 409)
   const preview = await previewChangeSet(deps, tenantId, promotion.changeSetId)
   const changeSet = { ...preview, blockers: [...(await staleDependencies(deps, tenantId, promotion, check)), ...preview.blockers] }
   const sourceChanges: string[] = []
@@ -234,8 +234,8 @@ export async function previewPromotion(deps: FeatureDeps, tenantId: string, id: 
     for (const item of promotion.items) {
       const type = typeForFolder(item.folder ?? PROMOTION_FOLDER)!
       const live = await readCurrent(graph, type, item.sourceId)
-      if (!live) sourceChanges.push(`"${item.sourceName}" was deleted in the source after planning. The reviewed version is still promoted.`)
-      else if (hashOf(comparableSnapshot(sanitizeSnapshot(type, live).snapshot)) !== item.sourceHash) sourceChanges.push(`"${item.sourceName}" changed in the source after planning. Only the reviewed version is promoted; plan again to include later edits.`)
+      if (!live) sourceChanges.push(`"${item.sourceName}" was deleted in the source after planning. The reviewed version is still ${promotion.sync ? "copied" : "promoted"}.`)
+      else if (hashOf(comparableSnapshot(sanitizeSnapshot(type, live).snapshot)) !== item.sourceHash) sourceChanges.push(`"${item.sourceName}" changed in the source after planning. Only the reviewed version is ${promotion.sync ? "copied" : "promoted"}; plan again to include later edits.`)
     }
   } catch (error) {
     sourceChanges.push(`The source tenant could not be re-read: ${error instanceof Error ? error.message : String(error)}`)
@@ -243,13 +243,16 @@ export async function previewPromotion(deps: FeatureDeps, tenantId: string, id: 
   return { promotion, changeSet, sourceChanges }
 }
 
+/** What a promotion's messages call it: Copy to Tenants plans a copy per target, Dev to Prod a promotion. */
+const noun = (promotion: PromotionRecord) => (promotion.sync ? "copy" : "promotion")
+
 /** Approves the promotion's change set after re-checking the destination dependencies it relies on. */
 export async function approvePromotion(deps: FeatureDeps, tenantId: string, id: string, input: { contentHash: string; targetFingerprint: string; reviewer?: string | null; note?: string | null; check?: PlanCheck }, actor: string | null): Promise<Stored<ChangeSetRecord>> {
   const promotion = getPromotion(deps, tenantId, id)
-  if (!promotion.changeSetId) throw new FeatureError("This promotion is blocked. Resolve its findings and plan again.", 409)
+  if (!promotion.changeSetId) throw new FeatureError(`This ${noun(promotion)} is blocked. Resolve its findings and plan again.`, 409)
   const { check, ...approval } = input
   const stale = await staleDependencies(deps, tenantId, promotion, check)
-  if (stale.length) throw new FeatureError(`This promotion cannot be approved: ${stale.join(" ")}`, 409)
+  if (stale.length) throw new FeatureError(`This ${noun(promotion)} cannot be approved: ${stale.join(" ")}`, 409)
   return approveChangeSet(deps, tenantId, promotion.changeSetId, approval, actor)
 }
 
@@ -260,7 +263,7 @@ export async function approvePromotion(deps: FeatureDeps, tenantId: string, id: 
  */
 export async function applyPromotion(deps: FeatureDeps, tenantId: string, id: string, input: { contentHash: string; confirmed: boolean; backup?: "new" | "none"; resolveBackup?: ApplyInput["resolveBackup"]; check?: PlanCheck; onSettled?: ApplyInput["onSettled"] }, actor: string | null): Promise<{ promotion: Stored<PromotionRecord>; changeSet: Stored<ChangeSetRecord> }> {
   const promotion = getPromotion(deps, tenantId, id)
-  if (!promotion.changeSetId) throw new FeatureError("This promotion is blocked. Resolve its findings and plan again.", 409)
+  if (!promotion.changeSetId) throw new FeatureError(`This ${noun(promotion)} is blocked. Resolve its findings and plan again.`, 409)
   const { check, ...apply } = input
   try {
     const changeSet = await applyChangeSet(deps, tenantId, promotion.changeSetId, { ...apply, dependencyCheck: () => staleDependencies(deps, tenantId, promotion, check) }, actor)
@@ -274,15 +277,15 @@ export async function applyPromotion(deps: FeatureDeps, tenantId: string, id: st
 /** The promotion's change set, for approval and rollback calls. */
 export function promotionChangeSet(deps: FeatureDeps, tenantId: string, id: string): Stored<ChangeSetRecord> {
   const promotion = getPromotion(deps, tenantId, id)
-  if (!promotion.changeSetId) throw new FeatureError("This promotion is blocked and has no change set.", 409)
+  if (!promotion.changeSetId) throw new FeatureError(`This ${noun(promotion)} is blocked and has no change set.`, 409)
   return getChangeSet(deps, tenantId, promotion.changeSetId)
 }
 
 /** The rollback change set created for the promotion; it only writes to the destination. */
 export function promotionRollback(deps: FeatureDeps, tenantId: string, id: string): Stored<ChangeSetRecord> {
   const promotion = getPromotion(deps, tenantId, id)
-  if (!promotion.rollbackChangeSetId) throw new FeatureError("No rollback was created for this promotion. Preview and create one first.", 409)
+  if (!promotion.rollbackChangeSetId) throw new FeatureError(`No rollback was created for this ${noun(promotion)}. Preview and create one first.`, 409)
   const rollback = getChangeSet(deps, tenantId, promotion.rollbackChangeSetId)
-  if (rollback.kind !== "rollback" || rollback.rollbackOf !== promotion.changeSetId) throw new FeatureError("The rollback of this promotion does not match its change set.", 409)
+  if (rollback.kind !== "rollback" || rollback.rollbackOf !== promotion.changeSetId) throw new FeatureError(`The rollback of this ${noun(promotion)} does not match its change set.`, 409)
   return rollback
 }

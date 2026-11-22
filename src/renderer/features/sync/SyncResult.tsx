@@ -418,7 +418,7 @@ export function SyncResult({ source, policies = [], policyCount, entries, errors
             {running ? (
               <>
                 <span aria-hidden="true" className="size-4 rounded-full border-2 border-border border-t-coral-500 motion-safe:animate-spin" />
-                <span className="text-gray-900">Copying to {plural(involved.length, "tenant", "tenants")}</span>
+                <span className="text-gray-900">Copying to {plural(involved.length - upToDate, "tenant", "tenants")}{upToDate ? `, ${upToDate} already up to date` : ""}</span>
                 <span className="text-sm font-normal tabular-nums text-gray-500">{finishedCount} of {involved.length} finished</span>
               </>
             ) : !involved.length ? (
