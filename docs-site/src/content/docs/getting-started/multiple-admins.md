@@ -21,8 +21,9 @@ The quickest way is a setup file. An admin who already uses TenuVault for the te
 
 1. Make sure the admin is in the admin group with the roles above, and, if sign-in is restricted, in the group that may sign in. See [Restrict who can sign in](/deploy/#restrict-who-can-sign-in).
 2. The admin installs TenuVault, selects **Connect your tenant**, then **Set up from a file** on the **Connect** step. See [Set up from a file](/getting-started/connect-tenant/#set-up-from-a-file).
-3. They sign in with their own account, select **Check access** on the **Storage** step, and take the first backup.
-4. They select **Review settings from the file** and choose which settings to apply. The backup schedule starts unticked, so the tenant is not backed up twice by accident.
+3. They sign in with their own account and select **Check access** on the **Storage** step.
+4. Before the first backup, they select **Review settings from the file** and choose which settings to apply, so the first backup already uses the file's services and scope. The backup schedule starts unticked, so the tenant is not backed up twice by accident.
+5. They take the first backup.
 
 To set up the second admin by hand instead:
 

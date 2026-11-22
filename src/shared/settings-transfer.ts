@@ -98,8 +98,8 @@ export interface TransferApplyResult {
   items: Array<{ id: string; group: string; label: string; outcome: TransferOutcome; message?: string }>
   /** The theme to set in the renderer, when that item was applied. */
   appearance?: AppearanceSetting
-  /** Tenants whose services were changed, so their permissions can be checked. */
-  servicesChanged: string[]
+  /** The services turned on, by tenant ID, so the permissions they need can be checked. */
+  servicesEnabled: Record<string, string[]>
 }
 
 /** Default file name of an export made on `date`. */

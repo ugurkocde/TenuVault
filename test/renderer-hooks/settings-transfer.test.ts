@@ -86,7 +86,7 @@ describe("settings import preview", () => {
         { id: "app:nightlyUpdates", group: "app", label: "Get nightly builds", outcome: "applied" },
         { id: `${TENANT}:service:conditionalAccess`, group: TENANT, label: "Entra Conditional Access", outcome: "applied" },
       ],
-      servicesChanged: [TENANT],
+      servicesEnabled: { [TENANT]: ["conditionalAccess"] },
     })
     services.status.mockResolvedValue({
       tenantId: TENANT, checkedAt: null,
@@ -111,5 +111,11 @@ describe("missingPermissions", () => {
       { id: "intune", label: "Intune", description: "", optIn: false, enabled: true, roles: "", check: { id: "intune", label: "Intune", backup: "ready", restore: "ready", areas: [] } },
       { id: "conditionalAccess", label: "Entra Conditional Access", description: "", optIn: true, enabled: false, roles: "", check: { id: "conditionalAccess", label: "Entra Conditional Access", backup: "missing", restore: "missing", areas: [] } },
     ] })).toEqual([])
+    const modules = [
+      { id: "conditionalAccess", label: "Entra Conditional Access", description: "", optIn: true, enabled: true, roles: "", check: { id: "conditionalAccess", label: "Entra Conditional Access", backup: "missing", restore: "ready", areas: [] } },
+      { id: "intune", label: "Intune", description: "", optIn: false, enabled: true, roles: "", check: { id: "intune", label: "Intune", backup: "missing", restore: "missing", areas: [] } },
+    ] as Parameters<typeof missingPermissions>[0]["modules"]
+    // Only the services the import turned on are checked.
+    expect(missingPermissions({ tenantId: TENANT, checkedAt: null, modules }, ["conditionalAccess"])).toEqual(["Entra Conditional Access: permissions for backups are missing."])
   })
 })

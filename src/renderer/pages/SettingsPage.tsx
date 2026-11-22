@@ -30,6 +30,7 @@ import { PdfBrandingSettings } from "../components/PdfBrandingSettings"
 import { BackupReaderSettings } from "../components/BackupReaderSettings"
 import { ServicesSettings } from "../components/ServicesSettings"
 import { SettingsTransfer } from "../components/SettingsTransfer"
+import type { TransferApplyResult } from "../../shared/settings-transfer"
 import { WhatsNewDialog, WhatsNewEntryNotes } from "../components/WhatsNewDialog"
 import { useWhatsNew } from "../lib/whats-new"
 import { useConfirm } from "~/components/ConfirmDialog"
@@ -879,9 +880,24 @@ export function SettingsSectionNav({ section }: { section: SettingsSectionId }) 
   )
 }
 
+/** The Settings section that shows an imported setting, so it can load again after the import. */
+function sectionOfImportItem(id: string): SettingsSectionId | null {
+  if (id === "app:retentionDays" || id === "app:keepRunningInTray" || id === "app:startAtLogin") return "background"
+  if (id === "app:autoUpdate" || id === "app:nightlyUpdates") return "updates"
+  if (id === "app:appearance") return "appearance"
+  if (id === "app:pdfBranding") return "branding"
+  if (id.includes(":service:")) return "services"
+  return null
+}
+
 export default function SettingsPage() {
   const [searchParams] = useSearchParams()
-  const [reloads, setReloads] = useState(0)
+  // After an import, only the sections whose settings were applied load again; others keep unsaved edits.
+  const [reloads, setReloads] = useState<Partial<Record<SettingsSectionId, number>>>({})
+  const reloadApplied = (result: TransferApplyResult) => {
+    const sections = new Set(result.items.filter((entry) => entry.outcome === "applied").map((entry) => sectionOfImportItem(entry.id)).filter((id) => id !== null))
+    if (sections.size) setReloads((current) => Object.fromEntries([...Object.entries(current), ...[...sections].map((id) => [id, (current[id] ?? 0) + 1])]))
+  }
   const { hash } = useLocation()
   const section = resolveSettingsSection(searchParams.get("section"), hash)
 
@@ -937,7 +953,7 @@ export default function SettingsPage() {
   const panel = (id: SettingsSectionId, content: ReactNode) => (
     <section key={id} id={`settings-${id}`} hidden={section !== id}>
       {/* A dialog this panel owns closes at once when the panel hides, in the same commit, so focus can land below. */}
-      <DialogAnimationProvider value={section === id}>{content}</DialogAnimationProvider>
+      <DialogAnimationProvider value={section === id}><Fragment key={reloads[id] ?? 0}>{content}</Fragment></DialogAnimationProvider>
     </section>
   )
 
@@ -950,21 +966,16 @@ export default function SettingsPage() {
       <div className="mt-4 flex flex-col gap-6 xl:flex-row xl:items-start">
         <SettingsSectionNav section={section} />
         <div className="min-w-0 w-full max-w-5xl flex-1">
-          {/* After an import the other sections load again, so they show the applied settings. */}
-          <Fragment key={reloads}>
-            {panel("signin", <div className="space-y-6"><TenantSettings active={section === "signin"} /><ProxySignInSettings /></div>)}
-            {panel("services", <ServicesSettings />)}
-            {panel("storage", <div className="space-y-6"><BackupsOnDevice /><RestoreWrites active={section === "storage"} /></div>)}
-            {panel("background", <div className="space-y-6"><BackgroundAndRetention /><BackupReaderSettings /></div>)}
-            {panel("notifications", <NotificationSettings />)}
-            {panel("branding", <PdfBrandingSettings />)}
-          </Fragment>
-          {panel("transfer", <SettingsTransfer active={section === "transfer"} onApplied={() => setReloads((count) => count + 1)} />)}
-          <Fragment key={`after-${reloads}`}>
-            {panel("updates", <Updates />)}
-            {panel("appearance", <AppearanceSettings />)}
-            {panel("about", <About active={section === "about"} />)}
-          </Fragment>
+          {panel("signin", <div className="space-y-6"><TenantSettings active={section === "signin"} /><ProxySignInSettings /></div>)}
+          {panel("services", <ServicesSettings />)}
+          {panel("storage", <div className="space-y-6"><BackupsOnDevice /><RestoreWrites active={section === "storage"} /></div>)}
+          {panel("background", <div className="space-y-6"><BackgroundAndRetention /><BackupReaderSettings /></div>)}
+          {panel("notifications", <NotificationSettings />)}
+          {panel("branding", <PdfBrandingSettings />)}
+          {panel("transfer", <SettingsTransfer active={section === "transfer"} onApplied={reloadApplied} />)}
+          {panel("updates", <Updates />)}
+          {panel("appearance", <AppearanceSettings />)}
+          {panel("about", <About active={section === "about"} />)}
         </div>
       </div>
     </div>

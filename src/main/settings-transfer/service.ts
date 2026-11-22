@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import { parseCloudSetup, type CloudBackupConfig } from "../../shared/cloud-backup"
 import { LOCAL_STORAGE_PREFIX } from "../../shared/constants"
 import type { AppPreferences, BackupSchedule, ScheduleInput } from "../../shared/ipc"
@@ -105,7 +105,9 @@ interface Candidate {
   group: string
   item: TransferItem
   /** Applies the file's value; returns what the renderer has to do itself. */
-  apply?: () => { appearance?: AppearanceSetting; services?: string } | void
+  apply?: () => { appearance?: AppearanceSetting; services?: { tenantId: string; moduleId: string } } | void
+  /** A digest of the value stored on this computer now, so a change after the review is noticed in full. */
+  state: string
 }
 
 interface Session {
@@ -115,8 +117,12 @@ interface Session {
   reviewed: Map<string, string>
 }
 
-/** What an item shows the admin: what is there now, what it becomes and what the review warns about. */
-const effect = (item: TransferItem) => JSON.stringify([item.current, item.next, item.warning ?? "", item.note ?? ""])
+/**
+ * What an item does as reviewed: what it showed the admin and the full value stored now. Display text
+ * shortens values and names a logo only, so the stored value is compared as a digest too.
+ */
+const reviewKey = (candidate: Pick<Candidate, "item" | "state">) => JSON.stringify([candidate.item.current, candidate.item.next, candidate.item.warning ?? "", candidate.item.note ?? "", candidate.state])
+const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value ?? null)).digest("hex")
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -301,8 +307,8 @@ export class SettingsTransfer {
   /** The preview of an open file against the current settings, for example after a tenant was connected. */
   preview(importId: unknown, appearance: unknown): TransferPreview {
     const session = this.session(importId)
-    const { groups, skipped } = this.candidates(session.file, appearance)
-    session.reviewed = new Map(groups.flatMap((group) => group.items.map((item) => [item.id, effect(item)] as const)))
+    const { groups, skipped, candidates } = this.candidates(session.file, appearance)
+    session.reviewed = new Map([...candidates].map(([id, candidate]) => [id, reviewKey(candidate)] as const))
     const all = [...session.file.skipped, ...skipped]
     // A file can name any number of unknown parts; the review lists the first ones and counts the rest.
     const listed = all.length > MAX_SKIPPED ? [...all.slice(0, MAX_SKIPPED), `And ${all.length - MAX_SKIPPED} more`] : all
@@ -323,18 +329,19 @@ export class SettingsTransfer {
     if (unknown !== undefined) throw new Error("A chosen setting is not part of this file.")
     this.sessions.delete(importId as string)
 
-    const result: TransferApplyResult = { items: [], servicesChanged: [] }
+    const result: TransferApplyResult = { items: [], servicesEnabled: {} }
     for (const id of new Set(itemIds as string[])) {
-      const { group, item, apply } = candidates.get(id)!
+      const candidate = candidates.get(id)!
+      const { group, item, apply } = candidate
       const entry = { id, group, label: item.label }
       if (item.status === "same") { result.items.push({ ...entry, outcome: "skipped", message: "Already the same." }); continue }
       if (item.status === "blocked" || !apply) { result.items.push({ ...entry, outcome: "failed", message: item.reason ?? NOT_VALID }); continue }
       // The setting changed on this computer since the review, so the file's value would now do something else.
-      if (session.reviewed.get(id) !== effect(item)) { result.items.push({ ...entry, outcome: "failed", message: "This setting changed since you reviewed it. Import the file again to review it." }); continue }
+      if (session.reviewed.get(id) !== reviewKey(candidate)) { result.items.push({ ...entry, outcome: "failed", message: "This setting changed since you reviewed it. Import the file again to review it." }); continue }
       try {
         const effect = apply()
         if (effect?.appearance) result.appearance = effect.appearance
-        if (effect?.services && !result.servicesChanged.includes(effect.services)) result.servicesChanged.push(effect.services)
+        if (effect?.services) (result.servicesEnabled[effect.services.tenantId] ??= []).push(effect.services.moduleId)
         result.items.push({ ...entry, outcome: "applied" })
       } catch (error) {
         result.items.push({ ...entry, outcome: "failed", message: error instanceof Error ? error.message : String(error) })
@@ -517,6 +524,7 @@ export class SettingsTransfer {
         items.push(this.item(id, label, days(current.retentionDays), valid ? days(value) : shown(value), valid && value === current.retentionDays && !asDefault, valid ? null : NOT_VALID, {
           ...(limited && { feature: "customRetention" as const }),
           note,
+          state: [current.retentionDays, saved.retentionDays],
           ...(shorter && { warning: `Keeps backups for a shorter time, for every tenant on this computer, also those not in the file. After the next complete backup of a tenant, its backups older than ${days(value as number)} are deleted.` }),
           apply: () => void this.deps.preferences.set({ retentionDays: value as number }),
         }))
@@ -530,6 +538,7 @@ export class SettingsTransfer {
       items.push(this.item(id, label, onOff(now), valid ? onOff(value) : shown(value), valid && value === now && !managed && !asDefault, !valid ? NOT_VALID : managed ? "Updates on this computer are managed by your organization." : null, {
         ...(PREFERENCE_WARNINGS[key] && { warning: PREFERENCE_WARNINGS[key] }),
         ...(asDefault && { note: DEFAULT_NOTE }),
+        state: [now, saved[key], managed],
         apply: () => void this.deps.preferences.set({ [key]: value as boolean }),
       }))
     }
@@ -539,6 +548,7 @@ export class SettingsTransfer {
       const next = app.appearance as AppearanceSetting
       items.push(this.item("app:appearance", "Appearance", APPEARANCES[now], valid ? APPEARANCES[next] : shown(app.appearance), valid && next === now, valid ? null : NOT_VALID, {
         apply: () => ({ appearance: next }),
+        state: now,
       }))
     }
     if (app.pdfBranding !== undefined) {
@@ -559,6 +569,7 @@ export class SettingsTransfer {
       items.push(this.item("app:pdfBranding", "PDF branding", describeBranding(current), branding ? describeBranding(branding) : "Not valid", !!branding && JSON.stringify(branding) === JSON.stringify(current), invalid ?? (available || (!!branding && JSON.stringify(branding) === JSON.stringify(current)) ? null : "PDF branding is included in Pro and MSP. No tenant on this computer has one of these plans."), {
         ...(!invalid && !available && { feature: "pdfBranding" as const }),
         ...(brandingNote && { note: brandingNote }),
+        state: [current, available],
         apply: () => void this.deps.branding.set(known),
       }))
     }
@@ -585,9 +596,11 @@ export class SettingsTransfer {
           items.push(this.item(`${prefix}service:${module.id}`, module.label, onOff(now), next === null ? "Not valid" : onOff(next), next === now, next === null ? NOT_VALID : null, {
             // Turning a service off removes it from this tenant's backups, so it starts unticked.
             ...(now && next === false && { warning: `Turns off ${module.label}: its settings are no longer backed up for this tenant.` }),
+            state: now,
             apply: () => {
               this.deps.modules.set(tenantId, module.id, next)
-              return { services: tenantId }
+              // Only a service turned on can need permissions this sign-in lacks.
+              return next ? { services: { tenantId, moduleId: module.id } } : undefined
             },
           }))
         }
@@ -609,6 +622,7 @@ export class SettingsTransfer {
       items.push(this.item(`${prefix}backupScope`, "What is backed up", describeScope(current), scope ? describeScope(scope) : "Not valid", !!scope && scope.excluded.join(",") === normalizeScope(current).excluded.join(","), !scope ? NOT_VALID : empty ? "The file backs up no type this version knows." : null, {
         ...(notes && { note: notes }),
         ...(changes.removed.length > 0 && { warning: `Stops backing up ${changes.removed.join(", ")}.` }),
+        state: current,
         apply: () => void this.deps.scopes.set(tenantId, scope!),
       }))
     }
@@ -629,6 +643,7 @@ export class SettingsTransfer {
         : planUnknown ? "The plan of this tenant is not known yet, so a daily schedule cannot be turned on. Import the file again once TenuVault has checked the license." : null, {
         ...(planBlocked && { feature: "dailySchedule" as const }),
         warning: SCHEDULE_WARNING,
+        state: [current, plan],
         apply: () => void this.deps.schedules.set(schedule!),
       }))
     }
@@ -640,6 +655,7 @@ export class SettingsTransfer {
       const fields = config && current ? changeNote(changedFields(current, config, CLOUD_NAMES)) : undefined
       items.push(this.item(`${prefix}cloudBackup`, "Cloud backup setup", describeCloud(current), config ? describeCloud(config) : "Not valid", !otherTenant && sameCloud(config, current), !config ? NOT_VALID : otherTenant ? "The cloud backup setup in the file belongs to another tenant." : null, {
         note: [fields, "A record of the Azure resources an Azure administrator created. Applying it changes nothing in Azure."].filter(Boolean).join(" "),
+        state: current,
         apply: () => void this.deps.store.set(cloudKey(tenantId), JSON.stringify(config)),
       }))
     }
@@ -650,12 +666,13 @@ export class SettingsTransfer {
     return items
   }
 
-  private item(id: string, label: string, current: string, next: string, same: boolean, blocked: string | null, extra: Partial<Pick<TransferItem, "feature" | "warning" | "note">> & { apply?: Candidate["apply"] } = {}): Omit<Candidate, "group"> {
-    const { apply, ...rest } = extra
+  private item(id: string, label: string, current: string, next: string, same: boolean, blocked: string | null, extra: Partial<Pick<TransferItem, "feature" | "warning" | "note">> & { apply?: Candidate["apply"]; state?: unknown } = {}): Omit<Candidate, "group"> {
+    const { apply, state, ...rest } = extra
     const status = blocked ? "blocked" : same ? "same" : "change"
     return {
       item: { id, label, current, next, status, ...(blocked && { reason: blocked }), ...rest, selected: status === "change" && !rest.warning },
       ...(apply && { apply }),
+      state: digest(state),
     }
   }
 }

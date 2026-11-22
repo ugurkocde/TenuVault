@@ -109,6 +109,8 @@ export default function OnboardingPage() {
   // browser; its result then belongs to the attempt the admin left and must not sign in by itself.
   const [attempt, setAttempt] = useState(0)
   const currentAttempt = useRef(0)
+  // A sign-in that is being given up right now: a setup file arriving meanwhile treats it as gone.
+  const releasingAccount = useRef(false)
   const [searchParams] = useSearchParams()
   const { addJob, removeJob, updateJob, activeJobs } = useBackupProgress()
   const completedBackup = useRef<string | null>(null)
@@ -199,7 +201,8 @@ export default function OnboardingPage() {
     setReleasing(true)
     setAddError(null)
     try {
-      if (!connected(account.tenantId)) await bridge.license.releaseTenant(account.tenantId)
+      releasingAccount.current = true
+      try { if (!connected(account.tenantId)) await bridge.license.releaseTenant(account.tenantId) } finally { releasingAccount.current = false }
       setAccount(null)
       setChoice(null)
       // With a setup file for another tenant open, the form starts with the file's IDs.
@@ -218,7 +221,7 @@ export default function OnboardingPage() {
    * belongs to another attempt and is given up first, as "Use a different tenant or account" does,
    * so the wizard cannot carry on with the tenant it showed before.
    */
-  const registered = async (result: RegistrationResult) => {
+  const registered = async (result: RegistrationResult, startedIn: number) => {
     resumeCheck.current = false
     const next = { ...fields, tenant: result.tenantId, clientId: result.clientId }
     setFields(next)
@@ -226,11 +229,15 @@ export default function OnboardingPage() {
     setAddError(null)
     if (account) {
       setReleasing(true)
+      releasingAccount.current = true
       // A release the licensing service could not take is repeated at the next start.
       try { if (!connected(account.tenantId)) await bridge.license.releaseTenant(account.tenantId) } catch { /* see above */ }
+      releasingAccount.current = false
       setReleasing(false)
       setAccount(null)
       setChoice(null)
+      // A setup file opened while the sign-in was given up is the admin's newer choice: stop here.
+      if (startedIn !== currentAttempt.current) return
     }
     // With several registrations the admin may want another one than the one TenuVault picked. A
     // sign-in that starts by itself could finish, and move on, while they are going back for it.
@@ -269,7 +276,7 @@ export default function OnboardingPage() {
     setSetup({ importId, connection })
     setSetupNotice("")
     setAutoSignIn(null)
-    if (account) {
+    if (account && !releasingAccount.current) {
       if (sameRegistration(account, connection)) {
         setFields((current) => ({ tenant: connection.tenantId, clientId: connection.clientId, displayName: current.displayName || connection.name }))
         setStep(2)
@@ -522,7 +529,7 @@ export default function OnboardingPage() {
             <ConnectTenantSetup
               trials={Boolean(status?.tenantTrialsEnabled)}
               onManual={() => { setSetupNotice(""); setAutoSignIn(null); setStep(1) }}
-              onRegistered={(result) => { if (attempt === currentAttempt.current) void registered(result) }}
+              onRegistered={(result) => { if (attempt === currentAttempt.current) void registered(result, attempt) }}
             />
             <div className="space-y-3 rounded-2xl bg-secondary/60 px-4 py-3 text-sm text-gray-700">
               <div className="flex flex-wrap items-center justify-between gap-3">
@@ -671,7 +678,7 @@ export default function OnboardingPage() {
             )}
             {setup && credentials && setup.connection.tenantId === credentials.tenantId.toLowerCase() && (
               <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-secondary/60 px-4 py-3 text-sm text-gray-700">
-                <p>The setup file holds more settings, such as services and what is backed up. Review them and choose what to apply.</p>
+                <p>The setup file holds more settings, such as services and what is backed up. Review them before the first backup, so it already uses them.</p>
                 <Button type="button" variant="outline" size="sm" onClick={() => void navigate(`/portal/settings?section=transfer&import=${encodeURIComponent(setup.importId)}`)}>
                   Review settings from the file
                 </Button>

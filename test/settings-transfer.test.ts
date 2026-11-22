@@ -178,7 +178,7 @@ describe("settings file round trip", () => {
     const result = b.transfer.apply(preview.importId, everyItem(preview).map((item) => item.id), "system")
     expect(result.items.every((item) => item.outcome === "applied")).toBe(true)
     expect(result.appearance).toBe("dark")
-    expect(result.servicesChanged).toEqual([TENANT])
+    expect(result.servicesEnabled).toEqual({ [TENANT]: ["conditionalAccess"] })
 
     expect(b.preferences.saved()).toEqual({ retentionDays: 90, keepRunningInTray: false, nightlyUpdates: true })
     expect(b.branding.get()).toEqual(a.branding.get())
@@ -689,5 +689,27 @@ describe("what an import does, as reviewed", () => {
     const preview = b.transfer.open(file({ ...unknown, tenants: [] }), "system")
     expect(preview.skipped).toHaveLength(51)
     expect(preview.skipped.at(-1)).toBe("And 30 more")
+  })
+})
+
+describe("apply integrity against stored values", () => {
+  it("refuses branding that changed after the review even where the preview text shortens it", () => {
+    const b = machine([{ tenantId: TENANT }])
+    const footer = "F".repeat(100)
+    b.branding.set({ companyName: "Contoso", footerText: `${footer}-old` })
+    const preview = b.transfer.open(file({ app: { pdfBranding: { companyName: "Contoso", footerText: "Public" } }, tenants: [] }), "system")
+    b.branding.set({ companyName: "Contoso", footerText: `${footer}-new` })
+    const result = b.transfer.apply(preview.importId, ["app:pdfBranding"], "system")
+    expect(result.items[0]).toMatchObject({ outcome: "failed", message: expect.stringContaining("changed since you reviewed it") })
+    expect(b.branding.get()?.footerText).toBe(`${footer}-new`)
+  })
+
+  it("reports for the permission check only the services an import turned on", () => {
+    const b = machine([{ tenantId: TENANT }])
+    b.modules.set(TENANT, "conditionalAccess", true)
+    const preview = b.transfer.open(file({ tenants: [{ tenantId: TENANT, services: { conditionalAccess: { enabled: false } } }] }), "system")
+    const result = b.transfer.apply(preview.importId, [`${TENANT}:service:conditionalAccess`], "system")
+    expect(result.items[0]?.outcome).toBe("applied")
+    expect(result.servicesEnabled).toEqual({})
   })
 })

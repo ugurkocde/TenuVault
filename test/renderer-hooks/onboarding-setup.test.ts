@@ -953,6 +953,31 @@ describe("setup from a file", () => {
     expect(container.querySelector<HTMLInputElement>("#clientId")!.value).toBe(FILE_CLIENT)
   })
 
+  it("does not sign in by itself when a setup file arrives while an earlier sign-in is being given up", async () => {
+    const account = { tenantId: FILE_TENANT, clientId: FILE_CLIENT, username: "admin@fabrikam.com" }
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 0, tenant: FILE_TENANT, clientId: FILE_CLIENT, displayName: "", account, signedInAt: Date.now() }))
+    state.accounts.mockResolvedValue([account])
+    let fileChosen!: (value: unknown) => void
+    state.transferImport.mockReturnValueOnce(new Promise((done) => { fileChosen = done }))
+    let released!: () => void
+    state.releaseTenant.mockImplementationOnce(() => new Promise<undefined>((done) => { released = () => done(undefined) }))
+    state.createRegistration.mockResolvedValueOnce({ tenantId: TENANT, clientId: CLIENT, username: "admin@contoso.test", reused: false, ready: true, displayName: "TenuVault Desktop", candidateCount: 0, missingConsent: [] })
+    const container = await render(createElement(OnboardingPage))
+    await flush()
+    // The file dialog is open while the in-app setup finishes and starts giving up the earlier sign-in.
+    await act(async () => button(container, "Set up from a file")!.click())
+    await act(async () => { button(container, "Set up with Microsoft sign-in")!.click(); await new Promise((resolve) => setTimeout(resolve, 20)) })
+    expect(state.releaseTenant).toHaveBeenCalledWith(FILE_TENANT)
+    await act(async () => fileChosen(filePreview()))
+    await flush()
+    await act(async () => { released(); await new Promise((resolve) => setTimeout(resolve, 20)) })
+    await flush()
+    expect(state.signIn).not.toHaveBeenCalled()
+    expect(container.querySelector<HTMLInputElement>("#tenant")!.value).toBe(FILE_TENANT)
+    expect(container.querySelector<HTMLInputElement>("#clientId")!.value).toBe(FILE_CLIENT)
+    expect(container.textContent).toContain("From a setup file")
+  })
+
   it("waits for the resumed sign-in to be checked, and treats a gone one as no sign-in", async () => {
     const account = { tenantId: FILE_TENANT, clientId: FILE_CLIENT, username: "admin@fabrikam.com" }
     state.store.set(DRAFT_KEY, JSON.stringify({ step: 1, tenant: FILE_TENANT, clientId: FILE_CLIENT, displayName: "", account, signedInAt: Date.now() }))

@@ -25,16 +25,16 @@ function connectedTenants(tenants: ReturnType<typeof useTenants>) {
 }
 
 /** Which permissions an applied services change still needs, from the sign-in TenuVault already has. */
-export function missingPermissions(status: ServicesStatus): string[] {
+export function missingPermissions(status: ServicesStatus, moduleIds?: string[]): string[] {
   if (status.error) return [`The permissions could not be checked: ${status.error}`]
-  return status.modules.filter((module) => module.enabled && module.check).flatMap((module) => {
+  return status.modules.filter((module) => module.enabled && module.check && (!moduleIds || moduleIds.includes(module.id))).flatMap((module) => {
     const missing = [module.check!.backup !== "ready" && "backups", module.check!.restore !== "ready" && "restores"].filter(Boolean)
     return missing.length ? [`${module.label}: permissions for ${missing.join(" and ")} are missing.`] : []
   })
 }
 
 /** Settings > Import and export. */
-export function SettingsTransfer({ active, onApplied }: { active: boolean; onApplied: () => void }) {
+export function SettingsTransfer({ active, onApplied }: { active: boolean; onApplied: (result: TransferApplyResult) => void }) {
   const [exporting, setExporting] = useState(false)
   const [opening, setOpening] = useState(false)
   const [preview, setPreview] = useState<TransferPreview | null>(null)
@@ -228,7 +228,7 @@ function GroupSection({ group, importId, selected, showUnchanged, onToggle }: { 
 }
 
 /** The review of an opened settings file: choose items, apply, then the result. */
-export function ImportDialog({ preview, paused = false, onClose, onApplied, onExportFirst }: { preview: TransferPreview; paused?: boolean; onClose: () => void; onApplied: () => void; onExportFirst: () => void }) {
+export function ImportDialog({ preview, paused = false, onClose, onApplied, onExportFirst }: { preview: TransferPreview; paused?: boolean; onClose: () => void; onApplied: (result: TransferApplyResult) => void; onExportFirst: () => void }) {
   const items = useMemo(() => preview.groups.flatMap((group) => group.items), [preview])
   const [selected, setSelected] = useState(() => new Set(items.filter((item) => item.selected).map((item) => item.id)))
   const [showUnchanged, setShowUnchanged] = useState(false)
@@ -249,15 +249,17 @@ export function ImportDialog({ preview, paused = false, onClose, onApplied, onEx
       const applied = await bridge.settingsTransfer.apply(preview.importId, chosen.map((item) => item.id), getAppearance())
       if (applied.appearance) setAppearance(applied.appearance)
       setResult(applied)
-      onApplied()
+      onApplied(applied)
       void queryClient.invalidateQueries()
-      if (applied.servicesChanged.length) {
-        // The permission check reads the sign-in TenuVault already holds; it changes nothing.
-        const checks = await Promise.all(applied.servicesChanged.map(async (tenantId) => {
+      const enabled = Object.entries(applied.servicesEnabled)
+      if (enabled.length) {
+        // The permission check reads the sign-in TenuVault already holds; it changes nothing. It covers
+        // only the services this import turned on.
+        const checks = await Promise.all(enabled.map(async ([tenantId, moduleIds]) => {
           const tenant = tenantsRef.current.find((entry) => entry.tenantId === tenantId)
           if (!tenant) return { tenant: tenantId, lines: [] }
           const status = await bridge.services.status(tenantId, tenant.clientId).catch((error: unknown): ServicesStatus => ({ tenantId, modules: [], checkedAt: null, error: message(error) }))
-          return { tenant: tenant.name, lines: missingPermissions(status) }
+          return { tenant: tenant.name, lines: missingPermissions(status, moduleIds) }
         }))
         setPermissions(checks)
       }
