@@ -1,3 +1,4 @@
+import { projectEntry } from './projection'
 import type { KeyValueStore } from '../../../main/storage/secure-store'
 import { AuditEventType, AuditSeverity, AuditResult, type AuditLogEntry } from './types'
 
@@ -12,6 +13,7 @@ function read(): Record<string, AuditLogEntry[]> {
   return value as Record<string, AuditLogEntry[]>
 }
 function write(value: Record<string, AuditLogEntry[]>): void {
+  for (const [account, entries] of Object.entries(value)) value[account] = entries.map(projectEntry)
   if (store) store.set(KEY, JSON.stringify(value))
   else memory = value
 }
@@ -36,10 +38,15 @@ function validEntry(entry: unknown): entry is AuditLogEntry {
   return true
 }
 export function pendingEvents(account: string): AuditLogEntry[] { const value = read()[account]; if (value === undefined) return []; if (!Array.isArray(value) || value.some(entry => !validEntry(entry))) throw new Error('Audit retry queue cannot be read'); return value }
+export function queuedAccounts(): string[] { return Object.keys(read()) }
 export function queueEvent(account: string, entry: AuditLogEntry): void {
   const pending = read()
   const entries = pending[account] ?? []
-  if (entries.some((item) => item.id === entry.id)) return
+  const queued = entries.find(item => item.id === entry.id)
+  if (queued) {
+    if (JSON.stringify(projectEntry(queued)) !== JSON.stringify(projectEntry(entry))) throw new Error('An audit event with this ID already exists in the outbox')
+    return
+  }
   if (entries.length >= 10000) throw new Error('Audit retry queue is full. Restore storage access before recording more events.')
   write({ ...pending, [account]: [...entries, entry] })
 }

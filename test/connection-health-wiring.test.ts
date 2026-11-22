@@ -39,9 +39,9 @@ describe("connection health wiring", () => {
   it("hands every run's outcomes to connection health, and checks as a backup starts and after it ended", () => {
     expect(main).toContain("onOutcomes: (outcomes, request) => health.recordRun(outcomes, request),")
     expect(main).toContain("onToken: (runId, granted) => health.runToken(runId, granted),")
-    const started = main.match(/onStarted: \(job, request\) => \{([\s\S]*?)\n    \},/)?.[1] ?? ""
+    const started = main.match(/onStarted: \(job, request, tokens\) => \{([\s\S]*?)\n    \},/)?.[1] ?? ""
     expect(started).toContain('void health.check(request.tenantId, "beforeBackup", { reader: job.authMode === "app-only" }).catch(() => undefined)')
-    const finished = main.match(/onFinished: \(job, request\) => \{([\s\S]*?)\n    \},/)?.[1] ?? ""
+    const finished = main.match(/onFinished: \(job, request, tokens\) => \{([\s\S]*?)\n    \},/)?.[1] ?? ""
     expect(finished).toContain('void health.check(request.tenantId, "afterBackup", { reader: job.authMode === "app-only", failed: job.status === "Failed" }).catch(() => undefined)')
     // Whose sign-in a run reads with is noted as it starts, before anything else, and let go of when its job ended.
     expect(started.trimStart().startsWith("health.runStarted(job, request)")).toBe(true)

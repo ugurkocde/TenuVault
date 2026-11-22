@@ -4,7 +4,7 @@ import type { Item } from "../../../shared/intune/registry"
 import type { GraphCall } from "~/lib/policies/graph-restore"
 
 /** A read definition; name is null when Graph gives it only the generic group collection name and no keyword. */
-type Definition = { name: string | null; options: Record<string, string> }
+type Definition = { name: string | null; options: Record<string, string>; verified?: boolean }
 
 /**
  * Setting definitions read so far, by ID; null for IDs Graph does not know. Definitions are
@@ -47,7 +47,7 @@ function parseDefinition(body: { displayName?: unknown; keywords?: unknown; opti
 interface BatchItem {
   id: string
   status: number
-  body?: { displayName?: unknown; keywords?: unknown; options?: unknown }
+  body?: { id?: unknown; displayName?: unknown; keywords?: unknown; options?: unknown }
 }
 
 /**
@@ -60,8 +60,13 @@ export async function readSettingNames(ids: string[], graph: GraphCall, signal?:
   return (await readSettingNamesReport(ids, graph, signal)).names
 }
 
+/** Catalog IDs already verified by a Graph response, without issuing a request. */
+export function cachedVerifiedSettingIds(ids: string[]): string[] {
+  return ids.filter(id => definitions.get(id)?.verified === true)
+}
+
 /** readSettingNames, saying whether any lookup failed (so some names may be missing for that reason). */
-export async function readSettingNamesReport(ids: string[], graph: GraphCall, signal?: AbortSignal): Promise<{ names: SettingNames; failed: boolean }> {
+export async function readSettingNamesReport(ids: string[], graph: GraphCall, signal?: AbortSignal): Promise<{ names: SettingNames; failed: boolean; verifiedIds: string[] }> {
   const uncached = [...new Set(ids.filter((id) => !definitions.has(id)))]
   let failed = false
   for (let start = 0; start < uncached.length && !failed; start += BATCH_SIZE) {
@@ -93,7 +98,9 @@ export async function readSettingNamesReport(ids: string[], graph: GraphCall, si
       if (!item) { failed = true; continue }
       if (item.status === 404) { cacheDefinition(id, null); continue }
       if (item.status !== 200) { failed = true; continue }
-      cacheDefinition(id, parseDefinition(item.body ?? {}))
+      const definition = parseDefinition(item.body ?? {})
+      cacheDefinition(id, definition ? { ...definition, verified: item.body?.id === id }
+        : item.body?.id === id ? { name: null, options: {}, verified: true } : null)
     }
   }
   const names: SettingNames = { settings: {}, options: {} }
@@ -103,7 +110,7 @@ export async function readSettingNamesReport(ids: string[], graph: GraphCall, si
     if (definition.name) names.settings[id] = definition.name
     Object.assign(names.options, definition.options)
   }
-  return { names, failed }
+  return { names, failed, verifiedIds: cachedVerifiedSettingIds(ids) }
 }
 
 /** For tests. */

@@ -166,3 +166,7 @@ By default, items are restored to the tenant selected at the top of **Backup & R
 * [Restore Intune policies](/restore/)
 * [What cannot be restored and restore write history](/restore/limitations/)
 * [Plans and features](/licensing/)
+
+### Recorded outcomes
+
+**Job details** in [Audit Log](/audit-log/) records created copies and in-place updates as separate item outcomes. It also shows unchanged, skipped, failed, partial, pending and unattempted items. Applied fields describe steps accepted by Intune. Verified fields are shown when a read confirmed them.

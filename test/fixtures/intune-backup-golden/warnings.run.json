@@ -52,7 +52,7 @@
       "Found 0 Apple user enrollment profiles.",
       "Found 0 Apple automated device enrollment tokens and profiles.",
       "Found 0 Android Enterprise enrollment profiles.",
-      "Could not read device categories: Something went wrong",
+      "Could not read device categories: Microsoft Graph request failed (HTTP 400).",
       "Found 0 terms and conditions.",
       "Found 0 assignment filters.",
       "Found 1 scope tags (1 built-in skipped).",
@@ -61,7 +61,7 @@
       "Found 0 Company Portal branding.",
       "Found 0 device clean-up rules.",
       "Found 0 multi admin approval policies.",
-      "Could not back up \"Win: BitLocker/Encryption\": Something went wrong",
+      "Could not back up \"Win: BitLocker/Encryption\": Microsoft Graph request failed (HTTP 400).",
       "Backed up 1 device configuration profiles.",
       "Backed up 1 settings catalog and endpoint security policies.",
       "Backed up 1 compliance policies.",
@@ -84,7 +84,7 @@
           "failed": 1,
           "found": 2,
           "errors": [
-            "Win: BitLocker/Encryption: Something went wrong"
+            "Win: BitLocker/Encryption: Microsoft Graph request failed (HTTP 400)."
           ]
         },
         {
@@ -374,7 +374,7 @@
           "state": "unreadable",
           "saved": 0,
           "failed": 0,
-          "reason": "Something went wrong"
+          "reason": "Microsoft Graph request failed (HTTP 400)."
         },
         {
           "folder": "TermsAndConditions",

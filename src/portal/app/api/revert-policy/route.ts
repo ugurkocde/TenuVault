@@ -1,10 +1,13 @@
 import { backupStoragePath } from "../../../../shared/backup-storage"
+import { randomUUID } from "node:crypto"
+import { beginRestoreAudit, recordRestorePreparationFailure, restoreAuditItem } from "~/lib/audit/restore"
+import { AuditEventType } from "~/lib/audit/types"
 import { readOwnedBackup, UNTAGGED_BACKUP } from "~/lib/policies/backup-owner"
 import { checkRestoreManifest, verifySnapshot } from "~/lib/policies/backup-manifest"
 import { grantedPermissions } from "../../../../shared/services/token"
 import { validPolicyPath } from "~/lib/policies/restore"
 import { isGraphId, isGuid } from "../../../../shared/security"
-import { graphCaller, Restorer } from "~/lib/policies/graph-restore"
+import { graphCaller, Restorer, type RestoreOutcome } from "~/lib/policies/graph-restore"
 import { readLegacyRevertHistory, revertHistoryPath } from "~/lib/policies/revert-history"
 import { type NextRequest, NextResponse } from "next/server"
 interface RevertPolicyRequest {
@@ -46,6 +49,7 @@ interface RevertMetadata {
 
 export async function POST(request: NextRequest) {
   let body: RevertPolicyRequest | null = null;
+  let preparationFailed: (() => void) | undefined
   
   try {
     body = await request.json() as RevertPolicyRequest
@@ -90,15 +94,26 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Invalid policy backup path' }, { status: 400 })
     }
 
+    const backupId = backupPath.split('/')[0] ?? ''
+    const operationId = randomUUID()
+    const auditAction = action === "revert" ? "Revert policy to the backed-up version in place" : "Restore policy as an unassigned copy"
+    let auditToken: string | undefined
+    preparationFailed = () => {
+      void recordRestorePreparationFailure({
+        destination: tenantId, graphToken: auditToken, sourceBackupId: backupId,
+        operationId, runId: operationId, action: auditAction,
+      }).catch(() => console.warn("[audit] Restore preparation failure could not be recorded"))
+    }
+
     // Get access tokens for both Azure Storage and Microsoft Graph
     const [storageToken, graphToken] = await Promise.all([
       getAccessToken(tenantId, appId, clientSecret, "https://storage.azure.com/.default"),
       getAccessToken(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default")
     ])
+    auditToken = graphToken
 
     // A shared container can hold other tenants' backups; never restore from one of those. Revert
     // and recreate change the live policy, so they need a backup that names this tenant.
-    const backupId = backupPath.split('/')[0] ?? ''
     const owned = await readOwnedBackup((name) => fetch(`https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(name)}`, {
       headers: { 'x-ms-version': '2021-12-02', 'Authorization': `Bearer ${storageToken}` },
     }), backupId, tenantId, storageAccountName)
@@ -110,7 +125,6 @@ export async function POST(request: NextRequest) {
 
     // Fetch the policy content from the backup
     const policyUrl = `https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(backupPath)}`
-    console.log("Attempting to fetch policy from:", policyUrl)
     
     const backupResponse = await fetch(policyUrl, {
       headers: {
@@ -121,13 +135,6 @@ export async function POST(request: NextRequest) {
 
     if (!backupResponse.ok) {
       const errorText = await backupResponse.text()
-      console.error("Failed to fetch policy from backup:", {
-        status: backupResponse.status,
-        statusText: backupResponse.statusText,
-        error: errorText,
-        url: policyUrl
-      })
-      
       // Provide more specific error messages
       if (backupResponse.status === 404) {
         return NextResponse.json(
@@ -155,8 +162,21 @@ export async function POST(request: NextRequest) {
     catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 }) }
     
     // Restore creates an unassigned copy; revert puts the existing policy back to the backed-up version.
-    const outcome = await new Restorer(graphCaller(graphToken, fetch, { tenant: tenantId, refreshToken: () => getAccessToken(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default", true) }), { identityOrigin: "drift", guardedRunId: body.guardedRunId, mode: action === 'revert' ? 'replace' : 'copy', assignments: false, granted: grantedPermissions(graphToken) })
-      .restore(backupPath, policyContent)
+    preparationFailed = undefined
+    const audit = beginRestoreAudit({
+      destination: tenantId, graphToken, sourceBackupId: backupId, operationId,
+      action: auditAction,
+      eventType: action === "revert" ? AuditEventType.POLICY_REVERTED : AuditEventType.POLICY_RESTORED,
+      items: [restoreAuditItem(backupPath, undefined, policyContent.id)],
+    })
+    audit?.started(0)
+    let outcome: RestoreOutcome
+    try {
+      outcome = await new Restorer(graphCaller(graphToken, fetch, { tenant: tenantId, refreshToken: () => getAccessToken(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default", true) }), { identityOrigin: "drift", guardedRunId: body.guardedRunId, mode: action === 'revert' ? 'replace' : 'copy', assignments: false, granted: grantedPermissions(graphToken), operationId,
+        auditProgress: result => audit?.item(0, restoreAuditItem(backupPath, result, policyContent.id)) })
+        .restore(backupPath, policyContent)
+      audit?.item(0, restoreAuditItem(backupPath, outcome, policyContent.id))
+    } finally { audit?.finish() }
     const result = { success: outcome.success, error: outcome.error, policyId: outcome.policyId }
 
     if (!result.success) {
@@ -215,13 +235,15 @@ export async function POST(request: NextRequest) {
       policyId: result.policyId
     })
 
-  } catch (error) {
-    console.error("Revert policy error:", error)
+  } catch {
+    console.error("Revert policy could not finish")
     
     return NextResponse.json(
       { error: "Internal server error while reverting policy" },
       { status: 500 }
     )
+  } finally {
+    preparationFailed?.()
   }
 }
 
@@ -345,8 +367,7 @@ async function writeRevertMetadata(
 
     if (!putResponse) return
     if (!putResponse.ok) {
-      const errorBody = await putResponse.text()
-      console.error("Failed to write revert metadata:", putResponse.status, putResponse.statusText, errorBody)
+      console.error("Failed to write revert metadata:", putResponse.status)
       
       // If it's a permission error, try to store locally or in a different way
       if (putResponse.status === 403) {

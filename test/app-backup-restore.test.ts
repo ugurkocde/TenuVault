@@ -10,13 +10,15 @@ import { spawn } from "node:child_process"
 import { once } from "node:events"
 import { AppSourceStore } from "../src/main/app-sources/store"
 import { AppSourceService } from "../src/main/app-sources/service"
+import { AuditSink, setMainAuditSink } from "../src/main/api/audit-sink"
+import { pendingEvents, setAuditOutboxStore } from "../src/portal/lib/audit/outbox"
 import { restoreDestinationPlan } from "../src/main/app-backup/restore-plan"
 import { withPlanError } from "../src/shared/plan-errors"
 import { LicenseService } from "../src/main/license/service"
 import { memoryStore } from "./helpers"
 import { PlanRequired, type Plan } from "../src/shared/plans"
 import { ingestContent, type ContentEncryption } from "../src/main/app-backup/content-stream"
-import { restoreCapturedApp } from "../src/main/app-backup/restore"
+import { appRestoreAuditItem, restoreAppWithAudit, restoreCapturedApp, type AppRestoreAuditObservation } from "../src/main/app-backup/restore"
 import { restoreGraph, putRestoreBlock, type RestoreGraph } from "../src/main/app-backup/restore-graph"
 import { assertRestoredSettings, readRestoreSnapshot, restoreBody, snapshotHash, type AppRestoreSnapshot } from "../src/main/app-backup/restore-snapshot"
 import { encryptRestoreContent, newRestoreSecrets } from "../src/main/app-backup/restore-encryption"
@@ -196,14 +198,18 @@ describe("cross-tenant restore engine", () => {
     expect(d.fetcher).not.toHaveBeenCalled()
   })
   it("uploads a fresh encrypted installer, verifies commit, publishes unassigned and retries without duplicating", async () => {
-    const f = await fixture(), d = destination(), opts = options(d)
+    const f = await fixture(), d = destination(), audit = vi.fn(), opts = { ...options(d), audit }
     const result = await restoreCapturedApp(f.store, f.source, snapshot, target, "Restored", opts)
     expect(result).toMatchObject({ tenantId: target, sourceId: f.source.id, contentVersion: "1" })
     const commit = d.calls.find(([, p]) => p.endsWith("/commit"))![2]!.fileEncryptionInfo as ContentEncryption
     const written: Buffer[] = []
     await ingestContent(stream(d.wire), commit, f.plain.length, async b => { written.push(Buffer.from(b)) })
     expect(Buffer.concat(written)).toEqual(f.plain)
+    const operationId = audit.mock.lastCall?.[0]?.operationId
+    expect(operationId).toBeTruthy()
+    expect(audit).toHaveBeenLastCalledWith(expect.objectContaining({ operationId, appId: result.appId, creationApplied: true, metadataVerified: true, publicationVerified: true }))
     expect(await restoreCapturedApp(f.store, f.source, snapshot, target, "Restored", opts)).toEqual(result)
+    expect(audit).toHaveBeenLastCalledWith(expect.objectContaining({ operationId, appId: result.appId, unchanged: true, publicationVerified: true }))
     expect(d.calls.filter(([m, p]) => m === "POST" && p.endsWith("/mobileApps"))).toHaveLength(1)
     expect(d.calls.some(([m, p]) => m !== "GET" && p.endsWith("/assignments"))).toBe(false)
     expect(opts.progress).toHaveBeenLastCalledWith(expect.objectContaining({ phase: "completed" }))
@@ -261,12 +267,81 @@ describe("cross-tenant restore engine", () => {
   })
 })
 
-it("binds service restore to both configured tenants, captured provenance and the reviewed settings hash", async () => {
+it.each(["cancelled", "failed"] as const)("queues one %s preflight outcome without reading the restore journal", async status => {
+  const f = await fixture(), controller = new AbortController(), operationId = randomUUID()
+  await f.store.writeRestoreRecord(tenant, f.source.id, target, {
+    schema: 1, id: randomUUID(), sourceId: f.source.id, target, name: "Restored", settingsHash: snapshotHash(snapshot),
+    secrets: newRestoreSecrets(), creationStarted: false,
+  })
+  let release!: () => void, entered!: () => void
+  const signingIn = new Promise<void>(resolve => { entered = resolve })
+  const gate = new Promise<void>(resolve => { release = resolve })
+  const read = vi.spyOn(f.store, "readRestoreRecord")
+  const journal = memoryStore(), account = "apprestoretest"
+  setAuditOutboxStore(journal)
+  setMainAuditSink(new AuditSink({
+    store: journal,
+    bind: tenantId => tenantId === target ? { tenantId, storageAccountName: account, user: { id: appId, name: "Admin", email: "" } } : undefined,
+    transport: async () => { throw new Error("Offline") },
+  }))
+  const privateError = "private Microsoft sign-in error"
+  const getGraphToken = vi.fn(async () => {
+    entered()
+    await gate
+    throw new Error(privateError)
+  })
+  const fetch = vi.fn()
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+  try {
+    const operation = restoreAppWithAudit(f.store, f.source, snapshot, target, "Restored", {
+      operationId, getGraphToken, fetch, signal: controller.signal, progress: vi.fn(),
+    })
+    await signingIn
+    if (status === "cancelled") controller.abort()
+    release()
+    await expect(operation).rejects.toThrow(status === "cancelled" ? "aborted" : "destination request was interrupted")
+    expect(getGraphToken).toHaveBeenCalledOnce()
+    expect(read).not.toHaveBeenCalled()
+    expect(fetch).not.toHaveBeenCalled()
+    expect(pendingEvents(account)).toMatchObject([{
+      action: "Restore app backup",
+      job: { operationId, sourceBackupId: f.source.id, status, reason: "RESTORE_PREPARATION_FAILED" },
+    }])
+    expect(journal.get("audit.pending-events")).not.toContain(privateError)
+  } finally {
+    warn.mockRestore()
+    setMainAuditSink(undefined)
+    setAuditOutboxStore()
+  }
+})
+
+it.each([true, false])("binds service restore to both configured tenants and the reviewed settings hash (destination storage: %s)", async (destinationHasStorage) => {
   const f = await fixture(), restore = vi.fn(async () => ({ appId: randomUUID(), tenantId: target, name: "Restored", contentVersion: "1", sourceId: f.source.id }))
   const service = new AppSourceService({ restore, restorePlan: async () => "pro", knownTenant: t => [tenant, target].includes(t), folder: () => f.root, keys: () => [f.master], setFolder: vi.fn(), pickFolder: vi.fn(), pickExport: vi.fn(), openFolder: vi.fn(), confirmNewStore: vi.fn(), checkDevice: vi.fn(), signIn: vi.fn(), details: vi.fn(), apps: vi.fn(), printDetails: vi.fn(), downloadScript: vi.fn() })
   expect((await service.restoreReview(tenant, f.source.id)).settingsHash).toBe(snapshotHash(snapshot))
   expect(() => service.restore(tenant, randomUUID(), f.source.id, randomUUID(), "Restored", snapshotHash(snapshot))).toThrow("configured")
-  await expect(service.restore(tenant, randomUUID(), f.source.id, target, "Restored", "0".repeat(64))).rejects.toThrow("changed")
+  const account = "apprestoretest", operationId = randomUUID(), journal = memoryStore()
+  setAuditOutboxStore(journal)
+  setMainAuditSink(new AuditSink({
+    store: journal,
+    bind: destination => destination === tenant || destinationHasStorage && destination === target
+      ? { tenantId: destination, storageAccountName: account, user: { id: appId, name: "Admin", email: "" } }
+      : undefined,
+    transport: async () => { throw new Error("Offline") },
+  }))
+  try {
+    await expect(service.restore(tenant, operationId, f.source.id, target, "Restored", "0".repeat(64))).rejects.toThrow("The app settings changed. Review them before restoring.")
+    expect(restore).not.toHaveBeenCalled()
+    expect(pendingEvents(account)).toMatchObject([{
+      user: { tenantId: destinationHasStorage ? target : tenant, id: destinationHasStorage ? appId : "unknown" },
+      job: { operationId, sourceBackupId: f.source.id, status: "failed", reason: "RESTORE_PREPARATION_FAILED",
+        ...(!destinationHasStorage ? { destinationTenantId: target } : {}) },
+    }])
+    if (destinationHasStorage) expect(pendingEvents(account)[0]?.job?.destinationTenantId).toBeUndefined()
+  } finally {
+    setMainAuditSink(undefined)
+    setAuditOutboxStore()
+  }
   await service.restore(tenant, randomUUID(), f.source.id, target, "Restored", snapshotHash(snapshot))
   expect(restore).toHaveBeenCalledOnce()
 })
@@ -445,5 +520,28 @@ describe("restore ownership across processes", () => {
     const action = vi.fn(async () => {})
     await expect(f.store.withRestoreLock(tenant, f.source.id, target, new AbortController().signal, action)).rejects.toThrow("owns this restore")
     expect(action).not.toHaveBeenCalled(); expect(await readdir(directory)).toHaveLength(kind === "empty" ? 0 : 1)
+  })
+})
+
+it("records a resumed draft as created and a read-only refusal as failed for the same operation", async () => {
+  const f = await fixture(), d = destination()
+  const original = { folder: "Apps", outcome: "unattempted" as const }
+  const audit = vi.fn<(event: AppRestoreAuditObservation) => void>()
+  const optionsWithAudit = { ...options(d), audit }
+  const interrupted: RestoreGraph = async (method, url, body) => {
+    if (method === "GET" && url.endsWith("/assignments")) throw new Error("HTTP 403")
+    return d.graph(method, url, body)
+  }
+  await expect(restoreCapturedApp(f.store, f.source, snapshot, target, "Restored", { ...optionsWithAudit, graph: interrupted })).rejects.toThrow("HTTP 403")
+  expect(appRestoreAuditItem(original, audit.mock.lastCall?.[0], true).outcome).toBe("partial")
+  const operationId = audit.mock.lastCall?.[0].operationId
+  const writes = d.calls.filter(([method]) => method !== "GET").length
+  await expect(restoreCapturedApp(f.store, f.source, snapshot, target, "Restored", { ...optionsWithAudit, graph: interrupted })).rejects.toThrow("HTTP 403")
+  expect(d.calls.filter(([method]) => method !== "GET")).toHaveLength(writes)
+  expect(audit.mock.lastCall?.[0].operationId).toBe(operationId)
+  expect(appRestoreAuditItem(original, audit.mock.lastCall?.[0], true)).toMatchObject({ outcome: "failed", targetId: d.app!.id, applied: [] })
+  await restoreCapturedApp(f.store, f.source, snapshot, target, "Restored", optionsWithAudit)
+  expect(appRestoreAuditItem(original, audit.mock.lastCall?.[0])).toMatchObject({
+    outcome: "created", targetId: d.app!.id, applied: [{ operation: "publish", field: "content" }],
   })
 })

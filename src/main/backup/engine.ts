@@ -4,6 +4,8 @@ import { isLargeBackup, LARGE_BACKUP_CONTAINER } from "../../shared/backup-stora
 import { captureLarge } from "./large"
 import { LARGE_JOB_MS, LARGE_TYPE_MS, LARGE_TYPE_REQUESTS, type LargeIndexes } from "../../shared/large-backup"
 import { backupTypeUse } from "../../shared/services/backup-use"
+import { auditUserFromToken } from "../api/audit-sink"
+import type { AuditUser } from "~/lib/audit/types"
 export { assertStorageAccountName } from "../../shared/storage-account"
 export { ProtectedBlobError, isImmutabilityRefusal } from "./request"
 import { createHash, randomUUID } from "node:crypto"
@@ -61,6 +63,8 @@ export interface BackupJob {
   credentialError?: true
   /** Set when the job failed because Microsoft or the storage account could not be reached, including timeouts. */
   unreachable?: boolean
+  /** A manifest PUT was dispatched, but the final response did not confirm it. */
+  commitUnconfirmed?: boolean
   log: string[]
   /** Per type results and notices for progress views, filled as the run goes; absent until the run starts. */
   results?: BackupResults
@@ -81,6 +85,8 @@ export type BackupAuthMode = "delegated" | "app-only"
 /** The tokens one backup run uses for Microsoft Graph and Azure Storage, chosen once when it starts. */
 export interface RunTokens {
   mode: BackupAuthMode
+  registrationId?: string
+  auditUser?: AuditUser
   /** `fresh`: a token Microsoft issues now instead of a cached one, which proves that the sign-in still works. */
   graph: (options?: { fresh?: boolean }) => Promise<string>
   storage: () => Promise<string>
@@ -125,12 +131,13 @@ export interface BackupEngineDeps {
   /** Items read at the same time. Graph throttling (429) pauses every reader. */
   concurrency?: number
   /**
-   * Called once when a request got a job of its own, before the job reads anything. A request that
-   * joined a running job, or was refused because of one, started nothing and is not announced.
+   * Called once when a request got a job of its own, before the job reads Graph or starts writing its
+   * assigned folder. A request that joined a running job, or was refused because of one, started
+   * nothing and is not announced.
    */
-  onStarted?: (job: BackupJob, request: BackupRequest) => void
+  onStarted?: (job: BackupJob, request: BackupRequest, tokens: RunTokens) => void
   /** Called once when a job has ended, with the request that started it. */
-  onFinished?: (job: BackupJob, request: BackupRequest) => void
+  onFinished?: (job: BackupJob, request: BackupRequest, tokens?: RunTokens) => void
   /**
    * Called once for a run that got as far as choosing what to read, before onFinished, with how each
    * selected type ended. The same outcomes are in the backup's manifest when the run wrote one.
@@ -382,12 +389,6 @@ export class BackupEngine {
     this.running.set(tenantKey, { job, key, mode: tokens.mode })
     this.prune()
     if (queued) this.write(job, "Queued behind another tenant's backup; backups run one at a time.")
-    // A failing listener must not keep the job from running.
-    try {
-      this.deps.onStarted?.(job, request)
-    } catch (error) {
-      console.warn("[backup] Could not announce the start of a backup:", error)
-    }
 
     let releaseTurn: () => void = () => {}
     const turnDone = new Promise<void>(resolve => { releaseTurn = resolve })
@@ -455,7 +456,7 @@ export class BackupEngine {
         if (this.running.get(tenantKey)?.job === job) this.running.delete(tenantKey)
         this.executions.delete(job.id)
         this.pending--
-        this.finished(job, request)
+        this.finished(job, request, tokens)
       })
       .then(() => job)
     // Existing runs release their turn only when fully settled. Streaming runs release before
@@ -477,14 +478,14 @@ export class BackupEngine {
   }
 
   /** A failing listener must not change how the job ended. */
-  private finished(job: BackupJob, request: BackupRequest): void {
+  private finished(job: BackupJob, request: BackupRequest, tokens?: RunTokens): void {
     try {
       if (job.outcomes) this.deps.onOutcomes?.(job.outcomes, request)
     } catch (error) {
       console.warn("[backup] Could not hand over the outcomes of a backup:", error)
     }
     try {
-      this.deps.onFinished?.(job, request)
+      this.deps.onFinished?.(job, request, tokens)
     } catch (error) {
       console.warn("[backup] Could not record the end of a backup:", error)
     }
@@ -504,6 +505,12 @@ export class BackupEngine {
     const streaming = this.hasLargeTypes(request.tenantId, request.scope ?? EVERYTHING)
     let backupFolder = `backup-${folderTimestamp(started)}`
     job.backupFolder = backupFolder
+    try {
+      this.deps.onStarted?.(job, request, tokens)
+    } catch {
+      console.warn("[audit] Backup audit checkpoint could not be saved")
+      this.write(job, "The audit checkpoint could not be saved. Terminal audit recording will still be attempted.", "warning")
+    }
     this.write(job, `Backing up tenant ${request.tenantId} to ${local ? "this device (encrypted)" : `storage account ${request.storageAccountName}`}.`)
     if (!streaming) this.write(job, `Backup folder: ${backupFolder}`)
     if (tokens.mode === "app-only") this.write(job, "Reading as the tenant's Backup Reader (app-only, read-only).")
@@ -518,6 +525,7 @@ export class BackupEngine {
     let lastToken: string | undefined
     const graphToken = async (options?: { fresh: true }) => {
       const token = await tokenOrStop(() => (options ? tokens.graph(options) : tokens.graph()), outcome)
+      tokens.auditUser ??= auditUserFromToken(token, request.tenantId)
       if (token !== lastToken) {
         lastToken = token
         observeToken(grantedPermissions(token))
@@ -849,6 +857,7 @@ export class BackupEngine {
         BackupFolder: folder,
         StartTime: displayTime(started),
         EndTime: displayTime(ended),
+        CompletedAt: ended.toISOString(),
         Duration: seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`,
         DurationSeconds: seconds,
         // Inventory such as Autopilot devices is counted under its own folder, not as policies.
@@ -890,8 +899,13 @@ export class BackupEngine {
       timer.unref?.()
       const commitNetwork = new NetworkCircuit(3 * concurrency, controller.signal, commitDeadline)
       const writer = new BlobWriter(fetchImpl, request.storageAccountName, storageToken, commitNetwork)
+      let unconfirmed = false
       try {
-        await writer.put(`${folder}/metadata.json`, JSON.stringify(metadata, null, 2), network, false, () => { if (trackCommit) stopped.committing = true })
+        await writer.put(`${folder}/metadata.json`, JSON.stringify(metadata, null, 2), network, false, () => { if (trackCommit) stopped.committing = true }, undefined, () => { unconfirmed = true })
+      } catch (error) {
+        // Keep the job failure and let audit reconcile the possible storage commit separately.
+        if (unconfirmed && trackCommit) job.commitUnconfirmed = true
+        throw error
       } finally { clearTimeout(timer) }
     }
     // From here the folder is this run's, so a run that stops early records it as failed, or as cancelled when the user cancelled it.

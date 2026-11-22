@@ -28,7 +28,7 @@ describe("audit callbacks cannot replace a completed route response", () => {
     const accountFor = vi.fn((tenantId: string) => { tenantId.toLowerCase(); return null })
     const record = createAuditRecorder(dispatch, accountFor)
     const body = JSON.stringify({ ...credentials, tenantId })
-    expect(() => record(new Request("http://tenuvault.internal/api/backup/start", { method: "POST" }), body, Response.json({ jobId: "fixture-job" }))).not.toThrow()
+    expect(() => record(new Request("http://tenuvault.internal/api/download-backup", { method: "POST" }), body, Response.json({ jobId: "fixture-job" }))).not.toThrow()
     expect(accountFor).not.toHaveBeenCalled()
     expect(dispatch).not.toHaveBeenCalled()
   })
@@ -51,7 +51,7 @@ describe("audit callbacks cannot replace a completed route response", () => {
   it.each(["null", "[]", "42", "true", "{invalid"])("skips malformed audit bodies (%s)", (body) => {
     const dispatch = vi.fn(async () => Response.json({ success: true }))
     const record = createAuditRecorder(dispatch, () => null)
-    expect(() => record(new Request("http://tenuvault.internal/api/backup/start", { method: "POST" }), body, Response.json({}))).not.toThrow()
+    expect(() => record(new Request("http://tenuvault.internal/api/download-backup", { method: "POST" }), body, Response.json({}))).not.toThrow()
     expect(dispatch).not.toHaveBeenCalled()
   })
 
@@ -82,7 +82,7 @@ describe("audit callbacks cannot replace a completed route response", () => {
   it("logs when the audit write itself fails instead of dropping the entry silently", async () => {
     const log = vi.spyOn(console, "error").mockImplementation(() => undefined)
     const record = createAuditRecorder(async () => new Response("no", { status: 503 }), () => null)
-    record(new Request("http://tenuvault.internal/api/backup/start", { method: "POST" }), JSON.stringify(credentials), Response.json({ jobId: "fixture-job" }))
+    record(new Request("http://tenuvault.internal/api/download-backup", { method: "POST" }), JSON.stringify(credentials), Response.json({ jobId: "fixture-job" }))
     await vi.waitFor(() => expect(log).toHaveBeenCalled())
     expect(log.mock.calls.flat().join(" ")).toContain("503")
   })
@@ -91,10 +91,10 @@ describe("audit callbacks cannot replace a completed route response", () => {
     const entries: unknown[] = []
     const accountFor = vi.fn(() => ({ tenantId: TENANT, clientId: "fixture-app", username: "admin@example.test", name: "Fixture admin", homeAccountId: "fixture-account" }))
     const record = createAuditRecorder(async (request) => { entries.push(await request.json()); return Response.json({ success: true }) }, accountFor)
-    record(new Request("http://tenuvault.internal/api/backup/start", { method: "POST" }), JSON.stringify(credentials), Response.json({ jobId: "fixture-job" }))
+    record(new Request("http://tenuvault.internal/api/download-backup", { method: "POST" }), JSON.stringify(credentials), Response.json({ jobId: "fixture-job" }))
     await vi.waitFor(() => expect(entries).toHaveLength(1))
     expect(accountFor).toHaveBeenCalledWith(TENANT)
-    expect(entries[0]).toMatchObject({ tenantId: TENANT, user: { name: "Fixture admin" }, logEntry: { eventType: "BACKUP_STARTED", result: "SUCCESS" } })
+    expect(entries[0]).toMatchObject({ tenantId: TENANT, user: { name: "Fixture admin" }, logEntry: { eventType: "BACKUP_DOWNLOADED", result: "SUCCESS" } })
   })
 })
 
@@ -106,14 +106,13 @@ it.each(["detect", "list", "dismiss"])("does not audit approval %s", async appro
   expect(dispatch).not.toHaveBeenCalled()
   expect(notice).not.toHaveBeenCalled()
 })
-it.each(["submit", "complete", "withdraw"])("audits approval %s and notifies only completion", async approvalAction => {
-  const entries: { logEntry: { action: string; eventType: string } }[] = []
-  const dispatch = vi.fn(async (request: Request) => { entries.push(await request.json()); return Response.json({ success: true }) })
+it.each(["submit", "complete", "withdraw"])("leaves approval %s audit to the route and notifies only completion", async approvalAction => {
+  const dispatch = vi.fn(async () => Response.json({ success: true }))
   const notice = vi.fn()
   const data = approvalAction === "withdraw" ? { success: true } : { outcome: { success: approvalAction === "complete", path: "backup/example.json", policyId: "item", ...(approvalAction === "submit" ? { approval: { kind: "pending" }, approvalId: "request", approvalState: "submitted" } : {}) } }
   createAuditRecorder(dispatch, () => null, notice)(new Request("http://tenuvault.internal/api/restore-backup", { method: "POST" }), JSON.stringify({ ...credentials, approvalAction }), Response.json(data))
-  await vi.waitFor(() => expect(entries).toHaveLength(1))
-  expect(entries[0]!.logEntry.action).toBe(({ submit: "Restore submitted for approval", complete: "Complete approved restore item", withdraw: "Approval request withdrawn" })[approvalAction])
+  await new Promise(resolve => setTimeout(resolve, 0))
+  expect(dispatch).not.toHaveBeenCalled()
   expect(notice).toHaveBeenCalledTimes(approvalAction === "complete" ? 1 : 0)
   if (approvalAction === "complete") expect(notice).toHaveBeenCalledWith(expect.objectContaining({ restored: 1, failed: 0, status: "Completed" }))
 })
@@ -140,7 +139,7 @@ it.each([
     await new Promise<void>(resolve => setTimeout(resolve, 0))
     expect(tally.mock.calls).toEqual(feature ? [[TENANT, feature]] : [])
     expect(network).not.toHaveBeenCalled()
-    expect(dispatch).toHaveBeenCalledOnce()
+    expect(dispatch).not.toHaveBeenCalled()
   } finally { vi.unstubAllGlobals() }
 })
 
@@ -150,7 +149,7 @@ it("does not tally a partially completed restore", async () => {
   createAuditRecorder(dispatch, () => null, undefined, tally)(new Request("http://tenuvault.internal/api/restore-backup", { method: "POST" }), JSON.stringify({ ...credentials, restoreType: "full" }), Response.json({ success: true, status: "PartiallyCompleted", details: { restoredCount: 1, partialCount: 1, failedCount: 0, results: [] } }))
   await new Promise<void>(resolve => setTimeout(resolve, 0))
   expect(tally).not.toHaveBeenCalled()
-  expect(dispatch).toHaveBeenCalledOnce()
+  expect(dispatch).not.toHaveBeenCalled()
 })
 
 it.each([["replace", false], ["replace", true], ["copy", false], ["copy", true]] as const)("does not tally completed approval items in %s mode (assignments %s)", async (mode, assignments) => {
@@ -161,7 +160,8 @@ it.each([["replace", false], ["replace", true], ["copy", false], ["copy", true]]
   const dispatch = vi.fn(async () => Response.json({ success: true }))
   const record = createAuditRecorder(dispatch, () => null, undefined, tally)
   for (let index = 0; index < 10; index++) record(new Request("http://tenuvault.internal/api/restore-backup", { method: "POST" }), JSON.stringify({ ...credentials, approvalAction: "complete", approvalId: `approval-${index}` }), Response.json({ outcome: { success: true, path: "backup/example.json", policyId: `item-${index}` } }))
-  await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(10))
+  await new Promise(resolve => setTimeout(resolve, 0))
+  expect(dispatch).not.toHaveBeenCalled()
   expect(tally).not.toHaveBeenCalled()
 })
 
@@ -169,7 +169,8 @@ it.each([[], [TENANT], null])("does not credit bulk restore requests to their so
   const tally = vi.fn()
   const dispatch = vi.fn(async () => Response.json({ success: true }))
   createAuditRecorder(dispatch, () => null, undefined, tally)(new Request("http://tenuvault.internal/api/restore-backup", { method: "POST" }), JSON.stringify({ ...credentials, targetTenants, restoreType: "full" }), Response.json({ success: true, status: "Completed", details: { restoredCount: 10, failedCount: 0, results: [] } }))
-  await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce())
+  await new Promise(resolve => setTimeout(resolve, 0))
+  expect(dispatch).not.toHaveBeenCalled()
   expect(tally).not.toHaveBeenCalled()
 })
 

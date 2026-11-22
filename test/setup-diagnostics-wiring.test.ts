@@ -10,7 +10,7 @@ const main = read("../src/main/index.ts")
 
 describe("setup diagnostics wiring", () => {
   it("records the first backup of every trigger, outside the manual-only notification", () => {
-    const finished = main.match(/onFinished: \(job, request\) => \{([\s\S]*?)\n    \},/)?.[1] ?? ""
+    const finished = main.match(/onFinished: \(job, request, tokens\) => \{([\s\S]*?)\n    \},/)?.[1] ?? ""
     expect(finished).toContain("diagnostics.record(firstBackupEvent(job))")
     const manualLine = finished.split("\n").find((line) => line.includes('=== "manual"')) ?? ""
     expect(manualLine).not.toContain("diagnostics")

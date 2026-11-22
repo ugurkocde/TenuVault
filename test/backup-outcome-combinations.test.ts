@@ -306,7 +306,7 @@ describe("a run that stops before it finished", () => {
     const job = await setup.run()
     expect(job.status).toBe("Failed")
     const metadata = await setup.manifest(job)
-    expect(metadata).toMatchObject({ Status: "Failed", Coverage: "Incomplete", RunId: job.id, Error: "Access token has expired or is not yet valid." })
+    expect(metadata).toMatchObject({ Status: "Failed", Coverage: "Incomplete", RunId: job.id, Error: "Microsoft Graph authentication failed (HTTP 401)." })
     const recorded = Object.fromEntries(metadata.Outcomes.map((entry: { Folder: string; Outcome: string }) => [entry.Folder, entry]))
     // Read before the stop: saved. Being read, or not reached: not read, with what the backup holds of it.
     expect(recorded.CompliancePolicies).toEqual({ Folder: "CompliancePolicies", Outcome: "saved", Saved: 1 })
@@ -341,7 +341,7 @@ describe("a backup that crosses versions", () => {
     const files = await exported(setup, job)
     const metadata = JSON.parse(files.get("metadata.json")!.toString())
     expect(Object.keys(metadata)).toEqual([
-      "BackupDate", "BackupFolder", "StartTime", "EndTime", "Duration", "DurationSeconds", "ItemCounts", "Status", "RunbookVersion", "BackupFormat", "Source", "TenantId",
+      "BackupDate", "BackupFolder", "StartTime", "EndTime", "CompletedAt", "Duration", "DurationSeconds", "ItemCounts", "Status", "RunbookVersion", "BackupFormat", "Source", "TenantId",
       "Trigger", "RunId", "Scope", "Failures", "SkippedTypes", "FailedTypes", "AuthMode", "Coverage", "Outcomes", "Items",
     ])
     expect(metadata.Coverage).toBe("Incomplete")

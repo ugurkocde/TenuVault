@@ -116,7 +116,7 @@ export async function POST(request: NextRequest) {
 
   } catch (error) {
     if (error instanceof AuditRangeError) return NextResponse.json({ error: error.message }, { status: 400 })
-    console.error("Audit stats error:", error)
+    console.error("Audit statistics could not be read")
     return NextResponse.json(
       { error: "Internal server error while fetching audit statistics" },
       { status: 500 }

@@ -23,6 +23,8 @@ export interface BackupReaderTestResult {
   graph: boolean
   /** The reader could list the backup container; null when backups stay on this device. */
   storage: boolean | null
+  audit?: boolean | null
+  auditCreated?: boolean
   /** Why a part failed, in words the card can show. */
   message?: string
 }
@@ -72,6 +74,9 @@ export interface BackupReaderState {
    * the services it backs up. Empty for a tenant that backs up Intune, as before.
    */
   setupArguments: string
+  auditPending?: number | null
+  auditStuck?: number
+  auditSetupRequired?: boolean
   /** The tenant's Azure backup storage account; omitted when backups stay on this device. */
   storageAccountName?: string
   /** After a verification: the reader works for Microsoft Graph but cannot write backups to the tenant's Azure storage. */
@@ -657,6 +662,7 @@ export interface TenuVaultBridge {
   /** The optional read-only Backup Reader for scheduled backups, per tenant. */
   backupReader: {
     status: (tenantId: string) => Promise<BackupReaderState>
+    deliverAudit: (tenantId: string) => Promise<BackupReaderState>
     /** Creates the certificate to upload (setup or renewal). Rejects with a plan error without Pro or MSP. */
     prepare: (tenantId: string) => Promise<BackupReaderState>
     /** Saves the public certificate for the setup script. */

@@ -1,5 +1,6 @@
 import { csvCell } from '../../../shared/security'
 import { REDACTED, redactSecrets, redactText } from '../../../shared/compliance/export'
+import { projectEntry } from './projection'
 import { AuditResult, type AuditLogEntry, type AuditLogFilter } from './types'
 
 /**
@@ -8,25 +9,11 @@ import { AuditResult, type AuditLogEntry, type AuditLogFilter } from './types'
  */
 
 /** Shown on the audit page and at the top of every export. */
-export const OWN_OPERATION_NOTICE = 'TenuVault own-operation history: actions this TenuVault installation recorded for this tenant. It is not a complete Microsoft tenant audit and does not show activity from the Intune admin center, other tools or other administrators. Use the Microsoft Entra and Intune audit logs for that.'
+export const OWN_OPERATION_NOTICE = 'TenuVault own-operation history: actions TenuVault producers recorded for this tenant. It is not a complete Microsoft tenant audit and does not show activity from the Intune admin center, other tools or other administrators. Use the Microsoft Entra and Intune audit logs for that.'
 
-// Detail properties that hold policy content or raw request data rather than a description.
-const PAYLOAD_KEY = /^(?:payload|snapshot|policy|policyJson|body|requestBody|responseBody|settings|content|raw|assignments|stack)$/i
-const MAX_TEXT = 2000
-
-/**
- * An entry safe to export: tokens and secrets redacted, policy payloads and stack traces
- * omitted, long text cut. Identity, timestamps, operation, scope and outcome stay as recorded.
- */
+/** Legacy events may still contain data from old writers. Export only known detail fields. */
 export function redactAuditEntry(entry: AuditLogEntry): AuditLogEntry {
-  const trim = (value: unknown): unknown => {
-    if (typeof value === 'string') return value.length > MAX_TEXT ? `${value.slice(0, MAX_TEXT)} [truncated]` : value
-    if (Array.isArray(value)) return value.map(trim)
-    if (!value || typeof value !== 'object') return value
-    return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, PAYLOAD_KEY.test(key) && child !== null && child !== undefined ? '[omitted: payload]' : trim(child)]))
-  }
-  const safe = redactSecrets(entry)
-  return { ...safe, ...(safe.details ? { details: trim(safe.details) as AuditLogEntry['details'] } : {}) }
+  return projectEntry(redactSecrets(entry))
 }
 
 /** Verified, failed, partial or unknown: an entry without a recorded result stays unknown. */
@@ -72,7 +59,11 @@ export function auditExportJSON(entries: AuditLogEntry[], meta: AuditExportMeta)
     notice: OWN_OPERATION_NOTICE,
     tenantId: meta.tenantId.toLowerCase(),
     exportedAt: meta.exportedAt,
-    filter: meta.filter,
+    filter: {
+      startDate: meta.filter.startDate, endDate: meta.filter.endDate,
+      eventTypes: meta.filter.eventTypes, severities: meta.filter.severities, results: meta.filter.results,
+      sortBy: meta.filter.sortBy, sortOrder: meta.filter.sortOrder,
+    },
     completeness: pendingNote(meta.pendingCount),
     redaction: `Tokens, credentials, secrets, policy payloads and stack traces are replaced with ${REDACTED} or omitted.`,
     count: entries.length,
@@ -92,7 +83,7 @@ export function auditExportCSV(entries: AuditLogEntry[], meta: AuditExportMeta):
     ...entries.map(redactAuditEntry).map(entry => [
       entry.timestamp, entry.action, entry.eventType, actorLabel(entry),
       `${entry.resource?.type ?? 'unknown'}: ${entry.resource?.name ?? 'Unknown'}${entry.resource?.id ? ` (${entry.resource.id})` : ''}`,
-      outcomeLabel(entry.result), entry.severity, entry.context?.correlationId ?? '', entry.details ? JSON.stringify(entry.details) : '',
+      entry.job?.status ?? outcomeLabel(entry.result), entry.severity, entry.context?.correlationId ?? '', entry.job || entry.details ? JSON.stringify({ ...entry.details, job: entry.job }) : '',
     ]),
   ]
   return rows.map(row => row.map(cell => csvCell(typeof cell === 'string' ? redactText(cell) : cell)).join(',')).join('\r\n')

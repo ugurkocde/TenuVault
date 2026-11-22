@@ -291,3 +291,7 @@ Hygiene scan findings and health review finding reconciliation are saved togethe
 ![Defender coverage and service areas at 1024px](/images/services/defender-backup-types-light.png)
 
 The Defender card names the major policy exclusions before a backup is run. Review [Defender coverage](/backups/defender/) before relying on these backups.
+
+### Backup audit access
+
+The **Backup Reader** card shows a separate audit storage access test and pending audit deliveries. Use the same Azure storage setup values when upgrading its role. Cloud schedule status shows whether its runbook records audit events and whether delivery needs attention. See [Audit Log](/audit-log/) for plan access and storage details.

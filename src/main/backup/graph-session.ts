@@ -108,7 +108,10 @@ export class GraphSession {
           // The sign-in comes last, so no type can replace it.
           response = await this.fetchImpl(url, { signal, headers: { ...headers, Authorization: `Bearer ${token}` } })
           if (response.ok) {
-            const result = (await response.json()) as T
+            const result = await response.json().catch(error => {
+              if (error instanceof SyntaxError) throw new SyntaxError("Microsoft Graph returned invalid JSON.")
+              throw error
+            }) as T
             signal.throwIfAborted()
             this.answered()
             return result

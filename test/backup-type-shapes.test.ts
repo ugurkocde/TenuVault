@@ -444,7 +444,7 @@ describe("a type the tenant never set up", () => {
         const { run } = fixture(graph({ "/beta/policies/homeRealmDiscoveryPolicies": refusal(401, "InvalidAuthenticationToken", "Access token has expired or is not yet valid.") }))
         const job = await run()
         expect(job.status).toBe("Failed")
-        expect(job.exception).toBe("Access token has expired or is not yet valid.")
+        expect(job.exception).toBe("Microsoft Graph authentication failed (HTTP 401).")
         expect(outcome(job, "HomeRealmDiscoveryPolicies")).toMatchObject({ outcome: "failed" })
       }
     } finally {

@@ -50,14 +50,14 @@ describe("a sign-in Microsoft no longer accepts", () => {
 })
 
 describe("the error of a failed Graph response", () => {
-  it("keeps the message Intune backups always showed and adds what Graph answered", async () => {
+  it("keeps Graph's error text out of the message and adds what Graph answered", async () => {
     const error = await graphFailure(Response.json({ error: { code: "Forbidden", message: "No role" } }, { status: 403 }))
-    expect(error.message).toBe("Access denied by Microsoft Graph: No role. Check that your account has an Intune role and the app registration has the Intune permissions.")
+    expect(error.message).toBe("Access denied by Microsoft Graph (HTTP 403). Check that your account has an Intune role and the app registration has the Intune permissions.")
     expect(error).toMatchObject({ status: 403, answer: { code: "Forbidden", message: "No role" } })
     const html = await graphFailure(new Response("<html>401</html>", { status: 401 }))
-    expect(html.message).toBe("Microsoft Graph returned 401")
+    expect(html.message).toBe("Microsoft Graph authentication failed (HTTP 401).")
     expect(html.answer).toEqual({})
-    expect((await graphFailure(Response.json({ error: { message: "Bad" } }, { status: 400 }))).message).toBe("Bad")
+    expect((await graphFailure(Response.json({ error: { message: "Bad" } }, { status: 400 }))).message).toBe("Microsoft Graph request failed (HTTP 400).")
   })
 
   it("reads no code or message from a body that is not an error object", () => {

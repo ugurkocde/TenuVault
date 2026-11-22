@@ -138,16 +138,12 @@ export async function withAbort<T>(request: () => Promise<T>, signal: AbortSigna
   }
 }
 
-function graphErrorMessage(text: string, status: number): string {
-  try {
-    const message = (JSON.parse(text) as { error?: { message?: string } }).error?.message
-    if (status === 403) {
-      return `Access denied by Microsoft Graph${message ? `: ${message}` : ""}. Check that your account has an Intune role and the app registration has the Intune permissions.`
-    }
-    return message ?? `Microsoft Graph returned ${status}`
-  } catch {
-    return `Microsoft Graph returned ${status}`
-  }
+/** A fixed message by status. Graph's own error text stays out of messages and logs; graphAnswer keeps it for classification. */
+function graphErrorMessage(status: number): string {
+  if (status === 403) return "Access denied by Microsoft Graph (HTTP 403). Check that your account has an Intune role and the app registration has the Intune permissions."
+  if (status === 401) return "Microsoft Graph authentication failed (HTTP 401)."
+  if (status === 429) return "Microsoft Graph throttled the request (HTTP 429)."
+  return `Microsoft Graph request failed (HTTP ${status}).`
 }
 
 /**
@@ -174,7 +170,7 @@ export function graphAnswer(text: string): GraphAnswer {
 /** The error of a failed Graph response, with its message as before and what Graph answered. */
 export async function graphFailure(response: Response): Promise<GraphError> {
   const text = await response.text()
-  return new GraphError(graphErrorMessage(text, response.status), response.status, graphAnswer(text))
+  return new GraphError(graphErrorMessage(response.status), response.status, graphAnswer(text))
 }
 
 /** The message for a failed storage response. A network error response rejects with a StorageUnreachableError instead. */

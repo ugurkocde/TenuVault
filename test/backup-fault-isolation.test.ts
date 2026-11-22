@@ -319,7 +319,7 @@ describe("an Entra ID or Defender endpoint that does not answer", () => {
     }
     // Three attempts without an answer, a refusal, three more without an answer: never six in a row.
     await expect(silent()).resolves.toBe("Connection reset")
-    await expect(settled(entra.get("https://graph.microsoft.com/beta/refused"))).resolves.toContain("Insufficient privileges")
+    await expect(settled(entra.get("https://graph.microsoft.com/beta/refused"))).resolves.toContain("Access denied by Microsoft Graph (HTTP 403)")
     await expect(silent()).resolves.toBe("Connection reset")
     // The service was not stopped, so an endpoint that answers is still read.
     await expect(entra.get("https://graph.microsoft.com/beta/healthy")).resolves.toEqual({ ok: true })
@@ -343,7 +343,7 @@ describe("a sign-in that ended during a backup", () => {
     const { run, requests, manifest } = fixture(tenant({ "/beta/policies/tokenLifetimePolicies": expired }))
     const job = await run()
     expect(job.status).toBe("Failed")
-    expect(job.exception).toBe("Access token has expired or is not yet valid.")
+    expect(job.exception).toBe("Microsoft Graph authentication failed (HTTP 401).")
     // Not a type that was left out or failed on its own: the run stopped.
     expect(outcomeOf(job, "TokenLifetimePolicies")).toMatchObject({ outcome: "failed", error: "The backup stopped before this type was read in full." })
     expect(job.outcomes).toMatchObject({ status: "Failed", coverage: "incomplete" })
@@ -357,9 +357,9 @@ describe("a sign-in that ended during a backup", () => {
     const { run, requests, manifest } = fixture(tenant(Object.fromEntries(units.map((unit) => [`/beta/directory/administrativeUnits/${unit.id}`, expired]))), { concurrency: 1 })
     const job = await run()
     expect(job.status).toBe("Failed")
-    expect(job.exception).toBe("Access token has expired or is not yet valid.")
+    expect(job.exception).toBe("Microsoft Graph authentication failed (HTTP 401).")
     expect(requests.filter((request) => request.path.startsWith("/beta/directory/administrativeUnits/")).map((request) => request.path)).toEqual(["/beta/directory/administrativeUnits/au1"])
-    expect(await manifest(job)).toMatchObject({ Status: "Failed", Error: "Access token has expired or is not yet valid." })
+    expect(await manifest(job)).toMatchObject({ Status: "Failed", Error: "Microsoft Graph authentication failed (HTTP 401)." })
   })
 
   it("ends the backup when the token error comes after the type had already ended", async () => {
@@ -380,7 +380,7 @@ describe("a sign-in that ended during a backup", () => {
     const job = await run()
     expect(requests.some((request) => request.path === "/beta/directory/administrativeUnits/au3")).toBe(false)
     expect(job.status).toBe("Failed")
-    expect(job.exception).toBe("Access token has expired or is not yet valid.")
+    expect(job.exception).toBe("Microsoft Graph authentication failed (HTTP 401).")
   })
 
   it("takes a 401 without a token error as the endpoint's own answer once the same request got it again with a new token", async () => {
@@ -425,7 +425,7 @@ describe("a sign-in that ended during a backup", () => {
     }), { getToken })
     const job = await run()
     expect(job.status).toBe("Failed")
-    expect(job.exception).toBe("Access token has expired or is not yet valid.")
+    expect(job.exception).toBe("Microsoft Graph authentication failed (HTTP 401).")
   })
 
   it("asks an object read and a sub-read once more in the same way, and ends the type on the confirmed answer", async () => {
@@ -463,7 +463,7 @@ describe("a sign-in that ended during a backup", () => {
     const { run, requests } = fixture(tenant({ "/beta/deviceManagement/deviceCategories": html }), { getToken })
     const job = await run()
     expect(job.status).toBe("Failed")
-    expect(job.exception).toBe("Microsoft Graph returned 401")
+    expect(job.exception).toBe("Microsoft Graph authentication failed (HTTP 401).")
     expect(requests.filter((request) => request.path === "/beta/deviceManagement/deviceCategories")).toHaveLength(1)
     expect(asked.some(Boolean)).toBe(false)
   })
@@ -474,7 +474,7 @@ describe("Intune and Conditional Access", () => {
     const { run, manifest } = fixture(tenant({ "/beta/deviceManagement/deviceCategories": refusal(401, "InvalidAuthenticationToken", "Access token has expired or is not yet valid.") }))
     const job = await run()
     expect(job.status).toBe("Failed")
-    expect(job.exception).toBe("Access token has expired or is not yet valid.")
+    expect(job.exception).toBe("Microsoft Graph authentication failed (HTTP 401).")
     // The run stopped: every type it had not finished is recorded as not read.
     expect(outcomeOf(job, "DeviceCategories")).toMatchObject({ outcome: "failed", error: "The backup stopped before this type was read in full." })
     expect(job.coverage).toBe("incomplete")

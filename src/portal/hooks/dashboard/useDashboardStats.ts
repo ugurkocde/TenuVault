@@ -249,7 +249,7 @@ export function useDashboardStats(selectedPeriod: string = "7d", tenantId?: numb
       const backupsError = allBackups.find(result => result.error)?.error ?? null
       const unresolvedBackups = allBackups.reduce((sum, result) => sum + (result.unresolved ?? 0), 0)
       const schedules = allSchedules.flat()
-      const auditLogs = allAuditLogs.flat()
+      const auditLogs = allAuditLogs.flatMap((logs, index) => logs.map(log => ({ log, tenant: tenants[index] })))
       
       // Calculate time range based on selected period
       const now = new Date()
@@ -287,8 +287,8 @@ export function useDashboardStats(selectedPeriod: string = "7d", tenantId?: numb
       
       // Create recent activity from audit logs and backups
       const auditActivity = auditLogs
-        .filter((log: any) => log.timestamp)
-        .map((log: any) => ({
+        .filter(({ log }) => log.timestamp)
+        .map(({ log, tenant }) => ({
           id: log.id || `audit-${log.timestamp}`,
           type: log.eventType?.includes('BACKUP') ? "backup" as const : 
                 log.eventType?.includes('SCHEDULE') ? "schedule" as const :
@@ -300,8 +300,9 @@ export function useDashboardStats(selectedPeriod: string = "7d", tenantId?: numb
                   log.result === 'FAILURE' ? "failed" as const : 
                   log.severity === 'WARNING' ? "warning" as const : 
                   "info" as const,
-          tenant: log.resource?.name || log.user?.name || "System",
-          tenantId: 0, // Audit logs don't have tenant ID
+          tenant: (log.job?.stage === "terminal" && log.eventType?.startsWith("BACKUP_") ? tenant?.name : undefined)
+            || log.resource?.name || log.user?.name || "System",
+          tenantId: 0, // Audit activity rows do not link to a tenant.
           time: new Date(log.timestamp),
           message: log.action || log.eventType || "Activity logged",
           details: log,

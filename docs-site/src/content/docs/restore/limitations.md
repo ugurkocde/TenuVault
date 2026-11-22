@@ -147,6 +147,10 @@ The journal keeps up to 1,000 records. When it is full, TenuVault removes comple
 * [Multi Admin Approval and TenuVault](/restore/multi-admin-approval/)
 * [Troubleshooting](/troubleshooting/)
 
+### Missing change details
+
+A job that stops unexpectedly can contain both recorded item outcomes and items whose write outcome is uncertain or unattempted. Review uncertain items in Intune before retrying. Older audit entries can show **Change details unavailable**. See [Audit Log](/audit-log/) for the fields kept in new events.
+
 ## Directory objects that are never restored
 
 These exclusions also apply to staged directory recovery. The preview reports the reason for each affected row.

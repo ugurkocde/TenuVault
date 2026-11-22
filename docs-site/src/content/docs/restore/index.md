@@ -217,3 +217,7 @@ Skipped items, and failed items that left nothing behind, have no button. An inc
 * [What cannot be restored and restore write history](/restore/limitations/)
 * [Disaster recovery](/restore/disaster-recovery/)
 * [Drift detection](/drift/), for reverting a single changed policy
+
+### Restore history in Audit Log
+
+Open **Job details** in the destination tenant’s [Audit Log](/audit-log/) for item outcomes, applied field names and the operation and run IDs. Audit delivery is independent of the restore result.

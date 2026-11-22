@@ -19,13 +19,13 @@ function statusBody(tenantId: string) {
   }
 }
 
-function serve(blob: () => Response) {
+function serve(blob: (url: string) => Response) {
   const urls: string[] = []
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input)
     urls.push(url)
     if (url.includes("login.microsoftonline.com")) return Response.json({ access_token: "token" })
-    return blob()
+    return blob(url)
   }))
   return urls
 }
@@ -40,6 +40,24 @@ describe("cloud-backup-status route", () => {
     const data = await (await POST(request(valid))).json()
     expect(data.cloudStatus).toMatchObject({ lastStatus: "Success", backupFolder: "backup-2026-10-30-020000" })
     expect(urls[1]).toContain("/intune-backups/cloud-backup-status-11111111.json")
+    expect(urls).toHaveLength(2)
+  })
+
+  it("reports audit health only for the run in Schedule status", async () => {
+    const runId = "99999999-9999-4999-8999-999999999999"
+    const schedule = { ...statusBody(TENANT), RunId: runId, AuditCapability: true, AuditStatusInResults: true }
+    const audit = { TenantId: TENANT, RunId: runId, AuditPending: 2, AuditReceiptFailed: true }
+    const urls = serve(url => Response.json(url.includes("/audit-status/") ? audit : schedule))
+    expect((await (await POST(request(valid))).json()).cloudStatus).toMatchObject({
+      lastStatus: "Success", auditPending: 2, auditReceiptFailed: true,
+    })
+    expect(urls[2]).toContain(`/tenuvault-backup-results/audit-status/${TENANT}/${runId}.json`)
+    for (const sidecar of [Response.json({ ...audit, RunId: OTHER }), new Response(null, { status: 403 })]) {
+      serve(url => url.includes("/audit-status/") ? sidecar : Response.json(schedule))
+      const { cloudStatus } = await (await POST(request(valid))).json()
+      expect(cloudStatus).toMatchObject({ lastStatus: "Success", auditStatusUnavailable: true })
+      expect(cloudStatus.auditPending).toBeUndefined()
+    }
   })
 
   it("reports no cloud run yet on 404 and never another tenant's status", async () => {
