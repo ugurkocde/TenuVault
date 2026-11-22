@@ -28,6 +28,7 @@ const state = vi.hoisted(() => ({
   openExternal: vi.fn(async (_url: string) => undefined),
   record: vi.fn(async (_event: unknown) => undefined),
   diagnostics: { state: "ineligible", policy: false, reminder: { setup: false, signin: false } } as import("../../src/shared/ipc").SetupDiagnosticsStatus,
+  transferPreview: vi.fn(),
 }))
 
 vi.mock("../../src/renderer/lib/bridge", () => ({
@@ -44,6 +45,7 @@ vi.mock("../../src/renderer/lib/bridge", () => ({
     schedules: { list: async () => [] },
     backups: { settings: async () => ({ recoveryExported: true }) },
     app: { openExternal: state.openExternal },
+    settingsTransfer: { preview: state.transferPreview, import: vi.fn() },
     diagnostics: { record: state.record, status: async () => state.diagnostics, reminderShown: async () => undefined, consent: async () => state.diagnostics, decline: async () => state.diagnostics },
   },
 }))
@@ -882,5 +884,33 @@ describe("setup diagnostics hooks", () => {
     expect(order).toEqual(["record", "addTenant"])
     state.record.mockImplementation(async () => undefined)
     state.addTenant.mockImplementation(() => undefined)
+  })
+})
+
+describe("setup from a file", () => {
+  const FILE_TENANT = "2f9d4a7c-1b6e-4c3d-8a5f-9e0b7c2d4a61"
+  const FILE_CLIENT = "3d7a1f9c-2e5b-4c8d-a6f4-9b0e1c7d2a58"
+
+  it("replaces the IDs of an unfinished sign-in with the file's, in the form and in the notice", async () => {
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 1, tenant: TENANT, clientId: CLIENT, displayName: "Draft", account: null }))
+    let resolve!: (value: unknown) => void
+    state.transferPreview.mockReturnValue(new Promise((done) => { resolve = done }))
+    const container = document.createElement("div")
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    roots.push(root)
+    act(() => root.render(createElement(MemoryRouter, { initialEntries: [`/portal/onboarding?setup=import-1&tenant=${FILE_TENANT}`] }, createElement(OnboardingPage))))
+    await flush()
+    // The draft's form is on screen while the file is read.
+    expect(container.querySelector<HTMLInputElement>("#tenant")!.value).toBe(TENANT)
+    await act(async () => resolve({
+      importId: "import-1", exportedAt: null, appVersion: null, skipped: [],
+      groups: [{ id: FILE_TENANT, title: "Fabrikam", connected: false, items: [], setup: { tenantId: FILE_TENANT, name: "Fabrikam", clientId: FILE_CLIENT } }],
+    }))
+    await flush()
+    expect(container.textContent).toContain("From a setup file")
+    expect(container.querySelector<HTMLInputElement>("#tenant")!.value).toBe(FILE_TENANT)
+    expect(container.querySelector<HTMLInputElement>("#clientId")!.value).toBe(FILE_CLIENT)
+    expect(JSON.parse(state.store.get(DRAFT_KEY)!)).toMatchObject({ tenant: FILE_TENANT, clientId: FILE_CLIENT })
   })
 })

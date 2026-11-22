@@ -263,9 +263,9 @@ A file never holds sign-ins or tokens, license keys, the recovery key or encrypt
 3. Tick the settings to apply and select **Apply**. The button counts the ticked settings, for example **Apply 4 settings**.
 4. TenuVault shows what was applied and what was not. If you turned on services for a tenant, it checks your sign-in and lists any permissions those services still need, with a link to **Services and permissions**.
 
-Settings that would change are ticked at first. These start unticked and carry a warning, because they change how this computer runs: **Start TenuVault when I sign in to this computer**, **Get nightly builds** and **Backup schedule**. When two computers run the same schedule, the tenant is backed up twice.
+Settings that would change are ticked at first. These start unticked and carry a warning, because they change how this computer runs: **Start TenuVault in the menu bar/tray when I sign in to this computer**, **Get nightly builds** and **Backup schedule**. When two computers run the same schedule, the tenant is backed up twice.
 
-Settings that are already the same are hidden; tick **Show settings that are already the same** to see them. Select **Save current settings first** to export your current settings before you apply anything, so you can go back.
+Settings that are already the same are hidden; tick **Show settings that are already the same** to see them. Select **Save current settings first** to export your current settings before you apply anything. Importing that file later brings back the values it holds. Settings still at their default and a tenant without a schedule are not in it, so turn those back by hand if an import changed them.
 
 <figure class="docs-screenshot">
   <a href="/images/screenshots/settings-transfer-review.webp" aria-label="Open full-size screenshot: review settings from the file">

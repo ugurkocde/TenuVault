@@ -24,10 +24,12 @@ import { parseSettingsFile, writeSettingsFile, type SettingsFile, type SettingsF
 const EXPORTED_PREFERENCES = ["retentionDays", "keepRunningInTray", "startAtLogin", "autoUpdate", "nightlyUpdates"] as const
 type ExportedPreference = (typeof EXPORTED_PREFERENCES)[number]
 
+/** Where the tray icon lives, as the Settings labels name it. */
+const ICON_LOCATION = process.platform === "darwin" ? "menu bar" : "tray"
 const PREFERENCE_LABELS: Record<ExportedPreference, string> = {
   retentionDays: "Keep backups for",
-  keepRunningInTray: "Keep running when I close the window",
-  startAtLogin: "Start TenuVault when I sign in to this computer",
+  keepRunningInTray: `Keep running in the ${ICON_LOCATION} when I close the window`,
+  startAtLogin: `Start TenuVault in the ${ICON_LOCATION} when I sign in to this computer`,
   autoUpdate: "Download and install updates automatically",
   nightlyUpdates: "Get nightly builds",
 }
@@ -79,6 +81,7 @@ export interface SettingsTransferDeps {
     set(tenantId: string, scope: BackupScope): unknown
   }
   schedules: {
+    /** The saved schedules as they are, read without any side effect (no fallback write, no notice). */
     list(): BackupSchedule[]
     set(input: ScheduleInput): unknown
   }
@@ -106,6 +109,8 @@ interface Candidate {
 interface Session {
   file: SettingsFile
   createdAt: number
+  /** The item IDs of the last preview the admin saw; apply accepts no other. */
+  reviewed: Set<string>
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -115,6 +120,10 @@ function isObject(value: unknown): value is Record<string, unknown> {
 const onOff = (value: boolean) => (value ? "On" : "Off")
 const days = (value: number) => (value === 0 ? "Keep everything" : value === 1 ? "1 day" : `${value} days`)
 const isAppearance = (value: unknown): value is AppearanceSetting => value === "system" || value === "light" || value === "dark"
+/** How a value from the file shows in the preview: plain values as text, anything else as not valid. */
+const shown = (value: unknown) => (typeof value === "string" ? value.slice(0, 64) : typeof value === "number" || typeof value === "boolean" ? String(value) : "Not valid")
+/** The branding fields this version knows; others in a file are listed as skipped. */
+const BRANDING_FIELDS = ["companyName", "logo", "colors", "preparedBy", "classification", "footerText"]
 
 function describeScope(scope: BackupScope): string {
   const preset = presetOf(scope)
@@ -146,10 +155,25 @@ function describeBranding(branding: PdfBranding | null): string {
   return parts.length ? `${name}, with ${parts.join(", ")}` : name
 }
 
-/** A cloud backup setup as the renderer stores it, checked by the same parser the setup paste uses. */
+/**
+ * A cloud backup setup as the renderer stores it, checked by the same parser the setup paste uses.
+ * Only single-line text, numbers and booleans pass, once per field name, so no value can add a line of its own.
+ */
 function cloudConfig(value: unknown): CloudBackupConfig | null {
   if (!isObject(value)) return null
-  return parseCloudSetup(Object.entries(value).map(([name, field]) => `${name}=${String(field)}`).join("\n"))
+  const names = new Set<string>()
+  const lines: string[] = []
+  for (const [name, field] of Object.entries(value)) {
+    if (!/^[A-Za-z][A-Za-z0-9]{0,63}$/.test(name) || names.has(name.toLowerCase())) return null
+    names.add(name.toLowerCase())
+    if (typeof field === "string") {
+      // eslint-disable-next-line no-control-regex
+      if (field.length > 256 || /[\u0000-\u001f\u007f]/.test(field)) return null
+      lines.push(`${name}=${field}`)
+    } else if ((typeof field === "number" && Number.isFinite(field)) || typeof field === "boolean") lines.push(`${name}=${field}`)
+    else return null
+  }
+  return parseCloudSetup(lines.join("\n"))
 }
 
 function sameCloud(a: CloudBackupConfig | null, b: CloudBackupConfig | null): boolean {
@@ -221,7 +245,7 @@ export class SettingsTransfer {
     this.prune()
     while (this.sessions.size >= MAX_SESSIONS) this.sessions.delete(this.sessions.keys().next().value!)
     const importId = randomUUID()
-    this.sessions.set(importId, { file, createdAt: this.now().getTime() })
+    this.sessions.set(importId, { file, createdAt: this.now().getTime(), reviewed: new Set() })
     return this.preview(importId, appearance)
   }
 
@@ -229,19 +253,21 @@ export class SettingsTransfer {
   preview(importId: unknown, appearance: unknown): TransferPreview {
     const session = this.session(importId)
     const { groups, skipped } = this.candidates(session.file, appearance)
+    session.reviewed = new Set(groups.flatMap((group) => group.items.map((item) => item.id)))
     return { importId: importId as string, exportedAt: session.file.exportedAt, appVersion: session.file.appVersion, groups, skipped: [...session.file.skipped, ...skipped] }
   }
 
   /**
    * Applies the chosen items of an open file and closes it. Every item is checked again against the
    * current settings, so one that became the same or blocked since the preview is reported, not
-   * applied. IDs that were not part of the preview are refused before anything is applied.
+   * applied. IDs that were not part of the last preview are refused before anything is applied, also
+   * when the file would offer them now, for example for a tenant connected after the preview.
    */
   apply(importId: unknown, itemIds: unknown, appearance: unknown): TransferApplyResult {
     const session = this.session(importId)
     if (!Array.isArray(itemIds) || itemIds.length > MAX_ITEMS || !itemIds.every((id) => typeof id === "string")) throw new Error("Choose the settings to apply.")
     const { candidates } = this.candidates(session.file, appearance)
-    const unknown = itemIds.find((id) => !candidates.has(id))
+    const unknown = itemIds.find((id) => !session.reviewed.has(id) || !candidates.has(id))
     if (unknown !== undefined) throw new Error("A chosen setting is not part of this file.")
     this.sessions.delete(importId as string)
 
@@ -353,7 +379,7 @@ export class SettingsTransfer {
     }
     if (file.app) {
       const group: TransferGroup = { id: "app", title: "This computer", connected: true, items: [] }
-      this.appItems(file.app, appearance).forEach((candidate) => add(group, candidate))
+      this.appItems(file.app, appearance, skipped).forEach((candidate) => add(group, candidate))
       groups.push(group)
     }
     const local = this.localTenants()
@@ -382,10 +408,13 @@ export class SettingsTransfer {
     return { groups, candidates, skipped }
   }
 
-  private appItems(app: NonNullable<SettingsFile["app"]>, appearance: unknown): Array<Omit<Candidate, "group">> {
+  private appItems(app: NonNullable<SettingsFile["app"]>, appearance: unknown, skipped: string[]): Array<Omit<Candidate, "group">> {
     const items: Array<Omit<Candidate, "group">> = []
     const current = this.deps.preferences.get()
     const preferences = isObject(app.preferences) ? app.preferences : {}
+    for (const key of Object.keys(preferences)) {
+      if (!(EXPORTED_PREFERENCES as readonly string[]).includes(key)) skipped.push(`This computer: "${key.slice(0, 64)}"`)
+    }
     const customRetention = this.localTenants().some((tenant) => { const plan = this.deps.plan(tenant.tenantId); return plan !== null && allows(plan, "customRetention") })
     for (const key of EXPORTED_PREFERENCES) {
       if (!Object.hasOwn(preferences, key)) continue
@@ -395,7 +424,7 @@ export class SettingsTransfer {
       if (key === "retentionDays") {
         const valid = typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 3650
         const limited = valid && !customRetention && (value === 0 || value > COMMUNITY_RETENTION_DAYS)
-        items.push(this.item(id, label, days(current.retentionDays), valid ? days(value) : String(value), valid ? value === current.retentionDays : false, valid ? null : NOT_VALID, {
+        items.push(this.item(id, label, days(current.retentionDays), valid ? days(value) : shown(value), valid ? value === current.retentionDays : false, valid ? null : NOT_VALID, {
           ...(limited && { feature: "customRetention" as const, note: `Saved as chosen. On Community, TenuVault keeps at most ${COMMUNITY_RETENTION_DAYS} days.` }),
           apply: () => void this.deps.preferences.set({ retentionDays: value as number }),
         }))
@@ -404,7 +433,7 @@ export class SettingsTransfer {
       const valid = typeof value === "boolean"
       const now = key === "autoUpdate" ? current.autoUpdate && !this.deps.autoUpdateManaged() : current[key]
       const managed = key === "autoUpdate" && this.deps.autoUpdateManaged()
-      items.push(this.item(id, label, onOff(now), valid ? onOff(value) : String(value), valid && value === now && !managed, !valid ? NOT_VALID : managed ? "Updates on this computer are managed by your organization." : null, {
+      items.push(this.item(id, label, onOff(now), valid ? onOff(value) : shown(value), valid && value === now && !managed, !valid ? NOT_VALID : managed ? "Updates on this computer are managed by your organization." : null, {
         ...(PREFERENCE_WARNINGS[key] && { warning: PREFERENCE_WARNINGS[key] }),
         apply: () => void this.deps.preferences.set({ [key]: value as boolean }),
       }))
@@ -413,23 +442,26 @@ export class SettingsTransfer {
       const now = isAppearance(appearance) ? appearance : "system"
       const valid = isAppearance(app.appearance)
       const next = app.appearance as AppearanceSetting
-      items.push(this.item("app:appearance", "Appearance", APPEARANCES[now], valid ? APPEARANCES[next] : String(app.appearance), valid && next === now, valid ? null : NOT_VALID, {
+      items.push(this.item("app:appearance", "Appearance", APPEARANCES[now], valid ? APPEARANCES[next] : shown(app.appearance), valid && next === now, valid ? null : NOT_VALID, {
         apply: () => ({ appearance: next }),
       }))
     }
     if (app.pdfBranding !== undefined) {
       const current = this.deps.branding.get()
+      // Fields from a newer version are listed as skipped and left out, so they do not block the rest.
+      const known = isObject(app.pdfBranding) ? Object.fromEntries(Object.entries(app.pdfBranding).filter(([key]) => BRANDING_FIELDS.includes(key))) : app.pdfBranding
+      if (isObject(app.pdfBranding)) for (const key of Object.keys(app.pdfBranding)) if (!BRANDING_FIELDS.includes(key)) skipped.push(`PDF branding: "${key.slice(0, 64)}"`)
       let branding: PdfBranding | null = null
       let invalid: string | null = null
       try {
-        branding = this.deps.branding.validate(app.pdfBranding)
+        branding = this.deps.branding.validate(known)
       } catch (error) {
         invalid = error instanceof Error ? error.message : NOT_VALID
       }
       const available = this.deps.branding.available()
       items.push(this.item("app:pdfBranding", "PDF branding", describeBranding(current), branding ? describeBranding(branding) : "Not valid", !!branding && JSON.stringify(branding) === JSON.stringify(current), invalid ?? (available || (!!branding && JSON.stringify(branding) === JSON.stringify(current)) ? null : "PDF branding is included in Pro and MSP. No tenant on this computer has one of these plans."), {
         ...(!invalid && !available && { feature: "pdfBranding" as const }),
-        apply: () => void this.deps.branding.set(app.pdfBranding),
+        apply: () => void this.deps.branding.set(known),
       }))
     }
     return items

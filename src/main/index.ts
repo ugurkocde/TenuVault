@@ -34,7 +34,8 @@ import { rendererStorageKey, rendererStorageValue } from "./renderer-storage"
 import { prepareGeneratedFile, prepareSaveFile, type PreparedFile } from "./save-file"
 import { pdfBrandingFor, PdfBrandingPolicy, PdfBrandingStore, setPdfBrandingPolicy, validateBranding } from "./pdf-branding"
 import { SettingsTransfer } from "./settings-transfer/service"
-import { SETTINGS_FILE_LIMIT, settingsFileName } from "../shared/settings-transfer"
+import { readSettingsFile } from "./settings-transfer/file"
+import { settingsFileName } from "../shared/settings-transfer"
 import { prepareOibReportFile, printHtmlToPdf } from "./report-export"
 import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, net, Notification, powerMonitor, safeStorage, session, shell } from "electron"
 import { createChromiumFetch } from "./chromium-fetch"
@@ -1125,7 +1126,16 @@ async function bootstrap(): Promise<void> {
     branding: { get: () => pdfBranding.get(), set: (value) => pdfBranding.set(value), available: () => pdfBranding.available(), validate: validateBranding },
     modules: moduleSettings,
     scopes,
-    schedules: { list: () => scheduler.list(), set: (input) => scheduler.set(input) },
+    schedules: {
+      list: () => scheduler.stored(),
+      // The plan rule of the schedule settings, checked as an enabled schedule so a paused one gets it too;
+      // the reviewed values are then saved as they are.
+      set: (input) => {
+        const current = scheduler.stored().find((schedule) => schedule.tenantId === input.tenantId.toLowerCase())
+        prepareScheduleInput({ ...input, enabled: true }, license.plan(input.tenantId), current)
+        return scheduler.set(input)
+      },
+    },
     plan: (tenantId) => license.plan(tenantId),
     appVersion: app.getVersion(),
   })
@@ -1138,8 +1148,7 @@ async function bootstrap(): Promise<void> {
     try {
       const selected = await dialog.showOpenDialog(mainWindow!, { title: "Import settings", properties: ["openFile"], filters: [{ name: "TenuVault settings", extensions: ["json"] }] })
       if (selected.canceled || !selected.filePaths[0]) return null
-      if ((await stat(selected.filePaths[0])).size > SETTINGS_FILE_LIMIT) throw new Error("The settings file is larger than 5 MB.")
-      return settingsTransfer.open(await readFile(selected.filePaths[0], "utf8"), appearance)
+      return settingsTransfer.open(await readSettingsFile(selected.filePaths[0]), appearance)
     } finally {
       openingSettingsFile = false
     }

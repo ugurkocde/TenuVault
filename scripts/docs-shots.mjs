@@ -52,7 +52,7 @@ export async function captureDocs({ main, send, evaluate, go, click, assertText,
       { id:'app', title:'This computer', connected:true, items:[
         { id:'app:retentionDays', label:'Keep backups for', current:'30 days', next:'90 days', status:'change', selected:true },
         { id:'app:nightlyUpdates', label:'Get nightly builds', current:'Off', next:'On', status:'change', warning:'This switches this computer between stable releases and nightly builds.', selected:false },
-        { id:'app:keepRunningInTray', label:'Keep running when I close the window', current:'On', next:'On', status:'same', selected:false },
+        { id:'app:keepRunningInTray', label:'Keep running in the menu bar when I close the window', current:'On', next:'On', status:'same', selected:false },
         { id:'app:appearance', label:'Appearance', current:'Use system setting', next:'Dark', status:'change', selected:true },
       ] },
       { id:tenantId, title:'Contoso Ltd', detail:'contoso.onmicrosoft.com', connected:true, items:[

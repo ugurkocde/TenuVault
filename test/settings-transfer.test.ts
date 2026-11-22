@@ -1,10 +1,14 @@
-import { describe, expect, it } from "vitest"
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { describe, expect, it, vi } from "vitest"
 import { BackupScheduler } from "../src/main/backup/scheduler"
+import { prepareScheduleInput } from "../src/main/backup/schedule-input"
 import { BackupScopes } from "../src/main/backup/scopes"
 import { PdfBrandingPolicy, PdfBrandingStore, validateBranding, type LogoImage } from "../src/main/pdf-branding"
 import { Preferences } from "../src/main/preferences"
 import { ModuleSettings } from "../src/main/services/settings"
-import { parseSettingsFile, SettingsFileError } from "../src/main/settings-transfer/file"
+import { parseSettingsFile, readSettingsFile, SettingsFileError } from "../src/main/settings-transfer/file"
 import { SettingsTransfer } from "../src/main/settings-transfer/service"
 import type { Plan } from "../src/shared/plans"
 import { SETTINGS_FILE_KIND, SETTINGS_FILE_LIMIT, type TransferPreview } from "../src/shared/settings-transfer"
@@ -59,7 +63,14 @@ function machine(tenants: TenantSetup[], plans: Record<string, Plan | null> = {}
     branding: { get: () => branding.get(), set: (value) => branding.set(value), available: () => branding.available(), validate: validateBranding },
     modules,
     scopes,
-    schedules: { list: () => scheduler.list(), set: (input) => scheduler.set(input) },
+    // As the main process wires it: a read without side effects, and the setter's plan rule before saving.
+    schedules: {
+      list: () => scheduler.stored(),
+      set: (input) => {
+        prepareScheduleInput({ ...input, enabled: true }, plan(input.tenantId), scheduler.stored().find((schedule) => schedule.tenantId === input.tenantId))
+        return scheduler.set(input)
+      },
+    },
     plan,
     appVersion: "0.6.0",
     now: options.now ?? (() => new Date("2026-11-21T10:00:00.000Z")),
@@ -301,7 +312,7 @@ describe("settings that cannot be applied", () => {
       app: { preferences: { retentionDays: 60, communityBannerDismissedAt: "2026-11-01T00:00:00.000Z" }, wallpaper: "x" },
       tenants: [{ tenantId: TENANT, services: { conditionalAccess: { enabled: true }, defender: { enabled: true }, intune: { enabled: false } }, favoriteColor: "red" }],
     }), "system")
-    expect(preview.skipped).toEqual(['Section "alerts"', 'This computer: "wallpaper"', 'Tenant aaaa: "favoriteColor"', 'Tenant aaaa: the service "defender"'])
+    expect(preview.skipped).toEqual(['Section "alerts"', 'This computer: "wallpaper"', 'This computer: "communityBannerDismissedAt"', 'Tenant aaaa: "favoriteColor"', 'Tenant aaaa: the service "defender"'])
     expect(everyItem(preview).map((item) => item.id)).toEqual(["app:retentionDays", `${TENANT}:service:conditionalAccess`])
     b.transfer.apply(preview.importId, everyItem(preview).map((item) => item.id), "system")
     expect(b.preferences.saved()).toEqual({ retentionDays: 60 })
@@ -403,5 +414,94 @@ describe("plans on the importing computer", () => {
   ])("blocks branding when no tenant includes it (%s)", (_name, plans) => {
     const b = machine(Object.keys(plans).map((tenantId) => ({ tenantId })), plans)
     expect(find(b.transfer.open(branded, "system"), "app:pdfBranding")).toMatchObject({ status: "blocked", feature: "pdfBranding" })
+  })
+})
+
+describe("review integrity", () => {
+  it("applies only items of the last preview, even when the file offers more by now", () => {
+    const a = configured()
+    const b = machine([{ tenantId: OTHER }])
+    const preview = b.transfer.open(a.transfer.exportFile({ app: false, tenantIds: [TENANT], connection: false, appearance: "dark" }), "system")
+    expect(find(preview, `${TENANT}:schedule`)).toBeUndefined()
+    // The tenant is connected after the preview: its items exist now, but the admin never saw them.
+    b.store.set("renderer.tenuvault_tenants", tenantList([{ tenantId: OTHER }, { tenantId: TENANT }]))
+    expect(() => b.transfer.apply(preview.importId, [`${TENANT}:schedule`], "system")).toThrow("not part of this file")
+    expect(b.scheduler.list()).toEqual([])
+    // A new preview shows them, and then they can be applied.
+    const again = b.transfer.preview(preview.importId, "system")
+    expect(find(again, `${TENANT}:schedule`)?.status).toBe("change")
+    b.transfer.apply(preview.importId, [`${TENANT}:schedule`], "system")
+    expect(b.scheduler.list().map((schedule) => schedule.tenantId)).toEqual([TENANT])
+  })
+
+  it("keeps the preview when a value cannot even be shown as text", () => {
+    const b = machine([{ tenantId: TENANT }])
+    const text = file({ app: { preferences: { retentionDays: 60, keepRunningInTray: { toString: 1 } }, appearance: { toString: null, valueOf: null } }, tenants: [] })
+    const preview = b.transfer.open(text, "system")
+    expect(find(preview, "app:retentionDays")?.status).toBe("change")
+    expect(find(preview, "app:appearance")).toMatchObject({ status: "blocked", next: "Not valid" })
+    expect(find(preview, "app:keepRunningInTray")).toMatchObject({ status: "blocked", next: "Not valid" })
+  })
+
+  it("refuses a cloud backup setup whose values could add lines or repeat a field", () => {
+    const b = machine([{ tenantId: TENANT }])
+    for (const cloudBackup of [
+      { ...CLOUD, automationAccount: "aa-tenuvault\nstorageAccount=attacker1" },
+      { ...CLOUD, StorageAccount: "attacker1" },
+      { ...CLOUD, linked: true, extra: { nested: true } },
+    ]) {
+      const preview = b.transfer.open(file({ tenants: [{ tenantId: TENANT, cloudBackup }] }), "system")
+      expect(find(preview, `${TENANT}:cloudBackup`)).toMatchObject({ status: "blocked", reason: "The value in the file is not valid." })
+    }
+  })
+
+  it("skips branding fields from a newer version and still applies the branding", () => {
+    const b = machine([{ tenantId: TENANT }])
+    const preview = b.transfer.open(file({ app: { pdfBranding: { companyName: "Contoso", watermark: "Draft" } }, tenants: [] }), "system")
+    expect(preview.skipped).toContain('PDF branding: "watermark"')
+    expect(find(preview, "app:pdfBranding")?.status).toBe("change")
+    b.transfer.apply(preview.importId, ["app:pdfBranding"], "system")
+    expect(b.branding.get()).toEqual({ companyName: "Contoso" })
+  })
+
+  it("reads the schedules for a preview without reconciling them", () => {
+    const store = memoryStore()
+    const onFallback = vi.fn()
+    // A Community tenant with a daily schedule: reconciling it saves a weekly fallback and sends a notice.
+    const scheduler = new BackupScheduler(store, async () => ({ status: "Completed" as const, message: "" }), () => undefined, () => new Date("2026-11-21T10:00:00.000Z"), () => ({ plan: "community", azure: false }), undefined, onFallback)
+    store.set("backup.schedules", JSON.stringify({ [TENANT]: { tenantId: TENANT, enabled: true, frequency: "daily", time: "02:00", since: "2026-11-01T00:00:00.000Z", attempts: 0, nextRunAt: null } }))
+    const before = store.get("backup.schedules")
+    expect(scheduler.stored().map((schedule) => schedule.frequency)).toEqual(["daily"])
+    expect(store.get("backup.schedules")).toBe(before)
+    expect(onFallback).not.toHaveBeenCalled()
+  })
+
+  it("refuses a daily schedule for Community at apply time too, through the schedule rule", () => {
+    const a = configured()
+    a.scheduler.set({ tenantId: TENANT, enabled: false, frequency: "daily", time: "04:00" })
+    const b = machine([{ tenantId: TENANT }], { [TENANT]: "community" })
+    const preview = b.transfer.open(a.transfer.exportFile({ app: false, tenantIds: [TENANT], connection: false, appearance: "dark" }), "system")
+    // A paused daily schedule is still a daily one: the preview blocks it like an enabled one.
+    expect(find(preview, `${TENANT}:schedule`)).toMatchObject({ status: "blocked", feature: "dailySchedule" })
+    expect(b.transfer.apply(preview.importId, [`${TENANT}:schedule`], "system").items[0]?.outcome).toBe("failed")
+    expect(b.scheduler.list()).toEqual([])
+  })
+})
+
+describe("reading a settings file from disk", () => {
+  const folder = mkdtempSync(join(tmpdir(), "settings-file-"))
+
+  it("reads a file with a byte order mark, and refuses folders and files over the limit", async () => {
+    const withBom = join(folder, "bom.json")
+    writeFileSync(withBom, `\uFEFF${file({ tenants: [] })}`)
+    expect(parseSettingsFile(await readSettingsFile(withBom)).tenants).toEqual([])
+
+    const large = join(folder, "large.json")
+    writeFileSync(large, Buffer.alloc(SETTINGS_FILE_LIMIT + 1, 0x20))
+    await expect(readSettingsFile(large)).rejects.toThrow("larger than 5 MB")
+
+    const directory = join(folder, "folder.json")
+    mkdirSync(directory)
+    await expect(readSettingsFile(directory)).rejects.toThrow("Choose a settings file.")
   })
 })

@@ -92,6 +92,11 @@ export class BackupScheduler {
     private readonly onPaused: (tenantId: string, reason: "azure" | "choice") => void = () => undefined,
   ) {}
 
+  /** The saved schedules as stored, without reconciling plan fallbacks, so reading has no side effect. */
+  stored(): BackupSchedule[] {
+    return Object.values(this.read())
+  }
+
   list(): BackupSchedule[] {
     return Object.values(this.reconcile()).map((schedule) => ({ ...schedule, nextRunAt: this.nextRun(schedule)?.toISOString() ?? null }))
   }

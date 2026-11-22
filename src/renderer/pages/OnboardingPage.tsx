@@ -568,6 +568,8 @@ export default function OnboardingPage() {
               // The error above already offers the setup call, so an error of the form does not repeat it.
               <SetupCallHintShown.Provider value={signInStuck}>
                 <TenantSignInForm
+                  // The form keeps its own fields once mounted; a setup file that arrives later starts it again with the file's IDs.
+                  key={setup ? `setup:${setup.importId}:${setup.connection.tenantId}` : "manual"}
                   initial={fields}
                   autoSignIn={autoSignIn}
                   hidePaste={Boolean(setupNotice)}

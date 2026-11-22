@@ -1,3 +1,4 @@
+import { open } from "node:fs/promises"
 import { isGuid } from "../../shared/security"
 import { SETTINGS_FILE_KIND, SETTINGS_FILE_LIMIT, SETTINGS_SCHEMA_VERSION } from "../../shared/settings-transfer"
 
@@ -11,6 +12,32 @@ export class SettingsFileError extends Error {
   constructor(message: string) {
     super(message)
     this.name = "SettingsFileError"
+  }
+}
+
+const TOO_LARGE = "The settings file is larger than 5 MB."
+
+/**
+ * Reads a chosen settings file through one handle: it must be a regular file, and at most the limit
+ * plus one byte is ever read, even when the file grows or is replaced after it was chosen.
+ */
+export async function readSettingsFile(path: string): Promise<string> {
+  const handle = await open(path, "r")
+  try {
+    const info = await handle.stat()
+    if (!info.isFile()) throw new SettingsFileError("Choose a settings file.")
+    if (info.size > SETTINGS_FILE_LIMIT) throw new SettingsFileError(TOO_LARGE)
+    const buffer = Buffer.alloc(SETTINGS_FILE_LIMIT + 1)
+    let length = 0
+    while (length < buffer.length) {
+      const { bytesRead } = await handle.read(buffer, length, buffer.length - length, length)
+      if (bytesRead === 0) break
+      length += bytesRead
+    }
+    if (length > SETTINGS_FILE_LIMIT) throw new SettingsFileError(TOO_LARGE)
+    return buffer.subarray(0, length).toString("utf8")
+  } finally {
+    await handle.close()
   }
 }
 
@@ -67,10 +94,11 @@ function label(value: unknown): string | undefined {
 
 /** Reads a settings file. Throws SettingsFileError when the file as a whole cannot be used. */
 export function parseSettingsFile(text: string): SettingsFile {
-  if (typeof text !== "string" || Buffer.byteLength(text, "utf8") > SETTINGS_FILE_LIMIT) throw new SettingsFileError("The settings file is larger than 5 MB.")
+  if (typeof text !== "string" || Buffer.byteLength(text, "utf8") > SETTINGS_FILE_LIMIT) throw new SettingsFileError(TOO_LARGE)
   let raw: unknown
   try {
-    raw = JSON.parse(text)
+    // A byte order mark, as some Windows editors write it, is not part of the JSON.
+    raw = JSON.parse(text.replace(/^\uFEFF/, ""))
   } catch {
     throw new SettingsFileError(NOT_A_SETTINGS_FILE)
   }
