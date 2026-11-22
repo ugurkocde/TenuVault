@@ -442,8 +442,11 @@ export async function reviseChangeSet(deps: FeatureDeps, tenantId: string, id: s
     throw new FeatureError(proposalOmissionBlocker(omission))
   }
   const proposal = deps.records.create<ChangeSetContent>(CONTENT_DOMAIN, tenantId, { title: record.title, status: "frozen", summary: "Frozen proposal of a revised change set.", kind: "proposal", changeSetId: record.id, entries }, { actor, reason: "Froze the revised content" })
+  // A diff stored before omission was on can hold covered values. With omission on, the revision
+  // keeps no stored diff; the fresh review computes it again from the target with omission applied.
+  const kept = omission?.enabled ? operations.map((operation) => ({ ...operation, diff: [], diffTruncated: false })) : operations
   return deps.records.update<ChangeSetRecord>(DOMAINS.changeSets, tenantId, id, (current) => {
-    const next = { ...current, operations, proposalId: proposal.id, review: null, status: "in-review" as const, results: Object.fromEntries(operations.map((operation) => [operation.key, current.results[operation.key] ?? emptyResult()])), summary: "Revised; waiting for a fresh review." }
+    const next = { ...current, operations: kept, proposalId: proposal.id, review: null, status: "in-review" as const, results: Object.fromEntries(operations.map((operation) => [operation.key, current.results[operation.key] ?? emptyResult()])), summary: "Revised; waiting for a fresh review." }
     return { ...next, contentHash: contentHashOf(next) }
   }, { actor, reason: `Removed ${removeKeys.length} operation(s); approval cleared` })!
 }

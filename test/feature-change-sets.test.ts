@@ -596,6 +596,28 @@ describe("change-set engine", () => {
     expect(check.state).toBe("denied")
   })
 
+  it("keeps a secret from an older diff out of a revision made with omission on", async () => {
+    const context = setup()
+    const normalGraph = context.deps.graph
+    context.deps.graph = async (...args) => {
+      const graph = await normalGraph(...args)
+      return async (method, path, body, options) => /deviceManagement\/deviceConfigurations\/(vpn|other)/.test(path) && method === "GET"
+        ? { status: 200, body: { id: path.includes("vpn") ? "vpn" : "other", displayName: "VPN", "@odata.type": "#microsoft.graph.iosVpnConfiguration", sharedSecret: "fixture-revision-secret", assignments: [] } }
+        : graph(method, path, body, options)
+    }
+    const record = await createChangeSet(context.deps, TENANT_A, { title: "Remove VPNs", operations: [
+      { folder: "DeviceConfigurations", action: "delete", targetId: "vpn" },
+      { folder: "DeviceConfigurations", action: "delete", targetId: "other" },
+    ] }, null)
+    context.deps.omissionPolicy = async () => ({ enabled: true, scripts: false, generation: "on" })
+    const revised = await reviseChangeSet(context.deps, TENANT_A, record.id, ["op-2"], "Admin")
+    // History written before omission was on stays as it was; the revision adds nothing covered.
+    const { history, ...current } = revised as typeof revised & { history: unknown[] }
+    expect(JSON.stringify(current)).not.toContain("fixture-revision-secret")
+    expect(JSON.stringify(history.at(-1))).not.toContain("fixture-revision-secret")
+    expect(revised.operations).toHaveLength(1)
+  })
+
   it("classifies an untyped proposal by the target's subtype before storing it", async () => {
     const context = setup()
     const id = "vpn"
