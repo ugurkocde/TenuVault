@@ -7,6 +7,8 @@ description: Copy selected Intune policies from one tenant to others, one way an
 
 Open **Copy to Tenants** in the sidebar, directly under **Drift Detection**.
 
+<span id="what-sync-does-and-does-not-do"></span>
+
 ## What Copy to Tenants does and does not do
 
 * It copies the policies you select from the source to each target you choose. The source tenant is only read; it never changes.
@@ -30,6 +32,8 @@ Copy to Tenants works like [Dev to Prod](/changes/#dev-to-prod), with more than 
 * **Community** sees a preview of what Copy to Tenants does, with **See plans**.
 
 When the selected tenant's plan does not include Copy to Tenants, the **Copy to Tenants** entry in the sidebar shows a **Pro** badge. It still opens the page. See [Plans and features](/licensing/).
+
+<span id="sync-step-by-step"></span>
 
 ## Copy step by step
 
@@ -102,6 +106,8 @@ Choose what happens before anything is written:
 
 Click **Approve and copy to N tenants**. Every ready target is approved and applied on its own, with the backup you chose. The backup choice is stored with each target's approval, so its apply, any retry and an apply from **Details** use the same choice, also when you open the copy again later. While another change is being applied to the same tenant, an approval is refused; approve again when that change finishes. Copy to Tenants records no reviewer name or decision note; the approval is recorded with the signed-in admin in the [audit log](/audit-log/).
 
+<span id="4-sync"></span>
+
 ### 4. Copy
 
 The result view shows the source tenant on the left, with the first three selected policies, and one node per target on the right, linked by a short line. It stays compact and centred at any window width. It follows each target's stored state while it is written, never a timer:
@@ -122,6 +128,8 @@ Each finished target offers:
 * **Retry failed**: applies the target again with the backup choice it was approved with, shown under the button. A retry never switches between backing up and skipping the backup, also when you open the copy again later. Policies already verified are not written again.
 * **Details**: shows the target's change set with the result of every policy, the pre-change evidence and **Preview rollback**.
 
+<span id="a-sync-that-was-planned-and-never-approved"></span>
+
 #### A copy that was planned and never approved
 
 When you open a copy from **Recent copies** that was reviewed but where no target was approved, the result view shows **Planned, not approved yet** with two actions:
@@ -140,6 +148,8 @@ When every target finished and at least one target was written, the summary show
 A rollback writes only to its target. It keeps working after the source tenant's license ends.
 
 When a rollback deletes a policy the copy created, TenuVault removes the link to it once the delete is verified, so the policy shows **Not copied yet** again in **Choose settings** and the next copy creates it again. When every written target of a copy was rolled back, the copy shows **Rolled back** under **Recent copies**.
+
+<span id="recent-syncs"></span>
 
 ## Recent copies
 

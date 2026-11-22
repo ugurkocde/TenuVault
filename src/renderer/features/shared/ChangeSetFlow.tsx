@@ -87,7 +87,7 @@ export function ChangeSetFlow({ changeSet, actions, tenantName, onChanged, rollb
     <div className="space-y-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          {!embedded && <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">{changeSet.origin?.workflow === "sync" ? copyWording(changeSet.title) : changeSet.title}</h3>}
+          {!embedded && <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">{copyWording(changeSet.title)}</h3>}
           <p className="text-sm text-gray-500">
             {changeSet.kind === "rollback" ? "Rollback change set. " : ""}
             {/* The admin who created it, as recorded; the workflow that created it is an internal name. */}
@@ -107,7 +107,7 @@ export function ChangeSetFlow({ changeSet, actions, tenantName, onChanged, rollb
       </ol>
 
       {changeSet.status === "stale" && <p className="rounded-2xl bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">This change set is stale and can no longer be approved or applied. Preview the change again to create a new change set.</p>}
-      {changeSet.lastError && <p className="rounded-2xl bg-red-50 p-3 text-sm text-red-800 dark:bg-red-950/40 dark:text-red-300">{changeSet.lastError}</p>}
+      {changeSet.lastError && <p className="rounded-2xl bg-red-50 p-3 text-sm text-red-800 dark:bg-red-950/40 dark:text-red-300">{copyWording(changeSet.lastError)}</p>}
 
       <section aria-label="Operations" className="space-y-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
