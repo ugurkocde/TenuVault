@@ -137,7 +137,10 @@ export class DirectoryRestoreService {
   private recentlyCreated(tenant: string, objectId?: string): boolean {
     if (!objectId) return false
     const now = this.now()
-    for (const page of this.savedPages(tenant)) for (const { run } of this.history(page)) {
+    // Unreadable evidence never defers: the row keeps its ordinary not-found outcome.
+    let pages: DirectoryPage[]
+    try { pages = this.savedPages(tenant) } catch (error) { if (isRestorePersistenceError(error)) throw error; return false }
+    for (const page of pages) for (const { run } of this.history(page)) {
       if (run.tenant.toLowerCase() !== restoreTenantKey(tenant)) continue
       // Directory object IDs are unique across users and groups.
       if (run.entries.some(entry => entry.step.directory?.action === "create" && entry.step.operation === "create" && entry.acknowledged === true && entry.targetId?.toLowerCase() === objectId.toLowerCase() && Number.isFinite(entry.acknowledgedAt) && entry.acknowledgedAt! <= now && now < entry.acknowledgedAt! + DIRECTORY_REPLICATION_WINDOW_MS)) return true

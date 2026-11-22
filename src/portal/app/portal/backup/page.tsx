@@ -470,7 +470,7 @@ export default function BackupRestorePage() {
         </div>
       )}
 
-      {tenant && <div hidden={activeTab !== "restore"}><DirectoryRestore key={`${tenant.credentials.tenantId}:${tenant.credentials.appId}`} tenant={tenant} /></div>}
+      {tenant && <div hidden={activeTab !== "restore"}><DirectoryRestore key={`${tenant.credentials.tenantId}:${tenant.credentials.appId}`} tenant={tenant} active={activeTab === "restore"} /></div>}
       {/* Sidebar filters can also change the tab. Keep restore progress and results mounted. */}
       {tenant && !isLoading && !blockingError && (
         <div hidden={activeTab !== "restore"}>

@@ -26,7 +26,8 @@ function claimsChallenge(header: string): boolean {
 /** A structured Graph authorization denial proves this send was not applied. */
 export async function directoryWriteAuthorization(response: Response, read = false): Promise<void> {
   const challenge = response.headers.get("WWW-Authenticate") ?? ""
-  if (response.status === 401 && claimsChallenge(challenge)) throw new DirectoryAuthenticationDeferredError("Sign in again and satisfy the Conditional Access requirement, then resume with a fresh connection to repeat permission, approval and safety checks. Automatic claims challenge replay is unavailable; if sign-in does not resolve it, complete the change in Microsoft Entra.")
+  // A read may defer on a header-only 403 challenge too. A write needs Graph's structured body to prove it was unapplied.
+  if ((response.status === 401 || (read && response.status === 403)) && claimsChallenge(challenge)) throw new DirectoryAuthenticationDeferredError("Sign in again and satisfy the Conditional Access requirement, then resume with a fresh connection to repeat permission, approval and safety checks. Automatic claims challenge replay is unavailable; if sign-in does not resolve it, complete the change in Microsoft Entra.")
   if (![401, 403].includes(response.status) || !jsonContent(response)) return
   let value: unknown
   try { value = await response.clone().json() } catch { return }

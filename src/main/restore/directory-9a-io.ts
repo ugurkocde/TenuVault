@@ -359,7 +359,11 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
         } else throw new RestoreSafetyError("Unsupported directory intent.")
         const response = await request(writePath, method, payload, async () => {
           const current = await read(step, targetId)
-          if (restoreFingerprint(current) !== step.preview) throw new RestoreSafetyError("The tenant changed before sending. Preview this item again.")
+          if (restoreFingerprint(current) !== step.preview) {
+            // A reviewed principal that no longer resolves may still be replicating after our own create.
+            if (step.directory?.principalId && current?.principal === null) throw new DirectoryRequiredObjectAbsentError("The tenant changed before sending. Preview this item again.", step.directory.principalId)
+            throw new RestoreSafetyError("The tenant changed before sending. Preview this item again.")
+          }
           const fresh = await review(step, current)
           if (fresh.blocker) throw new RestoreSafetyError(fresh.blocker)
           requireDirectoryApprovals(step, run, fresh.approvals)

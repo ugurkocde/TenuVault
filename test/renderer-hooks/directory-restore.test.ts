@@ -747,3 +747,11 @@ it("keeps an action's result when the saved-page refresh after it fails", async 
   expect(document.body.textContent).toContain("Directory page completed")
   expect(document.body.textContent).not.toContain("could not be listed")
 })
+it("lists saved pages on the saved-only panel only while its tab is shown", async () => {
+  accounts.discover.mockResolvedValue({ owner: "tenant/user/app", pages: [] })
+  root = createRoot(document.body.appendChild(document.createElement("div")))
+  await act(async () => root.render(createElement(DirectoryRestore, { tenant, active: false })))
+  expect(accounts.discover).not.toHaveBeenCalled()
+  await act(async () => root.render(createElement(DirectoryRestore, { tenant, active: true })))
+  expect(accounts.discover).toHaveBeenCalledTimes(1)
+})

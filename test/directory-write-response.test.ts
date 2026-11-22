@@ -82,3 +82,9 @@ it.each([401, 403])("classifies a structured %s insufficient-claims read before 
   await expect(directoryWriteAuthorization(Response.json({ error: { code: "Authorization_RequestDenied" } }, { status, headers }), true)).rejects.toMatchObject({ deferralCause: "authentication" })
   await expect(directoryWriteAuthorization(Response.json({ error: { code: "Authorization_RequestDenied" } }, { status }), true)).rejects.toThrow(DirectoryReadDeferredError)
 })
+
+it("defers a header-only 403 claims challenge on reads and leaves writes to the structured-body rule", async () => {
+  const headers = { "WWW-Authenticate": 'Bearer realm="", error="insufficient_claims", claims="eyJhY2Nlc3NfdG9rZW4iOnt9fQ=="' }
+  await expect(directoryWriteAuthorization(new Response("", { status: 403, headers }), true)).rejects.toMatchObject({ deferralCause: "authentication" })
+  await expect(directoryWriteAuthorization(new Response("<html>Denied</html>", { status: 403, headers }))).resolves.toBeUndefined()
+})

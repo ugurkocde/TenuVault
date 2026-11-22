@@ -12,7 +12,8 @@ import { directoryPageUnresolved } from "../../../shared/intune/directory-page-s
 interface Review { options?: DirectoryOptions; runId: string; fingerprint: string; more: boolean; discarded?: boolean; unresolved?: boolean; selection?: string[]; rows: Array<{ key: string; review: DirectoryReview }> }
 const approvalLabel: Record<string, string> = { "directory-item": "Approve this individual change", "privileged-relationship": "Approve this privileged relationship", "security-response": "Approve undoing the apparent security response", "recycle-relationships": "Approve recovered relationships and account state", "exact-group": "Approve this removal for this group" }
 /** A bounded page of explicit approvals, outside restore all and row selection. */
-export function DirectoryRestore({ tenant, backupId = "", path = "" }: { tenant: BackupTenant; backupId?: string; path?: string }) {
+/** `active` is false while the panel is mounted on a hidden tab: it lists saved pages only once shown. */
+export function DirectoryRestore({ tenant, backupId = "", path = "", active = true }: { tenant: BackupTenant; backupId?: string; path?: string; active?: boolean }) {
   const savedOnly = !backupId || !path
   const [open, setOpen] = useState(savedOnly), [busy, setBusy] = useState(false)
   const [stage, setStage] = useState("object"), [exactMembers, setExactMembers] = useState(false), [exactOwners, setExactOwners] = useState(false)
@@ -25,8 +26,8 @@ export function DirectoryRestore({ tenant, backupId = "", path = "" }: { tenant:
   const [savedPages, setSavedPages] = useState<Array<{ runId: string; path: string }>>([])
   const savedOwner = useRef(""), savedPage = useRef("")
   savedPage.current = review?.runId ?? resumeId
-  const generation = useRef(0), refresh = useRef(0), opened = useRef(open)
-  opened.current = open
+  const generation = useRef(0), refresh = useRef(0), opened = useRef(open && active)
+  opened.current = open && active
   // Each row lists the owner's saved pages only while its review is open, never on mount.
   const discover = useRef(async (_previousId?: string, _afterAction?: boolean) => {})
   discover.current = async (previousId = "", afterAction = false) => {
@@ -57,9 +58,9 @@ export function DirectoryRestore({ tenant, backupId = "", path = "" }: { tenant:
     return () => { refresh.current++; generation.current++; unsubscribe?.() }
   }, [tenant.credentials.tenantId, tenant.credentials.appId, backupId, path])
   useEffect(() => {
-    if (open) void discover.current()
+    if (open && active) void discover.current()
     else refresh.current++
-  }, [open, tenant.credentials.tenantId, tenant.credentials.appId, backupId, path])
+  }, [open, active, tenant.credentials.tenantId, tenant.credentials.appId, backupId, path])
   const invalidate = () => { generation.current++; setCanDiscard(null); setReview(null); setApprovals({}); setOutcomes([]); setReferences([]); setMessage("") }
   const send = async (action: "preview" | "restore" | "cancel" | "resume" | "next" | "reconcile" | "discard", discardId?: string) => {
     const run = action === "cancel" ? generation.current : ++generation.current

@@ -340,7 +340,8 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
           })
         } catch (error) {
           if (isRestorePersistenceError(error)) throw error
-          if (step.directory && error instanceof DirectoryObjectNotFoundError && io.recentlyCreated?.(entry.targetId)) {
+          // The final pre-send safety read runs inside the write and can also miss a replicating object.
+          if (step.directory && ((error instanceof DirectoryObjectNotFoundError && io.recentlyCreated?.(entry.targetId)) || (error instanceof DirectoryRequiredObjectAbsentError && io.recentlyCreated?.(error.objectId)))) {
             const deferred = new DirectoryReplicationDeferredError()
             const attempt = rejectedAttempt(), rejected = attempt ? { ...attempt, cause: "replication" as const } : undefined
             entry.deferralCause = "replication"; entry.state = "deferred"; entry.reason = deferred.message

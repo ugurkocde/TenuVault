@@ -366,3 +366,19 @@ describe("directory safety reads during replication", () => {
     expect(s.writes()).toBe(0)
   })
 })
+
+describe("the final pre-send safety read during replication", () => {
+  const group = "00000000-0000-4000-8000-000000000030", principal = "00000000-0000-4000-8000-000000000031"
+  it.each([true, false])("defers a recently created object missing only at the final read (recent: %s)", async recent => {
+    const { DirectoryRequiredObjectAbsentError } = await import("../src/main/restore/directory-write-response")
+    const s = setup(1), current = { id: group, present: false, principalId: principal, principal: { id: principal } }
+    const run: GuardedRun = { ...s.input, entries: [{ step: { ...s.input.entries[0]!.step, operation: "update", sourceId: group, targetId: group, directory: { action: "member", principalId: principal }, desired: { present: true, principalId: principal }, properties: ["present", "principalId"], preview: restoreFingerprint(current) }, state: "pending" }] }
+    s.io.read = async () => current
+    s.io.recentlyCreated = objectId => recent && objectId === group
+    // The adapter's final read runs inside write, before dispatch, and misses the object.
+    s.io.write = async () => { throw new DirectoryRequiredObjectAbsentError("The relationship resource is missing.", group) }
+    const entry = (await executeGuardedRun(s.journal, run, s.io)).run.entries[0]!
+    if (recent) expect(entry).toMatchObject({ state: "deferred", deferralCause: "replication" })
+    else expect(entry.state).not.toBe("deferred")
+  })
+})
