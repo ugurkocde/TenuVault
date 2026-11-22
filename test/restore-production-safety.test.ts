@@ -499,3 +499,7 @@ it("previews and updates a recreated policy through the real dispatch using its 
   expect(calls.some(call => call.path.endsWith("/" + source))).toBe(false)
   expect(calls.filter(call => call.method !== "GET")).toEqual([{ method: "PATCH", path: `/v1.0/policies/tokenLifetimePolicies/${created}` }])
 })
+
+it.each([201, 203, 206])("requires HTTP 200 for safety reads instead of %s", async status => {
+  await expect(safetyReader(token, async () => Response.json({ value: [] }, { status })).get("users")).rejects.toThrow(String(status))
+})

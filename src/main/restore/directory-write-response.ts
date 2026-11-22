@@ -1,5 +1,5 @@
 import type { Item } from "../../shared/intune/registry"
-import { RestoreWriteRefusedError } from "../../shared/intune/restore-guards"
+import { RestoreSafetyError, RestoreWriteRefusedError } from "../../shared/intune/restore-guards"
 import { isGuid } from "../../shared/security"
 import { DirectoryAuthenticationDeferredError, DirectoryReadDeferredError, DirectoryReplicationDeferredError, DirectoryRoleDeferredError } from "./directory-retry"
 
@@ -31,14 +31,19 @@ export async function directoryWriteAuthorization(response: Response, read = fal
   let value: unknown
   try { value = await response.clone().json() } catch { return }
   if (!object(value) || !object(value.error) || typeof value.error.code !== "string" || !value.error.code.trim()) return
-  if (read) throw new DirectoryReadDeferredError()
+  // A claims challenge needs a new sign-in on reads too. Classify it before generic read denials.
   if (value.error.code.toLowerCase() === "insufficient_claims" || claimsChallenge(challenge)) throw new DirectoryAuthenticationDeferredError("Sign in again and satisfy the Conditional Access requirement, then resume with a fresh connection to repeat permission, approval and safety checks.")
+  if (read) throw new DirectoryReadDeferredError()
   if (response.status === 401) throw new DirectoryAuthenticationDeferredError()
   if (["authorization_requestdenied", "accessdenied"].includes(value.error.code.toLowerCase())) throw new DirectoryRoleDeferredError()
 }
 
 export class DirectoryObjectNotFoundError extends RestoreWriteRefusedError {
   constructor() { super(404) }
+}
+/** A required safety read found no object. Only our journal's creation evidence can make it replication. */
+export class DirectoryRequiredObjectAbsentError extends RestoreSafetyError {
+  constructor(message: string, readonly objectId: string) { super(message) }
 }
 /** A structured resource-not-found can be replication only with our journal's creation evidence. */
 export async function directoryWriteNotFound(response: Response): Promise<void> {

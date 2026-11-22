@@ -783,6 +783,7 @@ it.each(["recent", "outside window", "future", "unacknowledged", "wrong target",
   stored.run.entries[0].state = "applied"; stored.run.entries[0].acknowledged = variant !== "unacknowledged"
   stored.run.entries[0].acknowledgedAt = Date.now() + (variant === "future" ? 100_000 : variant === "outside window" ? -30 * 60 * 1000 : -1000)
   env.store.set(createdKey, JSON.stringify(stored))
+  env.store.set(`restore.directory.pages.${tenant}`, JSON.stringify([...JSON.parse(env.store.get(`restore.directory.pages.${tenant}`)!), createdId]))
   const { GuardedRunJournal } = await import("../src/main/restore/guarded-run")
   const { directoryPagePrefix } = await import("../src/main/restore/directory-object-state")
   const prefix = directoryPagePrefix(tenant, createdId) + "batch.0."

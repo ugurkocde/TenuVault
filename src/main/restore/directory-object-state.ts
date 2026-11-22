@@ -210,6 +210,7 @@ export function directoryObjectState(store: KeyValueStore, tenant: string, owner
     trackRetryJournals,
     recoverRetryDeadlines,
     discarded: () => !!load().discarded[owner],
+    ownsObjects: () => { const state = load(); return !!state.invalid || Object.values(state.locks).some(lock => lock?.owner === owner) },
     prepare: (step: GuardedStep, journal: string): number | undefined => {
       const state = load(); assertActive(state)
       const target = object(step)

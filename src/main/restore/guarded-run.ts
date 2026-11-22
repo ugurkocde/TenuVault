@@ -2,7 +2,7 @@ import { restoreTenantKey } from "./restore-tenant-key"
 import { isProxyAuthResponse } from "../api/network-error"
 import { DirectoryRetryPersistenceError, DirectoryWriteUncertainError, persistDirectoryRetry, waitForDirectoryRetry } from "./directory-retry"
 import { DirectoryReplicationDeferredError } from "./directory-retry"
-import { DirectoryObjectNotFoundError, directoryCreateMatches } from "./directory-write-response"
+import { DirectoryObjectNotFoundError, DirectoryRequiredObjectAbsentError, directoryCreateMatches } from "./directory-write-response"
 import { requireConfigurationApproval } from "./entra-configuration"
 import { isGraphId, isGuid } from "../../shared/security"
 import { operationProtections, restoreMatrixRow } from "../../shared/intune/restore-matrix"
@@ -62,7 +62,8 @@ export interface GuardedRun {
 export interface GuardedIO {
   token: string
   now?: () => number
-  recentlyCreated?: (step: GuardedStep, targetId?: string) => boolean
+  /** True while this tenant's journal holds an acknowledged create of the object inside the replication window. */
+  recentlyCreated?: (objectId?: string) => boolean
   canReconcile?: (step: GuardedStep, targetId?: string) => boolean
   persistConfirmed?: (step: GuardedStep, save: () => void) => void
   persistRetry?: (step: GuardedStep, saveJournal: () => void, saveCoordinator: () => void, retryAt: number) => void
@@ -280,7 +281,12 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
         if (originBlock) throw new RestoreSafetyError(originBlock)
         if (journal.hasEarlierUnanswered(run, step)) throw new RestoreSafetyError("An earlier restore has an unanswered write for this object. Resume that run before starting another.")
         const current = await io.read(step, entry.targetId ?? step.targetId ?? mapped, signal)
-        if (restoreFingerprint(current) !== step.preview) throw new RestoreSafetyError("The tenant changed after this preview. Preview this item again.")
+        if (restoreFingerprint(current) !== step.preview) {
+          // A reviewed principal that no longer resolves may still be replicating after our own create.
+          const principalId = step.directory?.principalId
+          if (principalId && current && current.principal === null && io.recentlyCreated?.(principalId)) throw new DirectoryRequiredObjectAbsentError("The relationship principal is missing.", principalId)
+          throw new RestoreSafetyError("The tenant changed after this preview. Preview this item again.")
+        }
         if (step.operation === "create" && mapped && current === null) throw new RestoreSafetyError("The previously mapped object is missing. Review its mapping before recreating it again.")
         if (step.operation === "create" && current !== null) throw new RestoreSafetyError("The object already exists. Preview it as an update.")
         if (step.operation === "update" && current === null) throw new RestoreSafetyError("The object no longer exists. Preview it again.")
@@ -334,7 +340,7 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
           })
         } catch (error) {
           if (isRestorePersistenceError(error)) throw error
-          if (step.directory && error instanceof DirectoryObjectNotFoundError && io.recentlyCreated?.(step, entry.targetId)) {
+          if (step.directory && error instanceof DirectoryObjectNotFoundError && io.recentlyCreated?.(entry.targetId)) {
             const deferred = new DirectoryReplicationDeferredError()
             const attempt = rejectedAttempt(), rejected = attempt ? { ...attempt, cause: "replication" as const } : undefined
             entry.deferralCause = "replication"; entry.state = "deferred"; entry.reason = deferred.message
@@ -376,8 +382,11 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
         entry.state = "applied"; delete entry.reason
         if (step.directory && (typeof step.desired.present === "boolean" || ["update", "manager"].includes(step.directory.action))) { entry.acknowledged = true; entry.acknowledgedAt = (io.now ?? Date.now)() }
         saveConfirmed(step)
-      } catch (error) {
+      } catch (caught) {
+        let error = caught
         if (entry.state === "applied" || isRestorePersistenceError(error)) throw error
+        // A required object our own journal just created may not have replicated to this read. No write was sent.
+        if (step.directory && entry.state !== "uncertain" && error instanceof DirectoryRequiredObjectAbsentError && io.recentlyCreated?.(error.objectId)) error = new DirectoryReplicationDeferredError()
         if (entry.state === "uncertain" && error instanceof RestoreWriteDeferredError && error.retryAt !== undefined) {
           defer(error.retryAt)
           entry.reason = "Microsoft Graph deferred confirmation of this unanswered write. Retry after the saved deadline."

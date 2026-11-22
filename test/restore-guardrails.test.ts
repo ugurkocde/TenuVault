@@ -343,3 +343,26 @@ it.each(["Basic authentication for the operations team", "Basic contoso-finance-
 it.each(["abc8Q~" + "a".repeat(31), "A_.9Q~" + "b".repeat(34), "Basic " + Buffer.from("user:a-long-test-password-value").toString("base64")])("refuses credential values in nested descriptions: %s", description => {
   expect(() => assertNoSecrets({ nested: { description } })).toThrow("Credential values")
 })
+
+describe("directory safety reads during replication", () => {
+  const group = "00000000-0000-4000-8000-000000000020", principal = "00000000-0000-4000-8000-000000000021"
+  const relationship = (s: ReturnType<typeof setup>): GuardedRun => ({ ...s.input, entries: [{ step: { ...s.input.entries[0]!.step, operation: "update", sourceId: group, targetId: group, directory: { action: "member", principalId: principal }, desired: { present: true, principalId: principal }, properties: ["present", "principalId"], preview: restoreFingerprint({ id: group, present: false, principalId: principal, principal: { id: principal } }) }, state: "pending" }] })
+  it.each([true, false])("defers a missing required resource only with recent creation evidence (recent: %s)", async recent => {
+    const { DirectoryRequiredObjectAbsentError } = await import("../src/main/restore/directory-write-response")
+    const s = setup(1), created = vi.fn((objectId?: string) => recent && objectId === group)
+    s.io.recentlyCreated = created
+    s.io.read = async () => { throw new DirectoryRequiredObjectAbsentError("The relationship resource is missing.", group) }
+    const entry = (await executeGuardedRun(s.journal, relationship(s), s.io)).run.entries[0]!
+    expect(created).toHaveBeenCalledWith(group)
+    expect(entry).toMatchObject(recent ? { state: "deferred", deferralCause: "replication" } : { state: "blocked", reason: "The relationship resource is missing." })
+    expect(s.writes()).toBe(0)
+  })
+  it.each([true, false])("defers a reviewed principal that no longer resolves only with recent creation evidence (recent: %s)", async recent => {
+    const s = setup(1)
+    s.io.recentlyCreated = objectId => recent && objectId === principal
+    s.io.read = async () => ({ id: group, present: false, principalId: principal, principal: null })
+    const entry = (await executeGuardedRun(s.journal, relationship(s), s.io)).run.entries[0]!
+    expect(entry).toMatchObject(recent ? { state: "deferred", deferralCause: "replication" } : { state: "blocked", reason: expect.stringContaining("tenant changed") })
+    expect(s.writes()).toBe(0)
+  })
+})

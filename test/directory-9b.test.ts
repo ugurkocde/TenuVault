@@ -843,7 +843,7 @@ it("attempts every unpublished application inventory delete and retries the fail
   const service = new DirectoryRestoreService(store, new RecoveryAccounts(store), async () => ({ token, ...actor }), async () => actor, env.fetcher, () => [], env.settings)
   const request = { path: `backup/Applications/${app.id}.json`, snapshot, origin: "restore" as const }, options = { stage: "relationships" as const, exactMembers: false, exactOwners: false }
   await expect(service.prepare(actor.tenantId, request, options, async () => ids)).rejects.toThrow("Preview save unavailable")
-  expect(deletes).toHaveLength(3); expect([...data.keys()]).toEqual([expect.stringMatching(/\.0$/)])
+  expect(deletes.filter(key => key.startsWith("restore.directory.inventory."))).toHaveLength(3); expect([...data.keys()]).toEqual([expect.stringMatching(/\.0$/)])
   failing = false
   await expect(service.prepare(actor.tenantId, request, options, async () => ids)).rejects.toThrow("Preview save unavailable")
   expect(data.size).toBe(0); expect(env.writes).toEqual([])

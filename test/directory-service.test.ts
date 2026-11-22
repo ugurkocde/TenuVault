@@ -3285,6 +3285,7 @@ it("lists only the current owner's unfinished pages locally after restart and ac
   const another = structuredClone(JSON.parse(env.store.get(`restore.directory.review.${tenant}.${page.runId}`)!))
   another.run.id = id(700); another.run.actor.userId = id(701)
   env.store.set(`restore.directory.review.${tenant}.${another.run.id}`, JSON.stringify(another))
+  env.store.set(`restore.directory.pages.${tenant}`, JSON.stringify([...JSON.parse(env.store.get(`restore.directory.pages.${tenant}`)!), another.run.id]))
   const connection = vi.fn(async () => { throw new Error("No network or token refresh") })
   const fetcher = vi.fn(), owner = vi.fn(async () => local)
   const service = () => new DirectoryRestoreService(env.store, new RecoveryAccounts(env.store), connection, owner, fetcher)
@@ -3300,6 +3301,23 @@ it("lists only the current owner's unfinished pages locally after restart and ac
   owner.mockResolvedValueOnce(local).mockResolvedValueOnce({ ...local, userId: id(799) })
   await expect(service().unfinished(tenant)).rejects.toThrow("account changed")
   expect(connection).not.toHaveBeenCalled(); expect(fetcher).not.toHaveBeenCalled()
+})
+
+it("discovers saved pages from the page index without enumerating the store, and lists settled pages that still own objects", async () => {
+  const env = world(1), local = { tenantId: tenant, userId: admin, clientId: app }
+  const page = await env.service().prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read)
+  const approvals = Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals]))
+  expect(await env.service().execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, approvals)).toMatchObject({ status: "complete" })
+  expect(JSON.parse(env.store.get(`restore.directory.pages.${tenant}`)!)).toEqual([page.runId])
+  const reads: string[] = [], store = { partitioned: true as const, get: (key: string) => { reads.push(key); return env.store.get(key) }, set: env.store.set, delete: env.store.delete }
+  const service = () => new DirectoryRestoreService(store, new RecoveryAccounts(store), vi.fn(), async () => local, vi.fn())
+  expect((await service().unfinished(tenant)).pages).toEqual([])
+  expect(reads.every(key => key === `restore.directory.pages.${tenant}` || key.startsWith(`restore.directory.review.${tenant}.`) || key.startsWith(`restore.directory.coordinator.`) || key.startsWith(`restore.directory.${tenant}.${page.runId}.`))).toBe(true)
+  // Cursor and lock cleanup did not finish: the page keeps its object and stays listed.
+  const coordinatorKey = `restore.directory.coordinator.${tenant}`, state = JSON.parse(env.store.get(coordinatorKey) ?? '{"locks":{},"deadlines":{},"discarded":{}}')
+  state.locks[id(9999)] = { owner: page.runId, journal: `restore.directory.${tenant}.${page.runId}.batch.0.` }
+  env.store.set(coordinatorKey, JSON.stringify(state))
+  expect((await service().unfinished(tenant)).pages).toEqual([{ runId: page.runId, path: env.request.path }])
 })
 
 it.each(["mailNickname", "displayName"])("blocks group creation on a live %s conflict in preview and again at send", async field => {

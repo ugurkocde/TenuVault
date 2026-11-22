@@ -10,7 +10,7 @@ export function safetyReader(token: string, fetchImpl: typeof fetch = fetch, ver
     const url = path.startsWith(root) ? path : root + path
     if (!url.startsWith(root) || new URL(url).hash) throw new RestoreSafetyError("Invalid safety read path.")
     const response = await fetchImpl(url, { method: "GET", headers: { "Accept-Language": "en-US", ...headers, Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(60_000) })
-    if (!response.ok) throw new RestoreSafetyError(`A required safety read did not complete (${response.status}). Nothing was written.`)
+    if (response.status !== 200) throw new RestoreSafetyError(`A required safety read did not complete (${response.status}). Nothing was written.`)
     const body = await response.json() as Item
     if (!body || typeof body !== "object" || Array.isArray(body)) throw new RestoreSafetyError("Invalid safety read response.")
     return body

@@ -5,7 +5,7 @@ import { restoreMatrixRow } from "../../shared/intune/restore-matrix"
 import { RestoreSafetyError, RestoreWriteDeferredError, RestoreWriteRefusedError, guardRestoreItem, type RestoreActor } from "../../shared/intune/restore-guards"
 import { isGuid } from "../../shared/security"
 import { directoryContinuation } from "./directory-read-shape"
-import { directoryWriteAuthorization, directoryWriteReplication, directoryWriteResponse, directoryWriteNotFound } from "./directory-write-response"
+import { DirectoryRequiredObjectAbsentError, directoryWriteAuthorization, directoryWriteReplication, directoryWriteResponse, directoryWriteNotFound } from "./directory-write-response"
 import { directoryPermissionBlocker } from "./directory-permissions"
 import { directoryReadAbsent, directoryReadShape, directoryWorkloadOnly } from "./directory-read-shape"
 import { requireRestoreActor } from "./restore-actor"
@@ -174,14 +174,14 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
     if (["member", "owner"].includes(intent.action)) {
       const principalId = identity(intent.principalId)
       const resource = await request(path)
-      if (!resource) throw new RestoreSafetyError("The relationship resource is missing.")
+      if (!resource) throw new DirectoryRequiredObjectAbsentError("The relationship resource is missing.", identity(id ?? step.targetId ?? step.sourceId))
       const current = await request(`${path}/${intent.action === "member" ? "members" : "owners"}/${principalId}`)
       const principal = await resolvePrincipal(principalId)
       return { id: resource.id!, present: current !== null, principalId, resource, principal }
     }
     if (intent.action === "manager") {
       const user = await request(path)
-      if (!user) throw new RestoreSafetyError("The managed user is missing.")
+      if (!user) throw new DirectoryRequiredObjectAbsentError("The managed user is missing.", identity(id ?? step.targetId ?? step.sourceId))
       const manager = await request(`${path}/manager`)
       return { id: user.id!, principalId: manager?.id ?? null, resource: user, principal: intent.principalId ? await resolvePrincipal(intent.principalId) : null }
     }

@@ -25,33 +25,41 @@ export function DirectoryRestore({ tenant, backupId = "", path = "" }: { tenant:
   const [savedPages, setSavedPages] = useState<Array<{ runId: string; path: string }>>([])
   const savedOwner = useRef(""), savedPage = useRef("")
   savedPage.current = review?.runId ?? resumeId
-  const generation = useRef(0)
+  const generation = useRef(0), refresh = useRef(0), opened = useRef(open)
+  opened.current = open
+  // Each row lists the owner's saved pages only while its review is open, never on mount.
+  const discover = useRef(async (_previousId?: string, _afterAction?: boolean) => {})
+  discover.current = async (previousId = "", afterAction = false) => {
+    const current = ++refresh.current
+    try {
+      const result = await bridge.auth?.savedDirectoryRestores?.(tenant.credentials.tenantId)
+      if (current !== refresh.current || !result) return
+      setSavedPages(result.pages)
+      if (previousId && (savedOwner.current === result.owner || result.pages.some(page => page.runId === previousId))) setResumeId(previousId)
+      savedOwner.current = result.owner
+    } catch {
+      // A refresh after an action keeps that action's result visible.
+      if (current === refresh.current && !afterAction) setMessage("Your saved restores could not be listed. Sign in to this tenant and reopen the review to try again.")
+    }
+  }
   useEffect(() => {
     const clear = () => {
       generation.current++; setActiveRestore(null); setBusy(false); setCanDiscard(null); setReview(null); setApprovals({}); setOutcomes([]); setReferences([]); setMessage(""); setResumeId(""); setInputCanDiscard(null)
       setStage("object"); setExactMembers(false); setExactOwners(false)
     }
-    let refresh = 0
-    const discover = async (previousId = "") => {
-      const current = ++refresh
-      try {
-        const result = await bridge.auth?.savedDirectoryRestores?.(tenant.credentials.tenantId)
-        if (current !== refresh || !result) return
-        setSavedPages(result.pages)
-        if (previousId && (savedOwner.current === result.owner || result.pages.some(page => page.runId === previousId))) setResumeId(previousId)
-        savedOwner.current = result.owner
-      } catch { if (current === refresh) setMessage("Your saved restores could not be listed. Sign in to this tenant and reopen the review to try again.") }
-    }
     clear(); setSavedPages([]); savedOwner.current = ""
-    void discover()
     const unsubscribe = bridge.auth?.onAccountsChanged?.(changed => {
       if (changed.toLowerCase() !== tenant.credentials.tenantId.toLowerCase()) return
       const previousId = savedPage.current
-      clear(); setSavedPages([])
-      void discover(previousId)
+      clear(); setSavedPages([]); refresh.current++
+      if (opened.current) void discover.current(previousId)
     })
-    return () => { refresh++; generation.current++; unsubscribe?.() }
+    return () => { refresh.current++; generation.current++; unsubscribe?.() }
   }, [tenant.credentials.tenantId, tenant.credentials.appId, backupId, path])
+  useEffect(() => {
+    if (open) void discover.current()
+    else refresh.current++
+  }, [open, tenant.credentials.tenantId, tenant.credentials.appId, backupId, path])
   const invalidate = () => { generation.current++; setCanDiscard(null); setReview(null); setApprovals({}); setOutcomes([]); setReferences([]); setMessage("") }
   const send = async (action: "preview" | "restore" | "cancel" | "resume" | "next" | "reconcile" | "discard", discardId?: string) => {
     const run = action === "cancel" ? generation.current : ++generation.current
@@ -87,7 +95,11 @@ export function DirectoryRestore({ tenant, backupId = "", path = "" }: { tenant:
       else if (action === "discard") { setSavedPages(previous => previous.filter(page => page.runId !== pageId)); if (pageId === review?.runId) { setCanDiscard(false); setOutcomes([]) } setMessage("Saved restore discarded. This page can never send again.") }
       else { setOutcomes(data.outcomes ?? []); setReferences(data.replacedReferences ?? []); setMessage(data.status === "nothing-sent" ? "No directory changes were sent for this page. You can discard the saved restore." : data.status === "complete" ? "Directory page completed. Preview again for remaining differences." : `Directory restore is partial. Applied changes are retained. Review the results and warnings. Resume throttled steps after the retry time. Confirm uncertain results before continuing. ${(data.warnings ?? []).join(" ")}`) }
     } catch (error) { if (generation.current === run) setMessage(error instanceof Error ? error.message : "Directory restore could not finish.") }
-    finally { if (action !== "cancel" && generation.current === run) { setBusy(false); setActiveRestore(null) } }
+    finally {
+      if (action !== "cancel" && generation.current === run) { setBusy(false); setActiveRestore(null) }
+      // Saved-page actions change which pages remain unfinished.
+      if (["restore", "reconcile", "discard", "resume", "preview", "next"].includes(action) && opened.current) void discover.current("", true)
+    }
   }
   const resultRows = outcomes.length > 0 && <div className="max-h-64 space-y-2 overflow-auto" aria-label="Directory page results">{outcomes.map(outcome => <p key={outcome.key} className="break-all">{review?.rows.find(row => row.key === outcome.key)?.review.privilege ?? "Change"}: {outcome.state === "deferred" ? (outcome.deferralCause === "proxy" ? `Proxy authentication required. Sign in to the proxy and resume.${outcome.retryAt ? ` Earliest retry: ${new Date(outcome.retryAt).toLocaleString()}.` : ""}` : ["role", "authentication", "replication"].includes(outcome.deferralCause ?? "") ? "" : outcome.deferralCause === "throttle" && outcome.retryAt ? `Throttled by Microsoft Graph. Earliest retry: ${new Date(outcome.retryAt).toLocaleString()}.` : "Deferred before dispatch. Resume to continue.") : outcome.state === "uncertain" ? `The result is being confirmed.${outcome.retryAt ? ` Earliest retry: ${new Date(outcome.retryAt).toLocaleString()}.` : ""}` : `${outcome.state}.`} {outcome.targetId && <>Target ID: {outcome.targetId}. </>}{outcome.reason}</p>)}</div>
   const unfinished = savedPages.length > 0 && <div aria-label="Your unfinished saved restores" className="space-y-1"><p>Your unfinished saved restores</p>{savedPages.map(page => <Button key={page.runId} size="sm" variant="outline" disabled={busy} onClick={() => { invalidate(); setResumeId(page.runId); setInputCanDiscard(null) }}>{page.path}: {page.runId}</Button>)}</div>

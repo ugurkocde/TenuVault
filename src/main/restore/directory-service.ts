@@ -4,7 +4,8 @@ import { DirectoryPrincipalMappings } from "./directory-principal-mappings"
 import { DirectoryPendingPublications } from "./directory-pending-publications"
 import { captureDirectoryExecutionActor } from "../api/execution-metadata"
 import { directoryPagePrefix, directoryObjectState } from "./directory-object-state"
-import { DirectoryReadDeferredError, DirectoryThrottledError, persistDirectoryRetry } from "./directory-retry"
+import { DirectoryAuthenticationDeferredError, DirectoryReadDeferredError, DirectoryThrottledError, persistDirectoryRetry } from "./directory-retry"
+import { directoryWriteAuthorization } from "./directory-write-response"
 import { directory9bIO } from "./directory-9b-io"
 import { applicationObjectStep, applicationRelationshipSteps } from "./directory-9b-plan"
 import { DIRECTORY_9B_FOLDERS, applicationAdmission, applicationReview, requireApplicationRestoreAccess } from "./directory-9b"
@@ -36,6 +37,8 @@ export interface DirectoryOptions { stage: "object" | "relationships"; exactMemb
 export interface DirectoryPage { inventory?: { id: string; count: number; offset: number; targetId: string; principalMappings?: { parts: number; fingerprint: string } }; run: GuardedRun; rows: Array<{ key: string; review: DirectoryReview }>; more: boolean; options: DirectoryOptions; selection?: string[] }
 const fail = (message: string): never => { throw new RestoreSafetyError(message) }
 const key = (tenant: string, id: string) => `restore.directory.review.${restoreTenantKey(tenant)}.${id}`
+/** One small record lists a tenant's saved pages, so discovery never decrypts every journal. */
+const indexKey = (tenant: string) => `restore.directory.pages.${restoreTenantKey(tenant)}`
 /** Name the source-ID race or the folder-specific create-key conflict. */
 export function directoryExistingObjectBlocker(step: Pick<GuardedStep, "folder" | "sourceId" | "desired">, current: Item): string {
   const existing = `${String(current.displayName ?? current.id)} (${String(current.id)})`
@@ -52,7 +55,7 @@ export class DirectoryRestoreService {
   private readonly running = new Map<string, AbortController>()
   private readonly store: PartitionedRestoreStore
   constructor(store: PartitionedRestoreStore, private readonly recovery: RecoveryAccounts, private readonly connection: (tenant: string) => Promise<RestoreConnection>, private readonly localOwner: (tenant: string) => Promise<Pick<RestoreConnection, "tenantId" | "userId" | "clientId">>, private readonly fetchImpl: typeof fetch = fetch, private readonly protectedAppIds: (tenant: string) => readonly string[] = () => [], private readonly settings?: Pick<ModuleSettings, "get">, private readonly now: () => number = () => Date.now()) {
-    this.store = { ...(store.keys ? { keys: () => restorePersistence(() => store.keys!()) } : {}), partitioned: store.partitioned, get: name => restorePersistence(() => store.get(name)), set: (name, value) => restorePersistence(() => store.set(name, value)), delete: name => restorePersistence(() => store.delete(name)) }
+    this.store = { partitioned: store.partitioned, get: name => restorePersistence(() => store.get(name)), set: (name, value) => restorePersistence(() => store.set(name, value)), delete: name => restorePersistence(() => store.delete(name)) }
   }
   private async context(tenant: string, onThrottled?: (retryAt: number) => void, validatedConnection?: RestoreConnection, pageId?: string) {
     const connection = validatedConnection ?? await this.connection(tenant)
@@ -65,6 +68,8 @@ export class DirectoryRestoreService {
         onThrottled?.(error.retryAt!)
         throw error
       }
+      // Actor safety reads keep their own denial message, but a claims challenge needs a new sign-in.
+      try { await directoryWriteAuthorization(response, true) } catch (error) { if (error instanceof DirectoryAuthenticationDeferredError) throw error }
       return response
     }
     const actor = await resolveRestoreActor(safetyReader(connection.token, actorFetch), connection, this.recovery.get(tenant), ["identity-references"])
@@ -86,7 +91,7 @@ export class DirectoryRestoreService {
     }, undefined, undefined, true, onThrottled)
     const applicationIO = directory9bIO(connection.token, actor, this.fetchImpl, () => this.protectedAppIds(tenant), () => this.settings?.get(tenant).entra, undefined, onThrottled)
     for (const adapter of [io, applicationIO]) {
-      adapter.recentlyCreated = (step, targetId) => this.recentlyCreated(tenant, step, targetId)
+      adapter.recentlyCreated = objectId => this.recentlyCreated(tenant, objectId)
       adapter.now = this.now
       adapter.persistRetry = (_step, journal, coordinator, retryAt) => this.persistRetry(tenant, retryAt, journal, coordinator, pageId)
       adapter.persistConfirmed = (_step, save) => this.pending.forTenant(tenant).retain(save, undefined, pageId)
@@ -101,32 +106,41 @@ export class DirectoryRestoreService {
   }
   private async verifyLocalOwner(page: DirectoryPage) { this.verifyOwner(page, await this.localOwner(page.run.tenant)) }
   private pageIds(tenant: string): string[] {
-    const prefix = `restore.directory.review.${restoreTenantKey(tenant)}.`
-    if (!this.store.keys) fail("Local saved restore discovery is unavailable.")
-    return this.store.keys!().filter(name => name.startsWith(prefix)).map(name => name.slice(prefix.length)).filter(isGuid)
+    const raw = this.store.get(indexKey(tenant))
+    if (raw === null) return []
+    let ids: unknown
+    try { ids = JSON.parse(raw) } catch { ids = null }
+    if (!Array.isArray(ids) || !ids.every(isGuid)) fail("Local saved restore discovery could not be verified.")
+    return ids as string[]
+  }
+  /** The index is published before its page, so an interrupted first save lists no page. */
+  private savedPages(tenant: string): DirectoryPage[] {
+    return this.pageIds(tenant).flatMap(id => { const raw = this.store.get(key(tenant, id)); return raw === null ? [] : [JSON.parse(raw) as DirectoryPage] })
   }
   async unfinished(tenant: string) {
     const owner = await this.localOwner(tenant)
     if (owner.tenantId.toLowerCase() !== restoreTenantKey(tenant)) fail("The connection belongs to another tenant.")
     const pages: Array<{ runId: string; path: string }> = []
-    for (const id of this.pageIds(tenant)) {
-      const page = this.load(tenant, id)
+    for (const page of this.savedPages(tenant)) {
+      const id = page.run.id
       if (page.run.actor.tenantId.toLowerCase() !== owner.tenantId.toLowerCase() || page.run.actor.userId.toLowerCase() !== owner.userId.toLowerCase() || page.run.actor.clientId.toLowerCase() !== owner.clientId.toLowerCase()) continue
       this.verifyOwner(page, owner)
       const view = this.view(page)
-      if (!view.discarded && (!page.selection || view.unresolved)) pages.push({ runId: id, path: page.run.source?.path ?? "" })
+      // A settled page still lists while it owns objects, until its cursor and lock cleanup finishes.
+      if (!view.discarded && (!page.selection || view.unresolved || directoryObjectState(this.store, tenant, id).ownsObjects())) pages.push({ runId: id, path: page.run.source?.path ?? "" })
     }
     // Account changes while the read was running must not disclose the prior owner's pages.
     const current = await this.localOwner(tenant)
     if (["tenantId", "userId", "clientId"].some(field => current[field as keyof typeof current].toLowerCase() !== owner[field as keyof typeof owner].toLowerCase())) fail("The signed-in account changed. Refresh saved restores.")
     return { owner: [owner.tenantId, owner.userId, owner.clientId].map(value => value.toLowerCase()).join("/"), pages }
   }
-  private recentlyCreated(tenant: string, step: GuardedStep, targetId?: string): boolean {
-    if (!targetId || !this.store.keys) return false
+  private recentlyCreated(tenant: string, objectId?: string): boolean {
+    if (!objectId) return false
     const now = this.now()
-    for (const id of this.pageIds(tenant)) for (const { run } of this.history(this.load(tenant, id))) {
+    for (const page of this.savedPages(tenant)) for (const { run } of this.history(page)) {
       if (run.tenant.toLowerCase() !== restoreTenantKey(tenant)) continue
-      if (run.entries.some(entry => entry.step.folder === step.folder && entry.step.directory?.action === "create" && entry.step.operation === "create" && entry.acknowledged === true && entry.targetId?.toLowerCase() === targetId.toLowerCase() && Number.isFinite(entry.acknowledgedAt) && entry.acknowledgedAt! <= now && now < entry.acknowledgedAt! + DIRECTORY_REPLICATION_WINDOW_MS)) return true
+      // Directory object IDs are unique across users and groups.
+      if (run.entries.some(entry => entry.step.directory?.action === "create" && entry.step.operation === "create" && entry.acknowledged === true && entry.targetId?.toLowerCase() === objectId.toLowerCase() && Number.isFinite(entry.acknowledgedAt) && entry.acknowledgedAt! <= now && now < entry.acknowledgedAt! + DIRECTORY_REPLICATION_WINDOW_MS)) return true
     }
     return false
   }
@@ -158,7 +172,17 @@ export class DirectoryRestoreService {
     if (!raw) fail("This directory preview is unavailable.")
     return JSON.parse(raw!)
   }
-  private save(page: DirectoryPage) { assertNoSecrets(page); this.store.set(key(page.run.tenant, page.run.id), JSON.stringify(page)) }
+  private save(page: DirectoryPage) {
+    assertNoSecrets(page)
+    const ids = this.pageIds(page.run.tenant), first = !ids.includes(page.run.id)
+    if (first) this.store.set(indexKey(page.run.tenant), JSON.stringify([...ids, page.run.id]))
+    try { this.store.set(key(page.run.tenant, page.run.id), JSON.stringify(page)) }
+    catch (error) {
+      // An unpublished first page leaves no index entry. A failed rollback lists nothing, since the page is absent.
+      if (first) try { if (this.store.get(key(page.run.tenant, page.run.id)) === null) { if (ids.length) this.store.set(indexKey(page.run.tenant), JSON.stringify(ids)); else this.store.delete(indexKey(page.run.tenant)) } } catch { /* Keep the original failure. */ }
+      throw error
+    }
+  }
   private cleanupUnpublished(work: Array<() => void> = [], published?: () => boolean) {
     for (const remove of work) this.unpublishedCleanup.add(() => { if (!published?.()) remove() })
     for (const remove of this.unpublishedCleanup) {

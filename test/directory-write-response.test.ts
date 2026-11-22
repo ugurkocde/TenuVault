@@ -75,3 +75,10 @@ it("binds claims parameters to the same Bearer challenge in combined authenticat
   for (const challenge of ['Basic realm="proxy", Bearer claims="encoded", error="insufficient_claims"', 'Bearer realm="a,b", error="insufficient_claims", claims="encoded", Basic realm="proxy"']) await expect(directoryWriteAuthorization(new Response(null, { status: 401, headers: { "WWW-Authenticate": challenge } }))).rejects.toMatchObject({ deferralCause: "authentication" })
   for (const challenge of ['Basic error="insufficient_claims", Bearer claims="encoded"', 'Bearer error="insufficient_claims", Basic claims="encoded"', 'Bearer error="insufficient_claims", claims=" "']) await expect(directoryWriteAuthorization(new Response(null, { status: 401, headers: { "WWW-Authenticate": challenge } }))).resolves.toBeUndefined()
 })
+
+it.each([401, 403])("classifies a structured %s insufficient-claims read before generic read denials", async status => {
+  await expect(directoryWriteAuthorization(Response.json({ error: { code: "insufficient_claims", message: "Sensitive claims body" } }, { status }), true)).rejects.toMatchObject({ deferralCause: "authentication", message: expect.stringContaining("Sign in again") })
+  const headers = { "WWW-Authenticate": 'Bearer realm="", error="insufficient_claims", claims="eyJhY2Nlc3NfdG9rZW4iOnt9fQ=="' }
+  await expect(directoryWriteAuthorization(Response.json({ error: { code: "Authorization_RequestDenied" } }, { status, headers }), true)).rejects.toMatchObject({ deferralCause: "authentication" })
+  await expect(directoryWriteAuthorization(Response.json({ error: { code: "Authorization_RequestDenied" } }, { status }), true)).rejects.toThrow(DirectoryReadDeferredError)
+})
