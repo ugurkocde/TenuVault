@@ -581,9 +581,19 @@ describe("change-set engine", () => {
     const cleared = { "@odata.type": "#microsoft.graph.iosVpnConfiguration", displayName: "VPN", sharedSecret: null }
     expect(observedCheck(vpn, cleared, { ...cleared, sharedSecret: "still-set" }, omission)).toBe("unverifiable")
     expect(observedCheck(vpn, cleared, { ...cleared, sharedSecret: "still-set" })).toBe("differs")
+    const { "@odata.type": _subtype, ...untyped } = cleared
+    expect(observedCheck(vpn, untyped, { ...cleared, sharedSecret: "still-set" }, omission)).toBe("unverifiable")
     // A proposal without omitted values still verifies.
     const plain = oma({ isEncrypted: false, value: "requested" })
     expect(observedCheck(type, plain, plain, omission)).toBe("match")
+  })
+
+  it("never verifies a delete when only a nested read of the policy is missing", async () => {
+    const graph = async (_method: string, path: string) => path.includes("/settings-page")
+      ? { status: 404, body: {} }
+      : { status: 200, body: { id: "p1", name: "Policy", settings: [], "settings@odata.nextLink": "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/p1/settings-page", assignments: [] } }
+    const check = await readBack(graph as never, POLICIES, { action: "delete", objectId: "p1", proposed: null, assignments: null }, { enabled: true, scripts: false })
+    expect(check.state).toBe("denied")
   })
 
   it("classifies an untyped proposal by the target's subtype before storing it", async () => {

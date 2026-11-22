@@ -180,7 +180,8 @@ export class OmissionPolicyStore {
     const account = destination.toLowerCase()
     const local = isLocalAccount(account)
     const blobs = local ? undefined : this.writer(account, token, AbortSignal.timeout(30_000))
-    const current = await blobs?.readJsonWithETag(omissionPolicyPath(tenant))
+    // Saved only over a whole, confirmed answer: a partial read or an unconfirmed 404 stops the save.
+    const current = await blobs?.readJsonWithETag(omissionPolicyPath(tenant), true)
     if (current && !current.etag) throw verificationError()
     const previous = current ? parse(current.value, tenant) : local ? await this.read(tenant, account, token) : OFF
     const policy: Policy = {

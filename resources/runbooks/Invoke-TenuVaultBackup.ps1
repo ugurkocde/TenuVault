@@ -248,6 +248,29 @@ function Copy-TvDeep {
 # Objects become ordered dictionaries, which Get-TvProp and friends understand.
 # ---------------------------------------------------------------------------
 
+# Whether no JSON object in the text repeats a property name, ignoring case.
+function Test-TvUniqueJsonKeys {
+    param([AllowEmptyString()][string]$Text)
+    try { $document = [System.Text.Json.JsonDocument]::Parse($Text) } catch { return $false }
+    try {
+        $pending = [System.Collections.Generic.Stack[System.Text.Json.JsonElement]]::new()
+        $pending.Push($document.RootElement)
+        while ($pending.Count) {
+            $element = $pending.Pop()
+            if ($element.ValueKind -eq [System.Text.Json.JsonValueKind]::Object) {
+                $names = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+                foreach ($property in $element.EnumerateObject()) {
+                    if (-not $names.Add($property.Name)) { return $false }
+                    $pending.Push($property.Value)
+                }
+            } elseif ($element.ValueKind -eq [System.Text.Json.JsonValueKind]::Array) {
+                foreach ($item in $element.EnumerateArray()) { $pending.Push($item) }
+            }
+        }
+        return $true
+    } finally { $document.Dispose() }
+}
+
 function ConvertFrom-TvJsonElement {
     param([Parameter(Mandatory)][System.Text.Json.JsonElement]$Element)
     switch ($Element.ValueKind) {
@@ -490,7 +513,10 @@ function Invoke-TvHttp {
             }
         }
         $status = [int]$response.StatusCode
-        $serviceCode = if ($response.Headers.Contains("x-ms-error-code")) { @($response.Headers.GetValues("x-ms-error-code"))[0] }
+        # A present error-code header decides on its own; one that is empty or repeated confirms nothing.
+        $hasCodeHeader = $response.Headers.Contains("x-ms-error-code")
+        $codeValues = if ($hasCodeHeader) { @($response.Headers.GetValues("x-ms-error-code")) } else { @() }
+        $serviceCode = if ($codeValues.Count -eq 1) { [string]$codeValues[0] } else { "" }
         $retryAfter = if ($response.Headers.RetryAfter -and $response.Headers.RetryAfter.Delta) { $response.Headers.RetryAfter.Delta } else { $null }
         $bodyMs = if ($BudgetMs) { [Math]::Max(1, $BudgetMs - [int]$clock.ElapsedMilliseconds) } else { $script:BodyReadSeconds * 1000 }
         try {
@@ -529,7 +555,7 @@ function Invoke-TvHttp {
             if ($code) { $message = "HTTP $status $code" }
         }
         $lastError = [TvHttpError]::new($status, (Get-TvSafeError $message))
-        $lastError.ServiceCode = if ($serviceCode) { $serviceCode } else {
+        $lastError.ServiceCode = if ($hasCodeHeader) { $serviceCode } else {
             # Only a small, complete and well-formed Azure <Error> document whose code names the miss confirms it.
             $errorBody = if ($bytes.Length -le 65536) { [Text.Encoding]::UTF8.GetString($bytes) } else { "" }
             $match = [regex]::Match($errorBody, '\A\uFEFF?\s*(?:<\?xml[^>]*\?>\s*)?<Error>\s*<Code>(BlobNotFound|ContainerNotFound)</Code>(?:\s*<([A-Za-z][A-Za-z0-9]*)>[^<]*</\2>)*\s*</Error>\s*\z')
@@ -1427,7 +1453,9 @@ function Get-TvOmissionPolicy {
         try {
             $binding = Get-AutomationVariable -Name $bindingName -ErrorAction Stop
         } catch {
-            $bindingVerified = $_.CategoryInfo.Category -eq [System.Management.Automation.ErrorCategory]::ObjectNotFound
+            # Only Automation's own "Variable not found ... named: <name>" answer proves the variable is missing.
+            $bindingVerified = $_.CategoryInfo.Category -eq [System.Management.Automation.ErrorCategory]::ObjectNotFound -and
+                $_.Exception.Message -match '(?i)\bvariable not found\b' -and $_.Exception.Message.Contains($bindingName)
         }
     } else {
         $binding = $env:TENUVAULT_OMISSION_ACCOUNT
@@ -2429,10 +2457,12 @@ function Get-TvCoveredFolders {
     $attempted = if (Test-TvJsArray $recorded) { @($recorded | Where-Object { $_ -is [string] }) } else { $script:LegacyFolders }
     $missing = @()
     foreach ($field in @("Excluded", "FailedTypes", "AppOnlyExcludedTypes")) {
-        $source = if ($field -eq "Excluded") { Get-TvProp $scope "Excluded" } else { Get-TvProp $Metadata $field }
-        $missing += @($source | Where-Object { $_ -is [string] })
+        # Read with its shape kept, so a one-entry array stays an array; only arrays name missing folders, as on main.
+        $source = if ($field -eq "Excluded") { Get-TvMember $scope "Excluded" } else { Get-TvMember $Metadata $field }
+        if (Test-TvJsArray $source) { $missing += @($source | Where-Object { $_ -is [string] }) }
     }
-    $skips = @(Get-TvProp $Metadata "SkippedTypes")
+    $recordedSkips = Get-TvMember $Metadata "SkippedTypes"
+    $skips = if (Test-TvJsArray $recordedSkips) { @($recordedSkips) } else { @() }
     $actual = Get-TvMember $Metadata "ActualSkippedTypes"
     $inventory = Get-TvProp $Metadata "Items"
     if ((Get-TvProp $Metadata "OmissionVersion") -eq $script:SecretRules.version -and (Test-TvJsArray $actual) -and $inventory -is [System.Collections.IDictionary]) {
@@ -3254,8 +3284,10 @@ function Read-TvPlainJson {
     catch [TvOversizedError] { throw [TvOversizedError]::new($tooLarge) }
     catch [TvReadTimeoutError] { throw [TvReadTimeoutError]::new("$file did not arrive within $($script:BodyReadSeconds) seconds.") }
     if ($result.Bytes.Length -gt $script:MaxBlobBytes) { throw [TvOversizedError]::new($tooLarge) }
-    # A read that decides a policy accepts only the whole file, never a partial answer.
+    # A read that decides a policy accepts only the whole file, never a partial answer, with one
+    # spelling per property: the parsed object ignores case, so "enabled" and "Enabled" would collide.
     if ($WholeFile -and $result.Status -ne 200) { throw "$file returned HTTP $($result.Status) instead of the whole file." }
+    if ($WholeFile -and -not (Test-TvUniqueJsonKeys ([Text.Encoding]::UTF8.GetString($result.Bytes)))) { throw "$file has properties that differ only in case." }
     if ($RawHash -and (Get-TvRawHash $result.Bytes) -cne $RawHash) { throw "The projected backup file does not match its recorded fingerprint." }
     if (Test-TvSealedBlob $result.Bytes) { throw [TvSealedBlobError]::new("The backup file is sealed with a key from before plain Azure backups, which TenuVault in Azure does not have.") }
     try { $value = ConvertFrom-TvJson ([Text.Encoding]::UTF8.GetString($result.Bytes)) } catch { throw "The backup file is not valid JSON." }

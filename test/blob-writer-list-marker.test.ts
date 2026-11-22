@@ -32,6 +32,8 @@ describe("BlobWriter confirmed-missing reads", () => {
     expect(await writer('<?xml version="1.0" encoding="utf-8"?>\n<Error><Code>ContainerNotFound</Code><Message>x</Message></Error>').readJson("policy.json", true)).toBeNull()
     await expect(writer("<Error><Code>BlobNotFound</Code><Message>a & b</Message></Error>").readJson("policy.json", true)).rejects.toThrow()
     await expect(writer("<?xml garbage?><Error><Code>BlobNotFound</Code></Error>").readJson("policy.json", true)).rejects.toThrow()
+    await expect(writer("<Error><Code>BlobNotFound</Code><Message>a ]]> b</Message></Error>").readJson("policy.json", true)).rejects.toThrow()
+    await expect(writer("<Error><Code>BlobNotFound</Code><Message>\uFFFE</Message></Error>").readJson("policy.json", true)).rejects.toThrow()
     await expect(writer("<Error><Code>BlobNotFound</Code>").readJson("policy.json", true)).rejects.toThrow()
     await expect(writer("<Error><Code>BlobNotFound</Code><Message>The specified").readJson("policy.json", true)).rejects.toThrow()
     expect(await writer("\uFEFF<?xml version=\"1.0\"?><Error><Code>BlobNotFound</Code><Message>The specified blob does not exist.\nRequestId:x</Message></Error>\n").readJson("policy.json", true)).toBeNull()

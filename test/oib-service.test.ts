@@ -641,6 +641,32 @@ describe("legacy data", () => {
     expect(ids).toHaveLength(21)
   })
 
+  it.each([false, true])("undo restores a decrypted Base64 value that looks like a mask only for a capture made with omission off (omission %s)", async (captureOmission) => {
+    const id = "88888888-8888-4888-8888-888888888888"
+    const before = { id, displayName: "Custom", "@odata.type": "#microsoft.graph.windows10CustomConfiguration",
+      omaSettings: [{ "@odata.type": "#microsoft.graph.omaSettingBase64", displayName: "Value", omaUri: "./Device/Value", isEncrypted: true, value: "KioqKg==", secretReferenceValueId: "ref" }] }
+    const run: OibRun = { runId: "undo-b64", tenantId, createdAt: "2026-11-20T00:00:00Z", kind: "deploy", platform: "windows", reference: "r",
+      ...(captureOmission ? { omission: { enabled: true, scripts: false, generation: "on" } } : {}),
+      created: [], updated: [{ folder: "DeviceConfigurations", id, name: "Custom", previousName: "Custom", before }], failed: [] } as OibRun
+    store.set(`oib:runs:${tenantId}`, JSON.stringify([run]))
+    const writes: string[] = []
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.includes("oauth2")) return Response.json({ access_token: "test" })
+      if (init?.method && init.method !== "GET") { writes.push(`${init.method} ${url}`); return new Response(null, { status: 204 }) }
+      if (url.includes("getOmaSettingPlainTextValue")) return Response.json({ value: "current" })
+      return Response.json({ ...before, displayName: "Changed", omaSettings: [{ ...before.omaSettings[0], value: "current" }] })
+    }))
+    const result = await handleOib({ action: "oib-undo", tenantId, appId, runId: "undo-b64" }) as { results: Array<Record<string, unknown>> }
+    if (captureOmission) {
+      expect(result.results[0]).toMatchObject({ done: false, error: expect.stringContaining("masked") })
+      expect(writes).toEqual([])
+    } else {
+      expect(result.results[0]).toMatchObject({ action: "restored", done: true })
+      expect(writes.length).toBeGreaterThan(0)
+    }
+  })
+
   it("leaves unreadable Quick Start records where they are", () => {
     const legacy = memoryStore()
     legacy.set(`quickstart:runs:${tenantId}`, "{not json")

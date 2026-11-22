@@ -50,6 +50,10 @@ function Get-AutomationVariable {
     param($Name)
     if ($Name -ne "TenuVaultOmissionAccount-11111111") { return }
     if ($script:enrollmentRead -eq "unavailable") { throw "Automation enrollment read timed out" }
+    if ($script:enrollmentRead -eq "unrelated") {
+        throw [System.Management.Automation.ErrorRecord]::new([Exception]::new("The Automation connection was not found."), "Unrelated",
+            [System.Management.Automation.ErrorCategory]::ObjectNotFound, $Name)
+    }
     if ($script:enrollmentRead -eq "missing") {
         $exception = [Automation.Sandbox.AssetManagement.Cmdlets.AssetManagementClient.AssetManagementClientException]::new("Variable not found. To create this Variable, navigate to the Variables blade and create a Variable named: $Name.")
         throw [System.Management.Automation.ErrorRecord]::new($exception,
@@ -253,7 +257,7 @@ foreach ($run in @(1, 2)) {
 }
 
 $script:writeOnce = $false
-foreach ($case in @("forbidden", "ambiguous404", "unavailable", "malformed", "arrayTenant", "containerMissing")) {
+foreach ($case in @("forbidden", "ambiguous404", "unavailable", "malformed", "arrayTenant", "caseDuplicate", "containerMissing")) {
     $script:calls.Clear()
     $script:OutcomeSent = $false
     $script:policyStatus = switch ($case) { "forbidden" { 403 }; "unavailable" { 503 }; default { 404 } }
@@ -261,6 +265,7 @@ foreach ($case in @("forbidden", "ambiguous404", "unavailable", "malformed", "ar
     $script:control = switch ($case) {
         "malformed" { "invalid JSON" }
         "arrayTenant" { '{"version":1,"tenantId":["11111111-2222-3333-4444-555555555555"],"generation":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","enabled":false,"scripts":false}' }
+        "caseDuplicate" { '{"version":1,"tenantId":"11111111-2222-3333-4444-555555555555","generation":"default","enabled":false,"Enabled":true,"scripts":false}' }
         default { $null }
     }
     $script:omaParity = $case -eq "containerMissing"
@@ -271,7 +276,7 @@ foreach ($case in @("forbidden", "ambiguous404", "unavailable", "malformed", "ar
 
 $script:omaParity = $false
 $script:policyCode = "BlobNotFound"
-foreach ($case in @("unreadableEnrollment", "missingEnrollment", "movedWithoutPolicy", "movedWithOffPolicy", "movedWithOnPolicy", "emptyOmaSuccess", "emptyOmaFailure")) {
+foreach ($case in @("unreadableEnrollment", "unrelatedNotFound", "missingEnrollment", "movedWithoutPolicy", "movedWithOffPolicy", "movedWithOnPolicy", "emptyOmaSuccess", "emptyOmaFailure")) {
     $script:calls.Clear()
     $script:OutcomeSent = $false
     $script:binding = if ($case -eq "unreadableEnrollment") { "stcontoso" } elseif ($case -like "moved*") { "stprevious" } else { "" }
@@ -280,7 +285,7 @@ foreach ($case in @("unreadableEnrollment", "missingEnrollment", "movedWithoutPo
             ($case -eq "movedWithOnPolicy").ToString().ToLowerInvariant() + ',"scripts":false}'
     }
     $script:omit = $case -eq "movedWithOnPolicy"
-    $script:enrollmentRead = switch ($case) { "unreadableEnrollment" { "unavailable" }; "missingEnrollment" { "missing" }; default { "" } }
+    $script:enrollmentRead = switch ($case) { "unreadableEnrollment" { "unavailable" }; "unrelatedNotFound" { "unrelated" }; "missingEnrollment" { "missing" }; default { "" } }
     $script:emptyOma = if ($case -like "emptyOma*") { $case } else { "" }
     $errorText = $null
     try { $null = @(Invoke-TvBackup 3>&1) } catch { $errorText = $_.Exception.Message }

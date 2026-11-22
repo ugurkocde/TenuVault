@@ -162,8 +162,10 @@ export function safeSnapshot(type: IntuneType, snapshot: Item, omission?: Omissi
  */
 export function observedCheck(type: IntuneType, proposed: Item, live: Item, omission?: OmissionOptions): "match" | "differs" | "unverifiable" {
   if (!omission?.enabled) return matchesProposed(type, proposed, live) ? "match" : "differs"
-  const [expected, observed] = observablePair(type.folder, proposed, live, false, omission)
-  if (removesProposed(proposed, expected) || !matchesProposed(type, proposed, expected)) return "unverifiable"
+  // An untyped proposal is projected as the live object's subtype, so its credential fields are classified the same way.
+  const typed = typeof proposed["@odata.type"] !== "string" && typeof live["@odata.type"] === "string" ? { ...proposed, "@odata.type": live["@odata.type"] } : proposed
+  const [expected, observed] = observablePair(type.folder, typed, live, false, omission)
+  if (removesProposed(typed, expected) || !matchesProposed(type, typed, expected)) return "unverifiable"
   return matchesProposed(type, expected, observed) ? "match" : "differs"
 }
 

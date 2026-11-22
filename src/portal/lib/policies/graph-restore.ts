@@ -892,11 +892,18 @@ class SafeGraphReadError extends Error {
 }
 
 function liveReader(graph: GraphCall, statusOnly = false): GraphReader {
+  let first = true
   const reader: GraphReader = {
     get: async (path) => {
       const response = await graph("GET", path)
+      const objectRead = first
+      first = false
       // Settings Catalog answers 400 ResourceNotFound for deleted policies instead of 404.
-      if (response.status === 404 || (response.status === 400 && /ResourceNotFound/i.test(JSON.stringify(response.body)))) throw new Gone()
+      if (response.status === 404 || (response.status === 400 && /ResourceNotFound/i.test(JSON.stringify(response.body)))) {
+        // With omission on, only the object's own read proves it is gone; a missing child or page is an incomplete read.
+        if (statusOnly && !objectRead) throw new SafeGraphReadError(response.status)
+        throw new Gone()
+      }
       if (response.status >= 300) throw statusOnly ? new SafeGraphReadError(response.status) : new Error(errorMessage(response.body, response.status))
       return response.body
     },

@@ -12,7 +12,8 @@ import { MAX_LIST_PAGES, REQUEST_ATTEMPTS, BlobClaimError, ProtectedBlobError, R
  * only flat text elements with the five XML entities, then the closing tag. Any other body, also
  * a truncated or malformed one, confirms nothing.
  */
-const XML_TEXT = String.raw`(?:[^<&\u0000-\u0008\u000B\u000C\u000E-\u001F]|&(?:amp|lt|gt|quot|apos);)*`
+// XML character data: no markup, no "]]>", no characters XML forbids, surrogates only in pairs.
+const XML_TEXT = String.raw`(?:(?!\]\]>)[^<&\u0000-\u0008\u000B\u000C\u000E-\u001F\uD800-\uDFFF\uFFFE\uFFFF]|[\uD800-\uDBFF][\uDC00-\uDFFF]|&(?:amp|lt|gt|quot|apos);)*`
 const XML_DECLARATION = String.raw`<\?xml\s+version=(?:"1\.[0-9]"|'1\.[0-9]')(?:\s+encoding=(?:"[A-Za-z][A-Za-z0-9._-]*"|'[A-Za-z][A-Za-z0-9._-]*'))?(?:\s+standalone=(?:"(?:yes|no)"|'(?:yes|no)'))?\s*\?>`
 const AZURE_ERROR_CODE = new RegExp(String.raw`^\uFEFF?\s*(?:${XML_DECLARATION}\s*)?<Error>\s*<Code>([A-Za-z]+)<\/Code>(?:\s*<([A-Za-z][A-Za-z0-9]*)>${XML_TEXT}<\/\2>)*\s*<\/Error>\s*$`)
 

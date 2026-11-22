@@ -291,6 +291,8 @@ function Copy-TenuVaultOmissionPolicy {
             param([string]$Uri)
             try {
                 $response = Invoke-WebRequest -Uri $Uri -Authentication Bearer -Token $access -Headers $headers -TimeoutSec 30
+                # Only a whole policy file is copied or kept, never a partial answer.
+                if ($response.StatusCode -ne 200) { return }
                 $policy = $response.Content | ConvertFrom-Json -ErrorAction Stop
                 if (Test-TenuVaultOmissionPolicy $policy) { return @{ Body = $response.Content; Policy = $policy } }
             } catch { }

@@ -813,6 +813,8 @@ function setupRun(name: string): SetupScenario {
 
 it.runIf(Boolean(pwsh))("copies policies on a best-effort basis and allows cloud storage moves and fresh installs", () => {
   expect(setupRun("move-copies-policy")).toMatchObject({ error: null, storageAccount: "stcontoso", omissionBinding: "stprevious,stcontoso", actions: expect.arrayContaining(["copy-policy"]) })
+  expect(setupRun("move-skips-partial")).toMatchObject({ error: null, storageAccount: "stcontoso" })
+  expect(setupRun("move-skips-partial").actions).not.toContain("copy-policy")
   expect(setupRun("move-copies-off")).toMatchObject({ error: null, storageAccount: "stcontoso", omissionBinding: "stprevious", actions: expect.arrayContaining(["copy-policy"]) })
   expect(setupRun("move-warns-on-denied")).toMatchObject({ error: null, storageAccount: "stcontoso", omissionBinding: "stprevious", output: expect.arrayContaining([expect.stringContaining("Verify the omission setting")]) })
   expect(setupRun("move-quiet-on-denied")).toMatchObject({ error: null, storageAccount: "stcontoso" })
@@ -1305,7 +1307,7 @@ describe("azuredeploy.json", () => {
 
 it.runIf(Boolean(pwsh))("cloud runs fail closed on unverified policies and preserve the off-mode OMA snapshot format", () => {
   const runs = runPlainFixture()
-  for (const scenario of ["forbidden", "ambiguous404", "unavailable", "malformed", "arrayTenant"]) {
+  for (const scenario of ["forbidden", "ambiguous404", "unavailable", "malformed", "arrayTenant", "caseDuplicate", "unrelatedNotFound"]) {
     const run = runs.find(entry => entry.scenario === scenario)!
     expect(run.error).toContain("omission policy could not be verified")
     expect(run.calls.some(({ uri }) => uri.startsWith("https://graph.microsoft.com") || uri.includes("/intune-backups/backup-"))).toBe(false)
@@ -1384,12 +1386,13 @@ it.runIf(Boolean(pwsh))("hydrates an empty OMA reference off-mode and reports a 
 
 it.runIf(Boolean(pwsh))("keeps off-mode cloud report fields and compares matched typed and untyped tokens only under omission", () => {
   const script = fileURLToPath(new URL("./fixtures/cloud-backup/omission-compare.ps1", import.meta.url))
-  const { off, on, offWithOneSkip } = JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8", timeout: 60_000 }))
+  const { off, on, offWithOneSkip, offWithScalarSkip } = JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8", timeout: 60_000 }))
   expect(off.ExcludedPaths).toEqual([])
   expect(off.Warnings).toEqual([])
   expect(off.Drifts).toHaveLength(1)
   expect(JSON.stringify(off.Drifts[0].changes)).toContain("nested.children")
   expect(offWithOneSkip.Drifts).toEqual([])
+  expect(offWithScalarSkip.Drifts).toHaveLength(1)
   expect(on.ExcludedPaths).toEqual(["/nested/children"])
   expect(on.Drifts).toEqual([])
 }, 60_000)

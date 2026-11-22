@@ -11,7 +11,10 @@ $read = { param($backup, $path) if ($backup -eq "older") { return Copy-TvDeep $o
 $off = Get-TvBackupDrifts $older $newer @($type) $read
 $skipped = @{ Name = "newer"; Metadata = @{ Items = @{}; SkippedTypes = @($type.Folder) } }
 $offWithOneSkip = Get-TvBackupDrifts $older $skipped @($type) $read
+# A scalar where an array belongs names no folder, as on main.
+$scalar = @{ Name = "newer"; Metadata = @{ Items = @{}; SkippedTypes = $type.Folder; FailedTypes = $type.Folder } }
+$offWithScalarSkip = Get-TvBackupDrifts $older $scalar @($type) $read
 $newer.Metadata.OmissionVersion = 1
 $newer.Metadata.ActualSkippedTypes = @()
 $on = Get-TvBackupDrifts $older $newer @($type) $read
-Write-Output (@{ off = $off; on = $on; offWithOneSkip = $offWithOneSkip } | ConvertTo-Json -Compress -Depth 25)
+Write-Output (@{ off = $off; on = $on; offWithOneSkip = $offWithOneSkip; offWithScalarSkip = $offWithScalarSkip } | ConvertTo-Json -Compress -Depth 25)

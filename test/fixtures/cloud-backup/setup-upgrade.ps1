@@ -433,11 +433,11 @@ function Invoke-WebRequest {
         $script:actions.Add("copy-policy")
         return @{ StatusCode = 201 }
     }
-    if ($script:destinationPolicy -and $Uri -like "https://stcontoso.*") { return @{ Content = $script:destinationPolicy } }
+    if ($script:destinationPolicy -and $Uri -like "https://stcontoso.*") { return @{ StatusCode = 200; Content = $script:destinationPolicy } }
     if ($script:denyPrevious -or $Uri -notlike "https://stprevious.*") { throw "Access denied." }
-    return @{ Content = $script:migrationPolicy }
+    return @{ StatusCode = $script:previousStatus; Content = $script:migrationPolicy }
 }
-foreach ($scenario in "move-copies-policy", "move-copies-off", "move-quiet-on-denied", "move-warns-on-denied", "move-keeps-destination", "move-keeps-off", "move-continues-on-list-error", "fresh-recovers-after-list-error", "fresh-continues-on-list-error", "upgrade-preserves-binding", "upgrade-creates-binding", "upgrade-binding-denied", "upgrade-keeps-unreadable-binding") {
+foreach ($scenario in "move-copies-policy", "move-skips-partial", "move-copies-off", "move-quiet-on-denied", "move-warns-on-denied", "move-keeps-destination", "move-keeps-off", "move-continues-on-list-error", "fresh-recovers-after-list-error", "fresh-continues-on-list-error", "upgrade-preserves-binding", "upgrade-creates-binding", "upgrade-binding-denied", "upgrade-keeps-unreadable-binding") {
     Reset-OldSetup
     $runbook = $null
     $script:variables["TenuVaultStorageAccount-$tenantKey"] = if ($scenario.StartsWith("move")) { "stprevious" } else { $StorageAccountName }
@@ -455,6 +455,7 @@ foreach ($scenario in "move-copies-policy", "move-copies-off", "move-quiet-on-de
     }
     $script:migrationPolicy = $script:migrationPolicy.Replace('"enabled":false', '"enabled":true')
     if ($scenario -eq "move-copies-off") { $script:migrationPolicy = $script:migrationPolicy.Replace('"enabled":true', '"enabled":false') }
+    $script:previousStatus = if ($scenario -eq "move-skips-partial") { 206 } else { 200 }
     $script:denyPrevious = $scenario -in @("move-warns-on-denied", "move-quiet-on-denied", "move-keeps-destination", "move-keeps-off", "move-continues-on-list-error")
     $script:destinationPolicy = if ($scenario -eq "move-keeps-destination") { $script:migrationPolicy } elseif ($scenario -eq "move-keeps-off") { $script:migrationPolicy.Replace('"enabled":true', '"enabled":false') }
     if ($scenario -eq "upgrade-binding-denied") {

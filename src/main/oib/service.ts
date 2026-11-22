@@ -5,7 +5,7 @@ import { graphCaller, readLive, Restorer, type GraphCall } from "../../portal/li
 import { INTERNAL_API_ORIGIN } from "../../shared/constants"
 import { record, type RecordJson } from "../../shared/frameworks/policies"
 import { normalizeBackupStatus } from "../../portal/lib/backup-health"
-import { INTUNE_TYPES, typeForFolder, type Item } from "../../shared/intune/registry"
+import { INTUNE_TYPES, rememberHydratedOmaMasks, storedOmaHydrations, typeForFolder, type Item } from "../../shared/intune/registry"
 import { normalizeScope } from "../../shared/intune/scope"
 import { VALIDATED_FOLDERS, validatePolicy } from "../../shared/oib/compare"
 import { extractOibId } from "../../shared/oib/manifest"
@@ -563,6 +563,8 @@ async function undo(body: RecordJson): Promise<UndoResult> {
           updated.push(item)
           continue
         }
+        // A capture read with omission off holds decrypted values, so a mask-shaped one restores as on main.
+        if (!run.omission?.enabled) rememberHydratedOmaMasks(item.before, storedOmaHydrations(item.before))
         const outcome = await restorer.restore(`oib/${item.folder}/${item.id}.json`, item.before)
         if (outcome.success) results.push({ name: item.previousName, id: item.id, action: "restored", done: true })
         else if (outcome.missing) results.push({ name: item.previousName, id: item.id, action: "restored", done: true, note: "already deleted in Intune, so the previous version was not recreated" })
