@@ -16,7 +16,7 @@ A tenant in TenuVault is one Microsoft Intune tenant you have signed in to, toge
 | **Settings** | Sidebar | Sign in again and change where a tenant's backups are stored |
 | **License** | Sidebar | License state of each tenant and license sharing |
 
-Below **Dashboard** and **Tenants**, the sidebar groups its pages under **Protect** (backups, App Backup, drift, Sync and alerts), **Baselines** (OpenIntuneBaseline, CIS Benchmarks and frameworks) and **Oversight** (reports, audit log, governance, changes and operations). Select a group's heading to fold it away; TenuVault remembers folded groups on this computer, and a dot next to a folded heading shows that the open page is inside it. The arrow next to **Frameworks** folds its list of frameworks the same way, with the same dot. **Help** at the bottom of the sidebar opens **What's new**, **Share feedback** and **Support**.
+Below **Dashboard** and **Tenants**, the sidebar groups its pages under **Protect** (backups, App Backup, drift, Copy to Tenants and alerts), **Baselines** (OpenIntuneBaseline, CIS Benchmarks and frameworks) and **Oversight** (reports, audit log, governance, changes and operations). Select a group's heading to fold it away; TenuVault remembers folded groups on this computer, and a dot next to a folded heading shows that the open page is inside it. The arrow next to **Frameworks** folds its list of frameworks the same way, with the same dot. **Help** at the bottom of the sidebar opens **What's new**, **Share feedback** and **Support**.
 
 ## Switch between tenants
 

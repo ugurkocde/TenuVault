@@ -41,15 +41,15 @@ const backupOf = (body: Body): "new" | "none" | undefined => {
 
 /** A Sync target under its target tenant; a Dev to Prod promotion is not found here. */
 function syncTarget(deps: FeatureDeps, tenantId: string, body: Body): Stored<PromotionRecord> {
-  const record = deps.records.get<PromotionRecord>(DOMAINS.promotions, tenantId, recordId(body, "Sync target"))
-  if (!record?.sync) throw new FeatureError("This Sync target does not exist for this tenant.", 404)
+  const record = deps.records.get<PromotionRecord>(DOMAINS.promotions, tenantId, recordId(body, "copy target"))
+  if (!record?.sync) throw new FeatureError("This copy target does not exist for this tenant.", 404)
   return record
 }
 
 /** The backup choice a Sync approval must name; the target's apply and retries are bound to it. */
 const approvedBackup = (body: Body): "new" | "none" => {
   const value = body.backup
-  if (value !== "new" && value !== "none") throw new FeatureError("Choose whether to back up before this sync: backup must be \"new\" or \"none\".")
+  if (value !== "new" && value !== "none") throw new FeatureError("Choose whether to back up before this copy: backup must be \"new\" or \"none\".")
   return value
 }
 
@@ -75,13 +75,13 @@ function claimedBackup(deps: FeatureDeps, tenantId: string, target: Stored<Promo
 function boundBackup(target: Stored<PromotionRecord>, body: Body): "new" | "none" | undefined {
   const requested = backupOf(body)
   const stored = target.sync?.backup
-  if (stored && requested && requested !== stored) throw new FeatureError(`This sync was approved ${stored === "none" ? "without a backup" : "with a backup"}. Apply it with the same choice.`, 409)
+  if (stored && requested && requested !== stored) throw new FeatureError(`This copy was approved ${stored === "none" ? "without a backup" : "with a backup"}. Apply it with the same choice.`, 409)
   return stored ?? requested
 }
 
 function syncRun(deps: FeatureDeps, tenantId: string, body: Body): Stored<SyncRunRecord> {
-  const run = deps.records.get<SyncRunRecord>(DOMAINS.syncRuns, tenantId, recordId(body, "Sync run"))
-  if (!run) throw new FeatureError("This Sync run does not exist for this source tenant.", 404)
+  const run = deps.records.get<SyncRunRecord>(DOMAINS.syncRuns, tenantId, recordId(body, "copy run"))
+  if (!run) throw new FeatureError("This copy does not exist for this source tenant.", 404)
   return run
 }
 
@@ -92,7 +92,7 @@ function syncRun(deps: FeatureDeps, tenantId: string, body: Body): Stored<SyncRu
 async function requireRunTenants(deps: FeatureDeps, tenantId: string, target: Stored<PromotionRecord>): Promise<void> {
   const run = deps.records.current<SyncRunRecord>(DOMAINS.syncRuns, target.sourceTenantId, (record) => record.id === target.sync!.runId)[0]
   const targets = run?.targets.map((entry) => entry.targetTenantId) ?? []
-  if (!targets.includes(tenantId)) throw new FeatureError("The Sync run of this target no longer exists. Plan again.", 409)
+  if (!targets.includes(tenantId)) throw new FeatureError("The copy this target belongs to no longer exists. Plan again.", 409)
   requireNotDiscarded(run!)
   await requireSyncTenants(deps, target.sourceTenantId, targets)
 }
@@ -101,7 +101,7 @@ const DISCARDED = "discarded"
 
 /** A discarded run is kept as a record only: none of its targets can be reviewed, approved or applied. */
 function requireNotDiscarded(run: SyncRunRecord): void {
-  if (run.status === DISCARDED) throw new FeatureError("This sync was discarded. Start a new sync.", 409)
+  if (run.status === DISCARDED) throw new FeatureError("This copy was discarded. Start a new copy.", 409)
 }
 
 /** The Sync run of a target, read again; null when it no longer exists. */
@@ -168,7 +168,7 @@ function attempted(deps: FeatureDeps, tenantId: string, promotionId: string | nu
 }
 
 function parseItems(value: unknown): Array<{ folder: string; sourceId: string }> {
-  if (!Array.isArray(value)) throw new FeatureError("Select policies to sync.")
+  if (!Array.isArray(value)) throw new FeatureError("Select policies to copy.")
   return value.map((item) => {
     const entry = (item ?? {}) as Record<string, unknown>
     if (typeof entry.sourceId !== "string") throw new FeatureError("Invalid policy selection")
@@ -184,7 +184,7 @@ function parseTargetMappings(value: unknown, targets: string[]): Record<string, 
   const mappings: Record<string, Mapping[]> = {}
   for (const [tenantId, list] of Object.entries(value as Record<string, unknown>)) {
     const target = tenantId.toLowerCase()
-    if (!targets.includes(target)) throw new FeatureError("mappings name a tenant that is not a target of this Sync.")
+    if (!targets.includes(target)) throw new FeatureError("mappings name a tenant that is not a target of this copy.")
     try {
       mappings[target] = parseMappings(list)
     } catch (error) {
@@ -227,10 +227,10 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
       const run = syncRun(deps, tenantId, body)
       if (run.status === DISCARDED) return { run }
       // The planner still writes the run's targets; a discard would race it.
-      if (run.status === "planning") throw new FeatureError("This sync is still being planned. Discard it once planning finished.", 409)
-      if (run.targets.some((target) => everApproved(deps, target))) throw new FeatureError("A target of this sync was approved, so it cannot be discarded. Open it to see its result.", 409)
+      if (run.status === "planning") throw new FeatureError("This copy is still being planned. Discard it once planning finishes.", 409)
+      if (run.targets.some((target) => everApproved(deps, target))) throw new FeatureError("A target of this copy was approved, so it cannot be discarded. Open it to see its result.", 409)
       const busy = run.targets.find((target) => tenantWriteLabel(target.targetTenantId) !== undefined)
-      if (busy) throw new FeatureError("A target tenant of this sync is being changed. Try again when it finishes.", 409)
+      if (busy) throw new FeatureError("A target tenant of this copy is being changed. Try again when it finishes.", 409)
       return { run: deps.records.update<SyncRunRecord>(DOMAINS.syncRuns, tenantId, run.id, (current) => ({ ...current, status: DISCARDED, summary: "Discarded before any target was approved." }), { actor, reason: "Discarded before any target was approved" }) }
     },
     /** Source policies to select; the selected tenant is the source. */
@@ -285,14 +285,14 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
       const backup = approvedBackup(body)
       // Under the tenant write that an apply claims under, so an apply never claims a choice in
       // between this check and the store below: an overlapping apply is refused instead.
-      return withTenantWrite(tenantId, "Sync approval", async () => {
+      return withTenantWrite(tenantId, "Copy to Tenants approval", async () => {
         // Once an apply started, the approval keeps the choice it bound, so the target stays retryable.
         const latest = syncTarget(deps, tenantId, body)
         // A discard that completed while this request waited for the tenant write is final.
         const run = runOf(deps, latest)
         if (run) requireNotDiscarded(run)
         const claimed = claimedBackup(deps, tenantId, latest)
-        if (claimed && claimed !== backup) throw new FeatureError(`This sync was already started ${claimed === "none" ? "without a backup" : "with a backup"}. Approve it with the same choice.`, 409)
+        if (claimed && claimed !== backup) throw new FeatureError(`This copy was already started ${claimed === "none" ? "without a backup" : "with a backup"}. Approve it with the same choice.`, 409)
         const changeSet = await approvePromotion(deps, tenantId, target.id, { contentHash: hashField(body, "contentHash"), targetFingerprint: hashField(body, "targetFingerprint"), reviewer: null, note: null, check: syncCheck(deps, tenantId, target.id) }, actor)
         // Stored with the approval, so the apply and every retry use it whoever sends them later.
         deps.records.update<PromotionRecord>(DOMAINS.promotions, tenantId, target.id, (current) => ({ ...current, sync: { ...current.sync!, backup } }), { actor, reason: backup === "none" ? "Approved to apply without a pre-change backup" : "Approved to apply after a pre-change backup" })

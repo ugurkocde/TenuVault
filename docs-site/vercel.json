@@ -27,6 +27,16 @@
       "permanent": true
     },
     {
+      "source": "/sync",
+      "destination": "/copy-to-tenants/",
+      "permanent": true
+    },
+    {
+      "source": "/sync/",
+      "destination": "/copy-to-tenants/",
+      "permanent": true
+    },
+    {
       "source": "/readme",
       "destination": "/getting-started/",
       "permanent": true

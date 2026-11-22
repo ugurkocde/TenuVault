@@ -22,10 +22,10 @@ const entry = (state: SyncStatusEntry["state"]): SyncStatusEntry => ({ folder: "
 
 describe("Sync status chips", () => {
   it("names the state that needs attention first", () => {
-    expect(policyStatus([])).toEqual({ label: "Not synced yet", tone: "neutral" })
-    expect(policyStatus([{ tenantName: "Germany", entry: entry("in-sync") }]).label).toBe("In sync with Germany")
-    expect(policyStatus([{ tenantName: "Germany", entry: entry("in-sync") }, { tenantName: "France", entry: entry("in-sync") }]).label).toBe("In sync with 2 tenants")
-    expect(policyStatus([{ tenantName: "Germany", entry: entry("in-sync") }, { tenantName: "France", entry: entry("changed") }]).label).toBe("Changed since last sync")
+    expect(policyStatus([])).toEqual({ label: "Not copied yet", tone: "neutral" })
+    expect(policyStatus([{ tenantName: "Germany", entry: entry("in-sync") }]).label).toBe("Up to date in Germany")
+    expect(policyStatus([{ tenantName: "Germany", entry: entry("in-sync") }, { tenantName: "France", entry: entry("in-sync") }]).label).toBe("Up to date in 2 tenants")
+    expect(policyStatus([{ tenantName: "Germany", entry: entry("in-sync") }, { tenantName: "France", entry: entry("changed") }]).label).toBe("Changed since last copy")
     expect(policyStatus([{ tenantName: "Germany", entry: entry("changed") }, { tenantName: "France", entry: entry("missing-in-target") }]).label).toBe("Missing in target")
     expect(policyStatus([{ tenantName: "Germany", entry: entry("unknown") }]).label).toBe("Unknown")
   })
@@ -104,7 +104,7 @@ describe("Sync status chips name where a policy changed", () => {
     expect(policyStatus([{ tenantName: "Germany", entry: changed("target") }, { tenantName: "France", entry: changed("target") }], [], "Contoso Lab").label).toBe("Changed in 2 targets")
     expect(policyStatus([{ tenantName: "Germany", entry: changed("both") }], [], "Contoso Lab").label).toBe("Changed in both")
     expect(policyStatus([{ tenantName: "Germany", entry: changed("source") }, { tenantName: "France", entry: changed("target") }], [], "Contoso Lab").label).toBe("Changed in both")
-    expect(policyStatus([{ tenantName: "Germany", entry: changed("target") }], [], "Contoso Lab").title).toContain("Germany: changed since the last sync (edited in this tenant)")
+    expect(policyStatus([{ tenantName: "Germany", entry: changed("target") }], [], "Contoso Lab").title).toContain("Germany: changed since the last copy (edited in this tenant)")
   })
 })
 

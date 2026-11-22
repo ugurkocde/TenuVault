@@ -91,7 +91,7 @@ const FEATURE_NAMES: Record<Feature, string> = {
   pdfBranding: "Full white-label PDF reports with your logo and colors",
   backupReader: "Scheduled backups with a read-only Backup Reader that Conditional Access sign-in frequency does not interrupt",
   changeReports: "Change reports with who changed what, as PDF, Markdown or email after every scheduled backup",
-  sync: "Sync",
+  sync: "Copy to Tenants",
   appRestoreOtherTenant: "Restoring an App Backup installer into another tenant",
 }
 

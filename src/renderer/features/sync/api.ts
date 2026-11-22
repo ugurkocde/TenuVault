@@ -40,7 +40,7 @@ const named = (tenantIds: string[]) => tenantIds.map((tenantId) => ({ tenantId }
  * target was ever applied, `outcome` what the run did.
  */
 export const listSyncRuns = (source: Tenant) => featureCall<{ runs: Array<SyncRun & { applied?: boolean; inSync?: boolean; outcome?: RunOutcome }> }>(PATH, source, "list-runs")
-/** Discards a run none of whose targets was approved; the record is kept and leaves Recent syncs. */
+/** Discards a run none of whose targets was approved; the record is kept and leaves Recent copies. */
 export const discardSyncRun = (source: Tenant, id: string) => featureCall<{ run: SyncRun }>(PATH, source, "discard-run", { id })
 export const getSyncRun = (source: Tenant, id: string) => featureCall<{ run: SyncRun; targets: SyncTarget[] }>(PATH, source, "get-run", { id })
 export const syncPolicies = (source: Tenant, folder: string) => featureCall<{ source: PolicyOption[] }>(PATH, source, "policies", { folder })
@@ -89,7 +89,7 @@ export function syncTargetActions(target: Tenant, id: string, backup: SyncBackup
 /** Review and apply calls of a Sync target's rollback. A rollback always backs up first. */
 export function syncRollbackActions(target: Tenant, id: string): ChangeSetActions {
   const base = { id }
-  const none = () => Promise.reject(new Error("A rollback is itself undone by a new reviewed sync, not by a rollback of a rollback."))
+  const none = () => Promise.reject(new Error("A rollback is itself undone by a new reviewed copy, not by a rollback of a rollback."))
   return {
     preview: () => featureCall<ChangeSetPreview>(PATH, target, "rollback-review", base),
     approve: (input) => featureCall(PATH, target, "rollback-approve", { ...base, contentHash: input.contentHash, targetFingerprint: input.targetFingerprint }),
