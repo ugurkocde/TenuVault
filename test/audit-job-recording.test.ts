@@ -771,6 +771,14 @@ describe("audit recovery for a run split across an ordinary and a large backup",
     const result = await reconcileBackupAudit(entry, async () => manifest({ Status: "Failed", CompanionBackup: "backup-large-2026-11-21-000000", ItemCounts: { TotalPolicies: 0 } }), async () => manifest({ Status: "Success", ItemCounts: { Users: 3, TotalPolicies: 0 } }))
     expect(result.job).toMatchObject({ status: "warnings" })
   })
+  it("ends a split run without a run status as cancelled when either half was cancelled", async () => {
+    const result = await reconcileBackupAudit(entry, async () => manifest({ Status: "Failed", CompanionBackup: "backup-large-2026-11-21-000000" }), async () => manifest({ Status: "Cancelled" }))
+    expect(result.job).toMatchObject({ status: "cancelled" })
+  })
+  it("prefers the final manifest's run totals when both halves are present", async () => {
+    const result = await reconcileBackupAudit(entry, async () => manifest({ Status: "CompletedWithWarnings", RunStatus: "CompletedWithWarnings", RunCounts: { saved: 7, failures: 1 }, ItemCounts: { TotalPolicies: 4 }, Failures: 0, CompanionBackup: "backup-large-2026-11-21-000000" }), async () => manifest({ Status: "CompletedWithWarnings", ItemCounts: { TotalPolicies: 3 }, Failures: 2 }))
+    expect(result.job).toMatchObject({ status: "warnings", counts: { saved: 7, failures: 1 } })
+  })
   it("records both failed halves as failed", async () => {
     const result = await reconcileBackupAudit(entry, async () => manifest({ Status: "Failed", CompanionBackup: "backup-large-2026-11-21-000000", ItemCounts: { TotalPolicies: 0 } }), async () => manifest({ Status: "Failed", ItemCounts: { TotalPolicies: 0 } }))
     expect(result.job).toMatchObject({ status: "failed" })

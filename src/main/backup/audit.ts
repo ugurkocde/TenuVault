@@ -110,17 +110,22 @@ export async function reconcileBackupAudit(entry: AuditLogEntry, readManifest: (
     } else {
       const other = manifestStatus(companion)
       if (other === 'uncertain') return entry
-      if (RANK[other] > RANK[status]) status = other
+      // Without the run's own status, an explicit cancellation of either half ends the run as cancelled.
+      if (status === 'cancelled' || other === 'cancelled') status = 'cancelled'
+      else if (RANK[other] > RANK[status]) status = other
       const add = (a?: number, b?: number) => a === undefined && b === undefined ? undefined : (a ?? 0) + (b ?? 0)
       saved = add(saved, companion.ItemCounts?.TotalPolicies); failures = add(failures, companion.Failures)
       const companionCompleted = time(companion.CompletedAt)
       if (companionCompleted && (!completedAt || companionCompleted > completedAt)) completedAt = companionCompleted
       // The run's last manifest names the status the engine reported. Older ones follow its rule:
       // a failed half next to saved items completes with warnings.
-      const reported = [manifest.RunStatus, companion.RunStatus].find(value => typeof value === 'string')
-      if (reported) {
-        const run = manifestStatus({ ...manifest, Status: reported })
+      const final = [manifest, companion].find(half => typeof half.RunStatus === 'string')
+      if (final) {
+        const run = manifestStatus({ ...final, Status: final.RunStatus })
         if (run !== 'uncertain') status = run
+        // The run's own totals count each failure once, as the live record does.
+        if (typeof final.RunCounts?.saved === 'number') saved = final.RunCounts.saved
+        if (typeof final.RunCounts?.failures === 'number') failures = final.RunCounts.failures
       } else if (status === 'failed' && savedObjects(manifest) + savedObjects(companion) > 0) status = 'warnings'
     }
   }

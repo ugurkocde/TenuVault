@@ -1329,10 +1329,10 @@ export class BackupEngine {
           const listing = await storage.listFolder(backup.prefix)
           const bytes = [...listing.sizes.values()].reduce((sum, size) => sum + size, 0)
           if (!owned) { remnants.unowned++; remnants.unownedBytes += bytes; if (backup.time < cutoff) unowned++; continue }
-          // An ordinary half that read everything stays the newest complete copy of its types
-          // even when its large companion is missing, so it is never removed while it holds one.
+          // A half that read everything stays the newest complete copy of its own types even when
+          // its companion is missing, so it is never removed while it holds one.
           let holdsUncovered = false
-          if (metadata && !isLargeBackup(backup.prefix) && completeHalf(metadata)) {
+          if (metadata && completeHalf(metadata)) {
             for (const folder of restorableFolders(metadata)) if (uncovered.delete(folder)) holdsUncovered = true
           }
           if (holdsUncovered || backup.time >= cutoff - REMNANT_RECOVERY_DAYS * 86400_000) { remnants.kept++; remnants.keptBytes += bytes; continue }
@@ -1357,12 +1357,8 @@ export class BackupEngine {
           if (backup.time < cutoff && !unreadable.has(index)) unowned++
           continue
         }
-        if (paired) {
-          // The ordinary half alone coordinates complete pairs. Coverage protects both halves.
-          if (!validPair || isLargeBackup(backup.prefix)) continue
-          if (Date.parse(parseBackupName(String(companionId))!.timestamp) >= cutoff) continue
-          if ([...restorableFolders(companion!)].some(folder => !covered.has(folder))) continue
-        }
+        // The ordinary half alone coordinates complete pairs and records both halves' coverage.
+        if (paired && (!validPair || isLargeBackup(backup.prefix))) continue
         let holdsUncovered = false
         // Only a backup that read everything may satisfy coverage: one that finished with
         // warnings may miss items in any folder it appears to hold. Backups recorded before
@@ -1370,8 +1366,13 @@ export class BackupEngine {
         const status = String(metadata.Status ?? "").toLowerCase()
         const complete = (status === "success" || status === "succeeded") && (metadata.Failures === undefined || metadata.Failures === 0)
         // A folder with masked values does not satisfy coverage, so the newest backup with the plain values stays.
-        for (const folder of complete ? restorableFolders(metadata) : []) {
+        // Coverage is recorded before a pair's own deletion checks, so older copies are judged against it.
+        for (const folder of [...(complete ? restorableFolders(metadata) : []), ...(paired && companion ? restorableFolders(companion) : [])]) {
           if (uncovered.delete(folder)) holdsUncovered = true
+        }
+        if (paired) {
+          if (Date.parse(parseBackupName(String(companionId))!.timestamp) >= cutoff) continue
+          if ([...restorableFolders(companion!)].some(folder => !covered.has(folder))) continue
         }
         if (backup.time >= cutoff) continue
         if (holdsUncovered) {

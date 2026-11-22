@@ -413,6 +413,8 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
     })().catch((error: unknown) => {
       if (controller.signal.aborted) return
       if (error instanceof DOMException && error.name === "AbortError") return
+      // A later inventory page that fails to load returns once to page 1; a failure there is shown.
+      if (largePage > 0) { setLargePage(0); return }
       showPlanError(error)
       setItemsError(error instanceof Error ? error.message : String(error))
     })

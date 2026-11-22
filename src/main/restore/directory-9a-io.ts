@@ -338,7 +338,13 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
         const path = target(step, targetId)
         let method = "PATCH", writePath = path, payload: Item | undefined = body
         if (action === "create" || action === "update") {
-          const rebuilt = directoryPayload(step.folder, action, { ...(step.folder === "Groups" && action === "update" ? await request(path) : {}), ...body })
+          let live: Item | null = null
+          if (step.folder === "Groups" && action === "update") {
+            live = await request(path)
+            // A group that no longer resolves may still be replicating after our own create.
+            if (!live) throw new DirectoryRequiredObjectAbsentError("The group is missing.", identity(targetId ?? step.targetId ?? step.sourceId))
+          }
+          const rebuilt = directoryPayload(step.folder, action, { ...live, ...body })
           // Only the projected supported properties may reach Graph.
           if (Object.keys(body).some(key => !(key in rebuilt) || JSON.stringify(body[key]) !== JSON.stringify(rebuilt[key]))) throw new RestoreSafetyError("Unsupported directory write property.")
           if (action === "create") { method = "POST"; writePath = folderPath(step); payload = step.folder === "Users" ? disabledUserBody(body) : body }
