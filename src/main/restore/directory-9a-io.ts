@@ -324,6 +324,8 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
         requirePermissions(step)
         const result = await review(step)
         requirePermissions(step, result.roleAssignable)
+        // A reviewed principal that no longer resolves may still be replicating after our own create.
+        if (result.blocker && step.directory?.principalId && result.principal === null) throw new DirectoryRequiredObjectAbsentError(result.blocker, step.directory.principalId)
         if (result.blocker) throw new RestoreSafetyError(result.blocker)
         requireDirectoryApprovals(step, run, result.approvals)
         const admittedFields = step.folder === "Users" ? (step.directory?.action === "create" ? ["displayName", "mailNickname", "userPrincipalName", "accountEnabled"] : ["displayName"]) : ["description"]

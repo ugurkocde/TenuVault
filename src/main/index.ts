@@ -569,7 +569,7 @@ async function bootstrap(): Promise<void> {
       tallyBackup(job, request)
       health.runEnded(job.id)
       void health.check(request.tenantId, "afterBackup", { reader: job.authMode === "app-only", failed: job.status === "Failed" }).catch(() => undefined)
-      if (job.authMode === "app-only") backupReader.recordRun(job.tenantId, scheduledResult(job).status, request.trigger)
+      if (job.authMode === "app-only") backupReader.recordRun(job.tenantId, scheduledResult(job).status, request.trigger, tokens && { registrationId: tokens.registrationId, certificate: tokens.readerCertificate })
     },
   })
 
@@ -853,12 +853,7 @@ async function bootstrap(): Promise<void> {
   auditSink.recover()
   const recoverBackupAudits = () => auditSink.recoverBackups((binding, entry) => {
     const read = (folder: string) => readBackupAuditManifest(binding, entry, folder)
-    // The start checkpoint names the ordinary folder before a large-only run switches to its large folder.
-    const first = entry.resource.id, large = first.replace(/^backup-(?=\d)/, "backup-large-")
-    return reconcileBackupAudit(entry, async () => {
-      const response = await read(first)
-      return response.status === 404 && large !== first ? read(large) : response
-    }, read)
+    return reconcileBackupAudit(entry, () => read(entry.resource.id), read)
   })
   // Ordinary and large backups keep their manifests in separate containers.
   const readBackupAuditManifest = async (binding: { tenantId: string; storageAccountName: string }, entry: Parameters<Parameters<typeof auditSink.recoverBackups>[0]>[1], folder: string) => {

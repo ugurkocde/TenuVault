@@ -749,11 +749,23 @@ describe("audit recovery for a run split across an ordinary and a large backup",
     expect(result).toBe(entry)
     expect(await reconcileBackupAudit(entry, async () => manifest({ CompanionBackup: "backup-large-2026-11-21-000000" }))).toBe(entry)
   })
-  it("takes the worse status of both halves", async () => {
-    const companion = vi.fn(async () => manifest({ Status: "Failed", CompanionBackup: "backup-2026-11-21-000000" }))
-    const result = await reconcileBackupAudit(entry, async () => manifest({ CompanionBackup: "backup-large-2026-11-21-000000" }), companion)
+  it("takes the worse status of both halves and adds their totals", async () => {
+    const companion = vi.fn(async () => manifest({ Status: "Failed", CompanionBackup: "backup-2026-11-21-000000", ItemCounts: { TotalPolicies: 5 }, Failures: 2, CompletedAt: "2026-11-21T01:00:00.000Z" }))
+    const result = await reconcileBackupAudit(entry, async () => manifest({ CompanionBackup: "backup-large-2026-11-21-000000", ItemCounts: { TotalPolicies: 3 }, Failures: 0, CompletedAt: "2026-11-21T00:10:00.000Z" }), companion)
     expect(companion).toHaveBeenCalledWith("backup-large-2026-11-21-000000")
+    expect(result.job).toMatchObject({ status: "failed", counts: { saved: 8, failures: 2 } })
+    expect(result.timestamp).toBe("2026-11-21T01:00:00.000Z")
+  })
+  it("confirms a failed ordinary half whose large half was never committed", async () => {
+    const result = await reconcileBackupAudit(entry, async () => manifest({ Status: "Failed", CompanionBackup: "backup-large-2026-11-21-000000" }), async () => new Response(null, { status: 404 }))
     expect(result.job).toMatchObject({ status: "failed" })
+  })
+  it.each([["missing", new Response(null, { status: 404 })], ["another run", Response.json({ RunId: "other", TenantId: tenantId, AuthMode: "delegated", Status: "Success" })]])("finds a large-only run when the ordinary folder is %s, and records the folder that matched", async (_case, ordinary) => {
+    const read = vi.fn(async (folder: string) => folder.startsWith("backup-large-") ? manifest({}) : new Response(null, { status: 404 }))
+    const result = await reconcileBackupAudit(entry, async () => ordinary, read)
+    expect(read).toHaveBeenCalledWith("backup-large-2026-11-21-000000")
+    expect(result.resource.id).toBe("backup-large-2026-11-21-000000")
+    expect(result.job).toMatchObject({ status: "completed" })
   })
 })
 

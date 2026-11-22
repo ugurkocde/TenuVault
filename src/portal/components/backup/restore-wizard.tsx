@@ -97,6 +97,8 @@ interface BackupItem {
   replaceBlocker?: string
   readiness?: RecoveryReadiness
   snapshot?: unknown
+  /** The backup the item was read from: the chosen backup or its verified large companion. */
+  source: string
 }
 
 /** The deprecated-settings check for the chosen backup, against the Settings Catalog as read now. */
@@ -253,6 +255,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
   const [step, setStep] = useState<Step>(initialBackupId ? "items" : "backup")
   const [backupId, setBackupId] = useState<string | null>(initialBackupId)
   const backup = backups.find((entry) => entry.id === backupId) ?? null
+  const companionId = backup?.companionId
 
   const [items, setItems] = useState<BackupItem[] | null>(null)
   const [itemsError, setItemsError] = useState("")
@@ -360,25 +363,30 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
     setValidationError("")
     const controller = new AbortController()
     const credentials = { ...tenant.credentials, storageAccountName: tenant.storageAccountName, subscriptionId: "local", resourceGroupName: "local", backupId }
+    // A mixed run keeps its large types, such as directory objects, in a verified companion backup.
+    const sources = [backupId, ...(companionId ? [companionId] : [])]
     void (async () => {
-      const contents = await post<{ largePage?: number; hasMore?: boolean; content: { groups: Array<{ folder: string; label: string; area: string; limitation?: string; count?: number; policies: Array<{ path: string; displayName?: string }> }> } }>(
+      const listings = await Promise.all(sources.map(source => post<{ largePage?: number; hasMore?: boolean; content: { groups: Array<{ folder: string; label: string; area: string; limitation?: string; count?: number; policies: Array<{ path: string; displayName?: string }> }> } }>(
         "/api/list-backup-contents",
-        { ...credentials, largePage },
+        { ...credentials, backupId: source, largePage },
         controller.signal,
-      )
+      ).then(contents => ({ source, contents }))))
       if (controller.signal.aborted) return
-      setLargePaging(contents.largePage === undefined ? null : { hasMore: contents.hasMore === true, total: contents.content.groups.reduce((sum, group) => sum + (group.count ?? group.policies.length), 0) })
-      const listed: BackupItem[] = contents.content.groups.filter(group => matchesBackupService(group.folder, contentsService)).flatMap((group) =>
-        group.policies.map((policy) => ({ path: policy.path, folder: group.folder, label: group.label, area: group.area, name: policy.displayName ?? policy.path, blocker: group.limitation })),
-      )
+      const paged = listings.find(({ contents }) => contents.largePage !== undefined)?.contents
+      setLargePaging(paged ? { hasMore: paged.hasMore === true, total: paged.content.groups.reduce((sum, group) => sum + (group.count ?? group.policies.length), 0) } : null)
+      const listed: BackupItem[] = listings.flatMap(({ source, contents }) => contents.content.groups.filter(group => matchesBackupService(group.folder, contentsService)).flatMap((group) =>
+        group.policies.map((policy) => ({ path: policy.path, folder: group.folder, label: group.label, area: group.area, name: policy.displayName ?? policy.path, blocker: group.limitation, source }))))
       const details: Record<string, { name: string; blocker?: string; replaceBlocker?: string; snapshot?: unknown; readiness?: RecoveryReadiness }> = {}
-      for (let start = 0; start < listed.length; start += PREVIEW_CHUNK) {
-        const preview = await post<{ items: Array<{ path: string; name: string; blocker?: string; replaceBlocker?: string; snapshot?: unknown; readiness?: RecoveryReadiness }> }>(
-          "/api/restore-preview",
-          { ...credentials, paths: listed.slice(start, start + PREVIEW_CHUNK).map((item) => item.path) },
-          controller.signal,
-        )
-        for (const item of preview.items) details[item.path] = item
+      for (const source of sources) {
+        const own = listed.filter(item => item.source === source)
+        for (let start = 0; start < own.length; start += PREVIEW_CHUNK) {
+          const preview = await post<{ items: Array<{ path: string; name: string; blocker?: string; replaceBlocker?: string; snapshot?: unknown; readiness?: RecoveryReadiness }> }>(
+            "/api/restore-preview",
+            { ...credentials, backupId: source, paths: own.slice(start, start + PREVIEW_CHUNK).map((item) => item.path) },
+            controller.signal,
+          )
+          for (const item of preview.items) details[item.path] = item
+        }
       }
       if (controller.signal.aborted) return
       setItems(listed.map((item) => ({ ...item, name: details[item.path]?.name ?? item.name, blocker: details[item.path]?.blocker ?? item.blocker, replaceBlocker: details[item.path]?.replaceBlocker, snapshot: details[item.path]?.snapshot, readiness: details[item.path]?.readiness })))
@@ -389,7 +397,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
       setItemsError(error instanceof Error ? error.message : String(error))
     })
     return () => controller.abort()
-  }, [backupId, tenant, largePage, contentsService])
+  }, [backupId, companionId, tenant, largePage, contentsService])
 
   const selectionBlocker = (item: BackupItem) => mode === "replace" && !community && !copying ? item.replaceBlocker : item.blocker
 
@@ -893,7 +901,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
                                       )}
                                     </span>
                                   </label>
-                                  {!copying && ["Users", "Groups", "Applications", "ServicePrincipals", "OAuth2PermissionGrants"].includes(item.folder) && <DirectoryRestore key={`${tenant.credentials.tenantId}:${tenant.credentials.appId}:${tenant.storageAccountName}:${backupId}:${item.path}`} tenant={tenant} backupId={backupId!} path={item.path} active={active} />}
+                                  {!copying && ["Users", "Groups", "Applications", "ServicePrincipals", "OAuth2PermissionGrants"].includes(item.folder) && <DirectoryRestore key={`${tenant.credentials.tenantId}:${tenant.credentials.appId}:${tenant.storageAccountName}:${backupId}:${item.path}`} tenant={tenant} backupId={item.source} path={item.path} active={active} />}
                                   {!copying && !["Users", "Groups", "Applications", "ServicePrincipals", "OAuth2PermissionGrants"].includes(item.folder) && typeForFolder(item.folder)?.restoreSafety === "identity" && !["none", "metadata"].includes(restoreCapability(typeForFolder(item.folder)!)) && <ConfigurationRestore key={`${tenant.credentials.tenantId}:${tenant.credentials.appId}:${tenant.storageAccountName}:${backupId}:${item.path}`} tenant={tenant} backupId={backupId!} path={item.path} singleton={restoreCapability(typeForFolder(item.folder)!) === "singleton"} />}
                                 </li>
                               ))}

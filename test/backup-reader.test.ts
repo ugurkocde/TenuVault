@@ -297,6 +297,10 @@ describe("BackupReaderService", () => {
     reader.recordTest(TENANT, { graph: true, storage: false, message: "no container" })
     reader.recordRun(TENANT, "Completed", "scheduled")
     reader.recordRun(TENANT, "Failed", "manual")
+    // A run captured by a replaced or renewed reader never updates the current card.
+    const tokens = reader.tokens({ tenantId: TENANT, clientId: "admin", storageAccountName: "store", trigger: "scheduled" })!
+    reader.recordRun(TENANT, "Failed", "scheduled", { registrationId: tokens.registrationId, certificate: "renewed" })
+    reader.recordRun(TENANT, "Failed", "scheduled", { registrationId: "other-registration", certificate: tokens.readerCertificate })
     expect(reader.status(TENANT)!.lastTest).toMatchObject({ graph: true, storage: false })
     expect(reader.status(TENANT)!.lastRun?.status).toBe("Completed")
     expect(reader.status(TENANT)!.verifiedAt).toBeTruthy()
@@ -346,7 +350,7 @@ describe("BackupReaderService", () => {
     expect(reader.status(TENANT)?.lastRun?.status).toBe("Failed")
     // The Electron entry point must write the scheduled result shared by both surfaces.
     const main = readFileSync(new URL("../src/main/index.ts", import.meta.url), "utf8")
-    expect(main).toMatch(/backupReader\.recordRun\((?:job\.tenantId, scheduledResult\(job\)\.status, request\.trigger|tenantId, result\.status)\)/)
+    expect(main).toMatch(/backupReader\.recordRun\(job\.tenantId, scheduledResult\(job\)\.status, request\.trigger, tokens && \{ registrationId: tokens\.registrationId, certificate: tokens\.readerCertificate \}\)/)
   })
 
   it("verifies the active certificate again while a renewal waits, and keeps the renewal", async () => {

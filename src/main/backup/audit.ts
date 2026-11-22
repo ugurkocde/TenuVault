@@ -75,32 +75,49 @@ const manifestStatus = (manifest: BackupManifest): ManifestStatus => manifest.St
 
 /**
  * Confirm an interrupted run from its own committed manifest under the original binding. A run
- * split across an ordinary and a large backup commits two manifests: both must be terminal, and
- * the worse status wins. `readCompanion` reads the other half by folder name.
+ * split across an ordinary and a large backup commits two manifests: both must be terminal, the
+ * worse status wins and the totals add up. A start checkpoint names the ordinary folder before a
+ * large-only run switches to its large folder, so `read` also tries that folder. A failed or
+ * cancelled ordinary half whose large half was never committed confirms its own status.
  */
-export async function reconcileBackupAudit(entry: AuditLogEntry, readManifest: () => Promise<Response>, readCompanion?: (folder: string) => Promise<Response>): Promise<AuditLogEntry> {
-  const manifest = await runManifest(entry, await readManifest())
+export async function reconcileBackupAudit(entry: AuditLogEntry, readManifest: () => Promise<Response>, read?: (folder: string) => Promise<Response>): Promise<AuditLogEntry> {
+  let folder = entry.resource.id
+  let manifest = await runManifest(entry, await readManifest())
+  const large = folder.replace(/^backup-(?=\d)/, 'backup-large-')
+  if (!manifest && read && large !== folder) {
+    manifest = await runManifest(entry, await read(large))
+    if (manifest) folder = large
+  }
   if (!manifest) return entry
   let status = manifestStatus(manifest)
   if (status === 'uncertain') return entry
+  let saved = manifest.ItemCounts?.TotalPolicies, failures = manifest.Failures, completedAt = time(manifest.CompletedAt)
   if (manifest.CompanionBackup !== undefined) {
-    if (typeof manifest.CompanionBackup !== 'string' || !readCompanion) return entry
-    const companion = await runManifest(entry, await readCompanion(manifest.CompanionBackup))
-    if (!companion) return entry
-    const other = manifestStatus(companion)
-    if (other === 'uncertain') return entry
-    if (RANK[other] > RANK[status]) status = other
+    if (typeof manifest.CompanionBackup !== 'string' || !read) return entry
+    const response = await read(manifest.CompanionBackup)
+    const companion = await runManifest(entry, response)
+    if (!companion) {
+      if (response.status !== 404 || (status !== 'failed' && status !== 'cancelled')) return entry
+    } else {
+      const other = manifestStatus(companion)
+      if (other === 'uncertain') return entry
+      if (RANK[other] > RANK[status]) status = other
+      const add = (a?: number, b?: number) => a === undefined && b === undefined ? undefined : (a ?? 0) + (b ?? 0)
+      saved = add(saved, companion.ItemCounts?.TotalPolicies); failures = add(failures, companion.Failures)
+      const companionCompleted = time(companion.CompletedAt)
+      if (companionCompleted && (!completedAt || companionCompleted > completedAt)) completedAt = companionCompleted
+    }
   }
-  const timestamp = typeof manifest.CompletedAt === 'string' && Number.isFinite(Date.parse(manifest.CompletedAt))
-    ? new Date(manifest.CompletedAt).toISOString() : entry.timestamp
   return {
-    ...entry, timestamp,
+    ...entry, timestamp: completedAt ?? entry.timestamp,
+    resource: { ...entry.resource, id: folder },
     eventType: status === 'failed' ? AuditEventType.BACKUP_FAILED : status === 'cancelled' ? AuditEventType.BACKUP_CANCELLED : AuditEventType.BACKUP_COMPLETED,
     result: status === 'completed' ? AuditResult.SUCCESS : status === 'failed' ? AuditResult.FAILURE : AuditResult.PARTIAL,
     severity: status === 'failed' ? AuditSeverity.ERROR : status === 'warnings' ? AuditSeverity.WARNING : AuditSeverity.INFO,
     job: { ...entry.job!, status,
       reason: status === 'warnings' ? 'BACKUP_WARNINGS' : status === 'failed' ? 'BACKUP_FAILED' : status === 'cancelled' ? 'BACKUP_CANCELLED' : undefined,
-      counts: { saved: manifest.ItemCounts?.TotalPolicies, failures: manifest.Failures },
+      counts: { saved, failures },
     },
   }
 }
+const time = (value: unknown) => typeof value === 'string' && Number.isFinite(Date.parse(value)) ? new Date(value).toISOString() : undefined

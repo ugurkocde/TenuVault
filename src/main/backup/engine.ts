@@ -86,6 +86,8 @@ export type BackupAuthMode = "delegated" | "app-only"
 export interface RunTokens {
   mode: BackupAuthMode
   registrationId?: string
+  /** The Backup Reader certificate a run captured, so a renewed reader is never credited with it. */
+  readerCertificate?: string
   auditUser?: AuditUser
   /** `fresh`: a token Microsoft issues now instead of a cached one, which proves that the sign-in still works. */
   graph: (options?: { fresh?: boolean }) => Promise<string>

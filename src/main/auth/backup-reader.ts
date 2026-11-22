@@ -212,11 +212,12 @@ export class BackupReaderService {
   }
 
   /** Records that a scheduled backup actually ran with the reader, for the card and Schedule tab. */
-  recordRun(tenantId: string, status: string, trigger: BackupRequest["trigger"]): void {
+  recordRun(tenantId: string, status: string, trigger: BackupRequest["trigger"], reader?: { registrationId?: string; certificate?: string }): void {
     if (trigger !== "scheduled") return
     try {
       const credential = this.read(tenantId)
-      if (!credential) return
+      // A reader replaced or renewed while the run waited keeps its own card.
+      if (!credential || (reader && !this.sameReader(credential, reader))) return
       credential.lastRun = { at: this.now().toISOString(), status }
       this.write(credential)
     } catch { console.warn("[backup-reader] Scheduled run status could not be saved") }
@@ -257,7 +258,7 @@ export class BackupReaderService {
       })
       const roles = checkReaderToken(acquired.accessToken, app, resource, selection)
       if (resource === "graph" && roles.join(" ") !== seen) {
-        this.noteRoleChange(credential.tenantId, roles)
+        this.noteRoleChange(credential.tenantId, roles, { registrationId: credential.clientId, certificate: credential.active?.thumbprintSha256 })
         usable = verified.filter((role) => roles.includes(role))
         requireSomethingToRead(usable, selection)
         // Remembered only once the checks passed, so a refused reader is refused on every request of the run.
@@ -268,6 +269,7 @@ export class BackupReaderService {
     return {
       mode: "app-only",
       registrationId: credential.clientId,
+      readerCertificate: credential.active.thumbprintSha256,
       graph: (options) => token("graph", options?.fresh),
       storage: () => token("storage"),
       // Answered from the roles in the reader's token, so a run leaves out the types of a role that was removed before it asks for them.
@@ -283,9 +285,14 @@ export class BackupReaderService {
    * It compares with the roles verified by now, so a backup that started before the admin verified
    * again does not bring the notice back.
    */
-  private noteRoleChange(tenantId: string, roles: string[]): void {
+  /** The stored reader is still the registration and certificate a run captured. */
+  private sameReader(credential: BackupReaderCredential, reader: { registrationId?: string; certificate?: string }): boolean {
+    return credential.clientId === reader.registrationId && credential.active?.thumbprintSha256 === reader.certificate
+  }
+
+  private noteRoleChange(tenantId: string, roles: string[], reader: { registrationId?: string; certificate?: string }): void {
     const credential = this.read(tenantId)
-    if (!credential?.verifiedRoles) return
+    if (!credential?.verifiedRoles || !this.sameReader(credential, reader)) return
     const verified = credential.verifiedRoles
     const added = roles.filter((role) => !verified.includes(role))
     const removed = verified.filter((role) => !roles.includes(role))

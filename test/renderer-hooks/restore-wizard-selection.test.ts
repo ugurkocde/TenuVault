@@ -161,3 +161,27 @@ it("limits restore lists and preview reads to the selected service", async () =>
   expect(container.textContent).toContain("Tenant organization")
   expect(container.textContent).not.toContain("Profile A")
 })
+
+it("lists and previews a mixed backup's verified large companion under its own backup ID", async () => {
+  const companion = { content: { groups: [{ folder: "Groups", label: "group", area: "Entra ID", limitation: "Use the separate directory review.", policies: [{ path: "backup-large-1/Groups/g.json", displayName: "Team" }] }] } }
+  const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body ?? "{}"))
+    if (String(input).endsWith("/api/list-backup-contents")) return Response.json(body.backupId === "backup-large-1" ? companion : contents)
+    if (String(input).endsWith("/api/restore-preview")) return Response.json(body.backupId === "backup-large-1" ? { items: [{ path: "backup-large-1/Groups/g.json", name: "Team", blocker: "Use the separate directory review." }] } : preview)
+    return Response.json({})
+  })
+  vi.stubGlobal("fetch", fetcher)
+  const container = document.body.appendChild(document.createElement("div"))
+  const root = createRoot(container)
+  roots.push(root)
+  await act(async () => root.render(createElement(MemoryRouter, null, createElement(RestoreWizard, {
+    tenant: { name: "Contoso", credentials: { tenantId: "tenant", appId: "app", clientSecret: "" }, storageAccountName: "tvlocal-tenant" },
+    backups: [{ id: "backup-1", companionId: "backup-large-1", timestamp: "2026-10-16T02:00:00Z", type: "manual", status: "Completed", totalPolicies: 3, scope: null, size: 1, duration: 4, changes: null, comparedWith: null }],
+    initialBackupId: "backup-1", community: false, canCopyToTenants: false, copyCandidates: [],
+  }))))
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+  const calls = (route: string) => fetcher.mock.calls.filter(([url]) => String(url).endsWith(route)).map(([, init]) => JSON.parse(String(init?.body)))
+  expect(calls("/api/list-backup-contents").map(body => body.backupId).sort()).toEqual(["backup-1", "backup-large-1"])
+  expect(calls("/api/restore-preview").find(body => body.paths.includes("backup-large-1/Groups/g.json"))?.backupId).toBe("backup-large-1")
+  expect(container.textContent).toContain("Team")
+})

@@ -1,3 +1,4 @@
+import { PlanRequired } from "../../../../shared/plans"
 import { NextResponse, type NextRequest } from "next/server"
 import { backupStoragePath } from "../../../../shared/backup-storage"
 import { typeForFolder, restoreCapability, type Item } from "../../../../shared/intune/registry"
@@ -33,5 +34,9 @@ export async function POST(request: NextRequest) {
     if (typeof body.fingerprint !== "string") throw new Error("Review the exact difference first.")
     const outcome = await confirmIdentityRestore(graph, restore, body.fingerprint)
     return NextResponse.json({ ...outcome, details: { restoredCount: outcome.success ? 1 : 0, failedCount: !outcome.success && !outcome.partial ? 1 : 0, partialCount: outcome.partial ? 1 : 0, duration: 0, results: [outcome] } })
-  } catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "This configuration restore could not finish." }, { status: 409 }) }
+  } catch (error) {
+    // A plan that lapsed after the preview is refused at execution with the same prompt as the route gate.
+    if (error instanceof PlanRequired) return NextResponse.json({ error: error.message, upgrade: error.feature }, { status: 402 })
+    return NextResponse.json({ error: error instanceof Error ? error.message : "This configuration restore could not finish." }, { status: 409 })
+  }
 }

@@ -94,7 +94,7 @@ This table renders the same data used by the restore safety code. Verification u
 
 ## Users and groups
 
-Open an owned backup, expand Users or Groups and select **Review directory restore**. This flow is separate from restore all, Copy to Tenants, drift revert, imports and cross-tenant copy. It runs as the signed-in admin, never the Backup Reader.
+Open an owned backup, expand Users or Groups and select **Review directory restore**. When the same run also backed up other services, directory objects are kept in its linked large backup. The restore view lists the objects of both, and each directory review reads from the backup that holds the object. This flow is separate from restore all, Copy to Tenants, drift revert, imports and cross-tenant copy. It runs as the signed-in admin, never the Backup Reader.
 
 Choose **Directory object** first. Missing objects are checked against deleted items before recreation. Recycle recovery remains blocked until recovered relationships and account state can be inspected safely. TenuVault never skips the recycle bin to create a second identity. A missing object outside deleted items can be recreated. A recreated user starts disabled with a fresh random password that is never retained, logged or shown. Set up sign-in and enable the account separately in Entra.
 
