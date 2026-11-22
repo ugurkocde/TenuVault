@@ -285,6 +285,8 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
           // A reviewed principal that no longer resolves may still be replicating after our own create.
           const principalId = step.directory?.principalId
           if (principalId && current && current.principal === null && io.recentlyCreated?.(principalId)) throw new DirectoryRequiredObjectAbsentError("The relationship principal is missing.", principalId)
+          const updateTarget = entry.targetId ?? step.targetId ?? mapped
+          if (step.directory && current === null && step.operation === "update" && updateTarget && io.recentlyCreated?.(updateTarget)) throw new DirectoryRequiredObjectAbsentError("The directory object is missing.", updateTarget)
           throw new RestoreSafetyError("The tenant changed after this preview. Preview this item again.")
         }
         if (step.operation === "create" && mapped && current === null) throw new RestoreSafetyError("The previously mapped object is missing. Review its mapping before recreating it again.")

@@ -762,10 +762,14 @@ describe("audit recovery for a run split across an ordinary and a large backup",
     expect(result.job).toMatchObject({ status: expected })
   })
   it("confirms a run whose large half never committed from the final manifest's run status", async () => {
-    const result = await reconcileBackupAudit(entry, async () => manifest({ Status: "Success", RunStatus: "CompletedWithWarnings", CompanionBackup: "backup-large-2026-11-21-000000" }), async () => new Response(null, { status: 404 }))
-    expect(result.job).toMatchObject({ status: "warnings" })
+    const result = await reconcileBackupAudit(entry, async () => manifest({ Status: "Success", RunStatus: "CompletedWithWarnings", RunCounts: { saved: 9, failures: 1 }, ItemCounts: { TotalPolicies: 4 }, CompanionBackup: "backup-large-2026-11-21-000000" }), async () => new Response(null, { status: 404 }))
+    expect(result.job).toMatchObject({ status: "warnings", counts: { saved: 9, failures: 1 } })
     // The early ordinary manifest has no run status and stays uncertain until the run ends.
     expect(await reconcileBackupAudit(entry, async () => manifest({ Status: "Success", CompanionBackup: "backup-large-2026-11-21-000000" }), async () => new Response(null, { status: 404 }))).toBe(entry)
+  })
+  it("counts saved directory objects, not only policies, when an older split run has no run status", async () => {
+    const result = await reconcileBackupAudit(entry, async () => manifest({ Status: "Failed", CompanionBackup: "backup-large-2026-11-21-000000", ItemCounts: { TotalPolicies: 0 } }), async () => manifest({ Status: "Success", ItemCounts: { Users: 3, TotalPolicies: 0 } }))
+    expect(result.job).toMatchObject({ status: "warnings" })
   })
   it("records both failed halves as failed", async () => {
     const result = await reconcileBackupAudit(entry, async () => manifest({ Status: "Failed", CompanionBackup: "backup-large-2026-11-21-000000", ItemCounts: { TotalPolicies: 0 } }), async () => manifest({ Status: "Failed", ItemCounts: { TotalPolicies: 0 } }))

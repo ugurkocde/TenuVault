@@ -404,8 +404,11 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
       }
       if (controller.signal.aborted) return
       // Inventory paging belongs to a backup whose items are shown.
-      const paged = listings.find(({ source, contents }) => contents.largePage !== undefined && !unreadable.has(source))?.contents
-      setLargePaging(paged ? { hasMore: paged.hasMore === true, total: paged.content.groups.reduce((sum, group) => sum + (group.count ?? group.policies.length), 0) } : null)
+      const shown = listed.filter(item => !unreadable.has(item.source))
+      const paged = listings.find(({ source, contents }) => contents.largePage !== undefined && shown.some(item => item.source === source))?.contents
+      setLargePaging(paged ? { hasMore: paged.hasMore === true, total: paged.content.groups.filter(group => matchesBackupService(group.folder, contentsService)).reduce((sum, group) => sum + (group.count ?? group.policies.length), 0) } : null)
+      // A later inventory page of a backup that is no longer shown would leave no way back.
+      if (!paged && largePage > 0) setLargePage(0)
       setItems(listed.filter(item => !unreadable.has(item.source)).map((item) => ({ ...item, name: details[item.path]?.name ?? item.name, blocker: details[item.path]?.blocker ?? item.blocker, replaceBlocker: details[item.path]?.replaceBlocker, snapshot: details[item.path]?.snapshot, readiness: details[item.path]?.readiness })))
     })().catch((error: unknown) => {
       if (controller.signal.aborted) return

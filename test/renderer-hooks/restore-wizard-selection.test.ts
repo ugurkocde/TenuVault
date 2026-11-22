@@ -229,3 +229,24 @@ it("keeps the ordinary items when the linked large backup lists but cannot be pr
   expect(container.textContent).toContain("The linked large backup with this run's directory objects could not be read")
   expect(container.querySelector('[role="alert"]')).toBeNull()
 })
+
+it("shows no inventory paging for a companion whose items the service filter hides", async () => {
+  const companion = { largePage: 0, hasMore: true, content: { groups: [{ folder: "Groups", label: "group", area: "Entra ID", count: 5000, policies: [{ path: "backup-large-1/Groups/g.json", displayName: "Team" }] }] } }
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body ?? "{}"))
+    if (String(input).endsWith("/api/list-backup-contents")) return Response.json(body.backupId === "backup-large-1" ? companion : contents)
+    if (String(input).endsWith("/api/restore-preview")) return Response.json(preview)
+    return Response.json({})
+  }))
+  const container = document.body.appendChild(document.createElement("div"))
+  const root = createRoot(container)
+  roots.push(root)
+  await act(async () => root.render(createElement(MemoryRouter, null, createElement(RestoreWizard, {
+    tenant: { name: "Contoso", credentials: { tenantId: "tenant", appId: "app", clientSecret: "" }, storageAccountName: "tvlocal-tenant" },
+    backups: [{ id: "backup-1", companionId: "backup-large-1", timestamp: "2026-10-16T02:00:00Z", type: "manual", status: "Completed", totalPolicies: 3, scope: null, size: 1, duration: 4, changes: null, comparedWith: null }],
+    initialBackupId: "backup-1", community: false, canCopyToTenants: false, copyCandidates: [], service: "intune",
+  }))))
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+  expect(container.textContent).toContain("Configuration profile")
+  expect(container.textContent).not.toContain("Inventory page")
+})

@@ -1119,7 +1119,7 @@ export class BackupEngine {
     const outcomes = outcomesNow(status, ended, false)
     // A split run's last manifest also names the run's own status. It is written only once the large
     // phase ended, committed or not, so audit recovery can confirm the run from it.
-    const metadata = manifest(status, ended, outcomes, { ...(unread ? { Error: unread } : {}), ...(mixed ? { RunStatus: status } : {}) })
+    const metadata = manifest(status, ended, outcomes, { ...(unread ? { Error: unread } : {}), ...(mixed ? { RunStatus: status, RunCounts: { saved: totalPolicies, failures } } : {}) })
 
     if (!isLargeBackup(backupFolder)) await commitManifest(backupFolder, metadata)
     this.conclude(job, outcomes)
@@ -1329,7 +1329,13 @@ export class BackupEngine {
           const listing = await storage.listFolder(backup.prefix)
           const bytes = [...listing.sizes.values()].reduce((sum, size) => sum + size, 0)
           if (!owned) { remnants.unowned++; remnants.unownedBytes += bytes; if (backup.time < cutoff) unowned++; continue }
-          if (backup.time >= cutoff - REMNANT_RECOVERY_DAYS * 86400_000) { remnants.kept++; remnants.keptBytes += bytes; continue }
+          // An ordinary half that read everything stays the newest complete copy of its types
+          // even when its large companion is missing, so it is never removed while it holds one.
+          let holdsUncovered = false
+          if (metadata && !isLargeBackup(backup.prefix) && completeHalf(metadata)) {
+            for (const folder of restorableFolders(metadata)) if (uncovered.delete(folder)) holdsUncovered = true
+          }
+          if (holdsUncovered || backup.time >= cutoff - REMNANT_RECOVERY_DAYS * 86400_000) { remnants.kept++; remnants.keptBytes += bytes; continue }
           let remaining = bytes
           try {
             const markerName = `${backup.prefix}${BACKUP_OWNER_FILE}`, manifestName = `${backup.prefix}metadata.json`

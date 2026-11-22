@@ -382,3 +382,17 @@ describe("the final pre-send safety read during replication", () => {
     else expect(entry.state).not.toBe("deferred")
   })
 })
+
+describe("a recreated update target during replication", () => {
+  const target = "00000000-0000-4000-8000-000000000040"
+  it.each([true, false])("defers an update whose recently created target reads as missing (recent: %s)", async recent => {
+    const s = setup(1)
+    const run: GuardedRun = { ...s.input, entries: [{ step: { ...s.input.entries[0]!.step, operation: "update", sourceId: target, targetId: target, directory: { action: "update" }, desired: { displayName: "Saved" }, properties: ["displayName"], preview: restoreFingerprint({ id: target, displayName: "Live" }) }, state: "pending" }] }
+    s.io.read = async () => null
+    s.io.recentlyCreated = objectId => recent && objectId === target
+    const entry = (await executeGuardedRun(s.journal, run, s.io)).run.entries[0]!
+    if (recent) expect(entry).toMatchObject({ state: "deferred", deferralCause: "replication" })
+    else expect(entry).toMatchObject({ state: "blocked", reason: expect.stringContaining("tenant changed") })
+    expect(s.writes()).toBe(0)
+  })
+})

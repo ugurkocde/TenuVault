@@ -52,8 +52,8 @@ export function backupAudit(job: BackupJob, request: BackupRequest, tokens: RunT
 }
 
 type BackupManifest = {
-  RunId?: string; TenantId?: string; Status?: string; RunStatus?: string; AuthMode?: string; CompletedAt?: string; CompanionBackup?: string;
-  ItemCounts?: { TotalPolicies?: number }; Failures?: number; MaskedSecretItems?: unknown[];
+  RunId?: string; TenantId?: string; Status?: string; RunStatus?: string; RunCounts?: { saved?: number; failures?: number }; AuthMode?: string; CompletedAt?: string; CompanionBackup?: string;
+  ItemCounts?: Record<string, number | undefined> & { TotalPolicies?: number }; Failures?: number; MaskedSecretItems?: unknown[];
 }
 type ManifestStatus = 'completed' | 'warnings' | 'failed' | 'cancelled' | 'uncertain'
 const RANK: Record<ManifestStatus, number> = { completed: 0, warnings: 1, cancelled: 2, failed: 3, uncertain: 4 }
@@ -101,8 +101,12 @@ export async function reconcileBackupAudit(entry: AuditLogEntry, readManifest: (
       // manifest names the status the run ended with, or the half itself failed or was cancelled.
       if (response.status !== 404 || folder.startsWith('backup-large-')) return entry
       const reported = typeof manifest.RunStatus === 'string' ? manifestStatus({ ...manifest, Status: manifest.RunStatus }) : 'uncertain'
-      if (reported !== 'uncertain') status = reported
-      else if (status !== 'failed' && status !== 'cancelled') return entry
+      if (reported !== 'uncertain') {
+        status = reported
+        // The run's own totals include a large half that saved items but never committed its manifest.
+        if (typeof manifest.RunCounts?.saved === 'number') saved = manifest.RunCounts.saved
+        if (typeof manifest.RunCounts?.failures === 'number') failures = manifest.RunCounts.failures
+      } else if (status !== 'failed' && status !== 'cancelled') return entry
     } else {
       const other = manifestStatus(companion)
       if (other === 'uncertain') return entry
@@ -117,7 +121,7 @@ export async function reconcileBackupAudit(entry: AuditLogEntry, readManifest: (
       if (reported) {
         const run = manifestStatus({ ...manifest, Status: reported })
         if (run !== 'uncertain') status = run
-      } else if (status === 'failed' && (saved ?? 0) > 0) status = 'warnings'
+      } else if (status === 'failed' && savedObjects(manifest) + savedObjects(companion) > 0) status = 'warnings'
     }
   }
   return {
@@ -131,5 +135,10 @@ export async function reconcileBackupAudit(entry: AuditLogEntry, readManifest: (
       counts: { saved, failures },
     },
   }
+}
+/** Saved objects of every type, as the engine counts them for the run status. */
+const savedObjects = (manifest: BackupManifest) => {
+  const types = Object.entries(manifest.ItemCounts ?? {}).filter(([folder, count]) => folder !== 'TotalPolicies' && typeof count === 'number')
+  return types.length ? types.reduce((sum, [, count]) => sum + (count as number), 0) : manifest.ItemCounts?.TotalPolicies ?? 0
 }
 const time = (value: unknown) => typeof value === 'string' && Number.isFinite(Date.parse(value)) ? new Date(value).toISOString() : undefined
