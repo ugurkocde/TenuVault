@@ -331,7 +331,14 @@ export default function OnboardingPage() {
     bridge.settingsTransfer.preview(requestedSetup, currentAppearance()).then((preview) => {
       const group = preview.groups.find((entry) => entry.id === requestedTenant && entry.setup && !entry.connected)
       if (group?.setup) latest.current.continueWithSetup(preview.importId, group.setup)
-      else latest.current.setupFrom(preview)
+      else if (requestedTenant) {
+        // The link named a tenant that can no longer be connected from the file, for example one just
+        // connected: say so, and let the admin choose another one instead of filling it in.
+        const named = preview.groups.find((entry) => entry.id === requestedTenant)
+        const others = preview.groups.flatMap((entry) => (entry.setup && !entry.connected ? [entry.setup] : []))
+        setSetupError(named?.connected ? `${named.title} from this file is already connected.` : "The tenant this link names cannot be connected from the file.")
+        setSetupChoices(others.length ? { importId: preview.importId, connections: others } : null)
+      } else latest.current.setupFrom(preview)
     }, (error: unknown) => setSetupError(error instanceof Error ? error.message : String(error)))
   }, [requestedSetup, requestedTenant, checkingResume])
 

@@ -1015,6 +1015,27 @@ describe("setup from a file", () => {
     expect(container.querySelector('[role="alert"]')?.textContent).toContain("Open the file again")
   })
 
+  it("does not fill in another tenant when the tenant a link names is already connected", async () => {
+    const SECOND = "7a1c5e9b-3f2d-4b8a-a6c4-1d7e9f0b3c52"
+    state.transferPreview.mockResolvedValueOnce({
+      importId: "import-1", exportedAt: null, appVersion: null, skipped: [],
+      groups: [
+        { id: FILE_TENANT, title: "Fabrikam", connected: true, items: [] },
+        { id: SECOND, title: "Northwind", connected: false, items: [], setup: { tenantId: SECOND, name: "Northwind", clientId: FILE_CLIENT } },
+      ],
+    })
+    const container = document.createElement("div")
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    roots.push(root)
+    act(() => root.render(createElement(MemoryRouter, { initialEntries: [`/portal/onboarding?setup=import-1&tenant=${FILE_TENANT}`] }, createElement(OnboardingPage))))
+    await flush()
+    await flush()
+    expect(container.textContent).toContain("Fabrikam from this file is already connected.")
+    expect(container.textContent).toContain("Which tenant do you want to connect?")
+    expect(container.querySelector("#tenant")).toBeNull()
+  })
+
   it("replaces the IDs of an unfinished sign-in with the file's, in the form and in the notice", async () => {
     state.store.set(DRAFT_KEY, JSON.stringify({ step: 1, tenant: TENANT, clientId: CLIENT, displayName: "Draft", account: null }))
     let resolve!: (value: unknown) => void

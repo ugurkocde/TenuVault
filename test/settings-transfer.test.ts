@@ -732,3 +732,15 @@ describe("update channel and Azure names", () => {
     expect(preview.groups.find((group) => group.id === TENANT)?.setup?.storage).toMatchObject({ kind: "azure", resourceGroupName: "rg-münchen" })
   })
 })
+
+describe("schedules as the scheduler runs them", () => {
+  it("says a daily schedule runs weekly on Community, and that Azure storage pauses it there", () => {
+    const local = machine([{ tenantId: TENANT }], { [TENANT]: "community" })
+    local.scheduler.set({ tenantId: TENANT, enabled: true, frequency: "daily", time: "02:00" })
+    const daily = local.transfer.open(file({ tenants: [{ tenantId: TENANT, schedule: { enabled: true, frequency: "daily", time: "04:00" } }] }), "system")
+    expect(find(daily, `${TENANT}:schedule`)).toMatchObject({ status: "change", note: "On Community, a daily schedule runs once a week." })
+    const azure = machine([{ tenantId: TENANT, storage: "azure" }], { [TENANT]: "community" })
+    const weekly = azure.transfer.open(file({ tenants: [{ tenantId: TENANT, schedule: { enabled: true, frequency: "weekly", time: "04:00", weekday: 2 } }] }), "system")
+    expect(find(weekly, `${TENANT}:schedule`)?.note).toContain("paused until it is on Pro or MSP")
+  })
+})

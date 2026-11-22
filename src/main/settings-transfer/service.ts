@@ -647,8 +647,12 @@ export class SettingsTransfer {
         : planBlocked ? "Daily schedules are included in Pro and MSP. Weekly schedules are included in every plan."
         : planUnknown ? "The plan of this tenant is not known yet, so a daily schedule cannot be turned on. Import the file again once TenuVault has checked the license." : null, {
         ...(planBlocked && { feature: "dailySchedule" as const }),
+        // How the scheduler runs it on Community, so the preview does not promise more than happens.
+        ...(plan === "community" && schedule && { note: here.storage?.kind === "azure"
+          ? "On Community, schedules of a tenant whose backups are in Azure storage are paused until it is on Pro or MSP."
+          : schedule.frequency === "daily" ? "On Community, a daily schedule runs once a week." : undefined }),
         warning: SCHEDULE_WARNING,
-        state: [current, plan],
+        state: [current, plan, here.storage?.kind],
         apply: () => void this.deps.schedules.set(schedule!),
       }))
     }
