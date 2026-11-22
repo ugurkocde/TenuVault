@@ -18,10 +18,13 @@ const MESSAGES: ReadonlyArray<readonly [RegExp, string]> = [
   [/(".*?", which an earlier )Sync( wrote ".*?" to, no longer exists in this tenant\. This )Sync( creates a new policy\.)/g, "$1copy$2copy$3"],
   [/An earlier sync of (".*?") to this tenant has an unconfirmed result\. Syncing again may create a second copy\. Retry that sync first so TenuVault can check\./g, "An earlier copy of $1 to this tenant has an unconfirmed result. Copying again may create a second policy. Retry that copy first so TenuVault can check."],
   [/The Sync links this plan relied on for (".*?") were not recorded\. Plan again\./g, "The copy links this plan relied on for $1 were not recorded. Plan again."],
+  // Shared with Dev to Prod: the planner words these for a promotion; Copy to Tenants shows them as a copy.
+  [/The source policy holds values Intune masks\. These secrets are not promoted and must be set again in the destination\. Acknowledge this in the planner to continue\./g, "The source policy holds values Intune masks. These secrets are not copied and must be set again in this target. Acknowledge this in the review to continue."],
+  [/The destination policy holds values Intune masks\. Promotion can remove these secrets and they must be set again in the destination\. Acknowledge this in the planner to continue\. Automatic rollback cannot recover them\./g, "The target policy holds values Intune masks. Copying can remove these secrets and they must be set again in this target. Acknowledge this in the review to continue. Automatic rollback cannot recover them."],
   [/Another Sync (wrote|linked) (".*?") (to this tenant after this plan, so applying it would create a second policy|to a different policy in this tenant after this plan)\. Plan again\./g, "Another copy $1 $2 $3. Plan again."],
 ]
 
-/** A summary, finding, warning or error the earlier version generated. */
+/** A summary, finding, warning or error the earlier version or the shared planner generated, as Copy to Tenants shows it. */
 export function copyMessage(text: string): string {
   return MESSAGES.reduce((current, [pattern, replacement]) => current.replace(pattern, replacement), text)
 }

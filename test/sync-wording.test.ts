@@ -44,6 +44,13 @@ describe("copyMessage", () => {
       .toBe('An earlier copy of "Defender "Pilot"" to this tenant has an unconfirmed result. Copying again may create a second policy. Retry that copy first so TenuVault can check.')
   })
 
+  it("words the shared planner's secret warnings as a copy", () => {
+    expect(copyMessage("The source policy holds values Intune masks. These secrets are not promoted and must be set again in the destination. Acknowledge this in the planner to continue."))
+      .toBe("The source policy holds values Intune masks. These secrets are not copied and must be set again in this target. Acknowledge this in the review to continue.")
+    expect(copyMessage("The destination policy holds values Intune masks. Promotion can remove these secrets and they must be set again in the destination. Acknowledge this in the planner to continue. Automatic rollback cannot recover them."))
+      .toBe("The target policy holds values Intune masks. Copying can remove these secrets and they must be set again in this target. Acknowledge this in the review to continue. Automatic rollback cannot recover them.")
+  })
+
   it("leaves other text alone", () => {
     for (const text of ["Intune device sync failed", "Intune answered 403", "Sync 1 policy from Lab"]) expect(copyMessage(text)).toBe(text)
   })
