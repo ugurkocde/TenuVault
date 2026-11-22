@@ -57,3 +57,5 @@ For a customized OIB baseline, **OIB updates** offers the platform's latest OIB 
 When secret omission is enabled, rollback captures leave out the classified values. The rollback preview identifies the policies that need another recovery source. [Backup coverage](/backups/coverage/#leave-secret-values-out-of-policy-backups)
 
 When backup omission is enabled, TenuVault refuses to save a change-set proposal that contains a setting covered by that policy, including Settings Catalog secret tokens. Remove the affected settings from the proposal or configure them in Intune.
+
+With backup omission enabled, Microsoft Graph returns some values only in encrypted form, for example custom OMA-URI string settings. A change set that writes such a value finishes as **Uncertain**, because the read-back cannot compare the value. Check the result in Intune.
