@@ -933,6 +933,29 @@ describe("setup from a file", () => {
     expect(container.textContent).toContain("From a setup file")
   })
 
+  it("waits for the resumed sign-in to be checked, and treats a gone one as no sign-in", async () => {
+    const account = { tenantId: FILE_TENANT, clientId: FILE_CLIENT, username: "admin@fabrikam.com" }
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 1, tenant: FILE_TENANT, clientId: FILE_CLIENT, displayName: "", account, signedInAt: Date.now() }))
+    let accountsDone!: (value: SignedInAccount[]) => void
+    state.accounts.mockReturnValue(new Promise((done) => { accountsDone = done }))
+    state.transferPreview.mockResolvedValue(filePreview())
+    const container = document.createElement("div")
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    roots.push(root)
+    act(() => root.render(createElement(MemoryRouter, { initialEntries: [`/portal/onboarding?setup=import-1&tenant=${FILE_TENANT}`] }, createElement(OnboardingPage))))
+    await flush()
+    expect(state.transferPreview).not.toHaveBeenCalled()
+    // The sign-in is gone on this computer: the file fills in the form instead of a blank Storage step.
+    await act(async () => accountsDone([]))
+    await flush()
+    await flush()
+    expect(state.transferPreview).toHaveBeenCalled()
+    expect(container.textContent).not.toContain("Choose where backups are stored")
+    expect(container.textContent).toContain("From a setup file")
+    expect(container.querySelector<HTMLInputElement>("#tenant")!.value).toBe(FILE_TENANT)
+  })
+
   it("replaces the IDs of an unfinished sign-in with the file's, in the form and in the notice", async () => {
     state.store.set(DRAFT_KEY, JSON.stringify({ step: 1, tenant: TENANT, clientId: CLIENT, displayName: "Draft", account: null }))
     let resolve!: (value: unknown) => void

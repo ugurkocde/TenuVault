@@ -140,7 +140,8 @@ function describeSchedule(schedule: ScheduleInput | undefined): string {
 
 function describeCloud(config: CloudBackupConfig | null): string {
   if (!config) return "Not set up"
-  return `${config.automationAccount} in ${config.resourceGroup}, storage account ${config.storageAccount}`
+  const when = !config.time ? "" : config.frequency === "weekly" ? `, weekly on ${WEEKDAYS[config.weekday] ?? WEEKDAYS[0]} at ${config.time}` : `, daily at ${config.time}`
+  return `${config.automationAccount} in ${config.resourceGroup}, storage account ${config.storageAccount}${when}${config.linked ? "" : ", schedule not linked yet"}`
 }
 
 function describeStorage(storage: SetupStorage | null | undefined): string {
@@ -153,6 +154,20 @@ function describeBranding(branding: PdfBranding | null): string {
   const parts = [branding.logo && "logo", branding.colors && "colors", branding.preparedBy && "prepared by", branding.classification && "classification", branding.footerText && "footer text"].filter(Boolean)
   const name = branding.companyName ?? "Custom branding"
   return parts.length ? `${name}, with ${parts.join(", ")}` : name
+}
+
+/** The names of the fields that differ, so a change that reads the same as before still says what changes. */
+function changedFields<T extends object>(current: T | null, next: T, names: Partial<Record<keyof T, string>>): string[] {
+  return (Object.entries(names) as Array<[keyof T, string]>).filter(([key]) => JSON.stringify(current?.[key]) !== JSON.stringify(next[key])).map(([, name]) => name)
+}
+const BRANDING_NAMES: Partial<Record<keyof PdfBranding, string>> = { companyName: "company name", logo: "logo", colors: "colors", preparedBy: "prepared by", classification: "classification", footerText: "footer text" }
+const CLOUD_NAMES: Partial<Record<keyof CloudBackupConfig, string>> = { subscriptionId: "subscription", resourceGroup: "resource group", automationAccount: "Automation account", storageAccount: "storage account", keyVault: "key vault", scheduleName: "schedule name", frequency: "frequency", time: "time", weekday: "weekday", timeZone: "time zone", linked: "linked schedule" }
+const changeNote = (fields: string[]) => (fields.length ? `Changes the ${fields.join(", ")}.` : undefined)
+
+/** Lists fields inside a known part that this version does not know; the known fields still apply. */
+function unknownFields(value: unknown, known: readonly string[], where: string, skipped: string[]): void {
+  if (!isObject(value)) return
+  for (const key of Object.keys(value)) if (!known.includes(key)) skipped.push(`${where}: "${key.slice(0, 64)}"`)
 }
 
 // eslint-disable-next-line no-control-regex
@@ -407,6 +422,8 @@ export class SettingsTransfer {
         items: [],
       }
       for (const key of tenant.unknown) skipped.push(`${group.title}: "${key}"`)
+      unknownFields(tenant.connection, ["clientId", "storage"], `${group.title}: connection details`, skipped)
+      if (isObject(tenant.connection)) unknownFields(tenant.connection.storage, ["kind", "storageAccountName", "subscriptionId", "resourceGroupName", "location"], `${group.title}: storage`, skipped)
       if (!here) {
         group.notice = "This tenant is not connected on this computer, so its settings are skipped."
         if (connection) group.setup = connection
@@ -438,15 +455,19 @@ export class SettingsTransfer {
       if (key === "retentionDays") {
         const valid = typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 3650
         const limited = valid && !customRetention && (value === 0 || value > COMMUNITY_RETENTION_DAYS)
+        // A shorter period deletes backups, of every tenant on this computer, so it starts unticked.
+        const shorter = valid && value > 0 && (current.retentionDays === 0 || value < current.retentionDays)
         items.push(this.item(id, label, days(current.retentionDays), valid ? days(value) : shown(value), valid ? value === current.retentionDays : false, valid ? null : NOT_VALID, {
           ...(limited && { feature: "customRetention" as const, note: `Saved as chosen. On Community, TenuVault keeps at most ${COMMUNITY_RETENTION_DAYS} days.` }),
+          ...(shorter && { warning: `Keeps backups for a shorter time, for every tenant on this computer, also those not in the file. After the next complete backup of a tenant, its backups older than ${days(value as number)} are deleted.` }),
           apply: () => void this.deps.preferences.set({ retentionDays: value as number }),
         }))
         continue
       }
       const valid = typeof value === "boolean"
       const now = key === "autoUpdate" ? current.autoUpdate && !this.deps.autoUpdateManaged() : current[key]
-      const managed = key === "autoUpdate" && this.deps.autoUpdateManaged()
+      // Settings locks both update settings while the organization manages updates.
+      const managed = (key === "autoUpdate" || key === "nightlyUpdates") && this.deps.autoUpdateManaged()
       items.push(this.item(id, label, onOff(now), valid ? onOff(value) : shown(value), valid && value === now && !managed, !valid ? NOT_VALID : managed ? "Updates on this computer are managed by your organization." : null, {
         ...(PREFERENCE_WARNINGS[key] && { warning: PREFERENCE_WARNINGS[key] }),
         apply: () => void this.deps.preferences.set({ [key]: value as boolean }),
@@ -473,8 +494,10 @@ export class SettingsTransfer {
         invalid = error instanceof Error ? error.message : NOT_VALID
       }
       const available = this.deps.branding.available()
+      const brandingNote = branding && current ? changeNote(changedFields(current, branding, BRANDING_NAMES)) : undefined
       items.push(this.item("app:pdfBranding", "PDF branding", describeBranding(current), branding ? describeBranding(branding) : "Not valid", !!branding && JSON.stringify(branding) === JSON.stringify(current), invalid ?? (available || (!!branding && JSON.stringify(branding) === JSON.stringify(current)) ? null : "PDF branding is included in Pro and MSP. No tenant on this computer has one of these plans."), {
         ...(!invalid && !available && { feature: "pdfBranding" as const }),
+        ...(brandingNote && { note: brandingNote }),
         apply: () => void this.deps.branding.set(known),
       }))
     }
@@ -510,6 +533,7 @@ export class SettingsTransfer {
     }
 
     if (tenant.backupScope !== undefined) {
+      unknownFields(tenant.backupScope, ["excluded"], `${here.name}: what is backed up`, skipped)
       const raw = isObject(tenant.backupScope) && Array.isArray(tenant.backupScope.excluded) && tenant.backupScope.excluded.every((folder) => typeof folder === "string") ? tenant.backupScope.excluded as string[] : null
       const scope = raw ? normalizeScope({ excluded: raw }) : null
       const unknown = raw ? raw.filter((folder) => !INTUNE_TYPES.some((type) => type.folder === folder)).length : 0
@@ -536,7 +560,10 @@ export class SettingsTransfer {
       const plan = this.deps.plan(tenantId)
       const newDaily = !!schedule && schedule.frequency === "daily" && current?.frequency !== "daily"
       const planBlocked = newDaily && plan === "community"
-      const planUnknown = newDaily && plan === null && schedule.enabled
+      // As in the schedule editor, which saves no enabled daily schedule while the plan is unknown, even
+      // over a paused daily one.
+      const planUnknown = !!schedule && schedule.frequency === "daily" && schedule.enabled && plan === null && !sameSchedule(current, schedule)
+      unknownFields(tenant.schedule, ["enabled", "frequency", "time", "weekday"], `${here.name}: backup schedule`, skipped)
       items.push(this.item(`${prefix}schedule`, "Backup schedule", describeSchedule(current), schedule ? describeSchedule(schedule) : "Not valid", !!schedule && sameSchedule(current, schedule), !schedule ? NOT_VALID
         : planBlocked ? "Daily schedules are included in Pro and MSP. Weekly schedules are included in every plan."
         : planUnknown ? "The plan of this tenant is not known yet, so a daily schedule cannot be turned on. Import the file again once TenuVault has checked the license." : null, {
@@ -550,8 +577,10 @@ export class SettingsTransfer {
       const config = cloudConfig(tenant.cloudBackup)
       const current = this.cloud(tenantId)
       const otherTenant = !!config && config.tenantId !== tenantId
+      unknownFields(tenant.cloudBackup, CLOUD_FIELDS, `${here.name}: cloud backup setup`, skipped)
+      const fields = config && current ? changeNote(changedFields(current, config, CLOUD_NAMES)) : undefined
       items.push(this.item(`${prefix}cloudBackup`, "Cloud backup setup", describeCloud(current), config ? describeCloud(config) : "Not valid", !otherTenant && sameCloud(config, current), !config ? NOT_VALID : otherTenant ? "The cloud backup setup in the file belongs to another tenant." : null, {
-        note: "A record of the Azure resources an Azure administrator created. Applying it changes nothing in Azure.",
+        note: [fields, "A record of the Azure resources an Azure administrator created. Applying it changes nothing in Azure."].filter(Boolean).join(" "),
         apply: () => void this.deps.store.set(cloudKey(tenantId), JSON.stringify(config)),
       }))
     }

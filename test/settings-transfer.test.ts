@@ -318,10 +318,11 @@ describe("settings that cannot be applied", () => {
     expect(b.preferences.saved()).toEqual({ retentionDays: 60 })
   })
 
-  it("does not apply automatic updates where the organization manages them", () => {
+  it("does not apply either update setting where the organization manages updates", () => {
     const b = machine([{ tenantId: TENANT }], {}, { autoUpdateManaged: true })
-    const preview = b.transfer.open(file({ app: { preferences: { autoUpdate: true } } }), "system")
+    const preview = b.transfer.open(file({ app: { preferences: { autoUpdate: true, nightlyUpdates: true } } }), "system")
     expect(find(preview, "app:autoUpdate")).toMatchObject({ status: "blocked", reason: expect.stringContaining("managed by your organization") })
+    expect(find(preview, "app:nightlyUpdates")).toMatchObject({ status: "blocked", reason: expect.stringContaining("managed by your organization") })
   })
 })
 
@@ -538,5 +539,65 @@ describe("reading a settings file from disk", () => {
     const directory = join(folder, "folder.json")
     mkdirSync(directory)
     await expect(readSettingsFile(directory)).rejects.toThrow("Choose a settings file.")
+  })
+})
+
+describe("changes the preview spells out", () => {
+  it("leaves a shorter retention unticked and says it deletes backups of every tenant", () => {
+    const b = machine([{ tenantId: TENANT }])
+    b.preferences.set({ retentionDays: 90 })
+    const shorter = b.transfer.open(file({ app: { preferences: { retentionDays: 7 } }, tenants: [] }), "system")
+    expect(find(shorter, "app:retentionDays")).toMatchObject({ status: "change", selected: false, warning: expect.stringContaining("for every tenant on this computer") })
+    const longer = b.transfer.open(file({ app: { preferences: { retentionDays: 365 } }, tenants: [] }), "system")
+    expect(find(longer, "app:retentionDays")).toMatchObject({ status: "change", selected: true })
+    expect(find(longer, "app:retentionDays")?.warning).toBeUndefined()
+    b.preferences.set({ retentionDays: 0 })
+    const fromForever = b.transfer.open(file({ app: { preferences: { retentionDays: 365 } }, tenants: [] }), "system")
+    expect(find(fromForever, "app:retentionDays")?.selected).toBe(false)
+  })
+
+  it("does not turn on a daily schedule over a paused daily one while the plan is not known", () => {
+    const b = machine([{ tenantId: TENANT }], { [TENANT]: null })
+    b.scheduler.set({ tenantId: TENANT, enabled: false, frequency: "daily", time: "02:00" })
+    const preview = b.transfer.open(file({ tenants: [{ tenantId: TENANT, schedule: { enabled: true, frequency: "daily", time: "02:00" } }] }), "system")
+    expect(find(preview, `${TENANT}:schedule`)).toMatchObject({ status: "blocked", reason: expect.stringContaining("not known yet") })
+    // Pausing it stays possible.
+    const pause = b.transfer.open(file({ tenants: [{ tenantId: TENANT, schedule: { enabled: false, frequency: "daily", time: "03:00" } }] }), "system")
+    expect(find(pause, `${TENANT}:schedule`)?.status).toBe("change")
+  })
+
+  it("names what changes in a cloud setup or branding that reads the same, such as a new color or the linked state", () => {
+    const a = configured()
+    const b = machine([{ tenantId: TENANT }])
+    b.store.set(`renderer.tenuvault_cloud_backup_${TENANT}`, JSON.stringify(CLOUD))
+    b.branding.set({ companyName: "Contoso", logo: { dataUrl: pngLogo() }, colors: { primary: "#112233" }, footerText: "Internal" })
+    a.branding.set({ companyName: "Contoso", logo: { dataUrl: pngLogo() }, colors: { primary: "#445566" }, footerText: "Internal" })
+    const exported = JSON.parse(a.transfer.exportFile({ app: true, tenantIds: [TENANT], connection: false, appearance: "dark" }))
+    exported.tenants[0].cloudBackup = { ...CLOUD, linked: false }
+    const preview = b.transfer.open(JSON.stringify(exported), "system")
+    const cloud = find(preview, `${TENANT}:cloudBackup`)!
+    expect(cloud.next).toContain("schedule not linked yet")
+    expect(cloud.note).toContain("Changes the linked schedule.")
+    const branding = find(preview, "app:pdfBranding")!
+    expect(branding.status).toBe("change")
+    expect(branding.next).toBe(branding.current)
+    expect(branding.note).toBe("Changes the colors.")
+  })
+
+  it("lists unknown fields inside known parts and still applies the known ones", () => {
+    const b = machine([{ tenantId: TENANT }])
+    const preview = b.transfer.open(file({ tenants: [
+      { tenantId: TENANT, schedule: { enabled: true, frequency: "weekly", time: "02:00", weekday: 1, jitter: 5 }, cloudBackup: { ...CLOUD, region: "westeurope" }, backupScope: { excluded: [], includeArchived: true } },
+      { tenantId: OTHER, name: "Fabrikam", connection: { clientId: CLIENT, storage: { kind: "local", path: "C:\\x" }, tenantHint: "x" } },
+    ] }), "system")
+    expect(preview.skipped).toEqual(expect.arrayContaining([
+      'Tenant aaaa: backup schedule: "jitter"',
+      'Tenant aaaa: cloud backup setup: "region"',
+      'Tenant aaaa: what is backed up: "includeArchived"',
+      'Fabrikam: connection details: "tenantHint"',
+      'Fabrikam: storage: "path"',
+    ]))
+    expect(find(preview, `${TENANT}:schedule`)?.status).toBe("change")
+    expect(find(preview, `${TENANT}:cloudBackup`)?.status).toBe("change")
   })
 })

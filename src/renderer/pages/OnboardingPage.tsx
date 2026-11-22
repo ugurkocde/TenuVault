@@ -289,12 +289,17 @@ export default function OnboardingPage() {
     }
   }
 
+  // A file is read asynchronously; what it does is decided with the state of when it arrives, such as
+  // a resumed sign-in the check above turned out to be gone.
+  const latest = useRef({ continueWithSetup, setupFrom })
+  latest.current = { continueWithSetup, setupFrom }
+
   const openSetupFile = async () => {
     setOpeningSetup(true)
     setSetupError("")
     try {
       const preview = await bridge.settingsTransfer.import(currentAppearance())
-      if (preview) setupFrom(preview)
+      if (preview) latest.current.setupFrom(preview)
     } catch (error) {
       setSetupError(error instanceof Error ? error.message : String(error))
     } finally {
@@ -307,16 +312,15 @@ export default function OnboardingPage() {
   const requestedTenant = searchParams.get("tenant")
   const handledSetup = useRef<string | null>(null)
   useEffect(() => {
-    if (!requestedSetup || handledSetup.current === requestedSetup) return
+    // A resumed sign-in is checked first, so the file is matched against the sign-in that is really there.
+    if (!requestedSetup || checkingResume || handledSetup.current === requestedSetup) return
     handledSetup.current = requestedSetup
     bridge.settingsTransfer.preview(requestedSetup, currentAppearance()).then((preview) => {
       const group = preview.groups.find((entry) => entry.id === requestedTenant && entry.setup && !entry.connected)
-      if (group?.setup) continueWithSetup(preview.importId, group.setup)
-      else setupFrom(preview)
+      if (group?.setup) latest.current.continueWithSetup(preview.importId, group.setup)
+      else latest.current.setupFrom(preview)
     }, (error: unknown) => setSetupError(error instanceof Error ? error.message : String(error)))
-    // Runs once per file handed over; continueWithSetup only reads current state.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [requestedSetup, requestedTenant])
+  }, [requestedSetup, requestedTenant, checkingResume])
 
   // The license was checked at the sign-in; it is checked again before the tenant is saved. A
   // tenant the license does not cover is not added and its sign-in is removed in the main
@@ -511,7 +515,7 @@ export default function OnboardingPage() {
             <div className="space-y-3 rounded-2xl bg-secondary/60 px-4 py-3 text-sm text-gray-700">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <p>Another admin sent you a setup file? It fills in the tenant, the app registration and the storage.</p>
-                <Button type="button" variant="outline" size="sm" disabled={openingSetup || releasing} onClick={() => void openSetupFile()}>
+                <Button type="button" variant="outline" size="sm" disabled={openingSetup || releasing || checkingResume} onClick={() => void openSetupFile()}>
                   {openingSetup ? <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" /> : <FileUp className="mr-2 h-4 w-4" aria-hidden="true" />}
                   Set up from a file
                 </Button>

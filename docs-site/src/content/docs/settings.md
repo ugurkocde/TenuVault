@@ -263,7 +263,7 @@ A file never holds sign-ins or tokens, license keys, the recovery key or encrypt
 3. Tick the settings to apply and select **Apply**. The button counts the ticked settings, for example **Apply 4 settings**.
 4. TenuVault shows what was applied and what was not. If you turned on services for a tenant, it checks your sign-in and lists any permissions those services still need, with a link to **Services and permissions**.
 
-Settings that would change are ticked at first. These start unticked and carry a warning, because they change how this computer runs: **Start TenuVault in the menu bar/tray when I sign in to this computer**, **Get nightly builds** and **Backup schedule**. When two computers run the same schedule, the tenant is backed up twice. **What is backed up** names each type it starts or stops backing up, and starts unticked when it stops backing up a type.
+Settings that would change are ticked at first. These start unticked and carry a warning, because they change how this computer runs: **Start TenuVault in the menu bar/tray when I sign in to this computer**, **Get nightly builds** and **Backup schedule**. When two computers run the same schedule, the tenant is backed up twice. **What is backed up** names each type it starts or stops backing up, and starts unticked when it stops backing up a type. A shorter **Keep backups for** starts unticked too: it applies to every tenant on this computer, also those not in the file, and the next complete backup of a tenant deletes its backups older than the new period. When a cloud backup setup or PDF branding reads the same on both sides, the row names the fields that change, for example **Changes the logo.**
 
 Settings that are already the same are hidden; tick **Show settings that are already the same** to see them. Select **Save current settings first** to export your current settings before you apply anything. Importing that file later brings back the values it holds. Settings still at their default and a tenant without a schedule are not in it, so turn those back by hand if an import changed them.
 
@@ -287,9 +287,9 @@ Where the backups of a connected tenant are stored is shown for information only
 | A **Pro** badge on PDF branding | No tenant on this computer is on Pro or MSP. |
 | A **Pro** badge on a daily schedule | The tenant is on Community, which runs weekly schedules. A tenant that already has a daily schedule keeps it. |
 | **The plan of this tenant is not known yet** | TenuVault has not checked the tenant's license yet, so it does not turn on a new daily schedule. Import the file again later. |
-| **Updates on this computer are managed by your organization.** | An administrator set automatic updates by policy. See [Deploy TenuVault in your organization](/deploy/#control-automatic-updates). |
+| **Updates on this computer are managed by your organization.** | An administrator set automatic updates by policy, so neither **Download and install updates automatically** nor **Get nightly builds** is changed. See [Deploy TenuVault in your organization](/deploy/#control-automatic-updates). |
 | **The value in the file is not valid.** | That one setting is broken, for example a time that does not exist. The other settings still apply. |
-| **Not known to this version, so skipped** | The file comes from a newer TenuVault and holds settings or services this version does not know. Nothing from them is applied. |
+| **Not known to this version, so skipped** | The file comes from a newer TenuVault and holds settings, services or fields this version does not know. Nothing from them is applied; the settings this version knows still are. |
 
 **Keep backups for** is saved as chosen on every plan; on Community, TenuVault keeps at most 30 days, and the review says so.
 
