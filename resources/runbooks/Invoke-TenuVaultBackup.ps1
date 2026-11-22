@@ -432,6 +432,20 @@ function Read-TvCappedBody {
     }
 }
 
+# Whether text parses as one XML document, without DTDs or external resources.
+function Test-TvWellFormedXml {
+    param([AllowEmptyString()][string]$Text)
+    if (-not $Text) { return $false }
+    try {
+        $settings = [System.Xml.XmlReaderSettings]::new()
+        $settings.DtdProcessing = [System.Xml.DtdProcessing]::Prohibit
+        $settings.XmlResolver = $null
+        $reader = [System.Xml.XmlReader]::Create([IO.StringReader]::new($Text.TrimStart([char]0xFEFF)), $settings)
+        try { while ($reader.Read()) { } } finally { $reader.Dispose() }
+        return $true
+    } catch { return $false }
+}
+
 function Invoke-TvHttp {
     param(
         [Parameter(Mandatory)][string]$Uri,
@@ -516,10 +530,10 @@ function Invoke-TvHttp {
         }
         $lastError = [TvHttpError]::new($status, (Get-TvSafeError $message))
         $lastError.ServiceCode = if ($serviceCode) { $serviceCode } else {
-            # Only a small, complete Azure <Error> document whose code names the miss confirms it.
-            if ($bytes.Length -le 65536) {
-                [regex]::Match([Text.Encoding]::UTF8.GetString($bytes), '\A\uFEFF?\s*(?:<\?xml[^>]*\?>\s*)?<Error>\s*<Code>(BlobNotFound|ContainerNotFound)</Code>(?:\s*<([A-Za-z][A-Za-z0-9]*)>[^<]*</\2>)*\s*</Error>\s*\z').Groups[1].Value
-            } else { "" }
+            # Only a small, complete and well-formed Azure <Error> document whose code names the miss confirms it.
+            $errorBody = if ($bytes.Length -le 65536) { [Text.Encoding]::UTF8.GetString($bytes) } else { "" }
+            $match = [regex]::Match($errorBody, '\A\uFEFF?\s*(?:<\?xml[^>]*\?>\s*)?<Error>\s*<Code>(BlobNotFound|ContainerNotFound)</Code>(?:\s*<([A-Za-z][A-Za-z0-9]*)>[^<]*</\2>)*\s*</Error>\s*\z')
+            if ($match.Success -and (Test-TvWellFormedXml $errorBody)) { $match.Groups[1].Value } else { "" }
         }
         if ($retryable -and $attempt -lt $attempts) {
             $delay = $attempt
@@ -1422,7 +1436,7 @@ function Get-TvOmissionPolicy {
         ($binding -ceq "" -or $binding -cmatch "^[a-z0-9]{3,24}(,[a-z0-9]{3,24})*$")))
     $enrolled = @(([string]$binding).Split(",") | Where-Object { $_ -cmatch "^[a-z0-9]{3,24}$" })
     $bound = $enrolled -ccontains $Context.StorageAccount
-    try { $policy = Read-TvPlainJson $Context $path }
+    try { $policy = Read-TvPlainJson $Context $path -WholeFile }
     catch [TvHttpError] {
         if (-not $bound -and $_.Exception.Status -eq 404 -and $_.Exception.ServiceCode -cin @("BlobNotFound", "ContainerNotFound")) {
             if (-not $bindingVerified) {
@@ -3232,7 +3246,7 @@ $script:MaxBlobBytes = 33554432
 # buffered or parsed. A sealed blob throws TvSealedBlobError, a larger one TvOversizedError, a
 # missing one TvHttpError 404, and anything that is not a JSON object a plain error.
 function Read-TvPlainJson {
-    param([Parameter(Mandatory)][hashtable]$Context, [Parameter(Mandatory)][string]$BlobName, [string]$RawHash)
+    param([Parameter(Mandatory)][hashtable]$Context, [Parameter(Mandatory)][string]$BlobName, [string]$RawHash, [switch]$WholeFile)
     $target = Get-TvBlobTarget $Context.StorageAccount $BlobName
     $file = ($BlobName -split "/")[-1]
     $tooLarge = "$file is larger than the 32 MiB TenuVault reads."
@@ -3240,6 +3254,8 @@ function Read-TvPlainJson {
     catch [TvOversizedError] { throw [TvOversizedError]::new($tooLarge) }
     catch [TvReadTimeoutError] { throw [TvReadTimeoutError]::new("$file did not arrive within $($script:BodyReadSeconds) seconds.") }
     if ($result.Bytes.Length -gt $script:MaxBlobBytes) { throw [TvOversizedError]::new($tooLarge) }
+    # A read that decides a policy accepts only the whole file, never a partial answer.
+    if ($WholeFile -and $result.Status -ne 200) { throw "$file returned HTTP $($result.Status) instead of the whole file." }
     if ($RawHash -and (Get-TvRawHash $result.Bytes) -cne $RawHash) { throw "The projected backup file does not match its recorded fingerprint." }
     if (Test-TvSealedBlob $result.Bytes) { throw [TvSealedBlobError]::new("The backup file is sealed with a key from before plain Azure backups, which TenuVault in Azure does not have.") }
     try { $value = ConvertFrom-TvJson ([Text.Encoding]::UTF8.GetString($result.Bytes)) } catch { throw "The backup file is not valid JSON." }

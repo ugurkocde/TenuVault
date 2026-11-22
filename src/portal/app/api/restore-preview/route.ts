@@ -1,11 +1,11 @@
-import { backupPreviewManifest, readProjectedSnapshot, snapshotHash } from "~/lib/policies/backup-manifest"
+import { applyHydrationEvidence, backupPreviewManifest, readProjectedSnapshot } from "~/lib/policies/backup-manifest"
 import { hasOmissions, OMISSION_BLOCKER, type OmittedField } from "../../../../shared/intune/secret-omission"
 import { recoveryReadiness, type RecoveryReadiness } from "../../../../shared/intune/recovery"
 import { type NextRequest, NextResponse } from "next/server"
 import { validPolicyPath } from "~/lib/policies/restore"
 import { readOwnedBackup, UNTAGGED_BACKUP } from "~/lib/policies/backup-owner"
 import { graphCaller, locateLive, readLive } from "~/lib/policies/graph-restore"
-import { itemName, rememberHydratedOmaMasks, storedOmaHydrations, typeForFolder, type Item, type ReviewChange } from "../../../../shared/intune/registry"
+import { itemName, typeForFolder, type Item, type ReviewChange } from "../../../../shared/intune/registry"
 import { restoreCapabilities } from "../../../../shared/intune/restore-plan"
 import { sameSnapshot } from "../../../../shared/intune/compare"
 import { assignmentsUnread } from "../../../../shared/intune/read"
@@ -99,9 +99,7 @@ export async function POST(request: NextRequest) {
       const snapshot = entry?.omitted ? await readProjectedSnapshot(response, entry) : (await response.json()) as Item
       if (entry?.omitted || hasOmissions(snapshot)) return { path, folder: type.folder, name: itemName(type, snapshot), blocker: OMISSION_BLOCKER, replaceBlocker: OMISSION_BLOCKER, omitted: entry?.omitted }
       // Same hydration evidence as the restore itself (verifySnapshot), when the file matches its manifest.
-      if (!entry || (snapshot.id === entry.id && snapshotHash(snapshot) === entry.hash)) {
-        rememberHydratedOmaMasks(snapshot, [...(entry?.hydratedOmaMasks ?? []), ...storedOmaHydrations(snapshot)])
-      }
+      applyHydrationEvidence(snapshot, entry)
       const item: PreviewItem = { path, folder: type.folder, name: itemName(type, snapshot), snapshot, readiness: recoveryReadiness(type, snapshot), ...restoreCapabilities(type, snapshot) }
       if (ownership) item.replaceBlocker = ownership
       if (live !== true || typeof snapshot.id !== "string") return item

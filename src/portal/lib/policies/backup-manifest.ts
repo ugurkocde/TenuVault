@@ -114,6 +114,15 @@ export function checkRestoreManifest(metadata: Record<string, any> | null, backu
 export function verifySnapshot(snapshot: Item, expected: ManifestEntry | undefined): void {
   if (expected?.omitted || hasOmissions(snapshot)) throw new Error(OMISSION_BLOCKER)
   if (expected && (snapshot.id !== expected.id || snapshotHash(snapshot) !== expected.hash)) throw new Error("This backup file does not match its recorded fingerprint. It was not restored.")
+  applyHydrationEvidence(snapshot, expected)
+}
+
+/**
+ * Applies the evidence that mask-shaped OMA-URI values were decrypted: the manifest's record and
+ * the stored file itself. Only for a file that matches its manifest entry, or has none.
+ */
+export function applyHydrationEvidence(snapshot: Item, expected: ManifestEntry | undefined): void {
+  if (expected && (snapshot.id !== expected.id || snapshotHash(snapshot) !== expected.hash)) return
   rememberHydratedOmaMasks(snapshot, [...(expected?.hydratedOmaMasks ?? []), ...storedOmaHydrations(snapshot)])
 }
 

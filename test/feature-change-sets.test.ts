@@ -576,6 +576,11 @@ describe("change-set engine", () => {
     const check = await readBack(async () => ({ status: 200, body: { id: "custom", ...live, assignments: [] } }), type,
       { action: "update", objectId: "custom", proposed, assignments: null }, omission)
     expect(check.state).toBe("denied")
+    // Clearing a credential cannot be confirmed either: Graph's read-back is projected the same way.
+    const vpn = typeForFolder("DeviceConfigurations")!
+    const cleared = { "@odata.type": "#microsoft.graph.iosVpnConfiguration", displayName: "VPN", sharedSecret: null }
+    expect(observedCheck(vpn, cleared, { ...cleared, sharedSecret: "still-set" }, omission)).toBe("unverifiable")
+    expect(observedCheck(vpn, cleared, { ...cleared, sharedSecret: "still-set" })).toBe("differs")
     // A proposal without omitted values still verifies.
     const plain = oma({ isEncrypted: false, value: "requested" })
     expect(observedCheck(type, plain, plain, omission)).toBe("match")

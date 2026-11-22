@@ -163,8 +163,16 @@ export function safeSnapshot(type: IntuneType, snapshot: Item, omission?: Omissi
 export function observedCheck(type: IntuneType, proposed: Item, live: Item, omission?: OmissionOptions): "match" | "differs" | "unverifiable" {
   if (!omission?.enabled) return matchesProposed(type, proposed, live) ? "match" : "differs"
   const [expected, observed] = observablePair(type.folder, proposed, live, false, omission)
-  if (!matchesProposed(type, proposed, expected)) return "unverifiable"
+  if (removesProposed(proposed, expected) || !matchesProposed(type, proposed, expected)) return "unverifiable"
   return matchesProposed(type, expected, observed) ? "match" : "differs"
+}
+
+/** Whether the projection dropped a property or entry the proposal writes, a null reset included. */
+function removesProposed(proposed: Json | undefined, projected: Json | undefined): boolean {
+  if (Array.isArray(proposed)) return !Array.isArray(projected) || projected.length !== proposed.length || proposed.some((entry, index) => removesProposed(entry, projected[index]))
+  if (!proposed || typeof proposed !== "object") return false
+  if (!projected || typeof projected !== "object" || Array.isArray(projected)) return true
+  return Object.entries(proposed).some(([key, value]) => !Object.hasOwn(projected, key) || removesProposed(value, (projected as Item)[key]))
 }
 
 export function matchesObserved(type: IntuneType, proposed: Item, live: Item, omission?: OmissionOptions): boolean {

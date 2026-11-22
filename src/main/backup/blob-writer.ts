@@ -7,12 +7,14 @@ import { FetchApplicationError } from "../api/network-error"
 import type { NetworkCircuit } from "./engine"
 import { MAX_LIST_PAGES, REQUEST_ATTEMPTS, BlobClaimError, ProtectedBlobError, RequestTimeoutError, RetryableStorageError, StorageError, TokenError, isImmutabilityRefusal, requestFailure, storageError, storageFailure, withAbort, withRequestTimeout } from "./request"
 
-/** Writes blobs to Azure or, for local accounts, to the encrypted store via the fetch bridge. */
 /**
- * The code of a complete Azure Storage <Error> document: a Code element first, then only flat text
- * elements, then the closing tag. Any other body, also a truncated one, confirms nothing.
+ * The code of a complete, well-formed Azure Storage <Error> document: a Code element first, then
+ * only flat text elements with the five XML entities, then the closing tag. Any other body, also
+ * a truncated or malformed one, confirms nothing.
  */
-const AZURE_ERROR_CODE = /^\uFEFF?\s*(?:<\?xml[^>]*\?>\s*)?<Error>\s*<Code>([^<]+)<\/Code>(?:\s*<([A-Za-z][A-Za-z0-9]*)>[^<]*<\/\2>)*\s*<\/Error>\s*$/
+const XML_TEXT = String.raw`(?:[^<&\u0000-\u0008\u000B\u000C\u000E-\u001F]|&(?:amp|lt|gt|quot|apos);)*`
+const XML_DECLARATION = String.raw`<\?xml\s+version=(?:"1\.[0-9]"|'1\.[0-9]')(?:\s+encoding=(?:"[A-Za-z][A-Za-z0-9._-]*"|'[A-Za-z][A-Za-z0-9._-]*'))?(?:\s+standalone=(?:"(?:yes|no)"|'(?:yes|no)'))?\s*\?>`
+const AZURE_ERROR_CODE = new RegExp(String.raw`^\uFEFF?\s*(?:${XML_DECLARATION}\s*)?<Error>\s*<Code>([A-Za-z]+)<\/Code>(?:\s*<([A-Za-z][A-Za-z0-9]*)>${XML_TEXT}<\/\2>)*\s*<\/Error>\s*$`)
 
 /** An Azure error body, read up to 64 KiB. A larger body is not a confirmed result and reads as empty. */
 async function errorText(response: Response, limit = 64 * 1024): Promise<string> {
@@ -33,6 +35,7 @@ async function errorText(response: Response, limit = 64 * 1024): Promise<string>
   return Buffer.concat(chunks).toString("utf8")
 }
 
+/** Writes blobs to Azure or, for local accounts, to the encrypted store via the fetch bridge. */
 export class BlobWriter {
   constructor(
     private readonly fetchImpl: typeof fetch,
@@ -135,6 +138,11 @@ export class BlobWriter {
         if (!confirmedMissing || code === "BlobNotFound" || code === "ContainerNotFound") return null
       }
       if (!response.ok) throw await storageFailure(response, this.account, this.hideErrorDetails)
+      // A read that must confirm absence or presence accepts only a complete answer, never a partial one.
+      if (confirmedMissing && response.status !== 200) {
+        await response.body?.cancel().catch(() => undefined)
+        throw new FetchApplicationError(new Error(`${name.split("/").pop()} returned HTTP ${response.status} instead of the whole file.`))
+      }
       // Capped like every other backup read; an oversized file is unreadable, never buffered whole.
       const body = await readJsonCapped(response, MAX_BACKUP_ARCHIVE_BYTES)
       if (body.kind === "oversized") throw new FetchApplicationError(new Error(oversizedOwnershipFile(name.split("/").pop() ?? name)))

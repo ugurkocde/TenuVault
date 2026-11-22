@@ -1,5 +1,5 @@
 import { comparisonOmission, hasOmissions, observablePair, OMISSION_MARKER, projectSecrets, snapshotPath } from "../../../../shared/intune/secret-omission"
-import { readProjectedSnapshot } from "~/lib/policies/backup-manifest"
+import { applyHydrationEvidence, readProjectedSnapshot } from "~/lib/policies/backup-manifest"
 import { decodeXml, listBlobPages } from "~/lib/storage/list"
 import { typeForFolder, type Item } from "../../../../shared/intune/registry"
 import { restoreCapabilities } from "../../../../shared/intune/restore-plan"
@@ -577,7 +577,7 @@ async function detectDrifts(
           changeType: "deleted",
           description: `${policyType} policy deleted`,
           impact: determineImpact(policyType, "deleted", policyContent),
-          ...restoreBlockers(task.name, policyContent),
+          ...restoreBlockers(task.name, policyContent, records.get(olderBackup.name)?.get(relative(task.older!))),
           ...(options.documentItems && policyContent ? { changes: documentItem(omission ? projectSecrets(folderOf(task.name), policyContent, omission.scripts).snapshot : policyContent, "deleted") } : {}),
         }
       }
@@ -605,7 +605,7 @@ async function detectDrifts(
         description: generateChangeDescription(policyType, changes),
         impact: determineImpact(policyType, "modified", newerContent, changes),
         changes,
-        ...restoreBlockers(task.name, olderContent),
+        ...restoreBlockers(task.name, olderContent, records.get(olderBackup.name)?.get(relative(task.older!))),
       }
     } finally {
       done++
@@ -701,10 +701,13 @@ function typeOfFile(fileName: string) {
  * that cannot run leaves the actions offered; the restore itself still refuses server-side,
  * and one odd snapshot must not fail the whole comparison.
  */
-function restoreBlockers(fileName: string, snapshot: PolicyContent | null): Pick<Drift, 'createBlocker' | 'replaceBlocker'> {
+function restoreBlockers(fileName: string, snapshot: PolicyContent | null, record?: { id: string; hash: string; hydratedOmaMasks?: unknown }): Pick<Drift, 'createBlocker' | 'replaceBlocker'> {
   const type = typeOfFile(fileName)
   if (!type || !snapshot) return {}
   try {
+    // The same hydration evidence the restore itself applies (verifySnapshot).
+    const masks = Array.isArray(record?.hydratedOmaMasks) ? record.hydratedOmaMasks.filter((index): index is number => Number.isSafeInteger(index) && index >= 0) : undefined
+    applyHydrationEvidence(snapshot as Item, record && { id: record.id, hash: record.hash, ...(masks?.length ? { hydratedOmaMasks: masks } : {}) })
     const { blocker, replaceBlocker } = restoreCapabilities(type, snapshot as Item)
     return { ...(blocker ? { createBlocker: blocker } : {}), ...(replaceBlocker ? { replaceBlocker } : {}) }
   } catch {

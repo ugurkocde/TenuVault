@@ -1,4 +1,4 @@
-import { backupManifest, incompleteReason, snapshotHash } from "./backup-manifest"
+import { applyHydrationEvidence, backupManifest, incompleteReason, snapshotHash } from "./backup-manifest"
 import { OMISSION_BLOCKER } from "../../../shared/intune/secret-omission"
 import { dependencyReferences } from "../../../shared/intune/dependencies"
 import { assignmentsUnread } from "../../../shared/intune/read"
@@ -146,6 +146,8 @@ export async function validateBackup(input: ValidateBackupInput): Promise<Backup
     }
     checks.push(check("read", true))
     const snapshot = read.snapshot
+    // Same hydration evidence as the restore itself (verifySnapshot), when the file matches its manifest.
+    applyHydrationEvidence(snapshot, entry)
 
     if (!checks.some((entryCheck) => entryCheck.id === "fingerprint")) {
       if (!manifest) checks.push(check("fingerprint", true, "No recorded fingerprint in this backup."))
