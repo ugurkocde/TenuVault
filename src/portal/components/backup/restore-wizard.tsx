@@ -263,6 +263,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [query, setQuery] = useState("")
   const [largePage, setLargePage] = useState(0)
+  const [companionError, setCompanionError] = useState("")
   const [largePaging, setLargePaging] = useState<{ hasMore: boolean; total: number } | null>(null)
   const [openTypes, setOpenTypes] = useState<Set<string>>(new Set())
   /** How many items each type's list and the readiness list show, beyond LIST_PAGE. */
@@ -355,6 +356,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
     previousService.current = contentsService
     setItems(null)
     setItemsError("")
+    setCompanionError("")
     setCatalogCheck(null)
     setSelected(new Set())
     setShown({})
@@ -366,12 +368,16 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
     // A mixed run keeps its large types, such as directory objects, in a verified companion backup.
     const sources = [backupId, ...(companionId ? [companionId] : [])]
     void (async () => {
-      const listings = await Promise.all(sources.map(source => post<{ largePage?: number; hasMore?: boolean; content: { groups: Array<{ folder: string; label: string; area: string; limitation?: string; count?: number; policies: Array<{ path: string; displayName?: string }> }> } }>(
+      const settled = await Promise.allSettled(sources.map(source => post<{ largePage?: number; hasMore?: boolean; content: { groups: Array<{ folder: string; label: string; area: string; limitation?: string; count?: number; policies: Array<{ path: string; displayName?: string }> }> } }>(
         "/api/list-backup-contents",
         { ...credentials, backupId: source, largePage },
         controller.signal,
       ).then(contents => ({ source, contents }))))
       if (controller.signal.aborted) return
+      // The chosen backup must load. An unreadable companion only hides its large items.
+      if (settled[0]!.status === "rejected") throw settled[0]!.reason
+      const listings = settled.flatMap(result => result.status === "fulfilled" ? [result.value] : [])
+      setCompanionError(settled[1]?.status === "rejected" ? "The linked large backup with this run's directory objects could not be read. Other items can still be restored. Refresh the backup list after it finishes, or check its status in Backup History." : "")
       const paged = listings.find(({ contents }) => contents.largePage !== undefined)?.contents
       setLargePaging(paged ? { hasMore: paged.hasMore === true, total: paged.content.groups.reduce((sum, group) => sum + (group.count ?? group.policies.length), 0) } : null)
       const listed: BackupItem[] = listings.flatMap(({ source, contents }) => contents.content.groups.filter(group => matchesBackupService(group.folder, contentsService)).flatMap((group) =>
@@ -777,6 +783,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
             </p>
           )}
           {itemsError && <p className="mt-4 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{itemsError}</p>}
+          {companionError && <p className="mt-4 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900" role="status">{companionError}</p>}
           {catalogCheck?.state === "checking" && (
             <p className="mt-4 flex items-center gap-2 text-sm text-gray-500">
               <Loader2 className="h-4 w-4 animate-spin" /> Checking the current Settings Catalog for deprecated settings...
@@ -1131,6 +1138,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
             </p>
             <p className="mt-1 text-sm text-gray-500">
               Reads the whole backup back and checks every item: manifest completeness, decryptability, policy payloads and assignment references. Nothing is written to {tenant.name}, to Microsoft Graph or to a change set.
+              {companionId && " This run also has a linked large backup with directory objects. The dry run checks this backup only, not the linked large backup."}
             </p>
             {community && (
               <UpgradeNote feature="fullRestore" message="Validating a whole backup is included in TenuVault Pro and MSP. Community restores one item at a time as an unassigned copy." className="mt-3" />

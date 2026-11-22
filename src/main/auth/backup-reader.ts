@@ -212,12 +212,12 @@ export class BackupReaderService {
   }
 
   /** Records that a scheduled backup actually ran with the reader, for the card and Schedule tab. */
-  recordRun(tenantId: string, status: string, trigger: BackupRequest["trigger"], reader?: { registrationId?: string; certificate?: string }): void {
+  recordRun(tenantId: string, status: string, trigger: BackupRequest["trigger"], reader: { registrationId?: string; certificate?: string } | undefined): void {
     if (trigger !== "scheduled") return
     try {
       const credential = this.read(tenantId)
-      // A reader replaced or renewed while the run waited keeps its own card.
-      if (!credential || (reader && !this.sameReader(credential, reader))) return
+      // Only the reader the run captured gets the result; one replaced or renewed while it waited keeps its own card.
+      if (!credential || !reader?.registrationId || !reader.certificate || !this.sameReader(credential, reader)) return
       credential.lastRun = { at: this.now().toISOString(), status }
       this.write(credential)
     } catch { console.warn("[backup-reader] Scheduled run status could not be saved") }

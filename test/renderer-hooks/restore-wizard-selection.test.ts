@@ -185,3 +185,24 @@ it("lists and previews a mixed backup's verified large companion under its own b
   expect(calls("/api/restore-preview").find(body => body.paths.includes("backup-large-1/Groups/g.json"))?.backupId).toBe("backup-large-1")
   expect(container.textContent).toContain("Team")
 })
+
+it("keeps the ordinary items restorable when the linked large backup cannot be read", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body ?? "{}"))
+    if (String(input).endsWith("/api/list-backup-contents")) return body.backupId === "backup-large-1" ? Response.json({ error: "This large backup has no readable inventory yet." }, { status: 409 }) : Response.json(contents)
+    if (String(input).endsWith("/api/restore-preview")) return Response.json(preview)
+    return Response.json({})
+  }))
+  const container = document.body.appendChild(document.createElement("div"))
+  const root = createRoot(container)
+  roots.push(root)
+  await act(async () => root.render(createElement(MemoryRouter, null, createElement(RestoreWizard, {
+    tenant: { name: "Contoso", credentials: { tenantId: "tenant", appId: "app", clientSecret: "" }, storageAccountName: "tvlocal-tenant" },
+    backups: [{ id: "backup-1", companionId: "backup-large-1", timestamp: "2026-10-16T02:00:00Z", type: "manual", status: "Completed", totalPolicies: 3, scope: null, size: 1, duration: 4, changes: null, comparedWith: null }],
+    initialBackupId: "backup-1", community: false, canCopyToTenants: false, copyCandidates: [],
+  }))))
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+  expect(container.textContent).toContain("Configuration profile")
+  expect(container.textContent).toContain("The linked large backup with this run's directory objects could not be read")
+  expect(container.querySelector('[role="alert"]')).toBeNull()
+})

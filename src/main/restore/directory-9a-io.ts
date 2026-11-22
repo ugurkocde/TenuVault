@@ -159,6 +159,12 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
     if (group !== null && String(group.id).toLowerCase() !== id.toLowerCase()) throw new RestoreSafetyError("The group identity did not match its reference.")
     return group ? { ...group, "@odata.type": "#microsoft.graph.group" } : null
   }
+  /** A reviewed principal that no longer resolves may still be replicating after our own create. */
+  const reviewBlocker = (step: GuardedStep, result: { blocker?: string; principal: unknown }) => {
+    if (!result.blocker) return
+    if (step.directory?.principalId && result.principal === null) throw new DirectoryRequiredObjectAbsentError(result.blocker, step.directory.principalId)
+    throw new RestoreSafetyError(result.blocker)
+  }
   const read = async (step: GuardedStep, id?: string): Promise<Item | null> => {
     const intent = step.directory
     if (!intent) throw new RestoreSafetyError("A directory intent is required.")
@@ -308,7 +314,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
       requirePermissions(step)
       const result = await review(step)
       requirePermissions(step, result.roleAssignable)
-      if (result.blocker) throw new RestoreSafetyError(result.blocker)
+      reviewBlocker(step, result)
       const refs = await safety(step, current, desired)
       if (step.directory?.principalId) refs.principals = [...refs.principals, step.directory.principalId]
       return refs
@@ -324,9 +330,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
         requirePermissions(step)
         const result = await review(step)
         requirePermissions(step, result.roleAssignable)
-        // A reviewed principal that no longer resolves may still be replicating after our own create.
-        if (result.blocker && step.directory?.principalId && result.principal === null) throw new DirectoryRequiredObjectAbsentError(result.blocker, step.directory.principalId)
-        if (result.blocker) throw new RestoreSafetyError(result.blocker)
+        reviewBlocker(step, result)
         requireDirectoryApprovals(step, run, result.approvals)
         const admittedFields = step.folder === "Users" ? (step.directory?.action === "create" ? ["displayName", "mailNickname", "userPrincipalName", "accountEnabled"] : ["displayName"]) : ["description"]
         if (["create", "update"].includes(step.directory!.action) && !(step.folder === "Groups" && step.directory?.action === "create") && Object.keys(body).some(name => !admittedFields.includes(name))) throw new RestoreSafetyError("Only the live-verified directory metadata subset can be restored.")

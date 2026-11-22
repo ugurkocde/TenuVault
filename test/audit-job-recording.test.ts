@@ -749,12 +749,17 @@ describe("audit recovery for a run split across an ordinary and a large backup",
     expect(result).toBe(entry)
     expect(await reconcileBackupAudit(entry, async () => manifest({ CompanionBackup: "backup-large-2026-11-21-000000" }))).toBe(entry)
   })
-  it("takes the worse status of both halves and adds their totals", async () => {
+  it("adds both halves' totals and reports a failed half next to saved items as warnings", async () => {
     const companion = vi.fn(async () => manifest({ Status: "Failed", CompanionBackup: "backup-2026-11-21-000000", ItemCounts: { TotalPolicies: 5 }, Failures: 2, CompletedAt: "2026-11-21T01:00:00.000Z" }))
     const result = await reconcileBackupAudit(entry, async () => manifest({ CompanionBackup: "backup-large-2026-11-21-000000", ItemCounts: { TotalPolicies: 3 }, Failures: 0, CompletedAt: "2026-11-21T00:10:00.000Z" }), companion)
     expect(companion).toHaveBeenCalledWith("backup-large-2026-11-21-000000")
-    expect(result.job).toMatchObject({ status: "failed", counts: { saved: 8, failures: 2 } })
+    // The ordinary half saved items, so the run completes with warnings, as the engine reported it.
+    expect(result.job).toMatchObject({ status: "warnings", counts: { saved: 8, failures: 2 } })
     expect(result.timestamp).toBe("2026-11-21T01:00:00.000Z")
+  })
+  it("records both failed halves as failed", async () => {
+    const result = await reconcileBackupAudit(entry, async () => manifest({ Status: "Failed", CompanionBackup: "backup-large-2026-11-21-000000", ItemCounts: { TotalPolicies: 0 } }), async () => manifest({ Status: "Failed", ItemCounts: { TotalPolicies: 0 } }))
+    expect(result.job).toMatchObject({ status: "failed" })
   })
   it("confirms a failed ordinary half whose large half was never committed", async () => {
     const result = await reconcileBackupAudit(entry, async () => manifest({ Status: "Failed", CompanionBackup: "backup-large-2026-11-21-000000" }), async () => new Response(null, { status: 404 }))

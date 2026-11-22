@@ -97,7 +97,8 @@ export async function reconcileBackupAudit(entry: AuditLogEntry, readManifest: (
     const response = await read(manifest.CompanionBackup)
     const companion = await runManifest(entry, response)
     if (!companion) {
-      if (response.status !== 404 || (status !== 'failed' && status !== 'cancelled')) return entry
+      // Only an ordinary half can confirm a run whose large half was never committed.
+      if (response.status !== 404 || folder.startsWith('backup-large-') || (status !== 'failed' && status !== 'cancelled')) return entry
     } else {
       const other = manifestStatus(companion)
       if (other === 'uncertain') return entry
@@ -106,6 +107,8 @@ export async function reconcileBackupAudit(entry: AuditLogEntry, readManifest: (
       saved = add(saved, companion.ItemCounts?.TotalPolicies); failures = add(failures, companion.Failures)
       const companionCompleted = time(companion.CompletedAt)
       if (companionCompleted && (!completedAt || companionCompleted > completedAt)) completedAt = companionCompleted
+      // As the engine reports the run: a failed half next to saved items completes with warnings.
+      if (status === 'failed' && (saved ?? 0) > 0) status = 'warnings'
     }
   }
   return {
