@@ -3,7 +3,7 @@ import { readBytesCapped } from "../../../shared/capped-body"
 import { MAX_BACKUP_ARCHIVE_BYTES } from "../../../shared/constants"
 import { createHash } from "node:crypto"
 import { comparableSnapshot } from "../../../shared/intune/compare"
-import { rememberHydratedOmaMasks, type Item } from "../../../shared/intune/registry"
+import { rememberHydratedOmaMasks, storedOmaHydrations, type Item } from "../../../shared/intune/registry"
 import { manifestStatus, stoppedEarly } from "../../../shared/intune/backup-status"
 
 /** One recorded backup item: the Intune object ID and the fingerprint of its backed-up content. */
@@ -114,7 +114,7 @@ export function checkRestoreManifest(metadata: Record<string, any> | null, backu
 export function verifySnapshot(snapshot: Item, expected: ManifestEntry | undefined): void {
   if (expected?.omitted || hasOmissions(snapshot)) throw new Error(OMISSION_BLOCKER)
   if (expected && (snapshot.id !== expected.id || snapshotHash(snapshot) !== expected.hash)) throw new Error("This backup file does not match its recorded fingerprint. It was not restored.")
-  rememberHydratedOmaMasks(snapshot, expected?.hydratedOmaMasks)
+  rememberHydratedOmaMasks(snapshot, [...(expected?.hydratedOmaMasks ?? []), ...storedOmaHydrations(snapshot)])
 }
 
 const validRawHash = (hash: unknown): hash is string => typeof hash === "string" && /^[a-f0-9]{64}$/.test(hash)

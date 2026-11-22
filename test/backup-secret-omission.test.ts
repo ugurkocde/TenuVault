@@ -173,6 +173,22 @@ describe("shared omission rules", () => {
     expect(plan.create.body.omaSettings).toEqual([{ "@odata.type": `#microsoft.graph.${subtype}`, value: placeholder }])
   })
 
+  it.each(omaSubtypes.slice(1, 3))("restores a decrypted %s literal from a backup made before the hydration annotation", (subtype, placeholder) => {
+    const setting = (extra: Item) => ({ "@odata.type": `#microsoft.graph.${subtype}`, isEncrypted: true, value: placeholder, ...extra })
+    const legacy = { id: "policy", omaSettings: [setting({ secretReferenceValueId: REF })] }
+    const manifest = backupManifest({ Items: { "DeviceConfigurations/policy": { file: "Policy.json", hash: snapshotHash(legacy) } } }, "backup")
+    for (const expected of [manifest?.get("backup/DeviceConfigurations/Policy.json"), undefined]) {
+      const restored = structuredClone(legacy)
+      verifySnapshot(restored, expected)
+      expect(restoreBlocker(TYPE, restored)).toBeUndefined()
+    }
+    // A value that was never decrypted, or that a producer could not decrypt, stays blocked.
+    for (const blocked of [{ id: "policy", omaSettings: [setting({})] }, { id: "policy", omaSettings: [setting({ secretReferenceValueId: REF, value: "****" })] }]) {
+      verifySnapshot(blocked, undefined)
+      expect(restoreBlocker(TYPE, blocked)).toContain("masked OMA-URI")
+    }
+  })
+
   it.each(["iosWiFiConfiguration", "windowsWifiConfiguration", "androidDeviceOwnerWiFiConfiguration", "macOSWiFiConfiguration"])("keeps the Graph-null key and public metadata of %s", (subtype) => {
     const snapshot = { "@odata.type": `#microsoft.graph.${subtype}`, preSharedKey: null, ...(subtype === "androidDeviceOwnerWiFiConfiguration" ? { preSharedKeyIsSet: true } : {}) }
     expect(projectSecrets(FOLDER, snapshot, true)).toEqual({ snapshot, fields: [] })

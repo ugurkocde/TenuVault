@@ -961,7 +961,10 @@ if (-not $previousAccount) { $previousAccount = [string]$listed.Variables["TenuV
 $enrollment = [string]$listed.Variables["TenuVaultOmissionAccount-$tenantKey"]
 $enrolled = [bool]$enrollment
 $destinationPolicy = Copy-TenuVaultOmissionPolicy $previousAccount $enrolled
-Initialize-TenuVaultOmissionBinding $destinationPolicy $listed
+# Best-effort: a denied enrollment write never stops setup. A job that needs the binding fails closed.
+try { Initialize-TenuVaultOmissionBinding $destinationPolicy $listed } catch {
+    Write-Warning "The omission enrollment variable 'TenuVaultOmissionAccount-$tenantKey' could not be written ($($_.Exception.Message)). Setup continues; if omission is on for '$StorageAccountName', cloud backups stop before capture until this script runs again with write access to Automation variables."
+}
 
 Write-Host "Writing Automation variables for this tenant (suffix -$tenantKey)..."
 Set-TenuVaultAutomationVariable -Name "TenuVaultTenantId-$tenantKey" -Value $TenantId

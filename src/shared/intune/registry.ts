@@ -307,6 +307,17 @@ export function rememberHydratedOmaMasks(item: Item, indices: readonly number[] 
   }
 }
 
+/**
+ * Settings of a stored backup file that were decrypted although the value looks like a Graph mask.
+ * Every backup producer, also before the hydration annotation, writes **** when it cannot decrypt a
+ * value it has a secretReferenceValueId for, so any other value there is the decrypted value.
+ */
+export function storedOmaHydrations(item: Item): number[] {
+  return collection(item.omaSettings).flatMap((setting, index) =>
+    encryptedOmaSetting(setting) && typeof setting.secretReferenceValueId === "string" && setting.value !== "****" &&
+    setting._tenuvaultOmaMasked !== true && looksLikeOmaMask(setting) ? [index] : [])
+}
+
 const hasMaskedSecret = (item: Item) => collection(item.omaSettings).some((setting) =>
   encryptedOmaSetting(setting) && (omaHydration.get(setting) ??
     (typeof setting._tenuvaultOmaMasked === "boolean" ? setting._tenuvaultOmaMasked : looksLikeOmaMask(setting))))

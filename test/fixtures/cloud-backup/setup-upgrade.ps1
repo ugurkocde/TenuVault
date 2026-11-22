@@ -437,11 +437,11 @@ function Invoke-WebRequest {
     if ($script:denyPrevious -or $Uri -notlike "https://stprevious.*") { throw "Access denied." }
     return @{ Content = $script:migrationPolicy }
 }
-foreach ($scenario in "move-copies-policy", "move-copies-off", "move-quiet-on-denied", "move-warns-on-denied", "move-keeps-destination", "move-keeps-off", "move-continues-on-list-error", "fresh-recovers-after-list-error", "fresh-continues-on-list-error", "upgrade-preserves-binding", "upgrade-creates-binding", "upgrade-keeps-unreadable-binding") {
+foreach ($scenario in "move-copies-policy", "move-copies-off", "move-quiet-on-denied", "move-warns-on-denied", "move-keeps-destination", "move-keeps-off", "move-continues-on-list-error", "fresh-recovers-after-list-error", "fresh-continues-on-list-error", "upgrade-preserves-binding", "upgrade-creates-binding", "upgrade-binding-denied", "upgrade-keeps-unreadable-binding") {
     Reset-OldSetup
     $runbook = $null
     $script:variables["TenuVaultStorageAccount-$tenantKey"] = if ($scenario.StartsWith("move")) { "stprevious" } else { $StorageAccountName }
-    if ($scenario -notin @("upgrade-creates-binding", "move-quiet-on-denied")) {
+    if ($scenario -notin @("upgrade-creates-binding", "upgrade-binding-denied", "move-quiet-on-denied")) {
         $script:variables["TenuVaultOmissionAccount-$tenantKey"] = "stprevious"
     }
     if ($scenario -in @("upgrade-keeps-unreadable-binding", "move-continues-on-list-error")) {
@@ -457,8 +457,19 @@ foreach ($scenario in "move-copies-policy", "move-copies-off", "move-quiet-on-de
     if ($scenario -eq "move-copies-off") { $script:migrationPolicy = $script:migrationPolicy.Replace('"enabled":true', '"enabled":false') }
     $script:denyPrevious = $scenario -in @("move-warns-on-denied", "move-quiet-on-denied", "move-keeps-destination", "move-keeps-off", "move-continues-on-list-error")
     $script:destinationPolicy = if ($scenario -eq "move-keeps-destination") { $script:migrationPolicy } elseif ($scenario -eq "move-keeps-off") { $script:migrationPolicy.Replace('"enabled":true', '"enabled":false') }
+    if ($scenario -eq "upgrade-binding-denied") {
+        # Only the enrollment variable is denied; every other variable is written as on main.
+        function New-AzAutomationVariable {
+            param($ResourceGroupName, $AutomationAccountName, $Name, $Encrypted, $Value, $ErrorAction)
+            if ($Name -eq "TenuVaultOmissionAccount-$tenantKey") { throw "Authorization failed." }
+            $script:variableWrites.Add($Name); $script:variables[$Name] = $Value
+        }
+    }
     $output = @()
     $errorText = $null
     try { $output = @(. $upgradeStep 3>&1 6>&1) } catch { $errorText = $_.Exception.Message }
     Write-Scenario -Name $scenario -Runbook $runbook -ErrorText $errorText -Output $output
+    if ($scenario -eq "upgrade-binding-denied") {
+        function New-AzAutomationVariable { param($ResourceGroupName, $AutomationAccountName, $Name, $Encrypted, $Value) $script:variableWrites.Add($Name); $script:variables[$Name] = $Value }
+    }
 }

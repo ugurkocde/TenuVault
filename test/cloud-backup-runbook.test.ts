@@ -798,7 +798,7 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
 type SetupScenario = {
   scenario: string; plain: boolean; reason: string | null; error: string | null; actions: string[]; legacyVariableKept: boolean
   changeReport?: string | null; changeReportActors?: string | null; tenantName?: string | null; variables: string[]
-  schedule: boolean; link: boolean; output: string[]; omissionBinding: string | null; storageAccount: string | null
+  schedule: boolean; link: boolean; output: string[]; omissionBinding: string | null; storageAccount: string | null; scope?: string | null
 }
 let setupScenarios: Map<string, SetupScenario> | undefined
 function setupRun(name: string): SetupScenario {
@@ -828,6 +828,9 @@ it.runIf(Boolean(pwsh))("copies policies on a best-effort basis and allows cloud
   expect(setupRun("fresh-continues-on-list-error")).toMatchObject({ error: null, storageAccount: "stcontoso", omissionBinding: null, plain: true })
   expect(setupRun("upgrade-preserves-binding").omissionBinding).toBe("stprevious")
   expect(setupRun("upgrade-creates-binding").omissionBinding).toBe("")
+  const denied = setupRun("upgrade-binding-denied")
+  expect(denied).toMatchObject({ error: null, storageAccount: "stcontoso", scope: "policies", omissionBinding: null })
+  expect(denied.output.join("\n")).toContain("could not be written")
   expect(setupRun("upgrade-keeps-unreadable-binding").omissionBinding).toBe("stprevious")
 }, 130_000)
 
