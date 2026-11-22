@@ -3,7 +3,7 @@ import type { ChangeSet } from "../shared/change-set"
 import type { SyncBackup, SyncPreview, SyncStatusEntry, SyncTarget } from "./api"
 
 /**
- * The Sync screens' rules as pure functions: the status chip of a source policy, what the review
+ * The Copy to Tenants screens' rules as pure functions: the status chip of a source policy, what the review
  * shows per policy and whether a target can be approved, the state of each target in the result
  * flowchart (always read from its stored change set), and the geometry of the flowchart links.
  */
@@ -24,17 +24,17 @@ export function initials(name: string): string {
 
 /**
  * The status chip of one source policy from /api/sync status, over every target it is linked
- * in. Not linked anywhere: not synced yet. Otherwise the state that needs attention first. A
+ * in. Not linked anywhere: not copied yet. Otherwise the state that needs attention first. A
  * target whose status could not be read (`unread`) leaves the policy's state there unknown.
  */
 export function policyStatus(links: Array<{ tenantName: string; entry: SyncStatusEntry }>, unread: Array<{ tenantName: string; error: string }> = [], sourceName = "the source"): { label: string; tone: Tone; title?: string } {
-  if (!links.length && !unread.length) return { label: "Not synced yet", tone: "neutral" }
+  if (!links.length && !unread.length) return { label: "Not copied yet", tone: "neutral" }
   const title = [...links.map(({ tenantName, entry }) => `${tenantName}: ${STATE_WORDS[entry.state]}${entry.changedIn ? ` (${CHANGED_WORDS[entry.changedIn]})` : ""}${entry.error ? `. ${entry.error}` : ""}`), ...unread.map(({ tenantName, error }) => `${tenantName}: ${error}`)].join("\n")
   if (links.some(({ entry }) => entry.state === "missing-in-target")) return { label: "Missing in target", tone: "warning", title }
   const changed = links.filter(({ entry }) => entry.state === "changed")
   if (changed.length) return { label: changedLabel(changed, sourceName), tone: "warning", title }
   if (unread.length || links.some(({ entry }) => entry.state !== "in-sync")) return { label: "Unknown", tone: "neutral", title }
-  return { label: links.length === 1 ? `In sync with ${links[0]!.tenantName}` : `In sync with ${links.length} tenants`, tone: "success", title }
+  return { label: links.length === 1 ? `Up to date in ${links[0]!.tenantName}` : `Up to date in ${links.length} tenants`, tone: "success", title }
 }
 
 const CHANGED_WORDS: Record<NonNullable<SyncStatusEntry["changedIn"]>, string> = { source: "edited in the source", target: "edited in this tenant", both: "edited on both sides" }
@@ -45,7 +45,7 @@ const CHANGED_WORDS: Record<NonNullable<SyncStatusEntry["changedIn"]>, string> =
  */
 function changedLabel(changed: Array<{ tenantName: string; entry: SyncStatusEntry }>, sourceName: string): string {
   const sides = changed.map(({ entry }) => entry.changedIn)
-  if (sides.some((side) => side === null)) return "Changed since last sync"
+  if (sides.some((side) => side === null)) return "Changed since last copy"
   const inSource = sides.some((side) => side === "source" || side === "both")
   const inTargets = changed.filter(({ entry }) => entry.changedIn === "target" || entry.changedIn === "both")
   if (inSource && inTargets.length) return "Changed in both"
@@ -54,9 +54,9 @@ function changedLabel(changed: Array<{ tenantName: string; entry: SyncStatusEntr
 }
 
 const STATE_WORDS: Record<SyncStatusEntry["state"], string> = {
-  "in-sync": "in sync",
-  changed: "changed since the last sync",
-  "missing-in-target": "the synced policy is missing",
+  "in-sync": "up to date",
+  changed: "changed since the last copy",
+  "missing-in-target": "the copied policy is missing",
   "missing-in-source": "the source policy is missing",
   unknown: "unknown",
 }
@@ -75,7 +75,7 @@ export const ROW_LABEL: Record<ReviewRow["kind"], { label: string; tone: Tone }>
   create: { label: "Create", tone: "coral" },
   update: { label: "Update", tone: "warning" },
   same: { label: "No change", tone: "neutral" },
-  skip: { label: "Skip: already in sync", tone: "success" },
+  skip: { label: "Skip: already up to date", tone: "success" },
   blocked: { label: "Blocked", tone: "danger" },
 }
 
@@ -211,7 +211,7 @@ export function failedItems(changeSet: ChangeSet | null): Array<{ name: string; 
 export function excludedReason(target: SyncTarget): string {
   if (target.error) return target.error
   if (!target.promotion || target.promotion.status === "blocked" || !target.changeSet) return "Blocked by findings in the review."
-  if (target.changeSet.status === "stale") return "The review is out of date. Start a new sync."
+  if (target.changeSet.status === "stale") return "The review is out of date. Start a new copy."
   if (target.changeSet.status === "rejected") return "Rejected in the review."
   return "Reviewed but not approved."
 }
@@ -317,10 +317,10 @@ export const OUTCOME_CHIP: Record<RunOutcome, { label: string; tone: Tone }> = {
   applied: { label: "Applied", tone: "success" },
   partial: { label: "Partly applied", tone: "warning" },
   failed: { label: "Failed", tone: "danger" },
-  applying: { label: "Syncing", tone: "coral" },
+  applying: { label: "Copying", tone: "coral" },
   "rolled-back": { label: "Rolled back", tone: "neutral" },
   "not-applied": { label: "Not applied", tone: "warning" },
-  "in-sync": { label: "Already in sync", tone: "success" },
+  "in-sync": { label: "Already up to date", tone: "success" },
 }
 
 const UNITS: Array<[Intl.RelativeTimeFormatUnit, number]> = [["minute", 60], ["hour", 60], ["day", 24], ["week", 7], ["month", 4.35], ["year", 12]]

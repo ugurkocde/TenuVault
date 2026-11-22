@@ -10,7 +10,7 @@ export default defineConfig({
 	site: 'https://docs.tenuvault.com',
 	trailingSlash: 'always',
 	// Vercel redirects / in vercel.json; this keeps local preview and other hosts in sync.
-	redirects: { '/': '/getting-started/' },
+	redirects: { '/': '/getting-started/', '/sync': '/copy-to-tenants/' },
 	markdown: {
 		remarkPlugins: [remarkFaq],
 		rehypePlugins: [rehypeTableWrap],
@@ -173,7 +173,7 @@ export default defineConfig({
 						{ label: 'Audit log', slug: 'audit-log' },
 						{ label: 'Governance', slug: 'governance' },
 						{ label: 'Changes', slug: 'changes' },
-						{ label: 'Sync', slug: 'sync' },
+						{ label: 'Copy to Tenants', slug: 'copy-to-tenants' },
 						{ label: 'Operations', slug: 'operations' },
 						{ label: 'Alerts', slug: 'notifications' },
 						{ label: 'OpenIntuneBaseline', slug: 'baselines/quick-start' },

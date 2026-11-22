@@ -184,7 +184,7 @@ export async function planPromotion(deps: FeatureDeps, destinationTenantId: stri
     changeSetId: null,
     rollbackChangeSetId: null,
     ...(input.sync ? { sync: input.sync } : {}),
-  }, { actor, reason: input.workflow === "sync" ? "Planned a Sync target" : "Planned a promotion" })
+  }, { actor, reason: input.workflow === "sync" ? "Planned a Copy to Tenants target" : "Planned a promotion" })
   if (blockedCount) return promotion
   let changeSet: Stored<ChangeSetRecord>
   try {

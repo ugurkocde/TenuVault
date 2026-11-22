@@ -713,11 +713,11 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
     const record = getChangeSet(deps, tenant, id)
     const requested = input.resolveBackup ? input.resolveBackup() : input.backup
     if (requested !== undefined && requested !== "new" && requested !== "none") throw new FeatureError("backup must be \"new\" or \"none\".")
-    if (requested === "none" && !(record.origin.workflow === "sync" && record.kind === "change")) throw new FeatureError("Only Sync changes may skip the pre-change backup.")
+    if (requested === "none" && !(record.origin.workflow === "sync" && record.kind === "change")) throw new FeatureError("Only Copy to Tenants changes may skip the pre-change backup.")
     // The first claimed apply fixes the backup choice. A change set attempted before the choice was
     // stored counts as backed up, unless its capture shows the backup was skipped.
     const stored = record.backupChoice ?? (record.preChange ? (record.preChange.backupFolder === null ? "none" : "new") : record.attempts > 0 ? "new" : null)
-    if (stored && requested !== undefined && requested !== stored) throw new FeatureError(`This sync was first applied ${stored === "none" ? "without a backup" : "with a backup"}. Retry it with the same choice.`, 409)
+    if (stored && requested !== undefined && requested !== stored) throw new FeatureError(`This copy was first applied ${stored === "none" ? "without a backup" : "with a backup"}. Retry it with the same choice.`, 409)
     const backupChoice = stored ?? requested ?? "new"
     // A retry reuses the first attempt's capture; whether that attempt backed up decides the record.
     backupSkipped = record.preChange ? record.preChange.backupFolder === null : backupChoice === "none"

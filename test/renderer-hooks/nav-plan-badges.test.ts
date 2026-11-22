@@ -107,7 +107,7 @@ function selectTenant() {
   selectedTenantState.current = { id: 1, name: "Contoso", credentials: { tenantId: "t-1", appId: "app-1", clientSecret: "" } }
 }
 
-const PAID_ENTRIES = [["Audit Log", "/portal/audit"], ["Sync", "/portal/sync"], ["Governance", "/portal/governance"], ["Changes", "/portal/changes"], ["Operations", "/portal/operations"], ["Reports", "/portal/reports"], ["Alerts", "/portal/alerts"]] as const
+const PAID_ENTRIES = [["Audit Log", "/portal/audit"], ["Copy to Tenants", "/portal/sync"], ["Governance", "/portal/governance"], ["Changes", "/portal/changes"], ["Operations", "/portal/operations"], ["Reports", "/portal/reports"], ["Alerts", "/portal/alerts"]] as const
 
 function sidebarLink(container: HTMLElement, href: string): HTMLAnchorElement {
   return container.querySelector<HTMLAnchorElement>(`nav[aria-label="Main navigation"] a[href="${href}"]`)!

@@ -35,10 +35,10 @@ const LEAD = "Copy settings from one tenant to others, one way, when you start i
 const message = (error: unknown, fallback: string) => (error instanceof Error ? error.message : fallback)
 
 /**
- * Sync: copy selected policies from one tenant to others, one way and only when the admin starts
+ * Copy to Tenants: copy selected policies from one tenant to others, one way and only when the admin starts
  * it. Choose settings, choose targets, review each target against its live state, then approve
  * and apply every ready target on its own with the chosen backup. The result view follows each
- * target's stored change set. Community sees what Sync does and nothing else.
+ * target's stored change set. Community sees what Copy to Tenants does and nothing else.
  */
 export default function SyncPage() {
   const { selectedTenant } = useSelectedTenant()
@@ -47,11 +47,11 @@ export default function SyncPage() {
   return (
     <div className="mx-auto max-w-[1600px] space-y-6 p-6 lg:p-8">
       <div>
-        <h1 className="text-4xl font-light tracking-tight text-gray-900">Sync</h1>
+        <h1 className="text-4xl font-light tracking-tight text-gray-900">Copy to Tenants</h1>
         <p className="mt-2 max-w-2xl text-sm text-gray-600">{LEAD}</p>
       </div>
       {!selectedTenant?.credentials?.tenantId ? (
-        <p className="rounded-3xl bg-card p-6 text-sm text-gray-600">Connect or select a tenant to use Sync.</p>
+        <p className="rounded-3xl bg-card p-6 text-sm text-gray-600">Connect or select a tenant to use Copy to Tenants.</p>
       ) : !status ? (
         <div className="h-24 rounded-3xl bg-card motion-safe:animate-pulse" />
       ) : !canUse(plan, "sync") ? (
@@ -61,8 +61,8 @@ export default function SyncPage() {
           points={[
             "Pick policies in one tenant and copy them to another, for example from a lab tenant to production.",
             "Every target is reviewed against its live state before anything is written, with a backup first unless you skip it.",
-            "The next sync updates the policies it created, so nothing is duplicated. Sync never runs on its own.",
-            "Pro syncs between the two tenants of your license, or between two tenants that each run a Pro trial. Syncing to more tenants is part of MSP.",
+            "The next copy updates the policies it created, so nothing is duplicated. Copy to Tenants never runs on its own.",
+            "Pro copies between the two tenants of your license, or between two tenants that each run a Pro trial. Copying to more tenants is part of MSP.",
           ]}
         />
       ) : (
@@ -153,9 +153,9 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
   }, [status.data, tenants.length])
 
   const policyChip = (policy: PolicyOption) => {
-    if (!eligible.length) return options.isLoading ? null : { label: "Not synced yet", tone: "neutral" as const }
+    if (!eligible.length) return options.isLoading ? null : { label: "Not copied yet", tone: "neutral" as const }
     if (status.isLoading) return null
-    if (status.error) return { label: "Unknown", tone: "neutral" as const, title: message(status.error, "The sync status could not be read.") }
+    if (status.error) return { label: "Unknown", tone: "neutral" as const, title: message(status.error, "The copy status could not be read.") }
     return policyStatus(statusByPolicy.byPolicy.get(policyKey(policy.folder, policy.id)) ?? [], statusByPolicy.unread, source.name)
   }
 
@@ -220,7 +220,7 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
     setStep(3)
     try {
       const items = Object.values(chosen)
-      const planned = await planSync(source, { title: `Sync ${plural(items.length, "policy", "policies")} from ${source.name}`.slice(0, 200), targets, items: items.map(({ folder: type, sourceId: id }) => ({ folder: type, sourceId: id })), acknowledgeRedacted })
+      const planned = await planSync(source, { title: `Copy ${plural(items.length, "policy", "policies")} from ${source.name}`.slice(0, 200), targets, items: items.map(({ folder: type, sourceId: id }) => ({ folder: type, sourceId: id })), acknowledgeRedacted })
       void runs.refetch()
       if (!current()) return
       setRunId(planned.run.id)
@@ -230,7 +230,7 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
     } catch (error) {
       if (!current()) return
       showFeaturePlanError(error)
-      setPlanError(message(error, "The sync could not be planned."))
+      setPlanError(message(error, "The copy could not be planned."))
     } finally {
       if (current()) setPlanning(false)
     }
@@ -263,7 +263,7 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
       setRunId(id)
       await checkTargets(detail, current)
     } catch (error) {
-      if (current()) setPlanError(message(error, "The sync could not be read."))
+      if (current()) setPlanError(message(error, "The copy could not be read."))
     } finally {
       if (current()) setPlanning(false)
     }
@@ -278,7 +278,7 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
       // Only the run still shown is left; another run opened meanwhile stays as it is.
       if (shownRun.current === id) restart()
     } catch (error) {
-      if (shownRun.current === id) setDiscarding({ busy: false, error: message(error, "This sync could not be discarded.") })
+      if (shownRun.current === id) setDiscarding({ busy: false, error: message(error, "This copy could not be discarded.") })
     } finally {
       setDiscarding((current) => (current.busy ? { ...current, busy: false } : current))
     }
@@ -441,9 +441,9 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
       )}
 
       {step === 4 && (
-        <section aria-label="Sync result" className={`${card} p-6`}>
-          {run.isLoading && <div aria-busy="true" aria-label="Reading the sync" className="sync-skeleton h-40 rounded-2xl bg-gray-100" />}
-          {run.error && <p className="text-sm text-red-700">{message(run.error, "The sync could not be read.")}</p>}
+        <section aria-label="Copy result" className={`${card} p-6`}>
+          {run.isLoading && <div aria-busy="true" aria-label="Reading the copy" className="sync-skeleton h-40 rounded-2xl bg-gray-100" />}
+          {run.error && <p className="text-sm text-red-700">{message(run.error, "The copy could not be read.")}</p>}
           {run.data && (
             <SyncResult
               source={{ name: runSource?.name ?? run.data.run.sourceTenantId, domain: runSource?.domain ?? "" }}
@@ -463,17 +463,17 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
             />
           )}
           <div className="mt-6 flex flex-wrap justify-between gap-3">
-            <Button type="button" variant="ghost" onClick={restart}>Start a new sync</Button>
+            <Button type="button" variant="ghost" onClick={restart}>Start a new copy</Button>
           </div>
         </section>
       )}
       </div>
 
-      <section aria-label="Recent syncs" className={`${card} space-y-3 p-6`}>
-        <h2 className="text-lg font-semibold text-gray-900">Recent syncs</h2>
-        {runs.isLoading && <div aria-busy="true" aria-label="Loading recent syncs" className="sync-skeleton h-12 rounded-2xl bg-gray-100" />}
-        {runs.error && <p className="text-sm text-red-700">{message(runs.error, "Recent syncs could not be loaded.")}</p>}
-        {runs.data && !runs.data.runs.length && <p className="text-sm text-gray-600">No syncs from {source.name} yet.</p>}
+      <section aria-label="Recent copies" className={`${card} space-y-3 p-6`}>
+        <h2 className="text-lg font-semibold text-gray-900">Recent copies</h2>
+        {runs.isLoading && <div aria-busy="true" aria-label="Loading recent copies" className="sync-skeleton h-12 rounded-2xl bg-gray-100" />}
+        {runs.error && <p className="text-sm text-red-700">{message(runs.error, "Recent copies could not be loaded.")}</p>}
+        {runs.data && !runs.data.runs.length && <p className="text-sm text-gray-600">No copies from {source.name} yet.</p>}
         {!!runs.data?.runs.length && (
           <ul className="max-h-80 divide-y divide-gray-100 overflow-y-auto">
             {runs.data.runs.map((entry) => {
