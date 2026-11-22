@@ -505,7 +505,7 @@ describe("omission backup generations", () => {
     expect(await drift()).toMatchObject({ drifts: [], warnings: expect.arrayContaining([expect.objectContaining({ file: `${FOLDER}/Previous name.json` })]) })
   })
 
-  it("pairs compliance folders across legacy aliases even when the files have different names", async () => {
+  it("pairs legacy compliance aliases by path, as on main, when neither backup uses omission", async () => {
     const older = "backup-2026-09-19-180000"
     const newer = "backup-2026-09-20-180000"
     const snapshot = { id: "same-policy", displayName: "Compliance", passwordRequired: false }
@@ -530,7 +530,38 @@ describe("omission backup generations", () => {
     const drift = await (await scan(new NextRequest("http://tenuvault.internal", { method: "POST", body: JSON.stringify({
       tenantId: TENANT, storageAccountName: "stcontoso", appId: "test", clientSecret: "test", baseline: older, comparison: newer,
     }) }))).json()
-    expect(drift.drifts).toEqual([expect.objectContaining({ changeType: "modified", configId: "same-policy", backupFile: olderFile })])
+    expect(drift.drifts.map((entry: Item) => [entry.changeType, entry.backupFile])).toEqual([["added", newerFile], ["deleted", olderFile]])
+  })
+
+  it("reports a readable addition next to an unreadable legacy baseline file, as on main", async () => {
+    const older = "backup-2026-09-19-180000"
+    const newer = "backup-2026-09-20-180000"
+    const kept = { id: "kept", displayName: "Kept" }, added = { id: "added", displayName: "Added" }
+    const blobs = new Map<string, string | null>([
+      [`${older}/metadata.json`, JSON.stringify({ TenantId: TENANT, Status: "Success" })],
+      [`${newer}/metadata.json`, JSON.stringify({ TenantId: TENANT, Status: "Success", Items: {
+        "DeviceConfigurations/kept": { file: "Kept.json", hash: "unused" }, "DeviceConfigurations/added": { file: "Added.json", hash: "unused" },
+      } })],
+      [`${older}/DeviceConfigurations/Kept.json`, null],
+      [`${newer}/DeviceConfigurations/Kept.json`, JSON.stringify(kept)], [`${newer}/DeviceConfigurations/Added.json`, JSON.stringify(added)],
+    ])
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input))
+      if (url.hostname === "login.microsoftonline.com") return Response.json({ access_token: "test" })
+      if (url.searchParams.has("delimiter")) return new Response(`<Blobs><BlobPrefix><Name>${older}/</Name></BlobPrefix><BlobPrefix><Name>${newer}/</Name></BlobPrefix></Blobs>`)
+      if (url.searchParams.has("comp")) {
+        return new Response(`<Blobs>${[...blobs.keys()].filter(name => name.startsWith(url.searchParams.get("prefix") ?? "")).map(name => `<Blob><Name>${name}</Name><Content-Length>64</Content-Length></Blob>`).join("")}</Blobs>`)
+      }
+      const name = decodeURIComponent(url.pathname).split("/").slice(2).join("/")
+      if (blobs.get(name) === null) return new Response(null, { status: 503 })
+      const result = blobs.get(name)
+      return new Response(result, { status: result === undefined ? 404 : 200 })
+    }))
+    const drift = await (await scan(new NextRequest("http://tenuvault.internal", { method: "POST", body: JSON.stringify({
+      tenantId: TENANT, storageAccountName: "stcontoso", appId: "test", clientSecret: "test", baseline: older, comparison: newer,
+    }) }))).json()
+    expect(drift.drifts).toEqual(expect.arrayContaining([expect.objectContaining({ changeType: "added", backupFile: "DeviceConfigurations/Added.json" })]))
+    expect(drift.warnings.length).toBeGreaterThan(0)
   })
 
   it("stops reading mixed pairs when the history budget runs out", async () => {

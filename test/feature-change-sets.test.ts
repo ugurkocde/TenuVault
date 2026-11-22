@@ -581,6 +581,25 @@ describe("change-set engine", () => {
     expect(observedCheck(type, plain, plain, omission)).toBe("match")
   })
 
+  it("classifies an untyped proposal by the target's subtype before storing it", async () => {
+    const context = setup()
+    const id = "vpn"
+    const normalGraph = context.deps.graph
+    context.deps.graph = async (...args) => {
+      const graph = await normalGraph(...args)
+      return async (method, path, body, options) => path.startsWith(`deviceManagement/deviceConfigurations/${id}`) && method === "GET"
+        ? { status: 200, body: { id, displayName: "VPN", "@odata.type": "#microsoft.graph.iosVpnConfiguration", assignments: [] } }
+        : graph(method, path, body, options)
+    }
+    context.deps.omissionPolicy = async () => ({ enabled: true, scripts: false, generation: "on" })
+    const create = (operation: Item) => createChangeSet(context.deps, TENANT_A, { title: "Promote VPN", operations: [operation as never] }, null)
+    await expect(create({ folder: "DeviceConfigurations", action: "update", targetId: id, proposed: { displayName: "VPN", sharedSecret: "fixture-secret" } }))
+      .rejects.toThrow("Backup omission is enabled")
+    await expect(create({ folder: "DeviceConfigurations", action: "create", proposed: { displayName: "New VPN", sharedSecret: "fixture-secret" } }))
+      .rejects.toThrow("Backup omission is enabled")
+    expect(JSON.stringify(context.deps.records)).not.toContain("fixture-secret")
+  })
+
   it("blocks retry of a stored proposal with values covered by the current omission policy", async () => {
     const context = setup()
     const id = "vpn"

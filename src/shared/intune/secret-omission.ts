@@ -89,6 +89,14 @@ export function projectSecrets(folder: string, snapshot: Item, scripts: boolean,
   return { snapshot: visit(snapshot, "") as Item, fields }
 }
 
+/** Whether a snapshot sets a field that a credential rule of its folder names, for any subtype. */
+export function hasCredentialField(folder: string, snapshot: Item): boolean {
+  const fields = new Set(rules.credentials.filter((rule) => rule.folder === folder).map((rule) => rule.field))
+  const visit = (value: Json): boolean => Array.isArray(value) ? value.some(visit)
+    : !!value && typeof value === "object" && Object.entries(value).some(([key, entry]) => (fields.has(key) && entry != null) || visit(entry))
+  return fields.size > 0 && visit(snapshot)
+}
+
 export function omissionBody(snapshot: Item, fields: OmittedField[]): Item {
   return { ...snapshot, [OMISSION_MARKER]: { version: OMISSION_VERSION, fields: fields.map(({ path, reason }) => ({ path, reason })) } }
 }

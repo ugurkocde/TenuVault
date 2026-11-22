@@ -462,8 +462,9 @@ async function detectDrifts(
       tasks.push({ name: before.path, change: 'deleted', older })
     }
   }
-  const hasLegacyAlias = [...olderMap.keys(), ...newerMap.keys()].some(path => canonicalFolder(folderOf(path)) !== folderOf(path))
-  const identifyLegacy = !!omission || hasLegacyAlias || Boolean(newerItems) !== Boolean(olderItems)
+  // Without omission or projected files on either side, files pair by path as on main.
+  const projected = [...olderMap.keys(), ...newerMap.keys()].some(path => path.startsWith(".omitted/"))
+  const identifyLegacy = !!omission || projected
   if (identifyLegacy) {
     // A legacy file can have a different name from the same policy in the manifest. Learn
     // its identity before classifying additions or deletions, and keep failures indeterminate.

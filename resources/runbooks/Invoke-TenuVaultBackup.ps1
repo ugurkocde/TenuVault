@@ -516,7 +516,10 @@ function Invoke-TvHttp {
         }
         $lastError = [TvHttpError]::new($status, (Get-TvSafeError $message))
         $lastError.ServiceCode = if ($serviceCode) { $serviceCode } else {
-            [regex]::Match([Text.Encoding]::UTF8.GetString($bytes), "<Code>(BlobNotFound|ContainerNotFound)</Code>").Groups[1].Value
+            # Only a small Azure <Error> document whose top-level code names the miss confirms it.
+            if ($bytes.Length -le 65536) {
+                [regex]::Match([Text.Encoding]::UTF8.GetString($bytes), '\A\uFEFF?\s*(?:<\?xml[^>]*\?>\s*)?<Error>\s*<Code>(BlobNotFound|ContainerNotFound)</Code>').Groups[1].Value
+            } else { "" }
         }
         if ($retryable -and $attempt -lt $attempts) {
             $delay = $attempt

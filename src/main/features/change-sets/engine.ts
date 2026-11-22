@@ -1,4 +1,4 @@
-import { hasOmissions, observablePair, OMISSION_BLOCKER, projectSecrets, projectRollback, type OmissionOptions } from "../../../shared/intune/secret-omission"
+import { hasCredentialField, hasOmissions, observablePair, OMISSION_BLOCKER, projectSecrets, projectRollback, type OmissionOptions } from "../../../shared/intune/secret-omission"
 import { AuditEventType, AuditResult, AuditSeverity, type CreateAuditLogInput } from "../../../portal/lib/audit/types"
 import type { GraphCall } from "../../../portal/lib/policies/graph-restore"
 import { changeSetTitle } from "../../../shared/sync-wording"
@@ -15,7 +15,7 @@ import { withTenantWrite } from "../write-lock"
 import { cisBenchmarksAllowed } from "../../frameworks/service"
 import { requirePreChangeBackup } from "./backup"
 import { UNVERIFIED_OMISSION_GENERATION } from "../../backup/omission-policy"
-import { createListingMemo, GraphReadError, matchesObserved, observe, readBack, readCurrent, safeSnapshot, sameNameIds, writeOperation, type Observation } from "./graph"
+import { createListingMemo, GraphReadError, matchesObserved, observe, observedCheck, readBack, readCurrent, safeSnapshot, sameNameIds, writeOperation, type Observation } from "./graph"
 import {
   assignmentTargets,
   combinedFingerprint,
@@ -180,9 +180,15 @@ function proposalOmissionBlocker(omission?: { generation?: string }): string {
     : PROPOSAL_OMISSION_BLOCKER
 }
 
-function proposalWouldOmit(folder: string, body: Item | null, assignments: Item[] | null, omission?: OmissionOptions): boolean {
-  return !!omission?.enabled && !!body &&
-    projectSecrets(folder, assignments === null ? body : { ...body, assignments }, omission.scripts).fields.length > 0
+/**
+ * Whether omission covers a value the proposal sets. A proposal without its own subtype is
+ * classified as the target object's subtype; with neither, any credential field name blocks it.
+ */
+function proposalWouldOmit(folder: string, body: Item | null, assignments: Item[] | null, omission?: OmissionOptions, targetSubtype?: unknown): boolean {
+  if (!omission?.enabled || !body) return false
+  const typed = typeof body["@odata.type"] !== "string" && typeof targetSubtype === "string" ? { ...body, "@odata.type": targetSubtype } : body
+  if (projectSecrets(folder, assignments === null ? typed : { ...typed, assignments }, omission.scripts).fields.length > 0) return true
+  return typeof typed["@odata.type"] !== "string" && hasCredentialField(folder, typed)
 }
 
 const NOTICE = "Applying writes operations one by one. There is no atomic tenant transaction and no guaranteed reversal: a failure leaves earlier operations in place, and rollback is a new reviewed change set."
@@ -364,7 +370,6 @@ export async function createChangeSet(deps: FeatureDeps, tenantId: string, input
     const assignments = operation.action === "delete" ? null : validateAssignments(operation.assignments)
     // Freeze the target's values before review so writes, retries and read-back agree.
     const body = proposed ? (() => { const { assignments: _a, ...rest } = structuredClone(proposed); return resolveVariables ? replaceTenantVariables(rest as Item, tenant) : rest as Item })() : null
-    if (proposalWouldOmit(type.folder, body, assignments, omission)) throw new FeatureError(proposalOmissionBlocker(omission))
     let observed: Observation
     requireCisChangeSetEnabled(input.origin?.workflow ?? "change-sets", tenantId, recovery)
     try {
@@ -373,6 +378,7 @@ export async function createChangeSet(deps: FeatureDeps, tenantId: string, input
       asFeatureError(error, "The target tenant could not be read.")
     }
     if (operation.action !== "create" && !observed.snapshot) throw new FeatureError(`The target object of operation ${index + 1} does not exist in this tenant.`, 409)
+    if (proposalWouldOmit(type.folder, body, assignments, omission, observed.snapshot?.["@odata.type"])) throw new FeatureError(proposalOmissionBlocker(omission))
     const name = String(body?.[type.nameKey] ?? observed.snapshot?.[type.nameKey] ?? operation.name ?? "").trim()
     if (!name) throw new FeatureError("Every operation needs an object name.")
     const diff = reviewedDiff(type, operation.action === "create" ? null : observed.snapshot, body, omission)
@@ -542,7 +548,7 @@ async function reviewTarget(deps: FeatureDeps, tenantId: string, id: string) {
     if (observed.redacted && operation.action !== "create") warnings.push(`${operation.name} holds values Intune masks. They are not stored in the capture, so a rollback of this object is not supported.`)
     const entry = entries[operation.key]
     const body = entry?.body ?? null
-    if (proposalWouldOmit(type.folder, body, entry?.assignments ?? null, omission)) blockers.push(proposalOmissionBlocker(omission))
+    if (proposalWouldOmit(type.folder, body, entry?.assignments ?? null, omission, observed.snapshot?.["@odata.type"])) blockers.push(proposalOmissionBlocker(omission))
     const diff = omission?.enabled || (operation.action === "update" && observed.snapshot && body)
       ? reviewedDiff(type, observed.snapshot, body, omission)
       : { entries: operation.diff, truncated: operation.diffTruncated }
@@ -761,6 +767,8 @@ async function reconcile(graph: GraphCall, type: IntuneType, operation: ChangeOp
     } else {
       if (!live) return { decision: "stop", status: "failed", message: "The object no longer exists in the tenant. An earlier attempt may have written to it before it was deleted; check Intune.", objectId: operation.targetId }
       if (matchesObserved(type, entry.body ?? {}, live, omission) && (entry.assignments === null || sameAssignments(entry.assignments, live.assignments))) return { decision: "verified", objectId: operation.targetId!, readBack: "match", readBackHash: snapshotHash(type, safeSnapshot(type, live, omission)) }
+      // Omission hides a value this update sets, so an earlier attempt cannot be told apart; never send it again.
+      if (observedCheck(type, entry.body ?? {}, live, omission) === "unverifiable") return { decision: "stop", status: "uncertain", message: "The values this update sets are left out of backups, so an earlier attempt cannot be confirmed. It is not written again; check the object in Intune.", objectId: operation.targetId }
     }
     const sanitized = sanitizeSnapshot(type, live!).snapshot
     if (sameCapturedState(type, operation.action, captured.body, sanitized, captured.omission)) return { decision: "write" }
