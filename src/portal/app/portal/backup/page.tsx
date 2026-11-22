@@ -477,6 +477,7 @@ export default function BackupRestorePage() {
           <RestoreWizard
             key={`${selectedTenant?.id}:${restoreFrom ?? ""}`}
             service={service}
+            active={activeTab === "restore"}
             onRunningChange={setRestoreRunning}
             tenant={tenant}
             backups={backups}

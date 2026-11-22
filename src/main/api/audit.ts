@@ -1,4 +1,5 @@
 import type { ExecutionMetadata } from "./execution-metadata"
+import { mainAuditSink } from "./audit-sink"
 import { requiredFeatures } from "./plan-gates"
 import type { Feature } from "../../shared/plans"
 import { randomUUID } from "node:crypto"
@@ -184,6 +185,14 @@ async function recordRestore(bodyText: string, response: Response, dispatch: (re
     severity: ok ? AuditSeverity.INFO : partial ? AuditSeverity.WARNING : AuditSeverity.ERROR,
     details: { source: "desktop", statusCode: response.status, status: data.status, backupId: body.backupId, ...data.details,
       error: data.error ? { code: "RESTORE_FAILED", message: data.error } : undefined },
+  }
+  // The sink credits the account signed in now. A directory restore keeps the identity verified when it ran.
+  const sink = directory ? mainAuditSink() : undefined
+  if (sink) {
+    const binding = sink.bind(body.tenantId)
+    if (!binding) throw new Error("Audit storage is unavailable")
+    await sink.record({ ...binding, user: { id: account?.username ?? "unknown", email: account?.username ?? "unknown", name: account?.name ?? "Unknown user", tenantId: binding.tenantId.toLowerCase() } }, logEntry)
+    return
   }
   const logged = await dispatch(new Request(`${INTERNAL_API_ORIGIN}/api/audit/log`, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({

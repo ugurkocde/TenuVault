@@ -17,7 +17,8 @@ import type { RestoreOutcome } from "../../portal/lib/policies/graph-restore"
 
 export interface RestoreConnection { auditActor?: { username: string; name?: string }; token: string; tenantId: string; clientId: string; userId: string }
 export class IdentityRestoreService {
-  constructor(private readonly journal: GuardedRunJournal, private readonly recovery: RecoveryAccounts, private readonly connection: (tenant: string) => Promise<RestoreConnection>, private readonly fetchImpl: typeof fetch = fetch) {}
+  /** `requireUpdate` checks the current plan for an in-place update. The saved run decides the operation, never the request. */
+  constructor(private readonly journal: GuardedRunJournal, private readonly recovery: RecoveryAccounts, private readonly connection: (tenant: string) => Promise<RestoreConnection>, private readonly fetchImpl: typeof fetch = fetch, private readonly requireUpdate?: (tenant: string) => Promise<void>) {}
   private async context(tenant: string, readOnly = false, folder?: string, operation: GuardedStep["operation"] = "update") {
     const connection = await this.connection(tenant)
     if (connection.tenantId.toLowerCase() !== tenant.toLowerCase()) throw new RestoreSafetyError("This connection belongs to another tenant.")
@@ -82,6 +83,7 @@ export class IdentityRestoreService {
     if (!type || type.restoreSafety !== "identity" || restoreCapability(type) === "none") return { success: false, path: request.path, action: "skipped", retryable: false, error: "This type remains backup-only." }
     const run = request.runId ? this.journal.load(tenant, request.runId) : undefined
     if (!run || run.source?.path !== request.path || (request.origin !== "repair" && run.source.fingerprint !== restoreFingerprint(request.snapshot)) || (request.origin !== "repair" && run.origin !== request.origin) || run.entries.length !== 1 || run.entries[0]!.step.folder !== folder || (request.origin !== "repair" && run.entries[0]!.step.sourceId !== request.snapshot.id)) return { success: false, path: request.path, retryable: false, error: "Preview this identity restore before continuing." }
+    if (run.entries[0]!.step.operation === "update") await this.requireUpdate?.(tenant)
     const { actor, io } = await this.context(tenant, false, folder, run.entries[0]!.step.operation)
     const result = await executeGuardedRun(this.journal, { ...run, actor }, io)
     const entry = result.run.entries[0]!

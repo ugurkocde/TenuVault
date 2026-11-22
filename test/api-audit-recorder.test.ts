@@ -240,3 +240,18 @@ it("never derives a directory execution actor from the current account or untrus
   expect(entries[0]).toMatchObject({ user: { id: "unknown", email: "unknown", name: "Unknown user" } })
   expect(accountFor).not.toHaveBeenCalled()
 })
+
+it("records a directory restore in the main audit sink with the captured execution actor, not the bound account", async () => {
+  const { setMainAuditSink } = await import("../src/main/api/audit-sink")
+  const recorded: Array<{ user: unknown; entry: unknown }> = []
+  const sink = { bind: () => ({ tenantId: TENANT, storageAccountName: "fixturestore", user: { id: "replacement@example.test", email: "replacement@example.test", name: "Replacement admin" } }), record: async (binding: { user: unknown }, entry: unknown) => { recorded.push({ user: binding.user, entry }) } }
+  setMainAuditSink(sink as unknown as Parameters<typeof setMainAuditSink>[0])
+  try {
+    const dispatch = vi.fn(async () => Response.json({ success: true }))
+    const record = createAuditRecorder(dispatch, () => null)
+    record(new Request("http://tenuvault.internal/api/restore-directory", { method: "POST" }), JSON.stringify({ ...credentials, action: "restore", backupId: "backup" }), Response.json({ success: true, details: { restoredCount: 1, failedCount: 0 } }), { directoryActor: { username: "executor@example.test", name: "Executing admin" } })
+    await vi.waitFor(() => expect(recorded).toHaveLength(1))
+    expect(recorded[0]!.user).toMatchObject({ id: "executor@example.test", email: "executor@example.test", name: "Executing admin", tenantId: TENANT })
+    expect(dispatch).not.toHaveBeenCalled()
+  } finally { setMainAuditSink(undefined) }
+})

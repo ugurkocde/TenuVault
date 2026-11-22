@@ -66,6 +66,8 @@ interface CopyTarget {
 
 interface RestoreWizardProps {
   service?: BackupServiceFilter
+  /** False while the wizard is mounted on a hidden tab. */
+  active?: boolean
   onRunningChange?: (running: boolean) => void
   tenant: BackupTenant
   backups: BackupSummary[]
@@ -242,7 +244,7 @@ async function post<T>(path: string, body: unknown, signal?: AbortSignal): Promi
  * Restores items from a backup in five steps: choose the backup, the items and how to restore them,
  * review what will happen to each item in the tenant as it is now, then watch the restore run.
  */
-export function RestoreWizard({ tenant, backups, initialBackupId, community, canCopyToTenants, copyCandidates, service = "all", onRunningChange }: RestoreWizardProps) {
+export function RestoreWizard({ tenant, backups, initialBackupId, community, canCopyToTenants, copyCandidates, service = "all", onRunningChange, active = true }: RestoreWizardProps) {
   const showPlanError = (error: unknown) => showFeaturePlanError(error, community
     ? ["fullRestore", "replaceRestore", "restoreAssignments", "bulkActions"]
     : !canCopyToTenants ? ["bulkActions"] : [])
@@ -891,7 +893,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
                                       )}
                                     </span>
                                   </label>
-                                  {!copying && ["Users", "Groups", "Applications", "ServicePrincipals", "OAuth2PermissionGrants"].includes(item.folder) && <DirectoryRestore key={`${tenant.credentials.tenantId}:${tenant.credentials.appId}:${tenant.storageAccountName}:${backupId}:${item.path}`} tenant={tenant} backupId={backupId!} path={item.path} />}
+                                  {!copying && ["Users", "Groups", "Applications", "ServicePrincipals", "OAuth2PermissionGrants"].includes(item.folder) && <DirectoryRestore key={`${tenant.credentials.tenantId}:${tenant.credentials.appId}:${tenant.storageAccountName}:${backupId}:${item.path}`} tenant={tenant} backupId={backupId!} path={item.path} active={active} />}
                                   {!copying && !["Users", "Groups", "Applications", "ServicePrincipals", "OAuth2PermissionGrants"].includes(item.folder) && typeForFolder(item.folder)?.restoreSafety === "identity" && !["none", "metadata"].includes(restoreCapability(typeForFolder(item.folder)!)) && <ConfigurationRestore key={`${tenant.credentials.tenantId}:${tenant.credentials.appId}:${tenant.storageAccountName}:${backupId}:${item.path}`} tenant={tenant} backupId={backupId!} path={item.path} singleton={restoreCapability(typeForFolder(item.folder)!) === "singleton"} />}
                                 </li>
                               ))}

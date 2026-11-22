@@ -131,10 +131,11 @@ export interface BackupEngineDeps {
   /** Items read at the same time. Graph throttling (429) pauses every reader. */
   concurrency?: number
   /**
-   * Called once when a request got a job of its own, before the job reads Graph or starts writing its
-   * assigned folder. A request that joined a running job, or was refused because of one, started
-   * nothing and is not announced.
+   * Called once when a request got a job of its own, as it is queued with the tokens it captured. A
+   * request that joined a running job, or was refused because of one, started nothing and is not announced.
    */
+  onQueued?: (job: BackupJob, request: BackupRequest) => void
+  /** Called once before the job reads Graph or starts writing its assigned folder. */
   onStarted?: (job: BackupJob, request: BackupRequest, tokens: RunTokens) => void
   /** Called once when a job has ended, with the request that started it. */
   onFinished?: (job: BackupJob, request: BackupRequest, tokens?: RunTokens) => void
@@ -389,6 +390,12 @@ export class BackupEngine {
     this.running.set(tenantKey, { job, key, mode: tokens.mode })
     this.prune()
     if (queued) this.write(job, "Queued behind another tenant's backup; backups run one at a time.")
+    // A failing listener must not keep the job from running.
+    try {
+      this.deps.onQueued?.(job, request)
+    } catch (error) {
+      console.warn("[backup] Could not announce the start of a backup:", error)
+    }
 
     let releaseTurn: () => void = () => {}
     const turnDone = new Promise<void>(resolve => { releaseTurn = resolve })

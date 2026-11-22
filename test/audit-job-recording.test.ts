@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto"
-import { afterEach, expect, it, vi } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import { AuditSink, setMainAuditSink } from "../src/main/api/audit-sink"
 import { NextRequest } from "../src/main/api/next-server-shim"
 import { checkpointBackupAudit, reconcileBackupAudit, recordBackupAudit } from "../src/main/backup/audit"
@@ -737,4 +737,29 @@ it("requires fresh Reader audit creation even when the last canary remains reada
   expect(reads).toEqual(auditCreates.slice(0, 2))
   expect(blobs.size).toBe(3)
   expect([...new Set(checks.map(check => check.split("/").slice(0, 2).join("/")))].sort()).toEqual(["DELETE /audit-logs", "DELETE /intune-backups", "PUT /audit-logs"])
+})
+
+describe("audit recovery for a run split across an ordinary and a large backup", () => {
+  const tenantId = "11111111-1111-1111-1111-111111111111", runId = "desktop-7b223058-dfe2-4d7d-94f4-ce7b6ebf80ae"
+  const entry = { id: runId, timestamp: "2026-11-21T00:00:00.000Z", eventType: "BACKUP_COMPLETED", action: "Complete backup", resource: { type: "backup", id: "backup-2026-11-21-000000", name: "Complete backup" },
+    result: "partial", severity: "warning", user: { id: "admin", email: "", name: "Admin", tenantId }, job: { operationId: runId, runId, stage: "terminal", producer: "desktop", status: "uncertain" } } as unknown as Parameters<typeof reconcileBackupAudit>[0]
+  const manifest = (extra: Record<string, unknown>) => Response.json({ RunId: runId, TenantId: tenantId, AuthMode: "delegated", Status: "Success", ...extra })
+  it("keeps the record uncertain until the companion large manifest is committed", async () => {
+    const result = await reconcileBackupAudit(entry, async () => manifest({ CompanionBackup: "backup-large-2026-11-21-000000" }), async () => new Response(null, { status: 404 }))
+    expect(result).toBe(entry)
+    expect(await reconcileBackupAudit(entry, async () => manifest({ CompanionBackup: "backup-large-2026-11-21-000000" }))).toBe(entry)
+  })
+  it("takes the worse status of both halves", async () => {
+    const companion = vi.fn(async () => manifest({ Status: "Failed", CompanionBackup: "backup-2026-11-21-000000" }))
+    const result = await reconcileBackupAudit(entry, async () => manifest({ CompanionBackup: "backup-large-2026-11-21-000000" }), companion)
+    expect(companion).toHaveBeenCalledWith("backup-large-2026-11-21-000000")
+    expect(result.job).toMatchObject({ status: "failed" })
+  })
+})
+
+it("keeps ordinary and large backup folder names as audit resource IDs", async () => {
+  const { auditId } = await import("../src/portal/lib/audit/projection")
+  expect(auditId("backup-2026-11-21-000000")).toBe("backup-2026-11-21-000000")
+  expect(auditId("backup-large-2026-11-21-000000")).toBe("backup-large-2026-11-21-000000")
+  expect(auditId("backup-other-2026-11-21")).toMatch(/^sha256-/)
 })

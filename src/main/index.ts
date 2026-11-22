@@ -1,3 +1,4 @@
+import { backupStoragePath } from "../shared/backup-storage"
 import { DirectoryRestoreStore } from "./storage/directory-restore-store"
 import { DirectoryRestoreService } from "./restore/directory-service"
 import { directoryRestoreUnfinished, setDirectoryRestoreService } from "./restore/directory-dispatch"
@@ -424,7 +425,12 @@ async function bootstrap(): Promise<void> {
     if (!claims.oid) throw new Error("A signed-in admin is required.")
     return { tenantId: tenant, clientId: account.clientId, userId: claims.oid, token: token.accessToken, auditActor: { username: token.account?.username ?? claims.oid, name: token.account?.name } }
   }
-  const identityRestore = new IdentityRestoreService(guardedRestoreJournal(), recoveryAccounts, restoreConnection, bridgedFetch)
+  // An in-place update needs the plan feature at execution as well, whatever the request said.
+  const identityRestore = new IdentityRestoreService(guardedRestoreJournal(), recoveryAccounts, restoreConnection, bridgedFetch, async (tenant) => {
+    // The same plan resolution as the route gate.
+    const plan = await license.requireEntitlement(tenant).catch(() => null)
+    if (!plan || !allows(plan, "replaceRestore")) throw new PlanRequired("replaceRestore")
+  })
   setDirectoryRestoreService(new DirectoryRestoreService(new DirectoryRestoreStore(join(userData, "directory-restore"), cipher), recoveryAccounts, restoreConnection, tenant => auth.cachedAccountIdentity(tenant), bridgedFetch, tenant => {
     const id = backupReader.status(tenant)?.clientId
     return id ? [id] : []
@@ -539,9 +545,12 @@ async function bootstrap(): Promise<void> {
     // The connection is checked as a backup starts and after it ended. Neither waits for the other:
     // the backup runs whatever the check finds, and a check that fails is only an observation.
     // Whose sign-in the run reads with is noted as it starts, so its outcomes are credited to that sign-in.
-    onStarted: (job, request, tokens) => {
+    // Noted as the job is queued, with the tokens it captured, so a reader renewed during the wait is not credited.
+    onQueued: (job, request) => {
       health.runStarted(job, request)
       void health.check(request.tenantId, "beforeBackup", { reader: job.authMode === "app-only" }).catch(() => undefined)
+    },
+    onStarted: (job, request, tokens) => {
       checkpointBackupAudit(auditSink, job, request, tokens, backupAuditActor(job.tenantId), app.getVersion())
     },
     onOutcomes: (outcomes, request) => health.recordRun(outcomes, request),
@@ -842,12 +851,21 @@ async function bootstrap(): Promise<void> {
   })
   setMainAuditSink(auditSink)
   auditSink.recover()
-  const recoverBackupAudits = () => auditSink.recoverBackups((binding, entry) => reconcileBackupAudit(entry, async () => {
+  const recoverBackupAudits = () => auditSink.recoverBackups((binding, entry) => {
+    const read = (folder: string) => readBackupAuditManifest(binding, entry, folder)
+    // The start checkpoint names the ordinary folder before a large-only run switches to its large folder.
+    const first = entry.resource.id, large = first.replace(/^backup-(?=\d)/, "backup-large-")
+    return reconcileBackupAudit(entry, async () => {
+      const response = await read(first)
+      return response.status === 404 && large !== first ? read(large) : response
+    }, read)
+  })
+  // Ordinary and large backups keep their manifests in separate containers.
+  const readBackupAuditManifest = async (binding: { tenantId: string; storageAccountName: string }, entry: Parameters<Parameters<typeof auditSink.recoverBackups>[0]>[1], folder: string) => {
     const { tenantId, storageAccountName } = binding
-    const folder = entry.resource.id
-    if (!/^backup-\d{4}-\d{2}-\d{2}-\d{6}$/.test(folder)) return new Response(null, { status: 404 })
+    if (!/^backup-(?:large-)?\d{4}-\d{2}-\d{2}-\d{6}$/.test(folder)) return new Response(null, { status: 404 })
     assertStorageAccountName(storageAccountName)
-    const url = `https://${storageAccountName}.blob.core.windows.net/intune-backups/${folder}/metadata.json`
+    const url = `https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(`${folder}/metadata.json`)}`
     const signal = AbortSignal.timeout(15_000)
     if (isLocalAccount(storageAccountName)) {
       if (storageAccountName !== localStorageAccountName(tenantId)) throw new Error("Audit storage belongs to another tenant")
@@ -865,7 +883,7 @@ async function bootstrap(): Promise<void> {
       token = (await auth.getAccessToken(tenantId, clientId, RESOURCE_SCOPES.storage)).accessToken
     }
     return bridgedFetch(url, { signal, headers: { Authorization: `Bearer ${token}`, "x-ms-version": "2021-12-02" } })
-  }))
+  }
   let retryingAudit = false
   const retryAudit = async () => {
     if (retryingAudit) return

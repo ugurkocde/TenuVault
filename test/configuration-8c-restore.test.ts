@@ -162,7 +162,16 @@ for (const [folder, operations] of Object.entries(STAGED_8C_OPERATIONS)) for (co
     const review = await service.review(identity.tenantId, run.id)
     expect(review.kind).toBe(configurationConfirmation(folder))
     await service.confirm(identity.tenantId, run.id, review.fingerprint)
-    await service.restore(identity.tenantId, { ...request, runId: run.id })
+    // The saved operation decides the plan check at execution, whatever the request carried.
+    const lapsed = vi.fn(async () => { throw new Error("Plan feature replaceRestore required") })
+    const unlicensed = new IdentityRestoreService(journal, new RecoveryAccounts(saved), async () => ({ ...identity, token }), fetcher, lapsed)
+    if (operation === "update") {
+      await expect(unlicensed.restore(identity.tenantId, { ...request, runId: run.id })).rejects.toThrow("replaceRestore")
+      expect(writes).toBe(0)
+    }
+    const allowed = vi.fn(async () => {})
+    await new IdentityRestoreService(journal, new RecoveryAccounts(saved), async () => ({ ...identity, token }), fetcher, allowed).restore(identity.tenantId, { ...request, runId: run.id })
+    expect(allowed).toHaveBeenCalledTimes(operation === "update" ? 1 : 0)
     expect(journal.load(identity.tenantId, run.id)!.entries[0]!.state).toBe("applied")
     expect(forbidden).toEqual([])
     expect(writes).toBe(1)

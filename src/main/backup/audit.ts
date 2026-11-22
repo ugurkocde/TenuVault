@@ -51,25 +51,46 @@ export function backupAudit(job: BackupJob, request: BackupRequest, tokens: RunT
   return { binding, input, stamp: { id: job.id, timestamp: job.endTime ?? job.startTime } }
 }
 
-/** Confirm an interrupted run from its own committed manifest under the original binding. */
-export async function reconcileBackupAudit(entry: AuditLogEntry, readManifest: () => Promise<Response>): Promise<AuditLogEntry> {
-  const response = await readManifest()
+type BackupManifest = {
+  RunId?: string; TenantId?: string; Status?: string; AuthMode?: string; CompletedAt?: string; CompanionBackup?: string;
+  ItemCounts?: { TotalPolicies?: number }; Failures?: number; MaskedSecretItems?: unknown[];
+}
+type ManifestStatus = 'completed' | 'warnings' | 'failed' | 'cancelled' | 'uncertain'
+const RANK: Record<ManifestStatus, number> = { completed: 0, warnings: 1, cancelled: 2, failed: 3, uncertain: 4 }
+/** A run's own committed manifest, or null when absent, unparseable or from another run. */
+async function runManifest(entry: AuditLogEntry, response: Response): Promise<BackupManifest | null> {
   if (response.status === 0 || response.status === 408 || retryableStatus(response.status)) {
     throw new Error('Backup audit manifest is temporarily unavailable')
   }
-  if (!response.ok) return entry
+  if (!response.ok) return null
   const parsed = await readJsonCapped(response, MAX_BACKUP_ARCHIVE_BYTES)
-  if (parsed.kind !== 'json' || !parsed.value || typeof parsed.value !== 'object') return entry
-  const manifest = parsed.value as {
-    RunId?: string; TenantId?: string; Status?: string; AuthMode?: string; CompletedAt?: string;
-    ItemCounts?: { TotalPolicies?: number }; Failures?: number; MaskedSecretItems?: unknown[];
-  }
+  if (parsed.kind !== 'json' || !parsed.value || typeof parsed.value !== 'object') return null
+  const manifest = parsed.value as BackupManifest
   const authMode = entry.job?.producer === 'backup-reader' ? 'app-only' : 'delegated'
-  if (manifest.RunId !== entry.job?.runId || manifest.TenantId !== entry.user.tenantId || manifest.AuthMode !== authMode) return entry
-  const status = manifest.Status === 'Success' ? manifest.MaskedSecretItems?.length ? 'warnings' : 'completed'
-    : manifest.Status === 'CompletedWithWarnings' ? 'warnings' : manifest.Status === 'Failed' ? 'failed'
-      : manifest.Status === 'Cancelled' ? 'cancelled' : 'uncertain'
+  return manifest.RunId === entry.job?.runId && manifest.TenantId === entry.user.tenantId && manifest.AuthMode === authMode ? manifest : null
+}
+const manifestStatus = (manifest: BackupManifest): ManifestStatus => manifest.Status === 'Success' ? manifest.MaskedSecretItems?.length ? 'warnings' : 'completed'
+  : manifest.Status === 'CompletedWithWarnings' ? 'warnings' : manifest.Status === 'Failed' ? 'failed'
+    : manifest.Status === 'Cancelled' ? 'cancelled' : 'uncertain'
+
+/**
+ * Confirm an interrupted run from its own committed manifest under the original binding. A run
+ * split across an ordinary and a large backup commits two manifests: both must be terminal, and
+ * the worse status wins. `readCompanion` reads the other half by folder name.
+ */
+export async function reconcileBackupAudit(entry: AuditLogEntry, readManifest: () => Promise<Response>, readCompanion?: (folder: string) => Promise<Response>): Promise<AuditLogEntry> {
+  const manifest = await runManifest(entry, await readManifest())
+  if (!manifest) return entry
+  let status = manifestStatus(manifest)
   if (status === 'uncertain') return entry
+  if (manifest.CompanionBackup !== undefined) {
+    if (typeof manifest.CompanionBackup !== 'string' || !readCompanion) return entry
+    const companion = await runManifest(entry, await readCompanion(manifest.CompanionBackup))
+    if (!companion) return entry
+    const other = manifestStatus(companion)
+    if (other === 'uncertain') return entry
+    if (RANK[other] > RANK[status]) status = other
+  }
   const timestamp = typeof manifest.CompletedAt === 'string' && Number.isFinite(Date.parse(manifest.CompletedAt))
     ? new Date(manifest.CompletedAt).toISOString() : entry.timestamp
   return {
