@@ -8,6 +8,7 @@ import { ChangeSetFlow } from "../shared/ChangeSetFlow"
 import { syncRollbackActions, syncTargetActions, type SyncTarget } from "./api"
 import { applyStage, awaitingReview, backupOf, excludedReason, failedItems, initials, intuneLink, linkPath, mayHaveWritten, outcomeCounts, plural, progress, targetPhase, type ApplyStage, type TargetPhase } from "./model"
 import { Spinner } from "./loading"
+import { copyMessage } from "../../../shared/sync-wording"
 
 export interface ResultTarget {
   target: SyncTarget
@@ -74,16 +75,16 @@ function StateIcon({ phase }: { phase: TargetPhase }) {
 function nodeText(entry: ResultTarget, error: string | null, note: string | null, stage: ApplyStage | null): { text: string; problems: string[] } {
   const { target, phase } = entry
   const { done, total } = progress(target)
-  const problems = [...failedItems(target.changeSet).map((item) => `${item.name}: ${item.message}`), ...(error ? [error] : [])]
-  if (!problems.length && phase !== "verified" && target.changeSet?.lastError) problems.push(target.changeSet.lastError)
+  const problems = [...failedItems(target.changeSet).map((item) => `${item.name}: ${copyMessage(item.message)}`), ...(error ? [error] : [])]
+  if (!problems.length && phase !== "verified" && target.changeSet?.lastError) problems.push(copyMessage(target.changeSet.lastError))
   switch (phase) {
     case "waiting": return { text: "Waiting", problems: [] }
     case "writing": return { text: stage?.label ?? "Writing", problems: [] }
-    case "verified": return { text: `${plural(total, "change", "changes")} verified${target.skipped?.length ? `, ${target.skipped.length} already in sync` : ""}. ${backedUp(target) ? "Backup taken first." : "No backup taken."}`, problems: [] }
-    case "in-sync": return { text: "Already in sync, nothing written. No backup taken.", problems: [] }
-    case "partial": return { text: `${done} of ${total} synced. ${failedItems(target.changeSet).length || 1} failed:`, problems }
-    case "failed": return { text: target.changeSet && !retryable(target) ? "Nothing was synced. Start a new sync to review it again." : "Nothing was synced.", problems }
-    default: return { text: `Not synced. ${note ?? excludedReason(target)}`, problems: [] }
+    case "verified": return { text: `${plural(total, "change", "changes")} verified${target.skipped?.length ? `, ${target.skipped.length} already up to date` : ""}. ${backedUp(target) ? "Backup taken first." : "No backup taken."}`, problems: [] }
+    case "in-sync": return { text: "Already up to date, nothing written. No backup taken.", problems: [] }
+    case "partial": return { text: `${done} of ${total} copied. ${failedItems(target.changeSet).length || 1} failed:`, problems }
+    case "failed": return { text: target.changeSet && !retryable(target) ? "Nothing was copied. Start a new copy to review it again." : "Nothing was copied.", problems }
+    default: return { text: `Not copied. ${note ?? excludedReason(target)}`, problems: [] }
   }
 }
 
@@ -309,7 +310,7 @@ export function SyncFlowchart({ source, policies, policyCount, targets, errors, 
                 </div>
               )}
               {finished && (phase === "partial" || phase === "failed") && retryable(target) && (
-                <p id={`retry-${id}`} className="mt-2 text-xs text-gray-500">{backupOf(target) === "none" ? "Retry applies without a backup, as this sync started." : "Retry backs up first."}</p>
+                <p id={`retry-${id}`} className="mt-2 text-xs text-gray-500">{backupOf(target) === "none" ? "Retry applies without a backup, as this copy started." : "Retry backs up first."}</p>
               )}
               {mayHaveWritten(target) && !entry.storage && <p className="mt-2 text-xs text-amber-800">{NO_ROLLBACK}</p>}
             </div>
@@ -355,6 +356,9 @@ export function SyncResult({ source, policies = [], policyCount, entries, errors
   const overall = involved.length ? Math.round((involved.reduce((sum, entry) => sum + share(entry), 0) / involved.length) * 100) : 0
   const verified = involved.filter((entry) => entry.phase === "verified" || entry.phase === "in-sync").length
   const attention = involved.length - verified
+  // Targets already up to date finished without a write, so the headline does not count them as copied.
+  const upToDate = involved.filter((entry) => entry.phase === "in-sync").length
+  const copied = verified - upToDate
   // Targets something was written to; a rollback can run only where the tenant has backup storage.
   const wrote = involved.filter((entry) => mayHaveWritten(entry.target))
   const anyWritten = wrote.length > 0
@@ -372,7 +376,7 @@ export function SyncResult({ source, policies = [], policyCount, entries, errors
     : backups === attempted.length ? <Chip>Backup taken in each tenant</Chip>
     : <Chip>Backup taken in {backups} of {attempted.length} tenants</Chip>
   const chips = [
-    anyLinked && <Chip key="links" tone="success">Links saved for the next sync</Chip>,
+    anyLinked && <Chip key="links" tone="success">Links saved for the next copy</Chip>,
     rollbacks > 0 && <Chip key="rollback">{rollbacks === wrote.length ? "Rollback available per tenant" : `Rollback available in ${rollbacks} of ${wrote.length} tenants`}</Chip>,
     backupChip && <span key="backup">{backupChip}</span>,
     <Chip key="audit">Recorded in the audit log</Chip>,
@@ -390,7 +394,7 @@ export function SyncResult({ source, policies = [], policyCount, entries, errors
           <span aria-hidden="true" className="flex size-10 shrink-0 items-center justify-center rounded-full bg-card text-amber-700"><Clock className="h-5 w-5" /></span>
           <div className="min-w-60 flex-1">
             <p ref={statusLine} tabIndex={-1} role="status" className="text-base font-semibold text-gray-900 outline-none">Planned, not approved yet</p>
-            <p className="mt-1 text-sm text-gray-700">This sync was planned and reviewed, but no target was approved, so nothing was written. Continue to check every target against its live state again and approve, or discard the plan.</p>
+            <p className="mt-1 text-sm text-gray-700">This copy was planned and reviewed, but no target was approved, so nothing was written. Continue to check every target against its live state again and approve, or discard the plan.</p>
             {discard?.error && <p role="alert" className="mt-2 text-sm text-red-700">{discard.error}</p>}
           </div>
           <div className="flex flex-wrap gap-2 self-center">
@@ -414,23 +418,23 @@ export function SyncResult({ source, policies = [], policyCount, entries, errors
             {running ? (
               <>
                 <span aria-hidden="true" className="size-4 rounded-full border-2 border-border border-t-coral-500 motion-safe:animate-spin" />
-                <span className="text-gray-900">Syncing to {plural(involved.length, "tenant", "tenants")}</span>
+                <span className="text-gray-900">Copying to {plural(involved.length - upToDate, "tenant", "tenants")}{upToDate ? `, ${upToDate} already up to date` : ""}</span>
                 <span className="text-sm font-normal tabular-nums text-gray-500">{finishedCount} of {involved.length} finished</span>
               </>
             ) : !involved.length ? (
-              <span className="text-gray-900">Nothing was synced. No target was approved.</span>
+              <span className="text-gray-900">Nothing was copied. No target was approved.</span>
             ) : involved.every((entry) => entry.phase === "in-sync") ? (
-              <span className="text-green-700">Already in sync. Nothing was written.</span>
+              <span className="text-green-700">Already up to date. Nothing was written.</span>
             ) : attention === 0 ? (
-              <span className="text-green-700">Synced to {plural(verified, "tenant", "tenants")}</span>
+              <span className="text-green-700">Copied to {plural(copied, "tenant", "tenants")}{upToDate ? `, ${upToDate} already up to date` : ""}</span>
             ) : verified === 0 && !anyWritten ? (
-              <span className="text-red-700">Nothing was synced. {plural(attention, "tenant needs", "tenants need")} attention.</span>
+              <span className="text-red-700">Nothing was copied. {plural(attention, "tenant needs", "tenants need")} attention.</span>
             ) : (
-              <span className="text-amber-700">Synced to {verified} of {plural(involved.length, "tenant", "tenants")}. {attention} {attention === 1 ? "needs" : "need"} attention.</span>
+              <span className="text-amber-700">Copied to {copied} of {plural(involved.length, "tenant", "tenants")}{upToDate ? `, ${upToDate} already up to date` : ""}. {attention} {attention === 1 ? "needs" : "need"} attention.</span>
             )}
           </p>
           {running && (
-            <div role="progressbar" aria-label="Sync progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={overall} className="h-1 max-w-md overflow-hidden rounded-full bg-secondary">
+            <div role="progressbar" aria-label="Copy progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={overall} className="h-1 max-w-md overflow-hidden rounded-full bg-secondary">
               <div className="sync-fill h-full rounded-full bg-coral-500" style={{ width: `${Math.max(4, overall)}%` }} />
             </div>
           )}
@@ -466,7 +470,7 @@ export function SyncResult({ source, policies = [], policyCount, entries, errors
             decisionFields={false}
             backupSkipped={backupOf(open.target) === "none"}
             intro={<>
-              <p className="text-sm text-gray-600">Backup choice of this sync: {backupOf(open.target) === "none" ? "applied without a backup. Rollback uses the saved current versions." : "back up first, with this tenant's backup settings."}</p>
+              <p className="text-sm text-gray-600">Backup choice of this copy: {backupOf(open.target) === "none" ? "applied without a backup. Rollback uses the saved current versions." : "back up first, with this tenant's backup settings."}</p>
               {!open.storage && <p className="text-sm text-amber-800">{NO_ROLLBACK} A rollback always backs up first, so it cannot run from TenuVault until this tenant has backup storage.</p>}
             </>}
             rollbackHint="Rollback created. Review, approve and apply it below."

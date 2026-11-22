@@ -334,3 +334,7 @@ Stable installs follow stable by default. Enable **Get nightly builds** to recei
 ## Review scan persistence
 
 Hygiene scan findings and health review finding reconciliation are saved together before returning, reducing repeated encryption and disk writes. A failed batch leaves the previous records intact.
+
+### Backup audit access
+
+The **Backup Reader** card shows a separate audit storage access test and pending audit deliveries. Use the same Azure storage setup values when upgrading its role. Cloud schedule status shows whether its runbook records audit events and whether delivery needs attention. See [Audit Log](/audit-log/) for plan access and storage details.

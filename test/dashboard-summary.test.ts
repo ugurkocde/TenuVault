@@ -10,7 +10,10 @@ const state = vi.hoisted(() => ({ plans: ['community', 'pro'], tenants: [
 ] }))
 vi.mock('~/contexts/TenantContext', () => ({ useTenants: () => state.tenants }))
 vi.mock('@tanstack/react-query', () => ({ useQuery: (options: unknown) => options }))
-vi.mock('@desktop/lib/bridge', () => ({ bridge: { schedules: { list: async () => [] } } }))
+vi.mock('@desktop/lib/bridge', () => ({ bridge: {
+  schedules: { list: async () => [] },
+  backups: { failedAttempts: async () => [], liveRuns: async () => [] },
+} }))
 vi.mock('@desktop/lib/license', () => ({
   useLicense: () => ({ status: {} }),
   tenantLicense: (_status: unknown, id: string) => state.plans[state.tenants.findIndex(tenant => tenant.credentials.tenantId === id)],
@@ -76,6 +79,16 @@ describe('dashboard summary inventory', () => {
     const upgraded = useDashboardStats() as unknown as { queryKey: unknown[] }
     expect(upgraded.queryKey).not.toEqual(query.queryKey)
   })
+})
+
+it('shows the configured tenant name on a terminal backup activity row', async () => {
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) =>
+    String(input) === '/api/audit/logs' ? Response.json({ data: [{
+      id: 'terminal', eventType: 'BACKUP_COMPLETED', action: 'Complete backup', result: 'SUCCESS',
+      timestamp: new Date().toISOString(), resource: { name: 'Complete backup' }, job: { stage: 'terminal' },
+    }] }) : Response.json({ backups: [] })))
+  const query = useDashboardStats() as unknown as { queryFn: () => Promise<{ recentActivity: unknown[] }> }
+  expect((await query.queryFn()).recentActivity).toMatchObject([{ id: 'terminal', tenant: 'Second' }])
 })
 
 

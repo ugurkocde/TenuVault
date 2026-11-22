@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto'
+import { auditId, projectEntry, projectItem } from './projection'
 import { acknowledgeEvent, acknowledgeEvents, pendingEvents, queueEvent } from './outbox'
 import { BlobListError, decodeXml, listBlobPages } from '../storage/list'
 import { mapLimit } from '../../../shared/map-limit'
@@ -6,7 +8,9 @@ import { blobPath } from '../../../shared/security'
 import { entriesForTenant } from './export'
 import { auditDateFilter, defaultAuditDateRange } from './date-range'
 import { 
-  AuditLogEntry, 
+  AuditLogEntry,
+  AuditJobItem,
+  AuditUser,
   AuditLogFilter, 
   AuditLogStats,
   AuditEventType,
@@ -14,11 +18,16 @@ import {
   AuditResult 
 } from './types'
 
+const DETAIL_PAGE_SIZE = 100
+const MAX_DETAIL_PAGES = 1000
 const AUDIT_CONTAINER = 'audit-logs'
 const RETENTION_DAYS = 90 // Keep logs for 90 days
 export const MAX_AUDIT_RANGE_DAYS = 90
 export const AUDIT_READ_CONCURRENCY = 6
 export class AuditRangeError extends Error {}
+export class AuditContainerMissingError extends Error {
+  constructor() { super('The audit container is missing. Rerun the Azure storage setup.') }
+}
 interface AuditBlob { name: string; dayPath: string; timestamp: number | null; version: string }
 const readCaches = new WeakMap<typeof fetch, MetadataCache<AuditLogEntry[]>>()
 
@@ -42,6 +51,8 @@ async function limitRead<T>(account: string, run: () => Promise<T>): Promise<T> 
 interface StorageCredentials {
   storageAccountName: string
   accessToken: string
+  fetch?: typeof fetch
+  provisionContainer?: boolean
 }
 
 interface AuditLogFile {
@@ -62,6 +73,8 @@ export class AuditStorageService {
   constructor(credentials: StorageCredentials) {
     this.credentials = credentials
   }
+
+  private get fetch(): typeof fetch { return this.credentials.fetch ?? fetch }
 
   private getBaseUrl(): string {
     return `https://${this.credentials.storageAccountName}.blob.core.windows.net`
@@ -116,90 +129,198 @@ export class AuditStorageService {
   async ensureContainerExists(): Promise<void> {
     const url = `${this.getBaseUrl()}/${AUDIT_CONTAINER}?restype=container`
     
-    console.log('[AUDIT-STORAGE] Checking if audit-logs container exists...')
-    
-    try {
-      // Check if container exists
-      const checkResponse = await fetch(url, {
-        method: 'HEAD',
-        headers: this.getHeaders(),
-      })
-      
-      console.log('[AUDIT-STORAGE] Container check response:', checkResponse.status)
-      
-      if (checkResponse.status === 404) {
-        console.log('[AUDIT-STORAGE] Container does not exist, attempting to create...')
-        
-        // Create container if it doesn't exist
-        const createResponse = await fetch(url, {
-          method: 'PUT',
-          headers: this.getHeaders(),
-        })
-        
-        console.log('[AUDIT-STORAGE] Container creation response:', createResponse.status)
-        
-        if (!createResponse.ok && createResponse.status !== 409) {
-          const errorText = await createResponse.text()
-          console.error('[AUDIT-STORAGE] Failed to create container:', errorText)
-          throw new Error(`Failed to create audit container: ${createResponse.status} - ${errorText}`)
-        }
-        
-        console.log('[AUDIT-STORAGE] Successfully created audit-logs container')
-      } else if (checkResponse.ok || checkResponse.status === 200) {
-        console.log('[AUDIT-STORAGE] Container already exists')
-      } else {
-        throw new Error(`Audit storage is unavailable (${checkResponse.status})`)
-      }
-    } catch (error) {
-      console.error('[AUDIT-STORAGE] Error ensuring audit container exists:', error)
-      throw error
-    }
+    const check = await this.fetch(url, { method: 'HEAD', headers: this.getHeaders() })
+    if (check.ok) return
+    if (check.status !== 404) throw new Error(`Audit storage is unavailable (${check.status})`)
+    const created = await this.fetch(url, { method: 'PUT', headers: this.getHeaders() })
+    if (!created.ok && created.status !== 409) throw new Error(`Audit container could not be created (${created.status})`)
   }
 
-  async writeLog(entry: AuditLogEntry): Promise<void> {
-    if (!entry.id || !/^[a-zA-Z0-9-]{1,128}$/.test(entry.id) || !Number.isFinite(Date.parse(entry.timestamp))) {
+  async testProducerAccess(tenantId: string): Promise<boolean> {
+    const prefix = `producer-tests/${tenantId.toLowerCase()}/backup-reader`
+    const auditUrl = this.blobUrl(`${prefix}-${randomUUID()}.json`)
+    const backupUrl = `${this.getBaseUrl()}/intune-backups/${blobPath(`${prefix}.json`)}`
+    const canary = JSON.stringify({ tenantId, type: 'audit-access-test' })
+    const request = (url: string, method: string, headers?: HeadersInit, body?: string) =>
+      this.fetch(url, { method, headers: { ...this.getHeaders(), ...headers }, body, signal: AbortSignal.timeout(15000) })
+    // Only an ambiguous response to this fresh conditional create can be verified by readback.
+    const created = await request(auditUrl, 'PUT', { 'x-ms-blob-type': 'BlockBlob', 'If-None-Match': '*' }, canary)
+      .catch(() => undefined)
+    if (created && !created.ok && created.status !== 0 && created.status !== 408 && created.status < 500) {
+      throw new Error(`Audit storage test could not create a blob (${created.status})`)
+    }
+    const read = await request(auditUrl, 'GET')
+    if (!read.ok || await read.text() !== canary) throw new Error('Audit storage test could not be verified')
+    const backup = await request(backupUrl, 'PUT', { 'x-ms-blob-type': 'BlockBlob' }, canary)
+    if (!backup.ok) throw new Error('Could not write the backup permission test blob')
+    const probes = await Promise.all([
+      request(auditUrl, 'PUT', { 'x-ms-blob-type': 'BlockBlob', 'If-Match': '*' }, canary),
+      request(backupUrl, 'DELETE'),
+    ])
+    // Test audit deletion after overwrite, otherwise deletion could make the overwrite inconclusive.
+    probes.push(await request(auditUrl, 'DELETE'))
+    if (probes.some(result => result.ok)) throw new Error('The Backup Reader has excessive Azure Storage permissions. Remove grants that allow audit overwrite or blob deletion.')
+    if (probes.some(result => result.status !== 403)) throw new Error('Azure Storage did not confirm that audit overwrite and blob deletion are denied.')
+    return true
+  }
+
+  async writeLog(input: AuditLogEntry): Promise<void> {
+    const entry = projectEntry(input)
+    if (!/^[a-zA-Z0-9-]{1,128}$/.test(input.id) || !Number.isFinite(Date.parse(entry.timestamp))) {
       throw new Error('Audit event requires a valid ID and timestamp')
     }
     queueEvent(this.credentials.storageAccountName, entry)
-    await this.ensureContainerExists()
+    await this.deliver(entry)
+  }
+
+  async deliver(input: AuditLogEntry): Promise<void> {
+    const entry = projectEntry(input)
+    if (this.credentials.provisionContainer !== false) await this.ensureContainerExists()
     await this.uploadLog(entry)
     acknowledgeEvent(this.credentials.storageAccountName, entry.id)
   }
 
-  private async uploadLog(entry: AuditLogEntry): Promise<void> {
-    const date = new Date(entry.timestamp)
-    // The daily prefix keeps legacy files and immutable events queryable together.
-    const path = this.getLogFilePath(date).replace('.json', `-event-${entry.id}.json`)
-    const url = `${this.getBaseUrl()}/${AUDIT_CONTAINER}/${path}`
-    const file: AuditLogFile = { date: date.toISOString().slice(0, 10), entries: [entry], version: '2.0',
-      metadata: { createdAt: entry.timestamp, lastModified: entry.timestamp, entryCount: 1 } }
-    const response = await fetch(url, { method: 'PUT', headers: { ...this.getHeaders(), 'x-ms-blob-type': 'BlockBlob', 'If-None-Match': '*', 'x-ms-meta-audit_timestamp': entry.timestamp, 'x-ms-meta-audit_entries': '1' }, body: JSON.stringify(file) })
-    if (response.status === 412) {
-      // A retry after a lost response must not duplicate the event or replace a
-      // different event that accidentally reused its ID.
-      const existing = await fetch(url, { headers: this.getHeaders() })
-      if (existing.ok && JSON.stringify((await existing.json()).entries) === JSON.stringify([entry])) {
-        return
-      }
-      throw new Error('An audit event with this ID already exists and could not be verified')
-    }
-    if (!response.ok) throw new Error(`Failed to write audit log (${response.status}); the event is queued for retry`)
+  private detailPath(entry: AuditLogEntry, index: number): string {
+    if (!/^[a-zA-Z0-9-]{1,128}$/.test(entry.id)) throw new Error('Invalid audit detail identifier')
+    return `job-details/${entry.timestamp.slice(0, 10)}/${entry.id}/${index}.json`
   }
 
-  pendingCount(): number { return pendingEvents(this.credentials.storageAccountName).length }
-
-  async retryPending(): Promise<number> {
-    // Bound network work per refresh and acknowledge once, preserving newly queued events.
-    const entries = pendingEvents(this.credentials.storageAccountName).slice(0, 100)
-    const saved = new Set<string>()
-    try {
-      if (entries.length) await this.ensureContainerExists()
-      for (const entry of entries) {
-        try { await this.uploadLog(entry); saved.add(entry.id) } catch { break }
+  private async putImmutable(name: string, data: unknown, matches: (existing: any) => boolean, metadata?: HeadersInit): Promise<boolean> {
+    const url = this.blobUrl(name)
+    const response = await this.fetch(url, {
+      method: 'PUT',
+      headers: { ...this.getHeaders(), 'x-ms-blob-type': 'BlockBlob', 'If-None-Match': '*', ...metadata },
+      body: JSON.stringify(data),
+      signal: AbortSignal.timeout(15000),
+    })
+    if ([403, 409, 412].includes(response.status)) {
+      // An add-only identity may be denied on an existing blob. Verify without replacing it.
+      const existing = await this.fetch(url, { headers: this.getHeaders(), signal: AbortSignal.timeout(15000) })
+      if (existing.ok) {
+        if (matches(await existing.json())) return false
+        throw new Error('An audit event with this ID already exists and could not be verified')
       }
-    } catch { /* Keep the queue visible when container access fails. */ }
-    finally { acknowledgeEvents(this.credentials.storageAccountName, saved) }
-    return this.pendingCount()
+    }
+    if (response.status === 404 && response.headers.get('x-ms-error-code') === 'ContainerNotFound') throw new AuditContainerMissingError()
+    if (!response.ok) throw new Error(`Failed to write audit log (${response.status}); the event is queued for retry`)
+    return true
+  }
+
+  private async uploadLog(entry: AuditLogEntry): Promise<void> {
+    const items = entry.job?.items
+    let root = entry
+    if (items && items.length > DETAIL_PAGE_SIZE) {
+      const detailPages = Math.ceil(items.length / DETAIL_PAGE_SIZE)
+      if (detailPages > MAX_DETAIL_PAGES) throw new Error('Audit job exceeds the detail page limit')
+      for (let index = 0; index < detailPages; index++) {
+        const page = { tenantId: entry.user.tenantId, items: items.slice(index * DETAIL_PAGE_SIZE, (index + 1) * DETAIL_PAGE_SIZE) }
+        await this.putImmutable(this.detailPath(entry, index), page, existing => JSON.stringify(existing) === JSON.stringify(page))
+      }
+      root = { ...entry, job: { ...entry.job!, items: undefined, detailPages } }
+    }
+    const date = new Date(root.timestamp)
+    const name = this.eventPath(root)
+    const file: AuditLogFile = { date: date.toISOString().slice(0, 10), entries: [root], version: '2.0',
+      metadata: { createdAt: root.timestamp, lastModified: root.timestamp, entryCount: 1 } }
+    await this.putImmutable(name, file,
+      existing => Array.isArray(existing?.entries) && existing.entries.length === 1
+        && JSON.stringify(projectEntry(existing.entries[0])) === JSON.stringify(root),
+      { 'x-ms-meta-audit_timestamp': root.timestamp, 'x-ms-meta-audit_entries': '1' })
+  }
+
+  private eventPath(entry: AuditLogEntry): string {
+    return this.getLogFilePath(new Date(entry.timestamp)).replace('.json', `-event-${entry.id}.json`)
+  }
+
+  private async eventWasSaved(input: AuditLogEntry, strict = false): Promise<boolean> {
+    const entry = projectEntry(input)
+    const response = await this.fetch(this.blobUrl(this.eventPath(entry)), {
+      headers: this.getHeaders(), signal: AbortSignal.timeout(15000),
+    })
+    if (!response.ok) {
+      if (strict && response.status !== 404) throw new Error(`Could not verify the original audit event (${response.status}).`)
+      return false
+    }
+    const file = await response.json()
+    if (!Array.isArray(file?.entries) || file.entries.length !== 1) return false
+    const saved = projectEntry(file.entries[0])
+    if (JSON.stringify(saved) === JSON.stringify(entry)) return true
+    // An acknowledgement may have been lost after an administrator explicitly recovered it.
+    if (entry.job?.producer !== 'backup-reader' || saved.job?.producerPrincipalId !== entry.user.id ||
+      saved.user.tenantId !== entry.user.tenantId) return false
+    const deliveredByPrincipalId = saved.job.deliveredByPrincipalId
+    const recovered = projectEntry({
+      ...entry, user: deliveredByPrincipalId ? entry.user : saved.user,
+      job: { ...entry.job, producerPrincipalId: entry.user.id, deliveredByPrincipalId },
+    })
+    return JSON.stringify(saved) === JSON.stringify(recovered)
+  }
+
+  /** Explicit recovery of an immutable Reader event, preserving its original key and lineage. */
+  async deliverReaderAsAdmin(input: AuditLogEntry, admin: AuditUser): Promise<void> {
+    if (input.job?.producer !== 'backup-reader' || !input.user.tenantId) throw new Error('Expected a Backup Reader audit event')
+    if (this.credentials.provisionContainer !== false) await this.ensureContainerExists()
+    const entry = projectEntry({
+      ...input,
+      job: { ...input.job, producerPrincipalId: input.user.id, deliveredByPrincipalId: admin.id },
+    })
+    if (!await this.eventWasSaved(input, true)) {
+      try { await this.uploadLog(entry) }
+      catch (error) { if (!await this.eventWasSaved(input, true)) throw error }
+    }
+    acknowledgeEvent(this.credentials.storageAccountName, entry.id)
+  }
+
+  pendingCount(tenantId?: string): number {
+    return pendingEvents(this.credentials.storageAccountName)
+      .filter(entry => !tenantId || !entry.user.tenantId || entry.user.tenantId.toLowerCase() === tenantId.toLowerCase()).length
+  }
+
+  async retryPending(tenantId?: string): Promise<number> {
+    const entries = pendingEvents(this.credentials.storageAccountName)
+      .filter(entry => !tenantId || !entry.user.tenantId || entry.user.tenantId.toLowerCase() === tenantId.toLowerCase()).slice(0, 100)
+    const saved = new Set<string>()
+    let writable = false
+    try {
+      if (entries.some(entry => entry.job?.producer !== 'backup-reader')) {
+        await this.ensureContainerExists()
+        writable = true
+      }
+    } catch { /* A granted read can still confirm an earlier delivery. */ }
+    for (const entry of entries) {
+      try {
+        if (entry.job?.producer === 'backup-reader') {
+          if (await this.eventWasSaved(entry)) saved.add(entry.id)
+        } else if (writable) {
+          await this.uploadLog(projectEntry(entry))
+          saved.add(entry.id)
+        }
+      } catch { /* Retry remaining events independently. */ }
+    }
+    acknowledgeEvents(this.credentials.storageAccountName, saved)
+    return this.pendingCount(tenantId)
+  }
+
+  private async withDetails(entry: AuditLogEntry): Promise<AuditLogEntry> {
+    const count = entry.job?.detailPages
+    if (!count) return entry
+    const job = entry.job!
+    if (!Number.isSafeInteger(count) || count < 1 || count > MAX_DETAIL_PAGES) {
+      return { ...entry, job: { ...job, detailsIncomplete: true } }
+    }
+    const pages = await mapLimit(Array.from({ length: count }, (_, index) => index), AUDIT_READ_CONCURRENCY, index =>
+      limitRead(this.credentials.storageAccountName, async () => {
+        try {
+          const response = await this.fetch(this.blobUrl(this.detailPath(entry, index)), { headers: this.getHeaders() })
+          if (!response.ok) return null
+          const page = await response.json()
+          if (page.tenantId !== entry.user.tenantId || !Array.isArray(page.items) || page.items.length > DETAIL_PAGE_SIZE) return null
+          return page.items.map(projectItem) as AuditJobItem[]
+        } catch {
+          return null
+        }
+      }))
+    return { ...entry, job: { ...job, items: pages.flatMap(page => page ?? []), detailsIncomplete: pages.includes(null) || undefined } }
   }
 
   async queryLogs(filter: AuditLogFilter): Promise<AuditLogEntry[]> {
@@ -209,12 +330,12 @@ export class AuditStorageService {
       throw new AuditRangeError('Choose a limit from 1 to 1000 and a non-negative offset.')
     }
     const entries = await this.query(filter, offset + limit)
-    return entries.slice(offset, offset + limit)
+    return mapLimit(entries.slice(offset, offset + limit), AUDIT_READ_CONCURRENCY, entry => this.withDetails(entry))
   }
 
   /** Complete matching history for exports and aggregates, independent of UI pagination. */
   async queryAllLogs(filter: AuditLogFilter): Promise<AuditLogEntry[]> {
-    return this.query(filter)
+    return mapLimit(await this.query(filter), AUDIT_READ_CONCURRENCY, entry => this.withDetails(entry))
   }
 
   private async query(filter: AuditLogFilter, needed?: number): Promise<AuditLogEntry[]> {
@@ -287,7 +408,7 @@ export class AuditStorageService {
     if (!cache) { cache = new MetadataCache(() => true); readCaches.set(fetch, cache) }
     const key = JSON.stringify([this.credentials.storageAccountName.toLowerCase(), blob.name])
     const load = () => limitRead(this.credentials.storageAccountName, async () => {
-      const response = await fetch(this.blobUrl(blob.name), { headers: this.getHeaders() })
+      const response = await this.fetch(this.blobUrl(blob.name), { headers: this.getHeaders() })
       if (!response.ok) throw new Error(`Audit history is unavailable: an event file could not be read (${response.status})`)
       const file: AuditLogFile = await response.json()
       if (!Array.isArray(file.entries) || (blob.timestamp !== null && (file.entries.length !== 1 || Date.parse(file.entries[0]!.timestamp) !== blob.timestamp || file.entries[0]!.id !== this.eventId(blob)))) {
@@ -346,12 +467,16 @@ export class AuditStorageService {
     
     if (filter.searchQuery) {
       const query = filter.searchQuery.toLowerCase()
+      const reference = auditId(filter.searchQuery)?.toLowerCase()
       filteredEntries = filteredEntries.filter(e => 
         e.action.toLowerCase().includes(query) ||
         e.user.email.toLowerCase().includes(query) ||
         e.user.name.toLowerCase().includes(query) ||
         e.resource.name.toLowerCase().includes(query) ||
-        JSON.stringify(e.details).toLowerCase().includes(query)
+        e.resource.id.toLowerCase().includes(query) || e.resource.id === reference ||
+        (e.context?.correlationId ?? '').toLowerCase().includes(query) ||
+        JSON.stringify(e.details ?? {}).toLowerCase().includes(query) ||
+        JSON.stringify(e.job ?? {}).toLowerCase().includes(query)
       )
     }
     
@@ -399,7 +524,7 @@ export class AuditStorageService {
   }
 
   async getStats(filter: AuditLogFilter): Promise<AuditLogStats> {
-    const allEntries = await this.queryAllLogs(filter)
+    const allEntries = await this.query(filter)
     
     const stats: AuditLogStats = {
       totalEvents: allEntries.length,
@@ -511,13 +636,16 @@ export class AuditStorageService {
       const name = blobXml.match(/<Name>([^<]+)<\/Name>/)?.[1]
       const lastModified = blobXml.match(/<Last-Modified>([^<]+)<\/Last-Modified>/)?.[1]
       if (!name || !lastModified || !(new Date(lastModified) < cutoffDate)) continue
+      // Detail pages can be staged long before the immutable root becomes visible.
+      if (decodeXml(name).startsWith('job-details/')) continue
       let blobUrl: string
       try { blobUrl = this.blobUrl(decodeXml(name)) } catch { continue }
       const file = await fetch(blobUrl, { headers: this.getHeaders() })
       if (file.status === 404) continue
       if (!file.ok) throw new Error(`An audit file could not be read (${file.status}); nothing more was deleted.`)
-      const entries = ((await file.json().catch(() => null)) as Partial<AuditLogFile> | null)?.entries
-      const owned = Array.isArray(entries) && entries.length > 0 && entries.every((entry) => typeof entry?.user?.tenantId === 'string' && entry.user.tenantId.toLowerCase() === tenant)
+      const data = await file.json().catch(() => null)
+      const entries = data?.entries as AuditLogEntry[] | undefined
+      const owned = /^producer-tests\//.test(decodeXml(name)) ? typeof data?.tenantId === 'string' && data.tenantId.toLowerCase() === tenant : Array.isArray(entries) && entries.length > 0 && entries.every((entry) => typeof entry?.user?.tenantId === 'string' && entry.user.tenantId.toLowerCase() === tenant)
       if (!owned) {
         kept++
         continue
@@ -525,6 +653,24 @@ export class AuditStorageService {
       const response = await fetch(blobUrl, { method: 'DELETE', headers: this.getHeaders() })
       if (!response.ok && response.status !== 404) throw new Error(`An audit file could not be deleted (${response.status}); ${deleted} older file${deleted === 1 ? ' was' : 's were'} deleted before it.`)
       deleted++
+      for (const entry of entries ?? []) {
+        const pages = entry.job?.detailPages
+        if (!pages || !Number.isSafeInteger(pages) || pages < 1 || pages > MAX_DETAIL_PAGES ||
+          !/^[a-zA-Z0-9-]{1,128}$/.test(entry.id) || !Number.isFinite(Date.parse(entry.timestamp)) ||
+          this.eventPath(entry) !== decodeXml(name)) continue
+        for (let index = 0; index < pages; index++) {
+          const detailUrl = this.blobUrl(this.detailPath(entry, index))
+          const page = await fetch(detailUrl, { headers: this.getHeaders() })
+          if (page.status === 404) continue
+          if (!page.ok) throw new Error(`An audit detail page could not be read (${page.status}).`)
+          const pageTenant = (await page.json().catch(() => null))?.tenantId
+          if (typeof pageTenant !== "string" || pageTenant.toLowerCase() !== tenant) { kept++; continue }
+          const removed = await fetch(detailUrl, { method: 'DELETE', headers: this.getHeaders() })
+          if (removed.status === 404) continue
+          if (!removed.ok) throw new Error(`An audit detail page could not be deleted (${removed.status}).`)
+          deleted++
+        }
+      }
     }
     return { deleted, kept }
   }

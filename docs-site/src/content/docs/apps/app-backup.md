@@ -219,3 +219,7 @@ If a folder cannot be read, check its location and import the matching key. Afte
 - [What gets backed up](/backups/coverage/): app settings and installer content are separate.
 - [Encryption and recovery key](/security/encryption/)
 - [Network connections and data flows](/security/data-flows/#app-backup): the addresses App Backup contacts and what is sent to each.
+
+### Audit history for app restores
+
+The destination tenant’s [Audit Log](/audit-log/) records App Backup restore metadata and installer publication. If only the source tenant has backup storage, its Audit Log holds the event and **Job details** identifies the destination tenant. **Job details** also shows whether TenuVault verified each step, and links attempts for the same restored app by operation ID. An incomplete restore can show an unassigned app draft with publication still unverified. A successful retry that finishes publishing the draft records the app as created by the original restore. A retry that fails during its reads records a failed attempt.

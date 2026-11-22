@@ -153,11 +153,11 @@ export function recordSyncLinks(deps: FeatureDeps, targetTenantId: string, sourc
   if (!changed.length && !removed) return { written: 0, unresolved }
   const linked = (total: number) => `${total} linked polic${total === 1 ? "y" : "ies"}`
   const reason = [
-    ...(changed.length ? [`Linked ${changed.length} synced polic${changed.length === 1 ? "y" : "ies"}`] : []),
+    ...(changed.length ? [`Linked ${changed.length} copied polic${changed.length === 1 ? "y" : "ies"}`] : []),
     ...(removed ? [`Removed ${removed} link${removed === 1 ? "" : "s"} to policies a rollback deleted`] : []),
   ].join("; ")
   if (!stored) {
-    deps.records.create<SyncLinksRecord>(DOMAINS.syncLinks, target, { title: `Sync links from ${source}`, status: "active", summary: `${linked(changed.length)}.`, sourceTenantId: source, links: Object.fromEntries(changed) }, { actor: null, reason })
+    deps.records.create<SyncLinksRecord>(DOMAINS.syncLinks, target, { title: `Copy links from ${source}`, status: "active", summary: `${linked(changed.length)}.`, sourceTenantId: source, links: Object.fromEntries(changed) }, { actor: null, reason })
     return { written: changed.length, unresolved }
   }
   deps.records.update<SyncLinksRecord>(DOMAINS.syncLinks, target, stored.id, (latest) => {
@@ -171,7 +171,7 @@ export function recordSyncLinks(deps: FeatureDeps, targetTenantId: string, sourc
 
 /** The warning for a policy whose earlier Sync to this tenant has an unconfirmed create. */
 export function unconfirmedCreate(sourceName: string): string {
-  return `An earlier sync of "${sourceName}" to this tenant has an unconfirmed result. Syncing again may create a second copy. Retry that sync first so TenuVault can check.`
+  return `An earlier copy of "${sourceName}" to this tenant has an unconfirmed result. Copying again may create a second policy. Retry that copy first so TenuVault can check.`
 }
 
 /**
@@ -192,15 +192,15 @@ export function staleSyncLinks(deps: FeatureDeps, targetTenantId: string, promot
   for (const item of promotion.items.filter((entry) => !entry.blocked)) {
     const key = linkKey(item.folder, item.sourceId)
     if (!(key in planned)) {
-      reasons.push(`The Sync links this plan relied on for "${item.sourceName}" were not recorded. Plan again.`)
+      reasons.push(`The copy links this plan relied on for "${item.sourceName}" were not recorded. Plan again.`)
       continue
     }
     const linked = current[key]?.targetPolicyId.toLowerCase() ?? null
     if (linked !== null && own.has(linked)) continue
     if (linked === (planned[key]?.toLowerCase() ?? null)) continue
     reasons.push(item.action === "create"
-      ? `Another Sync wrote "${item.sourceName}" to this tenant after this plan, so applying it would create a second policy. Plan again.`
-      : `Another Sync linked "${item.sourceName}" to a different policy in this tenant after this plan. Plan again.`)
+      ? `Another copy wrote "${item.sourceName}" to this tenant after this plan, so applying it would create a second policy. Plan again.`
+      : `Another copy linked "${item.sourceName}" to a different policy in this tenant after this plan. Plan again.`)
   }
   return reasons
 }

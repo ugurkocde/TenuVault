@@ -103,9 +103,9 @@ If the check fails, TenuVault explains why:
 
 Backup files are plain JSON, protected by Azure encryption at rest and your role assignments. Anyone who can read the container can read them, including the plain-text values of secret OMA-URI settings that a backup keeps so a restore can put them back. Anyone who can write to it is trusted like an Intune admin, because a restore writes what it finds there. Grant blob data roles on the account only to your Intune admin group. Audit log events are stored as plain JSON too. Backups made by earlier TenuVault versions stay encrypted with the key of the device that made them; see [Older encrypted Azure backups](/security/encryption/#older-encrypted-azure-backups).
 
-With the optional [Backup Reader](/backups/backup-reader/), scheduled backups write to `intune-backups` as that read-only app instead of as you. An Azure administrator grants it the custom **TenuVault Backup Writer** role on this container only (read and write, no delete, no container creation) and turns on blob versioning; see [Let the Backup Reader write backups](/getting-started/create-storage-account/#optional-let-the-backup-reader-write-backups). Backup Reader runs write nothing to `audit-logs`; see [Audit log](/audit-log/).
+With the optional [Backup Reader](/backups/backup-reader/), scheduled backups write to `intune-backups` as that read-only app instead of as you. An Azure administrator grants it the custom **TenuVault Backup Writer** role on this container only (read and write, no delete, no container creation) and turns on blob versioning; see [Let the Backup Reader write backups](/getting-started/create-storage-account/#optional-let-the-backup-reader-write-backups). The current Backup Reader records terminal events in `audit-logs` after you apply the audit writer grant. Earlier Reader versions did not write those events. See [Audit log](/audit-log/).
 
-With [cloud backups](/backups/cloud/), a runbook in your own Azure Automation account writes to `intune-backups` as its managed identity with the same writer role, and records each run in a `cloud-backup-status-<tenant>.json` blob in the same container. [Cloud backups](/backups/cloud/) describes how the runbook stores them. Cloud runs also write nothing to `audit-logs`.
+With [cloud backups](/backups/cloud/), a runbook in your own Azure Automation account writes to `intune-backups` as its managed identity with the same writer role, and records each run in a `cloud-backup-status-<tenant>.json` blob in the same container. [Cloud backups](/backups/cloud/) describes how the runbook stores them. Cloud runbook 1.5.0 and later record terminal events in `audit-logs` with the audit writer grant. Older runbooks write backup files and status only.
 
 ## Change where a tenant's backups go
 
@@ -116,6 +116,8 @@ The Schedule tab shows the current location in step 1 and changes it there; the 
 3. Click **Save**.
 
 New backups go to the new location. Existing backups stay where they are, and TenuVault lists them only while their location is selected for the tenant.
+
+The **TenuVault Backup Writer** role can overwrite existing blobs in `intune-backups`. The storage owner chooses whether to enable blob versioning or apply an immutability policy. The separate audit writer grant permits read and create on the audit container.
 
 ## Retention
 

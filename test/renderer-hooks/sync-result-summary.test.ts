@@ -50,11 +50,11 @@ describe("Sync result summary", () => {
       { target: target(D, "failed", { status: "uncertain" }), name: "Contoso Japan", domain: "contoso.co.jp", phase: "failed", storage: false },
     ])
     const summary = container.querySelector('[aria-label="Summary"]')?.textContent ?? ""
-    expect(summary).not.toContain("Links saved for the next sync")
+    expect(summary).not.toContain("Links saved for the next copy")
     expect(summary).not.toContain("Rollback available")
     expect(container.textContent).toContain("Rollback needs backup storage in this tenant.")
     // A write that may have gone through is never reported as nothing synced in the status line.
-    expect(container.querySelector('[role="status"]')?.textContent).toBe("Synced to 0 of 1 tenant. 1 needs attention.")
+    expect(container.querySelector('[role="status"]')?.textContent).toBe("Copied to 0 of 1 tenant. 1 needs attention.")
   })
 
   it("shows saved links once a write is verified, and counts the unconfirmed target in the rollback chip", () => {
@@ -63,8 +63,17 @@ describe("Sync result summary", () => {
       { target: target(D, "failed", { status: "uncertain" }), name: "Contoso Japan", domain: "contoso.co.jp", phase: "failed", storage: false },
     ])
     const summary = container.querySelector('[aria-label="Summary"]')?.textContent ?? ""
-    expect(summary).toContain("Links saved for the next sync")
+    expect(summary).toContain("Links saved for the next copy")
     expect(summary).toContain("Rollback available in 1 of 2 tenants")
+  })
+
+  it("does not count a target that was already up to date as copied to", () => {
+    const inSync: SyncTarget = { targetTenantId: D, promotionId: null, error: null, rollbackChangeSet: null, promotion: null, changeSet: null, skipped: [{ folder: "ConfigurationPolicies", sourceId: "s", sourceName: "Defender" }] } as unknown as SyncTarget
+    const container = render([
+      { target: target(B, "applied", { status: "verified", objectId: "new-b" }), name: "Contoso Germany", domain: "contoso.de", phase: "verified", storage: true },
+      { target: inSync, name: "Contoso Japan", domain: "contoso.co.jp", phase: "in-sync", storage: true },
+    ])
+    expect(container.querySelector('[role="status"]')?.textContent).toBe("Copied to 1 tenant, 1 already up to date")
   })
 })
 
@@ -96,7 +105,7 @@ describe("Sync result while writing", () => {
     expect(node(container, "Contoso Brazil").getAttribute("aria-label")).toBe("Contoso Brazil: Writing and verifying 2 of 3")
     expect(node(container, "Contoso France").querySelector('[aria-label="Stages"] [aria-current="step"]')?.textContent).toBe("Write and verify")
     expect(node(container, "Contoso Japan").querySelector('[aria-label="Stages"]')?.textContent).toBe("ApproveSaveWrite and verify")
-    expect(container.querySelector('[role="status"]')?.textContent).toBe("Syncing to 4 tenants0 of 4 finished")
+    expect(container.querySelector('[role="status"]')?.textContent).toBe("Copying to 4 tenants0 of 4 finished")
     expect(Number(container.querySelector('[role="progressbar"]')!.getAttribute("aria-valuenow"))).toBeGreaterThan(0)
     // Writing targets are never faded; only a target left out is.
     for (const name of ["Contoso Germany", "Contoso Japan", "Contoso France", "Contoso Brazil"]) expect(node(container, name).className).not.toMatch(/opacity-/)

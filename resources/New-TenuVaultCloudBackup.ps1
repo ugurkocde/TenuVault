@@ -22,6 +22,8 @@
         counts, failed type names, time; never policy content) for the notification watcher to
         alert on. A container of its own: the identity never gets write access to the
         watcher's state
+      * tries to create the private audit-logs container and grants the managed identity read and
+        create access there. If Azure refuses, setup continues and prints the manual steps
       * links the runbook to a daily or weekly schedule in the timezone you choose
       * with -AlertEmail, creates an Azure Monitor action group and a metric alert on failed
         Automation jobs, before the schedule is linked. Without it, -NoFailureAlert is the
@@ -118,6 +120,9 @@
     Say that a Global Administrator already assigned the roles listed by an earlier run, so the
     schedule can be linked.
 
+.PARAMETER AuditRoleOnly
+    Provision audit storage and its scoped role, then stop before publishing a runbook.
+
 .PARAMETER Remove
     Remove this tenant's schedule link, schedule and variables, then list the rest.
 
@@ -146,6 +151,7 @@ param(
     [switch]$IncludeDeviceCategories,
     [switch]$GrantGraphRoles,
     [switch]$GraphRolesGranted,
+    [switch]$AuditRoleOnly,
     [switch]$Remove
 )
 
@@ -156,6 +162,8 @@ $backupContainer = "intune-backups"
 # Each run leaves its result note here for the notification watcher. Not the watcher's state
 # container: write access there would let this identity rewrite the watcher's state.
 $outcomeContainer = "tenuvault-backup-results"
+$auditContainer = "audit-logs"
+$auditRunbookVersion = "1.5.0"
 $runbookPath = Join-Path $PSScriptRoot "runbooks/Invoke-TenuVaultBackup.ps1"
 $tenantKey = $TenantId.Substring(0, [Math]::Min(8, $TenantId.Length)).ToLowerInvariant()
 $scheduleName = "TenuVaultBackup-$tenantKey"
@@ -206,7 +214,7 @@ if ($AlertEmail -and $AlertEmail -notmatch "^[^@\s]+@[^@\s]+$") {
 if ($AlertEmail -and $NoFailureAlert) {
     throw "-AlertEmail and -NoFailureAlert contradict each other. Pass only one of them."
 }
-if (-not $Remove -and -not $AlertEmail -and -not $NoFailureAlert) {
+if (-not $Remove -and -not $AuditRoleOnly -and -not $AlertEmail -and -not $NoFailureAlert) {
     throw "Decide how failed cloud backups will be noticed before anything is created: pass -AlertEmail <address> to create an Azure Monitor failure alert, or -NoFailureAlert to explicitly accept that failed runs are only visible in the Automation job list and in TenuVault. Nothing was written."
 }
 if ($GrantGraphRoles -and $GraphRolesGranted) {
@@ -262,6 +270,59 @@ function Get-TenuVaultAutomationPrincipalId {
         return [string]$resource.Identity.PrincipalId
     }
     return $null
+}
+
+# Match the ARM guid() function so scripts and templates reuse the same Azure role.
+function Get-TenuVaultAuditGuid {
+    param([string]$Name)
+    $namespace = [byte[]]@(0x11, 0xfb, 0x06, 0xfb, 0x71, 0x2d, 0x4d, 0xdd, 0x98, 0xc7, 0xe7, 0x1b, 0xbd, 0x58, 0x88, 0x30)
+    $inputBytes = [byte[]]($namespace + [Text.Encoding]::UTF8.GetBytes($Name))
+    $hash = [Security.Cryptography.SHA1]::Create()
+    try { $digest = $hash.ComputeHash($inputBytes)[0..15] }
+    finally { $hash.Dispose() }
+    $digest[6] = ($digest[6] -band 15) -bor 80
+    $digest[8] = ($digest[8] -band 63) -bor 128
+    return [guid]::ParseExact(($digest.ForEach({ $_.ToString("x2") }) -join ""), "N").ToString()
+}
+
+# Both standalone setup scripts provision the same create-only audit role.
+function Get-TenuVaultAuditRole {
+    param([string]$GroupScope)
+    $definitionId = Get-TenuVaultAuditGuid "$($GroupScope.ToLowerInvariant())-TenuVault Audit Writer"
+    $name = "TenuVault Audit Writer $definitionId"
+    $actions = @(
+        "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read",
+        "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/add/action"
+    )
+    $role = Get-AzRoleDefinition -Name $name -ErrorAction SilentlyContinue
+    if ($role) {
+        $management = @()
+        $data = @()
+        if ($role.PSObject.Properties.Name -contains "Permissions" -and $role.Permissions) {
+            foreach ($permission in $role.Permissions) {
+                $management += @($permission.Actions)
+                $data += @($permission.DataActions)
+            }
+        } else {
+            $management = @($role.Actions)
+            $data = @($role.DataActions)
+        }
+        if (@($management | Where-Object { $_ }).Count -or @(Compare-Object $actions $data).Count -or $role.AssignableScopes -notcontains $GroupScope) {
+            throw "The existing audit writer role differs from the create-only role for this resource group. Review its definition before retrying."
+        }
+        return $role
+    }
+    if (-not $PSCmdlet.ShouldProcess($GroupScope, "Create audit writer role")) { return }
+    $payload = @{ properties = @{
+        roleName = $name
+        description = "TenuVault audit writer: reads and creates blobs. Assigned only on the audit container."
+        type = "CustomRole"
+        permissions = @(@{ actions = @(); notActions = @(); dataActions = $actions; notDataActions = @() })
+        assignableScopes = @($GroupScope)
+    } } | ConvertTo-Json -Depth 8 -Compress
+    $response = Invoke-AzRestMethod -Method Put -Path "$GroupScope/providers/Microsoft.Authorization/roleDefinitions/$definitionId`?api-version=2022-04-01" -Payload $payload
+    if ([int]$response.StatusCode -notin @(200, 201)) { throw "The audit writer role could not be created (Azure status $($response.StatusCode))." }
+    return [pscustomobject]@{ Id = $definitionId; Name = $name }
 }
 
 function Add-TenuVaultRoleAssignment {
@@ -679,6 +740,58 @@ if (-not $stateContainer) {
     }
 }
 
+function Initialize-TenuVaultAuditAccess {
+    try {
+        if (-not (Get-AzStorageContainer -Name $auditContainer -Context $storageContext -ErrorAction SilentlyContinue)) {
+            if ($PSCmdlet.ShouldProcess($auditContainer, "Create private audit storage container")) {
+                New-AzStorageContainer -Name $auditContainer -Context $storageContext -Permission Off | Out-Null
+            }
+        }
+        if ($principalId) {
+            $auditRole = Get-TenuVaultAuditRole $storageGroupScope
+            if ($auditRole) {
+                $auditAssignmentScope = "$($storageAccount.Id)/blobServices/default/containers/$auditContainer"
+                $roleId = ([string]$auditRole.Id).Split("/")[-1]
+                $existing = Get-AzRoleAssignment -ObjectId $principalId -RoleDefinitionId $roleId -Scope $auditAssignmentScope |
+                    Where-Object { $_.Scope -eq $auditAssignmentScope }
+                if (-not $existing -and $PSCmdlet.ShouldProcess($auditAssignmentScope, "Assign the create-only audit role to the managed identity")) {
+                    # ARM deploys both accounts in the same group and uses the relative container scope.
+                    # Keep the principal-specific key for shared storage in another resource group.
+                    $assignmentKey = if (($storageGroupScope -split '/')[-1] -eq $ResourceGroupName) {
+                        $relativeScope = $auditAssignmentScope.Substring($storageGroupScope.Length + "/providers/".Length).ToLowerInvariant()
+                        "$relativeScope-$($AutomationAccountName.ToLowerInvariant())-$($auditRole.Name)"
+                    } else { "$auditAssignmentScope-$principalId-$roleId".ToLowerInvariant() }
+                    $assignmentId = Get-TenuVaultAuditGuid $assignmentKey
+                    $payload = @{ properties = @{
+                        principalId = $principalId; principalType = "ServicePrincipal"
+                        roleDefinitionId = "$storageGroupScope/providers/Microsoft.Authorization/roleDefinitions/$roleId"
+                    } } | ConvertTo-Json -Depth 5 -Compress
+                    $response = Invoke-AzRestMethod -Method Put -Path "$auditAssignmentScope/providers/Microsoft.Authorization/roleAssignments/$assignmentId`?api-version=2022-04-01" -Payload $payload
+                    if ([int]$response.StatusCode -notin @(200, 201)) { throw "The audit role could not be assigned (Azure status $($response.StatusCode))." }
+                }
+            }
+            # Azure RBAC is additive, including inherited grants. Report grants above or alongside
+            # the assignments setup manages so the operator can check their effective permissions.
+            $backupScope = "$($storageAccount.Id)/blobServices/default/containers/$backupContainer"
+            $auditScope = "$($storageAccount.Id)/blobServices/default/containers/$auditContainer"
+            foreach ($assignment in @(Get-AzRoleAssignment -ObjectId $principalId -Scope $auditScope -ErrorAction SilentlyContinue) +
+                @(Get-AzRoleAssignment -ObjectId $principalId -Scope $backupScope -ErrorAction SilentlyContinue)) {
+                if (($assignment.Scope -eq $auditScope -and $assignment.RoleDefinitionName -eq $auditRole.Name) -or
+                    ($assignment.Scope -eq $backupScope -and $assignment.RoleDefinitionName -eq $writerRoleName)) { continue }
+                Write-Warning -WarningAction Continue "The managed identity also has '$($assignment.RoleDefinitionName)' at $($assignment.Scope). Check its effective backup and audit access."
+            }
+        }
+    } catch {
+        Write-Warning -WarningAction Continue "Could not provision cloud backup audit access: $($_.Exception.Message)"
+        Write-Warning -WarningAction Continue "Ask an Azure administrator to create the private '$auditContainer' container in '$StorageAccountName', create the TenuVault Audit Writer custom role with only the blobs/read and blobs/add/action data actions and assignable scope '$storageGroupScope', and assign it to the Automation account '$AutomationAccountName' managed identity at the audit container scope. See https://docs.tenuvault.com/backups/cloud/#audit-events-and-replay for the audit-only deployment option."
+    }
+}
+
+if ($AuditRoleOnly) {
+    Initialize-TenuVaultAuditAccess
+    return
+}
+
 if ($principalId) {
     # The container assignment lives under the storage account, which may be in another
     # resource group than the Automation account. The role must be assignable there.
@@ -923,6 +1036,9 @@ if ($GrantGraphRoles -or $GraphRolesGranted) {
     }
 }
 
+# Give required backup setup first use of shared Azure RBAC quota.
+Initialize-TenuVaultAuditAccess
+
 # ---------------------------------------------------------------------------
 # Summary and next steps. The block between the markers is read by the desktop
 # app when an admin pastes this output back into the cloud setup step.
@@ -937,6 +1053,7 @@ if ($WhatIfPreference) {
 Write-Host "  Automation account:  $AutomationAccountName (resource group $ResourceGroupName, $Location)"
 Write-Host "  Runbook:             $runbookName ($(if ($runbook.Plain) { "published, version $($runbook.Version)" } else { $runbook.Reason }))"
 Write-Host "  Storage account:     $StorageAccountName (container '$backupContainer', writer role has no delete)"
+Write-Host "  Audit history:       '$auditContainer' (check Schedule or the Automation job output for delivery status)"
 Write-Host "  Backup results:      '$outcomeContainer' (result notes for the notification watcher, same writer role)"
 Write-Host "  Encryption:          Azure encryption at rest; backups are plain JSON, readable by whoever your role assignments allow"
 $changeReportSummary = if (-not $changeReportPassed) { "unchanged (as an earlier setup chose; off when none did)" } else { switch ($ChangeReport) { 'Off' { 'off' } 'Names' { 'names only, sent by the notification watcher' } default { 'with setting values, sent by the notification watcher' } } }
@@ -984,6 +1101,6 @@ Write-Host "weekDay=$WeekDay"
 Write-Host "timeZone=$TimeZone"
 Write-Host "tenantKey=$tenantKey"
 Write-Host "linked=$($linked.ToString().ToLowerInvariant())"
+Write-Host "runbookVersion=$($runbook.Version)"
+Write-Host "auditCapability=$(([bool]($runbook.Version -and [version]$runbook.Version -ge [version]$auditRunbookVersion)).ToString().ToLowerInvariant())"
 Write-Host "--- End of TenuVault cloud backup setup ---"
-
-

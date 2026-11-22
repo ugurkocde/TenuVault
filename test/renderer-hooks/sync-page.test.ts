@@ -83,7 +83,7 @@ function server(tenantId: string, action: string, body: Record<string, unknown>)
     case "discard-run": {
       const entry = runs.get(body.id as string)!
       // As the route: refused once a target was approved or applied.
-      if (entry.targets.some((target) => (target.changeSet as { status?: string } | null)?.status !== undefined && (target.changeSet as { status: string }).status !== "in-review")) return { status: 409, body: { error: "A target of this sync was approved, so it cannot be discarded. Open it to see its result." } }
+      if (entry.targets.some((target) => (target.changeSet as { status?: string } | null)?.status !== undefined && (target.changeSet as { status: string }).status !== "in-review")) return { status: 409, body: { error: "A target of this copy was approved, so it cannot be discarded. Open it to see its result." } }
       entry.run = { ...entry.run, status: "discarded" }
       return { status: 200, body: { run: entry.run } }
     }
@@ -123,7 +123,7 @@ function server(tenantId: string, action: string, body: Record<string, unknown>)
       const target = findTarget()
       if (scenario.failApprove?.includes(tenantId)) return { status: 409, body: { error: "The target changed since the review. Plan again." } }
       // As the route: a Sync approval names the backup choice, stored on the target record.
-      if (body.backup !== "new" && body.backup !== "none") return { status: 400, body: { error: "Choose whether to back up before this sync: backup must be \"new\" or \"none\"." } }
+      if (body.backup !== "new" && body.backup !== "none") return { status: 400, body: { error: "Choose whether to back up before this copy: backup must be \"new\" or \"none\"." } }
       ;(target.promotion as Record<string, unknown>).sync = { runId: "r", backup: body.backup }
       ;(target.changeSet as Record<string, unknown>).status = "approved"
       return { status: 200, body: { promotion: target.promotion, changeSet: target.changeSet } }
@@ -134,7 +134,7 @@ function server(tenantId: string, action: string, body: Record<string, unknown>)
       const changeSet = target.changeSet as Record<string, unknown>
       // As the route: the approved choice binds the apply; another one is refused before the claim.
       const approvedChoice = ((target.promotion as { sync?: { backup?: string } }).sync?.backup)
-      if (approvedChoice && body.backup !== undefined && body.backup !== approvedChoice) return { status: 409, body: { error: `This sync was approved ${approvedChoice === "none" ? "without a backup" : "with a backup"}. Apply it with the same choice.` } }
+      if (approvedChoice && body.backup !== undefined && body.backup !== approvedChoice) return { status: 409, body: { error: `This copy was approved ${approvedChoice === "none" ? "without a backup" : "with a backup"}. Apply it with the same choice.` } }
       if (scenario.conflictApply?.includes(tenantId) && !failed.has(tenantId)) {
         failed.add(tenantId)
         Object.assign(changeSet, { lastError: "Another change to this tenant is running. Try again when it finishes." })
@@ -142,7 +142,7 @@ function server(tenantId: string, action: string, body: Record<string, unknown>)
       }
       // As the engine: the first claimed apply fixes the backup choice; another one is refused.
       const stored = (changeSet.backupChoice as string | undefined) ?? approvedChoice
-      if (stored && body.backup !== undefined && body.backup !== stored) return { status: 409, body: { error: `This sync was first applied ${stored === "none" ? "without a backup" : "with a backup"}. Retry it with the same choice.` } }
+      if (stored && body.backup !== undefined && body.backup !== stored) return { status: 409, body: { error: `This copy was first applied ${stored === "none" ? "without a backup" : "with a backup"}. Retry it with the same choice.` } }
       const choice = stored ?? (body.backup as string | undefined) ?? "new"
       Object.assign(changeSet, { backupChoice: choice, attempts: (changeSet.attempts as number) + 1 })
       if (scenario.failBackup?.includes(tenantId) && !failed.has(tenantId)) {
@@ -173,7 +173,7 @@ beforeEach(() => {
     targets: [B, C, D].map((tenantId) => ({ tenantId, eligible: true, multiple: true, reason: null })),
     items: {
       [B]: { action: "update", same: true },
-      [C]: { action: "create", findings: () => [{ code: "sync-link-missing", severity: "warning", message: "\"Windows Defender Antivirus\", which an earlier Sync wrote, no longer exists in this tenant. This Sync creates a new policy." }], warnings: ["1 object(s) named \"Windows Defender Antivirus\" already exist; this creates another one."] },
+      [C]: { action: "create", findings: () => [{ code: "sync-link-missing", severity: "warning", message: "\"Windows Defender Antivirus\", which an earlier copy wrote, no longer exists in this tenant. This copy creates a new policy." }], warnings: ["1 object(s) named \"Windows Defender Antivirus\" already exist; this creates another one."] },
       [D]: { action: "create" },
     },
     failFirstApply: [],
@@ -230,7 +230,7 @@ async function until(check: () => boolean, label: string) {
 
 const button = (container: HTMLElement, text: string | RegExp) => [...container.querySelectorAll<HTMLButtonElement>("button")].find((entry) => (typeof text === "string" ? entry.textContent?.trim() === text : text.test(entry.textContent ?? "")))
 const card = (container: HTMLElement, name: string) => [...container.querySelectorAll<HTMLButtonElement>('section[aria-label="Choose targets"] button[aria-pressed]')].find((entry) => entry.textContent?.includes(name))!
-const node = (container: HTMLElement, name: string) => [...container.querySelectorAll<HTMLElement>('section[aria-label="Sync result"] [aria-label]')].find((entry) => entry.getAttribute("aria-label")?.startsWith(`${name}:`))!
+const node = (container: HTMLElement, name: string) => [...container.querySelectorAll<HTMLElement>('section[aria-label="Copy result"] [aria-label]')].find((entry) => entry.getAttribute("aria-label")?.startsWith(`${name}:`))!
 
 async function click(element: HTMLElement | undefined) {
   expect(element).toBeDefined()
@@ -242,21 +242,21 @@ async function click(element: HTMLElement | undefined) {
 async function toReview(container: HTMLElement, names: string[]) {
   await until(() => !!container.querySelector('input[type="checkbox"]'), "policies")
   await click(container.querySelector<HTMLInputElement>('section[aria-label="Choose settings"] input[type="checkbox"]')!)
-  await click(button(container, "Sync 1 policy"))
+  await click(button(container, "Copy 1 policy"))
   await until(() => !!container.querySelector('section[aria-label="Choose targets"] button[aria-pressed]'), "target cards")
   for (const name of names) await click(card(container, name))
   await click(button(container, /^Review \d tenants?$/))
-  await until(() => !!button(container, /^(Approve and sync|Continue: nothing to write)/) && !container.textContent?.includes("Checking"), "review")
+  await until(() => !!button(container, /^(Approve and copy|Continue: nothing to write)/) && !container.textContent?.includes("Checking"), "review")
 }
 
 describe("Sync page plans", () => {
   it("B2: shows Community only the locked preview", async () => {
     plan.current = "community"
     const container = await render()
-    expect(container.querySelector('section[aria-label="Sync preview"]')).not.toBeNull()
-    expect(container.textContent).toContain("Pro syncs between the two tenants of your license, or between two tenants that each run a Pro trial. Syncing to more tenants is part of MSP.")
+    expect(container.querySelector('section[aria-label="Copy to Tenants preview"]')).not.toBeNull()
+    expect(container.textContent).toContain("Pro copies between the two tenants of your license, or between two tenants that each run a Pro trial. Copying to more tenants is part of MSP.")
     expect(container.querySelector('ol[aria-label="Steps"]')).toBeNull()
-    expect(container.querySelector('section[aria-label="Recent syncs"]')).toBeNull()
+    expect(container.querySelector('section[aria-label="Recent copies"]')).toBeNull()
     expect(container.querySelector('section[aria-label="Choose settings"]')).toBeNull()
     expect(fetch).not.toHaveBeenCalled()
   })
@@ -267,7 +267,7 @@ describe("Sync page plans", () => {
     const container = await render()
     await until(() => !!container.querySelector('section[aria-label="Choose settings"] input[type="checkbox"]'), "policies")
     await click(container.querySelector<HTMLInputElement>('section[aria-label="Choose settings"] input[type="checkbox"]')!)
-    await click(button(container, "Sync 1 policy"))
+    await click(button(container, "Copy 1 policy"))
     await until(() => !!container.querySelector('section[aria-label="Choose targets"] button[aria-pressed]'), "target cards")
     expect(card(container, "Contoso Germany").textContent).toContain("Available on Pro")
     expect(card(container, "Contoso Germany").textContent).toContain("1 policy linked")
@@ -279,7 +279,7 @@ describe("Sync page plans", () => {
     }
     await click(card(container, "Contoso Germany"))
     expect(card(container, "Contoso Germany").getAttribute("aria-pressed")).toBe("true")
-    expect(container.textContent).toContain("Pro syncs between the two tenants of your license, or between two tenants that each run a Pro trial. Syncing to more tenants is part of MSP.")
+    expect(container.textContent).toContain("Pro copies between the two tenants of your license, or between two tenants that each run a Pro trial. Copying to more tenants is part of MSP.")
     expect(container.textContent).not.toMatch(/upsell|upgrade now|unlock/i)
     await click(button(container, "See plans"))
     expect(opened).toEqual([["buy", { source: "sync-targets" }]])
@@ -296,7 +296,7 @@ describe("Sync page plans", () => {
     expect(reads.every((targets) => targets.length === 1)).toBe(true)
     expect(reads.flat().sort()).toEqual([B, C].sort())
     await click(container.querySelector<HTMLInputElement>('section[aria-label="Choose settings"] input[type="checkbox"]')!)
-    await click(button(container, "Sync 1 policy"))
+    await click(button(container, "Copy 1 policy"))
     await until(() => !!container.querySelector('section[aria-label="Choose targets"] button[aria-pressed]'), "target cards")
     expect(card(container, "Contoso Germany").textContent).toContain("1 policy linked")
     expect(card(container, "Contoso France").textContent).toContain("Available on Pro")
@@ -310,7 +310,7 @@ describe("Sync page plans", () => {
 describe("Sync review", () => {
   it("B1 status chip and B4: per-target rows and warnings, no reviewer or note, OIB backup wording", async () => {
     const container = await render()
-    await until(() => container.textContent?.includes("In sync with Contoso Germany") === true, "status chip")
+    await until(() => container.textContent?.includes("Up to date in Contoso Germany") === true, "status chip")
     await toReview(container, ["Contoso Germany", "Contoso France"])
     const plans = calls.filter((call) => call.action === "plan")
     expect(plans).toHaveLength(1)
@@ -319,16 +319,16 @@ describe("Sync review", () => {
     expect(review.textContent).toContain("No change")
     expect(review.textContent).toContain("It is written again unchanged.")
     expect(review.textContent).toContain("Create")
-    expect(review.textContent).toContain("no longer exists in this tenant. This Sync creates a new policy.")
+    expect(review.textContent).toContain("no longer exists in this tenant. This copy creates a new policy.")
     expect(review.textContent).toContain("already exist; this creates another one.")
     expect(review.textContent).not.toMatch(/Reviewer|Decision note/)
     expect(review.querySelectorAll("input:not([type])")).toHaveLength(0)
     expect(review.querySelector("legend")?.textContent).toBe("Backup before changes")
     expect(review.textContent).toContain("Back up first")
-    expect(review.textContent).toContain("Each target is backed up first, using that tenant's backup settings. If the backup does not cover every policy type this sync changes, or fails, nothing is changed in that tenant.")
+    expect(review.textContent).toContain("Each target is backed up first, using that tenant's backup settings. If the backup does not cover every policy type this copy changes, or fails, nothing is changed in that tenant.")
     expect(review.textContent).toContain("Skip the backup")
     expect(review.querySelector<HTMLInputElement>('input[value="new"]')!.checked).toBe(true)
-    expect(button(container, "Approve and sync to 2 tenants")?.disabled).toBe(false)
+    expect(button(container, "Approve and copy to 2 tenants")?.disabled).toBe(false)
     // Nothing was approved or written by the review.
     expect(calls.map((call) => call.action)).not.toContain("approve")
   })
@@ -338,11 +338,11 @@ describe("Sync review", () => {
     const container = await render()
     await toReview(container, ["Contoso Germany"])
     expect(container.textContent).toContain("Left out")
-    const approve = () => button(container, /^Approve and sync/)!
+    const approve = () => button(container, /^Approve and copy/)!
     expect(approve().disabled).toBe(true)
-    const ack = [...container.querySelectorAll<HTMLInputElement>('section[aria-label="Review"] input[type="checkbox"]')].find((input) => input.parentElement?.textContent?.includes("secrets in these policies are not synced"))!
+    const ack = [...container.querySelectorAll<HTMLInputElement>('section[aria-label="Review"] input[type="checkbox"]')].find((input) => input.parentElement?.textContent?.includes("secrets in these policies are not copied"))!
     await click(ack)
-    await until(() => calls.filter((call) => call.action === "plan").length === 2 && approve().textContent === "Approve and sync to 1 tenant" && !approve().disabled, "plan with acknowledgement")
+    await until(() => calls.filter((call) => call.action === "plan").length === 2 && approve().textContent === "Approve and copy to 1 tenant" && !approve().disabled, "plan with acknowledgement")
     expect(calls.filter((call) => call.action === "plan")[1]!.body.acknowledgeRedacted).toBe(true)
     await click(ack)
     expect(approve().disabled).toBe(true)
@@ -353,18 +353,18 @@ describe("Sync review", () => {
     const container = await render()
     await toReview(container, ["Contoso Germany", "Contoso France"])
     const review = container.querySelector('section[aria-label="Review"]')!
-    expect(review.textContent).toContain("Skip: already in sync")
+    expect(review.textContent).toContain("Skip: already up to date")
     expect(review.textContent).toContain("Nothing is written.")
-    expect(review.textContent).toContain("Already in sync")
+    expect(review.textContent).toContain("Already up to date")
     expect(calls.filter((call) => call.action === "preview").map((call) => call.tenantId)).toEqual([C])
-    await click(button(container, "Approve and sync to 1 tenant"))
+    await click(button(container, "Approve and copy to 1 tenant"))
     await until(() => node(container, "Contoso France")?.className.includes("border-green-600") === true, "result")
     const germany = node(container, "Contoso Germany")
-    expect(germany.getAttribute("aria-label")).toBe("Contoso Germany: Already in sync, nothing written. No backup taken.")
+    expect(germany.getAttribute("aria-label")).toBe("Contoso Germany: Already up to date, nothing written. No backup taken.")
     expect(germany.className).toContain("border-green-600")
     expect(germany.querySelector("a")).toBeNull()
     for (const action of ["approve", "apply", "retry"]) expect(calls.filter((call) => call.action === action).map((call) => call.tenantId)).not.toContain(B)
-    expect(container.querySelector('[role="status"]')?.textContent).toBe("Synced to 2 tenants")
+    expect(container.querySelector('[role="status"]')?.textContent).toBe("Copied to 1 tenant, 1 already up to date")
   })
 
   it("lets the admin finish when every target is already in sync, without writing", async () => {
@@ -378,7 +378,7 @@ describe("Sync review", () => {
     expect(review.textContent).toContain("Nothing is written.")
     await click(button(container, "Continue: nothing to write"))
     await until(() => !!node(container, "Contoso Germany"), "result")
-    expect(container.querySelector('[role="status"]')?.textContent).toBe("Already in sync. Nothing was written.")
+    expect(container.querySelector('[role="status"]')?.textContent).toBe("Already up to date. Nothing was written.")
     expect(calls.map((call) => call.action)).not.toContain("approve")
     expect(container.textContent).not.toContain("Backup taken in each tenant")
   })
@@ -387,9 +387,9 @@ describe("Sync review", () => {
     const container = await render()
     await toReview(container, ["Contoso Germany", "Contoso Japan"])
     expect(container.textContent).toContain("This tenant has no backup storage, so no backup can be taken. It is left out unless you choose Skip the backup.")
-    expect(button(container, /^Approve and sync/)!.textContent).toBe("Approve and sync to 1 tenant")
+    expect(button(container, /^Approve and copy/)!.textContent).toBe("Approve and copy to 1 tenant")
     await click(container.querySelector<HTMLInputElement>('section[aria-label="Review"] input[value="none"]')!)
-    expect(button(container, /^Approve and sync/)!.textContent).toBe("Approve and sync to 2 tenants")
+    expect(button(container, /^Approve and copy/)!.textContent).toBe("Approve and copy to 2 tenants")
   })
 })
 
@@ -398,7 +398,7 @@ describe("Sync apply and result", () => {
     scenario.failFirstApply = [C]
     const container = await render()
     await toReview(container, ["Contoso Germany", "Contoso France"])
-    await click(button(container, "Approve and sync to 2 tenants"))
+    await click(button(container, "Approve and copy to 2 tenants"))
     await until(() => !!button(container, "Retry failed"), "result")
     const byTarget = (action: string) => calls.filter((call) => call.action === action).map((call) => ({ tenantId: call.tenantId, ...call.body }))
     expect(byTarget("approve")).toEqual([{ tenantId: B, id: `pr-${B}`, contentHash: HASH, targetFingerprint: FINGERPRINT, backup: "new" }, { tenantId: C, id: `pr-${C}`, contentHash: HASH, targetFingerprint: FINGERPRINT, backup: "new" }])
@@ -416,10 +416,10 @@ describe("Sync apply and result", () => {
 
     const france = node(container, "Contoso France")
     expect(france.className).toContain("border-red-500")
-    expect(france.textContent).toContain("Nothing was synced.")
+    expect(france.textContent).toContain("Nothing was copied.")
     expect(france.textContent).toContain("Intune answered 403")
-    expect(container.querySelector('[role="status"]')?.textContent).toBe("Synced to 1 of 2 tenants. 1 needs attention.")
-    expect(container.textContent).toContain("Links saved for the next sync")
+    expect(container.querySelector('[role="status"]')?.textContent).toBe("Copied to 1 of 2 tenants. 1 needs attention.")
+    expect(container.textContent).toContain("Links saved for the next copy")
     expect(container.textContent).toContain("Backup taken in each tenant")
     expect(container.textContent).toContain("Recorded in the audit log")
 
@@ -428,17 +428,17 @@ describe("Sync apply and result", () => {
     // The change set's first apply stored the choice, so the retry names none and the route applies it.
     expect(byTarget("retry")).toEqual([{ tenantId: C, id: `pr-${C}`, contentHash: HASH, confirm: true }])
     expect(byTarget("apply")).toHaveLength(2)
-    expect(container.querySelector('[role="status"]')?.textContent).toBe("Synced to 2 tenants")
+    expect(container.querySelector('[role="status"]')?.textContent).toBe("Copied to 2 tenants")
   })
 
   it("offers no retry for a target whose approval was refused, and applies the other", async () => {
     scenario.failApprove = [C]
     const container = await render()
     await toReview(container, ["Contoso Germany", "Contoso France"])
-    await click(button(container, "Approve and sync to 2 tenants"))
+    await click(button(container, "Approve and copy to 2 tenants"))
     await until(() => node(container, "Contoso Germany")?.className.includes("border-green-600") === true && node(container, "Contoso France")?.className.includes("border-red-500") === true, "result")
     const france = node(container, "Contoso France")
-    expect(france.textContent).toContain("Nothing was synced. Start a new sync to review it again.")
+    expect(france.textContent).toContain("Nothing was copied. Start a new copy to review it again.")
     expect(france.textContent).toContain("The target changed since the review. Plan again.")
     expect(button(france, "Retry failed")).toBeUndefined()
     expect(calls.filter((call) => call.action === "apply").map((call) => call.tenantId)).toEqual([B])
@@ -448,7 +448,7 @@ describe("Sync apply and result", () => {
     const container = await render()
     await toReview(container, ["Contoso Germany"])
     await click(container.querySelector<HTMLInputElement>('section[aria-label="Review"] input[value="none"]')!)
-    await click(button(container, "Approve and sync to 1 tenant"))
+    await click(button(container, "Approve and copy to 1 tenant"))
     await until(() => node(container, "Contoso Germany")?.className.includes("border-green-600") === true, "result")
     expect(calls.find((call) => call.action === "apply")!.body.backup).toBe("none")
     expect(node(container, "Contoso Germany").getAttribute("aria-label")).toBe("Contoso Germany: 1 change verified. No backup taken.")
@@ -458,11 +458,11 @@ describe("Sync apply and result", () => {
   it("opens a recent run in the result view from the stored records", async () => {
     const container = await render()
     await toReview(container, ["Contoso Germany"])
-    await click(button(container, "Approve and sync to 1 tenant"))
+    await click(button(container, "Approve and copy to 1 tenant"))
     await until(() => node(container, "Contoso Germany")?.className.includes("border-green-600") === true, "result")
-    await click(button(container, "Start a new sync"))
-    await until(() => !!container.querySelector('section[aria-label="Recent syncs"] button'), "recent syncs")
-    await click(container.querySelector<HTMLButtonElement>('section[aria-label="Recent syncs"] button')!)
+    await click(button(container, "Start a new copy"))
+    await until(() => !!container.querySelector('section[aria-label="Recent copies"] button'), "recent syncs")
+    await click(container.querySelector<HTMLButtonElement>('section[aria-label="Recent copies"] button')!)
     await until(() => node(container, "Contoso Germany")?.className.includes("border-green-600") === true, "reopened run")
   })
 })
@@ -472,14 +472,14 @@ describe("Sync review round 1", () => {
     scenario.failBackup = [B]
     const container = await render()
     await toReview(container, ["Contoso Germany"])
-    await click(button(container, "Approve and sync to 1 tenant"))
+    await click(button(container, "Approve and copy to 1 tenant"))
     await until(() => !!button(container, "Retry failed"), "failed backup")
     expect(node(container, "Contoso Germany").textContent).toContain("Retry backs up first.")
     // A newer draft chooses to skip the backup, then the first run is opened again.
-    await click(button(container, "Start a new sync"))
+    await click(button(container, "Start a new copy"))
     await toReview(container, ["Contoso Germany"])
     await click(container.querySelector<HTMLInputElement>('section[aria-label="Review"] input[value="none"]')!)
-    const first = [...container.querySelectorAll<HTMLButtonElement>('section[aria-label="Recent syncs"] button')].at(-1)!
+    const first = [...container.querySelectorAll<HTMLButtonElement>('section[aria-label="Recent copies"] button')].at(-1)!
     await click(first)
     await until(() => !!button(container, "Retry failed"), "reopened run")
     await click(button(container, "Retry failed"))
@@ -493,7 +493,7 @@ describe("Sync review round 1", () => {
     scenario.failBackup = [C]
     const container = await render()
     await toReview(container, ["Contoso Germany", "Contoso France"])
-    await click(button(container, "Approve and sync to 2 tenants"))
+    await click(button(container, "Approve and copy to 2 tenants"))
     await until(() => !!button(container, "Retry failed") && node(container, "Contoso Germany")?.className.includes("border-green-600") === true, "result")
     const summary = container.querySelector('[aria-label="Summary"]')!.textContent
     expect(summary).toContain("Backup taken in 1 of 2 tenants")
@@ -505,7 +505,7 @@ describe("Sync review round 1", () => {
     scenario.failBackup = [B]
     const container = await render()
     await toReview(container, ["Contoso Germany"])
-    await click(button(container, "Approve and sync to 1 tenant"))
+    await click(button(container, "Approve and copy to 1 tenant"))
     await until(() => !!button(container, "Retry failed"), "result")
     expect(container.textContent).not.toMatch(/Backup taken in|Backup skipped/)
   })
@@ -516,14 +516,14 @@ describe("Sync review round 1", () => {
     scenario.failFirstApply = [B]
     const container = await render()
     await toReview(container, ["Contoso Germany"])
-    await click(button(container, "Approve and sync to 1 tenant"))
+    await click(button(container, "Approve and copy to 1 tenant"))
     await until(() => node(container, "Contoso Germany")?.className.includes("border-coral-500") === true, "first run writing")
-    await click(button(container, "Start a new sync"))
+    await click(button(container, "Start a new copy"))
     await toReview(container, ["Contoso Germany"])
     // The pending apply of the first run does not hold up the second.
-    expect(button(container, "Approve and sync to 1 tenant")!.disabled).toBe(false)
+    expect(button(container, "Approve and copy to 1 tenant")!.disabled).toBe(false)
     scenario.failFirstApply = []
-    await click(button(container, "Approve and sync to 1 tenant"))
+    await click(button(container, "Approve and copy to 1 tenant"))
     await until(() => node(container, "Contoso Germany")?.className.includes("border-green-600") === true, "second run verified while the first is pending")
     release()
     await until(() => calls.filter((call) => call.action === "apply").length === 2 && !container.querySelector('[role="status"] .motion-safe\\:animate-spin'), "first run settled")
@@ -561,13 +561,13 @@ describe("Sync review round 1", () => {
     await toReview(container, ["Contoso Germany"])
     await click(button(container, "Back"))
     await click(button(container, "Review 1 tenant"))
-    await until(() => calls.filter((call) => call.action === "plan").length === 2 && !!button(container, /^Approve and sync/) && !container.textContent?.includes("Checking"), "second review")
-    await until(() => container.querySelectorAll('section[aria-label="Recent syncs"] li').length > 0, "recent syncs")
-    const rows = () => [...container.querySelectorAll('section[aria-label="Recent syncs"] li')]
+    await until(() => calls.filter((call) => call.action === "plan").length === 2 && !!button(container, /^Approve and copy/) && !container.textContent?.includes("Checking"), "second review")
+    await until(() => container.querySelectorAll('section[aria-label="Recent copies"] li').length > 0, "recent syncs")
+    const rows = () => [...container.querySelectorAll('section[aria-label="Recent copies"] li')]
     // The draft the second review replaced stays listed; both were never applied.
     await until(() => rows().length === 2, "both runs")
     expect(rows().map((row) => row.textContent?.includes("Not applied"))).toEqual([true, true])
-    await click(button(container, "Approve and sync to 1 tenant"))
+    await click(button(container, "Approve and copy to 1 tenant"))
     await until(() => node(container, "Contoso Germany")?.className.includes("border-green-600") === true, "applied")
     await until(() => !rows()[0]!.textContent?.includes("Not applied"), "applied run")
     expect(rows()[1]!.textContent).toContain("Not applied")
@@ -581,13 +581,13 @@ describe("Sync review round 3", () => {
     let container = await render()
     await toReview(container, ["Contoso Germany"])
     await click(container.querySelector<HTMLInputElement>('section[aria-label="Review"] input[value="none"]')!)
-    await click(button(container, "Approve and sync to 1 tenant"))
+    await click(button(container, "Approve and copy to 1 tenant"))
     await until(() => !!button(container, "Retry failed"), "refused apply")
     for (const root of roots.splice(0)) act(() => root.unmount())
     document.body.replaceChildren()
     container = await render()
-    await until(() => !!container.querySelector('section[aria-label="Recent syncs"] button'), "recent syncs")
-    await click(container.querySelector<HTMLButtonElement>('section[aria-label="Recent syncs"] button')!)
+    await until(() => !!container.querySelector('section[aria-label="Recent copies"] button'), "recent syncs")
+    await click(container.querySelector<HTMLButtonElement>('section[aria-label="Recent copies"] button')!)
     await until(() => !!button(container, "Retry failed"), "reopened run")
     return container
   }
@@ -604,7 +604,7 @@ describe("Sync review round 3", () => {
   it("applies from Details with the choice approved", async () => {
     const container = await refusedThenReopened()
     await click(button(node(container, "Contoso Germany"), "Details"))
-    expect(container.textContent).toContain("Backup choice of this sync: applied without a backup.")
+    expect(container.textContent).toContain("Backup choice of this copy: applied without a backup.")
     await click(button(container, "Apply to tenant"))
     await until(() => !!button(document.body, "Apply without a backup"), "confirmation")
     expect(document.body.textContent).toContain("No backup runs: the current state of every affected object is captured first")
@@ -621,7 +621,7 @@ describe("CodeRabbit comments", () => {
   it("says on a target without backup storage that skipping the backup leaves no rollback", async () => {
     const container = await render()
     await toReview(container, ["Contoso Germany", "Contoso Japan"])
-    const NOTE = "Rollback needs backup storage in this tenant. Without it, this sync cannot be rolled back from TenuVault."
+    const NOTE = "Rollback needs backup storage in this tenant. Without it, this copy cannot be rolled back from TenuVault."
     expect(container.textContent).not.toContain(NOTE)
     await click(container.querySelector<HTMLInputElement>('section[aria-label="Review"] input[value="none"]')!)
     const blocks = [...container.querySelectorAll('section[aria-label="Review"] .rounded-2xl.bg-gray-50')]
@@ -634,7 +634,7 @@ describe("CodeRabbit comments", () => {
     const container = await render()
     await toReview(container, ["Contoso Germany", "Contoso Japan"])
     await click(container.querySelector<HTMLInputElement>('section[aria-label="Review"] input[value="none"]')!)
-    await click(button(container, "Approve and sync to 2 tenants"))
+    await click(button(container, "Approve and copy to 2 tenants"))
     await until(() => ["Contoso Germany", "Contoso Japan"].every((name) => node(container, name)?.className.includes("border-green-600")), "result")
     const summary = container.querySelector('[aria-label="Summary"]')!.textContent
     expect(summary).toContain("Rollback available in 1 of 2 tenants")
@@ -648,27 +648,27 @@ describe("CodeRabbit comments", () => {
   it("keeps an opened recent sync when an abandoned plan finishes later", async () => {
     const container = await render()
     await toReview(container, ["Contoso Germany"])
-    await click(button(container, "Approve and sync to 1 tenant"))
+    await click(button(container, "Approve and copy to 1 tenant"))
     await until(() => node(container, "Contoso Germany")?.className.includes("border-green-600") === true, "first run applied")
-    await click(button(container, "Start a new sync"))
+    await click(button(container, "Start a new copy"))
     await until(() => !!container.querySelector('section[aria-label="Choose settings"] input[type="checkbox"]'), "policies")
     await click(container.querySelector<HTMLInputElement>('section[aria-label="Choose settings"] input[type="checkbox"]')!)
-    await click(button(container, "Sync 1 policy"))
+    await click(button(container, "Copy 1 policy"))
     await until(() => !!container.querySelector('section[aria-label="Choose targets"] button[aria-pressed]'), "target cards")
     await click(card(container, "Contoso Germany"))
     let release!: () => void
     scenario.holdPlan = new Promise<void>((resolve) => { release = resolve })
     await click(button(container, "Review 1 tenant"))
     // While a plan runs, a recent sync cannot be opened.
-    expect(container.querySelector<HTMLButtonElement>('section[aria-label="Recent syncs"] button')!.disabled).toBe(true)
+    expect(container.querySelector<HTMLButtonElement>('section[aria-label="Recent copies"] button')!.disabled).toBe(true)
     await click(button(container, "Back"))
-    await click(container.querySelector<HTMLButtonElement>('section[aria-label="Recent syncs"] button')!)
+    await click(container.querySelector<HTMLButtonElement>('section[aria-label="Recent copies"] button')!)
     await until(() => node(container, "Contoso Germany")?.className.includes("border-green-600") === true, "opened run")
     release()
     await until(() => calls.filter((call) => call.action === "plan").length === 2, "late plan")
     await settle()
     await settle()
-    expect(container.querySelector('section[aria-label="Sync result"]')).not.toBeNull()
+    expect(container.querySelector('section[aria-label="Copy result"]')).not.toBeNull()
     expect(node(container, "Contoso Germany").className).toContain("border-green-600")
     expect(container.querySelector('section[aria-label="Review"]')).toBeNull()
   })
@@ -710,7 +710,7 @@ describe("Sync loading progression", () => {
     const container = await render()
     await until(() => !!container.querySelector('input[type="checkbox"]'), "policies")
     await click(container.querySelector<HTMLInputElement>('section[aria-label="Choose settings"] input[type="checkbox"]')!)
-    await click(button(container, "Sync 1 policy"))
+    await click(button(container, "Copy 1 policy"))
     await until(() => !!container.querySelector('section[aria-label="Choose targets"] button[aria-pressed]'), "target cards")
     for (const name of ["Contoso Germany", "Contoso France"]) await click(card(container, name))
     await click(button(container, "Review 2 tenants"))
@@ -720,8 +720,8 @@ describe("Sync loading progression", () => {
     expect(review().querySelector(".run-indeterminate")).not.toBeNull()
     expect(review().textContent).not.toContain("Contoso Germany")
     // Nothing is ready yet, so the button names no count and stays disabled.
-    expect(button(container, /^Approve and sync/)!.textContent).toBe("Approve and sync")
-    expect(button(container, /^Approve and sync/)!.disabled).toBe(true)
+    expect(button(container, /^Approve and copy/)!.textContent).toBe("Approve and copy")
+    expect(button(container, /^Approve and copy/)!.disabled).toBe(true)
     releasePlan()
     // Germany's preview arrives; France's is still being read.
     await until(() => review().textContent?.includes("Ready: 0 changes") === true, "Germany checked")
@@ -730,11 +730,11 @@ describe("Sync loading progression", () => {
     const germany = () => blocks().find((block) => block.textContent?.includes("Contoso Germany"))!
     expect(france().textContent).toContain("Checking against the live tenant")
     expect(germany().textContent).not.toContain("Checking against the live tenant")
-    expect(button(container, /^Approve and sync/)!.disabled).toBe(true)
+    expect(button(container, /^Approve and copy/)!.disabled).toBe(true)
     releasePreview()
     await until(() => !france().textContent?.includes("Checking against the live tenant"), "France checked")
     expect(france().textContent).toContain("Ready: 1 change")
-    expect(button(container, /^Approve and sync/)!.disabled).toBe(false)
+    expect(button(container, /^Approve and copy/)!.disabled).toBe(false)
   })
 
   it("shows the policies loading as skeleton rows, then the rows and their status chips", async () => {
@@ -746,17 +746,17 @@ describe("Sync loading progression", () => {
     release()
     await until(() => !!container.querySelector('section[aria-label="Choose settings"] input[type="checkbox"]'), "policies")
     expect(container.querySelector('[aria-label="Loading policies"]')).toBeNull()
-    await until(() => container.textContent?.includes("In sync with Contoso Germany") === true, "status chip")
+    await until(() => container.textContent?.includes("Up to date in Contoso Germany") === true, "status chip")
     expect(container.querySelector('section[aria-label="Choose settings"] .sync-fade')).not.toBeNull()
   })
 
   it("reads the sync status again on Start a new sync, so a chip never keeps a state from before", async () => {
     const container = await render()
     await toReview(container, ["Contoso Germany"])
-    await click(button(container, "Approve and sync to 1 tenant"))
+    await click(button(container, "Approve and copy to 1 tenant"))
     await until(() => node(container, "Contoso Germany")?.className.includes("border-green-600") === true, "result")
     const before = calls.filter((call) => call.action === "status").length
-    await click(button(container, "Start a new sync"))
+    await click(button(container, "Start a new copy"))
     await until(() => calls.filter((call) => call.action === "status").length > before, "status read again")
   })
 })
@@ -769,27 +769,27 @@ describe("Sync runs planned and never approved", () => {
     for (const root of roots.splice(0)) act(() => root.unmount())
     document.body.replaceChildren()
     container = await render()
-    await until(() => !!container.querySelector('section[aria-label="Recent syncs"] li button'), "recent syncs")
-    await click(container.querySelector<HTMLButtonElement>('section[aria-label="Recent syncs"] li button')!)
+    await until(() => !!container.querySelector('section[aria-label="Recent copies"] li button'), "recent syncs")
+    await click(container.querySelector<HTMLButtonElement>('section[aria-label="Recent copies"] li button')!)
     await until(() => !!button(container, /Continue to review/), "planned run")
     return container
   }
 
   it("shows the run as planned, not approved yet, and continues it at Review with its stored plan", async () => {
     const container = await plannedThenReopened()
-    const result = container.querySelector<HTMLElement>('section[aria-label="Sync result"]')!
+    const result = container.querySelector<HTMLElement>('section[aria-label="Copy result"]')!
     expect(result.querySelector('[role="status"]')?.textContent).toBe("Planned, not approved yet")
     expect(button(result, "Discard")).toBeDefined()
-    expect(result.textContent).not.toContain("Nothing was synced. No target was approved.")
+    expect(result.textContent).not.toContain("Nothing was copied. No target was approved.")
     const previews = calls.filter((call) => call.action === "preview").length
     await click(button(container, /Continue to review/))
-    await until(() => !!button(container, /^Approve and sync/) && !container.textContent?.includes("Checking"), "review again")
+    await until(() => !!button(container, /^Approve and copy/) && !container.textContent?.includes("Checking"), "review again")
     // The same run, read against each live tenant again; nothing was planned anew.
     expect(calls.filter((call) => call.action === "plan")).toHaveLength(1)
     expect(calls.filter((call) => call.action === "preview").length).toBe(previews + 2)
     expect(container.querySelector('ol[aria-label="Steps"] [aria-current="step"]')?.textContent).toContain("Review")
-    expect(button(container, "Approve and sync to 2 tenants")!.disabled).toBe(false)
-    await click(button(container, "Approve and sync to 2 tenants"))
+    expect(button(container, "Approve and copy to 2 tenants")!.disabled).toBe(false)
+    await click(button(container, "Approve and copy to 2 tenants"))
     await until(() => ["Contoso Germany", "Contoso France"].every((name) => node(container, name)?.className.includes("border-green-600")), "applied")
     expect(calls.filter((call) => call.action === "approve").map((call) => call.body.id)).toEqual([`pr-${B}`, `pr-${C}`])
   })
@@ -799,7 +799,7 @@ describe("Sync runs planned and never approved", () => {
     await click(button(container, "Discard"))
     await until(() => !!container.querySelector('section[aria-label="Choose settings"]'), "new sync")
     expect(calls.filter((call) => call.action === "discard-run").map((call) => call.body.id)).toEqual(["00000001-0000-4000-8000-000000000000"])
-    await until(() => container.querySelector('section[aria-label="Recent syncs"]')?.textContent?.includes("No syncs from Contoso Lab yet.") === true, "list without the run")
+    await until(() => container.querySelector('section[aria-label="Recent copies"]')?.textContent?.includes("No copies from Contoso Lab yet.") === true, "list without the run")
   })
 
   it("shows the refusal when the run can no longer be discarded", async () => {
@@ -808,15 +808,15 @@ describe("Sync runs planned and never approved", () => {
     const entry = [...runs.values()][0]!
     ;(entry.targets[0]!.changeSet as { status: string }).status = "approved"
     await click(button(container, "Discard"))
-    await until(() => !!container.querySelector('section[aria-label="Sync result"] [role="alert"]'), "refusal")
-    expect(container.querySelector('section[aria-label="Sync result"] [role="alert"]')!.textContent).toBe("A target of this sync was approved, so it cannot be discarded. Open it to see its result.")
+    await until(() => !!container.querySelector('section[aria-label="Copy result"] [role="alert"]'), "refusal")
+    expect(container.querySelector('section[aria-label="Copy result"] [role="alert"]')!.textContent).toBe("A target of this copy was approved, so it cannot be discarded. Open it to see its result.")
   })
 
   it("lists runs with an outcome chip, the source and targets, and a relative time with the full date", async () => {
     const container = await render()
     await toReview(container, ["Contoso Germany", "Contoso France"])
-    await until(() => container.querySelectorAll('section[aria-label="Recent syncs"] li').length === 1, "recent syncs")
-    const row = container.querySelector('section[aria-label="Recent syncs"] li')!
+    await until(() => container.querySelectorAll('section[aria-label="Recent copies"] li').length === 1, "recent syncs")
+    const row = container.querySelector('section[aria-label="Recent copies"] li')!
     expect(row.textContent).toContain("Not applied")
     expect(row.querySelector("svg")).not.toBeNull()
     expect(row.textContent).toContain("Contoso Lab")

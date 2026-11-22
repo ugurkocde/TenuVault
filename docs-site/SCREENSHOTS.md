@@ -48,6 +48,7 @@ The capture harness uses a disposable profile. Only the OIB catalog reads contac
 | `baselines/frameworks.md` | Added: `frameworks-light`. |
 | `baselines/quick-start.md` | Added: `oib-home-light`, `oib-new-platforms`, `oib-new-select`, `oib-validate`. |
 | `changes.md` | Added: `changes`, `baseline-upgrades`. |
+| `copy-to-tenants.md` | Added: `sync`. |
 | `deploy.mdx` | Deployment scripts and OS-specific tabs; installer/update screenshots already live in Install. |
 | `drift.md` | Added: `drift-results`. |
 | `getting-started/app-registration.md` | Added: `setup-connect`. |
@@ -78,7 +79,6 @@ The capture harness uses a disposable profile. Only the OIB catalog reads contac
 | `security/index.md` | Security architecture and trust reference; related recovery controls are illustrated in Encryption. |
 | `security/permissions.md` | Permission reference; never show a successful permission check without verified evidence. |
 | `settings.md` | Added: `settings-signin`, `settings-storage`, `settings-background`, `settings-branding`; on 2026-11-21 `settings-transfer`, `settings-transfer-export` and `settings-transfer-review` (the review shows a fixture preview; nothing was exported or applied). |
-| `sync.md` | Added: `sync`. |
 | `tenants.md` | Added: `dashboard`, `tenants-overview`, `tenant-management`. |
 | `troubleshooting.md` | Error-message lookup reference; successful workflows are illustrated in their own guides. Dedicated failure captures can be added when reproduced. |
 

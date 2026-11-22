@@ -1,5 +1,6 @@
 import { AuditEventType, AuditResult, AuditSeverity, type CreateAuditLogInput } from "../../../portal/lib/audit/types"
 import type { GraphCall } from "../../../portal/lib/policies/graph-restore"
+import { changeSetTitle } from "../../../shared/sync-wording"
 import { typeForFolder, type IntuneType, type Item } from "../../../shared/intune/registry"
 import { isGraphId } from "../../../shared/security"
 import { replaceTenantVariables } from "../../../shared/oib/variables"
@@ -631,8 +632,8 @@ async function recordApplyAudit(deps: FeatureDeps, tenant: string, record: Store
       logEntry,
     })
     if (!logged.ok) throw new Error(`Audit write failed (${logged.status})`)
-  } catch (error) {
-    console.error("[audit] Failed to record change set apply:", error)
+  } catch {
+    console.error("[audit] Failed to record change set apply")
   }
 }
 
@@ -713,11 +714,11 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
     const record = getChangeSet(deps, tenant, id)
     const requested = input.resolveBackup ? input.resolveBackup() : input.backup
     if (requested !== undefined && requested !== "new" && requested !== "none") throw new FeatureError("backup must be \"new\" or \"none\".")
-    if (requested === "none" && !(record.origin.workflow === "sync" && record.kind === "change")) throw new FeatureError("Only Sync changes may skip the pre-change backup.")
+    if (requested === "none" && !(record.origin.workflow === "sync" && record.kind === "change")) throw new FeatureError("Only Copy to Tenants changes may skip the pre-change backup.")
     // The first claimed apply fixes the backup choice. A change set attempted before the choice was
     // stored counts as backed up, unless its capture shows the backup was skipped.
     const stored = record.backupChoice ?? (record.preChange ? (record.preChange.backupFolder === null ? "none" : "new") : record.attempts > 0 ? "new" : null)
-    if (stored && requested !== undefined && requested !== stored) throw new FeatureError(`This sync was first applied ${stored === "none" ? "without a backup" : "with a backup"}. Retry it with the same choice.`, 409)
+    if (stored && requested !== undefined && requested !== stored) throw new FeatureError(`This copy was first applied ${stored === "none" ? "without a backup" : "with a backup"}. Retry it with the same choice.`, 409)
     const backupChoice = stored ?? requested ?? "new"
     // A retry reuses the first attempt's capture; whether that attempt backed up decides the record.
     backupSkipped = record.preChange ? record.preChange.backupFolder === null : backupChoice === "none"
@@ -992,12 +993,12 @@ export async function createRollbackChangeSet(deps: FeatureDeps, tenantId: strin
   if (record.kind === "rollback") throw new FeatureError("A rollback is itself rolled back by a new reviewed change, not by a rollback of a rollback.", 409)
   if (record.status === "applying") throw new FeatureError("This change set is being applied. Wait for its results before planning a rollback.", 409)
   const open = listChangeSets(deps, tenantId).find((entry) => entry.rollbackOf === record.id && ["in-review", "approved", "stale", "applying"].includes(entry.status))
-  if (open) throw new FeatureError(`A rollback of this change set is already open ("${open.title}"). Apply or reject it first.`, 409)
+  if (open) throw new FeatureError(`A rollback of this change set is already open ("${changeSetTitle(open)}"). Apply or reject it first.`, 409)
   const { inputs } = inverseOperations(deps, tenantId, record)
   const usable = inputs.filter((entry) => !entry.blocked).map(({ key: _key, blocked: _blocked, warnings: _warnings, ...operation }) => operation)
   if (!usable.length) throw new FeatureError("Nothing in this change set can be rolled back automatically. See the manual steps in the rollback preview.", 409)
   return createChangeSet(deps, tenantId, {
-    title: input.title?.trim() || `Rollback of ${record.title}`.slice(0, 200),
+    title: input.title?.trim() || `Rollback of ${changeSetTitle(record)}`.slice(0, 200),
     ticket: input.ticket ?? record.ticket,
     origin: { workflow: record.origin.workflow, recordId: record.origin.recordId },
     sourceTenantId: record.targetTenantId,

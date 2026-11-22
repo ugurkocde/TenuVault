@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { createCipheriv, createHash, createHmac, randomBytes, randomUUID } from "node:crypto"
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises"
+import { realpath, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
 import { spawnSync } from "node:child_process"
@@ -18,7 +18,7 @@ const identity: CaptureIdentity = { tenantId: tenant, appId: randomUUID(), conte
 const roots: string[] = []
 afterEach(async () => { for (const folder of roots.splice(0)) await rm(folder, { recursive: true, force: true }) })
 async function workspace() {
-  const folder = await mkdtemp(join(tmpdir(), "intune-capture-")); roots.push(folder)
+  const folder = await realpath(await mkdtemp(join(tmpdir(), "intune-capture-"))); roots.push(folder)
   const master = randomBytes(32), base = join(folder, "store"), store = new AppSourceStore(base, () => [master])
   return { folder, base, master, store }
 }

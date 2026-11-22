@@ -115,7 +115,13 @@ For Dev to Prod promotion, select the production tenant and open **Changes** > *
 * [Intune tenant-to-tenant migration](https://www.tenuvault.com/guides/intune-tenant-to-tenant-migration): the migration guide, on the product site
 * [TenuVault for MSPs](https://www.tenuvault.com/solutions/msps)
 * [Restore Intune policies](/restore/)
-* [Sync](/sync/): copy live policies from one tenant to others, reviewed per target
+* [Copy to Tenants](/copy-to-tenants/): copy live policies from one tenant to others, reviewed per target
 * [Disaster recovery](/restore/disaster-recovery/)
 * [What cannot be restored](/restore/limitations/)
 * [Plans and features](/licensing/)
+
+### Destination history
+
+Policy copies and [App Backup restores](/apps/app-backup/) record a separate [audit event](/audit-log/) for each destination, with that tenant’s executing identity when available. If a destination has backup storage configured, look for its event in that tenant’s Audit Log. If only the source tenant has backup storage, open its Audit Log and check **Job details** for the destination tenant ID. Use the shared operation ID to relate the events.
+
+Before copying policies to multiple tenants, TenuVault checks sign-in for every destination. If any sign-in fails, the whole operation stops before creating any policies. The audit events record a preparation failure, and you can retry after restoring access to the destination.

@@ -1,17 +1,16 @@
 import { blobPath, isGuid } from "../../../../shared/security"
 import { assertStorageAccountName } from "../../../../shared/storage-account"
-import { cloudStatusBlobName, parseCloudStatus } from "../../../../shared/cloud-backup"
+import { cloudAuditStatusBlobName, cloudStatusBlobName, parseCloudStatus } from "../../../../shared/cloud-backup"
 import { BACKUP_CONTAINER } from "../../../../shared/constants"
+import { CLOUD_OUTCOME_CONTAINER } from "../../../../shared/notifications/cloud-outcome"
 import { type NextRequest, NextResponse } from "next/server"
 
 const storageHeaders = (token: string) => ({ 'x-ms-version': '2021-12-02', 'x-ms-date': new Date().toUTCString(), Authorization: `Bearer ${token}` })
 
 /**
  * The last cloud backup run for a tenant, read from the status blob the Azure Automation
- * runbook writes after every run (Invoke-TenuVaultBackup.ps1). Nothing is written here and no
- * Azure resource is touched: the app only reports what the runbook already recorded in the
- * tenant's own backup container, through the same storage reads as the backup list (a status blob
- * sealed by an earlier runbook version opens with the device keyring, a plain one is read as is).
+ * runbook writes to the backup container. Audit delivery health comes from the results
+ * container for the same run, when available.
  */
 export async function POST(request: NextRequest) {
   try {
@@ -59,7 +58,20 @@ export async function POST(request: NextRequest) {
     } catch {
       return NextResponse.json({ cloudStatus: null })
     }
-    return NextResponse.json({ cloudStatus: parseCloudStatus(parsed, tenantId) })
+    const auditBlob = cloudAuditStatusBlobName(parsed, tenantId)
+    let auditStatus: unknown
+    if (auditBlob) {
+      try {
+        const auditResponse = await fetch(`https://${storageAccountName}.blob.core.windows.net/${CLOUD_OUTCOME_CONTAINER}/${blobPath(auditBlob)}`, {
+          headers: storageHeaders(accessToken),
+          signal: AbortSignal.timeout(2000),
+        })
+        if (auditResponse.ok) auditStatus = await auditResponse.json()
+      } catch {
+        // Schedule status is still usable if the audit status cannot be read.
+      }
+    }
+    return NextResponse.json({ cloudStatus: parseCloudStatus(parsed, tenantId, auditStatus) })
   } catch (error) {
     if (error instanceof Error && (error.name === 'FetchApplicationError' || error.name === 'FetchPreconditionError')) {
       return NextResponse.json({ error: error.message }, { status: 502 })

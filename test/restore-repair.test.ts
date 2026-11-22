@@ -2,9 +2,12 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { Restorer, type GraphCall } from '../src/portal/lib/policies/graph-restore'
 import { POST } from '../src/portal/app/api/restore-backup/route'
 import { NextRequest } from '../src/main/api/next-server-shim'
+import { AuditSink, setMainAuditSink } from '../src/main/api/audit-sink'
+import { pendingEvents, setAuditOutboxStore } from '../src/portal/lib/audit/outbox'
+import { memoryStore } from './helpers'
 const path = 'backup-test/NotificationTemplates/a.json'
 const snapshot = { displayName: 'Message', localizedNotificationMessages: [{ locale: 'en-us', subject: 'Hello', messageTemplate: 'Hi', isDefault: true }, { locale: 'de-de', subject: 'Hallo', messageTemplate: 'Hi', isDefault: false }] }
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => { vi.unstubAllGlobals(); setMainAuditSink(undefined); setAuditOutboxStore() })
 it('repairs only rejected content and never repeats creation or completed additive steps', async () => {
   let reject = true
   const calls: string[] = []
@@ -32,28 +35,54 @@ it('retains the created ID and blocks replay when a follow-up response is lost',
   }, { mode: 'copy', assignments: false })
   expect(await restorer.restore(path, snapshot)).toMatchObject({ success: false, partial: true, policyId: 'created', retryable: false, repairToken: undefined })
 })
-it('reports a partial API operation and repairs across requests without another creation', async () => {
+it('lets another authorized admin repair a partial restore and audits the executing actor', async () => {
   let reject = true
   let creates = 0
+  const writes: string[] = []
+  const tenantId = '11111111-1111-1111-1111-111111111111'
+  const firstActor = '22222222-2222-2222-2222-222222222222'
+  const secondActor = '33333333-3333-3333-3333-333333333333'
+  let actor = firstActor
+  const account = 'restoreparity'
+  const store = memoryStore()
+  setAuditOutboxStore(store)
+  setMainAuditSink(new AuditSink({
+    store,
+    bind: () => ({ tenantId, storageAccountName: account, user: { id: firstActor, email: '', name: 'Admin' } }),
+    transport: async () => { throw new Error('Offline') },
+  }))
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input))
-    if (url.hostname === 'login.microsoftonline.com') return Response.json({ access_token: 'test' })
+    if (url.hostname === 'login.microsoftonline.com') {
+      const claims = { tid: tenantId, oid: actor, scp: 'DeviceManagementServiceConfig.ReadWrite.All DeviceManagementConfiguration.ReadWrite.All' }
+      return Response.json({ access_token: `mock.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.local` })
+    }
     if (url.pathname.endsWith('/metadata.json') || url.pathname.endsWith('/.tenuvault-owner.json')) return new Response('', { status: 404 })
     if (url.hostname.endsWith('.blob.core.windows.net')) return Response.json(snapshot)
-    if (url.pathname.endsWith('localizedNotificationMessages')) return reject ? Response.json({ error: { message: 'No' } }, { status: 400 }) : new Response(null, { status: 204 })
+    if (url.pathname.endsWith('localizedNotificationMessages')) {
+      writes.push(JSON.parse(String(init?.body)).locale)
+      return reject ? Response.json({ error: { message: 'No' } }, { status: 400 }) : new Response(null, { status: 204 })
+    }
     // The repair reads the copy back first to confirm it still exists.
     if ((init?.method ?? 'GET') === 'GET') return Response.json({ id: 'created', displayName: '[Restored] Message' })
     creates++
     return Response.json({ id: 'created' }, { status: 201 })
   }))
-  const body = { tenantId: 'tenant', appId: 'app', clientSecret: 'test', storageAccountName: 'store', backupId: 'backup-test', restoreType: 'selective', selectedPolicies: [{ path }] }
+  const body = { tenantId, appId: 'app', clientSecret: 'test', storageAccountName: account, backupId: 'backup-test', restoreType: 'selective', selectedPolicies: [{ path }] }
   const request = (value: object) => new NextRequest('http://tenuvault.internal/api/restore-backup', { method: 'POST', body: JSON.stringify(value) })
   const first = await (await POST(request(body))).json()
   expect(first).toMatchObject({ success: false, status: 'PartiallyCompleted', details: { restoredCount: 0, failedCount: 1, partialCount: 1 } })
+  writes.length = 0
   reject = false
+  actor = secondActor
   const second = await (await POST(request({ ...body, selectedPolicies: [{ path, repairToken: first.details.results[0].repairToken }] }))).json()
   expect(second).toMatchObject({ success: true, status: 'Completed' })
   expect(creates).toBe(1)
+  expect(writes).toEqual(['en-us', 'de-de'])
+  expect(pendingEvents(account)).toMatchObject([
+    { user: { id: firstActor }, job: { operationId: first.jobId, status: 'warnings' } },
+    { user: { id: secondActor }, job: { operationId: first.jobId, runId: second.jobId, status: 'completed' } },
+  ])
 })
 it('rejects a replacement repair when live state changed after the failure', async () => {
   let liveName = 'Before'

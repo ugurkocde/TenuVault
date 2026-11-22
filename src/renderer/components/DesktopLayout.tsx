@@ -27,7 +27,7 @@ import {
   Layers,
   LifeBuoy,
   MessageSquareHeart,
-  RefreshCw,
+  Copy,
   Settings,
   Shield,
   Siren,
@@ -91,7 +91,7 @@ const navigationGroups: NavGroup[] = [
     { name: "Backup & Restore", href: "/portal/backup", icon: Database },
     { name: "App Backup", href: "/portal/app-backup", icon: Package, hint: "Intune apps and installer backups" },
     { name: "Drift Detection", href: "/portal/drift", icon: GitCompare },
-    { name: "Sync", href: "/portal/sync", icon: RefreshCw, hint: "Copy settings from one tenant to others" },
+    { name: "Copy to Tenants", href: "/portal/sync", icon: Copy, hint: "Copy settings from one tenant to others" },
     { name: "Alerts", href: "/portal/alerts", icon: Siren, hint: "Teams, email and webhook alerts for backups and policy changes" },
   ] },
   // CIS Benchmarks and Frameworks follow OpenIntuneBaseline in this group.

@@ -138,6 +138,7 @@ const bridge: TenuVaultPreloadBridge = {
   },
   backupReader: {
     status: (tenantId) => invoke("backupReader:status", tenantId),
+    deliverAudit: (tenantId) => invoke("backupReader:deliverAudit", tenantId),
     prepare: (tenantId) => invoke("backupReader:prepare", tenantId),
     exportCertificate: (tenantId) => invoke("backupReader:exportCertificate", tenantId),
     exportScript: (tenantId) => invoke("backupReader:exportScript", tenantId),
