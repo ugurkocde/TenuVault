@@ -1453,9 +1453,10 @@ function Get-TvOmissionPolicy {
         try {
             $binding = Get-AutomationVariable -Name $bindingName -ErrorAction Stop
         } catch {
-            # Only Automation's own "Variable not found ... named: <name>" answer proves the variable is missing.
+            # Only Automation's own "Variable not found." answer proves the variable is missing; any other
+            # error, an unrelated ObjectNotFound included, leaves enrollment unverified.
             $bindingVerified = $_.CategoryInfo.Category -eq [System.Management.Automation.ErrorCategory]::ObjectNotFound -and
-                $_.Exception.Message -match '(?i)\bvariable not found\b' -and $_.Exception.Message.Contains($bindingName)
+                $_.Exception.Message -match '\AVariable not found\.'
         }
     } else {
         $binding = $env:TENUVAULT_OMISSION_ACCOUNT
