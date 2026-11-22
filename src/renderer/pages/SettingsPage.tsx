@@ -1,8 +1,8 @@
 import type { WriteRecord } from "../../main/storage/restore-journal"
 import { getAppearance, setAppearance, type Appearance } from "../lib/appearance"
-import { useEffect, useId, useRef, useState, type ReactNode } from "react"
+import { Fragment, useEffect, useId, useRef, useState, type ReactNode } from "react"
 import { Link, useLocation, useSearchParams } from "react-router-dom"
-import { Bell, Download, FolderOpen, HardDrive, Info, KeyRound, Loader2, Lock, MonitorCog, Network, Palette, RefreshCw, Save, ShieldCheck, Siren, SunMoon, Upload, type LucideIcon } from "lucide-react"
+import { ArrowLeftRight, Bell, Download, FolderOpen, HardDrive, Info, KeyRound, Loader2, Lock, MonitorCog, Network, Palette, RefreshCw, Save, ShieldCheck, Siren, SunMoon, Upload, type LucideIcon } from "lucide-react"
 import { cn } from "~/lib/utils"
 import { useTenantOperations, useTenants, type Tenant } from "~/contexts/TenantContext"
 import { Button } from "~/components/ui/button"
@@ -29,6 +29,8 @@ import { PlanBadge } from "../components/UpgradeNote"
 import { PdfBrandingSettings } from "../components/PdfBrandingSettings"
 import { BackupReaderSettings } from "../components/BackupReaderSettings"
 import { ServicesSettings } from "../components/ServicesSettings"
+import { SettingsTransfer } from "../components/SettingsTransfer"
+import type { TransferApplyResult } from "../../shared/settings-transfer"
 import { WhatsNewDialog, WhatsNewEntryNotes } from "../components/WhatsNewDialog"
 import { useWhatsNew } from "../lib/whats-new"
 import { useConfirm } from "~/components/ConfirmDialog"
@@ -622,9 +624,10 @@ export function BackgroundAndRetention() {
                   value={prefs.retentionDays}
                   onChange={(e) => void set({ retentionDays: Number(e.target.value) })}
                 >
-                  {[7, 14, 30, 60, 90, 180, 365].map((days) => (
+                  {/* A saved value outside the presets, for example from an imported settings file, is listed as it is. */}
+                  {[...new Set([7, 14, 30, 60, 90, 180, 365, prefs.retentionDays])].filter((days) => days > 0).sort((a, b) => a - b).map((days) => (
                     <option key={days} value={days} disabled={allCommunity && days > COMMUNITY_RETENTION_DAYS}>
-                      {days} days{allCommunity && days > COMMUNITY_RETENTION_DAYS ? " (Pro)" : ""}
+                      {days} {days === 1 ? "day" : "days"}{allCommunity && days > COMMUNITY_RETENTION_DAYS ? " (Pro)" : ""}
                     </option>
                   ))}
                   <option value={0} disabled={allCommunity}>Forever{allCommunity ? " (Pro)" : ""}</option>
@@ -841,6 +844,7 @@ const SECTIONS: { id: SettingsSectionId; title: string; icon: typeof KeyRound; f
   { id: "background", title: "Background runner", icon: MonitorCog },
   { id: "notifications", title: "Notifications", icon: Bell, feature: "notifications" },
   { id: "branding", title: "PDF branding", icon: Palette, feature: "pdfBranding" },
+  { id: "transfer", title: "Import and export", icon: ArrowLeftRight },
   { id: "updates", title: "Updates", icon: Download },
   { id: "appearance", title: "Appearance", icon: SunMoon },
   { id: "about", title: "About", icon: Info },
@@ -877,8 +881,24 @@ export function SettingsSectionNav({ section }: { section: SettingsSectionId }) 
   )
 }
 
+/** The Settings section that shows an imported setting, so it can load again after the import. */
+function sectionOfImportItem(id: string): SettingsSectionId | null {
+  if (id === "app:retentionDays" || id === "app:keepRunningInTray" || id === "app:startAtLogin") return "background"
+  if (id === "app:autoUpdate" || id === "app:nightlyUpdates") return "updates"
+  if (id === "app:appearance") return "appearance"
+  if (id === "app:pdfBranding") return "branding"
+  if (id.includes(":service:")) return "services"
+  return null
+}
+
 export default function SettingsPage() {
   const [searchParams] = useSearchParams()
+  // After an import, only the sections whose settings were applied load again; others keep unsaved edits.
+  const [reloads, setReloads] = useState<Partial<Record<SettingsSectionId, number>>>({})
+  const reloadApplied = (result: TransferApplyResult) => {
+    const sections = new Set(result.items.filter((entry) => entry.outcome === "applied").map((entry) => sectionOfImportItem(entry.id)).filter((id) => id !== null))
+    if (sections.size) setReloads((current) => Object.fromEntries([...Object.entries(current), ...[...sections].map((id) => [id, (current[id] ?? 0) + 1])]))
+  }
   const { hash } = useLocation()
   const section = resolveSettingsSection(searchParams.get("section"), hash)
 
@@ -934,7 +954,7 @@ export default function SettingsPage() {
   const panel = (id: SettingsSectionId, content: ReactNode) => (
     <section key={id} id={`settings-${id}`} hidden={section !== id}>
       {/* A dialog this panel owns closes at once when the panel hides, in the same commit, so focus can land below. */}
-      <DialogAnimationProvider value={section === id}>{content}</DialogAnimationProvider>
+      <DialogAnimationProvider value={section === id}><Fragment key={id === "background" ? 0 : reloads[id] ?? 0}>{content}</Fragment></DialogAnimationProvider>
     </section>
   )
 
@@ -942,7 +962,7 @@ export default function SettingsPage() {
     <div className="p-6 lg:p-8">
       <div className="pb-2">
         <h1 className="text-4xl font-medium tracking-tight text-gray-900">Settings</h1>
-        <p className="mt-2 text-lg text-gray-500">Sign-in, services and permissions, backup storage, encryption, background backups, notifications, PDF branding and updates.</p>
+        <p className="mt-2 text-lg text-gray-500">Sign-in, services and permissions, backup storage, encryption, background backups, notifications, PDF branding, import and export, and updates.</p>
       </div>
       <div className="mt-4 flex flex-col gap-6 xl:flex-row xl:items-start">
         <SettingsSectionNav section={section} />
@@ -950,9 +970,11 @@ export default function SettingsPage() {
           {panel("signin", <div className="space-y-6"><TenantSettings active={section === "signin"} /><ProxySignInSettings /></div>)}
           {panel("services", <ServicesSettings />)}
           {panel("storage", <div className="space-y-6"><BackupsOnDevice /><RestoreWrites active={section === "storage"} /></div>)}
-          {panel("background", <div className="space-y-6"><BackgroundAndRetention /><BackupReaderSettings /></div>)}
+          {/* Only the preferences card loads again after an import, so a Backup Reader draft stays. */}
+          {panel("background", <div className="space-y-6"><BackgroundAndRetention key={reloads.background ?? 0} /><BackupReaderSettings /></div>)}
           {panel("notifications", <NotificationSettings />)}
           {panel("branding", <PdfBrandingSettings />)}
+          {panel("transfer", <SettingsTransfer active={section === "transfer"} onApplied={reloadApplied} />)}
           {panel("updates", <Updates />)}
           {panel("appearance", <AppearanceSettings />)}
           {panel("about", <About active={section === "about"} />)}

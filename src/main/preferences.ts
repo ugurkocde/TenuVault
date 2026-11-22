@@ -55,6 +55,11 @@ export class Preferences {
     return { ...this.defaults, ...this.stored() }
   }
 
+  /** Only the preferences the admin set, without the defaults of this build. */
+  saved(): Partial<StoredPreferences> {
+    return this.stored()
+  }
+
   set(changes: Partial<StoredPreferences>): StoredPreferences {
     checkChanges(changes)
     // Only the admin's own choices are stored, so a default can still follow the installed build.

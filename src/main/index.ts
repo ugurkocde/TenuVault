@@ -34,7 +34,10 @@ import { pathToFileURL } from "node:url"
 import { isGuid, isMicrosoftLoginUrl, sameRendererDocument } from "../shared/security"
 import { rendererStorageKey, rendererStorageValue } from "./renderer-storage"
 import { prepareGeneratedFile, prepareSaveFile, type PreparedFile } from "./save-file"
-import { pdfBrandingFor, PdfBrandingPolicy, PdfBrandingStore, setPdfBrandingPolicy } from "./pdf-branding"
+import { pdfBrandingFor, PdfBrandingPolicy, PdfBrandingStore, setPdfBrandingPolicy, validateBranding } from "./pdf-branding"
+import { SettingsTransfer } from "./settings-transfer/service"
+import { readSettingsFile } from "./settings-transfer/file"
+import { settingsFileName } from "../shared/settings-transfer"
 import { prepareOibReportFile, printHtmlToPdf } from "./report-export"
 import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, net, Notification, powerMonitor, safeStorage, session, shell } from "electron"
 import { createChromiumFetch } from "./chromium-fetch"
@@ -1226,6 +1229,57 @@ async function bootstrap(): Promise<void> {
   handleTrusted("pdfBranding:clear", () => {
     pdfBranding.clear()
     return { branding: null, available: pdfBranding.available() }
+  })
+  // Settings files are built, read and applied here; the renderer only chooses which items to apply.
+  const settingsTransfer = new SettingsTransfer({
+    store: appStore,
+    preferences,
+    autoUpdateManaged: () => autoUpdateManaged,
+    branding: { get: () => pdfBranding.get(), set: (value) => pdfBranding.set(value), available: () => pdfBranding.available(), validate: validateBranding },
+    modules: moduleSettings,
+    scopes,
+    schedules: {
+      list: () => scheduler.stored(),
+      // The plan rule of the schedule settings, checked as an enabled schedule so a paused one gets it too;
+      // the reviewed values are then saved as they are.
+      set: (input) => {
+        const current = scheduler.stored().find((schedule) => schedule.tenantId === input.tenantId.toLowerCase())
+        prepareScheduleInput({ ...input, enabled: true }, license.plan(input.tenantId), current)
+        return scheduler.set(input)
+      },
+    },
+    plan: (tenantId) => license.plan(tenantId),
+    appVersion: app.getVersion(),
+  })
+  handleTrusted("settings:export", (_event, options: unknown) =>
+    saveFileWithDialog(prepareGeneratedFile(settingsTransfer.exportFile(options), settingsFileName(new Date()), "utf8"), "Export settings"))
+  let openingSettingsFile = false
+  handleTrusted("settings:import", async (_event, appearance: unknown) => {
+    if (openingSettingsFile) throw new Error("A settings file is already being opened.")
+    openingSettingsFile = true
+    try {
+      const selected = await dialog.showOpenDialog(mainWindow!, { title: "Import settings", properties: ["openFile"], filters: [{ name: "TenuVault settings", extensions: ["json"] }] })
+      if (selected.canceled || !selected.filePaths[0]) return null
+      return settingsTransfer.open(await readSettingsFile(selected.filePaths[0]), appearance)
+    } finally {
+      openingSettingsFile = false
+    }
+  })
+  handleTrusted("settings:preview", (_event, importId: unknown, appearance: unknown) => settingsTransfer.preview(importId, appearance))
+  handleTrusted("settings:apply", (_event, importId: unknown, itemIds: unknown, appearance: unknown) => {
+    const result = settingsTransfer.apply(importId, itemIds, appearance)
+    // Login item and update channel follow the preferences, as after a change in Settings, and only
+    // when one of those was applied. The import is saved by then, so a failure here is reported, not thrown.
+    const runtime = result.items.filter((entry) => entry.outcome === "applied" && ["app:startAtLogin", "app:autoUpdate", "app:nightlyUpdates"].includes(entry.id))
+    if (runtime.length) {
+      try {
+        applyPreferences(preferences.get())
+      } catch (error) {
+        console.warn("[settings-transfer] Could not apply preferences to this computer:", error)
+        for (const entry of runtime) entry.message = "Saved. TenuVault applies it to this computer at the next start."
+      }
+    }
+    return result
   })
   handleTrusted("updates:status", () => updates.current())
   handleTrusted("updates:check", () => updates.check())

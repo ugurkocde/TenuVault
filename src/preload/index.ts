@@ -176,6 +176,12 @@ const bridge: TenuVaultPreloadBridge = {
     send: (openingId, input) => invoke("feedback:send", openingId, input),
     discardCapture: (openingId) => invoke("feedback:discardCapture", openingId),
   },
+  settingsTransfer: {
+    export: (options) => invoke("settings:export", options),
+    import: (appearance) => invoke("settings:import", appearance),
+    preview: (importId, appearance) => invoke("settings:preview", importId, appearance),
+    apply: (importId, itemIds, appearance) => invoke("settings:apply", importId, itemIds, appearance),
+  },
   reports: {
     savePdf: (report, fileName) => invoke("reports:savePdf", report, fileName),
     saveFile: (data, fileName, encoding = "utf8") => invoke("reports:saveFile", data, fileName, encoding),

@@ -3,11 +3,11 @@ title: "Settings reference"
 description: Every control on the Settings page, what it does and when to use it.
 ---
 
-**Settings** holds sign-in, backup storage, encryption, background backups, notifications, PDF branding and updates for this computer. Open it from the bottom of the sidebar.
+**Settings** holds sign-in, backup storage, encryption, background backups, notifications, PDF branding, import and export, and updates for this computer. Open it from the bottom of the sidebar.
 
-Choose a section in the list on the left to open it: **Sign-in**, **Services and permissions**, **Storage and recovery**, **Background runner**, **Notifications**, **PDF branding**, **Updates**, **Appearance** and **About**. One section shows at a time, starting with **Sign-in**. When no tenant on this computer is on Pro or MSP, **Notifications** and **PDF branding** carry a **Pro** badge in the list; both sections still open. **Notifications** links to the [Alerts](/notifications/) page in the sidebar, where alerts, channels, change watching and deliveries are set up. On a narrow window the list becomes a row above the section.
+Choose a section in the list on the left to open it: **Sign-in**, **Services and permissions**, **Storage and recovery**, **Background runner**, **Notifications**, **PDF branding**, **Import and export**, **Updates**, **Appearance** and **About**. One section shows at a time, starting with **Sign-in**. When no tenant on this computer is on Pro or MSP, **Notifications** and **PDF branding** carry a **Pro** badge in the list; both sections still open. **Notifications** links to the [Alerts](/notifications/) page in the sidebar, where alerts, channels, change watching and deliveries are set up. On a narrow window the list becomes a row above the section.
 
-Settings apply to this computer only. Other admins who use TenuVault have their own settings.
+Settings apply to this computer only. Other admins who use TenuVault have their own settings. To give another admin the same settings, or to keep a copy of yours, use [Import and export](#import-and-export).
 
 ## Appearance
 
@@ -220,6 +220,80 @@ Branded reports are fully white label: they carry no TenuVault name or logo. Wha
   </a>
   <figcaption>PDF branding previews the report cover alongside company, logo and color controls. Default preview; no customer branding. Select the image to view it full size.</figcaption>
 </figure>
+
+## Import and export
+
+**Import and export** saves the settings of this computer and of your tenants in a readable JSON file, and applies such a file on another computer, or on this one again later. Use it to set up another admin's TenuVault the same way, or to keep a backup of your configuration. Import and export is available on every plan.
+
+<figure class="docs-screenshot">
+  <a href="/images/screenshots/settings-transfer.webp" aria-label="Open full-size screenshot: settings import and export">
+    <img src="/images/screenshots/settings-transfer.webp" alt="Import and export offers Export settings and Import settings" width="2880" height="2000" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>Import and export offers Export settings and Import settings. Example tenant data. Select the image to view it full size.</figcaption>
+</figure>
+
+### What the file holds
+
+| Part | Settings |
+| --- | --- |
+| **This computer** | **Keep backups for**, **Keep running in the menu bar/tray when I close the window**, **Start TenuVault in the menu bar/tray when I sign in to this computer**, **Download and install updates automatically**, **Get nightly builds**, the appearance and the PDF branding with its logo. Only the preferences you changed are written, so defaults stay defaults. |
+| Each tenant you choose | Which optional services are on in **Services and permissions**, what is backed up, the backup schedule (on or off, daily or weekly, time and weekday) and the [cloud backup](/backups/cloud/) setup record. |
+| **Include connection details** | Optional. For each tenant, the client ID of its app registration and where its backups are stored (this device, or the Azure storage account with its subscription, resource group and region). Another admin can then connect the tenant from the file. Both are identifiers, not secrets. |
+
+A file never holds sign-ins or tokens, license keys, the recovery key or encryption keys, Backup Reader certificates, proxy passwords, client secrets, logs, journals or history. Permissions are not part of the file either: they belong to the app registration in Entra, and every admin signs in with their own account.
+
+### Export settings
+
+1. Select **Export settings**.
+2. Tick **This computer** and the tenants to include. Every tenant connected on this computer is ticked at first.
+3. Tick **Include connection details** if the file is for an admin who has not connected the tenant yet.
+4. Select **Save file**. The default name is `tenuvault-settings-<date>.json`.
+
+<figure class="docs-screenshot">
+  <a href="/images/screenshots/settings-transfer-export.webp" aria-label="Open full-size screenshot: export settings">
+    <img src="/images/screenshots/settings-transfer-export.webp" alt="Export settings lists This computer, each connected tenant and Include connection details" width="1248" height="1792" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>Export settings lists This computer, each connected tenant and Include connection details. Example tenant data. Select the image to view it full size.</figcaption>
+</figure>
+
+### Import settings
+
+1. Select **Import settings** and open the file.
+2. **Review settings from the file** lists each setting with its current value and the value in the file, under **This computer** and one heading per tenant in the file. Nothing changes yet.
+3. Tick the settings to apply and select **Apply**. The button counts the ticked settings, for example **Apply 4 settings**.
+4. TenuVault shows what was applied and what was not. If you turned on services for a tenant, it checks your sign-in and lists any permissions those services still need, with a link to **Services and permissions**.
+
+Settings that would change are ticked at first. These start unticked and carry a warning, because they change how this computer runs: **Start TenuVault in the menu bar/tray when I sign in to this computer**, **Get nightly builds** and **Backup schedule**. When two computers run the same schedule, the tenant is backed up twice. **What is backed up** names each type it starts or stops backing up, and starts unticked when it stops backing up a type. **Download and install updates automatically** starts unticked when it would turn updates back on while this computer is set to get nightly builds. Turning off a service that is on starts unticked as well, because its settings are no longer backed up for that tenant. A shorter **Keep backups for** starts unticked too: it applies to every tenant on this computer, also those not in the file, and the next complete backup of a tenant deletes its backups older than the new period. When a cloud backup setup or PDF branding reads the same on both sides, the row names the fields that change with their old and new values, for example **Changes the logo (replaced)**. A value the file sets that only matches this computer's default is offered as well, so it stays your choice when a later version changes the default. Settings that change on this computer after the review are not applied; import the file again to review them.
+
+Settings that are already the same are hidden; tick **Show settings that are already the same** to see them. Select **Save current settings first** to export your current settings before you apply anything. Importing that file later brings back the values it holds. Settings still at their default and a tenant without a schedule are not in it, so turn those back by hand if an import changed them.
+
+<figure class="docs-screenshot">
+  <a href="/images/screenshots/settings-transfer-review.webp" aria-label="Open full-size screenshot: review settings from the file">
+    <img src="/images/screenshots/settings-transfer-review.webp" alt="Review settings from the file shows each setting with its current and new value and leaves the schedule unticked" width="1632" height="1896" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>Review settings from the file shows each setting with its current and new value and leaves the schedule unticked. Example tenant data. Select the image to view it full size.</figcaption>
+</figure>
+
+### Which tenant a setting applies to
+
+Settings for a tenant apply only to the tenant with the same tenant ID on this computer. A tenant in the file that is not connected here is listed with **This tenant is not connected on this computer, so its settings are skipped.** If the file has its connection details, **Connect this tenant** opens the guided setup with them filled in. See [Set up from a file](/getting-started/connect-tenant/#set-up-from-a-file). An import never adds, removes or signs in to a tenant.
+
+Where the backups of a connected tenant are stored is shown for information only. To change it, use **Change storage** in [Sign-in](#change-storage), which checks your access first. When the file was exported with a different app registration than the one this computer uses for the tenant, the review says so, because the permissions can differ.
+
+### What is not applied
+
+| The review shows | Why |
+| --- | --- |
+| A **Pro** badge on PDF branding | No tenant on this computer is on Pro or MSP. |
+| A **Pro** badge on a daily schedule | The tenant is on Community, which runs weekly schedules. A tenant that already has a daily schedule keeps it. |
+| **The plan of this tenant is not known yet** | TenuVault has not checked the tenant's license yet, so it does not turn on a new daily schedule. Import the file again later. |
+| **Updates on this computer are managed by your organization.** | An administrator set automatic updates by policy, so neither **Download and install updates automatically** nor **Get nightly builds** is changed. See [Deploy TenuVault in your organization](/deploy/#control-automatic-updates). |
+| **The value in the file is not valid.** | That one setting is broken, for example a time that does not exist. The other settings still apply. Connection details that are not valid show as their own row, and that tenant cannot be connected from the file. |
+| **Not known to this version, so skipped** | The file comes from a newer TenuVault and holds settings, services or fields this version does not know. Nothing from them is applied; the settings this version knows still are. |
+
+**Keep backups for** is saved as chosen on every plan; on Community, TenuVault keeps at most 30 days, and the review says so.
+
+The whole file is refused, and nothing changes, when it is not a TenuVault settings file, was made by a newer TenuVault that changed the format (**Update TenuVault to import it.**), is larger than 5 MB, or lists a tenant twice or a tenant ID that is not valid. An opened file stays ready to apply for up to one hour, and TenuVault keeps at most five opened files; opening a sixth closes the oldest. When a file is no longer open, import it again.
 
 ## Updates
 
