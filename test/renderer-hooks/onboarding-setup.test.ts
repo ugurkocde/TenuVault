@@ -976,6 +976,20 @@ describe("setup from a file", () => {
     expect(container.querySelector<HTMLInputElement>("#tenant")!.value).toBe(FILE_TENANT)
   })
 
+  it("shows on the Sign in step that a file handed over could not be opened", async () => {
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 1, tenant: TENANT, clientId: CLIENT, displayName: "", account: null }))
+    state.transferPreview.mockRejectedValueOnce(new Error("This settings file is no longer open. Import it again."))
+    const container = document.createElement("div")
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    roots.push(root)
+    act(() => root.render(createElement(MemoryRouter, { initialEntries: [`/portal/onboarding?setup=import-1&tenant=${FILE_TENANT}`] }, createElement(OnboardingPage))))
+    await flush()
+    await flush()
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("This settings file is no longer open.")
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("Open the file again")
+  })
+
   it("replaces the IDs of an unfinished sign-in with the file's, in the form and in the notice", async () => {
     state.store.set(DRAFT_KEY, JSON.stringify({ step: 1, tenant: TENANT, clientId: CLIENT, displayName: "Draft", account: null }))
     let resolve!: (value: unknown) => void

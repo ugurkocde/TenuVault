@@ -53,6 +53,8 @@ const SESSION_MS = 60 * 60 * 1000
 const MAX_SESSIONS = 5
 /** More item IDs than any preview has; a larger request is refused before any work. */
 const MAX_ITEMS = 5000
+/** Unknown parts the review lists by name. */
+const MAX_SKIPPED = 50
 
 export interface SettingsTransferDeps {
   store: KeyValueStore
@@ -109,9 +111,12 @@ interface Candidate {
 interface Session {
   file: SettingsFile
   createdAt: number
-  /** The item IDs of the last preview the admin saw; apply accepts no other. */
-  reviewed: Set<string>
+  /** What each item of the last preview showed; apply accepts no other item, and none whose effect changed since. */
+  reviewed: Map<string, string>
 }
+
+/** What an item shows the admin: what is there now, what it becomes and what the review warns about. */
+const effect = (item: TransferItem) => JSON.stringify([item.current, item.next, item.warning ?? "", item.note ?? ""])
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -158,11 +163,27 @@ function describeBranding(branding: PdfBranding | null): string {
 
 /** The names of the fields that differ, so a change that reads the same as before still says what changes. */
 function changedFields<T extends object>(current: T | null, next: T, names: Partial<Record<keyof T, string>>): string[] {
-  return (Object.entries(names) as Array<[keyof T, string]>).filter(([key]) => JSON.stringify(current?.[key]) !== JSON.stringify(next[key])).map(([, name]) => name)
+  return (Object.entries(names) as Array<[keyof T, string]>)
+    .filter(([key]) => JSON.stringify(current?.[key]) !== JSON.stringify(next[key]))
+    .map(([key, name]) => {
+      const before = current?.[key]
+      const after = next[key]
+      // A logo is named, not printed; other values show what they are now and what they become.
+      if (key === "logo") return before === undefined ? "logo (added)" : after === undefined ? "logo (removed)" : "logo (replaced)"
+      return `${name} from ${valueText(before)} to ${valueText(after)}`
+    })
+}
+
+/** A value of a branding or cloud setup field as the preview names it. */
+function valueText(value: unknown): string {
+  if (value === undefined || value === null || value === "") return "none"
+  if (typeof value === "boolean") return value ? "yes" : "no"
+  if (isObject(value)) return Object.entries(value).map(([key, entry]) => `${key} ${valueText(entry)}`).join(", ") || "none"
+  return `"${String(value).slice(0, 80)}"`
 }
 const BRANDING_NAMES: Partial<Record<keyof PdfBranding, string>> = { companyName: "company name", logo: "logo", colors: "colors", preparedBy: "prepared by", classification: "classification", footerText: "footer text" }
 const CLOUD_NAMES: Partial<Record<keyof CloudBackupConfig, string>> = { subscriptionId: "subscription", resourceGroup: "resource group", automationAccount: "Automation account", storageAccount: "storage account", keyVault: "key vault", scheduleName: "schedule name", frequency: "frequency", time: "time", weekday: "weekday", timeZone: "time zone", linked: "linked schedule" }
-const changeNote = (fields: string[]) => (fields.length ? `Changes the ${fields.join(", ")}.` : undefined)
+const changeNote = (fields: string[]) => (fields.length ? `Changes the ${fields.join("; the ")}.` : undefined)
 
 /** Lists fields inside a known part that this version does not know; the known fields still apply. */
 function unknownFields(value: unknown, known: readonly string[], where: string, skipped: string[]): void {
@@ -273,7 +294,7 @@ export class SettingsTransfer {
     this.prune()
     while (this.sessions.size >= MAX_SESSIONS) this.sessions.delete(this.sessions.keys().next().value!)
     const importId = randomUUID()
-    this.sessions.set(importId, { file, createdAt: this.now().getTime(), reviewed: new Set() })
+    this.sessions.set(importId, { file, createdAt: this.now().getTime(), reviewed: new Map() })
     return this.preview(importId, appearance)
   }
 
@@ -281,8 +302,11 @@ export class SettingsTransfer {
   preview(importId: unknown, appearance: unknown): TransferPreview {
     const session = this.session(importId)
     const { groups, skipped } = this.candidates(session.file, appearance)
-    session.reviewed = new Set(groups.flatMap((group) => group.items.map((item) => item.id)))
-    return { importId: importId as string, exportedAt: session.file.exportedAt, appVersion: session.file.appVersion, groups, skipped: [...session.file.skipped, ...skipped] }
+    session.reviewed = new Map(groups.flatMap((group) => group.items.map((item) => [item.id, effect(item)] as const)))
+    const all = [...session.file.skipped, ...skipped]
+    // A file can name any number of unknown parts; the review lists the first ones and counts the rest.
+    const listed = all.length > MAX_SKIPPED ? [...all.slice(0, MAX_SKIPPED), `And ${all.length - MAX_SKIPPED} more`] : all
+    return { importId: importId as string, exportedAt: session.file.exportedAt, appVersion: session.file.appVersion, groups, skipped: listed }
   }
 
   /**
@@ -305,6 +329,8 @@ export class SettingsTransfer {
       const entry = { id, group, label: item.label }
       if (item.status === "same") { result.items.push({ ...entry, outcome: "skipped", message: "Already the same." }); continue }
       if (item.status === "blocked" || !apply) { result.items.push({ ...entry, outcome: "failed", message: item.reason ?? NOT_VALID }); continue }
+      // The setting changed on this computer since the review, so the file's value would now do something else.
+      if (session.reviewed.get(id) !== effect(item)) { result.items.push({ ...entry, outcome: "failed", message: "This setting changed since you reviewed it. Import the file again to review it." }); continue }
       try {
         const effect = apply()
         if (effect?.appearance) result.appearance = effect.appearance
@@ -464,7 +490,13 @@ export class SettingsTransfer {
     for (const key of Object.keys(preferences)) {
       if (!(EXPORTED_PREFERENCES as readonly string[]).includes(key)) skipped.push(`This computer: "${key.slice(0, 64)}"`)
     }
-    const customRetention = this.localTenants().some((tenant) => { const plan = this.deps.plan(tenant.tenantId); return plan !== null && allows(plan, "customRetention") })
+    const plans = this.localTenants().map((tenant) => this.deps.plan(tenant.tenantId))
+    const customRetention = plans.some((plan) => plan !== null && allows(plan, "customRetention"))
+    const communityHere = plans.includes("community") || !customRetention
+    const saved = this.deps.preferences.saved()
+    // A value the file sets on purpose that only matches this computer's default is saved as a choice,
+    // so it does not follow a different default of a later version.
+    const DEFAULT_NOTE = "Same as now, which is the default here. Applying it keeps it as a choice when a later version changes the default."
     for (const key of EXPORTED_PREFERENCES) {
       if (!Object.hasOwn(preferences, key)) continue
       const value = preferences[key]
@@ -473,10 +505,18 @@ export class SettingsTransfer {
       if (key === "retentionDays") {
         const valid = typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 3650
         const limited = valid && !customRetention && (value === 0 || value > COMMUNITY_RETENTION_DAYS)
+        const capped = valid && communityHere && (value === 0 || value > COMMUNITY_RETENTION_DAYS)
         // A shorter period deletes backups, of every tenant on this computer, so it starts unticked.
         const shorter = valid && value > 0 && (current.retentionDays === 0 || value < current.retentionDays)
-        items.push(this.item(id, label, days(current.retentionDays), valid ? days(value) : shown(value), valid ? value === current.retentionDays : false, valid ? null : NOT_VALID, {
-          ...(limited && { feature: "customRetention" as const, note: `Saved as chosen. On Community, TenuVault keeps at most ${COMMUNITY_RETENTION_DAYS} days.` }),
+        const asDefault = valid && value === current.retentionDays && saved.retentionDays === undefined
+        const note = [
+          "Applies to every tenant on this computer.",
+          capped && `On Community, TenuVault keeps at most ${COMMUNITY_RETENTION_DAYS} days.`,
+          asDefault && DEFAULT_NOTE,
+        ].filter(Boolean).join(" ")
+        items.push(this.item(id, label, days(current.retentionDays), valid ? days(value) : shown(value), valid && value === current.retentionDays && !asDefault, valid ? null : NOT_VALID, {
+          ...(limited && { feature: "customRetention" as const }),
+          note,
           ...(shorter && { warning: `Keeps backups for a shorter time, for every tenant on this computer, also those not in the file. After the next complete backup of a tenant, its backups older than ${days(value as number)} are deleted.` }),
           apply: () => void this.deps.preferences.set({ retentionDays: value as number }),
         }))
@@ -486,8 +526,10 @@ export class SettingsTransfer {
       const now = key === "autoUpdate" ? current.autoUpdate && !this.deps.autoUpdateManaged() : current[key]
       // Settings locks both update settings while the organization manages updates.
       const managed = (key === "autoUpdate" || key === "nightlyUpdates") && this.deps.autoUpdateManaged()
-      items.push(this.item(id, label, onOff(now), valid ? onOff(value) : shown(value), valid && value === now && !managed, !valid ? NOT_VALID : managed ? "Updates on this computer are managed by your organization." : null, {
+      const asDefault = valid && value === now && saved[key] === undefined && !managed
+      items.push(this.item(id, label, onOff(now), valid ? onOff(value) : shown(value), valid && value === now && !managed && !asDefault, !valid ? NOT_VALID : managed ? "Updates on this computer are managed by your organization." : null, {
         ...(PREFERENCE_WARNINGS[key] && { warning: PREFERENCE_WARNINGS[key] }),
+        ...(asDefault && { note: DEFAULT_NOTE }),
         apply: () => void this.deps.preferences.set({ [key]: value as boolean }),
       }))
     }

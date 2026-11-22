@@ -1,3 +1,4 @@
+import { constants } from "node:fs"
 import { open } from "node:fs/promises"
 import { isGuid } from "../../shared/security"
 import { SETTINGS_FILE_KIND, SETTINGS_FILE_LIMIT, SETTINGS_SCHEMA_VERSION } from "../../shared/settings-transfer"
@@ -22,7 +23,8 @@ const TOO_LARGE = "The settings file is larger than 5 MB."
  * plus one byte is ever read, even when the file grows or is replaced after it was chosen.
  */
 export async function readSettingsFile(path: string): Promise<string> {
-  const handle = await open(path, "r")
+  // Non-blocking, so a named pipe without a writer is refused below instead of waiting.
+  const handle = await open(path, process.platform === "win32" ? constants.O_RDONLY : constants.O_RDONLY | constants.O_NONBLOCK)
   try {
     const info = await handle.stat()
     if (!info.isFile()) throw new SettingsFileError("Choose a settings file.")

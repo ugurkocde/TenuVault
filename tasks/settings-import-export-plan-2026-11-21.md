@@ -270,11 +270,12 @@ Approved 2026-11-21: two PRs. PR 1 holds the format, the settings file and the s
 - [x] Renderer section, export and review dialogs, result with the permission check, onboarding setup-file entry (AC 1, 14, 16)
 - [x] Docs-site: settings.md (Import and export), connect-tenant.mdx (Set up from a file), multiple-admins.md, licensing/index.md, four new screenshots and SCREENSHOTS.md (AC 18)
 - [x] Built-app end-to-end run through the real IPC with stubbed file dialogs: export with connection details, no client secret in the file, import, apply, single-use session, tenant list unchanged; light and dark at 1024 px
-- [ ] PR opened, evaluator, Codex gate
+- [x] PR #381 opened; separate evaluator passed (no blocker)
+- [ ] Codex gate: rounds 1 to 4 fixed (see commits); CodeRabbit threads addressed
 
 Deviations from the plan, for PR 1:
 - The section is **Import and export** (`section=transfer`). PR 2 may rename it when the shared card arrives.
 - The storage target of a tenant that is already connected is information only. The admin changes it through **Change storage**, which checks access first. A setup file applies the storage through onboarding.
-- A file session stays open for one hour (the plan said 15 minutes), so a new admin can sign in and take the first backup before reviewing the rest of the file.
+- A file session stays open for at most one hour (the plan said 15 minutes), so a new admin can sign in and take the first backup before reviewing the rest of the file. At most five sessions are kept; opening a sixth closes the oldest, and the admin then opens the file again.
 - Preview labels use the Settings wording (for example **Get nightly builds**).
 - The dev app check used one profile with the real IPC and stubbed file dialogs; the two-profile storage-account run belongs to PR 2.

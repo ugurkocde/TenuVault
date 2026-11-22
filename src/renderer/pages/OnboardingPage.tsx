@@ -510,6 +510,12 @@ export default function OnboardingPage() {
       )}
 
       <div className="@container rounded-3xl bg-card p-5 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
+        {/* A file handed over from Settings can fail on any step, for example after its review expired. */}
+        {step > 0 && setupError && (
+          <p role="alert" className="rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700">
+            {setupError} Open the file again in Settings, under Import and export, or with Set up from a file on the Connect step.
+          </p>
+        )}
         {step === 0 && (
           <div className="space-y-4">
             <StepHeading id="setup-step-0">Connect your tenant</StepHeading>

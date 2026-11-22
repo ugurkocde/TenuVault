@@ -577,11 +577,11 @@ describe("changes the preview spells out", () => {
     const preview = b.transfer.open(JSON.stringify(exported), "system")
     const cloud = find(preview, `${TENANT}:cloudBackup`)!
     expect(cloud.next).toContain("schedule not linked yet")
-    expect(cloud.note).toContain("Changes the linked schedule.")
+    expect(cloud.note).toContain("Changes the linked schedule from yes to no.")
     const branding = find(preview, "app:pdfBranding")!
     expect(branding.status).toBe("change")
     expect(branding.next).toBe(branding.current)
-    expect(branding.note).toBe("Changes the colors.")
+    expect(branding.note).toBe('Changes the colors from primary "#112233" to primary "#445566".')
   })
 
   it("lists unknown fields inside known parts and still applies the known ones", () => {
@@ -639,5 +639,55 @@ describe("services, unknown fields and connection details in the preview", () =>
     expect(find(preview, `${TENANT}:connection`)).toMatchObject({ status: "blocked", reason: expect.stringContaining("not valid") })
     expect(find(preview, `${OTHER}:connection`)).toMatchObject({ status: "blocked" })
     expect(preview.groups.find((group) => group.id === OTHER)?.setup).toBeUndefined()
+  })
+})
+
+describe("what an import does, as reviewed", () => {
+  it("refuses an item whose effect changed after the review, and applies the others", () => {
+    const b = machine([{ tenantId: TENANT }])
+    b.scopes.set(TENANT, { excluded: ["Apps", "CompliancePolicies"] })
+    const preview = b.transfer.open(file({ app: { preferences: { retentionDays: 60 } }, tenants: [{ tenantId: TENANT, backupScope: { excluded: ["Apps"] } }] }), "system")
+    expect(find(preview, `${TENANT}:backupScope`)?.warning).toBeUndefined()
+    // The scope changes on this computer: the same file value would now stop backing up a type.
+    b.scopes.set(TENANT, { excluded: [] })
+    const result = b.transfer.apply(preview.importId, ["app:retentionDays", `${TENANT}:backupScope`], "system")
+    expect(result.items).toEqual([
+      { id: "app:retentionDays", group: "app", label: "Keep backups for", outcome: "applied" },
+      expect.objectContaining({ id: `${TENANT}:backupScope`, outcome: "failed", message: expect.stringContaining("changed since you reviewed it") }),
+    ])
+    expect(b.scopes.get(TENANT).scope.excluded).toEqual([])
+  })
+
+  it("names old and new values in the notes, and whether a logo is added", () => {
+    const b = machine([{ tenantId: TENANT }])
+    b.branding.set({ companyName: "Contoso", footerText: "Internal" })
+    const preview = b.transfer.open(file({ app: { pdfBranding: { companyName: "Contoso", footerText: "Public", logo: { dataUrl: pngLogo() } } }, tenants: [] }), "system")
+    expect(find(preview, "app:pdfBranding")?.note).toBe('Changes the logo (added); the footer text from "Internal" to "Public".')
+  })
+
+  it("says retention applies to every tenant, and names the Community limit on a computer with a Pro tenant too", () => {
+    const b = machine([{ tenantId: TENANT }, { tenantId: OTHER }], { [TENANT]: "pro", [OTHER]: "community" })
+    const preview = b.transfer.open(file({ app: { preferences: { retentionDays: 365 } }, tenants: [] }), "system")
+    const item = find(preview, "app:retentionDays")!
+    expect(item.note).toBe("Applies to every tenant on this computer. On Community, TenuVault keeps at most 30 days.")
+    expect(item.feature).toBeUndefined()
+  })
+
+  it("keeps a value the file sets on purpose that only matches the default here", () => {
+    const b = machine([{ tenantId: TENANT }])
+    const preview = b.transfer.open(file({ app: { preferences: { keepRunningInTray: true } }, tenants: [] }), "system")
+    expect(find(preview, "app:keepRunningInTray")).toMatchObject({ status: "change", current: "On", next: "On", note: expect.stringContaining("default") })
+    b.transfer.apply(preview.importId, ["app:keepRunningInTray"], "system")
+    expect(b.preferences.saved()).toEqual({ keepRunningInTray: true })
+    const again = b.transfer.open(file({ app: { preferences: { keepRunningInTray: true } }, tenants: [] }), "system")
+    expect(find(again, "app:keepRunningInTray")?.status).toBe("same")
+  })
+
+  it("names the first unknown parts and counts the rest", () => {
+    const b = machine([{ tenantId: TENANT }])
+    const unknown = Object.fromEntries(Array.from({ length: 80 }, (_, index) => [`future${index}`, 1]))
+    const preview = b.transfer.open(file({ ...unknown, tenants: [] }), "system")
+    expect(preview.skipped).toHaveLength(51)
+    expect(preview.skipped.at(-1)).toBe("And 30 more")
   })
 })
