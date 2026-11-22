@@ -105,6 +105,10 @@ export default function OnboardingPage() {
   const [setupChoices, setSetupChoices] = useState<{ importId: string; connections: SetupConnection[] } | null>(null)
   const [setupError, setSetupError] = useState("")
   const [openingSetup, setOpeningSetup] = useState(false)
+  // Each setup file starts a new attempt. An in-app setup started before it may still finish in the
+  // browser; its result then belongs to the attempt the admin left and must not sign in by itself.
+  const [attempt, setAttempt] = useState(0)
+  const currentAttempt = useRef(0)
   const [searchParams] = useSearchParams()
   const { addJob, removeJob, updateJob, activeJobs } = useBackupProgress()
   const completedBackup = useRef<string | null>(null)
@@ -256,6 +260,8 @@ export default function OnboardingPage() {
    * tenant or account", which then fills in the file's IDs.
    */
   const continueWithSetup = (importId: string, connection: SetupConnection) => {
+    currentAttempt.current += 1
+    setAttempt(currentAttempt.current)
     resumeCheck.current = false
     setSetupChoices(null)
     setSetupError("")
@@ -510,7 +516,7 @@ export default function OnboardingPage() {
             <ConnectTenantSetup
               trials={Boolean(status?.tenantTrialsEnabled)}
               onManual={() => { setSetupNotice(""); setAutoSignIn(null); setStep(1) }}
-              onRegistered={(result) => void registered(result)}
+              onRegistered={(result) => { if (attempt === currentAttempt.current) void registered(result) }}
             />
             <div className="space-y-3 rounded-2xl bg-secondary/60 px-4 py-3 text-sm text-gray-700">
               <div className="flex flex-wrap items-center justify-between gap-3">

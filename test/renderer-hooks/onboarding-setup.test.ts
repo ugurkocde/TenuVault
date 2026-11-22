@@ -29,6 +29,7 @@ const state = vi.hoisted(() => ({
   record: vi.fn(async (_event: unknown) => undefined),
   diagnostics: { state: "ineligible", policy: false, reminder: { setup: false, signin: false } } as import("../../src/shared/ipc").SetupDiagnosticsStatus,
   transferPreview: vi.fn(),
+  transferImport: vi.fn(),
 }))
 
 vi.mock("../../src/renderer/lib/bridge", () => ({
@@ -45,7 +46,7 @@ vi.mock("../../src/renderer/lib/bridge", () => ({
     schedules: { list: async () => [] },
     backups: { settings: async () => ({ recoveryExported: true }) },
     app: { openExternal: state.openExternal },
-    settingsTransfer: { preview: state.transferPreview, import: vi.fn() },
+    settingsTransfer: { preview: state.transferPreview, import: state.transferImport },
     diagnostics: { record: state.record, status: async () => state.diagnostics, reminderShown: async () => undefined, consent: async () => state.diagnostics, decline: async () => state.diagnostics },
   },
 }))
@@ -931,6 +932,25 @@ describe("setup from a file", () => {
     expect(container.querySelector<HTMLInputElement>("#tenant")!.value).toBe(FILE_TENANT)
     expect(container.querySelector<HTMLInputElement>("#clientId")!.value).toBe(FILE_CLIENT)
     expect(container.textContent).toContain("From a setup file")
+  })
+
+  it("ignores an in-app setup that finishes after a setup file was opened, so nothing signs in by itself", async () => {
+    let finish!: (value: unknown) => void
+    state.createRegistration.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
+    state.transferImport.mockResolvedValueOnce(filePreview())
+    const container = await render(createElement(OnboardingPage))
+    await act(async () => button(container, "Set up with Microsoft sign-in")!.click())
+    await act(async () => button(container, "Set up from a file")!.click())
+    await flush()
+    expect(container.querySelector<HTMLInputElement>("#tenant")!.value).toBe(FILE_TENANT)
+    await act(async () => {
+      finish({ tenantId: TENANT, clientId: CLIENT, username: "admin@contoso.test", reused: false, ready: true, displayName: "TenuVault Desktop", candidateCount: 0, missingConsent: [] })
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    })
+    await flush()
+    expect(state.signIn).not.toHaveBeenCalled()
+    expect(container.querySelector<HTMLInputElement>("#tenant")!.value).toBe(FILE_TENANT)
+    expect(container.querySelector<HTMLInputElement>("#clientId")!.value).toBe(FILE_CLIENT)
   })
 
   it("waits for the resumed sign-in to be checked, and treats a gone one as no sign-in", async () => {

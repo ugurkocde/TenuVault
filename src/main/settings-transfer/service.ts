@@ -422,8 +422,10 @@ export class SettingsTransfer {
         items: [],
       }
       for (const key of tenant.unknown) skipped.push(`${group.title}: "${key}"`)
-      unknownFields(tenant.connection, ["clientId", "storage"], `${group.title}: connection details`, skipped)
-      if (isObject(tenant.connection)) unknownFields(tenant.connection.storage, ["kind", "storageAccountName", "subscriptionId", "resourceGroupName", "location"], `${group.title}: storage`, skipped)
+      this.unknownTenantFields(tenant, group.title, skipped)
+      if (tenant.connection !== undefined && !connection) {
+        add(group, this.item(`${tenant.tenantId}:connection`, "Connection details", "", "Not valid", false, "The connection details in the file are not valid, so this tenant cannot be connected from it."))
+      }
       if (!here) {
         group.notice = "This tenant is not connected on this computer, so its settings are skipped."
         if (connection) group.setup = connection
@@ -431,11 +433,27 @@ export class SettingsTransfer {
         if (connection && connection.clientId !== here.clientId) {
           group.notice = `The file was exported with the app registration ${connection.clientId}. This computer signs in to this tenant with ${here.clientId}, so permissions can differ. Check Services and permissions after applying.`
         }
-        this.tenantItems(tenant, here, connection, skipped).forEach((candidate) => add(group, candidate))
+        this.tenantItems(tenant, here, connection).forEach((candidate) => add(group, candidate))
       }
       groups.push(group)
     }
     return { groups, candidates, skipped }
+  }
+
+  /** Fields of a tenant's parts that this version does not know, for connected tenants and others alike. */
+  private unknownTenantFields(tenant: SettingsFileTenant, title: string, skipped: string[]): void {
+    if (isObject(tenant.services)) {
+      for (const [id, value] of Object.entries(tenant.services)) {
+        const module = MODULES.find((entry) => entry.id === id)
+        if (!module) skipped.push(`${title}: the service "${id.slice(0, 64)}"`)
+        else unknownFields(value, ["enabled"], `${title}: ${module.label}`, skipped)
+      }
+    }
+    unknownFields(tenant.backupScope, ["excluded"], `${title}: what is backed up`, skipped)
+    unknownFields(tenant.schedule, ["enabled", "frequency", "time", "weekday"], `${title}: backup schedule`, skipped)
+    unknownFields(tenant.cloudBackup, CLOUD_FIELDS, `${title}: cloud backup setup`, skipped)
+    unknownFields(tenant.connection, ["clientId", "storage"], `${title}: connection details`, skipped)
+    if (isObject(tenant.connection)) unknownFields(tenant.connection.storage, ["kind", "storageAccountName", "subscriptionId", "resourceGroupName", "location"], `${title}: storage`, skipped)
   }
 
   private appItems(app: NonNullable<SettingsFile["app"]>, appearance: unknown, skipped: string[]): Array<Omit<Candidate, "group">> {
@@ -486,6 +504,7 @@ export class SettingsTransfer {
       // Fields from a newer version are listed as skipped and left out, so they do not block the rest.
       const known = isObject(app.pdfBranding) ? Object.fromEntries(Object.entries(app.pdfBranding).filter(([key]) => BRANDING_FIELDS.includes(key))) : app.pdfBranding
       if (isObject(app.pdfBranding)) for (const key of Object.keys(app.pdfBranding)) if (!BRANDING_FIELDS.includes(key)) skipped.push(`PDF branding: "${key.slice(0, 64)}"`)
+      if (isObject(app.pdfBranding)) unknownFields(app.pdfBranding.colors, ["primary", "accent"], "PDF branding colors", skipped)
       let branding: PdfBranding | null = null
       let invalid: string | null = null
       try {
@@ -504,7 +523,7 @@ export class SettingsTransfer {
     return items
   }
 
-  private tenantItems(tenant: SettingsFileTenant, here: LocalTenant, connection: SetupConnection | null, skipped: string[]): Array<Omit<Candidate, "group">> {
+  private tenantItems(tenant: SettingsFileTenant, here: LocalTenant, connection: SetupConnection | null): Array<Omit<Candidate, "group">> {
     const items: Array<Omit<Candidate, "group">> = []
     const tenantId = tenant.tenantId
     const prefix = `${tenantId}:`
@@ -518,11 +537,12 @@ export class SettingsTransfer {
         for (const [id, value] of Object.entries(services)) {
           const module = MODULES.find((entry) => entry.id === id)
           // Modules that are always on (Intune) have nothing to apply; unknown ones are listed by name.
-          if (!module) skipped.push(`${here.name}: the service "${id.slice(0, 64)}"`)
           if (!module || !module.optIn) continue
           const next = isObject(value) && typeof value.enabled === "boolean" ? value.enabled : null
           const now = enabled.has(module.id)
           items.push(this.item(`${prefix}service:${module.id}`, module.label, onOff(now), next === null ? "Not valid" : onOff(next), next === now, next === null ? NOT_VALID : null, {
+            // Turning a service off removes it from this tenant's backups, so it starts unticked.
+            ...(now && next === false && { warning: `Turns off ${module.label}: its settings are no longer backed up for this tenant.` }),
             apply: () => {
               this.deps.modules.set(tenantId, module.id, next)
               return { services: tenantId }
@@ -533,7 +553,6 @@ export class SettingsTransfer {
     }
 
     if (tenant.backupScope !== undefined) {
-      unknownFields(tenant.backupScope, ["excluded"], `${here.name}: what is backed up`, skipped)
       const raw = isObject(tenant.backupScope) && Array.isArray(tenant.backupScope.excluded) && tenant.backupScope.excluded.every((folder) => typeof folder === "string") ? tenant.backupScope.excluded as string[] : null
       const scope = raw ? normalizeScope({ excluded: raw }) : null
       const unknown = raw ? raw.filter((folder) => !INTUNE_TYPES.some((type) => type.folder === folder)).length : 0
@@ -563,7 +582,6 @@ export class SettingsTransfer {
       // As in the schedule editor, which saves no enabled daily schedule while the plan is unknown, even
       // over a paused daily one.
       const planUnknown = !!schedule && schedule.frequency === "daily" && schedule.enabled && plan === null && !sameSchedule(current, schedule)
-      unknownFields(tenant.schedule, ["enabled", "frequency", "time", "weekday"], `${here.name}: backup schedule`, skipped)
       items.push(this.item(`${prefix}schedule`, "Backup schedule", describeSchedule(current), schedule ? describeSchedule(schedule) : "Not valid", !!schedule && sameSchedule(current, schedule), !schedule ? NOT_VALID
         : planBlocked ? "Daily schedules are included in Pro and MSP. Weekly schedules are included in every plan."
         : planUnknown ? "The plan of this tenant is not known yet, so a daily schedule cannot be turned on. Import the file again once TenuVault has checked the license." : null, {
@@ -577,7 +595,6 @@ export class SettingsTransfer {
       const config = cloudConfig(tenant.cloudBackup)
       const current = this.cloud(tenantId)
       const otherTenant = !!config && config.tenantId !== tenantId
-      unknownFields(tenant.cloudBackup, CLOUD_FIELDS, `${here.name}: cloud backup setup`, skipped)
       const fields = config && current ? changeNote(changedFields(current, config, CLOUD_NAMES)) : undefined
       items.push(this.item(`${prefix}cloudBackup`, "Cloud backup setup", describeCloud(current), config ? describeCloud(config) : "Not valid", !otherTenant && sameCloud(config, current), !config ? NOT_VALID : otherTenant ? "The cloud backup setup in the file belongs to another tenant." : null, {
         note: [fields, "A record of the Azure resources an Azure administrator created. Applying it changes nothing in Azure."].filter(Boolean).join(" "),

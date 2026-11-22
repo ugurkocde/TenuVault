@@ -601,3 +601,43 @@ describe("changes the preview spells out", () => {
     expect(find(preview, `${TENANT}:cloudBackup`)?.status).toBe("change")
   })
 })
+
+describe("services, unknown fields and connection details in the preview", () => {
+  it("leaves turning off a backed up service unticked, with a warning", () => {
+    const b = machine([{ tenantId: TENANT }])
+    b.modules.set(TENANT, "conditionalAccess", true)
+    const preview = b.transfer.open(file({ tenants: [{ tenantId: TENANT, services: { conditionalAccess: { enabled: false } } }] }), "system")
+    expect(find(preview, `${TENANT}:service:conditionalAccess`)).toMatchObject({ status: "change", selected: false, warning: expect.stringContaining("no longer backed up") })
+  })
+
+  it("lists unknown fields inside services and branding colors, and for tenants that are not connected", () => {
+    const b = machine([{ tenantId: TENANT }])
+    const preview = b.transfer.open(file({
+      app: { pdfBranding: { companyName: "Contoso", colors: { primary: "#112233", secondary: "#445566" } } },
+      tenants: [
+        { tenantId: TENANT, services: { conditionalAccess: { enabled: true, connection: "beta" } } },
+        { tenantId: OTHER, name: "Fabrikam", schedule: { enabled: true, frequency: "weekly", time: "02:00", weekday: 1, jitter: 5 }, backupScope: { excluded: [], extra: 1 }, cloudBackup: { ...CLOUD, region: "x" } },
+      ],
+    }), "system")
+    expect(preview.skipped).toEqual(expect.arrayContaining([
+      'PDF branding colors: "secondary"',
+      'Tenant aaaa: Entra Conditional Access: "connection"',
+      'Fabrikam: backup schedule: "jitter"',
+      'Fabrikam: what is backed up: "extra"',
+      'Fabrikam: cloud backup setup: "region"',
+    ]))
+    expect(find(preview, "app:pdfBranding")?.status).toBe("change")
+    expect(find(preview, `${TENANT}:service:conditionalAccess`)?.status).toBe("change")
+  })
+
+  it("shows connection details that are not valid as a blocked row, for connected tenants and others", () => {
+    const b = machine([{ tenantId: TENANT }])
+    const preview = b.transfer.open(file({ tenants: [
+      { tenantId: TENANT, connection: { clientId: "not-a-guid" } },
+      { tenantId: OTHER, name: "Fabrikam", connection: { clientId: CLIENT, storage: { kind: "azure", storageAccountName: "Bad Name" } } },
+    ] }), "system")
+    expect(find(preview, `${TENANT}:connection`)).toMatchObject({ status: "blocked", reason: expect.stringContaining("not valid") })
+    expect(find(preview, `${OTHER}:connection`)).toMatchObject({ status: "blocked" })
+    expect(preview.groups.find((group) => group.id === OTHER)?.setup).toBeUndefined()
+  })
+})
