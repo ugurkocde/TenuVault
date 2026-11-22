@@ -238,7 +238,7 @@ try {
   await scene("trial-started", { ...active(9), tenants: [trialTenant(0, 9, { trialAcknowledged: false })] }, MOCK.tenants.slice(0, 1), "#/portal/overview", "Pro trial started")
   // The welcome asks for no decision: it can only be hidden.
   if (await evaluate(`document.body.innerText.includes("Got it") || document.body.innerText.includes("Use Community instead") || ![...document.querySelectorAll('button')].some(b => b.textContent === "Dismiss Pro trial message")`)) throw new Error("The welcome asks for a decision")
-  await evaluate(`[...document.querySelectorAll('button')].find(b => b.textContent === "Email me setup tips and a reminder before the trial ends").click()`)
+  await evaluate(`[...document.querySelectorAll('button')].find(b => b.textContent === "Email me setup tips, trial reminders and how to keep Pro").click()`)
   await assertText("Email address saved.")
   await screenshot("trial-started-email-saved", true)
   await scene("trial-joined", { ...active(9), tenants: [trialTenant(0, 9, { trialAcknowledged: false, canEnd: false })] }, MOCK.tenants.slice(0, 1), "#/portal/overview", "Pro trial started")
@@ -294,7 +294,7 @@ try {
   await assertText("17 days left")
   await screenshot("trial-extension-saved", true)
   await main.evaluate(`globalThis.__marketingMock.trialActionError = "The email address could not be saved. Try again."`)
-  await evaluate(`[...document.querySelectorAll('button')].find(b => b.textContent === "Email me setup tips and a reminder before the trial ends").click()`)
+  await evaluate(`[...document.querySelectorAll('button')].find(b => b.textContent === "Email me setup tips, trial reminders and how to keep Pro").click()`)
   await assertText("The email address could not be saved. Try again.")
   await screenshot("trial-contact-error", true)
   await scene("trial-dashboard", active(9), MOCK.tenants.slice(0, 1), "#/portal/dashboard", "Pro trial")
