@@ -1,6 +1,6 @@
 import type { ReactNode } from "react"
 import { Link } from "react-router-dom"
-import { Check, Info, RefreshCw, ShieldCheck } from "lucide-react"
+import { Check, Info, Copy, ShieldCheck } from "lucide-react"
 import type { Tenant } from "~/contexts/TenantContext"
 import { Button } from "~/components/ui/button"
 import { Chip } from "~/components/dashboard/tiles"
@@ -14,7 +14,7 @@ import { Skeleton, Spinner, stillReading, useElapsed } from "./loading"
 export const card = "rounded-3xl bg-card shadow-[0_1px_2px_rgba(22,21,20,0.04)]"
 const fieldClass = "h-10 w-full rounded-full border border-gray-200 bg-white px-4 text-sm text-gray-800 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100"
 
-export const STEPS = ["Choose settings", "Choose targets", "Review", "Sync"] as const
+export const STEPS = ["Choose settings", "Choose targets", "Review", "Copy"] as const
 
 /**
  * The four steps; finished steps show a check, and the connector before a step fills once the
@@ -85,7 +85,7 @@ export function ChooseSettings({ sources, sourceId, onSource, folder, onFolder, 
   const full = count >= MAX_SYNC_POLICIES
   return (
     <section aria-label="Choose settings" className={card}>
-      <CardHead title="What should be synced?" description="Settings are read live from the source tenant.">
+      <CardHead title="What should be copied?" description="Settings are read live from the source tenant.">
         <label className="flex min-w-64 flex-col gap-1.5 text-xs font-medium text-gray-500">
           Source tenant
           <select className={fieldClass} value={sourceId} onChange={(event) => onSource(event.target.value)}>
@@ -142,10 +142,10 @@ export function ChooseSettings({ sources, sourceId, onSource, folder, onFolder, 
         )}
       </div>
       <Footer>
-        <span className="text-sm text-gray-500">{count ? `${count} selected. ` : ""}Up to {MAX_SYNC_POLICIES} per sync.</span>
+        <span className="text-sm text-gray-500">{count ? `${count} selected. ` : ""}Up to {MAX_SYNC_POLICIES} per copy.</span>
         <Button type="button" disabled={!count} onClick={onNext}>
-          <RefreshCw className="h-4 w-4" aria-hidden="true" />
-          {count ? `Sync ${plural(count, "policy", "policies")}` : "Sync"}
+          <Copy className="h-4 w-4" aria-hidden="true" />
+          {count ? `Copy ${plural(count, "policy", "policies")}` : "Copy"}
         </Button>
       </Footer>
     </section>
@@ -153,8 +153,8 @@ export function ChooseSettings({ sources, sourceId, onSource, folder, onFolder, 
 }
 
 const REASON: Record<NonNullable<SyncTargetOption["reason"]>, { chip: string; title: string }> = {
-  msp: { chip: "MSP", title: "Syncing to this tenant is part of MSP." },
-  plan: { chip: "Plan without Sync", title: "This tenant's plan does not include Sync." },
+  msp: { chip: "MSP", title: "Copying to this tenant is part of MSP." },
+  plan: { chip: "Not in plan", title: "This tenant's plan does not include Copy to Tenants." },
   unavailable: { chip: "Not available", title: "Sign in to this tenant and check its license first." },
 }
 
@@ -175,7 +175,7 @@ export function ChooseTargets({ sourceName, options, loading, error, tenantOf, l
   const mspOnly = options.some((option) => option.reason === "msp")
   return (
     <section aria-label="Choose targets" className={card}>
-      <CardHead title="Where should these settings go?" description={`Pick the tenants to sync to. ${sourceName} does not change.`} />
+      <CardHead title="Where should these settings go?" description={`Pick the tenants to copy to. ${sourceName} does not change.`} />
       <div className="px-6 pb-3">
         {loading && (
           <div aria-busy="true" aria-label="Checking the tenants" className="grid grid-cols-[repeat(auto-fill,minmax(13rem,1fr))] gap-3">
@@ -189,7 +189,7 @@ export function ChooseTargets({ sourceName, options, loading, error, tenantOf, l
           </div>
         )}
         {error && <p className="text-sm text-red-700">{error}</p>}
-        {!loading && !error && !options.length && <p className="text-sm text-gray-600">Connect another tenant to sync to it.</p>}
+        {!loading && !error && !options.length && <p className="text-sm text-gray-600">Connect another tenant to copy to it.</p>}
         {options.length > 0 && (
           <div className="grid grid-cols-[repeat(auto-fill,minmax(13rem,1fr))] gap-3">
             {options.map((option) => {
@@ -228,7 +228,7 @@ export function ChooseTargets({ sourceName, options, loading, error, tenantOf, l
           <p className="mt-3 flex items-center gap-2.5 rounded-2xl bg-secondary px-4 py-3 text-sm text-gray-700">
             <Info className="h-4 w-4 shrink-0" aria-hidden="true" />
             <span>
-              Pro syncs between the two tenants of your license, or between two tenants that each run a Pro trial. Syncing to more tenants is part of MSP.{" "}
+              Pro copies between the two tenants of your license, or between two tenants that each run a Pro trial. Copying to more tenants is part of MSP.{" "}
               <button type="button" className="font-semibold underline underline-offset-2" onClick={() => void bridge.license.open("buy", { source: "sync-targets" })}>See plans</button>
             </span>
           </p>
@@ -296,11 +296,11 @@ export function ReviewStep({ targets, reviews, planning, planError, reading, ten
                 <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-card text-[11px] font-bold text-gray-700">{initials(name)}</span>
                 <span className="min-w-0 flex-1"><span className="block truncate text-sm font-semibold text-gray-900">{name}</span><span className="block truncate text-xs text-gray-500">{tenant?.domain}</span></span>
                 <span key={state.state} className="sync-fade inline-flex">
-                  {state.state === "ready" ? <Chip tone="success">Ready: {plural(changes, "change", "changes")}</Chip> : state.state === "in-sync" ? <Chip tone="success">Already in sync</Chip> : state.state === "checking" ? <Chip>Checking</Chip> : <Chip tone="danger">Left out</Chip>}
+                  {state.state === "ready" ? <Chip tone="success">Ready: {plural(changes, "change", "changes")}</Chip> : state.state === "in-sync" ? <Chip tone="success">Already up to date</Chip> : state.state === "checking" ? <Chip>Checking</Chip> : <Chip tone="danger">Left out</Chip>}
                 </span>
               </header>
               {state.reason && <p className="border-t border-gray-200 px-4 py-2.5 text-sm text-red-700">{state.reason}</p>}
-              {backup === "none" && !tenant?.resources?.storageAccountName && state.state === "ready" && <p className="border-t border-gray-200 px-4 py-2.5 text-sm text-amber-800">Rollback needs backup storage in this tenant. Without it, this sync cannot be rolled back from TenuVault.</p>}
+              {backup === "none" && !tenant?.resources?.storageAccountName && state.state === "ready" && <p className="border-t border-gray-200 px-4 py-2.5 text-sm text-amber-800">Rollback needs backup storage in this tenant. Without it, this copy cannot be rolled back from TenuVault.</p>}
               {state.state === "checking" ? <CheckingRows count={Math.max(1, rows.length)} /> : (
               <ul className="sync-fade">
                 {rows.map((row) => (
@@ -308,7 +308,7 @@ export function ReviewStep({ targets, reviews, planning, planError, reading, ten
                     <span className="min-w-0">
                       <span className="block text-gray-900">{row.name}</span>
                       {row.kind === "same" && <span className="block text-xs text-gray-500">No setting differs from the policy in this tenant. It is written again unchanged.</span>}
-                      {row.kind === "skip" && <span className="block text-xs text-gray-500">Neither this policy nor its synced copy changed since the last sync. Nothing is written.</span>}
+                      {row.kind === "skip" && <span className="block text-xs text-gray-500">Neither this policy nor its copy changed since the last copy. Nothing is written.</span>}
                       {row.notes.map((note, noteIndex) => <span key={noteIndex} className={cn("block text-xs", NOTE_TONE[note.tone])}>{note.message}</span>)}
                     </span>
                     <Chip tone={ROW_LABEL[row.kind].tone}>{ROW_LABEL[row.kind].label}</Chip>
@@ -331,13 +331,13 @@ export function ReviewStep({ targets, reviews, planning, planError, reading, ten
         {secrets.needed && (
           <label className="flex cursor-pointer items-start gap-2.5 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900">
             <input type="checkbox" className="mt-0.5 h-4 w-4 shrink-0" checked={ack} disabled={planning} onChange={(event) => onAck(event.target.checked)} />
-            <span>I understand that secrets in these policies are not synced and must be set again in each target.{ack && !secrets.acknowledged && planning ? " Planning again with this acknowledgement." : ""}</span>
+            <span>I understand that secrets in these policies are not copied and must be set again in each target.{ack && !secrets.acknowledged && planning ? " Planning again with this acknowledgement." : ""}</span>
           </label>
         )}
         {writes && <fieldset className="pt-2">
           <legend className="text-sm font-medium text-gray-800">Backup before changes</legend>
           <div className="mt-2 grid gap-2 md:grid-cols-2">
-            {option("new", "Back up first", "Each target is backed up first, using that tenant's backup settings. If the backup does not cover every policy type this sync changes, or fails, nothing is changed in that tenant.")}
+            {option("new", "Back up first", "Each target is backed up first, using that tenant's backup settings. If the backup does not cover every policy type this copy changes, or fails, nothing is changed in that tenant.")}
             {option("none", "Skip the backup", "Rollback still works from the saved versions: TenuVault saves the current version of every policy it changes before writing. A rollback always backs up first, so it needs backup storage in the target tenant. Those saved versions are kept on this device only; without a backup they are the only copy.")}
           </div>
           {backup === "new" && targets.some((target) => !tenantOf(target.targetTenantId)?.resources?.storageAccountName) && (
@@ -351,7 +351,7 @@ export function ReviewStep({ targets, reviews, planning, planError, reading, ten
         <Button type="button" disabled={busy || checking || gated || !(ready || inSync)} onClick={onApprove}>
           <ShieldCheck className="h-4 w-4" aria-hidden="true" />
           {/* No count until a target is ready: while planning or checking there is nothing to approve yet. */}
-          {ready ? `Approve and sync to ${plural(ready, "tenant", "tenants")}` : inSync && !checking ? "Continue: nothing to write" : "Approve and sync"}
+          {ready ? `Approve and copy to ${plural(ready, "tenant", "tenants")}` : inSync && !checking ? "Continue: nothing to write" : "Approve and copy"}
         </Button>
       </Footer>
     </section>
@@ -368,7 +368,7 @@ function PlanningPanel({ source, targets }: { source: string; targets: number })
         <p className="text-sm font-medium text-gray-900">Reading {source} and {plural(targets, "target tenant", "target tenants")}</p>
         {elapsed && <span className="ml-auto text-xs tabular-nums text-gray-500">{elapsed}</span>}
       </div>
-      <p className="mt-1.5 pl-[1.625rem] text-xs text-gray-500">The sync is planned from the live source policies, then each target is checked. Nothing is written.</p>
+      <p className="mt-1.5 pl-[1.625rem] text-xs text-gray-500">The copy is planned from the live source policies, then each target is checked. Nothing is written.</p>
       <div className="mt-4 h-1 overflow-hidden rounded-full bg-gray-200">
         <div className="run-indeterminate h-full w-1/3 rounded-full bg-coral-500" />
       </div>

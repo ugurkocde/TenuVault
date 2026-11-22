@@ -71,7 +71,7 @@ function selectedItems(items: SyncPlanInput["items"]): SyncPlanInput["items"] {
   return items.map((item) => {
     if (!isGraphId(item.sourceId)) throw new FeatureError("Invalid policy ID")
     const type = typeForFolder(item.folder)
-    if (!type || !(PROMOTION_FOLDERS as readonly string[]).includes(type.folder)) throw new FeatureError("Choose a policy type that Sync supports.")
+    if (!type || !(PROMOTION_FOLDERS as readonly string[]).includes(type.folder)) throw new FeatureError("Choose a policy type that Copy to Tenants supports.")
     const key = linkKey(type.folder, item.sourceId)
     if (seen.has(key)) throw new FeatureError("A policy is selected twice.")
     seen.add(key)
@@ -120,7 +120,7 @@ async function linkedItems(deps: FeatureDeps, sourceTenantId: string, targetTena
       planned.push({ ...item, destinationId: link.targetPolicyId })
       continue
     }
-    const note: DependencyFinding = { code: "sync-link-missing", severity: "warning", message: `"${link.targetName}", which an earlier Sync wrote "${link.sourceName}" to, no longer exists in this tenant. This Sync creates a new policy.` }
+    const note: DependencyFinding = { code: "sync-link-missing", severity: "warning", message: `"${link.targetName}", which an earlier copy wrote "${link.sourceName}" to, no longer exists in this tenant. This copy creates a new policy.` }
     planned.push({ ...item, destinationId: null, notes: [note, ...warnings] })
   }
   return { items: planned, links: relied, skipped }
@@ -145,7 +145,7 @@ export async function planSync(deps: FeatureDeps, sourceTenantId: string, input:
     options: input.options,
     items: items.map((item) => ({ ...item, sourceName: null })),
     targets: input.targets.map((targetTenantId) => ({ targetTenantId, promotionId: null, error: null, skipped: [] })),
-  }, { actor, reason: "Started a Sync run" })
+  }, { actor, reason: "Started a Copy to Tenants run" })
   const results: SyncPlanResult["targets"] = []
   let sourceGraph: Promise<GraphCall> | null = null
   const sourceReads = new Map<string, Promise<Item | null>>()
@@ -191,7 +191,7 @@ export async function planSync(deps: FeatureDeps, sourceTenantId: string, input:
       ...current,
       items: current.items.map((item) => ({ ...item, sourceName: item.sourceName ?? names.get(linkKey(item.folder, item.sourceId)) ?? null })),
       targets: current.targets.map((entry) => (entry.targetTenantId === target ? { targetTenantId: target, promotionId: promotion?.id ?? null, error, skipped } : entry)),
-    }), { actor, reason: error ? `Target ${target} could not be planned` : promotion ? `Planned target ${target}` : `Target ${target} is already in sync` })!
+    }), { actor, reason: error ? `Target ${target} could not be planned` : promotion ? `Planned target ${target}` : `Target ${target} is already up to date` })!
   }
   const failed = results.filter((result) => result.error).length
   const planned = results.length - failed
@@ -201,7 +201,7 @@ export async function planSync(deps: FeatureDeps, sourceTenantId: string, input:
     ...current,
     // A run discarded while it was planned stays discarded; the planner never clears it.
     status: current.status === "discarded" ? current.status : failed === 0 ? "planned" : planned === 0 ? "failed" : "partial",
-    summary: current.status === "discarded" ? current.summary : inSync === results.length ? "Already in sync, nothing to write." : `${planned} of ${results.length} target${results.length === 1 ? "" : "s"} planned${inSync ? `, ${inSync} already in sync` : ""}${blocked ? `, ${blocked} blocked by findings` : ""}${failed ? `; ${failed} could not be planned` : ""}.`,
+    summary: current.status === "discarded" ? current.summary : inSync === results.length ? "Already up to date, nothing to write." : `${planned} of ${results.length} target${results.length === 1 ? "" : "s"} planned${inSync ? `, ${inSync} already up to date` : ""}${blocked ? `, ${blocked} blocked by findings` : ""}${failed ? `; ${failed} could not be planned` : ""}.`,
   }), { actor, reason: "Planned every target" })!
   return { run, targets: results }
 }

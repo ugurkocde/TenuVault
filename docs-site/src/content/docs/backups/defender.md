@@ -3,7 +3,7 @@ title: Defender configuration backups
 description: Back up the Microsoft Defender configuration exposed by Microsoft Graph, with explicit coverage limits.
 ---
 
-TenuVault backs up 17 Defender configuration types when you enable **Defender** in **Settings > Services and permissions**. Defender starts off for existing tenants. Manual backups use the signed-in admin; scheduled backups use the Backup Reader. All supported types accept both modes. Restore, Sync and drift revert are not available for these types.
+TenuVault backs up 17 Defender configuration types when you enable **Defender** in **Settings > Services and permissions**. Defender starts off for existing tenants. Manual backups use the signed-in admin; scheduled backups use the Backup Reader. All supported types accept both modes. Restore, Copy to Tenants and drift revert are not available for these types.
 
 ## Coverage
 

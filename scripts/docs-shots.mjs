@@ -107,7 +107,7 @@ export async function captureDocs({ main, send, evaluate, go, click, assertText,
   await capture('baseline-upgrades', '#/portal/changes/baseline-upgrades', 'Installed baselines')
   await capture('operations', '#/portal/operations', 'Review now')
   await capture('custom-baselines', '#/portal/baselines', 'My baselines')
-  await capture('sync', '#/portal/sync', 'Sync')
+  await capture('sync', '#/portal/sync', 'Copy to Tenants')
   await captureCloud()
   await go('#/portal/onboarding', 'Connect your tenant')
   await click('I already have an app registration')
