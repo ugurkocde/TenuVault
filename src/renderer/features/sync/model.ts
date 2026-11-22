@@ -1,6 +1,6 @@
 import { adminCenterLink, adminCenterListLink, inTenant } from "../../../shared/intune/admin-links"
 import type { ChangeSet } from "../shared/change-set"
-import { copyWording } from "../../../shared/sync-wording"
+import { copyMessage } from "../../../shared/sync-wording"
 import type { SyncBackup, SyncPreview, SyncStatusEntry, SyncTarget } from "./api"
 
 /**
@@ -97,9 +97,9 @@ export function reviewRows(target: SyncTarget, preview: SyncPreview | null): Rev
     // display-name finding says the same, so it is shown once, from the preview.
     const liveSameName = (live?.warnings ?? []).some((message) => SAME_NAME.test(message))
     const notes: ReviewRow["notes"] = [
-      ...item.findings.filter((finding) => !(liveSameName && finding.code === "display-name-only" && finding.severity === "warning")).map((finding) => ({ tone: finding.severity === "blocking" ? "danger" as const : finding.severity === "warning" ? "warning" as const : "neutral" as const, message: copyWording(finding.message) })),
-      ...(live?.blockers ?? []).map((message) => ({ tone: "danger" as const, message: copyWording(message) })),
-      ...(live?.warnings ?? []).map((message) => ({ tone: "warning" as const, message: copyWording(message) })),
+      ...item.findings.filter((finding) => !(liveSameName && finding.code === "display-name-only" && finding.severity === "warning")).map((finding) => ({ tone: finding.severity === "blocking" ? "danger" as const : finding.severity === "warning" ? "warning" as const : "neutral" as const, message: copyMessage(finding.message) })),
+      ...(live?.blockers ?? []).map((message) => ({ tone: "danger" as const, message: copyMessage(message) })),
+      ...(live?.warnings ?? []).map((message) => ({ tone: "warning" as const, message: copyMessage(message) })),
     ]
     return { key: policyKey(item.folder, item.sourceId), name: item.sourceName, kind, notes }
   }), ...skipped]

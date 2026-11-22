@@ -8,7 +8,7 @@ import { ChangeSetFlow } from "../shared/ChangeSetFlow"
 import { syncRollbackActions, syncTargetActions, type SyncTarget } from "./api"
 import { applyStage, awaitingReview, backupOf, excludedReason, failedItems, initials, intuneLink, linkPath, mayHaveWritten, outcomeCounts, plural, progress, targetPhase, type ApplyStage, type TargetPhase } from "./model"
 import { Spinner } from "./loading"
-import { copyWording } from "../../../shared/sync-wording"
+import { copyMessage } from "../../../shared/sync-wording"
 
 export interface ResultTarget {
   target: SyncTarget
@@ -75,8 +75,8 @@ function StateIcon({ phase }: { phase: TargetPhase }) {
 function nodeText(entry: ResultTarget, error: string | null, note: string | null, stage: ApplyStage | null): { text: string; problems: string[] } {
   const { target, phase } = entry
   const { done, total } = progress(target)
-  const problems = [...failedItems(target.changeSet).map((item) => `${item.name}: ${copyWording(item.message)}`), ...(error ? [error] : [])]
-  if (!problems.length && phase !== "verified" && target.changeSet?.lastError) problems.push(copyWording(target.changeSet.lastError))
+  const problems = [...failedItems(target.changeSet).map((item) => `${item.name}: ${copyMessage(item.message)}`), ...(error ? [error] : [])]
+  if (!problems.length && phase !== "verified" && target.changeSet?.lastError) problems.push(copyMessage(target.changeSet.lastError))
   switch (phase) {
     case "waiting": return { text: "Waiting", problems: [] }
     case "writing": return { text: stage?.label ?? "Writing", problems: [] }
