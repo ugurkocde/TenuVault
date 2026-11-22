@@ -66,6 +66,15 @@ describe("Sync result summary", () => {
     expect(summary).toContain("Links saved for the next copy")
     expect(summary).toContain("Rollback available in 1 of 2 tenants")
   })
+
+  it("does not count a target that was already up to date as copied to", () => {
+    const inSync: SyncTarget = { targetTenantId: D, promotionId: null, error: null, rollbackChangeSet: null, promotion: null, changeSet: null, skipped: [{ folder: "ConfigurationPolicies", sourceId: "s", sourceName: "Defender" }] } as unknown as SyncTarget
+    const container = render([
+      { target: target(B, "applied", { status: "verified", objectId: "new-b" }), name: "Contoso Germany", domain: "contoso.de", phase: "verified", storage: true },
+      { target: inSync, name: "Contoso Japan", domain: "contoso.co.jp", phase: "in-sync", storage: true },
+    ])
+    expect(container.querySelector('[role="status"]')?.textContent).toBe("Copied to 1 tenant, 1 already up to date")
+  })
 })
 
 /** A target of three operations writing, at the stage its stored records show. */

@@ -355,6 +355,9 @@ export function SyncResult({ source, policies = [], policyCount, entries, errors
   const overall = involved.length ? Math.round((involved.reduce((sum, entry) => sum + share(entry), 0) / involved.length) * 100) : 0
   const verified = involved.filter((entry) => entry.phase === "verified" || entry.phase === "in-sync").length
   const attention = involved.length - verified
+  // Targets already up to date finished without a write, so the headline does not count them as copied.
+  const upToDate = involved.filter((entry) => entry.phase === "in-sync").length
+  const copied = verified - upToDate
   // Targets something was written to; a rollback can run only where the tenant has backup storage.
   const wrote = involved.filter((entry) => mayHaveWritten(entry.target))
   const anyWritten = wrote.length > 0
@@ -422,11 +425,11 @@ export function SyncResult({ source, policies = [], policyCount, entries, errors
             ) : involved.every((entry) => entry.phase === "in-sync") ? (
               <span className="text-green-700">Already up to date. Nothing was written.</span>
             ) : attention === 0 ? (
-              <span className="text-green-700">Copied to {plural(verified, "tenant", "tenants")}</span>
+              <span className="text-green-700">Copied to {plural(copied, "tenant", "tenants")}{upToDate ? `, ${upToDate} already up to date` : ""}</span>
             ) : verified === 0 && !anyWritten ? (
               <span className="text-red-700">Nothing was copied. {plural(attention, "tenant needs", "tenants need")} attention.</span>
             ) : (
-              <span className="text-amber-700">Copied to {verified} of {plural(involved.length, "tenant", "tenants")}. {attention} {attention === 1 ? "needs" : "need"} attention.</span>
+              <span className="text-amber-700">Copied to {copied} of {plural(involved.length, "tenant", "tenants")}{upToDate ? `, ${upToDate} already up to date` : ""}. {attention} {attention === 1 ? "needs" : "need"} attention.</span>
             )}
           </p>
           {running && (

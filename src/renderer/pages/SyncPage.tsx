@@ -7,6 +7,7 @@ import { canUse, LockedPreview } from "../components/PlanGate"
 import { useLicense, useTenantPlan } from "../lib/license"
 import { showFeaturePlanError } from "../lib/plan-dialog"
 import { formatDate } from "../features/shared/change-set"
+import { copyWording } from "../../shared/sync-wording"
 import {
   applySyncTarget,
   approveSyncTarget,
@@ -484,7 +485,7 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
                 <li key={entry.id}>
                   <button type="button" aria-pressed={runId === entry.id && step === 4} disabled={planning || discarding.busy} onClick={() => openRun(entry)} className="flex w-full flex-wrap items-center gap-3 rounded-2xl px-2 py-3 text-left transition-colors hover:bg-gray-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-60 aria-pressed:bg-secondary">
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-medium text-gray-900">{entry.title}</span>
+                      <span className="block truncate text-sm font-medium text-gray-900">{copyWording(entry.title)}</span>
                       <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-gray-500">
                         <span className="truncate">{from}</span>
                         <ArrowRight className="h-3 w-3 shrink-0" aria-label="to" />

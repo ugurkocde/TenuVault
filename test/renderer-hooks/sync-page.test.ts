@@ -364,7 +364,7 @@ describe("Sync review", () => {
     expect(germany.className).toContain("border-green-600")
     expect(germany.querySelector("a")).toBeNull()
     for (const action of ["approve", "apply", "retry"]) expect(calls.filter((call) => call.action === action).map((call) => call.tenantId)).not.toContain(B)
-    expect(container.querySelector('[role="status"]')?.textContent).toBe("Copied to 2 tenants")
+    expect(container.querySelector('[role="status"]')?.textContent).toBe("Copied to 1 tenant, 1 already up to date")
   })
 
   it("lets the admin finish when every target is already in sync, without writing", async () => {

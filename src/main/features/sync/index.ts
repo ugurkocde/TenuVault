@@ -227,7 +227,7 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
       const run = syncRun(deps, tenantId, body)
       if (run.status === DISCARDED) return { run }
       // The planner still writes the run's targets; a discard would race it.
-      if (run.status === "planning") throw new FeatureError("This copy is still being planned. Discard it once planning finished.", 409)
+      if (run.status === "planning") throw new FeatureError("This copy is still being planned. Discard it once planning finishes.", 409)
       if (run.targets.some((target) => everApproved(deps, target))) throw new FeatureError("A target of this copy was approved, so it cannot be discarded. Open it to see its result.", 409)
       const busy = run.targets.find((target) => tenantWriteLabel(target.targetTenantId) !== undefined)
       if (busy) throw new FeatureError("A target tenant of this copy is being changed. Try again when it finishes.", 409)

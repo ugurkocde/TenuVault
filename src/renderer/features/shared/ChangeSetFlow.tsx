@@ -11,6 +11,7 @@ import { DiffList } from "./DiffList"
 import { formatDate, RESULT_TONE, STATUS_TONE, statusLabel, type ChangeSet, type ChangeSetActions, type ChangeSetPreview, type RollbackPreview } from "./change-set"
 import type { SettingNames } from "../../../shared/intune/drift"
 import { omittedSettingValues } from "../../../shared/frameworks/cis-display"
+import { copyWording } from "../../../shared/sync-wording"
 
 const STEPS = ["Review diff", "Approve", "Apply", "Results", "Rollback preview"] as const
 
@@ -86,7 +87,7 @@ export function ChangeSetFlow({ changeSet, actions, tenantName, onChanged, rollb
     <div className="space-y-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          {!embedded && <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">{changeSet.title}</h3>}
+          {!embedded && <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">{changeSet.origin?.workflow === "sync" ? copyWording(changeSet.title) : changeSet.title}</h3>}
           <p className="text-sm text-gray-500">
             {changeSet.kind === "rollback" ? "Rollback change set. " : ""}
             {/* The admin who created it, as recorded; the workflow that created it is an internal name. */}

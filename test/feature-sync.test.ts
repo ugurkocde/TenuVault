@@ -1284,7 +1284,7 @@ describe("Codex round 1", () => {
     const run = await planning(context)
     const refused = await context.post({ tenantId: TENANT_A, action: "discard-run", id: run.id })
     expect(refused.status).toBe(409)
-    expect(refused.body.error).toBe("This copy is still being planned. Discard it once planning finished.")
+    expect(refused.body.error).toBe("This copy is still being planned. Discard it once planning finishes.")
     release()
     expect((await pending).status).toBe(200)
     expect((await context.post({ tenantId: TENANT_A, action: "get-run", id: run.id })).body.run.status).toBe("planned")
