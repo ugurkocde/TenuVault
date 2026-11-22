@@ -455,6 +455,16 @@ function Read-TvCappedBody {
     }
 }
 
+# The single x-ms-error-code value of a response, or "" when the header is absent, empty or repeated.
+# The values stay an array: a lone value must not be unwrapped into a string and indexed by character.
+function Get-TvErrorCodeHeader {
+    param([Parameter(Mandatory)][object]$Response)
+    if (-not $Response.Headers.Contains("x-ms-error-code")) { return "" }
+    $values = [string[]]@($Response.Headers.GetValues("x-ms-error-code"))
+    if ($values.Length -ne 1) { return "" }
+    return $values[0]
+}
+
 # Whether text parses as one XML document, without DTDs or external resources.
 function Test-TvWellFormedXml {
     param([AllowEmptyString()][string]$Text)
@@ -515,8 +525,7 @@ function Invoke-TvHttp {
         $status = [int]$response.StatusCode
         # A present error-code header decides on its own; one that is empty or repeated confirms nothing.
         $hasCodeHeader = $response.Headers.Contains("x-ms-error-code")
-        $codeValues = if ($hasCodeHeader) { @($response.Headers.GetValues("x-ms-error-code")) } else { @() }
-        $serviceCode = if ($codeValues.Count -eq 1) { [string]$codeValues[0] } else { "" }
+        $serviceCode = Get-TvErrorCodeHeader $response
         $retryAfter = if ($response.Headers.RetryAfter -and $response.Headers.RetryAfter.Delta) { $response.Headers.RetryAfter.Delta } else { $null }
         $bodyMs = if ($BudgetMs) { [Math]::Max(1, $BudgetMs - [int]$clock.ElapsedMilliseconds) } else { $script:BodyReadSeconds * 1000 }
         try {

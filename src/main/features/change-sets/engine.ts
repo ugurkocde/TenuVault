@@ -325,8 +325,12 @@ function retain(deps: FeatureDeps, tenantId: string): void {
 
 function reviewedDiff(type: IntuneType, before: Item | null, after: Item | null, omission?: OmissionOptions) {
   if (!omission?.enabled) return diffConfigurations(type, before, after)
-  const [left, right] = observablePair(type.folder, before ?? {}, after ?? {}, false, omission)
-  return diffConfigurations(type, before ? left : null, after ? right : null)
+  // An untyped proposal is projected as the target's subtype, as proposalWouldOmit classifies it.
+  const typed = after && typeof after["@odata.type"] !== "string" && typeof before?.["@odata.type"] === "string" ? { ...after, "@odata.type": before["@odata.type"] } : after
+  // With no subtype on either side, credential fields cannot be classified, so no diff is shown.
+  if ([before, typed].some((side) => side && typeof side["@odata.type"] !== "string" && hasCredentialField(type.folder, side))) return { entries: [], truncated: false }
+  const [left, right] = observablePair(type.folder, before ?? {}, typed ?? {}, false, omission)
+  return diffConfigurations(type, before ? left : null, typed ? right : null)
 }
 
 /**

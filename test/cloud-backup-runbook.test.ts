@@ -1384,6 +1384,12 @@ it.runIf(Boolean(pwsh))("hydrates an empty OMA reference off-mode and reports a 
   expect(JSON.parse(failedBlobs.get(`${failedFolder}/metadata.json`)!)).toMatchObject({ Status: "CompletedWithWarnings", Failures: 1 })
 }, 60_000)
 
+it.runIf(Boolean(pwsh))("reads a single Azure error-code header whole, so a missing policy confirms as on Azure", () => {
+  const script = fileURLToPath(new URL("./fixtures/cloud-backup/error-code-header.ps1", import.meta.url))
+  const codes = JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8", timeout: 60_000 }))
+  expect(codes).toEqual({ single: "BlobNotFound", container: "ContainerNotFound", repeated: "", absent: "" })
+}, 60_000)
+
 it.runIf(Boolean(pwsh))("keeps off-mode cloud report fields and compares matched typed and untyped tokens only under omission", () => {
   const script = fileURLToPath(new URL("./fixtures/cloud-backup/omission-compare.ps1", import.meta.url))
   const { off, on, offWithOneSkip, offWithScalarSkip } = JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8", timeout: 60_000 }))

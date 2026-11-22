@@ -618,6 +618,23 @@ describe("change-set engine", () => {
     expect(revised.operations).toHaveLength(1)
   })
 
+  it("keeps an untyped proposal's credential out of a preview made after omission is enabled", async () => {
+    const context = setup()
+    const normalGraph = context.deps.graph
+    context.deps.graph = async (...args) => {
+      const graph = await normalGraph(...args)
+      return async (method, path, body, options) => path.startsWith("deviceManagement/deviceConfigurations/vpn") && method === "GET"
+        ? { status: 200, body: { id: "vpn", displayName: "VPN", "@odata.type": "#microsoft.graph.iosVpnConfiguration", sharedSecret: "fixture-preview-secret", assignments: [] } }
+        : graph(method, path, body, options)
+    }
+    const record = await createChangeSet(context.deps, TENANT_A, { title: "Rename VPN", operations: [
+      { folder: "DeviceConfigurations", action: "update", targetId: "vpn", proposed: { displayName: "VPN renamed", sharedSecret: "fixture-preview-secret" } },
+    ] }, null)
+    context.deps.omissionPolicy = async () => ({ enabled: true, scripts: false, generation: "on" })
+    const preview = await previewChangeSet(context.deps, TENANT_A, record.id)
+    expect(JSON.stringify(preview)).not.toContain("fixture-preview-secret")
+  })
+
   it("classifies an untyped proposal by the target's subtype before storing it", async () => {
     const context = setup()
     const id = "vpn"
