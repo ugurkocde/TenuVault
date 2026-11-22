@@ -52,7 +52,7 @@ export function backupAudit(job: BackupJob, request: BackupRequest, tokens: RunT
 }
 
 type BackupManifest = {
-  RunId?: string; TenantId?: string; Status?: string; AuthMode?: string; CompletedAt?: string; CompanionBackup?: string;
+  RunId?: string; TenantId?: string; Status?: string; RunStatus?: string; AuthMode?: string; CompletedAt?: string; CompanionBackup?: string;
   ItemCounts?: { TotalPolicies?: number }; Failures?: number; MaskedSecretItems?: unknown[];
 }
 type ManifestStatus = 'completed' | 'warnings' | 'failed' | 'cancelled' | 'uncertain'
@@ -107,8 +107,13 @@ export async function reconcileBackupAudit(entry: AuditLogEntry, readManifest: (
       saved = add(saved, companion.ItemCounts?.TotalPolicies); failures = add(failures, companion.Failures)
       const companionCompleted = time(companion.CompletedAt)
       if (companionCompleted && (!completedAt || companionCompleted > completedAt)) completedAt = companionCompleted
-      // As the engine reports the run: a failed half next to saved items completes with warnings.
-      if (status === 'failed' && (saved ?? 0) > 0) status = 'warnings'
+      // The run's last manifest names the status the engine reported. Older ones follow its rule:
+      // a failed half next to saved items completes with warnings.
+      const reported = [manifest.RunStatus, companion.RunStatus].find(value => typeof value === 'string')
+      if (reported) {
+        const run = manifestStatus({ ...manifest, Status: reported })
+        if (run !== 'uncertain') status = run
+      } else if (status === 'failed' && (saved ?? 0) > 0) status = 'warnings'
     }
   }
   return {

@@ -87,6 +87,8 @@ const STEPS: Array<{ id: Step; label: string }> = [
   { id: "run", label: "Restore" },
 ]
 
+const COMPANION_UNREADABLE = "The linked large backup with this run's directory objects could not be read. Other items can still be restored. Refresh the backup list after it finishes, or check its status in Backup History."
+
 interface BackupItem {
   path: string
   folder: string
@@ -377,25 +379,33 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
       // The chosen backup must load. An unreadable companion only hides its large items.
       if (settled[0]!.status === "rejected") throw settled[0]!.reason
       const listings = settled.flatMap(result => result.status === "fulfilled" ? [result.value] : [])
-      setCompanionError(settled[1]?.status === "rejected" ? "The linked large backup with this run's directory objects could not be read. Other items can still be restored. Refresh the backup list after it finishes, or check its status in Backup History." : "")
+      setCompanionError(settled[1]?.status === "rejected" ? COMPANION_UNREADABLE : "")
       const paged = listings.find(({ contents }) => contents.largePage !== undefined)?.contents
       setLargePaging(paged ? { hasMore: paged.hasMore === true, total: paged.content.groups.reduce((sum, group) => sum + (group.count ?? group.policies.length), 0) } : null)
       const listed: BackupItem[] = listings.flatMap(({ source, contents }) => contents.content.groups.filter(group => matchesBackupService(group.folder, contentsService)).flatMap((group) =>
         group.policies.map((policy) => ({ path: policy.path, folder: group.folder, label: group.label, area: group.area, name: policy.displayName ?? policy.path, blocker: group.limitation, source }))))
       const details: Record<string, { name: string; blocker?: string; replaceBlocker?: string; snapshot?: unknown; readiness?: RecoveryReadiness }> = {}
+      const unreadable = new Set<string>()
       for (const source of sources) {
         const own = listed.filter(item => item.source === source)
-        for (let start = 0; start < own.length; start += PREVIEW_CHUNK) {
-          const preview = await post<{ items: Array<{ path: string; name: string; blocker?: string; replaceBlocker?: string; snapshot?: unknown; readiness?: RecoveryReadiness }> }>(
-            "/api/restore-preview",
-            { ...credentials, backupId: source, paths: own.slice(start, start + PREVIEW_CHUNK).map((item) => item.path) },
-            controller.signal,
-          )
-          for (const item of preview.items) details[item.path] = item
+        try {
+          for (let start = 0; start < own.length; start += PREVIEW_CHUNK) {
+            const preview = await post<{ items: Array<{ path: string; name: string; blocker?: string; replaceBlocker?: string; snapshot?: unknown; readiness?: RecoveryReadiness }> }>(
+              "/api/restore-preview",
+              { ...credentials, backupId: source, paths: own.slice(start, start + PREVIEW_CHUNK).map((item) => item.path) },
+              controller.signal,
+            )
+            for (const item of preview.items) details[item.path] = item
+          }
+        } catch (error) {
+          // The chosen backup must preview. A companion that fails here drops only its own items.
+          if (source === backupId || controller.signal.aborted) throw error
+          unreadable.add(source)
+          setCompanionError(COMPANION_UNREADABLE)
         }
       }
       if (controller.signal.aborted) return
-      setItems(listed.map((item) => ({ ...item, name: details[item.path]?.name ?? item.name, blocker: details[item.path]?.blocker ?? item.blocker, replaceBlocker: details[item.path]?.replaceBlocker, snapshot: details[item.path]?.snapshot, readiness: details[item.path]?.readiness })))
+      setItems(listed.filter(item => !unreadable.has(item.source)).map((item) => ({ ...item, name: details[item.path]?.name ?? item.name, blocker: details[item.path]?.blocker ?? item.blocker, replaceBlocker: details[item.path]?.replaceBlocker, snapshot: details[item.path]?.snapshot, readiness: details[item.path]?.readiness })))
     })().catch((error: unknown) => {
       if (controller.signal.aborted) return
       if (error instanceof DOMException && error.name === "AbortError") return

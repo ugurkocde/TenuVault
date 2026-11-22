@@ -1117,7 +1117,8 @@ export class BackupEngine {
     const unread = failures === 0 && nothingRead(ending) ? nothingReadReason(ending, { mode: tokens.mode, settingsPage: SERVICES_PAGE }) : null
     const status = failures > 0 ? (saved === 0 ? "Failed" : "CompletedWithWarnings") : unread ? "Failed" : "Success"
     const outcomes = outcomesNow(status, ended, false)
-    const metadata = manifest(status, ended, outcomes, unread ? { Error: unread } : {})
+    // A split run's last manifest also names the run's own status, which audit recovery uses as is.
+    const metadata = manifest(status, ended, outcomes, { ...(unread ? { Error: unread } : {}), ...(mixed ? { RunStatus: status } : {}) })
 
     if (!isLargeBackup(backupFolder)) await commitManifest(backupFolder, metadata)
     this.conclude(job, outcomes)

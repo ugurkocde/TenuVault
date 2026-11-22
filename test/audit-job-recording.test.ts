@@ -757,6 +757,10 @@ describe("audit recovery for a run split across an ordinary and a large backup",
     expect(result.job).toMatchObject({ status: "warnings", counts: { saved: 8, failures: 2 } })
     expect(result.timestamp).toBe("2026-11-21T01:00:00.000Z")
   })
+  it.each([["Failed", "failed"], ["CompletedWithWarnings", "warnings"], ["Success", "completed"]])("uses the run status %s from the run's last manifest", async (run, expected) => {
+    const result = await reconcileBackupAudit(entry, async () => manifest({ Status: "Success", RunStatus: run, CompanionBackup: "backup-large-2026-11-21-000000", ItemCounts: { TotalPolicies: 4 } }), async () => manifest({ Status: "Failed", ItemCounts: { TotalPolicies: 0 } }))
+    expect(result.job).toMatchObject({ status: expected })
+  })
   it("records both failed halves as failed", async () => {
     const result = await reconcileBackupAudit(entry, async () => manifest({ Status: "Failed", CompanionBackup: "backup-large-2026-11-21-000000", ItemCounts: { TotalPolicies: 0 } }), async () => manifest({ Status: "Failed", ItemCounts: { TotalPolicies: 0 } }))
     expect(result.job).toMatchObject({ status: "failed" })
