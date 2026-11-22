@@ -97,8 +97,12 @@ export async function reconcileBackupAudit(entry: AuditLogEntry, readManifest: (
     const response = await read(manifest.CompanionBackup)
     const companion = await runManifest(entry, response)
     if (!companion) {
-      // Only an ordinary half can confirm a run whose large half was never committed.
-      if (response.status !== 404 || folder.startsWith('backup-large-') || (status !== 'failed' && status !== 'cancelled')) return entry
+      // Only an ordinary half can confirm a run whose large half was never committed: its final
+      // manifest names the status the run ended with, or the half itself failed or was cancelled.
+      if (response.status !== 404 || folder.startsWith('backup-large-')) return entry
+      const reported = typeof manifest.RunStatus === 'string' ? manifestStatus({ ...manifest, Status: manifest.RunStatus }) : 'uncertain'
+      if (reported !== 'uncertain') status = reported
+      else if (status !== 'failed' && status !== 'cancelled') return entry
     } else {
       const other = manifestStatus(companion)
       if (other === 'uncertain') return entry

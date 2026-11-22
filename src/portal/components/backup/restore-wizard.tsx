@@ -380,8 +380,6 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
       if (settled[0]!.status === "rejected") throw settled[0]!.reason
       const listings = settled.flatMap(result => result.status === "fulfilled" ? [result.value] : [])
       setCompanionError(settled[1]?.status === "rejected" ? COMPANION_UNREADABLE : "")
-      const paged = listings.find(({ contents }) => contents.largePage !== undefined)?.contents
-      setLargePaging(paged ? { hasMore: paged.hasMore === true, total: paged.content.groups.reduce((sum, group) => sum + (group.count ?? group.policies.length), 0) } : null)
       const listed: BackupItem[] = listings.flatMap(({ source, contents }) => contents.content.groups.filter(group => matchesBackupService(group.folder, contentsService)).flatMap((group) =>
         group.policies.map((policy) => ({ path: policy.path, folder: group.folder, label: group.label, area: group.area, name: policy.displayName ?? policy.path, blocker: group.limitation, source }))))
       const details: Record<string, { name: string; blocker?: string; replaceBlocker?: string; snapshot?: unknown; readiness?: RecoveryReadiness }> = {}
@@ -405,6 +403,9 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
         }
       }
       if (controller.signal.aborted) return
+      // Inventory paging belongs to a backup whose items are shown.
+      const paged = listings.find(({ source, contents }) => contents.largePage !== undefined && !unreadable.has(source))?.contents
+      setLargePaging(paged ? { hasMore: paged.hasMore === true, total: paged.content.groups.reduce((sum, group) => sum + (group.count ?? group.policies.length), 0) } : null)
       setItems(listed.filter(item => !unreadable.has(item.source)).map((item) => ({ ...item, name: details[item.path]?.name ?? item.name, blocker: details[item.path]?.blocker ?? item.blocker, replaceBlocker: details[item.path]?.replaceBlocker, snapshot: details[item.path]?.snapshot, readiness: details[item.path]?.readiness })))
     })().catch((error: unknown) => {
       if (controller.signal.aborted) return

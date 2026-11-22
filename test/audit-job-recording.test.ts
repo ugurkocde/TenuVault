@@ -761,6 +761,12 @@ describe("audit recovery for a run split across an ordinary and a large backup",
     const result = await reconcileBackupAudit(entry, async () => manifest({ Status: "Success", RunStatus: run, CompanionBackup: "backup-large-2026-11-21-000000", ItemCounts: { TotalPolicies: 4 } }), async () => manifest({ Status: "Failed", ItemCounts: { TotalPolicies: 0 } }))
     expect(result.job).toMatchObject({ status: expected })
   })
+  it("confirms a run whose large half never committed from the final manifest's run status", async () => {
+    const result = await reconcileBackupAudit(entry, async () => manifest({ Status: "Success", RunStatus: "CompletedWithWarnings", CompanionBackup: "backup-large-2026-11-21-000000" }), async () => new Response(null, { status: 404 }))
+    expect(result.job).toMatchObject({ status: "warnings" })
+    // The early ordinary manifest has no run status and stays uncertain until the run ends.
+    expect(await reconcileBackupAudit(entry, async () => manifest({ Status: "Success", CompanionBackup: "backup-large-2026-11-21-000000" }), async () => new Response(null, { status: 404 }))).toBe(entry)
+  })
   it("records both failed halves as failed", async () => {
     const result = await reconcileBackupAudit(entry, async () => manifest({ Status: "Failed", CompanionBackup: "backup-large-2026-11-21-000000", ItemCounts: { TotalPolicies: 0 } }), async () => manifest({ Status: "Failed", ItemCounts: { TotalPolicies: 0 } }))
     expect(result.job).toMatchObject({ status: "failed" })
