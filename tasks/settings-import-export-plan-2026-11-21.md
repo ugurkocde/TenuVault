@@ -279,3 +279,6 @@ Deviations from the plan, for PR 1:
 - A file session stays open for at most one hour (the plan said 15 minutes), so a new admin can sign in and take the first backup before reviewing the rest of the file. At most five sessions are kept; opening a sixth closes the oldest, and the admin then opens the file again.
 - Preview labels use the Settings wording (for example **Get nightly builds**).
 - The dev app check used one profile with the real IPC and stubbed file dialogs; the two-profile storage-account run belongs to PR 2.
+
+Follow-ups after PR 1 (not blocking, from the Codex round 6 review):
+- Onboarding that is resumed after a restart, with a setup file in progress, does not keep the file's storage choice: the import session lives in memory only. Keep the validated connection details in the onboarding draft, and ask the admin to open the file again when its session is gone.

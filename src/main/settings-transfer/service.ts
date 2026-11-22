@@ -253,6 +253,8 @@ function fileSchedule(value: unknown, tenantId: string): ScheduleInput | null {
 }
 
 const STORAGE_ACCOUNT = /^[a-z0-9]{3,24}$/
+/** Azure's rule for resource group names: Unicode letters and digits, hyphens, underscores, periods and parentheses, not ending in a period. */
+const AZURE_RESOURCE_GROUP = /^[-\p{L}\p{N}_.()]{0,89}[-\p{L}\p{N}_()]$/u
 
 /** Connection details in a file, or null when they are missing or not valid. */
 function fileConnection(value: unknown, tenant: SettingsFileTenant): SetupConnection | null {
@@ -262,7 +264,7 @@ function fileConnection(value: unknown, tenant: SettingsFileTenant): SetupConnec
   if (isObject(storage) && storage.kind === "local") parsed = { kind: "local" }
   else if (isObject(storage) && storage.kind === "azure") {
     const { storageAccountName, subscriptionId, resourceGroupName, location } = storage
-    if (typeof storageAccountName !== "string" || !STORAGE_ACCOUNT.test(storageAccountName) || !isGuid(subscriptionId) || typeof resourceGroupName !== "string" || !/^[-\w.()]{1,90}$/.test(resourceGroupName)) return null
+    if (typeof storageAccountName !== "string" || !STORAGE_ACCOUNT.test(storageAccountName) || !isGuid(subscriptionId) || typeof resourceGroupName !== "string" || !AZURE_RESOURCE_GROUP.test(resourceGroupName)) return null
     parsed = { kind: "azure", storageAccountName, subscriptionId: subscriptionId.toLowerCase(), resourceGroupName, location: typeof location === "string" ? location.slice(0, 64) : "" }
   } else if (storage !== undefined) return null
   return { tenantId: tenant.tenantId, name: tenant.name ?? tenant.domain ?? tenant.tenantId, clientId: value.clientId.toLowerCase(), ...(parsed && { storage: parsed }) }
@@ -535,10 +537,13 @@ export class SettingsTransfer {
       // Settings locks both update settings while the organization manages updates.
       const managed = (key === "autoUpdate" || key === "nightlyUpdates") && this.deps.autoUpdateManaged()
       const asDefault = valid && value === now && saved[key] === undefined && !managed
+      // Turning automatic updates back on follows the channel this computer is set to, which can be nightly.
+      const resumesNightly = key === "autoUpdate" && value === true && !now && current.nightlyUpdates
+      const warning = resumesNightly ? "This computer is set to get nightly builds, so it downloads and installs nightly builds again." : PREFERENCE_WARNINGS[key]
       items.push(this.item(id, label, onOff(now), valid ? onOff(value) : shown(value), valid && value === now && !managed && !asDefault, !valid ? NOT_VALID : managed ? "Updates on this computer are managed by your organization." : null, {
-        ...(PREFERENCE_WARNINGS[key] && { warning: PREFERENCE_WARNINGS[key] }),
+        ...(warning && { warning }),
         ...(asDefault && { note: DEFAULT_NOTE }),
-        state: [now, saved[key], managed],
+        state: [now, saved[key], managed, current.nightlyUpdates],
         apply: () => void this.deps.preferences.set({ [key]: value as boolean }),
       }))
     }

@@ -713,3 +713,22 @@ describe("apply integrity against stored values", () => {
     expect(result.servicesEnabled).toEqual({})
   })
 })
+
+describe("update channel and Azure names", () => {
+  it("warns that turning automatic updates back on resumes nightly builds, and leaves it unticked", () => {
+    const b = machine([{ tenantId: TENANT }])
+    b.preferences.set({ autoUpdate: false, nightlyUpdates: true })
+    const preview = b.transfer.open(file({ app: { preferences: { autoUpdate: true } }, tenants: [] }), "system")
+    expect(find(preview, "app:autoUpdate")).toMatchObject({ status: "change", selected: false, warning: expect.stringContaining("nightly builds") })
+  })
+
+  it("connects a tenant whose resource group has a non-ASCII name, from its own export", () => {
+    const a = machine([{ tenantId: TENANT, storage: "azure" }])
+    const tenants = JSON.parse(a.store.get("renderer.tenuvault_tenants")!)
+    tenants[0].resources.resourceGroupName = "rg-münchen"
+    a.store.set("renderer.tenuvault_tenants", JSON.stringify(tenants))
+    const b = machine([{ tenantId: OTHER }])
+    const preview = b.transfer.open(a.transfer.exportFile({ app: false, tenantIds: [TENANT], connection: true, appearance: "system" }), "system")
+    expect(preview.groups.find((group) => group.id === TENANT)?.setup?.storage).toMatchObject({ kind: "azure", resourceGroupName: "rg-münchen" })
+  })
+})

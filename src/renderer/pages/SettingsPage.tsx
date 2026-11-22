@@ -624,9 +624,10 @@ export function BackgroundAndRetention() {
                   value={prefs.retentionDays}
                   onChange={(e) => void set({ retentionDays: Number(e.target.value) })}
                 >
-                  {[7, 14, 30, 60, 90, 180, 365].map((days) => (
+                  {/* A saved value outside the presets, for example from an imported settings file, is listed as it is. */}
+                  {[...new Set([7, 14, 30, 60, 90, 180, 365, prefs.retentionDays])].filter((days) => days > 0).sort((a, b) => a - b).map((days) => (
                     <option key={days} value={days} disabled={allCommunity && days > COMMUNITY_RETENTION_DAYS}>
-                      {days} days{allCommunity && days > COMMUNITY_RETENTION_DAYS ? " (Pro)" : ""}
+                      {days} {days === 1 ? "day" : "days"}{allCommunity && days > COMMUNITY_RETENTION_DAYS ? " (Pro)" : ""}
                     </option>
                   ))}
                   <option value={0} disabled={allCommunity}>Forever{allCommunity ? " (Pro)" : ""}</option>
@@ -953,7 +954,7 @@ export default function SettingsPage() {
   const panel = (id: SettingsSectionId, content: ReactNode) => (
     <section key={id} id={`settings-${id}`} hidden={section !== id}>
       {/* A dialog this panel owns closes at once when the panel hides, in the same commit, so focus can land below. */}
-      <DialogAnimationProvider value={section === id}><Fragment key={reloads[id] ?? 0}>{content}</Fragment></DialogAnimationProvider>
+      <DialogAnimationProvider value={section === id}><Fragment key={id === "background" ? 0 : reloads[id] ?? 0}>{content}</Fragment></DialogAnimationProvider>
     </section>
   )
 
@@ -969,7 +970,8 @@ export default function SettingsPage() {
           {panel("signin", <div className="space-y-6"><TenantSettings active={section === "signin"} /><ProxySignInSettings /></div>)}
           {panel("services", <ServicesSettings />)}
           {panel("storage", <div className="space-y-6"><BackupsOnDevice /><RestoreWrites active={section === "storage"} /></div>)}
-          {panel("background", <div className="space-y-6"><BackgroundAndRetention /><BackupReaderSettings /></div>)}
+          {/* Only the preferences card loads again after an import, so a Backup Reader draft stays. */}
+          {panel("background", <div className="space-y-6"><BackgroundAndRetention key={reloads.background ?? 0} /><BackupReaderSettings /></div>)}
           {panel("notifications", <NotificationSettings />)}
           {panel("branding", <PdfBrandingSettings />)}
           {panel("transfer", <SettingsTransfer active={section === "transfer"} onApplied={reloadApplied} />)}
