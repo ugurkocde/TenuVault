@@ -1156,8 +1156,17 @@ async function bootstrap(): Promise<void> {
   handleTrusted("settings:preview", (_event, importId: unknown, appearance: unknown) => settingsTransfer.preview(importId, appearance))
   handleTrusted("settings:apply", (_event, importId: unknown, itemIds: unknown, appearance: unknown) => {
     const result = settingsTransfer.apply(importId, itemIds, appearance)
-    // Login item and update channel follow the preferences, as after a change in Settings.
-    applyPreferences(preferences.get())
+    // Login item and update channel follow the preferences, as after a change in Settings, and only
+    // when one of those was applied. The import is saved by then, so a failure here is reported, not thrown.
+    const runtime = result.items.filter((entry) => entry.outcome === "applied" && ["app:startAtLogin", "app:autoUpdate", "app:nightlyUpdates"].includes(entry.id))
+    if (runtime.length) {
+      try {
+        applyPreferences(preferences.get())
+      } catch (error) {
+        console.warn("[settings-transfer] Could not apply preferences to this computer:", error)
+        for (const entry of runtime) entry.message = "Saved. TenuVault applies it to this computer at the next start."
+      }
+    }
     return result
   })
   handleTrusted("updates:status", () => updates.current())

@@ -891,6 +891,48 @@ describe("setup from a file", () => {
   const FILE_TENANT = "2f9d4a7c-1b6e-4c3d-8a5f-9e0b7c2d4a61"
   const FILE_CLIENT = "3d7a1f9c-2e5b-4c8d-a6f4-9b0e1c7d2a58"
 
+  const openWith = async (preview: unknown) => {
+    state.transferPreview.mockResolvedValue(preview)
+    const container = document.createElement("div")
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    roots.push(root)
+    act(() => root.render(createElement(MemoryRouter, { initialEntries: [`/portal/onboarding?setup=import-1&tenant=${FILE_TENANT}`] }, createElement(OnboardingPage))))
+    await flush()
+    await flush()
+    return container
+  }
+  const filePreview = (clientId = FILE_CLIENT) => ({
+    importId: "import-1", exportedAt: null, appVersion: null, skipped: [],
+    groups: [{ id: FILE_TENANT, title: "Fabrikam", connected: false, items: [], setup: { tenantId: FILE_TENANT, name: "Fabrikam", clientId, storage: { kind: "local" } } }],
+  })
+
+  it("keeps a sign-in to the file's tenant and app registration and goes on to storage", async () => {
+    const account = { tenantId: FILE_TENANT, clientId: FILE_CLIENT, username: "admin@fabrikam.com" }
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 1, tenant: FILE_TENANT, clientId: FILE_CLIENT, displayName: "", account, signedInAt: Date.now() }))
+    state.accounts.mockResolvedValue([account])
+    const container = await openWith(filePreview())
+    expect(state.releaseTenant).not.toHaveBeenCalled()
+    expect(container.textContent).toContain("Choose where backups are stored")
+    expect(container.textContent).toContain("The setup file chose This device.")
+  })
+
+  it("gives up a sign-in to another tenant only when the admin chooses to, then fills in the file's IDs", async () => {
+    const account = { tenantId: TENANT, clientId: CLIENT, username: "admin@contoso.com" }
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 1, tenant: TENANT, clientId: CLIENT, displayName: "", account, signedInAt: Date.now() }))
+    state.accounts.mockResolvedValue([account])
+    const container = await openWith(filePreview())
+    expect(state.releaseTenant).not.toHaveBeenCalled()
+    expect(container.textContent).toContain("The setup file is for tenant")
+    expect(container.textContent).toContain("Signed in as admin@contoso.com")
+    await act(async () => { button(container, "Use a different tenant or account")!.click() })
+    await flush()
+    expect(state.releaseTenant).toHaveBeenCalledWith(TENANT)
+    expect(container.querySelector<HTMLInputElement>("#tenant")!.value).toBe(FILE_TENANT)
+    expect(container.querySelector<HTMLInputElement>("#clientId")!.value).toBe(FILE_CLIENT)
+    expect(container.textContent).toContain("From a setup file")
+  })
+
   it("replaces the IDs of an unfinished sign-in with the file's, in the form and in the notice", async () => {
     state.store.set(DRAFT_KEY, JSON.stringify({ step: 1, tenant: TENANT, clientId: CLIENT, displayName: "Draft", account: null }))
     let resolve!: (value: unknown) => void

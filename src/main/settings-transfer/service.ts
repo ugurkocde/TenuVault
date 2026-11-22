@@ -155,25 +155,38 @@ function describeBranding(branding: PdfBranding | null): string {
   return parts.length ? `${name}, with ${parts.join(", ")}` : name
 }
 
+// eslint-disable-next-line no-control-regex
+const CLOUD_TEXT = /^[^\u0000-\u001f\u007f]{1,256}$/
+const CLOUD_FIELDS = ["tenantId", "subscriptionId", "resourceGroup", "automationAccount", "storageAccount", "keyVault", "scheduleName", "frequency", "time", "weekday", "timeZone", "tenantKey", "linked"]
+
 /**
- * A cloud backup setup as the renderer stores it, checked by the same parser the setup paste uses.
- * Only single-line text, numbers and booleans pass, once per field name, so no value can add a line of its own.
+ * A cloud backup setup as the renderer stores it. Each known field is checked for its type and
+ * allowed values first, because the setup parser fills in defaults for values it cannot read (an
+ * unknown frequency becomes daily, any linked text other than false becomes linked). Then the
+ * known fields go through that parser, one single-line value each; other fields are left out.
  */
 function cloudConfig(value: unknown): CloudBackupConfig | null {
   if (!isObject(value)) return null
-  const names = new Set<string>()
-  const lines: string[] = []
-  for (const [name, field] of Object.entries(value)) {
-    if (!/^[A-Za-z][A-Za-z0-9]{0,63}$/.test(name) || names.has(name.toLowerCase())) return null
-    names.add(name.toLowerCase())
-    if (typeof field === "string") {
-      // eslint-disable-next-line no-control-regex
-      if (field.length > 256 || /[\u0000-\u001f\u007f]/.test(field)) return null
-      lines.push(`${name}=${field}`)
-    } else if ((typeof field === "number" && Number.isFinite(field)) || typeof field === "boolean") lines.push(`${name}=${field}`)
-    else return null
+  const text = (field: unknown, optional: boolean) => (field === undefined || field === "" ? optional : typeof field === "string" && CLOUD_TEXT.test(field))
+  const { tenantId, subscriptionId, storageAccount, frequency, time, weekday, linked } = value
+  if (!isGuid(tenantId) || !(subscriptionId === undefined || subscriptionId === "" || isGuid(subscriptionId))) return null
+  if (typeof storageAccount !== "string" || !/^[a-z0-9]{3,24}$/.test(storageAccount) || !text(value.resourceGroup, false) || !text(value.automationAccount, false)) return null
+  if (!text(value.keyVault, true) || !text(value.scheduleName, true) || !text(value.timeZone, true) || !text(value.tenantKey, true)) return null
+  if (frequency !== undefined && frequency !== "daily" && frequency !== "weekly") return null
+  if (time !== undefined && time !== "" && (typeof time !== "string" || !/^([01]\d|2[0-3]):[0-5]\d$/.test(time))) return null
+  if (weekday !== undefined && !(typeof weekday === "number" && Number.isInteger(weekday) && weekday >= 0 && weekday <= 6)) return null
+  if (linked !== undefined && typeof linked !== "boolean") return null
+  return parseCloudSetup(CLOUD_FIELDS.filter((name) => value[name] !== undefined && value[name] !== "").map((name) => `${name}=${String(value[name])}`).join("\n"))
+}
+
+/** What a new scope changes, by type: what starts and what stops being backed up. */
+function scopeChanges(current: BackupScope, next: BackupScope): { added: string[]; removed: string[] } {
+  const before = new Set(includedTypes(current).map((type) => type.folder))
+  const after = new Set(includedTypes(next).map((type) => type.folder))
+  return {
+    added: INTUNE_TYPES.filter((type) => after.has(type.folder) && !before.has(type.folder)).map((type) => type.label),
+    removed: INTUNE_TYPES.filter((type) => before.has(type.folder) && !after.has(type.folder)).map((type) => type.label),
   }
-  return parseCloudSetup(lines.join("\n"))
 }
 
 function sameCloud(a: CloudBackupConfig | null, b: CloudBackupConfig | null): boolean {
@@ -412,6 +425,7 @@ export class SettingsTransfer {
     const items: Array<Omit<Candidate, "group">> = []
     const current = this.deps.preferences.get()
     const preferences = isObject(app.preferences) ? app.preferences : {}
+    if (app.preferences !== undefined && !isObject(app.preferences)) items.push(this.item("app:preferences", "Preferences", "", "Not valid", false, NOT_VALID))
     for (const key of Object.keys(preferences)) {
       if (!(EXPORTED_PREFERENCES as readonly string[]).includes(key)) skipped.push(`This computer: "${key.slice(0, 64)}"`)
     }
@@ -501,8 +515,15 @@ export class SettingsTransfer {
       const unknown = raw ? raw.filter((folder) => !INTUNE_TYPES.some((type) => type.folder === folder)).length : 0
       const empty = !!scope && includedTypes(scope).length === 0
       const current = this.deps.scopes.get(tenantId).scope
+      const changes = scope ? scopeChanges(current, scope) : { added: [], removed: [] }
+      // Each type that starts or stops being backed up is named; one that stops starts unticked.
+      const notes = [
+        changes.added.length > 0 && `Starts backing up ${changes.added.join(", ")}.`,
+        unknown > 0 && `${unknown === 1 ? "One type" : `${unknown} types`} in the file ${unknown === 1 ? "is" : "are"} not known to this version and ${unknown === 1 ? "is" : "are"} left out.`,
+      ].filter(Boolean).join(" ")
       items.push(this.item(`${prefix}backupScope`, "What is backed up", describeScope(current), scope ? describeScope(scope) : "Not valid", !!scope && scope.excluded.join(",") === normalizeScope(current).excluded.join(","), !scope ? NOT_VALID : empty ? "The file backs up no type this version knows." : null, {
-        ...(unknown > 0 && { note: `${unknown === 1 ? "One type" : `${unknown} types`} in the file ${unknown === 1 ? "is" : "are"} not known to this version and ${unknown === 1 ? "is" : "are"} left out.` }),
+        ...(notes && { note: notes }),
+        ...(changes.removed.length > 0 && { warning: `Stops backing up ${changes.removed.join(", ")}.` }),
         apply: () => void this.deps.scopes.set(tenantId, scope!),
       }))
     }
@@ -510,9 +531,15 @@ export class SettingsTransfer {
     if (tenant.schedule !== undefined) {
       const schedule = fileSchedule(tenant.schedule, tenantId)
       const current = scheduleConfig(this.deps.schedules.list().find((entry) => entry.tenantId === tenantId))
-      // The rule of the schedule settings: a Community tenant keeps a daily schedule it has, but cannot start one.
-      const planBlocked = !!schedule && schedule.frequency === "daily" && this.deps.plan(tenantId) === "community" && current?.frequency !== "daily"
-      items.push(this.item(`${prefix}schedule`, "Backup schedule", describeSchedule(current), schedule ? describeSchedule(schedule) : "Not valid", !!schedule && sameSchedule(current, schedule), !schedule ? NOT_VALID : planBlocked ? "Daily schedules are included in Pro and MSP. Weekly schedules are included in every plan." : null, {
+      // The rules of the schedule settings: a Community tenant keeps a daily schedule it has, but cannot
+      // start one, and while the plan is not known yet no daily schedule is turned on.
+      const plan = this.deps.plan(tenantId)
+      const newDaily = !!schedule && schedule.frequency === "daily" && current?.frequency !== "daily"
+      const planBlocked = newDaily && plan === "community"
+      const planUnknown = newDaily && plan === null && schedule.enabled
+      items.push(this.item(`${prefix}schedule`, "Backup schedule", describeSchedule(current), schedule ? describeSchedule(schedule) : "Not valid", !!schedule && sameSchedule(current, schedule), !schedule ? NOT_VALID
+        : planBlocked ? "Daily schedules are included in Pro and MSP. Weekly schedules are included in every plan."
+        : planUnknown ? "The plan of this tenant is not known yet, so a daily schedule cannot be turned on. Import the file again once TenuVault has checked the license." : null, {
         ...(planBlocked && { feature: "dailySchedule" as const }),
         warning: SCHEDULE_WARNING,
         apply: () => void this.deps.schedules.set(schedule!),

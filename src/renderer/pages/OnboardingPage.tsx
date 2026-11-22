@@ -29,6 +29,11 @@ import { desktopTenantCredentials, type TenantCredentials } from "../overrides/a
 import { completedWithWarnings, resolveBackupJobDisplay, toBackupJobDisplay, type BackupJobDisplay } from "~/lib/backup-job-display"
 import { BackupResults } from "~/components/backup/backup-results"
 
+/** Whether a sign-in is to the tenant and app registration a setup file names. */
+function sameRegistration(account: SignedInAccount, connection: SetupConnection): boolean {
+  return account.tenantId.toLowerCase() === connection.tenantId.toLowerCase() && account.clientId.toLowerCase() === connection.clientId.toLowerCase()
+}
+
 // The theme the setup file preview compares against. Read here and not through lib/appearance,
 // whose module applies the theme when it loads.
 function currentAppearance(): AppearanceSetting {
@@ -193,6 +198,8 @@ export default function OnboardingPage() {
       if (!connected(account.tenantId)) await bridge.license.releaseTenant(account.tenantId)
       setAccount(null)
       setChoice(null)
+      // With a setup file for another tenant open, the form starts with the file's IDs.
+      if (setup && !sameRegistration(account, setup.connection)) setFields({ tenant: setup.connection.tenantId, clientId: setup.connection.clientId, displayName: setup.connection.name })
       setStep(1)
     } catch (error) {
       setAddError({ message: error instanceof Error ? error.message : String(error), license: false })
@@ -243,27 +250,29 @@ export default function OnboardingPage() {
   }
 
   /**
-   * Continues with the tenant of a setup file, on the Sign in step with its IDs filled in. Like the
-   * in-app setup, an earlier sign-in that was never saved belongs to another attempt and is given up.
+   * Continues with the tenant of a setup file, on the Sign in step with its IDs filled in. A sign-in
+   * that is not saved yet is never given up by opening a file: with the file's tenant and app
+   * registration it is used as it is, and for another one the admin decides with "Use a different
+   * tenant or account", which then fills in the file's IDs.
    */
-  const continueWithSetup = async (importId: string, connection: SetupConnection) => {
+  const continueWithSetup = (importId: string, connection: SetupConnection) => {
     resumeCheck.current = false
     setSetupChoices(null)
     setSetupError("")
     setAddError(null)
+    setSetup({ importId, connection })
+    setSetupNotice("")
+    setAutoSignIn(null)
     if (account) {
-      setReleasing(true)
-      try { if (!connected(account.tenantId)) await bridge.license.releaseTenant(account.tenantId) } catch { /* repeated at the next start */ }
-      setReleasing(false)
-      setAccount(null)
-      setChoice(null)
+      if (sameRegistration(account, connection)) {
+        setFields((current) => ({ tenant: connection.tenantId, clientId: connection.clientId, displayName: current.displayName || connection.name }))
+        setStep(2)
+      } else setStep(1)
+      return
     }
     const next = { tenant: connection.tenantId, clientId: connection.clientId, displayName: connection.name }
     setFields(next)
     saveOnboardingDraft({ step: 1, ...next, account: null })
-    setSetup({ importId, connection })
-    setSetupNotice("")
-    setAutoSignIn(null)
     setStep(1)
   }
 
@@ -273,7 +282,7 @@ export default function OnboardingPage() {
     if (connections.length === 0) {
       setSetupError("This file has no connection details for a tenant that is not connected yet. Ask the other admin to export it again with Include connection details.")
     } else if (connections.length === 1) {
-      void continueWithSetup(preview.importId, connections[0]!)
+      continueWithSetup(preview.importId, connections[0]!)
     } else {
       setSetupError("")
       setSetupChoices({ importId: preview.importId, connections })
@@ -302,7 +311,7 @@ export default function OnboardingPage() {
     handledSetup.current = requestedSetup
     bridge.settingsTransfer.preview(requestedSetup, currentAppearance()).then((preview) => {
       const group = preview.groups.find((entry) => entry.id === requestedTenant && entry.setup && !entry.connected)
-      if (group?.setup) void continueWithSetup(preview.importId, group.setup)
+      if (group?.setup) continueWithSetup(preview.importId, group.setup)
       else setupFrom(preview)
     }, (error: unknown) => setSetupError(error instanceof Error ? error.message : String(error)))
     // Runs once per file handed over; continueWithSetup only reads current state.
@@ -514,7 +523,7 @@ export default function OnboardingPage() {
                   <ul className="space-y-2">
                     {setupChoices.connections.map((connection) => (
                       <li key={connection.tenantId}>
-                        <Button type="button" variant="outline" size="sm" onClick={() => void continueWithSetup(setupChoices.importId, connection)}>
+                        <Button type="button" variant="outline" size="sm" onClick={() => continueWithSetup(setupChoices.importId, connection)}>
                           {connection.name} <span className="ml-2 font-mono text-xs text-gray-500">{connection.tenantId}</span>
                         </Button>
                       </li>
@@ -531,6 +540,11 @@ export default function OnboardingPage() {
             <StepHeading id="setup-step-1">Sign in to your tenant</StepHeading>
             {status?.tenantTrialsEnabled && <p className="text-sm text-gray-600">New tenants start with a Pro trial. No card and no email needed.</p>}
             {setup && !account && <SetupFileNotice connection={setup.connection} />}
+            {setup && account && !sameRegistration(account, setup.connection) && (
+              <p role="status" className="rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+                The setup file is for tenant <span className="font-mono">{setup.connection.tenantId}</span>, but you are signed in to another tenant or app registration that is not saved yet. Select Use a different tenant or account to sign in with the file&apos;s details instead.
+              </p>
+            )}
             {setupNotice && !account && (
               <p role="status" className="flex items-start gap-2 rounded-2xl bg-green-50 px-4 py-2.5 text-sm text-green-800">
                 <CheckCircle2 className="mt-0.5 h-4 w-4 flex-shrink-0" aria-hidden="true" /> {setupNotice}
@@ -607,6 +621,8 @@ export default function OnboardingPage() {
               <p className="text-sm text-gray-600">The setup file chose {setup.connection.storage.kind === "local" ? "This device" : `the storage account ${setup.connection.storage.storageAccountName}`}. {setup.connection.storage.kind === "azure" ? "Select Check access to confirm you can use it." : ""}</p>
             )}
             <StorageChooser
+              // A setup file opened while this step shows starts the chooser again with the file's storage.
+              key={setup ? `setup:${setup.importId}` : "manual"}
               tenantId={account.tenantId}
               clientId={account.clientId}
               initial={setup && setup.connection.tenantId === account.tenantId.toLowerCase() ? setup.connection.storage : undefined}

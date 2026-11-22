@@ -119,15 +119,15 @@ describe("settings import with LicenseService plans", () => {
     expect(branding.get()?.companyName).toBe("Contoso")
   })
 
-  it("three tenants, a Pro key, a trial that ended and Community: the ended trial blocks nothing it does not own", async () => {
+  it("three tenants, a Pro key, a trial that ended and Community: the ended trial gets no new daily schedule", async () => {
     const { license, transfer } = await computer([KEYED, ENDED, COMMUNITY])
     vi.setSystemTime(START + 3 * DAY)
     expect([license.plan(KEYED), license.plan(ENDED), license.plan(COMMUNITY)]).toEqual(["pro", null, "community"])
     const preview = transfer.open(fileFor([KEYED, ENDED, COMMUNITY]), "system")
     expect(item(preview, "app:pdfBranding")?.status).toBe("change")
     expect(item(preview, `${KEYED}:schedule`)?.status).toBe("change")
-    // Without a plan the schedule settings apply no plan rule either; the backup itself is refused then.
-    expect(item(preview, `${ENDED}:schedule`)?.status).toBe("change")
+    // Without a known plan no daily schedule is turned on, as in the schedule settings.
+    expect(item(preview, `${ENDED}:schedule`)).toMatchObject({ status: "blocked", reason: expect.stringContaining("not known yet") })
     expect(item(preview, `${COMMUNITY}:schedule`)?.feature).toBe("dailySchedule")
   })
 

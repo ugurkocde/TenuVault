@@ -44,7 +44,7 @@ The admins who use TenuVault need an Intune role, for example Intune Administrat
 
 When another admin already uses TenuVault for the tenant, they can send you a settings file exported with **Include connection details**. See [Import and export](/settings/#import-and-export).
 
-1. On the **Connect** step, select **Set up from a file** and open the file. If it holds several tenants that are not connected yet, choose one under **Which tenant do you want to connect?**
+1. On the **Connect** step, select **Set up from a file** and open the file. If it holds several tenants that are not connected yet, choose one under **Which tenant do you want to connect?** If you already signed in to the file's tenant and app registration, TenuVault keeps that sign-in and goes on to **Storage**. If you signed in to another tenant that is not saved yet, that sign-in stays until you select **Use a different tenant or account**.
 2. TenuVault opens the **Sign in** step with the tenant ID, the client ID and the display name filled in. A notice, **From a setup file**, names the tenant, the app registration and the storage account from the file. Use a setup file only from an admin you trust: it decides which app registration you sign in to and where backups are stored.
 3. Select **Sign in with Microsoft** and sign in with your own account.
 4. On the **Storage** step, the storage from the file is chosen. For an Azure storage account, select **Check access** to confirm you can use it.

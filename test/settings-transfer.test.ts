@@ -443,16 +443,51 @@ describe("review integrity", () => {
     expect(find(preview, "app:keepRunningInTray")).toMatchObject({ status: "blocked", next: "Not valid" })
   })
 
-  it("refuses a cloud backup setup whose values could add lines or repeat a field", () => {
+  it("refuses a cloud backup setup with a value of the wrong type or shape, before the parser fills in defaults", () => {
     const b = machine([{ tenantId: TENANT }])
     for (const cloudBackup of [
       { ...CLOUD, automationAccount: "aa-tenuvault\nstorageAccount=attacker1" },
-      { ...CLOUD, StorageAccount: "attacker1" },
-      { ...CLOUD, linked: true, extra: { nested: true } },
+      { ...CLOUD, linked: "yes" },
+      { ...CLOUD, frequency: "hourly" },
+      { ...CLOUD, weekday: 9 },
+      { ...CLOUD, time: "25:00" },
+      { ...CLOUD, subscriptionId: "not-a-guid" },
     ]) {
       const preview = b.transfer.open(file({ tenants: [{ tenantId: TENANT, cloudBackup }] }), "system")
       expect(find(preview, `${TENANT}:cloudBackup`)).toMatchObject({ status: "blocked", reason: "The value in the file is not valid." })
     }
+    // Fields this version does not know are left out of what is saved.
+    const preview = b.transfer.open(file({ tenants: [{ tenantId: TENANT, cloudBackup: { ...CLOUD, StorageAccount: "attacker1", extra: { nested: true } } }] }), "system")
+    b.transfer.apply(preview.importId, [`${TENANT}:cloudBackup`], "system")
+    const saved = JSON.parse(b.store.get(`renderer.tenuvault_cloud_backup_${TENANT}`)!)
+    expect(saved.storageAccount).toBe("contosobackups")
+    expect(saved).not.toHaveProperty("extra")
+    expect(saved).not.toHaveProperty("StorageAccount")
+  })
+
+  it("names the types a new scope starts and stops backing up, and leaves a scope that stops one unticked", () => {
+    const b = machine([{ tenantId: TENANT }])
+    b.scopes.set(TENANT, { excluded: ["DeviceConfigurations"] })
+    const preview = b.transfer.open(file({ tenants: [{ tenantId: TENANT, backupScope: { excluded: ["CompliancePolicies"] } }] }), "system")
+    const scope = find(preview, `${TENANT}:backupScope`)!
+    expect(scope.current).toBe(scope.next)
+    expect(scope).toMatchObject({ status: "change", selected: false, note: "Starts backing up device configuration profiles.", warning: expect.stringMatching(/^Stops backing up .*compliance/i) })
+  })
+
+  it("shows a preferences section that is not valid instead of dropping it", () => {
+    const b = machine([{ tenantId: TENANT }])
+    const preview = b.transfer.open(file({ app: { preferences: [90], appearance: "dark" }, tenants: [] }), "system")
+    expect(find(preview, "app:preferences")).toMatchObject({ status: "blocked", reason: "The value in the file is not valid." })
+    expect(find(preview, "app:appearance")?.status).toBe("change")
+  })
+
+  it("does not turn on a daily schedule while the tenant's plan is not known", () => {
+    const a = configured()
+    a.scheduler.set({ tenantId: TENANT, enabled: true, frequency: "daily", time: "04:00" })
+    const b = machine([{ tenantId: TENANT }], { [TENANT]: null })
+    const preview = b.transfer.open(a.transfer.exportFile({ app: false, tenantIds: [TENANT], connection: false, appearance: "dark" }), "system")
+    expect(find(preview, `${TENANT}:schedule`)).toMatchObject({ status: "blocked", reason: expect.stringContaining("not known yet") })
+    expect(find(preview, `${TENANT}:schedule`)?.feature).toBeUndefined()
   })
 
   it("skips branding fields from a newer version and still applies the branding", () => {
