@@ -367,49 +367,51 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
     setValidationError("")
     const controller = new AbortController()
     const credentials = { ...tenant.credentials, storageAccountName: tenant.storageAccountName, subscriptionId: "local", resourceGroupName: "local", backupId }
-    // A mixed run keeps its large types, such as directory objects, in a verified companion backup.
-    const sources = [backupId, ...(companionId ? [companionId] : [])]
-    void (async () => {
-      const settled = await Promise.allSettled(sources.map(source => post<{ largePage?: number; hasMore?: boolean; content: { groups: Array<{ folder: string; label: string; area: string; limitation?: string; count?: number; policies: Array<{ path: string; displayName?: string }> }> } }>(
+    // One backup's items for the selected service, with names and restore blockers from its snapshots.
+    const load = async (source: string) => {
+      const contents = await post<{ largePage?: number; hasMore?: boolean; content: { groups: Array<{ folder: string; label: string; area: string; limitation?: string; count?: number; policies: Array<{ path: string; displayName?: string }> }> } }>(
         "/api/list-backup-contents",
         { ...credentials, backupId: source, largePage },
         controller.signal,
-      ).then(contents => ({ source, contents }))))
-      if (controller.signal.aborted) return
-      // The chosen backup must load. An unreadable companion only hides its large items.
-      if (settled[0]!.status === "rejected") throw settled[0]!.reason
-      const listings = settled.flatMap(result => result.status === "fulfilled" ? [result.value] : [])
-      setCompanionError(settled[1]?.status === "rejected" ? COMPANION_UNREADABLE : "")
-      const listed: BackupItem[] = listings.flatMap(({ source, contents }) => contents.content.groups.filter(group => matchesBackupService(group.folder, contentsService)).flatMap((group) =>
-        group.policies.map((policy) => ({ path: policy.path, folder: group.folder, label: group.label, area: group.area, name: policy.displayName ?? policy.path, blocker: group.limitation, source }))))
+      )
+      const groups = contents.content.groups.filter(group => matchesBackupService(group.folder, contentsService))
+      const listed: BackupItem[] = groups.flatMap((group) =>
+        group.policies.map((policy) => ({ path: policy.path, folder: group.folder, label: group.label, area: group.area, name: policy.displayName ?? policy.path, blocker: group.limitation, source })))
       const details: Record<string, { name: string; blocker?: string; replaceBlocker?: string; snapshot?: unknown; readiness?: RecoveryReadiness }> = {}
-      const unreadable = new Set<string>()
-      for (const source of sources) {
-        const own = listed.filter(item => item.source === source)
-        try {
-          for (let start = 0; start < own.length; start += PREVIEW_CHUNK) {
-            const preview = await post<{ items: Array<{ path: string; name: string; blocker?: string; replaceBlocker?: string; snapshot?: unknown; readiness?: RecoveryReadiness }> }>(
-              "/api/restore-preview",
-              { ...credentials, backupId: source, paths: own.slice(start, start + PREVIEW_CHUNK).map((item) => item.path) },
-              controller.signal,
-            )
-            for (const item of preview.items) details[item.path] = item
-          }
-        } catch (error) {
-          // The chosen backup must preview. A companion that fails here drops only its own items.
-          if (source === backupId || controller.signal.aborted) throw error
-          unreadable.add(source)
-          setCompanionError(COMPANION_UNREADABLE)
-        }
+      for (let start = 0; start < listed.length; start += PREVIEW_CHUNK) {
+        const preview = await post<{ items: Array<{ path: string; name: string; blocker?: string; replaceBlocker?: string; snapshot?: unknown; readiness?: RecoveryReadiness }> }>(
+          "/api/restore-preview",
+          { ...credentials, backupId: source, paths: listed.slice(start, start + PREVIEW_CHUNK).map((item) => item.path) },
+          controller.signal,
+        )
+        for (const item of preview.items) details[item.path] = item
       }
+      const items = listed.map((item) => ({ ...item, name: details[item.path]?.name ?? item.name, blocker: details[item.path]?.blocker ?? item.blocker, replaceBlocker: details[item.path]?.replaceBlocker, snapshot: details[item.path]?.snapshot, readiness: details[item.path]?.readiness }))
+      // Inventory paging belongs to a backup whose items are shown in the selected service.
+      const paging = contents.largePage !== undefined && items.length ? { hasMore: contents.hasMore === true, total: groups.reduce((sum, group) => sum + (group.count ?? group.policies.length), 0) } : null
+      return { items, paging }
+    }
+    void (async () => {
+      // The chosen backup is shown as soon as it loads. Its failure is the error.
+      const chosen = await load(backupId)
       if (controller.signal.aborted) return
-      // Inventory paging belongs to a backup whose items are shown.
-      const shown = listed.filter(item => !unreadable.has(item.source))
-      const paged = listings.find(({ source, contents }) => contents.largePage !== undefined && shown.some(item => item.source === source))?.contents
-      setLargePaging(paged ? { hasMore: paged.hasMore === true, total: paged.content.groups.filter(group => matchesBackupService(group.folder, contentsService)).reduce((sum, group) => sum + (group.count ?? group.policies.length), 0) } : null)
-      // A later inventory page of a backup that is no longer shown would leave no way back.
-      if (!paged && largePage > 0) setLargePage(0)
-      setItems(listed.filter(item => !unreadable.has(item.source)).map((item) => ({ ...item, name: details[item.path]?.name ?? item.name, blocker: details[item.path]?.blocker ?? item.blocker, replaceBlocker: details[item.path]?.replaceBlocker, snapshot: details[item.path]?.snapshot, readiness: details[item.path]?.readiness })))
+      setItems(chosen.items)
+      setLargePaging(chosen.paging)
+      // A mixed run keeps its large types, such as directory objects, in a verified companion backup.
+      // It is added on its own and never holds back or removes the chosen backup's items.
+      if (!companionId) return
+      try {
+        const companion = await load(companionId)
+        if (controller.signal.aborted) return
+        setItems(previous => [...(previous ?? []), ...companion.items])
+        if (companion.paging) setLargePaging(companion.paging)
+        else if (!chosen.paging && largePage > 0) setLargePage(0)
+      } catch (error) {
+        if (controller.signal.aborted || (error instanceof DOMException && error.name === "AbortError")) return
+        setCompanionError(COMPANION_UNREADABLE)
+        // A later inventory page of a backup that is no longer shown would leave no way back.
+        if (!chosen.paging && largePage > 0) setLargePage(0)
+      }
     })().catch((error: unknown) => {
       if (controller.signal.aborted) return
       if (error instanceof DOMException && error.name === "AbortError") return

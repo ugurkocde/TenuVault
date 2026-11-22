@@ -250,3 +250,22 @@ it("shows no inventory paging for a companion whose items the service filter hid
   expect(container.textContent).toContain("Configuration profile")
   expect(container.textContent).not.toContain("Inventory page")
 })
+
+it("shows the chosen backup's items while its linked large backup is still loading", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body ?? "{}"))
+    if (String(input).endsWith("/api/list-backup-contents")) return body.backupId === "backup-large-1" ? new Promise<Response>(() => {}) : Response.json(contents)
+    if (String(input).endsWith("/api/restore-preview")) return Response.json(preview)
+    return Response.json({})
+  }))
+  const container = document.body.appendChild(document.createElement("div"))
+  const root = createRoot(container)
+  roots.push(root)
+  await act(async () => root.render(createElement(MemoryRouter, null, createElement(RestoreWizard, {
+    tenant: { name: "Contoso", credentials: { tenantId: "tenant", appId: "app", clientSecret: "" }, storageAccountName: "tvlocal-tenant" },
+    backups: [{ id: "backup-1", companionId: "backup-large-1", timestamp: "2026-10-16T02:00:00Z", type: "manual", status: "Completed", totalPolicies: 3, scope: null, size: 1, duration: 4, changes: null, comparedWith: null }],
+    initialBackupId: "backup-1", community: false, canCopyToTenants: false, copyCandidates: [],
+  }))))
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+  expect(container.textContent).toContain("Configuration profile")
+})

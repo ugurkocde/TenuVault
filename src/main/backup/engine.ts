@@ -1329,12 +1329,10 @@ export class BackupEngine {
           const listing = await storage.listFolder(backup.prefix)
           const bytes = [...listing.sizes.values()].reduce((sum, size) => sum + size, 0)
           if (!owned) { remnants.unowned++; remnants.unownedBytes += bytes; if (backup.time < cutoff) unowned++; continue }
-          // A half that read everything stays the newest complete copy of its own types even when
-          // its companion is missing, so it is never removed while it holds one.
+          // A remnant keeps every type it read completely, even when the half as a whole is incomplete
+          // or its companion is missing, so it is never removed while it holds a type's newest copy.
           let holdsUncovered = false
-          if (metadata && completeHalf(metadata)) {
-            for (const folder of restorableFolders(metadata)) if (uncovered.delete(folder)) holdsUncovered = true
-          }
+          for (const folder of completeFolders(metadata)) if (uncovered.delete(folder)) holdsUncovered = true
           if (holdsUncovered || backup.time >= cutoff - REMNANT_RECOVERY_DAYS * 86400_000) { remnants.kept++; remnants.keptBytes += bytes; continue }
           let remaining = bytes
           try {
@@ -1542,6 +1540,21 @@ function uniqueName(name: string, id: string, used: Set<string>): string {
 
 
 /** The permissions in the run's Graph token, read only when a service with a token pre-check needs checking. */
+/**
+ * The type folders a backup half holds a complete, restorable copy of. Per-type outcomes decide:
+ * saved or not configured, no masked values, and a complete inventory for a large type. A manifest
+ * without outcomes counts only when the whole half is complete.
+ */
+function completeFolders(metadata: Record<string, unknown> | null | undefined): Set<string> {
+  if (!metadata) return new Set()
+  const restorable = restorableFolders(metadata)
+  const outcomes = Array.isArray(metadata.Outcomes) ? metadata.Outcomes as Array<{ Folder?: unknown; Outcome?: unknown }> : null
+  if (!outcomes) return completeHalf(metadata) ? restorable : new Set()
+  const large = (metadata.LargeItems ?? {}) as Record<string, { complete?: unknown } | undefined>
+  return new Set(outcomes.filter(entry => typeof entry.Folder === "string" && (entry.Outcome === "saved" || entry.Outcome === "notConfigured")
+    && restorable.has(entry.Folder) && (large[entry.Folder] === undefined || large[entry.Folder]!.complete === true)).map(entry => entry.Folder as string))
+}
+
 async function moduleGrants(tokens: RunTokens, needed: boolean) {
   if (!needed) return undefined
   try {

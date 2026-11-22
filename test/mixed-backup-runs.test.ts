@@ -286,6 +286,20 @@ for (const azure of [false, true]) describe(azure ? "Azure emulator mixed runs" 
     expect((await f.store.list(local, BACKUP_CONTAINER, `${ordinaryId}/`)).some(blob => blob.name.endsWith("TermsAndConditions/one.json"))).toBe(true)
     expect(f.requests.filter(value => value.startsWith("DELETE") && value.includes(ordinaryId))).toHaveLength(0)
   })
+  it("keeps an incomplete remnant while one of its types is the newest complete copy", async () => {
+    undo = registerTestTypes([largeType])
+    const f = await setup()
+    const ordinaryId = "backup-2026-11-01-000000", largeId = "backup-large-2026-11-01-000000"
+    const snapshot = { id: "one", displayName: "Terms" }
+    await f.write(ordinaryId, "TermsAndConditions/one.json", snapshot)
+    // Terms and conditions were read in full; scope tags failed, so the half as a whole is incomplete.
+    await f.write(ordinaryId, "metadata.json", { BackupFolder: ordinaryId, TenantId: TENANT, RunId: "same-run", Status: "CompletedWithWarnings", Failures: 1, Coverage: "Incomplete", Scope: { Included: ["TermsAndConditions", "ScopeTags"], Excluded: [] }, FailedTypes: ["ScopeTags"], Outcomes: [{ Folder: "TermsAndConditions", Outcome: "saved", Saved: 1 }, { Folder: "ScopeTags", Outcome: "failed", Error: "Read failed" }], Items: { "TermsAndConditions/one": { file: "one.json", hash: snapshotHash(snapshot) } }, ItemCounts: { TermsAndConditions: 1, TotalPolicies: 1 }, CompanionBackup: largeId, LargeBackupOutcomes: [] })
+    await f.write(ordinaryId, ".tenuvault-owner.json", { Source: "TenuVault Desktop", TenantId: TENANT, RunId: "same-run", CompanionBackup: largeId })
+    const engine = new BackupEngine({ now: () => new Date("2026-11-17T12:00:00Z"), fetch: f.fetcher, getToken: async () => jwt({ scp: "Policy.Read.All" }), services: () => ({ services: ["intune"] }), retentionDays: () => 1 })
+    const job = await engine.waitForJob(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: f.account, scope: { excluded: INTUNE_TYPES.filter(type => type.folder !== "DeviceCategories").map(type => type.folder) } }))
+    expect(job.log.join(" ")).toContain("Remnant cleanup")
+    expect((await f.store.list(local, BACKUP_CONTAINER, `${ordinaryId}/`)).some(blob => blob.name.endsWith("TermsAndConditions/one.json"))).toBe(true)
+  })
   it("protects a valid complete run inside retention", async () => {
     const f = await pair()
     const engine = new BackupEngine({ now: () => new Date("2020-01-01T12:00:00Z"), fetch: f.fetcher, getToken: async () => jwt({ scp: "Policy.Read.All" }), services: () => ({ services: ["intune", "entra"] }), retentionDays: () => 1 })

@@ -450,6 +450,20 @@ export async function POST(request: NextRequest) {
           backup.size += describedCompanion.size
           backup.sizeFormatted = formatBytes(backup.size)
           backup.failures += describedCompanion.failures
+        } else if (other) {
+          // Discovery missed the companion, but its manifest was read: summarize it the same way,
+          // so a run whose items are all large stays restorable.
+          const counts: Record<string, number> = {}, sizes: Record<string, number> = {}
+          for (const [folder, value] of Object.entries(other.ItemCounts ?? {})) if (folder !== "TotalPolicies" && typeof value === "number") counts[folder] = value
+          for (const [folder, value] of Object.entries(other.LargeSizes ?? {})) if (typeof value === "number") sizes[folder] = value
+          const added = Object.values(counts).reduce((sum, value) => sum + value, 0)
+          backup.counts = { ...backup.counts, ...counts }
+          backup.sizes = { ...backup.sizes, ...sizes }
+          backup.totalPolicies += added
+          backup.policyCount += Object.entries(counts).reduce((sum, [folder, value]) => (typeForFolder(folder) && !backupTypeUse(typeForFolder(folder)!).policyCount ? sum : sum + value), 0)
+          backup.size += Object.values(sizes).reduce((sum, value) => sum + value, 0)
+          backup.sizeFormatted = formatBytes(backup.size)
+          if (typeof other.Failures === "number") backup.failures += other.Failures
         }
       }
       backup.largeProblems = largeRunProblems(metadata, cause, matches ? other : null)
