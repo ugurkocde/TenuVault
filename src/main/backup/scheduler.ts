@@ -8,7 +8,7 @@ const KEY = "backup.schedules"
 const TICK_MS = 60 * 1000
 const RETRY_MS = 15 * 60 * 1000
 const MAX_ATTEMPTS = 3
-const VALID_TIME = /^([01]\d|2[0-3]):[0-5]\d$/
+export const VALID_TIME = /^([01]\d|2[0-3]):[0-5]\d$/
 
 export interface ScheduledRunResult {
   status: "Completed" | "Failed" | "Cancelled"
@@ -382,7 +382,7 @@ export class BackupScheduler {
   }
 }
 
-const validWeekday = (value: unknown) => typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 6
+export const validWeekday = (value: unknown) => typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 6
 const validDate = (value: unknown) => typeof value === "string" && Number.isFinite(Date.parse(value))
 
 function parseSchedule(id: string, value: unknown): BackupSchedule | null {

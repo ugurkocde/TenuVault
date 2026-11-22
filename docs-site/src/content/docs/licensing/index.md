@@ -81,6 +81,7 @@ Eligible nonprofits can use Pro at no cost. Email [support@tenuvault.com](mailto
 | Full white-label PDF reports | | Yes | Yes |
 | Reusable golden standards for customers | | | Yes |
 | Portfolio views across customer tenants | | | Yes |
+| [Settings import and export](/settings/#import-and-export), and setting up another admin from a file | Yes | Yes | Yes |
 | Share the license with other admins in your tenant | | Yes, on by default | Yes, off by default |
 | **Check all** for drift across tenants (the [All tenants overview](/tenants/#the-all-tenants-overview) itself appears on any plan once two tenants are connected) | | | Yes |
 | Actions across several tenants: **Backup Selected**, **Copy to other tenants instead** when restoring, **Also deploy to** in OpenIntuneBaseline | | | Yes |

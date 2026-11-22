@@ -1,8 +1,8 @@
 import type { WriteRecord } from "../../main/storage/restore-journal"
 import { getAppearance, setAppearance, type Appearance } from "../lib/appearance"
-import { useEffect, useId, useRef, useState, type ReactNode } from "react"
+import { Fragment, useEffect, useId, useRef, useState, type ReactNode } from "react"
 import { Link, useLocation, useSearchParams } from "react-router-dom"
-import { Bell, Download, FolderOpen, HardDrive, Info, KeyRound, Loader2, Lock, MonitorCog, Network, Palette, RefreshCw, Save, ShieldCheck, Siren, SunMoon, Upload, type LucideIcon } from "lucide-react"
+import { ArrowLeftRight, Bell, Download, FolderOpen, HardDrive, Info, KeyRound, Loader2, Lock, MonitorCog, Network, Palette, RefreshCw, Save, ShieldCheck, Siren, SunMoon, Upload, type LucideIcon } from "lucide-react"
 import { cn } from "~/lib/utils"
 import { useTenantOperations, useTenants, type Tenant } from "~/contexts/TenantContext"
 import { Button } from "~/components/ui/button"
@@ -29,6 +29,7 @@ import { PlanBadge } from "../components/UpgradeNote"
 import { PdfBrandingSettings } from "../components/PdfBrandingSettings"
 import { BackupReaderSettings } from "../components/BackupReaderSettings"
 import { ServicesSettings } from "../components/ServicesSettings"
+import { SettingsTransfer } from "../components/SettingsTransfer"
 import { WhatsNewDialog, WhatsNewEntryNotes } from "../components/WhatsNewDialog"
 import { useWhatsNew } from "../lib/whats-new"
 import { useConfirm } from "~/components/ConfirmDialog"
@@ -841,6 +842,7 @@ const SECTIONS: { id: SettingsSectionId; title: string; icon: typeof KeyRound; f
   { id: "background", title: "Background runner", icon: MonitorCog },
   { id: "notifications", title: "Notifications", icon: Bell, feature: "notifications" },
   { id: "branding", title: "PDF branding", icon: Palette, feature: "pdfBranding" },
+  { id: "transfer", title: "Import and export", icon: ArrowLeftRight },
   { id: "updates", title: "Updates", icon: Download },
   { id: "appearance", title: "Appearance", icon: SunMoon },
   { id: "about", title: "About", icon: Info },
@@ -879,6 +881,7 @@ export function SettingsSectionNav({ section }: { section: SettingsSectionId }) 
 
 export default function SettingsPage() {
   const [searchParams] = useSearchParams()
+  const [reloads, setReloads] = useState(0)
   const { hash } = useLocation()
   const section = resolveSettingsSection(searchParams.get("section"), hash)
 
@@ -942,20 +945,26 @@ export default function SettingsPage() {
     <div className="p-6 lg:p-8">
       <div className="pb-2">
         <h1 className="text-4xl font-medium tracking-tight text-gray-900">Settings</h1>
-        <p className="mt-2 text-lg text-gray-500">Sign-in, services and permissions, backup storage, encryption, background backups, notifications, PDF branding and updates.</p>
+        <p className="mt-2 text-lg text-gray-500">Sign-in, services and permissions, backup storage, encryption, background backups, notifications, PDF branding, import and export, and updates.</p>
       </div>
       <div className="mt-4 flex flex-col gap-6 xl:flex-row xl:items-start">
         <SettingsSectionNav section={section} />
         <div className="min-w-0 w-full max-w-5xl flex-1">
-          {panel("signin", <div className="space-y-6"><TenantSettings active={section === "signin"} /><ProxySignInSettings /></div>)}
-          {panel("services", <ServicesSettings />)}
-          {panel("storage", <div className="space-y-6"><BackupsOnDevice /><RestoreWrites active={section === "storage"} /></div>)}
-          {panel("background", <div className="space-y-6"><BackgroundAndRetention /><BackupReaderSettings /></div>)}
-          {panel("notifications", <NotificationSettings />)}
-          {panel("branding", <PdfBrandingSettings />)}
-          {panel("updates", <Updates />)}
-          {panel("appearance", <AppearanceSettings />)}
-          {panel("about", <About active={section === "about"} />)}
+          {/* After an import the other sections load again, so they show the applied settings. */}
+          <Fragment key={reloads}>
+            {panel("signin", <div className="space-y-6"><TenantSettings active={section === "signin"} /><ProxySignInSettings /></div>)}
+            {panel("services", <ServicesSettings />)}
+            {panel("storage", <div className="space-y-6"><BackupsOnDevice /><RestoreWrites active={section === "storage"} /></div>)}
+            {panel("background", <div className="space-y-6"><BackgroundAndRetention /><BackupReaderSettings /></div>)}
+            {panel("notifications", <NotificationSettings />)}
+            {panel("branding", <PdfBrandingSettings />)}
+          </Fragment>
+          {panel("transfer", <SettingsTransfer active={section === "transfer"} onApplied={() => setReloads((count) => count + 1)} />)}
+          <Fragment key={`after-${reloads}`}>
+            {panel("updates", <Updates />)}
+            {panel("appearance", <AppearanceSettings />)}
+            {panel("about", <About active={section === "about"} />)}
+          </Fragment>
         </div>
       </div>
     </div>

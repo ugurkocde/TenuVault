@@ -32,7 +32,9 @@ import { pathToFileURL } from "node:url"
 import { isGuid, isMicrosoftLoginUrl, sameRendererDocument } from "../shared/security"
 import { rendererStorageKey, rendererStorageValue } from "./renderer-storage"
 import { prepareGeneratedFile, prepareSaveFile, type PreparedFile } from "./save-file"
-import { pdfBrandingFor, PdfBrandingPolicy, PdfBrandingStore, setPdfBrandingPolicy } from "./pdf-branding"
+import { pdfBrandingFor, PdfBrandingPolicy, PdfBrandingStore, setPdfBrandingPolicy, validateBranding } from "./pdf-branding"
+import { SettingsTransfer } from "./settings-transfer/service"
+import { SETTINGS_FILE_LIMIT, settingsFileName } from "../shared/settings-transfer"
 import { prepareOibReportFile, printHtmlToPdf } from "./report-export"
 import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, net, Notification, powerMonitor, safeStorage, session, shell } from "electron"
 import { createChromiumFetch } from "./chromium-fetch"
@@ -1114,6 +1116,40 @@ async function bootstrap(): Promise<void> {
   handleTrusted("pdfBranding:clear", () => {
     pdfBranding.clear()
     return { branding: null, available: pdfBranding.available() }
+  })
+  // Settings files are built, read and applied here; the renderer only chooses which items to apply.
+  const settingsTransfer = new SettingsTransfer({
+    store: appStore,
+    preferences,
+    autoUpdateManaged: () => autoUpdateManaged,
+    branding: { get: () => pdfBranding.get(), set: (value) => pdfBranding.set(value), available: () => pdfBranding.available(), validate: validateBranding },
+    modules: moduleSettings,
+    scopes,
+    schedules: { list: () => scheduler.list(), set: (input) => scheduler.set(input) },
+    plan: (tenantId) => license.plan(tenantId),
+    appVersion: app.getVersion(),
+  })
+  handleTrusted("settings:export", (_event, options: unknown) =>
+    saveFileWithDialog(prepareGeneratedFile(settingsTransfer.exportFile(options), settingsFileName(new Date()), "utf8"), "Export settings"))
+  let openingSettingsFile = false
+  handleTrusted("settings:import", async (_event, appearance: unknown) => {
+    if (openingSettingsFile) throw new Error("A settings file is already being opened.")
+    openingSettingsFile = true
+    try {
+      const selected = await dialog.showOpenDialog(mainWindow!, { title: "Import settings", properties: ["openFile"], filters: [{ name: "TenuVault settings", extensions: ["json"] }] })
+      if (selected.canceled || !selected.filePaths[0]) return null
+      if ((await stat(selected.filePaths[0])).size > SETTINGS_FILE_LIMIT) throw new Error("The settings file is larger than 5 MB.")
+      return settingsTransfer.open(await readFile(selected.filePaths[0], "utf8"), appearance)
+    } finally {
+      openingSettingsFile = false
+    }
+  })
+  handleTrusted("settings:preview", (_event, importId: unknown, appearance: unknown) => settingsTransfer.preview(importId, appearance))
+  handleTrusted("settings:apply", (_event, importId: unknown, itemIds: unknown, appearance: unknown) => {
+    const result = settingsTransfer.apply(importId, itemIds, appearance)
+    // Login item and update channel follow the preferences, as after a change in Settings.
+    applyPreferences(preferences.get())
+    return result
   })
   handleTrusted("updates:status", () => updates.current())
   handleTrusted("updates:check", () => updates.check())

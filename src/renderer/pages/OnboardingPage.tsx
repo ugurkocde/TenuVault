@@ -1,14 +1,15 @@
 import { trialKeyRefusalText } from "../../shared/trial-notices"
 import { showCommunityLimitError } from "../lib/plan-dialog"
 import { useEffect, useRef, useState } from "react"
-import { Link, useNavigate } from "react-router-dom"
-import { AlertTriangle, ArrowLeft, ArrowRight, Ban, CheckCircle2, Database, HardDriveDownload, KeyRound, Loader2, Play, RotateCcw, ShieldCheck, XCircle } from "lucide-react"
+import { Link, useNavigate, useSearchParams } from "react-router-dom"
+import { AlertTriangle, ArrowLeft, ArrowRight, Ban, CheckCircle2, Database, FileUp, HardDriveDownload, KeyRound, Loader2, Play, RotateCcw, ShieldCheck, XCircle } from "lucide-react"
 import { useSelectedTenant, useTenantOperations, useTenants } from "~/contexts/TenantContext"
 import { useBackupProgress } from "~/contexts/BackupProgressContext"
 import { Button } from "~/components/ui/button"
 import { Progress } from "~/components/ui/progress"
 import { cn } from "~/lib/utils"
 import type { RegistrationResult, SignedInAccount } from "../../shared/ipc"
+import type { AppearanceSetting, SetupConnection, TransferPreview } from "../../shared/settings-transfer"
 import { LOCAL_STORAGE_PREFIX, TRIAL_USED_MESSAGE } from "../../shared/constants"
 import { TrialKeyRefusalActions, TrialShortcuts } from "../components/TenantTrial"
 import { StorageChooser } from "../components/StorageChooser"
@@ -27,6 +28,17 @@ import type { StorageChoice } from "../lib/storage"
 import { desktopTenantCredentials, type TenantCredentials } from "../overrides/add-tenant-modal"
 import { completedWithWarnings, resolveBackupJobDisplay, toBackupJobDisplay, type BackupJobDisplay } from "~/lib/backup-job-display"
 import { BackupResults } from "~/components/backup/backup-results"
+
+// The theme the setup file preview compares against. Read here and not through lib/appearance,
+// whose module applies the theme when it loads.
+function currentAppearance(): AppearanceSetting {
+  try {
+    const value = localStorage.getItem("tenuvault-appearance")
+    return value === "light" || value === "dark" ? value : "system"
+  } catch {
+    return "system"
+  }
+}
 
 const STEPS = [
   { title: "Connect", icon: ShieldCheck },
@@ -83,6 +95,12 @@ export default function OnboardingPage() {
   // After the in-app setup: what it did, and the account the Sign in step signs in as by itself.
   const [setupNotice, setSetupNotice] = useState("")
   const [autoSignIn, setAutoSignIn] = useState<{ loginHint: string } | null>(null)
+  // A setup file another admin exported: its connection details fill in the Connect and Storage steps.
+  const [setup, setSetup] = useState<{ importId: string; connection: SetupConnection } | null>(null)
+  const [setupChoices, setSetupChoices] = useState<{ importId: string; connections: SetupConnection[] } | null>(null)
+  const [setupError, setSetupError] = useState("")
+  const [openingSetup, setOpeningSetup] = useState(false)
+  const [searchParams] = useSearchParams()
   const { addJob, removeJob, updateJob, activeJobs } = useBackupProgress()
   const completedBackup = useRef<string | null>(null)
   const handledPollError = useRef<string | null>(null)
@@ -223,6 +241,73 @@ export default function OnboardingPage() {
     ].filter(Boolean).join(" "))
     setStep(1)
   }
+
+  /**
+   * Continues with the tenant of a setup file, on the Sign in step with its IDs filled in. Like the
+   * in-app setup, an earlier sign-in that was never saved belongs to another attempt and is given up.
+   */
+  const continueWithSetup = async (importId: string, connection: SetupConnection) => {
+    resumeCheck.current = false
+    setSetupChoices(null)
+    setSetupError("")
+    setAddError(null)
+    if (account) {
+      setReleasing(true)
+      try { if (!connected(account.tenantId)) await bridge.license.releaseTenant(account.tenantId) } catch { /* repeated at the next start */ }
+      setReleasing(false)
+      setAccount(null)
+      setChoice(null)
+    }
+    const next = { tenant: connection.tenantId, clientId: connection.clientId, displayName: connection.name }
+    setFields(next)
+    saveOnboardingDraft({ step: 1, ...next, account: null })
+    setSetup({ importId, connection })
+    setSetupNotice("")
+    setAutoSignIn(null)
+    setStep(1)
+  }
+
+  /** The tenants of a settings file that can be connected from it: with connection details and not connected yet. */
+  const setupFrom = (preview: TransferPreview) => {
+    const connections = preview.groups.flatMap((group) => (group.setup && !group.connected ? [group.setup] : []))
+    if (connections.length === 0) {
+      setSetupError("This file has no connection details for a tenant that is not connected yet. Ask the other admin to export it again with Include connection details.")
+    } else if (connections.length === 1) {
+      void continueWithSetup(preview.importId, connections[0]!)
+    } else {
+      setSetupError("")
+      setSetupChoices({ importId: preview.importId, connections })
+    }
+  }
+
+  const openSetupFile = async () => {
+    setOpeningSetup(true)
+    setSetupError("")
+    try {
+      const preview = await bridge.settingsTransfer.import(currentAppearance())
+      if (preview) setupFrom(preview)
+    } catch (error) {
+      setSetupError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setOpeningSetup(false)
+    }
+  }
+
+  // Settings > Import and export opens setup with a file it already read and the tenant to connect.
+  const requestedSetup = searchParams.get("setup")
+  const requestedTenant = searchParams.get("tenant")
+  const handledSetup = useRef<string | null>(null)
+  useEffect(() => {
+    if (!requestedSetup || handledSetup.current === requestedSetup) return
+    handledSetup.current = requestedSetup
+    bridge.settingsTransfer.preview(requestedSetup, currentAppearance()).then((preview) => {
+      const group = preview.groups.find((entry) => entry.id === requestedTenant && entry.setup && !entry.connected)
+      if (group?.setup) void continueWithSetup(preview.importId, group.setup)
+      else setupFrom(preview)
+    }, (error: unknown) => setSetupError(error instanceof Error ? error.message : String(error)))
+    // Runs once per file handed over; continueWithSetup only reads current state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [requestedSetup, requestedTenant])
 
   // The license was checked at the sign-in; it is checked again before the tenant is saved. A
   // tenant the license does not cover is not added and its sign-in is removed in the main
@@ -414,6 +499,30 @@ export default function OnboardingPage() {
               onManual={() => { setSetupNotice(""); setAutoSignIn(null); setStep(1) }}
               onRegistered={(result) => void registered(result)}
             />
+            <div className="space-y-3 rounded-2xl bg-secondary/60 px-4 py-3 text-sm text-gray-700">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <p>Another admin sent you a setup file? It fills in the tenant, the app registration and the storage.</p>
+                <Button type="button" variant="outline" size="sm" disabled={openingSetup || releasing} onClick={() => void openSetupFile()}>
+                  {openingSetup ? <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" /> : <FileUp className="mr-2 h-4 w-4" aria-hidden="true" />}
+                  Set up from a file
+                </Button>
+              </div>
+              {setupError && <p role="alert" className="text-red-700">{setupError}</p>}
+              {setupChoices && (
+                <div className="space-y-2">
+                  <p className="font-medium text-gray-900">Which tenant do you want to connect?</p>
+                  <ul className="space-y-2">
+                    {setupChoices.connections.map((connection) => (
+                      <li key={connection.tenantId}>
+                        <Button type="button" variant="outline" size="sm" onClick={() => void continueWithSetup(setupChoices.importId, connection)}>
+                          {connection.name} <span className="ml-2 font-mono text-xs text-gray-500">{connection.tenantId}</span>
+                        </Button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
           </div>
         )}
 
@@ -421,6 +530,7 @@ export default function OnboardingPage() {
           <div className="space-y-4">
             <StepHeading id="setup-step-1">Sign in to your tenant</StepHeading>
             {status?.tenantTrialsEnabled && <p className="text-sm text-gray-600">New tenants start with a Pro trial. No card and no email needed.</p>}
+            {setup && !account && <SetupFileNotice connection={setup.connection} />}
             {setupNotice && !account && (
               <p role="status" className="flex items-start gap-2 rounded-2xl bg-green-50 px-4 py-2.5 text-sm text-green-800">
                 <CheckCircle2 className="mt-0.5 h-4 w-4 flex-shrink-0" aria-hidden="true" /> {setupNotice}
@@ -491,7 +601,16 @@ export default function OnboardingPage() {
             </p>
             <PlanContext tenantId={account.tenantId} username={account.username} />
             {addError && <p role="alert" className="text-sm text-red-700">{addError.message}</p>}
-            <StorageChooser tenantId={account.tenantId} clientId={account.clientId} onChange={setChoice} onBlockerChange={setStorageBlocker} />
+            {setup?.connection.storage && setup.connection.tenantId === account.tenantId.toLowerCase() && (
+              <p className="text-sm text-gray-600">The setup file chose {setup.connection.storage.kind === "local" ? "This device" : `the storage account ${setup.connection.storage.storageAccountName}`}. {setup.connection.storage.kind === "azure" ? "Select Check access to confirm you can use it." : ""}</p>
+            )}
+            <StorageChooser
+              tenantId={account.tenantId}
+              clientId={account.clientId}
+              initial={setup && setup.connection.tenantId === account.tenantId.toLowerCase() ? setup.connection.storage : undefined}
+              onChange={setChoice}
+              onBlockerChange={setStorageBlocker}
+            />
             <div className="flex flex-wrap items-center justify-end gap-3">
               {!choice && storageBlocker && <p role="status" className="text-sm text-gray-600">{storageBlocker}</p>}
               <Button className="bg-blue-600 hover:bg-blue-700" disabled={!choice || creating || checkingResume} onClick={() => void createTenant()}>
@@ -514,6 +633,14 @@ export default function OnboardingPage() {
                   <li>It usually takes a few minutes, longer for large tenants.</li>
                   <li>A restore needs a backup from before the change, so this first backup cannot bring back a policy already lost. It protects what you back up from now on.</li>
                 </ul>
+              </div>
+            )}
+            {setup && credentials && setup.connection.tenantId === credentials.tenantId.toLowerCase() && (
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-secondary/60 px-4 py-3 text-sm text-gray-700">
+                <p>The setup file holds more settings, such as services and what is backed up. Review them and choose what to apply.</p>
+                <Button type="button" variant="outline" size="sm" onClick={() => void navigate(`/portal/settings?section=transfer&import=${encodeURIComponent(setup.importId)}`)}>
+                  Review settings from the file
+                </Button>
               </div>
             )}
             {jobError && (
@@ -581,6 +708,17 @@ export default function OnboardingPage() {
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+/** What a setup file fills in, shown in full before the admin signs in, because a file can come from anyone. */
+function SetupFileNotice({ connection }: { connection: SetupConnection }) {
+  return (
+    <div role="note" className="space-y-1 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+      <p className="flex items-center gap-2 font-medium"><AlertTriangle className="h-4 w-4" aria-hidden="true" /> From a setup file</p>
+      <p>Tenant <span className="font-mono">{connection.tenantId}</span>, app registration <span className="font-mono">{connection.clientId}</span>{connection.storage?.kind === "azure" ? <>, storage account <span className="font-mono">{connection.storage.storageAccountName}</span></> : null}.</p>
+      <p>Use a setup file only from an admin you trust: it decides which app registration you sign in to and where backups are stored. You sign in with your own account.</p>
     </div>
   )
 }

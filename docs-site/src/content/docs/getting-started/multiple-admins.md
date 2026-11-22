@@ -17,6 +17,15 @@ Several admins can use TenuVault for the same tenant, each on their own computer
 
 ## Set up a second admin
 
+The quickest way is a setup file. An admin who already uses TenuVault for the tenant opens **Settings** > **Import and export**, selects **Export settings**, ticks the tenant and **Include connection details**, and sends the file. The file holds the tenant ID, the client ID, the storage account and settings such as the services that are on and what is backed up. It holds no secret or sign-in. See [Import and export](/settings/#import-and-export).
+
+1. Make sure the admin is in the admin group with the roles above, and, if sign-in is restricted, in the group that may sign in. See [Restrict who can sign in](/deploy/#restrict-who-can-sign-in).
+2. The admin installs TenuVault, selects **Connect your tenant**, then **Set up from a file** on the **Connect** step. See [Set up from a file](/getting-started/connect-tenant/#set-up-from-a-file).
+3. They sign in with their own account, select **Check access** on the **Storage** step, and take the first backup.
+4. They select **Review settings from the file** and choose which settings to apply. The backup schedule starts unticked, so the tenant is not backed up twice by accident.
+
+To set up the second admin by hand instead:
+
 1. Make sure the admin is in the admin group with the roles above, and, if sign-in is restricted, in the group that may sign in. See [Restrict who can sign in](/deploy/#restrict-who-can-sign-in).
 2. The admin installs TenuVault and selects **Connect your tenant**. See [Start TenuVault for the first time](/getting-started/first-launch/).
 3. On the **Connect** step, they select **I already have an app registration**, because the tenant already has one. They enter the tenant ID and the client ID of the existing app registration and sign in with their own account. An admin who can grant admin consent can select **Set up with Microsoft sign-in** instead: TenuVault finds the existing app registration and uses it. See [Sign in to your tenant](/getting-started/connect-tenant/).
@@ -34,7 +43,7 @@ Everyone who can write to the `intune-backups` container is trusted like an Intu
 
 | | What it means |
 | --- | --- |
-| Settings | Appearance, notifications, PDF branding, updates and the other entries in [Settings](/settings/) apply to that computer only. |
+| Settings | Appearance, notifications, PDF branding, updates and the other entries in [Settings](/settings/) apply to that computer only. To give another admin the same settings, send them a file from [Import and export](/settings/#import-and-export): they review each setting before it applies. |
 | Schedules | Each computer runs its own [schedule](/backups/schedules/) while TenuVault runs there. Two admins with a daily schedule make two backups a day. Usually one computer, or [cloud backups](/backups/cloud/), runs the schedule and the others back up by hand. |
 | Retention | Every computer applies its own **Keep backups for** setting to all of the tenant's backups in the storage account, so the shortest setting among the admins wins. Agree on one value. See [Retention](/backups/storage/#retention). |
 | Backup Reader | A Backup Reader certificate belongs to one computer. See [Backup Reader for scheduled backups](/backups/backup-reader/). |

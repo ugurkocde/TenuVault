@@ -6,6 +6,7 @@ import type { ReportPayload } from "./oib/report"
 import type { PdfBranding } from "./pdf/theme"
 import type { ModuleCheck, ModuleId } from "./services/modules"
 import type { FeedbackInput, FeedbackSendResult, FeedbackSnapshot } from "./feedback"
+import type { AppearanceSetting, SettingsExportOptions, TransferApplyResult, TransferPreview } from "./settings-transfer"
 
 /** The saved PDF branding and whether any tenant on this machine is on a plan that applies it. */
 export interface PdfBrandingState {
@@ -602,6 +603,17 @@ export interface TenuVaultBridge {
     set: (branding: PdfBranding) => Promise<PdfBrandingState>
     /** Back to the TenuVault design. */
     clear: () => Promise<PdfBrandingState>
+  }
+  /** Settings files: a copy of the app's settings to keep, or to set up another admin's TenuVault. */
+  settingsTransfer: {
+    /** Builds the file in the main process and asks where to save it. */
+    export: (options: SettingsExportOptions) => Promise<{ saved: boolean; path?: string }>
+    /** Asks for a settings file and returns its preview, or null when no file was chosen. Rejects for a file that cannot be used. */
+    import: (appearance: AppearanceSetting) => Promise<TransferPreview | null>
+    /** The preview of a file that is still open, against the current settings. */
+    preview: (importId: string, appearance: AppearanceSetting) => Promise<TransferPreview>
+    /** Applies the chosen items and closes the file. */
+    apply: (importId: string, itemIds: string[], appearance: AppearanceSetting) => Promise<TransferApplyResult>
   }
   /** The optional read-only Backup Reader for scheduled backups, per tenant. */
   backupReader: {
