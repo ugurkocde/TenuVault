@@ -8,6 +8,25 @@ import type { NetworkCircuit } from "./engine"
 import { MAX_LIST_PAGES, REQUEST_ATTEMPTS, BlobClaimError, ProtectedBlobError, RequestTimeoutError, RetryableStorageError, StorageError, TokenError, isImmutabilityRefusal, requestFailure, storageError, storageFailure, withAbort, withRequestTimeout } from "./request"
 
 /** Writes blobs to Azure or, for local accounts, to the encrypted store via the fetch bridge. */
+/** An Azure error body, read up to 64 KiB. A larger body is not a confirmed result and reads as empty. */
+async function errorText(response: Response, limit = 64 * 1024): Promise<string> {
+  const reader = response.body?.getReader()
+  if (!reader) return ""
+  const chunks: Uint8Array[] = []
+  let size = 0
+  try {
+    for (;;) {
+      const part = await reader.read()
+      if (part.done) break
+      size += part.value.byteLength
+      // Not awaited: cancelling one branch of a cloned body settles only when the other is read too.
+      if (size > limit) { void reader.cancel().catch(() => undefined); return "" }
+      chunks.push(part.value)
+    }
+  } catch { return "" } finally { reader.releaseLock() }
+  return Buffer.concat(chunks).toString("utf8")
+}
+
 export class BlobWriter {
   constructor(
     private readonly fetchImpl: typeof fetch,
@@ -106,7 +125,7 @@ export class BlobWriter {
     return this.request(`${BACKUP_CONTAINER}/${name.split("/").map(encodeURIComponent).join("/")}`, { method: "GET" }, async (response) => {
       if (response.status === 404) {
         const code = response.headers.get("x-ms-error-code") ??
-          (confirmedMissing ? /<Code>([^<]+)<\/Code>/.exec(await response.clone().text())?.[1] : undefined)
+          (confirmedMissing ? /<Code>([^<]+)<\/Code>/.exec(await errorText(response.clone()))?.[1] : undefined)
         if (!confirmedMissing || code === "BlobNotFound" || code === "ContainerNotFound") return null
       }
       if (!response.ok) throw await storageFailure(response, this.account, this.hideErrorDetails)

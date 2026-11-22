@@ -377,10 +377,7 @@
       "type": "Microsoft.Automation/automationAccounts/schedules",
       "apiVersion": "2023-11-01",
       "name": "[concat(parameters('automationAccountName'), '/', variables('scheduleName'))]",
-      "dependsOn": [
-        "[resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName'))]",
-        "automationVariables"
-      ],
+      "dependsOn": ["[resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName'))]"],
       "properties": {
         "description": "[concat('TenuVault cloud backup for tenant ', parameters('tenantId'))]",
         "startTime": "[parameters('scheduleStartTime')]",

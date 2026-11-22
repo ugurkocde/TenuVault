@@ -870,7 +870,8 @@ it.runIf(process.platform !== "win32" && spawnSync("jq", ["--version"]).status =
   expect(template.resources.find(resource => resource.type === "Microsoft.Automation/automationAccounts/variables" && !resource.condition?.includes("initializeOmissionEnrollment"))?.dependsOn)
     .toContain("[resourceId('Microsoft.Resources/deploymentScripts', variables('omissionMigrationName'))]")
   const schedules = template.resources.find(resource => resource.type === "Microsoft.Automation/automationAccounts/schedules")!
-  expect(schedules.dependsOn).toContain("automationVariables")
+  // The schedule keeps main's dependencies, so optional omission provisioning never holds it back.
+  expect(schedules.dependsOn).toEqual(["[resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName'))]"])
   const dir = mkdtempSync(join(tmpdir(), "tv-omission-arm-"))
   const output = join(dir, "output.json")
   const az = `az() {

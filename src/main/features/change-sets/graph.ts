@@ -156,10 +156,19 @@ export function safeSnapshot(type: IntuneType, snapshot: Item, omission?: Omissi
   return omission?.enabled ? projectSecrets(type.folder, snapshot, omission.scripts).snapshot : snapshot
 }
 
-export function matchesObserved(type: IntuneType, proposed: Item, live: Item, omission?: OmissionOptions): boolean {
-  if (!omission?.enabled) return matchesProposed(type, proposed, live)
+/**
+ * Compares a proposal with a live read. With omission on, values left out on either side are
+ * removed from both; when that removes a value the proposal sets, the read cannot confirm it.
+ */
+export function observedCheck(type: IntuneType, proposed: Item, live: Item, omission?: OmissionOptions): "match" | "differs" | "unverifiable" {
+  if (!omission?.enabled) return matchesProposed(type, proposed, live) ? "match" : "differs"
   const [expected, observed] = observablePair(type.folder, proposed, live, false, omission)
-  return matchesProposed(type, expected, observed)
+  if (!matchesProposed(type, proposed, expected)) return "unverifiable"
+  return matchesProposed(type, expected, observed) ? "match" : "differs"
+}
+
+export function matchesObserved(type: IntuneType, proposed: Item, live: Item, omission?: OmissionOptions): boolean {
+  return observedCheck(type, proposed, live, omission) === "match"
 }
 
 export type WriteOutcome =
@@ -257,7 +266,11 @@ export async function readBack(graph: GraphCall, type: IntuneType, input: { acti
   }
   if (input.action === "delete") return { state: live ? "differs" : "match", live: live && safeSnapshot(type, live, omission) }
   if (!live) return { state: "missing", live: null }
-  const content = matchesObserved(type, input.proposed ?? {}, live, omission)
+  const check = observedCheck(type, input.proposed ?? {}, live, omission)
+  if (check === "unverifiable") {
+    return { state: "denied", live: null, message: "the values this change sets are left out of backups, so the read-back cannot compare them" }
+  }
+  const content = check === "match"
   const assignments = input.assignments === null || sameAssignments(input.assignments, live.assignments)
   return { state: content && assignments ? "match" : "differs", live: safeSnapshot(type, live, omission) }
 }

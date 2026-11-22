@@ -21,3 +21,14 @@ describe("BlobWriter.list", () => {
     expect(markers).toEqual([null, `A & <B> "C"`])
   })
 })
+
+describe("BlobWriter confirmed-missing reads", () => {
+  const writer = (body: string) => new BlobWriter(async () => new Response(body, { status: 404 }), "stcontoso", async () => "token")
+  it("reads the error code from a small XML body", async () => {
+    expect(await writer("<Error><Code>BlobNotFound</Code></Error>").readJson("policy.json", true)).toBeNull()
+  })
+  it("treats an oversized 404 body as unconfirmed instead of buffering it", async () => {
+    const body = `<Error><Code>BlobNotFound</Code>${" ".repeat(70 * 1024)}</Error>`
+    await expect(writer(body).readJson("policy.json", true)).rejects.toThrow()
+  })
+})

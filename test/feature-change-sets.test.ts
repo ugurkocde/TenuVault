@@ -8,7 +8,7 @@ import { DOMAINS } from "../src/main/features/domains"
 import { MAX_RECORDS } from "../src/main/features/records"
 import { fakeDeps, seedRecords, TENANT_A, TENANT_B } from "./feature-helpers"
 import { COMPLETE_BACKUP_METADATA, FakeTenant, setting, wire } from "./feature-change-sets-fakes"
-import { writeOperation } from "../src/main/features/change-sets/graph"
+import { observedCheck, readBack, writeOperation } from "../src/main/features/change-sets/graph"
 import { OmissionPolicyStore } from "../src/main/backup/omission-policy"
 import { memoryStore } from "./helpers"
 
@@ -562,6 +562,23 @@ describe("change-set engine", () => {
     expect(retried.body.changeSet.results["op-1"]).toMatchObject({ readBack: "denied", message: expect.stringContaining("HTTP 403") })
     expect(JSON.stringify(retried.body)).not.toContain(canary)
     expect(paths.some(path => path.includes("getOmaSettingPlainTextValue"))).toBe(false)
+  })
+
+  it("never verifies a proposed value that omission removes from the read-back", async () => {
+    const type = typeForFolder("DeviceConfigurations")!
+    const omission = { enabled: true, scripts: false }
+    const oma = (extra: Item) => ({ "@odata.type": "#microsoft.graph.windows10CustomConfiguration", displayName: "Custom",
+      omaSettings: [{ "@odata.type": "#microsoft.graph.omaSettingString", displayName: "Value", omaUri: "./Device/Value", ...extra }] })
+    const proposed = oma({ isEncrypted: false, value: "requested" })
+    const live = oma({ isEncrypted: true, value: "different", secretReferenceValueId: "ref" })
+    expect(observedCheck(type, proposed, live)).toBe("differs")
+    expect(observedCheck(type, proposed, live, omission)).toBe("unverifiable")
+    const check = await readBack(async () => ({ status: 200, body: { id: "custom", ...live, assignments: [] } }), type,
+      { action: "update", objectId: "custom", proposed, assignments: null }, omission)
+    expect(check.state).toBe("denied")
+    // A proposal without omitted values still verifies.
+    const plain = oma({ isEncrypted: false, value: "requested" })
+    expect(observedCheck(type, plain, plain, omission)).toBe("match")
   })
 
   it("blocks retry of a stored proposal with values covered by the current omission policy", async () => {
