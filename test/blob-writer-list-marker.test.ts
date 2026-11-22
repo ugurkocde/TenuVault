@@ -30,6 +30,9 @@ describe("BlobWriter confirmed-missing reads", () => {
   it("does not confirm a miss from a proxy page that only mentions an Azure code", async () => {
     await expect(writer("<html><body><Error><Code>BlobNotFound</Code></Error></body></html>").readJson("policy.json", true)).rejects.toThrow()
     expect(await writer('<?xml version="1.0" encoding="utf-8"?>\n<Error><Code>ContainerNotFound</Code><Message>x</Message></Error>').readJson("policy.json", true)).toBeNull()
+    await expect(writer("<Error><Code>BlobNotFound</Code>").readJson("policy.json", true)).rejects.toThrow()
+    await expect(writer("<Error><Code>BlobNotFound</Code><Message>The specified").readJson("policy.json", true)).rejects.toThrow()
+    expect(await writer("\uFEFF<?xml version=\"1.0\"?><Error><Code>BlobNotFound</Code><Message>The specified blob does not exist.\nRequestId:x</Message></Error>\n").readJson("policy.json", true)).toBeNull()
   })
   it("treats an oversized 404 body as unconfirmed instead of buffering it", async () => {
     const body = `<Error><Code>BlobNotFound</Code>${" ".repeat(70 * 1024)}</Error>`

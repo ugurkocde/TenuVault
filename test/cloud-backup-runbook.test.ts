@@ -1321,7 +1321,8 @@ it.runIf(Boolean(pwsh))("cloud runs fail closed on unverified policies and prese
     { isEncrypted: true, secretReferenceValueId: "ref", value: "****" },
   ])
   const item = JSON.parse(blobs.get(`${folder}/metadata.json`)!).Items["DeviceConfigurations/cfg-1"]
-  expect(item).toHaveProperty("hydratedOmaMasks", [1])
+  // **** stays blocked on restore as on main, so it is not recorded as hydration evidence.
+  expect(item).not.toHaveProperty("hydratedOmaMasks")
   expect(item).not.toHaveProperty("secretsMasked")
   expect(item).not.toHaveProperty("partialCollections")
 }, 60_000)

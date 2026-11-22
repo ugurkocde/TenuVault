@@ -335,15 +335,16 @@ async function fetchPolicyFiles(
 }
 
 /** "<type folder>/<Intune ID>" to the item's file path (Type/Name.json) and fingerprint, from a backup's metadata.json Items. */
-function itemsByIdentity(metadata: BackupMetadata): Map<string, { path: string; item: BackupItems[string] }> | null {
+function itemsByIdentity(metadata: BackupMetadata, normalized: boolean): Map<string, { path: string; item: BackupItems[string] }> | null {
   const items = itemsOf(metadata as BackupFingerprint)
   if (!items) return null
   const entries = new Map<string, { path: string; item: BackupItems[string] }>()
   for (const [key, item] of Object.entries(items)) {
     if (item && typeof item.file === 'string' && typeof item.hash === 'string') {
       const folder = key.split("/")[0]!
-      const id = key.slice(folder.length + 1).toLowerCase()
-      entries.set(`${canonicalFolder(folder)}/${id}`, { path: snapshotPath(folder, item), item })
+      // Folder aliases and ID case are normalized only when omission or projected files are involved; otherwise keys stay as on main.
+      const identity = normalized ? `${canonicalFolder(folder)}/${key.slice(folder.length + 1).toLowerCase()}` : key
+      entries.set(identity, { path: snapshotPath(folder, item), item })
     }
   }
   return entries
@@ -390,8 +391,10 @@ async function detectDrifts(
   const pairedNewer = new Set<string>()
   const pairedOlder = new Set<string>()
   let unchanged = 0
-  const newerItems = itemsByIdentity(newerBackup.metadata)
-  const olderItems = itemsByIdentity(olderBackup.metadata)
+  // Without omission or projected files on either side, files pair by path and inventory key as on main.
+  const projected = [...olderMap.keys(), ...newerMap.keys()].some(path => path.startsWith(".omitted/"))
+  const newerItems = itemsByIdentity(newerBackup.metadata, !!omission || projected)
+  const olderItems = itemsByIdentity(olderBackup.metadata, !!omission || projected)
   const byPath = (items: typeof olderItems) => new Map([...(items ?? [])].map(([key, entry]) => [entry.path, { ...entry.item, id: key.slice(key.indexOf("/") + 1) }]))
   const records = new Map([[olderBackup.name, byPath(olderItems)], [newerBackup.name, byPath(newerItems)]])
   const identifiedBodies = new Map<PolicyFile, PolicyContent>()
@@ -429,7 +432,7 @@ async function detectDrifts(
     // A file metadata names but storage does not hold cannot be compared; reported rather than
     // shown as the item being added or deleted.
     const missing = (path: string, backup: string) => warnings.push({ file: path, backup, message: 'Could not be compared: the file is missing from the backup.' })
-    const compared = (path: string) => options.folders.has(canonicalFolder(folderOf(path)))
+    const compared = (path: string) => options.folders.has(omission || projected ? canonicalFolder(folderOf(path)) : path.slice(0, path.indexOf('/')))
     for (const [key, after] of newerItems) {
       const before = olderItems.get(key)
       const newer = newerMap.get(after.path)
@@ -462,8 +465,6 @@ async function detectDrifts(
       tasks.push({ name: before.path, change: 'deleted', older })
     }
   }
-  // Without omission or projected files on either side, files pair by path as on main.
-  const projected = [...olderMap.keys(), ...newerMap.keys()].some(path => path.startsWith(".omitted/"))
   const identifyLegacy = !!omission || projected
   if (identifyLegacy) {
     // A legacy file can have a different name from the same policy in the manifest. Learn

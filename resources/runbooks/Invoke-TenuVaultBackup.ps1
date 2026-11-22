@@ -516,9 +516,9 @@ function Invoke-TvHttp {
         }
         $lastError = [TvHttpError]::new($status, (Get-TvSafeError $message))
         $lastError.ServiceCode = if ($serviceCode) { $serviceCode } else {
-            # Only a small Azure <Error> document whose top-level code names the miss confirms it.
+            # Only a small, complete Azure <Error> document whose code names the miss confirms it.
             if ($bytes.Length -le 65536) {
-                [regex]::Match([Text.Encoding]::UTF8.GetString($bytes), '\A\uFEFF?\s*(?:<\?xml[^>]*\?>\s*)?<Error>\s*<Code>(BlobNotFound|ContainerNotFound)</Code>').Groups[1].Value
+                [regex]::Match([Text.Encoding]::UTF8.GetString($bytes), '\A\uFEFF?\s*(?:<\?xml[^>]*\?>\s*)?<Error>\s*<Code>(BlobNotFound|ContainerNotFound)</Code>(?:\s*<([A-Za-z][A-Za-z0-9]*)>[^<]*</\2>)*\s*</Error>\s*\z').Groups[1].Value
             } else { "" }
         }
         if ($retryable -and $attempt -lt $attempts) {
@@ -1548,7 +1548,8 @@ function Read-TvObject {
                 if ($value -isnot [string]) { throw "Microsoft Graph did not return an encrypted setting's value" }
                 Set-TvProp $setting "value" $value
                 $subtype = [string](Get-TvProp $setting "@odata.type")
-                if ($value -ceq "****" -or ($subtype -match "omaSettingStringXml$" -and $value -ceq "PGEvPg==") -or
+                # **** stays blocked on restore as on main, so only the other mask-shaped literals are recorded.
+                if (($subtype -match "omaSettingStringXml$" -and $value -ceq "PGEvPg==") -or
                     ($subtype -match "omaSettingBase64$" -and $value -ceq "KioqKg==")) {
                     $Outcome.HydratedOmaMasks = @($Outcome.HydratedOmaMasks | Where-Object { $null -ne $_ }) + $index
                 }

@@ -8,8 +8,11 @@ import type { NetworkCircuit } from "./engine"
 import { MAX_LIST_PAGES, REQUEST_ATTEMPTS, BlobClaimError, ProtectedBlobError, RequestTimeoutError, RetryableStorageError, StorageError, TokenError, isImmutabilityRefusal, requestFailure, storageError, storageFailure, withAbort, withRequestTimeout } from "./request"
 
 /** Writes blobs to Azure or, for local accounts, to the encrypted store via the fetch bridge. */
-/** The top-level code of an Azure Storage <Error> document; any other body confirms nothing. */
-const AZURE_ERROR_CODE = /^\uFEFF?\s*(?:<\?xml[^>]*\?>\s*)?<Error>\s*<Code>([^<]+)<\/Code>/
+/**
+ * The code of a complete Azure Storage <Error> document: a Code element first, then only flat text
+ * elements, then the closing tag. Any other body, also a truncated one, confirms nothing.
+ */
+const AZURE_ERROR_CODE = /^\uFEFF?\s*(?:<\?xml[^>]*\?>\s*)?<Error>\s*<Code>([^<]+)<\/Code>(?:\s*<([A-Za-z][A-Za-z0-9]*)>[^<]*<\/\2>)*\s*<\/Error>\s*$/
 
 /** An Azure error body, read up to 64 KiB. A larger body is not a confirmed result and reads as empty. */
 async function errorText(response: Response, limit = 64 * 1024): Promise<string> {

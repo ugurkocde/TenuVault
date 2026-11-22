@@ -154,7 +154,19 @@ describe("shared omission rules", () => {
     expect(restoreBlocker(TYPE, masked)).toContain("masked OMA-URI")
   })
 
-  it.each(omaSubtypes.slice(0, 3))("distinguishes a legacy %s mask from a successfully hydrated literal", async (subtype, placeholder) => {
+  it("keeps blocking **** even when a read reports it as the decrypted value, as on main", async () => {
+    const value = { id: "policy", omaSettings: [{ "@odata.type": "#microsoft.graph.omaSettingString", isEncrypted: true, value: "****", secretReferenceValueId: REF }] }
+    const hydrated = await readObject(TYPE, "policy", {
+      get: async path => path.includes("getOmaSettingPlainTextValue") ? { value: "****" } : structuredClone(value),
+      list: async () => [],
+    })
+    expect(restoreBlocker(TYPE, hydrated)).toContain("masked OMA-URI")
+    const restored = JSON.parse(JSON.stringify(hydrated))
+    verifySnapshot(restored, backupManifest({ Items: { "DeviceConfigurations/policy": { file: "Policy.json", hash: snapshotHash(hydrated), hydratedOmaMasks: hydratedOmaMasks(hydrated) } } }, "backup")?.get("backup/DeviceConfigurations/Policy.json"))
+    expect(restoreBlocker(TYPE, restored)).toContain("masked OMA-URI")
+  })
+
+  it.each(omaSubtypes.slice(1, 3))("distinguishes a legacy %s mask from a successfully hydrated literal", async (subtype, placeholder) => {
     const value = { id: "policy", omaSettings: [{ "@odata.type": `#microsoft.graph.${subtype}`, isEncrypted: true, value: placeholder, secretReferenceValueId: REF }] }
     expect(restoreBlocker(TYPE, value)).toContain("masked OMA-URI")
     const hydrated = await readObject(TYPE, "policy", {
@@ -505,7 +517,7 @@ describe("omission backup generations", () => {
     expect(await drift()).toMatchObject({ drifts: [], warnings: expect.arrayContaining([expect.objectContaining({ file: `${FOLDER}/Previous name.json` })]) })
   })
 
-  it("pairs legacy compliance aliases by path, as on main, when neither backup uses omission", async () => {
+  it.each([false, true])("pairs legacy compliance aliases as on main when neither backup uses omission (inventories %s)", async (inventories) => {
     const older = "backup-2026-09-19-180000"
     const newer = "backup-2026-09-20-180000"
     const snapshot = { id: "same-policy", displayName: "Compliance", passwordRequired: false }
@@ -513,8 +525,10 @@ describe("omission backup generations", () => {
     const olderFile = "DeviceCompliancePolicies/Old.json"
     const newerFile = "CompliancePolicies/New.json"
     const blobs = new Map([
-      [`${older}/metadata.json`, JSON.stringify({ TenantId: TENANT, Status: "Success" })],
-      [`${newer}/metadata.json`, JSON.stringify({ TenantId: TENANT, Status: "Success" })],
+      [`${older}/metadata.json`, JSON.stringify({ TenantId: TENANT, Status: "Success",
+        ...(inventories ? { Items: { "DeviceCompliancePolicies/same-policy": { file: "Old.json", hash: "older" } } } : {}) })],
+      [`${newer}/metadata.json`, JSON.stringify({ TenantId: TENANT, Status: "Success",
+        ...(inventories ? { Items: { "CompliancePolicies/same-policy": { file: "New.json", hash: "newer" } } } : {}) })],
       [`${older}/${olderFile}`, JSON.stringify(snapshot)], [`${newer}/${newerFile}`, JSON.stringify(current)],
     ])
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {

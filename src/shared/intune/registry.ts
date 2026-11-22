@@ -296,7 +296,7 @@ const looksLikeOmaMask = (setting: Item): boolean => {
 
 export function hydratedOmaMasks(item: Item): number[] {
   return collection(item.omaSettings).flatMap((setting, index) =>
-    encryptedOmaSetting(setting) && looksLikeOmaMask(setting) && omaHydration.get(setting) === false ? [index] : [])
+    encryptedOmaSetting(setting) && setting.value !== "****" && looksLikeOmaMask(setting) && omaHydration.get(setting) === false ? [index] : [])
 }
 
 export function rememberHydratedOmaMasks(item: Item, indices: readonly number[] | undefined): void {
@@ -318,9 +318,10 @@ export function storedOmaHydrations(item: Item): number[] {
     setting._tenuvaultOmaMasked !== true && looksLikeOmaMask(setting) ? [index] : [])
 }
 
+// **** is always blocked, as on main, even when a read reports it as the decrypted value.
 const hasMaskedSecret = (item: Item) => collection(item.omaSettings).some((setting) =>
-  encryptedOmaSetting(setting) && (omaHydration.get(setting) ??
-    (typeof setting._tenuvaultOmaMasked === "boolean" ? setting._tenuvaultOmaMasked : looksLikeOmaMask(setting))))
+  encryptedOmaSetting(setting) && (setting.value === "****" || (omaHydration.get(setting) ??
+    (typeof setting._tenuvaultOmaMasked === "boolean" ? setting._tenuvaultOmaMasked : looksLikeOmaMask(setting)))))
 
 /** Dependencies and superseded apps an app points to, in the shape updateRelationships expects. */
 const appLinks = (app: Item): Item[] =>
