@@ -24,6 +24,7 @@ For the recovery options behind restore alerts, see the overview of how to [rest
 | Restore completed, partial or failed | A restore finishes | Info, warning or critical |
 | Drift detected | A drift scan finds changes between two backups | Warning when something was deleted, else info |
 | Intune changes | Change watching sees new Intune audit events | Warning when something was deleted or unassigned, else info |
+| [Mass Intune policy change](#mass-intune-policy-change) | A single audit check or backup comparison meets a policy count threshold | Critical |
 | Conditional Access changes | Change watching sees new Conditional Access policy, named location or authentication strength changes | Warning when something was deleted, else info |
 | Backup Reader certificate expiring | A scheduled backup finds the Backup Reader certificate within 30 days of expiry; once at 30 days, at 7 days and when it expired | Warning at 30 days, then critical |
 | Watcher stale | An Azure watcher owns change alerts and its heartbeat is older than 3 hours, or missing; once per stale period | Critical |
@@ -118,6 +119,16 @@ An alert that cannot send changes says so on its row with **Not sending changes*
 Delivery is at least once. An undelivered notification stays queued, retries with backoff, and survives restarting the app. In the rare case a destination accepted a message but the confirmation was lost, the same event can arrive twice; the `eventId` is identical so receivers can dedupe. Recent deliveries, including failures and retries, are listed on the **Deliveries** tab, with a filter for failed, waiting and sent ones. **View** shows a delivery as it was sent: the email, the Teams card and the webhook JSON, built from the stored event. **Retry** sends a failed delivery again. A scheduled backup slot that fails on every retry sends one alert, not one per attempt, and backup alerts list the policies saved and the types that could not be read.
 
 Channels and alerts can be edited with **Edit** on their row. A channel's URL and secret are never shown again: leave those fields empty to keep what is stored, or paste a new URL, for example after a Teams workflow was recreated. Alerts keep sending to the edited channel, and deliveries still queued go to the new address. Removing a channel that alerts use asks first and takes it out of those alerts; an alert left without any channel is turned off, not deleted.
+
+### Mass Intune policy change
+
+In **Alerts**, select **Add alert** and choose the **Mass Intune policy change** template. Set the deleted and changed policy thresholds and choose a channel. The default sends a critical alert when at least 5 policies are deleted or at least 20 policies change in one check. Leave a threshold blank to turn off that count. Use **Count as changed** to choose which operations contribute to the changed threshold.
+
+Each Intune change check counts distinct policies within each group. Repeated edits to one policy count once, and change watching filters still apply. A completed backup is also compared with the previous complete backup of the same tenant. The backup comparison counts deletions and net changes, so assignment edits count as updates and creations count when selected. The first backup and backups with warnings are skipped. A change may appear in both an audit alert and a later backup comparison.
+
+Webhook, Teams and email use the usual notification layout. Each message shows the counts and a sample of affected policies. Actor names appear when enabled in **Change watching** and available from the audit log. Webhook receivers can filter on `type: "intune.massChange"`.
+
+For Azure, update the notification watcher runbook to 1.6.0 or later and send your alert rules to it. For alerts from cloud backup comparisons, update the cloud backup runbook to 1.6.0 or later and enable [change reports](/backups/cloud/#change-reports-by-email) with `-ChangeReport names` or `-ChangeReport full`. The watcher evaluates cloud backup comparisons independently of report email delivery. Cloud backup actors also depend on the backup's change report actor setting.
 
 ### Which changes an alert sends
 

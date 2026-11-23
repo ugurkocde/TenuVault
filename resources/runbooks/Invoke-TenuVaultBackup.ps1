@@ -64,7 +64,7 @@ param(
     [switch]$ReplayOlderAudit
 )
 
-$script:RunbookVersion = "1.5.0"
+$script:RunbookVersion = "1.6.0"
 $script:GraphBeta = "https://graph.microsoft.com/beta"
 $script:Container = "intune-backups"
 # One status blob per tenant, so status blobs never collide when tenants share tooling.
@@ -553,7 +553,8 @@ function Set-TvBlob {
 # out of its reach. So it alerts on this note. The note goes to a container of its
 # own, never to intune-backups and never to the watcher's state container (where this
 # identity could otherwise rewrite the watcher's state), and carries a fixed set of fields: status, folder
-# name, counts, failed type names, run id and time. No policy content, names or messages.
+# name, counts, failed type names, run id and time. When change reports are enabled,
+# the note can also carry policy counts and a small sample of names for mass change alerts.
 # It is best effort: a missing container (no watcher set up) or a missing role never
 # changes the backup's own result.
 
@@ -572,7 +573,9 @@ function Send-TvBackupOutcome {
         [int]$Failures = 0,
         [string[]]$FailedTypes = @(),
         # How the run started (Get-TvRunTrigger), so the watcher's alert names a run started by hand.
-        [ValidateSet("scheduled", "manual")][string]$Trigger = "scheduled"
+        [ValidateSet("scheduled", "manual")][string]$Trigger = "scheduled",
+        [AllowNull()][object]$Comparison,
+        [DateTime]$FinishedAt = [DateTime]::UtcNow
     )
     # One note per run: the failure path can follow a Failed result that was already noted.
     if ($script:OutcomeSent) { return }
@@ -583,7 +586,7 @@ function Send-TvBackupOutcome {
         runId         = $RunId
         status        = $Status
         backupFolder  = if ($BackupFolder) { $BackupFolder } else { $null }
-        finishedAt    = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", [Globalization.CultureInfo]::InvariantCulture)
+        finishedAt    = $FinishedAt.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ", [Globalization.CultureInfo]::InvariantCulture)
         totalPolicies = if ($null -ne $TotalPolicies) { [int]$TotalPolicies } else { $null }
         failures      = [int]$Failures
         failedTypes   = @($FailedTypes | Where-Object { $_ } | Select-Object -First 10 | ForEach-Object { [string]$_ })
@@ -598,7 +601,12 @@ function Send-TvBackupOutcome {
         "If-None-Match"  = "*"
     }
     try {
-        $body = [Text.Encoding]::UTF8.GetBytes(($note | ConvertTo-Json -Compress))
+        if ($Status -eq "Success" -and $Comparison) { $note.comparison = $Comparison }
+        $body = [Text.Encoding]::UTF8.GetBytes(($note | ConvertTo-Json -Compress -Depth 8))
+        if ($body.Length -gt 4096 -and $Comparison) {
+            foreach ($group in $Comparison.Values) { $group.items = @($group.items | Select-Object -First 1) }
+            $body = [Text.Encoding]::UTF8.GetBytes(($note | ConvertTo-Json -Compress -Depth 8))
+        }
         [void](Invoke-TvHttp -Uri $uri -Token $Token -Method "Put" -Headers $headers -BodyBytes $body -ContentType "application/json")
         Write-Output "Left the result ($Status) for the notification watcher."
     } catch [TvHttpError] {
@@ -3066,8 +3074,29 @@ function Get-TvChangeReportLevel {
     return "off"
 }
 
+# Counts and bounded samples only. The watcher applies the alert's thresholds on receipt.
+function Get-TvMassChangeComparison {
+    param([object]$Report)
+    $comparison = [ordered]@{}
+    $kinds = [ordered]@{ deleted = "deleted"; updated = "modified"; created = "added" }
+    $policies = @($Report.items | Where-Object {
+        $_.type -match 'polic(?:y|ies)|configuration|intent|(?:update|enrollment|deployment|template) ?profiles?|security baselines|administrative templates|managedAppProtection' -and $_.type -notmatch 'conditional ?access|unknown policy'
+    })
+    foreach ($kind in $kinds.Keys) {
+        $group = @($policies | Where-Object { $_.change -eq $kinds[$kind] })
+        $items = @($group | Select-Object -First 5 | ForEach-Object {
+            $sample = [ordered]@{ title = Get-TvEmailText $_.name 100 }
+            $first = $_.activity | Where-Object { $_.who } | Select-Object -First 1
+            if ($first) { $sample.actor = Get-TvEmailText $first.who 80 }
+            $sample
+        })
+        $comparison[$kind] = @{ count = $group.Count; items = $items }
+    }
+    return $comparison
+}
+
 function Invoke-TvChangeReport {
-    param([Parameter(Mandatory)][hashtable]$Context, [Parameter(Mandatory)][string]$BackupFolder, [Parameter(Mandatory)][object]$Metadata, [Parameter(Mandatory)][object[]]$Types, [Parameter(Mandatory)][string]$GraphToken, [Parameter(Mandatory)][string]$RunId, [string]$RunTrigger = "scheduled")
+    param([Parameter(Mandatory)][hashtable]$Context, [Parameter(Mandatory)][string]$BackupFolder, [Parameter(Mandatory)][object]$Metadata, [Parameter(Mandatory)][object[]]$Types, [Parameter(Mandatory)][string]$GraphToken, [Parameter(Mandatory)][string]$RunId, [string]$RunTrigger = "scheduled", [ref]$ComparisonResult)
     $level = Get-TvChangeReportLevel
     if ($level -eq "off") { return }
     try {
@@ -3099,6 +3128,7 @@ function Invoke-TvChangeReport {
             IncludeValues = $level -eq "full"; IncludeActors = ([string](Get-TvAutomationVariable "TenuVaultChangeReportActors")).Trim().ToLowerInvariant() -ne "false"
         }
         $report = New-TvChangeReport -Drift $drift -Audit $audit -Options $options
+        if ($ComparisonResult) { $ComparisonResult.Value = Get-TvMassChangeComparison $report }
         $fileName = Get-TvReportFileName $report
         $note = [ordered]@{
             schema = "tenuvault.cloud-change-report/v1"
@@ -3365,17 +3395,18 @@ function Invoke-TvBackup {
         Set-TvBlob $storageAccount "$backupFolder/metadata.json" ($metadata | ConvertTo-Json -Depth 100) $storageToken
         Write-Output "Backup completed: $totalPolicies policies in $($metadata.Duration) ($status). Older backups were kept: the cloud identity cannot delete. The next desktop backup made with an admin's sign-in applies retention."
         Set-TvCloudStatus $context $status "Backup $status, $totalPolicies policies." $backupFolder
-        Send-TvBackupOutcome -Account $storageAccount -Token $storageToken -TenantId $tenantId -RunId $runId -Status $status -BackupFolder $backupFolder -TotalPolicies $totalPolicies -Failures $failures -FailedTypes @($failedTypes) -Trigger $runTrigger
-        if ($status -eq "Failed") { throw "The backup saved no policies. See the runbook output above." }
+        $comparison = $null
         # Only a complete backup is compared, like the desktop app's report after a scheduled backup:
         # items a backup with warnings could not read would show up as deleted.
         # The report is optional: nothing it does may change the backup's result.
         if ($status -eq "Success") {
-            try { Invoke-TvChangeReport -Context $context -BackupFolder $backupFolder -Metadata $metadata -Types $types -GraphToken $graphToken -RunId $runId -RunTrigger $runTrigger }
+            try { Invoke-TvChangeReport -Context $context -BackupFolder $backupFolder -Metadata $metadata -Types $types -GraphToken $graphToken -RunId $runId -RunTrigger $runTrigger -ComparisonResult ([ref]$comparison) }
             catch { Write-Output "No change report was made: $(Get-TvSafeError $_.Exception.Message)" }
         } else {
             try { if ((Get-TvChangeReportLevel) -ne "off") { Write-Output "No change report: the backup completed with warnings." } } catch { }
         }
+        Send-TvBackupOutcome -Account $storageAccount -Token $storageToken -TenantId $tenantId -RunId $runId -Status $status -BackupFolder $backupFolder -TotalPolicies $totalPolicies -Failures $failures -FailedTypes @($failedTypes) -Trigger $runTrigger -Comparison $comparison -FinishedAt $ended
+        if ($status -eq "Failed") { throw "The backup saved no policies. See the runbook output above." }
     } catch {
         $reason = Get-TvSafeError $_.Exception.Message
         # Record the claimed folder as a failed backup, create-only, like the desktop engine.

@@ -11,6 +11,8 @@
 import { changeDigest, changeEvent, SERVICE_DIGEST, type AuditChange, type AuditChangeType, type ChangeService } from "./audit"
 import { canonicalJson, SEVERITY_RANK, sha256Hex, type NotificationEnvelope, type NotificationEventType, type NotificationSeverity } from "./envelope"
 
+import { auditMassChangeKey, countAuditPolicies, MASS_CHANGE_EVENT, massChangeEnvelope, reachesMassChangeThreshold, type MassChangeThresholds } from "./mass-change"
+
 export const CHANGE_TYPES: AuditChangeType[] = ["created", "updated", "deleted", "assigned", "unassigned", "changed"]
 
 /** One summary per check, or one alert per change. */
@@ -48,6 +50,7 @@ export interface AlertMatcher {
   minSeverity: NotificationSeverity
   conditions?: AlertConditions | null
   delivery?: AlertDelivery | null
+  massChange?: MassChangeThresholds | null
 }
 
 const CHANGE_EVENT_TYPES = new Set<string>(["intune.change", "entra.change"])
@@ -171,6 +174,14 @@ export function planChangeAlerts(service: ChangeService, changes: AuditChange[],
   }
   const digestOf = (selected: AuditChange[]) => changeDigest(service, { tenantId: context.tenantId, tenantName: context.tenantName, changes: selected, includeActor: context.includeActor, source: context.source, gapNotice: context.gapNotice })
   for (const alert of alerts) {
+    if (service === "intune" && alert.massChange && alertTakes(alert, MASS_CHANGE_EVENT, "critical") && changes.length) {
+      const settings = alert.massChange
+      const deleted = countAuditPolicies(changes, settings.deleted !== null ? ["deleted"] : [], context.includeActor)
+      const changed = countAuditPolicies(changes, settings.changed !== null ? settings.changeTypes : [], context.includeActor)
+      if (reachesMassChangeThreshold(settings, deleted.count, changed.count)) {
+        add(massChangeEnvelope({ ...context, occurredAt: changes.at(-1)!.at }, auditMassChangeKey(deleted.auditIds, changed.auditIds), "audit", deleted, changed), alert)
+      }
+    }
     if (!alert.enabled || !alert.eventTypes.includes(type)) continue
     const selected = changes.filter((change) => changeMatches(alert.conditions, change, service))
     if (!selected.length) continue
@@ -214,6 +225,7 @@ export interface WatcherAlert {
   minSeverity: NotificationSeverity
   destinations: WatcherDestination[]
   delivery: AlertDelivery
+  massChange?: MassChangeThresholds
   conditions: AlertConditions | null
 }
 

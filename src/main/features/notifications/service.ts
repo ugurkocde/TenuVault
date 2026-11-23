@@ -2,6 +2,7 @@ import { createHmac } from "node:crypto"
 import { canonicalJson, SEVERITY_RANK, watcherStaleEvent, type NotificationEnvelope } from "../../../shared/notifications/envelope"
 import { emailHtml, emailSubject, localText, teamsWorkflowsPayload } from "../../../shared/notifications/render"
 import { AUDIT_EVENT_SELECT, filterAuditChanges, mapAuditEvent, type AuditChange, type AuditEventRaw, type ChangeService } from "../../../shared/notifications/audit"
+import { backupMassChangeEnvelope, MASS_CHANGE_EVENT, parseMassChange, type BackupMassChange } from "../../../shared/notifications/mass-change"
 import { hasConditions, isChangeEventType, parseConditions, parseDelivery, planChangeAlerts, WATCHER_ALERTS_SCHEMA, watcherAlertsHash, type AlertMatcher, type WatcherAlert, type WatcherAlerts, type WatcherDestination } from "../../../shared/notifications/alerts"
 import { DEFAULT_CARD_LAYOUT, parseCardLayout, styleFor, type CardLayout } from "../../../shared/notifications/layout"
 import { ENTRA_AUDIT_FILTER, ENTRA_AUDIT_SELECT, mapEntraAuditEvent, type EntraAuditRaw } from "../../../shared/notifications/entra"
@@ -129,7 +130,7 @@ export function saveAuditWatch(deps: FeatureDeps, tenantId: string, change: Audi
 
 /** A stored alert as the shared matcher reads it, with its conditions validated again on read. */
 export function alertMatcher(rule: Stored<RuleRecord> | (RuleRecord & { id: string })): AlertMatcher {
-  return { id: rule.id, enabled: rule.enabled, eventTypes: rule.eventTypes, minSeverity: rule.minSeverity, conditions: parseConditions(rule.conditions), delivery: parseDelivery(rule.delivery) }
+  return { id: rule.id, enabled: rule.enabled, eventTypes: rule.eventTypes, minSeverity: rule.minSeverity, conditions: parseConditions(rule.conditions), delivery: parseDelivery(rule.delivery), massChange: parseMassChange(rule.massChange) }
 }
 
 /**
@@ -140,6 +141,7 @@ export function alertMatcher(rule: Stored<RuleRecord> | (RuleRecord & { id: stri
 export function matchingChannelIds(rules: Array<RuleRecord & { id?: string }>, channels: Array<ChannelRecord & { id: string }>, envelope: NotificationEnvelope): string[] {
   const enabledChannels = new Set(channels.filter((channel) => channel.enabled).map((channel) => channel.id))
   const selected = new Set<string>()
+  if (envelope.type === MASS_CHANGE_EVENT) return []
   for (const rule of rules) {
     if (!rule.enabled) continue
     if (!rule.eventTypes.includes(envelope.type)) continue
@@ -170,6 +172,29 @@ export async function emitChangeAlerts(deps: FeatureDeps, tenantId: string, serv
   const rules = rulesOf(deps, tenant)
   const channels = channelsOf(deps, tenant)
   const plan = planChangeAlerts(service, changes, rules.map(alertMatcher), { tenantId: tenant, tenantName: deps.tenant(tenant)?.name ?? null, includeActor: context.includeActor, source: "desktop", gapNotice: context.gapNotice })
+  return emitAlertPlan(deps, tenant, rules, channels, plan, options)
+}
+
+export function backupMassChangeRules(deps: FeatureDeps, tenant: string) {
+  return rulesOf(deps, tenant).filter((rule) => rule.enabled && rule.eventTypes.includes(MASS_CHANGE_EVENT) && parseMassChange(rule.massChange))
+}
+
+export async function emitBackupMassChange(deps: FeatureDeps, tenant: string, comparison: BackupMassChange, backup: string, occurredAt: string): Promise<void> {
+  const rules = backupMassChangeRules(deps, tenant)
+  const plan = rules.flatMap((rule) => {
+    const thresholds = parseMassChange(rule.massChange)!
+    const envelope = backupMassChangeEnvelope(comparison, thresholds, {
+      tenantId: tenant, tenantName: deps.tenant(tenant)?.name ?? null, occurredAt, source: "desktop",
+    }, backup)
+    return envelope ? [{ envelope, alertIds: [rule.id] }] : []
+  })
+  await emitAlertPlan(deps, tenant, rules, channelsOf(deps, tenant), plan)
+}
+
+async function emitAlertPlan(
+  deps: FeatureDeps, tenant: string, rules: Stored<RuleRecord>[], channels: Array<Stored<ChannelRecord>>,
+  plan: ReturnType<typeof planChangeAlerts>, options: NotificationOptions & { deferFlush?: boolean } = {},
+): Promise<number> {
   let enqueued = 0
   for (const { envelope, alertIds } of plan) {
     const channelIds = channelsOfAlerts(rules, channels, alertIds)
@@ -672,7 +697,8 @@ export function watcherAlertsDocument(deps: FeatureDeps, tenantId: string): { do
     if (!rule.enabled) continue
     const destinations = [...new Set(channels.filter((channel) => channel.enabled && rule.channelIds.includes(channel.id)).flatMap((channel): WatcherDestination[] => (channel.kind === "email" ? ["mail"] : channel.kind === "teams" ? ["teams"] : channel.kind === "webhook" ? ["webhook"] : [])))]
     if (!destinations.length) { skipped.push(rule.title); continue }
-    alerts.push({ id: rule.id, title: rule.title, eventTypes: rule.eventTypes.filter((type) => type !== "test"), minSeverity: rule.minSeverity, destinations: WATCHER_DESTINATIONS.filter((entry) => destinations.includes(entry)), delivery: parseDelivery(rule.delivery), conditions: parseConditions(rule.conditions) })
+    const massChange = rule.eventTypes.includes(MASS_CHANGE_EVENT) ? parseMassChange(rule.massChange) : null
+    alerts.push({ ...(massChange ? { massChange } : {}), id: rule.id, title: rule.title, eventTypes: rule.eventTypes.filter((type) => type !== "test"), minSeverity: rule.minSeverity, destinations: WATCHER_DESTINATIONS.filter((entry) => destinations.includes(entry)), delivery: parseDelivery(rule.delivery), conditions: parseConditions(rule.conditions) })
   }
   return { document: { schema: WATCHER_ALERTS_SCHEMA, alerts }, skipped }
 }
@@ -824,7 +850,7 @@ export async function previewChangeAlert(deps: FeatureDeps, tenantId: string, al
   const watch = auditWatchOf(deps, tenant) ?? { ...defaultAuditWatch(), id: "", tenantId: tenant, createdAt: "", updatedAt: "", history: [] }
   const profile = deps.tenant(tenant)
   const since = new Date(deps.now().getTime() - days * 24 * 3_600_000).toISOString()
-  const services = (["intune", "conditionalAccess"] as ChangeService[]).filter((service) => alert.eventTypes.includes(service === "intune" ? "intune.change" : "entra.change"))
+  const services = (["intune", "conditionalAccess"] as ChangeService[]).filter((service) => (service === "intune" ? alert.eventTypes.includes("intune.change") || alert.eventTypes.includes(MASS_CHANGE_EVENT) : alert.eventTypes.includes("entra.change")))
   const result: AlertPreview = { days, services: [], messages: [], total: 0 }
   const envelopes: NotificationEnvelope[] = []
   const graph = services.length ? await deps.graph(tenant) : null

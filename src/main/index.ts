@@ -122,7 +122,7 @@ import type { FeatureDeps } from "./features/deps"
 import { backupAuthorization, featureAccess, withRecoveryBackups } from "./features/recovery"
 import { TenantRecords } from "./features/records"
 import { DriftJobs, driftScanRoutes } from "./drift/jobs"
-import { afterScheduledBackup } from "./features/reports"
+import { afterScheduledBackup, alertOnBackupComparison } from "./features/reports"
 import { ModuleSettings } from "./services/settings"
 import { disabledFolders } from "../shared/services/modules"
 import { servicesStatus } from "./services/status"
@@ -480,6 +480,10 @@ async function bootstrap(): Promise<void> {
       // Manual backup outcomes notify here; scheduled and tray outcomes notify from the
       // scheduler path, which already suppresses repeated unreachable failures.
       if ((request.trigger ?? "manual") === "manual") void notifyBackupOutcome(job, "manual")
+      if (job.status === "Completed" && job.backupFolder && !job.failures && !/completed with \d+ warnings?/i.test(job.progressMessage)) {
+        void alertOnBackupComparison(featureDeps, job.tenantId, job.backupFolder)
+          .catch(() => console.warn("[notifications] The backup could not be compared for mass change alerts"))
+      }
       // Every trigger counts, until the first backup that works.
       diagnostics.record(firstBackupEvent(job))
       tallyBackup(job, request)

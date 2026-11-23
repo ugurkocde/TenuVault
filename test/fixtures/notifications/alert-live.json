@@ -272,6 +272,16 @@
   ],
   "alerts": [
     {
+      "id": "mass-change",
+      "title": "Mass Intune policy change",
+      "eventTypes": ["intune.massChange"],
+      "minSeverity": "critical",
+      "destinations": ["webhook", "teams", "mail"],
+      "delivery": "digest",
+      "conditions": null,
+      "massChange": { "deleted": null, "changed": 2, "changeTypes": ["updated"] }
+    },
+    {
       "id": "all",
       "title": "Everything",
       "eventTypes": [

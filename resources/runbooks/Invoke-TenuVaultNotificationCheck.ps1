@@ -1004,7 +1004,7 @@ function ConvertFrom-TvWatcherAlerts {
     if ($null -eq $document -or (Get-TvProp $document "schema") -cne "tenuvault.watcher-alerts/v1") { return $null }
     $list = Get-TvStyleList $document "alerts"
     if ($null -eq $list) { return $null }
-    $known = @("backup.failed", "backup.warning", "backup.succeeded", "backup.missed", "restore.completed", "restore.partial", "restore.failed", "drift.detected", "health.finding", "intune.change", "entra.change", "credential.expiring", "watcher.stale")
+    $known = @("backup.failed", "backup.warning", "backup.succeeded", "backup.missed", "restore.completed", "restore.partial", "restore.failed", "drift.detected", "health.finding", "intune.change", "intune.massChange", "entra.change", "credential.expiring", "watcher.stale")
     $alerts = [System.Collections.Generic.List[object]]::new()
     $index = 0
     foreach ($raw in $list) {
@@ -1019,7 +1019,7 @@ function ConvertFrom-TvWatcherAlerts {
         if ($types.Count -eq 0 -or $destinations.Count -eq 0) { continue }
         $id = Get-TvText (Get-TvProp $raw "id")
         if (-not $id) { $id = "alert-$index" }
-        $alerts.Add([pscustomobject][ordered]@{
+        $alert = [pscustomobject][ordered]@{
             id = $id
             title = Get-TvClean (Get-TvProp $raw "title") 120
             eventTypes = $types.ToArray()
@@ -1027,7 +1027,16 @@ function ConvertFrom-TvWatcherAlerts {
             destinations = $destinations.ToArray()
             delivery = Get-TvStyleChoice (Get-TvProp $raw "delivery") @("digest", "each") "digest"
             conditions = ConvertTo-TvAlertConditions (Get-TvProp $raw "conditions")
-        })
+        }
+        $mass = Get-TvProp $raw "massChange"
+        $deleted = Get-TvNoteCount (Get-TvProp $mass "deleted")
+        $changed = Get-TvNoteCount (Get-TvProp $mass "changed")
+        $massTypes = Get-TvStyleList $mass "changeTypes"
+        $changeTypes = @("updated", "assigned", "unassigned", "changed", "created" | Where-Object { $massTypes -ccontains $_ })
+        if (($deleted -or $changed) -and (-not $changed -or $changeTypes.Count)) {
+            $alert | Add-Member -NotePropertyName massChange -NotePropertyValue @{ deleted = $deleted; changed = $changed; changeTypes = $changeTypes }
+        }
+        $alerts.Add($alert)
     }
     return ,$alerts.ToArray()
 }
@@ -1098,6 +1107,96 @@ function Get-TvIntendedDestinations {
     return ,$out.ToArray()
 }
 
+# Mirrors the shared mass change evaluator. Both sources use the same envelope.
+function Test-TvMassThreshold {
+    param([object]$Settings, [int]$Deleted, [int]$Changed)
+    return (($Settings.deleted -and $Deleted -ge $Settings.deleted) -or ($Settings.changed -and $Changed -ge $Settings.changed))
+}
+
+function New-TvMassChangeEnvelope {
+    param([string]$TenantId, [object]$TenantName, [string]$OccurredAt, [string]$NaturalKey, [string]$Origin, [object]$Deleted, [object]$Changed)
+    $label = if ($TenantName) { $TenantName } else { "your tenant" }
+    $run = if ($Origin -eq "audit") { "One Intune audit check" } else { "One backup comparison" }
+    $items = @(@($Deleted.items | Select-Object -First 5) + @($Changed.items | Select-Object -First 5))
+    $details = @(
+        @{ label = "Deleted policies"; value = [string]$Deleted.count },
+        @{ label = "Changed policies"; value = [string]$Changed.count }
+    )
+    return New-TvEnvelope -Type "intune.massChange" -Severity "critical" -TenantId $TenantId -TenantName $TenantName `
+        -OccurredAt $OccurredAt -NaturalKey $NaturalKey -Title "Mass Intune policy change: $label" `
+        -Summary "$run found $($Deleted.count) deleted and $($Changed.count) changed policies." `
+        -Details $details -Items $items -MoreCount ($Deleted.count + $Changed.count - $items.Count)
+}
+
+function Get-TvMassAuditCount {
+    param([object[]]$Changes, [string[]]$Types, [bool]$IncludeActor)
+    $keys = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    $ids = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $items = [System.Collections.Generic.List[object]]::new()
+    for ($index = $Changes.Count - 1; $index -ge 0; $index--) {
+        $change = $Changes[$index]
+        if ($Types -cnotcontains $change.changeType) { continue }
+        $type = $change.resourceType
+        if ($type -notmatch 'polic(?:y|ies)|configuration|intent|(?:update|enrollment|deployment|template) ?profiles?|security baselines|administrative templates|managedAppProtection' -or $type -match 'conditional ?access|unknown policy') { continue }
+        $key = $change.resourceId
+        if (-not $key -and $change.resourceName) { $key = "$type|$($change.resourceName)" }
+        if (-not $key) { continue }
+        [void]$ids.Add([string]$change.auditId)
+        if (-not $keys.Add([string]$key) -or $items.Count -ge 5) { continue }
+        $title = if ($change.resourceName) { $change.resourceName } else { $type }
+        $item = @{ title = $title; detail = $change.changeType; at = $change.at }
+        if ($IncludeActor) { $item.actor = if ($change.actorUpn) { $change.actorUpn } else { $change.actorAppName } }
+        $items.Add($item)
+    }
+    $sorted = [string[]]@($ids)
+    [Array]::Sort($sorted, [StringComparer]::Ordinal)
+    return @{ count = $keys.Count; items = $items.ToArray(); hash = Get-TvSha256Hex ($sorted -join "|") }
+}
+
+function Get-TvBackupMassChangePlan {
+    param([object]$Outcome, [object[]]$Alerts, [string]$TenantId, [object]$TenantName, [bool]$IncludeActor)
+    if ($Outcome.status -cne "Success" -or -not $Outcome.backupFolder -or -not $Outcome.comparison) { return }
+    $comparison = $Outcome.comparison
+    foreach ($alert in $Alerts) {
+        $settings = (Get-TvProp $alert "massChange")
+        if (-not $settings -or -not (Test-TvAlertTakes $alert "intune.massChange" "critical")) { continue }
+        $deleted = if ($settings.deleted) { $comparison.deleted } else { @{ count = 0; items = @() } }
+        $changed = @{ count = 0; items = @() }
+        $types = @(foreach ($type in @("updated", "created")) {
+            if (-not $settings.changed -or $settings.changeTypes -cnotcontains $type) { continue }
+            $changed.count += $comparison[$type].count
+            $changed.items += $comparison[$type].items
+            $type
+        })
+        if (-not (Test-TvMassThreshold $settings $deleted.count $changed.count)) { continue }
+        if (-not $IncludeActor) {
+            $deleted = @{ count = $deleted.count; items = @($deleted.items | ForEach-Object { @{ title = $_.title; detail = $_.detail } }) }
+            $changed.items = @($changed.items | ForEach-Object { @{ title = $_.title; detail = $_.detail } })
+        }
+        $key = "backup:$($Outcome.backupFolder):$($deleted.count):$($types -join ',')"
+        $envelope = New-TvMassChangeEnvelope $TenantId $TenantName $Outcome.finishedAt $key "backup" $deleted $changed
+        [pscustomobject]@{ envelope = $envelope; alertId = $alert.id }
+    }
+}
+
+function ConvertTo-TvBackupMassChange {
+    param([object]$Raw)
+    if (-not $Raw) { return $null }
+    $comparison = @{}
+    foreach ($type in @("deleted", "updated", "created")) {
+        $rawGroup = Get-TvProp $Raw $type
+        $count = Get-TvNoteCount (Get-TvProp $rawGroup "count")
+        if ($null -eq $count) { return $null }
+        $items = @(Get-TvProp $rawGroup "items" | Where-Object { (Get-TvProp $_ "title") -is [string] } | Select-Object -First ([Math]::Min(5, $count)) | ForEach-Object {
+            $item = @{ title = Get-TvProp $_ "title"; detail = $type }
+            if ((Get-TvProp $_ "actor") -is [string]) { $item.actor = Get-TvProp $_ "actor" }
+            $item
+        })
+        $comparison[$type] = @{ count = $count; items = $items }
+    }
+    return $comparison
+}
+
 # Mirrors planChangeAlerts: the envelopes one poll of one service sends, and which alerts
 # send each. Alerts that pick the same changes produce the same envelope (same event id).
 function Get-TvChangeAlertPlan {
@@ -1113,23 +1212,35 @@ function Get-TvChangeAlertPlan {
     $type = if ($Service -eq "conditionalAccess") { "entra.change" } else { "intune.change" }
     $planned = [System.Collections.Specialized.OrderedDictionary]::new()
     foreach ($alert in @($Alerts)) {
-        if ($null -eq $alert -or -not (@($alert.eventTypes) -ccontains $type)) { continue }
-        $selected = [System.Collections.Generic.List[object]]::new()
-        foreach ($change in @($Changes)) { if ($null -ne $change -and (Test-TvChangeMatches $alert.conditions $change $Service)) { $selected.Add($change) } }
-        if ($selected.Count -eq 0) { continue }
+        if ($null -eq $alert) { continue }
         $envelopes = [System.Collections.Generic.List[object]]::new()
-        if ($alert.delivery -eq "each") {
-            $rest = [System.Collections.Generic.List[object]]::new()
-            foreach ($change in $selected) {
-                if ($envelopes.Count -lt $script:TvEachPerCheck) {
-                    $envelopes.Add((New-TenuVaultChangeEvent -TenantId $TenantId -TenantName $TenantName -Change $change -IncludeActor $IncludeActor -Service $Service))
-                } else { $rest.Add($change) }
+        $mass = Get-TvProp $alert "massChange"
+        if ($Service -eq "intune" -and $mass -and $Changes.Count -gt 0 -and (Test-TvAlertTakes $alert "intune.massChange" "critical")) {
+            $deleted = Get-TvMassAuditCount $Changes @(if ($mass.deleted) { "deleted" }) $IncludeActor
+            $changed = Get-TvMassAuditCount $Changes @(if ($mass.changed) { $mass.changeTypes }) $IncludeActor
+            if (Test-TvMassThreshold $mass $deleted.count $changed.count) {
+                $key = "audit:$($deleted.hash):$($changed.hash)"
+                $envelopes.Add((New-TvMassChangeEnvelope $TenantId $TenantName $Changes[-1].at $key "audit" $deleted $changed))
             }
-            if ($rest.Count -gt 0) {
-                $envelopes.Add((New-TenuVaultAuditDigest -TenantId $TenantId -TenantName $TenantName -Changes @($rest.ToArray()) -IncludeActor $IncludeActor -GapNotice $GapNotice -Service $Service))
+        }
+        if (@($alert.eventTypes) -ccontains $type) {
+            $selected = [System.Collections.Generic.List[object]]::new()
+            foreach ($change in @($Changes)) { if ($null -ne $change -and (Test-TvChangeMatches $alert.conditions $change $Service)) { $selected.Add($change) } }
+            if ($selected.Count -gt 0 -and $alert.delivery -eq "each") {
+                $rest = [System.Collections.Generic.List[object]]::new()
+                $sentEach = 0
+                foreach ($change in $selected) {
+                    if ($sentEach -lt $script:TvEachPerCheck) {
+                        $sentEach++
+                        $envelopes.Add((New-TenuVaultChangeEvent -TenantId $TenantId -TenantName $TenantName -Change $change -IncludeActor $IncludeActor -Service $Service))
+                    } else { $rest.Add($change) }
+                }
+                if ($rest.Count -gt 0) {
+                    $envelopes.Add((New-TenuVaultAuditDigest -TenantId $TenantId -TenantName $TenantName -Changes @($rest.ToArray()) -IncludeActor $IncludeActor -GapNotice $GapNotice -Service $Service))
+                }
+            } elseif ($selected.Count -gt 0) {
+                $envelopes.Add((New-TenuVaultAuditDigest -TenantId $TenantId -TenantName $TenantName -Changes @($selected.ToArray()) -IncludeActor $IncludeActor -GapNotice $GapNotice -Service $Service))
             }
-        } else {
-            $envelopes.Add((New-TenuVaultAuditDigest -TenantId $TenantId -TenantName $TenantName -Changes @($selected.ToArray()) -IncludeActor $IncludeActor -GapNotice $GapNotice -Service $Service))
         }
         foreach ($envelope in $envelopes) {
             if (-not (Test-TvAlertTakes $alert ([string]$envelope.type) ([string]$envelope.severity))) { continue }
@@ -1212,7 +1323,7 @@ function New-TenuVaultMissedBackupEvent {
 function Get-TvActionLink {
     param([object]$Envelope)
     switch ([string](Get-TvProp $Envelope "type")) {
-        "intune.change" { return @{ href = "https://intune.microsoft.com"; label = "Open the Intune admin center" } }
+        { $_ -in @("intune.change", "intune.massChange") } { return @{ href = "https://intune.microsoft.com"; label = "Open the Intune admin center" } }
         "entra.change" { return @{ href = "https://entra.microsoft.com/#view/Microsoft_AAD_ConditionalAccess/ConditionalAccessBlade/~/Policies"; label = "Open Conditional Access in Entra" } }
     }
     return $null
@@ -1522,6 +1633,7 @@ function ConvertFrom-TenuVaultBackupOutcome {
         totalPolicies = Get-TvNoteCount (Get-TvNoteField $Note "totalPolicies").Value
         failures = if ($null -ne $failures) { $failures } else { 0 }
         failedTypes = $failedTypes
+        comparison = ConvertTo-TvBackupMassChange (Get-TvNoteField $Note "comparison").Value
         trigger = if ($trigger -is [string] -and $trigger -ceq "manual") { "manual" } else { "scheduled" }
     }
 }
@@ -1547,6 +1659,7 @@ function Read-TvBackupOutcomes {
     $oldest = ConvertTo-TvIso ($Now.ToUniversalTime().AddDays(-$MaxAgeDays))
     $expired = 0
     $envelopes = [System.Collections.Generic.List[object]]::new()
+    $comparisons = [System.Collections.Generic.List[object]]::new()
     $failedFolders = [System.Collections.Generic.List[string]]::new()
     $processed = [System.Collections.Generic.List[string]]::new()
     $ignored = 0
@@ -1591,6 +1704,7 @@ function Read-TvBackupOutcomes {
                     $processed.Add($blobName)
                     continue
                 }
+                if ($outcome.comparison) { $comparisons.Add($outcome) }
                 $envelopes.Add((New-TenuVaultCloudOutcomeEvent -Outcome $outcome -TenantId $TenantId -TenantName $TenantName))
                 if ($outcome.status -eq "Failed" -and $outcome.backupFolder -and -not $failedFolders.Contains([string]$outcome.backupFolder)) {
                     $failedFolders.Add([string]$outcome.backupFolder)
@@ -1604,7 +1718,7 @@ function Read-TvBackupOutcomes {
             $readError = "Cloud backup results could not be read in this run: $(Get-TvSafeError $_.Exception.Message)"
         }
     } while ($marker)
-    return [pscustomobject]@{ Envelopes = $envelopes; FailedFolders = $failedFolders; Processed = $processed; Ignored = $ignored; Expired = $expired; Error = $readError }
+    return [pscustomobject]@{ Envelopes = $envelopes; Comparisons = $comparisons; FailedFolders = $failedFolders; Processed = $processed; Ignored = $ignored; Expired = $expired; Error = $readError }
 }
 
 # Mirrors CLOUD_OUTCOME_TRIGGER: the Trigger detail of the alert.
@@ -1631,7 +1745,7 @@ $script:TvEventGroups = [ordered]@{
     backups = @("backup.failed", "backup.warning", "backup.succeeded", "backup.missed")
     restores = @("restore.completed", "restore.partial", "restore.failed")
     drift = @("drift.detected")
-    changes = @("intune.change", "entra.change")
+    changes = @("intune.change", "intune.massChange", "entra.change")
     alerts = @("credential.expiring", "watcher.stale", "health.finding")
 }
 
@@ -2816,7 +2930,7 @@ if ($LibraryOnly) { return }
 # ---------------------------------------------------------------------------
 
 $ErrorActionPreference = "Stop"
-$runbookVersion = "1.5.0"
+$runbookVersion = "1.6.0"
 $runAt = [DateTime]::UtcNow
 $runAtIso = ConvertTo-TvIso $runAt
 $eventsSent = 0
@@ -3284,6 +3398,20 @@ try {
     $outcomeRead = Read-TvBackupOutcomes -ContainerUri $resultsContainerUri -Token $storageToken -TenantId $tenantId -TenantName $tenantName `
         -RenewLease { Update-TvStateLease -LeaseQueryUri $leaseQueryUri -Token $storageToken -LeaseId $leaseId }
     foreach ($envelope in $outcomeRead.Envelopes) { $candidateEnvelopes.Add($envelope) }
+    foreach ($outcome in $outcomeRead.Comparisons) {
+        $byEvent = @{}
+        foreach ($entry in @(Get-TvBackupMassChangePlan $outcome @($watcherAlerts) $tenantId $tenantName $includeActor)) {
+            $id = $entry.envelope.eventId
+            if (-not $byEvent.ContainsKey($id)) {
+                $byEvent[$id] = [System.Collections.Generic.List[string]]::new()
+                $candidateEnvelopes.Add($entry.envelope)
+            }
+            $byEvent[$id].Add($entry.alertId)
+        }
+        foreach ($id in $byEvent.Keys) {
+            $plannedDestinations[$id] = Get-TvAlertDestinations @($watcherAlerts) $byEvent[$id].ToArray()
+        }
+    }
     foreach ($folder in $outcomeRead.FailedFolders) { if (-not $failedBackupFolders.Contains($folder)) { $failedBackupFolders.Add($folder) } }
     $processedOutcomeNames = $outcomeRead.Processed
     $ignoredOutcomes = $outcomeRead.Ignored

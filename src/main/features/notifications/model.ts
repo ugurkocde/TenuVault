@@ -1,4 +1,5 @@
 import type { CardLayout } from "../../../shared/notifications/layout"
+import type { MassChangeThresholds } from "../../../shared/notifications/mass-change"
 import type { AlertConditions, AlertDelivery } from "../../../shared/notifications/alerts"
 import type { ExistingWatcher, WatcherDeployAck, WatcherDeployCapabilities, WatcherDeployMode, WatcherDeployPlan, WatcherDeployState, WatcherDeployStep, WatcherDeployStepId, WatcherFinding, WatcherGraphRoleStatus } from "../../../shared/notifications/watcher-deploy"
 import { NOTIFICATION_EVENT_TYPES, type NotificationEnvelope, type NotificationEventType, type NotificationSeverity } from "../../../shared/notifications/envelope"
@@ -53,6 +54,7 @@ export interface RuleRecord {
    * like rules did before conditions existed.
    */
   conditions?: AlertConditions | null
+  massChange?: MassChangeThresholds | null
   /** For change events only: one summary per check (the default) or one alert per change. */
   delivery?: AlertDelivery
 }
