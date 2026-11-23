@@ -34,12 +34,13 @@ const idOf = (item: Item, key = "id"): string => {
   return value
 }
 
-export async function resolveRestoreActor(reader: GraphReader, connection: { tenantId: string; clientId: string; userId: string }, recoveryAccountIds: string[], protections: readonly RestoreProtection[] = ALL_RESTORE_PROTECTIONS): Promise<RestoreActor> {
+export async function resolveRestoreActor(reader: GraphReader, connection: { tenantId: string; clientId: string; userId: string }, recoveryAccountIds: string[], protections: readonly RestoreProtection[] = ALL_RESTORE_PROTECTIONS, readByAppId = false): Promise<RestoreActor> {
   if (![connection.tenantId, connection.clientId, connection.userId].every(isGuid)) throw new RestoreSafetyError("A signed-in tenant connection is required.")
   if (!protections.length) return { tenantId: connection.tenantId, clientId: connection.clientId, userId: connection.userId, recoveryAccountIds: [] }
   const filter = encodeURIComponent(`appId eq '${connection.clientId}'`)
-  const apps = await reader.list(`applications?$filter=${filter}&$select=id,appId`)
-  const principals = await reader.list(`servicePrincipals?$filter=${filter}&$select=id,appId`)
+  const appKey = `(appId='${connection.clientId}')?$select=id,appId`
+  const apps = readByAppId ? [await reader.get("applications" + appKey)] : await reader.list(`applications?$filter=${filter}&$select=id,appId`)
+  const principals = readByAppId ? [await reader.get("servicePrincipals" + appKey)] : await reader.list(`servicePrincipals?$filter=${filter}&$select=id,appId`)
   if (apps.length !== 1 || principals.length !== 1 || apps[0]!.appId !== connection.clientId || principals[0]!.appId !== connection.clientId) throw new RestoreSafetyError("The connected registration and enterprise app could not both be resolved.")
   for (const id of recoveryAccountIds) if (idOf(await reader.get(`users/${encodeURIComponent(id)}?$select=id`)) !== id) throw new RestoreSafetyError("A recovery account could not be resolved.")
   return { tenantId: connection.tenantId, clientId: connection.clientId, userId: connection.userId, applicationObjectId: idOf(apps[0]!), servicePrincipalId: idOf(principals[0]!), recoveryAccountIds }

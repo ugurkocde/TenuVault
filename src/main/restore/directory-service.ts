@@ -1,7 +1,7 @@
 import { guardedRestoreJournal } from "../storage/restore-journal"
 import { mappedReference } from "../../shared/intune/restore-references"
 import { PRIVILEGED_REVIEW_FOLDERS } from "../../shared/intune/directory-review-folders"
-import { administrativeUnits, privilegeObject, privilegeReview, PRIVILEGED_RESTORE_BLOCKER, requirePrivilegeId, unitRelationships, type PrivilegeCandidate } from "./directory-9c"
+import { administrativeUnits, privilegeObject, privilegeReview, PRIVILEGED_RESTORE_BLOCKER, requirePrivilegeId, unitRelationships, type PrivilegeCandidate, type UnitReviewCursor } from "./directory-9c"
 import { DIRECTORY_REPLICATION_WINDOW_MS } from "./directory-relationship-history"
 import { restoreTenantKey } from "./restore-tenant-key"
 import { DirectoryPrincipalMappings } from "./directory-principal-mappings"
@@ -38,7 +38,7 @@ import type { RestoreConnection } from "./service"
 import type { IdentityRestoreRequest } from "./dispatch"
 
 export interface DirectoryOptions { stage: "object" | "relationships"; exactMembers: boolean; exactOwners: boolean; previousRunId?: string }
-export interface DirectoryPage { inventory?: { id: string; count: number; offset: number; targetId: string; principalMappings?: { parts: number; fingerprint: string } }; run: GuardedRun; rows: Array<{ key: string; review: DirectoryReview }>; more: boolean; options: DirectoryOptions; selection?: string[] }
+export interface DirectoryPage { unitCursor?: { targetId: string; cursor: UnitReviewCursor }; inventory?: { id: string; count: number; offset: number; targetId: string; principalMappings?: { parts: number; fingerprint: string } }; run: GuardedRun; rows: Array<{ key: string; review: DirectoryReview }>; more: boolean; options: DirectoryOptions; selection?: string[] }
 const fail = (message: string): never => { throw new RestoreSafetyError(message) }
 const key = (tenant: string, id: string) => `restore.directory.review.${restoreTenantKey(tenant)}.${id}`
 /** One small record lists a tenant's saved pages, so discovery never decrypts every journal. */
@@ -77,7 +77,7 @@ export class DirectoryRestoreService {
       return response
     }
     const reader = safetyReader(connection.token, actorFetch, version)
-    const actor = await resolveRestoreActor(reader, connection, this.recovery.get(tenant), ["identity-references"])
+    const actor = await resolveRestoreActor(reader, connection, this.recovery.get(tenant), ["identity-references"], version === "beta")
     return { actor, connection, reader }
   }
   private async context(tenant: string, onThrottled?: (retryAt: number) => void, validatedConnection?: RestoreConnection, pageId?: string) {
@@ -225,7 +225,7 @@ export class DirectoryRestoreService {
   }
   private async preparePage(tenant: string, request: IdentityRestoreRequest, options: DirectoryOptions, read: (path: string) => Promise<unknown>, onInventory: (discard: () => void) => void) {
     const folder = request.path.split("/")[1]
-    if (PRIVILEGED_REVIEW_FOLDERS.includes(folder ?? "")) return this.preparePrivileges(tenant, request, options, onInventory)
+    if (PRIVILEGED_REVIEW_FOLDERS.includes(folder ?? "")) return this.preparePrivileges(tenant, request, options)
     if (DIRECTORY_9B_FOLDERS.includes(folder ?? "")) return this.prepareApplications(tenant, request, options, read, onInventory)
     if (!["Users", "Groups"].includes(folder ?? "") || request.origin !== "restore") fail("Directory restore requires an owned same-tenant backup.")
     this.requireAccess(tenant, folder!)
@@ -399,7 +399,7 @@ export class DirectoryRestoreService {
     this.save(page)
     return this.view(page)
   }
-  private async preparePrivileges(tenant: string, request: IdentityRestoreRequest, requested: DirectoryOptions, onInventory: (discard: () => void) => void) {
+  private async preparePrivileges(tenant: string, request: IdentityRestoreRequest, requested: DirectoryOptions) {
     if (request.origin !== "restore") fail("Role and PIM review requires an owned same-tenant backup.")
     const [, folder, file] = request.path.split("/") as [string, string, string]
     const snapshot = request.snapshot, sourceId = snapshot.id
@@ -419,35 +419,20 @@ export class DirectoryRestoreService {
     const map = (type: string, id: string) => requirePrivilegeId(["Users", "Groups"].includes(type)
       ? directoryMappedId(this.store, tenant, type, id) ?? id
       : mappedReference(configurationMappings, "objectId", type, id) ?? id)
-    const prefix = `restore.directory.inventory.${restoreTenantKey(tenant)}.`
     let candidates: PrivilegeCandidate[] = [{ source: snapshot }]
     if (unitFolder) {
       const id = map(folder, requirePrivilegeId(sourceId))
       const unit = await privilegeObject(reader, administrativeUnits, id, "The saved administrative unit no longer resolves.")
-      let inventory: NonNullable<DirectoryPage["inventory"]>
+      let cursor: UnitReviewCursor | undefined
       if (requested.previousRunId) {
         const previous = this.load(tenant, requested.previousRunId)
-        if (!previous.inventory || !previous.more || previous.run.source?.path !== source.path || previous.run.source.fingerprint !== source.fingerprint || previous.options.exactMembers !== exactMembers || previous.run.actor.userId !== actor.userId || previous.run.actor.clientId !== actor.clientId || previous.inventory.targetId !== id) return fail("Continue the original administrative unit review with the same membership choice.")
-        inventory = { ...previous.inventory, offset: previous.inventory.offset + previous.rows.length }
-      } else {
-        inventory = { id: run.id, count: 0, offset: 0, targetId: id }
-        let part = 0
-        const path = `${administrativeUnits}/${id}`
-        const savePart = (rows: PrivilegeCandidate[]) => this.store.set(`${prefix}${run.id}.${part++}`, JSON.stringify(rows))
-        onInventory(() => this.cleanupUnpublished(Array.from({ length: part }, (_, index) => () => this.store.delete(`${prefix}${run.id}.${index}`)), () => !!this.store.get(key(tenant, run.id))))
-        let chunk: PrivilegeCandidate[] = []
-        for await (const candidate of unitRelationships(snapshot, reader, path, exactMembers, map)) {
-          if (++inventory.count > 1_000_000) fail("The administrative unit difference limit was reached.")
-          chunk.push(candidate)
-          if (chunk.length === 50) { savePart(chunk); chunk = [] }
-        }
-        if (chunk.length) savePart(chunk)
+        if (!previous.unitCursor || !previous.more || previous.run.source?.path !== source.path || previous.run.source.fingerprint !== source.fingerprint || previous.options.exactMembers !== exactMembers || previous.run.actor.userId !== actor.userId || previous.run.actor.clientId !== actor.clientId || previous.unitCursor.targetId !== id) return fail("Continue the original administrative unit review with the same membership choice, or start a new review.")
+        cursor = previous.unitCursor.cursor
       }
-      const raw = this.store.get(`${prefix}${inventory.id}.${inventory.offset / 50}`)
-      if (!raw && inventory.offset < inventory.count) fail("The administrative unit relationship inventory is unavailable.")
-      candidates = (raw ? JSON.parse(raw) as PrivilegeCandidate[] : []).map(candidate => ({ ...candidate, unit }))
-      page.inventory = inventory
-      page.more = inventory.offset + candidates.length < inventory.count
+      const relationships = await unitRelationships(snapshot, reader, `${administrativeUnits}/${id}`, exactMembers, map, cursor)
+      candidates = relationships.rows.map(candidate => ({ ...candidate, unit }))
+      page.more = !!relationships.cursor
+      if (relationships.cursor) page.unitCursor = { targetId: id, cursor: relationships.cursor }
     } else if (requested.previousRunId) fail("This relationship has only one review page.")
     for (const [index, candidate] of candidates.entries()) {
       let review: DirectoryReview

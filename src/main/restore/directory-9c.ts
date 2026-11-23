@@ -1,4 +1,5 @@
 import type { Item } from "../../shared/intune/registry"
+import type { safetyReader } from "./safety-reader"
 import type { GraphReader } from "../../shared/intune/read"
 import { isGuid } from "../../shared/security"
 import { guardRestoreItem, RestoreSafetyError, type RestoreActor } from "../../shared/intune/restore-guards"
@@ -84,7 +85,7 @@ export interface PrivilegeCandidate {
   blocker?: string
 }
 
-export async function privilegeReview(folder: string, candidate: PrivilegeCandidate, reader: GraphReader, actor: RestoreActor, map: (folder: string, id: string) => string, now: number): Promise<DirectoryReview> {
+export async function privilegeReview(folder: string, candidate: PrivilegeCandidate, reader: ReturnType<typeof safetyReader>, actor: RestoreActor, map: (folder: string, id: string) => string, now: number): Promise<DirectoryReview> {
   const { source, unit, removeMember } = candidate
   const group = folder.startsWith("PimGroup"), scopedMember = !!unit && source.roleId !== undefined
   const roleSourceId = scopedMember ? source.roleId : source.roleDefinitionId
@@ -107,9 +108,19 @@ export async function privilegeReview(folder: string, candidate: PrivilegeCandid
   const user = removeMember ? rawPrincipal : map("Users", rawPrincipal), mappedGroup = removeMember ? rawPrincipal : map("Groups", rawPrincipal)
   if (user !== rawPrincipal && mappedGroup !== rawPrincipal) return fail("The principal mapping is ambiguous.")
   const principalId = user !== rawPrincipal ? user : mappedGroup
-  const principal = await privilegeObject(reader, "directoryObjects", principalId, "The principal no longer resolves to a current name and type.")
-  const type = typeof principal["@odata.type"] === "string" ? principal["@odata.type"].replace(/^#microsoft\.graph\./, "") : ""
-  if (!["user", "group", "servicePrincipal", "device"].includes(type) || user !== rawPrincipal && type !== "user" || mappedGroup !== rawPrincipal && type !== "group") return fail("The principal's current type could not be verified.")
+  const typedReads = {
+    user: `users/${principalId}?$select=id,displayName,onPremisesSyncEnabled,onPremisesImmutableId,onPremisesLastSyncDateTime`,
+    group: `groups/${principalId}?$select=id,displayName,onPremisesSyncEnabled,onPremisesLastSyncDateTime`,
+    servicePrincipal: `servicePrincipals/${principalId}?$select=id,displayName,appId`,
+  }
+  const kinds = user !== rawPrincipal ? ["user"] as const : mappedGroup !== rawPrincipal ? ["group"] as const : ["user", "group", "servicePrincipal"] as const
+  let principal: Item | null = null, type: keyof typeof typedReads | undefined
+  for (const kind of kinds) {
+    principal = await reader.getOptional(typedReads[kind])
+    if (principal) { type = kind; break }
+  }
+  if (!type || !principal || !isGuid(principal.id) || principal.id.toLowerCase() !== principalId || typeof principal.displayName !== "string" || !principal.displayName.trim()
+    || principal["@odata.type"] !== undefined && principal["@odata.type"] !== `#microsoft.graph.${type}`) return fail("The principal no longer resolves to a current name and type.")
   review.principal = { id: principalId, name: String(principal.displayName), type }
   let blocker = candidate.blocker
   const protectedReferences = { complete: true, principals: [principalId], applications: type === "servicePrincipal" && isGuid(principal.appId) ? [principal.appId] : [] }
@@ -172,47 +183,77 @@ export async function privilegeReview(folder: string, candidate: PrivilegeCandid
   return { ...review, blocker: blocker ?? PRIVILEGED_RESTORE_BLOCKER }
 }
 
-/** Legacy unit backups stored only scoped membership IDs. An absent ID cannot identify the grant. */
-export async function* unitRelationships(snapshot: Item, reader: GraphReader, path: string, exact: boolean, map: (folder: string, id: string) => string): AsyncGenerator<PrivilegeCandidate> {
+export interface UnitReviewCursor {
+  saved: number
+  live?: { next?: string; offset: number; pages: number }
+  scoped: number
+}
+
+/** Check a slice of saved links, then walk live pages only when exact membership was selected. */
+export async function unitRelationships(snapshot: Item, reader: ReturnType<typeof safetyReader>, path: string, exact: boolean, map: (folder: string, id: string) => string, previous?: UnitReviewCursor) {
+  const cursor: UnitReviewCursor = { saved: 0, scoped: 0, ...previous }
+  const rows: PrivilegeCandidate[] = []
+  const limit = 50
   const savedMembers = snapshot.members, savedRoles = snapshot.scopedRoleMembers
   if (!Array.isArray(savedMembers) || !savedMembers.every(isGuid)) {
-    yield { source: {}, blocker: "The backup does not contain a complete administrative unit member inventory." }
-  } else if (savedMembers.length || exact) {
-    const live = await reader.list(path + "/members?$select=id")
-    const current = new Set(live.map(row => requirePrivilegeId(row.id)))
-    const expected = new Set<string>()
-    let complete = true
-    for (const saved of new Set(savedMembers.map(requirePrivilegeId))) {
+    if (cursor.saved === 0) rows.push({ source: {}, blocker: "The backup does not contain a complete administrative unit member inventory." })
+    cursor.saved = 1
+  } else {
+    const savedIds = [...new Set(savedMembers.map(requirePrivilegeId))]
+    const targetFor = (saved: string) => {
       const user = map("Users", saved), group = map("Groups", saved)
-      if (user !== saved && group !== saved) {
-        complete = false
-        yield { source: {}, blocker: "A saved member has an ambiguous principal mapping. Exact removal requires a complete inventory." }
-        continue
-      }
-      const target = user !== saved ? user : group
-      expected.add(target)
-      if (!current.has(target)) yield { source: {}, principalId: saved, present: false }
+      return user !== saved && group !== saved ? undefined : user !== saved ? user : group
     }
-    if (exact && complete) for (const id of current) if (!expected.has(id)) yield { source: {}, principalId: id, present: true, removeMember: true }
+    const end = Math.min(savedIds.length, cursor.saved + limit)
+    for (const saved of savedIds.slice(cursor.saved, end)) {
+      const target = targetFor(saved)
+      if (!target) rows.push({ source: {}, blocker: "A saved member has an ambiguous principal mapping. Exact removal requires a complete inventory." })
+      else {
+        const member = await reader.getOptional(`${path}/members/${target}`)
+        if (!member) rows.push({ source: {}, principalId: saved, present: false })
+        else if (requirePrivilegeId(member.id) !== target) fail("The current administrative unit member could not be verified.")
+      }
+    }
+    cursor.saved = end
+    if (end < savedIds.length) return { rows, cursor }
+    if (exact && cursor.live?.pages !== -1 && rows.length === limit) return { rows, cursor }
+    const expected = exact && cursor.live?.pages !== -1 ? new Set(savedIds.map(targetFor)) : undefined
+    if (expected && !expected.has(undefined)) {
+      const live = cursor.live ?? { offset: 0, pages: 0 }
+      if (live.pages >= 10_000) fail("The administrative unit membership collection did not finish.")
+      const page = await reader.page(path + "/members?$select=id&$top=50", live.next)
+      let offset = live.offset
+      while (offset < page.rows.length && rows.length < limit) {
+        const id = requirePrivilegeId(page.rows[offset++]!.id)
+        if (!expected.has(id)) rows.push({ source: {}, principalId: id, present: true, removeMember: true })
+      }
+      if (offset < page.rows.length) return { rows, cursor: { ...cursor, live: { ...live, offset } } }
+      if (page.next) return { rows, cursor: { ...cursor, live: { next: page.next, offset: 0, pages: live.pages + 1 } } }
+      cursor.live = { offset: 0, pages: -1 }
+    }
   }
+  if (rows.length === limit && (!Array.isArray(savedRoles) || cursor.scoped < savedRoles.length)) return { rows, cursor }
   if (!Array.isArray(savedRoles)) {
-    yield { source: {}, blocker: "The backup does not contain a complete scoped role inventory." }
-  } else if (savedRoles.length) {
+    rows.push({ source: {}, blocker: "The backup does not contain a complete scoped role inventory." })
+  } else if (cursor.scoped < savedRoles.length) {
     const live = await reader.list(path + "/scopedRoleMembers")
     const byId = new Map(live.map(row => [row.id, row]))
     const pairs = new Set(live.map(row => [row.roleId, object(row.roleMemberInfo)?.id].map(value => String(value).toLowerCase()).join("/")))
-    for (const saved of savedRoles) {
+    while (cursor.scoped < savedRoles.length && rows.length < limit) {
+      const saved = savedRoles[cursor.scoped++]
       const link = object(saved) ?? byId.get(saved)
       const principalId = object(link?.roleMemberInfo)?.id
       if (!link || !isGuid(principalId) || !isGuid(link.roleId)) {
-        yield { source: {}, blocker: "This saved scoped role membership lacks the principal or role ID. Capture a new backup with scoped role details." }
+        rows.push({ source: {}, blocker: "This saved scoped role membership lacks the principal or role ID. Capture a new backup with scoped role details." })
         continue
       }
       const mappedRole = map("EntraRoleDefinitions", link.roleId.toLowerCase())
       const principal = principalId.toLowerCase()
       const user = map("Users", principal), group = map("Groups", principal)
       const present = pairs.has(`${mappedRole}/${user !== principal ? user : group}`)
-      yield { source: { roleId: link.roleId }, principalId, present }
+      rows.push({ source: { roleId: link.roleId }, principalId, present })
     }
+    if (cursor.scoped < savedRoles.length) return { rows, cursor }
   }
+  return { rows, cursor: undefined }
 }

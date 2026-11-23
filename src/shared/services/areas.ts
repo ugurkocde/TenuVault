@@ -44,6 +44,8 @@ export interface PermissionArea {
   folders: readonly string[]
   /** The same folders with what they need; folders listed together need the same permissions. */
   parts: readonly FolderPermissions[]
+  /** Delegated reads included with the restore tier for review-only relationships. */
+  restoreReview?: Requirement
   /** Off even when its service is on, until the admin turns the area on for the tenant. */
   optIn?: true
   /** The area holds personal data, such as users or group members. */

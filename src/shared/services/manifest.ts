@@ -76,7 +76,10 @@ export function areaPermissions(area: PermissionArea, access: AccessLevel, mode:
       }
     }
   }
-  if (access === "restore") settle(area.parts.filter((part) => !part.restoreNotRequested).map((part) => part.restore), true)
+  if (access === "restore") {
+    const reads = area.restoreReview ? [{ delegated: area.restoreReview, application: "unsupported" } as const] : []
+    settle([...reads, ...area.parts.filter((part) => !part.restoreNotRequested).map((part) => part.restore)], true)
+  }
   settle(area.parts.map((part) => part.backup))
   return added
 }
@@ -116,9 +119,10 @@ export function graphPermissions(choice: PermissionChoice, mode: SignInMode, opt
 function namedByServices(mode: SignInMode): string[] {
   return unique(
     MODULES.flatMap((module) =>
-      module.areas.flatMap((area) =>
-        area.parts.flatMap((part) => [part.backup[mode], part.restore[mode]].flatMap((needed) => (needed === "unsupported" ? [] : needed.map((group) => group[0]!)))),
-      ),
+      module.areas.flatMap((area) => [
+        ...(mode === "delegated" ? area.restoreReview?.map(group => group[0]!) ?? [] : []),
+        ...area.parts.flatMap((part) => [part.backup[mode], part.restore[mode]].flatMap((needed) => (needed === "unsupported" ? [] : needed.map((group) => group[0]!)))),
+      ]),
     ),
   )
 }

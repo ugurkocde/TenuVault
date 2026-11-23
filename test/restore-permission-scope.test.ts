@@ -109,3 +109,11 @@ it("adds only the admitted application write permission after delegated restore 
   }
   for (const scope of ["AppRegistration.Create", "Application.ReadWrite.OwnedBy", "AppRoleAssignment.ReadWrite.All", "DelegatedPermissionGrant.ReadWrite.All"]) expect(restore).not.toContain(scope)
 })
+
+it("adds only delegated read access to the Roles and PIM review tier", () => {
+  const roles = MODULES.find(module => module.id === "entra")!.areas.find(area => area.id === "roles")!
+  const backup = areaPermissions(roles, "backup", "delegated")
+  expect(areaPermissions(roles, "restore", "delegated").filter(scope => !backup.includes(scope))).toEqual(["Application.Read.All", "User.Read.All"])
+  expect(areaPermissions(roles, "restore", "application")).toEqual(areaPermissions(roles, "backup", "application"))
+  for (const part of roles.parts) expect(part.restore.delegated).toBe("unsupported")
+})

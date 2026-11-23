@@ -1,3 +1,5 @@
+import { ENTRA_AREAS } from "../src/shared/services/entra"
+import { areaPermissions } from "../src/shared/services/manifest"
 import { expect, it, vi } from "vitest"
 import { DirectoryRestoreService } from "../src/main/restore/directory-service"
 import { RecoveryAccounts } from "../src/main/restore/safety-resolvers"
@@ -17,27 +19,36 @@ const options = { stage: "object" as const, exactMembers: false, exactOwners: fa
 const noBackupReads = async () => { throw new Error("Unexpected backup read") }
 const actor = { tenantId: tenant, clientId: client, userId: admin, applicationObjectId: id(11), servicePrincipalId: id(12), recoveryAccountIds: [] }
 
-function world() {
+function world(largeUnit = false) {
   const entries = new Map<string, string>()
   const store = { partitioned: true as const, get: (key: string) => entries.get(key) ?? null, set: (key: string, value: string) => { entries.set(key, value) }, delete: (key: string) => { entries.delete(key) } }
   setRestoreJournalStore(store)
   guardedRestoreJournal().save({ version: 1, id: id(15), tenant, actor, origin: "restore", entries: [], mappings: [{ kind: "objectId", folder: "EntraRoleDefinitions", source: oldRole, target: role }] })
-  const connection = { ...actor, token: `h.${Buffer.from(JSON.stringify({ tid: tenant, oid: admin, appid: client, scp: "Directory.Read.All" })).toString("base64url")}.s` }
+  const scopes = areaPermissions(ENTRA_AREAS.find(area => area.id === "roles")!, "restore", "delegated")
+  const connection = { ...actor, token: `h.${Buffer.from(JSON.stringify({ tid: tenant, oid: admin, appid: client, scp: scopes.join(" ") })).toString("base64url")}.s` }
   let status = 200, restricted = false
   const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     expect(init?.method).toBe("GET")
     const url = new URL(String(input))
     expect(url.pathname.startsWith("/beta/")).toBe(true)
     const path = url.pathname.slice(6)
-    if (path === "applications") return Response.json({ value: [{ id: id(11), appId: client }] })
-    if (path === "servicePrincipals") return Response.json({ value: [{ id: id(12), appId: client }] })
+    if (path.startsWith("applications") || path.startsWith("servicePrincipals") && !path.includes("/")) {
+      if (!scopes.includes("Application.Read.All")) return new Response(null, { status: 403 })
+      return Response.json({ id: path.startsWith("applications") ? id(11) : id(12), appId: client })
+    }
     if (path === `roleManagement/directory/roleDefinitions/${role}`) return Response.json({ id: role, displayName: "Custom role", isEnabled: true })
     if (path === `directory/administrativeUnits/${unit}`) return Response.json({ id: unit, displayName: "Unit", membershipType: "Assigned", isMemberManagementRestricted: restricted })
-    if (path.endsWith("/members")) return Response.json({ value: [{ id: id(90) }] })
+    if (path.endsWith("/members")) {
+      const next = Number(url.searchParams.get("$skiptoken") ?? 0)
+      url.searchParams.set("$skiptoken", String(next + 1))
+      return Response.json({ value: largeUnit ? Array.from({ length: 50 }, (_, i) => ({ id: id(1000 + next * 50 + i) })) : [{ id: id(90) }], ...(largeUnit && next < 999 ? { "@odata.nextLink": String(url) } : {}) })
+    }
     if (path.endsWith("/scopedRoleMembers")) return Response.json({ value: [] })
-    if (path.startsWith("directoryObjects/")) {
+    if (path.startsWith("directoryObjects/")) return new Response(null, { status: 403 })
+    if (path.startsWith("users/")) {
+      if (!scopes.includes("User.Read.All")) return new Response(null, { status: 403 })
       const principalId = path.split("/")[1]!
-      return Response.json({ id: principalId, displayName: "Current user", "@odata.type": "#microsoft.graph.user" }, { status, headers: { "Retry-After": "120" } })
+      return Response.json({ id: principalId, displayName: "Current user", onPremisesSyncEnabled: null }, { status, headers: { "Retry-After": "120" } })
     }
     if (path === "roleManagement/directory/roleAssignmentSchedules") {
       if (!url.searchParams.has("$skiptoken")) return Response.json({ value: [], "@odata.nextLink": String(url) + "&$skiptoken=page2" })
@@ -80,7 +91,7 @@ it("builds only closed create and reference-removal contracts", () => {
   expect(unitChangeBlocker({ isMemberManagementRestricted: true })).toMatch(/restricted management/)
 })
 
-it("saves a mapped, paged schedule preview and refuses a write with every approval", async () => {
+it("uses the Roles and PIM restore scopes for actor and principal reads, then saves a mapped, paged schedule preview and refuses a write with every approval", async () => {
   const env = world(), service = env.start()
   const request = { path: "backup/RoleAssignmentSchedules/saved-schedule.json", snapshot: scheduled, origin: "restore" as const }
   const page = await service.prepare(tenant, request, options, noBackupReads)
@@ -107,7 +118,7 @@ it("blocks self-benefit and isolates an unavailable principal", async () => {
   expect(page.rows[0]?.review.blocker).toMatch(/protected/)
   env.status(404)
   const unresolved = await service.prepare(tenant, { ...request, snapshot: scheduled }, options, noBackupReads)
-  expect(unresolved.rows[0]?.review.blocker).toMatch(/404/)
+  expect(unresolved.rows[0]?.review.blocker).toMatch(/no longer resolves/)
   env.status(429)
   await expect(service.prepare(tenant, request, options, noBackupReads)).rejects.toThrow(/throttl/i)
 })
@@ -142,4 +153,17 @@ it("stores scoped unit member IDs without a name or a profile", async () => {
   })
   expect(snapshot.scopedRoleMembers).toEqual([{ id: id(10), roleId: role, roleMemberInfo: { id: user } }])
   expect(JSON.stringify(snapshot)).not.toContain("Personal name")
+})
+
+it("continues a 50,000-member exact AU review without loading every live member", async () => {
+  const env = world(true)
+  const request = { path: "backup/AdministrativeUnits/Large unit.json", snapshot: { id: unit, members: [], scopedRoleMembers: [] }, origin: "restore" as const }
+  const memberReads = () => env.fetcher.mock.calls.filter(([url]) => new URL(String(url)).pathname.endsWith("/members"))
+  const first = await env.start().prepare(tenant, request, { ...options, exactMembers: true }, noBackupReads)
+  expect(first.rows).toHaveLength(50)
+  expect(first.more).toBe(true)
+  expect(memberReads()).toHaveLength(1)
+  const second = await env.start().prepare(tenant, request, { ...options, exactMembers: true, previousRunId: first.runId }, noBackupReads)
+  expect(second.rows[0]?.review.principal?.id).toBe(id(1050))
+  expect(memberReads()).toHaveLength(2)
 })

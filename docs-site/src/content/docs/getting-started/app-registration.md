@@ -124,7 +124,7 @@ The table above is the default permission set. For an older registration, follow
 
 The `-IncludeConditionalAccessRestore` switch adds `Policy.ReadWrite.ConditionalAccess` for [Conditional Access restores](/backups/conditional-access/). Conditional Access backups use the default `Policy.Read.All`.
 
-With `-Services` the script requests the permissions of the services you name in place of the default set, for example Entra ID or Defender. [App registration and delegated permissions](/security/permissions/#entra-id-and-defender) lists them per service and area.
+With `-Services` the script requests the permissions of the services you name in place of the default set, for example Entra ID or Defender. [App registration and delegated permissions](/security/permissions/#entra-id-and-defender) lists them per service and area. With `-RestoreAccess Entra`, Roles and PIM review uses delegated `Application.Read.All` and `User.Read.All` to identify protected apps and resolve principals. Roles and PIM writes are unavailable.
 
 ## Use the setup script instead
 

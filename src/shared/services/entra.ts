@@ -65,7 +65,11 @@ export const ENTRA_AREAS: readonly PermissionArea[] = [
     // Never restored: joining needs both tenants.
     part(["MultiTenantOrganization"], [["MultiTenantOrganization.Read.All", "MultiTenantOrganization.ReadWrite.All"]], [["MultiTenantOrganization.Read.All"]], "unsupported"),
   ]),
-  area({ id: "roles", label: "Roles and PIM" }, [
+  area({
+    id: "roles", label: "Roles and PIM",
+    // Review resolves the connected registration and the principal's cloud user state.
+    restoreReview: [["Application.Read.All", "Application.ReadWrite.All", "Directory.Read.All"], ["User.Read.All", "User.ReadWrite.All", "Directory.Read.All"]],
+  }, [
     part(["EntraRoleDefinitions", "EntraRoleAssignments"], [["RoleManagement.Read.Directory", "RoleManagement.ReadWrite.Directory", "Directory.Read.All", "Directory.ReadWrite.All"]], [["RoleManagement.Read.Directory"]], "unsupported"),
     part(["RoleEligibilitySchedules"], [["RoleManagement.Read.Directory", "RoleEligibilitySchedule.Read.Directory", "RoleEligibilitySchedule.ReadWrite.Directory", "RoleManagement.ReadWrite.Directory"]], [["RoleManagement.Read.Directory"]], "unsupported"),
     part(["RoleAssignmentSchedules"], [["RoleManagement.Read.Directory", "RoleAssignmentSchedule.Read.Directory", "RoleAssignmentSchedule.ReadWrite.Directory", "RoleManagement.ReadWrite.Directory"]], [["RoleManagement.Read.Directory"]], "unsupported"),
