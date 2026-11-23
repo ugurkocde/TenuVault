@@ -11,6 +11,7 @@ export async function POST(request: Request): Promise<Response> {
     if (!record(body)) return Response.json({ error: "Expected an OpenIntuneBaseline request." }, { status: 400 })
     return Response.json(await handleOib(body))
   } catch (error) {
-    return Response.json({ error: error instanceof Error ? error.message : "OpenIntuneBaseline request failed." }, { status: error instanceof FrameworkError || error instanceof TenantWriteConflict ? error.status : 400 })
+    const code = error instanceof FrameworkError ? error.code : undefined
+    return Response.json({ error: error instanceof Error ? error.message : "OpenIntuneBaseline request failed.", ...(code ? { code } : {}) }, { status: error instanceof FrameworkError || error instanceof TenantWriteConflict ? error.status : 400 })
   }
 }

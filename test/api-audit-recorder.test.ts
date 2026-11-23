@@ -203,3 +203,12 @@ it("keeps the OIB audit after a tally recorder throws", async () => {
   await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce())
   expect(tally).toHaveBeenCalledOnce()
 })
+
+it("records an OIB assignment run with its counts and mode", async () => {
+  const entries: Array<{ logEntry: { action: string; details: Record<string, unknown> } }> = []
+  const record = createAuditRecorder(async (request) => { entries.push(await request.json()); return Response.json({ success: true }) }, () => null)
+  record(new Request("http://tenuvault.internal/api/oib", { method: "POST" }), JSON.stringify({ ...credentials, action: "oib-assign" }),
+    Response.json({ runId: "run-1", assignMode: "replace", reassigned: [{}, {}, { pending: true }], skipped: [{}], failed: [] }))
+  await vi.waitFor(() => expect(entries).toHaveLength(1))
+  expect(entries[0]!.logEntry).toMatchObject({ action: "Change OpenIntuneBaseline policy assignments", result: "SUCCESS", details: { reassigned: 2, uncertain: 1, skipped: 1, failed: 0, assignMode: "replace" } })
+})

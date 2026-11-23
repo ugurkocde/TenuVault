@@ -4,8 +4,8 @@ import { createJobPoller } from "../../lib/job-store"
 import { errorText, oibRequest } from "./common"
 import type { Progress } from "./FlowShell"
 
-export type OibFlow = "new" | "existing" | "validate"
-export type OibJobKind = "deploy" | "fix" | "undo" | "validate"
+export type OibFlow = "new" | "existing" | "validate" | "assign"
+export type OibJobKind = "deploy" | "fix" | "undo" | "validate" | "assign"
 
 /** A deployment, drift fix, undo or validation that keeps running when its page unmounts. */
 export interface OibJob<T = unknown> {
@@ -177,7 +177,7 @@ export function jobProgress(job: OibJob | undefined): Progress | null {
   return { stage: job.detail ? `${job.detail}: ${job.stage}` : job.stage, done: job.done, total: job.total, percent: job.percent }
 }
 
-const DONE: Record<OibJobKind, string> = { deploy: "Deployment", fix: "Drift fix", undo: "Undo", validate: "Validation" }
+const DONE: Record<OibJobKind, string> = { deploy: "Deployment", fix: "Drift fix", undo: "Undo", validate: "Validation", assign: "Assignment change" }
 
 /** "Deploying to Contoso" while running, then "Deployment finished in Contoso" or "Deployment failed in Contoso". */
 export const jobTitle = (job: OibJob) => job.finishedAt ? `${DONE[job.kind]} ${job.error ? "failed" : "finished"} in ${job.tenantName}` : job.label

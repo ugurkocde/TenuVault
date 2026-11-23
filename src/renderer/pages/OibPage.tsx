@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react"
 import { Link, useNavigate, useParams } from "react-router-dom"
-import { ArrowLeft, ArrowRight, ExternalLink, Package, PencilRuler, RotateCcw, Search, ShieldCheck } from "lucide-react"
+import { ArrowLeft, ArrowRight, ExternalLink, Package, PencilRuler, RotateCcw, Search, ShieldCheck, Users } from "lucide-react"
 import { useSelectedTenant } from "~/contexts/TenantContext"
 import { OIB_PLATFORMS, OIB_REPO, type OibPlatform, type OibSelection, type OibVersions } from "../../shared/oib/types"
 import { defaultSelection, platformStatus, selectionLabel } from "../../shared/oib/versions"
@@ -9,6 +9,7 @@ import { NavPlanBadge } from "../components/NavPlanBadge"
 import { customizeOib } from "../features/custom-baselines/api"
 import { RunsList } from "../components/oib/DeployPanel"
 import { ExistingDeployment } from "../components/oib/ExistingDeployment"
+import { ManageAssignments } from "../components/oib/ManageAssignments"
 import { NewDeployment } from "../components/oib/NewDeployment"
 import { PolicyValidation } from "../components/oib/PolicyValidation"
 import { EarlierComparisons } from "../components/oib/EarlierComparisons"
@@ -21,6 +22,7 @@ const FLOWS = [
   { id: "new", title: "New Deployment", icon: Package, description: "Deploy OpenIntuneBaseline policies to this tenant for the first time.", features: ["Latest published release by default", "Licensing-aware policy filtering", "Optional backup first, undo per run"] },
   { id: "existing", title: "Existing Deployment", icon: Search, description: "Compare your current OIB deployment with the selected version.", features: ["Policy comparison by OIBID or name", "Version analysis and deprecated policies", "Deploy missing or outdated policies"] },
   { id: "validate", title: "Policy Validation", icon: ShieldCheck, description: "Check your deployed OIB policies for setting-level drift against the baseline.", features: ["Per-setting drift check", "CSV and PDF reports, saved history", "No changes made to your tenant"] },
+  { id: "assign", title: "Assignments", icon: Users, description: "Assign your deployed OIB policies to device and user groups.", features: ["Device and user groups by OIB scope", "Add to or replace assignments", "Optional backup first, undo per run"] },
 ] as const
 
 type Flow = (typeof FLOWS)[number]["id"]
@@ -68,7 +70,7 @@ export default function OibPage() {
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-4xl font-medium tracking-tight text-gray-900">OpenIntuneBaseline</h1>
-          <p className="mt-3 max-w-2xl text-lg text-gray-500">Deploy, compare and validate the community OpenIntuneBaseline security policies in {tenant?.name ?? "your tenant"}.</p>
+          <p className="mt-3 max-w-2xl text-lg text-gray-500">Deploy, compare, validate and assign the community OpenIntuneBaseline security policies in {tenant?.name ?? "your tenant"}.</p>
         </div>
         <a href={`https://github.com/${OIB_REPO}`} target="_blank" rel="noreferrer" className={button}>Source <ExternalLink className="h-4 w-4" aria-hidden="true" /></a>
       </div>
@@ -89,16 +91,16 @@ export default function OibPage() {
     {!tenant && <p role="status" className="rounded-3xl bg-amber-50 px-6 py-5 text-sm text-amber-950">Choose a connected tenant using the sidebar.</p>}
     {tenant && !active && <>
       <TenantJobs tenantId={tenant.tenantId} />
-      <div className="grid gap-4 lg:grid-cols-3">{FLOWS.map(f => <Link key={f.id} to={`/portal/oib/${f.id}`} className="group flex flex-col rounded-3xl bg-white p-6 shadow-[0_1px_2px_rgba(22,21,20,0.04)] transition-colors hover:bg-blue-50/50">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">{FLOWS.map(f => <Link key={f.id} to={`/portal/oib/${f.id}`} className="group flex flex-col rounded-3xl bg-white p-6 shadow-[0_1px_2px_rgba(22,21,20,0.04)] transition-colors hover:bg-blue-50/50">
         <span className="flex size-11 items-center justify-center rounded-full bg-secondary text-foreground" aria-hidden="true"><f.icon className="h-5 w-5" /></span>
         <h2 className="mt-4 text-lg font-medium text-gray-900">{f.title}</h2>
         <p className="mt-1 text-sm text-gray-600">{f.description}</p>
         <ul className="mt-3 flex-1 space-y-1 text-xs text-gray-500">{f.features.map(x => <li key={x}>• {x}</li>)}</ul>
         <span className="mt-4 flex size-10 items-center justify-center self-end rounded-full bg-secondary text-muted-foreground transition-colors group-hover:bg-primary group-hover:text-primary-foreground" aria-hidden="true"><ArrowRight className="h-4 w-4" /></span>
       </Link>)}</div>
-      <p className="mt-5 text-sm text-gray-500">Not sure which to choose? Use New Deployment the first time, Existing Deployment to compare and update previously deployed policies, and Policy Validation to check deployed policies for configuration drift. Always test in a pilot or test tenant first: these baselines can change the user experience and device behaviour.</p>
+      <p className="mt-5 text-sm text-gray-500">Not sure which to choose? Use New Deployment the first time, Existing Deployment to compare and update previously deployed policies, Policy Validation to check deployed policies for configuration drift, and Assignments to assign deployed policies to groups. Always test in a pilot or test tenant first: these baselines can change the user experience and device behaviour.</p>
       <CustomizeCard selections={selections} versions={versions} />
-      <section className={`${card} mt-6`} aria-label="Deployment runs"><h2 className="text-lg font-medium">Deployment history</h2><p className="mt-1 text-sm text-gray-600">Each deployment or drift reset is recorded on this device so it can be undone.</p><RunsList tenant={tenant} empty="No deployments that can be undone are recorded for this tenant." /></section>
+      <section className={`${card} mt-6`} aria-label="Deployment runs"><h2 className="text-lg font-medium">Deployment history</h2><p className="mt-1 text-sm text-gray-600">Each deployment, drift reset or assignment change is recorded on this device so it can be undone.</p><RunsList tenant={tenant} empty="No deployments that can be undone are recorded for this tenant." /></section>
       <EarlierComparisons key={tenant.tenantId} tenant={tenant} />
     </>}
     {tenant && active && <>
@@ -115,6 +117,7 @@ export default function OibPage() {
             {active === "new" && <NewDeployment selections={selections} />}
             {active === "existing" && <ExistingDeployment selections={selections} />}
             {active === "validate" && <PolicyValidation selections={selections} />}
+            {active === "assign" && <ManageAssignments selections={selections} />}
           </div>
         </VersionsContext.Provider>}
     </>}

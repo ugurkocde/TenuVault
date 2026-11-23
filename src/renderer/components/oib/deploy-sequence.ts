@@ -1,3 +1,4 @@
+import { oibScope, type OibScope } from "../../../shared/oib/assignments"
 import type { DeployItem, OibBackupChoice, OibCatalog, OibPlatform, OibRun } from "../../../shared/oib/types"
 
 /** A policy to deploy, with the names and registry folder the review shows. */
@@ -7,6 +8,8 @@ export interface DeployEntry extends DeployItem {
   folder?: string
   /** The tenant policy an update replaces, by name. */
   targetName?: string
+  /** Device or user targeted, as OIB marks the policy; undefined when it is not marked. */
+  scope?: OibScope
 }
 
 /** The policies of one platform pack to deploy. */
@@ -28,6 +31,8 @@ export interface BatchOutcome {
   error?: string
   /** The backup asked for with this batch; absent when the batch was not sent. */
   backup?: BackupRequest
+  /** Not deployed because the backup failed, was not confirmed, or failed for an earlier platform: retrying can help. */
+  backupFailed?: boolean
 }
 
 /** A batch from a loaded pack, with policy names and folders filled in from the catalog. */
@@ -35,7 +40,10 @@ export function batchFor(catalog: OibCatalog, items: Array<DeployItem & { target
   const policies = new Map(catalog.policies.map(p => [p.source, p]))
   return {
     platform: catalog.platform, commit: catalog.commit, tag: catalog.tag, reference: catalog.reference,
-    items: items.map(item => ({ ...item, name: policies.get(item.source)?.name, folder: policies.get(item.source)?.folder })),
+    items: items.map(item => {
+      const policy = policies.get(item.source)
+      return { ...item, name: policy?.name, folder: policy?.folder, ...(policy && oibScope(policy) ? { scope: oibScope(policy) } : {}) }
+    }),
   }
 }
 
@@ -55,7 +63,8 @@ export const deployItem = ({ source, mode, targetId }: DeployEntry): DeployItem 
  * a backup made by an earlier batch when that covered all of its folders, else backs up its own.
  * With "none" nothing is backed up.
  * When a backup is missing, fails or is not confirmed by the run, the remaining batches of this
- * tenant are skipped: nothing deploys without the backup that was asked for.
+ * tenant are skipped: nothing deploys without the backup that was asked for. Other failures (a
+ * group or filter the tenant does not have) stop only their own batch.
  */
 export async function deployToTenant(
   batches: DeployBatch[],
@@ -65,9 +74,10 @@ export async function deployToTenant(
   const outcomes: BatchOutcome[] = []
   const made: Array<{ folder: string; covers: Set<string> }> = []
   let stopped: string | null = null
+  let stoppedByBackup = false
   for (const batch of batches) {
     if (stopped) {
-      outcomes.push({ platform: batch.platform, error: stopped })
+      outcomes.push({ platform: batch.platform, error: stopped, ...(stoppedByBackup ? { backupFailed: true } : {}) })
       continue
     }
     if (options.backup.mode !== "none" && !options.storage) {
@@ -83,11 +93,16 @@ export async function deployToTenant(
       outcomes.push({ platform: batch.platform, run, backup })
       if (backup.mode === "new") {
         if (run.backupFolder) made.push({ folder: run.backupFolder, covers: new Set(folders) })
-        else stopped = "Skipped: the backup before the first deployment was not confirmed."
+        else { stopped = "Skipped: the backup before the first deployment was not confirmed."; stoppedByBackup = true }
       }
     } catch (error) {
-      outcomes.push({ platform: batch.platform, error: error instanceof Error ? error.message : "The request failed.", backup })
-      if (backup.mode !== "none") stopped = "Skipped: the backup of this tenant could not be used, so nothing else was deployed."
+      const message = error instanceof Error ? error.message : "The request failed."
+      // The main process marks a failed backup with code "backup"; a refused group or filter changed nothing and stops only its own platform.
+      const backupError = (error as { code?: unknown } | null)?.code === "backup"
+      // No answer at all (the request itself failed): whether the backup ran is unknown, so stop as for a failed backup.
+      const unanswered = typeof (error as { status?: unknown } | null)?.status !== "number"
+      outcomes.push({ platform: batch.platform, error: message, backup, ...(backupError || (unanswered && backup.mode !== "none") ? { backupFailed: true } : {}) })
+      if (backup.mode !== "none" && (backupError || unanswered)) { stopped = unanswered && !backupError ? "Skipped: the earlier request got no answer, so whether its backup ran is unknown and nothing else was changed." : "Skipped: the backup of this tenant could not be used, so nothing else was changed."; stoppedByBackup = true }
     }
   }
   return outcomes
