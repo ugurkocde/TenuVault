@@ -14,7 +14,7 @@ const script = resolve("resources/New-TenuVaultDesktopApp.ps1")
 const tenantId = "11111111-1111-4111-8111-111111111111"
 const clientId = "22222222-2222-4222-8222-222222222222"
 const group = "33333333-3333-4333-8333-333333333333"
-const source = readFileSync(script, "utf8")
+const source = readFileSync(script, "utf8").replace(/\r\n/g, "\n")
 
 // Every API gets its own service principal ID and its own permission IDs, so a mix-up between
 // APIs in the app registration or in a consent grant shows up in the recorded requests.
