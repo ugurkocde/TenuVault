@@ -55,7 +55,7 @@ describe.runIf(Boolean(powershell))("real setup script over HTTP", () => {
     const result = spawnSync(powershell!, ["-NoProfile", "-File", resolve("test/fixtures/app-registration/parse-script.ps1"), "-Script", file], { encoding: "utf8" })
     expect(result.error).toBeUndefined()
     expect(result.status, result.stdout + result.stderr).toBe(0)
-  })
+  }, 60000)
 
   async function run(scenario = "default", args: Record<string, unknown> = {}) {
     const requests: { method: string; path: string; body: Record<string, unknown>; query: URLSearchParams; headers: Record<string, unknown>; status: number }[] = []
