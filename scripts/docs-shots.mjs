@@ -56,7 +56,7 @@ export async function captureDocs({ main, send, evaluate, go, click, assertText,
         { id:'app:appearance', label:'Appearance', current:'Use system setting', next:'Dark', status:'change', selected:true },
       ] },
       { id:tenantId, title:'Contoso Ltd', detail:'contoso.onmicrosoft.com', connected:true, items:[
-        { id:tenantId + ':service:conditionalAccess', label:'Entra Conditional Access', current:'Off', next:'On', status:'change', selected:true },
+        { id:tenantId + ':service:conditionalAccess', label:'Entra ID: Conditional Access', current:'Off', next:'On', status:'change', selected:true },
         { id:tenantId + ':backupScope', label:'What is backed up', current:'Everything except apps', next:'Everything', status:'change', selected:true },
         { id:tenantId + ':schedule', label:'Backup schedule', current:'Off', next:'Daily at 02:00', status:'change', warning:'If another computer also runs this schedule, the tenant is backed up twice. Usually one computer, or cloud backups, runs the schedule.', selected:false },
       ] },

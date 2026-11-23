@@ -100,7 +100,7 @@ describe("settings import preview", () => {
     expect(onApplied).toHaveBeenCalled()
     expect(services.status).toHaveBeenCalledWith(TENANT, "client")
     expect(document.body.textContent).toContain("Settings applied")
-    expect(document.body.textContent).toContain("Entra Conditional Access: permissions for restores are missing.")
+    expect(document.body.textContent).toContain("Entra ID: Conditional Access: permissions for restores are missing.")
   })
 })
 
@@ -116,7 +116,7 @@ describe("missingPermissions", () => {
       { id: "intune", label: "Intune", description: "", switchable: true, enabled: true, access: "backup", roles: "", check: { id: "intune", label: "Intune", backup: "missing", restore: "missing", areas: [] } },
     ] as Parameters<typeof missingPermissions>[0]["modules"]
     // Only the services the import turned on are checked.
-    expect(missingPermissions({ tenantId: TENANT, checkedAt: null, modules }, ["conditionalAccess"])).toEqual(["Entra Conditional Access: permissions for backups are missing."])
+    expect(missingPermissions({ tenantId: TENANT, checkedAt: null, modules }, ["conditionalAccess"])).toEqual(["Entra ID: Conditional Access: permissions for backups are missing."])
     // A service set to backup only is not expected to have restore permissions.
     expect(missingPermissions({ tenantId: TENANT, checkedAt: null, modules: [
       { id: "entra", label: "Entra ID", description: "", switchable: true, enabled: true, access: "backup", roles: "", check: { id: "entra", label: "Entra ID", backup: "ready", restore: "missing", areas: [] } },
