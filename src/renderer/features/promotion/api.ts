@@ -8,12 +8,7 @@ export type { Mapping, ReferenceKind, ReferenceResolution }
 
 export type Promotion = PromotionRecord & { id: string; createdAt: string; updatedAt: string }
 export interface PolicyOption { id: string; name: string; folder: string; platforms: string | null; lastModifiedDateTime: string | null }
-export const PROMOTION_TYPE_OPTIONS = [
-  { folder: "ConfigurationPolicies", label: "Settings Catalog policies" },
-  { folder: "CompliancePolicies", label: "Compliance policies" },
-  { folder: "DeviceConfigurations", label: "Device configuration profiles" },
-  { folder: "EndpointSecurityIntents", label: "Endpoint security policies" },
-] as const
+export { PROMOTION_TYPES as PROMOTION_TYPE_OPTIONS } from "../../../shared/intune/promotion-types"
 
 const PATH = "/api/promotion"
 /** The source is named in targetTenants on every paid call, so its license is checked each time. */

@@ -2,14 +2,14 @@ import { groupNamePath, readGroupStates, type GroupState } from "../../../shared
 import { referenceTargetId, suggestGroups } from "../../../shared/intune/reference-mapping"
 import { assignmentsUnread } from "../../../shared/intune/read"
 import type { GraphCall } from "../../../portal/lib/policies/graph-restore"
-import { itemName, typeForFolder, type Item } from "../../../shared/intune/registry"
+import { itemName, typeForFolder, type IntuneType, type Item } from "../../../shared/intune/registry"
 import { isGraphId, isGuid } from "../../../shared/security"
 import type { Plan } from "../../../shared/plans"
 import type { FeatureDeps } from "../deps"
 import { FeatureError } from "../route"
 import { createListingMemo, GraphReadError, listAll, readCurrent, sameNameIds, type ListingMemo } from "../change-sets/graph"
 import { containsRedaction, hashOf, sanitizeSnapshot, unsupportedReason } from "../change-sets/model"
-import { extractReferences, referenceFindings, resolveReferences, translate, type DependencyFinding, type Mapping, type ReferenceKind, type ReferenceResolution, type TargetReads } from "./mapping"
+import { extractReferences, referenceFindings, resolveReferences, scopeTagKey, translate, type DependencyFinding, type Mapping, type ReferenceKind, type ReferenceResolution, type TargetReads } from "./mapping"
 
 /**
  * Destination resolution for promotion (#145) against live destination objects.
@@ -108,7 +108,7 @@ export async function targetStateHash(graph: GraphCall, reads: TargetReads, poli
   if (reads.policyId && reads.policyFolder) {
     const type = typeForFolder(reads.policyFolder)!
     const policy = policySnapshot === undefined ? await readCurrent(graph, type, reads.policyId) : policySnapshot
-    state.policyScopeTags = policy ? policy.roleScopeTagIds ?? null : "missing"
+    state.policyScopeTags = policy ? policy[scopeTagKey(type)] ?? null : "missing"
     if (reads.requireUnredacted) {
       const sanitized = policy ? sanitizeSnapshot(type, policy) : null
       state.policyRedacted = sanitized ? sanitized.redacted || containsRedaction(sanitized.snapshot) : null
@@ -135,6 +135,48 @@ export async function targetStateHash(graph: GraphCall, reads: TargetReads, poli
   const groupStates = groups ?? await readGroupStates(graph, reads.groupIds)
   state.groups = reads.groupIds.map((id) => ({ id: id.toLowerCase(), ...groupStates.get(id.toLowerCase()) }))
   return hashOf(state)
+}
+
+/** Refuse a copy or replacement whose complete configuration this workflow cannot replay. */
+function portabilityBlocker(type: IntuneType, snapshot: Item): string | undefined {
+  if (type.folder === "ScopeTags" || type.folder === "Remediations") {
+    const skipped = type.skip?.(snapshot)
+    if (skipped) return `${skipped} cannot be copied or replaced.`
+  }
+  if (type.folder === "PowerShellScripts" || type.folder === "ShellScripts") {
+    if (typeof snapshot.scriptContent !== "string" || !snapshot.scriptContent.trim()) return "Intune did not provide the script content."
+  }
+  if (type.folder === "Remediations") {
+    if (snapshot.deviceHealthScriptType !== "deviceHealthScript") return "Only custom remediation scripts can be copied."
+    if (typeof snapshot.detectionScriptContent !== "string" || !snapshot.detectionScriptContent.trim() || typeof snapshot.remediationScriptContent !== "string") {
+      return "Intune did not provide the complete remediation script content."
+    }
+  }
+  if (type.folder === "GroupPolicyConfigurations") {
+    const values = snapshot.definitionValues
+    if (snapshot.policyConfigurationIngestionType === "custom" || snapshot.policyConfigurationIngestionType === "mixed"
+      || !Array.isArray(values) || (values as Item[]).some((value) => {
+        const definition = value.definition as Item | undefined
+        return definition?.policyType !== "admxBacked" || !isGraphId(definition.id)
+          || (value.configurationType != null && value.configurationType !== "policy")
+      })) {
+      return "Only administrative templates with confirmed built-in definitions can be copied."
+    }
+  }
+  return undefined
+}
+
+function immutableDifference(type: IntuneType, source: Item, target: Item): string | undefined {
+  if (type.folder === "AssignmentFilters" && (source.platform !== target.platform || source.assignmentFilterManagementType !== target.assignmentFilterManagementType)) {
+    return "The assignment filter must have the same platform and management type. Choose a matching filter or create a new one."
+  }
+  if (type.folder === "FeatureUpdateProfiles" && (source.installLatestWindows10OnWindows11IneligibleDevice ?? false) !== (target.installLatestWindows10OnWindows11IneligibleDevice ?? false)) {
+    return "Intune cannot change the Windows 10 fallback on an existing feature update profile. Choose a profile with the same fallback setting or create a new one."
+  }
+  if (type.folder === "Remediations" && source.deviceHealthScriptType !== target.deviceHealthScriptType) {
+    return "Intune cannot change the script type of an existing remediation. Choose the same script type or create a new item."
+  }
+  return undefined
 }
 
 /**
@@ -171,9 +213,18 @@ export async function resolveTarget(deps: FeatureDeps, destinationTenantId: stri
   if (unsupported) findings.push({ code: "unsupported-type", severity: "blocking", message: unsupported })
 
   const targetPolicy = input.targetObjectId ? await read("The destination object", () => readCurrent(targetGraph, type, input.targetObjectId!)) : null
-  const sourceTags = Array.isArray(sourceSnapshot.roleScopeTagIds) ? sourceSnapshot.roleScopeTagIds.map(String) : []
-  const destinationTags = Array.isArray(targetPolicy?.roleScopeTagIds) ? targetPolicy.roleScopeTagIds.map(String) : []
-  const references = extractReferences(sourceSnapshot, input.includeAssignments).filter((reference) => !input.targetObjectId || reference.kind !== "scopeTag")
+  const sourceBlocker = portabilityBlocker(type, sourceSnapshot)
+  const destinationBlocker = targetPolicy && portabilityBlocker(type, targetPolicy)
+  const updateBlocker = targetPolicy && immutableDifference(type, sourceSnapshot, targetPolicy)
+  for (const [side, blocker] of [["Source", sourceBlocker], ["Destination", destinationBlocker ?? updateBlocker]]) {
+    if (blocker) findings.push({ code: "unsupported-type", severity: "blocking", message: `${side}: ${blocker}` })
+  }
+  const tagKey = scopeTagKey(type)
+  const tags = sourceSnapshot[tagKey]
+  const targetTags = targetPolicy?.[tagKey]
+  const sourceTags = Array.isArray(tags) ? tags.map(String) : []
+  const destinationTags = Array.isArray(targetTags) ? targetTags.map(String) : []
+  const references = extractReferences(type, sourceSnapshot, input.includeAssignments).filter((reference) => !input.targetObjectId || reference.kind !== "scopeTag")
   const kinds = new Set(references.map((reference) => reference.kind))
   const targetObjects: Partial<Record<ReferenceKind, Map<string, string> | null>> = {}
   const sourceNames: Partial<Record<ReferenceKind, Map<string, string>>> = {}
@@ -201,7 +252,7 @@ export async function resolveTarget(deps: FeatureDeps, destinationTenantId: stri
   }
   findings.push(...referenceFindings(resolutions.filter((reference) => input.verifyAssignments || reference.kind !== "scopeTag" || reference.state === "mapped-unverified")))
   if (input.verifyAssignments) {
-    if (assignmentsUnread(type, sourceSnapshot) || !Array.isArray(sourceSnapshot.assignments)) {
+    if (type.assign && (assignmentsUnread(type, sourceSnapshot) || !Array.isArray(sourceSnapshot.assignments))) {
       findings.push({ code: "unsupported-target", severity: "blocking", message: "Source assignments could not be read. Check the source policy before copying its assignments." })
     }
   }

@@ -376,7 +376,7 @@ export const INTUNE_TYPES: IntuneType[] = [
     extras: [
       {
         property: "definitionValues",
-        path: (id) => `deviceManagement/groupPolicyConfigurations/${id}/definitionValues?$expand=definition($select=id,displayName,classType,categoryPath)`,
+        path: (id) => `deviceManagement/groupPolicyConfigurations/${id}/definitionValues?$expand=definition($select=id,displayName,classType,categoryPath,policyType)`,
         each: {
           property: "presentationValues",
           path: (id, valueId) => `deviceManagement/groupPolicyConfigurations/${id}/definitionValues/${valueId}/presentationValues?$expand=presentation($select=id,label)`,

@@ -30,9 +30,14 @@ export async function policies(deps: FeatureDeps, tenantId: string, folder: stri
   const type = typeForFolder(folder)
   if (!type || !(PROMOTION_FOLDERS as readonly string[]).includes(type.folder)) throw new FeatureError("Choose a policy type that promotion supports.")
   try {
-    const select = type.folder === "ConfigurationPolicies" ? `id,${type.nameKey},platforms,technologies,lastModifiedDateTime` : `id,${type.nameKey},lastModifiedDateTime`
+    const fields = ["id", type.nameKey]
+    if (type.folder !== "ScopeTags") fields.push("lastModifiedDateTime")
+    if (type.folder === "ConfigurationPolicies") fields.push("platforms", "technologies")
+    if (type.folder === "ScopeTags") fields.push("isBuiltIn")
+    if (type.folder === "Remediations") fields.push("isGlobalScript")
+    const select = fields.join(",")
     const items = await listAll(await deps.graph(tenantId), `${type.path}?$select=${select}`)
-    return items.map((item) => ({ id: String(item.id ?? ""), name: String(item[type.nameKey] ?? ""), folder: type.folder, platforms: typeof item.platforms === "string" ? item.platforms : null, lastModifiedDateTime: item.lastModifiedDateTime ?? null }))
+    return items.filter((item) => !type.skip?.(item)).map((item) => ({ id: String(item.id ?? ""), name: String(item[type.nameKey] ?? ""), folder: type.folder, platforms: typeof item.platforms === "string" ? item.platforms : null, lastModifiedDateTime: item.lastModifiedDateTime ?? null }))
   } catch (error) {
     if (error instanceof FeatureError) throw error
     throw new FeatureError(`${type.label} could not be read. ${error instanceof Error ? error.message : String(error)}`, 502)

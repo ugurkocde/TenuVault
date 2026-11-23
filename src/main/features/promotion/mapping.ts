@@ -61,13 +61,19 @@ export function directAssignments(snapshot: Item | null): Item[] {
   return (Array.isArray(snapshot?.assignments) ? (snapshot!.assignments as Item[]) : []).filter((assignment) => typeof assignment.source !== "string" || assignment.source === "direct")
 }
 
-/** Every tenant-specific reference in a Settings Catalog snapshot, deduplicated. */
-export function extractReferences(snapshot: Item, includeAssignments: boolean): Array<{ kind: ReferenceKind; sourceId: string }> {
+/** Assignment filters use a different property name for the same Intune scope tag IDs. */
+export function scopeTagKey(type: IntuneType): "roleScopeTags" | "roleScopeTagIds" {
+  return type.folder === "AssignmentFilters" ? "roleScopeTags" : "roleScopeTagIds"
+}
+
+/** Every tenant-specific reference in a policy snapshot, deduplicated. */
+export function extractReferences(type: IntuneType, snapshot: Item, includeAssignments: boolean): Array<{ kind: ReferenceKind; sourceId: string }> {
   const found = new Map<string, { kind: ReferenceKind; sourceId: string }>()
   const add = (kind: ReferenceKind, id: string | null) => {
     if (id) found.set(`${kind}:${id.toLowerCase()}`, { kind, sourceId: id })
   }
-  for (const tag of Array.isArray(snapshot.roleScopeTagIds) ? snapshot.roleScopeTagIds : []) add("scopeTag", str(tag))
+  const tags = snapshot[scopeTagKey(type)]
+  for (const tag of Array.isArray(tags) ? tags : []) add("scopeTag", str(tag))
   visit(snapshot.settings ?? null, (object) => {
     if (object["@odata.type"] === REFERENCE_VALUE) add("reusableSetting", str(object.value))
   })
@@ -132,12 +138,15 @@ export function translate(
   let unresolved = false
   const { assignments: _assignments, ...rest } = structuredClone(source)
   const body = rest as Item
+  const tagKey = scopeTagKey(type)
+  const sourceTags = body[tagKey]
   if (options.destinationSnapshot !== undefined) {
-    delete body.roleScopeTagIds
+    delete body[tagKey]
     // PUT resets omitted tags to Default, so send the live destination array explicitly.
-    if (Array.isArray(options.destinationSnapshot?.roleScopeTagIds)) body.roleScopeTagIds = structuredClone(options.destinationSnapshot.roleScopeTagIds)
-  } else if (Array.isArray(body.roleScopeTagIds)) {
-    body.roleScopeTagIds = [...new Set((body.roleScopeTagIds as Json[]).map((tag) => {
+    const destinationTags = options.destinationSnapshot?.[tagKey]
+    if (Array.isArray(destinationTags)) body[tagKey] = structuredClone(destinationTags)
+  } else if (Array.isArray(sourceTags)) {
+    body[tagKey] = [...new Set(sourceTags.map((tag) => {
       const mapped = typeof tag === "string" ? usable("scopeTag", tag) : null
       if (!mapped && options.verifyScopeTags) unresolved = true
       if (!mapped && !options.verifyScopeTags) {

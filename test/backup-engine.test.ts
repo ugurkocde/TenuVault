@@ -392,7 +392,7 @@ describe("retention after incomplete backups", () => {
       }),
       "/beta/deviceManagement/deviceConfigurations/dc1/getOmaSettingPlainTextValue(secretReferenceValueId='s1')": Response.json({ value: "<enabled/>" }),
       "/beta/deviceManagement/groupPolicyConfigurations": Response.json({ value: [{ id: "gp1", displayName: "ADMX" }] }),
-      "/beta/deviceManagement/groupPolicyConfigurations/gp1/definitionValues?$expand=definition($select=id,displayName,classType,categoryPath)": Response.json({ value: [{ id: "dv1", enabled: true }] }),
+      "/beta/deviceManagement/groupPolicyConfigurations/gp1/definitionValues?$expand=definition($select=id,displayName,classType,categoryPath,policyType)": Response.json({ value: [{ id: "dv1", enabled: true }] }),
       "/beta/deviceManagement/groupPolicyConfigurations/gp1/definitionValues/dv1/presentationValues?$expand=presentation($select=id,label)": Response.json({ value: [{ id: "pv1", value: "x" }] }),
       "/beta/deviceManagement/reusablePolicySettings": Response.json({ value: [{ id: "r1", displayName: "Reusable" }] }),
     })
@@ -446,7 +446,7 @@ describe("retention after incomplete backups", () => {
         "assignments@odata.nextLink": next(`${base}/gp1/assignments?page=2`),
       },
       [`${base}/gp1/assignments?page=2`]: { value: [{ id: "a2" }] },
-      [`${base}/gp1/definitionValues?$expand=definition($select=id,displayName,classType,categoryPath)`]: {
+      [`${base}/gp1/definitionValues?$expand=definition($select=id,displayName,classType,categoryPath,policyType)`]: {
         value: [{ id: "dv1", enabled: true, configurationType: "policy", definition: { id: "def1", categoryPath: null } }],
         "@odata.nextLink": next(`${base}/gp1/definitionValues?page=2`),
       },
@@ -460,7 +460,7 @@ describe("retention after incomplete backups", () => {
       [`${base}/gp1/definitionValues/dv1/presentationValues?page=2`]: { value: [presentation("pv2", "Second")] },
       [`${base}/gp1/definitionValues/dv2/presentationValues?$expand=presentation($select=id,label)`]: { value: [] },
       [`${base}/gp2?$expand=assignments`]: { id: "gp2", displayName: "Empty template", assignments: [] },
-      [`${base}/gp2/definitionValues?$expand=definition($select=id,displayName,classType,categoryPath)`]: { value: [] },
+      [`${base}/gp2/definitionValues?$expand=definition($select=id,displayName,classType,categoryPath,policyType)`]: { value: [] },
     }
     const { engine, store, account } = setup(fakeGraph(Object.fromEntries(
       Object.entries(pages).map(([path, body]) => [path, Response.json(body)]),
@@ -481,7 +481,7 @@ describe("retention after incomplete backups", () => {
 
   it.each(["list", "definitions", "presentations"])("reports an incomplete backup when administrative template %s cannot be read", async (stage) => {
     const base = "/beta/deviceManagement/groupPolicyConfigurations"
-    const definitions = `${base}/gp1/definitionValues?$expand=definition($select=id,displayName,classType,categoryPath)`
+    const definitions = `${base}/gp1/definitionValues?$expand=definition($select=id,displayName,classType,categoryPath,policyType)`
     const presentations = `${base}/gp1/definitionValues/dv1/presentationValues?$expand=presentation($select=id,label)`
     const { engine, store, account } = setup(fakeGraph({
       [base]: Response.json({ value: [{ id: "gp1", displayName: "Template" }] }),

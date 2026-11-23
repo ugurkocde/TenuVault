@@ -1,3 +1,4 @@
+import { PROMOTION_FOLDERS } from "../../../shared/intune/promotion-types"
 import { comparableSnapshot } from "../../../shared/intune/compare"
 import { typeForFolder } from "../../../shared/intune/registry"
 import { isGraphId } from "../../../shared/security"
@@ -14,9 +15,7 @@ import { resolveTarget, staleTargets } from "./targets"
 
 /**
  * Dev to Prod promotion (#145): a deliberate, one-way, administrator-started copy of selected
- * policies from a source tenant into a destination tenant. Supported types are Settings
- * Catalog policies, compliance policies, endpoint security policies and device
- * configuration profiles (see PROMOTION_FOLDERS).
+ * policies from a source tenant into a destination tenant.
  *
  * Planning resolves every tenant-specific reference of each policy against the destination
  * through confirmed mappings and, when nothing blocks, freezes one change set in the
@@ -27,8 +26,7 @@ import { resolveTarget, staleTargets } from "./targets"
  */
 
 export const PROMOTION_FOLDER = "ConfigurationPolicies"
-export const PROMOTION_FOLDERS = ["ConfigurationPolicies", "CompliancePolicies", "DeviceConfigurations", "EndpointSecurityIntents"] as const
-export type PromotionFolder = (typeof PROMOTION_FOLDERS)[number]
+export { PROMOTION_FOLDERS }
 export const MAX_PROMOTION_ITEMS = 25
 
 export interface PromotionItem {
@@ -155,7 +153,7 @@ export async function planPromotion(deps: FeatureDeps, destinationTenantId: stri
       folder: type.folder,
       sourceObjectId: item.sourceId,
       targetObjectId: item.destinationId,
-      includeAssignments: input.includeAssignments,
+      includeAssignments: input.includeAssignments && !!type.assign,
       dropUnsupportedExclusions: input.dropUnsupportedExclusions,
       acknowledgeRedacted: input.acknowledgeRedacted,
       mappings: input.mappings,
@@ -163,7 +161,7 @@ export async function planPromotion(deps: FeatureDeps, destinationTenantId: stri
       verifyAssignments: input.workflow === "sync" && input.includeAssignments,
     }, listings)
     const promotable = (PROMOTION_FOLDERS as readonly string[]).includes(type.folder)
-    const findings = promotable ? resolved.findings : [...resolved.findings, { code: "unsupported-type" as const, severity: "blocking" as const, message: `Promotion does not support ${type.label} yet. Supported: Settings Catalog policies, compliance policies, endpoint security policies and device configuration profiles.` }]
+    const findings = promotable ? resolved.findings : [...resolved.findings, { code: "unsupported-type" as const, severity: "blocking" as const, message: `Promotion does not support ${type.label} yet.` }]
     // Notes of the calling workflow are warnings: they never decide whether the item is blocked.
     const notes = (item.notes ?? []).map((note) => ({ ...note, severity: note.severity === "blocking" ? "warning" as const : note.severity }))
     const blocked = resolved.blocked || !promotable

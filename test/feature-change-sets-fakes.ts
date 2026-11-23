@@ -15,6 +15,7 @@ export class FakeTenant {
   deviceConfigs = new Map<string, Item>()
   intents = new Map<string, Item>()
   groupPolicies = new Map<string, Item>()
+  extraCollections = new Map<string, Map<string, Item>>()
   filters: Item[] = []
   scopeTags: Item[] = [{ id: "0", displayName: "Default", isBuiltIn: true }]
   reusable: Item[] = []
@@ -107,13 +108,19 @@ export class FakeTenant {
     return full
   }
 
+  collection(path: string): Map<string, Item> {
+    const entries = this.extraCollections.get(path) ?? new Map<string, Item>()
+    this.extraCollections.set(path, entries)
+    return entries
+  }
+
   collectionForPath(path: string): Map<string, Item> | null {
     if (path.startsWith("deviceManagement/deviceCompliancePolicies")) return this.compliance
     if (path.startsWith("deviceManagement/deviceConfigurations")) return this.deviceConfigs
     if (path.startsWith("deviceManagement/intents")) return this.intents
     if (path.startsWith("deviceManagement/groupPolicyConfigurations")) return this.groupPolicies
     if (path.startsWith("deviceManagement/configurationPolicies")) return this.policies
-    return null
+    return this.extraCollections.get(path.split("/").slice(0, 2).join("/")) ?? null
   }
 
   writeCount(filter?: (call: { method: string; path: string }) => boolean): number {
@@ -160,7 +167,12 @@ export class FakeTenant {
     const genericCollection = this.collectionForPath(route!)
     if (genericCollection && route !== "deviceManagement/configurationPolicies") {
       const collSegments = route!.split("/")
-      if (collSegments.length === 2) return { status: 200, body: { value: [...genericCollection.values()].map((entry) => structuredClone(entry)) } }
+      if (collSegments.length === 2) {
+        const references = route === "deviceManagement/roleScopeTags" ? this.scopeTags
+          : route === "deviceManagement/assignmentFilters" ? this.filters
+            : []
+        return { status: 200, body: { value: [...genericCollection.values(), ...references].map((entry) => structuredClone(entry)) } }
+      }
       if (collSegments.length === 3) {
         const entry = genericCollection.get(decodeURIComponent(collSegments[2]!))
         if (!entry) return { status: 404, body: { error: { code: "ResourceNotFound", message: "Not found" } } }
@@ -168,6 +180,11 @@ export class FakeTenant {
         if (route!.startsWith("deviceManagement/intents")) delete clone.settings
         if (route!.startsWith("deviceManagement/intents")) delete clone.assignments
         return { status: 200, body: clone }
+      }
+      if (collSegments.length === 6 && collSegments[3] === "definitionValues" && collSegments[5] === "presentationValues") {
+        const policy = genericCollection.get(decodeURIComponent(segments[2]!))
+        const value = (policy?.definitionValues as Item[] | undefined)?.find((entry) => entry.id === decodeURIComponent(segments[4]!))
+        return { status: value ? 200 : 404, body: { value: structuredClone((value?.presentationValues as Item[] | undefined) ?? []) } }
       }
       if (collSegments.length === 4) {
         const entry = genericCollection.get(decodeURIComponent(collSegments[2]!))
@@ -223,6 +240,24 @@ export class FakeTenant {
       const key = Object.keys(body ?? {}).find((entry) => Array.isArray(body?.[entry])) ?? "assignments"
       current.assignments = ((body?.[key] as Item[] | undefined) ?? []).map((assignment) => ({ ...assignment, id: `${id}_${randomUUID()}`, source: "direct", sourceId: id }))
       return { status: 200, body: { value: current.assignments } }
+    }
+    if (method === "POST" && id && collection && segments[3] === "updateDefinitionValues") {
+      const current = collection.get(id)
+      if (!current) return { status: 404, body: {} }
+      const deleted = (body?.deletedIds as string[] | undefined) ?? []
+      const existing = ((current.definitionValues as Item[] | undefined) ?? []).filter((entry) => !deleted.includes(String(entry.id)))
+      const added = ((body?.added as Item[] | undefined) ?? []).map((entry) => ({
+        id: randomUUID(),
+        enabled: entry.enabled ?? false,
+        definition: { id: String(entry["definition@odata.bind"]).split("'")[1]!, policyType: "admxBacked" },
+        presentationValues: (entry.presentationValues as Item[]).map(({ ["presentation@odata.bind"]: bind, ...presentation }) => ({
+          ...presentation,
+          id: randomUUID(),
+          presentation: { id: String(bind).split("'")[3]! },
+        })),
+      }))
+      current.definitionValues = [...existing, ...added]
+      return { status: 204, body: {} }
     }
     if (method === "POST" && id && collection && segments[3] === "scheduleActionsForRules") {
       const current = collection.get(id)

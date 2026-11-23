@@ -1,3 +1,4 @@
+import { PROMOTION_TYPES } from "../../../shared/intune/promotion-types"
 import type { Mapping, ReferenceKind } from "../promotion/api"
 import type { MappingObjects } from "../promotion/MappingEditor"
 import type { Tenant } from "~/contexts/TenantContext"
@@ -24,13 +25,7 @@ export type SyncBackup = "new" | "none"
 export interface SyncTargetOption { tenantId: string; eligible: boolean; multiple: boolean; reason: "msp" | "plan" | "unavailable" | null }
 export type SyncPreview = Omit<PromotionPreview, "promotion"> & { promotion: Promotion }
 
-/** The four policy types Sync writes, by the folder the engine uses. */
-export const SYNC_TYPES = [
-  { folder: "ConfigurationPolicies", label: "Settings Catalog" },
-  { folder: "CompliancePolicies", label: "Compliance" },
-  { folder: "EndpointSecurityIntents", label: "Endpoint security" },
-  { folder: "DeviceConfigurations", label: "Device configuration" },
-] as const
+export const SYNC_TYPES = PROMOTION_TYPES.map(({ folder, shortLabel }) => ({ folder, label: shortLabel }))
 
 export const MAX_SYNC_POLICIES = 25
 

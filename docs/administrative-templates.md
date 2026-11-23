@@ -8,7 +8,7 @@ The reader uses Microsoft Graph **beta**:
 
 1. List `deviceManagement/groupPolicyConfigurations`, following `@odata.nextLink`.
 2. Read each policy with `$expand=assignments`, including any assignment continuation pages.
-3. Read its `definitionValues` with `$expand=definition($select=id,displayName,classType,categoryPath)`.
+3. Read its `definitionValues` with `$expand=definition($select=id,displayName,classType,categoryPath,policyType)`.
 4. Read each definition value's `presentationValues` with `$expand=presentation($select=id,label)`.
 
 These reads use the existing configuration permission. Microsoft lists

@@ -42,7 +42,7 @@ The page leads you through four steps: **Choose settings**, **Choose targets**, 
 ### 1. Choose settings
 
 1. Choose the **Source tenant**. It starts as the tenant selected in the tenant switcher; you can choose any connected tenant whose plan includes Copy to Tenants (Pro or MSP).
-2. Choose a policy type: **Settings Catalog**, **Compliance**, **Endpoint security** or **Device configuration**. Policies are read live from the source tenant; placeholder rows show while they load, and each status appears as soon as it is read.
+2. Choose a policy type from the [supported types](#supported-types). Policies are read live from the source tenant. Placeholder rows show while they load, and each status appears as soon as it is read.
 3. Tick the policies to copy. You can select policies of several types; the type buttons show how many you selected of each. Each policy shows its status:
    * **Not copied yet**: no earlier copy wrote this policy to a target you can choose.
    * **Up to date in** a tenant: neither the source policy nor the copied policy changed since the last copy.
@@ -179,9 +179,18 @@ When a copy verifies a write, TenuVault links the source policy to the policy it
 
 If the linked policy was deleted in the target, the next copy creates it again and says so in the review.
 
+## Supported types
+
+* Settings Catalog policies, compliance policies, endpoint security policies, and device configuration profiles, including Windows update rings.
+* Administrative templates that use built-in ADMX definitions.
+* Windows PowerShell scripts, macOS shell scripts, and custom remediations.
+* Windows feature update profiles.
+* Assignment filters and custom scope tags.
+
+TenuVault blocks templates with uploaded ADMX definitions and scripts whose content Intune did not return. Assignment filters use scope tag mappings. Their rules are copied as written, so review any tenant-specific values in those rules before applying.
+
 ## Limits
 
-* Four policy types: Settings Catalog policies, compliance policies, endpoint security policies and device configuration profiles.
 * At most 25 policies per copy.
 * At most 25 target tenants per copy.
 * Copying assignments is optional. Secret values must be set again in the destination.
