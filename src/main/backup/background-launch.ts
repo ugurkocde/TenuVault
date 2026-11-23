@@ -1,7 +1,9 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { mkdir, readFile, writeFile, rm } from 'node:fs/promises'
-import { join, dirname } from 'node:path'
+import { join, dirname, isAbsolute } from 'node:path'
+import type { BackgroundLaunchStatus } from '../../shared/ipc'
+import { LinuxBackgroundLaunch } from './linux-background-launch'
 const run = promisify(execFile)
 const LABEL = 'com.tenuvault.desktop.background'
 const xml = (value: string) => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;')
@@ -38,11 +40,24 @@ $principal = New-ScheduledTaskPrincipal -UserId $identity.Name -LogonType Intera
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 Register-ScheduledTask -TaskName $name -Action $action -Trigger @($login,$periodic) -Principal $principal -Settings $settings -Force | Out-Null
 `
-interface Options { platform: NodeJS.Platform; packaged: boolean; executable: string; home: string; data: string; uid?: number; systemRoot?: string; exec?: (file: string, args: string[]) => Promise<{ stdout: string }> }
+interface Options { platform: NodeJS.Platform; packaged: boolean; executable: string; home: string; data: string; uid?: number; systemRoot?: string; appImage?: string; configHome?: string; exec?: (file: string, args: string[]) => Promise<{ stdout: string }> }
 export class BackgroundLaunch {
   constructor(private readonly options: Options) {}
-  private execute(file: string, args: string[]) { return (this.options.exec ?? ((command, params) => run(command, params, { timeout: 30_000 })))(file, args) }
-  private get supported() { return this.options.packaged && ['win32', 'darwin'].includes(this.options.platform) }
+  private execute(file: string, args: string[]) {
+    if (this.options.exec) return this.options.exec(file, args)
+    // Bus errors determine whether the Linux launcher can fall back to autostart.
+    const env = file === 'systemctl' ? { ...process.env, LC_ALL: 'C' } : undefined
+    return run(file, args, { env, timeout: 30_000 })
+  }
+  private get supported() { return this.options.packaged && ['win32', 'darwin', 'linux'].includes(this.options.platform) }
+  private get linux() {
+    const { appImage, configHome, home, executable } = this.options
+    return new LinuxBackgroundLaunch(
+      configHome && isAbsolute(configHome) ? configHome : join(home, '.config'),
+      appImage && isAbsolute(appImage) ? appImage : executable,
+      (file, args) => this.execute(file, args),
+    )
+  }
   private get plist() { return join(this.options.home, 'Library', 'LaunchAgents', `${LABEL}.plist`) }
   private async windows(operation: string): Promise<string> {
     const script = join(this.options.data, 'background-launch.ps1')
@@ -62,14 +77,15 @@ export class BackgroundLaunch {
     if (!service.includes('/usr/bin/open')) throw new Error('An older direct-launch agent is loaded. Remove background launch first, then log out and back in before reinstalling; active backups are left running.')
     await this.execute('/bin/launchctl', ['bootout', `gui/${this.options.uid}/${LABEL}`])
   }
-  async status(): Promise<{ supported: boolean; installed: boolean }> {
+  async status(): Promise<BackgroundLaunchStatus> {
     if (!this.supported) return { supported: false, installed: false }
     if (this.options.platform === 'win32') return { supported: true, installed: (await this.windows('status')) === 'installed' }
+    if (this.options.platform === 'linux') return this.linux.status()
     try { const plist = await readFile(this.plist, 'utf8'), service = await this.service(); return { supported: true, installed: !!service && (!service.includes('/usr/bin/open') || (plist === launchAgent(this.options.executable) && service.includes(dirname(dirname(dirname(this.options.executable)))))) } }
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { supported: true, installed: false }; throw error }
   }
   /** Checks the status and replaces an agent of an earlier build that brought the window to the front. */
-  async refresh(): Promise<{ supported: boolean; installed: boolean }> {
+  async refresh(): Promise<BackgroundLaunchStatus> {
     if (this.supported && this.options.platform === 'darwin') {
       const current = await readFile(this.plist, 'utf8').catch(() => null)
       if (current === reopeningLaunchAgent(this.options.executable) && (await this.service())?.includes('/usr/bin/open')) {
@@ -84,8 +100,9 @@ export class BackgroundLaunch {
     }
     return this.status()
   }
-  async install(): Promise<{ supported: boolean; installed: boolean }> {
-    if (!this.supported) throw new Error('Background launch requires an installed Windows or macOS build.')
+  async install(): Promise<BackgroundLaunchStatus> {
+    if (!this.supported) throw new Error('Background launch requires an installed Windows, macOS or Linux build.')
+    if (this.options.platform === 'linux') return this.linux.install()
     if (this.options.platform === 'win32') await this.windows('install')
     else {
       const domain = `gui/${this.options.uid}`
@@ -108,8 +125,9 @@ export class BackgroundLaunch {
     }
     return this.status()
   }
-  async remove(): Promise<{ supported: boolean; installed: boolean }> {
+  async remove(): Promise<BackgroundLaunchStatus> {
     if (!this.supported) throw new Error('Background launch is unavailable on this platform.')
+    if (this.options.platform === 'linux') return this.linux.remove()
     if (this.options.platform === 'win32') await this.windows('remove')
     else {
       const service = await this.service()

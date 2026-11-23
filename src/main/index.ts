@@ -999,12 +999,22 @@ async function bootstrap(): Promise<void> {
   })
   keepInTray = () => preferences.get().keepRunningInTray
 
-  const backgroundLaunch = new BackgroundLaunch({ platform: process.platform, packaged: app.isPackaged, executable: process.execPath, home: app.getPath("home"), data: app.getPath("userData"), uid: process.getuid?.(), systemRoot: process.env.SystemRoot })
-  // Status checks and changes share the Windows script path.
+  const backgroundLaunch = new BackgroundLaunch({
+    platform: process.platform,
+    packaged: app.isPackaged,
+    executable: process.execPath,
+    home: app.getPath("home"),
+    data: app.getPath("userData"),
+    uid: process.getuid?.(),
+    systemRoot: process.env.SystemRoot,
+    appImage: process.env.APPIMAGE,
+    configHome: process.env.XDG_CONFIG_HOME,
+  })
+  // Serialize status checks and changes to the installed launcher.
   let backgroundLaunchPending: Promise<unknown> = Promise.resolve()
   const updateBackgroundLaunch = (action: () => ReturnType<BackgroundLaunch["status"]>) => {
     const request = backgroundLaunchPending.then(action).then(status => {
-      tray.setBackgroundRunnerInstalled(status.installed)
+      tray.setBackgroundRunnerInstalled(status.installed && status.mode !== "autostart")
       return status
     })
     backgroundLaunchPending = request.catch(() => undefined)
