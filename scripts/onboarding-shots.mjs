@@ -130,7 +130,7 @@ const scenes = [
   ["04-choice-both-details", "Entra ID and Defender cards both expanded, with area coverage and permission counts."],
   ["05-choice-personal-data", "Groups opted in with the statement of personal data stored."],
   ["06-choice-customize", "Customize access, Intune restore and Entra backup only."],
-  ["07-choice-intune-entra", "Continue with Intune and Entra ID."],
+  ["07-choice-intune-entra", "Continue with Entra ID and Intune."],
   ["08-choice-entra-only", "Continue with Entra ID, with Intune off."],
   ["09-connect-quick", "Entra-only quick setup before Microsoft, explaining broader setup-only access and the second sign-in."],
   ["09-connect-script", "Entra-only setup script with the generated command."],

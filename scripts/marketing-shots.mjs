@@ -484,11 +484,12 @@ const MAIN_OVERRIDES = `(() => {
       case "/api/detect-drifts": return json(200, M.drift[tenant] ?? { drifts: [], summary: { total: 0, critical: 0, warning: 0, info: 0, affectedTenants: 0 }, lastScan: new Date().toISOString(), backupsAnalyzed: 0 })
       case "/api/tenant-metadata/check": return json(200, { exists: true })
       case "/api/tenant-metadata/save": case "/api/tenant-metadata/delete": return json(200, { success: true })
-      case "/api/restore-journal": return json(200, { entries: [] })
+      case "/api/restore-journal": return json(200, { records: [] })
       default: return json(404, { error: "Not available in the demo" })
     }
   })
   handle("auth:accounts", () => M.accounts)
+  handle("auth:savedDirectoryRestores", () => ({ owner: "contoso-admin", pages: [] }))
   handle("license:status", () => M.license)
   handle("license:retry", () => M.license)
   handle("license:releaseTenant", () => M.license)

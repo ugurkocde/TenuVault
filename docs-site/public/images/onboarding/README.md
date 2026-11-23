@@ -12,7 +12,7 @@ Built desktop app at 1024px with fictional tenant and sign-in results. No Micros
 * 04-choice-both-details-light.png, 04-choice-both-details-dark.png: Entra ID and Defender cards both expanded, with area coverage and permission counts.
 * 05-choice-personal-data-light.png, 05-choice-personal-data-dark.png: Groups opted in with the statement of personal data stored.
 * 06-choice-customize-light.png, 06-choice-customize-dark.png: Customize access, Intune restore and Entra backup only.
-* 07-choice-intune-entra-light.png, 07-choice-intune-entra-dark.png: Continue with Intune and Entra ID.
+* 07-choice-intune-entra-light.png, 07-choice-intune-entra-dark.png: Continue with Entra ID and Intune.
 * 08-choice-entra-only-light.png, 08-choice-entra-only-dark.png: Continue with Entra ID, with Intune off.
 * 09-connect-quick-light.png, 09-connect-quick-dark.png: Entra-only quick setup before Microsoft, explaining broader setup-only access and the second sign-in.
 * 09-connect-script-light.png, 09-connect-script-dark.png: Entra-only setup script with the generated command.
