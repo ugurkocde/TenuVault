@@ -118,6 +118,8 @@ export default function OnboardingPage() {
   const [autoSignIn, setAutoSignIn] = useState<{ loginHint: string } | null>(null)
   // A setup file another admin exported: its connection details fill in the Connect and Storage steps.
   const [setup, setSetup] = useState<{ importId: string; connection: SetupConnection } | null>(null)
+  // A setup file waiting for a service choice that has to be confirmed again; Continue picks it up.
+  const [heldSetup, setHeldSetup] = useState<{ importId: string; connection: SetupConnection } | null>(null)
   const [setupChoices, setSetupChoices] = useState<{ importId: string; connections: SetupConnection[] } | null>(null)
   const [setupError, setSetupError] = useState("")
   const [openingSetup, setOpeningSetup] = useState(false)
@@ -312,16 +314,18 @@ export default function OnboardingPage() {
     setSetupNotice("")
     setAutoSignIn(null)
     // A saved choice that had to be confirmed again keeps the file waiting on the service step; its
-    // Continue then goes on to Sign in with the file's IDs.
+    // Continue then runs this again with the confirmed choice.
     if (!confirmedChoice(services)) {
-      const next = { tenant: connection.tenantId, clientId: connection.clientId, displayName: connection.name }
+      setHeldSetup({ importId, connection })
       if (!account) {
+        const next = { tenant: connection.tenantId, clientId: connection.clientId, displayName: connection.name }
         setFields(next)
         saveOnboardingDraft({ step: -1, ...next, account: null, services })
       }
       setStep(-1)
       return
     }
+    setHeldSetup(null)
     if (account && !releasingAccount.current) {
       if (sameRegistration(account, connection)) {
         setFields((current) => ({ tenant: connection.tenantId, clientId: connection.clientId, displayName: current.displayName || connection.name }))
@@ -335,8 +339,11 @@ export default function OnboardingPage() {
     setStep(1)
   }
 
-  // The Connect step shows what a setup file could not do; the service choice before it does not.
-  const showConnect = () => setStep((current) => (current === -1 ? 0 : current))
+  // The Connect step shows what a setup file could not do. A service choice that has to be confirmed
+  // again comes first: its step shows the error, and its Continue then opens Connect.
+  const showConnect = () => {
+    if (confirmedChoice(latest.current.services)) setStep((current) => (current === -1 ? 0 : current))
+  }
 
   /** The tenants of a settings file that can be connected from it: with connection details and not connected yet. */
   const setupFrom = (preview: TransferPreview) => {
@@ -355,8 +362,8 @@ export default function OnboardingPage() {
 
   // A file is read asynchronously; what it does is decided with the state of when it arrives, such as
   // a resumed sign-in the check above turned out to be gone.
-  const latest = useRef({ continueWithSetup, setupFrom })
-  latest.current = { continueWithSetup, setupFrom }
+  const latest = useRef({ continueWithSetup, setupFrom, services })
+  latest.current = { continueWithSetup, setupFrom, services }
 
   const openSetupFile = async () => {
     setOpeningSetup(true)
@@ -581,9 +588,9 @@ export default function OnboardingPage() {
       )}
 
       <div className="@container rounded-3xl bg-card p-5 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
-        {step === -1 && <OnboardingServices choice={services} onChange={setServices} onContinue={() => setStep(setup ? 1 : 0)} />}
+        {step === -1 && <OnboardingServices choice={services} onChange={setServices} onContinue={() => { if (heldSetup) continueWithSetup(heldSetup.importId, heldSetup.connection); else setStep(0) }} />}
         {/* A file handed over from Settings can fail on any step, for example after its review expired. */}
-        {step > 0 && setupError && (
+        {step !== 0 && setupError && (
           <p role="alert" className="rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700">
             {setupError} Open the file again in Settings, under Import and export, or with Set up from a file on the Connect step.
           </p>

@@ -347,6 +347,20 @@ for (const azure of [false, true]) describe(azure ? "Azure emulator mixed runs" 
     expect(final.RunCounts.failures).toBeGreaterThan(0)
     expect(final.LargeBackupOutcomes).toEqual(expect.arrayContaining([expect.objectContaining({ Folder: "AuthorizationPolicy", Outcome: "failed" })]))
     expect(job.results?.types.find(type => type.folder === "AuthorizationPolicy")?.state).toBe("unreadable")
+    // The final ordinary manifest landed, so the run is confirmed: its audit reports warnings, not uncertain.
+    expect(job.status).toBe("Completed")
+    expect(job.commitUnconfirmed).toBeFalsy()
+    expect(job.failures).toBeGreaterThan(0)
+  })
+  it("leaves a large-only run unconfirmed when its own manifest commit gets a server error", async () => {
+    undo = registerTestTypes([largeType])
+    const f = await setup()
+    f.refuse(500, "metadata.json")
+    const engine = new BackupEngine({ now: () => new Date("2026-11-17T12:00:00Z"), fetch: f.fetcher, getToken: async () => jwt({ scp: "Policy.Read.All" }), services: () => ({ services: ["entra"] }), retentionDays: () => 0 })
+    const job = await engine.waitForJob(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: f.account, scope: { excluded: INTUNE_TYPES.filter(type => type.folder !== "AuthorizationPolicy").map(type => type.folder) } }))
+    expect(job.backupFolder).toMatch(/^backup-large-/)
+    expect(job.commitUnconfirmed).toBe(true)
+    expect(job.outcomes?.types.find(type => type.folder === "AuthorizationPolicy")).toMatchObject({ outcome: "failed" })
   })
   it("protects a valid complete run inside retention", async () => {
     const f = await pair()

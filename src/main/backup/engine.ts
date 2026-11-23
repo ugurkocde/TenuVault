@@ -1101,13 +1101,15 @@ export class BackupEngine {
         const ending = typesNow(false)
         const saved = Object.values(counts).reduce((sum, count) => sum + count, 0)
         const status = failures ? (saved ? "CompletedWithWarnings" : "Failed") : nothingRead(ending) ? "Failed" : "Success"
-        await commitManifest(largeFolder, manifest(status, this.now(), outcomesNow(status, this.now(), false), {}, largeFolder))
+        // In a split run the final ordinary manifest is the run's record, so only its commit can leave the
+        // run unconfirmed; an ambiguous large commit is a failure of the large types below.
+        await commitManifest(largeFolder, manifest(status, this.now(), outcomesNow(status, this.now(), false), {}, largeFolder), !mixed)
       } catch (error) {
         network.signal.throwIfAborted()
         // Storage that refuses the large container (403 or 404) needs provisioning: like a refused claim,
         // the large types are skipped with that guidance and the ordinary backup stands.
         if (error instanceof LargeStorageError && (error.status === 403 || error.status === 404)) {
-          for (const type of largeTypes) endType(type, error)
+          for (const type of largeTypes) if (settled.get(type.folder)?.outcome !== "failed") endType(type, error)
         }
         // Any other failure, such as a server error or an unanswered commit, leaves snapshots whose
         // inventory may not exist. That is a failure of each type that was read, so the run and its
@@ -1382,10 +1384,10 @@ export class BackupEngine {
         // their status alone.
         const status = String(metadata.Status ?? "").toLowerCase()
         const complete = (status === "success" || status === "succeeded") && (metadata.Failures === undefined || metadata.Failures === 0)
-        const holds = Array.isArray(metadata.Outcomes) ? completeFolders(metadata) : complete ? restorableFolders(metadata) : new Set<string>()
+        const holds = Array.isArray(metadata.Outcomes) ? completeFolders(metadata) : complete ? indexedFolders(metadata, restorableFolders(metadata)) : new Set<string>()
         // A folder with masked values does not satisfy coverage, so the newest backup with the plain values stays.
         // Coverage is recorded before a pair's own deletion checks, so older copies are judged against it.
-        for (const folder of [...holds, ...(paired && companion ? restorableFolders(companion) : [])]) {
+        for (const folder of [...holds, ...(paired && companion ? indexedFolders(companion, restorableFolders(companion)) : [])]) {
           if (uncovered.delete(folder)) holdsUncovered = true
         }
         if (paired) {
@@ -1568,13 +1570,20 @@ export function completeFolders(metadata: Record<string, unknown> | null | undef
   if (!metadata) return new Set()
   const restorable = restorableFolders(metadata)
   const outcomes = Array.isArray(metadata.Outcomes) ? metadata.Outcomes as Array<{ Folder?: unknown; Outcome?: unknown }> : null
-  if (!outcomes) return completeHalf(metadata) ? restorable : new Set()
+  if (!outcomes) return completeHalf(metadata) ? indexedFolders(metadata, restorable) : new Set()
+  const held = new Set(outcomes.filter(entry => typeof entry.Folder === "string" && (entry.Outcome === "saved" || entry.Outcome === "notConfigured")
+    && restorable.has(entry.Folder)).map(entry => entry.Folder as string))
+  return indexedFolders(metadata, held)
+}
+
+/**
+ * The folders of a backup half that can be opened: a large type only with its complete inventory, and
+ * any other type unless it carries an incomplete one. A manifest that names a large type without its
+ * index, for example in an inconsistent imported archive, holds nothing of that type.
+ */
+export function indexedFolders(metadata: Record<string, unknown>, folders: Iterable<string>): Set<string> {
   const large = (metadata.LargeItems ?? {}) as Record<string, { complete?: unknown } | undefined>
-  // A large type is held only with its complete inventory; an outcome without one, for example in an
-  // inconsistent imported archive, holds nothing that can be opened.
-  const indexed = (folder: string) => typeForFolder(folder)?.volume === "large" ? large[folder]?.complete === true : large[folder] === undefined || large[folder]!.complete === true
-  return new Set(outcomes.filter(entry => typeof entry.Folder === "string" && (entry.Outcome === "saved" || entry.Outcome === "notConfigured")
-    && restorable.has(entry.Folder) && indexed(entry.Folder)).map(entry => entry.Folder as string))
+  return new Set([...folders].filter(folder => typeForFolder(folder)?.volume === "large" ? large[folder]?.complete === true : large[folder] === undefined || large[folder]!.complete === true))
 }
 
 /** The permissions in the run's Graph token, read only when a service with a token pre-check needs checking. */

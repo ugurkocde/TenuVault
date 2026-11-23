@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest"
-import { completeFolders } from "../src/main/backup/engine"
+import { completeFolders, indexedFolders } from "../src/main/backup/engine"
 import { registerTestTypes, testType } from "./helpers/backup-fixture"
 
 const largeType = testType("AuthorizationPolicy", "synthetic", { volume: "large", listOnly: true, apiVersion: "v1.0", inventory: true })
@@ -21,6 +21,14 @@ describe("completeFolders", () => {
     expect([...completeFolders(manifest({}))]).toEqual(["DeviceCategories"])
     expect([...completeFolders(manifest({ LargeItems: { AuthorizationPolicy: { version: 1, count: 1, shards: 1, complete: false } } }))]).toEqual(["DeviceCategories"])
     expect([...completeFolders(manifest({ LargeItems: { AuthorizationPolicy: { version: 1, count: 1, shards: 1, complete: true } } }))].sort()).toEqual(["AuthorizationPolicy", "DeviceCategories"])
+  })
+
+  it("applies the index rule to manifests without per-type outcomes", () => {
+    undo = registerTestTypes([largeType])
+    const legacy = { Status: "Success", Failures: 0, Coverage: "Complete", Scope: { Included: ["AuthorizationPolicy", "DeviceCategories"], Excluded: [] } }
+    expect([...completeFolders(legacy)]).toEqual(["DeviceCategories"])
+    expect([...indexedFolders(legacy, ["AuthorizationPolicy", "DeviceCategories"])]).toEqual(["DeviceCategories"])
+    expect([...indexedFolders({ LargeItems: { AuthorizationPolicy: { complete: true } } }, ["AuthorizationPolicy"])]).toEqual(["AuthorizationPolicy"])
   })
 
   it("never credits a failed type", () => {

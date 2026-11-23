@@ -1216,6 +1216,38 @@ describe("setup from a file", () => {
     expect(container.querySelector<HTMLInputElement>("#clientId")!.value).toBe(FILE_CLIENT)
   })
 
+  it("shows an unusable setup link's error on a service choice that must be confirmed again, then on Connect", async () => {
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 1, tenant: "", clientId: "", displayName: "", services: "broken" }))
+    state.transferPreview.mockRejectedValueOnce(new Error("This settings file was reviewed too long ago."))
+    const container = document.createElement("div")
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    roots.push(root)
+    act(() => root.render(createElement(MemoryRouter, { initialEntries: [`/portal/onboarding?setup=import-1&tenant=${FILE_TENANT}`] }, createElement(OnboardingPage))))
+    await flush()
+    await flush()
+    expect(container.textContent).toContain("What do you want to back up?")
+    expect(container.textContent).toContain("This settings file was reviewed too long ago.")
+    await act(async () => { container.querySelector<HTMLInputElement>('[aria-label="Back up Intune"]')!.click() })
+    await act(async () => { button(container, "Continue with Intune")!.click() })
+    await flush()
+    expect(container.textContent).toContain("Connect your tenant")
+    expect(container.textContent).toContain("This settings file was reviewed too long ago.")
+  })
+
+  it("keeps a matching sign-in when a setup file waited for the service choice, and goes on to storage", async () => {
+    const account = { tenantId: FILE_TENANT, clientId: FILE_CLIENT, username: "admin@fabrikam.com" }
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 1, tenant: FILE_TENANT, clientId: FILE_CLIENT, displayName: "", account, signedInAt: Date.now(), services: "broken" }))
+    state.accounts.mockResolvedValue([account])
+    const container = await openWith(filePreview())
+    expect(container.textContent).toContain("What do you want to back up?")
+    await act(async () => { container.querySelector<HTMLInputElement>('[aria-label="Back up Intune"]')!.click() })
+    await act(async () => { button(container, "Continue with Intune")!.click() })
+    await flush()
+    expect(state.releaseTenant).not.toHaveBeenCalled()
+    expect(container.textContent).toContain("Choose where backups are stored")
+  })
+
   it("keeps a sign-in to the file's tenant and app registration and goes on to storage", async () => {
     const account = { tenantId: FILE_TENANT, clientId: FILE_CLIENT, username: "admin@fabrikam.com" }
     state.store.set(DRAFT_KEY, JSON.stringify({ step: 1, tenant: FILE_TENANT, clientId: FILE_CLIENT, displayName: "", account, signedInAt: Date.now() }))
