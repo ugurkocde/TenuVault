@@ -545,12 +545,12 @@ export function BackgroundAndRetention() {
       setCheckBusy(false)
     }
   }
-  const changeLauncher = async () => {
+  const changeLauncher = async (action: "install" | "remove") => {
     if (launchInFlight.current || checkInFlight.current || !launcher?.supported) return
     launchInFlight.current = true
-    setLaunchBusy(launcher.installed ? "remove" : "install")
+    setLaunchBusy(action)
     try {
-      setLauncher(await (launcher.installed ? bridge.backgroundLaunch.remove() : bridge.backgroundLaunch.install()))
+      setLauncher(await (action === "remove" ? bridge.backgroundLaunch.remove() : bridge.backgroundLaunch.install()))
     } catch (error) {
       toast(String(error), "error")
     } finally {
@@ -595,14 +595,18 @@ export function BackgroundAndRetention() {
           <p className="font-medium">Restart TenuVault for scheduled backups</p>
           <p className="mt-2 text-sm">{launchDescription} Backups still require valid Microsoft sign-in (or a verified Backup Reader for scheduled backups), plan access and available storage. This does not run while signed out, asleep or powered off.</p>
           <div className="mt-3 flex flex-wrap items-center gap-3">
-            <Button variant="outline" disabled={!launcher?.supported || checkBusy || !!launchBusy} onClick={() => void changeLauncher()}>{launchBusy === "install" ? "Installing..." : launchBusy === "remove" ? "Removing..." : launcher?.installed ? "Remove background launch" : "Install background launch"}</Button>
+            <Button variant="outline" disabled={!launcher?.supported || checkBusy || !!launchBusy} onClick={() => void changeLauncher(launcher?.installed ? "remove" : "install")}>{launchBusy === "install" && !launcher?.installed ? "Installing..." : launchBusy === "remove" ? "Removing..." : launcher?.installed ? "Remove background launch" : "Install background launch"}</Button>
             <p role="status">{checkBusy ? "Checking..." : checkError ? "Unable to check" : launcher?.mode === "autostart" ? "Installed (sign-in only)" : launcher?.installed ? "Installed" : "Not installed"}</p>
+            {launcher?.mode === "autostart" && (
+              <Button variant="outline" disabled={checkBusy || !!launchBusy} onClick={() => void changeLauncher("install")}>{launchBusy === "install" ? "Checking..." : "Try systemd timer"}</Button>
+            )}
           </div>
           {checkError && <div className="mt-3 flex flex-wrap items-center gap-3">
             <p role="alert">Could not check background startup. Try again.</p>
             <Button variant="outline" size="sm" disabled={checkBusy} onClick={() => void checkLauncher()}>Retry check</Button>
           </div>}
-          {launcher && !launcher.supported && <p className="mt-2 text-xs">Available in installed Windows, macOS and Linux builds.</p>}
+          {info.platform === "linux" && <p className="mt-2 text-xs">Background launch requires a Linux build you package yourself. There is no official Linux download yet.</p>}
+          {info.platform !== "linux" && launcher && !launcher.supported && <p className="mt-2 text-xs">Available in installed Windows and macOS builds.</p>}
           <p className="mt-2 text-xs">Backups need an awake computer and a signed in session. Locking the screen does not sign you out; closing a laptop lid may put it to sleep.</p>
           <p className="mt-2 text-xs">To stop automatic restarts, remove the background runner and turn off Start at login before quitting. Removing it leaves your backup schedules unchanged.</p>
         </div>

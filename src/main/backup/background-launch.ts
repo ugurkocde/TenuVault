@@ -45,9 +45,7 @@ export class BackgroundLaunch {
   constructor(private readonly options: Options) {}
   private execute(file: string, args: string[]) {
     if (this.options.exec) return this.options.exec(file, args)
-    // Bus errors determine whether the Linux launcher can fall back to autostart.
-    const env = file === 'systemctl' ? { ...process.env, LC_ALL: 'C' } : undefined
-    return run(file, args, { env, timeout: 30_000 })
+    return run(file, args, { timeout: 30_000 })
   }
   private get supported() { return this.options.packaged && ['win32', 'darwin', 'linux'].includes(this.options.platform) }
   private get linux() {
@@ -84,8 +82,9 @@ export class BackgroundLaunch {
     try { const plist = await readFile(this.plist, 'utf8'), service = await this.service(); return { supported: true, installed: !!service && (!service.includes('/usr/bin/open') || (plist === launchAgent(this.options.executable) && service.includes(dirname(dirname(dirname(this.options.executable)))))) } }
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { supported: true, installed: false }; throw error }
   }
-  /** Checks the status and replaces an agent of an earlier build that brought the window to the front. */
+  /** Checks the status and updates installed launchers that need repair. */
   async refresh(): Promise<BackgroundLaunchStatus> {
+    if (this.supported && this.options.platform === 'linux') return this.linux.refresh()
     if (this.supported && this.options.platform === 'darwin') {
       const current = await readFile(this.plist, 'utf8').catch(() => null)
       if (current === reopeningLaunchAgent(this.options.executable) && (await this.service())?.includes('/usr/bin/open')) {

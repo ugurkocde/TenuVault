@@ -6,7 +6,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Label } from "~/components/ui/label"
 import type { Tenant } from "~/contexts/TenantContext"
 import { storageLabel } from "~/lib/storage-label"
-import type { AppPreferences, BackupReaderState, BackupSettings } from "../../shared/ipc"
+import type { AppPreferences, BackgroundLaunchStatus, BackupReaderState, BackupSettings } from "../../shared/ipc"
 import { LOCAL_STORAGE_PREFIX } from "../../shared/constants"
 import { describeCloudSchedule, nextRunsInZone } from "../../shared/cloud-backup"
 import { allows, COMMUNITY_RETENTION_DAYS } from "../../shared/plans"
@@ -70,7 +70,7 @@ function TenantSchedule({ tenantId, tenantName, tenant: tenantProp, onStorageCha
   const [prefs, setPrefs] = useState<AppPreferences | null>(null)
   const [prefsError, setPrefsError] = useState<string | null>(null)
   const [prefsSaveError, setPrefsSaveError] = useState<string | null>(null)
-  const [runner, setRunner] = useState<{ installed: boolean } | null>(null)
+  const [runner, setRunner] = useState<BackgroundLaunchStatus | null>(null)
   const [readerState, setReaderState] = useState<BackupReaderState | null>(null)
   const [timeError, setTimeError] = useState(false)
   const timeInput = useRef<HTMLInputElement>(null)
@@ -282,6 +282,7 @@ function TenantSchedule({ tenantId, tenantName, tenant: tenantProp, onStorageCha
             {current && (!dirty || !enabled) && <span className="text-sm text-gray-500">{describeSchedule(!enabled ? { ...current, enabled: true } : current)}</span>}
           </div>
           {current && runner?.installed === false && <p className="text-xs text-gray-500">Background restart is not installed. Backups run while TenuVault is running.</p>}
+          {current && runner?.mode === "autostart" && <p className="text-xs text-gray-500">Background restart is installed for sign-in only. If you quit TenuVault, open it again or sign in again to resume backups.</p>}
         </div>
 
         {dailyExplained && <UpgradeNote feature="dailySchedule" />}

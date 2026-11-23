@@ -67,67 +67,103 @@ Terminal=false
     return (await this.execute('systemctl', ['--user', ...args])).stdout.trim()
   }
 
-  private async session(): Promise<string | null> {
-    try { return await this.systemctl('show', '--property=ActiveState', '--value', SESSION) }
-    catch (error) {
-      const failure = error as NodeJS.ErrnoException & { stderr?: string }
-      const message = failure.stderr ?? String(error)
-      const noBus = /connect to (?:the )?(?:user |user scope )?bus.*(?:No medium found|No such file|Connection refused|Host is down|Transport endpoint is not connected|\$DBUS_SESSION_BUS_ADDRESS)/i
-      const noManager = /(?:Process org\.freedesktop\.systemd1 exited|org\.freedesktop\.systemd1 was not provided)/i
-      if (failure.code === 'ENOENT' || noBus.test(message) || noManager.test(message)) return null
-      throw error
-    }
+  private probe(...args: string[]): Promise<string | null> {
+    return this.systemctl(...args).catch(() => null)
+  }
+
+  private session(): Promise<string | null> {
+    return this.probe('show', '--property=ActiveState', '--value', SESSION)
+  }
+
+  private timerState(): Promise<string | null> {
+    return this.probe('show', '--property=UnitFileState,ActiveState', TIMER)
+  }
+
+  private timerInstalled(state: string | null): boolean {
+    const properties = state?.split('\n') ?? []
+    return properties.includes('UnitFileState=enabled') && properties.includes('ActiveState=active')
+  }
+
+  private async changeTimer(action: 'enable' | 'disable'): Promise<void> {
+    try { await this.systemctl(action, '--now', TIMER) }
+    catch (error) { throw new Error(`Could not ${action} the TenuVault background timer in your systemd user session.`, { cause: error }) }
   }
 
   async status(): Promise<BackgroundLaunchStatus> {
-    if (await readIfPresent(this.service) === this.serviceContent && await readIfPresent(this.timer) === TIMER_CONTENT && await this.session() === 'active') {
-      const state = await this.systemctl('show', '--property=UnitFileState,ActiveState', TIMER)
-      const properties = state.split('\n')
-      if (properties.includes('UnitFileState=enabled') && properties.includes('ActiveState=active')) {
-        return { supported: true, installed: true, mode: 'systemd' }
-      }
-    }
+    if (this.timerInstalled(await this.timerState())) return { supported: true, installed: true, mode: 'systemd' }
     if (await readIfPresent(this.autostart) === this.desktopContent) return { supported: true, installed: true, mode: 'autostart' }
     return { supported: true, installed: false }
   }
 
-  async install(): Promise<BackgroundLaunchStatus> {
-    if (!isAbsolute(this.executable)) throw new Error('Background launch requires an absolute application path.')
-    const current = await this.status()
-    if (current.installed) return current
-
-    // A desktop must activate the graphical target and export its display to the user manager.
-    const session = await this.session()
-    const environment = session === 'active' ? await this.systemctl('show-environment') : ''
-    if (/^(?:DISPLAY|WAYLAND_DISPLAY)=.+/m.test(environment)) {
-      await mkdir(this.units, { recursive: true, mode: 0o700 })
-      await writeFile(this.service, this.serviceContent, { mode: 0o600 })
-      await writeFile(this.timer, TIMER_CONTENT, { mode: 0o600 })
-      // Enabling reloads the unit definitions before starting the timer. An active app stays up.
-      await this.systemctl('enable', '--now', TIMER)
-      await rm(this.autostart, { force: true })
-    } else {
-      await this.removeUnits(session)
-      await mkdir(dirname(this.autostart), { recursive: true, mode: 0o700 })
-      await writeFile(this.autostart, this.desktopContent, { mode: 0o600 })
+  private async installTimer(): Promise<BackgroundLaunchStatus> {
+    await mkdir(this.units, { recursive: true, mode: 0o700 })
+    await writeFile(this.service, this.serviceContent, { mode: 0o600 })
+    await writeFile(this.timer, TIMER_CONTENT, { mode: 0o600 })
+    // Enabling reloads the unit definitions before starting the timer. An active app stays up.
+    await this.changeTimer('enable')
+    if (!this.timerInstalled(await this.timerState())) {
+      throw new Error('The TenuVault background timer did not start. Check that your app and systemd user session use the same configuration directory (XDG_CONFIG_HOME).')
     }
-    return this.status()
+    await rm(this.autostart, { force: true })
+    return { supported: true, installed: true, mode: 'systemd' }
   }
 
-  private async removeUnits(session?: string | null): Promise<void> {
+  private async refreshTimer(): Promise<BackgroundLaunchStatus> {
+    const [service, timer] = await Promise.all([readIfPresent(this.service), readIfPresent(this.timer)])
+    if (service === this.serviceContent && timer === TIMER_CONTENT) return { supported: true, installed: true, mode: 'systemd' }
+    try { return await this.installTimer() }
+    catch (error) {
+      // Retain the previous definitions so the next startup can retry the repair.
+      await Promise.all([
+        service === null ? rm(this.service, { force: true }) : writeFile(this.service, service, { mode: 0o600 }),
+        timer === null ? rm(this.timer, { force: true }) : writeFile(this.timer, timer, { mode: 0o600 }),
+      ])
+      throw error
+    }
+  }
+
+  async refresh(): Promise<BackgroundLaunchStatus> {
+    const current = await this.status()
+    if (current.mode !== 'systemd') return current
+    try { return await this.refreshTimer() }
+    catch (error) {
+      console.warn('Could not refresh the TenuVault background timer.', error)
+      return current
+    }
+  }
+
+  async install(): Promise<BackgroundLaunchStatus> {
+    if (!isAbsolute(this.executable)) throw new Error('Background launch requires an absolute application path.')
+    const timer = await this.timerState()
+    if (this.timerInstalled(timer)) return this.refreshTimer()
+
+    // A desktop must activate the graphical target and export its display to the user manager.
+    const session = timer === null ? null : await this.session()
+    const environment = session === 'active' ? await this.probe('show-environment') : null
+    if (environment && /^(?:DISPLAY|WAYLAND_DISPLAY)=.+/m.test(environment)) return this.installTimer()
+
+    await this.removeUnits(session !== null)
+    await mkdir(dirname(this.autostart), { recursive: true, mode: 0o700 })
+    await writeFile(this.autostart, this.desktopContent, { mode: 0o600 })
+    const status = await this.status()
+    if (!status.installed) throw new Error('Could not verify the TenuVault sign-in launcher after installation.')
+    return status
+  }
+
+  private async removeUnits(managerAvailable: boolean, installed = false): Promise<void> {
     const timerExists = await readIfPresent(this.timer) !== null
-    if (!timerExists && await readIfPresent(this.service) === null) return
-    const managerAvailable = (session === undefined ? await this.session() : session) !== null
+    if (!installed && !timerExists && await readIfPresent(this.service) === null) return
     // Stop only the timer. The service may be running an active backup.
-    if (managerAvailable && timerExists) await this.systemctl('disable', '--now', TIMER)
+    if (managerAvailable && (timerExists || installed)) await this.changeTimer('disable')
     await rm(this.enabledTimer, { force: true })
     await rm(this.timer, { force: true })
     await rm(this.service, { force: true })
-    if (managerAvailable) await this.systemctl('daemon-reload')
+    if (managerAvailable) await this.probe('daemon-reload')
   }
 
   async remove(): Promise<BackgroundLaunchStatus> {
-    await this.removeUnits()
+    const timer = await this.timerState()
+    await this.removeUnits(timer !== null, this.timerInstalled(timer))
     await rm(this.autostart, { force: true })
     return this.status()
   }

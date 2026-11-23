@@ -1,6 +1,7 @@
 # Background execution
 
-Install background launch in Settings on a packaged Windows, macOS or Linux app. This is a per-user
+Install background launch in Settings on a packaged Windows or macOS app, or on a Linux build you
+package yourself. There is no official Linux download yet. This is a per-user
 launcher, not a system service: it runs under the same logged-in OS account that owns the encrypted
 credentials and backup keys. Installation and removal use the OS task APIs; no password is stored.
 
@@ -13,7 +14,8 @@ Linux uses a systemd user timer tied to `graphical-session.target`, starting at 
 every five minutes. The user manager inherits the desktop's display environment, which Electron
 needs even when hidden. Without that systemd session support, an XDG autostart entry starts the
 app at login only. The launcher uses the AppImage file when applicable, or the installed executable.
-Reinstall it after moving the executable or replacing an AppImage with a file at a new path.
+Open TenuVault from its new location to update an installed timer. Reinstall the sign-in-only
+launcher after moving the executable or AppImage.
 
 The existing scheduler catches up the latest missed slot after launch. It serializes scheduled runs,
 and the backup engine prevents concurrent jobs for the same tenant. A failed scheduled backup is recorded and
