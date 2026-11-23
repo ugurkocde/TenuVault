@@ -1,4 +1,6 @@
 import type { GraphCall } from "../../../portal/lib/policies/graph-restore"
+import { GROUP_CHECK_REQUIRED } from "../../../shared/group-access"
+import { toGroup } from "../../oib/assignments"
 import { itemName, typeForFolder, type Item } from "../../../shared/intune/registry"
 import { isGraphId, isGuid } from "../../../shared/security"
 import type { Plan } from "../../../shared/plans"
@@ -65,7 +67,7 @@ export function requireSourceTenant(context: { tenantId: string; plan: Plan; dep
   return source
 }
 
-/** Objects of the destination a mapping can point to; groups are entered by object ID. */
+/** Objects of the destination a non-group mapping can point to. */
 export async function mappableObjects(deps: FeatureDeps, tenantId: string, kind: unknown): Promise<{ objects: Array<{ id: string; name: string }>; readable: boolean; reason?: string }> {
   if (kind !== "filter" && kind !== "scopeTag" && kind !== "reusableSetting") throw new FeatureError("Choose filter, scopeTag or reusableSetting.")
   try {
@@ -93,14 +95,17 @@ async function names(graph: GraphCall, kind: Exclude<ReferenceKind, "group">, me
   }
 }
 
-/** A group's state; without Group.Read.All the answer is unknown, never a guess. */
-async function groupState(graph: GraphCall, id: string): Promise<{ state: "found" | "missing" | "unknown"; name: string | null }> {
+/** Whether the tenant can verify the group and whether Intune can assign it. */
+async function groupState(graph: GraphCall, id: string): Promise<{ state: "found" | "missing" | "unknown" | "unassignable"; name: string | null }> {
   try {
-    const group = await getOne(graph, `groups/${encodeURIComponent(id)}?$select=id,displayName`)
+    const group = await getOne(graph, `groups/${encodeURIComponent(id)}?$select=id,displayName,securityEnabled,groupTypes`)
     if (!group) return { state: "missing", name: null }
-    return { state: "found", name: typeof group.displayName === "string" ? group.displayName : null }
-  } catch {
-    return { state: "unknown", name: null }
+    const verified = toGroup(group)
+    if (verified?.id !== id.toLowerCase()) throw new FeatureError("Microsoft Graph did not return the requested group.", 502)
+    return { state: verified.kind === "other" ? "unassignable" : "found", name: verified.displayName }
+  } catch (error) {
+    if (error instanceof GraphReadError && (error.status === 401 || error.status === 403)) return { state: "unknown", name: null }
+    throw error
   }
 }
 
@@ -139,7 +144,11 @@ export async function targetStateHash(graph: GraphCall, reads: TargetReads, poli
   state.filters = await subset("filter", reads.filterIds)
   state.scopeTags = await subset("scopeTag", reads.scopeTagIds.filter((id) => id !== "0"))
   state.reusableSettings = await subset("reusableSetting", reads.reusableSettingIds)
-  state.groups = await Promise.all(reads.groupIds.map(async (id) => ({ id: id.toLowerCase(), ...(await groupState(graph, id)) })))
+  state.groups = await Promise.all(reads.groupIds.map(async (id) => {
+    const group = await groupState(graph, id)
+    if (group.state === "unknown") throw new FeatureError(GROUP_CHECK_REQUIRED, 403)
+    return { id: id.toLowerCase(), ...group }
+  }))
   return hashOf(state)
 }
 
@@ -190,14 +199,14 @@ export async function resolveTarget(deps: FeatureDeps, destinationTenantId: stri
     targetObjects[kind] = await read("Destination objects", () => names(targetGraph, kind, targetListings))
     sourceNames[kind] = (sameTenant ? targetObjects[kind] : await read("Source objects", () => names(sourceGraph, kind, sourceListings))) ?? new Map()
   }
-  const groupStates = new Map<string, { state: "found" | "missing" | "unknown"; name: string | null }>()
+  const groupStates = new Map<string, Awaited<ReturnType<typeof groupState>>>()
   const sourceGroupNames = new Map<string, string>()
   for (const reference of references.filter((entry) => entry.kind === "group")) {
     const mapping = input.mappings.find((entry) => entry.kind === "group" && entry.confirmed && entry.sourceId.toLowerCase() === reference.sourceId.toLowerCase())
     const targetId = mapping?.targetId ?? (sameTenant ? reference.sourceId : null)
-    if (targetId) groupStates.set(targetId.toLowerCase(), await groupState(targetGraph, targetId))
-    const sourceGroup = sameTenant && targetId ? groupStates.get(targetId.toLowerCase())! : await groupState(sourceGraph, reference.sourceId)
-    if (sourceGroup.name) sourceGroupNames.set(reference.sourceId.toLowerCase(), sourceGroup.name)
+    if (targetId) groupStates.set(targetId.toLowerCase(), await read("The destination group", () => groupState(targetGraph, targetId)))
+    const sourceGroup = sameTenant && targetId ? groupStates.get(targetId.toLowerCase())! : await groupState(sourceGraph, reference.sourceId).catch(() => null)
+    if (sourceGroup?.name) sourceGroupNames.set(reference.sourceId.toLowerCase(), sourceGroup.name)
   }
   sourceNames.group = sourceGroupNames
   const resolutions = resolveReferences(references, { mappings: input.mappings, sourceNames, targetObjects, groupStates, sameTenant })
@@ -224,7 +233,7 @@ export async function resolveTarget(deps: FeatureDeps, destinationTenantId: stri
   }
 
   const confirmed = (kind: ReferenceKind) => resolutions.filter((entry) => entry.kind === kind && entry.targetId && entry.state !== "missing" && entry.state !== "rejected").map((entry) => entry.targetId!)
-  const targetReads: TargetReads = { policyId: input.targetObjectId, policyFolder: type.folder, requireUnredacted: input.acknowledgeRedacted !== true, filterIds: confirmed("filter"), scopeTagIds: input.targetObjectId ? destinationTags : confirmed("scopeTag"), reusableSettingIds: confirmed("reusableSetting"), groupIds: confirmed("group") }
+  const targetReads: TargetReads = { policyId: input.targetObjectId, policyFolder: type.folder, requireUnredacted: input.acknowledgeRedacted !== true, filterIds: confirmed("filter"), scopeTagIds: input.targetObjectId ? destinationTags : confirmed("scopeTag"), reusableSettingIds: confirmed("reusableSetting"), groupIds: resolutions.flatMap(entry => entry.kind === "group" && entry.state === "mapped" && entry.targetId ? [entry.targetId] : []) }
   const stateHash = await read("The destination state", () => targetStateHash(targetGraph, targetReads, targetPolicy, targetListings))
   const blocked = findings.some((finding) => finding.severity === "blocking") || !translated.body
   return {

@@ -11,6 +11,17 @@ describe("optional permissions", () => {
     expect(byId.groupRead).toMatchObject({ granted: true })
   })
 
+  it.each(["GroupMember.Read.All", "GroupMember.ReadWrite.All", "Group.Read.All", "Group.ReadWrite.All", "Directory.Read.All", "Directory.ReadWrite.All"])("accepts %s for group reads", (scope) => {
+    const status = optionalPermissionStatus({ kind: "delegated", permissions: new Set([scope]) })
+    expect(status.find(entry => entry.id === "groupRead")).toMatchObject({ granted: true, missing: [] })
+    expect(status.find(entry => entry.id === "groupRecipients")).toMatchObject({ granted: false, missing: ["User.Read.All"] })
+  })
+
+  it("recommends the least privileged group scope when the token lacks group read access", () => {
+    const status = optionalPermissionStatus({ kind: "delegated", permissions: new Set(["User.Read.All", "Group.Create"]) })
+    expect(status.find(entry => entry.id === "groupRead")).toMatchObject({ granted: false, missing: ["GroupMember.Read.All"] })
+  })
+
   it("names only the missing half of a pair", () => {
     const status = optionalPermissionStatus({ kind: "delegated", permissions: new Set(["GroupMember.Read.All"]) })
     expect(status.find((entry) => entry.id === "groupRecipients")).toMatchObject({ granted: false, missing: ["User.Read.All"] })

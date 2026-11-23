@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest"
+import { checkSpec } from "../src/main/oib/assignments"
+import type { GraphCall } from "../src/portal/lib/policies/graph-restore"
+import { GROUP_CHECK_REQUIRED } from "../src/shared/group-access"
+import { describe, expect, it, vi } from "vitest"
 import { alreadyTargeted, assignmentsFor, assignsAnything, conflictingGroups, describeAssignment, directAssignments, emptySpec, filterPlatformFor, includesFor, mergeAssignments, oibScope, parseSpec, sameAssignments, writableAssignment } from "../src/shared/oib/assignments"
 
 const A = "aaaaaaaa-0000-4000-8000-000000000001"
@@ -36,6 +39,28 @@ describe("assignment spec", () => {
     expect(() => parseSpec({ unmarked: "all" })).toThrow("marker")
     expect(() => parseSpec({ filters: { linux: { id: F, mode: "include" } } })).toThrow("Unknown assignment filter platform")
     expect(() => parseSpec({ filters: { macOS: { id: F, mode: "only" } } })).toThrow("includes or excludes")
+  })
+})
+
+describe("checking groups in the tenant", () => {
+  const spec = { ...emptySpec(), deviceGroups: [{ id: A }, { id: B }] }
+  const group = (id: string, displayName: string) => ({ id, displayName, securityEnabled: true, groupTypes: [] })
+  const next = "groups?$skiptoken=page2"
+
+  it("follows group lookup continuation links and uses the tenant names", async () => {
+    const graph = vi.fn<GraphCall>()
+      .mockResolvedValueOnce({ status: 200, body: { value: [group(A, "Pilot Windows")], "@odata.nextLink": `https://graph.microsoft.com/beta/${next}` } })
+      .mockResolvedValueOnce({ status: 200, body: { value: [group(B, "Pilot Mac")] } })
+    const checked = await checkSpec(graph, spec)
+    expect(graph).toHaveBeenLastCalledWith("GET", next)
+    expect(checked.spec.deviceGroups).toEqual([{ id: A, name: "Pilot Windows" }, { id: B, name: "Pilot Mac" }])
+  })
+
+  it.each([401, 403])("refuses a group spec when a lookup page returns %s", async status => {
+    const graph = vi.fn<GraphCall>()
+      .mockResolvedValueOnce({ status: 200, body: { value: [group(A, "Pilot Windows")], "@odata.nextLink": `https://graph.microsoft.com/beta/${next}` } })
+      .mockResolvedValueOnce({ status, body: {} })
+    await expect(checkSpec(graph, spec)).rejects.toMatchObject({ status: 403, message: GROUP_CHECK_REQUIRED })
   })
 })
 

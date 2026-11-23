@@ -1,3 +1,4 @@
+import { GROUP_CHECK_REQUIRED } from "../src/shared/group-access"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { handleOib, migrateLegacyOibRuns, OIB_BACKUP_POLLING, setOibStore } from "../src/main/oib/service"
 import { packFolder, packItems, parsePackFile, resetOibSource } from "../src/main/oib/source"
@@ -431,13 +432,17 @@ describe("assignments", () => {
     expect(await handleOib({ action: "oib-runs", tenantId })).toEqual({ runs: [] })
   })
 
-  it("deploys with group IDs when groups cannot be read", async () => {
+  it("blocks deployments with group IDs when group access is denied and supports unassigned deployment", async () => {
     const writes: string[] = []
     vi.stubGlobal("fetch", world({ policies: [], groupsDenied: true }, writes))
     await source()
-    const run = await handleOib({ ...base, action: "oib-deploy", commit, backup: false, storageAccountName: null, items: [{ source: SC, mode: "create" }], assignments: { ...spec, filters: {} } }) as OibRun
-    expect(run.created[0]).toMatchObject({ assignment: { include: 1, exclude: 1 } })
-    expect(run.assignments!.deviceGroups).toEqual([{ id: DEVICES }])
+    const deploy = { ...base, action: "oib-deploy", commit, backup: false, storageAccountName: null, items: [{ source: SC, mode: "create" }] }
+    await expect(handleOib({ ...deploy, assignments: { ...spec, filters: {} } })).rejects.toMatchObject({ status: 403, message: GROUP_CHECK_REQUIRED })
+    await expect(handleOib({ ...deploy, pilotGroupId: DEVICES })).rejects.toMatchObject({ status: 403, message: GROUP_CHECK_REQUIRED })
+    expect(writes).toEqual([])
+    const run = await handleOib(deploy) as OibRun
+    expect(run.created[0]).not.toHaveProperty("assignment")
+    expect(run).not.toHaveProperty("assignments")
   })
 
   it("searches groups by name and reports when groups cannot be read", async () => {
@@ -445,6 +450,7 @@ describe("assignments", () => {
     expect(await handleOib({ ...base, action: "oib-groups", query: "Pilot" })).toEqual({ readable: false, groups: [] })
     expect(await handleOib({ ...base, action: "oib-group-lookup", ids: [DEVICES] })).toEqual({ readable: false, groups: [], missing: [] })
     vi.stubGlobal("fetch", world({ policies: [], groups: [DEVICES] }, []))
+    expect(await handleOib({ ...base, action: "oib-groups", query: DEVICES })).toMatchObject({ readable: true, groups: [{ id: DEVICES, displayName: expect.any(String) }] })
     expect(await handleOib({ ...base, action: "oib-group-lookup", ids: [DEVICES, USERS] })).toMatchObject({ readable: true, groups: [{ id: DEVICES }], missing: [USERS] })
   })
 

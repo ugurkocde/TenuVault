@@ -21,6 +21,7 @@ import type { KeyValueStore } from "../storage/secure-store"
 import { FrameworkError, tokenFor } from "../frameworks/service"
 import { readSettingNamesReport } from "../../portal/lib/drift/setting-names"
 import { loadPack, oibDownloads, oibVersions, resolveMain, type LoadedPack } from "./source"
+import { groupCounts } from "./group-counts"
 import { checkSpec, listFilters, lookupGroups, readCurrentAssignments, searchGroups } from "./assignments"
 
 /**
@@ -1051,6 +1052,10 @@ export async function handleOib(body: RecordJson): Promise<unknown> {
     case "oib-groups": {
       tenantOf(body.tenantId)
       return searchGroups(graphCaller((await tokenFor(body)).token), typeof body.query === "string" ? body.query : "")
+    }
+    case "oib-group-counts": {
+      const tenant = tenantOf(body.tenantId)
+      return { counts: await groupCounts(graphCaller((await tokenFor(body)).token), tenant, body.ids) }
     }
     case "oib-group-lookup": {
       tenantOf(body.tenantId)

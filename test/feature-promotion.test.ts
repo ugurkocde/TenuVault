@@ -1,3 +1,4 @@
+import { GROUP_CHECK_REQUIRED } from "../src/shared/group-access"
 import { describe, expect, it } from "vitest"
 import { routes } from "../src/main/features/promotion"
 import { containsRedaction, containsSecret, REDACTED, type ChangeSetContent, type ChangeSetRecord } from "../src/main/features/change-sets/model"
@@ -400,11 +401,11 @@ const TARGET_FILTER_EX = "bbbbbbbb-0000-0000-0000-000000000004"
 function targeted() {
   const context = setup()
   context.dev.filters = [{ id: SOURCE_FILTER, displayName: "Corporate Windows", platform: "windows10AndLater", rule: "(device.deviceOwnership -eq \"Corporate\")" }, { id: SOURCE_FILTER_EX, displayName: "Kiosks", platform: "windows10AndLater", rule: "(device.model -eq \"Kiosk\")" }]
-  context.dev.groups.set(SOURCE_GROUP, { id: SOURCE_GROUP, displayName: "Pilot devices" })
-  context.dev.groups.set(SOURCE_EXCLUDED, { id: SOURCE_EXCLUDED, displayName: "Excluded devices" })
+  context.dev.groups.set(SOURCE_GROUP, { id: SOURCE_GROUP, displayName: "Pilot devices", securityEnabled: true, groupTypes: [] })
+  context.dev.groups.set(SOURCE_EXCLUDED, { id: SOURCE_EXCLUDED, displayName: "Excluded devices", securityEnabled: true, groupTypes: [] })
   context.prod.filters = [{ id: TARGET_FILTER, displayName: "Corporate Windows", platform: "windows10AndLater", rule: "(device.deviceOwnership -eq \"Corporate\")" }, { id: TARGET_FILTER_EX, displayName: "Kiosk devices", platform: "windows10AndLater", rule: "(device.model -eq \"Kiosk\")" }]
-  context.prod.groups.set(TARGET_GROUP, { id: TARGET_GROUP, displayName: "Pilot devices" })
-  context.prod.groups.set(TARGET_EXCLUDED, { id: TARGET_EXCLUDED, displayName: "Excluded devices" })
+  context.prod.groups.set(TARGET_GROUP, { id: TARGET_GROUP, displayName: "Pilot devices", securityEnabled: true, groupTypes: [] })
+  context.prod.groups.set(TARGET_EXCLUDED, { id: TARGET_EXCLUDED, displayName: "Excluded devices", securityEnabled: true, groupTypes: [] })
   const policy = context.dev.addPolicy({
     name: "EPM rules",
     roleScopeTagIds: ["0", "4"],
@@ -426,6 +427,18 @@ const TARGETING_MAPPINGS = [
 ]
 
 describe("promotion dependency mapping", () => {
+  it("searches groups in the destination tenant and flags unassignable results", async () => {
+    const context = targeted()
+    context.prod.groups.get(TARGET_EXCLUDED)!.securityEnabled = false
+    const id = await context.post({ action: "target-groups", query: TARGET_GROUP })
+    expect(id.body).toEqual({ readable: true, groups: [{ id: TARGET_GROUP, displayName: "Pilot devices", kind: "security", dynamic: false }] })
+    const prefix = await context.post({ action: "target-groups", query: "Excluded" })
+    expect(prefix.body).toEqual({ readable: true, groups: [{ id: TARGET_EXCLUDED, displayName: "Excluded devices", kind: "other", dynamic: false }] })
+    context.prod.groupsForbidden = true
+    expect((await context.post({ action: "target-groups", query: "Pilot" })).body).toEqual({ readable: false, groups: [] })
+    expect(context.dev.calls).toEqual([])
+  })
+
   it("preserves exclusions and filter types when reviewed assignments are promoted", async () => {
     const context = targeted()
     const planned = (await context.post({ action: "plan", title: "x", includeAssignments: true, items: [{ sourceId: context.policy.id }], mappings: TARGETING_MAPPINGS })).body.promotion as PromotionRecord & { id: string }
@@ -479,7 +492,7 @@ describe("promotion dependency mapping", () => {
     expect(promotion.items[0]!.findings.some((finding) => finding.code === "rejected-mapping")).toBe(true)
   })
 
-  it("shows unreadable groups as unknown instead of verified", async () => {
+  it("blocks promotion when a confirmed destination group is unreadable", async () => {
     const context = targeted()
     context.prod.groupsForbidden = true
     context.dev.groupsForbidden = true
@@ -487,7 +500,32 @@ describe("promotion dependency mapping", () => {
     const group = promotion.items[0]!.references.find((reference) => reference.kind === "group")!
     expect(group.state).toBe("mapped-unverified")
     expect(group.sourceName).toBeNull()
-    expect(promotion.items[0]!.findings.some((finding) => finding.code === "unknown-membership")).toBe(true)
+    expect(promotion.status).toBe("blocked")
+    expect(promotion.items[0]!.findings).toContainEqual({ code: "unknown-membership", severity: "blocking", message: GROUP_CHECK_REQUIRED })
+    expect(context.prod.writeCount()).toBe(0)
+  })
+
+  it("distinguishes a missing destination group from denied group access", async () => {
+    const context = targeted()
+    context.prod.groups.delete(TARGET_GROUP)
+    const promotion = (await context.post({ action: "plan", title: "x", includeAssignments: true, items: [{ sourceId: context.policy.id }], mappings: TARGETING_MAPPINGS })).body.promotion as PromotionRecord
+    expect(promotion.status).toBe("blocked")
+    expect(promotion.items[0]!.references).toContainEqual(expect.objectContaining({ kind: "group", sourceId: SOURCE_GROUP, state: "rejected" }))
+    expect(promotion.items[0]!.findings).toContainEqual(expect.objectContaining({ code: "rejected-mapping", severity: "blocking" }))
+    expect(promotion.items[0]!.findings).not.toContainEqual(expect.objectContaining({ message: GROUP_CHECK_REQUIRED }))
+  })
+
+  it("blocks a reviewed promotion before applying if the destination stops allowing group checks", async () => {
+    const context = targeted()
+    const result = await context.post({ action: "plan", title: "x", includeAssignments: true, items: [{ sourceId: context.policy.id }], mappings: TARGETING_MAPPINGS })
+    const promotion = result.body.promotion as PromotionRecord & { id: string }
+    expect(promotion.status).toBe("in-review")
+    const { changeSet } = await approved(context, promotion.id)
+    context.prod.groupsForbidden = true
+    const applied = await context.post({ action: "apply", id: promotion.id, contentHash: changeSet.contentHash, confirm: true })
+    expect(JSON.stringify(applied.body)).toContain(GROUP_CHECK_REQUIRED)
+    expect(context.prod.writeCount()).toBe(0)
+    expect(context.backups).toEqual([])
   })
 
   it("blocks approval when a mapped filter changes in the destination after planning", async () => {

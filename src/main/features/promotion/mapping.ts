@@ -1,3 +1,4 @@
+import { GROUP_CHECK_REQUIRED } from "../../../shared/group-access"
 import type { IntuneType, Item, Json } from "../../../shared/intune/registry"
 import { cleanAssignment } from "../../../shared/intune/registry"
 import { isGraphId } from "../../../shared/security"
@@ -32,7 +33,7 @@ export interface ReferenceResolution {
   /**
    * portable: the same built-in object exists in every tenant (Default scope tag).
    * mapped: confirmed and read in the target. mapped-unverified: confirmed but the target could
-   * not be read (groups without Group.Read.All). missing: no confirmed mapping. rejected: the
+   * not be read. missing: no confirmed mapping. rejected: the
    * confirmed target does not exist or has the wrong kind.
    */
   state: "portable" | "mapped" | "mapped-unverified" | "missing" | "rejected"
@@ -126,7 +127,7 @@ export function resolveReferences(
     mappings: Mapping[]
     sourceNames: Partial<Record<ReferenceKind, Map<string, string>>>
     targetObjects: Partial<Record<ReferenceKind, Map<string, string> | null>>
-    groupStates: Map<string, { state: "found" | "missing" | "unknown"; name: string | null }>
+    groupStates: Map<string, { state: "found" | "missing" | "unknown" | "unassignable"; name: string | null }>
     sameTenant: boolean
   },
 ): ReferenceResolution[] {
@@ -147,6 +148,7 @@ export function resolveReferences(
     if (kind === "group") {
       const group = input.groupStates.get(targetId.toLowerCase())
       if (!group || group.state === "unknown") return { ...base, targetId, targetName: group?.name ?? null, state: "mapped-unverified", suggestion: null }
+      if (group.state === "unassignable") return { ...base, targetId, targetName: group.name, state: "rejected", suggestion: null }
       if (group.state === "missing") return { ...base, targetId, targetName: null, state: "rejected", suggestion: null }
       return { ...base, targetId, targetName: group.name, state: "mapped", suggestion: null }
     }
@@ -168,8 +170,12 @@ export function referenceFindings(references: ReferenceResolution[]): Dependency
       else findings.push({ code: "missing-mapping", severity: "blocking", message: `The ${label[reference.kind]} ${name} has no confirmed target mapping.` })
       if (reference.kind !== "group") findings.push({ code: "ordering", severity: "blocking", message: `If the ${label[reference.kind]} ${name} does not exist in the target yet, create it there first, then map it.` })
     }
-    if (reference.state === "rejected") findings.push({ code: "rejected-mapping", severity: "blocking", message: `The mapped target of the ${label[reference.kind]} ${name} does not exist in the target tenant.` })
-    if (reference.state === "mapped-unverified") findings.push({ code: "unknown-membership", severity: "warning", message: `The mapped ${label[reference.kind]} ${reference.targetName ? `"${reference.targetName}"` : reference.targetId} could not be read in the target tenant; its existence and membership are unknown.` })
+    if (reference.state === "rejected") findings.push({ code: "rejected-mapping", severity: "blocking", message: reference.kind === "group" && reference.targetName
+      ? `Intune cannot assign the distribution list "${reference.targetName}". Choose a security or Microsoft 365 group.`
+      : `The mapped target of the ${label[reference.kind]} ${name} does not exist in the target tenant.` })
+    if (reference.state === "mapped-unverified" && reference.kind === "group") {
+      if (!findings.some(finding => finding.message === GROUP_CHECK_REQUIRED)) findings.push({ code: "unknown-membership", severity: "blocking", message: GROUP_CHECK_REQUIRED })
+    } else if (reference.state === "mapped-unverified") findings.push({ code: "unknown-membership", severity: "warning", message: `The mapped ${label[reference.kind]} ${reference.targetName ? `"${reference.targetName}"` : reference.targetId} could not be read in the target tenant; its existence and membership are unknown.` })
   }
   return findings
 }
@@ -193,7 +199,7 @@ export function translate(
     // The built-in Default scope tag has the same ID in every tenant.
     if (kind === "scopeTag" && id === "0") return "0"
     const reference = references.find((entry) => entry.kind === kind && entry.sourceId.toLowerCase() === id.toLowerCase())
-    return reference && ["portable", "mapped", "mapped-unverified"].includes(reference.state) && reference.targetId && isGraphId(reference.targetId) ? reference.targetId : null
+    return reference && (reference.state === "portable" || reference.state === "mapped" || (kind !== "group" && reference.state === "mapped-unverified")) && reference.targetId && isGraphId(reference.targetId) ? reference.targetId : null
   }
   let unresolved = false
   const { assignments: _assignments, ...rest } = structuredClone(source)

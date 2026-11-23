@@ -29,8 +29,8 @@ function setup() {
   const wired = wire(deps, [dev, prod])
   dev.scopeTags.push({ id: "4", displayName: "Pilot" })
   prod.scopeTags.push({ id: "9", displayName: "Pilot" })
-  dev.groups.set(DEV_GROUP, { id: DEV_GROUP, displayName: "Pilot devices" })
-  prod.groups.set(PROD_GROUP, { id: PROD_GROUP, displayName: "Pilot devices" })
+  dev.groups.set(DEV_GROUP, { id: DEV_GROUP, displayName: "Pilot devices", securityEnabled: true, groupTypes: [] })
+  prod.groups.set(PROD_GROUP, { id: PROD_GROUP, displayName: "Pilot devices", securityEnabled: true, groupTypes: [] })
   dev.filters = [{ id: DEV_FILTER, displayName: "Corporate", platform: "windows10AndLater", rule: "(device.deviceOwnership -eq \"Corporate\")" }]
   prod.filters = [{ id: PROD_FILTER, displayName: "Corporate", platform: "windows10AndLater", rule: "(device.deviceOwnership -eq \"Corporate\")" }]
   const api = routes(deps)
