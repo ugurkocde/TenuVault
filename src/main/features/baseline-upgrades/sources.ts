@@ -24,7 +24,8 @@ export interface BaselineSources {
 }
 
 export const defaultSources: BaselineSources = {
-  runs: (tenantId) => listRuns(tenantId),
+  // Assignment runs change who gets deployed policies; they install nothing.
+  runs: (tenantId) => listRuns(tenantId).filter((run) => run.kind !== "assign"),
   releases: () => oibReleases(),
   pack: (platform, commit, recorded, releaseTag) => {
     if (recorded) rememberCommit(commit)

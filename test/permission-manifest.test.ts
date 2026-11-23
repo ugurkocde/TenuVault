@@ -30,7 +30,7 @@ describe("What a setup asks for by default", () => {
         api: "Microsoft Graph",
         appId: "00000003-0000-0000-c000-000000000000",
         permissions: [
-          "User.Read", "Organization.Read.All", "Policy.Read.All",
+          "User.Read", "Organization.Read.All", "GroupMember.Read.All", "Policy.Read.All",
           "DeviceManagementConfiguration.ReadWrite.All", "DeviceManagementApps.ReadWrite.All", "DeviceManagementServiceConfig.ReadWrite.All",
           "DeviceManagementScripts.ReadWrite.All", "DeviceManagementRBAC.ReadWrite.All", "DeviceManagementManagedDevices.Read.All",
         ],
@@ -79,8 +79,8 @@ describe("What a choice of services, areas and access levels asks for", () => {
   })
 
   it("gives each service exactly its permissions", () => {
-    const graph = (choice: PermissionChoice) => graphPermissions(choice, "delegated").slice(2)
-    expect(graphPermissions({ intune: { access: "backup" } }, "delegated").slice(0, 2)).toEqual(["User.Read", "Organization.Read.All"])
+    const graph = (choice: PermissionChoice) => graphPermissions(choice, "delegated").slice(3)
+    expect(graphPermissions({ intune: { access: "backup" } }, "delegated").slice(0, 3)).toEqual(["User.Read", "Organization.Read.All", "GroupMember.Read.All"])
     expect(graph({ intune: { access: "backup" } })).toEqual(["Configuration", "Apps", "ServiceConfig", "Scripts", "RBAC", "ManagedDevices"].map((family) => `DeviceManagement${family}.Read.All`))
     expect(graph({ conditionalAccess: { access: "backup" } })).toEqual(["Policy.Read.All"])
     // Conditional Access writes also need Policy.Read.All, so restore asks for both.
@@ -94,7 +94,7 @@ describe("What a choice of services, areas and access levels asks for", () => {
     // Entra ID discovers group IDs for PIM, without enabling group object backups.
     const entra = graph({ entra: { access: "backup" } })
     expect(entra).toContain("Policy.Read.All")
-    expect(entra).toContain("GroupMember.Read.All")
+    expect(graphPermissions({ entra: { access: "backup" } }, "delegated").filter(permission => permission === "GroupMember.Read.All")).toHaveLength(1)
     for (const directory of ["Directory.Read.All", "User.Read.All", "Group.Read.All", "Device.Read.All", "Application.Read.All"]) expect(entra, directory).not.toContain(directory)
     expect(graph({ entra: { access: "backup", areas: ["groups"] } }).filter((permission) => !entra.includes(permission))).toEqual(["Group.Read.All", "Directory.Read.All"])
     expect(graph({ entra: { access: "backup", areas: ["usersAndDevices"] } }).filter((permission) => !entra.includes(permission))).toEqual(["User.Read.All", "Device.Read.All", "OrgContact.Read.All"])
@@ -128,7 +128,11 @@ describe("What a choice of services, areas and access levels asks for", () => {
     for (const choice of choices()) {
       const permissions = graphPermissions(choice, "delegated")
       expect(permissions).not.toContain("DeviceManagementManagedDevices.ReadWrite.All")
-      expect(permissions).not.toContain("Directory.ReadWrite.All")
+      for (const mode of ["delegated", "application"] as const) {
+        const requested = graphPermissions(choice, mode, OPTIONAL_PERMISSIONS.map(entry => entry.id))
+        expect(requested).not.toContain("Directory.ReadWrite.All")
+        expect(requested).not.toContain("Organization.ReadWrite.All")
+      }
       if (choice.intune) expect(permissions).toContain("DeviceManagementManagedDevices.Read.All")
     }
     // Both stay named, so Settings can say what restoring those types needs and a consented one counts as TenuVault's.
@@ -145,9 +149,10 @@ describe("What a choice of services, areas and access levels asks for", () => {
   })
 
   it("adds the optional permissions of single features only when asked, after the services", () => {
-    expect(graphPermissions(DEFAULT_SETUP_CHOICE, "delegated", ["groupRead", "notificationEmail"]).slice(9)).toEqual(["Mail.Send", "Group.Read.All"])
+    const defaultCount = graphPermissions(DEFAULT_SETUP_CHOICE, "delegated").length
+    expect(graphPermissions(DEFAULT_SETUP_CHOICE, "delegated", ["groupRead", "notificationEmail"]).slice(defaultCount)).toEqual(["Mail.Send"])
     const all = graphPermissions(DEFAULT_SETUP_CHOICE, "delegated", OPTIONAL_PERMISSIONS.map((entry) => entry.id))
-    expect(all.slice(9)).toEqual(["Mail.Send", "GroupMember.Read.All", "User.Read.All", "AuditLog.Read.All", "Group.Read.All"])
+    expect(all.slice(defaultCount)).toEqual(["Mail.Send", "User.Read.All", "AuditLog.Read.All"])
     // A permission a chosen area already brings is not listed twice.
     expect(graphPermissions({ entra: { access: "backup", areas: ["usersAndDevices"] } }, "delegated", ["groupRecipients"]).filter((permission) => permission === "User.Read.All")).toHaveLength(1)
     // App-only access has no optional permissions.
@@ -169,11 +174,11 @@ describe("What a choice of services, areas and access levels asks for", () => {
   })
 
   it("says what a set of granted permissions lacks for a choice, and nothing more", () => {
-    expect(missingForChoice(DEFAULT_SETUP_CHOICE, delegated())).toEqual(graphPermissions(DEFAULT_SETUP_CHOICE, "delegated"))
+    expect(missingForChoice(DEFAULT_SETUP_CHOICE, delegated())).toEqual(graphPermissions(DEFAULT_SETUP_CHOICE, "delegated").filter(permission => permission !== "GroupMember.Read.All"))
     expect(missingForChoice(DEFAULT_SETUP_CHOICE, delegated(...graphPermissions(DEFAULT_SETUP_CHOICE, "delegated")))).toEqual([])
     // An existing default registration that should also back up Defender.
     const today = delegated(...graphPermissions(DEFAULT_SETUP_CHOICE, "delegated"))
-    expect(missingForChoice({ ...DEFAULT_SETUP_CHOICE, defender: { access: "backup" } }, today)).toEqual(graphPermissions({ defender: { access: "backup" } }, "delegated").slice(2))
+    expect(missingForChoice({ ...DEFAULT_SETUP_CHOICE, defender: { access: "backup" } }, today)).toEqual(graphPermissions({ defender: { access: "backup" } }, "delegated").slice(3))
     // Another permission that also satisfies a requirement counts: Directory.Read.All reads the directory settings and the administrative units.
     const entra = missingForChoice({ entra: { access: "backup" } }, delegated("User.Read", "Organization.Read.All", "Policy.Read.All", "Directory.Read.All"))
     expect(entra).not.toContain("GroupSettings.Read.All")
@@ -309,7 +314,7 @@ describe("Permissions TenuVault knows", () => {
 
     it("take most of what backing up Entra ID or Defender asks for, and not a part of it that many apps hold", () => {
       const entra = backup("entra")
-      const defender = backup("defender")
+      const defender = backup("defender").filter(permission => permission !== "GroupMember.Read.All")
       expect(approved(...entra)).toBe(true)
       expect(approved(...defender)).toBe(true)
       // A registration made by an earlier version that lacks a few newer permissions still counts.
@@ -322,10 +327,10 @@ describe("Permissions TenuVault knows", () => {
       for (const few of [["Policy.Read.All"], ["Domain.Read.All"], ["SecurityEvents.Read.All", "CustomDetection.Read.All"], ["Policy.Read.All", "Domain.Read.All", "RoleManagement.Read.Directory"]]) expect(approved(...few), few.join(" ")).toBe(false)
     })
 
-    it("take everything a setup for Conditional Access alone asks for, and nothing less", () => {
-      const request = graphPermissions({ conditionalAccess: { access: "backup" } }, "delegated")
-      expect(request).toEqual(["User.Read", "Organization.Read.All", "Policy.Read.All"])
+    it("recognizes earlier Conditional Access registrations that lack the group read feature", () => {
+      const request = ["User.Read", "Organization.Read.All", "Policy.Read.All"]
       expect(approved(...request)).toBe(true)
+      expect(approved(...request, "GroupMember.Read.All")).toBe(true)
       // Its restore permission, added by hand or by the script's switch, takes nothing away.
       expect(approved(...request, "Policy.ReadWrite.ConditionalAccess")).toBe(true)
       // Policy.Read.All is given to many apps: without the rest of the request it proves nothing.

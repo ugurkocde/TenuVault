@@ -64,10 +64,12 @@ export function requiredFeatures(pathname: string, body: Record<string, unknown>
     }
     case "/api/oib": {
       // Community deploys, compares and validates the OpenIntuneBaseline on every platform in one
-      // tenant; updating existing policies in place and resetting drift are paid.
+      // tenant, and assigns the new policies to groups; updating existing policies in place,
+      // changing the assignments of deployed policies and resetting drift are paid.
       const features: Feature[] = []
       const updates = Array.isArray(body.items) && body.items.some((item: { mode?: unknown }) => item?.mode === "update")
       if (body.action === "oib-deploy" && updates) features.push("replaceRestore")
+      if (body.action === "oib-assign") features.push("replaceRestore")
       if (body.action === "oib-fix") features.push("driftRevert")
       // Deployments to the tenants after the first are an MSP action on each of them.
       if ((body.action === "oib-deploy" || body.action === "oib-fix") && body.bulk === true) features.push("bulkActions")

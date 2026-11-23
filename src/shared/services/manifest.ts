@@ -9,6 +9,7 @@
 
 import { MODULES, MODULE_BY_ID, meets, type AccessLevel, type GrantedPermissions, type ModuleId, type PermissionArea, type ServiceSelection, type SignInMode } from "./modules"
 import { OPTIONAL_PERMISSIONS, type OptionalPermissionId } from "./optional-permissions"
+import { GROUP_READ_PERMISSION } from "../group-access"
 
 /** What a setup asks Microsoft for: the services to cover, each with its access level and the opt-in areas that are on. */
 export type PermissionChoice = Partial<Record<ModuleId, { access: AccessLevel; areas?: readonly string[] }>>
@@ -25,6 +26,9 @@ export const GRAPH_APP_ID = "00000003-0000-0000-c000-000000000000"
 /** What every sign-in needs, whatever is backed up: the admin's own profile and the organization's name and domains. */
 export const BASE_PERMISSIONS: readonly string[] = ["User.Read", "Organization.Read.All"]
 
+/** New desktop registrations also support group lookup. Existing registrations can add it separately. */
+export const DESKTOP_BASE_PERMISSIONS: readonly string[] = [...BASE_PERMISSIONS, GROUP_READ_PERMISSION]
+
 /** The Azure APIs a signed-in admin uses to pick a storage account and to read and write backups in it. */
 const AZURE_APIS: readonly ApiPermissions[] = [
   { api: "Azure Service Management", appId: "797f4846-ba00-4fd7-ba43-dac1f8f63013", permissions: ["user_impersonation"] },
@@ -32,9 +36,8 @@ const AZURE_APIS: readonly ApiPermissions[] = [
 ]
 
 /**
- * The order services come in a permission list. It is the order app registrations have always had
- * (Entra policies before Intune), so a setup without choices asks for the same list as before, in
- * the same order.
+ * The order services come in a permission list. It keeps Conditional Access policies before Intune
+ * permissions in the default registration.
  */
 export const REQUEST_ORDER: readonly ModuleId[] = ["conditionalAccess", "intune", "entra", "defender"]
 
@@ -101,7 +104,7 @@ export function requestedPermissions(choice: PermissionChoice, mode: SignInMode,
   const services = chosenAreas(choice, mode).flatMap(({ area, access }) => areaPermissions(area, access, mode))
   if (mode === "application") return [{ api: "Microsoft Graph", appId: GRAPH_APP_ID, permissions: unique(services).sort() }]
   const extra = OPTIONAL_PERMISSIONS.filter((entry) => optional.includes(entry.id)).flatMap((entry) => entry.permissions)
-  return [{ api: "Microsoft Graph", appId: GRAPH_APP_ID, permissions: unique([...BASE_PERMISSIONS, ...services, ...extra]) }, ...AZURE_APIS]
+  return [{ api: "Microsoft Graph", appId: GRAPH_APP_ID, permissions: unique([...DESKTOP_BASE_PERMISSIONS, ...services, ...extra]) }, ...AZURE_APIS]
 }
 
 /** The Microsoft Graph permissions of a choice. */
@@ -157,7 +160,7 @@ export function showsApproval(consented: ReadonlySet<string>): boolean {
     if (module.id === "intune") return areas.flatMap((area) => areaPermissions(area, DEFAULT_SETUP_CHOICE.intune!.access, "delegated")).some(has)
     const own = (permissions: string[]) => unique(permissions).filter((permission) => !BASE_PERMISSIONS.includes(permission))
     const asked = own(areas.flatMap((area) => areaPermissions(area, "backup", "delegated")))
-    if (asked.length < 3) return graphPermissions({ [module.id]: { access: "backup" } }, "delegated").every(has)
+    if (asked.length < 3) return [...BASE_PERMISSIONS, ...asked].every(has)
     const lacking = own(areas.flatMap((area) => areaPermissions(area, "backup", "delegated", consented)))
     return (asked.length - lacking.length) * 2 > asked.length
   })

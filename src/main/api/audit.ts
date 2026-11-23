@@ -262,10 +262,10 @@ async function recordOib(
   onTrialUsage?: (tenant: string, feature: Feature) => void,
 ) {
   const body = JSON.parse(bodyText) as { action?: string; tenantId?: string; appId?: string; runId?: string; storageAccountName?: string; bulk?: boolean }
-  if (typeof body?.tenantId !== "string" || !body.tenantId || !["oib-deploy", "oib-fix", "oib-undo"].includes(body.action ?? "") || !body.appId) return
+  if (typeof body?.tenantId !== "string" || !body.tenantId || !["oib-deploy", "oib-fix", "oib-undo", "oib-assign"].includes(body.action ?? "") || !body.appId) return
   const data = await response.json().catch(() => ({})) as {
-    runId?: string; reference?: string; backupFolder?: string; pilotGroupId?: string; error?: string
-    created?: unknown[]; updated?: unknown[]; failed?: unknown[]; skipped?: unknown[]; results?: { done: boolean }[]
+    runId?: string; reference?: string; backupFolder?: string; pilotGroupId?: string; error?: string; assignMode?: string
+    created?: Array<{ assignment?: unknown; assignmentUnknown?: unknown }>; updated?: unknown[]; reassigned?: Array<{ pending?: unknown }>; failed?: unknown[]; skipped?: unknown[]; results?: { done: boolean }[]
   }
   const undo = body.action === "oib-undo"
   const failed = undo ? (data.results ?? []).filter((r) => !r.done).length : (data.failed?.length ?? 0)
@@ -277,9 +277,10 @@ async function recordOib(
     } catch { /* A tally never changes the action's outcome. */ }
   }
   const account = accountFor(body.tenantId)
-  const action = undo ? "Undo OpenIntuneBaseline run" : body.action === "oib-fix" ? "Reset OpenIntuneBaseline policy drift" : "Deploy OpenIntuneBaseline policies"
+  const reassign = body.action === "oib-assign"
+  const action = undo ? "Undo OpenIntuneBaseline run" : body.action === "oib-fix" ? "Reset OpenIntuneBaseline policy drift" : reassign ? "Change OpenIntuneBaseline policy assignments" : "Deploy OpenIntuneBaseline policies"
   const logEntry: CreateAuditLogInput = {
-    eventType: undo ? AuditEventType.POLICY_REVERTED : body.action === "oib-fix" ? AuditEventType.POLICY_RESTORED : AuditEventType.POLICY_CREATED,
+    eventType: undo ? AuditEventType.POLICY_REVERTED : body.action === "oib-fix" || reassign ? AuditEventType.POLICY_RESTORED : AuditEventType.POLICY_CREATED,
     action,
     resource: { type: "policy", id: data.runId ?? body.runId ?? body.tenantId, name: "OpenIntuneBaseline" },
     result: ok ? AuditResult.SUCCESS : response.ok ? AuditResult.PARTIAL : AuditResult.FAILURE,
@@ -288,7 +289,8 @@ async function recordOib(
       source: "desktop-oib",
       ...(undo
         ? { undone: (data.results ?? []).filter((r) => r.done).length, notUndone: failed }
-        : { created: data.created?.length ?? 0, updated: data.updated?.length ?? 0, skipped: data.skipped?.length ?? 0, failed, backupFolder: data.backupFolder, assignedToPilotGroup: Boolean(data.pilotGroupId) }),
+        : reassign ? { reassigned: (data.reassigned ?? []).filter((item) => item?.pending !== true).length, uncertain: (data.reassigned ?? []).filter((item) => item?.pending === true).length, skipped: data.skipped?.length ?? 0, failed, backupFolder: data.backupFolder, assignMode: data.assignMode === "replace" ? "replace" : "add" }
+        : { created: data.created?.length ?? 0, updated: data.updated?.length ?? 0, skipped: data.skipped?.length ?? 0, failed, backupFolder: data.backupFolder, assignedPolicies: (data.created ?? []).filter((item) => item?.assignment).length, uncertain: (data.created ?? []).filter((item) => item?.assignmentUnknown === true).length }),
       error: data.error ? { code: "OIB_FAILED", message: "Operation failed" } : undefined,
     },
   }

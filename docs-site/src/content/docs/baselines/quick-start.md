@@ -1,9 +1,9 @@
 ---
 title: "OpenIntuneBaseline"
-description: Deploy, compare and validate OpenIntuneBaseline policies from the latest published release or a version you choose, with a backup first and undo per run.
+description: Deploy, compare, validate and assign OpenIntuneBaseline policies from the latest published release or a version you choose, with a backup first and undo per run.
 ---
 
-The **OpenIntuneBaseline** section deploys, compares and validates [OpenIntuneBaseline](https://github.com/SkipToTheEndpoint/OpenIntuneBaseline) (OIB) policies in a tenant. It offers three workflows: **New Deployment**, **Existing Deployment** and **Policy Validation**. Every write can be undone per run.
+The **OpenIntuneBaseline** section deploys, compares, validates and assigns [OpenIntuneBaseline](https://github.com/SkipToTheEndpoint/OpenIntuneBaseline) (OIB) policies in a tenant. It offers four workflows: **New Deployment**, **Existing Deployment**, **Policy Validation** and **Assignments**. Every write can be undone per run.
 
 OpenIntuneBaseline is published by SkipToTheEndpoint and contributors under the GPL-3.0 license. TenuVault downloads the policy files from the upstream GitHub repository when you use them; they are not bundled with the app.
 
@@ -19,7 +19,7 @@ The header lists the version each platform uses, for example **Versions: Windows
   <a href="/images/screenshots/oib-home-light.webp" aria-label="Open full-size screenshot: oib home light">
     <img src="/images/screenshots/oib-home-light.webp" alt="OpenIntuneBaseline offers New Deployment, Existing Deployment and Policy Validation" width="2880" height="1800" loading="lazy" decoding="async" />
   </a>
-  <figcaption>OpenIntuneBaseline offers New Deployment, Existing Deployment and Policy Validation. Real public catalog with example tenant history. Select the image to view it full size.</figcaption>
+  <figcaption>OpenIntuneBaseline offers New Deployment, Existing Deployment and Policy Validation; Assignments is the fourth workflow. Real public catalog with example tenant history. Select the image to view it full size.</figcaption>
 </figure>
 
 ## Which OIB version is used
@@ -53,10 +53,12 @@ The platforms, their versions and development status come from the upstream `rel
 | --- | --- | --- | --- |
 | New Deployment, Existing Deployment comparison and Policy Validation, every platform | Yes | Yes | Yes |
 | Deploy new policies, with undo | Yes | Yes | Yes |
+| Assign new policies to device and user groups when you deploy them | Yes | Yes | Yes |
 | Update outdated policies in place | | Yes | Yes |
+| **Assignments**: change the assignments of deployed policies | | Yes | Yes |
 | **Fix drift** in Policy Validation | | Yes | Yes |
 | **Customize**: your own baseline under My baselines | | Yes | Yes |
-| **Also deploy to** other connected tenants in one run | | | Yes |
+| **Also deploy to** other connected tenants in one run, with groups per tenant | | | Yes |
 
 Community works in its one licensed tenant. Features that need a higher plan carry a plan badge, and the app refuses them in the main process as well. **Also deploy to** needs MSP on every tenant it reaches. Deployments, drift fixes and undo are written to the [audit log](/audit-log/); viewing the audit log needs Pro or MSP.
 
@@ -150,13 +152,62 @@ It covers matched Settings Catalog and Endpoint security policies, compliance po
   <figcaption>Validation presents per-policy results and actions. Results are simulated against the public catalog, not a live tenant assessment. Select the image to view it full size.</figcaption>
 </figure>
 
+## Assignments
+
+OpenIntuneBaseline marks most policies as a device policy or a user policy: in its policy manifest, or with `D` or `U` in the policy name, as in `Win - OIB - SC - Device Security - D - BitLocker (OS Disk)`. TenuVault uses that mark to assign policies, both when you deploy them and later in the **Assignments** workflow.
+
+You choose:
+
+* **Device groups**: assigned to device policies.
+* **User groups**: assigned to user policies.
+* **Excluded device groups**: excluded from the policies that get device groups.
+* **Excluded user groups**: excluded from the policies that get user groups.
+* **Policies without a device or user marker**: shown only when the selection has policies OIB does not mark. Assign them to device and user groups, device groups only, user groups only, or no groups.
+* **Assignment filters** (optional): one filter per platform the selected policies use, for example Windows or macOS, and whether it includes or excludes matching devices. The filter applies to each device and user group of the policies on that platform. Only filters of that platform are offered; app protection policies (BYOD) use app filters. Windows driver, feature and quality update profiles take no filter: when the selection has some, the editor and the confirmation say that they go to the whole group.
+
+Intune only applies an exclusion of the same kind as the include: a user group excluded from a policy assigned to device groups has no effect. That is why device and user exclusions are separate lists, and each goes only with its own kind of include. In Intune an exclusion wins over an include of the same kind.
+
+Each list takes up to 25 groups. A group cannot be both included and excluded.
+
+### Find groups
+
+Type at least two characters to search by the start of a group name. Pasting a group's object ID searches for the matching group in the tenant. Select the named result to add it. Distribution lists appear in the results with selection disabled. Results and selected groups show available counts for devices, users and nested groups.
+
+Group search requires delegated `GroupMember.Read.All` or an equivalent permission. If group access is missing, follow the [group read setup steps](/security/permissions/#group-read-groupmemberreadall) and select **Check again**. You can deploy new policies unassigned while access is missing. Changing the assignments of deployed policies requires group access.
+
+Before any deployment backup or write, TenuVault verifies that every selected group exists in the tenant and each filter matches the platform it was chosen for. If a chosen group is marked "not found in this tenant", remove it to continue.
+
+### Assign when you deploy
+
+In New Deployment and Existing Deployment, **Assignments for new policies** on the review step assigns the policies the run creates. Without groups, new policies stay unassigned and nothing reaches devices until you assign them; start with a pilot group. Policies updated in place keep their assignments.
+
+The confirmation lists where the policies go, for example "40 device policies: Pilot devices; 31 user policies: Pilot users; Excluded device groups: Kiosk devices". The result says how many new policies were assigned and how many stay unassigned.
+
+### The Assignments workflow
+
+Pro and MSP. **Assignments** changes the assignments of OIB policies that are already deployed:
+
+1. **Platforms**: choose the platforms, as in Existing Deployment.
+2. **Policies**: TenuVault finds the deployed OIB policies the same way Existing Deployment matches them. Policies the tenant does not have, and policies that match more than one tenant policy, are not listed. Each policy shows whether it is a device or user policy.
+3. **Review and assign**: choose **Add to the current assignments** or **Replace the current assignments**, then the groups and filters. The review reads the current assignments of each policy and shows them next to the assignments after the change. Policies already assigned that way are left alone.
+
+* **Add** keeps what each policy is assigned to and adds the groups. A group already assigned gets the filter you chose for its platform, or keeps its own filter when you chose none. If you include a group the policy excludes, both stay and the exclusion wins; the result says so.
+* **Replace** makes the direct assignments exactly the groups you chose. With no groups, every direct assignment of the selected policies is removed. You confirm that the current assignments are replaced.
+* Assignments that come from a policy set are never changed. iOS and Android app protection policies (BYOD) can only be added to, not replaced: Intune reports their policy set assignments as direct ones, so a replace could remove them. For the same reason Add only adds groups they are not assigned to yet, leaves existing entries and their filters as they are, and does not add excluded groups to an app protection policy that is already assigned.
+* A policy whose current assignments cannot be read is not changed.
+* Only what the review showed is changed: if a policy's assignments change in Intune after the review, or the tenant policy is no longer the matched copy of the OIB policy, it is not changed and the result asks you to review it again.
+* If Microsoft Graph does not confirm a change (a timeout or server error), the run keeps the previous assignments so Undo can still put them back; check the policy in Intune. Undo right after such a run may say the outcome is not known yet; try again a few minutes later.
+* If Microsoft Graph throttles a change, it is not sent again later, because the assignments may have changed by then. The policy is reported as failed; run the change again.
+
+The backup choice is the same as for deployments. Each change is recorded as a run that can be undone.
+
 ## Deploy and undo
 
 ### How OIB content is deployed
 
 * `%OrganizationId%` in OIB content is replaced with the tenant ID.
 * Assignments stored in the source files are never deployed. Scope tags are set to Default.
-* New policies are created unassigned. If you enter a **Pilot group object ID**, every new policy is assigned to that Entra group only. An invalid value shows "Enter a group object ID (GUID)."
+* New policies are created unassigned, or assigned to the groups you choose. See [Assign when you deploy](#assign-when-you-deploy).
 
 ### Backup first
 
@@ -171,19 +222,19 @@ Only one OpenIntuneBaseline deployment or undo can run per tenant at a time.
 
 **Also deploy to** deploys the same policies to other connected tenants after the selected tenant, one tenant at a time:
 
-* In other tenants, policies are always created unassigned. The pilot group applies to the selected tenant only.
+* Groups and filters exist per tenant, so each tenant you add gets its own **Assignments in *tenant*** editor. Leave it empty and that tenant's new policies stay unassigned.
 * With the backup on, a tenant without backup storage shows "No backup storage, will be skipped" and is reported as "Skipped: no backup storage is chosen for this tenant in Settings."
 * Each tenant's own plan is checked.
 
 ### Undo
 
-Every deployment and drift fix is recorded on this device with the IDs of the objects it created and the previous version of every policy it updated. **Deployment history** on the section's start page lists the runs that can be undone for the selected tenant.
+Every deployment, drift fix and assignment change is recorded on this device with the IDs of the objects it created, the previous version of every policy it updated and the previous direct assignments of every policy it reassigned. **Deployment history** on the section's start page lists the runs that can be undone for the selected tenant.
 
 If the run list cannot load, it shows the error with a **Retry** button. Retry reloads the history. A load failure does not mean there are no runs to undo.
 
-Undo deletes the objects the run created and puts the previous versions of updated policies back. It does not touch anything else. To go back further, restore from the backup taken before the run. See [Restore Intune policies](/restore/).
+Undo deletes the objects the run created (with their assignments), puts the previous versions of updated policies back and puts the previous assignments of reassigned policies back. It does not touch anything else. If a reassigned policy's assignments were changed again after the run, Undo leaves it alone and says so, so a newer change is never overwritten. To go back further, restore from the backup taken before the run. See [Restore Intune policies](/restore/).
 
-Failed writes follow the same safety rules as restores. A write with an unknown outcome is not repeated automatically; resolve it in **Settings** > **Storage and recovery** > **Restore write history**. See [Restore write history](/restore/limitations/#restore-write-history).
+Failed writes follow the same safety rules as restores. A write with an unknown outcome is not repeated automatically; resolve it in **Settings** > **Storage and recovery** > **Restore write history**. See [Restore write history](/restore/limitations/#restore-write-history). Assignment changes from the **Assignments** workflow are the exception: their record is the run in **Deployment history**, which keeps the previous assignments even when the outcome is unknown, so check the policy in Intune and use **Undo** there.
 
 ## Your own baseline
 
@@ -218,7 +269,11 @@ If the old OpenIntuneBaseline framework page saved policy pack comparisons for t
 | Tenant *type* could not be read (*status*). | Check your Intune role and the app registration permissions. |
 | Another change is being applied to this tenant: *label*. Try again when it finishes. | Another deployment, undo, change set or framework creation is running for this tenant. Wait for it to finish. See [Troubleshooting](/troubleshooting/). |
 | This run was already undone or is not recorded on this device. | Runs are stored per device. Delete leftover policies in Intune. |
-| The pilot group must be an Entra group object ID. | Enter the group's object ID (GUID), not its name. |
+| TenuVault cannot read groups in this tenant, so the groups could not be checked. Add the delegated GroupMember.Read.All permission to the app registration and grant admin consent. Nothing was changed. | Follow the [group read setup steps](/security/permissions/#group-read-groupmemberreadall), then select **Check again** and retry. |
+| This group does not exist in the tenant: *ID*. Nothing was changed. | The group was deleted or belongs to another tenant. Remove it and choose another group. |
+| The assignment filter *name* is not a *platform* filter. Nothing was changed. | Choose a filter of the platform shown next to it. |
+| A group cannot be both included and excluded. | Remove the group from one of the lists. |
+| The current assignments could not be read, so nothing was changed. | Check your Intune role and retry. The policy keeps its assignments. |
 
 ## License and attribution
 

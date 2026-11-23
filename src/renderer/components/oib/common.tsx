@@ -15,8 +15,9 @@ export const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{1
 
 export async function oibRequest<T>(body: object): Promise<T> {
   const response = await fetch("/api/oib", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
-  const result = await response.json() as T & { error?: string }
-  if (!response.ok) throw new Error(result.error || `Request failed (${response.status}).`)
+  const result = await response.json() as T & { error?: string; code?: string }
+  // The status marks an answered request; an error without one never reached the main process's answer.
+  if (!response.ok) throw Object.assign(new Error(result.error || `Request failed (${response.status}).`), { status: response.status }, result.code ? { code: result.code } : {})
   return result
 }
 

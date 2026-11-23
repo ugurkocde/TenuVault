@@ -94,7 +94,7 @@ Delete **TenuVault Desktop** under **Entra admin center** > **App registrations*
 | Admin consent | Granted tenant-wide for all of the permissions below |
 | Enterprise application | Hidden from users' My Apps portal |
 | Sign-in restriction | Optional, with the script: only members of one group can sign in (`-AllowedGroupId`) |
-| Group read | Optional, with the script: also request `Group.Read.All` (`-IncludeGroupRead`), off by default |
+| Group read | Delegated `GroupMember.Read.All`, included by default |
 | Services | Optional, with the script: request the permissions of other services (`-Services`, `-RestoreAccess`, `-Areas`). Without them, the permissions below |
 
 Because the app is a public client with delegated permissions, every call runs as the signed-in admin. MFA, Conditional Access and your Intune role apply, and changes are attributed to that admin in the Entra and Intune audit logs.
@@ -107,6 +107,7 @@ This page is only about the app registration you sign in with. It never gets app
 | --- | --- |
 | Microsoft Graph | `User.Read` |
 | Microsoft Graph | `Organization.Read.All` |
+| Microsoft Graph | `GroupMember.Read.All` |
 | Microsoft Graph | `Policy.Read.All` |
 | Microsoft Graph | `DeviceManagementConfiguration.ReadWrite.All` |
 | Microsoft Graph | `DeviceManagementApps.ReadWrite.All` |
@@ -119,7 +120,9 @@ This page is only about the app registration you sign in with. It never gets app
 
 The two Azure permissions are only used when backups go to your Azure storage account: Azure Service Management lists your subscriptions and storage accounts in the storage picker, and Azure Storage reads and writes the backup files. For what each permission is used for, see [App registration and delegated permissions](/security/permissions/).
 
-The table above is the default permission set. It does not change unless you opt in. With `-IncludeGroupRead` the script adds one more delegated Microsoft Graph permission, `Group.Read.All`. The hygiene unresolved groups check uses it to tell whether a referenced group exists; App Backup can also use it to name groups referenced by app assignments. Without it the hygiene check stays unknown and no group is reported as missing. App Backup's optional device-group membership check additionally needs delegated `Device.Read.All`, added manually to the existing registration; see [App Backup](/apps/app-backup/#understand-the-assignment-check). With `-IncludeConditionalAccessRestore` it adds `Policy.ReadWrite.ConditionalAccess`, which restoring [Conditional Access](/backups/conditional-access/) needs; backing Conditional Access up only needs the default `Policy.Read.All`.
+The table above is the default permission set. For an older registration, follow the [group read setup steps](/security/permissions/#group-read-groupmemberreadall) to add the permission, grant admin consent and select **Check again**. App Backup's optional device-group membership check additionally needs delegated `Device.Read.All`, added manually to the existing registration. See [App Backup](/apps/app-backup/#understand-the-assignment-check).
+
+The `-IncludeConditionalAccessRestore` switch adds `Policy.ReadWrite.ConditionalAccess` for [Conditional Access restores](/backups/conditional-access/). Conditional Access backups use the default `Policy.Read.All`.
 
 With `-Services` the script requests the permissions of the services you name in place of the default set, for example Entra ID or Defender. [App registration and delegated permissions](/security/permissions/#entra-id-and-defender) lists them per service and area.
 
@@ -179,12 +182,6 @@ Select **Next: sign in** under the card when you have the two values. If the app
    ./New-TenuVaultDesktopApp.ps1 -TenantId contoso.onmicrosoft.com -DisplayName "TenuVault Desktop" -AllowedGroupId 00000000-0000-0000-0000-000000000000
    ```
 
-   To also let the hygiene unresolved groups check read whether referenced groups exist:
-
-   ```powershell
-   ./New-TenuVaultDesktopApp.ps1 -TenantId contoso.onmicrosoft.com -IncludeGroupRead
-   ```
-
    To request the permissions of other services, name them. This asks for Intune with restore access, as always, and for Entra ID to back up:
 
    ```powershell
@@ -225,7 +222,7 @@ If an app registration with the same name already exists, the script prints a no
 | `-Services` | No | The services the app registration can back up: `Intune`, `ConditionalAccess`, `Entra`, `Defender`. Default: `Intune` and `ConditionalAccess`, which is the permission set in the table above. Each service brings its own read permissions, and a service you leave out brings none. The script refuses an empty list, such as `-Services @()`; leave the parameter out to get the default. |
 | `-RestoreAccess` | No | The services TenuVault may also restore, which adds their write permissions. Default: `Intune`, when Intune is one of the services. When you pass it, name every service that gets write permissions, or `None` to request read permissions only. |
 | `-Areas` | No | Areas of Entra ID that are backed up only on request: `Groups`, `UsersAndDevices`, `Applications`. Groups and users and devices hold personal data. Needs `Entra` in `-Services`. The script refuses an empty list; leave the parameter out to back up none of these areas. |
-| `-IncludeGroupRead` | No | Switch. When set, also requests the delegated `Group.Read.All` permission so the hygiene unresolved groups check can run. Off by default, so the default permission set is unchanged. Because each run creates a new app registration, use this on a fresh run and sign in with the new client ID, or add `Group.Read.All` to an existing registration manually and grant admin consent. |
+| `-IncludeGroupRead` | No | Deprecated switch accepted for compatibility. New registrations already include delegated `GroupMember.Read.All`. |
 | `-UseDeviceCode` | No | Switch. Signs in with a device code instead of opening a browser on this computer, for remote shells without a browser. Conditional Access often blocks device code flow, so only use it when the browser sign-in is not possible. |
 
 ### Execution policy
@@ -266,7 +263,7 @@ Do not add a client secret or a certificate.
 ### 3. Add the delegated permissions
 
 1. Open **API permissions** > **Add a permission**.
-2. Select **Microsoft Graph** > **Delegated permissions** and add the nine Graph permissions listed in [Delegated permissions](#delegated-permissions). `User.Read` is usually already present.
+2. Select **Microsoft Graph** > **Delegated permissions** and add the ten Graph permissions listed in [Delegated permissions](#delegated-permissions). `User.Read` is usually already present.
 3. Select **Add a permission** again. Under **Microsoft APIs** (or **APIs my organization uses**), choose **Azure Service Management** > **Delegated permissions** > `user_impersonation`.
 4. Repeat for **Azure Storage** > **Delegated permissions** > `user_impersonation`.
 5. Select **Grant admin consent for &lt;your tenant&gt;** and confirm. Every permission should show **Granted**.

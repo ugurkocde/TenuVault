@@ -26,10 +26,9 @@ const permissionsPage = read("docs-site/src/content/docs/security/permissions.md
 const registrationPage = read("docs-site/src/content/docs/getting-started/app-registration.md")
 const readerPage = read("docs-site/src/content/docs/backups/backup-reader.md")
 
-// The permission lists as they were before services could be chosen. They are written out, not
-// derived, so a change to the manifest that moves a default shows up as a failure here.
+// These lists are written out so a change to the manifest that moves a default fails here.
 const TODAY_GRAPH = [
-  "User.Read", "Organization.Read.All", "Policy.Read.All",
+  "User.Read", "Organization.Read.All", "GroupMember.Read.All", "Policy.Read.All",
   "DeviceManagementConfiguration.ReadWrite.All", "DeviceManagementApps.ReadWrite.All", "DeviceManagementServiceConfig.ReadWrite.All",
   "DeviceManagementScripts.ReadWrite.All", "DeviceManagementRBAC.ReadWrite.All", "DeviceManagementManagedDevices.Read.All",
 ]
@@ -56,7 +55,7 @@ describe("Copies written from the manifest", () => {
     // Outside its table, a script names a permission only where an existing switch adds one.
     const outside = (script: string) => script.slice(0, script.indexOf("# BEGIN PERMISSION TABLE")) + script.slice(script.indexOf("# END PERMISSION TABLE"))
     const quoted = (script: string) => [...outside(script).matchAll(/\$\w+ \+= "([A-Za-z.-]+)"/g)].map((match) => match[1]!)
-    expect(quoted(desktopScript)).toEqual(["Group.Read.All", "Policy.ReadWrite.ConditionalAccess", "Policy.Read.All", "AuditLog.Read.All", "Mail.Send", "GroupMember.Read.All", "User.Read.All"])
+    expect(quoted(desktopScript)).toEqual(["Policy.ReadWrite.ConditionalAccess", "Policy.Read.All", "AuditLog.Read.All", "Mail.Send", "User.Read.All"])
     expect(quoted(readerScript)).toEqual(["DeviceManagementManagedDevices.Read.All", "Policy.Read.All"])
   })
 })
@@ -94,10 +93,14 @@ describe("The setup in the app", () => {
 })
 
 describe("Optional permissions and restore access", () => {
-  it("are permissions the manifest knows, behind switches the setup script has", () => {
+  it("are permissions the manifest knows, included by default or added with a setup switch", () => {
     const known = knownPermissions("delegated")[0]!.permissions
     for (const entry of OPTIONAL_PERMISSIONS) {
       for (const permission of entry.permissions) expect(known, permission).toContain(permission)
+      if (!entry.setupSwitch) {
+        for (const permission of entry.permissions) expect(TODAY_GRAPH).toContain(permission)
+        continue
+      }
       expect(desktopScript).toContain(`[switch]$${entry.setupSwitch.slice(1)}`)
       // The switch's block in the script adds exactly these permissions.
       const block = desktopScript.slice(desktopScript.indexOf(`if ($${entry.setupSwitch.slice(1)}) {`))
@@ -106,7 +109,7 @@ describe("Optional permissions and restore access", () => {
     // Every permission a switch adds belongs to an optional permission or to Conditional Access restore.
     const switched = [...desktopScript.matchAll(/\$optional \+= "([A-Za-z.]+)"/g)].map((match) => match[1]!)
     const restore = MODULE_BY_ID.get("conditionalAccess")!.restoreAccess!
-    expect(new Set(switched)).toEqual(new Set([...OPTIONAL_PERMISSIONS.flatMap((entry) => entry.permissions), ...restore.permissions.map((permission) => permission.name), "Policy.Read.All"]))
+    expect(new Set(switched)).toEqual(new Set([...OPTIONAL_PERMISSIONS.flatMap((entry) => entry.setupSwitch ? entry.permissions : []), ...restore.permissions.map((permission) => permission.name), "Policy.Read.All"]))
   })
 
   it("names for Conditional Access restore what the manifest adds for it, behind the switch the script has", () => {
@@ -223,7 +226,7 @@ describe("The docs permission tables", () => {
     const optionalRows = rows.filter((row) => optional(row[0]!)).map((row) => named(row[0]!))
     const known = knownPermissions("delegated")[0]!.permissions
     for (const permission of optionalRows) expect(known, permission).toContain(permission)
-    for (const permission of [...OPTIONAL_PERMISSIONS.flatMap((entry) => entry.permissions), ...MODULE_BY_ID.get("conditionalAccess")!.restoreAccess!.permissions.map((entry) => entry.name)]) expect(optionalRows, permission).toContain(permission)
+    for (const permission of [...OPTIONAL_PERMISSIONS.flatMap((entry) => entry.setupSwitch ? entry.permissions : []), ...MODULE_BY_ID.get("conditionalAccess")!.restoreAccess!.permissions.map((entry) => entry.name)]) expect(optionalRows, permission).toContain(permission)
     for (const api of ["Azure Service Management", "Azure Storage"]) expect(table(permissionsPage, `### ${api}`).map((row) => named(row[0]!))).toEqual(["user_impersonation"])
   })
 

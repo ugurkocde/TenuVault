@@ -166,7 +166,15 @@ async function send(graph: GraphCall, method: Step["method"], path: string, body
 export async function writeOperation(
   graph: GraphCall,
   type: IntuneType,
-  input: { action: OperationAction; targetId: string | null; proposed: Item | null; assignments: Item[] | null; current: Item | null },
+  input: {
+    action: OperationAction
+    targetId: string | null
+    proposed: Item | null
+    assignments: Item[] | null
+    current: Item | null
+    assignmentBlockers?: () => Promise<string[]>
+    resumeAssignmentId?: string
+  },
   onCreated: (id: string) => void,
 ): Promise<WriteOutcome> {
   if (type.restoreSafety === "identity" && restoreCapability(type) !== "none") {
@@ -180,8 +188,23 @@ export async function writeOperation(
   const assign = async (id: string): Promise<Sent> => {
     if (!input.assignments) return { ok: true, body: {} }
     if (!type.assign || type.assign === "post") return { ok: false, rejected: true, message: `Assignments cannot be set for ${type.label} by a change set.` }
+    if (input.assignmentBlockers) {
+      try {
+        const blockers = await input.assignmentBlockers()
+        if (blockers.length) return { ok: false, rejected: true, message: `${blockers.join(" ")} Resolve the group checks and retry.` }
+      } catch (error) {
+        return { ok: false, rejected: true, message: `The destination groups could not be checked: ${error instanceof Error ? error.message : String(error)}. Verify group access and retry.` }
+      }
+    }
     return send(graph, "POST", `${type.path}/${encodeURIComponent(id)}/assign`, { [type.assign.key]: input.assignments as Json })
   }
+  const finishAssignments = async (id: string, failure: string): Promise<WriteOutcome> => {
+    const assigned = await assign(id)
+    if (!assigned.ok && assigned.approval) return blocked(assigned, id, true)
+    if (!assigned.ok) return { state: "unknown", objectId: id, message: `${failure}: ${assigned.message}` }
+    return { state: "written", objectId: id }
+  }
+  if (input.resumeAssignmentId) return finishAssignments(input.resumeAssignmentId, "The configuration was already written but the reviewed assignments failed")
   if (input.action === "delete") {
     const sent = await send(graph, "DELETE", `${type.path}/${encodeURIComponent(input.targetId!)}`)
     if (!sent.ok && sent.approval) return blocked(sent, input.targetId)
@@ -202,10 +225,7 @@ export async function writeOperation(
       if (!sent.ok && sent.approval) return blocked(sent, id, true)
       if (!sent.ok) return { state: "unknown", objectId: id, message: `The object was created but a follow-up step failed: ${sent.message}` }
     }
-    const assigned = await assign(id)
-    if (!assigned.ok && assigned.approval) return blocked(assigned, id, true)
-    if (!assigned.ok) return { state: "unknown", objectId: id, message: `The object was created but its reviewed assignments failed: ${assigned.message}` }
-    return { state: "written", objectId: id }
+    return finishAssignments(id, "The object was created but its reviewed assignments failed")
   }
   const steps = buildUpdatePlan(type, proposed as Item, input.targetId!, { includeAssignments: false, current: input.current ?? {} })
   for (const [index, step] of steps.entries()) {
@@ -216,10 +236,7 @@ export async function writeOperation(
       return { state: "unknown", objectId: input.targetId, message: index === 0 ? sent.message : `Part of the update was written before a step failed: ${sent.message}` }
     }
   }
-  const assigned = await assign(input.targetId!)
-  if (!assigned.ok && assigned.approval) return blocked(assigned, input.targetId, true)
-  if (!assigned.ok) return { state: "unknown", objectId: input.targetId, message: `The configuration was written but the reviewed assignments failed: ${assigned.message}` }
-  return { state: "written", objectId: input.targetId! }
+  return finishAssignments(input.targetId!, "The configuration was written but the reviewed assignments failed")
 }
 
 export type ReadBack = { state: "match" | "differs" | "missing"; live: Item | null } | { state: "denied"; live: null; message: string }

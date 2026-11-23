@@ -412,7 +412,7 @@ describe("a choice of services, areas and access levels", () => {
   it("asks for today's exact list when no choice is made", async () => {
     const f = fixture()
     await f.run()
-    expect(created(f).consented).toEqual(["User.Read", "Organization.Read.All", "Policy.Read.All", "DeviceManagementConfiguration.ReadWrite.All", "DeviceManagementApps.ReadWrite.All", "DeviceManagementServiceConfig.ReadWrite.All", "DeviceManagementScripts.ReadWrite.All", "DeviceManagementRBAC.ReadWrite.All", "DeviceManagementManagedDevices.Read.All"])
+    expect(created(f).consented).toEqual(["User.Read", "Organization.Read.All", "GroupMember.Read.All", "Policy.Read.All", "DeviceManagementConfiguration.ReadWrite.All", "DeviceManagementApps.ReadWrite.All", "DeviceManagementServiceConfig.ReadWrite.All", "DeviceManagementScripts.ReadWrite.All", "DeviceManagementRBAC.ReadWrite.All", "DeviceManagementManagedDevices.Read.All"])
     expect(created(f).declared).toEqual(DESKTOP_APP_PERMISSIONS[0]!.permissions.map((_, i) => `Microsoft Graph-${i}`))
   })
 

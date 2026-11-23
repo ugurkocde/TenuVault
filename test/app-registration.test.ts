@@ -9,10 +9,11 @@ const script = readFileSync(new URL("../resources/New-TenuVaultDesktopApp.ps1", 
 describe("the app registration shown in the guided setup", () => {
   it("lists exactly the default permissions the setup script grants", () => {
     for (const entry of DESKTOP_APP_PERMISSIONS) expect(script).toContain(`AppId  = "${entry.appId}"`)
-    // The list as every setup has requested it, written out: a default setup must never ask for more, less or another order.
+    // Keep the setup UI's exact default permission list and order explicit.
     expect(DESKTOP_APP_PERMISSIONS[0]!.permissions).toEqual([
       "User.Read",
       "Organization.Read.All",
+      "GroupMember.Read.All",
       "Policy.Read.All",
       "DeviceManagementConfiguration.ReadWrite.All",
       "DeviceManagementApps.ReadWrite.All",

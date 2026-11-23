@@ -1,10 +1,8 @@
 import type { GrantedPermissions } from "./modules"
 
-/**
- * Delegated permissions the setup script only adds with a switch. Each serves one feature;
- * without it that feature fails while everything else keeps working. The app shows their
- * status from the signed-in token so an admin can add them before a feature fails.
- */
+import { GROUP_READ_PERMISSION, GROUP_READ_PERMISSIONS } from "../group-access"
+
+/** Feature permissions shown separately from service modules. */
 export type OptionalPermissionId = "notificationEmail" | "groupRecipients" | "conditionalAccessWatching" | "groupRead"
 
 export interface OptionalPermission {
@@ -13,15 +11,15 @@ export interface OptionalPermission {
   label: string
   /** Every permission listed is needed. */
   permissions: readonly string[]
-  /** The New-TenuVaultDesktopApp.ps1 switch that adds it to a new app registration. */
-  setupSwitch: string
+  /** The setup switch for permissions outside the default registration. */
+  setupSwitch?: string
 }
 
 export const OPTIONAL_PERMISSIONS: readonly OptionalPermission[] = [
   { id: "notificationEmail", label: "Notification email", permissions: ["Mail.Send"], setupSwitch: "-IncludeNotifications" },
-  { id: "groupRecipients", label: "Entra group recipients of notification email", permissions: ["GroupMember.Read.All", "User.Read.All"], setupSwitch: "-IncludeNotifications" },
+  { id: "groupRecipients", label: "Entra group recipients of notification email", permissions: ["User.Read.All"], setupSwitch: "-IncludeNotifications" },
   { id: "conditionalAccessWatching", label: "Conditional Access change watching", permissions: ["AuditLog.Read.All"], setupSwitch: "-IncludeAuditLog" },
-  { id: "groupRead", label: "Hygiene check for groups that no longer exist", permissions: ["Group.Read.All"], setupSwitch: "-IncludeGroupRead" },
+  { id: "groupRead", label: "Group read (OpenIntuneBaseline assignments, Dev to Prod group mappings, hygiene group check)", permissions: [GROUP_READ_PERMISSION] },
 ]
 
 export interface OptionalPermissionStatus extends OptionalPermission {
@@ -39,7 +37,9 @@ function covers(granted: ReadonlySet<string>, permission: string): boolean {
 export function optionalPermissionStatus(granted: GrantedPermissions | undefined): OptionalPermissionStatus[] {
   return OPTIONAL_PERMISSIONS.map((entry) => {
     if (!granted || granted.kind !== "delegated") return { ...entry, permissions: [...entry.permissions], missing: [], granted: null }
-    const missing = entry.permissions.filter((permission) => !covers(granted.permissions, permission))
+    const missing = entry.permissions.filter((permission) => permission === GROUP_READ_PERMISSION
+      ? !GROUP_READ_PERMISSIONS.some(scope => granted.permissions.has(scope))
+      : !covers(granted.permissions, permission))
     return { ...entry, permissions: [...entry.permissions], missing, granted: missing.length === 0 }
   })
 }

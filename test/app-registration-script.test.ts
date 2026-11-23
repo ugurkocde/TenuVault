@@ -25,11 +25,19 @@ const API_IDS: Record<string, string> = {
 }
 const GRAPH_DEFAULTS = DESKTOP_APP_PERMISSIONS[0]!.permissions
 // The opt-in permissions, in the order the script appends them.
-const OPT_IN = { IncludeGroupRead: ["Group.Read.All"], IncludeConditionalAccessRestore: ["Policy.ReadWrite.ConditionalAccess"], IncludeAuditLog: ["AuditLog.Read.All"], IncludeNotifications: ["Mail.Send", "GroupMember.Read.All", "User.Read.All"] }
+const OPT_IN = { IncludeGroupRead: [], IncludeConditionalAccessRestore: ["Policy.ReadWrite.ConditionalAccess"], IncludeAuditLog: ["AuditLog.Read.All"], IncludeNotifications: ["Mail.Send", "User.Read.All"] }
 // Microsoft Graph offers every permission the manifest can name, so a choice of services finds its permissions.
 const offered = (appId: string) => (appId === API_IDS["Microsoft Graph"] ? [...new Set([...GRAPH_DEFAULTS, ...Object.values(OPT_IN).flat(), ...knownPermissions("delegated")[0]!.permissions])] : ["user_impersonation"])
-const scopeId = (appId: string, value: string) => `${appId}/${value}`
+const GROUP_READ_SCOPE_ID = "bc024368-1153-4739-b217-4326f2e966d0"
+const scopeId = (appId: string, value: string) => value === "GroupMember.Read.All" ? GROUP_READ_SCOPE_ID : `${appId}/${value}`
 const spId = (appId: string) => `sp-${appId}`
+
+it("includes group read once by default and keeps the old switch as a warning", () => {
+  expect(GRAPH_DEFAULTS.filter(scope => scope === "GroupMember.Read.All")).toHaveLength(1)
+  expect(source).toMatch(/\$basePermissions = @\([^\r\n]*'GroupMember\.Read\.All'/)
+  expect(source).not.toMatch(/['"](?:Organization|Directory)\.ReadWrite\.All['"]/i)
+  expect(source).toMatch(/if \(\$IncludeGroupRead\) \{\s*Write-Warning "-IncludeGroupRead is no longer needed:/)
+})
 
 it("keeps the setup script ASCII and free of module dependencies", () => {
   expect([...source].every(character => character.charCodeAt(0) < 128)).toBe(true)
@@ -100,11 +108,11 @@ describe.runIf(Boolean(powershell))("real setup script over HTTP", () => {
         }
         return send({ access_token: "test-access", id_token: `e30.${Buffer.from(JSON.stringify({ tid: tenantId, preferred_username: "admin@example.test" })).toString("base64url")}.` })
       }
-      const path = url.pathname.replace("/graph.microsoft.com/v1.0", "")
+      const path = url.pathname.replace("/graph.microsoft.com/beta", "")
       if (path === "/servicePrincipals" && req.method === "GET") {
         if (scenario === "transient" && readFailures++ < 1) return send({ error: { message: "Service unavailable" } }, 503)
         const appId = /'([^']+)'/.exec(url.searchParams.get("$filter")!)![1]!
-        return send({ value: [{ id: spId(appId), appId, oauth2PermissionScopes: offered(appId).map(value => ({ value, id: scopeId(appId, value) })) }] })
+        return send({ value: [{ id: spId(appId), appId, publishedPermissionScopes: offered(appId).map(value => ({ value, id: scopeId(appId, value) })) }] })
       }
       if (path === "/applications" && req.method === "GET") return send({ value: scenario === "existing" ? [{ appId: group }] : [] })
       if (path === "/applications" && req.method === "POST") return send({ id: "app-object", appId: clientId })
@@ -146,6 +154,7 @@ describe.runIf(Boolean(powershell))("real setup script over HTTP", () => {
     const args: Record<string, unknown> = scenario === "tenant" ? { TenantId: tenantId } : scenario === "group" ? { AllowedGroupId: group } : device ? { UseDeviceCode: true } : scenario === "unicode" ? { DisplayName: "TenuVault Caf\u00e9" } : Object.fromEntries(switches.map(name => [name, true]))
     const result = await run(scenario, args)
     expect(result.code, result.text).toBe(0)
+    expect(result.text.includes("-IncludeGroupRead is no longer needed:")).toBe(switches.includes("IncludeGroupRead"))
     expect(parseSetupOutput(result.text)).toEqual({ tenantId, clientId })
     expect(parseSetupOutput(result.clipboard)).toEqual({ tenantId, clientId })
     const auth = result.requests.find(r => r.path.endsWith("/authorize"))
@@ -205,7 +214,8 @@ describe.runIf(Boolean(powershell))("real setup script over HTTP", () => {
     const app = result.requests.find(r => r.method === "POST" && r.path.endsWith("/applications"))!
     const access = (app.body.requiredResourceAccess as { resourceAppId: string; resourceAccess: { id: string }[] }[]).find(entry => entry.resourceAppId === API_IDS["Microsoft Graph"])!
     const grant = result.requests.find(r => r.path.endsWith("/oauth2PermissionGrants") && r.body.resourceId === spId(API_IDS["Microsoft Graph"]!))!
-    return { declared: access.resourceAccess.map(entry => entry.id.replace(`${API_IDS["Microsoft Graph"]}/`, "")), consented: String(grant.body.scope).split(" ") }
+    const declared = access.resourceAccess.map(({ id }) => id === GROUP_READ_SCOPE_ID ? "GroupMember.Read.All" : id.replace(`${API_IDS["Microsoft Graph"]}/`, ""))
+    return { declared, consented: String(grant.body.scope).split(" ") }
   }
 
   it.each<[string, PermissionChoice]>([
@@ -238,7 +248,7 @@ describe.runIf(Boolean(powershell))("real setup script over HTTP", () => {
     const fromServices = graphPermissions({ entra: { access: "backup", areas: ["usersAndDevices"] } }, "delegated")
     expect(fromServices).toContain("User.Read.All")
     expect(fromServices).toContain("GroupMember.Read.All")
-    expect(requested(result).declared).toEqual([...new Set([...fromServices, "Policy.ReadWrite.ConditionalAccess", "Mail.Send", "GroupMember.Read.All"])])
+    expect(requested(result).declared).toEqual([...new Set([...fromServices, "Policy.ReadWrite.ConditionalAccess", "Mail.Send"])])
   }, 45000)
 
   it.each([

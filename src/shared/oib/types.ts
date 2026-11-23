@@ -1,4 +1,5 @@
 import type { Item } from "../intune/registry"
+import type { OibAssignmentSpec } from "./assignments"
 
 export const OIB_REPO = "SkipToTheEndpoint/OpenIntuneBaseline"
 export const OIB_LICENSE = "GPL-3.0 · SkipToTheEndpoint and contributors"
@@ -235,6 +236,10 @@ export interface RunObject {
   name: string
   warnings?: string[]
   partial?: boolean
+  /** The groups a created or reassigned policy was assigned to, counted; absent when it stayed unassigned. */
+  assignment?: { include: number; exclude: number }
+  /** A created policy that should have been assigned, but whose creation did not finish cleanly: it may or may not be assigned. */
+  assignmentUnknown?: boolean
 }
 
 export interface UpdatedObject extends RunObject {
@@ -244,11 +249,24 @@ export interface UpdatedObject extends RunObject {
   before?: Item
 }
 
+/** A deployed policy whose assignments an assignment run changed. */
+export interface ReassignedObject extends RunObject {
+  /** The direct assignments before the run, as /assign takes them; kept so undo can put them back. */
+  previous?: Item[]
+  /** The direct assignments the run wrote; undo only puts the previous ones back while these are still in place. */
+  applied?: Item[]
+  /** Saved before the write was sent and not confirmed since: the write may or may not have taken effect. */
+  pending?: boolean
+  /** When this write was sent or last answered without a clear outcome; undo waits a while after it. */
+  pendingAt?: string
+}
+
 export interface OibRun {
   runId: string
   tenantId: string
   createdAt: string
-  kind: "deploy" | "fix"
+  /** "assign" runs change the assignments of deployed policies (Manage assignments). */
+  kind: "deploy" | "fix" | "assign"
   platform: OibPlatform
   reference: string
   /** The exact OIB commit deployed; absent on Quick Start runs whose release commit is unknown. */
@@ -259,9 +277,16 @@ export interface OibRun {
   backupFolder?: string
   /** Absent on runs recorded before the backup choice existed (those backed up when backupFolder is set). */
   backupMode?: OibBackupMode
+  /** Set on runs recorded before assignments could name several groups: every new policy went to this group. */
   pilotGroupId?: string
+  /** The groups and filters the run assigned, with names as read from the tenant. */
+  assignments?: OibAssignmentSpec
+  /** Assignment runs: whether the groups were added to the existing assignments or replaced them. */
+  assignMode?: OibAssignMode
   created: RunObject[]
   updated: UpdatedObject[]
+  /** Assignment runs: the policies whose assignments changed. */
+  reassigned?: ReassignedObject[]
   failed: { name: string; error: string }[]
   skipped?: { name: string; reason: string }[]
 }
@@ -269,7 +294,25 @@ export interface OibRun {
 export interface UndoResult {
   run: OibRun | null
   /** note replaces the usual done text, for example when the policy was already deleted. */
-  results: { name: string; id: string; action: "removed" | "restored"; done: boolean; error?: string; note?: string }[]
+  results: { name: string; id: string; action: "removed" | "restored" | "reassigned"; done: boolean; error?: string; note?: string; warning?: string }[]
+}
+
+/** Manage assignments: add the groups to what a policy has, or replace its direct assignments. */
+export type OibAssignMode = "add" | "replace"
+
+/** One deployed policy for Manage assignments, with its current direct assignments. */
+export interface OibPolicyAssignments {
+  source: string
+  targetId: string
+  name: string
+  folder: string
+  /** Direct assignments; absent when they could not be read. */
+  assignments?: Item[]
+  /** Assignments that come from a policy set; they are never changed here. */
+  inherited: number
+  /** The groups those policy set assignments target. */
+  inheritedGroups?: string[]
+  error?: string
 }
 
 /** What a deployment or Fix drift does before it writes: back up now, reuse a recent backup, or skip. */
@@ -304,7 +347,7 @@ export interface OibProgress {
   stage: string
   done: number
   total: number
-  kind: "deploy" | "fix" | "undo" | "validate"
+  kind: "deploy" | "fix" | "undo" | "validate" | "assign"
   startedAt: string
   /** Backup job progress 0 to 100, while the pre-change backup runs. */
   percent?: number

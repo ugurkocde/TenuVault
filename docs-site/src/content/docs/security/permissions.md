@@ -58,6 +58,7 @@ Delegated permissions let an app act on behalf of a signed-in user. They never g
 | --- | --- |
 | `User.Read` | Signs you in and reads your own basic profile. |
 | `Organization.Read.All` | Reads your organization's name and verified domains for the tenant overview. |
+| `GroupMember.Read.All` | Searches groups by name, reads group properties and membership counts, and checks whether referenced or selected groups exist. Used by OpenIntuneBaseline, promotion group mappings, Conflicts and hygiene, App Backup and notification group recipients. Included in new app registrations. |
 | `Policy.Read.All` | Backs up Entra Conditional Access policies, named locations and authentication strengths, when the Conditional Access service is turned on for the tenant. Read only. See [Conditional Access backups](/backups/conditional-access/). |
 | `DeviceManagementConfiguration.ReadWrite.All` | Backs up and restores device configuration profiles, Settings Catalog and endpoint security policies, administrative templates, compliance policies, security baselines, Windows update profiles, assignment filters, policy sets, compliance notification templates and related configuration. Also used by the OpenIntuneBaseline section to read, create and update the OIB policies you choose, and by Framework coverage to read and create Settings Catalog policies. |
 | `DeviceManagementApps.ReadWrite.All` | Backs up and restores apps, app categories, app configuration policies and app protection policies. |
@@ -65,11 +66,9 @@ Delegated permissions let an app act on behalf of a signed-in user. They never g
 | `DeviceManagementScripts.ReadWrite.All` | Backs up and restores Windows PowerShell scripts, macOS shell scripts, macOS custom attributes, remediations and compliance scripts. |
 | `DeviceManagementRBAC.ReadWrite.All` | Backs up and restores Intune roles, role assignments, scope tags and multi admin approval policies. |
 | `DeviceManagementManagedDevices.Read.All` | Reads device categories and device clean-up rules for backups, and the managed device count and compliance rate shown in the tenant overview. Read only: TenuVault cannot change or wipe devices. |
-| `Group.Read.All` (optional, with `-IncludeGroupRead` or added manually) | Reads whether a group referenced by a policy assignment exists for the hygiene check. Also allows App Backup to read names and visibility of groups referenced by app assignments. Not requested by default; unreadable group information remains unknown. |
 | `Device.Read.All` (optional, added manually) | Lets App Backup read the capture PC's transitive Entra group memberships before backup. Not requested by default. Missing permission leaves device-group targeting unknown; it does not prevent offline export or an explicit capture attempt. |
 | `Policy.ReadWrite.ConditionalAccess` (optional, only with `-IncludeConditionalAccessRestore`) | Restores Conditional Access policies, named locations and authentication strengths. Not requested by default, so the default permission set cannot change Conditional Access. A restore also needs the Conditional Access Administrator or Security Administrator role, and restored policies start in report-only mode. |
 | `Mail.Send` (optional, only with `-IncludeNotifications`) | Sends notification email and [change reports](/reports/) as the signed-in admin (`POST /me/sendMail`). Not requested by default. Only notification channels of kind email and reports sent by email use it. |
-| `GroupMember.Read.All` (optional, with `-IncludeNotifications` or added manually) | Resolves Entra group recipients of notification email, guests excluded. Also permits App Backup to read names and visibility of groups referenced by app assignments. Not requested by default. Sending to a list address needs no group permission. |
 | `User.Read.All` (optional, only with `-IncludeNotifications`) | Reads mail address and user type of those group members so they can be addressed and guests excluded. Without it, Graph returns member objects with those fields empty and group recipients resolve to nobody. |
 | `AuditLog.Read.All` (optional, only with `-IncludeAuditLog`) | Reads Conditional Access, named location and authentication strength changes from the Entra audit log (`GET /auditLogs/directoryAudits`) for notification change watching, and to name who changed them in [change reports](/reports/). Not requested by default. Only ids, times, activity names, target names and the actor are used. For updates, the policy versions Graph includes in each event are compared in memory to name the settings that changed; the policy content and its values are never kept or sent. |
 
@@ -134,7 +133,7 @@ These are all write permissions requested for the enabled configuration restores
 
 Services and permissions and the setup script request the union of these scopes for the selected service's enabled areas, only after restore opt-in. Entra ID restore access includes the Governance catalog permission, which the permission preview names before the registration is changed. Each policy still requires its own preview and confirmation. Opt-in does not activate workflows or detection rules. Blocked and never-restorable types add no write scope. Defender and Roles and PIM restore access add none.
 
-Token lifetime restore also requests the read permission [Application.Read.All](https://learn.microsoft.com/en-us/graph/permissions-reference#applicationreadall), solely for the [policy binding read](https://learn.microsoft.com/en-us/graph/api/tokenlifetimepolicy-list-appliesto?view=graph-rest-1.0). The enabled metadata operations need no directory-object lookup. Organization.ReadWrite.All and Directory.ReadWrite.All are never requested. Directory.Read.All is never requested for restore operations; selecting the opt-in Groups or Applications backup area includes that read permission independently of restore access. Existing grants are not revoked. The setup script's no-parameter permission request is unchanged.
+Token lifetime restore also requests the read permission [Application.Read.All](https://learn.microsoft.com/en-us/graph/permissions-reference#applicationreadall), solely for the [policy binding read](https://learn.microsoft.com/en-us/graph/api/tokenlifetimepolicy-list-appliesto?view=graph-rest-1.0). The enabled metadata operations need no directory-object lookup. Organization.ReadWrite.All and Directory.ReadWrite.All are never requested. Directory.Read.All is never requested for restore operations; selecting the opt-in Groups or Applications backup area includes that read permission independently of restore access. Existing grants are not revoked.
 
 ## Check what the app registration allows
 
@@ -149,7 +148,7 @@ For missing permissions, expand **Add the missing permissions**. The four routes
 * **Registration in Entra** opens API permissions for that client ID and lists the exact names to add.
 * **Text for your administrator** includes the tenant ID, client ID, permission names and next steps.
 
-Run the CLI route as an **Application Administrator**. Azure CLI needs delegated **DelegatedPermissionGrant.ReadWrite.All** access or a documented higher permission such as **Directory.ReadWrite.All**. The commands add only missing `(id, type: Scope)` declarations for Microsoft Graph, so rerunning them does not append duplicates. They then merge only the missing scopes with the existing tenant-wide Microsoft Graph scopes. They update an existing grant in place with `PATCH /oauth2PermissionGrants/{id}`. Only when no tenant-wide grant exists do they use `POST /oauth2PermissionGrants`, with the registration's service principal object ID as `clientId` and the Graph service principal object ID as `resourceId`. They never delete grants or consent other pending permissions.
+Run the CLI route as an **Application Administrator**. The Azure CLI session needs delegated **DelegatedPermissionGrant.ReadWrite.All** access. The commands add only missing `(id, type: Scope)` declarations for Microsoft Graph, so rerunning them does not append duplicates. They then merge only the missing scopes with the existing tenant-wide Microsoft Graph scopes. They update an existing grant in place with `PATCH /oauth2PermissionGrants/{id}`. Only when no tenant-wide grant exists do they use `POST /oauth2PermissionGrants`, with the registration's service principal object ID as `clientId` and the Graph service principal object ID as `resourceId`. They never delete grants or consent other pending permissions.
 
 These changes are not transactional: an earlier permission declaration can remain saved if a later step fails. If a consent PATCH or POST fails, both the commands and the copied administrator text warn: consent may have changed because the request may have been applied; check consent in Entra before retrying. Avoid concurrent consent changes while running the commands: the merged scopes reflect the grant read before the update. If individual Graph grants exist, the commands stop before changing anything, so your administrator can review those grants separately.
 
@@ -200,25 +199,32 @@ The app registration only defines what TenuVault may request. What each admin ca
 | Back up, compare and restore Intune configuration | An Intune role such as Intune Administrator. A custom Intune role with fewer rights limits TenuVault in the same way. |
 | Store backups in Azure | Storage Blob Data Contributor on the storage account. |
 
-## Let the hygiene unresolved groups check run (optional)
+## Group read (GroupMember.Read.All)
 
-By default the app registration does not request `Group.Read.All`, so the hygiene unresolved groups check cannot tell whether a referenced group exists. It reports those references as unknown, never as missing and never as fine. No other hygiene rule uses this permission, and no other rule changes when you add it.
+New TenuVault app registrations include the delegated `GroupMember.Read.All` permission. It reads group names, basic properties and membership counts. The broader `Group.Read.All` also grants access to group content that TenuVault does not need for these checks.
 
-To opt in, run the setup script with `-IncludeGroupRead` on a fresh registration and sign in with the new client ID, or add the delegated `Group.Read.All` permission to an existing registration in the Microsoft Entra admin center and grant admin consent:
+* [OpenIntuneBaseline assignments](/baselines/quick-start/#find-groups) uses it to search for groups, show names and member counts, and check every selected group before writing an assignment.
+* [Dev to Prod](/changes/#dev-to-prod) uses it to find and verify destination groups when assignments are included in a promotion.
+* [Conflicts and hygiene](/governance/#conflicts-and-hygiene) uses it to check whether groups referenced in assignments still exist.
 
-```powershell
-./New-TenuVaultDesktopApp.ps1 -TenantId contoso.onmicrosoft.com -IncludeGroupRead
-```
+If group access is missing, OpenIntuneBaseline deploys new policies unassigned. The Assignments workflow and group mappings are unavailable, and hygiene reports unresolved groups as unknown.
 
-The hygiene scan shows the same remediation next to the unresolved groups unknown until group reads succeed. After consent, sign in again and run a new hygiene scan.
+To add group read to an existing registration:
 
-## See which optional permissions are granted
+1. In TenuVault, select **Open in Entra** on the group access card. You can also find the registration in **Microsoft Entra admin center > App registrations > TenuVault Desktop > API permissions**.
+2. Select **Add a permission > Microsoft Graph > Delegated permissions**. Search for `GroupMember.Read.All` and select **Add permissions**.
+3. Select **Grant admin consent** for the tenant.
+4. In TenuVault, select **Check again** on the group access card or in **Settings > Services and permissions**. TenuVault refreshes the token without a new sign-in. If consent is still pending, wait a few minutes and check again. For hygiene, run a new scan after the check succeeds.
 
-**Settings > Services and permissions** lists the optional permissions below under **Optional permissions**, read from the sign-in TenuVault already holds: granted, not granted (with the permission that is missing, the setup switch for a new app registration and a link to the app registration in Entra), or not checkable. The Notifications section shows the same status where each is used, before a test mail or a Conditional Access poll fails.
+## See which feature permissions are granted
+
+**Settings > Services and permissions** lists the permissions below under **Feature permissions**. TenuVault checks the token for each feature, shows a link to Entra when a permission is missing, and lists setup switches where applicable. Notifications shows the same status where each permission is used.
 
 ## Notification email and group recipients (optional)
 
-Email notification channels send as the signed-in admin and can resolve Entra group recipients. Both are off unless you opt in with `-IncludeNotifications` on a fresh registration, or by adding the delegated `Mail.Send`, `GroupMember.Read.All` and `User.Read.All` permissions to an existing registration and granting admin consent:
+Email notification channels send as the signed-in admin and can resolve Entra group recipients. For a new registration, `-IncludeNotifications` adds delegated `Mail.Send` and `User.Read.All` alongside the default `GroupMember.Read.All`. For an existing registration, add any missing permissions in Entra and grant admin consent.
+
+In **Services and permissions**, **Entra group recipients of notification email** checks `User.Read.All` or `User.ReadWrite.All`. The **Group read** row checks the group membership access also required for those recipients.
 
 ```powershell
 ./New-TenuVaultDesktopApp.ps1 -TenantId contoso.onmicrosoft.com -IncludeNotifications
@@ -312,7 +318,7 @@ For every area and sign-in mode, restore access adds none of `Directory.Read.All
 
 ### Directory restore permissions
 
-These permissions are requested only after the admin explicitly selects restore access for the opt-in Users and devices or Groups area. Backup, Backup Reader provisioning and renewal are unchanged. No blocked operation contributes a permission. The default setup request is unchanged. Restore adds no Directory.Read.All above the same backup area selection; Directory.ReadWrite.All and Organization.ReadWrite.All are never requested.
+These permissions are requested only after the admin explicitly selects restore access for the opt-in Users and devices or Groups area. Backup, Backup Reader provisioning and renewal are unchanged. No blocked operation contributes a permission. Restore adds no Directory.Read.All above the same backup area selection. TenuVault never requests Directory.ReadWrite.All or Organization.ReadWrite.All.
 
 | Permission | Why it is needed and least privilege |
 | --- | --- |
@@ -338,7 +344,7 @@ User display-name and manager changes are blocked when Conditional Access group 
 
 ### Application restore permissions
 
-Application restore permissions are requested only after opt-in to restore access for the Applications area. Backup permissions, the Backup Reader allowlist, provisioning and renewal, and the default setup request are unchanged. Blocked operations add no permission.
+Application restore permissions are requested only after opt-in to restore access for the Applications area. Blocked operations add no permission. The Backup Reader continues to use its backup-only permissions.
 
 | Permission | Why it is needed and least privilege |
 | --- | --- |

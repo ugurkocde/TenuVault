@@ -89,10 +89,12 @@ export function RunsList({ tenant, empty, flow, onChanged }: { tenant: OibTenant
       <button type="button" className={cn(button, "mt-2")} disabled={loading} onClick={() => void refresh()}>Retry</button>
     </div>}
     <ul className="mt-2 divide-y divide-gray-100">{runs.map(run => {
-      const parts = [run.created.length && `deletes the ${run.created.length === 1 ? "policy" : `${run.created.length} policies`} it created`, run.updated.length && `puts back the previous version of the ${run.updated.length === 1 ? "policy" : `${run.updated.length} policies`} it updated`].filter(Boolean).join(" and ")
+      const reassigned = run.reassigned?.length ?? 0
+      const parts = [run.created.length && `deletes the ${run.created.length === 1 ? "policy" : `${run.created.length} policies`} it created`, run.updated.length && `puts back the previous version of the ${run.updated.length === 1 ? "policy" : `${run.updated.length} policies`} it updated`,
+        reassigned && `puts back the previous assignments of the ${reassigned === 1 ? "policy" : `${reassigned} policies`} it reassigned`].filter(Boolean).join(" and ")
       return <li key={run.runId} className="py-3 text-sm">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <span>{run.kind === "fix" ? "Drift reset · " : ""}{run.reference}<span className="ml-2 text-xs text-gray-500">{new Date(run.createdAt).toLocaleString()} · {runSummary(run)}</span></span>
+          <span>{run.kind === "fix" ? "Drift reset · " : run.kind === "assign" ? "Assignments · " : ""}{run.reference}<span className="ml-2 text-xs text-gray-500">{new Date(run.createdAt).toLocaleString()} · {runSummary(run)}</span></span>
           <button type="button" className={button} disabled={!!running || confirming === run.runId} title={running ? `${running.label} is still running` : undefined} aria-expanded={confirming === run.runId} onClick={() => setConfirming(run.runId)}><Undo2 className="h-4 w-4" aria-hidden="true" />Undo</button>
         </div>
         {confirming === run.runId && <div role="group" aria-label="Confirm undo" className="mt-3 flex flex-wrap items-center gap-3 rounded-2xl bg-amber-50 p-4 text-amber-950">
@@ -110,7 +112,10 @@ export function RunsList({ tenant, empty, flow, onChanged }: { tenant: OibTenant
         <button type="button" className="text-xs text-blue-700 underline" onClick={() => clearJob(result.id)}>Dismiss</button>
       </div>
       {result.result.run && <p className="mt-1 text-xs">What could not be undone stays in the list; retry or fix it in Intune.</p>}
-      <ul className="mt-2 max-h-48 space-y-0.5 overflow-auto text-xs">{result.result.results.map(r => <li key={`${r.action}${r.id}`} className={r.done ? "" : "text-red-800"}>{r.name}: {r.done ? (r.note ?? (r.action === "removed" ? "deleted" : "previous version restored")) : r.error}</li>)}</ul>
+      <ul className="mt-2 max-h-48 space-y-0.5 overflow-auto text-xs">{result.result.results.map(r => <li key={`${r.action}${r.id}`} className={r.done ? "" : "text-red-800"}>
+        {r.name}: {r.done ? (r.note ?? (r.action === "removed" ? "deleted" : r.action === "reassigned" ? "previous assignments put back" : "previous version restored")) : r.error}
+        {r.warning && <span className="block text-amber-800">{r.warning}</span>}
+      </li>)}</ul>
     </div>}
   </div>
 }

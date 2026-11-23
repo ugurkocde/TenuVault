@@ -31,7 +31,7 @@ export function offersSignInHandoff(message: string): boolean {
 }
 
 const PURPOSE: Record<string, string> = {
-  "Microsoft Graph": "Reads the chosen services for backups, and writes only when you restore or deploy.",
+  "Microsoft Graph": "Reads the chosen services for backups and groups for assignment checks. Writes during restores or deployments.",
   "Azure Service Management": "Lists your storage accounts, only if you keep backups in Azure.",
   "Azure Storage": "Reads and writes backup files, only if you keep backups in Azure.",
 }

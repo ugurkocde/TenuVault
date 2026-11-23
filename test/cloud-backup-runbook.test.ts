@@ -394,13 +394,13 @@ describe("Cloud audit contract", () => {
       "[extensionResourceId(resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('storageAccountName'), 'default', variables('container')), 'Microsoft.Authorization/roleAssignments', guid(variables('containerScope'), parameters('automationAccountName'), variables('writerRoleName')))]",
       "[extensionResourceId(resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('storageAccountName'), 'default', variables('outcomeContainer')), 'Microsoft.Authorization/roleAssignments', guid(variables('outcomeContainerScope'), parameters('automationAccountName'), variables('writerRoleName')))]",
     ]
-    const jobSchedule = "[resourceId('Microsoft.Automation/automationAccounts/jobSchedules', parameters('automationAccountName'), guid(variables('scheduleName'), variables('runbookName')))]"
+    const jobSchedule = "[resourceId('Microsoft.Automation/automationAccounts/jobSchedules', parameters('automationAccountName'), variables('jobScheduleId'))]"
     for (const resource of audit) {
       expect(resource.dependsOn).toEqual(expect.arrayContaining([...requiredGrants, jobSchedule]))
       if (resource.type !== "Microsoft.Authorization/roleAssignments") expect(resource.dependsOn).toContain("automationVariables")
     }
     expect(resources.filter(resource => !audit.includes(resource)).every(resource => resource.condition?.includes("not(parameters('auditOnly'))"))).toBe(true)
-    expect(template.outputs.pasteIntoTenuVault).toMatchObject({ condition: "[not(parameters('auditOnly'))]" })
+    expect(template.outputs.pasteIntoTenuVault).toMatchObject({ condition: "[and(not(parameters('auditOnly')), parameters('linkSchedule'))]" })
     expect(template.parameters.auditOnly).toMatchObject({ type: "bool", defaultValue: false })
     expect(template.parameters.scheduleStartTime).not.toHaveProperty("defaultValue")
     expect(template.parameters).not.toHaveProperty("deploySchedule")
@@ -408,9 +408,24 @@ describe("Cloud audit contract", () => {
     const main = process.env.TENUVAULT_TEST_MAIN_WORKTREE
     if (main) {
       const base = JSON.parse(readFileSync(join(main, "resources/cloud-backup/azuredeploy.json"), "utf8")) as typeof template
-      expect(template.parameters.scheduleStartTime).toEqual(base.parameters.scheduleStartTime)
-      const existing = resources.filter(resource => !audit.includes(resource))
-      expect(existing.map(({ condition: _condition, ...definition }) => definition)).toEqual(base.resources)
+      // Compare the non-audit resources on both sides; only the schedule link id and start time changed.
+      const strip = (list: typeof resources) => list
+        .filter(resource => !resource.name.includes("audit"))
+        .map(({ condition: _condition, dependsOn, ...definition }) => ({
+          ...definition,
+          ...(dependsOn ? { dependsOn: dependsOn.map(dependency => dependency.replace("guid(variables('scheduleName'), variables('runbookName'))", "variables('jobScheduleId')")) } : {}),
+        }))
+      const expected = strip(base.resources as typeof resources).map(resource => {
+        if (resource.type === "Microsoft.Automation/automationAccounts/jobSchedules") {
+          return { ...resource, name: "[concat(parameters('automationAccountName'), '/', variables('jobScheduleId'))]" }
+        }
+        if (resource.type === "Microsoft.Automation/automationAccounts/schedules") {
+          const schedule = resource as unknown as { properties: Record<string, unknown> }
+          return { ...resource, properties: { ...schedule.properties, startTime: "[variables('scheduleStart')]" } }
+        }
+        return resource
+      })
+      expect(strip(resources)).toEqual(expected)
     }
   })
 
@@ -1068,6 +1083,43 @@ describe("New-TenuVaultCloudBackup.ps1", () => {
 })
 
 describe("azuredeploy.json", () => {
+  it("uses an optional deployment specific schedule link and a calculated start time", () => {
+    expect(template.parameters.baseTime).toMatchObject({ type: "string", defaultValue: "[utcNow()]" })
+    expect(template.parameters.linkSchedule).toMatchObject({ type: "bool", defaultValue: true })
+    expect(template.parameters.scheduleStartTime).toMatchObject({ type: "string" })
+    expect(template.variables.jobScheduleId).toBe("[guid(resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName')), variables('scheduleName'), variables('runbookName'), parameters('baseTime'))]")
+    expect(template.resources.find(resource => resource.type === "Microsoft.Automation/automationAccounts/jobSchedules")).toMatchObject({
+      name: "[concat(parameters('automationAccountName'), '/', variables('jobScheduleId'))]",
+      condition: "[and(not(parameters('auditOnly')), parameters('linkSchedule'))]",
+    })
+    expect(template.outputs.pasteIntoTenuVault).toMatchObject({ condition: "[and(not(parameters('auditOnly')), parameters('linkSchedule'))]" })
+    expect(template.resources.find(resource => resource.type === "Microsoft.Automation/automationAccounts/schedules")).toMatchObject({
+      properties: { startTime: "[variables('scheduleStart')]" },
+    })
+    expect(template.variables.requestedStartEpoch).toBe("[dateTimeToEpoch(parameters('scheduleStartTime'))]")
+    expect(template.variables.earliestStartEpoch).toBe("[dateTimeToEpoch(dateTimeAdd(parameters('baseTime'), 'PT15M'))]")
+    expect(template.variables.rollDays).toBe("[max(0, div(add(sub(variables('earliestStartEpoch'), variables('requestedStartEpoch')), 86399), 86400))]")
+    expect(template.variables.scheduleStart).toBe("[if(less(variables('requestedStartEpoch'), variables('earliestStartEpoch')), dateTimeFromEpoch(add(variables('requestedStartEpoch'), mul(variables('rollDays'), 86400))), parameters('scheduleStartTime'))]")
+    // The tenant-only link id collided across deployments and accounts; it must not come back.
+    expect(JSON.stringify(template)).not.toContain("guid(variables('scheduleName'), variables('runbookName'))")
+  })
+
+  it("moves a past first run forward by whole days and leaves a future one alone", () => {
+    // Mirrors the scheduleStart, rollDays and earliestStartEpoch expressions with ARM integer math.
+    const rollDays = (requested: number, base: number) => {
+      const earliest = base + 15 * 60
+      return requested < earliest ? Math.max(0, Math.floor((earliest - requested + 86399) / 86400)) : 0
+    }
+    const base = Date.parse("2026-11-23T10:00:00Z") / 1000
+    const at = (iso: string) => Date.parse(iso) / 1000
+    expect(rollDays(at("2026-11-23T10:00:01Z"), base)).toBe(1)
+    expect(rollDays(at("2026-11-23T10:14:59Z"), base)).toBe(1)
+    expect(rollDays(at("2026-11-23T10:15:00Z"), base)).toBe(0)
+    expect(rollDays(at("2026-11-22T10:15:00Z"), base)).toBe(1)
+    expect(rollDays(at("2026-11-20T02:00:00+01:00"), base)).toBe(4)
+    expect(rollDays(at("2026-12-01T02:00:00+01:00"), base)).toBe(0)
+  })
+
   it("creates the same pieces and hands the paste block back, without pretending to grant Graph roles", () => {
     const types = template.resources.map((resource) => resource.type)
     for (const type of [

@@ -56,12 +56,10 @@
     refused; leave the parameter out to back up none of these areas.
 
 .PARAMETER IncludeGroupRead
-    When set, also requests the delegated Group.Read.All permission. The hygiene
-    unresolved groups check needs it to tell whether a referenced group exists. Without
-    it that check stays unknown. Off by default, so the default permission set is unchanged.
+    Deprecated and accepted for compatibility. GroupMember.Read.All is added by default.
 
 .PARAMETER IncludeNotifications
-    When set, also requests the delegated Mail.Send, GroupMember.Read.All and User.Read.All permissions.
+    When set, also requests the delegated Mail.Send and User.Read.All permissions. GroupMember.Read.All is already included by default.
     Notification email channels send as the signed-in admin and can resolve Entra group
     recipients. Without it, email channels fail with a Graph permission error while
     webhook and Teams channels keep working. Off by default.
@@ -95,9 +93,6 @@
 
 .EXAMPLE
     ./New-TenuVaultDesktopApp.ps1 -UseDeviceCode
-
-.EXAMPLE
-    ./New-TenuVaultDesktopApp.ps1 -TenantId contoso.onmicrosoft.com -IncludeGroupRead
 
 .EXAMPLE
     ./New-TenuVaultDesktopApp.ps1 -Services Intune,Entra -RestoreAccess Intune
@@ -138,7 +133,7 @@ if ($AllowedGroupId) {
 # What each service and area needs from Microsoft Graph, as delegated permissions: Backup to read
 # it, Restore to read and write it. TenuVault's own tests keep this table equal to the one the app uses.
 # BEGIN PERMISSION TABLE
-$basePermissions = @('User.Read', 'Organization.Read.All')
+$basePermissions = @('User.Read', 'Organization.Read.All', 'GroupMember.Read.All')
 $defaultServices = @('ConditionalAccess', 'Intune')
 $defaultRestoreAccess = @('Intune')
 $permissionTable = @(
@@ -376,7 +371,7 @@ $context = @{ TenantId = $identity.tid }
 Write-Host "Signed in as $username (tenant $($context.TenantId))."
 
 function Invoke-Graph([string]$Method, [string]$Path, $Body, [switch]$ReplicationRetry) {
-    $parameters = @{ Method = $Method; Uri = "https://graph.microsoft.com/v1.0$Path"; Headers = @{ Authorization = "Bearer $($token.access_token)" } }
+    $parameters = @{ Method = $Method; Uri = "https://graph.microsoft.com/beta$Path"; Headers = @{ Authorization = "Bearer $($token.access_token)" } }
     if ($null -ne $Body) {
         $parameters.ContentType = 'application/json; charset=utf-8'
         $parameters.Body = [Text.Encoding]::UTF8.GetBytes(($Body | ConvertTo-Json -Depth 20))
@@ -413,7 +408,7 @@ function Get-GraphItems([string]$Path) {
         if ($page.'@odata.nextLink') {
             $next = [uri]$page.'@odata.nextLink'
             if ($next.Host -ne 'graph.microsoft.com' -or $next.Scheme -ne 'https') { throw 'Unexpected Graph paging address.' }
-            $Path = $next.PathAndQuery -replace '^/v1.0', ''
+            $Path = $next.PathAndQuery -replace '^/beta', ''
         }
     } while ($Path)
 }
@@ -442,8 +437,7 @@ $resources = @(
 # Permissions that single features need, added only on request and only once.
 $optional = @()
 if ($IncludeGroupRead) {
-    # Opt-in only: lets the hygiene unresolved groups check read group existence.
-    $optional += "Group.Read.All"
+    Write-Warning "-IncludeGroupRead is no longer needed: group read (GroupMember.Read.All) is part of the default permissions."
 }
 
 if ($IncludeConditionalAccessRestore) {
@@ -460,7 +454,6 @@ if ($IncludeAuditLog) {
 if ($IncludeNotifications) {
     # Opt-in only: notification email as the signed-in admin, plus group recipient resolution.
     $optional += "Mail.Send"
-    $optional += "GroupMember.Read.All"
     # Reading other members' mail and userType needs their basic profile properties.
     $optional += "User.Read.All"
 }
@@ -476,7 +469,7 @@ foreach ($resource in $resources) {
     }
     $resource.ServicePrincipalId = $sp.id
     $access = foreach ($scopeName in $resource.Scopes) {
-        $permission = $sp.oauth2PermissionScopes | Where-Object Value -eq $scopeName
+        $permission = $sp.publishedPermissionScopes | Where-Object Value -eq $scopeName
         if (-not $permission) { throw "Delegated permission $scopeName was not found on $($resource.Name)." }
         @{ id = $permission.id; type = 'Scope' }
     }

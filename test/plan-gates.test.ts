@@ -77,12 +77,15 @@ describe("requiredFeature", () => {
   })
 
   it("keeps every OIBDeployer flow in Community and gates in-place updates, drift fixes and other tenants", () => {
-    for (const action of ["oib-source", "oib-versions", "oib-downloads", "oib-load", "oib-compare", "oib-validate", "oib-validations", "oib-runs", "oib-undo", "oib-progress", "oib-backup-options"]) {
+    for (const action of ["oib-source", "oib-versions", "oib-downloads", "oib-load", "oib-compare", "oib-validate", "oib-validations", "oib-runs", "oib-undo", "oib-progress", "oib-backup-options", "oib-groups", "oib-group-lookup", "oib-filters", "oib-assignments-read"]) {
       expect(requiredFeature("/api/oib", { action, platform: "macos" })).toBeNull()
     }
     expect(requiredFeature("/api/oib", { action: "oib-deploy", platform: "macos", items: [{ source: "a", mode: "create" }] })).toBeNull()
     expect(requiredFeature("/api/oib", { action: "oib-deploy", items: [{ source: "a", mode: "create" }, { source: "b", mode: "update", targetId: "x" }] })).toBe("replaceRestore")
     expect(requiredFeature("/api/oib", { action: "oib-fix", items: [{ source: "b", mode: "update", targetId: "x" }] })).toBe("driftRevert")
+    // Assigning new policies to groups is part of deploying; changing deployed policies' assignments is paid.
+    expect(requiredFeature("/api/oib", { action: "oib-deploy", items: [{ source: "a", mode: "create" }], assignments: { deviceGroups: ["x"] } })).toBeNull()
+    expect(requiredFeature("/api/oib", { action: "oib-assign", mode: "add", items: [{ source: "b", targetId: "x" }] })).toBe("replaceRestore")
     expect(requiredFeature("/api/oib", { action: "oib-deploy", bulk: true, items: [{ source: "a", mode: "create" }] })).toBe("bulkActions")
   })
 

@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync } from "node:fs"
 import { MODULES, MODULE_BY_ID, type ModuleId, type PermissionArea } from "../src/shared/services/modules"
-import { areaPermissions, BASE_PERMISSIONS, DEFAULT_READER_CHOICE, DEFAULT_SETUP_CHOICE, REQUEST_ORDER, SCRIPT_SERVICE, scriptArea } from "../src/shared/services/manifest"
+import { areaPermissions, DESKTOP_BASE_PERMISSIONS, DEFAULT_READER_CHOICE, DEFAULT_SETUP_CHOICE, REQUEST_ORDER, SCRIPT_SERVICE, scriptArea } from "../src/shared/services/manifest"
 
 /**
  * The copies of the permission manifest that live outside TypeScript: the permission table inside
@@ -18,7 +18,7 @@ const rows = (row: (id: ModuleId, area: PermissionArea) => string | undefined) =
 /** The table inside New-TenuVaultDesktopApp.ps1: delegated permissions per service and area. */
 export function desktopScriptTable(): string {
   return [
-    `$basePermissions = ${list(BASE_PERMISSIONS)}`,
+    `$basePermissions = ${list(DESKTOP_BASE_PERMISSIONS)}`,
     `$defaultServices = ${list(REQUEST_ORDER.filter((id) => DEFAULT_SETUP_CHOICE[id]).map((id) => SCRIPT_SERVICE[id]))}`,
     `$defaultRestoreAccess = ${list(REQUEST_ORDER.filter((id) => DEFAULT_SETUP_CHOICE[id]?.access === "restore").map((id) => SCRIPT_SERVICE[id]))}`,
     "$permissionTable = @(",

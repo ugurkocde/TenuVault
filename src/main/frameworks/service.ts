@@ -36,6 +36,8 @@ interface Run { assessment: Assessment; policies: BaselinePolicy[]; fingerprint:
 const runs = new Map<string, Run>()
 const WRITE_LABEL = "Framework policy creation"
 export class FrameworkError extends Error {
+  /** A machine-readable cause the route passes on, such as "backup" for a failed pre-change backup. */
+  code?: string
   constructor(message: string, public status = 400) { super(message) }
 }
 
