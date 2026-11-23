@@ -7,6 +7,8 @@ import { withRouteTenant } from "../storage/blob-emulator"
 
 /** Largest request body accepted over IPC, matching the 8 MB policies limit the routes enforce. */
 export const MAX_IPC_BODY_BYTES = 8 * 1024 * 1024
+/** Marks a download whose save dialog was cancelled, so no archive was written. */
+export const DOWNLOAD_CANCELLED_HEADER = "x-tenuvault-download-cancelled"
 
 type RouteHandler = (request: NextRequest) => Promise<Response> | Response
 export type RouteModule = Partial<Record<"GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "OPTIONS", RouteHandler>>
@@ -72,6 +74,16 @@ export class ApiHost {
       )
     }
     if (this.options.transform) response = await this.options.transform(response)
+    // An archive is saved before the request is audited, so the audit records what was saved: a save that
+    // fails is a failed download, and a cancelled save dialog is no download at all.
+    if (response.ok && response.headers.get("content-type") === "application/x-tar" && this.options.saveDownload) {
+      try {
+        response = await this.options.saveDownload(response)
+      } catch (error) {
+        console.error(`[api] ${request.method} ${url.pathname} could not save the archive:`, error)
+        response = Response.json({ error: "The archive could not be saved. No file was written." }, { status: 500 })
+      }
+    }
     try {
       this.options.onHandled?.(request, body, response, metadata)
     } catch (error) {
@@ -105,8 +117,7 @@ export class ApiHost {
       headers: input.headers,
       body: input.body && input.body.byteLength > 0 ? new Uint8Array(input.body) : undefined,
     })
-    let response = await this.dispatch(request)
-    if (response.ok && response.headers.get("content-type") === "application/x-tar" && this.options.saveDownload) response = await this.options.saveDownload(response)
+    const response = await this.dispatch(request)
     return {
       status: response.status,
       statusText: response.statusText,

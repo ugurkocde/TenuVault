@@ -530,9 +530,17 @@ for (const azure of [false, true]) describe(azure ? "Azure emulator mixed runs" 
       if (failRecord && String(input).includes("run-status.json")) return new Response("<Error><Code>ServerBusy</Code></Error>", { status: 500 })
       return original(input, init)
     })
+    // History keeps the full download offered while the record cannot be read.
+    const rows = await (await history(f.request({ summary: true }))).json()
+    expect(rows.backups.find((entry: any) => entry.id === ordinary)).toMatchObject({ ordinaryOnlyExport: false })
     const refused = await download(f.request({ backupId: ordinary }))
     expect(refused.status).toBe(503)
-    expect((await refused.json()).error).toContain("Try the full download again")
+    expect((await refused.json()).error).toContain("Try again in a moment")
+    // An explicit ordinary-only copy reads neither the record nor the companion.
+    f.requests.length = 0
+    const ordinaryCopy = await download(f.request({ backupId: ordinary, ordinaryOnly: true }))
+    expect(ordinaryCopy.status).toBe(200)
+    expect(f.requests.some(value => value.includes("run-status.json") || value.includes(`${large}/metadata.json`))).toBe(false)
     failRecord = false
     const archive = await download(f.request({ backupId: ordinary }))
     expect(archive.status).toBe(200)

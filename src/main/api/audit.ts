@@ -1,4 +1,5 @@
 import type { ExecutionMetadata } from "./execution-metadata"
+import { DOWNLOAD_CANCELLED_HEADER } from "./host"
 import { mainAuditSink } from "./audit-sink"
 import { requiredFeatures } from "./plan-gates"
 import type { Feature } from "../../shared/plans"
@@ -59,6 +60,8 @@ export function createAuditRecorder(
       return
     }
 
+    // A cancelled save dialog wrote no archive, so there is no download to record.
+    if (path === "/api/download-backup" && response.headers.get(DOWNLOAD_CANCELLED_HEADER)) return
     if (path === "/api/restore-configuration" && JSON.parse(requestBody).action !== "restore") return
     if (path === "/api/restore-directory" && !["restore", "reconcile"].includes(JSON.parse(requestBody).action)) return
     if (["/api/restore-directory", "/api/restore-configuration", "/api/restore-backup", "/api/revert-policy"].includes(path) && request.method === "POST") {

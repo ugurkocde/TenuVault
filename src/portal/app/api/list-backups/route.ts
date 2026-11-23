@@ -408,6 +408,8 @@ export async function POST(request: NextRequest) {
     // those manifests, which lack the run status, are read for one: a few at a time and each bounded, so
     // a slow record leaves the early manifest standing instead of holding up history.
     const records = new Map<string, Record<string, any>>()
+    // Records that may exist but could not be read in time; their run is not judged from the early manifest.
+    const unreadRecords = new Set<string>()
     const pending = backups.filter(backup => !isLargeBackup(backup.id) && backup.fingerprint?.CompanionBackup !== undefined && typeof backup.fingerprint?.RunStatus !== "string")
     // One budget covers every record read, so many stalled records cost history at most this long.
     const budget = AbortSignal.timeout(RUN_RECORD_BUDGET_MS)
@@ -415,11 +417,13 @@ export async function POST(request: NextRequest) {
       await Promise.all(pending.slice(start, start + RUN_RECORD_READS).map(async backup => {
         try {
           const response = await fetch(`https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(`${backup.id}/${BACKUP_RUN_RECORD_FILE}`)}`, { headers: storageHeaders(accessToken), signal: AbortSignal.any([AbortSignal.timeout(RUN_RECORD_TIMEOUT_MS), budget]) })
-          const read = response.ok ? await readJsonCapped(response, MAX_BACKUP_ARCHIVE_BYTES) : null
-          if (read?.kind === "json" && read.value && typeof read.value === "object") records.set(backup.id, read.value as Record<string, any>)
-        } catch { /* Without a record the early manifest stands. */ }
+          if (!response.ok) { if (response.status !== 404) unreadRecords.add(backup.id); return }
+          const read = await readJsonCapped(response, MAX_BACKUP_ARCHIVE_BYTES)
+          if (read.kind === "json" && read.value && typeof read.value === "object") records.set(backup.id, read.value as Record<string, any>)
+        } catch { unreadRecords.add(backup.id) }
       }))
     }
+    for (const backup of pending) if (!records.has(backup.id) && budget.aborted) unreadRecords.add(backup.id)
     for (const backup of backups.filter(backup => !isLargeBackup(backup.id))) {
       let metadata = backup.fingerprint
       if (!metadata || (metadata.CompanionBackup === undefined && metadata.LargeBackupOutcomes === undefined)) continue
@@ -492,7 +496,9 @@ export async function POST(request: NextRequest) {
         }
       }
       backup.largeProblems = largeRunProblems(metadata, cause, matches ? other : null)
-      backup.ordinaryOnlyExport = backup.largeProblems.length > 0 || !matches || !completeHalf(metadata) || !completeHalf(other)
+      // An unread record may still name a complete run, so the full download stays offered; that request
+      // reads the record again and answers with a retry when it still cannot.
+      backup.ordinaryOnlyExport = !unreadRecords.has(backup.id) && (backup.largeProblems.length > 0 || !matches || !completeHalf(metadata) || !completeHalf(other))
       if (backup.largeProblems.length || backup.ordinaryOnlyExport) {
         backup.coverage = "incomplete"
         backup.status = "incomplete"

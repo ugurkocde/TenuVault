@@ -1,7 +1,7 @@
 import { POST as history } from "../src/portal/app/api/list-backups/route"
 import { afterEach, expect, it, vi } from "vitest"
 import { NextRequest } from "../src/main/api/next-server-shim"
-import { ApiHost } from "../src/main/api/host"
+import { ApiHost, DOWNLOAD_CANCELLED_HEADER } from "../src/main/api/host"
 import { POST as contents } from "../src/portal/app/api/list-backup-contents/route"
 import { POST as compare } from "../src/portal/app/api/large-backup-page/route"
 import { POST as download } from "../src/portal/app/api/download-backup/route"
@@ -60,6 +60,22 @@ it("streams large downloads through the host save destination rather than buffer
   expect(JSON.parse(new TextDecoder().decode(result.body))).toEqual({ saved: true })
   expect(bytes).toBeGreaterThan(2048)
   expect(reads.some(path => path.includes("comp=list"))).toBe(false)
+})
+it.each([
+  ["saved", async (response: Response) => { for await (const _chunk of response.body!) { /* drain */ } return Response.json({ saved: true }) }, 200, false],
+  ["cancelled", async (response: Response) => { await response.body?.cancel(); return Response.json({ saved: false }, { headers: { [DOWNLOAD_CANCELLED_HEADER]: "1" } }) }, 200, true],
+  ["failed", async () => { throw new Error("A snapshot could not be read") }, 500, false],
+] as const)("audits a large download only from what its save did: %s", async (_case, saveDownload, status, cancelled) => {
+  install()
+  const handled: Response[] = []
+  const host = new ApiHost({ routes: { "/api/download-backup": { POST: download } }, saveDownload, onHandled: (_request, _body, response) => { handled.push(response) } })
+  const result = await host.handleIpc({ path: "/api/download-backup", method: "POST", headers: {}, body: new TextEncoder().encode(JSON.stringify(body)) })
+  expect(result.status).toBe(status)
+  // The audit sees the outcome of the save, never the archive response that preceded it.
+  expect(handled).toHaveLength(1)
+  expect(handled[0]!.status).toBe(status)
+  expect(handled[0]!.headers.get("content-type")).not.toBe("application/x-tar")
+  expect(Boolean(handled[0]!.headers.get(DOWNLOAD_CANCELLED_HEADER))).toBe(cancelled)
 })
 it("validates the paging request before sending anything to Microsoft", async () => {
   const reads = install()

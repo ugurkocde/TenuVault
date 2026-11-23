@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { createAuditRecorder } from "../src/main/api/audit"
 import { memoryStore } from "./helpers"
 import { setRestoreApprovalStore } from "../src/main/storage/restore-approvals"
-import { ApiHost } from "../src/main/api/host"
+import { ApiHost, DOWNLOAD_CANCELLED_HEADER } from "../src/main/api/host"
 
 const TENANT = "11111111-1111-1111-1111-111111111111"
 const credentials = { tenantId: TENANT, appId: "fixture-app", clientSecret: "fixture-secret", storageAccountName: "fixturestore" }
@@ -46,6 +46,15 @@ describe("audit callbacks cannot replace a completed route response", () => {
     expect(accountFor).not.toHaveBeenCalled()
     expect(dispatch).not.toHaveBeenCalled()
     expect(log).not.toHaveBeenCalled()
+  })
+
+  it.each([[false, 1], [true, 0]])("records a download only when its archive was not cancelled (cancelled: %s)", async (cancelled, expected) => {
+    const dispatch = vi.fn(async () => Response.json({ success: true }))
+    const record = createAuditRecorder(dispatch, () => null)
+    const response = Response.json({ saved: !cancelled }, cancelled ? { headers: { [DOWNLOAD_CANCELLED_HEADER]: "1" } } : undefined)
+    record(new Request("http://tenuvault.internal/api/download-backup", { method: "POST" }), JSON.stringify({ ...credentials, id: "backup-2026-11-21-000000" }), response)
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
+    expect(dispatch).toHaveBeenCalledTimes(expected)
   })
 
   it.each(["null", "[]", "42", "true", "{invalid"])("skips malformed audit bodies (%s)", (body) => {

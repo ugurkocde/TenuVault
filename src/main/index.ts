@@ -62,7 +62,7 @@ import { setAuditOutboxStore } from "../portal/lib/audit/outbox"
 import { backupRoutes, surfaceTokenErrors } from "./api/desktop-routes"
 import { createBridgedFetch } from "./api/fetch-bridge"
 import { rejectProxyAuthResponses, withNetworkErrors } from "./api/network-error"
-import { ApiHost } from "./api/host"
+import { ApiHost, DOWNLOAD_CANCELLED_HEADER } from "./api/host"
 import { routes } from "./api/routes"
 import { AuthManager, SignInRequiredError } from "./auth/msal"
 import { BackupEngine, verifyStorageAccess, type BackupJob } from "./backup/engine"
@@ -746,7 +746,7 @@ async function bootstrap(): Promise<void> {
     saveDownload: async response => {
       const name = /filename="([A-Za-z0-9-]+\.tar)"/.exec(response.headers.get("content-disposition") ?? "")?.[1] ?? "backup.tar"
       const chosen = await dialog.showSaveDialog(mainWindow!, { title: "Export backup", defaultPath: name, filters: [{ name: "Large backup archive", extensions: ["tar"] }] })
-      if (chosen.canceled || !chosen.filePath) { await response.body?.cancel(); return Response.json({ saved: false }) }
+      if (chosen.canceled || !chosen.filePath) { await response.body?.cancel(); return Response.json({ saved: false }, { headers: { [DOWNLOAD_CANCELLED_HEADER]: "1" } }) }
       if (!response.body) throw new Error("The archive download has no content")
       await saveLargeDownload(response.body, chosen.filePath)
       return Response.json({ saved: true })
