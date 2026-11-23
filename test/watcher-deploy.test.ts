@@ -276,6 +276,23 @@ describe("watcher deployment preflight", () => {
     expect(codes).not.toContain("runbook-version")
   })
 
+  it("blocks adoption of a pre-1.6 watcher when a mass change alert is enabled", async () => {
+    const w = await world()
+    w.arm.runbookVersion = "1.5.9"
+    w.heartbeat.current = { runAt: NOW.toISOString(), lastError: null, alertsHash: "matching" }
+    const added = await call(w.api, PATH, {
+      tenantId: TENANT_A, action: "add-rule", title: "Mass Intune change", eventTypes: ["intune.massChange"], channelIds: [w.channel.id],
+      massChange: { deleted: 5, changed: null, changeTypes: [] },
+    })
+    expect(added.body.rule.enabled).toBe(true)
+    const check = () => call(w.api, PATH, { tenantId: TENANT_A, action: "watcher-preflight", ...planBody })
+    expect((await check()).body.findings).toEqual(expect.arrayContaining([expect.objectContaining({
+      severity: "block", code: "runbook-version", message: expect.stringContaining("1.6.0"),
+    })]))
+    w.arm.runbookVersion = "1.6.0"
+    expect((await check()).body.findings.map((finding: { code: string }) => finding.code)).not.toContain("runbook-version")
+  })
+
   it("keeps watcher email creation on the script path", async () => {
     const w = await world({ accountExists: false })
     const result = await call(w.api, PATH, { tenantId: TENANT_A, action: "watcher-preflight", ...planBody, destinationKinds: ["mail"] })

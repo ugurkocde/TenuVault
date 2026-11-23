@@ -9,6 +9,7 @@
 import type { AlertConditions, AlertDelivery } from "./alerts"
 import { EMPTY_CONDITIONS } from "./alerts"
 import type { NotificationEventType, NotificationSeverity } from "./envelope"
+import { MASS_CHANGE_EVENT } from "./mass-change"
 
 /** What a first setup can turn on, in plain-language groups instead of raw event types. */
 export interface SetupChoices {
@@ -116,7 +117,7 @@ export function setupState(input: { channels: readonly SetupChannelLike[]; rules
   const azureWatcher = Boolean(input.auditWatch?.externalWatcher)
   const needs = (type: string) => working.some((rule) => rule.eventTypes.includes(type))
   const watching = {
-    intune: needs("intune.change") ? azureWatcher || Boolean(input.auditWatch?.enabled) : null,
+    intune: needs("intune.change") || needs(MASS_CHANGE_EVENT) ? azureWatcher || Boolean(input.auditWatch?.enabled) : null,
     conditionalAccess: needs("entra.change") ? azureWatcher || Boolean(input.auditWatch?.conditionalAccess?.enabled) : null,
   }
   const missing: SetupMissing[] = []

@@ -2,6 +2,7 @@ import type { AuditChange, AuditChangeType } from "./audit"
 import { buildEnvelope, sha256Hex, type EnvelopeInput, type NotificationItem } from "./envelope"
 
 export const MASS_CHANGE_EVENT = "intune.massChange"
+export const MASS_CHANGE_RUNBOOK_VERSION = "1.6.0"
 export const MASS_CHANGE_TYPES = ["updated", "assigned", "unassigned", "changed", "created"] as const
 export const MAX_MASS_CHANGE_THRESHOLD = 1_000_000
 export type MassChangeType = typeof MASS_CHANGE_TYPES[number]
@@ -14,6 +15,10 @@ export interface MassChangeThresholds {
 
 export const DEFAULT_MASS_CHANGE: MassChangeThresholds = {
   deleted: 5, changed: 20, changeTypes: ["updated", "assigned", "unassigned", "changed"],
+}
+
+export function needsMassChange(rules: readonly { enabled: boolean; eventTypes: readonly string[] }[]): boolean {
+  return rules.some((rule) => rule.enabled && rule.eventTypes.includes(MASS_CHANGE_EVENT))
 }
 
 export function parseMassChange(value: unknown): MassChangeThresholds | null {
@@ -70,19 +75,20 @@ function policyKey(change: AuditChange): string | null {
   return change.resourceName ? `${change.resourceType}|${change.resourceName}`.toLowerCase() : null
 }
 
-export function countAuditPolicies(changes: AuditChange[], types: readonly AuditChangeType[], includeActor: boolean): MassChangeCount & { auditIds: string[] } {
+function countAuditPolicies(changes: AuditChange[], types: readonly AuditChangeType[], includeActor: boolean, excluded?: ReadonlyMap<string, AuditChange>) {
   const policies = new Map<string, AuditChange>()
   const auditIds: string[] = []
   // Keep the latest event for each policy and show the most recently affected policies first.
-  for (const change of [...changes].reverse()) {
+  for (const change of changes) {
     if (!types.includes(change.changeType)) continue
     const key = policyKey(change)
-    if (!key) continue
+    if (!key || excluded?.has(key)) continue
     auditIds.push(change.auditId)
     if (!policies.has(key)) policies.set(key, change)
   }
   return {
     count: policies.size,
+    policies,
     auditIds,
     items: [...policies.values()].slice(0, 5).map((change) => ({
       title: change.resourceName ?? change.resourceType ?? "Intune policy",
@@ -93,8 +99,27 @@ export function countAuditPolicies(changes: AuditChange[], types: readonly Audit
   }
 }
 
-export function auditMassChangeKey(auditIds: string[], changedIds: string[]): string {
+function auditMassChangeKey(auditIds: string[], changedIds: string[]): string {
   return `audit:${sha256Hex([...new Set(auditIds)].sort().join("|"))}:${sha256Hex([...new Set(changedIds)].sort().join("|"))}`
+}
+
+export function auditMassChangeEnvelope(
+  changes: AuditChange[],
+  thresholds: MassChangeThresholds,
+  context: Pick<EnvelopeInput, "tenantId" | "tenantName" | "source"> & { includeActor: boolean },
+) {
+  if (!changes.length) return null
+  const newestFirst = [...changes].sort((a, b) => {
+    const byTime = Date.parse(b.at) - Date.parse(a.at)
+    if (byTime || a.auditId === b.auditId) return byTime
+    return a.auditId < b.auditId ? -1 : 1
+  })
+  const deletions = countAuditPolicies(newestFirst, ["deleted"], context.includeActor)
+  const deleted = thresholds.deleted === null ? { count: 0, items: [], auditIds: [] } : deletions
+  const changed = countAuditPolicies(newestFirst, thresholds.changed === null ? [] : thresholds.changeTypes, context.includeActor, deletions.policies)
+  if (!reachesMassChangeThreshold(thresholds, deleted.count, changed.count)) return null
+  const key = auditMassChangeKey(deleted.auditIds, changed.auditIds)
+  return massChangeEnvelope({ ...context, occurredAt: newestFirst[0]!.at }, key, "audit", deleted, changed)
 }
 
 export type BackupMassChange = Record<"deleted" | "updated" | "created", MassChangeCount>

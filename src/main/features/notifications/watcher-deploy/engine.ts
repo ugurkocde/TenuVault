@@ -7,10 +7,12 @@ import { allows } from "../../../../shared/plans"
 import { isDefaultLayout } from "../../../../shared/notifications/layout"
 import { canonicalJson, sha256Hex } from "../../../../shared/notifications/envelope"
 import { watcherAlertsHash } from "../../../../shared/notifications/alerts"
+import { needsMassChange } from "../../../../shared/notifications/mass-change"
 import {
   graphRolesFor,
   handoverGate,
   watcherGrantSnippet,
+  watcherRunbookUpgradeMessage,
   WATCHER_DEPLOY_STEPS,
   type WatcherDeployAck,
   type WatcherDeployPlanInput,
@@ -691,6 +693,7 @@ function gateFor(deps: FeatureDeps, tenant: string, record: WatcherDeployRecord,
     failureAlertOk: existing.failureAlert === true || record.plan.noFailureAlert,
     destinationOk,
     needsConditionalAccess: record.plan.needsConditionalAccess,
+    needsMassChange: needsMassChange(rulesOf(deps, tenant)),
     watchConditionalAccess: existing.watchConditionalAccess,
     alertsHash: record.alertsHash,
     alertsWrittenAt: record.alertsWrittenAt,
@@ -729,7 +732,7 @@ async function advanceVerify(deps: FeatureDeps, tenant: string, record: Stored<W
     return block(deps, tenant, checked, actor, "needs-destination", "The watcher has not been shown a destination for every kind these alerts send to. Set its Teams, webhook or mail variables in Azure, then confirm here.")
   }
   if (gate.missing.includes("runbook-version") && heartbeat.status === "ok" && heartbeat.runbookVersion) {
-    return block(deps, tenant, checked, actor, "runbook-version", `The watcher runbook is ${heartbeat.runbookVersion}; this setup cannot attribute its runs to the selected watcher and job. Run the current setup script once to upgrade it, then continue here.`)
+    return block(deps, tenant, checked, actor, "runbook-version", watcherRunbookUpgradeMessage(heartbeat.runbookVersion, needsMassChange(rulesOf(deps, tenant))))
   }
   if (lastError && /\b(401|403)\b|forbidden|unauthorized|insufficient privileges|authorization_requestdenied/i.test(lastError)) {
     const scheduled = moveToScheduledVerification(deps, tenant, checked, actor)

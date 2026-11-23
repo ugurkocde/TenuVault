@@ -1129,18 +1129,17 @@ function New-TvMassChangeEnvelope {
 }
 
 function Get-TvMassAuditCount {
-    param([object[]]$Changes, [string[]]$Types, [bool]$IncludeActor)
+    param([object[]]$Changes, [string[]]$Types, [bool]$IncludeActor, [object]$ExcludedKeys)
     $keys = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     $ids = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     $items = [System.Collections.Generic.List[object]]::new()
-    for ($index = $Changes.Count - 1; $index -ge 0; $index--) {
-        $change = $Changes[$index]
+    foreach ($change in $Changes) {
         if ($Types -cnotcontains $change.changeType) { continue }
         $type = $change.resourceType
         if ($type -notmatch 'polic(?:y|ies)|configuration|intent|(?:update|enrollment|deployment|template) ?profiles?|security baselines|administrative templates|managedAppProtection' -or $type -match 'conditional ?access|unknown policy') { continue }
         $key = $change.resourceId
         if (-not $key -and $change.resourceName) { $key = "$type|$($change.resourceName)" }
-        if (-not $key) { continue }
+        if (-not $key -or ($null -ne $ExcludedKeys -and $ExcludedKeys.Contains([string]$key))) { continue }
         [void]$ids.Add([string]$change.auditId)
         if (-not $keys.Add([string]$key) -or $items.Count -ge 5) { continue }
         $title = if ($change.resourceName) { $change.resourceName } else { $type }
@@ -1150,7 +1149,19 @@ function Get-TvMassAuditCount {
     }
     $sorted = [string[]]@($ids)
     [Array]::Sort($sorted, [StringComparer]::Ordinal)
-    return @{ count = $keys.Count; items = $items.ToArray(); hash = Get-TvSha256Hex ($sorted -join "|") }
+    return @{ count = $keys.Count; keys = $keys; items = $items.ToArray(); hash = Get-TvSha256Hex ($sorted -join "|") }
+}
+
+function New-TvAuditMassChangeEnvelope {
+    param([object[]]$Changes, [object]$Settings, [string]$TenantId, [object]$TenantName, [bool]$IncludeActor)
+    if ($Changes.Count -eq 0) { return }
+    $newestFirst = @($Changes | Sort-Object -CaseSensitive -Property @{ Expression = { [string]$_.at }; Descending = $true }, auditId)
+    $deletions = Get-TvMassAuditCount $newestFirst @("deleted") $IncludeActor
+    $deleted = if ($Settings.deleted) { $deletions } else { @{ count = 0; items = @(); hash = Get-TvSha256Hex "" } }
+    $changed = Get-TvMassAuditCount $newestFirst @(if ($Settings.changed) { $Settings.changeTypes }) $IncludeActor $deletions.keys
+    if (-not (Test-TvMassThreshold $Settings $deleted.count $changed.count)) { return }
+    $key = "audit:$($deleted.hash):$($changed.hash)"
+    return New-TvMassChangeEnvelope $TenantId $TenantName $newestFirst[0].at $key "audit" $deleted $changed
 }
 
 function Get-TvBackupMassChangePlan {
@@ -1215,13 +1226,9 @@ function Get-TvChangeAlertPlan {
         if ($null -eq $alert) { continue }
         $envelopes = [System.Collections.Generic.List[object]]::new()
         $mass = Get-TvProp $alert "massChange"
-        if ($Service -eq "intune" -and $mass -and $Changes.Count -gt 0 -and (Test-TvAlertTakes $alert "intune.massChange" "critical")) {
-            $deleted = Get-TvMassAuditCount $Changes @(if ($mass.deleted) { "deleted" }) $IncludeActor
-            $changed = Get-TvMassAuditCount $Changes @(if ($mass.changed) { $mass.changeTypes }) $IncludeActor
-            if (Test-TvMassThreshold $mass $deleted.count $changed.count) {
-                $key = "audit:$($deleted.hash):$($changed.hash)"
-                $envelopes.Add((New-TvMassChangeEnvelope $TenantId $TenantName $Changes[-1].at $key "audit" $deleted $changed))
-            }
+        if ($Service -eq "intune" -and $mass -and (Test-TvAlertTakes $alert "intune.massChange" "critical")) {
+            $envelope = New-TvAuditMassChangeEnvelope $Changes $mass $TenantId $TenantName $IncludeActor
+            if ($envelope) { $envelopes.Add($envelope) }
         }
         if (@($alert.eventTypes) -ccontains $type) {
             $selected = [System.Collections.Generic.List[object]]::new()

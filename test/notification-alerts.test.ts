@@ -204,7 +204,7 @@ describe("rendering changed settings", () => {
 describe("watcher parity", () => {
   it.runIf(Boolean(pwsh))("PowerShell maps, plans and renders alerts exactly like TypeScript", () => {
     const script = fileURLToPath(new URL("./fixtures/notifications/render-alerts.ps1", import.meta.url))
-    const [mappedIntune, mappedEntra, intunePlan, entraPlan, teams, mail, routing, taking, massTeams, massMail, backupPlan] = execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8" }).trim().split(/\r?\n/)
+    const [mappedIntune, mappedEntra, intunePlan, entraPlan, teams, mail, routing, taking, massTeams, massMail, backupPlan, unsortedMass] = execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8" }).trim().split(/\r?\n/)
     expect(mappedIntune).toBe(canonicalJson(intune))
     expect(mappedEntra).toBe(canonicalJson(entra))
     const planJson = (service: "intune" | "conditionalAccess", changes: AuditChange[]) => canonicalJson(planChangeAlerts(service, changes, matchers, context).map((entry) => ({
@@ -221,6 +221,13 @@ describe("watcher parity", () => {
     const mass = planChangeAlerts("intune", intune, matchers, context).find((entry) => entry.envelope.type === MASS_CHANGE_EVENT)!
     expect(massTeams).toBe(canonicalJson(teamsWorkflowsPayload(mass.envelope, DEFAULT_CARD_STYLE)))
     expect(JSON.parse(massMail!)).toBe(emailHtml(mass.envelope))
+    const updatedThenDeleted = { ...intune[1]!, auditId: "updated-before-deletion", resourceId: "removed-policy", at: intune[0]!.at }
+    const deletion: AuditChange = { ...updatedThenDeleted, auditId: "deletion", changeType: "deleted", at: intune[1]!.at }
+    const unsorted = planChangeAlerts("intune", [intune[2]!, deletion, intune[0]!, intune[1]!, updatedThenDeleted], matchers, context).find((entry) => entry.envelope.type === MASS_CHANGE_EVENT)!.envelope
+    expect(unsorted).toEqual(mass.envelope)
+    expect(unsorted.occurredAt).toBe(intune[2]!.at)
+    expect(unsorted.items.map((item) => item.at)).toEqual([intune[2]!.at, intune[1]!.at])
+    expect(unsortedMass).toBe(canonicalJson(unsorted))
     const backupEnvelope = backupMassChangeEnvelope({
       deleted: { count: 1, items: [{ title: "Contoso removed profile", detail: "deleted" }] },
       updated: { count: 2, items: [{ title: "Contoso encryption", detail: "updated", actor: "Contoso automation" }] },
@@ -310,6 +317,16 @@ describe("mass Intune policy changes", () => {
       expect(rendered).toContain("operator@contoso")
       expect(rendered).toContain("Deleted policies")
     }
+  })
+
+  it("excludes deleted policies from changed counts even when deletion alerts are off", () => {
+    const changes = [change("one", "updated"), change("two", "updated"), change("three", "assigned"), change("delete", "deleted", "ONE")]
+    expect(planned(changes)).toEqual([])
+    const envelope = planned([...changes, change("four", "updated")])[0]!.envelope
+    expect(envelope.details.map((detail) => detail.value)).toEqual(["1", "3"])
+    expect(envelope.items.map((item) => item.title.toLowerCase()).filter((title) => title === "contoso one")).toHaveLength(1)
+    const changedOnly = { ...rule, massChange: { ...rule.massChange!, deleted: null } }
+    expect(planChangeAlerts("intune", changes, [changedOnly], context)).toEqual([])
   })
 
   it("evaluates snapshot counts, including optional creations, without using audit event counts", () => {

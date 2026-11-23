@@ -64,8 +64,8 @@ describe("setup state", () => {
     expect(done.missing).toEqual([])
   })
 
-  it("reports change watching only for the services a working alert listens to", () => {
-    const changeRule = { enabled: true, channelIds: ["c1"], eventTypes: ["intune.change"] }
+  it.each(["intune.change", "intune.massChange"])("reports Intune watching for a working %s alert", (eventType) => {
+    const changeRule = { enabled: true, channelIds: ["c1"], eventTypes: [eventType] }
     const state = setupState({ channels: [channel], rules: [changeRule], auditWatch: { enabled: false, conditionalAccess: { enabled: true }, externalWatcher: false } })
     expect(state.watching).toEqual({ intune: false, conditionalAccess: null })
     expect(state.missing).toEqual(["intune-watching"])

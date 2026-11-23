@@ -85,3 +85,16 @@ $note = @{
 $outcome = ConvertFrom-TenuVaultBackupOutcome $note $fixture.tenantId
 $backupPlan = @(Get-TvBackupMassChangePlan $outcome $alerts $fixture.tenantId $fixture.tenantName $true)
 Write-Output (ConvertTo-TenuVaultCanonicalJson $backupPlan)
+
+# Audit pages can return the newest event before older events.
+$updatedThenDeleted = $intune[1] | Select-Object *
+$updatedThenDeleted.auditId = "updated-before-deletion"
+$updatedThenDeleted.resourceId = "removed-policy"
+$updatedThenDeleted.at = $intune[0].at
+$deletion = $updatedThenDeleted | Select-Object *
+$deletion.auditId = "deletion"
+$deletion.changeType = "deleted"
+$deletion.at = $intune[1].at
+$unsortedPlan = Get-TvChangeAlertPlan -Service intune -Changes @($intune[2], $deletion, $intune[0], $intune[1], $updatedThenDeleted) -Alerts $alerts -TenantId $fixture.tenantId -TenantName $fixture.tenantName -IncludeActor $true
+$unsortedMass = @($unsortedPlan | Where-Object { $_.envelope.type -eq "intune.massChange" })[0].envelope
+Write-Output (ConvertTo-TenuVaultCanonicalJson $unsortedMass)

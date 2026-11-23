@@ -3405,6 +3405,7 @@ function Invoke-TvBackup {
         } else {
             try { if ((Get-TvChangeReportLevel) -ne "off") { Write-Output "No change report: the backup completed with warnings." } } catch { }
         }
+        # Write the outcome after the report so the watcher can read its comparison counts.
         Send-TvBackupOutcome -Account $storageAccount -Token $storageToken -TenantId $tenantId -RunId $runId -Status $status -BackupFolder $backupFolder -TotalPolicies $totalPolicies -Failures $failures -FailedTypes @($failedTypes) -Trigger $runTrigger -Comparison $comparison -FinishedAt $ended
         if ($status -eq "Failed") { throw "The backup saved no policies. See the runbook output above." }
     } catch {

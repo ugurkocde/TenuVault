@@ -3,7 +3,7 @@ import { allows } from "../../../shared/plans"
 import { typeForFolder } from "../../../shared/intune/registry"
 import { NOTIFICATION_EVENT_TYPES, testEvent } from "../../../shared/notifications/envelope"
 import { changeEvent } from "../../../shared/notifications/audit"
-import { MASS_CHANGE_EVENT, massChangeEnvelope, parseMassChange } from "../../../shared/notifications/mass-change"
+import { MASS_CHANGE_EVENT, MASS_CHANGE_RUNBOOK_VERSION, massChangeEnvelope, parseMassChange } from "../../../shared/notifications/mass-change"
 import { describeConditions, hasConditions, isChangeEventType, parseConditions, parseDelivery, watcherAlertsHash } from "../../../shared/notifications/alerts"
 import { DEFAULT_CARD_LAYOUT, isDefaultLayout, parseCardLayout, styleIssues } from "../../../shared/notifications/layout"
 import type { FeatureDeps } from "../deps"
@@ -29,7 +29,7 @@ import {
 } from "./model"
 import { watcherPreflight } from "./watcher-deploy/preflight"
 import { cancelWatcherDeploy, confirmWatcherDeploy, markInterruptedWatcherDeploys, publicWatcherDeploy, resumePendingWatcherHandovers, resumeWatcherDeploy, startWatcherDeploy, watcherDeployOf, WatcherDeployError } from "./watcher-deploy/engine"
-import { EMPTY_WATCHER_DEPLOY_ACK, type WatcherDeployAck, type WatcherDeployPlanInput } from "../../../shared/notifications/watcher-deploy"
+import { EMPTY_WATCHER_DEPLOY_ACK, versionAtLeast, type WatcherDeployAck, type WatcherDeployPlanInput } from "../../../shared/notifications/watcher-deploy"
 import {
   alertMatcher,
   auditWatchOf,
@@ -621,7 +621,7 @@ function watcherAlertsStatus(deps: FeatureDeps, tenantId: string) {
     source: watch?.watcherCheck?.alertsSource ?? null,
     runbookVersion,
     // Null while the heartbeat has not said which runbook runs.
-    supportsMassChange: runbookVersion === null ? null : versionAtLeast(runbookVersion, "1.6.0"),
+    supportsMassChange: runbookVersion === null ? null : versionAtLeast(runbookVersion, MASS_CHANGE_RUNBOOK_VERSION),
     readsAlertsFile: runbookVersion === null ? null : versionAtLeast(runbookVersion, WATCHER_ALERTS_FILE_RUNBOOK),
     auto: sync?.auto ?? false,
     pushedAt: sync?.pushedAt ?? null,
@@ -629,15 +629,6 @@ function watcherAlertsStatus(deps: FeatureDeps, tenantId: string) {
     error: sync?.error ?? null,
     errorAt: sync?.errorAt ?? null,
   }
-}
-
-function versionAtLeast(version: string, minimum: string): boolean {
-  const parts = (value: string) => value.split(".").map((part) => Number.parseInt(part, 10) || 0)
-  const [a, b] = [parts(version), parts(minimum)]
-  for (let index = 0; index < Math.max(a.length, b.length); index++) {
-    if ((a[index] ?? 0) !== (b[index] ?? 0)) return (a[index] ?? 0) > (b[index] ?? 0)
-  }
-  return true
 }
 
 /** Background work while the app runs: outbox retries and due audit polls every minute. */
@@ -837,7 +828,7 @@ export function publicChannel(channel: Stored<ChannelRecord>) {
 
 export function publicRule(rule: Stored<RuleRecord>) {
   const { history, ...rest } = rule
-  return { ...rest, conditions: parseConditions(rule.conditions), delivery: parseDelivery(rule.delivery), history: history.map(({ at, actor, reason }) => ({ at, actor, reason })) }
+  return { ...rest, conditions: parseConditions(rule.conditions), delivery: parseDelivery(rule.delivery), massChange: parseMassChange(rule.massChange), history: history.map(({ at, actor, reason }) => ({ at, actor, reason })) }
 }
 
 export function publicAuditWatch(watch: Stored<AuditWatchRecord> | null) {

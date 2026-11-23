@@ -1,4 +1,5 @@
-import { DEFAULT_MASS_CHANGE, MASS_CHANGE_EVENT, MASS_CHANGE_TYPES, MAX_MASS_CHANGE_THRESHOLD, parseMassChange, type MassChangeThresholds, type MassChangeType } from "../../../shared/notifications/mass-change"
+import { DEFAULT_MASS_CHANGE, MASS_CHANGE_EVENT, MASS_CHANGE_RUNBOOK_VERSION, MASS_CHANGE_TYPES, MAX_MASS_CHANGE_THRESHOLD, parseMassChange, type MassChangeThresholds, type MassChangeType } from "../../../shared/notifications/mass-change"
+import { cloudRunbookNeedsUpgrade } from "../../../shared/cloud-backup"
 import { PausedOnCommunity } from "../../components/PausedOnCommunity"
 import { useEffect, useState, type ReactNode } from "react"
 import { Link, useSearchParams } from "react-router-dom"
@@ -11,6 +12,7 @@ import { DEFAULT_CARD_LAYOUT, styleFor } from "../../../shared/notifications/lay
 import { canUse } from "../../components/PlanGate"
 import { PlanBadge, UpgradeNote } from "../../components/UpgradeNote"
 import { settingsHref } from "../../lib/settings-section"
+import { useCloudBackup } from "../../lib/cloud-backup"
 import { CardPreview } from "./CardPreview"
 import type { Tenant } from "~/contexts/TenantContext"
 import { Chip, Tile } from "~/components/dashboard/tiles"
@@ -1019,6 +1021,7 @@ function RuleDialog({ tenant, data, rule, draft, open, onClose, onSaved, onChann
   }
   const changes = watchesChanges(eventTypes)
   const mass = eventTypes.includes(MASS_CHANGE_EVENT)
+  const { status: cloudBackupStatus } = useCloudBackup(mass ? tenant : null)
   const thresholds = mass ? parseMassChange({ deleted: Number(deletedThreshold), changed: Number(changedThreshold), changeTypes: massChangeTypes }) : null
   const intune = eventTypes.includes("intune.change")
   const ca = eventTypes.includes("entra.change")
@@ -1144,6 +1147,10 @@ function RuleDialog({ tenant, data, rule, draft, open, onClose, onSaved, onChann
                 ))}
               </div>
               <p className="text-xs text-gray-500">Backup comparisons count creations and updates, including assignment edits as updates. <DocsLink section="mass-intune-policy-change">Mass change alert guide</DocsLink></p>
+              <p className="text-xs text-gray-500">Each audit check reads up to 500 events. Thresholds above 500 can only be reached by backup comparisons.</p>
+              {cloudBackupStatus && cloudRunbookNeedsUpgrade(cloudBackupStatus.runbookVersion, MASS_CHANGE_RUNBOOK_VERSION) && (
+                <p className="text-sm text-amber-800 dark:text-amber-300">Cloud backup runbook {cloudBackupStatus.runbookVersion} needs to be upgraded to {MASS_CHANGE_RUNBOOK_VERSION} or later to send mass change alerts from cloud backup comparisons.</p>
+              )}
             </fieldset>
           )}
           {mass && !changes && (

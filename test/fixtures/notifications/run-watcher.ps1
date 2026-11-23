@@ -5,7 +5,8 @@
 param(
     [Parameter(Mandatory)][string]$AlertsBlobPath,
     [Parameter(Mandatory)][string]$AlertsVariablePath,
-    [switch]$AlertsReadFails
+    [switch]$AlertsReadFails,
+    [string]$BackupOutcomePath
 )
 
 $ErrorActionPreference = "Stop"
@@ -35,6 +36,15 @@ $global:TvRunAlertsReadFails = [bool]$AlertsReadFails
 $global:PSPrivateMetadata = @{ JobId = [guid]"55555555-5555-4555-8555-555555555555" }
 $global:TvRunPosts = [System.Collections.Generic.List[object]]::new()
 $global:TvRunAudit = $fixture.intune
+$global:TvRunOutcomeName = $null
+if ($BackupOutcomePath) {
+    $outcomeText = Get-Content -LiteralPath $BackupOutcomePath -Raw
+    $outcome = ConvertFrom-Json $outcomeText
+    $global:TvRunVariables.TenuVaultTenantId = $outcome.tenantId
+    $global:TvRunOutcomeName = "cloud-backup-outcomes/$($outcome.backupFolder).json"
+    $global:TvRunBlobs["tenuvault-backup-results/$global:TvRunOutcomeName"] = $outcomeText
+    $global:TvRunAudit = @()
+}
 
 function global:Get-AutomationVariable { param([string]$Name) if ($global:TvRunVariables.ContainsKey($Name)) { return $global:TvRunVariables[$Name] } throw "Variable $Name not found." }
 function global:Start-Sleep { }
@@ -57,7 +67,15 @@ function global:Invoke-WebRequest {
         $path = ([uri]$Uri).AbsolutePath.TrimStart("/")
         $query = ([uri]$Uri).Query
         if ($query -like "*comp=lease*") { return (& $response 201 "") }
-        if ($query -like "*comp=list*") { return (& $response 200 '<?xml version="1.0" encoding="utf-8"?><EnumerationResults><Blobs></Blobs></EnumerationResults>') }
+        if ($query -like "*comp=list*") {
+            $blobs = ""
+            $note = $global:TvRunBlobs["tenuvault-backup-results/$global:TvRunOutcomeName"]
+            if ($path -eq "tenuvault-backup-results" -and $query -like "*prefix=cloud-backup-outcomes*" -and $note) {
+                $length = [Text.Encoding]::UTF8.GetByteCount($note)
+                $blobs = "<Blob><Name>$global:TvRunOutcomeName</Name><Properties><Content-Length>$length</Content-Length></Properties></Blob>"
+            }
+            return (& $response 200 "<EnumerationResults><Blobs>$blobs</Blobs><NextMarker /></EnumerationResults>")
+        }
         if ($Method -eq "Put") {
             $global:TvRunBlobs[$path] = [Text.Encoding]::UTF8.GetString([byte[]]$Body)
             return (& $response 201 "")
@@ -84,6 +102,8 @@ $titles = foreach ($post in $global:TvRunPosts) {
 $heartbeat = $global:TvRunBlobs["tenuvault-notification-state/heartbeat.json"] | ConvertFrom-Json
 Write-Output (ConvertTo-Json -Depth 6 -Compress ([ordered]@{
     posts = @($titles)
+    webhookEnvelopes = @($global:TvRunPosts | Where-Object { $_.host -eq "hooks.example.test" } | ForEach-Object { $_.body })
+    outcomeConsumed = $global:TvRunOutcomeName -and -not $global:TvRunBlobs.ContainsKey("tenuvault-backup-results/$global:TvRunOutcomeName")
     heartbeat = $heartbeat
     output = @($output)
 }))
