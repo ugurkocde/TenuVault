@@ -1082,12 +1082,14 @@ describe("New-TenuVaultCloudBackup.ps1", () => {
 })
 
 describe("azuredeploy.json", () => {
-  it("uses an account and deployment specific schedule link ID and a calculated start time", () => {
+  it("uses an optional deployment specific schedule link and a calculated start time", () => {
     expect(template.parameters.baseTime).toMatchObject({ type: "string", defaultValue: "[utcNow()]" })
+    expect(template.parameters.linkSchedule).toMatchObject({ type: "bool", defaultValue: true })
     expect(template.parameters.scheduleStartTime).toMatchObject({ type: "string" })
     expect(template.variables.jobScheduleId).toBe("[guid(resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName')), variables('scheduleName'), variables('runbookName'), parameters('baseTime'))]")
     expect(template.resources.find(resource => resource.type === "Microsoft.Automation/automationAccounts/jobSchedules")).toMatchObject({
       name: "[concat(parameters('automationAccountName'), '/', variables('jobScheduleId'))]",
+      condition: "[and(not(parameters('auditOnly')), parameters('linkSchedule'))]",
     })
     expect(template.resources.find(resource => resource.type === "Microsoft.Automation/automationAccounts/schedules")).toMatchObject({
       properties: { startTime: "[variables('scheduleStart')]" },
