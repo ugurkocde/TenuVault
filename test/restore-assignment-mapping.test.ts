@@ -73,7 +73,7 @@ describe("Restore assignment planning", () => {
     })
     const restorer = new Restorer(graph, { mode: "replace", assignments: true })
     const restored = await restorer.restore("backup/ConfigurationPolicies/policy.json", snapshot, {
-      snapshot: result.snapshot, skipped: 1, allAssignmentsSkipped: result.review.allAssignmentsSkipped,
+      snapshot: result.snapshot, mappings: [mappings[2]!], skipped: 1, allAssignmentsSkipped: result.review.allAssignmentsSkipped,
     })
     expect(restored).toMatchObject({ success: true, action: "updated", warnings: expect.arrayContaining(["All backup assignments were skipped. Existing assignments were kept."]) })
     expect(graph.mock.calls.filter(([method]) => method !== "GET").map(([method, path]) => [method, path]))
@@ -125,7 +125,7 @@ describe("Restore assignment planning", () => {
       : { status: 201, body: { id: "8" } })
     const restorer = new Restorer(graph, { mode: "copy", assignments: true, crossTenant: !sameTenant })
     const restored = await restorer.restore("backup/ScopeTags/tag.json", original, {
-      snapshot: result.snapshot, skipped: 0, allAssignmentsSkipped: result.review.allAssignmentsSkipped, warnings: result.review.warnings,
+      snapshot: result.snapshot, mappings, skipped: 0, allAssignmentsSkipped: result.review.allAssignmentsSkipped, warnings: result.review.warnings,
     })
     expect(restored).toMatchObject({ success: true, action: "created", warnings: [legacyScopeTagWarning] })
     expect(graph.mock.calls.map(([method, path, body]) => [method, path, body])).toEqual([
@@ -145,6 +145,43 @@ describe("Restore assignment planning", () => {
 })
 
 afterEach(() => vi.unstubAllGlobals())
+
+it("keeps same-run scope tag IDs alongside explicit mappings to existing tags", async () => {
+  const backupId = "backup-fixture"
+  const tenantId = "33333333-2222-4333-8444-555555555555"
+  const scopeTags = "/beta/deviceManagement/roleScopeTags"
+  const policies = "/beta/deviceManagement/configurationPolicies"
+  const writes: Array<{ path: string; body: Item }> = []
+  vi.stubGlobal("fetch", async (input: URL | string, init?: RequestInit) => {
+    const url = new URL(input)
+    if (url.hostname === "login.microsoftonline.com") return Response.json({ access_token: "test" })
+    if (url.hostname.endsWith(".blob.core.windows.net")) {
+      if (url.pathname.endsWith("metadata.json")) return Response.json({ TenantId: tenantId, Status: "Success" })
+      if (url.pathname.endsWith("tag.json")) return Response.json({ id: "3", displayName: "IT" })
+      return Response.json({ ...snapshot, assignments: [], roleScopeTagIds: ["3", "4", "0"] })
+    }
+    if (init?.method === "POST") {
+      writes.push({ path: url.pathname, body: JSON.parse(String(init.body)) })
+      return Response.json({ id: url.pathname === scopeTags ? "8" : "copied-policy" }, { status: 201 })
+    }
+    if (url.pathname === scopeTags) return Response.json({ value: [{ id: "3", displayName: "IT" }] })
+    return new Response(null, { status: 404 })
+  })
+  const response = await POST(new NextRequest("http://tenuvault.internal/api/restore-backup", {
+    method: "POST",
+    body: JSON.stringify({
+      backupId, tenantId, appId: "test", clientSecret: "test", storageAccountName: "test",
+      assignments: true, restoreType: "selective",
+      selectedPolicies: [`${backupId}/ConfigurationPolicies/policy.json`, `${backupId}/ScopeTags/tag.json`].map((path) => ({ path })),
+      assignmentMappings: { [tenantId]: [{ kind: "scopeTag", sourceId: "4", targetId: "3", confirmed: true }] },
+    }),
+  }))
+  expect(await response.json()).toMatchObject({ success: true, details: { restoredCount: 2 } })
+  expect(writes).toMatchObject([
+    { path: scopeTags },
+    { path: policies, body: { roleScopeTagIds: ["8", "3", "0"] } },
+  ])
+})
 
 it("shows the legacy scope tag warning in review and in the successful restore result", async () => {
   const backupId = "backup-fixture"

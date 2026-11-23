@@ -1,6 +1,7 @@
 import { act, createElement } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { MemoryRouter } from "react-router-dom"
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -28,11 +29,12 @@ async function renderItems(community: boolean, crossTenant = false): Promise<HTM
   const container = document.body.appendChild(document.createElement("div"))
   const root = createRoot(container)
   roots.push(root)
-  await act(async () => root.render(createElement(MemoryRouter, null, createElement(RestoreWizard, {
+  const client = new QueryClient()
+  await act(async () => root.render(createElement(QueryClientProvider, { client }, createElement(MemoryRouter, null, createElement(RestoreWizard, {
     tenant: { name: "Contoso", credentials: { tenantId: "tenant", appId: "app", clientSecret: "" }, storageAccountName: "tvlocal-tenant" },
     backups: [{ id: "backup-1", timestamp: "2026-10-16T02:00:00Z", type: "manual", status: "Completed", totalPolicies: 2, scope: null, size: 1, duration: 4, changes: null, comparedWith: null }],
     initialBackupId: "backup-1", community, canCopyToTenants: crossTenant, copyCandidates: crossTenant ? [{ tenantId: "destination", appId: "app", name: "Fabrikam" }] : [],
-  }))))
+  })))))
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
   // Open the group so each item's checkbox shows.
   const group = [...container.querySelectorAll<HTMLButtonElement>("button[aria-expanded]")].find((button) => button.textContent?.includes("Configuration profile"))!
@@ -72,6 +74,48 @@ it.each([false, true])("validates with assignments off (copy to another tenant: 
   expect(JSON.parse(String(request?.[1]?.body))).toEqual({
     tenantId: "tenant", appId: "app", clientSecret: "", storageAccountName: "tvlocal-tenant", backupId: "backup-1",
   })
+})
+
+it.each(["mapping", "skip"])("discards an in-flight validation after a %s edit", async (edit) => {
+  const container = await renderItems(false)
+  const path = "DeviceConfigurations/a.json"
+  const report = { ok: true, total: 2, passed: 2, failed: 0, manifest: { ok: true }, byType: [], items: [] }
+  let releaseValidation!: (response: Response) => void
+  const pending = new Promise<Response>((resolve) => { releaseValidation = resolve })
+  const validate = vi.fn().mockReturnValueOnce(pending).mockResolvedValueOnce(Response.json(report))
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input) === "/api/restore-validate") return validate()
+    if (JSON.parse(String(init?.body)).action === "assignment-review") {
+      return Response.json({ targets: [{ tenantId: "tenant", objects: {}, items: [{
+        path, errors: [], warnings: [], allAssignmentsSkipped: false,
+        references: [{ kind: "scopeTag", sourceId: "3", sourceName: "IT", state: "rejected", targetId: "3", suggestion: null }],
+        assignments: [{ key: "0", index: 0, label: "Included target", references: [] }],
+      }] }] })
+    }
+    return Response.json({})
+  }))
+  await act(async () => buttonNamed(container, "Select all")!.click())
+  await act(async () => buttonNamed(container, "Next")!.click())
+  const assignmentOption = [...container.querySelectorAll("label")].find((label) => label.textContent?.includes("Restore assignments"))!
+  await act(async () => assignmentOption.querySelector<HTMLInputElement>("input")!.click())
+  await act(async () => buttonNamed(container, "Review")!.click())
+  const button = [...container.querySelectorAll("button")].find((button) => button.textContent?.includes("Validate backup (no changes)"))!
+  await act(async () => button.click())
+  expect(validate).toHaveBeenCalledTimes(1)
+  await act(async () => {
+    if (edit === "mapping") {
+      const mapping = container.querySelector<HTMLSelectElement>('[aria-label="Target for IT"]')!
+      mapping.value = "0"
+      mapping.dispatchEvent(new Event("change", { bubbles: true }))
+    } else {
+      const skip = [...container.querySelectorAll("label")].find((label) => label.textContent?.includes("Skip assignment 1"))!
+      skip.querySelector<HTMLInputElement>("input")!.click()
+    }
+  })
+  await act(async () => releaseValidation(Response.json(report)))
+  expect(container.textContent).not.toContain("2 of 2 items passed")
+  await act(async () => button.click())
+  expect(container.textContent).toContain("2 of 2 items passed")
 })
 
 describe("restore wizard item selection", () => {

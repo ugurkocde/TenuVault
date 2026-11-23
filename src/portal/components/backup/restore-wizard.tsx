@@ -314,6 +314,12 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
   const [validating, setValidating] = useState(false)
   const [validation, setValidation] = useState<BackupValidation | null>(null)
   const [validationError, setValidationError] = useState("")
+  const validationGeneration = useRef(0)
+  const clearValidation = () => {
+    validationGeneration.current++
+    setValidation(null)
+    setValidationError("")
+  }
 
   const [running, setRunning] = useState(false)
   const [progress, setProgress] = useState<{ total: number; done: number; current: string | null; results: Outcome[] } | null>(null)
@@ -351,8 +357,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
     setSelected(new Set())
     setShown({})
     clearReview()
-    setValidation(null)
-    setValidationError("")
+    clearValidation()
     const controller = new AbortController()
     const credentials = { ...tenant.credentials, storageAccountName: tenant.storageAccountName, subscriptionId: "local", resourceGroupName: "local", backupId }
     void (async () => {
@@ -483,8 +488,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
     const load = reviewLoad.current
     const current = () => load === reviewLoad.current
     setReviewError("")
-    setValidation(null)
-    setValidationError("")
+    clearValidation()
     setConfirmed(false)
     try {
       const live: Array<{ path: string } & LiveState> = []
@@ -533,8 +537,8 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
   const runValidation = async () => {
     if (!backupId) return
     setValidating(true)
-    setValidation(null)
-    setValidationError("")
+    clearValidation()
+    const generation = validationGeneration.current
     try {
       const report = await post<BackupValidation>("/api/restore-validate", {
         ...tenant.credentials,
@@ -547,8 +551,9 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
           targetTenants: copying ? copyCandidates.filter((target) => copyTargets.includes(target.tenantId)).map(({ tenantId, appId }) => ({ tenantId, appId })) : undefined,
         } : {}),
       })
-      setValidation(report)
+      if (generation === validationGeneration.current) setValidation(report)
     } catch (error) {
+      if (generation !== validationGeneration.current) return
       showPlanError(error)
       setValidationError(error instanceof Error ? error.message : String(error))
     } finally {
@@ -599,19 +604,22 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
           : []
         if (copying && !targets.length) throw new Error("The original target tenant is no longer connected.")
         attempted.push(batch)
+        const selectedPolicies = batch.paths.map((path) => ({
+          path, repairToken: previous.find((item) => item.path === path && item.targetTenantId?.toLowerCase() === batch.targetTenantId)?.repairToken,
+        }))
         const data = await post<{ success: boolean; jobId?: string; message: string; details?: { restoredCount: number; unchangedCount?: number; results: Outcome[] } }>("/api/restore-backup", {
           ...tenant.credentials,
           storageAccountName: tenant.storageAccountName,
           backupId,
           restoreType: "selective",
-          selectedPolicies: batch.paths.map((path) => ({ path, repairToken: previous.find((item) => item.path === path && item.targetTenantId?.toLowerCase() === batch.targetTenantId)?.repairToken })),
+          selectedPolicies,
           dependencyMappings,
           confirmMappings: mappingsConfirmed,
           justification: copying ? undefined : justification.trim() || undefined,
           mode: copying ? "copy" : mode,
           assignments,
           assignmentMappings: assignments ? mappingsFor(copying ? targets.map((target) => target.tenantId) : [sourceTenantId]) : undefined,
-          skippedAssignments: assignments && !copying ? skipsFor(batch.paths) : undefined,
+          skippedAssignments: assignments && !copying ? skipsFor(selectedPolicies.filter((item) => !item.repairToken).map((item) => item.path)) : undefined,
           progressId: id,
           retryOf: batch.retryOf,
           ...(copying
@@ -1137,7 +1145,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
                   setAssignmentMappings((previous) => ({ ...previous, [target.tenantId]: next }))
                   rememberMappings(sourceTenantId, target.tenantId, next)
                   setAssignmentReviewDirty(true)
-                  setValidation(null)
+                  clearValidation()
                 }} />}
               {!editable.length && !problemItems.length && <p className="text-sm text-gray-600">Assignment references are ready.</p>}
               {problemItems.map((item) => <div key={item.path} className="space-y-2 text-sm">
@@ -1156,7 +1164,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
                           ? [...(previous[item.path] ?? []), row.key]
                           : (previous[item.path] ?? []).filter((key) => key !== row.key) }))
                         setAssignmentReviewDirty(true)
-                        setValidation(null)
+                        clearValidation()
                       }} />
                     Skip assignment {row.index + 1} ({row.label}){names ? ` (${names})` : ""}
                   </label>

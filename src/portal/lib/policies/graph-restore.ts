@@ -10,6 +10,7 @@ import { typeForFolder, type IntuneType, type Item, type Json, type Step } from 
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 import { buildRestorePlan, buildUpdatePlan, NotRestorableError, resolveStep, restoreBlocker, restoreCapabilities, restoreItemBlocker } from "../../../shared/intune/restore-plan"
 import { hasLegacyScopeTagAssignments, LEGACY_SCOPE_TAG_ASSIGNMENT_WARNING } from "../../../shared/intune/restore-assignments"
+import { referenceTargetId, type Mapping } from "../../../shared/intune/reference-mapping"
 import { assignmentsUnread, locateObject, readObject, type GraphReader } from "../../../shared/intune/read"
 import { comparableSnapshot, sameSnapshot } from "../../../shared/intune/compare"
 import { saveWrite, removeWrite, writeKey, writeRecords } from "../../../main/storage/restore-journal"
@@ -267,7 +268,7 @@ export class RestoreReconcileRequired extends Error {
   constructor() { super("A previous write has an uncertain outcome. Reconcile it in Settings before retrying.") }
 }
 
-type ReviewedTargeting = { snapshot: Item; skipped: number; allAssignmentsSkipped?: boolean; warnings?: string[] }
+type ReviewedTargeting = { snapshot: Item; mappings: Mapping[]; skipped: number; allAssignmentsSkipped?: boolean; warnings?: string[] }
 
 export class Restorer {
   private writeDispatched = false
@@ -337,6 +338,16 @@ export class Restorer {
     if (targeting) {
       for (const key of ["assignments", "roleAssignments", "roleScopeTagIds", "roleScopeTags"]) {
         if (targeting.snapshot[key] !== undefined) source[key] = targeting.snapshot[key]
+      }
+      if (!this.options.crossTenant && this.remapped.size) {
+        for (const key of ["roleScopeTagIds", "roleScopeTags"]) {
+          const tags = snapshot[key]
+          if (!Array.isArray(tags)) continue
+          // Start with the original IDs, since review may have deduplicated mapped tags.
+          source[key] = [...new Set(tags.map(id => typeof id === "string" && id !== "0"
+            ? referenceTargetId("scopeTag", id, targeting.mappings, false) ?? this.remapped.get(id) ?? id
+            : id))]
+        }
       }
     }
     // Keep live assignments when the backup could not read them.
