@@ -245,8 +245,8 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered, onRunningCh
             <p className="flex items-start gap-2.5 rounded-2xl bg-gray-50 px-4 py-2 text-gray-700">
               <Info className="mt-0.5 h-4 w-4 flex-shrink-0" aria-hidden="true" />
               <span>
-                Microsoft will ask you to approve <span className="font-medium text-gray-900">Microsoft Graph Command Line Tools</span>.
-                This first sign-in uses broader, setup-only access: Application.ReadWrite.All and DelegatedPermissionGrant.ReadWrite.All. It creates the registration and grants consent for your choice. A second sign-in follows through TenuVault, with the chosen permissions. The setup sign-in stays in memory and is dropped when setup ends. Leave &quot;Consent on behalf of your organization&quot; unticked; the setup does not need it.
+                Microsoft will ask you to approve <span className="font-medium text-gray-900">Microsoft Graph Command Line Tools</span> with extra access for setup.
+                Leave &quot;Consent on behalf of your organization&quot; unticked. Then sign in to TenuVault.
               </span>
             </p>
             <Button type="button" size="lg" className="w-full bg-blue-600 text-white hover:bg-blue-700 sm:w-auto" onClick={() => void start()}>
