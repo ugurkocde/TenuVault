@@ -250,7 +250,7 @@ export async function POST(request: NextRequest) {
           if (!result) continue
           const count = result.review.assignments.filter((entry) => entry.skipped).length
           snapshots.set(path, { original, resolved: result.snapshot, skipped: count, allAssignmentsSkipped: result.review.allAssignmentsSkipped, warnings: result.review.warnings })
-          if (result.review.references.length || result.review.assignments.length || result.review.errors.length) items.push({ path, ...result.review })
+          if (result.review.references.length || result.review.assignments.length || result.review.errors.length || result.review.warnings.length) items.push({ path, ...result.review })
         }
         prepared.set(destination, snapshots)
         assignmentReviews.push({ tenantId: destination, items, objects: reviewAssignments ? reviewer.objects() : {} })
