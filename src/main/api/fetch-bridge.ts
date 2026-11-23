@@ -1,3 +1,5 @@
+import { READ_ONLY_REGISTRATION_MESSAGE } from "../../shared/app-registration"
+import { grantedPermissions, isReadOnlyRegistration } from "../../shared/services/token"
 import { registerStorageToken } from "../storage/azure-seal"
 import { FetchPreconditionError } from "./network-error"
 import { DELEGATED_CLIENT_SECRET, INTERNAL_API_ORIGIN, LOCAL_STORAGE_PREFIX } from "../../shared/constants"
@@ -58,6 +60,21 @@ export function createBridgedFetch(options: FetchBridgeOptions): typeof fetch {
         return await options.dispatch(new Request(input, init))
       }
 
+      if (url.origin === "https://graph.microsoft.com") {
+        const source = input instanceof Request ? input : undefined
+        const method = (init?.method ?? source?.method ?? "GET").toUpperCase()
+        if (method !== "GET" && method !== "HEAD") {
+          const authorization = new Headers(init?.headers ?? source?.headers).get("Authorization")
+          const token = /^Bearer (.+)$/i.exec(authorization ?? "")?.[1]
+          if (isReadOnlyRegistration(grantedPermissions(token))) {
+            const isBatch = method === "POST" && /^\/beta\/\$batch\/?$/i.test(url.pathname)
+            if (!isBatch || !await isReadBatch(new Request(input, init).clone())) {
+              return Response.json({ error: { code: "ReadOnlyRegistration", message: READ_ONLY_REGISTRATION_MESSAGE } }, { status: 409 })
+            }
+          }
+        }
+      }
+
       const localAccount = options.handleLocalBlob ? localAccountFromUrl(url) : null
       if (options.handleLocalBlob && localAccount) {
         try {
@@ -116,6 +133,13 @@ export function createBridgedFetch(options: FetchBridgeOptions): typeof fetch {
       throw new FetchPreconditionError(error)
     }
   }
+}
+
+/** Settings comparisons fetch display names with a batch of GET requests. */
+async function isReadBatch(request: Request): Promise<boolean> {
+  const body = await request.json().catch(() => null) as { requests?: unknown[] } | null
+  return Array.isArray(body?.requests) && body.requests.length > 0 &&
+    body.requests.every(entry => entry && typeof entry === "object" && "method" in entry && entry.method === "GET")
 }
 
 async function delegatedTokenResponse(

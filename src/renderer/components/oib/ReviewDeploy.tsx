@@ -1,3 +1,5 @@
+import { READ_ONLY_REGISTRATION_MESSAGE } from "../../../shared/app-registration"
+import { useReadOnlyTenants, useRegistrationAccess } from "../../lib/registration-access"
 import { useEffect, useState, type ReactNode } from "react"
 import { Link } from "react-router-dom"
 import { AlertTriangle, CheckCircle2, Rocket, RotateCcw, XCircle } from "lucide-react"
@@ -99,7 +101,9 @@ export function ReviewDeploy({ batches: given, flow, kind = "deploy", onBack, ba
   notes?: ReactNode
 }) {
   const { tenant, can } = useOibTenant()
+  const readOnly = useRegistrationAccess(tenant?.tenantId, tenant?.appId)
   const tenants = useTenants()
+  const readOnlyTenants = useReadOnlyTenants(tenants, can("bulkActions"))
   const job = useOibJob<DeployOutcome[]>(tenant?.tenantId, { kind, flow })
   const blocking = useBlockingJob(tenant?.tenantId, kind)
   const [phase, setPhase] = useState<"review" | "confirm">("review")
@@ -125,7 +129,7 @@ export function ReviewDeploy({ batches: given, flow, kind = "deploy", onBack, ba
   const storage = !!tenant.storageAccountName
   const bulk = can("bulkActions")
   // Updates point at policies of this tenant, so only new policies can go to other tenants.
-  const others = kind === "fix" || updates.length ? [] : tenants.filter(t => t.credentials?.tenantId && t.credentials.appId && t.credentials.tenantId !== tenant.tenantId)
+  const others = kind === "fix" || updates.length ? [] : tenants.filter(t => t.credentials?.tenantId && t.credentials.appId && t.credentials.tenantId !== tenant.tenantId && !readOnlyTenants.has(t.credentials.tenantId.toLowerCase()))
   const extras: OibTenant[] = bulk ? others.filter(t => alsoDeploy.includes(t.credentials!.tenantId)).map(t => ({ tenantId: t.credentials!.tenantId, appId: t.credentials!.appId, name: t.name, storageAccountName: t.resources?.storageAccountName })) : []
   const targets = assignmentTargets(batches.flatMap(b => b.items.filter(i => i.mode === "create").map(i => ({ platform: b.platform, folder: i.folder, scope: i.scope }))))
   const extraAssignment = (tenantId: string) => extraAssignments[tenantId] ?? newAssignment()
@@ -145,6 +149,7 @@ export function ReviewDeploy({ batches: given, flow, kind = "deploy", onBack, ba
   const updateNames = updates.map(u => u.targetName && u.targetName !== u.name ? `${u.targetName}, replaced with ${u.name ?? u.source}` : u.name ?? u.source)
 
   function deploy() {
+    if (readOnly) return
     setError("")
     const targets = [tenant!, ...extras]
     try {
@@ -229,7 +234,7 @@ export function ReviewDeploy({ batches: given, flow, kind = "deploy", onBack, ba
         Settings added or changed in Intune since the policy was deployed are replaced.
       </Toggle></div>}
       <ActionBar summary={blocking ? `${blocking.label} is still running. Wait for it to finish first.` : undefined} error={error} back={{ label: "Back to the review", onClick: () => setPhase("review") }}>
-        <button type="button" className={primary} disabled={!!blocking || (updates.length > 0 && !acknowledged)} onClick={deploy}>
+        <button type="button" className={primary} title={readOnly ? READ_ONLY_REGISTRATION_MESSAGE : undefined} disabled={readOnly || !!blocking || (updates.length > 0 && !acknowledged)} onClick={deploy}>
           {kind === "fix" ? <RotateCcw className="h-4 w-4" aria-hidden="true" /> : <Rocket className="h-4 w-4" aria-hidden="true" />}
           {mode === "new" ? `Back up and ${kind === "fix" ? "reset" : "deploy"}` : kind === "fix" ? "Reset the policy" : "Deploy"}{extras.length ? ` to ${extras.length + 1} tenants` : ""}
         </button>
@@ -274,7 +279,7 @@ export function ReviewDeploy({ batches: given, flow, kind = "deploy", onBack, ba
     </div>
     <ActionBar summary={[creates.length && plural(creates.length, "new policy", "new policies"), updates.length && plural(updates.length, "update in place", "updates in place")].filter(Boolean).join(", ")} status={backup.loading ? "Checking the latest backup" : null} error={error}
       back={onBack ? { label: backLabel, onClick: () => { setRetry(null); onBack() } } : undefined}>
-      <button type="button" className={primary} disabled={!items.length || !assignmentsReady || backup.loading} onClick={() => { setAcknowledged(false); setPhase("confirm") }}>Continue</button>
+      <button type="button" className={primary} title={readOnly ? READ_ONLY_REGISTRATION_MESSAGE : undefined} disabled={readOnly || !items.length || !assignmentsReady || backup.loading} onClick={() => { setAcknowledged(false); setPhase("confirm") }}>Continue</button>
     </ActionBar>
   </div>
 }

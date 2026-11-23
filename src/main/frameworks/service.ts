@@ -1,3 +1,4 @@
+import { requireWritableRegistration } from "../../shared/services/token"
 import { approvalSignal, approvalMessage } from "../../shared/intune/approval"
 import { assignmentEvidence, type AssignmentEvidence } from "../../shared/frameworks/evidence"
 import { loadWorkspace, saveWorkspace, deleteWorkspace, keepReadLists, pruneHistory, recordAssessment, recordCreation, workspaceCapacity, workspaceView, type FrameworkWorkspace } from "./workspaces"
@@ -797,6 +798,7 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
     return assessment
   }
   if (body.action !== "create") throw new FrameworkError("Unknown framework action.")
+  requireWritableRegistration(token)
   return withTenantWrite(tenant, WRITE_LABEL, async () => {
     const run = typeof body.runId === "string" ? runs.get(body.runId) : undefined
     if (!run || run.assessment.tenantId !== tenant || run.consumed) throw new FrameworkError("This assessment has expired or was already used. Run comparison again.", 409)

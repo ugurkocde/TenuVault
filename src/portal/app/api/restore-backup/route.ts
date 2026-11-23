@@ -1,3 +1,4 @@
+import { READ_ONLY_REGISTRATION_MESSAGE } from "../../../../shared/app-registration"
 import { auditUserFromToken, mainAuditSink } from "../../../../main/api/audit-sink"
 import { AuditEventType, type AuditJobItem } from "~/lib/audit/types"
 import { beginRestoreAudit, recordRestorePreparationFailure, restoreAuditItem } from "~/lib/audit/restore"
@@ -10,7 +11,7 @@ import { validPolicyPath } from "~/lib/policies/restore"
 import { graphCaller, Restorer, ApprovalCompletionRefused, DependencyMappingError, RestoreReconcileRequired, type RestoreOutcome } from "~/lib/policies/graph-restore"
 import { PROGRESS_ID, startProgress } from "~/lib/policies/restore-progress"
 import { restoreOrder, type Item } from "../../../../shared/intune/registry"
-import { grantedPermissions } from "../../../../shared/services/token"
+import { grantedPermissions, isReadOnlyRegistration } from "../../../../shared/services/token"
 import { type NextRequest, NextResponse } from "next/server"
 export async function getAccessToken(tenantId: string, appId: string, clientSecret: string, scope: string, forceRefresh = false) {
   const tokenResponse = await fetch(
@@ -132,6 +133,7 @@ export async function POST(request: NextRequest) {
       getAccessToken(tenantId, appId, clientSecret, "https://storage.azure.com/.default"),
       getAccessToken(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default")
     ])
+    if (isReadOnlyRegistration(grantedPermissions(graphToken))) return NextResponse.json({ error: READ_ONLY_REGISTRATION_MESSAGE }, { status: 409 })
     if (!targetTenants) destinationTokens[0] = graphToken
 
     // A shared container can hold other tenants' backups; never restore one of those. Everyone who
@@ -201,6 +203,9 @@ export async function POST(request: NextRequest) {
           }
         }))
       : [{ graphToken, restorer: new Restorer(graphCaller(graphToken, fetch, { tenant: tenantId, refreshToken: () => getAccessToken(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default", true) }), { mode, assignments, approvalContext: requesterContext(graphToken, tenantId, body.justification), repairScope: repairScope(tenantId), granted: grantedPermissions(graphToken), operationId: correlated, auditProgress: onProgress, auditSubmitted: onSubmitted }) }]
+    if (targets.some(target => isReadOnlyRegistration(grantedPermissions(target.graphToken)))) {
+      return NextResponse.json({ error: READ_ONLY_REGISTRATION_MESSAGE }, { status: 409 })
+    }
     try {
       if (dependencyMappings.length) for (const { restorer } of targets) await restorer.mapDependencies(dependencyMappings)
     } catch (error) {
@@ -340,6 +345,7 @@ async function approvalAction(body: any): Promise<Response> {
     }))
     return NextResponse.json({ records: refreshed.map(record => approvalRow(record, record.requesterId.toLowerCase() === context.requesterId.toLowerCase())) })
   }
+  if (isReadOnlyRegistration(grantedPermissions(token))) return NextResponse.json({ error: READ_ONLY_REGISTRATION_MESSAGE }, { status: 409 })
   const record = restoreApprovals(tenantId).find(entry => entry.id === approvalId)
   if (!record) return NextResponse.json({ error: "Request not found" }, { status: 404 })
   const completion = action === "complete"

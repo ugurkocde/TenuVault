@@ -1,3 +1,5 @@
+import { READ_ONLY_REGISTRATION_MESSAGE } from "../../../shared/app-registration"
+import { useReadOnlyRegistration } from "../../lib/registration-access"
 import { useEffect, useRef, useState } from "react"
 import { CheckCircle2, ExternalLink } from "lucide-react"
 import { useTenants } from "~/contexts/TenantContext"
@@ -42,6 +44,7 @@ export function RestoreAppDialog({ tenant: sourceTenantId, source, onClose, onBu
   const stopped = useRef(false)
   const destination = tenants.find(t => t.credentials?.tenantId.toLowerCase() === target)
   const authenticated = signedIn.includes(target)
+  const targetReadOnly = useReadOnlyRegistration(destination)
   const targetPlan = target ? restoreDestinationPlan(status, tenant, target) : "unknown"
   const planNote = targetPlan === "excluded"
   const refreshAccounts = async () => {
@@ -111,6 +114,7 @@ export function RestoreAppDialog({ tenant: sourceTenantId, source, onClose, onBu
     finally { if (alive.current && generation === signInGeneration.current) setSigningIn(false) }
   }
   async function restore() {
+    if (targetReadOnly) return
     if (operation.current || !review?.settingsHash || !confirmed || !target || targetPlan === "excluded") return
     const id = crypto.randomUUID(); operation.current = id
     stopped.current = false
@@ -150,7 +154,8 @@ export function RestoreAppDialog({ tenant: sourceTenantId, source, onClose, onBu
           {review.blocker ? <p role="alert" className="rounded-xl bg-secondary p-4 text-sm">{review.blocker}</p> : <>
             <div><label htmlFor="restore-target" className="mb-2 block text-sm font-medium">Destination tenant</label><select id="restore-target" name="restoreTarget" disabled={running || signingIn || deviceStarting || !!deviceCode} value={target} onChange={e => { setTarget(e.target.value); setConfirmed(false); setError("") }} className="h-11 w-full rounded-xl border bg-background px-3 text-sm"><option value="">Choose a connected tenant…</option>{[...connected].sort((a, b) => Number(b.credentials!.tenantId.toLowerCase() === tenant) - Number(a.credentials!.tenantId.toLowerCase() === tenant)).map(t => { const id = t.credentials!.tenantId.toLowerCase(), plan = restoreDestinationPlan(status, tenant, id); return <option key={t.id} value={id}>{t.name}{id === tenant ? " (source tenant)" : plan === "excluded" ? ` (${planLabel(FEATURE_PLAN.appRestoreOtherTenant)})` : ""}</option> })}</select></div>
             {planNote && <UpgradeNote feature="appRestoreOtherTenant" message="Restoring into the source tenant is free on every plan. Restoring into another tenant is included in TenuVault Pro and MSP for that tenant." tenantId={target} />}
-            {target && (!authenticated || !!error) && <div className="space-y-2"><p className="text-sm text-muted-foreground">Use a destination account with permission to create Intune apps. Your source session stays connected.</p><Button variant="outline" disabled={signingIn || running || deviceStarting || !!deviceCode} onClick={() => void signIn()}>{signingIn ? "Signing in…" : authenticated ? "Reconnect destination" : "Sign in to destination"}</Button><Button variant="ghost" disabled={running || deviceStarting || !!deviceCode} onClick={() => void startDeviceCode()}>{deviceStarting ? "Getting Microsoft code…" : "Use a device code"}</Button></div>}
+            {targetReadOnly && <p role="status" className="text-sm text-muted-foreground">{READ_ONLY_REGISTRATION_MESSAGE}.</p>}
+            {target && !targetReadOnly && (!authenticated || !!error) && <div className="space-y-2"><p className="text-sm text-muted-foreground">Use a destination account with permission to create Intune apps. Your source session stays connected.</p><Button variant="outline" disabled={signingIn || running || deviceStarting || !!deviceCode} onClick={() => void signIn()}>{signingIn ? "Signing in…" : authenticated ? "Reconnect destination" : "Sign in to destination"}</Button><Button variant="ghost" disabled={running || deviceStarting || !!deviceCode} onClick={() => void startDeviceCode()}>{deviceStarting ? "Getting Microsoft code…" : "Use a device code"}</Button></div>}
             {deviceCode && <div role="status" className="space-y-3 rounded-xl border p-4 text-sm"><p>On your Mac or another device, open <button type="button" className="underline underline-offset-4" onClick={() => void bridge.app.openExternal(deviceCode.verificationUri)}>{deviceCode.verificationUri}</button> and enter:</p><p className="font-mono text-2xl font-semibold tracking-widest select-all">{deviceCode.userCode}</p><p>Sign in to {destination?.name}. This authorizes TenuVault on this computer. The code expires at {new Date(deviceCode.expiresAt).toLocaleTimeString()}.</p><p className="text-xs text-muted-foreground">Microsoft MFA and Conditional Access still apply. If your organization blocks device codes, use browser sign-in on this computer.</p><Button variant="outline" onClick={() => void cancelCode().catch(e => setError(e instanceof Error ? e.message : "Sign-in cancellation failed."))}>Cancel device sign-in</Button></div>}
             <div><label htmlFor="restore-name" className="mb-2 block text-sm font-medium">New app name</label><Input id="restore-name" name="restoreName" autoComplete="off" maxLength={200} value={name} disabled={running} onChange={e => { setName(e.target.value); setConfirmed(false) }} /></div>
             <div className="rounded-xl bg-secondary p-4 text-sm"><p>The app will be unassigned. Groups, assignment filters, categories and custom scope tags are not copied. Review destination-specific URLs, commands and scripts before deploying. Apps needing dependency mapping or Intune-hosted install scripts are blocked before creation.</p></div>
@@ -160,7 +165,7 @@ export function RestoreAppDialog({ tenant: sourceTenantId, source, onClose, onBu
         {running && <div role="status" className="space-y-3 rounded-xl bg-secondary p-4 text-sm"><p>{phase}</p><p>Leaving this page stops the upload. Retry with the same app name and destination to continue; an unassigned draft may remain.</p><Button variant="outline" onClick={() => { stopped.current = true; if (operation.current) void bridge.appSources.cancel(tenant, operation.current).catch(() => {}) }}>Stop restore</Button></div>}
         {error && <p role="alert" className="rounded-xl border p-4 text-sm">{error}</p>}
       </div>}
-      <div className="flex flex-wrap justify-end gap-2 border-t pt-4"><Button variant="outline" disabled={running || loading || signingIn} onClick={onClose}>{result ? "Done" : "Close"}</Button>{!result && <Button disabled={running || loading || signingIn || deviceStarting || !!deviceCode || !authenticated || !confirmed || targetPlan === "excluded" || !review?.settingsHash || !!review.blocker || !name.trim()} onClick={() => void restore()}>{running ? "Restoring…" : "Restore unassigned app"}</Button>}</div>
+      <div className="flex flex-wrap justify-end gap-2 border-t pt-4"><Button variant="outline" disabled={running || loading || signingIn} onClick={onClose}>{result ? "Done" : "Close"}</Button>{!result && <Button disabled={targetReadOnly || running || loading || signingIn || deviceStarting || !!deviceCode || !authenticated || !confirmed || targetPlan === "excluded" || !review?.settingsHash || !!review.blocker || !name.trim()} onClick={() => void restore()}>{running ? "Restoring…" : "Restore unassigned app"}</Button>}</div>
       <UpgradeDialog feature="appRestoreOtherTenant" open={planDialog} onOpenChange={setPlanDialog} tenantId={target || null} />
     </DialogContent>
   </Dialog>

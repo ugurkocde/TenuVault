@@ -1,9 +1,10 @@
+import { READ_ONLY_REGISTRATION_MESSAGE } from "../../../../shared/app-registration"
 import { randomUUID } from "node:crypto"
 import { beginRestoreAudit, recordRestorePreparationFailure, restoreAuditItem } from "~/lib/audit/restore"
 import { AuditEventType } from "~/lib/audit/types"
 import { readOwnedBackup, UNTAGGED_BACKUP } from "~/lib/policies/backup-owner"
 import { checkRestoreManifest, verifySnapshot } from "~/lib/policies/backup-manifest"
-import { grantedPermissions } from "../../../../shared/services/token"
+import { grantedPermissions, isReadOnlyRegistration } from "../../../../shared/services/token"
 import { validPolicyPath } from "~/lib/policies/restore"
 import { isGraphId, isGuid } from "../../../../shared/security"
 import { graphCaller, Restorer, type RestoreOutcome } from "~/lib/policies/graph-restore"
@@ -108,6 +109,7 @@ export async function POST(request: NextRequest) {
       getAccessToken(tenantId, appId, clientSecret, "https://storage.azure.com/.default"),
       getAccessToken(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default")
     ])
+    if (isReadOnlyRegistration(grantedPermissions(graphToken))) return NextResponse.json({ error: READ_ONLY_REGISTRATION_MESSAGE }, { status: 409 })
     auditToken = graphToken
 
     // A shared container can hold other tenants' backups; never restore from one of those. Revert

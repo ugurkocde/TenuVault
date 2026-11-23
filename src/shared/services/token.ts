@@ -1,3 +1,5 @@
+import { READ_ONLY_REGISTRATION_MESSAGE } from "../app-registration"
+import { READER_REQUIRED_ROLES } from "./backup-permissions"
 import type { GrantedPermissions } from "./modules"
 
 /**
@@ -22,7 +24,24 @@ export function grantedPermissions(token: string | undefined): GrantedPermission
   }
   if (!claims || typeof claims !== "object") return undefined
   const { scp, roles } = claims as { scp?: unknown; roles?: unknown }
-  if (typeof scp === "string") return { kind: "delegated", permissions: new Set(scp.split(" ").filter(Boolean)) }
+  if (typeof scp === "string") return { kind: "delegated", permissions: new Set(scp.split(/\s+/).filter(Boolean)) }
   if (Array.isArray(roles)) return { kind: "application", permissions: new Set(roles.filter((role): role is string => typeof role === "string")) }
   return undefined
+}
+
+
+/** Only classify a readable delegated token that has an Intune backup scope. */
+export function isReadOnlyRegistration(granted: GrantedPermissions | undefined): boolean {
+  if (granted?.kind !== "delegated") return false
+  const scopes = granted.permissions
+  return READER_REQUIRED_ROLES.some(scope => scopes.has(scope))
+    && ![...scopes].some(scope => /^(DeviceManagement[^.]*|Policy)\.ReadWrite\./i.test(scope))
+}
+
+
+/** Fail before preparing a write when the workflow already has the Graph token. */
+export function requireWritableRegistration(token: string): void {
+  if (isReadOnlyRegistration(grantedPermissions(token))) {
+    throw Object.assign(new Error(READ_ONLY_REGISTRATION_MESSAGE), { status: 409 })
+  }
 }

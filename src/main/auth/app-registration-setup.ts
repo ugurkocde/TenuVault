@@ -2,7 +2,7 @@ import { PublicClientApplication } from "@azure/msal-node"
 import { fetchNetworkClient } from "./network-client"
 import { ERROR_PAGE, firstSignInError, page, SIGN_IN_TIMEOUT_MS, SignInCancelledError, SignInTimeoutError } from "./msal"
 import { isGuid, isMicrosoftLoginUrl } from "../../shared/security"
-import { CONSENT_ROLES_TEXT, CREATE_BY_HAND } from "../../shared/app-registration"
+import { CONSENT_ROLES_TEXT, CREATE_BY_HAND, type RegistrationMode } from "../../shared/app-registration"
 import { provisionRegistration } from "./registration-provisioning"
 import { loopbackSignIn } from "./loopback-sign-in"
 import type { RegistrationResult, SetupProgress } from "../../shared/ipc"
@@ -98,9 +98,10 @@ export class AppRegistrationSetup {
   /** The Microsoft sign-in address of the setup sign-in waiting for the browser, or null. */
   signInLink(): string | null { return this.link }
 
-  async create(options?: { tenant?: string }): Promise<RegistrationResult> {
+  async create(options?: { tenant?: string; mode?: RegistrationMode }): Promise<RegistrationResult> {
     if (this.running) throw new Error("Setup is already running.")
     if (options?.tenant !== undefined && (typeof options.tenant !== "string" || options.tenant.length > 253 || options.tenant !== "" && !isGuid(options.tenant) && !/^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(options.tenant))) throw new Error("Enter a valid tenant ID or domain.")
+    if (options?.mode !== undefined && options.mode !== "full" && options.mode !== "backup-only") throw new Error("Choose a valid registration mode.")
     this.running = true
     const controller = new AbortController()
     this.controller = controller
@@ -156,7 +157,7 @@ export class AppRegistrationSetup {
       let phase: SetupProgress["phase"] = "registration"
       try {
         const registration = await provisionRegistration({
-          fetch: this.host.fetch, token: result.accessToken,
+          fetch: this.host.fetch, token: result.accessToken, mode: options?.mode,
           tenantId: result.account.tenantId.toLowerCase(), username: result.account.username,
           progress: (progress) => { phase = progress.phase; this.host.progress(progress) }, signal: controller.signal,
         })

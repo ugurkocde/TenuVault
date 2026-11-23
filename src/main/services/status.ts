@@ -1,6 +1,6 @@
 import type { ServicesStatus } from "../../shared/ipc"
 import { checkModules, MODULES } from "../../shared/services/modules"
-import { grantedPermissions } from "../../shared/services/token"
+import { grantedPermissions, isReadOnlyRegistration } from "../../shared/services/token"
 import { optionalPermissionStatus, type OptionalPermissionStatus } from "../../shared/services/optional-permissions"
 import type { ModuleSettings } from "./settings"
 
@@ -18,12 +18,14 @@ export async function servicesStatus(
   const enabled = settings.get(tenantId)
   let checks: ReturnType<typeof checkModules> | null = null
   let optional: OptionalPermissionStatus[] = optionalPermissionStatus(undefined)
+  let readOnlyRegistration: boolean | undefined
   let checkedAt: string | null = null
   let error: string | undefined
   try {
     const token = await graphToken(refresh)
     const granted = grantedPermissions(token.accessToken)
     if (granted) {
+      readOnlyRegistration = isReadOnlyRegistration(granted)
       checks = checkModules(granted)
       optional = optionalPermissionStatus(granted)
       checkedAt = issuedAt(token.accessToken) ?? new Date().toISOString()
@@ -33,6 +35,7 @@ export async function servicesStatus(
   }
   return {
     tenantId,
+    readOnlyRegistration,
     checkedAt,
     optional,
     ...(error ? { error } : {}),

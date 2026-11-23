@@ -1,3 +1,4 @@
+import { requireWritableRegistration } from "../../shared/services/token"
 import { approvalMessage } from "../../shared/intune/approval"
 import { randomUUID } from "node:crypto"
 import { graphCaller, readLive, Restorer, type GraphCall } from "../../portal/lib/policies/graph-restore"
@@ -479,6 +480,7 @@ async function deploy(body: RecordJson, kind: OibRun["kind"]): Promise<OibRun> {
         return { ...item, policy, meta: pack.catalog.policies.find((entry) => entry.source === item.source) }
       })
       const { token } = await tokenFor(body)
+      requireWritableRegistration(token)
       const graph = graphCaller(token, fetch, { tenant, refreshToken: async () => (await tokenFor(body, true)).token })
       const written = [...new Set(chosen.map((item) => item.policy.folder))]
       // Assignments are for new policies; a request that creates none cannot carry groups that are never checked.
@@ -676,6 +678,7 @@ async function assign(body: RecordJson): Promise<OibRun> {
         return { ...target, policy, type, meta: pack.catalog.policies.find((entry) => entry.source === target.source) }
       })
       const { token } = await tokenFor(body)
+      requireWritableRegistration(token)
       const graph = graphCaller(token, fetch, { tenant, refreshToken: async () => (await tokenFor(body, true)).token })
       report({ stage: "Checking the groups and filters" })
       const checked = await checkSpec(graph, spec)
@@ -824,6 +827,7 @@ async function undo(body: RecordJson): Promise<UndoResult> {
       // No count yet: "1 of 6" would read as if something were being undone.
       report({ stage: "Signing in" })
       const { token } = await tokenFor(body)
+      requireWritableRegistration(token)
       const graph = graphCaller(token, fetch, { tenant, refreshToken: async () => (await tokenFor(body, true)).token })
       const results: UndoResult["results"] = []
       const created: OibRun["created"] = []

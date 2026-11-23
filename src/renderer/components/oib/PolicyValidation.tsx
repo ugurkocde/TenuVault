@@ -1,3 +1,5 @@
+import { READ_ONLY_REGISTRATION_MESSAGE } from "../../../shared/app-registration"
+import { useRegistrationAccess } from "../../lib/registration-access"
 import { useEffect, useState } from "react"
 import { Link } from "react-router-dom"
 import { ChevronDown, ChevronRight, Download, FileText, History, LoaderCircle, RotateCcw, ShieldCheck, Trash2 } from "lucide-react"
@@ -159,6 +161,7 @@ function ResultDetails({ result }: { result: Validation }) {
 /** OIBDeployer's Policy Validation: setting-level drift of matched policies, read-only, with history and Fix drift (Pro). */
 export function PolicyValidation({ selections }: { selections: Selections }) {
   const { tenant, can, plan } = useOibTenant()
+  const readOnly = useRegistrationAccess(tenant?.tenantId, tenant?.appId)
   const job = useOibJob<ValidateAll>(tenant?.tenantId, { kind: "validate", flow: "validate" })
   const fixJob = useOibJob<DeployOutcome[]>(tenant?.tenantId, { kind: "fix", flow: "validate" })
   // Returning to the page: a fix job opens its progress or result, a validation its results.
@@ -356,7 +359,7 @@ export function PolicyValidation({ selections }: { selections: Selections }) {
                   {checking === k ? <><LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" />Validating</> : result ? "Re-validate" : "Validate"}
                 </button>
                 {result && result.status !== "unsupported" && <button type="button" className={button} aria-expanded={expanded.has(k)} onClick={() => setExpanded(s => { const next = new Set(s); next.has(k) ? next.delete(k) : next.add(k); return next })}>{expanded.has(k) ? "Hide" : "Details"}</button>}
-                {result?.status === "drifted" && <GatedButton feature="driftRevert" plan={plan} variant="outline" className="h-10 rounded-full" disabled={busy} onClick={() => openFix(row)}><RotateCcw className="h-4 w-4" aria-hidden="true" />Fix drift</GatedButton>}
+                {result?.status === "drifted" && <GatedButton feature="driftRevert" plan={plan} variant="outline" className="h-10 rounded-full" title={readOnly ? READ_ONLY_REGISTRATION_MESSAGE : undefined} disabled={readOnly || busy} onClick={() => openFix(row)}><RotateCcw className="h-4 w-4" aria-hidden="true" />Fix drift</GatedButton>}
               </div>
             </div>
             {!isSupported && <p className="mt-2 text-xs text-gray-500">This policy type is not validated setting by setting.</p>}

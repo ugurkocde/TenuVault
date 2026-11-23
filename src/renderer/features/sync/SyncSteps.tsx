@@ -1,3 +1,4 @@
+import { READ_ONLY_REGISTRATION_MESSAGE } from "../../../shared/app-registration"
 import type { ReactNode } from "react"
 import { Link } from "react-router-dom"
 import { Check, Info, Copy, ShieldCheck } from "lucide-react"
@@ -67,7 +68,7 @@ function Footer({ children }: { children: ReactNode }) {
 export interface SelectedPolicy { folder: string; sourceId: string; name: string; platforms: string | null }
 
 /** Step 1: the source tenant, the policy type tabs and the policies with their sync status. */
-export function ChooseSettings({ sources, sourceId, onSource, folder, onFolder, policies, loading, error, selected, onToggle, status, onNext }: {
+export function ChooseSettings({ sources, sourceId, onSource, folder, onFolder, policies, loading, error, selected, onToggle, status, onNext, blockedReason }: {
   sources: Tenant[]
   sourceId: string
   onSource: (tenantId: string) => void
@@ -79,6 +80,7 @@ export function ChooseSettings({ sources, sourceId, onSource, folder, onFolder, 
   selected: Record<string, SelectedPolicy>
   onToggle: (policy: PolicyOption) => void
   status: (policy: PolicyOption) => { label: string; tone: Tone; title?: string } | null
+  blockedReason?: string
   onNext: () => void
 }) {
   const count = Object.keys(selected).length
@@ -143,7 +145,7 @@ export function ChooseSettings({ sources, sourceId, onSource, folder, onFolder, 
       </div>
       <Footer>
         <span className="text-sm text-gray-500">{count ? `${count} selected. ` : ""}Up to {MAX_SYNC_POLICIES} per copy.</span>
-        <Button type="button" disabled={!count} onClick={onNext}>
+        <Button type="button" disabled={!count || !!blockedReason} title={blockedReason} onClick={onNext}>
           <Copy className="h-4 w-4" aria-hidden="true" />
           {count ? `Copy ${plural(count, "policy", "policies")}` : "Copy"}
         </Button>
@@ -159,8 +161,9 @@ const REASON: Record<NonNullable<SyncTargetOption["reason"]>, { chip: string; ti
 }
 
 /** Step 2: every other connected tenant as a card; on Pro only the other tenant of the license can be chosen. */
-export function ChooseTargets({ sourceName, options, loading, error, tenantOf, linked, selected, onToggle, onBack, onNext, planning }: {
+export function ChooseTargets({ sourceName, options, loading, error, tenantOf, linked, selected, onToggle, onBack, onNext, planning, readOnlyTenants }: {
   sourceName: string
+  readOnlyTenants: ReadonlySet<string>
   options: SyncTargetOption[]
   loading: boolean
   error: string | null
@@ -196,26 +199,28 @@ export function ChooseTargets({ sourceName, options, loading, error, tenantOf, l
               const tenant = tenantOf(option.tenantId)
               const name = tenant?.name ?? option.tenantId
               const chosen = selected.includes(option.tenantId)
-              const reason = option.reason ? REASON[option.reason] : null
+              const readOnly = readOnlyTenants.has(option.tenantId)
+              const eligible = option.eligible && !readOnly
+              const reason = readOnly ? { chip: "Read-only", title: READ_ONLY_REGISTRATION_MESSAGE } : option.reason ? REASON[option.reason] : null
               const count = linked[option.tenantId] ?? 0
               return (
                 <button
                   key={option.tenantId}
                   type="button"
                   aria-pressed={chosen}
-                  aria-disabled={!option.eligible || undefined}
+                  aria-disabled={!eligible || undefined}
                   title={reason?.title}
-                  onClick={() => onToggle(option)}
-                  className={cn("rounded-2xl border-2 p-4 text-left transition-[border-color,background-color,box-shadow,transform] focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring", chosen ? "border-coral-500 bg-blue-50" : "border-transparent bg-gray-50", option.eligible ? "motion-safe:hover:-translate-y-0.5 hover:shadow-[0_6px_20px_-8px_rgba(22,21,20,0.25)]" : "cursor-not-allowed opacity-70")}
+                  onClick={() => { if (eligible) onToggle(option) }}
+                  className={cn("rounded-2xl border-2 p-4 text-left transition-[border-color,background-color,box-shadow,transform] focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring", chosen ? "border-coral-500 bg-blue-50" : "border-transparent bg-gray-50", eligible ? "motion-safe:hover:-translate-y-0.5 hover:shadow-[0_6px_20px_-8px_rgba(22,21,20,0.25)]" : "cursor-not-allowed opacity-70")}
                 >
                   <span className="flex items-center justify-between">
                     <span className="flex size-9 items-center justify-center rounded-full bg-card text-[11px] font-bold text-gray-700">{initials(name)}</span>
-                    {option.eligible && <span aria-hidden="true" className={cn("flex size-5 items-center justify-center rounded-md border-2", chosen ? "border-coral-500 bg-coral-500 text-white" : "border-gray-400 bg-card")}>{chosen && <Check className="h-3 w-3" strokeWidth={3} />}</span>}
+                    {eligible && <span aria-hidden="true" className={cn("flex size-5 items-center justify-center rounded-md border-2", chosen ? "border-coral-500 bg-coral-500 text-white" : "border-gray-400 bg-card")}>{chosen && <Check className="h-3 w-3" strokeWidth={3} />}</span>}
                   </span>
                   <span className="mt-3 block truncate text-sm font-semibold text-gray-900">{name}</span>
                   <span className="block truncate text-xs text-gray-500">{tenant?.domain || option.tenantId}</span>
                   <span className="mt-3 flex min-h-6 flex-wrap gap-1.5">
-                    {option.eligible && !option.multiple && <Chip>Available on Pro</Chip>}
+                    {eligible && !option.multiple && <Chip>Available on Pro</Chip>}
                     {reason && <Chip>{reason.chip}</Chip>}
                     {count > 0 && <Chip tone="success">{plural(count, "policy", "policies")} linked</Chip>}
                   </span>
@@ -247,7 +252,7 @@ export function ChooseTargets({ sourceName, options, loading, error, tenantOf, l
 const NOTE_TONE = { danger: "text-red-700", warning: "text-amber-800", neutral: "text-gray-500" } as const
 
 /** Step 3: what each target gets, why a target is left out, the secret acknowledgement and the backup choice. */
-export function ReviewStep({ targets, reviews, planning, planError, reading, tenantOf, backup, onBackup, secrets, ack, onAck, onBack, onApprove, busy }: {
+export function ReviewStep({ targets, reviews, planning, planError, reading, tenantOf, backup, onBackup, secrets, ack, onAck, onBack, onApprove, busy, blockedReason }: {
   targets: SyncTarget[]
   /** What the plan reads while it runs: the source tenant and how many targets. */
   reading: { source: string; targets: number }
@@ -262,6 +267,7 @@ export function ReviewStep({ targets, reviews, planning, planError, reading, ten
   onAck: (checked: boolean) => void
   onBack: () => void
   onApprove: () => void
+  blockedReason?: string
   busy: boolean
 }) {
   const states = targets.map((target) => readiness(target, reviews[target.targetTenantId], backup, !!tenantOf(target.targetTenantId)?.resources?.storageAccountName))
@@ -348,7 +354,7 @@ export function ReviewStep({ targets, reviews, planning, planError, reading, ten
       <Footer>
         <Button type="button" variant="ghost" onClick={onBack}>Back</Button>
         <span className="text-sm text-gray-500">{!writes ? "Nothing is written." : backup === "new" ? "Each target is backed up before anything is written." : "No backup is taken. Rollback uses the saved current versions."}</span>
-        <Button type="button" disabled={busy || checking || gated || !(ready || inSync)} onClick={onApprove}>
+        <Button type="button" disabled={Boolean(blockedReason) || busy || checking || gated || !(ready || inSync)} title={blockedReason} onClick={onApprove}>
           <ShieldCheck className="h-4 w-4" aria-hidden="true" />
           {/* No count until a target is ready: while planning or checking there is nothing to approve yet. */}
           {ready ? `Approve and copy to ${plural(ready, "tenant", "tenants")}` : inSync && !checking ? "Continue: nothing to write" : "Approve and copy"}

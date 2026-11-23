@@ -14,6 +14,12 @@ Before you add it, check whether a policy change is simpler: see [Conditional Ac
 * **Read-only application permissions** for Microsoft Graph, and for Azure Storage a role that can write backups but not delete them.
 * Used **only by scheduled backups**. Backups you start yourself, backups from the tray, the backup before a change, restores, reverts and every other change use your own sign-in, MFA and Conditional Access.
 
+## Backing up with a read-only user sign-in
+
+Choose [Backup only (read-only)](/getting-started/app-registration/#backup-only-read-only-registration) in desktop setup when the people who sign in only need to run backups, browse, compare, or export. That registration uses Microsoft Graph delegated permissions and your signed-in user's access. It disables restores and other tenant changes.
+
+The Backup Reader is a separate app-only registration with a certificate for scheduled backups. You can set it up alongside the read-only desktop registration so scheduled runs continue when your user session expires.
+
 ## What it can and cannot do
 
 | | Backup Reader |

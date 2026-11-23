@@ -1,3 +1,4 @@
+import type { RegistrationMode } from "./app-registration"
 import type { AppSourcesBridge } from "./app-sources/types"
 import type { OptionalPermissionStatus } from "./services/optional-permissions"
 import type { PlanIpcError } from "./plan-errors"
@@ -424,6 +425,7 @@ export interface ServiceModuleStatus {
 }
 
 export interface ServicesStatus {
+  readOnlyRegistration?: boolean
   tenantId: string
   modules: ServiceModuleStatus[]
   /** Optional delegated permissions and whether the token carries them; absent from older answers. */
@@ -485,7 +487,7 @@ export interface TenuVaultBridge {
      * registration through Microsoft Graph, or finds the one TenuVault made earlier. The token
      * stays in the main process, in memory only. `tenant` is for guest and partner admins.
      */
-    createRegistration: (options?: { tenant?: string }) => Promise<RegistrationResult>
+    createRegistration: (options?: { tenant?: string; mode?: RegistrationMode }) => Promise<RegistrationResult>
     /** Stops waiting for the setup sign-in in the browser. */
     cancelCreateRegistration: () => Promise<void>
     /** Stops only a setup sign-in that still waits for the browser. Resolves with whether one was. */

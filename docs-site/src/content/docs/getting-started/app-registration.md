@@ -13,11 +13,11 @@ If someone else is the administrator who can grant consent, or you prefer to rea
 
 You need an account with **Global Administrator**, **Cloud Application Administrator** or **Application Administrator**, because the setup creates an app registration and grants tenant-wide admin consent. A Privileged Role Administrator can grant the consent, but can create the app registration only when users in the tenant may register applications, so the setup does not count on that role. TenuVault connects tenants in Microsoft's global cloud only; tenants in GCC High, DoD or Microsoft Azure operated by 21Vianet are not supported.
 
-1. On the **Connect** step, **Connect your tenant**, select **Set up with Microsoft sign-in**.
+1. On the **Connect** step, choose **Backup and restore** or [**Backup only (read-only)**](#backup-only-read-only-registration) under **App registration access**, then select **Set up with Microsoft sign-in**.
 2. Your browser opens. Choose your admin account. Microsoft asks you to approve **Microsoft Graph Command Line Tools** with two permissions, `Application.ReadWrite.All` and `DelegatedPermissionGrant.ReadWrite.All`. This is Microsoft's own sign-in app, the one Microsoft Graph PowerShell also signs in through. TenuVault uses it once, to create the app registration and grant consent. These two permissions are not permissions of the TenuVault app registration. If Microsoft also shows **Consent on behalf of your organization**, leave it unticked; the setup does not need it.
 3. TenuVault shows what it is doing under **Setting up your tenant**:
-   * **Create the app registration**: the app registration **TenuVault Desktop**, as described in [What the setup creates](#what-the-setup-creates). If the tenant already has a TenuVault app registration from an earlier setup, TenuVault uses that one and the list says **Use the app registration this tenant already has**, followed by **Check its admin consent**.
-   * **Grant admin consent**: tenant-wide consent for the [delegated permissions](#delegated-permissions) below, and nothing else.
+   * **Create the app registration**: the app registration for the access level you chose, as described in [What the setup creates](#what-the-setup-creates). If the tenant already has a suitable TenuVault app registration from an earlier setup, TenuVault uses that one and the list says **Use the app registration this tenant already has**, followed by **Check its admin consent**.
+   * **Grant admin consent**: tenant-wide consent for the delegated permissions of the selected access level.
    * **Wait until Microsoft accepts sign-ins to it**: Microsoft needs a few seconds before a new app registration can be used.
 4. When Microsoft accepts sign-ins to the app registration, your browser opens once more and signs you in to TenuVault through it. There is nothing to enter this time. TenuVault continues with the **Storage** step: [Choose where backups are stored](/getting-started/choose-storage/).
 
@@ -114,6 +114,27 @@ This page is only about the app registration you sign in with. It never gets app
 The two Azure permissions are only used when backups go to your Azure storage account: Azure Service Management lists your subscriptions and storage accounts in the storage picker, and Azure Storage reads and writes the backup files. For what each permission is used for, see [App registration and delegated permissions](/security/permissions/).
 
 The table above is the default permission set. It does not change unless you opt in. With `-IncludeGroupRead` the script adds one more delegated Microsoft Graph permission, `Group.Read.All`. The hygiene unresolved groups check uses it to tell whether a referenced group exists; App Backup can also use it to name groups referenced by app assignments, and OpenIntuneBaseline assignments use it to search groups by name. Without it the hygiene check stays unknown and no group is reported as missing. App Backup's optional device-group membership check additionally needs delegated `Device.Read.All`, added manually to the existing registration; see [App Backup](/apps/app-backup/#understand-the-assignment-check). With `-IncludeConditionalAccessRestore` it adds `Policy.ReadWrite.ConditionalAccess`, which restoring [Conditional Access](/backups/conditional-access/) needs; backing Conditional Access up only needs the default `Policy.Read.All`.
+
+## Backup only (read-only) registration
+
+Choose **Backup only (read-only)** under **App registration access** in **Set up TenuVault**, then select **Set up with Microsoft sign-in**. This option is available on every plan. The user who signs in can run backups, browse saved policies, compare changes, and export reports. TenuVault disables actions that change Intune or Entra, including restore, drift revert, Copy to Tenants, promotions, baseline deployment, and assignment changes. Azure storage can still save backups.
+
+For manual setup, follow [Create the app registration manually](#create-the-app-registration-manually). Name the app `TenuVault Desktop (Backup only)`. In step 3, use the following delegated Microsoft Graph permissions in place of the default Microsoft Graph list:
+
+- `DeviceManagementApps.Read.All`
+- `DeviceManagementConfiguration.Read.All` (also covers reading encrypted OMA settings)
+- `DeviceManagementRBAC.Read.All`
+- `DeviceManagementScripts.Read.All`
+- `DeviceManagementServiceConfig.Read.All`
+- `DeviceManagementManagedDevices.Read.All` (device categories and cleanup rules)
+- `Policy.Read.All` (Conditional Access backups when enabled)
+- `User.Read` and `Organization.Read.All` (sign-in and tenant details)
+
+Use the same Azure permissions in step 3 if you store backups in Azure. Grant admin consent, then connect TenuVault with the tenant ID and client ID. Microsoft sign-in still supplies the ID token TenuVault uses for license activation.
+
+To enable restores later, add the five Intune `ReadWrite.All` permissions in the [default full setup](#delegated-permissions), grant admin consent, and select **Check again** in **Settings > Services and permissions** to refresh the Graph token. You can keep using the same tenant and client ID.
+
+For unattended scheduled backups, use the separate [Backup Reader](/backups/backup-reader/). It signs in as an application with a certificate. The backup-only desktop registration signs in as you and follows your Intune roles, MFA, and Conditional Access.
 
 ## Use the setup script instead
 

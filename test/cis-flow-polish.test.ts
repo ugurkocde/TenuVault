@@ -17,6 +17,8 @@ import { diffConfigurations } from "../src/main/features/change-sets/model"
 import { CIS_CERTIFICATION_STATEMENT, CIS_REMEDIATION_LIMITS, CIS_TENANT_NOT_CERTIFIED_NOTE } from "../src/shared/frameworks/cis-certification"
 import { MANUAL_RECOMMENDATIONS_FALLBACK, MANUAL_RECOMMENDATIONS_URL } from "../src/shared/frameworks/cis-manual"
 
+vi.mock("@desktop/lib/bridge", () => ({ bridge: {} }))
+
 /** The cells of one CSV line, with quoted cells unquoted. */
 function csvCells(line: string): string[] {
   const cells: string[] = []

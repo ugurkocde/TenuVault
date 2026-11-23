@@ -15,6 +15,7 @@ vi.mock("~/contexts/TenantContext", () => ({
   useSelectedTenant: () => ({ selectedTenantId: 1, selectedTenant: tenant, setSelectedTenantId: vi.fn() }),
   useTenantOperations: () => ({ updateTenant: vi.fn() }),
 }))
+vi.mock("@desktop/lib/registration-access", () => ({ useReadOnlyRegistration: () => false, useReadOnlyTenants: () => new Set() }))
 vi.mock("@desktop/lib/license", () => ({ useTenantPlan: () => null }))
 vi.mock("@desktop/lib/bridge", () => ({ bridge: { license: { open: vi.fn() } } }))
 vi.mock("@desktop/lib/backup-list", () => ({ useBackupList: () => ({ backups: state.backups, loading: false, error: "", unresolved: state.unresolved, damagedFiles: state.damagedFiles, damagedFileNames: [], damagedKinds: null, refresh: vi.fn() }) }))
