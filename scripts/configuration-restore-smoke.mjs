@@ -23,7 +23,8 @@ export async function checkConfigurationRestore({ check, evaluate, waitForCondit
     }
     try {
       await go("#/portal/tenants", "Tenant Management")
-      await go("#/portal/backup", "Backup & Restore")
+      await go("#/portal/backup?tab=backup", "Backup Timeline")
+      assert(await waitForCondition(`[...document.querySelectorAll('button')].some(b => b.innerText.trim() === 'Refresh' && !b.disabled)`), "backup history refresh did not become available")
       await click("Refresh")
       assert(await waitForCondition(`[...document.querySelectorAll('button')].some(b => b.innerText.includes('Restore from this backup') && !b.disabled)`), "configuration backup did not load")
       await click("Restore from this backup")
