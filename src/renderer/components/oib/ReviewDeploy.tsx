@@ -29,7 +29,8 @@ export function runSummary(run: OibRun): string {
   const parts = [
     run.created.length && `${run.created.length} created`,
     run.updated.length && `${run.updated.length} updated`,
-    run.reassigned?.length && `${run.reassigned.length} reassigned`,
+    run.reassigned?.filter(r => !r.pending).length && `${run.reassigned.filter(r => !r.pending).length} reassigned`,
+    run.reassigned?.filter(r => r.pending).length && `${run.reassigned.filter(r => r.pending).length} with an unknown outcome`,
     run.skipped?.length && `${run.skipped.length} left unchanged`,
     run.failed.length && `${run.failed.length} failed`,
   ].filter(Boolean)
@@ -132,7 +133,9 @@ export function ReviewDeploy({ batches: given, flow, kind = "deploy", onBack, ba
   const assigning = kind === "deploy" && creates.length > 0
   const assignmentsReady = !assigning || (assignmentReady(assignment) && extras.every(t => assignmentReady(extraAssignment(t.tenantId))))
   /** The assignments a tenant's new policies get, or undefined when they stay unassigned. */
-  const specOf = (data: AssignmentData) => assigning && assignsAnything(data.spec) ? specFor(data, targets) : undefined
+  // Per platform: a request carries only the filters its own policies use, so a stale filter of another platform cannot stop it.
+  const specOf = (data: AssignmentData, batch: DeployBatch) => assigning && assignsAnything(data.spec)
+    ? specFor(data, assignmentTargets(batch.items.filter(i => i.mode === "create").map(i => ({ platform: batch.platform, folder: i.folder, scope: i.scope })))) : undefined
   const fallback: BackupRequest["mode"] = !storage ? "none" : backup.usable ? "reuse" : "new"
   const mode = !storage ? "none" : choice === "reuse" && !backup.usable ? fallback : choice ?? fallback
   const request: BackupRequest = mode === "reuse" ? { mode, folder: backup.recent!.folder } : { mode }
@@ -152,7 +155,7 @@ export function ReviewDeploy({ batches: given, flow, kind = "deploy", onBack, ba
           // The recent backup belongs to the first tenant; other tenants back up their own affected folders.
           const results = await deployToTenant(batches, { backup: index === 0 || request.mode === "none" ? request : { mode: "new" }, storage: !!target.storageAccountName }, async (batch, backupRequest) => {
             context.update({ detail: targets.length > 1 || batches.length > 1 ? `${target.name}, ${OIB_PLATFORMS[batch.platform].label}` : undefined })
-            const spec = specOf(index === 0 ? assignment : extraAssignment(target.tenantId))
+            const spec = specOf(index === 0 ? assignment : extraAssignment(target.tenantId), batch)
             const run = await oibRequest<OibRun>({ action: kind === "fix" ? "oib-fix" : "oib-deploy", tenantId: target.tenantId, appId: target.appId, storageAccountName: target.storageAccountName,
               platform: batch.platform, commit: batch.commit, ...(batch.tag ? { tag: batch.tag } : {}), items: batch.items.map(deployItem), backup: backupRequest,
               ...(spec && batch.items.some(i => i.mode === "create") ? { assignments: spec } : {}), ...(index > 0 ? { bulk: true } : {}) })

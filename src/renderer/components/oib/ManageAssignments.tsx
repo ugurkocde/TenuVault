@@ -194,7 +194,9 @@ function ReviewAssign({ batches: given, onBack, onFinished, next }: { batches: D
         const results = await deployToTenant(sending, { backup: request, storage }, async (batch, backupRequest) => {
           context.update({ detail: batches.length > 1 ? `${tenant!.name}, ${OIB_PLATFORMS[batch.platform].label}` : undefined })
           const run = await oibRequest<OibRun>({ action: "oib-assign", tenantId: tenant!.tenantId, appId: tenant!.appId, storageAccountName: tenant!.storageAccountName,
-            platform: batch.platform, commit: batch.commit, ...(batch.tag ? { tag: batch.tag } : {}), items: batch.items.map(i => ({ source: i.source, targetId: i.targetId, expected: reviewed.get(i.targetId!) })), mode, assignments: spec, backup: backupRequest })
+            platform: batch.platform, commit: batch.commit, ...(batch.tag ? { tag: batch.tag } : {}), items: batch.items.map(i => ({ source: i.source, targetId: i.targetId, expected: reviewed.get(i.targetId!) })), mode,
+            // Only the filters this platform's policies use, so a stale filter of another platform cannot stop it.
+            assignments: specFor(assignment, assignmentTargets(batch.items.map(i => ({ ...i, platform: batch.platform })))), backup: backupRequest })
           outcomes.push({ tenantId: tenant!.tenantId, tenantName: tenant!.name, platform: batch.platform, run, backup: backupRequest })
           context.setResult([...outcomes])
           return run
@@ -291,7 +293,8 @@ function AssignResult({ outcomes }: { outcomes: DeployOutcome[] }) {
     const name = `${outcome.tenantName}, ${OIB_PLATFORMS[outcome.platform].label}`
     if (error || !run) return <div key={index} role="alert" className="flex items-start gap-3 rounded-2xl bg-red-50 p-4 text-sm text-red-800"><XCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" /><p><strong className="font-medium">{name}:</strong> {error ?? "No result."}</p></div>
     const list = [
-      ...(run.reassigned ?? []).map(r => ({ text: `${r.name}: ${r.assignment ? `assigned (${plural(r.assignment.include, "group", "groups")}${r.assignment.exclude ? `, ${r.assignment.exclude} excluded` : ""})` : "assignments removed"}${r.warnings ? `. ${r.warnings.join(" ")}` : ""}`, tone: "" })),
+      ...(run.reassigned ?? []).filter(r => r.pending).map(r => ({ text: `${r.name}: outcome unknown, check the policy in Intune${r.warnings ? `. ${r.warnings.join(" ")}` : ""}`, tone: "text-amber-900" })),
+      ...(run.reassigned ?? []).filter(r => !r.pending).map(r => ({ text: `${r.name}: ${r.assignment ? `assigned (${plural(r.assignment.include, "group", "groups")}${r.assignment.exclude ? `, ${r.assignment.exclude} excluded` : ""})` : "assignments removed"}${r.warnings ? `. ${r.warnings.join(" ")}` : ""}`, tone: "" })),
       ...(run.skipped ?? []).map(s => ({ text: `${s.name}: ${s.reason}`, tone: "text-gray-600" })),
       ...run.failed.map(f => ({ text: `${f.name}: ${f.error}`, tone: "text-red-800" })),
     ]

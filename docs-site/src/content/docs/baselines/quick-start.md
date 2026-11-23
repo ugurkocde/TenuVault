@@ -234,7 +234,7 @@ If the run list cannot load, it shows the error with a **Retry** button. Retry r
 
 Undo deletes the objects the run created (with their assignments), puts the previous versions of updated policies back and puts the previous assignments of reassigned policies back. It does not touch anything else. If a reassigned policy's assignments were changed again after the run, Undo leaves it alone and says so, so a newer change is never overwritten. To go back further, restore from the backup taken before the run. See [Restore Intune policies](/restore/).
 
-Failed writes follow the same safety rules as restores. A write with an unknown outcome is not repeated automatically; resolve it in **Settings** > **Storage and recovery** > **Restore write history**. See [Restore write history](/restore/limitations/#restore-write-history).
+Failed writes follow the same safety rules as restores. A write with an unknown outcome is not repeated automatically; resolve it in **Settings** > **Storage and recovery** > **Restore write history**. See [Restore write history](/restore/limitations/#restore-write-history). Assignment changes from the **Assignments** workflow are the exception: their record is the run in **Deployment history**, which keeps the previous assignments even when the outcome is unknown, so check the policy in Intune and use **Undo** there.
 
 ## Your own baseline
 

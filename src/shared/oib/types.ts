@@ -255,6 +255,8 @@ export interface ReassignedObject extends RunObject {
   applied?: Item[]
   /** Saved before the write was sent and not confirmed since: the write may or may not have taken effect. */
   pending?: boolean
+  /** When this write was sent or last answered without a clear outcome; undo waits a while after it. */
+  pendingAt?: string
 }
 
 export interface OibRun {

@@ -583,8 +583,18 @@ describe("assignments", () => {
     const run = await assign()
     expect(run.reassigned).toMatchObject([{ pending: true }])
     answer = 0
+    // The wait counts from the write, not from the start of a long run.
+    const age = (patch: (stored: OibRun) => void) => {
+      const runs = JSON.parse(store.get(`oib:runs:${tenantId}`)!) as OibRun[]
+      patch(runs.find(r => r.runId === run.runId)!)
+      store.set(`oib:runs:${tenantId}`, JSON.stringify(runs))
+    }
+    age(stored => { stored.createdAt = new Date(Date.now() - 60 * 60_000).toISOString() })
     const early = await handleOib({ action: "oib-undo", tenantId, appId, runId: run.runId }) as UndoResult
     expect(early).toMatchObject({ run: { runId: run.runId }, results: [{ done: false, error: "The outcome of the change is not known yet. Try Undo again in a few minutes." }] })
+    // Long after the write, the old assignments mean the change never landed: nothing is left to undo.
+    age(stored => { stored.reassigned![0]!.pendingAt = new Date(Date.now() - 60 * 60_000).toISOString() })
+    expect(await handleOib({ action: "oib-undo", tenantId, appId, runId: run.runId })).toMatchObject({ run: null, results: [{ done: true, note: "already assigned as before the run" }] })
   })
 
   it("refuses groups on a deployment that creates no policy", async () => {

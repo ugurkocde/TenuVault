@@ -39,7 +39,7 @@ const GRAPH_BETA = "https://graph.microsoft.com/beta/"
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const OBJECT_ID = /^[A-Za-z0-9_-]{1,100}$/
 const RUNS_KEPT = 20
-/** How long a lost write's record is kept by undo while the policy still shows the old assignments. */
+/** How long after a write without a clear answer undo keeps its record while the policy still shows the old assignments. */
 const PENDING_SETTLE_MS = 10 * 60_000
 const VALIDATIONS_KEPT = 50
 const MAX_HISTORY_CHARS = 16_000_000
@@ -725,7 +725,7 @@ async function assign(body: RecordJson): Promise<OibRun> {
         }
         const conflicts = conflictingGroups(next).map((id) => checked.groupNames[id] ?? id)
         const warnings = [...planned.notes, ...(conflicts.length ? [`${conflicts.join(", ")} ${conflicts.length === 1 ? "is" : "are"} both included and excluded; the exclusion wins.`] : [])]
-        const entry: NonNullable<OibRun["reassigned"]>[number] = { folder: policy.folder, id: item.targetId, name, previous: current, applied: next, pending: true,
+        const entry: NonNullable<OibRun["reassigned"]>[number] = { folder: policy.folder, id: item.targetId, name, previous: current, applied: next, pending: true, pendingAt: new Date().toISOString(),
           ...(planned.include || planned.exclude ? { assignment: { include: planned.include, exclude: planned.exclude } } : {}), ...(warnings.length ? { warnings } : {}) }
         // Saved before the write, so a write that lands while the answer or the app is lost can still be undone.
         run.reassigned!.push(entry)
@@ -736,6 +736,7 @@ async function assign(body: RecordJson): Promise<OibRun> {
           response = await writer("POST", `${type.path}/${encodeURIComponent(item.targetId)}/assign`, { [type.assign.key]: next }, { noRetry: true })
         } catch (error) {
           // The outcome is unknown: the entry stays, and undo puts the previous assignments back either way.
+          entry.pendingAt = new Date().toISOString()
           entry.warnings = [...(entry.warnings ?? []), "The answer from Microsoft Graph was lost, so the change may or may not have been made. Check the policy in Intune; undo puts the previous assignments back."]
           run.failed.push({ name, error: `The outcome is unknown: ${message(error)}` })
           saveRun(run)
@@ -743,6 +744,7 @@ async function assign(body: RecordJson): Promise<OibRun> {
         }
         // A timeout or server error can come after Graph made the change: keep the undo record.
         if (response.status === 408 || response.status >= 500) {
+          entry.pendingAt = new Date().toISOString()
           entry.warnings = [...(entry.warnings ?? []), `Microsoft Graph answered ${response.status}, so the change may or may not have been made. Check the policy in Intune; undo puts the previous assignments back.`]
           run.failed.push({ name, error: `The outcome is unknown: Microsoft Graph returned ${response.status}.` })
           saveRun(run)
@@ -849,7 +851,7 @@ async function undo(body: RecordJson): Promise<UndoResult> {
         const now = directAssignments(live.assignments).map(writableAssignment)
         if (sameAssignments(now, item.previous)) {
           // A write whose answer was lost may still be on its way: keep its record for a while.
-          if (item.pending && Date.now() - Date.parse(run.createdAt) < PENDING_SETTLE_MS) {
+          if (item.pending && Date.now() - Date.parse(item.pendingAt ?? run.createdAt) < PENDING_SETTLE_MS) {
             results.push({ name: item.name, id: item.id, action: "reassigned", done: false, error: "The outcome of the change is not known yet. Try Undo again in a few minutes." })
             reassigned.push(item)
             continue
