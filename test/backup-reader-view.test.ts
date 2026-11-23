@@ -26,7 +26,7 @@ const status = (overrides: Partial<BackupReaderStatus> = {}): BackupReaderStatus
   renewalPending: false,
   ...overrides,
 })
-const state = (reader: BackupReaderStatus | null, overrides: Partial<BackupReaderState> = {}): BackupReaderState => ({ supported: true, available: true, reader, setupArguments: "", ...overrides })
+const state = (reader: BackupReaderStatus | null, overrides: Partial<BackupReaderState> = {}): BackupReaderState => ({ supported: true, available: true, reader, services: ["intune"], setupArguments: "", ...overrides })
 
 describe("Backup Reader card", () => {
   it("keeps the device inventory permission in the renewal command when the reader has it", () => {

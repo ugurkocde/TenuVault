@@ -145,7 +145,7 @@ describe("The Backup Reader", () => {
       return new Set([...base, ...(commandLine.includes("-IncludeDeviceCategories") ? ["DeviceManagementManagedDevices.Read.All"] : []), ...(commandLine.includes("-IncludeConditionalAccess") ? ["Policy.Read.All"] : [])])
     }
     const commandFor = (roles: string[]) => {
-      const command = readerView({ supported: true, available: true, reader: status(roles), setupArguments: "" }).command
+      const command = readerView({ supported: true, available: true, reader: status(roles), services: ["intune"], setupArguments: "" }).command
       expect(command.startsWith("./New-TenuVaultBackupReader.ps1 -CertificatePath <exported .cer> -AppId c")).toBe(true)
       expect(command.slice(command.indexOf("-AppId c") + 8)).toBe(readerScriptArguments(roles))
       return command

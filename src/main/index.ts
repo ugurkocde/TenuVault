@@ -1138,6 +1138,7 @@ async function bootstrap(): Promise<void> {
     const profile = tenantProfile(tenantId)
     const azureStorage = profile && !isLocalAccount(profile.storageAccountName) ? profile.storageAccountName : undefined
     const reader = backupReader.status(tenantId)
+    const selection = moduleSettings.selection(tenantId)
     let auditStuck: number | undefined
     try { auditStuck = auditSink.stuckReaderCount(tenantId, reader?.state === "verified" ? reader.clientId : undefined) } catch { /* Pending count already reports the read failure. */ }
     return {
@@ -1147,7 +1148,8 @@ async function bootstrap(): Promise<void> {
       auditStuck,
       auditSetupRequired: !!azureStorage && missingReaderAuditContainers.has(readerAuditKey(tenantId, azureStorage)),
       reader,
-      setupArguments: readerSetupArguments(moduleSettings.selection(tenantId)),
+      services: selection.services,
+      setupArguments: readerSetupArguments(selection),
       ...(azureStorage ? { storageAccountName: azureStorage } : {}),
     }
   }

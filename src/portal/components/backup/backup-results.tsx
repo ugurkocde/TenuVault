@@ -5,6 +5,7 @@ import { AlertTriangle, CircleStop, Check, ChevronDown, ChevronRight, Copy, File
 import { cn } from "~/lib/utils"
 import { formatBackupDuration, summarizeBackupResults, typeHeading, type BackupJobDisplay } from "~/lib/backup-job-display"
 import { MAX_ITEM_ERRORS, type BackupTypeResult } from "../../../shared/backup-results"
+import { BACKUP_SERVICES, backupServiceForFolder, compareBackupServices } from "../../../shared/services/presentation"
 
 interface BackupResultsProps {
   job: Pick<BackupJobDisplay, "status" | "startTime" | "endTime" | "output" | "results" | "isComplete">
@@ -16,6 +17,15 @@ interface BackupResultsProps {
 
 const COMPACT_ROWS = 5
 
+function compactRows(rows: BackupTypeResult[]): BackupTypeResult[] {
+  const ordered = [...rows].sort((left, right) => compareBackupServices(left.folder, right.folder))
+  // Reserve one row for each service before filling the remaining space.
+  const firstByService = new Set(BACKUP_SERVICES.map(service => ordered.find(row => backupServiceForFolder(row.folder) === service.id)).filter(row => row !== undefined))
+  const extra = ordered.filter(row => !firstByService.has(row)).slice(0, COMPACT_ROWS - firstByService.size)
+  const selected = new Set([...firstByService, ...extra])
+  return ordered.filter(row => selected.has(row))
+}
+
 /**
  * What a backup saved, per type, with problems first and the raw log folded away. Without per type
  * results (a job that has not started or failed before listing anything) only the raw log is offered.
@@ -26,7 +36,7 @@ export function BackupResults({ job, compact = false, jobId }: BackupResultsProp
 
   const summary = summarizeBackupResults(results, job.isComplete)
   const duration = formatBackupDuration(job.startTime, job.endTime)
-  const rows = compact ? summary.rows.slice(0, COMPACT_ROWS) : summary.rows
+  const rows = compact ? compactRows(summary.rows) : summary.rows
   const hidden = summary.rows.length - rows.length
   const problems = summary.unreadable.length + summary.skipped.length + summary.partial.length + summary.stopped.length + summary.warnings.length + summary.notReached.length
   // Red only for a failed run; a run that completed with warnings or that the user cancelled stays amber.

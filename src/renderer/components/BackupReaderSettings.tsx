@@ -7,6 +7,7 @@ import { useTenants } from "~/contexts/TenantContext"
 import { useConfirm } from "~/components/ConfirmDialog"
 import readerScript from "../../../resources/New-TenuVaultBackupReader.ps1?raw"
 import type { BackupReaderState } from "../../shared/ipc"
+import { BACKUP_SERVICES } from "../../shared/services/presentation"
 import { excludedSummary, READER_CA_GUIDE_URL, READER_GUIDE_URL, readerAzureRequest, readerEntraRequest, readerErrorGuidance, readerStorageCommand, readerView } from "../lib/backup-reader-view"
 import { isGuid } from "../../shared/security"
 import { bridge } from "../lib/bridge"
@@ -110,6 +111,11 @@ export function BackupReaderSettings() {
   if (!tenants.length) return null
   const { reader, verified, waiting, daysLeft, expiry, command, excluded, roleChange, storageAccountName, canAct } = readerView(state)
   const disabled = !canAct || !!busy
+  const configured = state?.services ?? []
+  const names = BACKUP_SERVICES.flatMap(({ id, label }) => {
+    if (configured.includes(id)) return [label]
+    return id === "entra" && configured.includes("conditionalAccess") ? ["Entra ID (Conditional Access only)"] : []
+  })
 
   return (
     <Card>
@@ -125,8 +131,10 @@ export function BackupReaderSettings() {
         </div>
         <CardDescription>
           Optional. Keeps scheduled backups running when Conditional Access sign-in frequency ends your session. A separate
-          read-only app registration with a certificate on this computer reads Intune for scheduled backups only. Manual
+          read-only app registration with a certificate on this computer reads the selected tenant’s configured services for scheduled backups only. Manual
           backups, restores and every other change keep using your own sign-in.
+          {names.length > 0 && <> This tenant backs up {new Intl.ListFormat("en", { type: "conjunction" }).format(names)}.</>}
+          {state?.services?.length === 0 && <> No services are configured for this tenant.</>}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-5 px-7 pb-7 text-sm text-gray-700">
@@ -135,7 +143,10 @@ export function BackupReaderSettings() {
         {tenants.length > 1 && (
           <div className="flex items-center gap-3">
             <label htmlFor={ids.tenant}>Tenant</label>
-            <select id={ids.tenant} disabled={!!busy} className="h-10 rounded-full border border-gray-300 bg-white px-4" value={tenantId} onChange={(event) => setTenantId(event.target.value)}>
+            <select id={ids.tenant} disabled={!!busy} className="h-10 rounded-full border border-gray-300 bg-white px-4" value={tenantId} onChange={(event) => {
+              setState(null)
+              setTenantId(event.target.value)
+            }}>
               {tenants.map((tenant) => <option key={tenant.id} value={tenant.credentials!.tenantId}>{tenant.name}</option>)}
             </select>
           </div>

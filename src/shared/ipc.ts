@@ -70,6 +70,8 @@ export interface BackupReaderState {
   /** The tenant's plan includes the Backup Reader. */
   available: boolean
   reader: BackupReaderStatus | null
+  /** The services configured for scheduled backups for the selected tenant. */
+  services: ServiceSelection["services"]
   /**
    * The setup script parameters for the first setup of this tenant's reader, with a leading space:
    * the services it backs up. Empty for a tenant that backs up Intune, as before.

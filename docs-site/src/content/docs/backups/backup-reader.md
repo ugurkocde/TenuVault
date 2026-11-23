@@ -26,6 +26,8 @@ Before you add it, check whether a policy change is simpler: see [Conditional Ac
 | Read device categories and device clean-up rules | Only with the optional device inventory permission (see below). Otherwise scheduled backups leave them out and manual backups include them. |
 | Bypass licensing | No. Scheduled backups still need a license that covers the tenant. |
 
+The **Backup Reader** card shows the services configured for the selected tenant.
+
 ### Permissions
 
 Microsoft Graph application permissions, read-only:
