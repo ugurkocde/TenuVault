@@ -7,8 +7,7 @@ import { withRouteTenant } from "../storage/blob-emulator"
 
 /** Largest request body accepted over IPC, matching the 8 MB policies limit the routes enforce. */
 export const MAX_IPC_BODY_BYTES = 8 * 1024 * 1024
-/** Marks a download whose save dialog was cancelled, so no archive was written. */
-export const DOWNLOAD_CANCELLED_HEADER = "x-tenuvault-download-cancelled"
+export { DOWNLOAD_CANCELLED_HEADER } from "../../shared/constants"
 
 type RouteHandler = (request: NextRequest) => Promise<Response> | Response
 export type RouteModule = Partial<Record<"GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "OPTIONS", RouteHandler>>

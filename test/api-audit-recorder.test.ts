@@ -48,11 +48,11 @@ describe("audit callbacks cannot replace a completed route response", () => {
     expect(log).not.toHaveBeenCalled()
   })
 
-  it.each([[false, 1], [true, 0]])("records a download only when its archive was not cancelled (cancelled: %s)", async (cancelled, expected) => {
+  it.each([[false, 1, ""], [true, 0, ""], [true, 0, "/"], [false, 1, "/"]])("records a download only when its archive was not cancelled (cancelled: %s, path suffix %j)", async (cancelled, expected, suffix) => {
     const dispatch = vi.fn(async () => Response.json({ success: true }))
     const record = createAuditRecorder(dispatch, () => null)
     const response = Response.json({ saved: !cancelled }, cancelled ? { headers: { [DOWNLOAD_CANCELLED_HEADER]: "1" } } : undefined)
-    record(new Request("http://tenuvault.internal/api/download-backup", { method: "POST" }), JSON.stringify({ ...credentials, id: "backup-2026-11-21-000000" }), response)
+    record(new Request(`http://tenuvault.internal/api/download-backup${suffix}`, { method: "POST" }), JSON.stringify({ ...credentials, id: "backup-2026-11-21-000000" }), response)
     await new Promise<void>((resolve) => setTimeout(resolve, 0))
     expect(dispatch).toHaveBeenCalledTimes(expected)
   })

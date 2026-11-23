@@ -125,6 +125,9 @@ export default function BackupRestorePage() {
   const [completedBackup, setCompletedBackup] = useState<{ jobId: string; tenantId: string } | null>(null)
   const [changesOpen, setChangesOpen] = useState(false)
   const [isDownloading, setIsDownloading] = useState(false)
+  // Backups whose full download the route refused while offering the ordinary items, so the next
+  // download is the ordinary-only copy.
+  const [ordinaryOnlyIds, setOrdinaryOnlyIds] = useState<ReadonlySet<string>>(new Set())
   const [exportingDevices, setExportingDevices] = useState(false)
   const detailRef = useRef<HTMLDivElement | null>(null)
 
@@ -139,7 +142,8 @@ export default function BackupRestorePage() {
     .filter((entry) => entry.id !== selectedTenantId && entry.credentials?.tenantId && entry.credentials.appId)
     .map((entry) => ({ tenantId: entry.credentials!.tenantId, appId: entry.credentials!.appId, name: entry.name, domain: entry.domain }))
   const trends = useMemo(() => backupTypeTrends(backups).filter(type => matchesBackupService(type.folder, service)), [backups, service])
-  const selected = backups.find((backup) => backup.id === selectedId) ?? null
+  const listed = backups.find((backup) => backup.id === selectedId) ?? null
+  const selected = listed && ordinaryOnlyIds.has(listed.id) ? { ...listed, ordinaryOnlyExport: true } : listed
   const latest = backups.find((backup) => backup.counts && statusKind(backup.status) === "success")
 
   useEffect(() => {
@@ -195,7 +199,8 @@ export default function BackupRestorePage() {
       })
       if (!response.ok) {
         const problem = await response.json().catch(() => ({}))
-        if (problem.ordinaryOnlyAvailable) void fetchBackups()
+        if (problem.ordinaryOnlyAvailable && response.status === 503) setOrdinaryOnlyIds(current => new Set(current).add(backup.id))
+        else if (problem.ordinaryOnlyAvailable) void fetchBackups()
         throw new Error(problem.error || "Failed to download backup")
       }
       if (response.headers.get("content-type")?.includes("application/json")) return

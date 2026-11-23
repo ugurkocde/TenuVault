@@ -546,6 +546,16 @@ for (const azure of [false, true]) describe(azure ? "Azure emulator mixed runs" 
     expect(archive.status).toBe(200)
     expect(archive.headers.get("content-type")).toBe("application/x-tar")
   })
+  it("treats a split run's record that is not valid JSON as missing, in history and downloads", async () => {
+    const f = await pair()
+    const { RunStatus: _status, RunCounts: _counts, ...early } = f.first
+    await f.write(ordinary, "metadata.json", { ...early, LargeBackupOutcomes: [{ Folder: "AuthorizationPolicy", Outcome: "failed", Error: "The backup stopped before this type was read in full." }] })
+    await f.store.put(local, BACKUP_CONTAINER, backupBlobName(`${ordinary}/run-status.json`), Buffer.from("{oops"), "application/json")
+    const rows = await (await history(f.request({ summary: true }))).json()
+    expect(rows.backups.find((entry: any) => entry.id === ordinary)).toMatchObject({ ordinaryOnlyExport: true })
+    const refused = await download(f.request({ backupId: ordinary }))
+    expect(refused.status).toBe(409)
+  })
   it("protects a valid complete run inside retention", async () => {
     const f = await pair()
     const engine = new BackupEngine({ now: () => new Date("2020-01-01T12:00:00Z"), fetch: f.fetcher, getToken: async () => jwt({ scp: "Policy.Read.All" }), services: () => ({ services: ["intune", "entra"] }), retentionDays: () => 1 })

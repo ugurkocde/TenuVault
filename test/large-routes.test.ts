@@ -2,6 +2,7 @@ import { POST as history } from "../src/portal/app/api/list-backups/route"
 import { afterEach, expect, it, vi } from "vitest"
 import { NextRequest } from "../src/main/api/next-server-shim"
 import { ApiHost, DOWNLOAD_CANCELLED_HEADER } from "../src/main/api/host"
+import { saveArchiveResponse } from "../src/main/backup/large-archive"
 import { POST as contents } from "../src/portal/app/api/list-backup-contents/route"
 import { POST as compare } from "../src/portal/app/api/large-backup-page/route"
 import { POST as download } from "../src/portal/app/api/download-backup/route"
@@ -76,6 +77,14 @@ it.each([
   expect(handled[0]!.status).toBe(status)
   expect(handled[0]!.headers.get("content-type")).not.toBe("application/x-tar")
   expect(Boolean(handled[0]!.headers.get(DOWNLOAD_CANCELLED_HEADER))).toBe(cancelled)
+})
+it("answers a cancelled save as cancelled even when the archive already failed while the dialog was open", async () => {
+  const failed = new Response(new ReadableStream({ pull() { throw new Error("Backup fingerprint mismatch") }, cancel() { return Promise.reject(new Error("Backup fingerprint mismatch")) } }), { headers: { "content-type": "application/x-tar", "content-disposition": 'attachment; filename="backup-1.tar"' } })
+  const choose = vi.fn(async () => ({ canceled: true }))
+  const result = await saveArchiveResponse(failed, choose)
+  expect(choose).toHaveBeenCalledWith("backup-1.tar")
+  expect(result.status).toBe(200)
+  expect(result.headers.get(DOWNLOAD_CANCELLED_HEADER)).toBe("1")
 })
 it("validates the paging request before sending anything to Microsoft", async () => {
   const reads = install()

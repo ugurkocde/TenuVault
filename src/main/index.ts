@@ -6,7 +6,7 @@ import { IdentityRestoreService } from "./restore/service"
 import { RecoveryAccounts } from "./restore/safety-resolvers"
 import { restoreSafetyRoutes } from "./restore/routes"
 import { setIdentityRestorePreviews, setIdentityRestoreDispatch } from "./restore/dispatch"
-import { importLargeArchive, reviewLargeArchive, saveLargeDownload } from "./backup/large-archive"
+import { importLargeArchive, reviewLargeArchive, saveArchiveResponse } from "./backup/large-archive"
 import { AddPermissionsFlow, permissionAdditionScopes, signInForPermissionAddition, verifyPermissionAdditionToken } from "./auth/add-permissions-flow"
 import { additionPermissions } from "./services/addition-permissions"
 import { checkOnboardingPermissions, saveOnboardingServices } from "./services/onboarding"
@@ -62,7 +62,7 @@ import { setAuditOutboxStore } from "../portal/lib/audit/outbox"
 import { backupRoutes, surfaceTokenErrors } from "./api/desktop-routes"
 import { createBridgedFetch } from "./api/fetch-bridge"
 import { rejectProxyAuthResponses, withNetworkErrors } from "./api/network-error"
-import { ApiHost, DOWNLOAD_CANCELLED_HEADER } from "./api/host"
+import { ApiHost } from "./api/host"
 import { routes } from "./api/routes"
 import { AuthManager, SignInRequiredError } from "./auth/msal"
 import { BackupEngine, verifyStorageAccess, type BackupJob } from "./backup/engine"
@@ -743,14 +743,7 @@ async function bootstrap(): Promise<void> {
     },
   })
   const host: ApiHost = new ApiHost({
-    saveDownload: async response => {
-      const name = /filename="([A-Za-z0-9-]+\.tar)"/.exec(response.headers.get("content-disposition") ?? "")?.[1] ?? "backup.tar"
-      const chosen = await dialog.showSaveDialog(mainWindow!, { title: "Export backup", defaultPath: name, filters: [{ name: "Large backup archive", extensions: ["tar"] }] })
-      if (chosen.canceled || !chosen.filePath) { await response.body?.cancel(); return Response.json({ saved: false }, { headers: { [DOWNLOAD_CANCELLED_HEADER]: "1" } }) }
-      if (!response.body) throw new Error("The archive download has no content")
-      await saveLargeDownload(response.body, chosen.filePath)
-      return Response.json({ saved: true })
-    },
+    saveDownload: response => saveArchiveResponse(response, name => dialog.showSaveDialog(mainWindow!, { title: "Export backup", defaultPath: name, filters: [{ name: "Large backup archive", extensions: ["tar"] }] })),
     routes: { ...routes, ...backupRoutes(engine, (tenantId) => scopes.get(tenantId).scope), ...featureRoutes(featureDeps), ...driftScanRoutes(driftJobs), ...restoreSafetyRoutes(guardedRestoreJournal(), recoveryAccounts, restoreConnection, async tenant => { await restoreConnection(tenant) }, identityRestore) },
     transform: surfaceTokenErrors,
     // Disabled CIS routes refuse before any licensing work. The plan comes next, so the

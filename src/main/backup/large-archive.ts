@@ -1,5 +1,5 @@
 import { completeHalf, largeRunProblems, matchingCompanions } from "../../shared/backup-companion"
-import { BACKUP_CONTAINER } from "../../shared/constants"
+import { BACKUP_CONTAINER, DOWNLOAD_CANCELLED_HEADER } from "../../shared/constants"
 import { backupBlobName, backupContainer } from "../../shared/backup-storage"
 import { createHash, randomUUID } from "node:crypto"
 import { open, rename, rm } from "node:fs/promises"
@@ -115,6 +115,23 @@ export async function* exportMixedArchive(tenantId: string, ordinaryId: string, 
     }
   }
   yield Buffer.alloc(2 * BLOCK)
+}
+
+/**
+ * Saves an archive response where the admin chooses. A cancelled choice answers with the cancelled
+ * marker, even when the archive already failed while the dialog was open, so it is never reported as a
+ * failed download.
+ */
+export async function saveArchiveResponse(response: Response, choose: (name: string) => Promise<{ canceled: boolean; filePath?: string }>): Promise<Response> {
+  const name = /filename="([A-Za-z0-9-]+\.tar)"/.exec(response.headers.get("content-disposition") ?? "")?.[1] ?? "backup.tar"
+  const chosen = await choose(name)
+  if (chosen.canceled || !chosen.filePath) {
+    await response.body?.cancel().catch(() => undefined)
+    return Response.json({ saved: false }, { headers: { [DOWNLOAD_CANCELLED_HEADER]: "1" } })
+  }
+  if (!response.body) throw new Error("The archive download has no content")
+  await saveLargeDownload(response.body, chosen.filePath)
+  return Response.json({ saved: true })
 }
 
 /** Save atomically so a failed download never leaves a file presented as a complete archive. */

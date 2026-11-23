@@ -121,9 +121,15 @@ export async function POST(request: NextRequest) {
             headers: { "content-type": "application/x-tar", "content-disposition": `attachment; filename="${ordinaryId}.tar"` },
           })
         }
-        if (recordUnavailable && body.ordinaryOnly !== true) return NextResponse.json({ error: "The run's final result could not be read in time, so the download did not start. Try again in a moment.", ordinaryOnlyAvailable: !isLargeBackup(backupId) }, { status: 503 })
+        if (recordUnavailable && body.ordinaryOnly !== true) return NextResponse.json({ error: "The run's final result could not be read in time, so the full download did not start. Try again in a moment, or download the ordinary items only.", ordinaryOnlyAvailable: !isLargeBackup(backupId) }, { status: 503 })
         if (isLargeBackup(backupId) || body.ordinaryOnly !== true) return NextResponse.json({ error: "The mixed run is incomplete or its companion does not match. Choose Download ordinary only to export the ordinary snapshots.", ordinaryOnlyAvailable: !isLargeBackup(backupId) }, { status: 409 })
         ordinaryExport = ordinaryOnlyManifest(metadata, ordinaryOnlyRequest ? "An ordinary-only copy was requested." : matches ? "Large companion is incomplete, or an ordinary-only copy was requested." : "Large companion is missing, unreadable or does not match.")
+        // Without the run's record an early manifest's placeholders say nothing about the large types, so
+        // the copy names them as left out without claiming why.
+        if (ordinaryOnlyRequest && typeof metadata.RunStatus !== "string") {
+          const export_ = ordinaryExport.Export as { omittedLargeTypes: Array<Record<string, unknown>> }
+          ordinaryExport = { ...ordinaryExport, Export: { ...export_, omittedLargeTypes: export_.omittedLargeTypes.map(problem => ({ ...problem, reason: "Not included in this ordinary-only copy." })) } }
+        }
       }
       if (largeOwner?.ok && largeOwner.metadata?.LargeItems) {
         const stream = Readable.from(exportLargeArchive(tenantId, backupId, largeOwner.metadata, readLarge))

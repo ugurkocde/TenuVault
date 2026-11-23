@@ -47,7 +47,8 @@ export function createAuditRecorder(
   onTrialUsage?: (tenant: string, feature: Feature) => void,
 ) {
   return (request: Request, requestBody: string, response: Response, metadata?: ExecutionMetadata): void => {
-    const path = new URL(request.url).pathname
+    // The host serves a route with or without a trailing slash, so both are recorded the same way.
+    const path = new URL(request.url).pathname.replace(/(.)\/$/, "$1")
     if (path.startsWith("/api/audit")) return
     if (path === "/api/frameworks") {
       void recordFrameworkCreation(requestBody, response.clone(), dispatch, accountFor)

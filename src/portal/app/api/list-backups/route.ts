@@ -410,6 +410,8 @@ export async function POST(request: NextRequest) {
     const records = new Map<string, Record<string, any>>()
     // Records that may exist but could not be read in time; their run is not judged from the early manifest.
     const unreadRecords = new Set<string>()
+    // Reads that finished, with a record, without one (404) or with one that is not valid JSON.
+    const settledRecords = new Set<string>()
     const pending = backups.filter(backup => !isLargeBackup(backup.id) && backup.fingerprint?.CompanionBackup !== undefined && typeof backup.fingerprint?.RunStatus !== "string")
     // One budget covers every record read, so many stalled records cost history at most this long.
     const budget = AbortSignal.timeout(RUN_RECORD_BUDGET_MS)
@@ -417,13 +419,15 @@ export async function POST(request: NextRequest) {
       await Promise.all(pending.slice(start, start + RUN_RECORD_READS).map(async backup => {
         try {
           const response = await fetch(`https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(`${backup.id}/${BACKUP_RUN_RECORD_FILE}`)}`, { headers: storageHeaders(accessToken), signal: AbortSignal.any([AbortSignal.timeout(RUN_RECORD_TIMEOUT_MS), budget]) })
-          if (!response.ok) { if (response.status !== 404) unreadRecords.add(backup.id); return }
+          if (!response.ok) { if (response.status !== 404) unreadRecords.add(backup.id); else settledRecords.add(backup.id); return }
           const read = await readJsonCapped(response, MAX_BACKUP_ARCHIVE_BYTES)
+          settledRecords.add(backup.id)
           if (read.kind === "json" && read.value && typeof read.value === "object") records.set(backup.id, read.value as Record<string, any>)
         } catch { unreadRecords.add(backup.id) }
       }))
     }
-    for (const backup of pending) if (!records.has(backup.id) && budget.aborted) unreadRecords.add(backup.id)
+    // Only reads the budget cut off or never started are unread; a finished read decided the row already.
+    for (const backup of pending) if (!settledRecords.has(backup.id) && budget.aborted) unreadRecords.add(backup.id)
     for (const backup of backups.filter(backup => !isLargeBackup(backup.id))) {
       let metadata = backup.fingerprint
       if (!metadata || (metadata.CompanionBackup === undefined && metadata.LargeBackupOutcomes === undefined)) continue
