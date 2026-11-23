@@ -60,7 +60,9 @@ export function privilegeRequest(folder: string, source: Item, principalId: stri
   const body: Item = group ? { principalId, groupId: requirePrivilegeId(target.groupId), accessId: accessId! } : { principalId, roleDefinitionId: requirePrivilegeId(target.roleId), directoryScopeId: scope! }
   if (!collection) return { method: "POST", path: roleAssignments, body }
   const eligibility = folder.includes("Eligibility")
-  return { method: "POST", path: collection.replace(/Schedules$/, "ScheduleRequests"), body: { ...body, action: "adminAssign", scheduleInfo: schedule(source, eligibility, now) } }
+  return { method: "POST", path: collection.replace(/Schedules$/, "ScheduleRequests"), body: {
+    ...body, action: "adminAssign", justification: "Restore a privileged access schedule with TenuVault.", scheduleInfo: schedule(source, eligibility, now),
+  } }
 }
 
 export async function privilegeObject(reader: GraphReader, collection: string, id: string, unresolved: string): Promise<Item> {

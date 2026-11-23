@@ -70,7 +70,7 @@ it("uses distinct eligibility and assignment requests and preserves the absolute
   }
   for (const [folder, path] of Object.entries(cases)) {
     expect(privilegeRequest(folder, { ...scheduled, accessId: "owner", justification: "private note", createdUsing: "obsolete" }, user, target, now)).toEqual({
-      method: "POST", path, body: { principalId: user, ...(folder.startsWith("PimGroup") ? { accessId: "owner", groupId: group } : { roleDefinitionId: role, directoryScopeId: "/" }), action: "adminAssign", scheduleInfo: { startDateTime: "2026-11-23T12:00:00.000Z", expiration: { type: "afterDateTime", endDateTime: endsAt } } },
+      method: "POST", path, body: { principalId: user, ...(folder.startsWith("PimGroup") ? { accessId: "owner", groupId: group } : { roleDefinitionId: role, directoryScopeId: "/" }), action: "adminAssign", justification: "Restore a privileged access schedule with TenuVault.", scheduleInfo: { startDateTime: "2026-11-23T12:00:00.000Z", expiration: { type: "afterDateTime", endDateTime: endsAt } } },
     })
   }
   expect(() => privilegeRequest("RoleAssignmentSchedules", scheduled, user, target, Date.parse("2026-11-25"))).toThrow(/expired/)
