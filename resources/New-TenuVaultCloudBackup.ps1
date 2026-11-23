@@ -1017,13 +1017,15 @@ if ($GrantGraphRoles -or $GraphRolesGranted) {
         $after = [DateTimeOffset]::UtcNow.AddMinutes(10)
         $next = $next.Date.AddHours([int]$hour % $interval).AddMinutes([int]$minute)
         do {
-            if (-not $tz.IsInvalidTime($next)) {
-                $offset = if ($tz.IsAmbiguousTime($next)) {
-                    ($tz.GetAmbiguousTimeOffsets($next) | Sort-Object -Descending)[0]
-                } else { $tz.GetUtcOffset($next) }
-                $startTime = [DateTimeOffset]::new($next, $offset)
-                if ($startTime -gt $after) { break }
-            }
+            # A slot inside a daylight saving gap runs at the same wall time after the clock
+            # change (02:30 becomes 03:30), as the app's preview shows.
+            $slot = $next
+            while ($tz.IsInvalidTime($slot)) { $slot = $slot.AddHours(1) }
+            $offset = if ($tz.IsAmbiguousTime($slot)) {
+                ($tz.GetAmbiguousTimeOffsets($slot) | Sort-Object -Descending)[0]
+            } else { $tz.GetUtcOffset($slot) }
+            $startTime = [DateTimeOffset]::new($slot, $offset)
+            if ($startTime -gt $after) { break }
             $next = $next.AddHours($interval)
         } while ($true)
     } else {
