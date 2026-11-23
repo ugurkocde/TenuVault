@@ -378,13 +378,9 @@ describe("Cloud audit contract", () => {
     expect(run.calls.some(call => call.uri.includes(".tenuvault-owner.json"))).toBe(false)
   }, 60_000)
 
-  it("sets the tenant's Intune archive variable only when a full deployment opts in", () => {
-    const variable = template.resources.find(resource => resource.name.includes("TenuVaultArchiveIntuneAudit-"))
-    expect(template.parameters.archiveIntuneAudit).toMatchObject({ type: "bool", defaultValue: false })
-    expect(variable).toMatchObject({
-      condition: "[and(not(parameters('auditOnly')), parameters('archiveIntuneAudit'))]",
-      properties: { value: '"true"', isEncrypted: false },
-    })
+  it("omits the Intune archive setting from the Deploy to Azure template", () => {
+    expect(template.parameters).not.toHaveProperty("archiveIntuneAudit")
+    expect(template.resources.some(resource => resource.name.includes("TenuVaultArchiveIntuneAudit-"))).toBe(false)
   })
 
   it("offers an ARM upgrade that leaves a PowerShell setup's backup writer, variables and schedule in place", () => {
@@ -417,7 +413,7 @@ describe("Cloud audit contract", () => {
     if (main) {
       const base = JSON.parse(readFileSync(join(main, "resources/cloud-backup/azuredeploy.json"), "utf8")) as typeof template
       expect(template.parameters.scheduleStartTime).toEqual(base.parameters.scheduleStartTime)
-      const existing = resources.filter(resource => !audit.includes(resource) && !resource.name.includes("TenuVaultArchiveIntuneAudit-"))
+      const existing = resources.filter(resource => !audit.includes(resource))
       expect(existing.map(({ condition: _condition, ...definition }) => definition)).toEqual(base.resources)
     }
   })
@@ -684,7 +680,7 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
     const denied = runPlainFixture()[9]!
     expect(denied.output!.join(" ")).toContain("The cloud backup identity needs DeviceManagementApps.Read.All.")
     expect(denied.output!.join(" ")).not.toContain("private Graph message")
-    expect(JSON.parse(denied.calls.find((call) => call.method === "Put" && call.uri.includes("/cloud-backup-outcomes/"))!.body!)).toMatchObject({ status: "CompletedWithWarnings" })
+    expect(JSON.parse(denied.calls.find((call) => call.method === "Put" && call.uri.includes("/cloud-backup-outcomes/"))!.body!)).toMatchObject({ status: "CompletedWithWarnings", auditArchiveOnlyWarning: true })
     expect(JSON.parse(denied.calls.find((call) => call.method === "Put" && call.uri.includes("/cloud-backup-status-"))!.body!)).toMatchObject({ LastStatus: "CompletedWithWarnings" })
     const recovered = runPlainFixture()[10]!
     const recoveredMetadata = JSON.parse(recovered.calls.find((call) => call.method === "Put" && call.uri.endsWith("/metadata.json"))!.body!)
@@ -867,6 +863,14 @@ describe("New-TenuVaultCloudBackup.ps1", () => {
     expect(setupRun("rerun-sets-report")).toMatchObject({ error: null, changeReport: "full", changeReportActors: "true", tenantName: "11111111-2222-3333-4444-555555555555" })
     expect(setup).toContain('$changeReportPassed = $PSBoundParameters.ContainsKey("ChangeReport")')
     expect(setup).toContain('$changeReportActorsPassed = $PSBoundParameters.ContainsKey("ChangeReportWithoutActors")')
+  }, 60_000)
+
+  it.runIf(Boolean(pwsh))("turns off a saved Intune archive when the setup switch is explicitly false", () => {
+    expect(setupRun("rerun-disables-audit-archive")).toMatchObject({
+      error: null,
+      archiveIntuneAudit: "false",
+      variableWrites: expect.arrayContaining(["TenuVaultArchiveIntuneAudit-11111111"]),
+    })
   }, 60_000)
 
   it.runIf(Boolean(pwsh))("follows main for disabled schedules, including stale markers and partial overrides", () => {

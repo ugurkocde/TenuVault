@@ -7,6 +7,8 @@
  * can show where backups run, when the next one is due, and how the last one ended.
  */
 
+import { allows, type Plan } from "./plans"
+
 export interface CloudBackupConfig {
   tenantId: string
   subscriptionId: string
@@ -188,7 +190,8 @@ export function cloudSetupCommand(options: {
   weekday: number
   timeZone: string
   scope: "everything" | "policies"
-  archiveIntuneAudit?: boolean
+  /** Omit for scripts without the archive switch. Null means the current plan is unknown. */
+  plan?: Plan | null
   /**
    * Change reports by email through the notification watcher, when the admin chose a level in this
    * hand-off. Left out, the command carries no change report parameter, so a rerun keeps the
@@ -229,7 +232,11 @@ export function cloudSetupCommand(options: {
   const cut = cleaned && cleaned.length > 200 && /[\uD800-\uDBFF]/.test(cleaned[199]!) ? 199 : 200
   const name = cleaned?.slice(0, cut).trim()
   if (name && reportOn) parts.push(`-TenantName '${name.replace(/'/g, "''")}'`)
-  if (options.archiveIntuneAudit) parts.push("-ArchiveIntuneAudit")
+  const { plan } = options
+  if (plan !== undefined) {
+    const archiveIntuneAudit = plan !== null && allows(plan, "auditLog")
+    parts.push(archiveIntuneAudit ? "-ArchiveIntuneAudit" : "-ArchiveIntuneAudit:$false")
+  }
   parts.push("-GrantGraphRoles")
   return parts.join(" ")
 }

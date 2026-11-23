@@ -875,7 +875,8 @@ Set-TenuVaultAutomationVariable -Name "TenuVaultScope-$tenantKey" -Value $Scope
 Set-TenuVaultAutomationVariable -Name "TenuVaultExcludedFolders-$tenantKey" -Value $ExcludedFolders
 Set-TenuVaultAutomationVariable -Name "TenuVaultAppOnlyExcluded-$tenantKey" -Value $appOnlyExcluded
 if ($PSBoundParameters.ContainsKey("ArchiveIntuneAudit")) {
-    Set-TenuVaultAutomationVariable -Name "TenuVaultArchiveIntuneAudit-$tenantKey" -Value $ArchiveIntuneAudit.IsPresent.ToString().ToLowerInvariant()
+    $archiveEnabled = if ($ArchiveIntuneAudit) { "true" } else { "false" }
+    Set-TenuVaultAutomationVariable -Name "TenuVaultArchiveIntuneAudit-$tenantKey" -Value $archiveEnabled
 }
 if ($changeReportPassed) { Set-TenuVaultAutomationVariable -Name "TenuVaultChangeReport-$tenantKey" -Value $ChangeReport.ToLowerInvariant() }
 if ($tenantNamePassed) {

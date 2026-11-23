@@ -1381,6 +1381,7 @@ $script:TvOutcomeSummary = @{
     CompletedWithWarnings = "The cloud backup in Azure saved policies, but some could not be read. Open TenuVault for the details."
     Failed = "The cloud backup in Azure failed, so this backup is incomplete. Open the runbook job in the Automation account for the reason."
 }
+$script:TvAuditArchiveWarningSummary = "The cloud backup in Azure saved policies, but the Intune audit log could not be archived. Open TenuVault for the details."
 
 # Mirrors backupEvent in envelope.ts.
 function New-TenuVaultBackupEvent {
@@ -1514,6 +1515,7 @@ function ConvertFrom-TenuVaultBackupOutcome {
     $trigger = (Get-TvNoteField $Note "trigger").Value
     $typeList = (Get-TvNoteField $Note "failedTypes").Value
     $failedTypes = @(@(if ($typeList -is [array]) { $typeList }) | Where-Object { $_ -is [string] -and $_ -cmatch '^[A-Za-z]{1,64}\z' } | Select-Object -First 10)
+    $auditArchiveOnlyWarning = (Get-TvNoteField $Note "auditArchiveOnlyWarning").Value
     return [pscustomobject][ordered]@{
         status = [string]$status
         runId = [string]$runId
@@ -1522,6 +1524,7 @@ function ConvertFrom-TenuVaultBackupOutcome {
         totalPolicies = Get-TvNoteCount (Get-TvNoteField $Note "totalPolicies").Value
         failures = if ($null -ne $failures) { $failures } else { 0 }
         failedTypes = $failedTypes
+        auditArchiveOnlyWarning = $auditArchiveOnlyWarning -is [bool] -and $auditArchiveOnlyWarning
         trigger = if ($trigger -is [string] -and $trigger -ceq "manual") { "manual" } else { "scheduled" }
     }
 }
@@ -1614,10 +1617,11 @@ $script:TvOutcomeTrigger = @{ scheduled = "Cloud backup schedule"; manual = "Clo
 function New-TenuVaultCloudOutcomeEvent {
     param([Parameter(Mandatory)][object]$Outcome, [Parameter(Mandatory)][string]$TenantId, [object]$TenantName)
     $key = if ($Outcome.backupFolder) { [string]$Outcome.backupFolder } else { "run:$($Outcome.runId)" }
+    $summary = if ($Outcome.status -eq "CompletedWithWarnings" -and $Outcome.auditArchiveOnlyWarning) { $script:TvAuditArchiveWarningSummary } else { $script:TvOutcomeSummary[[string]$Outcome.status] }
     return New-TenuVaultBackupEvent -TenantId $TenantId -TenantName $TenantName -Status $Outcome.status `
         -BackupFolder $Outcome.backupFolder -NaturalKey $key -OccurredAt $Outcome.finishedAt `
         -TotalPolicies $Outcome.totalPolicies -Failures $Outcome.failures -FailedTypes @($Outcome.failedTypes) `
-        -Trigger $script:TvOutcomeTrigger[[string]$Outcome.trigger] -Message $script:TvOutcomeSummary[[string]$Outcome.status]
+        -Trigger $script:TvOutcomeTrigger[[string]$Outcome.trigger] -Message $summary
 }
 
 # ---------------------------------------------------------------------------

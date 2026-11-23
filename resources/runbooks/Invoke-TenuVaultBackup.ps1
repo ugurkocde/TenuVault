@@ -589,7 +589,8 @@ function Send-TvBackupOutcome {
         [int]$Failures = 0,
         [string[]]$FailedTypes = @(),
         # How the run started (Get-TvRunTrigger), so the watcher's alert names a run started by hand.
-        [ValidateSet("scheduled", "manual")][string]$Trigger = "scheduled"
+        [ValidateSet("scheduled", "manual")][string]$Trigger = "scheduled",
+        [switch]$AuditArchiveOnlyWarning
     )
     # One note per run: the failure path can follow a Failed result that was already noted.
     if ($script:OutcomeSent) { return }
@@ -606,6 +607,7 @@ function Send-TvBackupOutcome {
         failedTypes   = @($FailedTypes | Where-Object { $_ } | Select-Object -First 10 | ForEach-Object { [string]$_ })
         trigger       = $Trigger
     }
+    if ($AuditArchiveOnlyWarning) { $note.auditArchiveOnlyWarning = $true }
     $name = if ($BackupFolder) { $BackupFolder } else { "run-$RunId" }
     $uri = "https://$Account.blob.core.windows.net/$script:OutcomeContainer/cloud-backup-outcomes/$([uri]::EscapeDataString($name)).json"
     $headers = @{
@@ -3659,9 +3661,10 @@ function Invoke-TvBackup {
         $metadata.Items = $sortedItems
         Set-TvBlob $storageAccount "$backupFolder/metadata.json" ($metadata | ConvertTo-Json -Depth 100) $storageToken
         Write-Output "Backup completed: $totalPolicies policies in $($metadata.Duration) ($status). Older backups were kept: the cloud identity cannot delete. The next desktop backup made with an admin's sign-in applies retention."
-        $outcomeStatus = if ($status -eq "Success" -and $archiveWarning) { "CompletedWithWarnings" } else { $status }
+        $auditArchiveOnlyWarning = $status -eq "Success" -and [bool]$archiveWarning
+        $outcomeStatus = if ($auditArchiveOnlyWarning) { "CompletedWithWarnings" } else { $status }
         Set-TvCloudStatus $context $outcomeStatus "Backup $outcomeStatus, $totalPolicies policies." $backupFolder
-        Send-TvBackupOutcome -Account $storageAccount -Token $storageToken -TenantId $tenantId -RunId $runId -Status $outcomeStatus -BackupFolder $backupFolder -TotalPolicies $totalPolicies -Failures $failures -FailedTypes @($failedTypes) -Trigger $runTrigger
+        Send-TvBackupOutcome -Account $storageAccount -Token $storageToken -TenantId $tenantId -RunId $runId -Status $outcomeStatus -BackupFolder $backupFolder -TotalPolicies $totalPolicies -Failures $failures -FailedTypes @($failedTypes) -Trigger $runTrigger -AuditArchiveOnlyWarning:$auditArchiveOnlyWarning
         if ($status -eq "Failed") { throw "The backup saved no policies. See the runbook output above." }
         # Only a complete backup is compared, like the desktop app's report after a scheduled backup:
         # items a backup with warnings could not read would show up as deleted.

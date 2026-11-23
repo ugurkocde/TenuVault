@@ -29,6 +29,7 @@ export interface CloudBackupOutcome {
   totalPolicies: number | null
   failures: number
   failedTypes: string[]
+  auditArchiveOnlyWarning: boolean
   /** How the run started. Notes from backup runbooks before 1.4.0 carry none and count as scheduled. */
   trigger: "scheduled" | "manual"
 }
@@ -70,6 +71,8 @@ export const CLOUD_OUTCOME_SUMMARY: Record<CloudOutcomeStatus, string> = {
   Failed: "The cloud backup in Azure failed, so this backup is incomplete. Open the runbook job in the Automation account for the reason.",
 }
 
+const AUDIT_ARCHIVE_WARNING_SUMMARY = "The cloud backup in Azure saved policies, but the Intune audit log could not be archived. Open TenuVault for the details."
+
 /** The Trigger detail of the alert, by how the run started. */
 export const CLOUD_OUTCOME_TRIGGER: Record<CloudBackupOutcome["trigger"], string> = {
   scheduled: "Cloud backup schedule",
@@ -97,6 +100,7 @@ export function parseCloudOutcome(value: unknown, tenantId: string): CloudBackup
     totalPolicies: count(note.totalPolicies, 1_000_000),
     failures: count(note.failures, 1_000_000) ?? 0,
     failedTypes,
+    auditArchiveOnlyWarning: note.auditArchiveOnlyWarning === true,
     trigger: note.trigger === "manual" ? "manual" : "scheduled",
   }
 }
@@ -114,7 +118,7 @@ export function cloudOutcomeEvent(outcome: CloudBackupOutcome, tenantId: string,
     failures: outcome.failures,
     failedTypes: outcome.failedTypes,
     trigger: CLOUD_OUTCOME_TRIGGER[outcome.trigger],
-    message: CLOUD_OUTCOME_SUMMARY[outcome.status],
+    message: outcome.status === "CompletedWithWarnings" && outcome.auditArchiveOnlyWarning ? AUDIT_ARCHIVE_WARNING_SUMMARY : CLOUD_OUTCOME_SUMMARY[outcome.status],
     source,
   })
 }
