@@ -110,7 +110,7 @@ The app registration only defines what TenuVault may request. What each admin ca
 New TenuVault app registrations include the delegated `GroupMember.Read.All` permission. It reads group names, basic properties and membership counts. The broader `Group.Read.All` also grants access to group content that TenuVault does not need for these checks.
 
 * [OpenIntuneBaseline assignments](/baselines/quick-start/#find-groups) uses it to search for groups, show names and member counts, and check every selected group before writing an assignment.
-* [Copy to Tenants and Dev to Prod](/copy-to-tenants/#group-mappings) use it to find and verify destination groups when assignments are included in a promotion.
+* [Dev to Prod](/changes/#dev-to-prod) uses it to find and verify destination groups when assignments are included in a promotion.
 * [Conflicts and hygiene](/governance/#conflicts-and-hygiene) uses it to check whether groups referenced in assignments still exist.
 
 If group access is missing, OpenIntuneBaseline deploys new policies unassigned. The Assignments workflow and group mappings are unavailable, and hygiene reports unresolved groups as unknown.

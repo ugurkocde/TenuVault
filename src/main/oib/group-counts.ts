@@ -31,8 +31,7 @@ export function createGroupCounter(now = Date.now) {
     }
   }
 
-  async function read(graph: GraphCall, tenant: string, id: string) {
-    const key = `${tenant}:${id}`
+  async function read(graph: GraphCall, key: string, id: string) {
     const cached = cache.get(key)
     if (cached && cached.expires > now()) return cached.counts
     const inflight = pending.get(key)
@@ -47,12 +46,13 @@ export function createGroupCounter(now = Date.now) {
     return load
   }
 
-  return async (graph: GraphCall, tenant: string, ids: unknown): Promise<Record<string, GroupCounts>> => {
+  return async (graph: GraphCall, tenant: string, appId: string, ids: unknown): Promise<Record<string, GroupCounts>> => {
     for (const [key, entry] of cache) if (entry.expires <= now()) cache.delete(key)
     if (!Array.isArray(ids)) return {}
     const wanted = [...new Set(ids.slice(0, GROUP_COUNT_LIMIT).filter(isGuid).map(id => id.toLowerCase()))]
+    const prefix = `${tenant.toLowerCase()}:${appId.toLowerCase()}`
     const entries = await Promise.all(wanted.map(async id => {
-      const counts = await read(graph, tenant, id)
+      const counts = await read(graph, `${prefix}:${id}`, id)
       return counts ? [[id, counts] as const] : []
     }))
     return Object.fromEntries(entries.flat())

@@ -283,6 +283,7 @@ export function promotionChangeSet(deps: FeatureDeps, tenantId: string, id: stri
 
 /** The rollback change set created for the promotion; it only writes to the destination. */
 export function promotionRollback(deps: FeatureDeps, tenantId: string, id: string): Stored<ChangeSetRecord> {
+  // Recovery can restore saved assignments whose groups have since been deleted.
   const promotion = getPromotion(deps, tenantId, id)
   if (!promotion.rollbackChangeSetId) throw new FeatureError(`No rollback was created for this ${noun(promotion)}. Preview and create one first.`, 409)
   const rollback = getChangeSet(deps, tenantId, promotion.rollbackChangeSetId)

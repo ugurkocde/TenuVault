@@ -15,11 +15,11 @@ describe("group membership counts", () => {
       return new Response({ user: " 40\n", device: "12", group: "0" }[match![1]!]!)
     })
     const read = createGroupCounter()
-    await expect(read(graphCaller("token", fetch), "tenant", [first])).resolves.toEqual({ [first]: { users: 40, devices: 12, groups: 0 } })
+    await expect(read(graphCaller("token", fetch), "tenant", "app", [first])).resolves.toEqual({ [first]: { users: 40, devices: 12, groups: 0 } })
     expect(fetch).toHaveBeenCalledTimes(3)
   })
 
-  it("limits concurrency across requests, deduplicates in-flight reads and expires the per-tenant cache", async () => {
+  it("limits concurrency across requests, deduplicates in-flight reads and expires the per-tenant and app cache", async () => {
     let active = 0
     let peak = 0
     let now = 0
@@ -31,18 +31,31 @@ describe("group membership counts", () => {
       return { status: 200, body: {}, rawBody: "0" }
     })
     const counts = createGroupCounter(() => now)
-    const request = () => counts(graph, "tenant", [first, second])
+    const request = () => counts(graph, "tenant", "app", [first, second])
     const [result, same] = await Promise.all([request(), request()])
     expect(result).toEqual(same)
     expect(peak).toBe(4)
     expect(graph).toHaveBeenCalledTimes(6)
     await request()
     expect(graph).toHaveBeenCalledTimes(6)
-    await counts(graph, "another-tenant", [first])
+    await counts(graph, "another-tenant", "app", [first])
     expect(graph).toHaveBeenCalledTimes(9)
     now = 5 * 60_000
     await request()
     expect(graph).toHaveBeenCalledTimes(15)
+  })
+
+  it("isolates cached and in-flight counts for two apps in the same tenant", async () => {
+    const allowed = vi.fn<GraphCall>().mockResolvedValue({ status: 200, body: {}, rawBody: "4" })
+    const denied = vi.fn<GraphCall>().mockResolvedValue({ status: 403, body: {} })
+    const counts = createGroupCounter()
+    const good = counts(allowed, "tenant", "first-app", [first])
+    const refused = counts(denied, "tenant", "second-app", [first])
+    await expect(good).resolves.toEqual({ [first]: { users: 4, devices: 4, groups: 4 } })
+    await expect(refused).resolves.toEqual({})
+    await expect(counts(denied, "tenant", "second-app", [first])).resolves.toEqual({})
+    expect(allowed).toHaveBeenCalledTimes(3)
+    expect(denied).toHaveBeenCalledTimes(6)
   })
 
   it("omits failed, malformed and unsafe counts and caps a request at 50 IDs", async () => {
@@ -53,7 +66,7 @@ describe("group membership counts", () => {
       if (path.includes(guid(4))) return { status: 200, body: {}, rawBody: "9007199254740992" }
       return { status: 200, body: {}, rawBody: "0" }
     })
-    const result = await createGroupCounter()(graph, "tenant", Array.from({ length: 51 }, (_, i) => guid(i + 1)))
+    const result = await createGroupCounter()(graph, "tenant", "app", Array.from({ length: 51 }, (_, i) => guid(i + 1)))
     expect(Object.keys(result)).toHaveLength(46)
     expect(result).toHaveProperty(guid(50))
     expect(result).not.toHaveProperty(guid(51))

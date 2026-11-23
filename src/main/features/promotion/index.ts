@@ -81,7 +81,11 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
         throw error
       }
     },
-    "target-group-counts": async ({ tenantId, body }) => ({ counts: await groupCounts(await deps.graph(tenantId), tenantId, body.ids) }),
+    "target-group-counts": async ({ tenantId, body }) => {
+      const tenant = deps.tenant(tenantId)
+      if (!tenant) throw new FeatureError("Select a signed-in tenant first.", 403)
+      return { counts: await groupCounts(await deps.graph(tenantId), tenantId, tenant.clientId, body.ids) }
+    },
     plan: async (context) => {
       const { tenantId, body, actor } = context
       const source = requireSourceTenant(context, body.sourceTenantId, { distinct: true })

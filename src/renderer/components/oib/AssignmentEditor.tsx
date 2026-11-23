@@ -260,12 +260,12 @@ export function AssignmentEditor({ state, targets, accessMissing, accessContext,
 
 /** One line per scope saying where the policies go, for the review and confirmation. */
 export function assignmentSummary(data: AssignmentData, targets: AssignmentTargets): string[] {
-  const { spec } = data
+  const spec = specFor(data, targets)
   const names = (list: OibGroupRef[]) => groupNames(data, list).join(", ")
   const unmarkedGroups = spec.unmarked === "both" ? [...spec.deviceGroups, ...spec.userGroups] : spec.unmarked === "device" ? spec.deviceGroups : spec.unmarked === "user" ? spec.userGroups : []
   const line = (count: number, scope: string, list: OibGroupRef[]) => count ? `${scopeCount(count, scope)}: ${list.length ? names(list) : "unassigned"}` : ""
   const assigned = (targets.device && spec.deviceGroups.length) || (targets.user && spec.userGroups.length) || (targets.unmarked && unmarkedGroups.length)
-  const filters = Object.entries(spec.filters).filter(([p, c]) => c && targets.filterPlatforms.includes(p as FilterPlatform)).map(([p, c]) => `${FILTER_PLATFORM_LABELS[p as FilterPlatform]} filter: ${c!.name ?? c!.id} (${c!.mode})`)
+  const filters = Object.entries(spec.filters).flatMap(([p, c]) => c ? [`${FILTER_PLATFORM_LABELS[p as FilterPlatform]} filter: ${c.name ?? c.id} (${c.mode})`] : [])
   return [
     line(targets.device, "device", spec.deviceGroups),
     line(targets.user, "user", spec.userGroups),

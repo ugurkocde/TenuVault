@@ -67,6 +67,8 @@ export async function lookupGroups(graph: GraphCall, ids: string[]): Promise<{ r
       if (page >= IDS_PER_REQUEST) throw new FrameworkError("The groups could not be read completely.", 502)
       const response = await graph("GET", next)
       if (denied(response.status)) return { readable: false, groups: [], missing: [] }
+      // A filter for a single missing ID can return 404 instead of an empty list.
+      if (page === 0 && chunk.length === 1 && response.status === 404 && (response.body.error as Item | undefined)?.code === "Request_ResourceNotFound") break
       if (response.status >= 300) throw new FrameworkError(`Groups could not be read (${response.status}). ${errorOf(response.body)}`.trim(), 502)
       if (!Array.isArray(response.body.value)) throw new FrameworkError("The groups were not returned.", 502)
       for (const entry of response.body.value as Item[]) {
