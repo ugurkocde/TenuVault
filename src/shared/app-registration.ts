@@ -1,3 +1,5 @@
+import { GROUP_READ_PERMISSION } from "./group-access"
+
 // The app registration TenuVault Desktop signs in with, as the setup script creates it
 // (resources/New-TenuVaultDesktopApp.ps1). Shown in the guided setup before anyone consents.
 
@@ -52,6 +54,7 @@ export const DESKTOP_APP_PERMISSIONS: readonly { api: string; appId: string; per
     permissions: [
       "User.Read",
       "Organization.Read.All",
+      GROUP_READ_PERMISSION,
       "Policy.Read.All",
       "DeviceManagementConfiguration.ReadWrite.All",
       "DeviceManagementApps.ReadWrite.All",
@@ -60,7 +63,7 @@ export const DESKTOP_APP_PERMISSIONS: readonly { api: string; appId: string; per
       "DeviceManagementRBAC.ReadWrite.All",
       "DeviceManagementManagedDevices.Read.All",
     ],
-    purpose: "Reads Intune configuration for backups, and writes it only when you restore or deploy.",
+    purpose: "Reads Intune configuration for backups and group details for assignment checks. Writes configuration during restore or deployment.",
   },
   {
     api: "Azure Service Management",

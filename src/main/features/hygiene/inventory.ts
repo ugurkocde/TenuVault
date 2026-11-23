@@ -1,3 +1,4 @@
+import { HYGIENE_GROUP_READ_HINT } from "../../../shared/group-access"
 import { mapLimit } from "../../../shared/map-limit"
 import { INTUNE_TYPES, itemName, typeForFolder, type Item } from "../../../shared/intune/registry"
 import { normalizeBackupStatus } from "../../../portal/lib/backup-health"
@@ -145,7 +146,7 @@ export interface GroupResolution {
 /**
  * Checks whether referenced groups exist with GET groups/{id}?$select=id (read only).
  * 200 means it exists, 404 that it does not. The TenuVault app only requests
- * Group.Read.All when the setup script ran with -IncludeGroupRead, so a 401 or 403 stops
+ * GroupMember.Read.All, so a 401 or 403 stops
  * the checks and leaves every group unknown; any other failure leaves that group unknown.
  * Unknown is never reported as missing or as fine.
  */
@@ -161,7 +162,7 @@ export async function resolveGroups(deps: FeatureDeps, tenantId: string, items: 
   }
   const groups = new Map<string, GroupState>()
   if (!ids.size) return { groups, state: "none" }
-  const unavailable = "Group existence cannot be read with this app's permissions (Group.Read.All is not granted), so group references are unknown. To let this check run, add Group.Read.All to the app registration and grant admin consent (run New-TenuVaultDesktopApp.ps1 with -IncludeGroupRead), then sign in again and rescan."
+  const unavailable = `Group existence could not be checked, so group references are unknown. ${HYGIENE_GROUP_READ_HINT}`
   let graph: Awaited<ReturnType<FeatureDeps["graph"]>>
   try {
     graph = await deps.graph(tenantId)

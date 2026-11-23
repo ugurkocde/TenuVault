@@ -21,6 +21,8 @@ Open **Copy to Tenants** in the sidebar, directly under **Drift Detection**.
 
 Copy to Tenants works like [Dev to Prod](/changes/#dev-to-prod), with more than one target and links between the source and target policies: each target gets its own reviewed change set, backup and rollback, and a failure in one target never stops or undoes another.
 
+Use [Dev to Prod](/changes/#dev-to-prod) to promote assignments and map groups in the destination.
+
 ## What your plan includes
 
 | | Community | Pro | MSP |
