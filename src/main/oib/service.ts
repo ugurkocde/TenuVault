@@ -12,7 +12,7 @@ import { extractOibId } from "../../shared/oib/manifest"
 import { compareToTenant } from "../../shared/oib/match"
 import { definitionIdsOf, describePolicy, policyChanges, type OibPolicyChanges, type OibPolicySettings } from "../../shared/oib/policy-settings"
 import { replaceTenantVariables } from "../../shared/oib/variables"
-import { AssignmentSpecError, REPORTS_SET_AS_DIRECT, alreadyTargeted, assignmentKey, assignmentsFor, excludesFor, assignsAnything, conflictingGroups, directAssignments, emptySpec, mergeAssignments, oibScope, parseSpec, sameAssignments, writableAssignment, type OibAssignmentSpec } from "../../shared/oib/assignments"
+import { AssignmentSpecError, REPORTS_SET_AS_DIRECT, alreadyTargeted, assignmentKey, assignmentsFor, excludesFor, assignsAnything, conflictingGroups, directAssignments, emptySpec, groupOf, mergeAssignments, oibScope, parseSpec, sameAssignments, writableAssignment, type OibAssignmentSpec } from "../../shared/oib/assignments"
 import { isFullValidation, OIB_BACKUP_REUSE_MINUTES, OIB_PLATFORMS, type DeployItem, type OibAssignMode, type OibPolicyAssignments, type OibBackupChoice, type OibBackupOptions, type OibComparison, type OibPlatform, type OibProgress, type OibRecentBackup, type OibRun, type PolicyValidation, type TenantPolicy, type UndoResult, type ValidationRun } from "../../shared/oib/types"
 import { backupGaps, describeMissing, describeStatus, folderLabel } from "../backup/completeness"
 import { apiBody } from "../features/deps"
@@ -22,6 +22,7 @@ import type { KeyValueStore } from "../storage/secure-store"
 import { FrameworkError, tokenFor } from "../frameworks/service"
 import { readSettingNamesReport } from "../../portal/lib/drift/setting-names"
 import { loadPack, oibDownloads, oibVersions, resolveMain, type LoadedPack } from "./source"
+import { groupCounts } from "./group-counts"
 import { checkSpec, listFilters, lookupGroups, readCurrentAssignments, searchGroups } from "./assignments"
 
 /**
@@ -879,7 +880,9 @@ async function undo(body: RecordJson): Promise<UndoResult> {
           reassigned.push(item)
           continue
         }
-        // Undo only takes back this run's change: assignments changed since are never overwritten.
+        const groupIds = item.previous.map(groupOf).filter(Boolean)
+        const groups = await lookupGroups(graph, groupIds).catch(() => ({ readable: false, missing: [] }))
+        // Undo only takes back this run's change: read the current assignments just before writing.
         let live: Awaited<ReturnType<typeof readCurrentAssignments>>
         try {
           live = await readCurrentAssignments(graph, type, item.id)
@@ -908,23 +911,31 @@ async function undo(body: RecordJson): Promise<UndoResult> {
           reassigned.push(item)
           continue
         }
+        if (groups.readable && groups.missing.length) {
+          const count = groups.missing.length
+          results.push({ name: item.name, id: item.id, action: "reassigned", done: false, error: `${count} ${count === 1 ? "group" : "groups"} this policy was assigned to no longer exist (${groups.missing.join(", ")}). Undo did not change this policy; assign it again in Assignments.` })
+          reassigned.push(item)
+          continue
+        }
+        const warning = groups.readable ? undefined : "Groups could not be checked because TenuVault cannot read groups in this tenant."
+        const result = { name: item.name, id: item.id, action: "reassigned" as const, ...(warning ? { warning } : {}) }
         let response: Awaited<ReturnType<GraphCall>>
         try {
           response = await writer!("POST", `${type.path}/${encodeURIComponent(item.id)}/assign`, { [type.assign.key]: item.previous }, { noRetry: true })
         } catch (error) {
           // A lost answer stops only this policy: its entry stays for the next undo, the others go on.
-          results.push({ name: item.name, id: item.id, action: "reassigned", done: false, error: `The outcome is unknown: ${message(error)}. Check the policy in Intune and undo again.` })
+          results.push({ ...result, done: false, error: `The outcome is unknown: ${message(error)}. Check the policy in Intune and undo again.` })
           reassigned.push(item)
           continue
         }
         const notFound = response.status === 404 || (response.status === 400 && /ResourceNotFound/i.test(JSON.stringify(response.body)))
         // A not-found answer only clears the record once a read confirms the policy itself is gone.
         const gone = notFound && await readCurrentAssignments(graph, type, item.id).then((policy) => !policy, () => false)
-        if (response.status < 300) results.push({ name: item.name, id: item.id, action: "reassigned", done: true })
-        else if (gone) results.push({ name: item.name, id: item.id, action: "reassigned", done: true, note: "already deleted in Intune" })
+        if (response.status < 300) results.push({ ...result, done: true })
+        else if (gone) results.push({ ...result, done: true, note: "already deleted in Intune" })
         else {
           const error = (response.body.error as Item | undefined)?.message
-          results.push({ name: item.name, id: item.id, action: "reassigned", done: false, error: response.approval ? approvalMessage(response.approval, type.label) : typeof error === "string" && error ? error : `Microsoft Graph returned ${response.status}` })
+          results.push({ ...result, done: false, error: response.approval ? approvalMessage(response.approval, type.label) : typeof error === "string" && error ? error : `Microsoft Graph returned ${response.status}` })
           reassigned.push(item)
         }
       }
@@ -1055,6 +1066,10 @@ export async function handleOib(body: RecordJson): Promise<unknown> {
     case "oib-groups": {
       tenantOf(body.tenantId)
       return searchGroups(graphCaller((await tokenFor(body)).token), typeof body.query === "string" ? body.query : "")
+    }
+    case "oib-group-counts": {
+      const tenant = tenantOf(body.tenantId)
+      return { counts: await groupCounts(graphCaller((await tokenFor(body)).token), tenant, String(body.appId), body.ids) }
     }
     case "oib-group-lookup": {
       tenantOf(body.tenantId)

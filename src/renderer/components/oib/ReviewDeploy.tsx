@@ -1,5 +1,8 @@
 import { READ_ONLY_REGISTRATION_MESSAGE } from "../../../shared/app-registration"
 import { useReadOnlyTenants, useRegistrationAccess } from "../../lib/registration-access"
+import { useQueries } from "@tanstack/react-query"
+import { groupAccessMissing } from "../GroupAccess"
+import { servicesStatusOptions } from "../../features/notifications/optional-permissions"
 import { useEffect, useState, type ReactNode } from "react"
 import { Link } from "react-router-dom"
 import { AlertTriangle, CheckCircle2, Rocket, RotateCcw, XCircle } from "lucide-react"
@@ -122,25 +125,31 @@ export function ReviewDeploy({ batches: given, flow, kind = "deploy", onBack, ba
   const view = job ? job.finishedAt ? "result" : "running" : phase
   const headingRef = useFocusOnChange<HTMLHeadingElement>(view)
   useJobFinished(job, onFinished)
-  if (!tenant) return null
 
   const items = batches.flatMap(b => b.items)
   const creates = items.filter(i => i.mode === "create"), updates = items.filter(i => i.mode === "update")
-  const storage = !!tenant.storageAccountName
+  const storage = !!tenant?.storageAccountName
   const bulk = can("bulkActions")
   // Updates point at policies of this tenant, so only new policies can go to other tenants.
-  const others = kind === "fix" || updates.length ? [] : tenants.filter(t => t.credentials?.tenantId && t.credentials.appId && t.credentials.tenantId !== tenant.tenantId && !readOnlyTenants.has(t.credentials.tenantId.toLowerCase()))
+  const others = kind === "fix" || updates.length || readOnly ? [] : tenants.filter(t => t.credentials?.tenantId && t.credentials.appId && t.credentials.tenantId !== tenant?.tenantId && !readOnlyTenants.has(t.credentials.tenantId.toLowerCase()))
   const extras: OibTenant[] = bulk ? others.filter(t => alsoDeploy.includes(t.credentials!.tenantId)).map(t => ({ tenantId: t.credentials!.tenantId, appId: t.credentials!.appId, name: t.name, storageAccountName: t.resources?.storageAccountName })) : []
   const targets = assignmentTargets(batches.flatMap(b => b.items.filter(i => i.mode === "create").map(i => ({ platform: b.platform, folder: i.folder, scope: i.scope }))))
   const extraAssignment = (tenantId: string) => extraAssignments[tenantId] ?? newAssignment()
   const updateExtra = (tenantId: string) => (change: (data: AssignmentData) => AssignmentData) => setExtraAssignments(current => ({ ...current, [tenantId]: change(current[tenantId] ?? newAssignment()) }))
-  const assigning = kind === "deploy" && creates.length > 0
-  const assignmentsReady = !assigning || (assignmentReady(assignment) && extras.every(t => assignmentReady(extraAssignment(t.tenantId))))
-  /** The assignments a tenant's new policies get, or undefined when they stay unassigned. */
-  // Per platform: a request carries only the filters its own policies use, so a stale filter of another platform cannot stop it.
-  // Sent whenever anything is chosen, even only a filter or an exclusion, so the main process checks it.
-  const specOf = (data: AssignmentData, batch: DeployBatch) => assigning && (specGroupIds(data.spec).length > 0 || Object.values(data.spec.filters).some(Boolean))
-    ? specFor(data, assignmentTargets(batch.items.filter(i => i.mode === "create").map(i => ({ platform: batch.platform, folder: i.folder, scope: i.scope })))) : undefined
+  const assigning = !readOnly && kind === "deploy" && creates.length > 0
+  const permissionStatuses = useQueries({ queries: [tenant, ...extras].map(target => servicesStatusOptions(assigning ? target : null)) })
+  if (!tenant) return null
+  const accessMissing = (data: AssignmentData, index: number) => groupAccessMissing(data.readable, permissionStatuses[index]?.data?.optional?.find(entry => entry.id === "groupRead")?.granted)
+  const primaryMissing = accessMissing(assignment, 0)
+  const extraMissing = new Map(extras.map((target, index) => [target.tenantId, accessMissing(extraAssignment(target.tenantId), index + 1)]))
+  const assignmentsReady = !assigning || ((primaryMissing || assignmentReady(assignment, targets)) &&
+    extras.every(t => extraMissing.get(t.tenantId) || assignmentReady(extraAssignment(t.tenantId), targets)))
+  const specOf = (target: OibTenant, index: number, batch: DeployBatch) => {
+    if (!assigning || (index === 0 ? primaryMissing : extraMissing.get(target.tenantId))) return undefined
+    const data = index === 0 ? assignment : extraAssignment(target.tenantId)
+    const spec = specFor(data, assignmentTargets(batch.items.filter(i => i.mode === "create").map(i => ({ platform: batch.platform, folder: i.folder, scope: i.scope }))))
+    return specGroupIds(spec).length || Object.values(spec.filters).some(Boolean) ? spec : undefined
+  }
   const fallback: BackupRequest["mode"] = !storage ? "none" : backup.usable ? "reuse" : "new"
   const mode = !storage ? "none" : choice === "reuse" && !backup.usable ? fallback : choice ?? fallback
   const request: BackupRequest = mode === "reuse" ? { mode, folder: backup.recent!.folder } : { mode }
@@ -149,7 +158,7 @@ export function ReviewDeploy({ batches: given, flow, kind = "deploy", onBack, ba
   const updateNames = updates.map(u => u.targetName && u.targetName !== u.name ? `${u.targetName}, replaced with ${u.name ?? u.source}` : u.name ?? u.source)
 
   function deploy() {
-    if (readOnly) return
+    if (readOnly || !assignmentsReady) return
     setError("")
     const targets = [tenant!, ...extras]
     try {
@@ -161,7 +170,7 @@ export function ReviewDeploy({ batches: given, flow, kind = "deploy", onBack, ba
           // The recent backup belongs to the first tenant; other tenants back up their own affected folders.
           const results = await deployToTenant(batches, { backup: index === 0 || request.mode === "none" ? request : { mode: "new" }, storage: !!target.storageAccountName }, async (batch, backupRequest) => {
             context.update({ detail: targets.length > 1 || batches.length > 1 ? `${target.name}, ${OIB_PLATFORMS[batch.platform].label}` : undefined })
-            const spec = specOf(index === 0 ? assignment : extraAssignment(target.tenantId), batch)
+            const spec = specOf(target, index, batch)
             const run = await oibRequest<OibRun>({ action: kind === "fix" ? "oib-fix" : "oib-deploy", tenantId: target.tenantId, appId: target.appId, storageAccountName: target.storageAccountName,
               platform: batch.platform, commit: batch.commit, ...(batch.tag ? { tag: batch.tag } : {}), items: batch.items.map(deployItem), backup: backupRequest,
               ...(spec && batch.items.some(i => i.mode === "create") ? { assignments: spec } : {}), ...(index > 0 ? { bulk: true } : {}) })
@@ -217,10 +226,10 @@ export function ReviewDeploy({ batches: given, flow, kind = "deploy", onBack, ba
 
   if (view === "confirm") {
     // Where the new policies go, per tenant: groups by scope, or unassigned.
-    const assignedIn = (name: string, data: AssignmentData) => assignsAnything(data.spec) ? `In ${name}: ${assignmentSummary(data, targets).join("; ")}.` : `In ${name} they stay unassigned.`
+    const assignedIn = (name: string, data: AssignmentData, missing: boolean) => !missing && assignsAnything(specFor(data, targets)) ? `In ${name}: ${assignmentSummary(data, targets).join("; ")}.` : `In ${name} they stay unassigned.`
     const sentences = [
       `${kind === "fix" ? "Reset" : "Change"} ${tenant.name}${extras.length ? ` and ${plural(extras.length, "other tenant", "other tenants")} (${listJoin(extras.map(t => t.name))}), one after another` : ""}, using OpenIntuneBaseline ${versionsLabel(batches)}.`,
-      creates.length ? `Create ${plural(creates.length, "policy", "policies")}${extras.length ? ` in each tenant` : ""}. ${[assignedIn(tenant.name, assignment), ...extras.map(t => assignedIn(t.name, extraAssignment(t.tenantId)))].join(" ")}` : "",
+      creates.length ? `Create ${plural(creates.length, "policy", "policies")}${extras.length ? ` in each tenant` : ""}. ${[assignedIn(tenant.name, assignment, primaryMissing), ...extras.map(t => assignedIn(t.name, extraAssignment(t.tenantId), !!extraMissing.get(t.tenantId)))].join(" ")}` : "",
       updates.length ? `Replace ${plural(updates.length, "existing policy", "existing policies")} with the OIB version. Assignments, filters and scope tags stay as they are.` : "",
       mode === "reuse" ? `No new backup: the complete backup from ${minutesAgo(backup.recent!.ageMinutes)} (${backup.recent!.folder}) is used.`
         : mode === "new" ? `First back up the policy types this ${noun} changes${extras.length ? " in each tenant" : ""}. If the backup fails, nothing is changed.`
@@ -234,7 +243,7 @@ export function ReviewDeploy({ batches: given, flow, kind = "deploy", onBack, ba
         Settings added or changed in Intune since the policy was deployed are replaced.
       </Toggle></div>}
       <ActionBar summary={readOnly ? READ_ONLY_REGISTRATION_MESSAGE : blocking ? `${blocking.label} is still running. Wait for it to finish first.` : undefined} error={error} back={{ label: "Back to the review", onClick: () => setPhase("review") }}>
-        <button type="button" className={primary} title={readOnly ? READ_ONLY_REGISTRATION_MESSAGE : undefined} disabled={readOnly || !!blocking || (updates.length > 0 && !acknowledged)} onClick={deploy}>
+        <button type="button" className={primary} title={readOnly ? READ_ONLY_REGISTRATION_MESSAGE : undefined} disabled={readOnly || !!blocking || !assignmentsReady || (updates.length > 0 && !acknowledged)} onClick={deploy}>
           {kind === "fix" ? <RotateCcw className="h-4 w-4" aria-hidden="true" /> : <Rocket className="h-4 w-4" aria-hidden="true" />}
           {mode === "new" ? `Back up and ${kind === "fix" ? "reset" : "deploy"}` : kind === "fix" ? "Reset the policy" : "Deploy"}{extras.length ? ` to ${extras.length + 1} tenants` : ""}
         </button>
@@ -257,9 +266,9 @@ export function ReviewDeploy({ batches: given, flow, kind = "deploy", onBack, ba
       {assigning && <section className="rounded-2xl border border-gray-200 p-4" aria-labelledby="oib-assignments-heading">
         <h4 id="oib-assignments-heading" className="text-sm font-medium text-gray-800">Assignments for new policies{extras.length ? ` in ${tenant.name}` : ""}</h4>
         <p className="mb-4 mt-1 text-xs leading-5 text-gray-500">OpenIntuneBaseline marks each policy as a device or user policy. Device groups go to device policies, user groups to user policies. Without groups the new policies stay unassigned, and nothing reaches devices until a policy is assigned. Start with a pilot group.</p>
-        <AssignmentEditor state={{ tenant, data: assignment, update: change => setAssignment(change) }} targets={targets} />
+        <AssignmentEditor state={{ tenant, data: assignment, update: setAssignment }} targets={targets} accessMissing={primaryMissing} accessContext="You can still deploy: the new policies are created unassigned." />
       </section>}
-      {kind === "deploy" && !updates.length && <div className={cn("rounded-2xl border border-gray-200 p-4", !bulk && "opacity-60")}>
+      {!readOnly && kind === "deploy" && !updates.length && <div className={cn("rounded-2xl border border-gray-200 p-4", !bulk && "opacity-60")}>
         <p className="flex items-center gap-2 text-sm font-medium text-gray-800">Also deploy to{!bulk && <PlanBadge feature="bulkActions" />}</p>
         <p className="mt-1 text-xs leading-5 text-gray-500">Create the same policies in other connected tenants after {tenant.name}, one tenant at a time. Groups exist per tenant: choose them for each tenant below, or leave its policies unassigned.{mode !== "none" && " Each tenant backs up its affected policy types first."}</p>
         {bulk && (others.length
@@ -270,9 +279,11 @@ export function ReviewDeploy({ batches: given, flow, kind = "deploy", onBack, ba
           : <p className="mt-3 text-xs text-gray-500">Connect another tenant to deploy to it as well.</p>)}
         {extras.map(t => {
           const data = extraAssignment(t.tenantId)
-          return <details key={t.tenantId} className="group mt-4 rounded-2xl bg-gray-50 p-4" open={!assignmentReady(data) || undefined}>
-            <summary className="cursor-pointer select-none text-sm font-medium text-gray-800">Assignments in {t.name}<span className="ml-2 text-xs font-normal text-gray-500">{assignsAnything(data.spec) ? assignmentSummary(data, targets).join("; ") : "unassigned"}</span></summary>
-            <div className="mt-4"><AssignmentEditor state={{ tenant: t, data, update: updateExtra(t.tenantId) }} targets={targets} /></div>
+          const missing = !!extraMissing.get(t.tenantId)
+          return <details key={t.tenantId} className="group mt-4 rounded-2xl bg-gray-50 p-4" open={missing || !assignmentReady(data, targets) || undefined}
+            onToggle={event => { if (missing && !event.currentTarget.open) event.currentTarget.open = true }}>
+            <summary className="cursor-pointer select-none text-sm font-medium text-gray-800">Assignments in {t.name}<span className="ml-2 text-xs font-normal text-gray-500">{missing ? "Group access missing: created unassigned" : assignsAnything(specFor(data, targets)) ? assignmentSummary(data, targets).join("; ") : "unassigned"}</span></summary>
+            <div className="mt-4"><AssignmentEditor state={{ tenant: t, data, update: updateExtra(t.tenantId) }} targets={targets} accessMissing={missing} accessContext={`Policies in ${t.name} are created unassigned.`} /></div>
           </details>
         })}
       </div>}

@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
 import { BACKUP_ONLY_GRAPH_PERMISSIONS, READ_ONLY_REGISTRATION_MESSAGE, desktopAppPermissions } from "../src/shared/app-registration"
+import { GROUP_READ_PERMISSION } from "../src/shared/group-access"
 import { DEVICE_INVENTORY_ROLE, READER_REQUIRED_ROLES } from "../src/shared/services/backup-permissions"
 import { grantedPermissions, isReadOnlyRegistration, requireWritableRegistration } from "../src/shared/services/token"
 
@@ -26,5 +27,11 @@ describe("interactive backup-only registration", () => {
     expect(isReadOnlyRegistration(grantedPermissions(token({ roles: BACKUP_ONLY_GRAPH_PERMISSIONS })))).toBe(false)
     expect(isReadOnlyRegistration(grantedPermissions(token({ scp: "User.Read DeviceManagementManagedDevices.Read.All" })))).toBe(false)
     expect(isReadOnlyRegistration(grantedPermissions("opaque"))).toBe(false)
+  })
+
+  it("requests group read for full setup and preserves the backup-only scope set", () => {
+    expect(desktopAppPermissions()[0]?.permissions).toContain(GROUP_READ_PERMISSION)
+    expect(desktopAppPermissions("backup-only")[0]?.permissions).not.toContain(GROUP_READ_PERMISSION)
+    expect(isReadOnlyRegistration(grantedPermissions(token({ scp: scopes + " " + GROUP_READ_PERMISSION })))).toBe(true)
   })
 })

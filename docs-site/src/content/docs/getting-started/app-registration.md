@@ -89,7 +89,7 @@ Delete **TenuVault Desktop** under **Entra admin center** > **App registrations*
 | Admin consent | Granted tenant-wide for all of the permissions below |
 | Enterprise application | Hidden from users' My Apps portal |
 | Sign-in restriction | Optional, with the script: only members of one group can sign in (`-AllowedGroupId`) |
-| Group read | Optional, with the script: also request `Group.Read.All` (`-IncludeGroupRead`), off by default |
+| Group read | Delegated `GroupMember.Read.All`, included by default |
 
 Because the app is a public client with delegated permissions, every call runs as the signed-in admin. MFA, Conditional Access and your Intune role apply, and changes are attributed to that admin in the Entra and Intune audit logs.
 
@@ -101,6 +101,7 @@ This page is only about the app registration you sign in with. It never gets app
 | --- | --- |
 | Microsoft Graph | `User.Read` |
 | Microsoft Graph | `Organization.Read.All` |
+| Microsoft Graph | `GroupMember.Read.All` |
 | Microsoft Graph | `Policy.Read.All` |
 | Microsoft Graph | `DeviceManagementConfiguration.ReadWrite.All` |
 | Microsoft Graph | `DeviceManagementApps.ReadWrite.All` |
@@ -113,7 +114,9 @@ This page is only about the app registration you sign in with. It never gets app
 
 The two Azure permissions are only used when backups go to your Azure storage account: Azure Service Management lists your subscriptions and storage accounts in the storage picker, and Azure Storage reads and writes the backup files. For what each permission is used for, see [App registration and delegated permissions](/security/permissions/).
 
-The table above is the default permission set. It does not change unless you opt in. With `-IncludeGroupRead` the script adds one more delegated Microsoft Graph permission, `Group.Read.All`. The hygiene unresolved groups check uses it to tell whether a referenced group exists; App Backup can also use it to name groups referenced by app assignments, and OpenIntuneBaseline assignments use it to search groups by name. Without it the hygiene check stays unknown and no group is reported as missing. App Backup's optional device-group membership check additionally needs delegated `Device.Read.All`, added manually to the existing registration; see [App Backup](/apps/app-backup/#understand-the-assignment-check). With `-IncludeConditionalAccessRestore` it adds `Policy.ReadWrite.ConditionalAccess`, which restoring [Conditional Access](/backups/conditional-access/) needs; backing Conditional Access up only needs the default `Policy.Read.All`.
+The table above is the default permission set. For an older registration, follow the [group read setup steps](/security/permissions/#group-read-groupmemberreadall) to add the permission, grant admin consent and select **Check again**. App Backup's optional device-group membership check additionally needs delegated `Device.Read.All`, added manually to the existing registration. See [App Backup](/apps/app-backup/#understand-the-assignment-check).
+
+The `-IncludeConditionalAccessRestore` switch adds `Policy.ReadWrite.ConditionalAccess` for [Conditional Access restores](/backups/conditional-access/). Conditional Access backups use the default `Policy.Read.All`.
 
 ## Backup only (read-only) registration
 
@@ -130,9 +133,11 @@ For manual setup, follow [Create the app registration manually](#create-the-app-
 - `Policy.Read.All` (Conditional Access backups when enabled)
 - `User.Read` and `Organization.Read.All` (sign-in and tenant details)
 
+Backups save group IDs on assignment targets. For the optional [App Backup assignment check](/apps/app-backup/#understand-the-assignment-check), add delegated `GroupMember.Read.All` to see group names.
+
 Use the same Azure permissions in step 3 if you store backups in Azure. Grant admin consent, then connect TenuVault with the tenant ID and client ID. Microsoft sign-in still supplies the ID token TenuVault uses for license activation.
 
-To enable restores later, add the five Intune `ReadWrite.All` permissions in the [default full setup](#delegated-permissions), grant admin consent, and select **Check again** in **Settings > Services and permissions** to refresh the Graph token. You can keep using the same tenant and client ID.
+To enable restores later, add the five Intune `ReadWrite.All` permissions in the [default full setup](#delegated-permissions). Add `GroupMember.Read.All` if you also need to choose groups for OpenIntuneBaseline assignments or Dev to Prod mappings. Grant admin consent, then select **Check again** in **Settings > Services and permissions** to refresh the Graph token. You can keep using the same tenant and client ID.
 
 For unattended scheduled backups, use the separate [Backup Reader](/backups/backup-reader/). It signs in as an application with a certificate. The backup-only desktop registration signs in as you and follows your Intune roles, MFA, and Conditional Access.
 
@@ -192,12 +197,6 @@ Select **Next: sign in** under the card when you have the two values. If the app
    ./New-TenuVaultDesktopApp.ps1 -TenantId contoso.onmicrosoft.com -DisplayName "TenuVault Desktop" -AllowedGroupId 00000000-0000-0000-0000-000000000000
    ```
 
-   To also let the hygiene unresolved groups check read whether referenced groups exist:
-
-   ```powershell
-   ./New-TenuVaultDesktopApp.ps1 -TenantId contoso.onmicrosoft.com -IncludeGroupRead
-   ```
-
 3. Sign in with your admin account in the browser the script opens. It asks you to choose an account, so a browser that is already signed in with another account does not pick that one.
 
    * The script signs in through **Microsoft Graph Command Line Tools**, the Microsoft app that Microsoft Graph PowerShell also signs in through. If Microsoft asks you to consent to it, accept. It requests `Application.ReadWrite.All` and `DelegatedPermissionGrant.ReadWrite.All` to create the app and grant consent, and `AppRoleAssignment.ReadWrite.All` only with `-AllowedGroupId`.
@@ -229,7 +228,7 @@ If an app registration with the same name already exists, the script prints a no
 | `-TenantId` | No | Tenant ID or domain to create the app registration in. Defaults to the tenant of the account you sign in with. |
 | `-DisplayName` | No | Name of the app registration. Default: `TenuVault Desktop`. |
 | `-AllowedGroupId` | No | Object ID of a security group. When set, user assignment is required on the enterprise application and only members of this group can sign in to TenuVault. |
-| `-IncludeGroupRead` | No | Switch. When set, also requests the delegated `Group.Read.All` permission so the hygiene unresolved groups check can run and OpenIntuneBaseline assignments can search groups by name. Off by default, so the default permission set is unchanged. Because each run creates a new app registration, use this on a fresh run and sign in with the new client ID, or add `Group.Read.All` to an existing registration manually and grant admin consent. |
+| `-IncludeGroupRead` | No | Deprecated switch accepted for compatibility. New registrations already include delegated `GroupMember.Read.All`. |
 | `-UseDeviceCode` | No | Switch. Signs in with a device code instead of opening a browser on this computer, for remote shells without a browser. Conditional Access often blocks device code flow, so only use it when the browser sign-in is not possible. |
 
 ### Execution policy

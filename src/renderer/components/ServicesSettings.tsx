@@ -1,5 +1,6 @@
+import { servicesStatusKey, servicesStatusOptions } from "../features/notifications/optional-permissions"
 import { useEffect, useId, useState } from "react"
-import { useQueryClient } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { AlertCircle, Check, CheckCircle2, Copy, ExternalLink, Loader2, MinusCircle, RefreshCw } from "lucide-react"
 import { Button } from "~/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "~/components/ui/card"
@@ -259,6 +260,7 @@ export function ServicesSettings() {
   const [checkingTenant, setCheckingTenant] = useState<string | null>(null)
   const current = rows.find((row) => row.tenantId === selected) ?? rows[0]
   const queryClient = useQueryClient()
+  const currentStatus = useQuery(servicesStatusOptions(current && { tenantId: current.tenantId, appId: current.clientId }))
 
   useEffect(() => {
     // Statuses come from tokens TenuVault already holds; a slow answer for an old tenant list is dropped.
@@ -268,7 +270,7 @@ export function ServicesSettings() {
     const worker = async () => {
       for (let row = queue.shift(); row; row = queue.shift()) {
         const tenant = row
-        const status = await bridge.services.status(tenant.tenantId, tenant.clientId).catch((error: unknown): ServicesStatus => ({
+        const status = await queryClient.fetchQuery(servicesStatusOptions({ tenantId: tenant.tenantId, appId: tenant.clientId })).catch((error: unknown): ServicesStatus => ({
           tenantId: tenant.tenantId, modules: [], checkedAt: null, error: error instanceof Error ? error.message : String(error),
         }))
         if (active) setStatuses((previous) => new Map(previous).set(tenant.tenantId, status))
@@ -288,14 +290,14 @@ export function ServicesSettings() {
     )
   }
 
-  const status = statuses.get(current.tenantId)
-  const run = async (action: () => Promise<ServicesStatus>, statusKey?: readonly string[]) => {
+  const status = currentStatus.data ?? statuses.get(current.tenantId)
+  const statusKey = servicesStatusKey(current.tenantId, current.clientId)
+  const run = async (action: () => Promise<ServicesStatus>) => {
     setBusy(true)
     try {
       const next = await action()
       setStatuses((previous) => new Map(previous).set(next.tenantId, next))
-      if (statusKey) queryClient.setQueryData(statusKey, next)
-      else void queryClient.invalidateQueries({ queryKey: ["services-status"] })
+      queryClient.setQueryData(statusKey, next)
     } catch (error) {
       toast(error instanceof Error ? error.message : String(error), "error")
     } finally {
@@ -304,8 +306,8 @@ export function ServicesSettings() {
   }
 
   // A failed re-check leaves the module list as it was and clears the cached permission indicators.
-  const recheck = async (tenantId: string, clientId: string) => {
-    const statusKey = ["services-status", tenantId, clientId]
+  const recheck = async () => {
+    const { tenantId, clientId } = current
     setCheckingTenant(tenantId)
     try {
       await run(async () => {
@@ -324,7 +326,7 @@ export function ServicesSettings() {
           })
           throw error
         }
-      }, statusKey)
+      })
     } finally {
       setCheckingTenant((value) => (value === tenantId ? null : value))
     }
@@ -343,7 +345,7 @@ export function ServicesSettings() {
         {rows.length > 1 ? <Overview tenants={rows} statuses={statuses} selected={current.tenantId} onSelect={setSelected} /> : null}
         <div className="flex flex-wrap items-center gap-3">
           <p className="text-sm font-medium text-gray-900">{current.name}</p>
-          <Button variant="outline" size="sm" disabled={busy || status === "loading"} onClick={() => { void recheck(current.tenantId, current.clientId) }}>
+          <Button variant="outline" size="sm" disabled={busy || status === "loading"} onClick={() => { void recheck() }}>
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
             Check again
           </Button>
@@ -376,19 +378,19 @@ export function ServicesSettings() {
 }
 
 /**
- * Delegated permissions the setup script only adds on request. Each one turns on a single
- * feature; without it that feature fails while the rest keeps working.
+ * Delegated permissions used by specific features.
  */
 function OptionalPermissions({ entries, clientId, checking }: { entries: OptionalPermissionStatus[]; clientId: string; checking: boolean }) {
   return (
     <section aria-labelledby="optional-permissions-heading" className="space-y-2 border-t border-gray-100 pt-4 dark:border-gray-800">
-      <h3 id="optional-permissions-heading" className="text-sm font-medium text-gray-900">Optional permissions</h3>
+      <h3 id="optional-permissions-heading" className="text-sm font-medium text-gray-900">Feature permissions</h3>
       {/* The text switches to "Checking" while Check again runs, so every finished check is announced, also when the result is unchanged. */}
       <p role="status" aria-live="polite" className="sr-only">
-        {checking ? "Checking optional permissions." : entries.some((entry) => entry.granted === null) ? "Optional permissions could not be checked." : `${entries.filter((entry) => entry.granted).length} of ${entries.length} optional permissions granted.`}
+        {checking ? "Checking feature permissions." : entries.some((entry) => entry.granted === null) ? "Feature permissions could not be checked." : `${entries.filter((entry) => entry.granted).length} of ${entries.length} feature permissions granted.`}
       </p>
       <p className="text-xs text-gray-500">
-        Added only when you ask for them. A new app registration gets them with the setup switch shown; for this one, add the delegated permission in Entra and grant admin consent, then check again.
+        For feature permissions with a setup switch, use that switch when creating a new app registration. You can also add the delegated permission in Entra, grant admin consent, then check again.
+        {" "}<span className="font-mono">-IncludeNotifications</span> adds <span className="font-mono">Mail.Send</span> and <span className="font-mono">User.Read.All</span>.
       </p>
       <ul className="divide-y divide-gray-100 dark:divide-gray-800">
         {entries.map((entry) => (
@@ -397,9 +399,11 @@ function OptionalPermissions({ entries, clientId, checking }: { entries: Optiona
             <span className="font-medium text-gray-900">{entry.label}</span>
             <span className="font-mono text-xs text-gray-600">{entry.permissions.join(", ")}</span>
             <span className="text-xs text-gray-500">{entry.granted === true ? "Granted" : entry.granted === false ? `Not granted: ${entry.missing.join(", ")}` : "Could not be checked"}</span>
+            {entry.id === "groupRecipients" && <span className="text-xs text-gray-500">Also needs Group read.</span>}
+            {entry.id === "groupRead" && <span className="basis-full text-xs text-gray-500">Included in new full app registrations. To enable group reads, add the delegated GroupMember.Read.All permission in Entra and grant admin consent, then select Check again.</span>}
             {entry.granted === false && (
               <span className="ml-auto flex flex-wrap items-center gap-2 text-xs text-gray-500">
-                <span>New app registration: <span className="font-mono">{entry.setupSwitch}</span></span>
+                {entry.setupSwitch && <span>New app registration: <span className="font-mono">{entry.setupSwitch}</span></span>}
                 <a href={entraApiPermissionsUrl(clientId)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 underline underline-offset-2">Open in Entra<ExternalLink className="h-3 w-3" aria-hidden="true" /></a>
               </span>
             )}

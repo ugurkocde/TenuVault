@@ -115,7 +115,10 @@ export function RunsList({ tenant, empty, flow, onChanged }: { tenant: OibTenant
         <button type="button" className="text-xs text-blue-700 underline" onClick={() => clearJob(result.id)}>Dismiss</button>
       </div>
       {result.result.run && <p className="mt-1 text-xs">What could not be undone stays in the list; retry or fix it in Intune.</p>}
-      <ul className="mt-2 max-h-48 space-y-0.5 overflow-auto text-xs">{result.result.results.map(r => <li key={`${r.action}${r.id}`} className={r.done ? "" : "text-red-800"}>{r.name}: {r.done ? (r.note ?? (r.action === "removed" ? "deleted" : r.action === "reassigned" ? "previous assignments put back" : "previous version restored")) : r.error}</li>)}</ul>
+      <ul className="mt-2 max-h-48 space-y-0.5 overflow-auto text-xs">{result.result.results.map(r => <li key={`${r.action}${r.id}`} className={r.done ? "" : "text-red-800"}>
+        {r.name}: {r.done ? (r.note ?? (r.action === "removed" ? "deleted" : r.action === "reassigned" ? "previous assignments put back" : "previous version restored")) : r.error}
+        {r.warning && <span className="block text-amber-800">{r.warning}</span>}
+      </li>)}</ul>
     </div>}
   </div>
 }

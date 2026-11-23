@@ -108,7 +108,7 @@ The check reads app assignments and matches this PC's local Entra identity and I
 
 No assignment or group membership is changed automatically. Required assignments can cause Intune to install software; keep intended changes limited to a dedicated test-device group. After changing targeting, sync the PC and allow membership changes to propagate before rechecking. An assignment check is guidance, not proof of installer authorization, so an uncertain check still allows a deliberate Backup attempt.
 
-Device-group checks need optional delegated **`Device.Read.All`**. Reading names and visibility of referenced groups needs **`GroupMember.Read.All`** or an existing broader group-read permission. Filter details use **`DeviceManagementConfiguration.Read.All`** or its read/write equivalent, already included in the standard setup. For an existing registration, add only the needed read permissions in Entra, grant admin consent, reconnect Microsoft in TenuVault, then recheck. The default setup permissions are unchanged. All-devices and user-only targeting can be described without device-group reads.
+Device-group checks need optional delegated **`Device.Read.All`**. Reading names and visibility of referenced groups needs **`GroupMember.Read.All`** or an existing broader group-read permission. Filter details use **`DeviceManagementConfiguration.Read.All`** or its read/write equivalent. Full setup includes `GroupMember.Read.All`. For a backup-only or older registration, add any missing read permissions in Entra, grant admin consent, then select **Check again** in **Settings > Services and permissions** before checking assignments. All-devices and user-only targeting can be described without device-group reads.
 
 ### If a Required device assignment is needed
 

@@ -1,5 +1,6 @@
 import { READ_ONLY_REGISTRATION_MESSAGE } from "../../../shared/app-registration"
 import { useRegistrationAccess } from "../../lib/registration-access"
+import { ASSIGNMENT_ACCESS_CONTEXT, GroupAccessCard, useGroupAccessMissing } from "../GroupAccess"
 import { useEffect, useRef, useState } from "react"
 import { AlertTriangle, ArrowRight, CheckCircle2, RefreshCw, Users, XCircle } from "lucide-react"
 import { cn } from "~/lib/utils"
@@ -8,7 +9,7 @@ import { assignmentsFor, assignsAnything, describeAssignment, excludesFor, merge
 import { policyTypeName } from "../../../shared/oib/licensing"
 import { OIB_PLATFORMS, type OibAssignMode, type OibPlatform, type OibPolicyAssignments, type OibRun } from "../../../shared/oib/types"
 import { PlanBadge } from "../UpgradeNote"
-import { AssignmentEditor, assignmentReady, assignmentSummary, assignmentTargets, groupNames, newAssignment, specFor, type AssignmentData } from "./AssignmentEditor"
+import { AssignmentEditor, assignmentReady, assignmentSummary, assignmentTargets, groupNames, newAssignment, specFor, unknownGroups, type AssignmentData } from "./AssignmentEditor"
 import { button, card, errorText, listJoin, minutesAgo, oibRequest, PlatformPicker, platformsLabel, primary, Toggle, useOibTenant, versionsLabel, type Selections } from "./common"
 import { RunsList } from "./DeployPanel"
 import { batchFolders, batchFor, deployToTenant, type BackupRequest, type DeployBatch } from "./deploy-sequence"
@@ -49,6 +50,7 @@ export function ManageAssignments({ selections }: { selections: Selections }) {
   const stale = useRef(false)
   const rows = joinRows(loader.loaded).filter(assignable)
   const allowed = can("replaceRestore")
+  const accessMissing = useGroupAccessMissing(readOnly ? null : tenant, null)
 
   // After a reload, drop selections that are no longer deployed.
   useEffect(() => {
@@ -64,7 +66,7 @@ export function ManageAssignments({ selections }: { selections: Selections }) {
   }
   const running = !!job && !job.finishedAt
   const refresh = () => { stale.current = false; loader.start() }
-  const compare = () => { setStep("select"); refresh() }
+  const compare = () => { if (!accessMissing) { setStep("select"); refresh() } }
   const toSelect = () => !platforms.length ? setStep("platforms") : stale.current || (!loader.busy && !loader.loaded.length && !loader.failed.length) ? compare() : setStep("select")
   const goTo = (next: string) => {
     if (step === "review" && job?.finishedAt) clearJob(job.id)
@@ -84,8 +86,9 @@ export function ManageAssignments({ selections }: { selections: Selections }) {
       {step === "platforms" && <>
         <PlatformPicker value={platforms} onChange={setPlatforms} />
         <ChangeVersions platforms={platforms} />
-        <ActionBar summary={platforms.length ? `${platformsLabel(platforms)} selected` : "Select at least one platform"}>
-          <button type="button" className={primary} disabled={!platforms.length} onClick={compare}>Find deployed policies<ArrowRight className="h-4 w-4" aria-hidden="true" /></button>
+        {!readOnly && accessMissing && <GroupAccessCard key={tenant.tenantId} tenant={tenant} context={ASSIGNMENT_ACCESS_CONTEXT} />}
+        <ActionBar summary={readOnly ? READ_ONLY_REGISTRATION_MESSAGE : accessMissing ? "Group access is needed first." : platforms.length ? `${platformsLabel(platforms)} selected` : "Select at least one platform"}>
+          <button type="button" className={primary} disabled={!platforms.length || accessMissing} onClick={compare}>Find deployed policies<ArrowRight className="h-4 w-4" aria-hidden="true" /></button>
         </ActionBar>
       </>}
 
@@ -135,6 +138,8 @@ function ReviewAssign({ batches: given, onBack, onFinished, next }: { batches: D
   const batches = retry ?? given
   const [phase, setPhase] = useState<"review" | "confirm">("review")
   const [assignment, setAssignment] = useState<AssignmentData>(() => newAssignment())
+  const [groupReadAttempt, setGroupReadAttempt] = useState(0)
+  const accessMissing = useGroupAccessMissing(tenant, assignment.readable)
   const [mode, setMode] = useState<OibAssignMode>("add")
   const [choice, setChoice] = useState<BackupRequest["mode"] | null>(null)
   const [acknowledged, setAcknowledged] = useState(false)
@@ -153,14 +158,19 @@ function ReviewAssign({ batches: given, onBack, onFinished, next }: { batches: D
     let live = true
     setCurrent({ key: selectionKey, loading: true, value: null, error: "" })
     Promise.all(batches.map(b => oibRequest<Current>({ action: "oib-assignments-read", tenantId: tenant.tenantId, appId: tenant.appId, platform: b.platform, commit: b.commit, ...(b.tag ? { tag: b.tag } : {}), items: b.items.map(i => ({ source: i.source, targetId: i.targetId })) })))
-      .then(parts => live && setCurrent({ key: selectionKey, loading: false, error: "", value: {
-        policies: parts.flatMap(p => p.policies),
-        groupNames: Object.assign({}, ...parts.map(p => p.groupNames)), filterNames: Object.assign({}, ...parts.map(p => p.filterNames)),
-        groupsReadable: parts.every(p => p.groupsReadable),
-      } }))
+      .then(parts => {
+        if (!live) return
+        const groupsReadable = parts.every(p => p.groupsReadable)
+        if (!groupsReadable) setAssignment(data => ({ ...data, readable: false }))
+        setCurrent({ key: selectionKey, loading: false, error: "", value: {
+          policies: parts.flatMap(p => p.policies),
+          groupNames: Object.assign({}, ...parts.map(p => p.groupNames)), filterNames: Object.assign({}, ...parts.map(p => p.filterNames)),
+          groupsReadable,
+        } })
+      })
       .catch(e => live && setCurrent({ key: selectionKey, loading: false, value: null, error: errorText(e, "The current assignments could not be read.") }))
     return () => { live = false }
-  }, [tenant?.tenantId, selectionKey, !!job])
+  }, [tenant?.tenantId, tenant?.appId, selectionKey, !!job, groupReadAttempt])
 
   if (!tenant) return null
   const items = batches.flatMap(b => b.items.map(i => ({ ...i, platform: b.platform })))
@@ -173,8 +183,13 @@ function ReviewAssign({ batches: given, onBack, onFinished, next }: { batches: D
   const known = current.key === selectionKey ? current.value : null
   const names = { ...known?.groupNames, ...assignment.names }
   const filterNames = { ...known?.filterNames, ...Object.fromEntries(Object.values(spec.filters).flatMap(f => f?.name ? [[f.id, f.name]] : [])) }
-  const removeAll = mode === "replace" && !assignsAnything(assignment.spec)
-  const ready = assignmentReady(assignment) && (mode === "replace" || assignsAnything(assignment.spec)) && !current.loading && !!known
+  const removeAll = mode === "replace" && !assignsAnything(spec)
+  const blockedReason = readOnly ? READ_ONLY_REGISTRATION_MESSAGE
+    : accessMissing ? "Group access is needed first."
+    : assignment.checking ? `Checking groups in ${tenant.name}…`
+    : unknownGroups(assignment, targets).length ? "Remove the groups that were not found."
+    : mode === "add" && !assignsAnything(spec) ? "Add at least one device or user group." : ""
+  const ready = !blockedReason && assignmentReady(assignment, targets) && !current.loading && !!known
   const unreadable = known?.policies.filter(p => p.error) ?? []
   const title = (text: string) => <h3 ref={headingRef} tabIndex={-1} className="scroll-mt-6 text-lg font-medium text-gray-900 outline-none">{text}</h3>
 
@@ -194,7 +209,7 @@ function ReviewAssign({ batches: given, onBack, onFinished, next }: { batches: D
   const describe = (list: Item[]) => list.length ? list.map(a => describeAssignment(a, names, filterNames)).join("; ") : "Not assigned"
 
   function start() {
-    if (readOnly) return
+    if (!ready) return
     setError("")
     // Only policies the review read and that change are sent, each with the assignments it showed.
     const reviewed = new Map(preview.filter(p => p.live?.assignments && p.after && !p.unchanged).map(p => [p.item.targetId!, { expected: p.live!.assignments!, after: p.after! }]))
@@ -257,7 +272,7 @@ function ReviewAssign({ batches: given, onBack, onFinished, next }: { batches: D
         Devices and users that lose a policy stop getting its settings at their next check-in.
       </Toggle></div>}
       <ActionBar summary={readOnly ? READ_ONLY_REGISTRATION_MESSAGE : blocking ? `${blocking.label} is still running. Wait for it to finish first.` : undefined} error={error} back={{ label: "Back to the review", onClick: () => setPhase("review") }}>
-        <button type="button" className={primary} title={readOnly ? READ_ONLY_REGISTRATION_MESSAGE : undefined} disabled={readOnly || !!blocking || !changing || (mode === "replace" && !acknowledged)} onClick={start}><Users className="h-4 w-4" aria-hidden="true" />{backupMode === "new" ? "Back up and assign" : removeAll ? "Remove assignments" : "Assign"}</button>
+        <button type="button" className={primary} title={readOnly ? READ_ONLY_REGISTRATION_MESSAGE : undefined} disabled={!!blocking || !ready || !changing || (mode === "replace" && !acknowledged)} onClick={start}><Users className="h-4 w-4" aria-hidden="true" />{backupMode === "new" ? "Back up and assign" : removeAll ? "Remove assignments" : "Assign"}</button>
       </ActionBar>
     </div>
   }
@@ -272,9 +287,10 @@ function ReviewAssign({ batches: given, onBack, onFinished, next }: { batches: D
           <span><span className="font-medium text-gray-900">{label}</span><span className="mt-1 block text-xs leading-5 text-gray-600">{text}</span></span>
         </label>)}</div>
     </fieldset>
-    <section className="mt-5 rounded-2xl border border-gray-200 p-4" aria-label="Groups">
-      <AssignmentEditor state={{ tenant, data: assignment, update: change => setAssignment(change) }} targets={targets} />
-    </section>
+    {!readOnly && <section className="mt-5 rounded-2xl border border-gray-200 p-4" aria-label="Groups">
+      <AssignmentEditor state={{ tenant, data: assignment, update: setAssignment }} targets={targets} accessMissing={accessMissing}
+        accessContext={ASSIGNMENT_ACCESS_CONTEXT} onRecheck={() => setGroupReadAttempt(attempt => attempt + 1)} />
+    </section>}
     <section className="mt-5" aria-labelledby="oib-assign-preview">
       <h4 id="oib-assign-preview" className="text-sm font-medium text-gray-800">Current and new assignments</h4>
       {current.loading ? <p role="status" className="mt-2 text-sm text-gray-500">Reading the current assignments…</p>
@@ -290,9 +306,9 @@ function ReviewAssign({ batches: given, onBack, onFinished, next }: { batches: D
       {unreadable.length > 0 && <p className="mt-2 text-xs text-amber-800">{plural(unreadable.length, "policy", "policies")} could not be read and will not be changed.</p>}
     </section>
     <div className="mt-5"><BackupChoice storage={storage} backup={backup} mode={backupMode} onChoose={setChoice} noun="run" skip="Undo puts back the previous assignments, saved in the run on this device only." /></div>
-    <ActionBar summary={readOnly ? READ_ONLY_REGISTRATION_MESSAGE : `${plural(items.length, "policy", "policies")}${known ? `, ${changing} would change` : ""}${removeAll ? ", every direct assignment removed" : ""}`} status={backup.loading ? "Checking the latest backup" : null} error={error}
+    <ActionBar summary={blockedReason || `${plural(items.length, "policy", "policies")}${known ? `, ${changing} would change` : ""}${removeAll ? ", every direct assignment removed" : ""}`} status={backup.loading ? "Checking the latest backup" : null} error={error}
       back={{ label: "Change selection", onClick: () => { setRetry(null); onBack() } }}>
-      <button type="button" className={primary} title={readOnly ? READ_ONLY_REGISTRATION_MESSAGE : undefined} disabled={readOnly || !ready || !changing || backup.loading} onClick={() => { setAcknowledged(false); setPhase("confirm") }}>Continue</button>
+      <button type="button" className={primary} title={readOnly ? READ_ONLY_REGISTRATION_MESSAGE : undefined} disabled={!ready || !changing || backup.loading} onClick={() => { setAcknowledged(false); setPhase("confirm") }}>Continue</button>
     </ActionBar>
   </div>
 }

@@ -294,7 +294,7 @@ export interface OibRun {
 export interface UndoResult {
   run: OibRun | null
   /** note replaces the usual done text, for example when the policy was already deleted. */
-  results: { name: string; id: string; action: "removed" | "restored" | "reassigned"; done: boolean; error?: string; note?: string }[]
+  results: { name: string; id: string; action: "removed" | "restored" | "reassigned"; done: boolean; error?: string; note?: string; warning?: string }[]
 }
 
 /** Manage assignments: add the groups to what a policy has, or replace its direct assignments. */

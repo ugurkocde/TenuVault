@@ -1197,6 +1197,40 @@ describe("Sync rollback of a created policy", () => {
     expect((await context.post({ tenantId: TENANT_B, action: "rollback-apply", id, contentHash: review.body.contentHash, confirm: true })).body.changeSet.status).toBe("applied")
     expect(Object.values(syncLinks(context.deps, TENANT_B, TENANT_A)).map((link) => link.targetPolicyId)).toEqual(Object.values(before).map((link) => link.targetPolicyId))
   })
+
+  it("checks captured assignment groups in Sync rollback preview, approval and apply", async () => {
+    const context = setup()
+    await synced(context)
+    const target = context.targets[TENANT_B]!
+    const policy = [...target.policies.values()][0]!
+    const group = { id: "bbbbbbbb-0000-4000-8000-000000000001", displayName: "Previous pilot", securityEnabled: true, groupTypes: [] }
+    target.groups.set(group.id, group)
+    policy.assignments = [{ target: { "@odata.type": "#microsoft.graph.groupAssignmentTarget", groupId: group.id } }]
+    editSource(context)
+    const planned = await plan(context, [TENANT_B], { includeAssignments: true })
+    expect(planned.status).toBe(200)
+    const id = planned.body.targets[0].promotion.id as string
+    expect((await applied(context, TENANT_B, id)).body.changeSet.status).toBe("applied")
+    expect(target.policies.get(policy.id as string)?.assignments).toEqual([])
+
+    const rollback = (action: string, body: Record<string, unknown> = {}) => context.post({ ...body, tenantId: TENANT_B, action: `rollback-${action}`, id })
+    target.groups.delete(group.id)
+    expect((await rollback("preview")).body.operations).toMatchObject([{ blocked: expect.stringContaining(group.id) }])
+    expect((await rollback("create")).status).toBe(200)
+    const review = await rollback("review")
+    expect(review.body.blockers).toEqual([expect.stringContaining(group.id)])
+    expect((await rollback("approve", review.body)).status).toBe(409)
+
+    target.groups.set(group.id, group)
+    const fresh = await rollback("review")
+    expect((await rollback("approve", fresh.body)).status).toBe(200)
+    target.groups.delete(group.id)
+    const writes = target.writeCount()
+    const refused = await rollback("apply", { contentHash: fresh.body.contentHash, confirm: true })
+    expect(refused.status).toBe(409)
+    expect(refused.body.error).toContain(group.id)
+    expect(target.writeCount()).toBe(writes)
+  })
 })
 
 describe("Sync discard", () => {
