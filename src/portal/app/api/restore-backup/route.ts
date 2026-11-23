@@ -226,7 +226,8 @@ export async function POST(request: NextRequest) {
 
     // Read back the selected snapshots and check every destination before the first write.
     const sourceDirectory = targets[0]?.targetTenantId ? assignmentDirectory(graphCaller(graphToken)) : targets[0]!.directory
-    const prepared = new Map<string, Map<string, { original: Item; resolved: Item; skipped: number }>>()
+    type Prepared = { original: Item; resolved: Item; skipped: number; allAssignmentsSkipped: boolean; warnings: string[] } | { blocker: string }
+    const prepared = new Map<string, Map<string, Prepared>>()
     const assignmentReviews = []
     if (assignments) {
       const freshPaths = paths.filter((path) => !repairSelections.some((entry: { path: string }) => entry.path === path))
@@ -235,13 +236,20 @@ export async function POST(request: NextRequest) {
       for (const target of targets) {
         const destination = target.targetTenantId ?? tenantId.toLowerCase()
         const reviewer = assignmentReviewer(sourceDirectory, target.directory, metadata, !target.targetTenantId, assignmentMappings[destination] ?? [], skipped)
-        const snapshots = new Map<string, { original: Item; resolved: Item; skipped: number }>()
+        const snapshots = new Map<string, Prepared>()
+        const actionable = new Map<string, Item>()
+        for (const [path, snapshot] of originals) {
+          const blocker = await target.restorer.assignmentReviewBlocker(path, snapshot)
+          if (blocker) snapshots.set(path, { blocker })
+          else actionable.set(path, snapshot)
+        }
+        await reviewer.preload(actionable)
         const items = []
-        for (const [path, original] of originals) {
-          const result = await reviewer.review(path, original)
+        for (const [path, original] of actionable) {
+          const result = await reviewer.review(path, original, reviewAssignments)
           if (!result) continue
           const count = result.review.assignments.filter((entry) => entry.skipped).length
-          snapshots.set(path, { original, resolved: result.snapshot, skipped: count })
+          snapshots.set(path, { original, resolved: result.snapshot, skipped: count, allAssignmentsSkipped: result.review.allAssignmentsSkipped, warnings: result.review.warnings })
           if (result.review.references.length || result.review.assignments.length || result.review.errors.length) items.push({ path, ...result.review })
         }
         prepared.set(destination, snapshots)
@@ -281,8 +289,10 @@ export async function POST(request: NextRequest) {
               })?.finish()
             }
             const snapshot = prepared.get(targetTenantId ?? tenantId.toLowerCase())?.get(path)
-            const result = snapshot
-              ? await restorer.restore(path, snapshot.original, { snapshot: snapshot.resolved, skipped: snapshot.skipped })
+            const result: RestoreOutcome = snapshot
+              ? "blocker" in snapshot
+                ? { success: false, path, action: "skipped", retryable: false, error: snapshot.blocker }
+                : await restorer.restore(path, snapshot.original, { snapshot: snapshot.resolved, skipped: snapshot.skipped, allAssignmentsSkipped: snapshot.allAssignmentsSkipped, warnings: snapshot.warnings })
               : await restoreSinglePolicy(restorer, path, storageAccountName, storageToken, manifest?.get(path), repairSelections.find((p: any) => p.path === path)?.repairToken)
             auditProgress.save(result)
             auditProgress.save = undefined

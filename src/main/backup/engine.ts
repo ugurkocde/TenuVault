@@ -1,3 +1,4 @@
+import { readGroupStates } from "../../shared/intune/group-reads"
 import { restoreReferences, type AssignmentKind } from "../../shared/intune/restore-assignments"
 import { auditUserFromToken } from "../api/audit-sink"
 import type { AuditUser } from "~/lib/audit/types"
@@ -682,12 +683,22 @@ export class BackupEngine {
     const namesFor = (kind: AssignmentKind, entries: Item[]) => Object.fromEntries(entries.flatMap((entry) =>
       typeof entry.id === "string" && typeof entry.displayName === "string" && assignmentIds[kind]?.has(entry.id.toLowerCase())
         ? [[entry.id.toLowerCase(), entry.displayName]] : []))
-    const [groups, filters, scopeTags] = await Promise.all([
-      assignmentIds.group?.size ? reader.list("groups?$select=id,displayName").catch(() => []) : [],
-      lists.find((list) => list?.type.folder === "AssignmentFilters")?.items ?? [],
-      lists.find((list) => list?.type.folder === "ScopeTags")?.items ?? [],
-    ])
-    const namesByKind = { group: namesFor("group", groups), filter: namesFor("filter", filters as Item[]), scopeTag: namesFor("scopeTag", scopeTags as Item[]) }
+    const groups = await readGroupStates(async (method, path, body) => {
+      try {
+        const result = method === "GET" ? await reader.get(path) : await graph.batchGet<Item>(`${GRAPH}/beta/$batch`, body)
+        return { status: 200, body: result }
+      } catch (error) {
+        if (error instanceof GraphError) return { status: error.status, body: {} }
+        throw error
+      }
+    }, assignmentIds.group ?? [])
+    const filters = lists.find((list) => list?.type.folder === "AssignmentFilters")?.items ?? []
+    const scopeTags = lists.find((list) => list?.type.folder === "ScopeTags")?.items ?? []
+    const namesByKind = {
+      group: Object.fromEntries([...groups].flatMap(([id, state]) => state.name ? [[id, state.name]] : [])),
+      filter: namesFor("filter", filters as Item[]),
+      scopeTag: namesFor("scopeTag", scopeTags as Item[]),
+    }
     assignmentNames = Object.fromEntries(Object.entries(namesByKind).filter(([, names]) => Object.keys(names).length))
     network.signal.throwIfAborted()
 

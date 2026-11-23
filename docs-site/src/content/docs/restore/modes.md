@@ -89,9 +89,9 @@ TenuVault also takes care of these details:
 
 ### Resolve missing references
 
-In **Review**, check the assignment references for the destination. When a group or filter has been removed or recreated, select an existing replacement and tick **Confirmed**, or tick **Skip assignment** to omit that assignment. This removes it from the assignments written during an in-place restore. Map a missing scope tag to an existing tag or explicitly choose **Default**. Then select **Check assignment references**. A matching name is a suggestion and requires confirmation.
+In **Review**, check the assignment references for the destination. When a group or filter has been removed or recreated, select an existing replacement and tick **Confirmed**, or tick **Skip assignment** to omit that assignment. If you skip every assignment for an in-place restore, the item keeps its current assignments. Map a missing scope tag to an existing tag or explicitly choose **Default**. Then select **Check assignment references**. A matching name is a suggestion and requires confirmation.
 
-TenuVault checks all selected references before writing any policy. **Validate backup (no changes)** reports missing or unreadable references against the live tenant. Confirmed mappings are available for the current app session by source and destination. Older backups, and backups made without group read access, may have no group names. You can still choose a replacement by its ID.
+TenuVault checks the references for restorable items before writing any policy. If the app cannot read a group, Review warns that it will use the original ID in the same tenant or the confirmed mapping. With **Restore assignments** on, **Validate backup (no changes)** also checks for missing references against the live tenant. Confirmed mappings are available for the current app session by source and destination. Older backups, and backups made without group read access, may have no group names. You can still choose a replacement by its ID.
 
 ### Types that need assignments reconciled in Intune
 
@@ -164,7 +164,7 @@ On the **Review** step, **Overwrite the current version** lists each property th
 
 ## Where restored items go
 
-By default, items are restored to the tenant selected at the top of **Backup & Restore**. On MSP, **Copy to other tenants instead** sends copies to other connected tenants. Copies to other tenants always use **Create copies**, keep their original names, get the Default scope tag and are never assigned. See [Restore to another tenant](/restore/cross-tenant/).
+By default, items are restored to the tenant selected at the top of **Backup & Restore**. On MSP, **Copy to other tenants instead** sends copies to other connected tenants. Copies to other tenants always use **Create copies** and keep their original names. By default, they use the Default scope tag and arrive unassigned. To include assignments, turn on **Restore assignments** and confirm the group, filter and scope tag mappings for each destination. See [Restore to another tenant](/restore/cross-tenant/).
 
 ## Related pages
 

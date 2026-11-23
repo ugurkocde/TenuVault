@@ -10,7 +10,7 @@ import { settingDefinitionIds, type DeprecatedSettingHit } from "../../../shared
 import { typeForFolder, type ReviewChange } from "../../../shared/intune/registry"
 import { moduleForFolder } from "../../../shared/services/modules"
 import { inTenant, type AdminLink } from "../../../shared/intune/admin-links"
-import { passwordResetWarning } from "../../../shared/intune/restore-plan"
+import { passwordResetWarning, restoreItemBlocker } from "../../../shared/intune/restore-plan"
 import { ACKNOWLEDGEMENT_REQUIRED } from "../../../shared/disclaimer"
 
 import { useEffect, useMemo, useRef, useState } from "react"
@@ -458,12 +458,14 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
   const planFor = (path: string): Plan => {
     const item = itemByPath.get(path)
     const state = review?.[path]
-    const blocker = state?.blocker ?? item?.blocker
-    if (copying) return blocker ? "cannot" : "copy"
-    if (mode === "copy") return blocker ? "cannot" : "create"
-    if (state?.replaceBlocker ?? item?.replaceBlocker) return "cannot"
+    const blocker = restoreItemBlocker(copying ? "copy" : mode, {
+      blocker: state?.blocker ?? item?.blocker, replaceBlocker: state?.replaceBlocker ?? item?.replaceBlocker, live: state?.live,
+    })
+    if (blocker) return "cannot"
+    if (copying) return "copy"
+    if (mode === "copy") return "create"
     if (!state?.live || state.live === "error") return "unchecked"
-    if (state.live === "missing") return blocker ? "cannot" : "recreate"
+    if (state.live === "missing") return "recreate"
     const targeting = assignmentReviews?.[0]?.items.find((entry) => entry.path === path)
     const changedTargeting = assignments && (targeting?.assignments.some((entry) => entry.skipped)
       || targeting?.references.some((entry) => entry.targetId && entry.targetId.toLowerCase() !== entry.sourceId.toLowerCase()))
@@ -502,7 +504,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
         }
       }
       if (assignments) {
-        const paths = live.filter((item) => mode === "replace" && !copying && item.live !== "missing" ? !item.replaceBlocker : !item.blocker).map((item) => item.path)
+        const paths = live.filter((item) => !restoreItemBlocker(copying ? "copy" : mode, item)).map((item) => item.path)
         const targets = copyCandidates.filter((target) => copyTargets.includes(target.tenantId))
         if (paths.length) {
           const result = await post<{ targets: TargetAssignmentReview[] }>("/api/restore-backup", {
@@ -538,10 +540,12 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
         ...tenant.credentials,
         storageAccountName: tenant.storageAccountName,
         backupId,
-        liveAssignmentTargets: true,
-        assignmentMappings: mappingsFor(copying && assignments ? copyTargets : [sourceTenantId]),
-        skippedAssignments: copying ? undefined : skipsFor(selectedPaths),
-        targetTenants: copying && assignments ? copyCandidates.filter((target) => copyTargets.includes(target.tenantId)).map(({ tenantId, appId }) => ({ tenantId, appId })) : undefined,
+        ...(assignments ? {
+          liveAssignmentTargets: true,
+          assignmentMappings: mappingsFor(copying ? copyTargets : [sourceTenantId]),
+          skippedAssignments: copying ? undefined : skipsFor(selectedPaths),
+          targetTenants: copying ? copyCandidates.filter((target) => copyTargets.includes(target.tenantId)).map(({ tenantId, appId }) => ({ tenantId, appId })) : undefined,
+        } : {}),
       })
       setValidation(report)
     } catch (error) {
@@ -1121,7 +1125,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
           {assignments && assignmentReviews?.map((target) => {
             const editable = target.items.flatMap((item) => item.references)
               .filter((reference) => reference.state !== "portable" && (copying || reference.state !== "mapped" || reference.targetId?.toLowerCase() !== reference.sourceId.toLowerCase()))
-            const problemItems = target.items.filter((item) => item.errors.length || item.assignments.length)
+            const problemItems = target.items.filter((item) => item.errors.length || item.assignments.length || item.warnings.length)
             return <section key={target.tenantId} className="mt-5 space-y-3 rounded-2xl border border-gray-200 p-4">
               <h3 className="text-sm font-medium text-gray-900">Assignment references in {copyCandidates.find((entry) => entry.tenantId.toLowerCase() === target.tenantId)?.name ?? tenant.name}</h3>
               {editable.length > 0 && <ReferenceMappingTable references={editable} objects={target.objects}
@@ -1136,6 +1140,9 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
               {problemItems.map((item) => <div key={item.path} className="space-y-2 text-sm">
                 <p className="font-medium text-gray-900">{itemByPath.get(item.path)?.name ?? item.path}</p>
                 {item.errors.map((error) => <p key={error} className="text-red-700">{error}</p>)}
+                {item.warnings.map((warning) => <p key={warning} className="text-amber-800">{warning}</p>)}
+                {!copying && mode === "replace" && item.allAssignmentsSkipped && review?.[item.path]?.live !== "missing" &&
+                  <p className="text-gray-700">All backup assignments are skipped. The current assignments will be kept.</p>}
                 {!copying && item.assignments.map((row) => {
                   const names = row.references.map((ref) => ref.sourceName ?? ref.sourceId).join(", ")
                   return <label key={row.key} className="flex items-start gap-2 text-gray-700">

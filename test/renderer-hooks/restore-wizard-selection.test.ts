@@ -23,15 +23,15 @@ afterEach(() => {
 const contents = { content: { groups: [{ folder: "DeviceConfigurations", label: "configuration profile", area: "Devices", policies: [{ path: "DeviceConfigurations/a.json", displayName: "Profile A" }, { path: "DeviceConfigurations/b.json", displayName: "Profile B" }] }] } }
 const preview = { items: [{ path: "DeviceConfigurations/a.json", name: "Profile A" }, { path: "DeviceConfigurations/b.json", name: "Profile B" }] }
 
-async function renderItems(community: boolean): Promise<HTMLDivElement> {
-  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => Response.json(String(input).endsWith("/api/list-backup-contents") ? contents : String(input).endsWith("/api/restore-preview") ? preview : {})))
+async function renderItems(community: boolean, crossTenant = false): Promise<HTMLDivElement> {
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => Response.json(String(input).endsWith("/api/list-backup-contents") ? contents : String(input).endsWith("/api/restore-preview") ? preview : String(input).endsWith("/api/restore-validate") ? { ok: true, total: 2, passed: 2, failed: 0, manifest: { ok: true }, byType: [], items: [] } : {})))
   const container = document.body.appendChild(document.createElement("div"))
   const root = createRoot(container)
   roots.push(root)
   await act(async () => root.render(createElement(MemoryRouter, null, createElement(RestoreWizard, {
     tenant: { name: "Contoso", credentials: { tenantId: "tenant", appId: "app", clientSecret: "" }, storageAccountName: "tvlocal-tenant" },
     backups: [{ id: "backup-1", timestamp: "2026-10-16T02:00:00Z", type: "manual", status: "Completed", totalPolicies: 2, scope: null, size: 1, duration: 4, changes: null, comparedWith: null }],
-    initialBackupId: "backup-1", community, canCopyToTenants: false, copyCandidates: [],
+    initialBackupId: "backup-1", community, canCopyToTenants: crossTenant, copyCandidates: crossTenant ? [{ tenantId: "destination", appId: "app", name: "Fabrikam" }] : [],
   }))))
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
   // Open the group so each item's checkbox shows.
@@ -54,6 +54,24 @@ it("reads access policies only at the review step", async () => {
   await act(async () => buttonNamed(container, "Review")!.click())
   expect(requests()).toHaveLength(1)
   expect(JSON.parse(String(requests()[0]![1]?.body))).toMatchObject({ approvalAction: "detect" })
+})
+
+it.each([false, true])("validates with assignments off (copy to another tenant: %s)", async (crossTenant) => {
+  const container = await renderItems(false, crossTenant)
+  await act(async () => buttonNamed(container, "Select all")!.click())
+  await act(async () => buttonNamed(container, "Next")!.click())
+  if (crossTenant) {
+    const destination = Array.from(container.querySelectorAll("label")).find((entry) => entry.textContent?.includes("Fabrikam"))!
+    await act(async () => destination.querySelector<HTMLInputElement>("input")!.click())
+  }
+  await act(async () => buttonNamed(container, "Review")!.click())
+  const validate = [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Validate backup (no changes)"))!
+  await act(async () => validate.click())
+  const request = vi.mocked(fetch).mock.calls.find(([url]) => String(url) === "/api/restore-validate")
+  expect(request).toBeDefined()
+  expect(JSON.parse(String(request?.[1]?.body))).toEqual({
+    tenantId: "tenant", appId: "app", clientSecret: "", storageAccountName: "tvlocal-tenant", backupId: "backup-1",
+  })
 })
 
 describe("restore wizard item selection", () => {

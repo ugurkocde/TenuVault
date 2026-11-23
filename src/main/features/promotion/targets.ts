@@ -1,3 +1,5 @@
+import { groupNamePath, readGroupStates, type GroupState } from "../../../shared/intune/group-reads"
+import { referenceTargetId, suggestGroups } from "../../../shared/intune/reference-mapping"
 import { assignmentsUnread } from "../../../shared/intune/read"
 import type { GraphCall } from "../../../portal/lib/policies/graph-restore"
 import { itemName, typeForFolder, type Item } from "../../../shared/intune/registry"
@@ -5,7 +7,7 @@ import { isGraphId, isGuid } from "../../../shared/security"
 import type { Plan } from "../../../shared/plans"
 import type { FeatureDeps } from "../deps"
 import { FeatureError } from "../route"
-import { createListingMemo, getOne, GraphReadError, listAll, readCurrent, sameNameIds, type ListingMemo } from "../change-sets/graph"
+import { createListingMemo, GraphReadError, listAll, readCurrent, sameNameIds, type ListingMemo } from "../change-sets/graph"
 import { containsRedaction, hashOf, sanitizeSnapshot, unsupportedReason } from "../change-sets/model"
 import { extractReferences, referenceFindings, resolveReferences, translate, type DependencyFinding, type Mapping, type ReferenceKind, type ReferenceResolution, type TargetReads } from "./mapping"
 
@@ -95,24 +97,13 @@ async function names(graph: GraphCall, kind: Exclude<ReferenceKind, "group">, me
   }
 }
 
-/** A group's state; without Group.Read.All the answer is unknown, never a guess. */
-async function groupState(graph: GraphCall, id: string): Promise<{ state: "found" | "missing" | "unknown"; name: string | null }> {
-  try {
-    const group = await getOne(graph, `groups/${encodeURIComponent(id)}?$select=id,displayName`)
-    if (!group) return { state: "missing", name: null }
-    return { state: "found", name: typeof group.displayName === "string" ? group.displayName : null }
-  } catch {
-    return { state: "unknown", name: null }
-  }
-}
-
 /**
  * Hash of the destination objects a plan relied on: mapped filters (including their rule),
  * scope tags, reusable settings and groups. Destination tags and unacknowledged redaction
  * are checked here so changes require a new plan. The change set's target fingerprint owns
  * the remaining content, so a retry after a verified update still matches.
  */
-export async function targetStateHash(graph: GraphCall, reads: TargetReads, policySnapshot?: Item | null, memo?: ListingMemo, groups?: ReadonlyMap<string, Awaited<ReturnType<typeof groupState>>>): Promise<string> {
+export async function targetStateHash(graph: GraphCall, reads: TargetReads, policySnapshot?: Item | null, memo?: ListingMemo, groups?: ReadonlyMap<string, GroupState>): Promise<string> {
   const state: Record<string, unknown> = {}
   if (reads.policyId && reads.policyFolder) {
     const type = typeForFolder(reads.policyFolder)!
@@ -141,7 +132,8 @@ export async function targetStateHash(graph: GraphCall, reads: TargetReads, poli
   state.filters = await subset("filter", reads.filterIds)
   state.scopeTags = await subset("scopeTag", reads.scopeTagIds.filter((id) => id !== "0"))
   state.reusableSettings = await subset("reusableSetting", reads.reusableSettingIds)
-  state.groups = await Promise.all(reads.groupIds.map(async (id) => ({ id: id.toLowerCase(), ...(groups?.get(id.toLowerCase()) ?? await groupState(graph, id)) })))
+  const groupStates = groups ?? await readGroupStates(graph, reads.groupIds)
+  state.groups = reads.groupIds.map((id) => ({ id: id.toLowerCase(), ...groupStates.get(id.toLowerCase()) }))
   return hashOf(state)
 }
 
@@ -192,27 +184,23 @@ export async function resolveTarget(deps: FeatureDeps, destinationTenantId: stri
     targetObjects[kind] = await read("Destination objects", () => names(targetGraph, kind, targetListings))
     sourceNames[kind] = (sameTenant ? targetObjects[kind] : await read("Source objects", () => names(sourceGraph, kind, sourceListings))) ?? new Map()
   }
-  const groupStates = new Map<string, { state: "found" | "missing" | "unknown"; name: string | null }>()
-  const sourceGroupNames = new Map<string, string>()
-  for (const reference of references.filter((entry) => entry.kind === "group")) {
-    const mapping = input.mappings.find((entry) => entry.kind === "group" && entry.confirmed && entry.sourceId.toLowerCase() === reference.sourceId.toLowerCase())
-    const targetId = mapping?.targetId ?? (sameTenant ? reference.sourceId : null)
-    if (targetId) groupStates.set(targetId.toLowerCase(), await groupState(targetGraph, targetId))
-    const sourceGroup = sameTenant && targetId ? groupStates.get(targetId.toLowerCase())! : await groupState(sourceGraph, reference.sourceId)
-    if (sourceGroup.name) sourceGroupNames.set(reference.sourceId.toLowerCase(), sourceGroup.name)
-  }
-  if (input.verifyAssignments && references.some((reference) => reference.kind === "group" && sourceGroupNames.has(reference.sourceId.toLowerCase()))) {
-    // A directory read helps suggest candidates. Only the individual ID read verifies a mapping.
-    const groups = await listAll(targetGraph, "groups?$select=id,displayName", targetListings).catch(() => [])
-    targetObjects.group = new Map(groups.filter((group) => typeof group.id === "string").map((group) => [(group.id as string).toLowerCase(), String(group.displayName ?? "")]))
-  }
-  sourceNames.group = sourceGroupNames
+  const sourceGroupIds = references.filter((entry) => entry.kind === "group").map((entry) => entry.sourceId)
+  const targetGroupIds = sourceGroupIds.flatMap((id) => referenceTargetId("group", id, input.mappings, sameTenant) ?? [])
+  const groupStates = await readGroupStates(targetGraph, sameTenant ? [...targetGroupIds, ...sourceGroupIds] : targetGroupIds)
+  const originals = sameTenant ? groupStates : await readGroupStates(sourceGraph, sourceGroupIds)
+  sourceNames.group = new Map(sourceGroupIds.flatMap((id) => {
+    const name = originals.get(id.toLowerCase())?.name
+    return name ? [[id.toLowerCase(), name]] : []
+  }))
   const resolutions = resolveReferences(references, { mappings: input.mappings, sourceNames, targetObjects, groupStates, sameTenant })
+  if (input.verifyAssignments) {
+    await suggestGroups(resolutions, async (name) => {
+      const groups = await listAll(targetGraph, groupNamePath(name), targetListings).catch(() => [])
+      return new Map(groups.flatMap((group) => typeof group.id === "string" ? [[group.id.toLowerCase(), String(group.displayName ?? "")]] : []))
+    })
+  }
   findings.push(...referenceFindings(resolutions.filter((reference) => input.verifyAssignments || reference.kind !== "scopeTag" || reference.state === "mapped-unverified")))
   if (input.verifyAssignments) {
-    for (const reference of resolutions.filter((entry) => entry.state === "mapped-unverified")) {
-      findings.push({ code: "rejected-mapping", severity: "blocking", message: `The mapped ${reference.kind} ${reference.targetId} could not be verified in the target tenant.` })
-    }
     if (assignmentsUnread(type, sourceSnapshot) || !Array.isArray(sourceSnapshot.assignments)) {
       findings.push({ code: "unsupported-target", severity: "blocking", message: "Source assignments could not be read. Check the source policy before copying its assignments." })
     }

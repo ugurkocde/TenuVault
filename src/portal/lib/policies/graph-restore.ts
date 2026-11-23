@@ -8,7 +8,7 @@ import { createHash, randomUUID } from "node:crypto"
 import { typeForFolder, type IntuneType, type Item, type Json, type Step } from "../../../shared/intune/registry"
 
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-import { buildRestorePlan, buildUpdatePlan, NotRestorableError, resolveStep, restoreBlocker } from "../../../shared/intune/restore-plan"
+import { buildRestorePlan, buildUpdatePlan, NotRestorableError, resolveStep, restoreBlocker, restoreCapabilities, restoreItemBlocker } from "../../../shared/intune/restore-plan"
 import { assignmentsUnread, locateObject, readObject, type GraphReader } from "../../../shared/intune/read"
 import { comparableSnapshot, sameSnapshot } from "../../../shared/intune/compare"
 import { saveWrite, removeWrite, writeKey, writeRecords } from "../../../main/storage/restore-journal"
@@ -264,6 +264,8 @@ export class RestoreReconcileRequired extends Error {
   constructor() { super("A previous write has an uncertain outcome. Reconcile it in Settings before retrying.") }
 }
 
+type ReviewedTargeting = { snapshot: Item; skipped: number; allAssignmentsSkipped?: boolean; warnings?: string[] }
+
 export class Restorer {
   private writeDispatched = false
 
@@ -298,12 +300,31 @@ export class Restorer {
     for (const mapping of mappings) this.reviewed.set(mapping.sourceId.toLowerCase(), mapping.targetId)
   }
 
-  async restore(path: string, snapshot: Item, targeting?: { snapshot: Item; skipped: number }): Promise<RestoreOutcome> {
+  async assignmentReviewBlocker(path: string, snapshot: Item): Promise<string | undefined> {
+    const folder = path.split("/")[1] ?? ""
+    const type = typeForFolder(folder === "DeviceCompliancePolicies" ? "CompliancePolicies" : folder)
+    if (!type) return "This backup file is not an Intune type TenuVault can restore."
+    const permission = restorePermissionBlocker(type.folder, this.options.granted)
+    if (permission) return permission
+    const mode = this.options.mode
+    const capabilities = restoreCapabilities(type, snapshot)
+    if (mode === "copy" || capabilities.blocker === capabilities.replaceBlocker || typeof snapshot.id !== "string") return restoreItemBlocker(mode, capabilities)
+    try {
+      const current = await this.current(type, snapshot.id) ?? await locateLive(this.graph, type, snapshot) ?? (await this.recreated(type, snapshot))?.object
+      return restoreItemBlocker(mode, current
+        ? restoreCapabilities(type, snapshot, current)
+        : { ...capabilities, live: "missing" })
+    } catch {
+      return restoreItemBlocker(mode, capabilities)
+    }
+  }
+
+  async restore(path: string, snapshot: Item, targeting?: ReviewedTargeting): Promise<RestoreOutcome> {
     this.writeDispatched = false
     return withAdminLink(path, { ...await this.restoreOnce(path, snapshot, targeting), auditSourceId: typeof snapshot.id === "string" ? snapshot.id : undefined }, snapshot)
   }
 
-  private async restoreOnce(path: string, snapshot: Item, targeting?: { snapshot: Item; skipped: number }): Promise<RestoreOutcome> {
+  private async restoreOnce(path: string, snapshot: Item, targeting?: ReviewedTargeting): Promise<RestoreOutcome> {
     const folder = path.split("/")[1] ?? ""
     const type = typeForFolder(folder === "DeviceCompliancePolicies" ? "CompliancePolicies" : folder)
     if (!type) return { success: false, path, error: "This backup file is not an Intune type TenuVault can restore." }
@@ -317,12 +338,15 @@ export class Restorer {
     }
     // Keep live assignments when the backup could not read them.
     const unread = this.options.assignments && (!this.options.crossTenant || targeting) && assignmentsUnread(type, snapshot)
-    const assignments = this.options.assignments && (!this.options.crossTenant || !!targeting) && !unread
+    const assignments = this.options.assignments && (!this.options.crossTenant || !!targeting) && !unread && !targeting?.allAssignmentsSkipped
     const withNote = (outcome: RestoreOutcome): RestoreOutcome => {
       if (!outcome.success) return outcome
-      const warnings = [...(outcome.warnings ?? [])]
+      const warnings = [...(outcome.warnings ?? []), ...(targeting?.warnings ?? [])]
       if (unread) warnings.push("Assignments were not restored: this backup was made by an earlier TenuVault version that could not read them. Assign the policy in Intune.")
       if (targeting?.skipped) warnings.push(`Skipped ${targeting.skipped} assignment(s) as reviewed.`)
+      if (targeting?.allAssignmentsSkipped && (outcome.action === "updated" || outcome.action === "unchanged")) {
+        warnings.push("All backup assignments were skipped. Existing assignments were kept.")
+      }
       return warnings.length ? { ...outcome, warnings } : outcome
     }
     try {
@@ -407,7 +431,7 @@ export class Restorer {
     const bodies = [plan.create, ...plan.steps, ...plan.assignments]
     const dependencies = bodies.flatMap((step) => dependencyReferences(step.body).filter((reference) =>
       !verifiedTargeting || !(reference.key === "roleScopeTagIds" && reference.path.startsWith("snapshot.roleScopeTagIds["))
-        && !("kind" in step && step.kind === "assignments" && ["groupId", "deviceAndAppManagementAssignmentFilterId", "roleScopeTagIds"].includes(reference.key))))
+        && !("kind" in step && step.kind === "assignments" && ["groupId", "entraObjectId", "deviceAndAppManagementAssignmentFilterId", "roleScopeTagIds"].includes(reference.key))))
     const unresolved = await this.unresolved(dependencies)
     if (unresolved.length) return { success: false, path, retryable: false, error: this.options.crossTenant
       ? `Unresolved target dependencies (${unresolved.join(", ")}). Copy the dependencies first or reconcile this object in the target tenant.`

@@ -1,5 +1,6 @@
 import { backupManifest, incompleteReason, snapshotHash } from "./backup-manifest"
 import { dependencyReferences } from "../../../shared/intune/dependencies"
+import { isScopeTagGroupTarget, scopeTagRoleRow } from "../../../shared/intune/restore-assignments"
 import { assignmentsUnread } from "../../../shared/intune/read"
 import { INTUNE_TYPES, itemName, typeForFolder, type Item } from "../../../shared/intune/registry"
 import { buildRestorePlan, buildUpdatePlan, restoreBlocker } from "../../../shared/intune/restore-plan"
@@ -79,9 +80,19 @@ function assignmentFailure(type: ReturnType<typeof typeForFolder>, snapshot: Ite
   const assignments = snapshot.assignments as Item[]
   for (const [index, assignment] of assignments.entries()) {
     if (!assignment || typeof assignment !== "object" || Array.isArray(assignment)) return `Assignment ${index + 1} is not an object.`
+    if (scopeTagRoleRow(type, assignment)) {
+      for (const key of ["members", "scopeMembers"] as const) {
+        const ids = assignment[key]
+        if (ids !== undefined && (!Array.isArray(ids) || ids.some((id) => typeof id !== "string" || !GUID.test(id)))) {
+          return `Assignment ${index + 1} has invalid group IDs in ${key}.`
+        }
+      }
+      continue
+    }
     const target = assignment.target as Item | undefined
     if (!target || typeof target !== "object" || Array.isArray(target)) return `Assignment ${index + 1} has no target.`
     if (typeof target["@odata.type"] !== "string" || !target["@odata.type"]) return `Assignment ${index + 1} has no target type.`
+    if (isScopeTagGroupTarget(target) && (typeof target.entraObjectId !== "string" || !GUID.test(target.entraObjectId))) return `Assignment ${index + 1} has an invalid scope tag group ID.`
     if (target.groupId !== undefined && (typeof target.groupId !== "string" || !GUID.test(target.groupId))) return `Assignment ${index + 1} references a group ID that is not valid: ${String(target.groupId)}`
   }
   try {

@@ -115,7 +115,10 @@ function stubFetch(blobs: Record<string, Item>, options: { list?: string[]; grou
     const url = new URL(String(input))
     requests.push({ method: init?.method ?? 'GET', host: url.hostname, path: url.pathname })
     if (url.hostname === 'login.microsoftonline.com') return Response.json({ access_token: 'test' })
-    if (url.hostname === 'graph.microsoft.com' && url.pathname === '/beta/groups') return Response.json({ value: options.groups ?? [] })
+    if (url.hostname === 'graph.microsoft.com' && url.pathname.startsWith('/beta/groups/')) {
+      const group = options.groups?.find((entry) => entry.id === url.pathname.split('/').at(-1))
+      return group ? Response.json(group) : Response.json({}, { status: 404 })
+    }
     if (url.hostname.endsWith('.blob.core.windows.net')) {
       if (url.searchParams.get('comp') === 'list') {
         const names = (options.list ?? []).map((name) => `<Blob><Name>${name}</Name></Blob>`).join('')
@@ -162,8 +165,9 @@ describe('Restore validation route', () => {
     }))).json()
     expect(mapped.ok).toBe(true)
     expect(requests.filter((entry) => entry.host === "graph.microsoft.com")).toEqual([
-      { method: "GET", host: "graph.microsoft.com", path: "/beta/groups" },
-      { method: "GET", host: "graph.microsoft.com", path: "/beta/groups" },
+      { method: "GET", host: "graph.microsoft.com", path: `/beta/groups/${groupId}` },
+      { method: "GET", host: "graph.microsoft.com", path: `/beta/groups/${replacement}` },
+      { method: "GET", host: "graph.microsoft.com", path: `/beta/groups/${groupId}` },
     ])
   })
 

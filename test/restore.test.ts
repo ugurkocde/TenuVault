@@ -199,7 +199,10 @@ describe('Copy to other tenants', () => {
       }
       const token = new Headers(init?.headers).get('Authorization') ?? ''
       const destination = token === `Bearer token-${targetTenantId}`
-      if (url.pathname === '/beta/groups') return Response.json({ value: [{ id: destination ? targetId : sourceId, displayName: 'Contoso pilot' }] })
+      if (url.pathname.startsWith('/beta/groups/')) {
+        const id = destination ? targetId : sourceId
+        return url.pathname.endsWith(`/${id}`) ? Response.json({ id, displayName: 'Contoso pilot' }) : new Response(null, { status: 404 })
+      }
       if (url.pathname === '/beta/deviceManagement/roleScopeTags') return Response.json({ value: [{ id: destination ? '8' : '7', displayName: 'Contoso IT' }] })
       writes.push({ route: url.pathname, token, payload: JSON.parse(String(init?.body)) })
       return Response.json({ id: 'copied-firewall' }, { status: 201 })

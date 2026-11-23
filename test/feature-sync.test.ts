@@ -1369,6 +1369,32 @@ describe("Copy to Tenants assignment option", () => {
     expect(context.targets[TENANT_B]!.writeCount((write) => write.path.endsWith("/assign"))).toBe(0)
   })
 
+  it("replaces a linked policy's assignments using a confirmed group when directory reads return 403", async () => {
+    const context = setup()
+    await synced(context)
+    const destination = context.targets[TENANT_B]!
+    const target = [...destination.policies.values()][0]!
+    target.assignments = [{ target: { "@odata.type": "#microsoft.graph.allDevicesAssignmentTarget" } }]
+    context.source.groupsForbidden = true
+    destination.groupsForbidden = true
+    destination.filters = [{ id: newFilter, displayName: "Corporate devices" }]
+    context.policy.assignments = [assignment]
+    const response = await plan(context, [TENANT_B], { includeAssignments: true, mappings: { [TENANT_B]: entries.slice(0, 2) } })
+    expect(response.status).toBe(200)
+    const promotion = response.body.targets[0].promotion
+    expect(promotion.items[0]).toMatchObject({
+      action: "update", destinationId: target.id,
+      references: expect.arrayContaining([expect.objectContaining({ kind: "group", targetId: newGroup, state: "mapped-unverified" })]),
+      findings: expect.arrayContaining([expect.objectContaining({ code: "unknown-membership", severity: "warning" })]),
+    })
+    expect((await applied(context, TENANT_B, promotion.id)).body.changeSet.status).toBe("applied")
+    expect(destination.policies.size).toBe(1)
+    expect(destination.policies.get(String(target.id))?.assignments).toMatchObject([
+      { target: { ...assignment.target, groupId: newGroup, deviceAndAppManagementAssignmentFilterId: newFilter } },
+    ])
+    expect(destination.writeCount((write) => write.path.endsWith("/assign"))).toBe(1)
+  })
+
   it("uses confirmed mappings independently in each destination and blocks an unconfirmed group", async () => {
     const context = setup({ plans: MSP })
     context.policy.assignments = [assignment]

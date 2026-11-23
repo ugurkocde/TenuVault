@@ -13,7 +13,7 @@ import { containsRedaction, containsSecret } from "../change-sets/model"
  * dropped explicitly), never includes; filter types are preserved exactly.
  */
 
-import type { Mapping, ReferenceKind, ReferenceResolution } from "../../../shared/intune/reference-mapping"
+import { usableReference, type Mapping, type ReferenceKind, type ReferenceResolution } from "../../../shared/intune/reference-mapping"
 export { resolveReferences, type Mapping, type ReferenceKind, type ReferenceResolution } from "../../../shared/intune/reference-mapping"
 
 export interface DependencyFinding {
@@ -127,7 +127,7 @@ export function translate(
     // The built-in Default scope tag has the same ID in every tenant.
     if (kind === "scopeTag" && id === "0") return "0"
     const reference = references.find((entry) => entry.kind === kind && entry.sourceId.toLowerCase() === id.toLowerCase())
-    return reference && ["portable", "mapped", "mapped-unverified"].includes(reference.state) && reference.targetId && isGraphId(reference.targetId) ? reference.targetId : null
+    return reference && usableReference(reference) && reference.targetId && isGraphId(reference.targetId) ? reference.targetId : null
   }
   let unresolved = false
   const { assignments: _assignments, ...rest } = structuredClone(source)

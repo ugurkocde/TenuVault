@@ -3,10 +3,11 @@ import { parseMappings, type Mapping } from "../../../main/features/promotion/ma
 import { isGuid } from "../../../shared/security"
 import { resolveRestoreAssignments, restoreReferences, type AssignmentKind, type ReferenceNames } from "../../../shared/intune/restore-assignments"
 import { typeForFolder, type Item } from "../../../shared/intune/registry"
+import { groupNamePath, readGroupStates, type GroupState } from "../../../shared/intune/group-reads"
+import { referenceTargetId, suggestGroups } from "../../../shared/intune/reference-mapping"
 import type { GraphCall } from "./graph-restore"
 
-const collections: Record<AssignmentKind, string> = {
-  group: "groups",
+const collections = {
   filter: "deviceManagement/assignmentFilters",
   scopeTag: "deviceManagement/roleScopeTags",
 }
@@ -39,17 +40,28 @@ export function parseSkippedAssignments(value: unknown, paths: string[]): Skippe
 export function assignmentDirectory(graph: GraphCall) {
   const memo = createListingMemo()
   const reads = new Map<AssignmentKind, Promise<Map<string, string> | null>>()
-  return (kind: AssignmentKind) => {
-    const existing = reads.get(kind)
-    if (existing) return existing
-    const read = listAll(graph, `${collections[kind]}?$select=id,displayName`, memo)
-      .then((items) => {
-        if (items.some((item) => typeof item.id !== "string")) return null
-        return new Map(items.map((item) => [(item.id as string).toLowerCase(), String(item.displayName ?? "")]))
-      })
-      .catch(() => null)
-    reads.set(kind, read)
-    return read
+  const groups = new Map<string, Promise<GroupState>>()
+  const names = async (path: string) => {
+    const items = await listAll(graph, path, memo)
+    if (items.some((item) => typeof item.id !== "string")) return null
+    return new Map(items.map((item) => [(item.id as string).toLowerCase(), String(item.displayName ?? "")]))
+  }
+  return {
+    objects(kind: Exclude<AssignmentKind, "group">) {
+      const existing = reads.get(kind)
+      if (existing) return existing
+      const read = names(`${collections[kind]}?$select=id,displayName`).catch(() => null)
+      reads.set(kind, read)
+      return read
+    },
+    async groups(ids: string[]) {
+      const valid = [...new Set(ids.filter(isGuid).map((id) => id.toLowerCase()))]
+      const fresh = valid.filter((id) => !groups.has(id))
+      const pending = readGroupStates(graph, fresh)
+      for (const id of fresh) groups.set(id, pending.then((result) => result.get(id)!))
+      return new Map(await Promise.all(valid.map(async (id) => [id, await groups.get(id)!] as const)))
+    },
+    suggestions: (name: string) => names(groupNamePath(name)).then((results) => results ?? new Map<string, string>()).catch(() => new Map<string, string>()),
   }
 }
 
@@ -70,17 +82,48 @@ export function assignmentReviewer(source: AssignmentDirectory, target: Assignme
     scopeTag: backupNames(metadata, "scopeTag"),
   }
   const targetObjects: ReferenceNames = {}
+  const typeForPath = (path: string) => {
+    const folder = path.split("/")[1]
+    return typeForFolder(folder === "DeviceCompliancePolicies" ? "CompliancePolicies" : folder ?? "")
+  }
+  const targetGroupIds = (references: ReturnType<typeof restoreReferences>) => references.flatMap(({ kind, sourceId }) => {
+    if (kind !== "group") return []
+    const targetId = referenceTargetId(kind, sourceId, mappings, sameTenant)
+    return targetId ? [targetId] : []
+  })
+  const sourceGroupIds = (references: ReturnType<typeof restoreReferences>) => references.flatMap(({ kind, sourceId, name }) =>
+    kind === "group" && !name && !recorded.group.has(sourceId.toLowerCase()) ? [sourceId] : [])
   return {
-    async review(path: string, snapshot: Item) {
-      const folder = path.split("/")[1]
-      const type = typeForFolder(folder === "DeviceCompliancePolicies" ? "CompliancePolicies" : folder ?? "")
+    async preload(items: Iterable<[string, Item]>) {
+      const references = [...items].flatMap(([path, snapshot]) => {
+        const type = typeForPath(path)
+        return type && type.restore !== "metadata" ? restoreReferences(type, snapshot) : []
+      })
+      const ids = targetGroupIds(references)
+      const originals = sourceGroupIds(references)
+      if (source === target) await target.groups([...ids, ...originals])
+      else await Promise.all([target.groups(ids), source.groups(originals)])
+    },
+    async review(path: string, snapshot: Item, includeSuggestions = false) {
+      const type = typeForPath(path)
       if (!type || type.restore === "metadata") return undefined
       const references = restoreReferences(type, snapshot).filter((entry) => entry.kind !== "scopeTag" || entry.sourceId !== "0")
       const sourceNames: ReferenceNames = {}
-      await Promise.all([...new Set(references.map((entry) => entry.kind))].map(async (kind) => {
-        const [original, destination] = await Promise.all([source(kind), target(kind)])
+      const groupStates = await target.groups(targetGroupIds(references))
+      const sourceGroups = await source.groups(sourceGroupIds(references))
+      const groupNames = new Map<string, string>()
+      for (const { kind, sourceId, name } of references) {
+        if (kind !== "group") continue
+        const key = sourceId.toLowerCase()
+        const label = recorded.group.get(key) ?? name ?? sourceGroups.get(key)?.name
+        if (label) groupNames.set(key, label)
+      }
+      sourceNames.group = groupNames
+      const otherReferences = references.filter((entry): entry is typeof entry & { kind: Exclude<AssignmentKind, "group"> } => entry.kind !== "group")
+      await Promise.all([...new Set(otherReferences.map((entry) => entry.kind))].map(async (kind) => {
+        const [original, destination] = await Promise.all([source.objects(kind), target.objects(kind)])
         const named = new Map<string, string>()
-        for (const { sourceId } of references.filter((reference) => reference.kind === kind)) {
+        for (const { sourceId } of otherReferences.filter((reference) => reference.kind === kind)) {
           const key = sourceId.toLowerCase()
           const name = recorded[kind].get(key) ?? original?.get(key)
           if (name) named.set(key, name)
@@ -88,7 +131,9 @@ export function assignmentReviewer(source: AssignmentDirectory, target: Assignme
         sourceNames[kind] = named
         targetObjects[kind] = destination
       }))
-      return resolveRestoreAssignments(type, snapshot, { sameTenant, mappings, skipped: new Set(skipped[path] ?? []), targetObjects, sourceNames })
+      const result = resolveRestoreAssignments(type, snapshot, { sameTenant, mappings, skipped: new Set(skipped[path] ?? []), targetObjects, sourceNames, groupStates })
+      if (includeSuggestions) await suggestGroups(result.review.references, target.suggestions)
+      return result
     },
     objects() {
       return Object.fromEntries(Object.entries(targetObjects).filter(([kind]) => kind !== "group").map(([kind, names]) => [kind, {

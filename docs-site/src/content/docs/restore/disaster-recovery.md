@@ -11,7 +11,7 @@ faq:
   - question: "What cannot be recovered automatically?"
     answer: "Anything Microsoft Graph does not export: app installer files, Apple automated device enrollment tokens, and private keys or other secret material. Upload the original installer again, renew the Apple token through Apple Business Manager or Apple School Manager, and run a new backup for profiles that hold a masked OMA-URI value."
   - question: "Can I rebuild Intune configuration in another tenant?"
-    answer: "Yes, with the MSP plan. You can copy items from a backup of one connected tenant into another connected tenant. Copies keep their original names, get the Default scope tag and are never assigned, so you recreate groups, exclusions and filters and then assign the copies."
+    answer: "Yes, with the MSP plan. You can copy items from a backup of one connected tenant into another connected tenant. Copies keep their original names. By default, they are unassigned and use the Default scope tag. Turn on Restore assignments and confirm the reference mappings to include assignments."
 ---
 
 Intune disaster recovery means getting Microsoft Intune configuration back after policies are deleted or changed, an admin device is lost, or a tenant has to be rebuilt. A backup is only useful if you can restore from it when things go wrong. This page shows how to prepare, and which TenuVault workflow to use for each recovery scenario. For the planning checklist, see the [Intune disaster recovery plan](https://www.tenuvault.com/intune-disaster-recovery) on the product site.
@@ -47,7 +47,7 @@ For a rehearsal checklist, follow the guide to [practice an Intune restore](http
 2. Go to **Backup & Restore** > **Backup History** and pick the last backup from before the problem. Use **View Changes** in **Backup Details** to see what changed between backups.
 3. Click **Restore from this backup**.
 4. Select the affected items. On **How to restore**, choose **Replace in place**.
-5. Decide on **Restore assignments**. With it on, each item's assignments are replaced with the ones in the backup. Restore Windows Autopilot profiles, Apple user enrollment profiles, terms and conditions and Intune roles in a separate selection with assignments off. See [Restore modes and assignments](/restore/modes/).
+5. Decide on **Restore assignments**. With it on, each item's assignments are replaced with the reviewed assignments from the backup. If you skip every assignment for an item, it keeps its live assignments. Restore Windows Autopilot profiles, Apple user enrollment profiles, terms and conditions and Intune roles in a separate selection with assignments off. See [Restore modes and assignments](/restore/modes/).
 6. On **Review**, check the labels. Items that already match are skipped, deleted items show **Recreate: deleted from the tenant**, and changed items show **Overwrite the current version**.
 7. Tick the confirmation, click **Restore N items**, and check each result.
 8. Resolve any **Incomplete object** or unknown outcomes as described in [What cannot be restored and restore write history](/restore/limitations/).
@@ -89,7 +89,7 @@ ZIP exports are not encrypted and can contain secrets such as OMA-URI values. Pr
 
 ## Rebuild in another tenant
 
-With MSP you can copy items from a backup of one connected tenant into another connected tenant. Copies keep their original names, get the Default scope tag and are never assigned. See [Restore to another tenant](/restore/cross-tenant/) for the full procedure, including dependency mappings for apps and app categories.
+With MSP you can copy items from a backup of one connected tenant into another connected tenant. Copies keep their original names. By default, they are unassigned and use the Default scope tag. Turn on **Restore assignments** and confirm the group, filter and scope tag mappings in each destination to include assignments. See [Restore to another tenant](/restore/cross-tenant/) for the full procedure, including dependency mappings for apps and app categories.
 
 After the copy:
 

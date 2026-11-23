@@ -11,7 +11,7 @@ faq:
   - question: "Are assignments restored with an Intune policy?"
     answer: "Only when you turn on Restore assignments, which needs Pro or MSP. With it on, the policies you restore get the assignments recorded in the backup, where assignment replacement is supported. Windows Autopilot profiles, Apple user enrollment profiles, terms and conditions and Intune roles do not support assignment replacement in place: restore them in a separate selection with assignments off. Copies with assignments off arrive unassigned. Cross-tenant restores use confirmed mappings for every tenant-specific assignment reference when Restore assignments is on."
   - question: "Can I restore Intune configuration to another tenant?"
-    answer: "Yes, with the MSP plan. Copies keep their original names, get the Default scope tag and are never assigned, so you recreate groups, exclusions and filters in the target tenant and then assign the copies."
+    answer: "Yes, with the MSP plan. Copies keep their original names. By default, they are unassigned and use the Default scope tag. To include assignments, turn on Restore assignments and confirm the group, filter and scope tag mappings for each destination."
 ---
 
 An Intune restore brings Microsoft Intune policies back as they were when a backup ran, including policies that were changed or deleted afterwards. Recreated policies get new IDs in Intune, and references within the same restore are pointed to them. The restore wizard walks you through it: pick a backup, choose the policies, decide how to restore them, review exactly what will happen to each policy, and then watch the restore run. For the product overview, see [Intune restore with TenuVault](https://www.tenuvault.com/intune-restore).
@@ -156,7 +156,7 @@ Next to the restore button, **Validate backup (no changes)** runs a dry run over
 * **Readable and decryptable**: the file can be read back and decrypted with the keys on this device.
 * **Recorded fingerprint**: the content still matches the fingerprint recorded when the backup ran.
 * **Policy payload**: the payload parses and a restore plan can be built from it.
-* **Assignment references** checks the recorded targets against the live tenant. It uses your confirmed mappings and explicit skips. When restoring with assignments to other tenants, it checks the selected destinations.
+* With **Restore assignments** on, **Assignment references** checks the recorded targets against the live tenant. It uses your confirmed mappings and explicit skips. When restoring with assignments to other tenants, it checks the selected destinations.
 
 The result lists, per policy type, how many items passed and failed, and names every failing item with the check that failed. A valid backup reports that all items passed. Nothing is written to your tenant, to Microsoft Graph or to a change set, and no restore starts. Run it when you want to prove a backup is restorable before you need it, or to find the exact item that is missing or corrupt. Validating a whole backup is included in TenuVault Pro and MSP, like restoring several items at once.
 
