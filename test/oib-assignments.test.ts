@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { assignmentsFor, assignsAnything, conflictingGroups, describeAssignment, directAssignments, emptySpec, filterPlatformFor, includesFor, mergeAssignments, oibScope, parseSpec, sameAssignments, writableAssignment } from "../src/shared/oib/assignments"
+import { alreadyTargeted, assignmentsFor, assignsAnything, conflictingGroups, describeAssignment, directAssignments, emptySpec, filterPlatformFor, includesFor, mergeAssignments, oibScope, parseSpec, sameAssignments, writableAssignment } from "../src/shared/oib/assignments"
 
 const A = "aaaaaaaa-0000-4000-8000-000000000001"
 const B = "bbbbbbbb-0000-4000-8000-000000000002"
@@ -99,6 +99,17 @@ describe("merging assignments", () => {
     const existing = include(A)
     const filtered = include(A, { deviceAndAppManagementAssignmentFilterId: F, deviceAndAppManagementAssignmentFilterType: "include" })
     expect(mergeAssignments([existing], [filtered, include(B)], { keepExisting: true })).toEqual([existing, include(B)])
+    // A group already included is not excluded either.
+    expect(mergeAssignments([existing], [include(B), exclude(A)], { keepExisting: true })).toEqual([existing, include(B)])
+    expect(alreadyTargeted([existing], [include(B), exclude(A)])).toEqual([A])
+  })
+
+  it("reads a missing intent as apply, as Graph reports device configuration assignments", () => {
+    expect(sameAssignments([include(A)], [{ ...include(A), intent: "apply" }])).toBe(true)
+    expect(sameAssignments([include(A)], [{ ...include(A), intent: "remove" }])).toBe(false)
+    // A replaced entry keeps the existing entry's intent.
+    const filtered = include(A, { deviceAndAppManagementAssignmentFilterId: F, deviceAndAppManagementAssignmentFilterType: "include" })
+    expect(mergeAssignments([{ ...include(A), intent: "apply" }], [filtered])).toEqual([{ ...filtered, intent: "apply" }])
   })
 
   it("keeps a group's own filter when the added include has none", () => {

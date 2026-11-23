@@ -171,7 +171,7 @@ function GroupPicker({ state, list, onChange, label, hint }: { state: Assignment
       {results.length > 0 && <ul className="mt-1 max-h-56 overflow-auto rounded-2xl border border-gray-200 bg-white p-1 shadow-sm" aria-label={`Groups matching ${query}`}>{results.map(group => {
         const disabled = taken.has(group.id) || group.kind === "other"
         return <li key={group.id}><button type="button" disabled={disabled} onClick={() => add(group)} className="flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2 text-left text-sm hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50">
-          <span className="min-w-0 truncate">{group.displayName}</span>
+          <span className="min-w-0 truncate">{group.displayName}<span className="ml-2 font-mono text-xs text-gray-400" title={group.id}>{group.id.slice(0, 8)}</span></span>
           <span className="shrink-0 text-xs text-gray-500">{group.kind === "other" ? "Cannot be assigned" : taken.has(group.id) ? "Chosen" : `${KIND_LABEL[group.kind]}${group.dynamic ? ", dynamic" : ""}`}</span>
         </button></li>
       })}</ul>}

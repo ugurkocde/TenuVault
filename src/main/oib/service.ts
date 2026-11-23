@@ -11,7 +11,7 @@ import { extractOibId } from "../../shared/oib/manifest"
 import { compareToTenant } from "../../shared/oib/match"
 import { definitionIdsOf, describePolicy, policyChanges, type OibPolicyChanges, type OibPolicySettings } from "../../shared/oib/policy-settings"
 import { replaceTenantVariables } from "../../shared/oib/variables"
-import { AssignmentSpecError, REPORTS_SET_AS_DIRECT, assignmentsFor, assignsAnything, conflictingGroups, directAssignments, emptySpec, mergeAssignments, oibScope, parseSpec, sameAssignments, writableAssignment, type OibAssignmentSpec } from "../../shared/oib/assignments"
+import { AssignmentSpecError, REPORTS_SET_AS_DIRECT, alreadyTargeted, assignmentsFor, assignsAnything, conflictingGroups, directAssignments, emptySpec, mergeAssignments, oibScope, parseSpec, sameAssignments, writableAssignment, type OibAssignmentSpec } from "../../shared/oib/assignments"
 import { isFullValidation, OIB_BACKUP_REUSE_MINUTES, OIB_PLATFORMS, type DeployItem, type OibAssignMode, type OibPolicyAssignments, type OibBackupChoice, type OibBackupOptions, type OibComparison, type OibPlatform, type OibProgress, type OibRecentBackup, type OibRun, type PolicyValidation, type TenantPolicy, type UndoResult, type ValidationRun } from "../../shared/oib/types"
 import { backupGaps, describeMissing, describeStatus, folderLabel } from "../backup/completeness"
 import { apiBody } from "../features/deps"
@@ -721,7 +721,9 @@ async function assign(body: RecordJson): Promise<OibRun> {
           continue
         }
         const conflicts = conflictingGroups(next).map((id) => checked.groupNames[id] ?? id)
-        const warnings = [...planned.notes, ...(conflicts.length ? [`${conflicts.join(", ")} ${conflicts.length === 1 ? "is" : "are"} both included and excluded; the exclusion wins.`] : [])]
+        const untouched = mode === "add" && REPORTS_SET_AS_DIRECT.has(policy.folder) ? alreadyTargeted(current, planned.assignments).map((id) => checked.groupNames[id] ?? id) : []
+        const warnings = [...planned.notes, ...(conflicts.length ? [`${conflicts.join(", ")} ${conflicts.length === 1 ? "is" : "are"} both included and excluded; the exclusion wins.`] : []),
+          ...(untouched.length ? [`${untouched.join(", ")} ${untouched.length === 1 ? "is" : "are"} already targeted by this app protection policy and ${untouched.length === 1 ? "was" : "were"} left as ${untouched.length === 1 ? "it is" : "they are"}.`] : [])]
         const entry: NonNullable<OibRun["reassigned"]>[number] = { folder: policy.folder, id: item.targetId, name, previous: current, applied: next, pending: true, pendingAt: new Date().toISOString(),
           ...(planned.include || planned.exclude ? { assignment: { include: planned.include, exclude: planned.exclude } } : {}), ...(warnings.length ? { warnings } : {}) }
         // Saved before the write, so a write that lands while the answer or the app is lost can still be undone.

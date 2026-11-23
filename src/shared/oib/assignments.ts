@@ -236,13 +236,16 @@ export function mergeAssignments(current: Item[], added: Item[], options: { keep
   // Strictly additive: a group already targeted keeps its entry as it is (app protection, whose
   // policy set assignments Intune reports as direct, so an existing entry may belong to a set).
   if (options.keepExisting) {
-    const present = new Set(current.map(writableAssignment).filter(groupOf).map(key))
-    return [...current.map(writableAssignment), ...added.filter((assignment) => !groupOf(assignment) || !present.has(key(assignment)))]
+    // A group already targeted in any way (included or excluded) is left alone: its entry may come from a policy set.
+    const present = new Set(current.map(writableAssignment).map(groupOf).filter(Boolean))
+    return [...current.map(writableAssignment), ...added.filter((assignment) => !groupOf(assignment) || !present.has(groupOf(assignment)))]
   }
   const existing = new Map(current.map(writableAssignment).filter(groupOf).map((assignment) => [key(assignment), assignment]))
   const merged = added.map((assignment) => {
     const before = existing.get(key(assignment))
     const filter = before ? targetOf(before).deviceAndAppManagementAssignmentFilterId : undefined
+    // An entry that replaces an existing one keeps that entry's intent (device configurations).
+    if (before && typeof before.intent === "string" && assignment.intent === undefined) assignment = { ...assignment, intent: before.intent }
     if (!before || !filter || targetOf(assignment).deviceAndAppManagementAssignmentFilterId) return assignment
     return { ...assignment, target: { ...targetOf(assignment), deviceAndAppManagementAssignmentFilterId: filter, deviceAndAppManagementAssignmentFilterType: targetOf(before).deviceAndAppManagementAssignmentFilterType ?? "include" } }
   })
@@ -252,7 +255,8 @@ export function mergeAssignments(current: Item[], added: Item[], options: { keep
 
 /** Whether two assignment lists target the same groups the same way, in any order. */
 export function sameAssignments(a: Item[], b: Item[]): boolean {
-  const canonical = (list: Item[]) => list.map(writableAssignment).map((entry) => JSON.stringify(Object.keys(targetOf(entry)).sort().map((k) => [k, targetOf(entry)[k]]).concat([["intent", entry.intent ?? null]]))).sort()
+  // Graph reads device configuration assignments back with intent "apply", its default, for assignments written without one.
+  const canonical = (list: Item[]) => list.map(writableAssignment).map((entry) => JSON.stringify(Object.keys(targetOf(entry)).sort().map((k) => [k, targetOf(entry)[k]]).concat([["intent", entry.intent ?? "apply"]]))).sort()
   return JSON.stringify(canonical(a)) === JSON.stringify(canonical(b))
 }
 
@@ -274,4 +278,10 @@ export function describeAssignment(assignment: Item, names: Record<string, strin
   const filterType = target.deviceAndAppManagementAssignmentFilterType
   const filter = filterId && (filterType === "include" || filterType === "exclude") ? `, filter ${filters[filterId] ?? filterId} (${filterType})` : ""
   return `${kind === "exclusionGroupAssignmentTarget" ? "Excluded: " : ""}${who}${filter}`
+}
+
+/** Groups an additive change leaves alone because the policy already targets them (see mergeAssignments keepExisting). */
+export function alreadyTargeted(current: Item[], added: Item[]): string[] {
+  const present = new Set(current.map(groupOf).filter(Boolean))
+  return [...new Set(added.map(groupOf).filter((id) => id && present.has(id)))]
 }
