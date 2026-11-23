@@ -78,7 +78,7 @@
     "baseTime": {
       "type": "string",
       "defaultValue": "[utcNow()]",
-      "metadata": { "description": "Leave this value as is. It gives each deployment a fresh schedule link ID and serves as the reference for the current time." }
+      "metadata": { "description": "Leave this value at its default. The portal's Redeploy action reuses the stored value, keeping the same schedule link ID and reference time. To deploy again, start from Deploy to Azure and leave this parameter unset so utcNow() is evaluated again." }
     },
     "linkSchedule": {
       "type": "bool",
