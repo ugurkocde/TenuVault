@@ -9,7 +9,7 @@ An Azure Logic App can receive [TenuVault webhook alerts](/notifications/#webhoo
 
 Use a Log Analytics workspace where you can create tables and a data collection rule (DCR). You also need permission to create a Logic App and assign an Azure role on the DCR.
 
-1. In the Azure portal, open **Monitor** > **Data Collection Endpoints** and create a data collection endpoint (DCE) in the workspace's region. For this public Azure recipe, enable public network access on the DCE. Copy its **Logs ingestion URI**.
+1. In the Azure portal, open **Monitor** > **Data Collection Endpoints** and create a data collection endpoint (DCE) in the workspace's region. Leave public network access enabled (the default) for this recipe. Copy its **Logs ingestion URI**.
 2. In the workspace, open **Tables** > **Create** > **New custom log (DCR based)**. Enter `TenuVaultAlerts` as the name. Azure adds `_CL`. Create a new DCR and select your DCE. Keep the table on the **Analytics** plan for Sentinel analytics rules.
 3. Save the following sample as `tenuvault-sample.json` and upload it in the custom log wizard. The wizard uses it to infer the columns.
 
@@ -30,8 +30,8 @@ Use a Log Analytics workspace where you can create tables and a data collection 
 ## Create the webhook receiver
 
 1. Create a **Consumption** Logic App and turn on its **System assigned** identity under **Identity**. On the DCR, open **Access control (IAM)** and assign **Monitoring Metrics Publisher** to that managed identity. Allow up to 30 minutes for the assignment to take effect. [Managed identity setup](https://learn.microsoft.com/en-us/azure/logic-apps/authenticate-with-managed-identity?tabs=consumption).
-2. In the workflow designer, add the built-in **Request** trigger **When an HTTP request is received**. Use `POST` and leave the request body schema empty. Save and copy the full **HTTP URL**, including its `sig` query parameter. Keep this URL private because it grants permission to invoke the workflow. [Request trigger and callback URL](https://learn.microsoft.com/en-us/azure/connectors/connectors-native-reqres).
-3. Add the built-in **HTTP** action with method `POST`. Use the Logs ingestion URI from the DCE as `<logs-ingestion-uri>`, without a trailing slash, and replace the DCR and stream placeholders. [Logs Ingestion API request reference](https://learn.microsoft.com/en-us/rest/api/ingestion/upload/upload?view=rest-ingestion-2023-01-01).
+2. In the workflow designer, add the built-in **Request** trigger **When a HTTP request is received**. Use `POST` and leave the request body schema empty. Save and copy the full **HTTP URL**, including its `sig` query parameter. Keep this URL private because it grants permission to invoke the workflow. [Request trigger and callback URL](https://learn.microsoft.com/en-us/azure/connectors/connectors-native-reqres).
+3. Add the built-in **HTTP** action with method `POST` and keep its default name `HTTP` (the status expression in step 4 refers to it by that name). Use the Logs ingestion URI from the DCE as `<logs-ingestion-uri>`, without a trailing slash, and replace the DCR and stream placeholders. [Logs Ingestion API request reference](https://learn.microsoft.com/en-us/rest/api/ingestion/upload/upload?view=rest-ingestion-2023-01-01).
 
    ```text
    <logs-ingestion-uri>/dataCollectionRules/<dcr-immutable-id>/streams/<input-stream>?api-version=2023-01-01
@@ -46,7 +46,7 @@ Use a Log Analytics workspace where you can create tables and a data collection 
      ```
 
    - In the HTTP action's settings, set **Retry policy** to **None** so the sender can handle retries.
-4. Add one built-in **Response** action directly after **HTTP**. Set **Run after** to run when **HTTP** succeeded, failed, or timed out. Leave the response body empty. Enter this expression in **Status Code** and save the workflow. The `502` lets TenuVault treat an ingestion failure as a delivery failure and retry it. [Response action](https://learn.microsoft.com/en-us/azure/connectors/connectors-native-reqres) and [run-after settings](https://learn.microsoft.com/en-us/azure/logic-apps/error-exception-handling).
+4. Add one built-in **Response** action directly after **HTTP**. Set **Run after** to run when **HTTP** succeeded, failed, or timed out. Leave the response body empty. Enter this expression in **Status Code** and save the workflow. The `502` lets TenuVault treat an ingestion failure as a delivery failure and retry it. A slow first run can also time out on the sender and be retried after ingestion succeeded; the `EventId` deduplication in the query below covers that. [Response action](https://learn.microsoft.com/en-us/azure/connectors/connectors-native-reqres) and [run-after settings](https://learn.microsoft.com/en-us/azure/logic-apps/error-exception-handling).
 
    ```text
    if(equals(actions('HTTP')?['status'], 'Succeeded'), 204, 502)
