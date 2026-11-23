@@ -744,3 +744,35 @@ describe("schedules as the scheduler runs them", () => {
     expect(find(weekly, `${TENANT}:schedule`)?.note).toContain("paused until it is on Pro or MSP")
   })
 })
+
+describe("retention tier transfer", () => {
+  it("round-trips both saved tiers and keeps them when importing an older settings file", () => {
+    const source = machine([{ tenantId: TENANT }])
+    source.preferences.set({ retentionMonths: 12, retentionYears: 7 })
+    const exported = source.transfer.exportFile({ app: true, tenantIds: [], connection: false, appearance: "system" })
+    const destination = machine([{ tenantId: TENANT }])
+    const preview = destination.transfer.open(exported, "system")
+    expect(find(preview, "app:retentionMonths")).toMatchObject({ next: "12 months", selected: true })
+    expect(find(preview, "app:retentionYears")).toMatchObject({ next: "7 years", selected: true })
+    destination.transfer.apply(preview.importId, ["app:retentionMonths", "app:retentionYears"], "system")
+    const legacy = destination.transfer.open(file({ app: { preferences: { retentionDays: 90 } }, tenants: [] }), "system")
+    destination.transfer.apply(legacy.importId, ["app:retentionDays"], "system")
+    expect(destination.preferences.saved()).toMatchObject({ retentionDays: 90, retentionMonths: 12, retentionYears: 7 })
+  })
+
+  it("blocks invalid counts, leaves shortening unticked, and labels choices saved on Community", () => {
+    const destination = machine([{ tenantId: TENANT }], { [TENANT]: "community" })
+    destination.preferences.set({ retentionYears: 7 })
+    const preview = destination.transfer.open(file({ app: { preferences: { retentionMonths: 121, retentionYears: 0 } }, tenants: [] }), "system")
+    expect(find(preview, "app:retentionMonths")).toMatchObject({ status: "blocked", selected: false })
+    expect(find(preview, "app:retentionYears")).toMatchObject({ next: "Off", selected: false, feature: "customRetention", warning: expect.stringContaining("can delete older backups") })
+  })
+
+  it("does not let a settings file add or lengthen tiers on Community", () => {
+    const destination = machine([{ tenantId: TENANT }], { [TENANT]: "community" })
+    destination.preferences.set({ retentionYears: 2 })
+    const preview = destination.transfer.open(file({ app: { preferences: { retentionMonths: 12, retentionYears: 7 } }, tenants: [] }), "system")
+    expect(find(preview, "app:retentionMonths")).toMatchObject({ status: "blocked", selected: false, feature: "customRetention" })
+    expect(find(preview, "app:retentionYears")).toMatchObject({ status: "blocked", selected: false, feature: "customRetention" })
+  })
+})

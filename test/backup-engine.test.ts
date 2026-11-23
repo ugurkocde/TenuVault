@@ -329,6 +329,46 @@ describe("retention", () => {
     const folders = new Set((await store.list(account, "intune-backups")).map((b) => b.name.split("/")[0]))
     expect([...folders].sort()).toEqual(["backup-2026-09-20-020000", "backup-2026-09-24-120000"])
   })
+  it("keeps tier copies whole and prunes expired duplicates and warnings", async () => {
+    const store = new LocalBlobStore(mkdtempSync(join(tmpdir(), "tv-retention-")), [randomBytes(32)])
+    const account = localStorageAccountName(TENANT)
+    await store.createContainer(account, "intune-backups")
+    const monthly = "backup-2026-07-20-120000"
+    const yearly = "backup-2025-12-20-120000"
+    const expired = [
+      ["backup-2026-07-01-120000", "Success"],
+      ["backup-2026-07-21-120000", "CompletedWithWarnings"],
+      ["backup-2026-07-24-120000", "Success"],
+      ["backup-2025-12-01-120000", "Success"],
+      ["backup-2024-12-20-120000", "Success"],
+    ]
+    for (const [folder, Status] of [[monthly, "Success"], [yearly, "Succeeded"], ...expired]) {
+      await store.put(account, "intune-backups", `${folder}/metadata.json`, Buffer.from(JSON.stringify({ TenantId: TENANT, Status, ...(folder === "backup-2026-07-24-120000" && { MaskedSecretItems: [{ Folder: "CompliancePolicies", Id: "A" }] }) })), "application/json")
+      await store.put(account, "intune-backups", `${folder}/CompliancePolicies/A.json`, Buffer.from("{}"), "application/json")
+    }
+    const graph = fakeGraph()
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input, init)
+      const url = new URL(request.url)
+      return localAccountFromUrl(url) ? handleLocalBlobRequest(store, request) : graph(url)
+    }) as typeof fetch
+    const engine = new BackupEngine({
+      fetch: fetchImpl,
+      getToken: async () => "token",
+      retentionDays: () => 30,
+      retentionTiers: () => ({ retentionMonths: 1, retentionYears: 1 }),
+      now: () => new Date("2026-09-24T12:00:00Z"),
+    })
+    const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)
+    expect(job.status).toBe("Completed")
+    expect(job.log.join("\n")).toContain("Removed 5 backups older than 30 days.")
+    expect(job.log.join("\n")).toContain("Kept 2 older backups for monthly or yearly retention.")
+    const files = (await store.list(account, "intune-backups")).map((blob) => blob.name).sort()
+    expect(files.filter((file) => !file.startsWith("backup-2026-09-24-120000/"))).toEqual([
+      `${yearly}/CompliancePolicies/A.json`, `${yearly}/metadata.json`,
+      `${monthly}/CompliancePolicies/A.json`, `${monthly}/metadata.json`,
+    ])
+  })
 })
 
 describe("retention and storage protection", () => {

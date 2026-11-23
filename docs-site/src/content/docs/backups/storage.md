@@ -128,7 +128,13 @@ To choose how long backups are kept:
 1. Open **Settings** and go to **Background runner**.
 2. In **Keep backups for**, choose **7 days**, **14 days**, **30 days**, **60 days**, **90 days**, **180 days**, **365 days** or **Forever**.
 
-The default is 30 days. The setting applies to every tenant on this computer. The **Kept for** field on the **Schedule** tab shows the value that applies to the selected tenant.
+The default is 30 days. The setting applies to every tenant on this computer. The **Kept for** field on the **Schedule** tab shows the policy for the selected tenant.
+
+Pro and MSP can also set **Monthly retention** (0 to 120 months) and **Yearly retention** (0 to 50 years). For example, keep every backup for 30 days, then one a month for 12 months and one a year for 7 years. Set either tier to **0** to turn it off. **Forever** keeps every backup.
+
+Each tier counts the most recent local calendar months or years whose preferred backup is older than the daily window. It picks the newest complete backup with full coverage in each period, or the newest complete backup with partial coverage if that period has no full one. Masked secrets, app-only exclusions, skipped types and scope exclusions count as partial coverage. Periods without a complete backup are skipped. One backup can satisfy both tiers. The Backup Timeline marks tier copies.
+
+Saved tiers keep applying after a downgrade, trial end, or license lapse. The daily window is still capped on Community. If the cap shortens the daily window, the tiers continue counting periods from the saved daily cutoff and preserve the preferred backup for each enabled month or year between the two cutoffs. Editing tiers requires Pro or MSP.
 
 How retention works:
 
@@ -145,10 +151,10 @@ How retention works:
 The `.tenuvault-owner.json` marker records `Source` and `TenantId` before policy uploads. In Azure it is plain JSON like the backup itself, and in a storage account several tenants share, it and `metadata.json` decide which tenant a backup belongs to: each tenant lists, restores and downloads only its own backups. It is excluded from downloaded ZIPs. When the manifest names no tenant, the marker supplies the backup's ownership for the backup list, restore, drift detection and retention. Retention deletes the marker last. When an expired folder is missing its manifest, cleanup can proceed if a desktop or Cloud Backup marker identifies it as belonging to the current tenant. TenuVault logs incomplete folders whose ownership it cannot verify and leaves them in place. Storage immutability policies and legal holds still apply.
 
 :::caution
-Retention applies to every backup in the tenant's storage location, including backups made from other computers. If several admins share one Azure storage account, the shortest retention setting among them wins. See [Work with other admins in one tenant](/getting-started/multiple-admins/).
+Retention applies to every backup in the tenant's storage location, including backups made from other computers. If several admins share one Azure storage account, use the same daily, monthly and yearly settings and time zone on each computer. Each computer applies its own policy, so a shorter policy can delete backups another computer would keep. See [Work with other admins in one tenant](/getting-started/multiple-admins/).
 :::
 
-On Community, backups are kept for 30 days at most. A longer setting, or **Forever**, counts as 30 days for Community tenants. Pro and MSP tenants keep what you choose.
+On Community, the daily window is capped at 30 days. A longer setting, or **Forever**, counts as 30 days for Community tenants. Pro and MSP tenants keep what you choose.
 
 On Community, when the oldest listed backup is at least 23 days old, a line above **Backup Timeline** shows its date, explains removal after the next complete backup and describes longer retention included in TenuVault Pro and MSP.
 
@@ -156,7 +162,7 @@ On Community, when the oldest listed backup is at least 23 days old, a line abov
 
 Pro and MSP tenants using Azure storage can protect new backup blob versions with Azure's version-level immutability. A locked policy protects those versions from deletion until they expire, including when someone with delete access makes a mistake or an attacker gains that access. A write can still create a new current version in Azure. The protected version remains available through Azure version history. [Azure version-level immutability](https://learn.microsoft.com/en-us/azure/storage/blobs/immutable-version-level-worm-policies)
 
-Set the immutable period to at least the number of days you plan to retain backups in TenuVault. For an expired backup, TenuVault checks all its current blobs before starting cleanup. If any has an active immutability policy, an unreadable immutability expiry, or a legal hold, the whole backup stays. The log shows the latest active expiry when Azure provides one. A legal hold lasts until an Azure administrator clears it. The log reports missing Azure delete permission as a warning and names any folders left partially deleted if Azure refuses a delete after cleanup starts. Once a backup is past TenuVault retention and its blobs are eligible for deletion, the next complete backup made with an admin's sign-in can remove it.
+To keep every retained copy protected for its full lifetime, set the Azure immutability window to cover the longest retention tier you use. For example, a 30-day lock can expire while TenuVault still keeps a yearly copy. A monthly or yearly copy stays in TenuVault after its Azure lock expires if it still qualifies for that tier. For an expired backup, TenuVault checks all its current blobs before starting cleanup. If any has an active immutability policy, an unreadable immutability expiry, or a legal hold, the whole backup stays. The log shows the latest active expiry when Azure provides one. A legal hold lasts until an Azure administrator clears it. The log reports missing Azure delete permission as a warning and names any folders left partially deleted if Azure refuses a delete after cleanup starts. Once a backup is past TenuVault retention and its blobs are eligible for deletion, the next complete backup made with an admin's sign-in can remove it.
 
 Longer protection and extra blob versions use more billed space. Azure can keep previous versions after TenuVault removes a backup from its history. The storage setup script adds a lifecycle rule that makes previous backup versions eligible for cleanup once their age exceeds the immutable policy period. With the Backup Reader, the rule uses the longer of that period and `-VersionRetentionDays`. Review version usage in Azure.
 

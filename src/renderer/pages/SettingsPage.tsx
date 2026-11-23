@@ -11,7 +11,8 @@ import { Dialog, DialogAnimationProvider, DialogContent, DialogDescription, Dial
 import { storageLabel } from "~/lib/storage-label"
 import type { AppInfo, AppPreferences, ProxyCredentialSummary, SignedInAccount, UpdateStatus } from "../../shared/ipc"
 import { LOCAL_STORAGE_PREFIX } from "../../shared/constants"
-import { COMMUNITY_RETENTION_DAYS, effectiveRetentionDays, type Feature } from "../../shared/plans"
+import { RETENTION_TIER_LIMITS, retentionTierSummary, validRetentionTier } from "../../shared/backup-retention"
+import { allows, COMMUNITY_RETENTION_DAYS, effectiveRetentionDays, type Feature } from "../../shared/plans"
 import { isGuid } from "../../shared/security"
 import { LicenseAgreementLink } from "../components/LicenseAgreementDialog"
 import { StorageChooser, type StorageChooserDraft } from "../components/StorageChooser"
@@ -614,6 +615,9 @@ export function BackgroundAndRetention() {
           const plans = connected.map((tenant) => tenantPlan(licenseStatus?.tenants.find((entry) => entry.tenantId.toLowerCase() === tenant.credentials!.tenantId.toLowerCase())))
           const allCommunity = connected.length > 0 && plans.every((plan) => plan === "community")
           const gated = allCommunity && !allowsCustomRetention(prefs.retentionDays)
+          const canEditTiers = plans.some((plan) => plan !== null && allows(plan, "customRetention"))
+          const savedTiers = !!(prefs.retentionMonths || prefs.retentionYears)
+          const summary = retentionTierSummary(canEditTiers ? prefs.retentionDays : effectiveRetentionDays(prefs.retentionDays, null), prefs)
           return (
             <>
               <div className="flex items-center gap-3 border-t border-gray-100 pt-4">
@@ -633,9 +637,50 @@ export function BackgroundAndRetention() {
                   <option value={0} disabled={allCommunity}>Forever{allCommunity ? " (Pro)" : ""}</option>
                 </select>
               </div>
+              <div className="flex flex-wrap gap-x-6 gap-y-3">
+                {(["retentionMonths", "retentionYears"] as const).map((key) => {
+                  const saved = prefs[key] ?? 0
+                  const monthly = key === "retentionMonths"
+                  return (
+                    <div key={key}>
+                      <label htmlFor={key} className="block font-medium">{monthly ? "Monthly retention" : "Yearly retention"}</label>
+                      <div className="mt-1 flex items-center gap-2">
+                        <input
+                          key={saved}
+                          id={key}
+                          type="number"
+                          className="h-10 w-24 rounded-full border border-gray-300 bg-white px-4 disabled:opacity-50"
+                          min={0}
+                          max={RETENTION_TIER_LIMITS[key]}
+                          step={1}
+                          defaultValue={saved}
+                          disabled={!canEditTiers || prefs.retentionDays === 0}
+                          aria-describedby="retention-tier-help"
+                          onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur() }}
+                          onBlur={(e) => {
+                            const value = e.currentTarget.valueAsNumber
+                            e.currentTarget.value = String(saved)
+                            if (value !== saved && validRetentionTier(key, value)) void set({ [key]: value })
+                            else if (!validRetentionTier(key, value)) toast(`Enter a whole number from 0 to ${RETENTION_TIER_LIMITS[key]}.`, "error")
+                          }}
+                        />
+                        <span>{monthly ? "months" : "years"}</span>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+              <p id="retention-tier-help" className="text-xs text-gray-500">
+                {!canEditTiers ? (savedTiers
+                  ? "Your saved monthly and yearly tiers still apply. Editing them requires Pro or MSP."
+                  : "Monthly and yearly retention are available on Pro and MSP.")
+                  : prefs.retentionDays === 0 ? "Forever keeps every backup."
+                    : "Use 0 to turn a tier off. Each tier keeps one complete backup per eligible month or year and prefers full coverage."}
+              </p>
+              {summary && <p role="status" className="font-medium">{summary}.</p>}
               <p className="text-xs text-gray-500">
-                Older backups are deleted after each successful backup. The newest backup is always kept. Community tenants
-                keep {COMMUNITY_RETENTION_DAYS} days at most; Pro and MSP tenants keep what you choose here.
+                Expired backups are deleted after each successful backup. The newest backup is always kept. Community tenants
+                keep up to {COMMUNITY_RETENTION_DAYS} days of daily history. Pro and MSP tenants can choose a longer daily window.
               </p>
               {gated && (
                 <p role="note" className="text-xs text-gray-700">
@@ -883,7 +928,7 @@ export function SettingsSectionNav({ section }: { section: SettingsSectionId }) 
 
 /** The Settings section that shows an imported setting, so it can load again after the import. */
 function sectionOfImportItem(id: string): SettingsSectionId | null {
-  if (id === "app:retentionDays" || id === "app:keepRunningInTray" || id === "app:startAtLogin") return "background"
+  if (id === "app:retentionDays" || id === "app:retentionMonths" || id === "app:retentionYears" || id === "app:keepRunningInTray" || id === "app:startAtLogin") return "background"
   if (id === "app:autoUpdate" || id === "app:nightlyUpdates") return "updates"
   if (id === "app:appearance") return "appearance"
   if (id === "app:pdfBranding") return "branding"

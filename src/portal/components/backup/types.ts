@@ -1,3 +1,4 @@
+import type { RetentionQuality } from "../../../shared/backup-retention"
 /** A backup as /api/list-backups describes it. */
 export interface BackupSummary {
   id: string
@@ -11,6 +12,7 @@ export interface BackupSummary {
   /** Stored bytes per registry folder, from the same listing as `counts`. */
   sizes?: Record<string, number>
   scope: { excluded: string[]; description: string } | null
+  retentionQuality?: RetentionQuality | null
   failures?: number
   skippedTypes?: string[]
   failedTypes?: string[]

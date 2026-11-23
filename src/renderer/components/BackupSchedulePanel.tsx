@@ -9,7 +9,8 @@ import { storageLabel } from "~/lib/storage-label"
 import type { AppPreferences, BackupReaderState, BackupSettings } from "../../shared/ipc"
 import { LOCAL_STORAGE_PREFIX } from "../../shared/constants"
 import { describeCloudSchedule, nextRunsInZone } from "../../shared/cloud-backup"
-import { allows, COMMUNITY_RETENTION_DAYS } from "../../shared/plans"
+import { retentionTierSummary } from "../../shared/backup-retention"
+import { allows, effectiveRetentionDays } from "../../shared/plans"
 import { bridge } from "../lib/bridge"
 import { useCloudBackup } from "../lib/cloud-backup"
 import { tenantLicense, tenantPlan, useLicense } from "../lib/license"
@@ -68,6 +69,7 @@ function TenantSchedule({ tenantId, tenantName, tenant: tenantProp, onStorageCha
   const [weekday, setWeekday] = useState(0)
   const [saving, setSaving] = useState(false)
   const [prefs, setPrefs] = useState<AppPreferences | null>(null)
+  const tierSummary = prefs && retentionTierSummary(effectiveRetentionDays(prefs.retentionDays, plan), prefs)
   const [prefsError, setPrefsError] = useState<string | null>(null)
   const [prefsSaveError, setPrefsSaveError] = useState<string | null>(null)
   const [runner, setRunner] = useState<{ installed: boolean } | null>(null)
@@ -140,7 +142,7 @@ function TenantSchedule({ tenantId, tenantName, tenant: tenantProp, onStorageCha
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
       {confirmDialog}
       <div className="space-y-4 lg:col-span-2">
-      <TenantStorageSettings tenant={tenant} tenantName={tenantName} prefs={prefs} community={community} onStorageChange={onStorageChange} cloudOnly={!!cloud.config?.linked && !current?.enabled} />
+      <TenantStorageSettings tenant={tenant} tenantName={tenantName} prefs={prefs} tierSummary={tierSummary} community={community} onStorageChange={onStorageChange} cloudOnly={!!cloud.config?.linked && !current?.enabled} />
       <BackupScopeSettings tenantId={tenantId} tenantName={tenantName} hasCloud={!!cloud.config} onSaved={() => setScopeVersion((version) => version + 1)} />
       <div className="space-y-4 rounded-3xl bg-white px-6 py-5 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
         <div className="flex items-center gap-3">
@@ -452,9 +454,9 @@ function TenantSchedule({ tenantId, tenantName, tenant: tenantProp, onStorageCha
             <div>
               <dt className="text-xs text-gray-500">Kept for</dt>
               <dd className="mt-0.5 text-base text-gray-900">
-                {community
-                  ? `${prefs.retentionDays === 0 ? COMMUNITY_RETENTION_DAYS : Math.min(prefs.retentionDays, COMMUNITY_RETENTION_DAYS)} days (Community)`
-                  : prefs.retentionDays === 0 ? "Forever" : `${prefs.retentionDays} days (change in Settings)`}
+                {tierSummary || (community
+                  ? `${effectiveRetentionDays(prefs.retentionDays, "community")} days (Community)`
+                  : prefs.retentionDays === 0 ? "Forever" : `${prefs.retentionDays} days (change in Settings)`)}
               </dd>
             </div>
           )}
@@ -580,7 +582,10 @@ function BackupScopeSettings({ tenantId, tenantName, hasCloud, onSaved }: Backup
 }
 
 /** The tenant's storage choice, edited here and in Settings through the same chooser. */
-function TenantStorageSettings({ tenant, tenantName, prefs, community, onStorageChange, cloudOnly }: { tenant: Tenant | null; tenantName: string; prefs: AppPreferences | null; community: boolean; onStorageChange?: (tenant: Tenant, choice: StorageChoice) => void; cloudOnly?: boolean }) {
+function TenantStorageSettings({ tenant, tenantName, prefs, tierSummary, community, onStorageChange, cloudOnly }: { tenant: Tenant | null; tenantName: string; prefs: AppPreferences | null; tierSummary: string | null; community: boolean; onStorageChange?: (tenant: Tenant, choice: StorageChoice) => void; cloudOnly?: boolean }) {
+  const keptFor = prefs && (community
+    ? `${effectiveRetentionDays(prefs.retentionDays, "community")} days (Community)`
+    : prefs.retentionDays === 0 ? "forever" : `${prefs.retentionDays} days`)
   const { confirm, confirmDialog } = useConfirm()
   const [editing, setEditing] = useState(false)
   const [choice, setChoice] = useState<StorageChoice | null>(null)
@@ -633,7 +638,7 @@ function TenantStorageSettings({ tenant, tenantName, prefs, community, onStorage
             {local
               ? `Backups for ${tenantName} go to ${settings?.localFolder ?? "the TenuVault Backups folder"}${settings ? `, recovery key ${settings.keyFingerprint}${settings.recoveryExported ? " saved" : " not saved yet"}` : ""}.`
               : `Backups for ${tenantName} go to container intune-backups${tenant?.resources?.resourceGroupName ? `, ${tenant.resources.resourceGroupName}` : ""}.`}
-            {prefs ? ` Kept for ${community ? `${prefs.retentionDays === 0 ? COMMUNITY_RETENTION_DAYS : Math.min(prefs.retentionDays, COMMUNITY_RETENTION_DAYS)} days (Community)` : prefs.retentionDays === 0 ? "forever" : `${prefs.retentionDays} days`}${cloudOnly && !local ? ", applied on the next desktop backup with an admin's sign-in (the cloud runbook cannot delete, so cloud backups stay longer until then)" : ""}.` : ""}
+            {keptFor ? ` Kept for ${keptFor}${tierSummary ? " in full" : ""}${cloudOnly && !local ? ", applied on the next desktop backup with an admin's sign-in (the cloud runbook cannot delete, so cloud backups stay longer until then)" : ""}.` : ""}
             {" "}Backups never go to a TenuVault server.
           </p>
         </div>

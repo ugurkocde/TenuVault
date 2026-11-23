@@ -22,7 +22,9 @@ import { retentionNote } from "@desktop/lib/plan-notes"
 import { FirstBackupNote } from "@desktop/components/FirstBackupNote"
 import { LegacySealedBackupsNotice } from "@desktop/components/LegacySealedBackupsNotice"
 import { DamagedBackupFilesNotice } from "@desktop/components/DamagedBackupFilesNotice"
-import { allows } from "../../../../shared/plans"
+import type { AppPreferences } from "../../../../shared/ipc"
+import { retentionBackupTime, savedRetentionPolicy, selectRetentionTiers } from "../../../../shared/backup-retention"
+import { allows, effectiveRetentionDays } from "../../../../shared/plans"
 import { AREAS } from "../../../../shared/intune/scope"
 import { typeForFolder, type Item } from "../../../../shared/intune/registry"
 import { autopilotDevicesCsv } from "../../../../shared/intune/autopilot-devices"
@@ -89,7 +91,25 @@ export default function BackupRestorePage() {
   // Shared with the drift page and kept between visits: shown at once, refreshed in the background.
   const backupList = useBackupList(selectedTenant)
   const backups = backupList.backups ?? NO_BACKUPS
-  const retentionMessage = retentionNote(plan, backups, new Date())
+  const [prefs, setPrefs] = useState<AppPreferences | null>(null)
+  useEffect(() => {
+    if (activeTab !== "backup") return
+    let active = true
+    void bridge.preferences.get().then((value) => { if (active) setPrefs(value) }).catch(() => {})
+    return () => { active = false }
+  }, [activeTab])
+  const tiers = useMemo(() => {
+    if (!prefs) return null
+    const policy = savedRetentionPolicy(prefs)
+    const days = effectiveRetentionDays(prefs.retentionDays, plan)
+    if (days === 0 || (!policy.retentionMonths && !policy.retentionYears)) return null
+    const candidates = backups.flatMap((backup) => {
+      const time = retentionBackupTime(backup.id)
+      return time === null || !backup.retentionQuality ? [] : [{ id: backup.id, time, quality: backup.retentionQuality }]
+    })
+    return selectRetentionTiers(candidates, new Date(), days, policy).tiers
+  }, [backups, plan, prefs])
+  const retentionMessage = prefs?.retentionMonths || prefs?.retentionYears ? null : retentionNote(plan, backups, new Date())
   const isLoading = backupList.loading && backupList.backups === null
   // The tenant and storage the list is for. Notices are keyed by it, so their state, such as a check
   // after a key import, never carries over to another tenant's list.
@@ -361,6 +381,7 @@ export default function BackupRestorePage() {
                 {backups.map((backup) => {
                   const kind = statusKind(backup.status)
                   const style = STATUS_STYLE[kind]
+                  const tier = tiers?.get(backup.id)
                   return (
                     <div key={backup.id} className="flex gap-4">
                       <div className={cn("ml-2 mt-4 flex h-11 w-11 shrink-0 items-center justify-center rounded-full", style.iconBg)}>
@@ -380,6 +401,7 @@ export default function BackupRestorePage() {
                             <p className="text-sm text-gray-500">{backup.scope ? backup.scope.description : "Everything (made before backup choices existed)"}</p>
                           </div>
                           <div className="flex flex-wrap justify-end gap-2">
+                            {tier && <span title="Kept by the current retention policy" className="rounded-full bg-secondary px-2.5 py-1 text-xs font-medium text-gray-700">{tier}</span>}
                             {backup.type && <span className={cn("rounded-full px-2.5 py-1 text-xs font-medium", backup.type === "scheduled" ? "bg-blue-50 text-blue-700" : "bg-muted text-gray-700")}>{TRIGGER_LABEL[backup.type]}</span>}
                             {kind !== "success" && <span className={cn("rounded-full px-2.5 py-1 text-xs font-medium", style.badge)}>{statusLabel(backup.status)}</span>}
                           </div>

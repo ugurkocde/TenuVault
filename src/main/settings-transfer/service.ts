@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto"
+import { validRetentionTier } from "../../shared/backup-retention"
 import { parseCloudSetup, type CloudBackupConfig } from "../../shared/cloud-backup"
 import { LOCAL_STORAGE_PREFIX } from "../../shared/constants"
 import type { AppPreferences, BackupSchedule, ScheduleInput } from "../../shared/ipc"
@@ -21,13 +22,15 @@ import { parseSettingsFile, writeSettingsFile, type SettingsFile, type SettingsF
  */
 
 /** Preferences a settings file carries. Dismissed notices and one-time notes stay on each computer. */
-const EXPORTED_PREFERENCES = ["retentionDays", "keepRunningInTray", "startAtLogin", "autoUpdate", "nightlyUpdates"] as const
+const EXPORTED_PREFERENCES = ["retentionDays", "retentionMonths", "retentionYears", "keepRunningInTray", "startAtLogin", "autoUpdate", "nightlyUpdates"] as const
 type ExportedPreference = (typeof EXPORTED_PREFERENCES)[number]
 
 /** Where the tray icon lives, as the Settings labels name it. */
 const ICON_LOCATION = process.platform === "darwin" ? "menu bar" : "tray"
 const PREFERENCE_LABELS: Record<ExportedPreference, string> = {
   retentionDays: "Keep backups for",
+  retentionMonths: "Monthly retention",
+  retentionYears: "Yearly retention",
   keepRunningInTray: `Keep running in the ${ICON_LOCATION} when I close the window`,
   startAtLogin: `Start TenuVault in the ${ICON_LOCATION} when I sign in to this computer`,
   autoUpdate: "Download and install updates automatically",
@@ -527,8 +530,31 @@ export class SettingsTransfer {
           ...(limited && { feature: "customRetention" as const }),
           note,
           state: [current.retentionDays, saved.retentionDays],
-          ...(shorter && { warning: `Keeps backups for a shorter time, for every tenant on this computer, also those not in the file. After the next complete backup of a tenant, its backups older than ${days(value as number)} are deleted.` }),
+          ...(shorter && { warning: `Keeps backups for a shorter time, for every tenant on this computer, also those not in the file. After the next complete backup of a tenant, its backups older than ${days(value as number)} can be deleted under its retention policy.` }),
           apply: () => void this.deps.preferences.set({ retentionDays: value as number }),
+        }))
+        continue
+      }
+      if (key === "retentionMonths" || key === "retentionYears") {
+        const valid = validRetentionTier(key, value)
+        const now = current[key] ?? 0
+        const shorter = valid && value < now
+        const asDefault = valid && value === now && saved[key] === undefined
+        const unit = key === "retentionMonths" ? "month" : "year"
+        const describeCount = (count: number) => count === 0 ? "Off" : `${count} ${unit}${count === 1 ? "" : "s"}`
+        const note = [
+          "Applies to tenants on this computer. Changing tiers requires Pro or MSP.",
+          asDefault && DEFAULT_NOTE,
+        ].filter(Boolean).join(" ")
+        // Community keeps saved tiers but cannot add or lengthen them, as in Settings.
+        const planBlocked = valid && !customRetention && value > now
+        items.push(this.item(id, label, describeCount(now), valid ? describeCount(value) : shown(value), valid && value === now && !asDefault, !valid ? NOT_VALID
+          : planBlocked ? "Monthly and yearly copies are included in Pro and MSP." : null, {
+          ...(!customRetention && { feature: "customRetention" as const }),
+          note,
+          state: [now, saved[key]],
+          ...(shorter && { warning: "Shortening this tier can delete older backups after the next complete backup of each tenant on this computer." }),
+          apply: () => void this.deps.preferences.set({ [key]: value as number }),
         }))
         continue
       }

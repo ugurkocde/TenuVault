@@ -337,6 +337,8 @@ export interface AppPreferences {
   keepRunningInTray: boolean
   /** Delete backups older than this many days after each backup. 0 keeps everything. */
   retentionDays: number
+  retentionMonths?: number
+  retentionYears?: number
   /** Whether the one-time successful backup note has been shown on this machine. */
   firstBackupNoteSeen: boolean
   autoUpdate: boolean
