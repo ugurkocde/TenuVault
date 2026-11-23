@@ -253,14 +253,12 @@ if (-not $containerSoftDeleteMatches -and $PSCmdlet.ShouldProcess($StorageAccoun
     Enable-AzStorageContainerDeleteRetentionPolicy -ResourceGroupName $ResourceGroupName -StorageAccountName $StorageAccountName -RetentionDays 7 | Out-Null
 }
 
-if (($Immutable -or $BackupReaderAppId) -and -not $blobService.IsVersioningEnabled -and
-    $PSCmdlet.ShouldProcess($StorageAccountName, "Enable blob versioning")) {
-    Write-Host "Turning on blob versioning..."
-    Update-AzStorageBlobServiceProperty -ResourceGroupName $ResourceGroupName -StorageAccountName $StorageAccountName -IsVersioningEnabled $true | Out-Null
-}
-
 $immutablePolicy = $null
 if ($Immutable) {
+    if (-not $blobService.IsVersioningEnabled -and $PSCmdlet.ShouldProcess($StorageAccountName, "Enable blob versioning")) {
+        Write-Host "Turning on blob versioning..."
+        Update-AzStorageBlobServiceProperty -ResourceGroupName $ResourceGroupName -StorageAccountName $StorageAccountName -IsVersioningEnabled $true | Out-Null
+    }
     if (-not $backupContainer -and $PSCmdlet.ShouldProcess($StorageAccountName, "Create '$container' with version-level immutability support")) {
         $backupContainer = New-AzRmStorageContainer -ResourceGroupName $ResourceGroupName -StorageAccountName $StorageAccountName `
             -Name $container -EnableImmutableStorageWithVersioning
@@ -443,6 +441,11 @@ if ($BackupReaderAppId) {
         Write-Warning "The Backup Reader also has '$($assignment.RoleDefinitionName)' at $($assignment.Scope). Remove it so the reader cannot delete backups."
     }
 
+    $blobService = Get-AzStorageBlobServiceProperty -ResourceGroupName $ResourceGroupName -StorageAccountName $StorageAccountName
+    if (-not $blobService.IsVersioningEnabled -and $PSCmdlet.ShouldProcess($StorageAccountName, "Enable blob versioning")) {
+        Write-Host "Turning on blob versioning..."
+        Update-AzStorageBlobServiceProperty -ResourceGroupName $ResourceGroupName -StorageAccountName $StorageAccountName -IsVersioningEnabled $true | Out-Null
+    }
     # Only previous versions age out; current backups are never deleted by the lifecycle rule.
     $ruleName = "tenuvault-previous-versions"
     $policy = Get-AzStorageAccountManagementPolicy -ResourceGroupName $ResourceGroupName -StorageAccountName $StorageAccountName -ErrorAction SilentlyContinue
