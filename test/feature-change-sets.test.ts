@@ -6,6 +6,7 @@ import { containsExpected, contentHashOf, diffConfigurations, REDACTED, sanitize
 import { typeForFolder, type Item } from "../src/shared/intune/registry"
 import { DOMAINS } from "../src/main/features/domains"
 import { MAX_RECORDS } from "../src/main/features/records"
+import { GROUP_CHECK_REQUIRED } from "../src/shared/group-access"
 import { fakeDeps, seedRecords, TENANT_A, TENANT_B } from "./feature-helpers"
 import { COMPLETE_BACKUP_METADATA, FakeTenant, setting, wire } from "./feature-change-sets-fakes"
 import { writeOperation } from "../src/main/features/change-sets/graph"
@@ -464,6 +465,103 @@ describe("change-set engine", () => {
     const recreated = [...context.tenant.policies.values()].filter((policy) => policy.name === "Old policy")
     expect(recreated).toHaveLength(1)
     expect(recreated[0]!.id).not.toBe(doomed.id)
+    expect(context.backups).toEqual([TENANT_A, TENANT_A])
+  })
+})
+
+describe("rollback assignment checks across operations", () => {
+  async function setupRollback() {
+    const context = setup()
+    const groups = ["aaaaaaaa-0000-4000-8000-000000000001", "aaaaaaaa-0000-4000-8000-000000000002"].map((id, index) => ({
+      id,
+      displayName: `Previous group ${index + 1}`,
+      securityEnabled: true,
+      groupTypes: [],
+    }))
+    const policies = groups.map((group, index) => {
+      context.tenant.groups.set(group.id, group)
+      return context.tenant.addPolicy({ name: `Policy ${index + 1}`, assignments: [{ target: { "@odata.type": "#microsoft.graph.groupAssignmentTarget", groupId: group.id } }] })
+    })
+    const record = await createChangeSet(context.deps, TENANT_A, {
+      title: "Update two policies",
+      origin: { workflow: "standard-adoption" },
+      operations: policies.map((policy) => ({
+        folder: "ConfigurationPolicies",
+        action: "update",
+        targetId: policy.id as string,
+        proposed: { ...policy, description: "Updated" },
+        assignments: [],
+      })),
+    }, "Admin")
+    const review = await approve(context, record.id)
+    const applied = await context.post({ action: "apply", id: record.id, contentHash: review.contentHash, confirm: true })
+    expect(applied.body.changeSet.status).toBe("applied")
+    const rollback = await context.post({ action: "rollback-create", id: record.id })
+    expect(rollback.status).toBe(200)
+    return { ...context, groups, policies, originalId: record.id, rollbackId: rollback.body.changeSet.id as string }
+  }
+
+  it("identifies only the affected policy when one of two captured groups is deleted", async () => {
+    const context = await setupRollback()
+    const deleted = context.groups[1]!
+    context.tenant.groups.delete(deleted.id)
+    const preview = await context.post({ action: "rollback-preview", id: context.originalId })
+    expect(preview.body.operations).toMatchObject([
+      { name: "Policy 1", blocked: null },
+      { name: "Policy 2", blocked: expect.stringContaining(deleted.id) },
+    ])
+    const review = await context.post({ action: "preview", id: context.rollbackId })
+    expect(review.body.operations).toMatchObject([
+      { name: "Policy 1", blockers: [] },
+      { name: "Policy 2", blockers: [expect.stringContaining(deleted.id)] },
+    ])
+    expect(review.body.blockers).toHaveLength(1)
+
+    const revised = await context.post({ action: "revise", id: context.rollbackId, removeKeys: ["op-2"] })
+    expect(revised.status).toBe(200)
+    const approved = await approve(context, context.rollbackId)
+    const applied = await context.post({ action: "apply", id: context.rollbackId, contentHash: approved.contentHash, confirm: true })
+    expect(applied.body.changeSet.status).toBe("applied")
+    expect(context.tenant.policies.get(context.policies[0]!.id as string)?.description).toBe("")
+    expect(context.tenant.policies.get(context.policies[1]!.id as string)?.description).toBe("Updated")
+  })
+
+  it("shows the group permission blocker once in the overall review", async () => {
+    const context = await setupRollback()
+    context.tenant.groupsForbidden = true
+    const review = await context.post({ action: "preview", id: context.rollbackId })
+    expect(review.body.operations).toMatchObject([{ blockers: [GROUP_CHECK_REQUIRED] }, { blockers: [GROUP_CHECK_REQUIRED] }])
+    expect(review.body.blockers).toEqual([GROUP_CHECK_REQUIRED])
+  })
+
+  it("keeps a partial rollback retryable when a pending group's deletion blocks the retry", async () => {
+    const context = await setupRollback()
+    const id = context.rollbackId
+    const review = await approve(context, id)
+    const secondId = context.policies[1]!.id as string
+    context.tenant.failWrite = (_method, path) => path.endsWith(`/${secondId}`) ? 400 : undefined
+    const apply = (action: "apply" | "retry") => context.post({ action, id, contentHash: review.contentHash, confirm: true })
+    const first = await apply("apply")
+    expect(first.body.changeSet).toMatchObject({ status: "partial", results: { "op-1": { status: "verified" }, "op-2": { status: "failed" } } })
+
+    context.tenant.failWrite = undefined
+    context.tenant.groups.delete(context.groups[0]!.id)
+    const pendingGroup = context.groups[1]!
+    context.tenant.groups.delete(pendingGroup.id)
+    const writes = context.tenant.writeCount()
+    const blocked = await apply("retry")
+    expect(blocked.status).toBe(409)
+    expect(blocked.body.error).toContain(pendingGroup.id)
+    expect(blocked.body.error).toContain("Nothing was written in this attempt.")
+    expect(context.tenant.writeCount()).toBe(writes)
+    const stored = getChangeSet(context.deps, TENANT_A, id)
+    expect(stored.status).toBe("partial")
+    expect(stored.review).toEqual(first.body.changeSet.review)
+    expect(stored.results).toEqual(first.body.changeSet.results)
+
+    context.tenant.groups.set(pendingGroup.id, pendingGroup)
+    const retried = await apply("retry")
+    expect(retried.body.changeSet).toMatchObject({ status: "applied", attempts: 3, results: { "op-1": { status: "verified", attempts: 1 }, "op-2": { status: "verified", attempts: 2 } } })
     expect(context.backups).toEqual([TENANT_A, TENANT_A])
   })
 })

@@ -165,13 +165,28 @@ async function send(graph: GraphCall, method: Step["method"], path: string, body
 export async function writeOperation(
   graph: GraphCall,
   type: IntuneType,
-  input: { action: OperationAction; targetId: string | null; proposed: Item | null; assignments: Item[] | null; current: Item | null },
+  input: {
+    action: OperationAction
+    targetId: string | null
+    proposed: Item | null
+    assignments: Item[] | null
+    current: Item | null
+    assignmentBlockers?: () => Promise<string[]>
+  },
   onCreated: (id: string) => void,
 ): Promise<WriteOutcome> {
   const blocked = (sent: Extract<Sent, { ok: false }>, objectId: string | null, partial = false): WriteOutcome => ({ state: "approval", objectId, partial, message: approvalMessage(sent.approval!, type.label, partial ? "The configuration was written, but assignments or a follow-up step need approval." : undefined) })
   const assign = async (id: string): Promise<Sent> => {
     if (!input.assignments) return { ok: true, body: {} }
     if (!type.assign || type.assign === "post") return { ok: false, rejected: true, message: `Assignments cannot be set for ${type.label} by a change set.` }
+    if (input.assignmentBlockers) {
+      try {
+        const blockers = await input.assignmentBlockers()
+        if (blockers.length) return { ok: false, rejected: true, message: blockers.join(" ") }
+      } catch (error) {
+        return { ok: false, rejected: true, message: `The destination groups could not be checked: ${error instanceof Error ? error.message : String(error)}` }
+      }
+    }
     return send(graph, "POST", `${type.path}/${encodeURIComponent(id)}/assign`, { [type.assign.key]: input.assignments as Json })
   }
   if (input.action === "delete") {

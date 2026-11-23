@@ -452,13 +452,35 @@ describe("Dev to Prod rollback assignment groups", () => {
   it.each([PREVIOUS_GROUP, PREVIOUS_EXCLUSION])("blocks review and approval when captured group %s is gone", async (groupId) => {
     const context = await rollbackWithAssignments()
     context.prod.groups.delete(groupId)
-    const message = `1 group this policy was assigned to before no longer exist in Tenant 2222: ${groupId}. Assign the policy again after the rollback, or remove the assignment from the rollback.`
+    const message = `1 group this policy was assigned to before no longer exists in Tenant 2222: ${groupId}. Restore any recoverable groups in Entra (eligible groups keep their ID for 30 days), or restore this policy and its assignments manually.`
     const preview = await context.rollback("preview")
     expect(preview.body.operations[0].blocked).toBe(message)
     expect((await context.rollback("create")).status).toBe(200)
     const review = await context.rollback("review")
     expect(review.body.blockers).toEqual([message])
     expect(review.body.operations[0].blockers).toEqual([message])
+    expect((await context.rollback("approve", review.body)).status).toBe(409)
+  })
+
+  it("lists both missing groups with plural wording", async () => {
+    const context = await rollbackWithAssignments()
+    context.prod.groups.delete(PREVIOUS_GROUP)
+    context.prod.groups.delete(PREVIOUS_EXCLUSION)
+    const preview = await context.rollback("preview")
+    const blocker = preview.body.operations[0].blocked
+    expect(blocker).toContain("2 groups this policy was assigned to before no longer exist in Tenant 2222:")
+    expect(blocker).toContain(PREVIOUS_GROUP)
+    expect(blocker).toContain(PREVIOUS_EXCLUSION)
+  })
+
+  it("blocks a captured group that Intune cannot assign", async () => {
+    const context = await rollbackWithAssignments()
+    context.prod.groups.get(PREVIOUS_GROUP)!.securityEnabled = false
+    const message = 'Intune cannot assign "Previous pilot": it is a distribution list.'
+    expect((await context.rollback("preview")).body.operations[0].blocked).toBe(message)
+    expect((await context.rollback("create")).status).toBe(200)
+    const review = await context.rollback("review")
+    expect(review.body.blockers).toEqual([message])
     expect((await context.rollback("approve", review.body)).status).toBe(409)
   })
 
@@ -480,6 +502,36 @@ describe("Dev to Prod rollback assignment groups", () => {
     const applied = await context.rollback("apply", { contentHash: review.body.contentHash, confirm: true })
     expect(applied.body.changeSet.status).toBe("applied")
     expect(sameAssignments(context.originalAssignments, context.prod.policies.get(String(context.destination.id))?.assignments)).toBe(true)
+  })
+
+  it.each([false, true])("blocks assignments when group reads become forbidden at apply (after configuration write: %s)", async (afterConfigurationWrite) => {
+    const context = await rollbackWithAssignments()
+    expect((await context.rollback("create")).status).toBe(200)
+    const review = await context.rollback("review")
+    expect((await context.rollback("approve", review.body)).status).toBe(200)
+    const writes = context.prod.writeCount()
+    const assignmentWrites = context.prod.writeCount(({ path }) => path.endsWith("/assign"))
+    if (afterConfigurationWrite) {
+      context.prod.failWrite = () => {
+        context.prod.groupsForbidden = true
+        return undefined
+      }
+    } else {
+      context.prod.groupsForbidden = true
+    }
+    const applied = await context.rollback("apply", { contentHash: review.body.contentHash, confirm: true })
+    expect(context.prod.writeCount(({ path }) => path.endsWith("/assign"))).toBe(assignmentWrites)
+    if (afterConfigurationWrite) {
+      expect(applied.status).toBe(200)
+      expect(applied.body.changeSet.status).toBe("uncertain")
+      expect(applied.body.changeSet.results["op-1"].message).toContain("The configuration was written but the reviewed assignments failed")
+      expect(applied.body.changeSet.results["op-1"].message).toContain("GroupMember.Read.All")
+      expect(context.prod.writeCount()).toBeGreaterThan(writes)
+    } else {
+      expect(applied.status).toBe(409)
+      expect(applied.body.error).toContain(GROUP_CHECK_REQUIRED)
+      expect(context.prod.writeCount()).toBe(writes)
+    }
   })
 
   it.each([false, true])("refuses apply when a group disappears after approval (during backup: %s)", async (duringBackup) => {
