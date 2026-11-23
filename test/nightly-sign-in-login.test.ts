@@ -26,8 +26,10 @@ type Scenario = {
   refuseAfterMs?: number
   /** The browser posts the password only this long after Enter, then Microsoft accepts it. */
   postPasswordAfterMs?: number
+  /** The late post arrives while the script reads the page, not while it waits. */
+  latePostDuringRead?: boolean
   /** The screen after the password. */
-  after?: "kmsi" | "mfa" | "approve" | "consent"
+  after?: "kmsi" | "mfa" | "approve" | "consent" | "approval"
   /** A hidden error left over from the username step. */
   staleHiddenError?: string
 }
@@ -37,7 +39,7 @@ type Request = { method: () => string; url: () => string; isNavigationRequest: (
 /** A stand-in for Microsoft's login page: the parts of a Playwright page completeLogin uses. */
 function fakeLogin(scenario: Scenario = {}) {
   let time = 0
-  let step: "username" | "password" | "kmsi" | "mfa" | "approve" | "consent" | "app" = "username"
+  let step: "username" | "password" | "kmsi" | "mfa" | "approve" | "consent" | "approval" | "app" = "username"
   const values = { loginfmt: "", passwd: "" }
   const errors = { usernameError: "", passwordError: "" }
   const submits = { username: [] as string[], password: [] as string[] }
@@ -53,11 +55,17 @@ function fakeLogin(scenario: Scenario = {}) {
     const request: Request = { method: () => "POST", url: () => url, isNavigationRequest: () => navigation }
     for (const listener of listeners) listener(request)
   }
-  const passwordPosted = () => {
+  let answer: (() => void) | null = null
+  const passwordPosted = (answerLater = false) => {
     post("https://login.microsoftonline.com/tenant/login", true)
-    if (scenario.refuseAfterMs !== undefined) refusalAt = time + scenario.refuseAfterMs
-    else if (scenario.wrongPassword) refuse()
-    else step = scenario.after ?? "kmsi"
+    const respond = () => {
+      if (scenario.refuseAfterMs !== undefined) refusalAt = time + scenario.refuseAfterMs
+      else if (scenario.wrongPassword) refuse()
+      else step = scenario.after ?? "kmsi"
+    }
+    // A post sent while the page is read is answered only later: the password step stays on screen.
+    if (answerLater) answer = respond
+    else respond()
   }
   const refuse = () => {
     errors.passwordError = "Your account or password is incorrect."
@@ -93,7 +101,19 @@ function fakeLogin(scenario: Scenario = {}) {
     (selector === "#usernameError" && step === "username" && errors.usernameError !== "") ||
     (selector === "#passwordError" && step === "password" && errors.passwordError !== "")
 
-  const BODY = { kmsi: "Stay signed in?", mfa: "More information required", approve: "Approve sign in request", consent: "Permissions requested" } as Record<string, string>
+  const BODY = {
+    kmsi: "Stay signed in?",
+    mfa: "More information required",
+    approve: "Approve sign in request",
+    consent: "Permissions requested",
+    approval: "Approval required. This app requires your admin's approval. Request approval",
+  } as Record<string, string>
+  const deliverLatePost = (answerLater = false) => {
+    if (latePostAt !== null && time >= latePostAt) {
+      latePostAt = Number.POSITIVE_INFINITY
+      passwordPosted(answerLater)
+    }
+  }
 
   const locator = (selector: string) => {
     if (selector === 'input[name="passwd"]' || selector === 'input[name="loginfmt"]') throw new Error(`${selector} also matches the off-screen password manager fields`)
@@ -120,7 +140,10 @@ function fakeLogin(scenario: Scenario = {}) {
       },
       // innerText also reads hidden elements, as in a browser.
       innerText: async () => {
-        if (selector === "body") return BODY[step] ?? "Sign in"
+        if (selector === "body") {
+          if (scenario.latePostDuringRead) deliverLatePost(true)
+          return BODY[step] ?? "Sign in"
+        }
         if (selector === "#usernameError") return errors.usernameError
         if (selector === "#passwordError") return errors.passwordError
         return ""
@@ -143,10 +166,9 @@ function fakeLogin(scenario: Scenario = {}) {
     now: () => time,
     sleep: async (ms: number) => {
       time += ms
-      if (latePostAt !== null && time >= latePostAt) {
-        latePostAt = Number.POSITIVE_INFINITY
-        passwordPosted()
-      }
+      answer?.()
+      answer = null
+      if (!scenario.latePostDuringRead) deliverLatePost()
       if (refusalAt !== null && time >= refusalAt) {
         refusalAt = null
         refuse()
@@ -215,6 +237,15 @@ describe("nightly sign-in: Microsoft's login page", () => {
     expect(login.listening()).toBe(0)
   })
 
+  it("counts a late post that arrives while the page is read, right before a retry", async () => {
+    const { completeLogin } = await load()
+    // The post lands in the first page read after the 15 second retry window has passed.
+    const login = fakeLogin({ postPasswordAfterMs: 15_000, latePostDuringRead: true })
+    await completeLogin(login.page, USER, PASSWORD, login.options)
+    expect(login.step()).toBe("app")
+    expect(login.submits.password).toEqual([PASSWORD])
+  })
+
   it("ignores a hidden error left over from the username step", async () => {
     const { completeLogin } = await load()
     const login = fakeLogin({ staleHiddenError: "This username may be incorrect." })
@@ -226,6 +257,7 @@ describe("nightly sign-in: Microsoft's login page", () => {
     ["mfa", /MFA or more information/],
     ["approve", /MFA or more information/],
     ["consent", /asks for consent/],
+    ["approval", /asks for consent/],
   ] as const)("reports the %s screen at once and marks the sign-in stopped", async (after, message) => {
     const { completeLogin } = await load()
     const login = fakeLogin({ after })
