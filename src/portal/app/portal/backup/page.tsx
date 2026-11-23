@@ -23,8 +23,8 @@ import { FirstBackupNote } from "@desktop/components/FirstBackupNote"
 import { LegacySealedBackupsNotice } from "@desktop/components/LegacySealedBackupsNotice"
 import { DamagedBackupFilesNotice } from "@desktop/components/DamagedBackupFilesNotice"
 import type { AppPreferences } from "../../../../shared/ipc"
-import { effectiveRetentionTiers, retentionBackupTime, selectRetentionTiers } from "../../../../shared/backup-retention"
-import { allows } from "../../../../shared/plans"
+import { retentionBackupTime, savedRetentionPolicy, selectRetentionTiers } from "../../../../shared/backup-retention"
+import { allows, effectiveRetentionDays } from "../../../../shared/plans"
 import { AREAS } from "../../../../shared/intune/scope"
 import { typeForFolder, type Item } from "../../../../shared/intune/registry"
 import { autopilotDevicesCsv } from "../../../../shared/intune/autopilot-devices"
@@ -93,22 +93,23 @@ export default function BackupRestorePage() {
   const backups = backupList.backups ?? NO_BACKUPS
   const [prefs, setPrefs] = useState<AppPreferences | null>(null)
   useEffect(() => {
-    if (activeTab !== "backup" || plan === null || !allows(plan, "customRetention")) return
+    if (activeTab !== "backup") return
     let active = true
     void bridge.preferences.get().then((value) => { if (active) setPrefs(value) }).catch(() => {})
     return () => { active = false }
-  }, [activeTab, plan])
+  }, [activeTab])
   const tiers = useMemo(() => {
     if (!prefs) return null
-    const policy = effectiveRetentionTiers(prefs, plan)
-    if (prefs.retentionDays === 0 || (!policy.retentionMonths && !policy.retentionYears)) return null
+    const policy = savedRetentionPolicy(prefs)
+    const days = effectiveRetentionDays(prefs.retentionDays, plan)
+    if (days === 0 || (!policy.retentionMonths && !policy.retentionYears)) return null
     const candidates = backups.flatMap((backup) => {
       const time = retentionBackupTime(backup.id)
-      return time === null || !backup.retentionComplete ? [] : [{ id: backup.id, time, complete: true }]
+      return time === null || !backup.retentionQuality ? [] : [{ id: backup.id, time, quality: backup.retentionQuality }]
     })
-    return selectRetentionTiers(candidates, new Date(), prefs.retentionDays, policy).tiers
+    return selectRetentionTiers(candidates, new Date(), days, policy).tiers
   }, [backups, plan, prefs])
-  const retentionMessage = retentionNote(plan, backups, new Date())
+  const retentionMessage = prefs?.retentionMonths || prefs?.retentionYears ? null : retentionNote(plan, backups, new Date())
   const isLoading = backupList.loading && backupList.backups === null
   // The tenant and storage the list is for. Notices are keyed by it, so their state, such as a check
   // after a key import, never carries over to another tenant's list.

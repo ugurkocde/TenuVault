@@ -9,7 +9,7 @@ import { storageLabel } from "~/lib/storage-label"
 import type { AppPreferences, BackupReaderState, BackupSettings } from "../../shared/ipc"
 import { LOCAL_STORAGE_PREFIX } from "../../shared/constants"
 import { describeCloudSchedule, nextRunsInZone } from "../../shared/cloud-backup"
-import { effectiveRetentionTiers, retentionTierSummary } from "../../shared/backup-retention"
+import { retentionTierSummary } from "../../shared/backup-retention"
 import { allows, effectiveRetentionDays } from "../../shared/plans"
 import { bridge } from "../lib/bridge"
 import { useCloudBackup } from "../lib/cloud-backup"
@@ -69,7 +69,7 @@ function TenantSchedule({ tenantId, tenantName, tenant: tenantProp, onStorageCha
   const [weekday, setWeekday] = useState(0)
   const [saving, setSaving] = useState(false)
   const [prefs, setPrefs] = useState<AppPreferences | null>(null)
-  const tierSummary = prefs && retentionTierSummary(prefs.retentionDays, effectiveRetentionTiers(prefs, plan))
+  const tierSummary = prefs && retentionTierSummary(effectiveRetentionDays(prefs.retentionDays, plan), prefs)
   const [prefsError, setPrefsError] = useState<string | null>(null)
   const [prefsSaveError, setPrefsSaveError] = useState<string | null>(null)
   const [runner, setRunner] = useState<{ installed: boolean } | null>(null)
@@ -638,8 +638,7 @@ function TenantStorageSettings({ tenant, tenantName, prefs, tierSummary, communi
             {local
               ? `Backups for ${tenantName} go to ${settings?.localFolder ?? "the TenuVault Backups folder"}${settings ? `, recovery key ${settings.keyFingerprint}${settings.recoveryExported ? " saved" : " not saved yet"}` : ""}.`
               : `Backups for ${tenantName} go to container intune-backups${tenant?.resources?.resourceGroupName ? `, ${tenant.resources.resourceGroupName}` : ""}.`}
-            {keptFor && !tierSummary ? ` Kept for ${keptFor}${cloudOnly && !local ? ", applied on the next desktop backup with an admin's sign-in (the cloud runbook cannot delete, so cloud backups stay longer until then)" : ""}.` : ""}
-            {tierSummary && cloudOnly && !local && " Retention is applied on the next desktop backup with an admin's sign-in."}
+            {keptFor ? ` Kept for ${keptFor}${tierSummary ? " in full" : ""}${cloudOnly && !local ? ", applied on the next desktop backup with an admin's sign-in (the cloud runbook cannot delete, so cloud backups stay longer until then)" : ""}.` : ""}
             {" "}Backups never go to a TenuVault server.
           </p>
         </div>

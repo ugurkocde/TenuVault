@@ -1,5 +1,3 @@
-import { allows, type Plan } from "./plans"
-
 export const RETENTION_TIER_LIMITS = {
   retentionMonths: 120,
   retentionYears: 50,
@@ -7,14 +5,15 @@ export const RETENTION_TIER_LIMITS = {
 
 export type RetentionTierKey = keyof typeof RETENTION_TIER_LIMITS
 export type RetentionTiers = Partial<Record<RetentionTierKey, number>>
+export type RetentionPolicy = RetentionTiers & { tierDays?: number }
 export type RetentionTier = "Monthly" | "Yearly" | "Monthly and yearly"
 
 export function validRetentionTier(key: RetentionTierKey, value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= RETENTION_TIER_LIMITS[key]
 }
 
-export function effectiveRetentionTiers({ retentionMonths = 0, retentionYears = 0 }: RetentionTiers, plan: Plan | null): RetentionTiers {
-  return plan !== null && allows(plan, "customRetention") ? { retentionMonths, retentionYears } : {}
+export function savedRetentionPolicy({ retentionDays, retentionMonths, retentionYears }: RetentionTiers & { retentionDays: number }): RetentionPolicy {
+  return { retentionMonths, retentionYears, tierDays: retentionDays || undefined }
 }
 
 export function retentionTierSummary(days: number, { retentionMonths = 0, retentionYears = 0 }: RetentionTiers): string | null {
@@ -32,8 +31,10 @@ export const retentionCutoff = (now: Date, days: number): number => now.getTime(
 export function retentionBackupTime(folder: string): number | null {
   const match = /^backup-(\d{4})-(\d{2})-(\d{2})-(\d{2})(\d{2})(\d{2})$/.exec(folder)
   if (!match) return null
-  const [, y, mo, d, h, mi, se] = match.map(Number)
-  return Date.UTC(y!, mo! - 1, d!, h!, mi!, se!)
+  const [, year, month, day, hour, minute, second] = match
+  const timestamp = `${year}-${month}-${day}T${hour}:${minute}:${second}.000Z`
+  const time = Date.parse(timestamp)
+  return Number.isFinite(time) && new Date(time).toISOString() === timestamp ? time : null
 }
 
 export function completeForRetention(metadata: Record<string, unknown> | null): boolean {
@@ -41,42 +42,54 @@ export function completeForRetention(metadata: Record<string, unknown> | null): 
   return metadata !== null && (status === "success" || status === "succeeded") && (metadata.Failures === undefined || metadata.Failures === 0)
 }
 
+export type RetentionQuality = "full" | "partial"
+
+export function retentionQuality(metadata: Record<string, unknown> | null): RetentionQuality | null {
+  if (!metadata || !completeForRetention(metadata)) return null
+  const scope = metadata.Scope as { Excluded?: unknown } | undefined
+  return [metadata.MaskedSecretItems, metadata.AppOnlyExcludedTypes, metadata.SkippedTypes, scope?.Excluded]
+    .some((items) => Array.isArray(items) && items.length > 0) ? "partial" : "full"
+}
+
 interface RetentionBackup {
   id: string
   time: number
-  complete: boolean
+  quality: RetentionQuality | null
 }
 
-/** The newest successful backup wins each local calendar period, even while it is still in the
- * daily window. A period with no successful backup has no keeper.
+/** Pick the newest full backup in each local period, or the newest partial backup as a fallback.
+ * Only periods whose keeper is beyond the daily window use a tier slot.
  */
 export function selectRetentionTiers(
   backups: readonly RetentionBackup[],
   now: Date,
   days: number,
-  { retentionMonths = 0, retentionYears = 0 }: RetentionTiers,
+  { retentionMonths = 0, retentionYears = 0, tierDays = days }: RetentionPolicy,
 ): { newest: string | undefined; tiers: Map<string, RetentionTier> } {
   const tiers = new Map<string, RetentionTier>()
   if (days <= 0 || (!retentionMonths && !retentionYears)) return { newest: undefined, tiers }
 
   const sorted = [...backups].sort((a, b) => b.time - a.time)
   const cutoff = retentionCutoff(now, days)
-  const currentYear = now.getFullYear()
-  const currentMonth = currentYear * 12 + now.getMonth()
-  const months = new Set<number>()
-  const years = new Set<number>()
-  for (const backup of sorted) {
-    if (!backup.complete) continue
-    const date = new Date(backup.time)
-    const year = date.getFullYear()
-    const month = year * 12 + date.getMonth()
-    const monthly = currentMonth - month >= 0 && currentMonth - month < retentionMonths && !months.has(month)
-    const yearly = currentYear - year >= 0 && currentYear - year < retentionYears && !years.has(year)
-    if (monthly) months.add(month)
-    if (yearly) years.add(year)
-    if (backup.time < cutoff && (monthly || yearly)) {
-      tiers.set(backup.id, monthly && yearly ? "Monthly and yearly" : monthly ? "Monthly" : "Yearly")
+  const tierCutoff = retentionCutoff(now, Math.max(days, tierDays))
+
+  function keepers(limit: number, periodOf: (date: Date) => number): RetentionBackup[] {
+    if (!limit) return []
+    const periods = new Map<number, RetentionBackup>()
+    for (const backup of sorted) {
+      if (!backup.quality) continue
+      const period = periodOf(new Date(backup.time))
+      const keeper = periods.get(period)
+      if (!keeper || (keeper.quality === "partial" && backup.quality === "full")) periods.set(period, backup)
     }
+    const eligible = [...periods.values()].filter((keeper) => keeper.time < tierCutoff).slice(0, limit)
+    // If the plan clamps the daily window, preserve the keepers waiting to age out of the saved
+    // window. They can still enter the tiers later, and cannot displace the existing tier copies.
+    const pending = [...periods.values()].filter((keeper) => keeper.time >= tierCutoff && keeper.time < cutoff)
+    return [...eligible, ...pending]
   }
+
+  for (const backup of keepers(retentionMonths, (date) => date.getFullYear() * 12 + date.getMonth())) tiers.set(backup.id, "Monthly")
+  for (const backup of keepers(retentionYears, (date) => date.getFullYear())) tiers.set(backup.id, tiers.has(backup.id) ? "Monthly and yearly" : "Yearly")
   return { newest: sorted[0]?.id, tiers }
 }

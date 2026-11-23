@@ -7,9 +7,13 @@ import { legacyAzureReader, registerStorageToken } from "../src/main/storage/azu
 import { LEGACY_SEALED_MESSAGE } from "../src/shared/legacy-sealed"
 import { sealLegacyAzure } from "./legacy-seal"
 import { endlessBody } from "./helpers"
+import { POST as listBackups } from "../src/portal/app/api/list-backups/route"
 import { POST as downloadBackup } from "../src/portal/app/api/download-backup/route"
 import { reviewArchive } from "../src/main/backup/archive"
 import { BACKUP_OWNER_FILE } from "../src/shared/constants"
+import { retentionBackupTime, savedRetentionPolicy, selectRetentionTiers, type RetentionPolicy } from "../src/shared/backup-retention"
+import { effectiveRetentionDays, type Plan } from "../src/shared/plans"
+import type { BackupSummary } from "../src/portal/components/backup/types"
 import { INTUNE_TYPES } from "../src/shared/intune/registry"
 
 const TENANT = "11111111-1111-1111-1111-111111111111"
@@ -40,7 +44,7 @@ describe("storage delete refusals", () => {
   })
 })
 
-function setup(options: { retention?: number; count?: number; override?: (url: URL, request: Request) => Response | Promise<Response> | undefined } = {}) {
+function setup(options: { retention?: number | (() => number); tiers?: RetentionPolicy; count?: number; override?: (url: URL, request: Request) => Response | Promise<Response> | undefined } = {}) {
   vi.useFakeTimers()
   vi.setSystemTime(now)
   const saved = new Map<string, Buffer>()
@@ -75,7 +79,7 @@ function setup(options: { retention?: number; count?: number; override?: (url: U
   }
   registerStorageToken("token", TENANT)
   const fetch = legacyAzureReader(wireFetch, () => [master])
-  const engine = new BackupEngine({ fetch, getToken: async () => { registerStorageToken("token", TENANT); return "token" }, retentionDays: () => options.retention ?? 30 })
+  const engine = new BackupEngine({ fetch, getToken: async () => { registerStorageToken("token", TENANT); return "token" }, retentionDays: () => typeof options.retention === "function" ? options.retention() : options.retention ?? 30, retentionTiers: () => options.tiers ?? {} })
   /** A plain blob, as this version writes, or one sealed by an earlier version with `key`. */
   function seed(name: string, value: unknown, sealed = false, key = master) {
     const body = Buffer.from(typeof value === "string" ? value : JSON.stringify(value))
@@ -295,6 +299,113 @@ describe("backup folder ownership", () => {
     expect([...saved.keys()].some((name) => name.startsWith(ours))).toBe(false)
     expect(job.log.join("\n")).toContain("is larger than the 32 MiB TenuVault reads")
     expect(big.pulled()).toBeLessThan(40)
+  })
+
+  it("keeps Azure tier copies, honors protection on expired copies, and excludes foreign and untagged candidates", async () => {
+    const keeper = "backup-2026-08-19-020000/"
+    const foreign = "backup-2026-08-24-020000/"
+    const untagged = "backup-2026-08-23-020000/"
+    const hold = "backup-2026-08-02-020000/"
+    const locked = "backup-2026-08-03-020000/"
+    const expired = "backup-2026-08-01-020000/"
+    const { engine, saved, calls, seed, folder } = setup({
+      tiers: { retentionMonths: 1 },
+      override: (url) => {
+        const prefix = url.searchParams.get("prefix")
+        if (prefix !== hold && prefix !== locked) return
+        expect(url.searchParams.get("include")).toBe("immutabilitypolicy,legalhold")
+        const protection = prefix === hold ? "<LegalHold>true</LegalHold>" : "<ImmutabilityPolicyUntilDate>Tue, 13 Oct 2026 12:00:00 GMT</ImmutabilityPolicyUntilDate>"
+        return new Response(`<Blobs><Blob><Name>${prefix}DeviceConfigurations/Old.json</Name><Properties>${protection}</Properties></Blob></Blobs>`)
+      },
+    })
+    for (const prefix of [keeper, hold, locked, expired]) {
+      folder(prefix)
+      seed(`${prefix}metadata.json`, { TenantId: TENANT, Status: "Success" })
+    }
+    folder(foreign, { ...owner, TenantId: OTHER })
+    seed(`${foreign}metadata.json`, { TenantId: OTHER, Status: "Success" })
+    folder(untagged, null)
+    seed(`${untagged}metadata.json`, { Status: "Success" })
+
+    const original = [...saved]
+    const job = await complete(engine)
+    expect(job.log.join("\n")).toContain("Kept 1 older backup for monthly or yearly retention.")
+    expect(job.log.join("\n")).toContain("Kept 2 older backups because of storage policy or legal hold. The latest immutability expiry is Tue, 13 Oct 2026 12:00:00 GMT.")
+    const protectionLists = calls.map(({ request }) => new URL(request.url)).filter((url) => url.searchParams.has("include"))
+    expect(protectionLists.map((url) => url.searchParams.get("prefix")).sort()).toEqual([expired, hold, locked])
+    expect(calls.filter(call => call.request.method === "DELETE").map(call => call.name)).toEqual([
+      `${expired}metadata.json`, `${expired}DeviceConfigurations/Old.json`, `${expired}${BACKUP_OWNER_FILE}`,
+    ])
+    for (const [name, data] of original.filter(([name]) => !name.startsWith(expired))) expect(saved.get(name)).toEqual(data)
+  })
+
+  it.each(["community", null] as const)("keeps saved monthly and yearly tier copies when Pro ends and the plan becomes %s", async (downgraded) => {
+    let plan: Plan | null = "pro"
+    const prefs = { retentionDays: 90, retentionMonths: 1, retentionYears: 2 }
+    const { engine, saved, seed, folder } = setup({
+      retention: () => effectiveRetentionDays(prefs.retentionDays, plan),
+      tiers: savedRetentionPolicy(prefs),
+    })
+    const monthly = "backup-2026-06-28-020000/"
+    const yearly = "backup-2025-12-31-020000/"
+    const pending = "backup-2026-08-31-020000/"
+    const dailyOnly = "backup-2026-08-29-020000/"
+    for (const prefix of [monthly, yearly, pending, dailyOnly]) {
+      folder(prefix)
+      seed(`${prefix}metadata.json`, { TenantId: TENANT, Status: "Success" })
+    }
+    await complete(engine)
+    expect(saved.has(`${dailyOnly}metadata.json`)).toBe(true)
+
+    plan = downgraded
+    vi.setSystemTime(new Date("2026-10-13T12:00:00Z"))
+    const job = await complete(engine)
+    expect(job.log.join("\n")).toContain("Removed 1 backup older than 30 days.")
+    for (const prefix of [monthly, yearly, pending]) {
+      expect(saved.has(`${prefix}metadata.json`)).toBe(true)
+      expect(saved.has(`${prefix}DeviceConfigurations/Old.json`)).toBe(true)
+    }
+    expect([...saved.keys()].some((name) => name.startsWith(dailyOnly))).toBe(false)
+  })
+
+  it("labels the same full and fallback copies in Timeline and leaves untagged backups out of shared-container tiers", async () => {
+    const { fetch, seed, folder } = setup()
+    const manifests = {
+      "backup-2026-08-26-020000": { TenantId: OTHER },
+      "backup-2026-08-25-020000": {},
+      "backup-2026-08-24-020000": { TenantId: TENANT, MaskedSecretItems: [{ Folder: "DeviceConfigurations" }] },
+      "backup-2026-08-23-020000": { TenantId: TENANT, AppOnlyExcludedTypes: ["ScopeTags"] },
+      "backup-2026-08-22-020000": { TenantId: TENANT, Scope: { Excluded: ["AssignmentFilters"] } },
+      "backup-2026-08-18-020000": { TenantId: TENANT },
+      "backup-2026-07-22-020000": { TenantId: TENANT, Scope: { Excluded: ["AssignmentFilters"] } },
+    }
+    for (const [name, manifest] of Object.entries(manifests)) {
+      folder(`${name}/`, null)
+      seed(`${name}/metadata.json`, { Status: "Success", ...manifest })
+    }
+    vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
+      if (new URL(String(input)).hostname === "login.microsoftonline.com") return Promise.resolve(Response.json({ access_token: "token" }))
+      return fetch(input, init)
+    })
+    const response = await listBackups(new NextRequest("http://tenuvault.internal/api/list-backups", {
+      method: "POST",
+      body: JSON.stringify({ tenantId: TENANT, appId: "app", clientSecret: "placeholder", subscriptionId: "sub", resourceGroupName: "rg", storageAccountName: "contoso" }),
+    }))
+    expect(response.ok).toBe(true)
+    const { backups } = await response.json() as { backups: BackupSummary[] }
+    expect(backups.map(({ id, retentionQuality }) => [id, retentionQuality])).toEqual([
+      ["backup-2026-08-25-020000", null],
+      ["backup-2026-08-24-020000", "partial"],
+      ["backup-2026-08-23-020000", "partial"],
+      ["backup-2026-08-22-020000", "partial"],
+      ["backup-2026-08-18-020000", "full"],
+      ["backup-2026-07-22-020000", "partial"],
+    ])
+    const candidates = backups.map(({ id, retentionQuality }) => ({ id, time: retentionBackupTime(id)!, quality: retentionQuality ?? null }))
+    expect([...selectRetentionTiers(candidates, now, 30, { retentionMonths: 2, retentionYears: 1 }).tiers]).toEqual([
+      ["backup-2026-08-18-020000", "Monthly and yearly"],
+      ["backup-2026-07-22-020000", "Monthly"],
+    ])
   })
 
   it.each([

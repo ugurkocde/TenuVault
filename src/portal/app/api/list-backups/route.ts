@@ -1,5 +1,5 @@
 import { BlobListError, decodeXml, listBlobPages } from "~/lib/storage/list"
-import { completeForRetention, retentionBackupTime } from "../../../../shared/backup-retention"
+import { retentionBackupTime, retentionQuality } from "../../../../shared/backup-retention"
 import { typeForFolder } from "../../../../shared/intune/registry"
 import { describeScope } from "../../../../shared/intune/scope"
 import { comparable, compareBackups, summarize, type BackupFingerprint, type ChangeSummary } from "../../../../shared/intune/backup-changes"
@@ -181,7 +181,7 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
       conditionalAccess: count('ConditionalAccess'),
     },
     scope: metadata ? { excluded, description: describeScope({ excluded }) } : null,
-    retentionComplete: !unavailable && !metadataError && completeForRetention(metadata),
+    retentionQuality: !unavailable && !metadataError && !markerFailure ? retentionQuality(metadata) : null,
     failures: typeof metadata?.Failures === 'number' ? metadata.Failures : 0,
     skippedTypes: Array.isArray(metadata?.SkippedTypes) ? metadata.SkippedTypes : [],
     failedTypes: Array.isArray(metadata?.FailedTypes) ? metadata.FailedTypes : [],
@@ -348,7 +348,7 @@ export async function POST(request: NextRequest) {
     backups.push(...described.filter((backup) => !backup.foreign && !backup.unresolved && backup.ownerKind !== 'other'))
     if (retentionShared) {
       for (const backup of backups) {
-        if (backup.ownerKind !== 'owned') backup.retentionComplete = false
+        if (backup.ownerKind !== 'owned') backup.retentionQuality = null
       }
     }
 

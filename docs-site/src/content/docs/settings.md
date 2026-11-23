@@ -176,11 +176,12 @@ The menu bar or tray icon menu has **Open TenuVault**, **Back up all tenants now
 
 Sets how long backups are kept: **7 days**, **14 days**, **30 days**, **60 days**, **90 days**, **180 days**, **365 days** or **Forever**. Default: **30 days**. The setting applies to every tenant on this computer.
 
-* On Pro and MSP, **Monthly retention** and **Yearly retention** keep the latest complete backup in each eligible local calendar month or year after the daily period. Set a tier to **0** to turn it off.
+* On Pro and MSP, set **Monthly retention** and **Yearly retention** to choose how many periods to keep after the daily window. Set either tier to **0** to turn it off. Each tier counts the most recent local calendar months or years whose preferred backup is older than the daily window. It picks the newest complete backup with full coverage in each period, or the newest complete backup with partial coverage if that period has no full one. Periods without a complete backup are skipped. One backup can satisfy both tiers.
+* Saved tiers keep applying after a downgrade, trial end, or license lapse. The daily window is still capped on Community. If the cap shortens the daily window, the tiers continue counting periods from the saved daily cutoff and preserve the preferred backup for each enabled month or year between the two cutoffs. Editing tiers requires Pro or MSP.
 * Expired backups are deleted after each successful backup. The newest backup is always kept.
 * If a backup is incomplete, no older backups are deleted.
 * A backup that is the newest copy of a type that later backups left out is kept.
-* Community tenants keep 30 days at most, even if you choose a longer period or **Forever**. Pro and MSP tenants keep what you choose.
+* Community tenants keep up to 30 days of daily history, even if you choose a longer period or **Forever**. Pro and MSP tenants keep what you choose.
 * When every connected tenant is on Community, periods longer than 30 days and **Forever** are marked Pro and cannot be chosen. If a longer period was saved earlier, Settings shows the saved choice and the 30 days that take effect on Community.
 
 See [Backup storage and retention](/backups/storage/) and [Schedule backups](/backups/schedules/).

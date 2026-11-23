@@ -4,7 +4,7 @@ export { assertStorageAccountName } from "../../shared/storage-account"
 export { isImmutabilityRefusal } from "./request"
 import { createHash, randomUUID } from "node:crypto"
 import { BACKUP_CANCELLED_MESSAGE, BACKUP_OWNER_FILE } from "../../shared/constants"
-import { completeForRetention, retentionBackupTime, retentionCutoff, selectRetentionTiers, type RetentionTiers } from "../../shared/backup-retention"
+import { completeForRetention, retentionBackupTime, retentionCutoff, retentionQuality, selectRetentionTiers, type RetentionPolicy } from "../../shared/backup-retention"
 import { resolveBackupOwnership, type OwnershipFile } from "../../shared/backup-ownership"
 import { BlobWriter } from "./blob-writer"
 import { GraphSession, type GraphItem } from "./graph-session"
@@ -109,7 +109,7 @@ export interface BackupEngineDeps {
   enabledModules?: (tenantId: string) => ModuleId[]
   /** Backups outside this daily window can expire after each backup. Zero keeps everything. */
   retentionDays?: (tenantId: string) => number
-  retentionTiers?: (tenantId: string) => RetentionTiers
+  retentionTiers?: (tenantId: string) => RetentionPolicy
   now?: () => Date
   /** Items read at the same time. Graph throttling (429) pauses every reader. */
   concurrency?: number
@@ -717,7 +717,7 @@ export class BackupEngine {
       const retentionStorage = new BlobWriter(fetchImpl, request.storageAccountName, storageToken, retentionNetwork)
       try {
         const tiers = this.deps.retentionTiers?.(job.tenantId)
-        retentionWarnings = await this.applyRetention(job, retentionStorage, backupFolder, restorableFolders(metadata), days, tiers, retentionNetwork.signal)
+        retentionWarnings = await this.applyRetention(job, retentionStorage, backupFolder, metadata, days, tiers, retentionNetwork.signal)
       } catch (error) {
         retentionWarnings++
         if (signal.aborted || Date.now() >= deadline) {
@@ -793,7 +793,7 @@ export class BackupEngine {
    * either count as this tenant's unless the container also holds a backup recorded as another
    * tenant's, or one whose metadata or marker cannot be read.
    */
-  private async applyRetention(job: BackupJob, storage: BlobWriter, current: string, covered: Set<string>, days: number, tierPolicy: RetentionTiers | undefined, signal: AbortSignal): Promise<number> {
+  private async applyRetention(job: BackupJob, storage: BlobWriter, current: string, currentMetadata: Record<string, unknown>, days: number, tierPolicy: RetentionPolicy | undefined, signal: AbortSignal): Promise<number> {
     const now = this.now()
     const cutoff = retentionCutoff(now, days)
     const { prefixes } = await storage.list("backup-", { delimiter: "/" })
@@ -858,17 +858,18 @@ export class BackupEngine {
 
     const selection = tierPolicy?.retentionMonths || tierPolicy?.retentionYears
       ? selectRetentionTiers([
-          { id: `${current}/`, time: retentionBackupTime(current)!, complete: true },
+          { id: `${current}/`, time: retentionBackupTime(current)!, quality: retentionQuality(currentMetadata) },
           ...backups.flatMap((backup, index) => {
             const entry = owners[index]
             return entry && (entry.owner === "this" || (entry.owner === "untagged" && !shared))
-              ? [{ id: backup.prefix, time: backup.time, complete: completeForRetention(entry.metadata) }]
+              ? [{ id: backup.prefix, time: backup.time, quality: retentionQuality(entry.metadata) }]
               : []
           }),
         ], now, days, tierPolicy)
       : null
 
     // Types no newer backup holds yet, walking from the newest backup to the oldest.
+    const covered = restorableFolders(currentMetadata)
     const uncovered = new Set(INTUNE_TYPES.map((type) => type.folder).filter((folder) => !covered.has(folder)))
     let removed = 0
     let kept = 0
@@ -939,6 +940,8 @@ export class BackupEngine {
     }
     if (removed > 0) this.write(job, `Removed ${removed} backup${removed === 1 ? "" : "s"} older than ${days} days.`, "info")
     if (kept > 0) this.write(job, `Kept ${kept} older backup${kept === 1 ? "" : "s"} because ${kept === 1 ? "it holds" : "they hold"} the newest copy of types this backup leaves out.`, "info")
+    const tierCopies = selection?.tiers.size ?? 0
+    if (tierCopies > 0) this.write(job, `Kept ${tierCopies} older backup${tierCopies === 1 ? "" : "s"} for monthly or yearly retention.`, "info")
     if (protectedKept > 0) {
       const expiry = latestExpiry ? ` The latest immutability expiry is ${new Date(latestExpiry).toUTCString()}.` : ""
       const unknown = unknownExpiry ? " Azure returned an unreadable immutability expiry for one or more blobs." : ""

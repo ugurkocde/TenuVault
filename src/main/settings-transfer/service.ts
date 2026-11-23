@@ -543,15 +543,14 @@ export class SettingsTransfer {
         const unit = key === "retentionMonths" ? "month" : "year"
         const describeCount = (count: number) => count === 0 ? "Off" : `${count} ${unit}${count === 1 ? "" : "s"}`
         const note = [
-          "Applies to Pro and MSP tenants on this computer.",
-          !customRetention && "The choice is saved for future Pro or MSP tenants.",
+          "Applies to tenants on this computer. Changing tiers requires Pro or MSP.",
           asDefault && DEFAULT_NOTE,
         ].filter(Boolean).join(" ")
         items.push(this.item(id, label, describeCount(now), valid ? describeCount(value) : shown(value), valid && value === now && !asDefault, valid ? null : NOT_VALID, {
           ...(!customRetention && { feature: "customRetention" as const }),
           note,
           state: [now, saved[key]],
-          ...(shorter && { warning: "Shortening this tier can delete older backups after the next complete backup of each Pro or MSP tenant on this computer." }),
+          ...(shorter && { warning: "Shortening this tier can delete older backups after the next complete backup of each tenant on this computer." }),
           apply: () => void this.deps.preferences.set({ [key]: value as number }),
         }))
         continue

@@ -12,7 +12,7 @@ import { storageLabel } from "~/lib/storage-label"
 import type { AppInfo, AppPreferences, ProxyCredentialSummary, SignedInAccount, UpdateStatus } from "../../shared/ipc"
 import { LOCAL_STORAGE_PREFIX } from "../../shared/constants"
 import { RETENTION_TIER_LIMITS, retentionTierSummary, validRetentionTier } from "../../shared/backup-retention"
-import { COMMUNITY_RETENTION_DAYS, effectiveRetentionDays, type Feature } from "../../shared/plans"
+import { allows, COMMUNITY_RETENTION_DAYS, effectiveRetentionDays, type Feature } from "../../shared/plans"
 import { isGuid } from "../../shared/security"
 import { LicenseAgreementLink } from "../components/LicenseAgreementDialog"
 import { StorageChooser, type StorageChooserDraft } from "../components/StorageChooser"
@@ -615,7 +615,9 @@ export function BackgroundAndRetention() {
           const plans = connected.map((tenant) => tenantPlan(licenseStatus?.tenants.find((entry) => entry.tenantId.toLowerCase() === tenant.credentials!.tenantId.toLowerCase())))
           const allCommunity = connected.length > 0 && plans.every((plan) => plan === "community")
           const gated = allCommunity && !allowsCustomRetention(prefs.retentionDays)
-          const summary = allCommunity ? null : retentionTierSummary(prefs.retentionDays, prefs)
+          const canEditTiers = plans.some((plan) => plan !== null && allows(plan, "customRetention"))
+          const savedTiers = !!(prefs.retentionMonths || prefs.retentionYears)
+          const summary = retentionTierSummary(canEditTiers ? prefs.retentionDays : effectiveRetentionDays(prefs.retentionDays, null), prefs)
           return (
             <>
               <div className="flex items-center gap-3 border-t border-gray-100 pt-4">
@@ -652,7 +654,7 @@ export function BackgroundAndRetention() {
                           max={RETENTION_TIER_LIMITS[key]}
                           step={1}
                           defaultValue={saved}
-                          disabled={allCommunity || prefs.retentionDays === 0}
+                          disabled={!canEditTiers || prefs.retentionDays === 0}
                           aria-describedby="retention-tier-help"
                           onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur() }}
                           onBlur={(e) => {
@@ -669,14 +671,16 @@ export function BackgroundAndRetention() {
                 })}
               </div>
               <p id="retention-tier-help" className="text-xs text-gray-500">
-                {allCommunity ? "Monthly and yearly retention are available on Pro and MSP."
+                {!canEditTiers ? (savedTiers
+                  ? "Your saved monthly and yearly tiers still apply. Editing them requires Pro or MSP."
+                  : "Monthly and yearly retention are available on Pro and MSP.")
                   : prefs.retentionDays === 0 ? "Forever keeps every backup."
-                    : "Use 0 to turn a tier off. Each tier keeps the latest complete backup in each local calendar period."}
+                    : "Use 0 to turn a tier off. Each tier keeps one complete backup per eligible month or year and prefers full coverage."}
               </p>
               {summary && <p role="status" className="font-medium">{summary}.</p>}
               <p className="text-xs text-gray-500">
                 Expired backups are deleted after each successful backup. The newest backup is always kept. Community tenants
-                keep {COMMUNITY_RETENTION_DAYS} days at most; Pro and MSP tenants keep what you choose here.
+                keep up to {COMMUNITY_RETENTION_DAYS} days of daily history. Pro and MSP tenants can choose a longer daily window.
               </p>
               {gated && (
                 <p role="note" className="text-xs text-gray-700">

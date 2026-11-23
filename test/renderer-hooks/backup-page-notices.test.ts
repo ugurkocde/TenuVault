@@ -17,7 +17,7 @@ vi.mock("~/contexts/TenantContext", () => ({
   useTenantOperations: () => ({ updateTenant: vi.fn() }),
 }))
 vi.mock("@desktop/lib/license", () => ({ useTenantPlan: () => null }))
-vi.mock("@desktop/lib/bridge", () => ({ bridge: { license: { open: vi.fn() }, backups } }))
+vi.mock("@desktop/lib/bridge", () => ({ bridge: { license: { open: vi.fn() }, preferences: { get: async () => ({ retentionDays: 30 }) }, backups } }))
 vi.mock("@desktop/lib/backup-list", () => ({
   useBackupList: () => ({ backups: [], loading: false, error: "", unresolved: 0, sealed: state.sealed, damagedFiles: state.damagedFiles, damagedFileNames: [], damagedKinds: { counts: { key: state.damagedFiles, os: 0, duplicate: 0, damaged: 0 }, codes: [], names: { key: [], os: [], duplicate: [], damaged: [] } }, refresh: () => state.refresh() }),
 }))

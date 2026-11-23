@@ -102,7 +102,7 @@ import { setFrameworkStore } from "./frameworks/workspaces"
 import { internalCisBenchmarksEnabled, isAdmittedAssessStatus, setCisBenchmarksPlanProvider, setCisEntitlementProvider, setFrameworkExportSaver, setInternalCisBenchmarksProvider } from "./frameworks/service"
 import { setCisContentEnvOverrideAllowed, setCisContentFallbackBaseUrl } from "./frameworks/cis-content"
 import { setNativeFrameworkStore, setNativeFrameworkAuthorization, setNativeFrameworkNotifier } from "./frameworks/native"
-import { effectiveRetentionTiers } from "../shared/backup-retention"
+import { savedRetentionPolicy } from "../shared/backup-retention"
 import { allows, effectiveRetentionDays, PlanRequired } from "../shared/plans"
 import { APP_STATE_START_OVER_BUTTON, APP_STATE_START_OVER_DETAIL, SecureStore, UnreadableStoreError, type Cipher } from "./storage/secure-store"
 import { Preferences } from "./preferences"
@@ -469,7 +469,7 @@ async function bootstrap(): Promise<void> {
       }
     },
     retentionDays: backupAccess.retentionDays,
-    retentionTiers: (tenantId) => effectiveRetentionTiers(preferences.get(), license.plan(tenantId)),
+    retentionTiers: () => savedRetentionPolicy(preferences.get()),
     onStarted: (job, request, tokens) => {
       checkpointBackupAudit(auditSink, job, request, tokens, backupAuditActor(job.tenantId), app.getVersion())
     },
@@ -1031,6 +1031,13 @@ async function bootstrap(): Promise<void> {
   handleTrusted("preferences:get", () => currentPreferences())
   handleTrusted("preferences:set", (_event, changes: Partial<AppPreferences>) => {
     const { autoUpdateManaged: _managed, ...rest } = changes
+    if (rest.retentionMonths !== undefined || rest.retentionYears !== undefined) {
+      const canEditTiers = connectedTenantIds().some((tenantId) => {
+        const plan = license.plan(tenantId)
+        return plan !== null && allows(plan, "customRetention")
+      })
+      if (!canEditTiers) throw new PlanRequired("customRetention")
+    }
     applyPreferences(preferences.set(rest))
     return currentPreferences()
   })

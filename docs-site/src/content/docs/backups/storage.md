@@ -132,7 +132,9 @@ The default is 30 days. The setting applies to every tenant on this computer. Th
 
 Pro and MSP can also set **Monthly retention** (0 to 120 months) and **Yearly retention** (0 to 50 years). For example, keep every backup for 30 days, then one a month for 12 months and one a year for 7 years. Set either tier to **0** to turn it off. **Forever** keeps every backup.
 
-Each tier uses the computer's local calendar and counts the current month or year as the first period. The newest complete backup in each eligible month or year becomes a tier copy when it ages out of the daily window. A period without a complete backup has no tier copy. One backup can satisfy both tiers. The Backup Timeline marks those copies under the current policy.
+Each tier counts the most recent local calendar months or years whose preferred backup is older than the daily window. It picks the newest complete backup with full coverage in each period, or the newest complete backup with partial coverage if that period has no full one. Masked secrets, app-only exclusions, skipped types and scope exclusions count as partial coverage. Periods without a complete backup are skipped. One backup can satisfy both tiers. The Backup Timeline marks tier copies.
+
+Saved tiers keep applying after a downgrade, trial end, or license lapse. The daily window is still capped on Community. If the cap shortens the daily window, the tiers continue counting periods from the saved daily cutoff and preserve the preferred backup for each enabled month or year between the two cutoffs. Editing tiers requires Pro or MSP.
 
 How retention works:
 
@@ -152,7 +154,7 @@ The `.tenuvault-owner.json` marker records `Source` and `TenantId` before policy
 Retention applies to every backup in the tenant's storage location, including backups made from other computers. If several admins share one Azure storage account, use the same daily, monthly and yearly settings and time zone on each computer. Each computer applies its own policy, so a shorter policy can delete backups another computer would keep. See [Work with other admins in one tenant](/getting-started/multiple-admins/).
 :::
 
-On Community, backups are kept for 30 days at most. A longer setting, or **Forever**, counts as 30 days for Community tenants. Pro and MSP tenants keep what you choose.
+On Community, the daily window is capped at 30 days. A longer setting, or **Forever**, counts as 30 days for Community tenants. Pro and MSP tenants keep what you choose.
 
 On Community, when the oldest listed backup is at least 23 days old, a line above **Backup Timeline** shows its date, explains removal after the next complete backup and describes longer retention included in TenuVault Pro and MSP.
 
