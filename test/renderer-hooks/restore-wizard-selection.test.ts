@@ -380,3 +380,57 @@ it("keeps later pages of its linked large backup reachable when the first page n
   expect(container.textContent).toContain("Inventory page 2")
   expect(container.textContent).toContain("Later team")
 })
+
+it("keeps Next page on an unreadable page reached by going back from the last page", async () => {
+  const page = (largePage: number, hasMore: boolean) => ({ largePage, hasMore, content: { groups: [{ folder: "Groups", label: "group", area: "Entra ID", count: 12000, policies: [{ path: `backup-large-1/Groups/g${largePage}.json`, displayName: `Team ${largePage}` }] }] } })
+  let secondPageReads = 0
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body ?? "{}"))
+    if (String(input).endsWith("/api/list-backup-contents")) {
+      if (body.backupId !== "backup-large-1") return Response.json(contents)
+      // Page 2 reads once, then fails when the admin comes back to it.
+      if (body.largePage === 1 && ++secondPageReads > 1) return Response.json({ error: "Storage access denied." }, { status: 403 })
+      return Response.json(page(body.largePage, body.largePage < 2))
+    }
+    if (String(input).endsWith("/api/restore-preview")) return Response.json(body.backupId === "backup-large-1" ? { items: body.paths.map((path: string) => ({ path, name: path })) } : preview)
+    return Response.json({})
+  }))
+  const container = document.body.appendChild(document.createElement("div"))
+  const root = createRoot(container)
+  roots.push(root)
+  await act(async () => root.render(createElement(MemoryRouter, null, createElement(RestoreWizard, {
+    tenant: { name: "Contoso", credentials: { tenantId: "tenant", appId: "app", clientSecret: "" }, storageAccountName: "tvlocal-tenant" },
+    backups: [{ id: "backup-1", companionId: "backup-large-1", timestamp: "2026-10-16T02:00:00Z", type: "manual", status: "Completed", totalPolicies: 3, scope: null, size: 1, duration: 4, changes: null, comparedWith: null }],
+    initialBackupId: "backup-1", community: false, canCopyToTenants: false, copyCandidates: [],
+  }))))
+  const settle = async () => { await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) }) }
+  await settle()
+  for (let step = 0; step < 2; step++) { await act(async () => buttonNamed(container, "Next page")!.click()); await settle() }
+  expect(container.textContent).toContain("Inventory page 3")
+  expect(buttonNamed(container, "Next page")!.disabled).toBe(true)
+  await act(async () => buttonNamed(container, "Previous page")!.click())
+  await settle()
+  expect(container.textContent).toContain("Inventory page 2")
+  expect(container.textContent).toContain("The linked large backup with this run's directory objects could not be read")
+  expect(buttonNamed(container, "Next page")!.disabled).toBe(false)
+})
+
+it("offers no inventory paging after an unreadable companion page in a service view that hides every large type", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body ?? "{}"))
+    if (String(input).endsWith("/api/list-backup-contents")) return body.backupId === "backup-large-1" ? Response.json({ error: "Storage unavailable." }, { status: 500 }) : Response.json(contents)
+    if (String(input).endsWith("/api/restore-preview")) return Response.json(preview)
+    return Response.json({})
+  }))
+  const container = document.body.appendChild(document.createElement("div"))
+  const root = createRoot(container)
+  roots.push(root)
+  await act(async () => root.render(createElement(MemoryRouter, null, createElement(RestoreWizard, {
+    tenant: { name: "Contoso", credentials: { tenantId: "tenant", appId: "app", clientSecret: "" }, storageAccountName: "tvlocal-tenant" },
+    backups: [{ id: "backup-1", companionId: "backup-large-1", timestamp: "2026-10-16T02:00:00Z", type: "manual", status: "Completed", totalPolicies: 3, scope: null, size: 1, duration: 4, changes: null, comparedWith: null }],
+    initialBackupId: "backup-1", community: false, canCopyToTenants: false, copyCandidates: [], service: "intune",
+  }))))
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+  expect(container.textContent).toContain("Configuration profile")
+  expect(container.textContent).not.toContain("Inventory page")
+})

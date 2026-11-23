@@ -3,7 +3,7 @@
 import { matchesBackupService, type BackupServiceFilter } from "@desktop/lib/backup-service"
 import { DirectoryRestore } from "./directory-restore"
 import { ConfigurationRestore } from "./configuration-restore"
-import { restoreCapability } from "../../../shared/intune/registry"
+import { INTUNE_TYPES, restoreCapability } from "../../../shared/intune/registry"
 import { RestoreApprovals } from "./restore-approvals"
 import { reviewedDependencyMappings, type RecoveryReadiness } from "../../../shared/intune/recovery"
 import { settingDefinitionIds, type DeprecatedSettingHit } from "../../../shared/intune/settings-catalog"
@@ -423,13 +423,15 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
         setItems(previous => [...(previous ?? []), ...companion.items])
         if (companion.paging) setLargePaging(companion.paging)
         else if (!chosen.paging && largePage > 0) setLargePaging(previous => previous && { ...previous, hasMore: false })
-      } catch (error) {
+      } catch {
         if (controller.signal.aborted) return
         setCompanionError(COMPANION_UNREADABLE)
-        // A page that timed out or met a server error may be the only unreadable one, so later pages stay
-        // reachable, up to the last page the inventory allows. A refusal of the whole backup does not.
-        const transient = companionLoad.signal.aborted || !(error instanceof FeatureApiError && error.status < 500)
-        if (transient && !chosen.paging) setLargePaging(previous => previous ?? { hasMore: true, total: null })
+        // Any unreadable page may be the only one, so the pages around it stay reachable, up to the last
+        // page the route serves; an empty page still ends paging. Route statuses do not say reliably whether
+        // the whole backup was refused, so none is read here.
+        // A service view that hides every large type has no companion page to reach.
+        const shown = INTUNE_TYPES.some(type => type.volume === "large" && matchesBackupService(type.folder, contentsService))
+        if (!chosen.paging && shown) setLargePaging(previous => ({ hasMore: true, total: previous?.total ?? null }))
       } finally {
         clearTimeout(deadline)
         controller.signal.removeEventListener("abort", stopCompanion)

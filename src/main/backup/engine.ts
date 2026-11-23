@@ -1126,7 +1126,7 @@ export class BackupEngine {
           failures++
           largeCommitFailures++
           failedTypes.push(type.folder)
-          Object.assign(result(type.folder), { state: "unreadable", errors: [reason] })
+          Object.assign(result(type.folder), { state: "unreadable", reason, errors: [reason] })
           settle(type.folder, { outcome: "failed", error: reason })
           this.write(job, `Could not save ${type.label}: ${reason}`, "warning")
         }
@@ -1151,7 +1151,10 @@ export class BackupEngine {
     const unread = failures === 0 && nothingRead(ending) ? nothingReadReason(ending, { mode: tokens.mode, settingsPage: SERVICES_PAGE }) : null
     // A split run whose only failures come from its large inventory commit keeps its ordinary half, even
     // an empty one, so it reports warnings; any other run that saved nothing failed.
-    const ordinaryStands = mixed && largeCommitFailures > 0 && failures === largeCommitFailures
+    // The ordinary half stands only when it read something: a type saved or confirmed not configured. A
+    // refused ordinary list is a skip, so a run with only that and a failed large commit saved nothing.
+    const ordinaryRead = ending.some(type => typeForFolder(type.folder)?.volume !== "large" && (type.outcome === "saved" || type.outcome === "notConfigured"))
+    const ordinaryStands = mixed && largeCommitFailures > 0 && failures === largeCommitFailures && ordinaryRead
     const status = failures > 0 ? (saved === 0 && !ordinaryStands ? "Failed" : "CompletedWithWarnings") : unread ? "Failed" : "Success"
     const outcomes = outcomesNow(status, ended, false)
     // A split run's last manifest also names the run's own status. It is written only once the large
