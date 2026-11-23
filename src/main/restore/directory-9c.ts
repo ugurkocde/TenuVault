@@ -2,7 +2,8 @@ import type { Item } from "../../shared/intune/registry"
 import type { safetyReader } from "./safety-reader"
 import type { GraphReader } from "../../shared/intune/read"
 import { isGuid } from "../../shared/security"
-import { guardRestoreItem, RestoreSafetyError, type RestoreActor } from "../../shared/intune/restore-guards"
+import { guardRestoreItem, RestoreSafetyError, RestoreWriteDeferredError, type RestoreActor } from "../../shared/intune/restore-guards"
+import { isRestorePersistenceError } from "./guarded-run"
 import { cloudObject, NEVER_RESTORED, type DirectoryReview } from "./directory-9a"
 
 export const PRIVILEGED_RESTORE_BLOCKER = "This relationship is available for review. A live restore and cleanup round trip is required before execution."
@@ -106,69 +107,111 @@ export async function privilegeReview(folder: string, candidate: PrivilegeCandid
     start: Number.isFinite(date(savedSchedule.startDateTime)) ? savedSchedule.startDateTime : null,
     end: end?.type === "noExpiration" ? "No expiration" : Number.isFinite(date(end?.endDateTime)) ? end?.endDateTime : null,
   } })
-  const rawPrincipal = requirePrivilegeId(candidate.principalId ?? source.principalId)
-  const user = removeMember ? rawPrincipal : map("Users", rawPrincipal), mappedGroup = removeMember ? rawPrincipal : map("Groups", rawPrincipal)
-  if (user !== rawPrincipal && mappedGroup !== rawPrincipal) return fail("The principal mapping is ambiguous.")
-  const principalId = user !== rawPrincipal ? user : mappedGroup
-  const typedReads = {
-    user: `users/${principalId}?$select=id,displayName,onPremisesSyncEnabled,onPremisesImmutableId,onPremisesLastSyncDateTime`,
-    group: `groups/${principalId}?$select=id,displayName,onPremisesSyncEnabled,onPremisesLastSyncDateTime`,
-    servicePrincipal: `servicePrincipals/${principalId}?$select=id,displayName,appId`,
-  }
-  const kinds = user !== rawPrincipal ? ["user"] as const : mappedGroup !== rawPrincipal ? ["group"] as const : ["user", "group", "servicePrincipal"] as const
-  let principal: Item | null = null, type: keyof typeof typedReads | undefined
-  for (const kind of kinds) {
-    principal = await reader.getOptional(typedReads[kind])
-    if (principal) { type = kind; break }
-  }
-  if (!type || !principal || !isGuid(principal.id) || principal.id.toLowerCase() !== principalId || typeof principal.displayName !== "string" || !principal.displayName.trim()
-    || principal["@odata.type"] !== undefined && principal["@odata.type"] !== `#microsoft.graph.${type}`) return fail("The principal no longer resolves to a current name and type.")
-  review.principal = { id: principalId, name: String(principal.displayName), type }
   let blocker = candidate.blocker
-  const protectedReferences = { complete: true, principals: [principalId], applications: type === "servicePrincipal" && isGuid(principal.appId) ? [principal.appId] : [] }
-  try { guardRestoreItem(actor, folder, undefined, protectedReferences, false); cloudObject(principal) }
-  catch (error) { blocker = (error as RestoreSafetyError).message }
-  if (type !== "user") blocker ??= "This principal type is blocked because all indirect beneficiaries could not be verified."
-  const roleId = roleSourceId === undefined ? undefined : map("EntraRoleDefinitions", requirePrivilegeId(roleSourceId))
-  const role = roleId ? await privilegeObject(reader, roleDefinitions, roleId, "The saved role no longer resolves.") : undefined
-  if (role && role.isEnabled !== true) blocker ??= "The live role definition is disabled or its state could not be verified."
+  const unresolved: string[] = []
+  const resolve = async <T>(kind: string, savedId: unknown, read: (id: string, identify: (mappedId: string) => void) => Promise<T>) => {
+    let id = isGuid(savedId) ? savedId.toLowerCase() : undefined
+    try { return await read(requirePrivilegeId(id), mappedId => { id = mappedId }) }
+    catch (error) {
+      if (error instanceof RestoreWriteDeferredError || isRestorePersistenceError(error)) throw error
+      unresolved.push(id ? `The ${kind} ${id} no longer resolves.` : `The saved ${kind} has an invalid or missing ID.`)
+      return undefined
+    }
+  }
+  const beneficiary = await resolve("principal", candidate.principalId ?? source.principalId, async (rawPrincipal, identify) => {
+    const user = removeMember ? rawPrincipal : map("Users", rawPrincipal), mappedGroup = removeMember ? rawPrincipal : map("Groups", rawPrincipal)
+    if (user !== rawPrincipal && mappedGroup !== rawPrincipal) return fail("The principal mapping is ambiguous.")
+    const id = user !== rawPrincipal ? user : mappedGroup
+    identify(id)
+    const typedReads = {
+      user: `users/${id}?$select=id,displayName,onPremisesSyncEnabled,onPremisesImmutableId,onPremisesLastSyncDateTime`,
+      group: `groups/${id}?$select=id,displayName,onPremisesSyncEnabled,onPremisesLastSyncDateTime`,
+      servicePrincipal: `servicePrincipals/${id}?$select=id,displayName,appId`,
+    }
+    const kinds = user !== rawPrincipal ? ["user"] as const : mappedGroup !== rawPrincipal ? ["group"] as const : ["user", "group", "servicePrincipal"] as const
+    for (const type of kinds) {
+      const principal = await reader.getOptional(typedReads[type])
+      if (!principal) continue
+      if (isGuid(principal.id) && principal.id.toLowerCase() === id && typeof principal.displayName === "string" && principal.displayName.trim()
+        && (principal["@odata.type"] === undefined || principal["@odata.type"] === `#microsoft.graph.${type}`)) return { id, principal, type }
+      break
+    }
+    return fail("The principal does not have a verified name and type.")
+  })
+  const principalId = beneficiary?.id
+  const protectedReferences = { complete: !!beneficiary, principals: principalId ? [principalId] : [],
+    applications: beneficiary?.type === "servicePrincipal" && isGuid(beneficiary.principal.appId) ? [beneficiary.principal.appId] : [] }
+  if (beneficiary) {
+    const { id, principal, type } = beneficiary
+    review.principal = { id, name: String(principal.displayName), type }
+    try { guardRestoreItem(actor, folder, undefined, protectedReferences, false); cloudObject(principal) }
+    catch (error) { blocker = (error as RestoreSafetyError).message }
+    if (type !== "user") blocker ??= "This principal type is blocked because all indirect beneficiaries could not be verified."
+  }
+  let roleId: string | undefined
+  if (scopedMember || !group && !unit) {
+    const role = await resolve("role", roleSourceId, async (savedId, identify) => {
+      roleId = map("EntraRoleDefinitions", savedId)
+      identify(roleId)
+      if (!unit) review.resource = { id: roleId, name: "Unresolved directory role", type: "directory role" }
+      return privilegeObject(reader, roleDefinitions, roleId, "The saved role no longer resolves.")
+    })
+    if (role) {
+      if (role.isEnabled !== true) blocker ??= "The live role definition is disabled or its state could not be verified."
+      if (unit) review.privilege = `Scoped role member: ${role.displayName}`
+      else review.resource = { id: String(role.id), name: String(role.displayName), type: "directory role" }
+    }
+  }
   let directoryScopeId = source.directoryScopeId === "/" ? "/" : undefined
   let groupId: string | undefined
   if (group) {
-    groupId = map("Groups", requirePrivilegeId(source.groupId))
-    const resource = await privilegeObject(reader, "groups", groupId, "The saved PIM group no longer resolves.")
-    review.resource = { id: groupId, name: String(resource.displayName), type: "group" }
-    review.scope = `Group ${resource.displayName} (${groupId})`
-    review.roleAssignable = resource.isAssignableToRole === true
-    if (!Array.isArray(resource.groupTypes) || resource.groupTypes.includes("DynamicMembership") || resource.onPremisesSyncEnabled != null) blocker ??= "Dynamic, synchronized or unresolved PIM groups are blocked."
+    const resource = await resolve("group scope", source.groupId, async (savedId, identify) => {
+      groupId = map("Groups", savedId)
+      identify(groupId)
+      review.resource = { id: groupId, name: "Unresolved group", type: "group" }
+      review.scope = `Unresolved group (${groupId})`
+      return privilegeObject(reader, "groups", groupId, "The saved PIM group no longer resolves.")
+    })
+    if (resource) {
+      review.resource.name = String(resource.displayName)
+      review.scope = `Group ${resource.displayName} (${groupId})`
+      review.roleAssignable = resource.isAssignableToRole === true
+      if (!Array.isArray(resource.groupTypes) || resource.groupTypes.includes("DynamicMembership") || resource.onPremisesSyncEnabled != null) blocker ??= "Dynamic, synchronized or unresolved PIM groups are blocked."
+    }
   } else if (unit) {
     review.resource = { id: String(unit.id), name: String(unit.displayName), type: "administrative unit" }
     review.scope = `Administrative unit ${unit.displayName} (${unit.id})`
-    if (role) review.privilege = `Scoped role member: ${role.displayName}`
     blocker ??= unitChangeBlocker(unit)
-    if (removeMember && !blocker) {
+    if (removeMember && !blocker && beneficiary) {
       try { guardRestoreItem(actor, folder, undefined, protectedReferences, true) }
       catch (error) { blocker = (error as RestoreSafetyError).message }
     }
-  } else {
-    if (!role || !roleId) return fail("The saved role no longer resolves.")
-    review.resource = { id: roleId, name: String(role.displayName), type: "directory role" }
-    if (source.appScopeId != null && source.appScopeId !== "") blocker ??= "Application-scoped roles remain blocked."
-    else if (directoryScopeId === "/") review.scope = "Entire tenant"
-    else if (typeof source.directoryScopeId === "string" && source.directoryScopeId.startsWith("/administrativeUnits/")) {
-      const unitId = map("AdministrativeUnits", requirePrivilegeId(source.directoryScopeId.slice(21)))
-      const scope = await privilegeObject(reader, administrativeUnits, unitId, "The saved administrative unit scope no longer resolves.")
-      directoryScopeId = `/administrativeUnits/${unitId}`
-      review.scope = `Administrative unit ${scope.displayName} (${unitId})`
+  } else if (source.appScopeId != null && source.appScopeId !== "") {
+    blocker ??= "Application-scoped roles remain blocked."
+  } else if (directoryScopeId === "/") {
+    review.scope = "Entire tenant"
+  } else if (typeof source.directoryScopeId === "string" && source.directoryScopeId.startsWith("/administrativeUnits/")) {
+    const scope = await resolve("administrative unit scope", source.directoryScopeId.slice(21), async (savedId, identify) => {
+      const unitId = map("AdministrativeUnits", savedId)
+      identify(unitId)
+      review.scope = `Unresolved administrative unit (${unitId})`
+      return privilegeObject(reader, administrativeUnits, unitId, "The saved administrative unit scope no longer resolves.")
+    })
+    if (scope) {
+      directoryScopeId = `/administrativeUnits/${String(scope.id).toLowerCase()}`
+      review.scope = `Administrative unit ${scope.displayName} (${String(scope.id).toLowerCase()})`
       blocker ??= unitChangeBlocker(scope)
-    } else blocker ??= "The saved role scope no longer resolves."
+    }
+  } else {
+    blocker ??= "The saved role scope no longer resolves."
   }
-  if (!blocker) {
+  if (unresolved.length) blocker = unresolved.join(" ")
+  if (!blocker && principalId) {
     try { privilegeRequest(folder, source, principalId, { roleId, directoryScopeId, groupId, unitId: unit ? String(unit.id) : undefined }, now, removeMember) }
     catch (error) { blocker = (error as RestoreSafetyError).message }
   }
   let present = candidate.present
-  if (present === undefined && !blocker) {
+  if (present === undefined && !blocker && principalId) {
     const collection = scheduleCollections[folder] ?? roleAssignments
     const current = await reader.list(collectionFilter(collection, group ? "groupId" : "principalId", groupId ?? principalId))
     present = current.some(row => String(row.principalId).toLowerCase() === principalId && (group

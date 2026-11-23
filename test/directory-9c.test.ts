@@ -27,11 +27,13 @@ function world(largeUnit = false) {
   const scopes = areaPermissions(ENTRA_AREAS.find(area => area.id === "roles")!, "restore", "delegated")
   const connection = { ...actor, token: `h.${Buffer.from(JSON.stringify({ tid: tenant, oid: admin, appid: client, scp: scopes.join(" ") })).toString("base64url")}.s` }
   let status = 200, restricted = false
+  const missing = new Set<string>()
   const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     expect(init?.method).toBe("GET")
     const url = new URL(String(input))
     expect(url.pathname.startsWith("/beta/")).toBe(true)
     const path = url.pathname.slice(6)
+    if (missing.has(path)) return new Response(null, { status: 404 })
     if (path.startsWith("applications") || path.startsWith("servicePrincipals") && !path.includes("/")) {
       if (!scopes.includes("Application.Read.All")) return new Response(null, { status: 403 })
       return Response.json({ id: path.startsWith("applications") ? id(11) : id(12), appId: client })
@@ -57,7 +59,7 @@ function world(largeUnit = false) {
     return new Response(null, { status: 404 })
   })
   const start = () => new DirectoryRestoreService(store, new RecoveryAccounts(store), async () => connection, async () => connection, fetcher, undefined, undefined, () => now)
-  return { start, fetcher, status: (value: number) => { status = value }, restrict: () => { restricted = true } }
+  return { start, fetcher, status: (value: number) => { status = value }, restrict: () => { restricted = true }, missing }
 }
 
 it("uses distinct eligibility and assignment requests and preserves the absolute end time", () => {
@@ -121,6 +123,25 @@ it("blocks self-benefit and isolates an unavailable principal", async () => {
   expect(unresolved.rows[0]?.review.blocker).toMatch(/no longer resolves/)
   env.status(429)
   await expect(service.prepare(tenant, request, options, noBackupReads)).rejects.toThrow(/throttl/i)
+})
+
+it.each([
+  ["principal", user, [`users/${user}`, `groups/${user}`, `servicePrincipals/${user}`]],
+  ["role", role, [`roleManagement/directory/roleDefinitions/${role}`]],
+  ["scope", unit, [`directory/administrativeUnits/${unit}`]],
+] as const)("keeps the resolved schedule details when the %s is missing", async (kind, missingId, paths) => {
+  const env = world()
+  for (const path of paths) env.missing.add(path)
+  const request = { path: "backup/RoleAssignmentSchedules/saved-schedule.json", snapshot: { ...scheduled, directoryScopeId: `/administrativeUnits/${unit}` }, origin: "restore" as const }
+  const page = await env.start().prepare(tenant, request, options, noBackupReads)
+  const review = page.rows[0]!.review
+  expect(review.blocker).toContain(`${kind} ${missingId}`)
+  expect(review.privilege).toBe("Active role schedule")
+  expect(review.changes).toEqual([{ property: "Schedule", before: null, after: { start: scheduleInfo.startDateTime, end: endsAt } }])
+  expect(review.principal).toEqual(kind === "principal" ? null : { id: user, name: "Current user", type: "user" })
+  expect(review.resource).toEqual({ id: role, name: kind === "role" ? "Unresolved directory role" : "Custom role", type: "directory role" })
+  expect(review.scope).toBe(kind === "scope" ? `Unresolved administrative unit (${unit})` : `Administrative unit Unit (${unit})`)
+  expect(env.fetcher.mock.calls.some(([url]) => String(url).includes("/roleAssignmentSchedules"))).toBe(false)
 })
 
 it("pages a legacy-named administrative unit, preserving exact choice, role IDs and blocked rows", async () => {
