@@ -2,6 +2,7 @@ import { AuditEventType, AuditResult, AuditSeverity, type CreateAuditLogInput } 
 import type { GraphCall } from "../../../portal/lib/policies/graph-restore"
 import { changeSetTitle } from "../../../shared/sync-wording"
 import { typeForFolder, type IntuneType, type Item } from "../../../shared/intune/registry"
+import { manualRollbackNote } from "../../../shared/intune/rollback-support"
 import { isGraphId } from "../../../shared/security"
 import { replaceTenantVariables } from "../../../shared/oib/variables"
 import { PlanRequired } from "../../../shared/plans"
@@ -930,7 +931,7 @@ function inverseOperations(deps: FeatureDeps, tenantId: string, record: ChangeSe
     if (result.status === "pending" || result.status === "failed") continue
     const inverseAction = operation.action === "create" ? "delete" : operation.action === "update" ? "update" : "create"
     if (unsupportedReason(operation.folder, inverseAction)) {
-      manual.push(`"${operation.name}" needs manual recovery in Intune because automatic rollback does not support this policy type.`)
+      manual.push(manualRollbackNote(operation.name))
       continue
     }
     const warnings = result.status === "verified" ? [] : [`The outcome of "${operation.name}" was ${result.status}; the rollback is based on the captured state and live state is re-read at review.`]
@@ -970,6 +971,7 @@ export async function previewRollback(deps: FeatureDeps, tenantId: string, id: s
   const { inputs, manual } = inverseOperations(deps, tenantId, record)
   const graph = await reader(deps, tenantId, { changeSetId: record.id })
   const operations: RollbackPreview["operations"] = []
+  const irreversible: string[] = []
   for (const input of inputs) {
     const type = typeOf(input.folder)
     let live: Item | null = null
@@ -981,13 +983,15 @@ export async function previewRollback(deps: FeatureDeps, tenantId: string, id: s
     }
     if (input.action !== "create" && input.targetId && !live) warnings.push(`"${input.name}" no longer exists in the tenant.`)
     const diff = input.action === "update" && live && input.proposed ? diffConfigurations(type, sanitizeSnapshot(type, live).snapshot, input.proposed).entries : input.action === "create" && input.proposed ? diffConfigurations(type, null, input.proposed).entries : []
-    operations.push({ key: input.key, action: input.action, name: input.name ?? String(input.proposed?.[type.nameKey] ?? ""), targetId: input.targetId ?? null, blocked: input.blocked, warnings, diff })
+    const name = input.name ?? String(input.proposed?.[type.nameKey] ?? "")
+    operations.push({ key: input.key, action: input.action, name, targetId: input.targetId ?? null, blocked: input.blocked, warnings, diff })
+    if (!input.blocked) irreversible.push(...irreversibleSteps({ folder: input.folder, action: input.action, name, setsAssignments: false }))
   }
   return {
     changeSetId: record.id,
     operations,
     manual,
-    irreversible: operations.filter((operation) => !operation.blocked).flatMap((operation) => irreversibleSteps({ action: operation.action, name: operation.name, setsAssignments: false })),
+    irreversible,
     unsupportedRecovery: UNSUPPORTED_RECOVERY,
     notice: "Rollback writes the captured pre-change state back as a new reviewed change set. It is not an atomic transaction and does not guarantee the previous state on devices.",
   }

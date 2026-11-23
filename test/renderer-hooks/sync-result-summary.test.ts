@@ -74,6 +74,21 @@ describe("Sync result summary", () => {
       { target: inSync, name: "Contoso Japan", domain: "contoso.co.jp", phase: "in-sync", storage: true },
     ])
     expect(container.querySelector('[role="status"]')?.textContent).toBe("Copied to 1 tenant, 1 already up to date")
+    expect(container.querySelector('[aria-label="Summary"]')?.textContent).toContain("Rollback available per tenant")
+  })
+
+  it.each([false, true])("shows manual recovery for a copied script with a supported write: %s", (mixed) => {
+    const copied = target(B, "applied", { status: "verified", objectId: "new-b" })
+    const { operations, results } = copied.changeSet!
+    const script = { ...operations[0]!, key: "script", folder: "PowerShellScripts", name: "Inventory device health" }
+    operations.splice(mixed ? 1 : 0, mixed ? 0 : 1, script)
+    results.script = { ...results["op-1"]!, objectId: "new-script" }
+    const container = render([{ target: copied, name: "Contoso Germany", domain: "contoso.de", phase: "verified", storage: true }])
+    const summary = container.querySelector('[aria-label="Summary"]')?.textContent ?? ""
+    expect(summary).not.toContain("Rollback available per tenant")
+    if (mixed) expect(summary).toContain("Rollback available for supported policy types")
+    else expect(summary).not.toContain("Rollback available")
+    expect(container.textContent).toContain('Undo changes to "Inventory device health" in Intune. Automatic rollback is unavailable for this policy type.')
   })
 })
 

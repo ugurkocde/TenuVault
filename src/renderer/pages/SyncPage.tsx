@@ -36,7 +36,7 @@ import { awaitingReview, discardable, excludedReason, needsSecretAck, OUTCOME_CH
 import { card, ChooseSettings, ChooseTargets, ReviewStep, Stepper, type SelectedPolicy } from "../features/sync/SyncSteps"
 import { resultEntries, SyncResult } from "../features/sync/SyncResult"
 
-const LEAD = "Copy settings from one tenant to others, one way, when you start it. Every target is reviewed and can be rolled back."
+const LEAD = "Copy settings from one tenant to others, one way, when you start it. Review changes for each target before copying. Automatic rollback is available for supported policy types."
 const message = (error: unknown, fallback: string) => (error instanceof Error ? error.message : fallback)
 
 /**

@@ -3,6 +3,7 @@ import { comparableSnapshot } from "../../../shared/intune/compare"
 import { PROMOTION_FOLDERS } from "../../../shared/intune/promotion-types"
 import { buildRestorePlan } from "../../../shared/intune/restore-plan"
 import { cleanAssignment, typeForFolder, type IntuneType, type Item, type Json } from "../../../shared/intune/registry"
+import { manualRollbackNote, SUPPORTED_OPERATIONS, supportsAutomaticRollback, type OperationAction } from "../../../shared/intune/rollback-support"
 import { MAX_SETTING_LEAVES, settingValues, type SettingLeaf } from "../../../shared/frameworks/setting-summary"
 import type { ListedRecord } from "../contracts"
 
@@ -13,15 +14,7 @@ import type { ListedRecord } from "../contracts"
  * storage and the backup.
  */
 
-export type OperationAction = "create" | "update" | "delete"
-
-/** The types available to generic change sets and automatic rollback. */
-export const SUPPORTED_OPERATIONS: Readonly<Record<string, readonly OperationAction[]>> = {
-  ConfigurationPolicies: ["create", "update", "delete"],
-  CompliancePolicies: ["create", "update", "delete"],
-  DeviceConfigurations: ["create", "update", "delete"],
-  EndpointSecurityIntents: ["create", "update", "delete"],
-}
+export type { OperationAction }
 
 /** Most operations in one change set; keeps review, capture and storage bounded. */
 export const MAX_OPERATIONS = 25
@@ -449,11 +442,12 @@ export function unsupportedReason(folder: string, action: OperationAction, promo
 }
 
 /** What cannot be undone for one operation, in plain language. */
-export function irreversibleSteps(operation: Pick<ChangeOperation, "action" | "name" | "setsAssignments">): string[] {
+export function irreversibleSteps(operation: Pick<ChangeOperation, "folder" | "action" | "name" | "setsAssignments">): string[] {
   const notes: string[] = []
-  if (operation.action === "delete") notes.push(`Deleting "${operation.name}" is irreversible. A rollback recreates it with a new ID and without assignments; references to the old ID and its reporting history are lost.`)
-  if (operation.action === "update") notes.push(`Devices that already received the new settings of "${operation.name}" are not guaranteed to return to the previous values when the captured configuration is written back.`)
-  if (operation.action === "create") notes.push(`A rollback deletes "${operation.name}" again; anything added to it after creation is lost.`)
+  if (!supportsAutomaticRollback(operation.folder)) notes.push(manualRollbackNote(operation.name))
+  else if (operation.action === "delete") notes.push(`Deleting "${operation.name}" is irreversible. A rollback recreates it with a new ID and without assignments; references to the old ID and its reporting history are lost.`)
+  else if (operation.action === "update") notes.push(`Devices that already received the new settings of "${operation.name}" are not guaranteed to return to the previous values when the captured configuration is written back.`)
+  else if (operation.action === "create") notes.push(`A rollback deletes "${operation.name}" again; anything added to it after creation is lost.`)
   if (operation.setsAssignments) notes.push(`Assignments of "${operation.name}" change which devices and users receive it as soon as Intune processes the write.`)
   return notes
 }

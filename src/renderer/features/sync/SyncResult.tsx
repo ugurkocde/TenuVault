@@ -4,9 +4,10 @@ import type { Tenant } from "~/contexts/TenantContext"
 import { Button } from "~/components/ui/button"
 import { Chip } from "~/components/dashboard/tiles"
 import { cn } from "~/lib/utils"
+import { manualRollbackNote, supportsAutomaticRollback } from "../../../shared/intune/rollback-support"
 import { ChangeSetFlow } from "../shared/ChangeSetFlow"
 import { syncRollbackActions, syncTargetActions, type SyncTarget } from "./api"
-import { applyStage, awaitingReview, backupOf, excludedReason, failedItems, initials, intuneLink, linkPath, mayHaveWritten, outcomeCounts, plural, progress, targetPhase, type ApplyStage, type TargetPhase } from "./model"
+import { applyStage, awaitingReview, backupOf, excludedReason, failedItems, initials, intuneLink, linkPath, outcomeCounts, plural, possibleWrites, progress, targetPhase, type ApplyStage, type TargetPhase } from "./model"
 import { Spinner } from "./loading"
 import { copyMessage } from "../../../shared/sync-wording"
 
@@ -255,6 +256,8 @@ export function SyncFlowchart({ source, policies, policyCount, targets, errors, 
           const stage = phase === "writing" ? applyStage(target, !!entry.active) : null
           const { text, problems } = nodeText(entry, errors[id] ?? null, notes[id] ?? null, stage)
           const finished = FINISHED.includes(phase)
+          const writes = possibleWrites(target)
+          const manual = writes.filter((operation) => !supportsAutomaticRollback(operation.folder))
           const intune = finished ? intuneLink(target, platforms) : null
           // Verified share of the operations; a finished target that verified everything is full.
           const { done, total } = progress(target)
@@ -312,7 +315,12 @@ export function SyncFlowchart({ source, policies, policyCount, targets, errors, 
               {finished && (phase === "partial" || phase === "failed") && retryable(target) && (
                 <p id={`retry-${id}`} className="mt-2 text-xs text-gray-500">{backupOf(target) === "none" ? "Retry applies without a backup, as this copy started." : "Retry backs up first."}</p>
               )}
-              {mayHaveWritten(target) && !entry.storage && <p className="mt-2 text-xs text-amber-800">{NO_ROLLBACK}</p>}
+              {writes.length > manual.length && !entry.storage && <p className="mt-2 text-xs text-amber-800">{NO_ROLLBACK}</p>}
+              {finished && manual.length > 0 && (
+                <ul className="mt-2 space-y-1 text-xs text-amber-800">
+                  {manual.map((operation) => <li key={operation.key}>{manualRollbackNote(operation.name)}</li>)}
+                </ul>
+              )}
             </div>
           )
         })}
@@ -360,11 +368,14 @@ export function SyncResult({ source, policies = [], policyCount, entries, errors
   const upToDate = involved.filter((entry) => entry.phase === "in-sync").length
   const copied = verified - upToDate
   // Targets something was written to; a rollback can run only where the tenant has backup storage.
-  const wrote = involved.filter((entry) => mayHaveWritten(entry.target))
+  const wrote = involved.map(({ target, storage }) => ({ storage, operations: possibleWrites(target) })).filter(({ operations }) => operations.length > 0)
   const anyWritten = wrote.length > 0
   // Links come only from verified writes, so the links chip follows verified operations alone.
   const anyLinked = involved.some((entry) => progress(entry.target).done > 0)
-  const rollbacks = wrote.filter((entry) => entry.storage).length
+  const manualRecovery = wrote.some(({ operations }) => operations.some(({ folder }) => !supportsAutomaticRollback(folder)))
+  const rollbacks = wrote.filter(({ storage, operations }) => storage && operations.some(({ folder }) => supportsAutomaticRollback(folder))).length
+  const rollbackLabel = manualRecovery ? "Rollback available for supported policy types" : "Rollback available"
+  const rollbackScope = rollbacks < wrote.length ? ` in ${rollbacks} of ${wrote.length} tenants` : manualRecovery ? "" : " per tenant"
   // Targets already in sync wrote nothing, so they took no backup and decide nothing here. The
   // backup chip counts completed backups from the stored evidence, never the requested choice.
   const written = involved.filter((entry) => entry.target.changeSet)
@@ -377,12 +388,18 @@ export function SyncResult({ source, policies = [], policyCount, entries, errors
     : <Chip>Backup taken in {backups} of {attempted.length} tenants</Chip>
   const chips = [
     anyLinked && <Chip key="links" tone="success">Links saved for the next copy</Chip>,
-    rollbacks > 0 && <Chip key="rollback">{rollbacks === wrote.length ? "Rollback available per tenant" : `Rollback available in ${rollbacks} of ${wrote.length} tenants`}</Chip>,
+    rollbacks > 0 && <Chip key="rollback">{rollbackLabel}{rollbackScope}</Chip>,
     backupChip && <span key="backup">{backupChip}</span>,
     <Chip key="audit">Recorded in the audit log</Chip>,
   ].filter(Boolean)
   const open = entries.find((entry) => entry.target.targetTenantId === detailsOpen)
   const openTenant = open ? tenantOf(open.target.targetTenantId) : undefined
+  const openWrites = open ? possibleWrites(open.target) : []
+  const openHasSupportedWrites = openWrites.some((operation) => supportsAutomaticRollback(operation.folder))
+  const openHasManualWrites = openWrites.some((operation) => !supportsAutomaticRollback(operation.folder))
+  const skippedBackupNote = openHasManualWrites
+    ? "applied without a backup. Saved versions are kept on this device."
+    : "applied without a backup. Rollback uses the saved current versions."
   // Planned and never approved: a target still waits in review and every other target was left
   // out or already in sync, so the run is not a dead end.
   const unapproved = entries.some((entry) => awaitingReview(entry.target)) && involved.every((entry) => entry.phase === "in-sync")
@@ -470,8 +487,8 @@ export function SyncResult({ source, policies = [], policyCount, entries, errors
             decisionFields={false}
             backupSkipped={backupOf(open.target) === "none"}
             intro={<>
-              <p className="text-sm text-gray-600">Backup choice of this copy: {backupOf(open.target) === "none" ? "applied without a backup. Rollback uses the saved current versions." : "back up first, with this tenant's backup settings."}</p>
-              {!open.storage && <p className="text-sm text-amber-800">{NO_ROLLBACK} A rollback always backs up first, so it cannot run from TenuVault until this tenant has backup storage.</p>}
+              <p className="text-sm text-gray-600">Backup choice of this copy: {backupOf(open.target) === "none" ? skippedBackupNote : "back up first, with this tenant's backup settings."}</p>
+              {!open.storage && openHasSupportedWrites && <p className="text-sm text-amber-800">{NO_ROLLBACK} A rollback always backs up first, so it cannot run from TenuVault until this tenant has backup storage.</p>}
             </>}
             rollbackHint="Rollback created. Review, approve and apply it below."
           />

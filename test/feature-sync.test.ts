@@ -1475,8 +1475,13 @@ describe("copying additional Intune types", () => {
     expect(listed.status).toBe(200)
     expect(listed.body.source).toContainEqual(expect.objectContaining({ id: sourceId, folder }))
     const input = { items: [{ folder, sourceId }], includeAssignments: true, mappings: { [TENANT_B]: [groupMapping, filterMapping, tagMapping] } }
+    const recoveryNote = 'Undo changes to "Contoso policy" in Intune. Automatic rollback is unavailable for this policy type.'
     const create = await planned(context, [TENANT_B], input)
     expect(create.targets[0]!.promotion?.items[0]).toMatchObject({ action: "create", blocked: false })
+    const createPreview = await context.post({ tenantId: TENANT_B, action: "preview", id: create.targets[0]!.promotion!.id })
+    expect(createPreview.status).toBe(200)
+    expect(createPreview.body.changeSet.irreversible).toContain(recoveryNote)
+    expect(createPreview.body.changeSet.irreversible.join(" ")).not.toContain("A rollback deletes")
     const created = await applied(context, TENANT_B, create.targets[0]!.promotion!.id)
     expect(created.status).toBe(200)
     expect(created.body.promotion.status).toBe("applied")
@@ -1499,6 +1504,10 @@ describe("copying additional Intune types", () => {
     if (folder === "GroupPolicyConfigurations") (source.definitionValues as Item[])[0]!.enabled = false
     const update = await planned(context, [TENANT_B], input)
     expect(update.targets[0]!.promotion?.items[0]).toMatchObject({ action: "update", blocked: false, destinationId: id })
+    const updatePreview = await context.post({ tenantId: TENANT_B, action: "preview", id: update.targets[0]!.promotion!.id })
+    expect(updatePreview.status).toBe(200)
+    expect(updatePreview.body.changeSet.irreversible).toContain(recoveryNote)
+    expect(updatePreview.body.changeSet.irreversible.join(" ")).not.toContain("captured configuration is written back")
     const updated = await applied(context, TENANT_B, update.targets[0]!.promotion!.id)
     expect(updated.status).toBe(200)
     expect(updated.body.promotion.status).toBe("applied")

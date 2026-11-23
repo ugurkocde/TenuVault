@@ -1,9 +1,11 @@
-import { act, createElement } from "react"
+import { act, createElement, type ReactNode } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { readFileSync } from "node:fs"
 import { MemoryRouter } from "react-router-dom"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import type { SyncTarget } from "../../src/renderer/features/sync/api"
+import { ReviewStep } from "../../src/renderer/features/sync/SyncSteps"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -206,12 +208,12 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-async function render(): Promise<HTMLDivElement> {
+async function render(content: ReactNode = createElement(SyncPage)): Promise<HTMLDivElement> {
   const container = document.body.appendChild(document.createElement("div"))
   const root = createRoot(container)
   roots.push(root)
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  act(() => root.render(createElement(QueryClientProvider, { client }, createElement(MemoryRouter, { initialEntries: ["/portal/sync"] }, createElement(SyncPage)))))
+  act(() => root.render(createElement(QueryClientProvider, { client }, createElement(MemoryRouter, { initialEntries: ["/portal/sync"] }, content))))
   await settle()
   return container
 }
@@ -327,10 +329,26 @@ describe("Sync review", () => {
     expect(review.textContent).toContain("Back up first")
     expect(review.textContent).toContain("Each target is backed up first, using that tenant's backup settings. If the backup does not cover every policy type this copy changes, or fails, nothing is changed in that tenant.")
     expect(review.textContent).toContain("Skip the backup")
+    expect(review.textContent).toContain("Rollback still works from the saved versions")
     expect(review.querySelector<HTMLInputElement>('input[value="new"]')!.checked).toBe(true)
     expect(button(container, "Approve and copy to 2 tenants")?.disabled).toBe(false)
     // Nothing was approved or written by the review.
     expect(calls.map((call) => call.action)).not.toContain("approve")
+  })
+
+  it("qualifies the skip-backup wording when the plan includes a script", async () => {
+    const changeSet = changeSetOf(B, "create", "in-review")
+    changeSet.operations[0]!.folder = "PowerShellScripts"
+    const target = { targetTenantId: B, promotionId: "promotion", promotion: { status: "in-review", items: [] }, changeSet, error: null } as unknown as SyncTarget
+    const container = await render(createElement(ReviewStep, {
+      targets: [target], reviews: {}, planning: false, reading: { source: "Contoso Lab", targets: 1 },
+      planError: null, tenantOf: () => undefined, backup: "none", onBackup: () => {},
+      secrets: { needed: false, acknowledged: false }, ack: false, onAck: () => {},
+      onBack: () => {}, onApprove: () => {}, mappingsDirty: false, busy: false,
+    }))
+    expect(container.textContent).toContain("Automatic rollback is available only for supported policy types and requires backup storage in the target tenant. Undo the other changes in Intune.")
+    expect(container.textContent).not.toContain("Rollback still works from the saved versions")
+    expect(container.textContent).toContain("No backup is taken. Saved versions are kept on this device.")
   })
 
   it("B4: secrets gate Approve until acknowledged, which plans again with the acknowledgement", async () => {
