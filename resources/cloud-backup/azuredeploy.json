@@ -2,7 +2,7 @@
   "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
   "contentVersion": "1.0.0.0",
   "metadata": {
-    "description": "Deploys the TenuVault cloud backup runner into your own subscription: an Azure Automation account with a managed identity, the Invoke-TenuVaultBackup runbook, the container scoped backup writer role, and one tenant schedule. Backups are written as plain JSON: Azure encrypts the storage account at rest and your role assignments decide who can read it, so no Key Vault or recovery key is needed. Setups made before runbook 1.2.0 also created a Key Vault (kv-tenuvault-<suffix>) for the recovery key: run New-TenuVaultCloudBackup.ps1 again with the same resource group and Automation account to upgrade one, and delete the vault once no TenuVault setup in this or any other Automation account still has a TenuVaultKeyVault variable. The template cannot grant Microsoft Graph application roles (no ARM resource can): a Global Administrator assigns the five read-only DeviceManagement roles listed in the deployment outputs to the managed identity, or runs New-TenuVaultCloudBackup.ps1 with -GrantGraphRoles instead. The setup script is the fuller path (it also creates the failure alert and computes the first schedule occurrence); this template is the portal friendly bootstrap that produces the same resources.",
+    "description": "Deploys the TenuVault cloud backup runner into your own subscription: an Azure Automation account with a managed identity, the Invoke-TenuVaultBackup runbook, the container scoped backup writer role, and one tenant schedule. When linking is enabled, each deployment creates a link under a new ID, so a deployment that failed earlier, or one for the same tenant in another Automation account, does not collide with an ID Azure already used. Set linkSchedule to false in an incremental deployment when this tenant's schedule is already linked. The deployment leaves the existing link in place and omits the paste block. Backups are written as plain JSON: Azure encrypts the storage account at rest and your role assignments decide who can read it, so no Key Vault or recovery key is needed. Setups made before runbook 1.2.0 also created a Key Vault (kv-tenuvault-<suffix>) for the recovery key: run New-TenuVaultCloudBackup.ps1 again with the same resource group and Automation account to upgrade one, and delete the vault once no TenuVault setup in this or any other Automation account still has a TenuVaultKeyVault variable. The template cannot grant Microsoft Graph application roles (no ARM resource can): a Global Administrator assigns the five read-only DeviceManagement roles listed in the deployment outputs to the managed identity, or runs New-TenuVaultCloudBackup.ps1 with -GrantGraphRoles instead. The setup script is the fuller path (it also creates the failure alert and computes the first schedule occurrence); this template is the portal friendly bootstrap that produces the same resources.",
     "author": "Ugur Koc"
   },
   "parameters": {
@@ -73,7 +73,17 @@
     },
     "scheduleStartTime": {
       "type": "string",
-      "metadata": { "description": "First run, as an ISO 8601 date time with offset, at least 5 minutes in the future, for example 2026-11-01T02:00:00+01:00. Its time of day becomes the recurring backup time." }
+      "metadata": { "description": "First run as an ISO 8601 date and time with offset, for example 2026-11-01T02:00:00+01:00. A start time in the past or less than 15 minutes away moves forward by whole days to the same moment of a later day (written in UTC), so the deployment does not fail on it. A weekly schedule then first runs on the next chosen weekday after that." }
+    },
+    "baseTime": {
+      "type": "string",
+      "defaultValue": "[utcNow()]",
+      "metadata": { "description": "Leave this value at its default. The portal's Redeploy action reuses the stored value, keeping the same schedule link ID and reference time. To deploy again, start from Deploy to Azure and leave this parameter unset so utcNow() is evaluated again." }
+    },
+    "linkSchedule": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": { "description": "Links the schedule to the runbook. Keep true for the first deployment of this tenant's backup into an Automation account. Set false in an incremental deployment when this tenant's schedule is already linked. The deployment updates the runbook, settings and schedule, leaves the existing link in place and omits the paste block." }
     },
     "timeZone": {
       "type": "string",
@@ -100,6 +110,11 @@
     "tenantKey": "[take(toLower(parameters('tenantId')), 8)]",
     "runbookName": "Invoke-TenuVaultBackup",
     "scheduleName": "[concat('TenuVaultBackup-', variables('tenantKey'))]",
+    "jobScheduleId": "[guid(resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName')), variables('scheduleName'), variables('runbookName'), parameters('baseTime'))]",
+    "requestedStartEpoch": "[dateTimeToEpoch(parameters('scheduleStartTime'))]",
+    "earliestStartEpoch": "[dateTimeToEpoch(dateTimeAdd(parameters('baseTime'), 'PT15M'))]",
+    "rollDays": "[max(0, div(add(sub(variables('earliestStartEpoch'), variables('requestedStartEpoch')), 86399), 86400))]",
+    "scheduleStart": "[if(less(variables('requestedStartEpoch'), variables('earliestStartEpoch')), dateTimeFromEpoch(add(variables('requestedStartEpoch'), mul(variables('rollDays'), 86400))), parameters('scheduleStartTime'))]",
     "container": "intune-backups",
     "outcomeContainer": "tenuvault-backup-results",
     "storageAccountIdForName": "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]",
@@ -209,7 +224,7 @@
       "dependsOn": [
         "[extensionResourceId(resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('storageAccountName'), 'default', variables('container')), 'Microsoft.Authorization/roleAssignments', guid(variables('containerScope'), parameters('automationAccountName'), variables('writerRoleName')))]",
         "[extensionResourceId(resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('storageAccountName'), 'default', variables('outcomeContainer')), 'Microsoft.Authorization/roleAssignments', guid(variables('outcomeContainerScope'), parameters('automationAccountName'), variables('writerRoleName')))]",
-        "[resourceId('Microsoft.Automation/automationAccounts/jobSchedules', parameters('automationAccountName'), guid(variables('scheduleName'), variables('runbookName')))]",
+        "[resourceId('Microsoft.Automation/automationAccounts/jobSchedules', parameters('automationAccountName'), variables('jobScheduleId'))]",
         "automationVariables"
       ],
       "properties": {
@@ -238,7 +253,7 @@
       "dependsOn": [
         "[extensionResourceId(resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('storageAccountName'), 'default', variables('container')), 'Microsoft.Authorization/roleAssignments', guid(variables('containerScope'), parameters('automationAccountName'), variables('writerRoleName')))]",
         "[extensionResourceId(resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('storageAccountName'), 'default', variables('outcomeContainer')), 'Microsoft.Authorization/roleAssignments', guid(variables('outcomeContainerScope'), parameters('automationAccountName'), variables('writerRoleName')))]",
-        "[resourceId('Microsoft.Automation/automationAccounts/jobSchedules', parameters('automationAccountName'), guid(variables('scheduleName'), variables('runbookName')))]",
+        "[resourceId('Microsoft.Automation/automationAccounts/jobSchedules', parameters('automationAccountName'), variables('jobScheduleId'))]",
         "automationVariables"
       ],
       "properties": { "publicAccess": "None" }
@@ -255,7 +270,7 @@
         "[resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('storageAccountName'), 'default', variables('auditContainer'))]",
         "[extensionResourceId(resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('storageAccountName'), 'default', variables('container')), 'Microsoft.Authorization/roleAssignments', guid(variables('containerScope'), parameters('automationAccountName'), variables('writerRoleName')))]",
         "[extensionResourceId(resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('storageAccountName'), 'default', variables('outcomeContainer')), 'Microsoft.Authorization/roleAssignments', guid(variables('outcomeContainerScope'), parameters('automationAccountName'), variables('writerRoleName')))]",
-        "[resourceId('Microsoft.Automation/automationAccounts/jobSchedules', parameters('automationAccountName'), guid(variables('scheduleName'), variables('runbookName')))]"
+        "[resourceId('Microsoft.Automation/automationAccounts/jobSchedules', parameters('automationAccountName'), variables('jobScheduleId'))]"
       ],
       "properties": {
         "roleDefinitionId": "[resourceId('Microsoft.Authorization/roleDefinitions', variables('auditRoleId'))]",
@@ -306,7 +321,7 @@
       "dependsOn": ["[resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName'))]"],
       "properties": {
         "description": "[concat('TenuVault cloud backup for tenant ', parameters('tenantId'))]",
-        "startTime": "[parameters('scheduleStartTime')]",
+        "startTime": "[variables('scheduleStart')]",
         "expiryTime": "9999-12-31T23:59:59.9999999+00:00",
         "interval": 1,
         "frequency": "[parameters('frequency')]",
@@ -315,10 +330,10 @@
       }
     },
     {
-      "condition": "[not(parameters('auditOnly'))]",
+      "condition": "[and(not(parameters('auditOnly')), parameters('linkSchedule'))]",
       "type": "Microsoft.Automation/automationAccounts/jobSchedules",
       "apiVersion": "2023-11-01",
-      "name": "[concat(parameters('automationAccountName'), '/', guid(variables('scheduleName'), variables('runbookName')))]",
+      "name": "[concat(parameters('automationAccountName'), '/', variables('jobScheduleId'))]",
       "dependsOn": [
         "[resourceId('Microsoft.Automation/automationAccounts/runbooks', parameters('automationAccountName'), variables('runbookName'))]",
         "[resourceId('Microsoft.Automation/automationAccounts/schedules', parameters('automationAccountName'), variables('scheduleName'))]"
@@ -344,7 +359,7 @@
       "metadata": { "description": "Read-only Microsoft Graph application roles for the managed identity. Until they are assigned every run fails with access denied, on purpose." }
     },
     "pasteIntoTenuVault": {
-      "condition": "[not(parameters('auditOnly'))]",
+      "condition": "[and(not(parameters('auditOnly')), parameters('linkSchedule'))]",
       "type": "string",
       "value": "[concat('tenantId=', parameters('tenantId'), '\nsubscriptionId=', subscription().subscriptionId, '\nresourceGroup=', resourceGroup().name, '\nautomationAccount=', parameters('automationAccountName'), '\nstorageAccount=', parameters('storageAccountName'), '\nscheduleName=', variables('scheduleName'), '\nfrequency=', if(equals(parameters('frequency'), 'Week'), 'weekly', 'daily'), '\ntime=', substring(parameters('scheduleStartTime'), 11, 5), '\nweekDay=', parameters('weekDay'), '\ntimeZone=', parameters('timeZone'), '\ntenantKey=', variables('tenantKey'), '\nlinked=true')]",
       "metadata": { "description": "Paste this block into TenuVault (Backup and Restore > Schedule > Where backups run > In Azure) so the app can show the cloud runner and its status." }
