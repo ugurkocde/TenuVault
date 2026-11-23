@@ -1,10 +1,17 @@
 import { decodeXml } from "~/lib/storage/list"
-import { blobPath, isSafeArchivePath } from "../../../../shared/security"
+import { blobPath, csvCell, isSafeArchivePath } from "../../../../shared/security"
 import { isBackupName } from "../../../../shared/intune/backup-names"
 import { BACKUP_OWNER_FILE, MAX_BACKUP_ARCHIVE_BYTES, MAX_BACKUP_ARCHIVE_FILES, MAX_BACKUP_ARCHIVE_TOTAL_BYTES } from "../../../../shared/constants"
-import { readBytesCapped } from "../../../../shared/capped-body"
+import { AUDIT_ARCHIVE_FILE, auditArchive, auditArchiveWindow } from "../../../../shared/intune/audit-archive"
+import { readBytesCapped, readJsonCapped } from "../../../../shared/capped-body"
 import { type NextRequest, NextResponse } from "next/server"
 import { readOwnedBackup } from "~/lib/policies/backup-owner"
+
+let saveAuditArchive: ((data: string, fileName: string) => Promise<{ saved: boolean; path?: string }>) | undefined
+
+export function setAuditArchiveSaver(saver: typeof saveAuditArchive): void {
+  saveAuditArchive = saver
+}
 
 interface ListedFile {
   path: string
@@ -45,7 +52,8 @@ export async function POST(request: NextRequest) {
       appId,
       clientSecret,
       storageAccountName,
-      backupId
+      backupId,
+      auditArchiveFormat,
     } = body
 
     if (!tenantId || !appId || !clientSecret || !storageAccountName || !backupId) {
@@ -62,6 +70,40 @@ export async function POST(request: NextRequest) {
 
     // Get access token for Azure Storage
     const accessToken = await getAccessToken(tenantId, appId, clientSecret)
+
+    const readFile = (name: string) => fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${blobPath(name)}`, {
+      headers: { 'x-ms-version': '2021-12-02', 'Authorization': `Bearer ${accessToken}` },
+    })
+
+    if (auditArchiveFormat !== undefined) {
+      if (auditArchiveFormat !== "json" && auditArchiveFormat !== "csv") {
+        return NextResponse.json({ error: "Choose JSON or CSV." }, { status: 400 })
+      }
+      if (!saveAuditArchive) return NextResponse.json({ error: "Saving exports is unavailable." }, { status: 500 })
+      const owned = await readOwnedBackup(readFile, backupId, tenantId, storageAccountName)
+      if (!owned.ok) return NextResponse.json({ error: owned.error }, { status: owned.status })
+      const window = owned.owned ? auditArchiveWindow(owned.metadata?.AuditArchive) : undefined
+      if (!window) return NextResponse.json({ error: "This backup has no archived Intune audit log." }, { status: 404 })
+      const response = await readFile(`${backupId}/${AUDIT_ARCHIVE_FILE}`)
+      if (!response.ok) return NextResponse.json({ error: "The archived Intune audit log could not be read." }, { status: response.status })
+      const body = await readJsonCapped(response, MAX_BACKUP_ARCHIVE_BYTES)
+      if (body.kind !== "json") {
+        return NextResponse.json({ error: "The archived Intune audit log could not be read." }, { status: body.kind === "oversized" ? 413 : 502 })
+      }
+      const archive = auditArchive(body.value as Record<string, unknown>, window)
+      const fileName = `${backupId}-intune-audit.${auditArchiveFormat}`
+      if (auditArchiveFormat === "json") return NextResponse.json({ fileName, ...await saveAuditArchive(JSON.stringify(archive), fileName) })
+      const rows = [["Window from (UTC)", "Window to (UTC)", "Event ID", "Timestamp", "Activity", "Operation", "Result", "Actor", "Resources (JSON)"]]
+      for (const event of archive.value) {
+        const actor = event.actor as Record<string, unknown> | null | undefined
+        rows.push([window.from, window.to, String(event.id), String(event.activityDateTime ?? ""),
+          String(event.activity || event.activityType || event.displayName || ""), String(event.activityOperationType ?? ""),
+          String(event.activityResult ?? ""), String(actor?.userPrincipalName || actor?.applicationDisplayName || actor?.servicePrincipalName || ""),
+          JSON.stringify(event.resources ?? [])])
+      }
+      const csv = `\ufeff${rows.map((row) => row.map(csvCell).join(",")).join("\r\n")}\r\n`
+      return NextResponse.json({ fileName, ...await saveAuditArchive(csv, fileName) })
+    }
 
     // Function to fetch all files with pagination support
     const fetchAllFiles = async (): Promise<ListedFile[]> => {
@@ -189,9 +231,7 @@ export async function POST(request: NextRequest) {
     // Ownership is settled by the shared resolver before any file is read: a shared container can
     // hold other tenants' backups, and those are refused, as are backups whose metadata or
     // ownership marker cannot be read.
-    const owned = await readOwnedBackup((name) => fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${blobPath(name)}`, {
-      headers: { 'x-ms-version': '2021-12-02', 'Authorization': `Bearer ${accessToken}` },
-    }), backupId, tenantId, storageAccountName)
+    const owned = await readOwnedBackup(readFile, backupId, tenantId, storageAccountName)
     if (!owned.ok) return NextResponse.json({ error: owned.error }, { status: owned.status })
     const batches: string[][] = []
     for (let i = 0; i < filePaths.length; i += batchSize) batches.push(filePaths.slice(i, i + batchSize))

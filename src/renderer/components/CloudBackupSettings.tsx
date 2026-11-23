@@ -16,6 +16,7 @@ import {
 } from "../../shared/cloud-backup"
 import { LOCAL_STORAGE_PREFIX } from "../../shared/constants"
 import { normalizeScope, presetOf } from "../../shared/intune/scope"
+import type { Plan } from "../../shared/plans"
 import { bridge } from "../lib/bridge"
 import type { CloudBackupState } from "../lib/cloud-backup"
 import { formatWhen } from "../lib/schedules"
@@ -78,10 +79,11 @@ function RunsCalendar({ runs }: { runs: Date[] }) {
  * the printed result back), then the recorded schedule, its next runs and the runbook's last
  * reported result. The app itself never creates or edits the Azure resources.
  */
-export function CloudBackupSettings({ tenant, community, cloud, scopeVersion = 0 }: { tenant: Tenant | null | undefined; community: boolean; cloud: CloudBackupState; scopeVersion?: number }) {
+export function CloudBackupSettings({ tenant, plan, cloud, scopeVersion = 0 }: { tenant: Tenant | null | undefined; plan: Plan | null; cloud: CloudBackupState; scopeVersion?: number }) {
   const tenantId = tenant?.credentials?.tenantId ?? ""
   const tenantName = tenant?.name ?? "this tenant"
   const storageAccount = tenant?.resources?.storageAccountName ?? ""
+  const community = plan === "community"
   const localStorage = !storageAccount || storageAccount.startsWith(LOCAL_STORAGE_PREFIX)
   const [pasted, setPasted] = useState("")
   const [pasteError, setPasteError] = useState<string | null>(null)
@@ -127,6 +129,7 @@ export function CloudBackupSettings({ tenant, community, cloud, scopeVersion = 0
       weekday,
       timeZone,
       scope: preset === "everything" ? "everything" : "policies",
+      plan,
       changeReport: changeReport === "keep" ? undefined : changeReport,
       withoutActors,
       tenantName: tenant?.name,
@@ -135,7 +138,7 @@ export function CloudBackupSettings({ tenant, community, cloud, scopeVersion = 0
       subscriptionId: tenant?.resources?.subscriptionId || undefined,
     })
     return preset === "custom" ? `${base} -ExcludedFolders "${excluded.join(",")}"` : base
-  }, [tenantId, storageAccount, frequency, time, weekday, timeZone, preset, excluded, changeReport, withoutActors, tenant])
+  }, [tenantId, storageAccount, frequency, time, weekday, timeZone, preset, excluded, plan, changeReport, withoutActors, tenant])
 
   const applyPaste = async () => {
     const config = parseCloudSetup(pasted)
@@ -355,7 +358,7 @@ export function CloudBackupSettings({ tenant, community, cloud, scopeVersion = 0
               roles (as a Global Administrator) and creates the failure alert; the template deploys everything ARM
               can and lists the roles in its outputs. The Deploy to Azure link cannot carry the choices above with
               it: enter frequency, day, time, timezone, scope, the change report (changeReport) and, for a custom choice, the excluded folders
-              (excludedFolders) in the template as well (its defaults are daily, everything except apps, no change report).
+              (excludedFolders) in the template as well.
               <div className="mt-3 flex flex-wrap gap-2">
                 <Button size="sm" disabled={community || localStorage} onClick={() => void bridge.app.openExternal(deployToAzureUrl())}>
                   <Cloud className="mr-2 h-4 w-4" /> Deploy to Azure

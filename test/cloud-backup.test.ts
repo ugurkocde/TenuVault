@@ -141,8 +141,22 @@ describe("cloudSetupCommand", () => {
     expect(command.toLowerCase()).not.toContain("secret")
   })
 
+  const base = { tenantId: TENANT, storageAccount: "tvbkp1", frequency: "daily", time: "02:00", weekday: 0, timeZone: "UTC", scope: "policies" } as const
+
+  it.each([
+    ["pro", "-ArchiveIntuneAudit"],
+    ["msp", "-ArchiveIntuneAudit"],
+    ["community", "-ArchiveIntuneAudit:$false"],
+    [null, "-ArchiveIntuneAudit:$false"],
+  ] as const)("passes the explicit audit archive choice for plan %s", (plan, flag) => {
+    expect(cloudSetupCommand({ ...base, plan })).toContain(`${flag} -GrantGraphRoles`)
+  })
+
+  it("keeps the old command for scripts without the archive switch", () => {
+    expect(cloudSetupCommand(base)).not.toContain("-ArchiveIntuneAudit")
+  })
+
   it("passes the change report choice only when one was made, so a rerun keeps the earlier one", () => {
-    const base = { tenantId: TENANT, storageAccount: "tvbkp1", frequency: "daily", time: "02:00", weekday: 0, timeZone: "UTC", scope: "policies" } as const
     // No choice made in this hand-off: no parameter, and the setup keeps level and actors.
     expect(cloudSetupCommand(base)).not.toContain("-ChangeReport")
     expect(cloudSetupCommand({ ...base, tenantName: "Contoso" })).not.toContain("-TenantName")

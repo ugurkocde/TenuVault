@@ -22,6 +22,10 @@ For the product overview of how to [back up Intune policies](https://www.tenuvau
 
 Installer content stays separate from this metadata. The free [App Backup Windows preview](/apps/app-backup/#back-up-a-windows-installer) retrieves supported Win32 installers on a PC enrolled in the source tenant. Its captured backups can be restored as new, unassigned apps in the same tenant on every plan, or in another connected tenant with Pro or MSP for that tenant. Earlier local archives remain exportable but do not qualify for that restore flow. macOS installer capture is not available yet.
 
+## Intune audit events
+
+Each Pro or MSP desktop or cloud configuration backup includes an [Intune audit archive](/audit-log/#archived-intune-audit-events) when Microsoft Graph returns the events. The configured backup scope applies to policies and inventory. The audit archive covers tenant-wide events within its recorded window and can be exported from **Backup Details**. The Backup Reader and cloud managed identity already use the application permission required to read these events, `DeviceManagementApps.Read.All`.
+
 ## How to read the tables
 
 * **Assignments**: whether the backup holds the object's assignments (the groups and filters it targets). Restoring assignments is a separate choice. See [Restore modes and assignments](/restore/modes/).

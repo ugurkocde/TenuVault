@@ -197,7 +197,7 @@ function TenantSchedule({ tenantId, tenantName, tenant: tenantProp, onStorageCha
         )}
 
         {runnerKind === "azure" ? (
-          <CloudBackupSettings tenant={tenant} community={community} cloud={cloud} scopeVersion={scopeVersion} />
+          <CloudBackupSettings tenant={tenant} plan={plan} cloud={cloud} scopeVersion={scopeVersion} />
         ) : (
         <>
 

@@ -42,6 +42,14 @@ describe("cloud backup result notes", () => {
     expect(events[21]).toBeNull()
   })
 
+  it("names the audit log when archiving was the only warning", () => {
+    const note = outcomeFixture.notes.find((note) => note.runId === "audit-archive-warning")!
+    const outcome = parseCloudOutcome(note, TENANT)!
+    expect(cloudOutcomeEvent(outcome, TENANT, "Contoso").summary).toContain("the Intune audit log could not be archived")
+    expect(events[1]!.summary).toContain("some could not be read")
+    expect(parseCloudOutcome({ ...note, auditArchiveOnlyWarning: "true" }, TENANT)!.auditArchiveOnlyWarning).toBe(false)
+  })
+
   it("name a run started by hand in the alert, and count older notes without a trigger as scheduled", () => {
     const trigger = (index: number) => events[index]!.details.find((entry) => entry.label === "Trigger")?.value
     // Notes from backup runbooks before 1.4.0 carry no trigger: their alert reads as it always did.

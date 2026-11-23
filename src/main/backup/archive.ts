@@ -3,9 +3,10 @@ import type { Readable } from 'node:stream'
 import { createHash } from 'node:crypto'
 import { typeForFolder } from '../../shared/intune/registry'
 import { comparableSnapshot } from '../../shared/intune/compare'
+import { AUDIT_ARCHIVE_FILE, auditArchive, auditArchiveWindow } from '../../shared/intune/audit-archive'
 const snapshotHash = (value: Record<string, any>) => createHash('sha256').update(JSON.stringify(comparableSnapshot(value))).digest('base64').slice(0, 22)
 import { LocalBlobStore } from '../storage/local-blob-store'
-import { MAX_BACKUP_ARCHIVE_FILES, MAX_BACKUP_ARCHIVE_TOTAL_BYTES } from '../../shared/constants'
+import { MAX_BACKUP_ARCHIVE_BYTES, MAX_BACKUP_ARCHIVE_FILES, MAX_BACKUP_ARCHIVE_TOTAL_BYTES } from '../../shared/constants'
 
 const MAX = MAX_BACKUP_ARCHIVE_TOTAL_BYTES
 const guid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i
@@ -39,12 +40,13 @@ function inspectDirectory(raw: Buffer): void {
   if (offset !== end) throw new Error('Unsupported ZIP directory')
 }
 async function bounded(entry: JSZip.JSZipObject, remaining: number): Promise<Buffer> {
+  const fileLimit = entry.name === AUDIT_ARCHIVE_FILE ? MAX_BACKUP_ARCHIVE_BYTES : 8 * 1024 * 1024
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = []; let size = 0
     const stream = entry.nodeStream('nodebuffer') as Readable
     stream.on('data', (chunk: Buffer) => {
       size += chunk.length
-      if (size > Math.min(8 * 1024 * 1024, remaining)) { stream.destroy(new Error('Archive expands beyond the import limit')); return }
+      if (size > Math.min(fileLimit, remaining)) { stream.destroy(new Error('Archive expands beyond the import limit')); return }
       chunks.push(chunk)
     }).on('error', reject).on('end', () => resolve(Buffer.concat(chunks))).resume()
   })
@@ -71,7 +73,15 @@ export async function reviewArchive(raw: Buffer): Promise<ReviewedArchive> {
     if (expected.has(path) || !object(snapshot) || snapshot.id !== id || snapshotHash(snapshot) !== item.hash) throw new Error('Backup contents do not match the export inventory')
     expected.add(path); counts[folder] = (counts[folder] ?? 0) + 1
   }
-  if (files.size !== expected.size + 2 || metadata.ItemCounts.TotalPolicies !== policyTotal(counts) || Object.entries(metadata.ItemCounts).some(([folder, count]) => folder !== 'TotalPolicies' && count !== (counts[folder] ?? 0))) throw new Error('Backup archive is incomplete or contains extra files')
+  const window = auditArchiveWindow(metadata.AuditArchive)
+  if (metadata.AuditArchive !== undefined) {
+    if (!window) throw new Error("Invalid Intune audit archive window")
+    auditArchive(parse(AUDIT_ARCHIVE_FILE) as Record<string, unknown>, window)
+  } else if (metadata.AuditArchiveWarning === true) {
+    // A write with no acknowledgement can leave a file whose window never committed.
+    files.delete(AUDIT_ARCHIVE_FILE)
+  }
+  if (files.size !== expected.size + 2 + Number(Boolean(window)) || metadata.ItemCounts.TotalPolicies !== policyTotal(counts) || Object.entries(metadata.ItemCounts).some(([folder, count]) => folder !== 'TotalPolicies' && count !== (counts[folder] ?? 0))) throw new Error('Backup archive is incomplete or contains extra files')
   files.delete('tenuvault-manifest.json')
   return { tenantId: manifest.sourceTenantId.toLowerCase(), backupId: manifest.backupId, digest: createHash('sha256').update(raw).digest('hex'), files, count: expected.size }
 }

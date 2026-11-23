@@ -24,7 +24,7 @@ $text = $ast.Extent.Text
 $start = $text.IndexOf("# Runbook import and publish")
 $end = $text.IndexOf("# Failure alert")
 if ($start -lt 0 -or $end -le $start) { throw "The upgrade step markers were not found." }
-$upgradeStep = [scriptblock]::Create($text.Substring($start, $end - $start))
+$upgradeStep = [scriptblock]::Create('param([switch]$ArchiveIntuneAudit)' + "`n" + $text.Substring($start, $end - $start))
 $scheduleStart = $text.IndexOf('# Schedule and link.')
 $scheduleEnd = $text.IndexOf('# Summary and next steps.')
 $scheduleParameters = @'
@@ -268,6 +268,7 @@ function Write-Scenario {
         changeReport = $script:variables["TenuVaultChangeReport-$tenantKey"]
         changeReportActors = $script:variables["TenuVaultChangeReportActors-$tenantKey"]
         tenantName = $script:variables["TenuVaultTenantName-$tenantKey"]
+        archiveIntuneAudit = $script:variables["TenuVaultArchiveIntuneAudit-$tenantKey"]
         variables = @($script:variables.Keys | Sort-Object)
         variableWrites = $script:variableWrites.ToArray()
         scope = $script:variables["TenuVaultScope-$tenantKey"]
@@ -354,6 +355,15 @@ foreach ($scenario in "rerun-keeps-report", "rerun-sets-report") {
     $tenantNamePassed = $false
     $ChangeReport = "Off"
     Write-Scenario -Name $scenario -Runbook $runbook -ErrorText $errorText -Output $output
+}
+
+if ($ast.ParamBlock.Parameters.Name.VariablePath.UserPath -contains "ArchiveIntuneAudit") {
+    Reset-OldSetup
+    $script:variables["TenuVaultArchiveIntuneAudit-$tenantKey"] = "true"
+    $errorText = $null
+    $output = @()
+    try { $output = @(. $upgradeStep -ArchiveIntuneAudit:$false 3>&1 6>&1) } catch { $errorText = $_.Exception.Message }
+    Write-Scenario -Name "rerun-disables-audit-archive" -Runbook $runbook -ErrorText $errorText -Output $output
 }
 
 function Invoke-LinkedUpgrade {

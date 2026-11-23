@@ -132,3 +132,11 @@ On Community, the **Audit Log** entry in the sidebar and **View All Activity** o
 
 * [Intune audit logs or a backup](https://www.tenuvault.com/compare/intune-audit-logs-vs-intune-backup): what Microsoft's audit logs record and what they cannot restore, on the product site
 * [Drift detection](/drift/)
+
+## Archived Intune audit events
+
+Pro and MSP configuration backups also save the tenant's Microsoft Intune audit events. Open **Backup & Restore**, select a backup in the timeline, and look under **Backup Details > Contents > Intune audit log**. The entry shows the time window queried and the number of events saved in that backup. Use **Export audit log (JSON)** for the complete archived records or **Export CSV** for a spreadsheet with the time, activity, result, actor and affected resources.
+
+The first backup with an archive asks Intune for up to 365 days of available history. Later backups start 10 minutes before the last saved archive ended to pick up late arrivals. Events already stored in overlapping backups are skipped, so keep the backups covering the dates you want to retain. If the audit read fails, the backup reports **Intune audit log not archived** and the next run picks up from the last saved window. Microsoft can only return the events it still retains.
+
+Each backup stores the archive as `AuditEvents/auditEvents.json`. On-device backups encrypt it with the other files. Azure backups store it as JSON in the backup container. It can include actor identities and the values Microsoft recorded as changed, so access follows the backup's storage permissions. Backup retention applies to these archive files. The cleanup option on the **Audit Log** page manages TenuVault's operation history in the separate `audit-logs` container.

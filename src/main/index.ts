@@ -52,6 +52,7 @@ import { createBridgedFetch } from "./api/fetch-bridge"
 import { rejectProxyAuthResponses, withNetworkErrors } from "./api/network-error"
 import { ApiHost } from "./api/host"
 import { routes } from "./api/routes"
+import { setAuditArchiveSaver } from "../portal/app/api/download-backup/route"
 import { AuthManager, SignInRequiredError } from "./auth/msal"
 import { BackupEngine, verifyStorageAccess, type BackupJob } from "./backup/engine"
 import { BackupScheduler, reportsResult, runUnattended, scheduledResult } from "./backup/scheduler"
@@ -468,6 +469,10 @@ async function bootstrap(): Promise<void> {
       }
     },
     retentionDays: backupAccess.retentionDays,
+    archiveIntuneAudit: (tenantId) => {
+      const plan = license.plan(tenantId)
+      return plan !== null && allows(plan, "auditLog")
+    },
     onStarted: (job, request, tokens) => {
       checkpointBackupAudit(auditSink, job, request, tokens, backupAuditActor(job.tenantId), app.getVersion())
     },
@@ -599,6 +604,7 @@ async function bootstrap(): Promise<void> {
   setCisBenchmarksPlanProvider((tenantId) => license.plan(tenantId))
   setCisEntitlementProvider((tenantId) => license.entitlementToken(tenantId))
   // Framework exports the main process built are saved here directly, so they never round-trip through the renderer.
+  setAuditArchiveSaver((data, fileName) => saveFileWithDialog(prepareGeneratedFile(data, fileName, "utf8")))
   setFrameworkExportSaver((file) => saveFileWithDialog(prepareGeneratedFile(file.data, file.name, file.encoding)))
   setCisContentFallbackBaseUrl(LICENSE_API_BASE)
   // A packaged build sends the CIS entitlement token only to the built-in origin above.

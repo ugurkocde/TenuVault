@@ -95,6 +95,12 @@ If the first run time is in the past or less than 15 minutes away, the template 
 
 If Azure Policy denies the `audit-logs` container, its custom role, or its role assignment, set `enableAudit` to `false` and `auditOnly` to `false` in an incremental deployment. Also set `linkSchedule` to `false` if the earlier attempt already linked the schedule. The template skips those audit resources and their outputs. It still deploys the backup runbook, its storage grants, and the schedule. Until the managed identity has access to `audit-logs`, the runbook reports audit delivery problems in the Automation job output and continues saving backups. To add audit access later, use the audit-only upgrade below with `enableAudit` set to `true`.
 
+### Archive the Intune audit log
+
+With Pro or MSP, run the app's copied setup command to enable Intune audit archiving with `-ArchiveIntuneAudit`. Archiving is off by default. To turn it off again, rerun setup with `-ArchiveIntuneAudit:$false`. The app includes that setting in the copied command for Community and when the plan is unknown.
+
+The first archive looks back up to 365 days. Later backups resume from the most recent readable checkpoint, reread the preceding 30 minutes for late arrivals, and skip events already saved in that overlap. When a backup reaches the archive's time or size limit after making progress, Backup Details shows the date archived through and the next backup continues from there. The archive lives in `AuditEvents/auditEvents.json` and follows backup retention. Checkpoints are per storage location. Switching to a store with no archive starts a new 365-day window.
+
 ### Test it now
 
 Do not wait for the first night. In the portal, open the Automation account, **Runbooks > Invoke-TenuVaultBackup > Start**, set `TENANTKEY` to the value from the setup output and `TRIGGER` to `Manual`, and watch the job. A successful run prints one "Found" and one "Backed up" line per type and ends with "Backup completed". The backup then appears in **Backup History** in TenuVault, marked **Manual**, with `Source: TenuVault Cloud Backup` in its details. Without `TRIGGER` it is marked **Scheduled**, like the runs the schedule starts.

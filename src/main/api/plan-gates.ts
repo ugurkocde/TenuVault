@@ -47,6 +47,8 @@ export function requiredFeatures(pathname: string, body: Record<string, unknown>
       return ["fullRestore"]
     case "/api/revert-policy":
       return body.action === "revert" ? ["driftRevert"] : []
+    case "/api/download-backup":
+      return body.auditArchiveFormat === undefined ? [] : ["auditLog"]
     // The audit log is Pro and MSP; /api/audit/log stays open so the main process can write entries.
     case "/api/audit/logs":
     case "/api/audit/stats":

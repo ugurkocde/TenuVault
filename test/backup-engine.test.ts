@@ -50,7 +50,7 @@ function fakeGraph(overrides: Record<string, Response | (() => Response)> = {}) 
   }
 }
 
-function setup(graph = fakeGraph(), concurrency?: number, unattendedTokens?: ConstructorParameters<typeof BackupEngine>[0]["unattendedTokens"]) {
+function setup(graph = fakeGraph(), concurrency?: number, unattendedTokens?: ConstructorParameters<typeof BackupEngine>[0]["unattendedTokens"], options?: Pick<ConstructorParameters<typeof BackupEngine>[0], "archiveIntuneAudit" | "now">) {
   const store = new LocalBlobStore(mkdtempSync(join(tmpdir(), "tv-engine-")), [randomBytes(32)])
   const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init)
@@ -60,7 +60,7 @@ function setup(graph = fakeGraph(), concurrency?: number, unattendedTokens?: Con
     throw new Error(`unexpected ${url}`)
   }) as unknown as typeof fetch
   const getToken = vi.fn(async () => "token")
-  const engine = new BackupEngine({ fetch: fetchImpl, getToken, unattendedTokens, ...(concurrency === undefined ? {} : { concurrency }) })
+  const engine = new BackupEngine({ fetch: fetchImpl, getToken, unattendedTokens, ...options, ...(concurrency === undefined ? {} : { concurrency }) })
   return { engine, store, getToken, account: localStorageAccountName(TENANT) }
 }
 
@@ -70,6 +70,47 @@ async function finished(engine: BackupEngine, id: string) {
 }
 
 describe("BackupEngine", () => {
+  it("records the Intune audit window and keeps a denied archive read as a warning", async () => {
+    let now = new Date("2026-11-23T12:00:00Z")
+    let denied = false
+    let enabled = false
+    const auditCalls = vi.fn()
+    const event = { id: "audit-1", activityDateTime: "2026-11-23T11:58:00Z", actor: { userPrincipalName: "megan@contoso.example" } }
+    const otherGraph = fakeGraph()
+    const { engine, store, account } = setup((url) => {
+      if (!url.pathname.endsWith("/auditEvents")) return otherGraph(url)
+      auditCalls()
+      return denied ? Response.json({ error: { message: "private Graph message" } }, { status: 403 }) : Response.json({ value: [event] })
+    }, undefined, undefined, { archiveIntuneAudit: () => enabled, now: () => now })
+    const request = { tenantId: TENANT, clientId: CLIENT, storageAccountName: account }
+    const body = async (folder: string, name: string) => JSON.parse((await store.get(account, "intune-backups", `${folder}/${name}`)).data.toString())
+    const off = await finished(engine, engine.start(request).id)
+    expect(auditCalls).not.toHaveBeenCalled()
+    expect(await body(off.backupFolder!, "metadata.json")).not.toHaveProperty("AuditArchiveWarning")
+    now = new Date("2026-11-23T12:00:01Z")
+    enabled = true
+    const saved = await finished(engine, engine.start(request).id)
+    const window = { from: "2025-11-23T12:00:01.000Z", to: now.toISOString(), count: 1 }
+    expect(await body(saved.backupFolder!, "metadata.json")).toMatchObject({ Status: "Success", AuditArchive: window })
+    expect(await body(saved.backupFolder!, "AuditEvents/auditEvents.json")).toEqual({ window, value: [event] })
+    now = new Date("2026-11-23T12:01:00Z")
+    denied = true
+    const warned = await finished(engine, engine.start(request).id)
+    expect(warned).toMatchObject({ status: "Completed", failures: 0, results: { warnings: 1 } })
+    const metadata = await body(warned.backupFolder!, "metadata.json")
+    expect(metadata).toMatchObject({ Status: "Success", AuditArchiveWarning: true, Warnings: [expect.stringContaining("audit log not archived")] })
+    expect(metadata).not.toHaveProperty("AuditArchive")
+    expect(metadata.Warnings[0]).toContain("DeviceManagementApps.Read.All")
+    expect(metadata.Warnings[0]).not.toContain("private Graph message")
+    denied = false
+    now = new Date("2026-11-23T12:02:00Z")
+    const recovered = await finished(engine, engine.start(request).id)
+    expect(await body(recovered.backupFolder!, "metadata.json")).toMatchObject({
+      Status: "Success",
+      AuditArchive: { from: "2026-11-23T11:30:01.000Z", to: now.toISOString(), count: 0 },
+    })
+  })
+
   it("keeps every policy when names and id prefixes repeat", async () => {
     // Intune's default enrollment configurations share a display name and the tenant GUID id prefix.
     const prefix = "7192bb9f-ffa6-4f50-9176-7603cd9450d6"

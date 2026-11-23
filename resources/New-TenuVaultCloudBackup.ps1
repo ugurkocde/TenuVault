@@ -99,6 +99,10 @@
     name, at most 200 characters. A rerun without it keeps the name an earlier setup saved;
     pass -TenantName '' to name the tenant by its id again. Without any, reports use the id.
 
+.PARAMETER ArchiveIntuneAudit
+    Enables Intune audit archiving. Omit to keep the previous choice (off if unset).
+    Pass -ArchiveIntuneAudit:$false to turn it off.
+
 .PARAMETER ChangeReport
     Off (default), Names or Full. With Names or Full, every complete backup is compared with the
     previous complete plain backup of the tenant, and a change report (what changed, setting by
@@ -146,6 +150,7 @@ param(
     [string]$TenantName,
     [ValidateSet("Off", "Names", "Full")][string]$ChangeReport = "Off",
     [switch]$ChangeReportWithoutActors,
+    [switch]$ArchiveIntuneAudit,
     [string]$AlertEmail,
     [switch]$NoFailureAlert,
     [switch]$IncludeDeviceCategories,
@@ -182,7 +187,7 @@ $appOnlyExcluded = if ($IncludeDeviceCategories) { "" } else { "DeviceCategories
 $variableNames = @(
     "TenuVaultTenantId-$tenantKey", "TenuVaultStorageAccount-$tenantKey",
     "TenuVaultScope-$tenantKey", "TenuVaultExcludedFolders-$tenantKey", "TenuVaultAppOnlyExcluded-$tenantKey",
-    "TenuVaultChangeReport-$tenantKey", "TenuVaultChangeReportActors-$tenantKey", "TenuVaultTenantName-$tenantKey"
+    "TenuVaultChangeReport-$tenantKey", "TenuVaultChangeReportActors-$tenantKey", "TenuVaultTenantName-$tenantKey", "TenuVaultArchiveIntuneAudit-$tenantKey"
 )
 # Setups before runbook 1.2.0 also wrote the Key Vault that held the recovery key. The runbook
 # no longer reads it; a rerun or -Remove deletes that variable.
@@ -869,6 +874,10 @@ Set-TenuVaultAutomationVariable -Name "TenuVaultStorageAccount-$tenantKey" -Valu
 Set-TenuVaultAutomationVariable -Name "TenuVaultScope-$tenantKey" -Value $Scope
 Set-TenuVaultAutomationVariable -Name "TenuVaultExcludedFolders-$tenantKey" -Value $ExcludedFolders
 Set-TenuVaultAutomationVariable -Name "TenuVaultAppOnlyExcluded-$tenantKey" -Value $appOnlyExcluded
+if ($PSBoundParameters.ContainsKey("ArchiveIntuneAudit")) {
+    $archiveEnabled = if ($ArchiveIntuneAudit) { "true" } else { "false" }
+    Set-TenuVaultAutomationVariable -Name "TenuVaultArchiveIntuneAudit-$tenantKey" -Value $archiveEnabled
+}
 if ($changeReportPassed) { Set-TenuVaultAutomationVariable -Name "TenuVaultChangeReport-$tenantKey" -Value $ChangeReport.ToLowerInvariant() }
 if ($tenantNamePassed) {
     # Cleared to the tenant id, never to an empty value, which the runbook would skip for an

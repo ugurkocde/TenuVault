@@ -1,3 +1,5 @@
+import type { AuditArchiveWindow } from "../../../shared/intune/audit-archive"
+
 /** A backup as /api/list-backups describes it. */
 export interface BackupSummary {
   id: string
@@ -14,6 +16,9 @@ export interface BackupSummary {
   failures?: number
   skippedTypes?: string[]
   failedTypes?: string[]
+  auditArchive?: AuditArchiveWindow
+  auditArchivePartial?: boolean
+  auditArchiveWarning?: boolean
   size: number
   /** Seconds, or a preformatted string from older backups; null when unknown. */
   duration: number | string | null
