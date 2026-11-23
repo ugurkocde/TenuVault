@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { POST } from "../src/portal/app/api/restore-backup/route"
 import { NextRequest } from "../src/main/api/next-server-shim"
 import { resolveRestoreAssignments } from "../src/shared/intune/restore-assignments"
-import { buildRestorePlan } from "../src/shared/intune/restore-plan"
+import { buildRestorePlan, buildUpdatePlan } from "../src/shared/intune/restore-plan"
 import { typeForFolder, type Item } from "../src/shared/intune/registry"
 import { readGroupStates, type GroupState } from "../src/shared/intune/group-reads"
 import { Restorer, type GraphCall } from "../src/portal/lib/policies/graph-restore"
@@ -12,6 +12,8 @@ const oldGroup = "11111111-2222-4333-8444-555555555555"
 const newGroup = "11111111-2222-4333-8444-555555555556"
 const oldFilter = "22222222-2222-4333-8444-555555555555"
 const newFilter = "22222222-2222-4333-8444-555555555556"
+const legacyScopeTagAssignment = { displayName: "Pilot", members: [oldGroup], scopeMembers: [newGroup] }
+const legacyScopeTagWarning = "This scope tag's assignment is stored in an older format and is not restored. Assign it in Intune."
 const type = typeForFolder("ConfigurationPolicies")!
 const snapshot: Item = {
   id: "policy-id",
@@ -98,24 +100,82 @@ describe("Restore assignment planning", () => {
     expect(buildRestorePlan(type, result.snapshot, { includeAssignments: true }).assignments[0]?.body).toEqual({ assignments })
   })
 
-  it("restores both group-target and role-style scope tag assignments", () => {
+  it.each([true, false])("writes only the mapped scope tag group target (same tenant: %s)", async (sameTenant) => {
     const scopeTag = typeForFolder("ScopeTags")!
     const original: Item = { id: "3", displayName: "IT", assignments: [
       { target: { "@odata.type": "#microsoft.graph.scopeTagGroupAssignmentTarget", entraObjectId: oldGroup, targetType: "device" } },
-      { displayName: "Pilot", members: [oldGroup], scopeMembers: [oldGroup] },
+      legacyScopeTagAssignment,
     ] }
-    const result = resolveRestoreAssignments(scopeTag, original, { ...options, mappings })
+    const result = resolveRestoreAssignments(scopeTag, original, { ...options, sameTenant, mappings })
     expect(result.review.errors).toEqual([])
-    expect(buildRestorePlan(scopeTag, result.snapshot, { includeAssignments: true }).assignments).toMatchObject([
-      { path: "deviceManagement/roleScopeTags/{id}/assign", body: { assignments: [
-        { target: { entraObjectId: newGroup, targetType: "device" } },
-        { target: { "@odata.type": "#microsoft.graph.groupAssignmentTarget", groupId: newGroup } },
-      ] } },
+    expect(result.review.warnings).toEqual([legacyScopeTagWarning])
+    expect(result.review.references).toMatchObject([{ sourceId: oldGroup, targetId: newGroup }])
+    expect(result.review.allAssignmentsSkipped).toBe(false)
+    const graph = vi.fn<GraphCall>(async (_method, path): ReturnType<GraphCall> => path.endsWith("/assign")
+      ? { status: 200, body: { value: [] } }
+      : { status: 201, body: { id: "8" } })
+    const restorer = new Restorer(graph, { mode: "copy", assignments: true, crossTenant: !sameTenant })
+    const restored = await restorer.restore("backup/ScopeTags/tag.json", original, {
+      snapshot: result.snapshot, skipped: 0, allAssignmentsSkipped: result.review.allAssignmentsSkipped, warnings: result.review.warnings,
+    })
+    expect(restored).toMatchObject({ success: true, action: "created", warnings: [legacyScopeTagWarning] })
+    expect(graph.mock.calls.map(([method, path, body]) => [method, path, body])).toEqual([
+      ["POST", "deviceManagement/roleScopeTags", { displayName: "[Restored] IT" }],
+      ["POST", "deviceManagement/roleScopeTags/8/assign", { assignments: [
+        { target: { "@odata.type": "#microsoft.graph.scopeTagGroupAssignmentTarget", entraObjectId: newGroup, targetType: "device" } },
+      ] }],
     ])
+  })
+
+  it("omits legacy scope tag rows from plans built without assignment review", () => {
+    const scopeTag = typeForFolder("ScopeTags")!
+    const original: Item = { id: "3", displayName: "IT", assignments: [legacyScopeTagAssignment] }
+    expect(buildRestorePlan(scopeTag, original, { includeAssignments: true }).assignments).toEqual([])
+    expect(buildUpdatePlan(scopeTag, original, "3", { includeAssignments: true }).map((step) => step.kind)).toEqual(["content"])
   })
 })
 
 afterEach(() => vi.unstubAllGlobals())
+
+it("shows the legacy scope tag warning in review and in the successful restore result", async () => {
+  const backupId = "backup-fixture"
+  const tenantId = "33333333-2222-4333-8444-555555555555"
+  const path = `${backupId}/ScopeTags/tag.json`
+  const calls: Array<{ path: string; method: string }> = []
+  vi.stubGlobal("fetch", async (input: URL | string, init?: RequestInit) => {
+    const url = new URL(input)
+    if (url.hostname === "login.microsoftonline.com") return Response.json({ access_token: "test" })
+    if (url.hostname.endsWith(".blob.core.windows.net")) {
+      if (url.pathname.endsWith("metadata.json")) return Response.json({ TenantId: tenantId, Status: "Success" })
+      return Response.json({ id: "3", displayName: "IT", assignments: [legacyScopeTagAssignment] })
+    }
+    calls.push({ path: url.pathname, method: init?.method ?? "GET" })
+    if (url.pathname === "/beta/deviceManagement/roleScopeTags" && init?.method === "POST") {
+      return Response.json({ id: "8" }, { status: 201 })
+    }
+    return new Response(null, { status: 404 })
+  })
+  const run = (action?: string) => POST(new NextRequest("http://tenuvault.internal/api/restore-backup", {
+    method: "POST",
+    body: JSON.stringify({
+      action, backupId, tenantId, appId: "test", clientSecret: "test", storageAccountName: "test",
+      assignments: true, restoreType: "selective", mode: "copy", selectedPolicies: [{ path }],
+    }),
+  }))
+  const review = await run("assignment-review")
+  expect(review.status).toBe(200)
+  expect(await review.json()).toMatchObject({ targets: [{ items: [{
+    path, references: [], errors: [], warnings: [legacyScopeTagWarning], allAssignmentsSkipped: true,
+  }] }] })
+  expect(calls).toEqual([])
+
+  const restored = await run()
+  expect(restored.status).toBe(200)
+  expect(await restored.json()).toMatchObject({ details: { results: [{
+    path, success: true, action: "created", warnings: [legacyScopeTagWarning],
+  }] } })
+  expect(calls).toEqual([{ method: "POST", path: "/beta/deviceManagement/roleScopeTags" }])
+})
 
 it("blocks the entire restore when the second policy has a missing reference, with no Graph writes", async () => {
   const backupId = "backup-fixture"

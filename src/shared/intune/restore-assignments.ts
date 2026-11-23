@@ -47,9 +47,17 @@ export function isScopeTagGroupTarget(target: Item): boolean {
   return /(?:^|\.)scopeTagGroupAssignmentTarget$/i.test(String(target["@odata.type"] ?? ""))
 }
 
-export function scopeTagRoleRow(type: IntuneType, entry: Item): boolean {
-  return type.folder === "ScopeTags" && entry.target === undefined &&
+export const LEGACY_SCOPE_TAG_ASSIGNMENT_WARNING = "This scope tag's assignment is stored in an older format and is not restored. Assign it in Intune."
+
+export function isLegacyScopeTagAssignment(type: IntuneType, entry: Json): boolean {
+  return type.folder === "ScopeTags" && entry !== null && typeof entry === "object" && !Array.isArray(entry) && entry.target === undefined &&
     (Array.isArray(entry.members) || Array.isArray(entry.scopeMembers))
+}
+
+export function hasLegacyScopeTagAssignments(type: IntuneType, snapshot: Item): boolean {
+  return type.folder === "ScopeTags" && Array.isArray(snapshot.assignments) && snapshot.assignments.some(
+    (entry) => isLegacyScopeTagAssignment(type, entry),
+  )
 }
 
 function directRows(type: IntuneType, snapshot: Item) {
@@ -59,11 +67,11 @@ function directRows(type: IntuneType, snapshot: Item) {
   if (!Array.isArray(value)) return []
   return value.flatMap<{ index: number; entry: Item | null; role: boolean }>((entry, index) => {
     if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return [{ index, entry: null, role }]
-    const roleRow = role || scopeTagRoleRow(type, entry)
-    if (!roleRow && typeof entry.source === "string" && entry.source !== "direct" && type.folder !== "PolicySets") return []
+    if (isLegacyScopeTagAssignment(type, entry)) return []
+    if (!role && typeof entry.source === "string" && entry.source !== "direct" && type.folder !== "PolicySets") return []
     const target = entry.target as Item | undefined
     if (type.exclusionsUnsupported && String(target?.["@odata.type"] ?? "").toLowerCase().includes("exclusion")) return []
-    if (!target || typeof target !== "object" || Array.isArray(target)) return [{ index, entry, role: roleRow }]
+    if (!target || typeof target !== "object" || Array.isArray(target)) return [{ index, entry, role }]
     const { groupName: _name, deviceAndAppManagementAssignmentFilterId, ...rest } = target
     const activeFilter = target.deviceAndAppManagementAssignmentFilterType !== "none" && deviceAndAppManagementAssignmentFilterId !== undefined
     return [{ index, entry: { ...entry, target: { ...rest, ...(activeFilter ? { deviceAndAppManagementAssignmentFilterId } : {}) } }, role }]
@@ -165,10 +173,13 @@ export function resolveRestoreAssignments(type: IntuneType, snapshot: Item, inpu
     })
     replacements.set(index, skipped ? null : mapped)
   }
-  if (Array.isArray(rows) && replacements.size) {
+  const legacySkipped = hasLegacyScopeTagAssignments(type, snapshot)
+  if (Array.isArray(rows) && (replacements.size || legacySkipped)) {
     next[property] = rows.flatMap((entry, index) => replacements.has(index) ? replacements.get(index) ?? [] : [entry])
+      .filter((entry) => !isLegacyScopeTagAssignment(type, entry))
   }
-  const allAssignmentsSkipped = replacements.size > 0 && assignments.filter((entry) => entry.skipped).length === replacements.size
+  const allAssignmentsSkipped = (legacySkipped || replacements.size > 0) && assignments.filter((entry) => entry.skipped).length === replacements.size
   const warnings = [...unverified].map((reference) => `Could not verify ${reference.kind === "scopeTag" ? "scope tag" : reference.kind} ${reference.targetName ?? reference.targetId} in the destination. Restore will use this ID.`)
+  if (legacySkipped) warnings.push(LEGACY_SCOPE_TAG_ASSIGNMENT_WARNING)
   return { snapshot: next, review: { references: resolutions, assignments, errors: [...new Set(errors)], warnings, allAssignmentsSkipped } }
 }

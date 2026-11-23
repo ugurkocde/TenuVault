@@ -9,6 +9,7 @@ import { typeForFolder, type IntuneType, type Item, type Json, type Step } from 
 
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 import { buildRestorePlan, buildUpdatePlan, NotRestorableError, resolveStep, restoreBlocker, restoreCapabilities, restoreItemBlocker } from "../../../shared/intune/restore-plan"
+import { hasLegacyScopeTagAssignments, LEGACY_SCOPE_TAG_ASSIGNMENT_WARNING } from "../../../shared/intune/restore-assignments"
 import { assignmentsUnread, locateObject, readObject, type GraphReader } from "../../../shared/intune/read"
 import { comparableSnapshot, sameSnapshot } from "../../../shared/intune/compare"
 import { saveWrite, removeWrite, writeKey, writeRecords } from "../../../main/storage/restore-journal"
@@ -342,6 +343,9 @@ export class Restorer {
     const withNote = (outcome: RestoreOutcome): RestoreOutcome => {
       if (!outcome.success) return outcome
       const warnings = [...(outcome.warnings ?? []), ...(targeting?.warnings ?? [])]
+      if (assignments && hasLegacyScopeTagAssignments(type, snapshot) && !warnings.includes(LEGACY_SCOPE_TAG_ASSIGNMENT_WARNING)) {
+        warnings.push(LEGACY_SCOPE_TAG_ASSIGNMENT_WARNING)
+      }
       if (unread) warnings.push("Assignments were not restored: this backup was made by an earlier TenuVault version that could not read them. Assign the policy in Intune.")
       if (targeting?.skipped) warnings.push(`Skipped ${targeting.skipped} assignment(s) as reviewed.`)
       if (targeting?.allAssignmentsSkipped && (outcome.action === "updated" || outcome.action === "unchanged")) {

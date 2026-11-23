@@ -1,5 +1,5 @@
 import { cleanAssignment, COMMON_READ_ONLY, itemName, type IntuneType, type Item, type Json, type Step } from "./registry"
-import { scopeTagRoleRow } from "./restore-assignments"
+import { hasLegacyScopeTagAssignments, isLegacyScopeTagAssignment } from "./restore-assignments"
 import { isGraphId } from "../security"
 
 /**
@@ -153,16 +153,10 @@ function assignmentSteps(type: IntuneType, snapshot: Item, replace = false): Ste
   const assignments = (Array.isArray(snapshot.assignments) ? (snapshot.assignments as Item[]) : [])
     // Assignments inherited from a policy set come back with the set; copying them would make them direct.
     .filter((assignment) => typeof assignment.source !== "string" || assignment.source === "direct")
-    .flatMap((assignment) => {
-      if (!scopeTagRoleRow(type, assignment)) return [cleanAssignment(assignment)]
-      // Legacy rows store groups in role-style lists. The scope tag assign action takes target objects.
-      const members = Array.isArray(assignment.members) ? assignment.members : []
-      const scopeMembers = Array.isArray(assignment.scopeMembers) ? assignment.scopeMembers : []
-      const ids = new Set([...members, ...scopeMembers])
-      return [...ids].map((groupId) => ({ target: { "@odata.type": "#microsoft.graph.groupAssignmentTarget", groupId } }))
-    })
+    .filter((assignment) => !isLegacyScopeTagAssignment(type, assignment))
+    .map(cleanAssignment)
     .filter((assignment) => !(type.exclusionsUnsupported && isExclusion(assignment)))
-  if (!type.assign || (!assignments.length && !replace)) return []
+  if (!type.assign || (!assignments.length && (!replace || hasLegacyScopeTagAssignments(type, snapshot)))) return []
   if (type.assign === "post") {
     return assignments.map((body) => ({ method: "POST", path: `${type.path}/{id}/assignments`, body, kind: "assignments" }))
   }
