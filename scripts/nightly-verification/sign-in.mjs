@@ -20,7 +20,7 @@ import { createRequire } from "node:module"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { assert, checker, launch, sleep } from "./app.mjs"
-import { completeLogin } from "./login.mjs"
+import { completeLogin, signInEach } from "./login.mjs"
 import { hidden, hide, maskedCapture, maskPage, matchesTestAccount } from "./secrets.mjs"
 
 const SECRETS = ["TENUVAULT_E2E_TENANT_ID", "TENUVAULT_E2E_CLIENT_ID", "TENUVAULT_E2E_USERNAME", "TENUVAULT_E2E_PASSWORD"]
@@ -92,7 +92,7 @@ async function signInWith(browserName, playwright, secrets) {
     await app?.screenshot(`fail-${browserName}-app`, hidden(secrets)).catch(() => {})
     // The logs are public; GitHub masks secrets in them, and so does this.
     const masked = new Error(hide(error instanceof Error ? error.message : String(error), secrets))
-    masked.refused = error?.refused === true
+    masked.stopped = error?.stopped === true
     throw masked
   } finally {
     await browser?.close().catch(() => {})
@@ -116,18 +116,7 @@ async function main() {
   const secrets = Object.fromEntries(SECRETS.map((name) => [name, process.env[name].trim()]))
   // Playwright comes from this folder's own locked install (npm ci --prefix scripts/nightly-verification).
   const playwright = createRequire(import.meta.url)("playwright")
-  // After Microsoft refused the test account, no other browser sends the credentials again:
-  // repeated refusals could lock the account.
-  let refusedIn = ""
-  for (const name of browsers) {
-    await check(`the installed app signs in to the test tenant through ${name}`, async () => {
-      if (refusedIn) throw new Error(`Not tried: Microsoft refused the test account in ${refusedIn}, so the credentials are not sent again.`)
-      return signInWith(name, playwright, secrets).catch((error) => {
-        if (error?.refused === true) refusedIn = name
-        throw error
-      })
-    })
-  }
+  await signInEach(browsers, check, (name) => signInWith(name, playwright, secrets))
 }
 
 main()

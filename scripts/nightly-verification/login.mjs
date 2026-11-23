@@ -6,10 +6,11 @@
  * re-render a field it just showed. On a slow night a value typed too early is wiped (the page then
  * says "Enter a valid email address"), or a submit is lost while the step changes (the password
  * stays typed and nothing happens). So each step is submitted from its own field with Enter and
- * counts as sent only when the browser posts it to Microsoft. A step that was not sent is typed
- * again if the page wiped it and submitted again, a few times at most. A sent step is never
- * submitted again, however slow the answer: retrying credentials Microsoft may already have
- * refused could lock the test account. Any refusal ends the run at once.
+ * counts as sent as soon as the browser posts it to Microsoft, however late. A step with no post
+ * for a while after its last attempt is typed again if the page wiped it and submitted again, a
+ * few times at most. A sent step is never submitted again, however slow the answer: retrying
+ * credentials Microsoft may already have refused could lock the test account. Any refusal ends
+ * the run at once.
  */
 
 const defaultSleep = (ms) => new Promise((resolveSleep) => setTimeout(resolveSleep, ms))
@@ -27,11 +28,11 @@ const PASSWORD_FIELD = 'input[name="passwd"]:not(.moveOffScreen):not([aria-hidde
 const CONSENT = /Permissions requested|Need admin approval/i
 const MFA = /More information required|Let's keep your account secure|Action Required|Approve sign in request|Verify your identity|Enter code|Open your Authenticator app/i
 
-/** Microsoft refused the test account's credentials. Other browsers must not send them again. */
-export class LoginRefused extends Error {
+/** Microsoft stopped the test account's sign-in: a refusal, consent or MFA. Other browsers must not send the credentials again. */
+export class LoginStopped extends Error {
   constructor(message) {
     super(message)
-    this.refused = true
+    this.stopped = true
   }
 }
 
@@ -64,56 +65,89 @@ function isCredentialPost(request) {
  * `options` exist for tests: the clock, the wait between checks and the limits.
  */
 export async function completeLogin(page, username, password, options = {}) {
-  const { now = Date.now, sleep = defaultSleep, timeoutMs = 120_000, sentWithinMs = 5_000, maxSubmits = 3 } = options
+  const { now = Date.now, sleep = defaultSleep, timeoutMs = 120_000, sentWithinMs = 15_000, maxSubmits = 3 } = options
   const deadline = now() + timeoutMs
   const left = () => Math.max(1, deadline - now())
   // Every browser action is bounded, so a field the page replaces mid-action cannot outlast the deadline.
   const actionTimeout = () => Math.min(10_000, left())
-  const stoppedAt = () => `stopped at ${page.url().split("?")[0]}`
+  const stoppedAt = () => `stopped at ${page.url().split(/[?#]/)[0]}`
   const atApp = () => /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?\//.test(page.url())
+  // One listener for the whole login: a post that arrives late, after a slow Enter, still counts.
+  let posts = 0
+  const onRequest = (request) => {
+    if (isCredentialPost(request)) posts++
+  }
+  page.on("request", onRequest)
   const steps = {
-    username: { field: page.locator(USERNAME_FIELD), value: username, submits: 0, sent: false },
-    password: { field: page.locator(PASSWORD_FIELD), value: password, submits: 0, sent: false },
+    username: { field: page.locator(USERNAME_FIELD), value: username, submits: 0, sent: false, postsBefore: 0, triedAt: 0 },
+    password: { field: page.locator(PASSWORD_FIELD), value: password, submits: 0, sent: false, postsBefore: 0, triedAt: 0 },
   }
-  await steps.username.field.waitFor({ state: "visible", timeout: Math.min(60_000, left()) }).catch(() => {
-    throw new Error(`Microsoft's login page did not ask for the username (${stoppedAt()}).`)
-  })
-  while (now() < deadline) {
-    if (atApp()) return
-    const body = await page.locator("body").innerText({ timeout: 1000 }).catch(() => "")
-    if (/Stay signed in\?/i.test(body) && (await page.locator("#idBtn_Back").isVisible().catch(() => false))) {
-      // "No": the test browser keeps nothing, and the answer does not change the sign-in.
-      await page.locator("#idBtn_Back").click({ timeout: actionTimeout() }).catch(() => {})
-    } else if (CONSENT.test(body)) {
-      throw new Error("Microsoft asks for consent. Grant tenant-wide admin consent to the E2E app registration (RELEASING.md).")
-    } else if (MFA.test(body)) {
-      throw new Error("Microsoft asks the test user for MFA or more information. The test user must have no MFA method and be outside Conditional Access.")
-    } else {
-      const error = await loginError(page)
-      if (error && !EMPTY_FIELD_ERROR.test(error)) throw new LoginRefused(`Microsoft refused the sign-in: ${error}`)
-      const name = (await steps.password.field.isVisible().catch(() => false))
-        ? "password"
-        : (await steps.username.field.isVisible().catch(() => false)) ? "username" : null
-      const step = name ? steps[name] : null
-      // A sent step waits for Microsoft's answer; only a step the browser never posted is submitted again.
-      if (step && !step.sent) {
-        if (step.submits >= maxSubmits) {
-          throw new Error(`Microsoft's login page did not take the ${name} after ${maxSubmits} attempts${error ? `: ${error}` : ""} (${stoppedAt()}).`)
+  try {
+    await steps.username.field.waitFor({ state: "visible", timeout: Math.min(60_000, left()) }).catch(() => {
+      throw new Error(`Microsoft's login page did not ask for the username (${stoppedAt()}).`)
+    })
+    while (now() < deadline) {
+      if (atApp()) return
+      // A post since a step's last attempt means Microsoft has it: that step is never submitted again.
+      for (const step of Object.values(steps)) if (step.submits > 0 && posts > step.postsBefore) step.sent = true
+      const body = await page.locator("body").innerText({ timeout: 1000 }).catch(() => "")
+      if (/Stay signed in\?/i.test(body) && (await page.locator("#idBtn_Back").isVisible().catch(() => false))) {
+        // "No": the test browser keeps nothing, and the answer does not change the sign-in.
+        await page.locator("#idBtn_Back").click({ timeout: actionTimeout() }).catch(() => {})
+      } else if (CONSENT.test(body)) {
+        throw new LoginStopped(`Microsoft asks for consent. Grant tenant-wide admin consent to the E2E app registration (RELEASING.md) (${stoppedAt()}).`)
+      } else if (MFA.test(body)) {
+        throw new LoginStopped(`Microsoft asks the test user for MFA or more information. The test user must have no MFA method and be outside Conditional Access (${stoppedAt()}).`)
+      } else {
+        const error = await loginError(page)
+        if (error && !EMPTY_FIELD_ERROR.test(error)) throw new LoginStopped(`Microsoft refused the sign-in: ${error} (${stoppedAt()})`)
+        const name = (await steps.password.field.isVisible().catch(() => false))
+          ? "password"
+          : (await steps.username.field.isVisible().catch(() => false)) ? "username" : null
+        const step = name ? steps[name] : null
+        // A sent step waits for Microsoft's answer. A step is submitted again only when the browser
+        // posted nothing for 15 seconds after its last attempt: a request counts when it is sent, not
+        // when it is answered, so a slow answer never looks like a lost submit.
+        if (step && !step.sent && (step.submits === 0 || now() - step.triedAt >= sentWithinMs)) {
+          if (step.submits >= maxSubmits) {
+            throw new Error(`Microsoft's login page did not take the ${name} after ${maxSubmits} attempts${error ? `: ${error}` : ""} (${stoppedAt()}).`)
+          }
+          step.submits++
+          step.postsBefore = posts
+          try {
+            if ((await step.field.inputValue({ timeout: actionTimeout() })) !== step.value) await step.field.fill(step.value, { timeout: actionTimeout() })
+            await step.field.press("Enter", { timeout: actionTimeout() })
+          } catch {
+            // The page replaced the field mid-action: look at the page again.
+          }
+          step.triedAt = now()
         }
-        step.submits++
-        let posted = null
-        try {
-          if ((await step.field.inputValue({ timeout: actionTimeout() })) !== step.value) await step.field.fill(step.value, { timeout: actionTimeout() })
-          posted = page.waitForRequest(isCredentialPost, { timeout: sentWithinMs }).then(() => true, () => false)
-          await step.field.press("Enter", { timeout: actionTimeout() })
-        } catch {
-          // The page replaced the field mid-action: look at the page again.
-        }
-        // Even a press that timed out may have submitted; only a post decides.
-        if (posted) step.sent = await posted
       }
+      await sleep(Math.min(500, left()))
     }
-    await sleep(500)
+    if (atApp()) return
+    throw new Error(`Microsoft's login did not return to the app within ${Math.round(timeoutMs / 1000)} seconds (${stoppedAt()}).`)
+  } finally {
+    page.off("request", onRequest)
   }
-  throw new Error(`Microsoft's login did not return to the app within ${Math.round(timeoutMs / 1000)} seconds (${stoppedAt()}).`)
+}
+
+/**
+ * Runs the sign-in check once per browser. After Microsoft stopped the test account's sign-in
+ * (a refusal, consent, MFA), the remaining browsers do not send the credentials again: repeated
+ * refusals could lock the account.
+ */
+export async function signInEach(browsers, check, signIn) {
+  let stoppedIn = ""
+  for (const name of browsers) {
+    await check(`the installed app signs in to the test tenant through ${name}`, async () => {
+      if (stoppedIn) throw new Error(`Not tried: Microsoft stopped the test account's sign-in in ${stoppedIn}, so the credentials are not sent again.`)
+      try {
+        return await signIn(name)
+      } catch (error) {
+        if (error?.stopped === true) stoppedIn = name
+        throw error
+      }
+    })
+  }
 }

@@ -4,6 +4,11 @@ import { describe, expect, it } from "vitest"
 type Options = { now?: () => number; sleep?: (ms: number) => Promise<void>; timeoutMs?: number; sentWithinMs?: number; maxSubmits?: number }
 const load = async () => (await import("../scripts/nightly-verification/login.mjs" as string)) as {
   completeLogin: (page: unknown, username: string, password: string, options?: Options) => Promise<void>
+  signInEach: (
+    browsers: string[],
+    check: (name: string, run: () => Promise<unknown>) => Promise<boolean>,
+    signIn: (browser: string) => Promise<unknown>,
+  ) => Promise<void>
 }
 
 const USER = "e2e@contoso.example"
@@ -19,6 +24,8 @@ type Scenario = {
   wrongPassword?: boolean
   /** Microsoft answers the posted password only after this long, then refuses it. */
   refuseAfterMs?: number
+  /** The browser posts the password only this long after Enter, then Microsoft accepts it. */
+  postPasswordAfterMs?: number
   /** The screen after the password. */
   after?: "kmsi" | "mfa" | "approve" | "consent"
   /** A hidden error left over from the username step. */
@@ -38,12 +45,19 @@ function fakeLogin(scenario: Scenario = {}) {
   let wipe = scenario.wipeFirstUsername ?? false
   let lost = scenario.lostPasswordSubmits ?? 0
   let refusalAt: number | null = null
-  let waiters: { match: (request: Request) => boolean; resolve: () => void }[] = []
+  let latePostAt: number | null = null
+  const listeners = new Set<(request: Request) => void>()
 
   const post = (url: string, navigation: boolean) => {
     posts.push(url)
     const request: Request = { method: () => "POST", url: () => url, isNavigationRequest: () => navigation }
-    waiters = waiters.filter((waiter) => (waiter.match(request) ? (waiter.resolve(), false) : true))
+    for (const listener of listeners) listener(request)
+  }
+  const passwordPosted = () => {
+    post("https://login.microsoftonline.com/tenant/login", true)
+    if (scenario.refuseAfterMs !== undefined) refusalAt = time + scenario.refuseAfterMs
+    else if (scenario.wrongPassword) refuse()
+    else step = scenario.after ?? "kmsi"
   }
   const refuse = () => {
     errors.passwordError = "Your account or password is incorrect."
@@ -62,10 +76,8 @@ function fakeLogin(scenario: Scenario = {}) {
       submits.password.push(values.passwd)
       if (lost > 0) return void lost--
       if (!values.passwd) return void (errors.passwordError = "Please enter your password.")
-      post("https://login.microsoftonline.com/tenant/login", true)
-      if (scenario.refuseAfterMs !== undefined) refusalAt = time + scenario.refuseAfterMs
-      else if (scenario.wrongPassword) refuse()
-      else step = scenario.after ?? "kmsi"
+      if (scenario.postPasswordAfterMs !== undefined && latePostAt === null) latePostAt = time + scenario.postPasswordAfterMs
+      else passwordPosted()
     }
   }
 
@@ -120,24 +132,28 @@ function fakeLogin(scenario: Scenario = {}) {
   const page = {
     url: () => (step === "app" ? "http://localhost:51234/?code=redacted" : `${LOGIN}?client_id=x`),
     locator,
-    // Resolves when a matching request is posted during the next action, else times out.
-    waitForRequest: (match: (request: Request) => boolean) =>
-      new Promise<void>((resolve, reject) => {
-        waiters.push({ match, resolve })
-        setTimeout(() => reject(new Error("Timeout waiting for request")), 0)
-      }),
+    on: (event: string, listener: (request: Request) => void) => {
+      if (event === "request") listeners.add(listener)
+    },
+    off: (event: string, listener: (request: Request) => void) => {
+      if (event === "request") listeners.delete(listener)
+    },
   }
   const options: Options = {
     now: () => time,
     sleep: async (ms: number) => {
       time += ms
+      if (latePostAt !== null && time >= latePostAt) {
+        latePostAt = Number.POSITIVE_INFINITY
+        passwordPosted()
+      }
       if (refusalAt !== null && time >= refusalAt) {
         refusalAt = null
         refuse()
       }
     },
   }
-  return { page, options, submits, posts, step: () => step }
+  return { page, options, submits, posts, step: () => step, listening: () => listeners.size }
 }
 
 describe("nightly sign-in: Microsoft's login page", () => {
@@ -179,7 +195,7 @@ describe("nightly sign-in: Microsoft's login page", () => {
     const { completeLogin } = await load()
     const login = fakeLogin({ wrongPassword: true })
     const error = await completeLogin(login.page, USER, PASSWORD, login.options).catch((caught: Error & { refused?: boolean }) => caught)
-    expect(error).toMatchObject({ message: "Microsoft refused the sign-in: Your account or password is incorrect.", refused: true })
+    expect(error).toMatchObject({ message: `Microsoft refused the sign-in: Your account or password is incorrect. (stopped at ${LOGIN})`, stopped: true })
     expect(login.submits.password).toEqual([PASSWORD])
   })
 
@@ -188,6 +204,15 @@ describe("nightly sign-in: Microsoft's login page", () => {
     const login = fakeLogin({ refuseAfterMs: 20_000 })
     await expect(completeLogin(login.page, USER, PASSWORD, login.options)).rejects.toThrow("Microsoft refused the sign-in: Your account or password is incorrect.")
     expect(login.submits.password).toEqual([PASSWORD])
+  })
+
+  it("counts a password the browser posts late as sent, and never sends it again", async () => {
+    const { completeLogin } = await load()
+    const login = fakeLogin({ postPasswordAfterMs: 8_000 })
+    await completeLogin(login.page, USER, PASSWORD, login.options)
+    expect(login.step()).toBe("app")
+    expect(login.submits.password).toEqual([PASSWORD])
+    expect(login.listening()).toBe(0)
   })
 
   it("ignores a hidden error left over from the username step", async () => {
@@ -201,10 +226,13 @@ describe("nightly sign-in: Microsoft's login page", () => {
     ["mfa", /MFA or more information/],
     ["approve", /MFA or more information/],
     ["consent", /asks for consent/],
-  ] as const)("reports the %s screen at once", async (after, message) => {
+  ] as const)("reports the %s screen at once and marks the sign-in stopped", async (after, message) => {
     const { completeLogin } = await load()
     const login = fakeLogin({ after })
-    await expect(completeLogin(login.page, USER, PASSWORD, login.options)).rejects.toThrow(message)
+    const error = await completeLogin(login.page, USER, PASSWORD, login.options).catch((caught: Error & { stopped?: boolean }) => caught)
+    expect(error).toMatchObject({ stopped: true })
+    expect(String(error)).toMatch(message)
+    expect(String(error)).toContain(`(stopped at ${LOGIN})`)
   })
 
   it("times out with the page it stopped at", async () => {
@@ -214,5 +242,43 @@ describe("nightly sign-in: Microsoft's login page", () => {
       `Microsoft's login did not return to the app within 30 seconds (stopped at ${LOGIN}).`,
     )
     expect(login.submits.password).toEqual([PASSWORD])
+  })
+})
+
+describe("nightly sign-in: one check per browser", () => {
+  const run = async (failures: Record<string, Error>) => {
+    const { signInEach } = await load()
+    const tried: string[] = []
+    const results: string[] = []
+    const check = async (name: string, body: () => Promise<unknown>) => {
+      try {
+        await body()
+        results.push(`ok ${name}`)
+        return true
+      } catch (error) {
+        results.push(`FAIL ${name}: ${(error as Error).message}`)
+        return false
+      }
+    }
+    await signInEach(["chromium", "firefox", "webkit"], check, async (browser) => {
+      tried.push(browser)
+      if (failures[browser]) throw failures[browser]
+    })
+    return { tried, results }
+  }
+
+  it("does not send the credentials in the remaining browsers after Microsoft stopped the sign-in", async () => {
+    const stopped = Object.assign(new Error("Microsoft refused the sign-in: Your account has been locked."), { stopped: true })
+    const { tried, results } = await run({ chromium: stopped })
+    expect(tried).toEqual(["chromium"])
+    expect(results.slice(1)).toEqual([
+      "FAIL the installed app signs in to the test tenant through firefox: Not tried: Microsoft stopped the test account's sign-in in chromium, so the credentials are not sent again.",
+      "FAIL the installed app signs in to the test tenant through webkit: Not tried: Microsoft stopped the test account's sign-in in chromium, so the credentials are not sent again.",
+    ])
+  })
+
+  it("keeps trying the other browsers after a failure on the page", async () => {
+    const { tried } = await run({ chromium: new Error("Microsoft's login page did not take the password after 3 attempts") })
+    expect(tried).toEqual(["chromium", "firefox", "webkit"])
   })
 })
