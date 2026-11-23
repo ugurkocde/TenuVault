@@ -1,7 +1,7 @@
 import { guardedRestoreJournal } from "../storage/restore-journal"
 import { mappedReference } from "../../shared/intune/restore-references"
 import { PRIVILEGED_REVIEW_FOLDERS } from "../../shared/intune/directory-review-folders"
-import { administrativeUnits, privilegeObject, privilegeReview, PRIVILEGED_RESTORE_BLOCKER, requirePrivilegeId, unitRelationships, type PrivilegeCandidate, type UnitReviewCursor } from "./directory-9c"
+import { administrativeUnits, privilegeReview, PRIVILEGED_RESTORE_BLOCKER, requirePrivilegeId, requirePrivilegeObject, unitRelationships, type PrivilegeCandidate, type UnitReviewCursor } from "./directory-9c"
 import { DIRECTORY_REPLICATION_WINDOW_MS } from "./directory-relationship-history"
 import { restoreTenantKey } from "./restore-tenant-key"
 import { DirectoryPrincipalMappings } from "./directory-principal-mappings"
@@ -422,22 +422,25 @@ export class DirectoryRestoreService {
     let candidates: PrivilegeCandidate[] = [{ source: snapshot }]
     if (unitFolder) {
       const id = map(folder, requirePrivilegeId(sourceId))
-      const unit = await privilegeObject(reader, administrativeUnits, id, "The saved administrative unit no longer resolves.")
+      const path = `${administrativeUnits}/${id}`
+      const live = await reader.getOptional(path)
+      const unit = live ? requirePrivilegeObject(live, id, "The saved administrative unit no longer resolves.") : undefined
       let cursor: UnitReviewCursor | undefined
       if (requested.previousRunId) {
         const previous = this.load(tenant, requested.previousRunId)
         if (!previous.unitCursor || !previous.more || previous.run.source?.path !== source.path || previous.run.source.fingerprint !== source.fingerprint || previous.options.exactMembers !== exactMembers || previous.run.actor.userId !== actor.userId || previous.run.actor.clientId !== actor.clientId || previous.unitCursor.targetId !== id) return fail("Continue the original administrative unit review with the same membership choice, or start a new review.")
         cursor = previous.unitCursor.cursor
       }
-      const relationships = await unitRelationships(snapshot, reader, `${administrativeUnits}/${id}`, exactMembers, map, cursor)
-      candidates = relationships.rows.map(candidate => ({ ...candidate, unit }))
+      const relationships = await unitRelationships(snapshot, reader, unit ? path : undefined, exactMembers, map, cursor)
+      candidates = relationships.rows.map(candidate => ({ ...candidate, unitId: id, unit }))
+      if (!unit && !candidates.length) candidates.push({ source: {}, unitId: id, blocker: "The live relationship inventory is unavailable." })
       page.more = !!relationships.cursor
       if (relationships.cursor) page.unitCursor = { targetId: id, cursor: relationships.cursor }
     } else if (requested.previousRunId) fail("This relationship has only one review page.")
     for (const [index, candidate] of candidates.entries()) {
       let review: DirectoryReview
       try {
-        if (candidate.blocker && !candidate.principalId) fail(candidate.blocker)
+        if (candidate.blocker && !candidate.principalId && candidate.unit) fail(candidate.blocker)
         review = await privilegeReview(folder, candidate, reader, actor, map, this.now())
       } catch (error) {
         if (error instanceof RestoreWriteDeferredError || isRestorePersistenceError(error)) throw error

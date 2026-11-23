@@ -166,6 +166,25 @@ it("pages a legacy-named administrative unit, preserving exact choice, role IDs 
   expect(restricted.rows[0]?.review.blocker).toMatch(/restricted management/)
 })
 
+it("keeps saved members and resolved scoped roles in the review when the administrative unit is missing", async () => {
+  const env = world()
+  env.missing.add(`directory/administrativeUnits/${unit}`)
+  const request = { path: "backup/AdministrativeUnits/Deleted unit.json", snapshot: {
+    id: unit, members: [user], scopedRoleMembers: [{ id: id(92), roleId: oldRole, roleMemberInfo: { id: user } }],
+  }, origin: "restore" as const }
+  const page = await env.start().prepare(tenant, request, { ...options, exactMembers: true }, noBackupReads)
+  expect(page.rows.map(row => row.review.privilege)).toEqual(["Add unit member", "Scoped role member: Custom role"])
+  for (const { review } of page.rows) {
+    expect(review.blocker).toContain(`administrative unit ${unit} no longer resolves`)
+    expect(review.principal).toEqual({ id: user, name: "Current user", type: "user" })
+    expect(review.resource).toEqual({ id: unit, name: "Unresolved administrative unit", type: "administrative unit" })
+    expect(review.scope).toBe(`Unresolved administrative unit (${unit})`)
+    expect(review.changes).toEqual([])
+  }
+  expect(page.more).toBe(false)
+  expect(env.fetcher.mock.calls.some(([url]) => new URL(String(url)).pathname.includes(`/${unit}/`))).toBe(false)
+})
+
 it("stores scoped unit member IDs without a name or a profile", async () => {
   const type = typeForFolder("AdministrativeUnits")!
   const snapshot = await readObject(type, unit, {

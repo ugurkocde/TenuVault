@@ -67,7 +67,10 @@ export function privilegeRequest(folder: string, source: Item, principalId: stri
 }
 
 export async function privilegeObject(reader: GraphReader, collection: string, id: string, unresolved: string): Promise<Item> {
-  const result = await reader.get(`${collection}/${requirePrivilegeId(id)}`)
+  return requirePrivilegeObject(await reader.get(`${collection}/${requirePrivilegeId(id)}`), id, unresolved)
+}
+
+export function requirePrivilegeObject(result: Item, id: string, unresolved: string): Item {
   if (!isGuid(result.id) || result.id.toLowerCase() !== id || typeof result.displayName !== "string" || !result.displayName.trim()) return fail(unresolved)
   return result
 }
@@ -83,14 +86,15 @@ export interface PrivilegeCandidate {
   source: Item
   principalId?: string
   present?: boolean
+  unitId?: string
   unit?: Item
   removeMember?: boolean
   blocker?: string
 }
 
 export async function privilegeReview(folder: string, candidate: PrivilegeCandidate, reader: ReturnType<typeof safetyReader>, actor: RestoreActor, map: (folder: string, id: string) => string, now: number): Promise<DirectoryReview> {
-  const { source, unit, removeMember } = candidate
-  const group = folder.startsWith("PimGroup"), scopedMember = !!unit && source.roleId !== undefined
+  const { source, unitId, unit, removeMember } = candidate
+  const group = folder.startsWith("PimGroup"), scopedMember = !!unitId && source.roleId !== undefined
   const roleSourceId = scopedMember ? source.roleId : source.roleDefinitionId
   const groupEligibility = folder === "PimGroupEligibilitySchedules"
   const approvals = ["directory-item", "privileged-relationship"]
@@ -98,7 +102,7 @@ export async function privilegeReview(folder: string, candidate: PrivilegeCandid
   const review: DirectoryReview = {
     principal: null, resource: { id: "", name: "Unresolved resource", type: "directory" },
     privilege: group ? `${groupEligibility ? "Eligible" : "Active"} group ${source.accessId === "owner" ? "owner" : "member"}`
-      : unit ? scopedMember ? "Scoped role member" : removeMember ? "Remove unit member" : "Add unit member"
+      : unitId ? scopedMember ? "Scoped role member" : removeMember ? "Remove unit member" : candidate.principalId ? "Add unit member" : "Administrative unit relationship review"
       : folder === "RoleEligibilitySchedules" ? "Role eligibility" : folder === "RoleAssignmentSchedules" ? "Active role schedule" : "Role assignment",
     scope: "Unresolved scope", approvals, notices: [], roleAssignable: false, changes: [],
   }
@@ -118,7 +122,7 @@ export async function privilegeReview(folder: string, candidate: PrivilegeCandid
       return undefined
     }
   }
-  const beneficiary = await resolve("principal", candidate.principalId ?? source.principalId, async (rawPrincipal, identify) => {
+  const beneficiary = candidate.blocker && !candidate.principalId ? undefined : await resolve("principal", candidate.principalId ?? source.principalId, async (rawPrincipal, identify) => {
     const user = removeMember ? rawPrincipal : map("Users", rawPrincipal), mappedGroup = removeMember ? rawPrincipal : map("Groups", rawPrincipal)
     if (user !== rawPrincipal && mappedGroup !== rawPrincipal) return fail("The principal mapping is ambiguous.")
     const id = user !== rawPrincipal ? user : mappedGroup
@@ -149,17 +153,19 @@ export async function privilegeReview(folder: string, candidate: PrivilegeCandid
     if (type !== "user") blocker ??= "This principal type is blocked because all indirect beneficiaries could not be verified."
   }
   let roleId: string | undefined
-  if (scopedMember || !group && !unit) {
+  if (scopedMember || !group && !unitId) {
     const role = await resolve("role", roleSourceId, async (savedId, identify) => {
       roleId = map("EntraRoleDefinitions", savedId)
       identify(roleId)
-      if (!unit) review.resource = { id: roleId, name: "Unresolved directory role", type: "directory role" }
+      if (!unitId) review.resource = { id: roleId, name: "Unresolved directory role", type: "directory role" }
       return privilegeObject(reader, roleDefinitions, roleId, "The saved role no longer resolves.")
     })
     if (role) {
       if (role.isEnabled !== true) blocker ??= "The live role definition is disabled or its state could not be verified."
-      if (unit) review.privilege = `Scoped role member: ${role.displayName}`
+      if (unitId) review.privilege = `Scoped role member: ${role.displayName}`
       else review.resource = { id: String(role.id), name: String(role.displayName), type: "directory role" }
+    } else if (scopedMember && roleId) {
+      review.privilege = `Scoped role member: unresolved role (${roleId})`
     }
   }
   let directoryScopeId = source.directoryScopeId === "/" ? "/" : undefined
@@ -178,10 +184,11 @@ export async function privilegeReview(folder: string, candidate: PrivilegeCandid
       review.roleAssignable = resource.isAssignableToRole === true
       if (!Array.isArray(resource.groupTypes) || resource.groupTypes.includes("DynamicMembership") || resource.onPremisesSyncEnabled != null) blocker ??= "Dynamic, synchronized or unresolved PIM groups are blocked."
     }
-  } else if (unit) {
-    review.resource = { id: String(unit.id), name: String(unit.displayName), type: "administrative unit" }
-    review.scope = `Administrative unit ${unit.displayName} (${unit.id})`
-    blocker ??= unitChangeBlocker(unit)
+  } else if (unitId) {
+    review.resource = { id: unitId, name: unit ? String(unit.displayName) : "Unresolved administrative unit", type: "administrative unit" }
+    review.scope = unit ? `Administrative unit ${unit.displayName} (${unitId})` : `Unresolved administrative unit (${unitId})`
+    if (unit) blocker ??= unitChangeBlocker(unit)
+    else unresolved.push(`The saved administrative unit ${unitId} no longer resolves.`)
     if (removeMember && !blocker && beneficiary) {
       try { guardRestoreItem(actor, folder, undefined, protectedReferences, true) }
       catch (error) { blocker = (error as RestoreSafetyError).message }
@@ -205,7 +212,7 @@ export async function privilegeReview(folder: string, candidate: PrivilegeCandid
   } else {
     blocker ??= "The saved role scope no longer resolves."
   }
-  if (unresolved.length) blocker = unresolved.join(" ")
+  if (unresolved.length) blocker = unitId && !unit && blocker ? [...unresolved, blocker].join(" ") : unresolved.join(" ")
   if (!blocker && principalId) {
     try { privilegeRequest(folder, source, principalId, { roleId, directoryScopeId, groupId, unitId: unit ? String(unit.id) : undefined }, now, removeMember) }
     catch (error) { blocker = (error as RestoreSafetyError).message }
@@ -235,7 +242,7 @@ export interface UnitReviewCursor {
 }
 
 /** Check a slice of saved links, then walk live pages only when exact membership was selected. */
-export async function unitRelationships(snapshot: Item, reader: ReturnType<typeof safetyReader>, path: string, exact: boolean, map: (folder: string, id: string) => string, previous?: UnitReviewCursor) {
+export async function unitRelationships(snapshot: Item, reader: ReturnType<typeof safetyReader>, path: string | undefined, exact: boolean, map: (folder: string, id: string) => string, previous?: UnitReviewCursor) {
   const cursor: UnitReviewCursor = { saved: 0, scoped: 0, ...previous }
   const rows: PrivilegeCandidate[] = []
   const limit = 50
@@ -252,7 +259,8 @@ export async function unitRelationships(snapshot: Item, reader: ReturnType<typeo
     const end = Math.min(savedIds.length, cursor.saved + limit)
     for (const saved of savedIds.slice(cursor.saved, end)) {
       const target = targetFor(saved)
-      if (!target) rows.push({ source: {}, blocker: "A saved member has an ambiguous principal mapping. Exact removal requires a complete inventory." })
+      if (!target) rows.push({ source: {}, principalId: path ? undefined : saved, blocker: "A saved member has an ambiguous principal mapping. Exact removal requires a complete inventory." })
+      else if (!path) rows.push({ source: {}, principalId: saved })
       else {
         const member = await reader.getOptional(`${path}/members/${target}`)
         if (!member) rows.push({ source: {}, principalId: saved, present: false })
@@ -261,9 +269,9 @@ export async function unitRelationships(snapshot: Item, reader: ReturnType<typeo
     }
     cursor.saved = end
     if (end < savedIds.length) return { rows, cursor }
-    if (exact && cursor.live?.pages !== -1 && rows.length === limit) return { rows, cursor }
-    const expected = exact && cursor.live?.pages !== -1 ? new Set(savedIds.map(targetFor)) : undefined
-    if (expected && !expected.has(undefined)) {
+    if (path && exact && cursor.live?.pages !== -1 && rows.length === limit) return { rows, cursor }
+    const expected = path && exact && cursor.live?.pages !== -1 ? new Set(savedIds.map(targetFor)) : undefined
+    if (path && expected && !expected.has(undefined)) {
       const live = cursor.live ?? { offset: 0, pages: 0 }
       if (live.pages >= 10_000) fail("The administrative unit membership collection did not finish.")
       const page = await reader.page(path + "/members?$select=id&$top=50", live.next)
@@ -281,7 +289,7 @@ export async function unitRelationships(snapshot: Item, reader: ReturnType<typeo
   if (!Array.isArray(savedRoles)) {
     rows.push({ source: {}, blocker: "The backup does not contain a complete scoped role inventory." })
   } else if (cursor.scoped < savedRoles.length) {
-    const live = await reader.list(path + "/scopedRoleMembers")
+    const live = path ? await reader.list(path + "/scopedRoleMembers") : []
     const byId = new Map(live.map(row => [row.id, row]))
     const pairs = new Set(live.map(row => [row.roleId, object(row.roleMemberInfo)?.id].map(value => String(value).toLowerCase()).join("/")))
     while (cursor.scoped < savedRoles.length && rows.length < limit) {
@@ -289,7 +297,11 @@ export async function unitRelationships(snapshot: Item, reader: ReturnType<typeo
       const link = object(saved) ?? byId.get(saved)
       const principalId = object(link?.roleMemberInfo)?.id
       if (!link || !isGuid(principalId) || !isGuid(link.roleId)) {
-        rows.push({ source: {}, blocker: "This saved scoped role membership lacks the principal or role ID. Capture a new backup with scoped role details." })
+        rows.push({ source: !path && isGuid(link?.roleId) ? { roleId: link.roleId } : {}, principalId: !path && isGuid(principalId) ? principalId : undefined, blocker: "This saved scoped role membership lacks the principal or role ID. Capture a new backup with scoped role details." })
+        continue
+      }
+      if (!path) {
+        rows.push({ source: { roleId: link.roleId }, principalId })
         continue
       }
       const mappedRole = map("EntraRoleDefinitions", link.roleId.toLowerCase())
