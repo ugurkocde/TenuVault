@@ -71,7 +71,10 @@ Terminal=false
     try { return await this.systemctl('show', '--property=ActiveState', '--value', SESSION) }
     catch (error) {
       const failure = error as NodeJS.ErrnoException & { stderr?: string }
-      if (failure.code === 'ENOENT' || /(?:connect to (?:the )?(?:user |user scope )?bus).*(?:No medium found|No such file|Connection refused|Host is down|Transport endpoint is not connected|\$DBUS_SESSION_BUS_ADDRESS)/i.test(failure.stderr ?? String(error))) return null
+      const message = failure.stderr ?? String(error)
+      const noBus = /connect to (?:the )?(?:user |user scope )?bus.*(?:No medium found|No such file|Connection refused|Host is down|Transport endpoint is not connected|\$DBUS_SESSION_BUS_ADDRESS)/i
+      const noManager = /(?:Process org\.freedesktop\.systemd1 exited|org\.freedesktop\.systemd1 was not provided)/i
+      if (failure.code === 'ENOENT' || noBus.test(message) || noManager.test(message)) return null
       throw error
     }
   }

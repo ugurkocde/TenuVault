@@ -116,11 +116,12 @@ it('manages a graphical systemd timer and replaces the executable path after mov
   } finally { await rm(root, { recursive: true, force: true }) }
 })
 
-it.each(['missing-systemctl', 'missing-bus', 'inactive-session', 'missing-display'])('installs sign-in-only autostart with %s', async reason => {
+it.each(['missing-systemctl', 'missing-bus', 'missing-manager', 'inactive-session', 'missing-display'])('installs sign-in-only autostart with %s', async reason => {
   const root = await mkdtemp(join(tmpdir(), 'tv-background-xdg-'))
   const { exec, state } = linuxSystemctl()
   if (reason === 'missing-systemctl') state.error = Object.assign(new Error('spawn systemctl ENOENT'), { code: 'ENOENT' })
   if (reason === 'missing-bus') state.error = new Error('Failed to connect to user scope bus via local transport: No medium found')
+  if (reason === 'missing-manager') state.error = new Error('Failed to get properties: Process org.freedesktop.systemd1 exited with status 1')
   if (reason === 'inactive-session') state.session = 'inactive'
   if (reason === 'missing-display') state.display = 'XDG_CURRENT_DESKTOP=GNOME'
   const options = { platform: 'linux' as const, packaged: true, executable: '/opt/TenuVault/tenuvault-desktop', home: root, data: root, exec }
