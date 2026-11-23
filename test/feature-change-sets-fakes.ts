@@ -7,7 +7,7 @@ import type { FeatureDeps } from "../src/main/features/deps"
  * A fake Intune tenant for the change-set engine and promotion tests. It answers the
  * Graph calls those workflows make, with the response shapes verified against Microsoft Graph
  * beta (collections under `value`, Settings Catalog details with expanded settings and
- * assignments, 404 for missing objects, 403 for groups without Group.Read.All).
+ * assignments, 404 for missing objects, 403 for groups without group read access).
  */
 export class FakeTenant {
   policies = new Map<string, Item>()
@@ -178,6 +178,14 @@ export class FakeTenant {
     if (route === "deviceManagement/assignmentFilters") return { status: 200, body: { value: structuredClone(this.filters) } }
     if (route === "deviceManagement/roleScopeTags") return { status: 200, body: { value: structuredClone(this.scopeTags) } }
     if (route === "deviceManagement/reusablePolicySettings") return { status: 200, body: { value: structuredClone(this.reusable) } }
+    if (route === "groups") {
+      if (this.groupsForbidden) return { status: 403, body: { error: { code: "Authorization_RequestDenied", message: "Insufficient privileges to complete the operation." } } }
+      const filter = new URLSearchParams(path.split("?")[1]).get("$filter") ?? ""
+      const id = /^id eq '([^']+)'$/.exec(filter)?.[1]
+      const prefix = /^startswith\(displayName,'(.*)'\)$/.exec(filter)?.[1]?.replaceAll("''", "'").toLowerCase()
+      const value = [...this.groups.values()].filter(group => id ? group.id === id : prefix !== undefined && String(group.displayName).toLowerCase().startsWith(prefix))
+      return { status: 200, body: { value: structuredClone(value) } }
+    }
     if (segments[0] === "groups" && segments.length === 2) {
       if (this.groupsForbidden) return { status: 403, body: { error: { code: "Authorization_RequestDenied", message: "Insufficient privileges to complete the operation." } } }
       const group = this.groups.get(decodeURIComponent(segments[1]!).toLowerCase())

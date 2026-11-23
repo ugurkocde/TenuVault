@@ -206,7 +206,7 @@ export function assignmentsFor(policy: { folder: string; scope?: OibScope; typeL
 
 const targetOf = (assignment: Item): Item => (assignment.target && typeof assignment.target === "object" && !Array.isArray(assignment.target) ? (assignment.target as Item) : {})
 const kindOf = (assignment: Item) => String(targetOf(assignment)["@odata.type"] ?? "").replace("#microsoft.graph.", "")
-const groupOf = (assignment: Item) => (typeof targetOf(assignment).groupId === "string" ? (targetOf(assignment).groupId as string).toLowerCase() : "")
+export const groupOf = (assignment: Item) => (typeof targetOf(assignment).groupId === "string" ? (targetOf(assignment).groupId as string).toLowerCase() : "")
 
 /** Direct assignments only: assignments that come from a policy set are managed by the set. */
 export const directAssignments = (assignments: unknown): Item[] =>

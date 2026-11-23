@@ -1,5 +1,6 @@
 import { AuditEventType, AuditResult, AuditSeverity, type CreateAuditLogInput } from "../../../portal/lib/audit/types"
 import type { GraphCall } from "../../../portal/lib/policies/graph-restore"
+import { GROUP_CHECK_GUIDANCE, GROUP_CHECK_REQUIRED } from "../../../shared/group-access"
 import { changeSetTitle } from "../../../shared/sync-wording"
 import { typeForFolder, type IntuneType, type Item } from "../../../shared/intune/registry"
 import { isGraphId } from "../../../shared/security"
@@ -12,6 +13,7 @@ import type { Stored } from "../records"
 import { FeatureError } from "../route"
 import { withTenantWrite } from "../write-lock"
 import { cisBenchmarksAllowed } from "../../frameworks/service"
+import { groupState } from "../promotion/targets"
 import { requirePreChangeBackup } from "./backup"
 import { createListingMemo, GraphReadError, observe, readBack, readCurrent, sameNameIds, writeOperation, type Observation } from "./graph"
 import {
@@ -436,6 +438,28 @@ function integrity(deps: FeatureDeps, tenantId: string, record: ChangeSetRecord)
   return { entries, problem: null }
 }
 
+/** Checks the groups a rollback would restore, including exclusions. */
+async function rollbackGroupBlockers(graph: GraphCall, tenant: string, assignments: Item[] | null | undefined, permissionMessage = GROUP_CHECK_REQUIRED): Promise<string[]> {
+  const ids = new Set<string>()
+  for (const assignment of assignments ?? []) {
+    const groupId = (assignment.target as Item | undefined)?.groupId
+    if (typeof groupId === "string" && groupId) ids.add(groupId.toLowerCase())
+  }
+  const groups = await Promise.all([...ids].map(async (id) => ({ id, ...await groupState(graph, id) })))
+  const blockers: string[] = []
+  if (groups.some((group) => group.state === "unknown")) blockers.push(permissionMessage)
+  const missing = groups.filter((group) => group.state === "missing").map((group) => group.id)
+  if (missing.length) {
+    const subject = missing.length === 1 ? "1 group" : `${missing.length} groups`
+    const verb = missing.length === 1 ? "exists" : "exist"
+    blockers.push(`${subject} this policy was assigned to before no longer ${verb} in ${tenant}: ${missing.join(", ")}. Restore any recoverable groups in Entra (eligible groups keep their ID for 30 days), or restore this policy and its assignments manually.`)
+  }
+  for (const group of groups) {
+    if (group.state === "unassignable") blockers.push(`Intune cannot assign "${group.name ?? group.id}": it is a distribution list.`)
+  }
+  return blockers
+}
+
 /**
  * Reads the target now and explains what applying would do: affected objects, fresh diff,
  * blockers, irreversible steps and unsupported recovery areas, with the content hash and
@@ -445,6 +469,7 @@ export async function previewChangeSet(deps: FeatureDeps, tenantId: string, id: 
   const record = getChangeSet(deps, tenantId, id)
   const recovery = isRecovery(record)
   requireCisChangeSetEnabled(record.origin.workflow, tenantId, recovery)
+  const tenantName = recovery ? deps.tenant(tenantId)?.name || tenantId : tenantId
   const { entries, problem } = integrity(deps, tenantId, record)
   const graph = gatedGraph(await reader(deps, tenantId, recoveryScope(record)), record.origin.workflow, tenantId, recovery)
   const listings = createListingMemo()
@@ -458,6 +483,7 @@ export async function previewChangeSet(deps: FeatureDeps, tenantId: string, id: 
     requireCisChangeSetEnabled(record.origin.workflow, tenantId, recovery)
     try {
       observed = await observe(graph, type, operation, listings)
+      if (recovery) blockers.push(...await rollbackGroupBlockers(graph, tenantName, entries[operation.key]?.assignments))
     } catch (error) {
       asFeatureError(error, "The target tenant could not be read.")
     }
@@ -483,12 +509,13 @@ export async function previewChangeSet(deps: FeatureDeps, tenantId: string, id: 
       result: record.results[operation.key] ?? emptyResult(),
     })
   }
-  const blockers = [...(problem ? [problem] : []), ...operations.flatMap((operation) => operation.blockers)]
+  const blockers = [...new Set([...(problem ? [problem] : []), ...operations.flatMap((operation) => operation.blockers)])]
   const targetFingerprint = combinedFingerprint(fingerprints)
   const review = record.review
   let reason: string | null = null
   if (!review || review.decision !== "approved") reason = "Not approved."
   else if (review.contentHash !== record.contentHash) reason = "The content changed after approval."
+  else if (recovery && blockers.length) reason = blockers.join(" ")
   else if (review.targetFingerprint !== targetFingerprint) reason = "The target tenant changed after approval."
   return {
     id: record.id,
@@ -641,16 +668,22 @@ function saveResult(deps: FeatureDeps, tenantId: string, id: string, key: string
   deps.records.update<ChangeSetRecord>(DOMAINS.changeSets, tenantId, id, (current) => ({ ...current, results: { ...current.results, [key]: result } }), { actor, reason })
 }
 
-type Reconciled = { decision: "verified"; objectId: string; readBack: OperationResult["readBack"]; readBackHash?: string } | { decision: "write" } | { decision: "stop"; status: "failed" | "uncertain"; message: string; objectId: string | null }
+type Reconciled = { decision: "verified"; objectId: string; readBack: OperationResult["readBack"]; readBackHash?: string } | { decision: "write"; resumeAssignmentId?: string } | { decision: "stop"; status: "failed" | "uncertain"; message: string; objectId: string | null }
 
 /**
  * Settles an operation whose previous write may or may not have happened, by reading live
- * state first. Verified results are recorded without writing again; only an operation whose
- * target still holds the captured pre-change state is written again. A target that holds
- * neither state may have been partly written (for example the configuration but not the
- * assignments), so it stays uncertain and rollback restores it from the capture.
+ * state first. The full write is retried when the target still holds the captured state.
+ * A rollback can also finish assignments when its configuration matches the proposal and
+ * the assignments still match the state before the assignment write.
  */
-async function reconcile(graph: GraphCall, type: IntuneType, operation: ChangeOperation, result: OperationResult, entry: { body: Item | null; assignments: Item[] | null }, captured: { body: Item | null; sameNameIds: string[] }): Promise<Reconciled> {
+async function reconcile(graph: GraphCall, type: IntuneType, operation: ChangeOperation, result: OperationResult, entry: { body: Item | null; assignments: Item[] | null }, captured: { body: Item | null; assignments: Item[] | null; sameNameIds: string[] }, recovery: boolean): Promise<Reconciled> {
+  const reconcileProposed = (id: string, live: Item, previousAssignments: Item[] | null): Reconciled | undefined => {
+    if (!matchesProposed(type, entry.body ?? {}, live)) return
+    if (entry.assignments === null || sameAssignments(entry.assignments, live.assignments)) return { decision: "verified", objectId: id, readBack: "match", readBackHash: snapshotHash(type, live) }
+    if (!recovery) return
+    if (previousAssignments && Array.isArray(live.assignments) && sameAssignments(previousAssignments, live.assignments)) return { decision: "write", resumeAssignmentId: id }
+    return { decision: "stop", status: "uncertain", message: "The configuration matches the review, but the live assignments could not be confirmed as unchanged. Review the policy in Intune and restore its assignments manually.", objectId: id }
+  }
   try {
     if (operation.action === "create") {
       let id = result.objectId
@@ -663,15 +696,15 @@ async function reconcile(graph: GraphCall, type: IntuneType, operation: ChangeOp
       }
       const live = await readCurrent(graph, type, id)
       if (!live) return { decision: "stop", status: "uncertain", message: "The created object no longer exists. Check Intune before retrying.", objectId: id }
-      if (matchesProposed(type, entry.body ?? {}, live) && (entry.assignments === null || sameAssignments(entry.assignments, live.assignments))) return { decision: "verified", objectId: id, readBack: "match", readBackHash: snapshotHash(type, live) }
-      return { decision: "stop", status: "uncertain", message: "An object was created but it does not match the proposed configuration. Review it in Intune.", objectId: id }
+      return reconcileProposed(id, live, result.objectId ? [] : null) ?? { decision: "stop", status: "uncertain", message: "An object was created but it does not match the proposed configuration. Review it in Intune.", objectId: id }
     }
     const live = await readCurrent(graph, type, operation.targetId!)
     if (operation.action === "delete") {
       if (!live) return { decision: "verified", objectId: operation.targetId!, readBack: "missing" }
     } else {
       if (!live) return { decision: "stop", status: "failed", message: "The object no longer exists in the tenant. An earlier attempt may have written to it before it was deleted; check Intune.", objectId: operation.targetId }
-      if (matchesProposed(type, entry.body ?? {}, live) && (entry.assignments === null || sameAssignments(entry.assignments, live.assignments))) return { decision: "verified", objectId: operation.targetId!, readBack: "match", readBackHash: snapshotHash(type, live) }
+      const proposed = reconcileProposed(operation.targetId!, live, captured.assignments)
+      if (proposed) return proposed
     }
     const sanitized = sanitizeSnapshot(type, live!).snapshot
     const before = captured.body ? operationFingerprint(operation.action, { snapshot: captured.body, sameNameIds: [] }) : "missing"
@@ -735,6 +768,7 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
     requireCisChangeSetEnabled(record.origin.workflow, tenantId, recovery)
     const staleBefore = (await input.dependencyCheck?.()) ?? []
     if (staleBefore.length) markStale(deps, tenant, id, staleBefore.join(" "), actor)
+    const tenantName = recovery ? deps.tenant(tenant)?.name || tenant : tenant
 
     // Claim the change set before anything slow, so approve, reject and revise refuse it
     // while the backup runs, and a change made in between is detected instead of overwritten.
@@ -760,6 +794,16 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
       writer = gatedGraph(await deps.graph(tenant, recovery ? { journal: true, recovery: recoveryScope(record) } : { journal: true }), record.origin.workflow, tenantId, recovery)
       requireCisChangeSetEnabled(record.origin.workflow, tenantId, recovery)
       gated = gatedGraph(graph, record.origin.workflow, tenantId, recovery)
+      const checkGroups = async () => {
+        if (!recovery) return
+        for (const operation of record.operations) {
+          const result = record.results[operation.key]
+          if (result?.status === "verified" || (result?.status === "approval" && result.partial)) continue
+          const blockers = await rollbackGroupBlockers(gated, tenantName, entries[operation.key]?.assignments, record.preChange ? GROUP_CHECK_GUIDANCE : GROUP_CHECK_REQUIRED)
+          if (blockers.length) markStale(deps, tenant, id, `${operation.name}: ${blockers.join(" ")}${record.preChange ? " Resolve the group checks and retry." : ""}`, actor)
+        }
+      }
+      await checkGroups()
       if (!preChange) {
         const check = async () => {
           const observations: Record<string, Observation> = {}
@@ -786,6 +830,7 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
         if (staleAfterBackup.length) markStale(deps, tenant, id, staleAfterBackup.join(" "), actor)
         listings = createListingMemo()
         const observations = await check()
+        await checkGroups()
         captured = Object.fromEntries(record.operations.map((operation) => {
           const observed = observations[operation.key]!
           return [operation.key, { body: observed.snapshot, assignments: observed.snapshot && Array.isArray(observed.snapshot.assignments) ? (observed.snapshot.assignments as Item[]) : null }]
@@ -835,8 +880,13 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
       if (stopIfCisRevoked()) break operations
       const entry = entries[operation.key]!
       const at = () => deps.now().toISOString()
+      let resumeAssignmentId: string | undefined
       if (current.status === "uncertain" || current.status === "writing") {
-        const settled = await reconcile(gated, type, operation, current, entry, { body: captured[operation.key]?.body ?? null, sameNameIds: capturedNames[operation.key] ?? [] })
+        const settled = await reconcile(gated, type, operation, current, entry, {
+          body: captured[operation.key]?.body ?? null,
+          assignments: captured[operation.key]?.assignments ?? null,
+          sameNameIds: capturedNames[operation.key] ?? [],
+        }, recovery)
         if (stopIfCisRevoked()) break operations
         if (settled.decision === "verified") {
           saveResult(deps, tenant, id, operation.key, { ...current, status: "verified", objectId: settled.objectId, readBack: settled.readBack, ...(settled.readBackHash ? { readBackHash: settled.readBackHash } : {}), message: "Reconciled from live state; not written again.", at: at() }, actor, `Reconciled ${operation.name}: verified without a repeat write`)
@@ -846,6 +896,7 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
           saveResult(deps, tenant, id, operation.key, { ...current, status: settled.status, objectId: settled.objectId, message: settled.message, at: at() }, actor, `Reconciled ${operation.name}: ${settled.status}`)
           continue
         }
+        resumeAssignmentId = settled.resumeAssignmentId
       } else if (!firstAttempt) {
         let observed: Observation | null = null
         try {
@@ -864,7 +915,15 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
       if (stopIfCisRevoked()) break operations
       const attempt: OperationResult = { ...current, status: "writing", attempts: current.attempts + 1, message: null, readBack: null, at: at() }
       saveResult(deps, tenant, id, operation.key, attempt, actor, `Writing ${operation.name}`)
-      const outcome = await writeOperation(writer, type, { action: operation.action, targetId: operation.targetId, proposed: entry.body, assignments: entry.assignments, current: captured[operation.key]?.body ?? null }, (createdId) => {
+      const outcome = await writeOperation(writer, type, {
+        action: operation.action,
+        targetId: operation.targetId,
+        proposed: entry.body,
+        assignments: entry.assignments,
+        current: captured[operation.key]?.body ?? null,
+        assignmentBlockers: recovery ? () => rollbackGroupBlockers(gated, tenantName, entry.assignments, GROUP_CHECK_GUIDANCE) : undefined,
+        resumeAssignmentId,
+      }, (createdId) => {
         saveResult(deps, tenant, id, operation.key, { ...attempt, objectId: createdId }, actor, `Created ${operation.name}`)
       })
       if (outcome.state === "approval") {
@@ -963,6 +1022,7 @@ export async function previewRollback(deps: FeatureDeps, tenantId: string, id: s
   const record = getChangeSet(deps, tenantId, id)
   const { inputs, manual } = inverseOperations(deps, tenantId, record)
   const graph = await reader(deps, tenantId, { changeSetId: record.id })
+  const tenantName = deps.tenant(tenantId)?.name || tenantId
   const operations: RollbackPreview["operations"] = []
   for (const input of inputs) {
     const type = typeOf(input.folder)
@@ -975,7 +1035,15 @@ export async function previewRollback(deps: FeatureDeps, tenantId: string, id: s
     }
     if (input.action !== "create" && input.targetId && !live) warnings.push(`"${input.name}" no longer exists in the tenant.`)
     const diff = input.action === "update" && live && input.proposed ? diffConfigurations(type, sanitizeSnapshot(type, live).snapshot, input.proposed).entries : input.action === "create" && input.proposed ? diffConfigurations(type, null, input.proposed).entries : []
-    operations.push({ key: input.key, action: input.action, name: input.name ?? String(input.proposed?.[type.nameKey] ?? ""), targetId: input.targetId ?? null, blocked: input.blocked, warnings, diff })
+    let blocked = input.blocked
+    if (!blocked && input.assignments) {
+      try {
+        blocked = (await rollbackGroupBlockers(graph, tenantName, input.assignments)).join(" ") || null
+      } catch (error) {
+        asFeatureError(error, "The destination groups could not be read.")
+      }
+    }
+    operations.push({ key: input.key, action: input.action, name: input.name ?? String(input.proposed?.[type.nameKey] ?? ""), targetId: input.targetId ?? null, blocked, warnings, diff })
   }
   return {
     changeSetId: record.id,

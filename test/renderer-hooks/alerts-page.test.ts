@@ -5,10 +5,12 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import type { Tenant } from "../../src/portal/contexts/TenantContext"
 import type { NotificationRule, NotificationsStatus, PublicChannel, WatcherDeployView } from "../../src/renderer/features/notifications/api"
+import { optionalPermissionStatus, type OptionalPermissionId } from "../../src/shared/services/optional-permissions"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const opened = vi.hoisted(() => [] as string[])
+const permissionState = vi.hoisted(() => ({ scopes: null as string[] | null }))
 const state = vi.hoisted(() => ({ status: null as unknown as NotificationsStatus, watchUpdates: [] as unknown[], pushes: [] as unknown[], added: [] as unknown[], channelsAdded: [] as unknown[], tested: [] as unknown[], updatedRules: [] as unknown[], updatedChannels: [] as unknown[], deployStarts: [] as unknown[], afterTest: null as null | (() => void), pushFails: false }))
 
 vi.mock("../../src/renderer/features/notifications/api", async (original) => ({
@@ -56,7 +58,11 @@ vi.mock("../../src/renderer/features/notifications/api", async (original) => ({
 vi.mock("../../src/portal/contexts/TenantContext", () => ({ useTenants: () => [] }))
 vi.mock("../../src/renderer/lib/toast", () => ({ toast: () => undefined }))
 vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { license: { open: vi.fn() }, app: { openExternal: async (url: string) => { opened.push(url) } } } }))
-vi.mock("../../src/renderer/features/notifications/optional-permissions", () => ({ useOptionalPermission: () => null }))
+vi.mock("../../src/renderer/features/notifications/optional-permissions", () => ({
+  useOptionalPermission: (_tenant: Tenant, id: OptionalPermissionId) => permissionState.scopes
+    ? optionalPermissionStatus({ kind: "delegated", permissions: new Set(permissionState.scopes) }).find((entry) => entry.id === id)
+    : null,
+}))
 
 import { AlertsTab, ChannelsTab, DeliveriesTab, WatchingTab } from "../../src/renderer/features/notifications/NotificationsPanel"
 import { WatcherDeployProgress } from "../../src/renderer/features/notifications/WatcherDeployProgress"
@@ -66,6 +72,7 @@ const roots: Root[] = []
 afterEach(() => {
   for (const root of roots.splice(0)) act(() => root.unmount())
   document.body.innerHTML = ""
+  permissionState.scopes = null
 })
 
 const empty: NotificationsStatus = { channels: [], rules: [], auditWatch: null, deliveries: [], licensed: true, runtimeNote: "Runs while TenuVault runs." }
@@ -253,6 +260,20 @@ describe("the Alerts page", () => {
     state.status = { ...empty, channels: [teams] }
     const container = await render(ChannelsTab, true)
     expect(container.querySelector('a[href="/portal/alerts/alerts"]')?.textContent).toBe("Add an alert")
+  })
+
+  it.each([
+    ["User.Read.All", "GroupMember.Read.All"],
+    ["GroupMember.Read.All", "User.Read.All"],
+  ])("shows the missing group recipient scope when only %s is granted", async (granted, missing) => {
+    permissionState.scopes = ["Mail.Send", granted]
+    const email: PublicChannel = { ...teams, kind: "email", urlHost: null, recipients: [{ type: "group", groupId: "44444444-4444-4444-8444-444444444444", displayName: "Operations" }] }
+    state.status = { ...empty, channels: [email] }
+    const container = await render(ChannelsTab, true)
+    const warning = `Group recipients need ${missing} to resolve member email addresses.`
+    expect(container.textContent).toContain(warning)
+    act(() => [...container.querySelectorAll("button")].find((button) => button.textContent === "Edit")!.click())
+    expect(document.body.querySelector('[role="dialog"]')?.textContent).toContain(warning)
   })
 
   it("shows nothing below the locked preview when nothing was set up on an earlier plan", async () => {

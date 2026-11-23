@@ -24,10 +24,17 @@ const API_IDS: Record<string, string> = {
 }
 const GRAPH_DEFAULTS = DESKTOP_APP_PERMISSIONS[0]!.permissions
 // The opt-in permissions, in the order the script appends them.
-const OPT_IN = { IncludeGroupRead: ["Group.Read.All"], IncludeConditionalAccessRestore: ["Policy.ReadWrite.ConditionalAccess"], IncludeAuditLog: ["AuditLog.Read.All"], IncludeNotifications: ["Mail.Send", "GroupMember.Read.All", "User.Read.All"] }
+const OPT_IN = { IncludeGroupRead: [], IncludeConditionalAccessRestore: ["Policy.ReadWrite.ConditionalAccess"], IncludeAuditLog: ["AuditLog.Read.All"], IncludeNotifications: ["Mail.Send", "User.Read.All"] }
 const offered = (appId: string) => (appId === API_IDS["Microsoft Graph"] ? [...GRAPH_DEFAULTS, ...Object.values(OPT_IN).flat()] : ["user_impersonation"])
-const scopeId = (appId: string, value: string) => `${appId}/${value}`
+const scopeId = (appId: string, value: string) => value === "GroupMember.Read.All" ? "bc024368-1153-4739-b217-4326f2e966d0" : `${appId}/${value}`
 const spId = (appId: string) => `sp-${appId}`
+
+it("includes group read once by default and keeps the old switch as a warning", () => {
+  expect(GRAPH_DEFAULTS.filter(scope => scope === "GroupMember.Read.All")).toHaveLength(1)
+  expect(source.match(/"GroupMember\.Read\.All"/g)).toHaveLength(1)
+  expect(source).toMatch(/\$resources = @\([\s\S]*?"GroupMember\.Read\.All"[\s\S]*?if \(\$IncludeGroupRead\)/)
+  expect(source).toMatch(/if \(\$IncludeGroupRead\) \{\s*Write-Warning "-IncludeGroupRead is no longer needed:/)
+})
 
 it("keeps the setup script ASCII and free of module dependencies", () => {
   expect([...source].every(character => character.charCodeAt(0) < 128)).toBe(true)
@@ -138,6 +145,7 @@ describe.runIf(Boolean(powershell))("real setup script over HTTP", () => {
     const args: Record<string, unknown> = scenario === "tenant" ? { TenantId: tenantId } : scenario === "group" ? { AllowedGroupId: group } : device ? { UseDeviceCode: true } : scenario === "unicode" ? { DisplayName: "TenuVault Caf\u00e9" } : Object.fromEntries(switches.map(name => [name, true]))
     const result = await run(scenario, args)
     expect(result.code, result.text).toBe(0)
+    expect(result.text.includes("-IncludeGroupRead is no longer needed:")).toBe(switches.includes("IncludeGroupRead"))
     expect(parseSetupOutput(result.text)).toEqual({ tenantId, clientId })
     expect(parseSetupOutput(result.clipboard)).toEqual({ tenantId, clientId })
     const auth = result.requests.find(r => r.path.endsWith("/authorize"))

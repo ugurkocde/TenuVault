@@ -1,3 +1,4 @@
+import { HYGIENE_GROUP_READ_HINT } from "../../../shared/group-access"
 import { createHash } from "node:crypto"
 import { comparableSnapshot } from "../../../shared/intune/compare"
 import { typeForFolder, type Item, type Json } from "../../../shared/intune/registry"
@@ -13,7 +14,7 @@ export { catalogSetting, type CatalogMark, type CatalogSetting } from "../../../
  * - Only collected types are inspected. A type that was not collected is reported as "not
  *   collected" by the caller, never as clean.
  * - A reference that cannot be resolved because its type was not collected or its endpoint
- *   is unreadable (groups without Group.Read.All) is an unknown, never a finding and never
+ *   is unreadable (groups without group read access) is an unknown, never a finding and never
  *   proof that the reference is fine.
  * - Include and exclude targets are kept apart: a policy that excludes a group another policy
  *   includes is intentional targeting, not a conflict.
@@ -68,7 +69,7 @@ export const RULES: Record<RuleId, RuleInfo> = {
     id: "missing-group",
     name: "Unresolved groups",
     description: "An assignment targets or excludes a group that Microsoft Graph reports as not existing.",
-    limits: "Group reads need Group.Read.All. The setup script does not request it by default: run New-TenuVaultDesktopApp.ps1 with -IncludeGroupRead to add it. Without it every group is unknown, not missing.",
+    limits: HYGIENE_GROUP_READ_HINT,
   },
   "deprecated-setting": {
     id: "deprecated-setting",
