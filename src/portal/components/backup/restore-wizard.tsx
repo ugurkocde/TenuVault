@@ -1,6 +1,6 @@
 "use client"
 
-import { ReferenceMappingTable, type MappingObjects } from "@desktop/features/promotion/MappingEditor"
+import { GroupMappingEditor, type MappingObjects } from "@desktop/features/promotion/MappingEditor"
 import { rememberMappings, sessionMappings } from "@desktop/features/promotion/session-mappings"
 import type { Mapping } from "@desktop/features/promotion/api"
 import type { AssignmentReview } from "../../../shared/intune/restore-assignments"
@@ -1123,13 +1123,16 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
           )}
 
           {assignments && assignmentReviews?.map((target) => {
+            const destination = copyCandidates.find((entry) => entry.tenantId.toLowerCase() === target.tenantId)
+            const mappingTenant = copying ? destination && { name: destination.name, credentials: destination } : tenant
             const editable = target.items.flatMap((item) => item.references)
               .filter((reference) => reference.state !== "portable" && (copying || reference.state !== "mapped" || reference.targetId?.toLowerCase() !== reference.sourceId.toLowerCase()))
             const problemItems = target.items.filter((item) => item.errors.length || item.assignments.length || item.warnings.length)
             return <section key={target.tenantId} className="mt-5 space-y-3 rounded-2xl border border-gray-200 p-4">
-              <h3 className="text-sm font-medium text-gray-900">Assignment references in {copyCandidates.find((entry) => entry.tenantId.toLowerCase() === target.tenantId)?.name ?? tenant.name}</h3>
-              {editable.length > 0 && <ReferenceMappingTable references={editable} objects={target.objects}
+              <h3 className="text-sm font-medium text-gray-900">Assignment references in {mappingTenant?.name ?? target.tenantId}</h3>
+              {editable.length > 0 && mappingTenant && <GroupMappingEditor tenant={mappingTenant} references={editable} objects={target.objects}
                 mappings={assignmentMappings[target.tenantId] ?? sessionMappings(sourceTenantId, target.tenantId)}
+                onRecheck={() => void loadReview()}
                 onChange={(next) => {
                   setAssignmentMappings((previous) => ({ ...previous, [target.tenantId]: next }))
                   rememberMappings(sourceTenantId, target.tenantId, next)

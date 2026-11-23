@@ -189,6 +189,7 @@ describe('Copy to other tenants', () => {
     const sourceId = '11111111-1111-4111-8111-111111111111'
     const targetId = '22222222-2222-4222-8222-222222222222'
     const writes: Array<{ route: string; token: string; payload: unknown }> = []
+    let destinationSecurityGroup = false
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input))
       if (url.hostname === 'login.microsoftonline.com') return Response.json({ access_token: `token-${url.pathname.split('/')[1]}` })
@@ -201,7 +202,9 @@ describe('Copy to other tenants', () => {
       const destination = token === `Bearer token-${targetTenantId}`
       if (url.pathname.startsWith('/beta/groups/')) {
         const id = destination ? targetId : sourceId
-        return url.pathname.endsWith(`/${id}`) ? Response.json({ id, displayName: 'Contoso pilot' }) : new Response(null, { status: 404 })
+        return url.pathname.endsWith(`/${id}`)
+          ? Response.json({ id, displayName: 'Contoso pilot', securityEnabled: !destination || destinationSecurityGroup, groupTypes: [] })
+          : new Response(null, { status: 404 })
       }
       if (url.pathname === '/beta/deviceManagement/roleScopeTags') return Response.json({ value: [{ id: destination ? '8' : '7', displayName: 'Contoso IT' }] })
       writes.push({ route: url.pathname, token, payload: JSON.parse(String(init?.body)) })
@@ -213,10 +216,14 @@ describe('Copy to other tenants', () => {
     }))
     expect((await copy()).status).toBe(409)
     expect(writes).toEqual([])
-    const response = await copy({ assignmentMappings: { [targetTenantId]: [
+    const mapped = { assignmentMappings: { [targetTenantId]: [
       { kind: 'group', sourceId, targetId, confirmed: true },
       { kind: 'scopeTag', sourceId: '7', targetId: '8', confirmed: true },
-    ] } })
+    ] } }
+    expect((await copy(mapped)).status).toBe(409)
+    expect(writes).toEqual([])
+    destinationSecurityGroup = true
+    const response = await copy(mapped)
     expect(await response.json()).toMatchObject({ success: true, details: { restoredCount: 1 } })
     expect(writes).toMatchObject([
       { route: '/beta/deviceManagement/deviceConfigurations', token: `Bearer token-${targetTenantId}`, payload: { displayName: 'Firewall', roleScopeTagIds: ['8'] } },

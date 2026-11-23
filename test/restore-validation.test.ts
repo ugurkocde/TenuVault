@@ -152,18 +152,25 @@ describe('Restore validation route', () => {
     expect(requests.filter((entry) => entry.host.endsWith('.blob.core.windows.net') && entry.method !== 'GET')).toEqual([])
   })
 
-  it("reports missing and mapped groups from a read-only live check", async () => {
+  it.each([
+    { kind: "distribution list", securityEnabled: false, groupTypes: [], assignable: false },
+    { kind: "security group", securityEnabled: true, groupTypes: [], assignable: true },
+    { kind: "Microsoft 365 group", securityEnabled: false, groupTypes: ["Unified"], assignable: true },
+  ])("checks a replacement $kind without writing to the tenant", async ({ securityEnabled, groupTypes, assignable }) => {
     const tenantId = "33333333-2222-4333-8444-555555555555"
     const replacement = "11111111-2222-4333-8444-555555555556"
     const metadata = { ...metadataFor([["DeviceConfigurations/policy-1", policy, "Example.json"]]), TenantId: tenantId }
-    const requests = stubFetch({ [`${backupId}/metadata.json`]: metadata, [policyPath]: policy }, { list: [policyPath], groups: [{ id: replacement, displayName: "Contoso pilot" }] })
+    const requests = stubFetch({ [`${backupId}/metadata.json`]: metadata, [policyPath]: policy }, {
+      list: [policyPath], groups: [{ id: replacement, displayName: "Contoso pilot", securityEnabled, groupTypes }],
+    })
     const input = { ...baseBody, tenantId, liveAssignmentTargets: true }
     const missing = await (await POST(request(input))).json()
     expect(missing.items[0].checks).toContainEqual(expect.objectContaining({ id: "assignments", ok: false }))
     const mapped = await (await POST(request({
       ...input, assignmentMappings: { [tenantId]: [{ kind: "group", sourceId: groupId, targetId: replacement, confirmed: true }] },
     }))).json()
-    expect(mapped.ok).toBe(true)
+    expect(mapped.ok).toBe(assignable)
+    expect(mapped.items[0].checks).toContainEqual(expect.objectContaining({ id: "assignments", ok: assignable }))
     expect(requests.filter((entry) => entry.host === "graph.microsoft.com")).toEqual([
       { method: "GET", host: "graph.microsoft.com", path: `/beta/groups/${groupId}` },
       { method: "GET", host: "graph.microsoft.com", path: `/beta/groups/${replacement}` },

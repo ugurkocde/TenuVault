@@ -1,5 +1,5 @@
 import type { GraphCall } from "../../portal/lib/policies/graph-restore"
-import { GROUP_CHECK_REQUIRED, GROUP_SEARCH_LIMIT, type GroupSearchResult, type TenantGroup } from "../../shared/group-access"
+import { groupKind, GROUP_CHECK_REQUIRED, GROUP_SEARCH_LIMIT, type GroupSearchResult, type TenantGroup } from "../../shared/group-access"
 import type { IntuneType, Item } from "../../shared/intune/registry"
 import { isGuid } from "../../shared/security"
 import { FILTER_PLATFORM_LABELS, FILTER_PLATFORMS, filterManagementType, specGroupIds, type FilterPlatform, type OibAssignmentSpec } from "../../shared/oib/assignments"
@@ -32,9 +32,8 @@ const errorOf = (body: Item) => {
 
 export function toGroup(entry: Item): TenantGroup | null {
   if (!isGuid(entry.id) || typeof entry.displayName !== "string") return null
-  const unified = Array.isArray(entry.groupTypes) && entry.groupTypes.includes("Unified")
   const dynamic = Array.isArray(entry.groupTypes) && entry.groupTypes.includes("DynamicMembership")
-  return { id: entry.id.toLowerCase(), displayName: entry.displayName, kind: unified ? "microsoft365" : entry.securityEnabled === true ? "security" : "other", dynamic }
+  return { id: entry.id.toLowerCase(), displayName: entry.displayName, kind: groupKind(entry.securityEnabled, entry.groupTypes), dynamic }
 }
 
 /** Groups whose name starts with the query (or the group with that object ID). */

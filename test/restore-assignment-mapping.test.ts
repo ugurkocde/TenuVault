@@ -269,7 +269,7 @@ it("batches referenced groups in groups of twenty and handles their individual s
     const requests = body?.requests as Array<{ id: string; method: string; url: string }>
     return { status: 200, body: { responses: requests.map(({ id, url }) => {
       const groupId = url.split("/")[2]?.split("?")[0]
-      return { id, status: groupId === ids[0] ? 404 : groupId === ids[1] ? 403 : 200, body: { id: groupId ?? "", displayName: "Pilot" } }
+      return { id, status: groupId === ids[0] ? 404 : groupId === ids[1] ? 403 : 200, body: { id: groupId ?? "", displayName: "Pilot", securityEnabled: true, groupTypes: [] } }
     }).reverse() } }
   })
   const states = await readGroupStates(graph, [...ids, ids[0]!])

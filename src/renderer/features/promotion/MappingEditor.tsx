@@ -5,11 +5,11 @@ import type { TenantGroup } from "../../../shared/group-access"
 import { useQuery } from "@tanstack/react-query"
 import type { Tenant } from "~/contexts/TenantContext"
 import { Chip } from "~/components/dashboard/tiles"
+import type { PermissionTenant } from "../notifications/optional-permissions"
 import { KIND_LABEL, STATE_TONE, targetGroupCounts, targetGroups, targetObjects, type Mapping, type ReferenceKind, type ReferenceResolution } from "./api"
 
 const fieldClass = "h-9 w-full rounded-full border border-gray-200 bg-white px-3 text-sm text-gray-800 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100"
 const STATE_LABEL = { portable: "Built in", mapped: "Verified", "mapped-unverified": "Unverified", missing: "Needs mapping", rejected: "Target rejected" } as const
-const GUID = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i
 
 export type MappingObjects = Partial<Record<ReferenceKind, { readable: boolean; objects: Array<{ id: string; name: string }>; reason?: string }>>
 type MappingsProps = { references: ReferenceResolution[]; mappings: Mapping[]; onChange: (mappings: Mapping[]) => void }
@@ -17,20 +17,32 @@ type MappingsProps = { references: ReferenceResolution[]; mappings: Mapping[]; o
 export function MappingEditor({ tenant, ...props }: MappingsProps & { tenant: Tenant }) {
   return <RemoteMappingEditor {...props} tenant={tenant} source="promotion"
     loadObjects={(kind) => targetObjects(tenant, kind)}
-    search={(query) => targetGroups(tenant, query)}
-    counts={(ids) => targetGroupCounts(tenant, ids)}
     help="New policies use Default for source scope tags without a usable mapping. Updates keep their scope tags." />
 }
 
-export function RemoteMappingEditor({ tenant, source, loadObjects, search, counts, help, onRecheck, ...props }: MappingsProps & {
+type GroupMappingProps = MappingsProps & {
+  tenant: { name: string; credentials?: PermissionTenant }
+  search?: GroupDirectory["search"]
+  counts?: GroupDirectory["counts"]
+  help?: string
+  onRecheck?: () => void
+}
+
+export function RemoteMappingEditor({ tenant, source, loadObjects, ...props }: Omit<GroupMappingProps, "tenant"> & {
   tenant: Tenant
   source: string
   loadObjects: (kind: Exclude<ReferenceKind, "group">) => Promise<NonNullable<MappingObjects[ReferenceKind]>>
-  search: GroupDirectory["search"]
-  counts: GroupDirectory["counts"]
-  help?: string
-  onRecheck?: () => void
 }) {
+  const tenantId = tenant.credentials?.tenantId
+  const kinds = new Set(props.references.map((reference) => reference.kind))
+  const useTargetList = (kind: Exclude<ReferenceKind, "group">) => useQuery({
+    queryKey: [source, "objects", tenantId, kind], queryFn: () => loadObjects(kind), enabled: kinds.has(kind),
+  }).data
+  const objects = { filter: useTargetList("filter"), scopeTag: useTargetList("scopeTag"), reusableSetting: useTargetList("reusableSetting") }
+  return <GroupMappingEditor {...props} tenant={tenant} objects={objects} />
+}
+
+export function GroupMappingEditor({ tenant, search, counts, help, onRecheck, objects, ...props }: GroupMappingProps & { objects: MappingObjects }) {
   const { references } = props
   const credentials = tenant.credentials
   const tenantId = credentials?.tenantId
@@ -40,20 +52,17 @@ export function RemoteMappingEditor({ tenant, source, loadObjects, search, count
   const unreadable = references.find((reference) => reference.kind === "group" && reference.state === "mapped-unverified")
   const graphRefused = lastRead?.tenantKey === tenantKey && lastRead.refused
   const planRefused = !!unreadable && lastRead?.reviewed !== unreadable
-  const kinds = new Set(references.map((reference) => reference.kind))
-  const accessMissing = useGroupAccessMissing(kinds.has("group") ? credentials ?? null : null, graphRefused || planRefused ? false : null)
+  const hasGroups = references.some((reference) => reference.kind === "group")
+  const accessMissing = useGroupAccessMissing(hasGroups ? credentials ?? null : null, graphRefused || planRefused ? false : null)
   const directory: GroupDirectory = {
-    tenantKey, search, counts,
+    tenantKey,
+    search: search ?? ((query) => targetGroups(tenantId!, query)),
+    counts: counts ?? ((ids) => targetGroupCounts(tenantId!, ids)),
     enabled: Boolean(credentials && !accessMissing),
     onRefused: () => setLastRead({ tenantKey, refused: true, reviewed: unreadable }),
   }
-  const useTargetList = (kind: Exclude<ReferenceKind, "group">) => useQuery({
-    queryKey: [source, "objects", tenantId, kind], queryFn: () => loadObjects(kind), enabled: kinds.has(kind),
-  }).data
-  const objects = { filter: useTargetList("filter"), scopeTag: useTargetList("scopeTag"), reusableSetting: useTargetList("reusableSetting") }
-
   return <div className="space-y-2">
-    {credentials && kinds.has("group") && accessMissing && <GroupAccessCard tenant={{ ...credentials, name: tenant.name }}
+    {credentials && hasGroups && accessMissing && <GroupAccessCard tenant={{ ...credentials, name: tenant.name }}
       context="Group mappings are unavailable until TenuVault can read groups in the destination."
       onRecheck={() => {
         setLastRead({ tenantKey, refused: false, reviewed: unreadable })
@@ -75,11 +84,11 @@ export function RemoteMappingEditor({ tenant, source, loadObjects, search, count
   </div>
 }
 
-export function ReferenceMappingTable({ references, mappings, onChange, objects, help, renderGroup, groupAccessMissing }: MappingsProps & {
+function ReferenceMappingTable({ references, mappings, onChange, objects, help, renderGroup, groupAccessMissing }: MappingsProps & {
   objects: MappingObjects
   help?: string
   groupAccessMissing?: boolean
-  renderGroup?: (reference: ReferenceResolution, mapping: Mapping | undefined, set: (change: Partial<Mapping>) => void) => ReactNode
+  renderGroup: (reference: ReferenceResolution, mapping: Mapping | undefined, set: (change: Partial<Mapping>) => void) => ReactNode
 }) {
   const unique = references.filter((reference, index) => reference.state !== "portable" && references.findIndex((entry) => entry.kind === reference.kind && entry.sourceId.toLowerCase() === reference.sourceId.toLowerCase()) === index)
   if (!unique.length) return <p className="text-sm text-gray-600">No tenant-specific references need a mapping.</p>
@@ -112,17 +121,15 @@ export function ReferenceMappingTable({ references, mappings, onChange, objects,
                 <td className="py-2 pr-3 align-top">
                   <Chip tone={STATE_TONE[reference.state]}>{STATE_LABEL[reference.state]}</Chip>
                   {reference.state === "mapped" && reference.targetName && <span className="mt-1 block text-xs text-gray-600">{reference.targetName}</span>}
-                  {reference.suggestion && (!renderGroup || reference.kind !== "group") && mapping?.targetId !== reference.suggestion.targetId && (
+                  {reference.suggestion && reference.kind !== "group" && mapping?.targetId !== reference.suggestion.targetId && (
                     <button type="button" className="mt-1 block text-left text-xs text-blue-700 underline dark:text-blue-300" onClick={() => set(reference, { targetId: reference.suggestion!.targetId })}>
                       Same name in target: "{reference.suggestion.targetName}". Use as candidate
                     </button>
                   )}
                 </td>
                 <td className="py-2 pr-3 align-top">
-                  {reference.kind === "group" && renderGroup ? renderGroup(reference, mapping, (change) => set(reference, change))
-                    : reference.kind === "group" && !list?.readable ? (
-                    <input className={fieldClass} aria-label={`Target group object ID for ${reference.sourceName ?? reference.sourceId}`} placeholder="Target group object ID" value={mapping?.targetId ?? ""} onChange={(event) => set(reference, { targetId: event.target.value.trim() })} aria-invalid={!!mapping?.targetId && !GUID.test(mapping.targetId)} />
-                  ) : list && !list.readable && reference.kind !== "scopeTag" ? (
+                  {reference.kind === "group" ? renderGroup(reference, mapping, (change) => set(reference, change))
+                    : list && !list.readable && reference.kind !== "scopeTag" ? (
                     <span className="text-xs text-amber-800 dark:text-amber-300">Target objects could not be read: {list.reason}</span>
                   ) : (
                     <select className={fieldClass} aria-label={`Target for ${reference.sourceName ?? reference.sourceId}`} value={mapping?.targetId ?? ""} onChange={(event) => set(reference, { targetId: event.target.value })}>
