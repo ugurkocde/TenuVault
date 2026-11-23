@@ -318,7 +318,7 @@ For every area and sign-in mode, restore access adds none of `Directory.Read.All
 
 ### Directory restore permissions
 
-These permissions are requested only after the admin explicitly selects restore access for the opt-in Users and devices or Groups area. Backup, Backup Reader provisioning and renewal are unchanged. No blocked operation contributes a permission. Restore adds no Directory.Read.All above the same backup area selection. TenuVault never requests Directory.ReadWrite.All or Organization.ReadWrite.All.
+These permissions are requested only after the admin explicitly selects restore access for Users and devices, Groups, or Roles and PIM. Backup, Backup Reader provisioning and renewal are unchanged. No blocked operation contributes a permission. Restore adds no Directory.Read.All above the same backup area selection. TenuVault never requests Directory.ReadWrite.All or Organization.ReadWrite.All.
 
 | Permission | Why it is needed and least privilege |
 | --- | --- |
