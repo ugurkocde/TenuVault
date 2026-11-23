@@ -31,6 +31,8 @@ export interface BatchOutcome {
   error?: string
   /** The backup asked for with this batch; absent when the batch was not sent. */
   backup?: BackupRequest
+  /** Not deployed because the backup failed, was not confirmed, or failed for an earlier platform: retrying can help. */
+  backupFailed?: boolean
 }
 
 /** A batch from a loaded pack, with policy names and folders filled in from the catalog. */
@@ -72,9 +74,10 @@ export async function deployToTenant(
   const outcomes: BatchOutcome[] = []
   const made: Array<{ folder: string; covers: Set<string> }> = []
   let stopped: string | null = null
+  let stoppedByBackup = false
   for (const batch of batches) {
     if (stopped) {
-      outcomes.push({ platform: batch.platform, error: stopped })
+      outcomes.push({ platform: batch.platform, error: stopped, ...(stoppedByBackup ? { backupFailed: true } : {}) })
       continue
     }
     if (options.backup.mode !== "none" && !options.storage) {
@@ -90,13 +93,14 @@ export async function deployToTenant(
       outcomes.push({ platform: batch.platform, run, backup })
       if (backup.mode === "new") {
         if (run.backupFolder) made.push({ folder: run.backupFolder, covers: new Set(folders) })
-        else stopped = "Skipped: the backup before the first deployment was not confirmed."
+        else { stopped = "Skipped: the backup before the first deployment was not confirmed."; stoppedByBackup = true }
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "The request failed."
-      outcomes.push({ platform: batch.platform, error: message, backup })
-      // Only a backup problem stops the tenant; a refused group or filter changed nothing and needs no backup to be skipped.
-      if (backup.mode !== "none" && /backup/i.test(message)) stopped = "Skipped: the backup of this tenant could not be used, so nothing else was changed."
+      // The main process marks a failed backup with code "backup"; a refused group or filter changed nothing and stops only its own platform.
+      const backupError = (error as { code?: unknown } | null)?.code === "backup"
+      outcomes.push({ platform: batch.platform, error: message, backup, ...(backupError ? { backupFailed: true } : {}) })
+      if (backup.mode !== "none" && backupError) { stopped = "Skipped: the backup of this tenant could not be used, so nothing else was changed."; stoppedByBackup = true }
     }
   }
   return outcomes

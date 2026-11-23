@@ -30,9 +30,10 @@ describe("deploying several platforms to one tenant", () => {
 
   it("stops the tenant's remaining batches when the backup fails", async () => {
     const sent: string[] = []
-    const outcomes = await deployToTenant(batches, { backup: NEW, storage: true }, async (b) => { sent.push(b.platform); throw new Error("The backup failed, so nothing was changed.") })
+    const outcomes = await deployToTenant(batches, { backup: NEW, storage: true }, async (b) => { sent.push(b.platform); throw Object.assign(new Error("The backup failed, so nothing was changed."), { code: "backup" }) })
     expect(sent).toEqual(["windows"])
     expect(outcomes.map(o => o.error)).toEqual(["The backup failed, so nothing was changed.", expect.stringContaining("Skipped"), expect.stringContaining("Skipped")])
+    expect(outcomes.every(o => o.backupFailed)).toBe(true)
   })
 
   it("stops when the backup is not confirmed or there is no backup storage", async () => {
@@ -48,11 +49,13 @@ describe("deploying several platforms to one tenant", () => {
     const sent: string[] = []
     const outcomes = await deployToTenant(batches, { backup: NEW, storage: true }, async (b) => {
       sent.push(b.platform)
-      if (b.platform === "windows") throw new Error("This group does not exist in the tenant: x. Nothing was changed.")
+      // The wording mentions a backup, but only the code marks a backup failure.
+      if (b.platform === "windows") throw new Error("The filter Backup pilot is not a Windows filter. Nothing was changed.")
       return run(b.platform, `backup-${b.platform}`)
     })
     expect(sent).toEqual(["windows", "macos", "byod"])
     expect(outcomes.map(o => !!o.run)).toEqual([false, true, true])
+    expect(outcomes[0]!.backupFailed).toBeUndefined()
   })
 
   it("continues after a failed batch when no backup was asked for", async () => {

@@ -8,6 +8,9 @@ import type { OibPlatform } from "./types"
  * OIB marks every policy as device or user targeted: the PolicyManifest scope, or the " - D - " /
  * " - U - " part of the policy name for packs without a manifest. Device groups go to device
  * policies and user groups to user policies; policies without a marker follow `unmarked`.
+ * Intune only honours an exclusion of the same kind as the include (user groups excluded from
+ * policies assigned to user groups, device groups from policies assigned to device groups), so
+ * device and user exclusions are separate lists and each goes with its own scope.
  * Targets are Entra groups only. Pure, so the renderer and the main process build the same list.
  */
 
@@ -30,7 +33,10 @@ export interface OibFilterChoice {
 export interface OibAssignmentSpec {
   deviceGroups: OibGroupRef[]
   userGroups: OibGroupRef[]
-  excludeGroups: OibGroupRef[]
+  /** Excluded from policies that get device groups. */
+  excludeDeviceGroups: OibGroupRef[]
+  /** Excluded from policies that get user groups. */
+  excludeUserGroups: OibGroupRef[]
   /** Where policies without a device or user marker go. */
   unmarked: UnmarkedChoice
   /** The filter for the include targets of policies of each filter platform (see filterPlatformFor). */
@@ -54,7 +60,7 @@ export const FILTER_PLATFORM_LABELS: Record<FilterPlatform, string> = {
 export const MAX_GROUPS_PER_LIST = 25
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
-export const emptySpec = (): OibAssignmentSpec => ({ deviceGroups: [], userGroups: [], excludeGroups: [], unmarked: "both", filters: {} })
+export const emptySpec = (): OibAssignmentSpec => ({ deviceGroups: [], userGroups: [], excludeDeviceGroups: [], excludeUserGroups: [], unmarked: "both", filters: {} })
 
 /** Whether the spec assigns anything: policies stay unassigned without an include group. */
 export const assignsAnything = (spec: OibAssignmentSpec | undefined): boolean => !!spec && (spec.deviceGroups.length > 0 || spec.userGroups.length > 0)
@@ -90,6 +96,9 @@ export function filterPlatformFor(folder: string, platform: OibPlatform): Filter
   return FOLDER_FILTER_PLATFORM[folder] ?? PLATFORM_FILTER_PLATFORM[platform]
 }
 
+/** The filter platform of a platform's device policies, for telling which policies of it take no filter. */
+export const platformFilterPlatform = (platform: OibPlatform): FilterPlatform | undefined => PLATFORM_FILTER_PLATFORM[platform]
+
 /** Managed device filters for device policies, managed app filters for app protection. */
 export const filterManagementType = (platform: FilterPlatform): "devices" | "apps" => platform.endsWith("MobileApplicationManagement") ? "apps" : "devices"
 
@@ -117,8 +126,9 @@ export function parseSpec(value: unknown): OibAssignmentSpec {
   const input = value as Record<string, unknown>
   const deviceGroups = groups(input.deviceGroups, "device groups")
   const userGroups = groups(input.userGroups, "user groups")
-  const excludeGroups = groups(input.excludeGroups, "excluded groups")
-  const excluded = new Set(excludeGroups.map((group) => group.id))
+  const excludeDeviceGroups = groups(input.excludeDeviceGroups, "excluded device groups")
+  const excludeUserGroups = groups(input.excludeUserGroups, "excluded user groups")
+  const excluded = new Set([...excludeDeviceGroups, ...excludeUserGroups].map((group) => group.id))
   if ([...deviceGroups, ...userGroups].some((group) => excluded.has(group.id))) throw new AssignmentSpecError("A group cannot be both included and excluded.")
   const unmarked = input.unmarked === undefined ? "both" : input.unmarked
   if (unmarked !== "both" && unmarked !== "device" && unmarked !== "user" && unmarked !== "none") throw new AssignmentSpecError("Choose where policies without a device or user marker go.")
@@ -133,18 +143,33 @@ export function parseSpec(value: unknown): OibAssignmentSpec {
       filters[platform as FilterPlatform] = { id: entry.id.toLowerCase(), mode: entry.mode, ...(typeof entry.name === "string" && entry.name ? { name: entry.name.slice(0, 256) } : {}) }
     }
   }
-  return { deviceGroups, userGroups, excludeGroups, unmarked, filters }
+  return { deviceGroups, userGroups, excludeDeviceGroups, excludeUserGroups, unmarked, filters }
 }
 
 /** Every group the spec names, once. */
-export const specGroupIds = (spec: OibAssignmentSpec): string[] => [...new Set([...spec.deviceGroups, ...spec.userGroups, ...spec.excludeGroups].map((group) => group.id))]
+export const specGroupIds = (spec: OibAssignmentSpec): string[] => [...new Set([...spec.deviceGroups, ...spec.userGroups, ...spec.excludeDeviceGroups, ...spec.excludeUserGroups].map((group) => group.id))]
+
+/** Which kinds of group a policy of this scope gets: its own, or for unmarked policies the admin's choice. */
+const kindsFor = (scope: OibScope | undefined, spec: OibAssignmentSpec): OibScope[] => {
+  const choice: UnmarkedChoice = scope ?? spec.unmarked
+  return choice === "both" ? ["device", "user"] : choice === "none" ? [] : [choice]
+}
+
+const unique = (list: OibGroupRef[]) => {
+  const seen = new Set<string>()
+  return list.filter((group) => !seen.has(group.id) && seen.add(group.id))
+}
+
+/** The exclusions that go with the include groups a policy of this scope gets, of the same kind. */
+export function excludesFor(scope: OibScope | undefined, spec: OibAssignmentSpec): OibGroupRef[] {
+  const kinds = kindsFor(scope, spec)
+  return unique([...(kinds.includes("device") && spec.deviceGroups.length ? spec.excludeDeviceGroups : []), ...(kinds.includes("user") && spec.userGroups.length ? spec.excludeUserGroups : [])])
+}
 
 /** The include groups a policy of this scope gets. */
 export function includesFor(scope: OibScope | undefined, spec: OibAssignmentSpec): OibGroupRef[] {
-  const choice: UnmarkedChoice = scope ?? spec.unmarked
-  const list = choice === "device" ? spec.deviceGroups : choice === "user" ? spec.userGroups : choice === "both" ? [...spec.deviceGroups, ...spec.userGroups] : []
-  const seen = new Set<string>()
-  return list.filter((group) => !seen.has(group.id) && seen.add(group.id))
+  const kinds = kindsFor(scope, spec)
+  return unique([...(kinds.includes("device") ? spec.deviceGroups : []), ...(kinds.includes("user") ? spec.userGroups : [])])
 }
 
 export interface PolicyAssignments {
@@ -166,8 +191,9 @@ export function assignmentsFor(policy: { folder: string; scope?: OibScope; typeL
   const chosenFilters = Object.values(spec.filters).filter(Boolean)
   const filter = filterPlatform ? spec.filters[filterPlatform] : undefined
   if (!filterPlatform && chosenFilters.length) notes.push(`Assigned without a filter: ${policy.typeLabel ?? "this policy type"} does not support assignment filters.`)
-  const excludes = policy.exclusionsUnsupported ? [] : spec.excludeGroups
-  if (policy.exclusionsUnsupported && spec.excludeGroups.length) notes.push(`Excluded groups were left out: ${policy.typeLabel ?? "this policy type"} does not support exclusions.`)
+  const wanted = excludesFor(policy.scope, spec)
+  const excludes = policy.exclusionsUnsupported ? [] : wanted
+  if (policy.exclusionsUnsupported && wanted.length) notes.push(`Excluded groups were left out: ${policy.typeLabel ?? "this policy type"} does not support exclusions.`)
   const assignments: Item[] = [
     ...includes.map((group): Item => ({ target: { "@odata.type": "#microsoft.graph.groupAssignmentTarget", groupId: group.id, ...(filter ? { deviceAndAppManagementAssignmentFilterId: filter.id, deviceAndAppManagementAssignmentFilterType: filter.mode } : {}) } })),
     ...excludes.map((group): Item => ({ target: { "@odata.type": "#microsoft.graph.exclusionGroupAssignmentTarget", groupId: group.id } })),

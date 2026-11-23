@@ -211,7 +211,7 @@ function ReviewAssign({ batches: given, onBack, onFinished, next }: { batches: D
   if (view === "running" || view === "result") {
     const outcomes = job!.result ?? []
     const notDone = outcomes.filter(o => !o.run)
-    const backupFailed = view === "result" && !job!.error && notDone.some(o => /backup/i.test(o.error ?? "") && !/no backup storage/i.test(o.error ?? ""))
+    const backupFailed = view === "result" && !job!.error && notDone.some(o => o.backupFailed)
     const attempt = backupFailed ? attempts.get(tenant.tenantId) : undefined
     const again = attempt ? attempt.batches.filter(b => notDone.some(o => o.platform === b.platform)) : []
     const heading = view === "running" ? job!.label : backupFailed && notDone.length === outcomes.length ? "Nothing was changed: the backup failed" : `Assignment change ${job!.error ? "stopped" : outcomes.some(o => o.error || o.run?.failed.length) ? "finished with problems" : "finished"}`
@@ -306,6 +306,6 @@ function AssignResult({ outcomes }: { outcomes: DeployOutcome[] }) {
 function groupNamesLine(run: OibRun): string {
   const spec = run.assignments!
   const data = newAssignment(spec)
-  const parts = [spec.deviceGroups.length && `device groups ${groupNames(data, spec.deviceGroups).join(", ")}`, spec.userGroups.length && `user groups ${groupNames(data, spec.userGroups).join(", ")}`, spec.excludeGroups.length && `excluded ${groupNames(data, spec.excludeGroups).join(", ")}`].filter(Boolean) as string[]
+  const parts = [spec.deviceGroups.length && `device groups ${groupNames(data, spec.deviceGroups).join(", ")}`, spec.userGroups.length && `user groups ${groupNames(data, spec.userGroups).join(", ")}`, spec.excludeDeviceGroups.length && `excluded device groups ${groupNames(data, spec.excludeDeviceGroups).join(", ")}`, spec.excludeUserGroups.length && `excluded user groups ${groupNames(data, spec.excludeUserGroups).join(", ")}`].filter(Boolean) as string[]
   return parts.length ? ` Chosen: ${listJoin(parts)}.` : ""
 }

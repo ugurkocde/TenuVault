@@ -374,6 +374,30 @@ async function backUp(body: RecordJson, tenant: string, folders: string[], repor
   })
 }
 
+/**
+ * The backup a run asked for: a new one of the folders it writes, or the chosen recent one checked
+ * again. Any failure here is marked as a backup failure (code "backup"), so the renderer can stop
+ * the tenant's remaining platforms and offer a retry without reading the message.
+ */
+async function backupStage(body: RecordJson, tenant: string, backup: OibBackupChoice, written: string[], report: (update: Partial<OibProgress> & { stage: string }) => void): Promise<string | undefined> {
+  try {
+    if (backup.mode === "new") {
+      report({ stage: "Backing up the tenant" })
+      return await backUp(body, tenant, written, report)
+    }
+    if (backup.mode === "reuse") {
+      report({ stage: "Checking the chosen backup" })
+      await requireReusable(body, tenant, backup.folder, written)
+      return backup.folder
+    }
+    return undefined
+  } catch (error) {
+    const failure = error instanceof FrameworkError ? error : new FrameworkError(`The backup could not be taken, so nothing was changed. ${message(error)}`, 502)
+    failure.code = "backup"
+    throw failure
+  }
+}
+
 /** Progress of one running job under its key; every update keeps the job's kind and start time. */
 function tracker(key: string, kind: OibProgress["kind"]) {
   const startedAt = new Date().toISOString()
@@ -451,15 +475,7 @@ async function deploy(body: RecordJson, kind: OibRun["kind"]): Promise<OibRun> {
         report({ stage: "Checking the groups and filters" })
         checked = await checkSpec(graph, spec)
       }
-      let backupFolder: string | undefined
-      if (backup.mode === "new") {
-        report({ stage: "Backing up the tenant" })
-        backupFolder = await backUp(body, tenant, written, report)
-      } else if (backup.mode === "reuse") {
-        report({ stage: "Checking the chosen backup" })
-        await requireReusable(body, tenant, backup.folder, written)
-        backupFolder = backup.folder
-      }
+      const backupFolder = await backupStage(body, tenant, backup, written, report)
       const run: OibRun = {
         runId: randomUUID(), tenantId: tenant, createdAt: new Date().toISOString(), kind, platform, reference: pack.catalog.reference, commit: pack.catalog.commit,
         ...(backupFolder ? { backupFolder } : {}), backupMode: backup.mode, ...(checked && assignsAnything(checked.spec) ? { assignments: checked.spec } : {}), created: [], updated: [], failed: [], skipped: [],
@@ -553,13 +569,14 @@ function assignTargets(value: unknown, reviewed = false): Array<{ source: string
   })
 }
 
-/** Whether the live tenant policy is the one the OIB policy matches, by the comparison's own rules. */
-function matchesPack(pack: LoadedPack, source: string, folder: string, targetId: string, live: Item, nameKey: string): boolean {
-  const name = live[nameKey] ?? live.displayName ?? live.name
-  if (typeof name !== "string") return false
-  const tenantPolicy = { id: targetId, name, folder, oibId: extractOibId(live.description) }
-  const { matches } = compareToTenant(pack.catalog.policies, pack.catalog.deprecated, [tenantPolicy])
-  return matches.find((match) => match.source === source)?.tenant?.id === targetId
+/**
+ * The tenant policy each OIB policy matches now, by the comparison's own rules over the tenant's
+ * current inventory: a target that is no longer the match (a newer copy appeared, or the match
+ * became ambiguous) is not changed.
+ */
+async function currentMatches(graph: GraphCall, pack: LoadedPack, folders: string[]): Promise<Map<string, string>> {
+  const { matches } = compareToTenant(pack.catalog.policies, pack.catalog.deprecated, await inventory(graph, folders))
+  return new Map(matches.flatMap((match) => (match.tenant ? [[match.source, match.tenant.id.toLowerCase()] as const] : [])))
 }
 
 const NOT_THE_POLICY = "This tenant policy is not the deployed copy of this OIB policy. Compare again."
@@ -582,6 +599,7 @@ async function readAssignments(body: RecordJson): Promise<{ policies: OibPolicyA
   const targets = assignTargets(body.items)
   const pack = await loadPack(platform, body.commit, body.tag)
   const graph = graphCaller((await tokenFor(body)).token)
+  const matched = await currentMatches(graph, pack, [...new Set(targets.flatMap(({ source }) => pack.items.get(source)?.folder ?? []))])
   const policies: OibPolicyAssignments[] = []
   for (const { source, targetId } of targets) {
     const policy = pack.items.get(source)
@@ -594,7 +612,7 @@ async function readAssignments(body: RecordJson): Promise<{ policies: OibPolicyA
     try {
       const live = await readLive(graph, type, targetId)
       if (!live) policies.push({ ...base, error: "The tenant policy no longer exists. Compare again." })
-      else if (!matchesPack(pack, source, policy.folder, targetId, live, type.nameKey)) policies.push({ ...base, name: nameOf(type, live, base.name), error: NOT_THE_POLICY })
+      else if (matched.get(source) !== targetId.toLowerCase()) policies.push({ ...base, name: nameOf(type, live, base.name), error: NOT_THE_POLICY })
       else if (!Array.isArray(live.assignments) || assignmentsUnread(type, live)) policies.push({ ...base, name: nameOf(type, live, base.name), error: "The current assignments could not be read." })
       else {
         const direct = directAssignments(live.assignments)
@@ -650,15 +668,9 @@ async function assign(body: RecordJson): Promise<OibRun> {
       report({ stage: "Checking the groups and filters" })
       const checked = await checkSpec(graph, spec)
       const written = [...new Set(chosen.map((item) => item.policy.folder))]
-      let backupFolder: string | undefined
-      if (backup.mode === "new") {
-        report({ stage: "Backing up the tenant" })
-        backupFolder = await backUp(body, tenant, written, report)
-      } else if (backup.mode === "reuse") {
-        report({ stage: "Checking the chosen backup" })
-        await requireReusable(body, tenant, backup.folder, written)
-        backupFolder = backup.folder
-      }
+      report({ stage: "Checking the deployed policies" })
+      const matched = await currentMatches(graph, pack, written)
+      const backupFolder = await backupStage(body, tenant, backup, written, report)
       const run: OibRun = {
         runId: randomUUID(), tenantId: tenant, createdAt: new Date().toISOString(), kind: "assign", platform, reference: pack.catalog.reference, commit: pack.catalog.commit,
         ...(backupFolder ? { backupFolder } : {}), backupMode: backup.mode, assignments: checked.spec, assignMode: mode, created: [], updated: [], reassigned: [], failed: [], skipped: [],
@@ -678,7 +690,7 @@ async function assign(body: RecordJson): Promise<OibRun> {
           continue
         }
         const name = nameOf(type, live, policy.name)
-        if (!matchesPack(pack, item.source, policy.folder, item.targetId, live, type.nameKey)) {
+        if (matched.get(item.source) !== item.targetId.toLowerCase()) {
           run.failed.push({ name, error: NOT_THE_POLICY })
           continue
         }
@@ -717,6 +729,13 @@ async function assign(body: RecordJson): Promise<OibRun> {
           // The outcome is unknown: the entry stays, and undo puts the previous assignments back either way.
           entry.warnings = [...(entry.warnings ?? []), "The answer from Microsoft Graph was lost, so the change may or may not have been made. Check the policy in Intune; undo puts the previous assignments back."]
           run.failed.push({ name, error: `The outcome is unknown: ${message(error)}` })
+          saveRun(run)
+          continue
+        }
+        // A timeout or server error can come after Graph made the change: keep the undo record.
+        if (response.status === 408 || response.status >= 500) {
+          entry.warnings = [...(entry.warnings ?? []), `Microsoft Graph answered ${response.status}, so the change may or may not have been made. Check the policy in Intune; undo puts the previous assignments back.`]
+          run.failed.push({ name, error: `The outcome is unknown: Microsoft Graph returned ${response.status}.` })
           saveRun(run)
           continue
         }

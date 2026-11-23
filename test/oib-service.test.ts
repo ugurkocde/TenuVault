@@ -226,7 +226,10 @@ describe("deployments", () => {
     const writes: string[] = []
     vi.stubGlobal("fetch", world({ policies: [], backupOk: false }, writes))
     await source()
-    await expect(handleOib({ ...base, action: "oib-deploy", commit, items: [{ source: SC, mode: "create" }] })).rejects.toThrow("The backup failed, so nothing was changed. Storage unavailable")
+    const failure = await handleOib({ ...base, action: "oib-deploy", commit, items: [{ source: SC, mode: "create" }] }).catch((error: unknown) => error) as Error & { code?: string }
+    expect(failure.message).toContain("The backup failed, so nothing was changed. Storage unavailable")
+    // Marked, so the renderer stops this tenant's other platforms without reading the wording.
+    expect(failure.code).toBe("backup")
     expect(writes).toEqual([])
   })
 
@@ -366,7 +369,7 @@ describe("deployments", () => {
 })
 
 describe("assignments", () => {
-  const spec = { deviceGroups: [{ id: DEVICES }], userGroups: [{ id: USERS }], excludeGroups: [{ id: EXCLUDED }], unmarked: "none", filters: { windows10AndLater: { id: WIN_FILTER, mode: "include" } } }
+  const spec = { deviceGroups: [{ id: DEVICES }], userGroups: [{ id: USERS }], excludeDeviceGroups: [{ id: EXCLUDED }], excludeUserGroups: [], unmarked: "none", filters: { windows10AndLater: { id: WIN_FILTER, mode: "include" } } }
   const filters = [{ id: WIN_FILTER, displayName: "Corporate Windows", platform: "windows10AndLater" }, { id: MAC_FILTER, displayName: "Corporate Macs", platform: "macOS" }]
   const assignBody = (writes: string[], path: string) => {
     const write = writes.find(w => w.startsWith(`POST ${path}/assign `))
@@ -379,7 +382,8 @@ describe("assignments", () => {
     await source()
     const run = await handleOib({ ...base, action: "oib-deploy", commit, backup: false, storageAccountName: null, items: [{ source: SC, mode: "create" }, { source: COMPLIANCE, mode: "create" }], assignments: spec }) as OibRun
     expect(run.failed).toEqual([])
-    expect(run.created).toMatchObject([{ id: CREATED, assignment: { include: 1, exclude: 1 } }, { id: CREATED_COMPLIANCE, assignment: { include: 1, exclude: 1 } }])
+    // Device exclusions go with device groups only: the user policy gets no exclusion.
+    expect(run.created).toMatchObject([{ id: CREATED, assignment: { include: 1, exclude: 1 } }, { id: CREATED_COMPLIANCE, assignment: { include: 1, exclude: 0 } }])
     // Names come from the tenant, not from the request.
     expect(run.assignments).toMatchObject({ deviceGroups: [{ id: DEVICES, name: "Group d0d0" }], filters: { windows10AndLater: { id: WIN_FILTER, name: "Corporate Windows" } } })
     const filter = { deviceAndAppManagementAssignmentFilterId: WIN_FILTER, deviceAndAppManagementAssignmentFilterType: "include" }
@@ -389,7 +393,6 @@ describe("assignments", () => {
     ])
     expect(assignBody(writes, `deviceManagement/deviceCompliancePolicies/${CREATED_COMPLIANCE}`)?.assignments).toEqual([
       { target: { "@odata.type": "#microsoft.graph.groupAssignmentTarget", groupId: USERS, ...filter } },
-      { target: { "@odata.type": "#microsoft.graph.exclusionGroupAssignmentTarget", groupId: EXCLUDED } },
     ])
   })
 
@@ -411,7 +414,7 @@ describe("assignments", () => {
     await expect(deploy(spec)).rejects.toThrow(`This group does not exist in the tenant: ${USERS}. Nothing was changed.`)
     await expect(deploy({ ...spec, userGroups: [], filters: { windows10AndLater: { id: MAC_FILTER, mode: "include" } } })).rejects.toThrow("Corporate Macs is not a Windows filter")
     await expect(deploy({ ...spec, userGroups: [], filters: { windows10AndLater: { id: "99999999-0000-4000-8000-000000000000", mode: "exclude" } } })).rejects.toThrow("does not exist in the tenant")
-    await expect(deploy({ ...spec, excludeGroups: [{ id: DEVICES }] })).rejects.toThrow("both included and excluded")
+    await expect(deploy({ ...spec, excludeDeviceGroups: [{ id: DEVICES }] })).rejects.toThrow("both included and excluded")
     await expect(deploy({ ...spec, deviceGroups: ["All devices"] })).rejects.toThrow("Entra group object ID")
     await expect(handleOib({ ...base, action: "oib-fix", commit, items: [{ source: SC, mode: "update", targetId: EXISTING }], assignments: spec })).rejects.toThrow("new policies of a deployment")
     expect(writes).toEqual([])
@@ -464,7 +467,7 @@ describe("assignments", () => {
     const again = await handleOib({ ...base, action: "oib-assign", commit, backup: { mode: "none" }, mode: "add", items: [{ source: SC, targetId: EXISTING, expected: now }], assignments: { ...spec, filters: {} } }) as OibRun
     expect(again).toMatchObject({ reassigned: [], skipped: [{ reason: "Already assigned this way." }] })
     // What the admin reviewed no longer matches the tenant: nothing changes.
-    const stale = await handleOib({ ...base, action: "oib-assign", commit, backup: { mode: "none" }, mode: "replace", items: [{ source: SC, targetId: EXISTING, expected: reviewed }], assignments: { deviceGroups: [], userGroups: [], excludeGroups: [] } }) as OibRun
+    const stale = await handleOib({ ...base, action: "oib-assign", commit, backup: { mode: "none" }, mode: "replace", items: [{ source: SC, targetId: EXISTING, expected: reviewed }], assignments: { deviceGroups: [], userGroups: [], excludeDeviceGroups: [] } }) as OibRun
     expect(stale).toMatchObject({ reassigned: [], failed: [{ error: "The assignments changed after the review, so nothing was changed. Review them again." }] })
     expect(state.assignments![EXISTING]).toEqual(now)
 
@@ -479,13 +482,13 @@ describe("assignments", () => {
     vi.stubGlobal("fetch", world(state, writes))
     await source()
     const assign = (mode: string, assignments: Json) => handleOib({ ...base, action: "oib-assign", commit, backup: { mode: "none" }, mode, items: [{ source: SC, targetId: EXISTING, expected: state.assignments![EXISTING] as Json }], assignments })
-    await assign("replace", { ...spec, excludeGroups: [], filters: {} })
+    await assign("replace", { ...spec, excludeDeviceGroups: [], filters: {} })
     expect(state.assignments![EXISTING]).toEqual([{ target: { "@odata.type": "#microsoft.graph.groupAssignmentTarget", groupId: DEVICES } }])
-    const cleared = await assign("replace", { deviceGroups: [], userGroups: [], excludeGroups: [] }) as OibRun
+    const cleared = await assign("replace", { deviceGroups: [], userGroups: [], excludeDeviceGroups: [] }) as OibRun
     expect(state.assignments![EXISTING]).toEqual([])
     expect(cleared.reassigned).toMatchObject([{ id: EXISTING }])
     expect(cleared.reassigned![0]).not.toHaveProperty("assignment")
-    await expect(assign("add", { deviceGroups: [], userGroups: [], excludeGroups: [{ id: EXCLUDED }] })).rejects.toThrow("at least one device or user group")
+    await expect(assign("add", { deviceGroups: [], userGroups: [], excludeDeviceGroups: [{ id: EXCLUDED }] })).rejects.toThrow("at least one device or user group")
     await expect(assign("merge", spec)).rejects.toThrow("add the groups or replace")
   })
 
@@ -495,7 +498,7 @@ describe("assignments", () => {
     const inner = world(state, writes)
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => String(input).endsWith(`${EXISTING}/assignments`) ? Response.json({ error: { code: "BadRequest", message: "busy" } }, { status: 400 }) : inner(input, init)))
     await source()
-    const run = await handleOib({ ...base, action: "oib-assign", commit, backup: { mode: "none" }, mode: "replace", items: [{ source: SC, targetId: EXISTING, expected: [] }], assignments: { deviceGroups: [], userGroups: [], excludeGroups: [] } }) as OibRun
+    const run = await handleOib({ ...base, action: "oib-assign", commit, backup: { mode: "none" }, mode: "replace", items: [{ source: SC, targetId: EXISTING, expected: [] }], assignments: { deviceGroups: [], userGroups: [], excludeDeviceGroups: [] } }) as OibRun
     expect(run.reassigned).toEqual([])
     expect(run.failed[0]!.error).toMatch(/could not be read/)
     expect(writes.filter(w => !w.startsWith("GET "))).toEqual([])
@@ -506,7 +509,7 @@ describe("assignments", () => {
     const state: Tenant = { policies: [{ id: EXISTING, name: "Corporate Edge settings" }], assignments: { [EXISTING]: [] } }
     vi.stubGlobal("fetch", world(state, writes))
     await source()
-    const assign = (item: Json) => handleOib({ ...base, action: "oib-assign", commit, backup: { mode: "none" }, mode: "replace", items: [item], assignments: { deviceGroups: [DEVICES], userGroups: [], excludeGroups: [] } })
+    const assign = (item: Json) => handleOib({ ...base, action: "oib-assign", commit, backup: { mode: "none" }, mode: "replace", items: [item], assignments: { deviceGroups: [DEVICES], userGroups: [], excludeDeviceGroups: [] } })
     await expect(assign({ source: SC, targetId: EXISTING })).rejects.toThrow("Review the current assignments")
     const run = await assign({ source: SC, targetId: EXISTING, expected: [] }) as OibRun
     expect(run).toMatchObject({ reassigned: [], failed: [{ error: "This tenant policy is not the deployed copy of this OIB policy. Compare again." }] })
@@ -522,7 +525,7 @@ describe("assignments", () => {
     let refuse = true
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => refuse && init?.method === "POST" && String(input).endsWith("/assign") ? Response.json({ error: { code: "BadRequest", message: "Refused" } }, { status: 400 }) : inner(input, init)))
     await source()
-    const assign = () => handleOib({ ...base, action: "oib-assign", commit, backup: { mode: "none" }, mode: "add", items: [{ source: SC, targetId: EXISTING, expected: state.assignments![EXISTING] as Json }], assignments: { deviceGroups: [DEVICES], userGroups: [], excludeGroups: [] } }) as Promise<OibRun>
+    const assign = () => handleOib({ ...base, action: "oib-assign", commit, backup: { mode: "none" }, mode: "add", items: [{ source: SC, targetId: EXISTING, expected: state.assignments![EXISTING] as Json }], assignments: { deviceGroups: [DEVICES], userGroups: [], excludeDeviceGroups: [] } }) as Promise<OibRun>
     expect(await assign()).toMatchObject({ reassigned: [], failed: [{ error: "Refused" }] })
     expect(await handleOib({ action: "oib-runs", tenantId })).toEqual({ runs: [] })
     refuse = false
@@ -539,11 +542,31 @@ describe("assignments", () => {
     expect(await handleOib({ action: "oib-undo", tenantId, appId, runId: run.runId })).toMatchObject({ run: null, results: [{ done: true, note: "already assigned as before the run" }] })
   })
 
+  it("keeps the undo record when Graph answers a write with a server error", async () => {
+    const state: Tenant = { policies: [{ id: EXISTING, name: "Win - OIB - SC - Test - v3.8" }], assignments: { [EXISTING]: [] } }
+    const inner = world(state, [])
+    let gateway = true
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (gateway && init?.method === "POST" && String(input).endsWith("/assign")) {
+        gateway = false
+        // The change is made, but the answer is a gateway error.
+        state.assignments![EXISTING] = (JSON.parse(String(init.body)) as { assignments: unknown[] }).assignments
+        return Response.json({ error: { code: "GatewayTimeout", message: "Gateway timeout" } }, { status: 504 })
+      }
+      return inner(input, init)
+    }))
+    await source()
+    const run = await handleOib({ ...base, action: "oib-assign", commit, backup: { mode: "none" }, mode: "add", items: [{ source: SC, targetId: EXISTING, expected: [] }], assignments: { deviceGroups: [DEVICES], userGroups: [], excludeDeviceGroups: [] } }) as OibRun
+    expect(run).toMatchObject({ reassigned: [{ id: EXISTING, pending: true }], failed: [{ error: "The outcome is unknown: Microsoft Graph returned 504." }] })
+    expect(await handleOib({ action: "oib-undo", tenantId, appId, runId: run.runId })).toMatchObject({ run: null, results: [{ action: "reassigned", done: true }] })
+    expect(state.assignments![EXISTING]).toEqual([])
+  })
+
   it("checks a spec that assigns nothing against the tenant too", async () => {
     const writes: string[] = []
     vi.stubGlobal("fetch", world({ policies: [], groups: [DEVICES] }, writes))
     await source()
-    await expect(handleOib({ ...base, action: "oib-deploy", commit, items: [{ source: SC, mode: "create" }], assignments: { deviceGroups: [], userGroups: [], excludeGroups: [EXCLUDED] } })).rejects.toThrow("does not exist in the tenant")
+    await expect(handleOib({ ...base, action: "oib-deploy", commit, items: [{ source: SC, mode: "create" }], assignments: { deviceGroups: [], userGroups: [], excludeDeviceGroups: [EXCLUDED] } })).rejects.toThrow("does not exist in the tenant")
     expect(writes).toEqual([])
   })
 })

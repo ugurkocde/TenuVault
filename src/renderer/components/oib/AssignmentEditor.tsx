@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState } from "react"
 import { Plus, X } from "lucide-react"
 import { cn } from "~/lib/utils"
-import { emptySpec, FILTER_PLATFORM_LABELS, filterManagementType, filterPlatformFor, MAX_GROUPS_PER_LIST, specGroupIds, type FilterPlatform, type OibAssignmentSpec, type OibGroupRef, type OibScope, type UnmarkedChoice } from "../../../shared/oib/assignments"
+import { emptySpec, FILTER_PLATFORM_LABELS, filterManagementType, filterPlatformFor, MAX_GROUPS_PER_LIST, platformFilterPlatform, specGroupIds, type FilterPlatform, type OibAssignmentSpec, type OibGroupRef, type OibScope, type UnmarkedChoice } from "../../../shared/oib/assignments"
 import type { OibPlatform } from "../../../shared/oib/types"
 import { errorText, GUID, oibRequest, type OibTenant } from "./common"
 
@@ -21,19 +21,25 @@ export interface AssignmentTargets {
   user: number
   unmarked: number
   filterPlatforms: FilterPlatform[]
+  /** Policies whose type takes no filter, by the filter platform the rest of their platform uses. */
+  unfiltered: Partial<Record<FilterPlatform, number>>
 }
 
 export function assignmentTargets(policies: Array<{ platform: OibPlatform; folder?: string; scope?: OibScope }>): AssignmentTargets {
   const platforms = new Set<FilterPlatform>()
+  const unfiltered: Partial<Record<FilterPlatform, number>> = {}
   for (const policy of policies) {
     const platform = policy.folder ? filterPlatformFor(policy.folder, policy.platform) : undefined
     if (platform) platforms.add(platform)
+    const own = platformFilterPlatform(policy.platform)
+    if (policy.folder && !platform && own) unfiltered[own] = (unfiltered[own] ?? 0) + 1
   }
   return {
     device: policies.filter(p => p.scope === "device").length,
     user: policies.filter(p => p.scope === "user").length,
     unmarked: policies.filter(p => !p.scope).length,
     filterPlatforms: [...platforms],
+    unfiltered: Object.fromEntries(Object.entries(unfiltered).filter(([platform]) => platforms.has(platform as FilterPlatform))),
   }
 }
 
@@ -51,7 +57,7 @@ export interface AssignmentData {
 
 export const newAssignment = (spec?: OibAssignmentSpec): AssignmentData => ({
   spec: spec ?? emptySpec(),
-  names: Object.fromEntries(spec ? [...spec.deviceGroups, ...spec.userGroups, ...spec.excludeGroups].flatMap(g => g.name ? [[g.id, g.name]] : []) : []),
+  names: Object.fromEntries(spec ? [...spec.deviceGroups, ...spec.userGroups, ...spec.excludeDeviceGroups, ...spec.excludeUserGroups].flatMap(g => g.name ? [[g.id, g.name]] : []) : []),
   missing: [], readable: null, checking: false,
 })
 
@@ -89,7 +95,7 @@ function useGroupNames({ tenant, data, update }: AssignmentState) {
 export function specFor(data: AssignmentData, targets: AssignmentTargets): OibAssignmentSpec {
   const named = (list: OibGroupRef[]) => list.map(g => ({ id: g.id, ...(data.names[g.id] ? { name: data.names[g.id] } : {}) }))
   const filters = Object.fromEntries(Object.entries(data.spec.filters).filter(([platform, choice]) => choice && targets.filterPlatforms.includes(platform as FilterPlatform)))
-  return { ...data.spec, deviceGroups: named(data.spec.deviceGroups), userGroups: named(data.spec.userGroups), excludeGroups: named(data.spec.excludeGroups), filters }
+  return { ...data.spec, deviceGroups: named(data.spec.deviceGroups), userGroups: named(data.spec.userGroups), excludeDeviceGroups: named(data.spec.excludeDeviceGroups), excludeUserGroups: named(data.spec.excludeUserGroups), filters }
 }
 
 const groupName = (data: AssignmentData, id: string) => data.names[id] ?? id
@@ -188,7 +194,7 @@ function useFilters(tenant: OibTenant, wanted: boolean) {
 const scopeCount = (count: number, scope: string) => `${count} ${scope} ${count === 1 ? "policy" : "policies"}`
 
 /** The assignment choices for one tenant. `targets` says which policies they apply to. */
-export function AssignmentEditor({ state, targets, excludeHint }: { state: AssignmentState; targets: AssignmentTargets; excludeHint?: string }) {
+export function AssignmentEditor({ state, targets }: { state: AssignmentState; targets: AssignmentTargets }) {
   useGroupNames(state)
   const { data, tenant, update } = state
   const { spec } = data
@@ -202,7 +208,8 @@ export function AssignmentEditor({ state, targets, excludeHint }: { state: Assig
     {data.readable === false && <p role="note" className="rounded-2xl bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-950">This app registration may not read groups, so groups cannot be searched by name. Paste each group's object ID from Entra. To search by name, add the Group.Read.All permission (the setup script's -IncludeGroupRead switch) and sign in again.</p>}
     <GroupPicker state={state} list={spec.deviceGroups} onChange={list => setSpec(s => ({ ...s, deviceGroups: list }))} label="Device groups" hint={`${deviceHint}.`} />
     <GroupPicker state={state} list={spec.userGroups} onChange={list => setSpec(s => ({ ...s, userGroups: list }))} label="User groups" hint={`${userHint}.`} />
-    <GroupPicker state={state} list={spec.excludeGroups} onChange={list => setSpec(s => ({ ...s, excludeGroups: list }))} label="Excluded groups" hint={excludeHint ?? "Excluded from every policy that gets a device or user group. An exclusion wins over an include."} />
+    <GroupPicker state={state} list={spec.excludeDeviceGroups} onChange={list => setSpec(s => ({ ...s, excludeDeviceGroups: list }))} label="Excluded device groups" hint="Excluded from the policies that get device groups. Intune only applies an exclusion of the same kind as the include, so exclude devices here." />
+    <GroupPicker state={state} list={spec.excludeUserGroups} onChange={list => setSpec(s => ({ ...s, excludeUserGroups: list }))} label="Excluded user groups" hint="Excluded from the policies that get user groups. Excluding a user group from a device policy has no effect in Intune, so exclude users here." />
     {targets.unmarked > 0 && <label className="block text-sm font-medium text-gray-800">Policies without a device or user marker ({targets.unmarked})
       <select value={spec.unmarked} onChange={e => setSpec(s => ({ ...s, unmarked: e.target.value as UnmarkedChoice }))} className="mt-2 block h-10 w-full rounded-full border border-gray-300 bg-white px-4 text-sm font-normal sm:w-[28rem]">
         {(["both", "device", "user", "none"] as const).map(choice => <option key={choice} value={choice}>Assign to {unmarkedTo(choice)}</option>)}
@@ -226,6 +233,7 @@ export function AssignmentEditor({ state, targets, excludeHint }: { state: Assig
             <option value="include">Include matching devices</option>
             <option value="exclude">Exclude matching devices</option>
           </select>}
+          {choice && !!targets.unfiltered[platform] && <p className="w-full text-xs text-amber-800">{targets.unfiltered[platform] === 1 ? "1 selected policy is a Windows update profile, which takes" : `${targets.unfiltered[platform]} selected policies are Windows update profiles, which take`} no filter: {targets.unfiltered[platform] === 1 ? "it goes" : "they go"} to the whole group.</p>}
         </div>
       })}</div>
     </fieldset>}
@@ -240,17 +248,25 @@ export function assignmentSummary(data: AssignmentData, targets: AssignmentTarge
   const unmarkedGroups = spec.unmarked === "both" ? [...spec.deviceGroups, ...spec.userGroups] : spec.unmarked === "device" ? spec.deviceGroups : spec.unmarked === "user" ? spec.userGroups : []
   const line = (count: number, scope: string, list: OibGroupRef[]) => count ? `${scopeCount(count, scope)}: ${list.length ? names(list) : "unassigned"}` : ""
   const assigned = (targets.device && spec.deviceGroups.length) || (targets.user && spec.userGroups.length) || (targets.unmarked && unmarkedGroups.length)
-  const filters = Object.entries(spec.filters).filter(([p, c]) => c && targets.filterPlatforms.includes(p as FilterPlatform)).map(([p, c]) => `${FILTER_PLATFORM_LABELS[p as FilterPlatform]} filter ${c!.name ?? c!.id} (${c!.mode})`)
+  const filters = Object.entries(spec.filters).filter(([p, c]) => c && targets.filterPlatforms.includes(p as FilterPlatform)).map(([p, c]) => `${FILTER_PLATFORM_LABELS[p as FilterPlatform]} filter: ${c!.name ?? c!.id} (${c!.mode})`)
   return [
     line(targets.device, "device", spec.deviceGroups),
     line(targets.user, "user", spec.userGroups),
     line(targets.unmarked, "unmarked", [...new Map(unmarkedGroups.map(g => [g.id, g])).values()]),
-    assigned && spec.excludeGroups.length ? `Excluded: ${names(spec.excludeGroups)}` : "",
+    assigned && spec.deviceGroups.length && spec.excludeDeviceGroups.length ? `Excluded device groups: ${names(spec.excludeDeviceGroups)}` : "",
+    assigned && spec.userGroups.length && spec.excludeUserGroups.length ? `Excluded user groups: ${names(spec.excludeUserGroups)}` : "",
     assigned && filters.length ? listFilters(filters) : "",
+    ...(assigned ? unfilteredLines(spec, targets) : []),
   ].filter(Boolean)
 }
 
-const listFilters = (filters: string[]) => `With the ${filters.join(", ")}`
+const listFilters = (filters: string[]) => filters.join("; ")
+
+/** Policies on a platform with a chosen filter whose type takes none: they get the whole group. */
+function unfilteredLines(spec: OibAssignmentSpec, targets: AssignmentTargets): string[] {
+  return Object.entries(targets.unfiltered).flatMap(([platform, count]) => spec.filters[platform as FilterPlatform] && count
+    ? [`${count === 1 ? "1 policy takes" : `${count} policies take`} no filter (Windows update profiles), so ${count === 1 ? "it goes" : "they go"} to the whole group without the ${FILTER_PLATFORM_LABELS[platform as FilterPlatform]} filter`] : [])
+}
 
 /** Whether the choices can be sent: no unknown group and no lookup still running. */
 export const assignmentReady = (data: AssignmentData) => !unknownGroups(data).length && !data.checking

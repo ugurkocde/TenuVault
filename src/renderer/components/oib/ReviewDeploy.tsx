@@ -176,7 +176,7 @@ export function ReviewDeploy({ batches: given, flow, kind = "deploy", onBack, ba
   const notDeployed = outcomes.filter(o => !o.run)
   const nothingDeployed = outcomes.length > 0 && notDeployed.length === outcomes.length
   // A backup that failed (or could not be used) stops a tenant's run before any policy changes.
-  const backupFailed = view === "result" && !job!.error && notDeployed.some(o => /backup/i.test(o.error ?? "") && !/no backup storage/i.test(o.error ?? ""))
+  const backupFailed = view === "result" && !job!.error && notDeployed.some(o => o.backupFailed)
   const heading = view === "running" ? job!.label
     : view === "result" ? backupFailed ? nothingDeployed ? `Nothing was ${kind === "fix" ? "reset" : "deployed"}: the backup failed` : "Some platforms were not deployed"
       : `${kind === "fix" ? "Drift fix" : "Deployment"} ${job!.error ? "stopped" : job!.result?.some(o => o.error || o.run?.failed.length) ? "finished with problems" : "finished"}`

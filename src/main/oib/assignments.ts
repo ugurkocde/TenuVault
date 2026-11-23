@@ -132,7 +132,7 @@ export async function checkSpec(graph: GraphCall, spec: OibAssignmentSpec): Prom
   const named = (list: OibAssignmentSpec["deviceGroups"]) => list.map((group) => ({ id: group.id, ...(groupNames[group.id] ? { name: groupNames[group.id] } : {}) }))
   const filters = Object.fromEntries(chosen.map(([platform, choice]) => [platform, { id: choice.id, mode: choice.mode, ...(filterNames[choice.id] ? { name: filterNames[choice.id] } : {}) }]))
   return {
-    spec: { ...spec, deviceGroups: named(spec.deviceGroups), userGroups: named(spec.userGroups), excludeGroups: named(spec.excludeGroups), filters },
+    spec: { ...spec, deviceGroups: named(spec.deviceGroups), userGroups: named(spec.userGroups), excludeDeviceGroups: named(spec.excludeDeviceGroups), excludeUserGroups: named(spec.excludeUserGroups), filters },
     groupNames, filterNames, groupsChecked: lookup.readable,
   }
 }

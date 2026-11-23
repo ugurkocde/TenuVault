@@ -22,16 +22,16 @@ describe("OIB policy scope", () => {
 describe("assignment spec", () => {
   it("normalizes group IDs and keeps names", () => {
     const spec = parseSpec({ deviceGroups: [{ id: A.toUpperCase(), name: "Pilot devices" }], userGroups: [B], filters: { windows10AndLater: { id: F, mode: "exclude" }, macOS: null } })
-    expect(spec).toEqual({ deviceGroups: [{ id: A, name: "Pilot devices" }], userGroups: [{ id: B }], excludeGroups: [], unmarked: "both", filters: { windows10AndLater: { id: F, mode: "exclude" } } })
+    expect(spec).toEqual({ deviceGroups: [{ id: A, name: "Pilot devices" }], userGroups: [{ id: B }], excludeDeviceGroups: [], excludeUserGroups: [], unmarked: "both", filters: { windows10AndLater: { id: F, mode: "exclude" } } })
     expect(assignsAnything(spec)).toBe(true)
-    expect(assignsAnything({ ...emptySpec(), excludeGroups: [{ id: X }] })).toBe(false)
+    expect(assignsAnything({ ...emptySpec(), excludeDeviceGroups: [{ id: X }] })).toBe(false)
   })
 
   it("refuses what Intune would not take or what would surprise the admin", () => {
     expect(() => parseSpec(null)).toThrow("invalid")
     expect(() => parseSpec({ deviceGroups: ["Pilot"] })).toThrow("Entra group object ID")
     expect(() => parseSpec({ deviceGroups: [A, A.toUpperCase()] })).toThrow("listed twice")
-    expect(() => parseSpec({ deviceGroups: [A], excludeGroups: [A] })).toThrow("both included and excluded")
+    expect(() => parseSpec({ deviceGroups: [A], excludeUserGroups: [A] })).toThrow("both included and excluded")
     expect(() => parseSpec({ deviceGroups: Array.from({ length: 26 }, (_, i) => `aaaaaaaa-0000-4000-8000-${String(i).padStart(12, "0")}`) })).toThrow("at most 25")
     expect(() => parseSpec({ unmarked: "all" })).toThrow("marker")
     expect(() => parseSpec({ filters: { linux: { id: F, mode: "include" } } })).toThrow("Unknown assignment filter platform")
@@ -40,7 +40,7 @@ describe("assignment spec", () => {
 })
 
 describe("assignments per policy", () => {
-  const spec = { ...emptySpec(), deviceGroups: [{ id: A }], userGroups: [{ id: B }, { id: A }], excludeGroups: [{ id: X }], filters: { windows10AndLater: { id: F, mode: "include" as const } } }
+  const spec = { ...emptySpec(), deviceGroups: [{ id: A }], userGroups: [{ id: B }, { id: A }], excludeDeviceGroups: [{ id: X }], filters: { windows10AndLater: { id: F, mode: "include" as const } } }
 
   it("routes groups by scope and sends unmarked policies where the admin chose", () => {
     expect(includesFor("device", spec).map(g => g.id)).toEqual([A])
@@ -54,6 +54,16 @@ describe("assignments per policy", () => {
     expect(assignmentsFor({ folder: "ConfigurationPolicies", scope: "device" }, "windows", spec)).toEqual({ assignments: [include(A, filter), exclude(X)], include: 1, exclude: 1, filter: { id: F, mode: "include" }, notes: [] })
     // A macOS policy has no macOS filter chosen: no filter, no note.
     expect(assignmentsFor({ folder: "ConfigurationPolicies", scope: "device" }, "macos", spec)).toMatchObject({ assignments: [include(A), exclude(X)], notes: [] })
+  })
+
+  it("excludes groups of the same kind as the include only", () => {
+    const Y = "eeeeeeee-0000-4000-8000-000000000005"
+    const split = { ...spec, excludeUserGroups: [{ id: Y }], filters: {} }
+    expect(assignmentsFor({ folder: "CompliancePolicies", scope: "user" }, "windows", split).assignments).toEqual([include(B), include(A), exclude(Y)])
+    expect(assignmentsFor({ folder: "ConfigurationPolicies", scope: "device" }, "windows", split).assignments).toEqual([include(A), exclude(X)])
+    // Unmarked policies sent to both kinds get both kinds of exclusion; with device groups only, only device exclusions.
+    expect(assignmentsFor({ folder: "ConfigurationPolicies" }, "windows", split).assignments).toEqual([include(A), include(B), exclude(X), exclude(Y)])
+    expect(assignmentsFor({ folder: "ConfigurationPolicies" }, "windows", { ...split, unmarked: "device" }).assignments).toEqual([include(A), exclude(X)])
   })
 
   it("leaves out filters and exclusions the policy type does not take, and says so", () => {

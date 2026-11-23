@@ -160,9 +160,12 @@ You choose:
 
 * **Device groups**: assigned to device policies.
 * **User groups**: assigned to user policies.
-* **Excluded groups**: excluded from every policy that gets a device or user group. In Intune an exclusion wins over an include.
+* **Excluded device groups**: excluded from the policies that get device groups.
+* **Excluded user groups**: excluded from the policies that get user groups.
 * **Policies without a device or user marker**: shown only when the selection has policies OIB does not mark. Assign them to device and user groups, device groups only, user groups only, or no groups.
-* **Assignment filters** (optional): one filter per platform the selected policies use, for example Windows or macOS, and whether it includes or excludes matching devices. The filter applies to each device and user group of the policies on that platform. Only filters of that platform are offered; app protection policies (BYOD) use app filters. Windows driver, feature and quality update profiles take no filter and are assigned without one; the result says so.
+* **Assignment filters** (optional): one filter per platform the selected policies use, for example Windows or macOS, and whether it includes or excludes matching devices. The filter applies to each device and user group of the policies on that platform. Only filters of that platform are offered; app protection policies (BYOD) use app filters. Windows driver, feature and quality update profiles take no filter: when the selection has some, the editor and the confirmation say that they go to the whole group.
+
+Intune only applies an exclusion of the same kind as the include: a user group excluded from a policy assigned to device groups has no effect. That is why device and user exclusions are separate lists, and each goes only with its own kind of include. In Intune an exclusion wins over an include of the same kind.
 
 Each list takes up to 25 groups. A group cannot be both included and excluded.
 
@@ -178,7 +181,7 @@ Before anything changes, TenuVault checks the groups and filters again in the te
 
 In New Deployment and Existing Deployment, **Assignments for new policies** on the review step assigns the policies the run creates. Without groups, new policies stay unassigned and nothing reaches devices until you assign them; start with a pilot group. Policies updated in place keep their assignments.
 
-The confirmation lists where the policies go, for example "40 device policies: Pilot devices; 31 user policies: Pilot users". The result says how many new policies were assigned and how many stay unassigned.
+The confirmation lists where the policies go, for example "40 device policies: Pilot devices; 31 user policies: Pilot users; Excluded device groups: Kiosk devices". The result says how many new policies were assigned and how many stay unassigned.
 
 ### The Assignments workflow
 
@@ -192,6 +195,8 @@ Pro and MSP. **Assignments** changes the assignments of OIB policies that are al
 * **Replace** makes the direct assignments exactly the groups you chose. With no groups, every direct assignment of the selected policies is removed. You confirm that the current assignments are replaced.
 * Assignments that come from a policy set are never changed.
 * A policy whose current assignments cannot be read is not changed.
+* Only what the review showed is changed: if a policy's assignments change in Intune after the review, or the tenant policy is no longer the matched copy of the OIB policy, it is not changed and the result asks you to review it again.
+* If Microsoft Graph does not confirm a change (a timeout or server error), the run keeps the previous assignments so Undo can still put them back; check the policy in Intune.
 
 The backup choice is the same as for deployments. Each change is recorded as a run that can be undone.
 
@@ -226,7 +231,7 @@ Every deployment, drift fix and assignment change is recorded on this device wit
 
 If the run list cannot load, it shows the error with a **Retry** button. Retry reloads the history. A load failure does not mean there are no runs to undo.
 
-Undo deletes the objects the run created (with their assignments), puts the previous versions of updated policies back and puts the previous assignments of reassigned policies back. It does not touch anything else. To go back further, restore from the backup taken before the run. See [Restore Intune policies](/restore/).
+Undo deletes the objects the run created (with their assignments), puts the previous versions of updated policies back and puts the previous assignments of reassigned policies back. It does not touch anything else. If a reassigned policy's assignments were changed again after the run, Undo leaves it alone and says so, so a newer change is never overwritten. To go back further, restore from the backup taken before the run. See [Restore Intune policies](/restore/).
 
 Failed writes follow the same safety rules as restores. A write with an unknown outcome is not repeated automatically; resolve it in **Settings** > **Storage and recovery** > **Restore write history**. See [Restore write history](/restore/limitations/#restore-write-history).
 
