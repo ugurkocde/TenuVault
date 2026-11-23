@@ -11,7 +11,7 @@ import { extractOibId } from "../../shared/oib/manifest"
 import { compareToTenant } from "../../shared/oib/match"
 import { definitionIdsOf, describePolicy, policyChanges, type OibPolicyChanges, type OibPolicySettings } from "../../shared/oib/policy-settings"
 import { replaceTenantVariables } from "../../shared/oib/variables"
-import { AssignmentSpecError, REPORTS_SET_AS_DIRECT, alreadyTargeted, assignmentsFor, assignsAnything, conflictingGroups, directAssignments, emptySpec, mergeAssignments, oibScope, parseSpec, sameAssignments, writableAssignment, type OibAssignmentSpec } from "../../shared/oib/assignments"
+import { AssignmentSpecError, REPORTS_SET_AS_DIRECT, alreadyTargeted, assignmentsFor, excludesFor, assignsAnything, conflictingGroups, directAssignments, emptySpec, mergeAssignments, oibScope, parseSpec, sameAssignments, writableAssignment, type OibAssignmentSpec } from "../../shared/oib/assignments"
 import { isFullValidation, OIB_BACKUP_REUSE_MINUTES, OIB_PLATFORMS, type DeployItem, type OibAssignMode, type OibPolicyAssignments, type OibBackupChoice, type OibBackupOptions, type OibComparison, type OibPlatform, type OibProgress, type OibRecentBackup, type OibRun, type PolicyValidation, type TenantPolicy, type UndoResult, type ValidationRun } from "../../shared/oib/types"
 import { backupGaps, describeMissing, describeStatus, folderLabel } from "../backup/completeness"
 import { apiBody } from "../features/deps"
@@ -246,17 +246,26 @@ function readRuns(tenant: string): OibRun[] {
  * are outside that limit: they are small (IDs only) and are the only record of what those
  * deployments created, so they stay until they are undone.
  */
-function saveRun(run: OibRun): void {
+function saveRun(run: OibRun, prune = true): void {
   let runs = readRuns(run.tenantId).filter((r) => r.runId !== run.runId)
   if (run.created.length || run.updated.length || run.reassigned?.length) runs.push(run)
   const legacy = runs.filter((r) => r.legacy === "quickstart")
+  // A run with a write whose outcome is not known yet is never pruned; nor is anything while a
+  // write is about to be sent (prune false), so a refused write cannot cost an older run its undo.
+  const pinned = (r: OibRun) => !prune || !!r.reassigned?.some((item) => item.pending)
   // Assignment changes keep their own RUNS_KEPT, so reassigning often never pushes out a deployment's undo.
-  const kept = (assign: boolean) => runs.filter((r) => r.legacy !== "quickstart" && (r.kind === "assign") === assign).slice(-RUNS_KEPT)
+  const kept = (assign: boolean) => {
+    const own = runs.filter((r) => r.legacy !== "quickstart" && (r.kind === "assign") === assign)
+    const prunable = own.filter((r) => !pinned(r))
+    const keep = new Set(prunable.slice(-RUNS_KEPT))
+    return own.filter((r) => pinned(r) || keep.has(r))
+  }
   let recent = [...kept(false), ...kept(true)].sort((a, b) => a.createdAt.localeCompare(b.createdAt))
   const combine = () => [...legacy, ...recent].sort((a, b) => a.createdAt.localeCompare(b.createdAt))
   let json = JSON.stringify(combine())
-  while (json.length > MAX_HISTORY_CHARS && recent.length > 1) {
-    recent = recent.slice(1)
+  while (json.length > MAX_HISTORY_CHARS && prune && recent.some((r) => !pinned(r))) {
+    const oldest = recent.findIndex((r) => !pinned(r))
+    recent = recent.filter((_, index) => index !== oldest)
     json = JSON.stringify(combine())
   }
   requireStore().set(runsKey(run.tenantId), json)
@@ -583,6 +592,7 @@ async function currentMatches(graph: GraphCall, pack: LoadedPack, folders: strin
 }
 
 const NOT_THE_POLICY = "This tenant policy is not the deployed copy of this OIB policy. Compare again."
+const ADD_EXCLUSION_APP_PROTECTION = "Excluded groups cannot be added to an app protection policy that is already assigned: Intune reports its policy set assignments as direct ones, so an exclusion could remove protection from people a policy set targets. Nothing was changed; add groups without exclusions, or change the exclusions in Intune."
 const REPLACE_APP_PROTECTION = "Replace is not available for app protection policies: Intune reports their policy set assignments as direct ones, so replacing could remove them. Nothing was changed; add groups instead."
 
 /** The registry type of a pack policy, when its assignments can be written with /assign. */
@@ -705,6 +715,12 @@ async function assign(body: RecordJson): Promise<OibRun> {
           continue
         }
         const current = directAssignments(live.assignments).map(writableAssignment)
+        // An exclusion added to an app protection policy that is already assigned could reach people a
+        // policy set targets through another group (Intune reports set assignments as direct), so it is refused.
+        if (mode === "add" && REPORTS_SET_AS_DIRECT.has(policy.folder) && current.length && excludesFor(oibScope(item.meta ?? { name: policy.name }), checked.spec).length) {
+          run.failed.push({ name, error: ADD_EXCLUSION_APP_PROTECTION })
+          continue
+        }
         // Only what the admin reviewed is changed: a policy whose assignments changed since goes back to review.
         if (!sameAssignments(current, item.expected ?? [])) {
           run.failed.push({ name, error: "The assignments changed after the review, so nothing was changed. Review them again." })
@@ -725,10 +741,10 @@ async function assign(body: RecordJson): Promise<OibRun> {
         const warnings = [...planned.notes, ...(conflicts.length ? [`${conflicts.join(", ")} ${conflicts.length === 1 ? "is" : "are"} both included and excluded; the exclusion wins.`] : []),
           ...(untouched.length ? [`${untouched.join(", ")} ${untouched.length === 1 ? "is" : "are"} already targeted by this app protection policy and ${untouched.length === 1 ? "was" : "were"} left as ${untouched.length === 1 ? "it is" : "they are"}.`] : [])]
         const entry: NonNullable<OibRun["reassigned"]>[number] = { folder: policy.folder, id: item.targetId, name, previous: current, applied: next, pending: true, pendingAt: new Date().toISOString(),
-          ...(planned.include || planned.exclude ? { assignment: { include: planned.include, exclude: planned.exclude } } : {}), ...(warnings.length ? { warnings } : {}) }
+          ...assignmentCount(mode, current, next, planned), ...(warnings.length ? { warnings } : {}) }
         // Saved before the write, so a write that lands while the answer or the app is lost can still be undone.
         run.reassigned!.push(entry)
-        saveRun(run)
+        saveRun(run, false)
         let response: Awaited<ReturnType<GraphCall>>
         try {
           // Never sent again later: a retry after throttling could overwrite assignments changed in the meantime.
@@ -765,6 +781,19 @@ async function assign(body: RecordJson): Promise<OibRun> {
       progress.delete(tenant)
     }
   })
+}
+
+/**
+ * The groups a reassigned policy was assigned to, for the result: the planned list for replace,
+ * and for add only the entries the change really adds (an app protection add leaves groups it
+ * already targets alone).
+ */
+function assignmentCount(mode: OibAssignMode, current: Item[], next: Item[], planned: { include: number; exclude: number }): { assignment?: { include: number; exclude: number } } {
+  if (mode === "replace") return planned.include || planned.exclude ? { assignment: { include: planned.include, exclude: planned.exclude } } : {}
+  const before = new Set(current.map((entry) => JSON.stringify(entry)))
+  const added = next.filter((entry) => !before.has(JSON.stringify(entry)))
+  const exclude = added.filter((entry) => String((entry.target as Item | undefined)?.["@odata.type"] ?? "").includes("exclusion")).length
+  return added.length ? { assignment: { include: added.length - exclude, exclude } } : {}
 }
 
 /** Deletes the objects a run created and puts back the previous version of what it updated. */

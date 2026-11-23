@@ -610,6 +610,19 @@ describe("assignments", () => {
     expect(undone).toMatchObject({ run: { runId: run.runId }, results: [{ action: "reassigned", done: false }] })
   })
 
+  it("never prunes an older run for a write that is then refused", async () => {
+    const older = Array.from({ length: 20 }, (_, index): OibRun => ({ runId: `old-${index}`, tenantId, createdAt: new Date(Date.UTC(2026, 0, 1, 0, index)).toISOString(), kind: "assign", platform: "windows", reference: "r",
+      created: [], updated: [], failed: [], reassigned: [{ folder: "ConfigurationPolicies", id: EXISTING, name: "x", previous: [], applied: [] }] }))
+    store.set(`oib:runs:${tenantId}`, JSON.stringify(older))
+    const state: Tenant = { policies: [{ id: EXISTING, name: "Win - OIB - SC - Test - v3.8" }], assignments: { [EXISTING]: [] } }
+    const inner = world(state, [])
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => init?.method === "POST" && String(input).endsWith("/assign")
+      ? Response.json({ error: { code: "BadRequest", message: "Refused" } }, { status: 400 }) : inner(input, init)))
+    await source()
+    await handleOib({ ...base, action: "oib-assign", commit, backup: { mode: "none" }, mode: "add", items: [{ source: SC, targetId: EXISTING, expected: [] }], assignments: { deviceGroups: [DEVICES], userGroups: [] } })
+    expect((await handleOib({ action: "oib-runs", tenantId }) as { runs: OibRun[] }).runs.map(r => r.runId).sort()).toEqual(older.map(r => r.runId).sort())
+  })
+
   it("refuses groups on a deployment that creates no policy", async () => {
     const writes: string[] = []
     vi.stubGlobal("fetch", world({ policies: [{ id: EXISTING, name: "Win - OIB - SC - Test - v3.1", value: 7 }] }, writes))

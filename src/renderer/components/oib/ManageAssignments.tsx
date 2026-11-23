@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react"
 import { AlertTriangle, ArrowRight, CheckCircle2, RefreshCw, Users, XCircle } from "lucide-react"
 import { cn } from "~/lib/utils"
 import type { Item } from "../../../shared/intune/registry"
-import { assignmentsFor, assignsAnything, describeAssignment, mergeAssignments, REPORTS_SET_AS_DIRECT, sameAssignments } from "../../../shared/oib/assignments"
+import { assignmentsFor, assignsAnything, describeAssignment, excludesFor, mergeAssignments, REPORTS_SET_AS_DIRECT, sameAssignments } from "../../../shared/oib/assignments"
 import { policyTypeName } from "../../../shared/oib/licensing"
 import { OIB_PLATFORMS, type OibAssignMode, type OibPlatform, type OibPolicyAssignments, type OibRun } from "../../../shared/oib/types"
 import { PlanBadge } from "../UpgradeNote"
@@ -178,7 +178,8 @@ function ReviewAssign({ batches: given, onBack, onFinished, next }: { batches: D
   const preview = items.map(item => {
     const live = known?.policies.find(p => p.targetId === item.targetId)
     // Intune reports policy set assignments of app protection as direct, so replacing them is refused (see the main process).
-    const blocked = mode === "replace" && REPORTS_SET_AS_DIRECT.has(item.folder ?? "")
+    const appProtection = REPORTS_SET_AS_DIRECT.has(item.folder ?? "")
+    const blocked = appProtection && (mode === "replace" || (!!live?.assignments?.length && excludesFor(item.scope, spec).length > 0))
     const planned = assignmentsFor({ folder: item.folder ?? "", scope: item.scope }, item.platform, spec).assignments
     const after = live?.assignments && !blocked ? mode === "replace" ? planned : mergeAssignments(live.assignments, planned, { keepExisting: REPORTS_SET_AS_DIRECT.has(item.folder ?? "") }) : undefined
     return { item, live, after, blocked, unchanged: !!live?.assignments && !!after && sameAssignments(live.assignments, after) }
@@ -273,7 +274,7 @@ function ReviewAssign({ batches: given, onBack, onFinished, next }: { batches: D
         : current.error ? <p role="alert" className="mt-2 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-800">{current.error}</p>
         : <ul className="mt-2 max-h-96 divide-y divide-gray-100 overflow-auto rounded-2xl bg-gray-50 text-sm">{preview.map(({ item, live, after, unchanged, blocked }) => <li key={item.targetId} className="p-3">
           <p className="text-gray-900">{live?.name ?? item.targetName ?? item.name}<span className="ml-2 text-xs text-gray-500">{item.scope ? `${SCOPE_LABEL[item.scope]} policy` : "Not marked"}</span></p>
-          {live?.error ? <p className="mt-1 text-xs text-red-800">{live.error} It is left unchanged.</p> : blocked ? <p className="mt-1 text-xs text-amber-800">Replace is not available for app protection policies, because Intune reports their policy set assignments as direct ones. It is left unchanged; add groups to it instead.</p> : <>
+          {live?.error ? <p className="mt-1 text-xs text-red-800">{live.error} It is left unchanged.</p> : blocked ? <p className="mt-1 text-xs text-amber-800">{mode === "replace" ? "Replace is not available for app protection policies, because Intune reports their policy set assignments as direct ones. It is left unchanged; add groups to it instead." : "Excluded groups cannot be added to an app protection policy that is already assigned, because an exclusion could remove protection from people a policy set targets. It is left unchanged; add groups without exclusions."}</p> : <>
             <p className="mt-1 text-xs text-gray-600">Now: {describe(live?.assignments ?? [])}{live?.inherited ? ` (and ${plural(live.inherited, "assignment", "assignments")} from a policy set)` : ""}</p>
             <p className={cn("mt-0.5 text-xs", unchanged ? "text-gray-500" : "text-gray-900")}>{unchanged ? "No change" : `After: ${describe(after ?? [])}`}</p>
           </>}
