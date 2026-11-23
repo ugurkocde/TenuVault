@@ -122,6 +122,8 @@ The findings stay those of the last scan until you scan again: a newer backup do
 
 The latest scan shows when it was collected, the source backup, how many objects were inspected, how many findings are definite and possible, and when the Settings Catalog was checked. Types that were not collected are shown as not collected, not as clean. Group membership, filters and device state are not collected, so overlaps that depend on them stay possible, never proven. When the Settings Catalog cannot be read during a scan, deprecated settings are shown as a check that could not be made, never as clean.
 
+The unresolved groups check uses delegated [group read access](/security/permissions/#group-read-groupmemberreadall) to check whether referenced groups still exist. If permission is missing, group references appear as unknown. After granting admin consent, select **Check again** in **Settings > Services and permissions** and run a new scan.
+
 Use the filters above the findings to narrow the list:
 
 * **Status**: open and acknowledged, all, or one status.

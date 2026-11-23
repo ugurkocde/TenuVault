@@ -20,6 +20,8 @@ import {
   MAX_SYNC_POLICIES,
   planSync,
   syncTargetObjects,
+  syncTargetGroups,
+  syncTargetGroupCounts,
   previewSyncTarget,
   retrySyncTarget,
   syncPolicies,
@@ -462,13 +464,17 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
           mappingsDirty={mappingsDirty}
           mappingPanel={includeAssignments ? (target) => {
             const id = target.targetTenantId
+            const destination = tenantOf(id)
             const references = target.promotion?.items.flatMap((item) => item.references ?? []) ?? []
-            if (!references.some((reference) => reference.state !== "portable")) return null
+            if (!destination || !references.some((reference) => reference.state !== "portable")) return null
             return <div className="space-y-3 border-t border-gray-200 px-4 py-3">
               <h3 className="text-sm font-medium text-gray-900">Assignment and scope tag mappings</h3>
               <fieldset disabled={planning || pending(runId)}>
-                <RemoteMappingEditor tenantId={id} source={`sync:${sourceId}`} references={references}
+                <RemoteMappingEditor tenant={destination} source={`sync:${sourceId}`} references={references}
                   loadObjects={(kind) => syncTargetObjects(source, id, kind)}
+                  search={(query) => syncTargetGroups(source, id, query)}
+                  counts={(ids) => syncTargetGroupCounts(source, id, ids)}
+                  onRecheck={() => setMappingsDirty(true)}
                   mappings={mappings[id] ?? sessionMappings(sourceId, id)}
                   onChange={(next) => {
                     setMappings((previous) => ({ ...previous, [id]: next }))

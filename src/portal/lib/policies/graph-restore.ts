@@ -102,6 +102,7 @@ export interface GraphCallOptions {
   /** Checked immediately before every network attempt, including retries and token refresh. */
   beforeAttempt?: () => void
   onWriteDispatched?: () => void
+  consistencyLevel?: "eventual"
   exactBody?: string
   approvalCode?: string
   justification?: string
@@ -111,7 +112,7 @@ export interface GraphCallOptions {
   noRetry?: boolean
 }
 
-export type GraphCall = (method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE", path: string, body?: Item, options?: GraphCallOptions) => Promise<{ status: number; body: Item; approval?: ApprovalSignal }>
+export type GraphCall = (method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE", path: string, body?: Item, options?: GraphCallOptions) => Promise<{ status: number; body: Item; approval?: ApprovalSignal; rawBody?: string }>
 
 const GRAPH = "https://graph.microsoft.com/beta/"
 /** Far above any real collection; stops a listing whose continuation links never end. */
@@ -169,7 +170,7 @@ export function graphCaller(token: string, fetchImpl: typeof fetch = fetch, opti
         callOptions.onWriteDispatched?.()
         response = await fetchImpl(`${GRAPH}${path}`, {
           method,
-          headers: { Authorization: `Bearer ${token}`, ...(body ? { "Content-Type": "application/json" } : {}), ...(callOptions.approvalCode ? { "x-msft-approval-code": callOptions.approvalCode } : callOptions.justification ? { "x-msft-approval-justification": Buffer.from(callOptions.justification, "utf8").toString("base64") } : {}) },
+          headers: { Authorization: `Bearer ${token}`, ...(body ? { "Content-Type": "application/json" } : {}), ...(callOptions.consistencyLevel ? { ConsistencyLevel: callOptions.consistencyLevel } : {}), ...(callOptions.approvalCode ? { "x-msft-approval-code": callOptions.approvalCode } : callOptions.justification ? { "x-msft-approval-justification": Buffer.from(callOptions.justification, "utf8").toString("base64") } : {}) },
           body: callOptions.exactBody ?? (body && method !== "DELETE" ? JSON.stringify(body) : undefined),
           signal: AbortSignal.timeout(60_000),
         })
@@ -178,8 +179,9 @@ export function graphCaller(token: string, fetchImpl: typeof fetch = fetch, opti
         throw error
       }
       const text = await response.text()
+      const successfulCount = response.ok && path.endsWith("/$count")
       let parsed: Item = {}
-      try { parsed = text ? JSON.parse(text) as Item : {} } catch { /* An unreadable success remains uncertain. */ }
+      try { parsed = text && !successfulCount ? JSON.parse(text) as Item : {} } catch { /* An unreadable success remains uncertain. */ }
       const rejected = response.status >= 400 && response.status < 500 && response.status !== 408
       if (key && rejected) removeWrite(key)
       if (response.status === 401 && options.refreshToken && !refreshed && attempt < 3 && !callOptions.noRetry) {
@@ -197,7 +199,7 @@ export function graphCaller(token: string, fetchImpl: typeof fetch = fetch, opti
       }
       if (key && response.ok && (!createsObject || typeof parsed.id === "string")) saveWrite({ key, tenant: options.tenant!, method, path, at: new Date().toISOString(), state: "complete", label, ...(callOptions.sourceId ? { sourceId: callOptions.sourceId } : {}), ...(typeof parsed.id === "string" ? { objectId: parsed.id } : {}) })
       const approval = approvalSignal(response.status, parsed, response.headers)
-      return { status: response.status, body: parsed, ...(approval ? { approval } : {}) }
+      return { status: response.status, body: parsed, ...(successfulCount ? { rawBody: text } : {}), ...(approval ? { approval } : {}) }
     }
     throw new Error("Microsoft Graph retry limit reached")
   }

@@ -1,3 +1,5 @@
+import { GROUP_CHECK_REQUIRED } from "../../../shared/group-access"
+import { usableReference, type Mapping, type ReferenceKind, type ReferenceResolution } from "../../../shared/intune/reference-mapping"
 import type { IntuneType, Item, Json } from "../../../shared/intune/registry"
 import { cleanAssignment } from "../../../shared/intune/registry"
 import { isGraphId } from "../../../shared/security"
@@ -13,7 +15,6 @@ import { containsRedaction, containsSecret } from "../change-sets/model"
  * dropped explicitly), never includes; filter types are preserved exactly.
  */
 
-import { usableReference, type Mapping, type ReferenceKind, type ReferenceResolution } from "../../../shared/intune/reference-mapping"
 export { resolveReferences, type Mapping, type ReferenceKind, type ReferenceResolution } from "../../../shared/intune/reference-mapping"
 
 export interface DependencyFinding {
@@ -102,8 +103,12 @@ export function referenceFindings(references: ReferenceResolution[]): Dependency
       else findings.push({ code: "missing-mapping", severity: "blocking", message: `The ${label[reference.kind]} ${name} has no confirmed target mapping.` })
       if (reference.kind !== "group") findings.push({ code: "ordering", severity: "blocking", message: `If the ${label[reference.kind]} ${name} does not exist in the target yet, create it there first, then map it.` })
     }
-    if (reference.state === "rejected") findings.push({ code: "rejected-mapping", severity: "blocking", message: `The mapped target of the ${label[reference.kind]} ${name} does not exist in the target tenant.` })
-    if (reference.state === "mapped-unverified") findings.push({ code: "unknown-membership", severity: "warning", message: `The mapped ${label[reference.kind]} ${reference.targetName ? `"${reference.targetName}"` : reference.targetId} could not be read in the target tenant; its existence and membership are unknown.` })
+    if (reference.state === "rejected") findings.push({ code: "rejected-mapping", severity: "blocking", message: reference.kind === "group" && reference.targetName
+      ? `Intune cannot assign the distribution list "${reference.targetName}". Choose a security or Microsoft 365 group.`
+      : `The mapped target of the ${label[reference.kind]} ${name} does not exist in the target tenant.` })
+    if (reference.state === "mapped-unverified" && reference.kind === "group") {
+      if (!findings.some(finding => finding.message === GROUP_CHECK_REQUIRED)) findings.push({ code: "unknown-membership", severity: "blocking", message: GROUP_CHECK_REQUIRED })
+    } else if (reference.state === "mapped-unverified") findings.push({ code: "unknown-membership", severity: "warning", message: `The mapped ${label[reference.kind]} ${reference.targetName ? `"${reference.targetName}"` : reference.targetId} could not be read in the target tenant; its existence and membership are unknown.` })
   }
   return findings
 }

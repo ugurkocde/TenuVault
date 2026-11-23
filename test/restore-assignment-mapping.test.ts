@@ -1,3 +1,4 @@
+import { GROUP_CHECK_GUIDANCE, GROUP_CHECK_REQUIRED } from "../src/shared/group-access"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { POST } from "../src/portal/app/api/restore-backup/route"
 import { NextRequest } from "../src/main/api/next-server-shim"
@@ -80,14 +81,22 @@ describe("Restore assignment planning", () => {
     expect(resolveRestoreAssignments(type, snapshot, { ...options, sameTenant: false, skipped: new Set(["0"]), mappings: [mappings[2]!] }).review.errors).toHaveLength(1)
   })
 
-  it.each([true, false])("warns on unreadable groups without assuming identical IDs across tenants (same tenant: %s)", (sameTenant) => {
-    const confirmed = sameTenant ? mappings.slice(1) : mappings
-    const groupId = sameTenant ? oldGroup : newGroup
-    const unreadable = resolveRestoreAssignments(type, snapshot, { ...options, sameTenant, mappings: confirmed, groupStates: new Map() })
+  it("warns when same-tenant restore has to use the original group ID", () => {
+    const unreadable = resolveRestoreAssignments(type, snapshot, { ...options, mappings: mappings.slice(1), groupStates: new Map() })
     expect(unreadable.review.errors).toEqual([])
-    expect(unreadable.review.warnings).toEqual([expect.stringContaining(groupId)])
+    expect(unreadable.review.warnings).toEqual([expect.stringContaining(GROUP_CHECK_GUIDANCE)])
     expect(buildRestorePlan(type, unreadable.snapshot, { includeAssignments: true }).assignments[0]?.body)
-      .toMatchObject({ assignments: [{ target: { groupId } }] })
+      .toMatchObject({ assignments: [{ target: { groupId: oldGroup } }] })
+  })
+
+  it.each([true, false])("blocks a confirmed replacement that cannot be read (same tenant: %s)", (sameTenant) => {
+    const unreadable = resolveRestoreAssignments(type, snapshot, { ...options, sameTenant, mappings, groupStates: new Map() })
+    expect(unreadable.review.errors).toEqual([GROUP_CHECK_REQUIRED])
+    expect(unreadable.review.warnings).toEqual([])
+    expect(unreadable.review.assignments).toMatchObject([{ blocked: true }])
+  })
+
+  it("requires a confirmed mapping even if the source group ID exists in the destination", () => {
     const idCollision = resolveRestoreAssignments(type, snapshot, { ...options, sameTenant: false, groupStates: new Map([[oldGroup, { state: "found", name: "Other group" }]]) })
     expect(idCollision.review.references).toContainEqual(expect.objectContaining({ kind: "group", state: "missing", targetId: null }))
   })

@@ -1,3 +1,4 @@
+import type { GroupCounts, GroupSearchResult } from "../../../shared/group-access"
 import type { Mapping, ReferenceKind } from "../promotion/api"
 import type { MappingObjects } from "../promotion/MappingEditor"
 import type { Tenant } from "~/contexts/TenantContext"
@@ -51,6 +52,12 @@ export const syncStatus = (source: Tenant, targetTenantIds: string[]) => feature
 
 export const syncTargetObjects = (source: Tenant, targetTenantId: string, kind: Exclude<ReferenceKind, "group">) =>
   featureCall<NonNullable<MappingObjects[ReferenceKind]>>(PATH, source, "target-objects", { targetTenantId, kind })
+
+export const syncTargetGroups = (source: Tenant, targetTenantId: string, query: string) =>
+  featureCall<GroupSearchResult>(PATH, source, "target-groups", { targetTenantId, query })
+
+export const syncTargetGroupCounts = (source: Tenant, targetTenantId: string, ids: string[]) =>
+  featureCall<{ counts: Record<string, GroupCounts> }>(PATH, source, "target-group-counts", { targetTenantId, ids })
 
 export const planSync = (source: Tenant, input: { title: string; targets: string[]; items: Array<{ folder: string; sourceId: string }>; acknowledgeRedacted: boolean; includeAssignments?: boolean; mappings?: Record<string, Mapping[]> }) =>
   featureCall<{ run: SyncRun; targets: Array<{ targetTenantId: string; promotion: Promotion | null; error: string | null; skipped: SyncSkip[] }> }>(PATH, source, "plan", {

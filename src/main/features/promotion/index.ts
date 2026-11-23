@@ -1,3 +1,6 @@
+import { FrameworkError } from "../../frameworks/service"
+import { searchGroups } from "../../oib/assignments"
+import { groupCounts } from "../../oib/group-counts"
 import type { RouteModule } from "../../api/host"
 import { typeForFolder } from "../../../shared/intune/registry"
 import type { FeatureDeps } from "../deps"
@@ -39,6 +42,21 @@ export async function policies(deps: FeatureDeps, tenantId: string, folder: stri
   }
 }
 
+export async function searchTargetGroups(deps: FeatureDeps, tenantId: string, query: unknown) {
+  try {
+    return await searchGroups(await deps.graph(tenantId), typeof query === "string" ? query : "")
+  } catch (error) {
+    if (error instanceof FrameworkError) throw new FeatureError(error.message, error.status)
+    throw error
+  }
+}
+
+export async function countTargetGroups(deps: FeatureDeps, tenantId: string, ids: unknown) {
+  const tenant = deps.tenant(tenantId)
+  if (!tenant) throw new FeatureError("Select a signed-in tenant first.", 403)
+  return { counts: await groupCounts(await deps.graph(tenantId), tenantId, tenant.clientId, ids) }
+}
+
 /**
  * /api/promotion (#145). The selected tenant is the destination (its plan is checked by the
  * route); the source is named in `sourceTenantId` and in `targetTenants`, so its plan is
@@ -68,11 +86,10 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
       const [sourcePolicies, destinationPolicies] = await Promise.all([policies(deps, source, folder), policies(deps, context.tenantId, folder)])
       return { source: sourcePolicies, destination: destinationPolicies }
     },
-    /**
-     * Objects of the destination a dependency mapping can point to. Groups are not listed:
-     * without Group.Read.All they cannot be read, so the admin enters a group object ID.
-     */
+    /** Objects in the destination that a mapping can point to. */
     "target-objects": ({ tenantId, body }) => mappableObjects(deps, tenantId, body.kind),
+    "target-groups": ({ tenantId, body }) => searchTargetGroups(deps, tenantId, body.query),
+    "target-group-counts": ({ tenantId, body }) => countTargetGroups(deps, tenantId, body.ids),
     plan: async (context) => {
       const { tenantId, body, actor } = context
       const source = requireSourceTenant(context, body.sourceTenantId, { distinct: true })
