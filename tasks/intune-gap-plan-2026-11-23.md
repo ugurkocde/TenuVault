@@ -67,6 +67,35 @@ and the msgraph skill.
    read-only delegated registration, so that a user who only runs backups holds no write scopes.
    The app then hides restore and every write action for that user.
 
+3. Gap 5: Graph does not return uploaded ADMX/ADML content. Options: (a) back up the file list so
+   a restore names the ADMX files to upload first and blocks cleanly until they exist, (b) also let
+   the admin attach the original files to the backup. Which one, if any?
+4. Gap 4: the properties catalog endpoint is undocumented beta and refused app-only reads in the lab
+   tenant. Build it as an optional type that is skipped when Graph refuses, or wait for a
+   documented API?
+5. Gap 3: Autopatch groups have no documented Graph API. Options: (a) label the update rings and
+   profiles Autopatch creates (already backed up) and document that the groups themselves are not,
+   (b) use the undocumented Autopatch service API, which may break without notice. Which one?
+
+## Graph checks (Lokka, lab tenant, 2026-11-23)
+
+- Gap 6, Linux scripts: covered. Linux custom configuration scripts are settings catalog policies
+  (template family `deviceConfigurationScripts`, technology `linuxMdm`). The `ConfigurationPolicies`
+  entry in `src/shared/intune/registry.ts` reads `deviceManagement/configurationPolicies` with no
+  platform filter and expands settings, so they are backed up and restored like any settings
+  catalog policy. Only the coverage page needs a line.
+- Gap 5, uploaded ADMX/ADML: `deviceManagement/groupPolicyUploadedDefinitionFiles` lists the
+  files (file name, namespace, prefix, revision, language codes), but `content` comes back null on
+  both the list and a single read, and `groupPolicyUploadedLanguageFiles` is empty. Graph does not
+  hand back the uploaded files, so they cannot be rebuilt from Graph alone. Blocked: question 3.
+- Gap 4, properties catalog: `deviceManagement/inventoryPolicies` (beta, not in the Graph
+  reference) answers 403 to an app with `DeviceManagementConfiguration.ReadWrite.All`. Blocked
+  until it is confirmed with a delegated admin sign-in: question 4.
+- Gap 3, Autopatch groups and releases: there is no documented Graph resource for Autopatch groups.
+  They live in the Autopatch service, which writes ordinary Intune update rings and update
+  profiles that TenuVault already backs up. `admin/windows/updates` (deployment service, beta)
+  answers 403 here. Blocked: question 5.
+
 ## Status
 
 Updated as PRs open.
