@@ -482,7 +482,7 @@ async function deploy(body: RecordJson, kind: OibRun["kind"]): Promise<OibRun> {
       const graph = graphCaller(token, fetch, { tenant, refreshToken: async () => (await tokenFor(body, true)).token })
       const written = [...new Set(chosen.map((item) => item.policy.folder))]
       // Assignments are for new policies; a request that creates none cannot carry groups that are never checked.
-      if (spec && body.assignments != null && !chosen.some((item) => item.mode === "create")) throw new FrameworkError("Assignments are chosen for new policies, and this deployment creates none. Nothing was changed.")
+      if (spec && !chosen.some((item) => item.mode === "create")) throw new FrameworkError("Assignments are chosen for new policies, and this deployment creates none. Nothing was changed.")
       // Groups and filters are checked before the backup, so a wrong group changes nothing.
       let checked: Awaited<ReturnType<typeof checkSpec>> | undefined
       if (spec && chosen.some((item) => item.mode === "create")) {

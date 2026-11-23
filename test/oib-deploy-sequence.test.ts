@@ -50,12 +50,19 @@ describe("deploying several platforms to one tenant", () => {
     const outcomes = await deployToTenant(batches, { backup: NEW, storage: true }, async (b) => {
       sent.push(b.platform)
       // The wording mentions a backup, but only the code marks a backup failure.
-      if (b.platform === "windows") throw new Error("The filter Backup pilot is not a Windows filter. Nothing was changed.")
+      if (b.platform === "windows") throw Object.assign(new Error("The filter Backup pilot is not a Windows filter. Nothing was changed."), { status: 400 })
       return run(b.platform, `backup-${b.platform}`)
     })
     expect(sent).toEqual(["windows", "macos", "byod"])
     expect(outcomes.map(o => !!o.run)).toEqual([false, true, true])
     expect(outcomes[0]!.backupFailed).toBeUndefined()
+  })
+
+  it("stops when a request with a backup got no answer, since the backup's outcome is unknown", async () => {
+    const sent: string[] = []
+    const outcomes = await deployToTenant(batches, { backup: NEW, storage: true }, async (b) => { sent.push(b.platform); throw new TypeError("Failed to fetch") })
+    expect(sent).toEqual(["windows"])
+    expect(outcomes.slice(1).every(o => o.error?.includes("got no answer") && o.backupFailed)).toBe(true)
   })
 
   it("continues after a failed batch when no backup was asked for", async () => {

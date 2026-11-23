@@ -4,7 +4,7 @@ import { AlertTriangle, CheckCircle2, Rocket, RotateCcw, XCircle } from "lucide-
 import { useTenants } from "~/contexts/TenantContext"
 import { settingsHref } from "../../lib/settings-section"
 import { cn } from "~/lib/utils"
-import { assignsAnything } from "../../../shared/oib/assignments"
+import { assignsAnything, specGroupIds } from "../../../shared/oib/assignments"
 import { OIB_BACKUP_REUSE_MINUTES, OIB_PLATFORMS, type OibBackupOptions, type OibRecentBackup, type OibRun } from "../../../shared/oib/types"
 import { AssignmentEditor, assignmentReady, assignmentSummary, assignmentTargets, newAssignment, specFor, type AssignmentData } from "./AssignmentEditor"
 import { PlanBadge } from "../UpgradeNote"
@@ -134,7 +134,8 @@ export function ReviewDeploy({ batches: given, flow, kind = "deploy", onBack, ba
   const assignmentsReady = !assigning || (assignmentReady(assignment) && extras.every(t => assignmentReady(extraAssignment(t.tenantId))))
   /** The assignments a tenant's new policies get, or undefined when they stay unassigned. */
   // Per platform: a request carries only the filters its own policies use, so a stale filter of another platform cannot stop it.
-  const specOf = (data: AssignmentData, batch: DeployBatch) => assigning && assignsAnything(data.spec)
+  // Sent whenever anything is chosen, even only a filter or an exclusion, so the main process checks it.
+  const specOf = (data: AssignmentData, batch: DeployBatch) => assigning && (specGroupIds(data.spec).length > 0 || Object.values(data.spec.filters).some(Boolean))
     ? specFor(data, assignmentTargets(batch.items.filter(i => i.mode === "create").map(i => ({ platform: batch.platform, folder: i.folder, scope: i.scope })))) : undefined
   const fallback: BackupRequest["mode"] = !storage ? "none" : backup.usable ? "reuse" : "new"
   const mode = !storage ? "none" : choice === "reuse" && !backup.usable ? fallback : choice ?? fallback

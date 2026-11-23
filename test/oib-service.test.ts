@@ -57,6 +57,8 @@ interface Tenant {
   filters?: Array<{ id: string; displayName: string; platform: string; assignmentFilterManagementType?: string }>
   /** Direct assignments of the Settings Catalog policies, by policy ID; one group "prod" when left out. */
   assignments?: Record<string, unknown[]>
+  /** Assignments that come from a policy set, by policy ID: read back with the direct ones, never replaced by /assign. */
+  inherited?: Record<string, unknown[]>
 }
 
 const COMPLETE = { Status: "Success", Failures: 0, TenantId: tenantId, Scope: { Excluded: [] }, SkippedTypes: [], FailedTypes: [], DurationSeconds: 120 }
@@ -111,7 +113,7 @@ function world(state: Tenant, writes: string[]) {
     if (method === "GET" && detail) {
       const found = state.policies.find(p => p.id === decodeURIComponent(detail[1]!))
       if (!found) return Response.json({ error: { code: "ResourceNotFound", message: "Not found" } }, { status: 404 })
-      if (detail[2]) return Response.json({ value: state.assignments?.[found.id] ?? [{ id: "a1", target: { "@odata.type": "#microsoft.graph.groupAssignmentTarget", groupId: "prod" } }] })
+      if (detail[2]) return Response.json({ value: state.assignments?.[found.id] ? [...(state.inherited?.[found.id] ?? []), ...state.assignments[found.id]!] : [{ id: "a1", target: { "@odata.type": "#microsoft.graph.groupAssignmentTarget", groupId: "prod" } }] })
       return Response.json({ id: found.id, name: found.name, description: found.description ?? "", platforms: "windows10", technologies: "mdm", ...(found.tags ? { roleScopeTagIds: found.tags } : {}), settings: [setting(found.value ?? 1)] })
     }
     writes.push(`${method} ${path}${init?.body ? ` ${String(init.body)}` : ""}`)
@@ -450,7 +452,7 @@ describe("assignments", () => {
     const writes: string[] = []
     const prod = { id: "a1", source: "direct", target: { "@odata.type": "#microsoft.graph.groupAssignmentTarget", groupId: "prod", deviceAndAppManagementAssignmentFilterId: null, deviceAndAppManagementAssignmentFilterType: "none" } }
     const fromSet = { id: "a2", source: "policySets", target: { "@odata.type": "#microsoft.graph.groupAssignmentTarget", groupId: "set-group" } }
-    const state: Tenant = { policies: [{ id: EXISTING, name: "Win - OIB - SC - Test - v3.8", description: `OIBID:${OIB_A}` }], assignments: { [EXISTING]: [prod, fromSet] }, filters }
+    const state: Tenant = { policies: [{ id: EXISTING, name: "Win - OIB - SC - Test - v3.8", description: `OIBID:${OIB_A}` }], assignments: { [EXISTING]: [prod] }, inherited: { [EXISTING]: [fromSet] }, filters }
     vi.stubGlobal("fetch", world(state, writes))
     await source()
     const read = await handleOib({ ...base, action: "oib-assignments-read", commit, items: [{ source: SC, targetId: EXISTING }] }) as { policies: Array<{ assignments: unknown[]; inherited: number }> }
@@ -485,6 +487,9 @@ describe("assignments", () => {
     const undone = await handleOib({ action: "oib-undo", tenantId, appId, runId: run.runId }) as UndoResult
     expect(undone).toMatchObject({ run: null, results: [{ action: "reassigned", done: true }] })
     expect(state.assignments![EXISTING]).toEqual([{ target: { "@odata.type": "#microsoft.graph.groupAssignmentTarget", groupId: "prod" } }])
+    // The policy set's assignment is still read back after the add and the undo.
+    const after = await handleOib({ ...base, action: "oib-assignments-read", commit, items: [{ source: SC, targetId: EXISTING }] }) as { policies: Array<{ inherited: number; inheritedGroups?: string[] }> }
+    expect(after.policies[0]).toMatchObject({ inherited: 1, inheritedGroups: ["set-group"] })
   })
 
   it("replaces assignments, removes them all with an empty replace, and refuses an add without groups", async () => {

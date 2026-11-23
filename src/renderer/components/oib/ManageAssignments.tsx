@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react"
 import { AlertTriangle, ArrowRight, CheckCircle2, RefreshCw, Users, XCircle } from "lucide-react"
 import { cn } from "~/lib/utils"
-import type { Item } from "../../../shared/intune/registry"
+import { typeForFolder, type Item } from "../../../shared/intune/registry"
 import { assignmentsFor, assignsAnything, describeAssignment, excludesFor, mergeAssignments, REPORTS_SET_AS_DIRECT, sameAssignments } from "../../../shared/oib/assignments"
 import { policyTypeName } from "../../../shared/oib/licensing"
 import { OIB_PLATFORMS, type OibAssignMode, type OibPlatform, type OibPolicyAssignments, type OibRun } from "../../../shared/oib/types"
@@ -180,7 +180,7 @@ function ReviewAssign({ batches: given, onBack, onFinished, next }: { batches: D
     // Intune reports policy set assignments of app protection as direct, so replacing them is refused (see the main process).
     const appProtection = REPORTS_SET_AS_DIRECT.has(item.folder ?? "")
     const blocked = appProtection && (mode === "replace" || ((!!live?.assignments?.length || !!live?.inherited) && excludesFor(item.scope, spec).length > 0))
-    const planned = assignmentsFor({ folder: item.folder ?? "", scope: item.scope }, item.platform, spec).assignments
+    const planned = assignmentsFor({ folder: item.folder ?? "", scope: item.scope, exclusionsUnsupported: typeForFolder(item.folder ?? "")?.exclusionsUnsupported }, item.platform, spec).assignments
     // As in the main process: app protection never adds a group a policy set already targets.
     const additions = appProtection ? planned.filter(entry => !live?.inheritedGroups?.includes(String((entry.target as Item | undefined)?.groupId ?? "").toLowerCase())) : planned
     const after = live?.assignments && !blocked ? mode === "replace" ? planned : mergeAssignments(live.assignments, additions, { keepExisting: appProtection }) : undefined

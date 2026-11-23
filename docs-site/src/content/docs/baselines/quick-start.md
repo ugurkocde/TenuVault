@@ -154,7 +154,7 @@ It covers matched Settings Catalog and Endpoint security policies, compliance po
 
 ## Assignments
 
-OpenIntuneBaseline marks every policy as a device policy or a user policy: in its policy manifest, or with `D` or `U` in the policy name, as in `Win - OIB - SC - Device Security - D - BitLocker (OS Disk)`. TenuVault uses that mark to assign policies, both when you deploy them and later in the **Assignments** workflow.
+OpenIntuneBaseline marks most policies as a device policy or a user policy: in its policy manifest, or with `D` or `U` in the policy name, as in `Win - OIB - SC - Device Security - D - BitLocker (OS Disk)`. TenuVault uses that mark to assign policies, both when you deploy them and later in the **Assignments** workflow.
 
 You choose:
 

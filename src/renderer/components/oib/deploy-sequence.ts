@@ -99,8 +99,10 @@ export async function deployToTenant(
       const message = error instanceof Error ? error.message : "The request failed."
       // The main process marks a failed backup with code "backup"; a refused group or filter changed nothing and stops only its own platform.
       const backupError = (error as { code?: unknown } | null)?.code === "backup"
-      outcomes.push({ platform: batch.platform, error: message, backup, ...(backupError ? { backupFailed: true } : {}) })
-      if (backup.mode !== "none" && backupError) { stopped = "Skipped: the backup of this tenant could not be used, so nothing else was changed."; stoppedByBackup = true }
+      // No answer at all (the request itself failed): whether the backup ran is unknown, so stop as for a failed backup.
+      const unanswered = typeof (error as { status?: unknown } | null)?.status !== "number"
+      outcomes.push({ platform: batch.platform, error: message, backup, ...(backupError || (unanswered && backup.mode !== "none") ? { backupFailed: true } : {}) })
+      if (backup.mode !== "none" && (backupError || unanswered)) { stopped = unanswered && !backupError ? "Skipped: the earlier request got no answer, so whether its backup ran is unknown and nothing else was changed." : "Skipped: the backup of this tenant could not be used, so nothing else was changed."; stoppedByBackup = true }
     }
   }
   return outcomes

@@ -104,7 +104,7 @@ export const groupNames = (data: AssignmentData, list: OibGroupRef[]) => list.ma
 const KIND_LABEL: Record<OibGroup["kind"], string> = { security: "Security", microsoft365: "Microsoft 365", other: "Distribution" }
 
 /** Group search and object ID entry for one list. */
-function GroupPicker({ state, list, onChange, label, hint }: { state: AssignmentState; list: OibGroupRef[]; onChange: (list: OibGroupRef[]) => void; label: string; hint: string }) {
+function GroupPicker({ state, list, onChange, label, hint, blocked }: { state: AssignmentState; list: OibGroupRef[]; onChange: (list: OibGroupRef[]) => void; label: string; hint: string; blocked: OibGroupRef[] }) {
   const { data, tenant, update } = state
   const id = useId()
   const [text, setText] = useState("")
@@ -114,7 +114,8 @@ function GroupPicker({ state, list, onChange, label, hint }: { state: Assignment
   const input = useRef<HTMLInputElement>(null)
   const query = text.trim()
   const pasted = GUID.test(query)
-  const taken = new Set(specGroupIds(data.spec))
+  // A group can be a device group and a user group at once; it only cannot be both included and excluded.
+  const taken = new Set([...list, ...blocked].map(g => g.id))
   const unknown = unknownGroups(data)
   const full = list.length >= MAX_GROUPS_PER_LIST
 
@@ -166,7 +167,7 @@ function GroupPicker({ state, list, onChange, label, hint }: { state: Assignment
         {pasted && <button type="button" className="inline-flex h-10 items-center gap-1 rounded-full border border-gray-200 px-4 text-sm" disabled={taken.has(query.toLowerCase())} onClick={() => add({ id: query })}><Plus className="h-4 w-4" aria-hidden="true" />Add</button>}
       </div>
       <p id={`${id}-status`} role="status" className="mt-1 text-xs text-gray-500">
-        {full ? `At most ${MAX_GROUPS_PER_LIST} groups.` : pasted && taken.has(query.toLowerCase()) ? "This group is already chosen." : searching ? "Searching…" : error ? <span className="text-red-700">{error}</span> : query.length >= 2 && !pasted && data.readable !== false && !results.length ? "No group name starts with this." : ""}
+        {full ? `At most ${MAX_GROUPS_PER_LIST} groups.` : pasted && taken.has(query.toLowerCase()) ? list.some(g => g.id === query.toLowerCase()) ? "This group is already chosen." : "This group is already chosen on the other side: a group cannot be both included and excluded." : searching ? "Searching…" : error ? <span className="text-red-700">{error}</span> : query.length >= 2 && !pasted && data.readable !== false && !results.length ? "No group name starts with this." : ""}
       </p>
       {results.length > 0 && <ul className="mt-1 max-h-56 overflow-auto rounded-2xl border border-gray-200 bg-white p-1 shadow-sm" aria-label={`Groups matching ${query}`}>{results.map(group => {
         const disabled = taken.has(group.id) || group.kind === "other"
@@ -208,10 +209,10 @@ export function AssignmentEditor({ state, targets }: { state: AssignmentState; t
   const userHint = [targets.user && `Assigned to the ${scopeCount(targets.user, "user")}`, targets.unmarked && (spec.unmarked === "both" || spec.unmarked === "user") && `and the ${scopeCount(targets.unmarked, "unmarked")}`].filter(Boolean).join(" ") || "No user policy is selected."
   return <div className="space-y-5">
     {data.readable === false && <p role="note" className="rounded-2xl bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-950">This app registration may not read groups, so groups cannot be searched by name. Paste each group's object ID from Entra. To search by name, add the Group.Read.All permission (the setup script's -IncludeGroupRead switch) and sign in again.</p>}
-    <GroupPicker state={state} list={spec.deviceGroups} onChange={list => setSpec(s => ({ ...s, deviceGroups: list }))} label="Device groups" hint={`${deviceHint}.`} />
-    <GroupPicker state={state} list={spec.userGroups} onChange={list => setSpec(s => ({ ...s, userGroups: list }))} label="User groups" hint={`${userHint}.`} />
-    <GroupPicker state={state} list={spec.excludeDeviceGroups} onChange={list => setSpec(s => ({ ...s, excludeDeviceGroups: list }))} label="Excluded device groups" hint="Excluded from the policies that get device groups. Intune only applies an exclusion of the same kind as the include, so exclude devices here." />
-    <GroupPicker state={state} list={spec.excludeUserGroups} onChange={list => setSpec(s => ({ ...s, excludeUserGroups: list }))} label="Excluded user groups" hint="Excluded from the policies that get user groups. Excluding a user group from a device policy has no effect in Intune, so exclude users here." />
+    <GroupPicker state={state} list={spec.deviceGroups} onChange={list => setSpec(s => ({ ...s, deviceGroups: list }))} blocked={[...spec.excludeDeviceGroups, ...spec.excludeUserGroups]} label="Device groups" hint={`${deviceHint}.`} />
+    <GroupPicker state={state} list={spec.userGroups} onChange={list => setSpec(s => ({ ...s, userGroups: list }))} blocked={[...spec.excludeDeviceGroups, ...spec.excludeUserGroups]} label="User groups" hint={`${userHint}.`} />
+    <GroupPicker state={state} list={spec.excludeDeviceGroups} onChange={list => setSpec(s => ({ ...s, excludeDeviceGroups: list }))} blocked={[...spec.deviceGroups, ...spec.userGroups]} label="Excluded device groups" hint="Excluded from the policies that get device groups. Intune only applies an exclusion of the same kind as the include, so exclude devices here." />
+    <GroupPicker state={state} list={spec.excludeUserGroups} onChange={list => setSpec(s => ({ ...s, excludeUserGroups: list }))} blocked={[...spec.deviceGroups, ...spec.userGroups]} label="Excluded user groups" hint="Excluded from the policies that get user groups. Excluding a user group from a device policy has no effect in Intune, so exclude users here." />
     {targets.unmarked > 0 && <label className="block text-sm font-medium text-gray-800">Policies without a device or user marker ({targets.unmarked})
       <select value={spec.unmarked} onChange={e => setSpec(s => ({ ...s, unmarked: e.target.value as UnmarkedChoice }))} className="mt-2 block h-10 w-full rounded-full border border-gray-300 bg-white px-4 text-sm font-normal sm:w-[28rem]">
         {(["both", "device", "user", "none"] as const).map(choice => <option key={choice} value={choice}>Assign to {unmarkedTo(choice)}</option>)}
