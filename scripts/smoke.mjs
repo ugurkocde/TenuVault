@@ -775,7 +775,7 @@ await check("settings show encrypted local backup storage", async () => {
 await check("settings sidebar switches sections and names the section in the URL", async () => {
   await go("#/portal/settings", "Storage and recovery")
   const nav = `document.querySelector('nav[aria-label="Settings sections"]')`
-  assert(await waitForCondition(`${nav}?.querySelectorAll("a").length === 9`), "settings sidebar does not list nine sections")
+  assert(await waitForCondition(`${nav}?.querySelectorAll("a").length === 10`), "settings sidebar does not list ten sections")
   assert(await evaluate(`document.getElementById("settings-storage").hidden === true`), "storage section visible on the default sign-in section")
   await evaluate(`[...${nav}.querySelectorAll("a")].find(a => a.textContent.trim() === "Background runner").click()`)
   assert(await waitForText("Keep backups for"), "background section did not appear after clicking its sidebar entry")

@@ -50,6 +50,7 @@ export async function servicesStatus(
       description: module.description,
       switchable: module.switchable,
       enabled: enabled[module.id].enabled,
+      access: enabled[module.id].access,
       roles: module.roles,
       ...(module.restoreAccess ? { restoreAccess: { permissions: [...module.restoreAccess.permissions], newSetupSwitch: module.restoreAccess.newSetupSwitch } } : {}),
       check: checks?.find((check) => check.id === module.id) ?? null,

@@ -53,7 +53,7 @@ The capture harness uses a disposable profile. Only the OIB catalog reads contac
 | `drift.md` | Added: `drift-results`. |
 | `getting-started/app-registration.md` | Added: `setup-connect`. |
 | `getting-started/choose-storage.md` | Added: `setup-storage`. |
-| `getting-started/connect-tenant.mdx` | Added: `setup-connect`, `setup-signin`. |
+| `getting-started/connect-tenant.mdx` | Added: `setup-connect`, `setup-signin`, `setup-from-file` (2026-11-21, the Sign in step filled in from a fixture settings file; no file read from disk, no sign-in). |
 | `getting-started/create-storage-account.md` | Azure provisioning instructions; no authenticated Azure portal capture was available. The in-app choice is illustrated in Choose storage. |
 | `getting-started/first-backup.md` | Added: `backup-scope`. |
 | `getting-started/first-launch.md` | Added: `welcome`. |
@@ -78,7 +78,7 @@ The capture harness uses a disposable profile. Only the OIB catalog reads contac
 | `security/encryption.md` | Added: `settings-storage`. |
 | `security/index.md` | Security architecture and trust reference; related recovery controls are illustrated in Encryption. |
 | `security/permissions.md` | Permission reference; never show a successful permission check without verified evidence. |
-| `settings.md` | Added: `settings-signin`, `settings-storage`, `settings-background`, `settings-branding`. |
+| `settings.md` | Added: `settings-signin`, `settings-storage`, `settings-background`, `settings-branding`; on 2026-11-21 `settings-transfer`, `settings-transfer-export` and `settings-transfer-review` (the review shows a fixture preview; nothing was exported or applied). |
 | `tenants.md` | Added: `dashboard`, `tenants-overview`, `tenant-management`. |
 | `troubleshooting.md` | Error-message lookup reference; successful workflows are illustrated in their own guides. Dedicated failure captures can be added when reproduced. |
 

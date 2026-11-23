@@ -30,6 +30,8 @@ const state = vi.hoisted(() => ({
   openExternal: vi.fn(async (_url: string) => undefined),
   record: vi.fn(async (_event: unknown) => undefined),
   diagnostics: { state: "ineligible", policy: false, reminder: { setup: false, signin: false } } as import("../../src/shared/ipc").SetupDiagnosticsStatus,
+  transferPreview: vi.fn(),
+  transferImport: vi.fn(),
 }))
 
 vi.mock("../../src/renderer/lib/appearance", () => ({}))
@@ -47,6 +49,7 @@ vi.mock("../../src/renderer/lib/bridge", () => ({
     schedules: { list: async () => [] },
     backups: { settings: async () => ({ recoveryExported: true }) },
     app: { openExternal: state.openExternal },
+    settingsTransfer: { preview: state.transferPreview, import: state.transferImport },
     diagnostics: { record: state.record, status: async () => state.diagnostics, reminderShown: async () => undefined, consent: async () => state.diagnostics, decline: async () => state.diagnostics },
   },
 }))
@@ -1157,5 +1160,177 @@ describe("onboarding service choices", () => {
     expect(container.textContent).toContain("Entra ID backs up the supported types")
     expect(button(container, "Run first backup")).toBeDefined()
     expect(container.textContent).not.toContain("It reads your Intune")
+  })
+})
+
+describe("setup from a file", () => {
+  const FILE_TENANT = "2f9d4a7c-1b6e-4c3d-8a5f-9e0b7c2d4a61"
+  const FILE_CLIENT = "3d7a1f9c-2e5b-4c8d-a6f4-9b0e1c7d2a58"
+
+  const openWith = async (preview: unknown) => {
+    state.transferPreview.mockResolvedValue(preview)
+    const container = document.createElement("div")
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    roots.push(root)
+    act(() => root.render(createElement(MemoryRouter, { initialEntries: [`/portal/onboarding?setup=import-1&tenant=${FILE_TENANT}`] }, createElement(OnboardingPage))))
+    await flush()
+    await flush()
+    return container
+  }
+  const filePreview = (clientId = FILE_CLIENT) => ({
+    importId: "import-1", exportedAt: null, appVersion: null, skipped: [],
+    groups: [{ id: FILE_TENANT, title: "Fabrikam", connected: false, items: [], setup: { tenantId: FILE_TENANT, name: "Fabrikam", clientId, storage: { kind: "local" } } }],
+  })
+
+  it("keeps a sign-in to the file's tenant and app registration and goes on to storage", async () => {
+    const account = { tenantId: FILE_TENANT, clientId: FILE_CLIENT, username: "admin@fabrikam.com" }
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 1, tenant: FILE_TENANT, clientId: FILE_CLIENT, displayName: "", account, signedInAt: Date.now() }))
+    state.accounts.mockResolvedValue([account])
+    const container = await openWith(filePreview())
+    expect(state.releaseTenant).not.toHaveBeenCalled()
+    expect(container.textContent).toContain("Choose where backups are stored")
+    expect(container.textContent).toContain("The setup file chose This device.")
+  })
+
+  it("gives up a sign-in to another tenant only when the admin chooses to, then fills in the file's IDs", async () => {
+    const account = { tenantId: TENANT, clientId: CLIENT, username: "admin@contoso.com" }
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 1, tenant: TENANT, clientId: CLIENT, displayName: "", account, signedInAt: Date.now() }))
+    state.accounts.mockResolvedValue([account])
+    const container = await openWith(filePreview())
+    expect(state.releaseTenant).not.toHaveBeenCalled()
+    expect(container.textContent).toContain("The setup file is for tenant")
+    expect(container.textContent).toContain("Signed in as admin@contoso.com")
+    await act(async () => { button(container, "Use a different tenant or account")!.click() })
+    await flush()
+    expect(state.releaseTenant).toHaveBeenCalledWith(TENANT)
+    expect(container.querySelector<HTMLInputElement>("#tenant")!.value).toBe(FILE_TENANT)
+    expect(container.querySelector<HTMLInputElement>("#clientId")!.value).toBe(FILE_CLIENT)
+    expect(container.textContent).toContain("From a setup file")
+  })
+
+  it("ignores an in-app setup that finishes after a setup file was opened, so nothing signs in by itself", async () => {
+    let finish!: (value: unknown) => void
+    state.createRegistration.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
+    state.transferImport.mockResolvedValueOnce(filePreview())
+    const container = await render(createElement(OnboardingPage))
+    await act(async () => button(container, "Set up with Microsoft sign-in")!.click())
+    await act(async () => button(container, "Set up from a file")!.click())
+    await flush()
+    expect(container.querySelector<HTMLInputElement>("#tenant")!.value).toBe(FILE_TENANT)
+    await act(async () => {
+      finish({ tenantId: TENANT, clientId: CLIENT, username: "admin@contoso.test", reused: false, ready: true, displayName: "TenuVault Desktop", candidateCount: 0, missingConsent: [] })
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    })
+    await flush()
+    expect(state.signIn).not.toHaveBeenCalled()
+    expect(container.querySelector<HTMLInputElement>("#tenant")!.value).toBe(FILE_TENANT)
+    expect(container.querySelector<HTMLInputElement>("#clientId")!.value).toBe(FILE_CLIENT)
+  })
+
+  it("does not sign in by itself when a setup file arrives while an earlier sign-in is being given up", async () => {
+    const account = { tenantId: FILE_TENANT, clientId: FILE_CLIENT, username: "admin@fabrikam.com" }
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 0, tenant: FILE_TENANT, clientId: FILE_CLIENT, displayName: "", account, signedInAt: Date.now() }))
+    state.accounts.mockResolvedValue([account])
+    let fileChosen!: (value: unknown) => void
+    state.transferImport.mockReturnValueOnce(new Promise((done) => { fileChosen = done }))
+    let released!: () => void
+    state.releaseTenant.mockImplementationOnce(() => new Promise<undefined>((done) => { released = () => done(undefined) }))
+    state.createRegistration.mockResolvedValueOnce({ tenantId: TENANT, clientId: CLIENT, username: "admin@contoso.test", reused: false, ready: true, displayName: "TenuVault Desktop", candidateCount: 0, missingConsent: [] })
+    const container = await render(createElement(OnboardingPage))
+    await flush()
+    // The file dialog is open while the in-app setup finishes and starts giving up the earlier sign-in.
+    await act(async () => button(container, "Set up from a file")!.click())
+    await act(async () => { button(container, "Set up with Microsoft sign-in")!.click(); await new Promise((resolve) => setTimeout(resolve, 20)) })
+    expect(state.releaseTenant).toHaveBeenCalledWith(FILE_TENANT)
+    await act(async () => fileChosen(filePreview()))
+    await flush()
+    await act(async () => { released(); await new Promise((resolve) => setTimeout(resolve, 20)) })
+    await flush()
+    expect(state.signIn).not.toHaveBeenCalled()
+    expect(container.querySelector<HTMLInputElement>("#tenant")!.value).toBe(FILE_TENANT)
+    expect(container.querySelector<HTMLInputElement>("#clientId")!.value).toBe(FILE_CLIENT)
+    expect(container.textContent).toContain("From a setup file")
+  })
+
+  it("waits for the resumed sign-in to be checked, and treats a gone one as no sign-in", async () => {
+    const account = { tenantId: FILE_TENANT, clientId: FILE_CLIENT, username: "admin@fabrikam.com" }
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 1, tenant: FILE_TENANT, clientId: FILE_CLIENT, displayName: "", account, signedInAt: Date.now() }))
+    let accountsDone!: (value: SignedInAccount[]) => void
+    state.accounts.mockReturnValue(new Promise((done) => { accountsDone = done }))
+    state.transferPreview.mockResolvedValue(filePreview())
+    const container = document.createElement("div")
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    roots.push(root)
+    act(() => root.render(createElement(MemoryRouter, { initialEntries: [`/portal/onboarding?setup=import-1&tenant=${FILE_TENANT}`] }, createElement(OnboardingPage))))
+    await flush()
+    expect(state.transferPreview).not.toHaveBeenCalled()
+    // The sign-in is gone on this computer: the file fills in the form instead of a blank Storage step.
+    await act(async () => accountsDone([]))
+    await flush()
+    await flush()
+    expect(state.transferPreview).toHaveBeenCalled()
+    expect(container.textContent).not.toContain("Choose where backups are stored")
+    expect(container.textContent).toContain("From a setup file")
+    expect(container.querySelector<HTMLInputElement>("#tenant")!.value).toBe(FILE_TENANT)
+  })
+
+  it("shows on the Sign in step that a file handed over could not be opened", async () => {
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 1, tenant: TENANT, clientId: CLIENT, displayName: "", account: null }))
+    state.transferPreview.mockRejectedValueOnce(new Error("This settings file is no longer open. Import it again."))
+    const container = document.createElement("div")
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    roots.push(root)
+    act(() => root.render(createElement(MemoryRouter, { initialEntries: [`/portal/onboarding?setup=import-1&tenant=${FILE_TENANT}`] }, createElement(OnboardingPage))))
+    await flush()
+    await flush()
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("This settings file is no longer open.")
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("Open the file again")
+  })
+
+  it("does not fill in another tenant when the tenant a link names is already connected", async () => {
+    const SECOND = "7a1c5e9b-3f2d-4b8a-a6c4-1d7e9f0b3c52"
+    state.transferPreview.mockResolvedValueOnce({
+      importId: "import-1", exportedAt: null, appVersion: null, skipped: [],
+      groups: [
+        { id: FILE_TENANT, title: "Fabrikam", connected: true, items: [] },
+        { id: SECOND, title: "Northwind", connected: false, items: [], setup: { tenantId: SECOND, name: "Northwind", clientId: FILE_CLIENT } },
+      ],
+    })
+    const container = document.createElement("div")
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    roots.push(root)
+    act(() => root.render(createElement(MemoryRouter, { initialEntries: [`/portal/onboarding?setup=import-1&tenant=${FILE_TENANT}`] }, createElement(OnboardingPage))))
+    await flush()
+    await flush()
+    expect(container.textContent).toContain("Fabrikam from this file is already connected.")
+    expect(container.textContent).toContain("Which tenant do you want to connect?")
+    expect(container.querySelector("#tenant")).toBeNull()
+  })
+
+  it("replaces the IDs of an unfinished sign-in with the file's, in the form and in the notice", async () => {
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 1, tenant: TENANT, clientId: CLIENT, displayName: "Draft", account: null }))
+    let resolve!: (value: unknown) => void
+    state.transferPreview.mockReturnValue(new Promise((done) => { resolve = done }))
+    const container = document.createElement("div")
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    roots.push(root)
+    act(() => root.render(createElement(MemoryRouter, { initialEntries: [`/portal/onboarding?setup=import-1&tenant=${FILE_TENANT}`] }, createElement(OnboardingPage))))
+    await flush()
+    // The draft's form is on screen while the file is read.
+    expect(container.querySelector<HTMLInputElement>("#tenant")!.value).toBe(TENANT)
+    await act(async () => resolve({
+      importId: "import-1", exportedAt: null, appVersion: null, skipped: [],
+      groups: [{ id: FILE_TENANT, title: "Fabrikam", connected: false, items: [], setup: { tenantId: FILE_TENANT, name: "Fabrikam", clientId: FILE_CLIENT } }],
+    }))
+    await flush()
+    expect(container.textContent).toContain("From a setup file")
+    expect(container.querySelector<HTMLInputElement>("#tenant")!.value).toBe(FILE_TENANT)
+    expect(container.querySelector<HTMLInputElement>("#clientId")!.value).toBe(FILE_CLIENT)
+    expect(JSON.parse(state.store.get(DRAFT_KEY)!)).toMatchObject({ tenant: FILE_TENANT, clientId: FILE_CLIENT })
   })
 })

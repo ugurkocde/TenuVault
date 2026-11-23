@@ -45,6 +45,25 @@ export async function captureDocs({ main, send, evaluate, go, click, assertText,
       }
       return previous(event, request)
     })
+    // Settings import and export: a file from another admin with one connected tenant (Contoso)
+    // and one that is not connected here yet. Nothing is read from disk or applied.
+    const other = { tenantId:'6b2e9d41-5c7a-4f3e-9a8d-2c1f7e4b9a35', name:'Litware Dev', clientId:'3d7a1f9c-2e5b-4c8d-a6f4-9b0e1c7d2a58', storage:{ kind:'azure', storageAccountName:'stlitwarebackups', subscriptionId:'0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d', resourceGroupName:'rg-tenuvault', location:'westeurope' } }
+    const transferPreview = { importId:'docs-import', exportedAt:new Date(Date.now() - 3600000).toISOString(), appVersion:'0.6.0', skipped:[], groups:[
+      { id:'app', title:'This computer', connected:true, items:[
+        { id:'app:retentionDays', label:'Keep backups for', current:'30 days', next:'90 days', status:'change', selected:true },
+        { id:'app:nightlyUpdates', label:'Get nightly builds', current:'Off', next:'On', status:'change', warning:'This switches this computer between stable releases and nightly builds.', selected:false },
+        { id:'app:keepRunningInTray', label:'Keep running in the menu bar when I close the window', current:'On', next:'On', status:'same', selected:false },
+        { id:'app:appearance', label:'Appearance', current:'Use system setting', next:'Dark', status:'change', selected:true },
+      ] },
+      { id:tenantId, title:'Contoso Ltd', detail:'contoso.onmicrosoft.com', connected:true, items:[
+        { id:tenantId + ':service:conditionalAccess', label:'Entra Conditional Access', current:'Off', next:'On', status:'change', selected:true },
+        { id:tenantId + ':backupScope', label:'What is backed up', current:'Everything except apps', next:'Everything', status:'change', selected:true },
+        { id:tenantId + ':schedule', label:'Backup schedule', current:'Off', next:'Daily at 02:00', status:'change', warning:'If another computer also runs this schedule, the tenant is backed up twice. Usually one computer, or cloud backups, runs the schedule.', selected:false },
+      ] },
+      { id:other.tenantId, title:'Litware Dev', connected:false, notice:'This tenant is not connected on this computer, so its settings are skipped.', items:[], setup:other },
+    ] }
+    handle('settings:import', () => transferPreview)
+    handle('settings:preview', () => transferPreview)
     globalThis.__marketingMock.noMaa = true
   })()`)
   await send('Emulation.setDeviceMetricsOverride', {width:1440, height:1000, deviceScaleFactor:Number(process.env.MARKETING_SCALE ?? 2), mobile:false})
@@ -96,9 +115,20 @@ export async function captureDocs({ main, send, evaluate, go, click, assertText,
   await capture('audit-log', '#/portal/audit', 'Audit Log')
   await capture('setup-connect', '#/portal/onboarding', 'Connect your tenant')
   await capture('license', '#/license', 'License')
-  for (const [section, text] of [['signin','Sign-in'], ['storage','Encryption key'], ['background','Background runner'], ['appearance','Appearance'], ['branding','PDF branding']]) {
+  for (const [section, text] of [['signin','Sign-in'], ['storage','Encryption key'], ['background','Background runner'], ['appearance','Appearance'], ['branding','PDF branding'], ['transfer','Import settings']]) {
     await capture('settings-' + section, '#/portal/settings?section=' + section, text)
   }
+  // Taller window so each dialog shows all of its rows.
+  await send('Emulation.setDeviceMetricsOverride', {width:1440, height:1700, deviceScaleFactor:Number(process.env.MARKETING_SCALE ?? 2), mobile:false})
+  await click('Export settings')
+  await assertText('Include connection details')
+  await screenshot('settings-transfer-export')
+  await click('Cancel')
+  await click('Import settings')
+  await assertText('Review settings from the file')
+  await screenshot('settings-transfer-review')
+  await click('Cancel')
+  await send('Emulation.setDeviceMetricsOverride', {width:1440, height:1000, deviceScaleFactor:Number(process.env.MARKETING_SCALE ?? 2), mobile:false})
   await capture('reports', '#/portal/reports', 'New change report')
   await capture('governance', '#/portal/governance', 'Export evidence pack')
   await capture('hygiene', '#/portal/governance/hygiene', 'Conflicts and hygiene')
@@ -121,4 +151,14 @@ export async function captureDocs({ main, send, evaluate, go, click, assertText,
   await click('Restore to tenant…')
   await assertText('Restore unassigned app')
   await screenshot('app-backup-restore')
+  await send('Input.dispatchKeyEvent', {type:'keyDown', key:'Escape', code:'Escape', windowsVirtualKeyCode:27})
+  await send('Input.dispatchKeyEvent', {type:'keyUp', key:'Escape', code:'Escape', windowsVirtualKeyCode:27})
+  // A new admin sets up from a file another admin exported with its connection details.
+  await evaluate(`window.tenuvault.storage.setItem('tenuvault.onboarding.draft', JSON.stringify({step:0,tenant:'',clientId:'',displayName:'',account:null}))`)
+  await go('#/portal/onboarding', 'Connect your tenant')
+  await click('Set up from a file')
+  await assertText('From a setup file')
+  await sleep(600)
+  await scrollAll(0)
+  await screenshot('setup-from-file')
 }
