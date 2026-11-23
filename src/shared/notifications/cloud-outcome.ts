@@ -119,7 +119,7 @@ export function cloudOutcomeEvent(outcome: CloudBackupOutcome, tenantId: string,
     failures: outcome.failures,
     failedTypes: outcome.failedTypes,
     trigger: CLOUD_OUTCOME_TRIGGER[outcome.trigger],
-    message: outcome.status === "CompletedWithWarnings" && outcome.secondaryCopy === "Failed"
+    message: outcome.status === "CompletedWithWarnings" && outcome.failures === 0 && outcome.secondaryCopy === "Failed"
       ? SECONDARY_COPY_WARNING : CLOUD_OUTCOME_SUMMARY[outcome.status],
     source,
   })

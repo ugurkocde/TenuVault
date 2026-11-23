@@ -443,7 +443,7 @@ function Invoke-TvHttp {
             $handler = [System.Net.Http.HttpClientHandler]::new()
             $handler.AllowAutoRedirect = $false
             $script:CopyHttpClient = [System.Net.Http.HttpClient]::new($handler)
-            $script:CopyHttpClient.Timeout = $client.Timeout
+            $script:CopyHttpClient.Timeout = [TimeSpan]::FromMinutes(5)
         }
         $client = $script:CopyHttpClient
     }
@@ -561,7 +561,7 @@ function Get-TvSecondaryTarget {
     param([string]$PrimaryAccount)
     $value = Get-TvAutomationVariable "TenuVaultSecondaryStorage"
     if (-not $value -or $value -eq "off") { return }
-    if ($value -notmatch '^/subscriptions/[0-9a-f-]{36}/resourceGroups/[^/]+/providers/Microsoft\.Storage/storageAccounts/([a-z0-9]{3,24})/blobServices/default/containers/([a-z0-9](?:[a-z0-9]|-(?!-)){1,61}[a-z0-9])\z' -or $Matches[1] -eq $PrimaryAccount) {
+    if ($value -notmatch '^/subscriptions/[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}/resourceGroups/[\w.()-]+/providers/Microsoft\.Storage/storageAccounts/([a-z0-9]{3,24})/blobServices/default/containers/((?-i:[a-z0-9](?:[a-z0-9]|-(?!-)){1,61}[a-z0-9]))\z' -or $Matches[1] -eq $PrimaryAccount) {
         throw "TenuVaultSecondaryStorage must name a container in a separate storage account."
     }
     return @{ Account = $Matches[1].ToLowerInvariant(); Container = $Matches[2].ToLowerInvariant() }
@@ -594,7 +594,7 @@ function Get-TvCopyFolderBlobs {
 }
 
 function Copy-TvBackupBlob {
-    param([hashtable]$Context, [hashtable]$Target, [string]$Name, [string]$ETag)
+    param([hashtable]$Context, [hashtable]$Target, [string]$Name, [string]$ETag, [switch]$VerifyExisting)
     if (-not $ETag) { throw "Azure did not return a source blob ETag." }
     $source = Get-TvBlobTarget $Context.StorageAccount $Name
     $destination = Get-TvBlobTarget $Target.Account $Name $Target.Container
@@ -605,10 +605,17 @@ function Copy-TvBackupBlob {
         "x-ms-blob-type" = "BlockBlob"
         "x-ms-copy-source" = $source.Uri
         "x-ms-copy-source-authorization" = "Bearer $($Context.StorageToken)"
-        "x-ms-source-if-match" = $ETag
+        "x-ms-source-if-match" = '"' + $ETag.Trim('"') + '"'
         "If-None-Match" = "*"
     }
-    $response = Invoke-TvHttp -Uri $destination.Uri -Token $Context.StorageToken -Method Put -Headers $headers -BodyBytes ([byte[]]@())
+    try {
+        $response = Invoke-TvHttp -Uri $destination.Uri -Token $Context.StorageToken -Method Put -Headers $headers -BodyBytes ([byte[]]@())
+    } catch [TvHttpError] {
+        # A prior HTTP attempt can commit a data blob before its response is lost. The
+        # destination listing checks that the create-only write left a blob of the right size.
+        if ($VerifyExisting -and $_.Exception.Status -eq 412 -and $_.Exception.Message -ceq "HTTP 412 ConditionNotMet") { return }
+        throw
+    }
     if ($response.Status -ne 201) { throw "Azure did not confirm the synchronous blob copy." }
 }
 
@@ -624,7 +631,7 @@ function Copy-TvBackupToSecondary {
     # Claim the destination folder first. Publish the manifest only after all its data verifies.
     Copy-TvBackupBlob $Context $Target $owner $source[$owner].ETag
     foreach ($name in $source.Keys) {
-        if ($name -cne $owner -and $name -cne $manifest) { Copy-TvBackupBlob $Context $Target $name $source[$name].ETag }
+        if ($name -cne $owner -and $name -cne $manifest) { Copy-TvBackupBlob $Context $Target $name $source[$name].ETag -VerifyExisting }
     }
     $copied = Get-TvCopyFolderBlobs $Target.Account $Target.Container $prefix $Context.StorageToken
     if ($copied.Count -ne ($source.Count - 1)) { throw "Secondary copy verification failed: blob counts differ." }
@@ -3252,6 +3259,8 @@ function Set-TvCloudStatus {
     }
     if ($Context.SecondaryCopy) {
         $body.SecondaryCopy = $Context.SecondaryCopy
+    }
+    if ($Context.SecondaryTarget) {
         $body.SecondaryStorageAccount = $Context.SecondaryTarget.Account
         $body.SecondaryContainer = $Context.SecondaryTarget.Container
     }
@@ -3475,9 +3484,14 @@ function Invoke-TvBackup {
                 }
             }
         } catch {
-            $context.SecondaryCopy = "Failed"
-            if ($status -eq "Success") { $reportedStatus = "CompletedWithWarnings" }
-            Write-Warning -WarningAction Continue "Secondary backup copy could not be verified: $(Get-TvSafeError $_.Exception.Message)"
+            if ($context.SecondaryTarget) {
+                $context.SecondaryCopy = "Failed"
+                $reportedStatus = "CompletedWithWarnings"
+                Write-Warning -WarningAction Continue "Secondary backup copy could not be verified: $(Get-TvSafeError $_.Exception.Message)"
+            } else {
+                $context.SecondaryCopy = "Skipped"
+                Write-Warning -WarningAction Continue "Secondary backup copy skipped: $(Get-TvSafeError $_.Exception.Message)"
+            }
         }
         $message = if ($status -eq "Success" -and $reportedStatus -eq "CompletedWithWarnings") {
             "Primary backup succeeded, $totalPolicies policies. Secondary copy could not be verified."

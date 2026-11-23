@@ -1619,7 +1619,7 @@ $script:TvOutcomeTrigger = @{ scheduled = "Cloud backup schedule"; manual = "Clo
 function New-TenuVaultCloudOutcomeEvent {
     param([Parameter(Mandatory)][object]$Outcome, [Parameter(Mandatory)][string]$TenantId, [object]$TenantName)
     $key = if ($Outcome.backupFolder) { [string]$Outcome.backupFolder } else { "run:$($Outcome.runId)" }
-    $summary = if ($Outcome.status -eq "CompletedWithWarnings" -and (Get-TvProp $Outcome "secondaryCopy") -eq "Failed") {
+    $summary = if ($Outcome.status -eq "CompletedWithWarnings" -and $Outcome.failures -eq 0 -and (Get-TvProp $Outcome "secondaryCopy") -eq "Failed") {
         "The primary cloud backup completed, but the secondary copy could not be verified. Check the Azure Automation job for details."
     } else { $script:TvOutcomeSummary[[string]$Outcome.status] }
     return New-TenuVaultBackupEvent -TenantId $TenantId -TenantName $TenantName -Status $Outcome.status `

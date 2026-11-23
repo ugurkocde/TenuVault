@@ -86,6 +86,10 @@
 .PARAMETER SecondaryContainerName
     Private container for the second copy. Defaults to intune-backups when setting a target.
 
+.PARAMETER AllowSecondaryDeleteRole
+    Allow Storage Blob Data Contributor on the secondary container if Azure refuses to extend
+    the Backup Writer role. This weaker option lets the backup identity delete secondary blobs.
+
 .PARAMETER Time
     Local time of day the backup runs, "HH:mm". Default 02:00.
 
@@ -143,6 +147,7 @@ param(
     [Parameter(Mandatory)][string]$StorageAccountName,
     [AllowEmptyString()][string]$SecondaryStorageAccountId,
     [string]$SecondaryContainerName,
+    [switch]$AllowSecondaryDeleteRole,
     [string]$SubscriptionId,
     [string]$ResourceGroupName = "rg-tenuvault-backups",
     [string]$Location,
@@ -179,6 +184,7 @@ $runbookPath = Join-Path $PSScriptRoot "runbooks/Invoke-TenuVaultBackup.ps1"
 $tenantKey = $TenantId.Substring(0, [Math]::Min(8, $TenantId.Length)).ToLowerInvariant()
 $scheduleName = "TenuVaultBackup-$tenantKey"
 $writerRoleName = "TenuVault Backup Writer"
+$secondaryDeleteRoleId = "ba92f5b4-2d11-453d-a403-e96b0029c9fe"
 $secondaryVariable = "TenuVaultSecondaryStorage-$tenantKey"
 $secondaryPassed = $PSBoundParameters.ContainsKey("SecondaryStorageAccountId")
 $secondaryContainerPassed = $PSBoundParameters.ContainsKey("SecondaryContainerName")
@@ -679,6 +685,15 @@ function Invoke-TenuVaultSecondaryContext {
     }
 }
 
+function Write-TenuVaultSecondaryDeleteRoleWarning {
+    param([object[]]$Assignments, [string]$Scope, [string]$PrincipalId)
+    if ($AllowSecondaryDeleteRole -or -not ($Assignments | Where-Object {
+        $_.RoleDefinitionId -eq $secondaryDeleteRoleId -or $_.RoleDefinitionName -eq "Storage Blob Data Contributor"
+    })) { return }
+    Write-Warning "Storage Blob Data Contributor still lets the cloud backup identity delete blobs in the secondary container. Once TenuVault Backup Writer is assigned there, remove the broader grant in the secondary subscription with:"
+    Write-Host "Remove-AzRoleAssignment -ObjectId '$PrincipalId' -RoleDefinitionId '$secondaryDeleteRoleId' -Scope '$Scope'"
+}
+
 function Initialize-TenuVaultSecondaryAccess {
     [CmdletBinding(SupportsShouldProcess)]
     param([hashtable]$Target, [object]$Role, [string]$PrincipalId)
@@ -692,25 +707,36 @@ function Initialize-TenuVaultSecondaryAccess {
             Set-AzRoleDefinition -Role $Role -ErrorAction Stop | Out-Null
         } catch {
             [void]$Role.AssignableScopes.Remove($Target.GroupScope)
-            # Only fall back when Azure explicitly denies the role definition change.
             if ($_.ToString() -notmatch 'AuthorizationFailed|Forbidden|RoleDefinitionLimitExceeded|RequestDisallowedByPolicy') { throw }
+            if (-not $AllowSecondaryDeleteRole) {
+                throw "Azure refused to extend TenuVault Backup Writer to '$($Target.GroupScope)'. Ask an Azure administrator to allow the role there, then rerun setup. If you accept granting delete access on the secondary container, rerun with -AllowSecondaryDeleteRole. Azure error: $($_.Exception.Message)"
+            }
             $roleName = "Storage Blob Data Contributor"
-            $roleId = "ba92f5b4-2d11-453d-a403-e96b0029c9fe"
-            Write-Warning "Azure refused to extend the Backup Writer role to the secondary resource group. Assigning Storage Blob Data Contributor on the secondary container only. This role can delete blobs. Review the grant after the Backup Writer role becomes available."
+            $roleId = $secondaryDeleteRoleId
+            Write-Warning "Azure refused to extend the Backup Writer role. -AllowSecondaryDeleteRole allows Storage Blob Data Contributor on the secondary container. This role can delete blobs."
         }
     }
     Invoke-TenuVaultSecondaryContext $Target {
-        $storageContext = New-AzStorageContext -StorageAccountName $Target.Account -UseConnectedAccount
-        if (-not (Get-AzStorageContainer -Name $Target.Container -Context $storageContext -ErrorAction SilentlyContinue)) {
-            New-AzStorageContainer -Name $Target.Container -Context $storageContext -Permission Off | Out-Null
+        $containerArgs = @{ ResourceGroupName = $Target.Group; StorageAccountName = $Target.Account; Name = $Target.Container }
+        $container = try { Get-AzRmStorageContainer @containerArgs -ErrorAction Stop } catch {
+            if (-not (Test-TenuVaultNotFound $_)) { throw }
         }
-        $assignments = @(Get-AzRoleAssignment -ObjectId $PrincipalId -Scope $Target.Scope |
+        if (-not $container) {
+            New-AzRmStorageContainer @containerArgs -PublicAccess None -ErrorAction Stop | Out-Null
+        }
+        $assignments = @(Get-AzRoleAssignment -ObjectId $PrincipalId -Scope $Target.Scope -ErrorAction Stop |
             Where-Object { $_.Scope -eq $Target.Scope })
+        Write-TenuVaultSecondaryDeleteRoleWarning $assignments $Target.Scope $PrincipalId
         if (-not ($assignments | Where-Object { $_.RoleDefinitionId -eq $roleId -or $_.RoleDefinitionName -eq $roleName })) {
-            New-AzRoleAssignment -ObjectId $PrincipalId -ObjectType ServicePrincipal -RoleDefinitionId $roleId -Scope $Target.Scope | Out-Null
-        }
-        if ($roleName -eq $writerRoleName -and ($assignments | Where-Object { $_.RoleDefinitionName -eq "Storage Blob Data Contributor" })) {
-            Write-Warning "The secondary container still grants Storage Blob Data Contributor to the cloud backup identity. Review and remove that grant to leave the no-delete Backup Writer role."
+            foreach ($delay in @(2, 4, 8, 16, 0)) {
+                try {
+                    New-AzRoleAssignment -ObjectId $PrincipalId -ObjectType ServicePrincipal -RoleDefinitionId $roleId -Scope $Target.Scope -ErrorAction Stop | Out-Null
+                    break
+                } catch {
+                    if (-not $delay -or $_.ToString() -notmatch 'PrincipalNotFound|RoleDefinitionDoesNotExist|RoleDefinitionNotFound|RoleDefinitionNotAssignable') { throw }
+                    Start-Sleep -Seconds $delay
+                }
+            }
         }
     }
     return $true
@@ -744,7 +770,13 @@ if ($secondaryTarget) {
     Invoke-TenuVaultSecondaryContext $secondaryTarget {
         $account = Get-AzStorageAccount -ResourceGroupName $secondaryTarget.Group -Name $secondaryTarget.Account -ErrorAction Stop
         if ($account.Id -ne $SecondaryStorageAccountId) { throw "The secondary storage account does not match its ARM resource ID." }
-        Assert-TenuVaultAuthorizationActions -Scope $secondaryTarget.GroupScope -RequiredActions @("Microsoft.Authorization/roleAssignments/write")
+        $requiredSecondaryActions = @("Microsoft.Authorization/roleAssignments/write")
+        if ($secondaryTarget.GroupScope -ne $storageGroupScope -and
+            $existingWriterRole.AssignableScopes -notcontains $secondaryTarget.GroupScope -and
+            $existingWriterRole.AssignableScopes -notcontains "/subscriptions/$($secondaryTarget.Subscription)") {
+            $requiredSecondaryActions += "Microsoft.Authorization/roleDefinitions/write"
+        }
+        Assert-TenuVaultAuthorizationActions -Scope $secondaryTarget.GroupScope -RequiredActions $requiredSecondaryActions
     }
 }
 
@@ -1193,6 +1225,23 @@ Write-TenuVaultLegacyKeyVaultNote $legacyKeyVaults -KeptBecause $runbook.Reason
 $secondaryVariables = Get-TenuVaultAutomationVariables
 if ($secondaryVariables.Error) { Write-Warning "The saved secondary target could not be read back. Check the Automation account variables before updating the app." }
 $secondarySetup = $secondaryVariables.Variables[$secondaryVariable]
+$hasSecondarySetup = $secondarySetup -match "$storageIdPattern/blobServices/default/containers/($containerPattern)\z"
+if ($hasSecondarySetup) {
+    $savedSecondaryAccount = $Matches[4].ToLowerInvariant()
+    $savedSecondaryContainer = $Matches[5]
+    if (-not $secondaryPassed -and -not $AllowSecondaryDeleteRole -and $principalId) {
+        try {
+            Invoke-TenuVaultSecondaryContext @{ Subscription = $Matches[2] } {
+                $assignments = @(Get-AzRoleAssignment -ObjectId $principalId -Scope $secondarySetup -ErrorAction Stop |
+                    Where-Object { $_.Scope -eq $secondarySetup })
+                Write-TenuVaultSecondaryDeleteRoleWarning $assignments $secondarySetup $principalId
+            }
+        } catch {
+            Write-Warning "Could not check the saved secondary container for Storage Blob Data Contributor. Review the cloud backup identity's assignments on '$secondarySetup'."
+        }
+    }
+    Write-Host "Wait a few minutes for secondary storage permissions to propagate before starting a test backup."
+}
 Write-Host ""
 Write-Host "--- TenuVault cloud backup setup (paste into TenuVault) ---"
 Write-Host "tenantId=$TenantId"
@@ -1200,9 +1249,9 @@ Write-Host "subscriptionId=$($context.Subscription.Id)"
 Write-Host "resourceGroup=$ResourceGroupName"
 Write-Host "automationAccount=$AutomationAccountName"
 Write-Host "storageAccount=$StorageAccountName"
-if ($secondarySetup -match "$storageIdPattern/blobServices/default/containers/($containerPattern)\z") {
-    Write-Host "secondaryStorageAccount=$($Matches[4].ToLowerInvariant())"
-    Write-Host "secondaryContainer=$($Matches[5])"
+if ($hasSecondarySetup) {
+    Write-Host "secondaryStorageAccount=$savedSecondaryAccount"
+    Write-Host "secondaryContainer=$savedSecondaryContainer"
 }
 Write-Host "scheduleName=$scheduleName"
 Write-Host "frequency=$($Frequency.ToLowerInvariant())"

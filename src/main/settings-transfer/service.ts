@@ -188,7 +188,7 @@ function valueText(value: unknown): string {
   return `"${String(value).slice(0, 80)}"`
 }
 const BRANDING_NAMES: Partial<Record<keyof PdfBranding, string>> = { companyName: "company name", logo: "logo", colors: "colors", preparedBy: "prepared by", classification: "classification", footerText: "footer text" }
-const CLOUD_NAMES: Partial<Record<keyof CloudBackupConfig, string>> = { subscriptionId: "subscription", resourceGroup: "resource group", automationAccount: "Automation account", storageAccount: "storage account", keyVault: "key vault", scheduleName: "schedule name", frequency: "frequency", time: "time", weekday: "weekday", timeZone: "time zone", linked: "linked schedule" }
+const CLOUD_NAMES: Partial<Record<keyof CloudBackupConfig, string>> = { subscriptionId: "subscription", resourceGroup: "resource group", automationAccount: "Automation account", storageAccount: "storage account", secondaryStorageAccount: "secondary storage account", secondaryContainer: "secondary container", keyVault: "key vault", scheduleName: "schedule name", frequency: "frequency", time: "time", weekday: "weekday", timeZone: "time zone", linked: "linked schedule" }
 const changeNote = (fields: string[]) => (fields.length ? `Changes the ${fields.join("; the ")}.` : undefined)
 
 /** Lists fields inside a known part that this version does not know; the known fields still apply. */
@@ -199,7 +199,7 @@ function unknownFields(value: unknown, known: readonly string[], where: string, 
 
 // eslint-disable-next-line no-control-regex
 const CLOUD_TEXT = /^[^\u0000-\u001f\u007f]{1,256}$/
-const CLOUD_FIELDS = ["tenantId", "subscriptionId", "resourceGroup", "automationAccount", "storageAccount", "keyVault", "scheduleName", "frequency", "time", "weekday", "timeZone", "tenantKey", "linked"]
+const CLOUD_FIELDS = ["tenantId", "subscriptionId", "resourceGroup", "automationAccount", "storageAccount", "secondaryStorageAccount", "secondaryContainer", "keyVault", "scheduleName", "frequency", "time", "weekday", "timeZone", "tenantKey", "linked"]
 
 /**
  * A cloud backup setup as the renderer stores it. Each known field is checked for its type and
@@ -214,11 +214,14 @@ function cloudConfig(value: unknown): CloudBackupConfig | null {
   if (!isGuid(tenantId) || !(subscriptionId === undefined || subscriptionId === "" || isGuid(subscriptionId))) return null
   if (typeof storageAccount !== "string" || !/^[a-z0-9]{3,24}$/.test(storageAccount) || !text(value.resourceGroup, false) || !text(value.automationAccount, false)) return null
   if (!text(value.keyVault, true) || !text(value.scheduleName, true) || !text(value.timeZone, true) || !text(value.tenantKey, true)) return null
+  if (!text(value.secondaryStorageAccount, true) || !text(value.secondaryContainer, true)) return null
   if (frequency !== undefined && frequency !== "daily" && frequency !== "weekly") return null
   if (time !== undefined && time !== "" && (typeof time !== "string" || !/^([01]\d|2[0-3]):[0-5]\d$/.test(time))) return null
   if (weekday !== undefined && !(typeof weekday === "number" && Number.isInteger(weekday) && weekday >= 0 && weekday <= 6)) return null
   if (linked !== undefined && typeof linked !== "boolean") return null
-  return parseCloudSetup(CLOUD_FIELDS.filter((name) => value[name] !== undefined && value[name] !== "").map((name) => `${name}=${String(value[name])}`).join("\n"))
+  const config = parseCloudSetup(CLOUD_FIELDS.filter((name) => value[name] !== undefined && value[name] !== "").map((name) => `${name}=${String(value[name])}`).join("\n"))
+  if (config?.secondaryStorageAccount !== (value.secondaryStorageAccount || undefined) || config?.secondaryContainer !== (value.secondaryContainer || undefined)) return null
+  return config
 }
 
 /** What a new scope changes, by type: what starts and what stops being backed up. */

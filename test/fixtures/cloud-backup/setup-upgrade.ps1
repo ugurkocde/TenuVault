@@ -198,15 +198,10 @@ function Register-AzAutomationScheduledRunbook {
 }
 function Get-AzStorageContainer {
     param($Name, $Context, $ErrorAction)
-    if ($SecondaryCopyTests -and $Context.Account -eq "stcontosorecovery" -and -not $script:secondaryContainerCreated) { return }
     if ($Name -ne "audit-logs") { return @{ Name = $Name } }
 }
 function New-AzStorageContainer {
     param($Name, $Context, $Permission)
-    if ($SecondaryCopyTests -and $Context.Account -eq "stcontosorecovery") {
-        $script:secondaryContainerCreated = $true
-        $script:actions.Add("create $Name with access $Permission")
-    }
     if ($script:auditFailure -eq "container") { throw "Audit container creation denied" }
 }
 function Get-AzRoleDefinition {
@@ -232,8 +227,13 @@ function Add-MockedRoleAssignment([string]$Container) {
     $script:roleSlots--
 }
 function New-AzRoleAssignment {
-    param($ObjectId, $RoleDefinitionId, $Scope, $ObjectType)
+    param($ObjectId, $RoleDefinitionId, $Scope, $ObjectType, $ErrorAction)
     if ($SecondaryCopyTests -and $Scope -match '/storageAccounts/stcontosorecovery/') {
+        $script:secondaryAssignmentAttempts++
+        if ($script:secondaryScenario -eq "propagation") {
+            if ($script:secondaryAssignmentAttempts -eq 1) { throw "PrincipalNotFound" }
+            if ($script:secondaryAssignmentAttempts -eq 2) { throw "RoleDefinitionDoesNotExist" }
+        }
         $script:secondaryAssignment = @{ Scope = $Scope; RoleDefinitionId = $RoleDefinitionId; ObjectId = $ObjectId; ObjectType = $ObjectType; Subscription = $script:activeSubscription }
         $script:actions.Add("grant secondary")
         return
@@ -242,6 +242,10 @@ function New-AzRoleAssignment {
 }
 function Invoke-AzRestMethod {
     param($Method, $Path, $Payload)
+    if ($Method -eq "Get" -and $Path -like "*/resourceGroups/rg-copy/providers/Microsoft.Authorization/permissions*" -and
+        $script:secondaryScenario -in @("missing-role-definition-write", "rerun")) {
+        return @{ StatusCode = 200; Content = '{"value":[{"actions":["*"],"notActions":["Microsoft.Authorization/roleDefinitions/write"]}]}' }
+    }
     if ($Method -eq "Get") { return @{ StatusCode = 200; Content = '{"value":[{"actions":["*"],"notActions":[]}]}' } }
     if ($Path -match '/roleDefinitions/' -and $script:auditFailure -eq "role-definition") { return @{ StatusCode = 403 } }
     if ($Path -match '/roleAssignments/' -and $script:auditFailure -eq "role-assignment") { return @{ StatusCode = 403 } }
@@ -324,16 +328,31 @@ if ($SecondaryCopyTests) {
         @{ Id = "/subscriptions/$script:activeSubscription/resourceGroups/$ResourceGroupName/providers/Microsoft.Storage/storageAccounts/$Name" }
     }
     function New-AzStorageContext { param($StorageAccountName, [switch]$UseConnectedAccount) @{ Account = $StorageAccountName } }
+    function Get-AzRmStorageContainer {
+        param($ResourceGroupName, $StorageAccountName, $Name, $ErrorAction)
+        if ($script:secondaryScenario -eq "container-forbidden") { throw "Forbidden reading secondary container" }
+        if (-not $script:secondaryContainerCreated) { throw [ResourceNotFoundException]::new("Secondary container not found") }
+        return @{ Name = $Name }
+    }
+    function New-AzRmStorageContainer {
+        param($ResourceGroupName, $StorageAccountName, $Name, $PublicAccess, $ErrorAction)
+        $script:secondaryContainerCreated = $true
+        $script:actions.Add("create $Name with access $PublicAccess")
+    }
+    function Start-Sleep {
+        param($Seconds)
+        $script:actions.Add("retry after ${Seconds}s")
+    }
     function Set-AzRoleDefinition {
         [CmdletBinding()]
         param($Role)
-        if ($script:secondaryScenario -eq "fallback") { throw "AuthorizationFailed" }
+        if ($script:secondaryScenario -in @("denied", "fallback")) { throw "AuthorizationFailed" }
         if ($script:secondaryScenario -eq "unexpected") { throw "Temporary network error" }
         $script:secondaryRoleScope = $Role.AssignableScopes[-1]
         $script:actions.Add("extend writer")
     }
-    foreach ($scenario in "default", "custom", "rerun", "omitted", "disable", "fallback", "unexpected", "bad-id", "bad-container", "container-only", "same-account", "different-tenant") {
-        if ($scenario -notin @("rerun", "omitted", "disable")) {
+    foreach ($scenario in "default", "custom", "rerun", "omitted", "disable", "denied", "fallback", "fallback-omitted", "fallback-rerun", "propagation", "missing-role-definition-write", "container-forbidden", "unexpected", "bad-id", "bad-container", "container-only", "same-account", "different-tenant") {
+        if ($scenario -notin @("rerun", "omitted", "disable", "fallback-omitted", "fallback-rerun")) {
             Reset-OldSetup
             $script:secondaryAssignment = $null
             $script:secondaryRoleScope = $null
@@ -342,12 +361,15 @@ if ($SecondaryCopyTests) {
         $script:actions.Clear()
         $script:variableWrites.Clear()
         $script:roleSlots = 10
+        $script:secondaryAssignmentAttempts = 0
         $script:activeSubscription = $primarySubscription
         $script:secondaryScenario = $scenario
         $arguments = @{ TenantId = $TenantId; StorageAccountName = $StorageAccountName; GraphRolesGranted = $true; NoFailureAlert = $true; SecondaryStorageAccountId = $secondaryId }
         switch ($scenario) {
             { $_ -in @("custom", "rerun") } { $arguments.SecondaryContainerName = "backup-copies" }
-            "omitted" { $arguments.Remove("SecondaryStorageAccountId") }
+            { $_ -in @("omitted", "fallback-omitted") } { $arguments.Remove("SecondaryStorageAccountId") }
+            "fallback" { $arguments.AllowSecondaryDeleteRole = $true }
+            "missing-role-definition-write" { $arguments.AllowSecondaryDeleteRole = $true }
             "disable" { $arguments.SecondaryStorageAccountId = "" }
             "bad-id" { $arguments.SecondaryStorageAccountId += "/blobServices/default" }
             "bad-container" { $arguments.SecondaryContainerName = "bad--container" }
@@ -358,7 +380,7 @@ if ($SecondaryCopyTests) {
         $errorText = $null
         try { $output = @(. $SetupPath @arguments 3>&1 6>&1) } catch { $errorText = $_.Exception.Message }
         @{ scenario = $scenario; error = $errorText; assignment = $script:secondaryAssignment
-           actions = @($script:actions); subscriptionAfter = $script:activeSubscription
+           actions = @($script:actions); subscriptionAfter = $script:activeSubscription; assignmentAttempts = $script:secondaryAssignmentAttempts
            saved = $script:variables["TenuVaultSecondaryStorage-$tenantKey"]; writes = @($script:variableWrites)
            output = @($output | ForEach-Object { [string]$_ }) } | ConvertTo-Json -Compress -Depth 5
     }

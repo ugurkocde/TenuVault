@@ -12,6 +12,7 @@ if (-not $RunbookPath) {
     $RunbookPath = Join-Path $repoRoot "resources/runbooks/Invoke-TenuVaultBackup.ps1"
 }
 . $RunbookPath -LibraryOnly
+$invokeRunbookHttp = ${function:Invoke-TvHttp}
 
 [Environment]::SetEnvironmentVariable("TenuVaultTenantId", "11111111-2222-3333-4444-555555555555")
 [Environment]::SetEnvironmentVariable("TenuVaultStorageAccount", "stcontoso")
@@ -44,15 +45,23 @@ function Invoke-TvHttp {
         if ($Method -eq "Put" -and $targetUri.AbsolutePath -match "/backup-") {
             if ($Headers["x-ms-copy-source"]) {
                 if ($Token -ne "token" -or $Headers["x-ms-copy-source-authorization"] -ne "Bearer token" -or
-                    $Headers["x-ms-source-if-match"] -ne '"source-etag"' -or $Headers["If-None-Match"] -ne "*" -or $BodyBytes.Length -ne 0) {
+                    $Headers["x-ms-source-if-match"] -ne '"0x8D9126CC8255C5D"' -or $Headers["If-None-Match"] -ne "*" -or $BodyBytes.Length -ne 0) {
                     throw "Unexpected copy authentication or conditions."
                 }
                 if ($script:copyScenario -eq "denied" -and $targetUri.AbsolutePath -like "*/Baseline*") {
                     throw [TvHttpError]::new(403, "HTTP 403 AuthorizationPermissionMismatch")
                 }
+                if ($script:copyScenario -eq "manifest-denied" -and $targetUri.AbsolutePath -like "*/metadata.json") {
+                    throw [TvHttpError]::new(403, "HTTP 403 AuthorizationPermissionMismatch")
+                }
                 $length = $script:backupBlobs[$Headers["x-ms-copy-source"]]
                 if ($script:copyScenario -eq "wrong-size" -and $targetUri.AbsolutePath -like "*/Baseline*") { $length++ }
                 $script:backupBlobs[$Uri] = $length
+                if ($script:copyScenario -eq "data-retry" -and $targetUri.AbsolutePath -like "*/Baseline*") {
+                    # The service committed the blob before reporting a retryable error. Run the
+                    # real HTTP retry code, with Azure rejecting the retried create-only request.
+                    return & $invokeRunbookHttp @PSBoundParameters
+                }
                 return @{ Status = 201 }
             }
             $script:backupBlobs[$Uri] = $BodyBytes.Length
@@ -69,7 +78,7 @@ function Invoke-TvHttp {
             }
             $blobs = foreach ($key in $matching) {
                 $name = [Security.SecurityElement]::Escape([uri]::UnescapeDataString($key.Substring($container.Length)))
-                "<Blob><Name>$name</Name><Properties><Content-Length>$($script:backupBlobs[$key])</Content-Length><Etag>`"source-etag`"</Etag></Properties></Blob>"
+                "<Blob><Name>$name</Name><Properties><Content-Length>$($script:backupBlobs[$key])</Content-Length><Etag>0x8D9126CC8255C5D</Etag></Properties></Blob>"
             }
             return @{ Status = 200; Text = "<EnumerationResults><Blobs>$blobs</Blobs><NextMarker>$next</NextMarker></EnumerationResults>" }
         }
@@ -98,9 +107,28 @@ function Invoke-TvHttp {
 }
 
 if ($SecondaryCopyTests) {
-    [Environment]::SetEnvironmentVariable("TenuVaultSecondaryStorage", "/subscriptions/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/resourceGroups/rg-copy/providers/Microsoft.Storage/storageAccounts/stcontosorecovery/blobServices/default/containers/backup-copies")
-    foreach ($scenario in "verified", "denied", "wrong-size", "primary-warnings") {
+    $secondaryId = "/subscriptions/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/resourceGroups/rg-copy/providers/Microsoft.Storage/storageAccounts/stcontosorecovery/blobServices/default/containers/backup-copies"
+    $script:CopyHttpClient = [pscustomobject]@{ Attempts = 0 }
+    $script:CopyHttpClient | Add-Member -MemberType ScriptMethod -Name SendAsync -Value {
+        $this.Attempts++
+        $status = if ($this.Attempts -eq 1) { 503 } else { 412 }
+        $response = [System.Net.Http.HttpResponseMessage]::new([System.Net.HttpStatusCode]$status)
+        if ($status -eq 412) {
+            $response.Content = [System.Net.Http.StringContent]::new("<Error><Code>ConditionNotMet</Code></Error>")
+        }
+        $task = [System.Threading.Tasks.TaskCompletionSource[System.Net.Http.HttpResponseMessage]]::new()
+        $task.SetResult($response)
+        return $task.Task
+    }
+    foreach ($scenario in "verified", "denied", "wrong-size", "primary-warnings", "data-retry", "manifest-denied", "malformed", "off") {
+        $target = switch ($scenario) {
+            "malformed" { $secondaryId.Replace("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", ("-" * 36)) }
+            "off" { "off" }
+            default { $secondaryId }
+        }
+        [Environment]::SetEnvironmentVariable("TenuVaultSecondaryStorage", $target)
         $script:copyScenario = $scenario
+        $script:CopyHttpClient.Attempts = 0
         $script:backupBlobs = @{}
         $script:calls.Clear()
         $script:OutcomeSent = $false
@@ -108,7 +136,7 @@ if ($SecondaryCopyTests) {
         $errorText = $null
         $output = @()
         try { $output = @(Invoke-TvBackup 3>&1) } catch { $errorText = $_.Exception.Message }
-        @{ scenario = $scenario; calls = @($script:calls.ToArray()); error = $errorText
+        @{ scenario = $scenario; calls = @($script:calls.ToArray()); error = $errorText; copyAttempts = $script:CopyHttpClient.Attempts
            output = @($output | ForEach-Object { [string]$_ }) } | ConvertTo-Json -Compress -Depth 5
     }
     return
