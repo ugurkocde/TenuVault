@@ -91,7 +91,9 @@ async function signInWith(browserName, playwright, secrets) {
   } catch (error) {
     await app?.screenshot(`fail-${browserName}-app`, hidden(secrets)).catch(() => {})
     // The logs are public; GitHub masks secrets in them, and so does this.
-    throw new Error(hide(error instanceof Error ? error.message : String(error), secrets))
+    const masked = new Error(hide(error instanceof Error ? error.message : String(error), secrets))
+    masked.refused = error?.refused === true
+    throw masked
   } finally {
     await browser?.close().catch(() => {})
     await app?.close().catch(() => {})
@@ -114,8 +116,17 @@ async function main() {
   const secrets = Object.fromEntries(SECRETS.map((name) => [name, process.env[name].trim()]))
   // Playwright comes from this folder's own locked install (npm ci --prefix scripts/nightly-verification).
   const playwright = createRequire(import.meta.url)("playwright")
+  // After Microsoft refused the test account, no other browser sends the credentials again:
+  // repeated refusals could lock the account.
+  let refusedIn = ""
   for (const name of browsers) {
-    await check(`the installed app signs in to the test tenant through ${name}`, () => signInWith(name, playwright, secrets))
+    await check(`the installed app signs in to the test tenant through ${name}`, async () => {
+      if (refusedIn) throw new Error(`Not tried: Microsoft refused the test account in ${refusedIn}, so the credentials are not sent again.`)
+      return signInWith(name, playwright, secrets).catch((error) => {
+        if (error?.refused === true) refusedIn = name
+        throw error
+      })
+    })
   }
 }
 
