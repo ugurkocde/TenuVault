@@ -58,8 +58,8 @@ const navigate = async (router: Awaited<ReturnType<typeof render>>, to: string |
 
 it("renders three service links and follows URL selection, clearing, reload and history", async () => {
   const router = await render("/portal/backup?service=entra")
-  expect(links().map(link => link.textContent)).toEqual(["Intune", "Entra ID", "Defender"])
-  expect(links().map(link => link.getAttribute("href"))).toEqual(["/portal/backup?service=intune", "/portal/backup?service=entra", "/portal/backup?service=defender"])
+  expect(links().map(link => link.textContent)).toEqual(["Defender", "Entra ID", "Intune"])
+  expect(links().map(link => link.getAttribute("href"))).toEqual(["/portal/backup?service=defender", "/portal/backup?service=entra", "/portal/backup?service=intune"])
   expect(active()).toBe("Entra ID")
   await navigate(router, "/portal/backup?service=defender")
   expect(active()).toBe("Defender")
@@ -71,10 +71,19 @@ it("renders three service links and follows URL selection, clearing, reload and 
   expect(active()).toBeUndefined()
 })
 
+it("opens Entra ID from the sidebar when Conditional Access is the only Entra ID area enabled", async () => {
+  const base = status("tenant-1", ["entra"])
+  mocks.status.mockResolvedValue({ ...base, modules: [...base.modules, { ...base.modules[0]!, id: "conditionalAccess", enabled: true }] })
+  await render("/portal/backup?service=entra", createElement(BackupRestorePage))
+  expect(links().map(link => link.textContent)).toEqual(["Defender", "Entra ID", "Intune"])
+  expect(active()).toBe("Entra ID")
+  expect(container.querySelector('section[aria-label="Entra ID"]')?.textContent).toContain("Conditional Access")
+})
+
 it("keeps an off service visible with a muted badge and opens the Settings card", async () => {
   mocks.status.mockResolvedValue(status("tenant-1", ["defender"]))
   const router = await render("/portal/backup?service=defender")
-  const link = links()[2]!
+  const link = links()[0]!
   expect(link.textContent).toBe("DefenderOff")
   expect(link.querySelector(".bg-secondary")?.textContent).toBe("Off")
   expect(active()).toBeUndefined()
@@ -103,7 +112,7 @@ it.each([true, false])("opens backup contents while pending, then follows an exp
 it.each([true, false])("keeps failed status distinct from Off, then recovers to enabled=%s", async enabled => {
   mocks.status.mockRejectedValueOnce(new Error("Status unavailable"))
   const router = await render()
-  expect(links().map(link => link.textContent)).toEqual(["Intune", "Entra ID", "Defender"])
+  expect(links().map(link => link.textContent)).toEqual(["Defender", "Entra ID", "Intune"])
   expect(links().every(link => link.getAttribute("href")?.startsWith("/portal/backup?service="))).toBe(true)
   await act(async () => links()[1]!.click())
   expect(router.state.location.pathname).toBe("/portal/backup")
@@ -124,14 +133,14 @@ it("refreshes service switches and drops late status results from the previous t
   mocks.status.mockResolvedValue(status("tenant-2", ["defender"]))
   await act(async () => root.render(createElement(MemoryRouter, null, sidebar())))
   await act(async () => finish(status()))
-  expect(links()[2]!.textContent).toBe("DefenderOff")
+  expect(links()[0]!.textContent).toBe("DefenderOff")
   expect(mocks.status).toHaveBeenLastCalledWith("tenant-2", "other-client")
   mocks.status.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
   act(() => mocks.changed!("tenant-2"))
   mocks.status.mockResolvedValue(status("tenant-2"))
   await act(async () => mocks.changed!("tenant-2"))
   await act(async () => finish(status("tenant-2", ["intune"])))
-  expect(links().map(link => link.textContent)).toEqual(["Intune", "Entra ID", "Defender"])
+  expect(links().map(link => link.textContent)).toEqual(["Defender", "Entra ID", "Intune"])
   const calls = mocks.status.mock.calls.length
   act(() => mocks.changed!("tenant-1"))
   expect(mocks.status).toHaveBeenCalledTimes(calls)
@@ -146,6 +155,7 @@ it("narrows page contents and trends by service and restores All for an unknown 
   expect(contents()).not.toContain("Device configuration")
   expect(trends()).not.toContain("Device configuration")
   const select = container.querySelector<HTMLSelectElement>("#backup-service")!
+  expect([...select.options].map(option => option.textContent)).toEqual(["All", "Defender", "Entra ID", "Intune"])
   expect(select.value).toBe("entra")
   await act(async () => { select.value = "intune"; select.dispatchEvent(new Event("change", { bubbles: true })) })
   expect(router.state.location.search).toBe("?service=intune")

@@ -36,7 +36,9 @@ export function ServicesNavigation({ linkClass }: { linkClass: (active: boolean)
     <h2 className="px-4 pb-1 text-xs font-medium text-muted-foreground">Services</h2>
     <div className="space-y-0.5">
       {BACKUP_SERVICES.map(service => {
-        const enabled = status?.modules.find(module => module.id === service.id)?.enabled
+        const enabled = service.id === "entra" && status?.modules.some(module => module.id === "conditionalAccess" && module.enabled)
+          ? true
+          : status?.modules.find(module => module.id === service.id)?.enabled
         const off = enabled === false
         const active = enabled === true && pathname === "/portal/backup" && filter === service.id
         const Icon = ICONS[service.id]

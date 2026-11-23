@@ -12,6 +12,7 @@ import { useTenants } from "~/contexts/TenantContext"
 import type { ServicesStatus } from "../../shared/ipc"
 import type { AreaHealth, ConnectionHealthReport, ServiceHealth, SignInHealth } from "../../shared/connection-health/model"
 import { PERSONAL_DATA } from "../../shared/services/onboarding"
+import { BACKUP_SERVICES } from "../../shared/services/presentation"
 import { MODULE_BY_ID, entraApiPermissionsUrl } from "../../shared/services/modules"
 import { optionalPermissionStatus, type OptionalPermissionStatus } from "../../shared/services/optional-permissions"
 import { HEALTH_CAUSE_TEXT, READER_HEALTH_TEXT, SIGN_IN_HEALTH_TEXT, STORAGE_HEALTH_TEXT, changeText, healthDate, permissionRemediation, verificationText } from "../lib/connection-health-view"
@@ -95,13 +96,14 @@ function Area({ area, service, report, busy, run }: { area: AreaHealth; service:
 }
 
 function Service({ service, conditionalAccess, report, busy, toggle, run }: { service: ServiceHealth; conditionalAccess?: ServiceHealth; report: ConnectionHealthReport; busy: boolean; toggle: (service: ServiceHealth, enabled: boolean) => void; run: (action: () => Promise<ConnectionHealthReport>) => void }) {
+  const label = service.id === "conditionalAccess" ? "Conditional Access" : service.label
   const losses = service.areas.flatMap(area => area.losses)
   const included = service.areas.filter(area => area.enabled)
   const restore = !included.length ? "unknown" : included.every(area => area.restore === "present") ? "present" : included.some(area => area.restore === "missing") ? "missing" : "unknown"
   return <section className="rounded-2xl border border-border p-4" data-service={service.id}>
     <div className="flex items-center justify-between gap-3">
-      <h3 className="font-medium text-gray-900">{service.label}</h3>
-      {MODULE_BY_ID.get(service.id)?.switchable && <Switch checked={service.enabled} disabled={busy} label={`Include ${service.label} in backups`} onChange={enabled => toggle(service, enabled)} />}
+      <h3 className="font-medium text-gray-900">{label}</h3>
+      {MODULE_BY_ID.get(service.id)?.switchable && <Switch checked={service.enabled} disabled={busy} label={`Include ${label} in backups`} onChange={enabled => toggle(service, enabled)} />}
     </div>
     <p className="mt-1 text-xs text-gray-500">{MODULE_BY_ID.get(service.id)?.description}</p>
     {service.id === "defender" && <p className="mt-2 text-xs text-gray-600">Backs up 17 Microsoft Graph configuration types, including tenant attack simulation content. Anti-phishing, Safe Links, Safe Attachments, anti-spam, anti-malware and quarantine policies, the Tenant Allow/Block List and Defender for Endpoint settings are not covered. Restore is not available yet.</p>}
@@ -111,14 +113,14 @@ function Service({ service, conditionalAccess, report, busy, toggle, run }: { se
       {!service.enabled && <p className="text-sm text-gray-600">Off. New manual and scheduled backups leave out this service.</p>}
       {!service.hasTypes ? <p className="text-sm text-gray-600">This version has no backup types for {service.label} yet. Turning it on saves your choice; it does not back up these areas yet.</p> : service.enabled ? <Verification value={service.verified} /> : null}
       {losses.length > 0 && <p className="text-sm text-amber-800">{losses.some(loss => loss.mode === "app-only") ? "The Backup Reader lost access, even if your sign-in verified a backup." : "Your sign-in lost access."} See the affected areas below.</p>}
-      {conditionalAccess && <p className="text-xs text-gray-600">Conditional Access: {conditionalAccess.enabled ? "On" : "Off"}, controlled separately below.</p>}
+      {conditionalAccess && <p className="text-xs text-gray-600">Conditional Access: {conditionalAccess.enabled ? "On" : "Off"}, managed under Areas and access.</p>}
     </div>
     {service.enabled && service.missing.length > 0 && <div className="mt-3"><PermissionRoutes inApp report={report} missing={service.missing} /></div>}
     <details className="mt-3" data-service-details>
       <summary className="cursor-pointer text-sm font-medium text-gray-700">Areas and access ({service.areas.length}{conditionalAccess ? " + Conditional Access" : ""})</summary>
       <div data-no-select className="my-3 space-y-1 text-xs text-gray-600">
         <label className="flex flex-wrap items-center gap-2">Access to request
-          <select aria-label={`${service.label} access to request`} className="rounded-lg border border-border bg-card p-2 text-foreground" disabled={busy} value={service.access} onChange={event => run(() => bridge.services.setAccess(report.tenantId, service.id, event.target.value as "backup" | "restore"))}>
+          <select aria-label={`${label} access to request`} className="rounded-lg border border-border bg-card p-2 text-foreground" disabled={busy} value={service.access} onChange={event => run(() => bridge.services.setAccess(report.tenantId, service.id, event.target.value as "backup" | "restore"))}>
             <option value="backup">Backup</option><option value="restore">Backup and restore</option>
           </select>
         </label>
@@ -240,7 +242,10 @@ function TenantServices({ tenantId, clientId, name, active }: { tenantId: string
         <h3 className="font-medium text-blue-800">Changes since the last check</h3>
         <ul className="list-disc space-y-2 pl-4">{report.changes.map((change, index) => <li key={index} className="break-words">{changeText(change, report.since)}</li>)}</ul>
       </section>}
-      {report.services.filter(service => service.id !== "conditionalAccess").map(service => <Service key={service.id} service={service} conditionalAccess={service.id === "entra" ? report.services.find(entry => entry.id === "conditionalAccess") : undefined} report={report} busy={busy} toggle={(service, enabled) => void toggle(service, enabled)} run={action => void run(action)} />)}
+      {BACKUP_SERVICES.map(({ id }) => {
+        const service = report.services.find(entry => entry.id === id)
+        return service && <Service key={service.id} service={service} conditionalAccess={service.id === "entra" ? report.services.find(entry => entry.id === "conditionalAccess") : undefined} report={report} busy={busy} toggle={(service, enabled) => void toggle(service, enabled)} run={action => void run(action)} />
+      })}
       <OptionalPermissions tenantId={tenantId} entries={optionalPermissionStatus(report.granted ? { kind: "delegated", permissions: new Set(report.granted) } : undefined)} clientId={clientId} checking={busy} />
     </>}
   </div>

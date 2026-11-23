@@ -2,11 +2,13 @@ import { useState } from "react"
 import { ChevronDown, ChevronRight, Info } from "lucide-react"
 import { Checkbox } from "~/components/ui/checkbox"
 import { cn } from "~/lib/utils"
-import { DEFAULT_SELECTION, type ServiceSelection, moduleForFolder } from "../../shared/services/modules"
-import { AREAS, includedTypes, normalizeScope, presetOf, scopeForPreset, type BackupScope, type ScopePreset } from "../../shared/intune/scope"
+import { DEFAULT_SELECTION, type ServiceSelection } from "../../shared/services/modules"
+import { includedTypes, normalizeScope, presetOf, scopeForPreset, type BackupScope, type ScopePreset } from "../../shared/intune/scope"
+
+import { BACKUP_SERVICE_AREAS } from "../lib/backup-service"
 
 const PRESETS: Array<{ id: ScopePreset; title: string; text: string }> = [
-  { id: "policies", title: "Everything except apps", text: "Policies, scripts, updates, enrollment and tenant settings." },
+  { id: "policies", title: "Everything except apps", text: "Configuration from all enabled services, excluding Intune app details." },
   { id: "everything", title: "Everything", text: "Also app details and assignments. Installer files are never included." },
   { id: "custom", title: "Custom", text: "Choose areas and individual types." },
 ]
@@ -33,7 +35,7 @@ export function BackupScopePicker({ selection = DEFAULT_SELECTION, value, onChan
   const excluded = new Set(value.excluded)
   const available = includedTypes({ excluded: [] }, selection)
   const offered = new Set(available.map(type => type.folder))
-  const areas = AREAS.map(group => ({ ...group, types: group.types.filter(type => offered.has(type.folder)) })).filter(group => group.types.length)
+  const areas = BACKUP_SERVICE_AREAS.flatMap(service => service.areas.map(group => ({ ...group, service, types: group.types.filter(type => offered.has(type.folder)) })).filter(group => group.types.length))
   const included = includedTypes(value, selection)
 
   const setExcluded = (folders: string[], exclude: boolean) => {
@@ -82,12 +84,13 @@ export function BackupScopePicker({ selection = DEFAULT_SELECTION, value, onChan
 
       {selectedPreset === "custom" && (
         <div className="divide-y divide-gray-100 rounded-2xl border border-gray-200">
-          {areas.map(({ area, types }) => {
+          {areas.map(({ area, service, types }) => {
+            const key = `${service.id}/${area}`
             const chosen = types.filter((type) => !excluded.has(type.folder)).length
-            const expanded = open.has(area)
+            const expanded = open.has(key)
             const areaItems = known && types.every((type) => !unknown.has(type.folder)) ? types.reduce((sum, type) => sum + (counts[type.folder] ?? 0), 0) : null
             return (
-              <div key={area}>
+              <div key={key}>
                 <div className="flex items-center gap-3 px-4 py-3">
                   <Checkbox
                     aria-label={`Back up ${area}`}
@@ -97,8 +100,8 @@ export function BackupScopePicker({ selection = DEFAULT_SELECTION, value, onChan
                     disabled={disabled}
                     onCheckedChange={() => setExcluded(types.map((type) => type.folder), chosen === types.length)}
                   />
-                  <button type="button" className="flex flex-1 items-center justify-between gap-3 text-left" onClick={() => toggleArea(area)} aria-expanded={expanded}>
-                    <span className="text-sm font-medium text-gray-900">{moduleForFolder(types[0]!.folder)?.module.label}: {area}</span>
+                  <button type="button" className="flex flex-1 items-center justify-between gap-3 text-left" onClick={() => toggleArea(key)} aria-expanded={expanded}>
+                    <span className="text-sm font-medium text-gray-900">{service.label}: {area}</span>
                     <span className="flex items-center gap-2 text-xs text-gray-500">
                       {chosen} of {types.length} types{areaItems !== null ? `, ${areaItems} items last time` : ""}
                       {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}

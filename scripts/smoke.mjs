@@ -553,7 +553,7 @@ await check("Community users can reach the tenant sign-in without a key", async 
 await check("dashboard renders in the desktop shell", async () => {
   await disableAnimations()
   await go("#/portal/dashboard", "Dashboard")
-  await assertPageInMain("Protect your Intune policies", "dashboard")
+  await assertPageInMain("Protect your tenant configuration", "dashboard")
   await sleep(1000)
   await screenshot("01-dashboard")
 })
@@ -572,7 +572,7 @@ await check("a failed page keeps the sidebar and offers recovery", async () => {
     assert(renderFailures > beforeRetry, "Try again did not re-render the failed page")
     await screenshot("01b-page-error")
     await evaluate(`document.querySelector('nav a[href="#/portal/dashboard"]').click()`)
-    assert(await waitForCondition(`document.querySelector('main')?.innerText.includes('Protect your Intune policies') && !document.querySelector('main [role="alert"]')`), "sidebar did not open a healthy page")
+    assert(await waitForCondition(`document.querySelector('main')?.innerText.includes('Protect your tenant configuration') && !document.querySelector('main [role="alert"]')`), "sidebar did not open a healthy page")
     await send("Network.setBlockedURLs", { urls: [] })
     // React keeps a rejected lazy import. Reload retries the module after the failure is removed.
     await go("#/portal/overview", "This screen could not be loaded")
@@ -594,7 +594,7 @@ await check("unhandled promise rejections are logged without replacing the page"
   await evaluate(`void Promise.reject(new Error('Smoke unhandled rejection'))`)
   for (let attempt = 0; unhandledRejections <= beforeRejection && attempt < 20; attempt++) await sleep(100)
   assert(unhandledRejections > beforeRejection, "unhandled rejection was not logged")
-  assert(await evaluate(`document.querySelector('main')?.innerText.includes('Protect your Intune policies') && !document.querySelector('main [role="alert"]')`), "unhandled rejection replaced the page")
+  assert(await evaluate(`document.querySelector('main')?.innerText.includes('Protect your tenant configuration') && !document.querySelector('main [role="alert"]')`), "unhandled rejection replaced the page")
 })
 
 await check("preload bridge is isolated", async () => {
@@ -1826,6 +1826,13 @@ await check("dashboard shows the selected tenant in light and dark", async () =>
   await evaluate(`document.documentElement.classList.toggle("dark", ${wasDark})`)
 })
 
+await check("backup services use the same alphabetical order in navigation and the filter", async () => {
+  await go("#/portal/backup", "Backup & Restore")
+  const order = ["Defender", "Entra ID", "Intune"]
+  assert(await waitForCondition(`JSON.stringify([...document.querySelectorAll('section[aria-label="Services"] a > span:first-of-type')].map(e => e.textContent)) === ${JSON.stringify(JSON.stringify(order))}`), "sidebar services out of order")
+  assert(await waitForCondition(`JSON.stringify([...document.querySelectorAll('#backup-service option')].slice(1).map(e => e.textContent)) === ${JSON.stringify(JSON.stringify(order))}`), "backup service filter out of order")
+})
+
 await check("restore deep links and navigation preserve the selected tab", async () => {
   await go("#/portal/backup?tab=restore", "Backup & Restore")
   // The sidebar already contains "Backup & Restore" before the lazy page loads.
@@ -1835,6 +1842,7 @@ await check("restore deep links and navigation preserve the selected tab", async
 
 await check("search with no matches and missing dates stay truthful", async () => {
   await go("#/portal/tenants", "Tenant Management")
+  assert(await waitForCondition(`[...document.querySelectorAll('[aria-label^="Backup services for"]')].some(group => [...group.querySelectorAll("a")].map(link => link.innerText).join(", ") === "Defender, Entra ID, Intune")`), "tenant backups are out of order")
   assert(!(await evaluate(`document.body.innerText.includes('NaN') || document.body.innerText.includes('Next backup in 2 hours')`)), "invented time shown")
   await evaluate(`(() => { const input = document.querySelector('[aria-label="Search tenants"]'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, 'no-such-tenant'); input.dispatchEvent(new Event('input', {bubbles:true})); })()`)
   assert(await waitForText("No matching tenants"), "search claims no tenants are configured")

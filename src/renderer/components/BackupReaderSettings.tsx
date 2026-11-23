@@ -159,7 +159,7 @@ export function BackupReaderSettings() {
               Conditional Access change: see <button type="button" className="underline" onClick={() => void bridge.app.openExternal(READER_CA_GUIDE_URL)}>Conditional Access and TenuVault</button>.
             </p>
             <p>
-              What it can do: read all Intune configuration of the tenant, including script contents, and write new backups.
+              What it can do: read configuration for the services and areas you give it access to, and write new backup files.
               What it cannot do: change Intune, delete backups, or read encrypted OMA-URI values in plain text (scheduled
               backups keep those masked; a manual backup captures them).
             </p>

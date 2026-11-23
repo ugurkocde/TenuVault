@@ -1,6 +1,7 @@
 vi.mock("@desktop/components/ServiceBackupNotice", () => ({ ServiceBackupNotice: () => null }))
 import { act, createElement } from "react"
 import { createRoot, type Root } from "react-dom/client"
+import { MemoryRouter } from "react-router-dom"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import type { Tenant } from "../../src/portal/contexts/TenantContext"
 
@@ -53,7 +54,7 @@ async function renderPage(): Promise<HTMLElement> {
   const container = document.body.appendChild(document.createElement("div"))
   const root = createRoot(container)
   roots.push(root)
-  await act(async () => root.render(createElement(BackupProgressProvider, null, createElement(TenantsPage))))
+  await act(async () => root.render(createElement(BackupProgressProvider, null, createElement(MemoryRouter, null, createElement(TenantsPage)))))
   return container
 }
 

@@ -90,7 +90,9 @@ it("keeps an admin's verification visible alongside the Backup Reader's loss", a
 it("shows all services, Conditional Access separately and the personal data statement before opting in", async () => {
   mocks.check.mockResolvedValue(healthScene("personal-data"))
   await render()
-  expect(container.querySelector('[data-service="defender"]')).not.toBeNull()
+  const cards = [...container.querySelectorAll('[data-service]')].filter(card => !card.parentElement?.closest('[data-service]'))
+  expect(cards.map(card => card.querySelector("h3")?.textContent)).toEqual(["Defender", "Entra ID", "Intune"])
+  expect(cards[1]?.querySelector('[data-service="conditionalAccess"] h3')?.textContent).toBe("Conditional Access")
   expect(container.textContent).not.toContain("no backup types for Entra ID yet")
   expect(container.querySelector('[data-area="externalIdentities"]')?.textContent).not.toContain("no backup types for this area yet")
   expect(container.querySelector('[data-area="externalIdentities"]')?.textContent).toContain("API connectors require the Backup Reader")
@@ -100,7 +102,7 @@ it("shows all services, Conditional Access separately and the personal data stat
   expect(container.textContent).toContain("These identify people and their group memberships")
   await toggle("Include Groups in backups")
   expect(mocks.setArea).toHaveBeenCalledWith(HEALTH_TENANT, "entra", "groups", true)
-  await toggle("Include Entra Conditional Access in backups")
+  await toggle("Include Conditional Access in backups")
   expect(mocks.setEnabled).toHaveBeenCalledWith(HEALTH_TENANT, HEALTH_CLIENT, "conditionalAccess", false, undefined)
 })
 it("does not turn Intune off before confirmation and leaves it on after Cancel", async () => {

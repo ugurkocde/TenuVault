@@ -7,7 +7,8 @@ import { ModuleSettings } from "../src/main/services/settings"
 it("keeps today's exact default permissions while enabling only Intune backups", () => {
   expect(onboardingPermissions(DEFAULT_ONBOARDING_CHOICE)).toEqual(DEFAULT_SETUP_CHOICE)
   expect(graphPermissions(onboardingPermissions(DEFAULT_ONBOARDING_CHOICE), "delegated")).toEqual(graphPermissions(DEFAULT_SETUP_CHOICE, "delegated"))
-  expect(choiceLabel({ intune: { access: "restore" }, entra: { access: "backup" } })).toBe("Intune and Entra ID")
+  expect(choiceLabel({ intune: { access: "restore" }, entra: { access: "backup" } })).toBe("Entra ID and Intune")
+  expect(choiceLabel({ intune: { access: "restore" }, conditionalAccess: { access: "backup" }, defender: { access: "backup" } })).toBe("Defender, Entra ID (Conditional Access) and Intune")
   expect(choiceLabel({})).toBe("a service")
   expect(hasOnboardingBackups(DEFAULT_ONBOARDING_CHOICE)).toBe(true)
   expect(hasOnboardingBackups({ entra: { access: "backup" } })).toBe(true)

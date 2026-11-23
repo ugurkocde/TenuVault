@@ -326,7 +326,7 @@ function TenantSchedule({ tenantId, tenantName, tenant: tenantProp, onStorageCha
           <h3 className="font-medium text-gray-900">Sign-in at night</h3>
           <p>
             {scheduledIdentity(readerState?.reader ?? null) === "reader"
-              ? "Scheduled backups on this computer read Intune as the read-only Backup Reader, so Conditional Access sign-in frequency cannot stop them. Manual backups, restores and every change still use your own sign-in."
+              ? "Scheduled backups on this computer use the read-only Backup Reader for the services it can read, so Conditional Access sign-in frequency cannot stop them. Manual backups, restores and every change still use your own sign-in."
               : "Scheduled backups on this computer run as you. When a Conditional Access sign-in frequency policy ends your session at night, they stop until you sign in again. The optional Backup Reader (Pro and MSP) reads Intune for scheduled backups only, with its own read-only app registration and a certificate on this computer."}{" "}
             <Link to={settingsHref("background")} className="font-medium underline">Backup Reader settings</Link>
           </p>

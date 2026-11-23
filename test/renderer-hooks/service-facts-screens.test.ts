@@ -53,7 +53,7 @@ describe("The Settings card reads switchable", () => {
     const container = mount(createElement(ServicesSettings))
     await act(async () => undefined)
     expect(serviceSwitch(container, "Intune")?.checked).toBe(true)
-    expect(serviceSwitch(container, "Entra Conditional Access")).not.toBeNull()
+    expect(serviceSwitch(container, "Conditional Access")).not.toBeNull()
     const next = answer()
     next.services.find(service => service.id === "intune")!.enabled = false
     state.report.mockResolvedValue(next)
@@ -79,7 +79,7 @@ describe("The Settings card reads switchable", () => {
     const container = mount(createElement(ServicesSettings))
     await act(async () => undefined)
     expect(serviceSwitch(container, "Intune")).toBeNull()
-    expect(serviceSwitch(container, "Entra Conditional Access")).not.toBeNull()
+    expect(serviceSwitch(container, "Conditional Access")).not.toBeNull()
     expect(container.textContent).toContain("Intune")
   })
 })
@@ -88,7 +88,7 @@ describe("The scope picker follows the tenant's selection", () => {
   const picker = (services: Array<"intune" | "conditionalAccess" | "entra">) => mount(createElement(BackupScopePicker, { selection: { services }, value: { excluded: ["DeviceConfigurations"] }, onChange: () => undefined }))
   it("offers only the services that are on", () => {
     expect(picker(["intune"]).textContent).not.toContain("Entra ID: Authentication")
-    expect(picker(["intune"]).textContent).not.toContain("Entra Conditional Access: Conditional Access")
+    expect(picker(["intune"]).textContent).not.toContain("Entra ID: Conditional Access")
     const text = picker(["entra"]).textContent ?? ""
     expect(text).toContain("Entra ID: Authentication")
     expect(text).not.toContain("Intune: Device configuration")
@@ -100,6 +100,6 @@ describe("The scope picker follows the tenant's selection", () => {
     withFacts("conditionalAccess", { defaultOn: true })
     withFacts("intune", { defaultOn: false })
     expect(picker(["intune"]).textContent).toContain("Intune: Device configuration")
-    expect(picker(["intune"]).textContent).not.toContain("Entra Conditional Access: Conditional Access")
+    expect(picker(["intune"]).textContent).not.toContain("Entra ID: Conditional Access")
   })
 })

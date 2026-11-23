@@ -1,5 +1,7 @@
 "use client"
 
+import { Link } from "react-router-dom"
+import { BACKUP_SERVICES } from "@desktop/lib/backup-service"
 import { ServiceBackupNotice } from "@desktop/components/ServiceBackupNotice"
 import { useBackupProgress } from "~/contexts/BackupProgressContext"
 import { trackBackup } from "@desktop/lib/backups"
@@ -60,6 +62,17 @@ import {
 /** A count read from Microsoft Graph, or n/a when Graph could not read it: never a made-up zero. */
 function GraphCount({ value }: { value: number | null | undefined }) {
   return typeof value === "number" ? <>{value}</> : <span title="Microsoft Graph could not read this count">n/a</span>
+}
+
+function TenantBackupLinks({ tenant }: { tenant: Tenant }) {
+  const tenantId = tenant.credentials?.tenantId
+  if (!tenantId) return null
+  return <div className="flex flex-wrap gap-2" role="group" aria-label={`Backup services for ${tenant.name}`} data-no-select>
+    {BACKUP_SERVICES.map(service => <Link key={service.id}
+      to={`/portal/backup?service=${service.id}&tenant=${encodeURIComponent(tenantId)}`}
+      className="rounded-lg border border-border px-2 py-1 text-xs text-blue-700 hover:underline"
+      aria-label={`View ${service.label} backups for ${tenant.name}`}>{service.label}</Link>)}
+  </div>
 }
 
 function TenantsPageContent() {
@@ -699,7 +712,7 @@ function TenantsPageContent() {
       <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <h1 className="text-4xl font-medium tracking-tight text-gray-900">Tenant Management</h1>
-          <p className="mt-2 text-base text-gray-500">Manage and monitor all your Intune tenants</p>
+          <p className="mt-2 text-base text-gray-500">Manage and monitor your Microsoft tenants</p>
         </div>
         <div className="flex gap-3">
           <Button
@@ -848,7 +861,7 @@ function TenantsPageContent() {
             <Database className="h-7 w-7 text-gray-500" />
           </div>
           <h3 className="text-xl font-medium tracking-tight text-gray-900 mb-2">{tenants.length ? "No matching tenants" : "No tenants configured"}</h3>
-          <p className="text-gray-500">{tenants.length ? "Try a different name or domain." : "Get started by connecting your first Intune tenant"}</p>
+          <p className="text-gray-500">{tenants.length ? "Try a different name or domain." : "Get started by connecting your first tenant"}</p>
           {tenants.length > 0 && <Button className="mt-6" onClick={() => setSearchQuery("")}>Clear search</Button>}
         </div>
       ) : viewMode === "grid" ? (
@@ -1049,7 +1062,8 @@ function TenantsPageContent() {
                 </div>
               )}
 
-              {/* Policy Breakdown */}
+              <div className="mb-4"><TenantBackupLinks tenant={tenant} /></div>
+              <p className="mb-2 text-xs font-medium text-gray-500">Live Intune counts</p>
               <div className="grid grid-cols-2 gap-3 mb-4">
                 <div className="flex flex-col justify-between gap-1 rounded-2xl bg-gray-50 p-4">
                   <span className="block text-xs text-gray-500">Compliance Policies</span>
@@ -1304,7 +1318,7 @@ function TenantsPageContent() {
                           <div className="text-sm text-gray-500">{tenant.domain}</div>
                         </div>
                       </div>
-                      {tenant.credentials && <div className="mt-3 w-64 whitespace-normal"><ServiceBackupNotice tenantId={tenant.credentials.tenantId} /></div>}
+                      {tenant.credentials && <div className="mt-3 w-64 space-y-2 whitespace-normal"><TenantBackupLinks tenant={tenant} /><ServiceBackupNotice tenantId={tenant.credentials.tenantId} /></div>}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <span className={cn(

@@ -29,7 +29,7 @@ export function IdentityRestoreSafety({ tenantId }: { tenantId: string }) {
   }
   useEffect(() => { void request({ action: "list" }); return () => { generation.current++ } }, [tenantId])
   return <Card>
-    <CardHeader><CardTitle>Identity restore safety</CardTitle><CardDescription>Entra ID and Defender remain backup-only. Review protected recovery accounts for this tenant and saved results from guarded restores.</CardDescription></CardHeader>
+    <CardHeader><CardTitle>Identity restore safety</CardTitle><CardDescription>Review safeguards for supported Entra ID restores. Review protected recovery accounts for this tenant and saved results from guarded restores.</CardDescription></CardHeader>
     <CardContent className="space-y-4" aria-busy={busy}>
       <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-sm">
         <p className="font-medium">Protected recovery accounts</p>

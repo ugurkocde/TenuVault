@@ -1,21 +1,20 @@
-import { moduleForFolder } from "../../shared/services/modules"
+import { AREAS } from "../../shared/intune/scope"
+import { BACKUP_SERVICES, backupServiceForFolder, type BackupService } from "../../shared/services/presentation"
 
-export const BACKUP_SERVICES = [
-  { id: "intune", label: "Intune" },
-  { id: "entra", label: "Entra ID" },
-  { id: "defender", label: "Defender" },
-] as const
-
-export type BackupService = typeof BACKUP_SERVICES[number]["id"]
+export { BACKUP_SERVICES }
 export type BackupServiceFilter = BackupService | "all"
 
 export function parseBackupService(value: string | null): BackupServiceFilter {
   return BACKUP_SERVICES.find(service => service.id === value)?.id ?? "all"
 }
 
-/** Conditional Access has its own switch, but belongs under Entra ID in navigation. */
 export function matchesBackupService(folder: string, service: BackupServiceFilter): boolean {
-  if (service === "all") return true
-  const id = moduleForFolder(folder)?.module.id
-  return id === service || (service === "entra" && id === "conditionalAccess")
+  return service === "all" || backupServiceForFolder(folder) === service
 }
+
+
+export const BACKUP_SERVICE_AREAS = BACKUP_SERVICES.map(service => ({
+  ...service,
+  areas: AREAS.map(({ area, types }) => ({ area, types: types.filter(type => matchesBackupService(type.folder, service.id)) }))
+    .filter(group => group.types.length > 0),
+}))

@@ -1,6 +1,7 @@
 vi.mock("@desktop/components/ServiceBackupNotice", () => ({ ServiceBackupNotice: () => null }))
 import { act, createElement, useState, type ReactNode } from "react"
 import { createRoot, type Root } from "react-dom/client"
+import { MemoryRouter } from "react-router-dom"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import type { Tenant } from "../../src/portal/contexts/TenantContext"
 
@@ -69,7 +70,7 @@ describe("Tenants page after a backup the user cancelled", () => {
     const container = document.body.appendChild(document.createElement("div"))
     const root = createRoot(container)
     roots.push(root)
-    await act(async () => root.render(createElement(Harness, null, createElement(TenantsPage))))
+    await act(async () => root.render(createElement(Harness, null, createElement(MemoryRouter, null, createElement(TenantsPage)))))
     expect(backupNow().disabled).toBe(false)
 
     await act(async () => backupNow().click())

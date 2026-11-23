@@ -27,7 +27,7 @@ import { FirstBackupNote } from "@desktop/components/FirstBackupNote"
 import { LegacySealedBackupsNotice } from "@desktop/components/LegacySealedBackupsNotice"
 import { DamagedBackupFilesNotice } from "@desktop/components/DamagedBackupFilesNotice"
 import { allows } from "../../../../shared/plans"
-import { AREAS } from "../../../../shared/intune/scope"
+import { compareBackupServices } from "../../../../shared/services/presentation"
 import { typeForFolder, type Item } from "../../../../shared/intune/registry"
 import { autopilotDevicesCsv } from "../../../../shared/intune/autopilot-devices"
 import { storageLabel } from "~/lib/storage-label"
@@ -35,7 +35,7 @@ import { changeTenantStorage, type StorageChoice } from "@desktop/lib/storage"
 import { LinkedMessage } from "~/components/linked-message"
 import { SERVICES_PAGE } from "../../../../shared/services/modules"
 
-import { BACKUP_SERVICES, matchesBackupService, parseBackupService, type BackupServiceFilter } from "@desktop/lib/backup-service"
+import { BACKUP_SERVICES, BACKUP_SERVICE_AREAS, matchesBackupService, parseBackupService, type BackupServiceFilter } from "@desktop/lib/backup-service"
 
 type Tab = "backup" | "restore" | "schedule"
 
@@ -143,7 +143,7 @@ export default function BackupRestorePage() {
   const copyCandidates = tenants
     .filter((entry) => entry.id !== selectedTenantId && entry.credentials?.tenantId && entry.credentials.appId)
     .map((entry) => ({ tenantId: entry.credentials!.tenantId, appId: entry.credentials!.appId, name: entry.name, domain: entry.domain }))
-  const trends = useMemo(() => backupTypeTrends(backups).filter(type => matchesBackupService(type.folder, service)), [backups, service])
+  const trends = useMemo(() => backupTypeTrends(backups).filter(type => matchesBackupService(type.folder, service)).sort((a, b) => compareBackupServices(a.folder, b.folder)), [backups, service])
   const listed = backups.find((backup) => backup.id === selectedId) ?? null
   const scope = tenant ? `${tenant.credentials.tenantId}:${tenant.storageAccountName}` : ""
   if (scopeRef.current.scope !== scope) scopeRef.current = { scope, generation: scopeRef.current.generation + 1 }
@@ -612,12 +612,15 @@ function BackupDetails({ credentials, service, backup, first, storageAccountName
   const unavailable = backup.status === "unavailable"
   const counts = backup.counts ?? {}
   const excluded = new Set(backup.scope?.excluded ?? [])
-  const areas = AREAS.map(({ area, types }) => ({ area, types: types.filter(type => matchesBackupService(type.folder, service)) })).filter(entry => entry.types.length > 0).map(({ area, types }) => ({
-    area,
-    count: types.reduce((sum, type) => sum + (counts[type.folder] ?? 0), 0),
-    types: types.filter((type) => !excluded.has(type.folder) && (counts[type.folder] ?? 0) > 0),
-    left: types.filter((type) => excluded.has(type.folder)).length,
-    all: types.length,
+  const groups = BACKUP_SERVICE_AREAS.filter(group => service === "all" || service === group.id).map(group => ({
+    ...group,
+    areas: group.areas.map(({ area, types }) => ({
+      area,
+      count: types.reduce((sum, type) => sum + (counts[type.folder] ?? 0), 0),
+      types: types.filter((type) => !excluded.has(type.folder) && (counts[type.folder] ?? 0) > 0),
+      left: types.filter((type) => excluded.has(type.folder)).length,
+      all: types.length,
+    })),
   }))
   const typeLabel = (folder: string) => capitalize(typeForFolder(folder)?.label ?? folder)
 
@@ -663,7 +666,7 @@ function BackupDetails({ credentials, service, backup, first, storageAccountName
             {backup.coverage === "incomplete" && (backup.notRead?.length ?? 0) > 0 && <p>Coverage incomplete. This backup does not hold every type it was asked to cover. Not read in full: {backup.notRead!.map(typeLabel).join(", ")}.</p>}
             {(backup.failures ?? 0) > 0 && <p>{backup.failures} item{backup.failures === 1 ? "" : "s"} or type{backup.failures === 1 ? "" : "s"} could not be read. The backup log lists them.</p>}
             {(backup.failedTypes?.length ?? 0) > 0 && <p>Not read: {backup.failedTypes!.map(typeLabel).join(", ")}.</p>}
-            {(backup.skippedTypes?.length ?? 0) > 0 && <p>Left out because the app registration or your role does not allow reading them: {backup.skippedTypes!.map(typeLabel).join(", ")}. <LinkedMessage text={`${SERVICES_PAGE} in Settings shows which permission is missing and how to add it.`} /> Also check that your Intune or Entra role covers these items.</p>}
+            {(backup.skippedTypes?.length ?? 0) > 0 && <p>Left out because the app registration or your role does not allow reading them: {backup.skippedTypes!.map(typeLabel).join(", ")}. <LinkedMessage text={`${SERVICES_PAGE} in Settings shows which permission is missing and how to add it.`} /> Also check that your role for the affected service covers these items.</p>}
           </div>
         </div>
       )}
@@ -691,42 +694,49 @@ function BackupDetails({ credentials, service, backup, first, storageAccountName
       <div className="grid grid-cols-1 gap-8 md:grid-cols-2">
         <div>
           <h3 className="mb-3 text-xs font-medium text-gray-500">Contents</h3>
-          <div className="space-y-2">
-            {areas
-              .filter((entry) => entry.count > 0 || entry.left < entry.all)
-              .map((entry) => (
-                <details key={entry.area} className="group rounded-xl bg-gray-50 px-3 py-2.5 text-sm">
-                  <summary className="flex cursor-pointer list-none items-center justify-between">
-                    <span className="text-gray-700">{entry.area}</span>
-                    <span className="font-medium text-gray-900">{entry.count}</span>
-                  </summary>
-                  <ul className="mt-2 space-y-1 border-t border-gray-100 pt-2 text-xs">
-                    {entry.types.map((type) => (
-                      <li key={type.folder} className="flex items-center justify-between gap-2 text-gray-600">
-                        <span>{capitalize(type.label)}</span>
-                        <span className="flex items-center gap-2">
-                          {type.folder === "AutopilotDevices" && !unavailable && (
-                            <button type="button" className="font-medium text-coral-700 underline disabled:text-gray-400" disabled={exportingDevices} onClick={onExportDevices}>
-                              {exportingDevices ? "Exporting..." : "Export CSV"}
-                            </button>
-                          )}
-                          <span>{counts[type.folder]}</span>
-                        </span>
-                      </li>
-                    ))}
-                    {entry.types.length === 0 && <li className="text-gray-500">No items of these types in the tenant.</li>}
-                    {entry.left > 0 && <li className="text-gray-500">{entry.left} type{entry.left === 1 ? "" : "s"} not included in this backup</li>}
-                  </ul>
-                </details>
-              ))}
-            {areas
-              .filter((entry) => entry.left === entry.all)
-              .map((entry) => (
-                <div key={entry.area} className="flex justify-between rounded-xl px-3 py-2 text-sm text-gray-500">
-                  <span>{entry.area}</span>
-                  <span>Not included</span>
-                </div>
-              ))}
+          <div className="space-y-4">
+            {groups.map(group => (
+              <section key={group.id} aria-label={group.label}>
+                <h4 className="mb-2 text-sm font-medium text-gray-900">{group.label}</h4>
+              <div className="space-y-2">
+                {group.areas
+                  .filter((entry) => entry.count > 0 || entry.left < entry.all)
+                  .map((entry) => (
+                    <details key={entry.area} className="group rounded-xl bg-gray-50 px-3 py-2.5 text-sm">
+                      <summary className="flex cursor-pointer list-none items-center justify-between">
+                        <span className="text-gray-700">{entry.area}</span>
+                        <span className="font-medium text-gray-900">{entry.count}</span>
+                      </summary>
+                      <ul className="mt-2 space-y-1 border-t border-gray-100 pt-2 text-xs">
+                        {entry.types.map((type) => (
+                          <li key={type.folder} className="flex items-center justify-between gap-2 text-gray-600">
+                            <span>{capitalize(type.label)}</span>
+                            <span className="flex items-center gap-2">
+                              {type.folder === "AutopilotDevices" && !unavailable && (
+                                <button type="button" className="font-medium text-coral-700 underline disabled:text-gray-400" disabled={exportingDevices} onClick={onExportDevices}>
+                                  {exportingDevices ? "Exporting..." : "Export CSV"}
+                                </button>
+                              )}
+                              <span>{counts[type.folder]}</span>
+                            </span>
+                          </li>
+                        ))}
+                        {entry.types.length === 0 && <li className="text-gray-500">No items of these types in the tenant.</li>}
+                        {entry.left > 0 && <li className="text-gray-500">{entry.left} type{entry.left === 1 ? "" : "s"} not included in this backup</li>}
+                      </ul>
+                    </details>
+                  ))}
+                {group.areas
+                  .filter((entry) => entry.left === entry.all)
+                  .map((entry) => (
+                    <div key={entry.area} className="flex justify-between rounded-xl px-3 py-2 text-sm text-gray-500">
+                      <span>{entry.area}</span>
+                      <span>Not included</span>
+                    </div>
+                  ))}
+              </div>
+              </section>
+            ))}
           </div>
         </div>
         <div>

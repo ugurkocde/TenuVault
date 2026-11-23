@@ -2,8 +2,10 @@ import { ApplicationRestoreDisclosure } from "./ApplicationRestoreDisclosure"
 import { INTUNE_TYPES } from "../../shared/intune/registry"
 import { Button } from "~/components/ui/button"
 import { MODULE_BY_ID, type ModuleId } from "../../shared/services/modules"
-import { areaPermissions, BASE_PERMISSIONS, REQUEST_ORDER, type PermissionChoice } from "../../shared/services/manifest"
+import { areaPermissions, BASE_PERMISSIONS, type PermissionChoice } from "../../shared/services/manifest"
 import { canRequestRestore, choiceLabel, onboardingPermissions, PERSONAL_DATA } from "../../shared/services/onboarding"
+
+import { BACKUP_SERVICES, DISPLAY_MODULE_ORDER } from "../../shared/services/presentation"
 
 const isWrite = (name: string) => /(?:^|\.)(?:ReadWrite|Write|Manage)(?:\.|$)/.test(name)
 const counts = (permissions: readonly string[]) => `${permissions.filter(name => !isWrite(name)).length} read, ${permissions.filter(isWrite).length} write`
@@ -43,7 +45,7 @@ export function OnboardingServices({ choice, onChange, onContinue }: { choice: P
     <div><h2 id="setup-step--1" tabIndex={-1} className="text-2xl font-medium tracking-tight text-gray-900">What do you want to back up?</h2>
       <p className="mt-2 text-sm text-gray-600">Choose services for this tenant. Review permissions below, or keep the defaults and continue.</p></div>
     <div className="grid items-start gap-3 lg:grid-cols-3">
-      {(["intune", "entra", "defender"] as const).map(id => {
+      {BACKUP_SERVICES.map(({ id }) => {
         const module = MODULE_BY_ID.get(id)!
         const picked = choice[id]
         const areas = permissionAreas(id, picked ?? { access: module.defaultAccess })
@@ -80,8 +82,8 @@ export function OnboardingServices({ choice, onChange, onContinue }: { choice: P
       <div className="mt-3 space-y-4 text-sm text-gray-600">
         <p>Delegated Microsoft Graph permissions, grouped by area. Shared permissions can appear in more than one area and are requested once.</p>
         <div><h3 className="font-medium text-gray-900">Profile and organization</h3><ul>{BASE_PERMISSIONS.map(name => <li key={name} className="break-words">Read: {name}</li>)}</ul></div>
-        {REQUEST_ORDER.flatMap(id => permissionsChoice[id] ? permissionAreas(id, permissionsChoice[id]!).map(area => <div key={`${id}:${area.id}`} data-permission-area>
-          <h3 className="font-medium text-gray-900">{MODULE_BY_ID.get(id)!.label}: {area.label}</h3>
+        {DISPLAY_MODULE_ORDER.flatMap(id => permissionsChoice[id] ? permissionAreas(id, permissionsChoice[id]!).map(area => <div key={`${id}:${area.id}`} data-permission-area>
+          <h3 className="font-medium text-gray-900">{id === "conditionalAccess" ? "Entra ID: Conditional Access" : MODULE_BY_ID.get(id)!.label}: {area.label}</h3>
           <ul>{area.permissions.map(name => <li key={name} className="break-words">{isWrite(name) ? "Write" : "Read"}: {name}</li>)}</ul>
         </div>) : [])}
       </div>
@@ -90,11 +92,10 @@ export function OnboardingServices({ choice, onChange, onContinue }: { choice: P
       <summary className="cursor-pointer text-sm font-medium text-gray-900">Customize access</summary>
       <div className="mt-3 space-y-3 text-sm text-gray-600">
         <p>Backup and restore asks for write permissions only where this version can restore. This choice grants nothing and does not block a restore your sign-in allows.</p>
-        {Object.keys(choice).map(key => {
-          const id = key as ModuleId
-          const module = MODULE_BY_ID.get(id)!
-          return <label key={id} className="flex flex-wrap items-center gap-3">{module.label}
-            {canRequestRestore(id) ? <select aria-label={`${module.label} access`} className="rounded-lg border border-border bg-card p-2 text-foreground" value={choice[id]!.access} onChange={event => onChange({ ...choice, [id]: { ...choice[id]!, access: event.target.value as "backup" | "restore" } })}><option value="backup">Backup only</option><option value="restore">Backup and restore</option></select> : <span>Backup only. Restore is not available yet.</span>}
+        {DISPLAY_MODULE_ORDER.filter(id => choice[id]).map(id => {
+          const label = id === "conditionalAccess" ? "Entra ID: Conditional Access" : MODULE_BY_ID.get(id)!.label
+          return <label key={id} className="flex flex-wrap items-center gap-3">{label}
+            {canRequestRestore(id) ? <select aria-label={`${label} access`} className="rounded-lg border border-border bg-card p-2 text-foreground" value={choice[id]!.access} onChange={event => onChange({ ...choice, [id]: { ...choice[id]!, access: event.target.value as "backup" | "restore" } })}><option value="backup">Backup only</option><option value="restore">Backup and restore</option></select> : <span>Backup only. Restore is not available yet.</span>}
           </label>
         })}
       </div>

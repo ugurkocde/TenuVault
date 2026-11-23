@@ -2,6 +2,8 @@ import { INTUNE_TYPES, restoreCapability } from "../intune/registry"
 import { checkedChoice, type PermissionChoice } from "./manifest"
 import { MODULES, moduleForFolder, type ModuleId } from "./modules"
 
+import { BACKUP_SERVICES } from "./presentation"
+
 export const DEFAULT_ONBOARDING_CHOICE: PermissionChoice = { intune: { access: "restore" } }
 
 /** Keep the read permission included by every earlier Intune setup, without enabling its backups. */
@@ -27,7 +29,10 @@ export function checkedOnboardingChoice(value: unknown): PermissionChoice {
 }
 
 export function choiceLabel(choice: PermissionChoice): string {
-  const names = MODULES.filter(module => choice[module.id]).map(module => module.id === "conditionalAccess" ? "Conditional Access" : module.label)
+  const names = BACKUP_SERVICES.flatMap(({ id, label }) => {
+    if (choice[id]) return [label]
+    return id === "entra" && choice.conditionalAccess ? ["Entra ID (Conditional Access)"] : []
+  })
   return names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names.at(-1)}` : names[0] ?? "a service"
 }
 

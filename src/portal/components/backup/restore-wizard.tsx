@@ -11,6 +11,7 @@ import { reviewedDependencyMappings, type RecoveryReadiness } from "../../../sha
 import { settingDefinitionIds, type DeprecatedSettingHit } from "../../../shared/intune/settings-catalog"
 import { typeForFolder, type ReviewChange } from "../../../shared/intune/registry"
 import { moduleForFolder } from "../../../shared/services/modules"
+import { compareBackupServices } from "../../../shared/services/presentation"
 import { inTenant, type AdminLink } from "../../../shared/intune/admin-links"
 import { passwordResetWarning } from "../../../shared/intune/restore-plan"
 import { ACKNOWLEDGEMENT_REQUIRED } from "../../../shared/disclaimer"
@@ -527,7 +528,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
       else types.set(item.folder, [item])
       areas.set(item.area, types)
     }
-    return areas
+    return new Map([...areas].sort(([, left], [, right]) => compareBackupServices(left.keys().next().value!, right.keys().next().value!)))
   }, [visible])
 
   const maxSelection = community ? 1 : undefined
