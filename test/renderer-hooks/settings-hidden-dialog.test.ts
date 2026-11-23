@@ -9,7 +9,7 @@ window.matchMedia ??= ((query: string) => ({ matches: false, media: query, oncha
 // Every bridge call resolves to nothing and every subscription returns an unsubscribe, so the
 // sections render their empty states. This test is only about the About panel's dialog.
 vi.mock("../../src/renderer/lib/bridge", () => {
-  const call = (name: string) => (name.startsWith("on") ? () => () => undefined : async () => undefined)
+  const call = (name: string) => (name.startsWith("on") ? () => () => undefined : async () => name === "accounts" ? [] : undefined)
   const namespace = () => new Proxy({}, { get: (_target, name) => (name === "getItemSync" ? () => null : call(String(name))) })
   return { bridge: new Proxy({}, { get: () => namespace() }) }
 })
@@ -22,8 +22,13 @@ vi.mock("../../src/renderer/lib/local-inventory", async (original) => ({
   useBackupSettings: () => [null, () => undefined],
 }))
 vi.mock("../../src/renderer/lib/appearance", () => ({ getAppearance: () => "light", setAppearance: () => undefined }))
-vi.mock("~/contexts/TenantContext", () => ({ useTenants: () => [], useTenantOperations: () => ({}) }))
-vi.mock("~/components/ConfirmDialog", () => ({ useConfirm: () => ({ confirm: async () => true, confirmDialog: null }) }))
+const mocks = vi.hoisted(() => ({ connected: false, confirm: vi.fn(async (_options: { description: string }) => false) }))
+vi.mock("~/contexts/TenantContext", () => ({
+  useTenants: () => mocks.connected ? [{ id: 1, name: "Contoso", credentials: { tenantId: "tenant" } }] : [],
+  useTenantOperations: () => ({}),
+}))
+vi.mock("~/components/ConfirmDialog", () => ({ useConfirm: () => ({ confirm: mocks.confirm, confirmDialog: null }) }))
+vi.mock("../../src/renderer/components/IdentityRestoreSafety", () => ({ IdentityRestoreSafety: () => null }))
 vi.mock("../../src/renderer/lib/whats-new", () => ({ useWhatsNew: () => ({ state: null, refresh: async () => undefined, markSeen: async () => undefined }) }))
 vi.mock("../../src/renderer/components/PdfBrandingSettings", () => ({ PdfBrandingSettings: () => null }))
 vi.mock("../../src/renderer/components/BackupReaderSettings", () => ({ BackupReaderSettings: () => null }))
@@ -51,6 +56,8 @@ const roots: Root[] = []
 afterEach(() => {
   for (const root of roots.splice(0)) act(() => root.unmount())
   document.body.innerHTML = ""
+  mocks.connected = false
+  vi.unstubAllGlobals()
 })
 
 const settle = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
@@ -78,4 +85,22 @@ describe("Settings page dialogs when their section hides", () => {
     expect(container.querySelector("#settings-about")?.hasAttribute("hidden")).toBe(true)
     expect(document.querySelector('[role="dialog"]')).toBeNull()
   })
+})
+
+
+it("names Entra when reconciling an uncertain named-location write from history", async () => {
+  mocks.connected = true
+  vi.stubGlobal("fetch", vi.fn(async () => Response.json({ records: [{
+    key: "location", tenant: "tenant", state: "uncertain", method: "PATCH",
+    path: "identity/conditionalAccess/namedLocations/location-id",
+  }] })))
+  const container = document.body.appendChild(document.createElement("div"))
+  const root = createRoot(container)
+  roots.push(root)
+  await act(async () => root.render(createElement(MemoryRouter, { initialEntries: ["/settings?section=storage"] }, createElement(SettingsPage))))
+  const button = (label: string) => [...container.querySelectorAll("button")].find(button => button.textContent === label)
+  click(button("Confirm applied"))
+  expect(container.textContent).toContain("After checking the Microsoft Entra admin center")
+  click(button("Confirm not applied"))
+  expect(mocks.confirm).toHaveBeenCalledWith(expect.objectContaining({ description: expect.stringContaining("the Microsoft Entra admin center") }))
 })

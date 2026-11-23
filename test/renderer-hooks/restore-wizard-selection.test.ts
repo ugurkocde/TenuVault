@@ -56,6 +56,36 @@ it("reads access policies only at the review step", async () => {
   expect(JSON.parse(String(requests()[0]![1]?.body))).toMatchObject({ approvalAction: "detect" })
 })
 
+it("sends an uncertain named-location result to the Entra admin center", async () => {
+  const path = "backup-1/NamedLocations/corporate.json"
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    const body = JSON.parse(String(init?.body ?? "{}"))
+    if (url.endsWith("/api/list-backup-contents")) return Response.json({ content: { groups: [{ folder: "NamedLocations", label: "named location", area: "Conditional Access", policies: [{ path, displayName: "Corporate networks" }] }] } })
+    if (url.endsWith("/api/restore-preview")) return Response.json({ items: [{ path, name: "Corporate networks" }] })
+    if (body.approvalAction === "detect") return Response.json({ enabled: false })
+    if (url.endsWith("/api/restore-backup")) return Response.json({ details: { results: [{ path, success: false, partial: true, retryable: false, policyId: "location-id", error: "Outcome unknown." }] } })
+    return Response.json({})
+  }))
+  const container = document.body.appendChild(document.createElement("div"))
+  const root = createRoot(container)
+  roots.push(root)
+  await act(async () => root.render(createElement(MemoryRouter, null, createElement(RestoreWizard, {
+    tenant: { name: "Contoso", credentials: { tenantId: "tenant", appId: "app", clientSecret: "" }, storageAccountName: "tvlocal-tenant" },
+    backups: [{ id: "backup-1", timestamp: "2026-10-16T02:00:00Z", type: "manual", status: "Completed", totalPolicies: 1, scope: null, size: 1, duration: 4, changes: null, comparedWith: null }],
+    initialBackupId: "backup-1", community: false, canCopyToTenants: false, copyCandidates: [],
+  }))))
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+  for (const label of ["Select all", "Next", "Review", "Restore 1 item"]) {
+    const button = [...container.querySelectorAll("button")].find(button => button.textContent?.trim().startsWith(label))
+    expect(button?.disabled, label).toBe(false)
+    await act(async () => button!.click())
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+  }
+  expect(container.textContent).toContain("Check and repair it in the Microsoft Entra admin center.")
+  expect(container.textContent).toContain("Check this item in the Microsoft Entra admin center before retrying.")
+})
+
 describe("restore wizard item selection", () => {
   it("shows Select all on Community as a marked plan option that explains the plan instead of selecting", async () => {
     const container = await renderItems(true)

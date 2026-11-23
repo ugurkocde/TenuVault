@@ -195,7 +195,7 @@ When the restore ends, the heading changes to **Restore finished** and a summary
 Some results carry extra notes:
 
 * **Incomplete object: *ID*.** The item was created or updated, but a follow-up step (such as settings, categories or assignments) failed. If TenuVault can safely resume, the note says "Retry repairs the remaining steps without creating another object. Repair is available for one hour in this app session." Otherwise it says "Check and repair it in Intune."
-* **Check this item in Intune before retrying; a write may already have completed.** The response was lost, so TenuVault does not know whether the write reached Intune. It does not retry this item automatically. See [Restore write history](/restore/limitations/#restore-write-history).
+* When the result asks you to check the object before retrying, open the admin center it names for the affected service. The response was lost and the write may already have completed. It does not retry this item automatically. See [Restore write history](/restore/limitations/#restore-write-history).
 * Warnings in amber describe partial problems, for example "Assignments could not be restored: ..." followed by the Graph error.
 
 ### Open a restored item

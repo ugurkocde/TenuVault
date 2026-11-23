@@ -9,7 +9,7 @@ faq:
   - question: "Why does a profile with a masked OMA-URI value need a new backup?"
     answer: "The backup holds the masked value (****) instead of the secret, and restoring it would send **** to devices. Run a new backup, then restore from it."
   - question: "What happens when the outcome of a restore write is unknown?"
-    answer: "TenuVault records every restore write in an encrypted journal on your device and blocks an identical write whose outcome is uncertain. Check the object in Intune, then confirm the write as applied or not applied under Settings > Storage and recovery > Restore write history before you retry."
+    answer: "TenuVault records every restore write in an encrypted journal on your device and blocks an identical write whose outcome is uncertain. Check the object in the affected service’s admin center, then confirm the write as applied or not applied under Settings > Storage and recovery > Restore write history before you retry."
 ---
 
 Most Intune items restore directly from a backup. A few cannot, because Intune does not export everything needed to recreate them. This page lists those cases and explains **Restore write history**, which protects you from duplicate writes when a restore is interrupted.
@@ -91,9 +91,9 @@ Many Intune objects are created in several steps: the object first, then its set
 
 ## Restore write history
 
-When TenuVault sends a write to Microsoft Graph and the response is lost (a timeout, dropped connection or server error), it cannot know whether Intune applied the change. Repeating the write blindly could create a duplicate object. TenuVault therefore records every restore write in an encrypted journal on your device, and blocks an identical write whose outcome is uncertain until you resolve it.
+When TenuVault sends a write to Microsoft Graph and the response is lost (a timeout, dropped connection or server error), it cannot know whether the service applied the change. Repeating the write blindly could create a duplicate object. TenuVault therefore records every restore write in an encrypted journal on your device, and blocks an identical write whose outcome is uncertain until you resolve it.
 
-A blocked write fails with "A previous write has an uncertain outcome. Reconcile it in Settings before retrying." In the wizard, affected items show "Outcome unknown. Check Intune before attempting another restore." or "Check this item in Intune before retrying; a write may already have completed."
+A blocked write fails with "A previous write has an uncertain outcome. Reconcile it in Settings before retrying." The wizard names the admin center where you can check the affected object before retrying.
 
 The journal stores the method, target path, tenant, time, a short policy name and the object ID when known. It never stores full request payloads or access tokens. OpenIntuneBaseline deployments and drift fixes use the same protection.
 
@@ -115,16 +115,16 @@ Each record shows the policy name (or "Object name unavailable"), the time, its 
 
 ### Resolve an uncertain write
 
-1. Open the Intune admin center for the tenant shown in the record and look for the object named in the record.
+1. Open the admin center for the affected service in the tenant shown in the record and look for the object named in the record.
 2. Choose the action that matches what you found:
    * **Confirm applied**: the object exists. Enter its object ID in the inline form and choose **Save applied ID**. The ID must be a GUID. A later retry reuses this result instead of sending the write again.
-   * **Confirm not applied**: the object does not exist. Confirm "I checked the target tenant in Intune and confirmed this request was NOT applied. Allow another attempt?" The next retry sends the write again.
+   * **Confirm not applied**: the object does not exist. Confirm that you checked the target tenant in the named admin center and that the request was not applied. The next retry sends the write again.
 3. Retry the restore from the wizard.
 
 Invalid IDs and failed requests show an error in the form. The form stays open so you can correct the ID or try saving again. After a failed save, focus returns to the input. **Cancel** or **Escape** closes the form without saving while no save is in progress. Closing the form returns focus to the record's recovery button or, if the entry is gone, to **Refresh history**, including after a successful save.
 
 :::caution
-Do not confirm a write as not applied just because its response was lost. Check Intune first. Confirming wrongly can create a duplicate object.
+Do not confirm a write as not applied just because its response was lost. Check the object in the named admin center first. Confirming wrongly can create a duplicate object.
 :::
 
 ### Fix a reconciled write
@@ -134,7 +134,7 @@ Reconciled records offer two actions:
 * **Correct applied ID** fixes a mistaken object ID without allowing another create. The inline form starts with the recorded ID. Enter the corrected GUID and choose **Save applied ID**. The next retry reads the object and verifies its creation fields before any follow-up writes.
 * **Allow a new operation** clears the record so an identical request can be sent again. Use it only for a genuinely new operation, and never while you are resuming a repair.
 
-When a retry reuses a reconciled creation, TenuVault reads the object in the recorded tenant and checks its ID and the fields from the original request before continuing. If they do not match or cannot be read, it stops with "The reconciled object does not match the original creation request, or its fields cannot be verified. No follow-up writes were sent. Review the ID and complete recovery manually in Intune." Some policy types then need manual completion in Intune.
+When a retry reuses a reconciled creation, TenuVault reads the object in the recorded tenant and checks its ID and the fields from the original request before continuing. If they do not match or cannot be read, it stops with "The reconciled object does not match the original creation request, or its fields cannot be verified. No follow-up writes were sent. Review the ID and complete recovery manually in the admin center named in the message."
 
 ### Journal size
 
@@ -151,7 +151,7 @@ The journal keeps up to 1,000 records. When it is full, TenuVault removes comple
 
 ### Missing change details
 
-A job that stops unexpectedly can contain both recorded item outcomes and items whose write outcome is uncertain or unattempted. Review uncertain items in Intune before retrying. Older audit entries can show **Change details unavailable**. See [Audit Log](/audit-log/) for the fields kept in new events.
+A job that stops unexpectedly can contain both recorded item outcomes and items whose write outcome is uncertain or unattempted. Review uncertain items in the affected service’s admin center before retrying. Older audit entries can show **Change details unavailable**. See [Audit Log](/audit-log/) for the fields kept in new events.
 
 ## Directory objects that are never restored
 

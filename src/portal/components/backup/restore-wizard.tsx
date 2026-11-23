@@ -10,7 +10,7 @@ import { RestoreApprovals } from "./restore-approvals"
 import { reviewedDependencyMappings, type RecoveryReadiness } from "../../../shared/intune/recovery"
 import { settingDefinitionIds, type DeprecatedSettingHit } from "../../../shared/intune/settings-catalog"
 import { typeForFolder, type ReviewChange } from "../../../shared/intune/registry"
-import { moduleForFolder } from "../../../shared/services/modules"
+import { restoreAdminCenter } from "../../../shared/services/presentation"
 import { compareBackupServices } from "../../../shared/services/presentation"
 import { inTenant, type AdminLink } from "../../../shared/intune/admin-links"
 import { passwordResetWarning } from "../../../shared/intune/restore-plan"
@@ -48,11 +48,6 @@ import { GatedButton } from "@desktop/components/PlanGate"
 import { formatDate, formatSize, statusKind, statusLabel, type BackupSummary, type BackupTenant } from "./types"
 import { LinkedMessage } from "~/components/linked-message"
 
-
-/** Where an admin checks a restored item: Conditional Access lives in Entra, everything else in Intune. */
-function adminCenter(folder: string | undefined): string {
-  return folder && moduleForFolder(folder)?.module.id === "conditionalAccess" ? "Entra" : "Intune"
-}
 
 /** "1 item completed.", or with what failed and what was skipped when there is any. */
 export function restoreSummary(handled: number, failed: number, skipped: number): string {
@@ -698,7 +693,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
       // A lost response leaves the write outcome unknown. Keep completed results and
       // block blind repetition of every attempted item whose result is missing.
       const known = mergeOutcomes(previous, completed)
-      const unknown = attempted.flatMap((batch) => missing(batch, { success: false, retryable: false, error: "Outcome unknown. Check Intune before attempting another restore." }))
+      const unknown = attempted.flatMap((batch) => missing(batch, { success: false, retryable: false, error: "Outcome unknown." }))
       setResult({ outcome: known.some((item) => item.success) ? "partial" : "failed",
         message: `Restore interrupted: ${error instanceof Error ? error.message : String(error)}`, results: mergeOutcomes(known, [...notStarted, ...unknown]) })
     } finally {
@@ -1296,6 +1291,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
           <ul className="mt-4 max-h-[26rem] divide-y divide-gray-100 overflow-y-auto">
             {(result?.results ?? progress?.results ?? []).slice(0, shown[RESULTS] ?? LIST_PAGE).map((outcome, index) => {
               const Icon = outcome.approval ? ShieldCheck : outcome.success ? (outcome.action === "unchanged" ? SkipForward : CheckCircle) : outcome.action === "skipped" ? Ban : XCircle
+              const center = restoreAdminCenter(itemByPath.get(outcome.path)?.folder ?? outcome.path)
               const text = outcome.success
                 ? outcome.action === "unchanged"
                   ? "Already matched the backup"
@@ -1317,9 +1313,9 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
                     </span>
                     <span className="block text-xs text-gray-500"><LinkedMessage text={text} /></span>
                     {outcome.approvalState === "required" && <Button variant="outline" className="mt-2" aria-controls="restore-approval-list" onClick={() => setApprovalOpenRevision(value => value + 1)}>Submit for approval</Button>}
-                    {outcome.partial && !outcome.approvalId && outcome.policyId && <span className="block text-xs text-amber-800">Incomplete object: {outcome.policyId}. {outcome.repairToken ? "Retry repairs the remaining steps without creating another object. Repair is available for one hour in this app session." : "Check and repair it in Intune."}</span>}
+                    {outcome.partial && !outcome.approvalId && outcome.policyId && <span className="block text-xs text-amber-800">Incomplete object: {outcome.policyId}. {outcome.repairToken ? "Retry repairs the remaining steps without creating another object. Repair is available for one hour in this app session." : `Check and repair it in ${center}.`}</span>}
                     {/* A skipped item was refused before any write, so there is nothing to check. */}
-                    {outcome.retryable === false && !outcome.success && !outcome.approvalId && (!outcome.approval || outcome.partial) && outcome.action !== "skipped" && <span className="block text-xs text-amber-800">Check this item in {adminCenter(itemByPath.get(outcome.path)?.folder)} before retrying; a write may already have completed.</span>}
+                    {outcome.retryable === false && !outcome.success && !outcome.approvalId && (!outcome.approval || outcome.partial) && outcome.action !== "skipped" && <span className="block text-xs text-amber-800">Check this item in {center} before retrying. A write may already have completed.</span>}
                     {outcome.guardedRunId && <span className="block break-all text-xs text-gray-500">Saved restore {outcome.guardedRunId}. Review and read back its outcome in Settings, Storage and recovery.</span>}
                     {outcome.replacedReferences?.map((reference, index) => <span key={`reference-${index}`} className="block break-all text-xs text-amber-800">Review {reference.path}, {reference.property}: {reference.mapping.kind} {reference.mapping.source} now maps to {reference.mapping.target}.</span>)}
                     {outcome.warnings?.map((warning) => (

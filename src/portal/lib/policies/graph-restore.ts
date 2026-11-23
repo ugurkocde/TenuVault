@@ -16,6 +16,7 @@ import { comparableSnapshot, sameSnapshot } from "../../../shared/intune/compare
 import { saveWrite, removeWrite, writeKey, writeRecords } from "../../../main/storage/restore-journal"
 import { describeRequirement, moduleForFolder, restorePermissionBlocker, SERVICES_PAGE, type GrantedPermissions } from "../../../shared/services/modules"
 import { TENANT_ADMIN, adminCenterLink, type AdminLink } from "../../../shared/intune/admin-links"
+import { restoreAdminCenter } from "../../../shared/services/presentation"
 import { policyReferences, referenceLabel, referencePath, TENANT_KINDS, uncheckedReferencesWarning, type PolicyReference } from "../../../shared/intune/conditional-access"
 
 /** A read that failed because the object no longer exists. */
@@ -154,7 +155,7 @@ export function graphCaller(token: string, fetchImpl: typeof fetch = fetch, opti
       if (previous?.state === "uncertain") throw new RestoreReconcileRequired()
       if (previous?.state === "reconciled") {
         if (createsObject) {
-          if (!previous.objectId || !label || !/^[a-zA-Z0-9_-]{1,200}$/.test(previous.objectId)) throw new Error("This reconciled creation has no verifiable identity. Complete recovery manually in Intune.")
+          if (!previous.objectId || !label || !/^[a-zA-Z0-9_-]{1,200}$/.test(previous.objectId)) throw new Error(`This reconciled creation has no verifiable identity. Complete recovery manually in ${restoreAdminCenter(path)}.`)
           const reader = graphCaller(token, fetchImpl, { ...options, tenant: undefined, beforeAttempt })
           let current: { status: number; body: Item }
           if (path.endsWith("/createInstance")) {
@@ -164,7 +165,7 @@ export function graphCaller(token: string, fetchImpl: typeof fetch = fetch, opti
             current = { status: 200, body: { ...intent, settingsDelta: intent.settings } }
           } else current = await reader("GET", `${path}/${encodeURIComponent(previous.objectId)}`)
           const sameId = current.body.id === previous.objectId || (GUID.test(previous.objectId) && typeof current.body.id === "string" && current.body.id.toLowerCase() === previous.objectId.toLowerCase())
-          if (current.status !== 200 || !sameId || !matchesCreationFields(body!, current.body)) throw new Error("The reconciled object does not match the original creation request, or its fields cannot be verified. No follow-up writes were sent. Review the ID and complete recovery manually in Intune.")
+          if (current.status !== 200 || !sameId || !matchesCreationFields(body!, current.body)) throw new Error(`The reconciled object does not match the original creation request, or its fields cannot be verified. No follow-up writes were sent. Review the ID and complete recovery manually in ${restoreAdminCenter(path)}.`)
         }
         // Keep a resumed repair protected from capacity eviction for its full window.
         saveWrite({ ...previous, at: new Date().toISOString() })
@@ -426,7 +427,7 @@ export class Restorer {
     if (created.approval) return { ...await this.pauseApproval(type, path, { ...plan.create, kind: "content" }, [...plan.steps, ...plan.assignments], source, "created", created.approval, undefined, undefined, typeof snapshot.id === "string" ? snapshot.id : undefined, false, 1, bodies.length, primary), auditPlanned: planned }
     if (created.status >= 300) return { success: false, path, retryable: created.status < 500 && created.status !== 408, auditPlanned: planned, auditUncertain: created.status >= 500 || created.status === 408, error: writeError(type, created.body, created.status) }
     const id = String(created.body.id ?? "")
-    if (!id) return { success: false, path, retryable: false, auditPlanned: planned, auditUncertain: true, error: "Microsoft Graph did not return an ID. Check Intune before retrying." }
+    if (!id) return { success: false, path, retryable: false, auditPlanned: planned, auditUncertain: true, error: `Microsoft Graph did not return an ID. Check ${restoreAdminCenter(type.folder)} before retrying.` }
     if (typeof snapshot.id === "string" && !this.reviewed.has(snapshot.id.toLowerCase())) this.remapped.set(snapshot.id, id)
     // Graph may answer with only the ID, so the body sent (with the [Restored] name) fills the gaps.
     const outcome = await this.complete(type, path, id, { ...plan.create.body, ...created.body }, "created", [...plan.steps, ...plan.assignments], undefined, 1, { priorChanges: primary })
@@ -573,7 +574,7 @@ export class Restorer {
   private async repairOnce(path: string, token: string): Promise<RestoreOutcome> {
     const entry = repairs.get(token)
     if (!entry || entry.expires < Date.now() || entry.path !== path || entry.scope !== (this.options.repairScope ?? this.instanceScope)) {
-      return { success: false, path, retryable: false, error: "Repair is unavailable or expired. Check the existing object in Intune; do not create another copy." }
+      return { success: false, path, retryable: false, error: `Repair is unavailable or expired. Check the existing object in ${restoreAdminCenter(path)} before creating another copy.` }
     }
     // Consume before awaiting to prevent concurrent requests replaying additive steps.
     repairs.delete(token)
@@ -649,7 +650,7 @@ export class Restorer {
           safeToRetry = response.status < 500 && response.status !== 408
         }
       } catch (error) {
-        message = `Write outcome unknown: ${error instanceof Error ? error.message : String(error)}. Check Intune before retrying.`
+        message = `Write outcome unknown: ${error instanceof Error ? error.message : String(error)}. Check ${restoreAdminCenter(type.folder)} before retrying.`
       }
       if (response?.approval) {
         if (stepResults) stepResults[index + 1]!.outcome = "pending"
@@ -663,7 +664,7 @@ export class Restorer {
       let expectedCurrent: Item | undefined
       if (safeToRetry && action === "updated") {
         try { expectedCurrent = await this.current(type, id) } catch { /* No repair token without a reliable baseline. */ }
-        if (!expectedCurrent) { safeToRetry = false; message += " The live object could not be checked; review it in Intune before another replacement." }
+        if (!expectedCurrent) { safeToRetry = false; message += ` The live object could not be checked. Review it in ${restoreAdminCenter(type.folder)} before another replacement.` }
       }
       if (safeToRetry) {
         for (const [key, entry] of repairs) if (entry.expires < Date.now()) repairs.delete(key)

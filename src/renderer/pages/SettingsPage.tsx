@@ -14,6 +14,7 @@ import type { AppInfo, AppPreferences, ProxyCredentialSummary, SignedInAccount, 
 import { LOCAL_STORAGE_PREFIX } from "../../shared/constants"
 import { COMMUNITY_RETENTION_DAYS, effectiveRetentionDays, type Feature } from "../../shared/plans"
 import { isGuid } from "../../shared/security"
+import { restoreAdminCenter } from "../../shared/services/presentation"
 import { LicenseAgreementLink } from "../components/LicenseAgreementDialog"
 import { StorageChooser, type StorageChooserDraft } from "../components/StorageChooser"
 import { UnreadableBackupsNotice } from "../components/UnreadableBackupsNotice"
@@ -69,9 +70,10 @@ function RestoreAppliedInput({ record, request, onClose }: { record: WriteRecord
   const [objectId, setObjectId] = useState(record.state === "reconciled" ? record.objectId ?? "" : "")
   const [error, setError] = useState("")
   const [saving, setSaving] = useState(false)
+  const center = restoreAdminCenter(record.path)
   const description = record.state === "reconciled"
-    ? "After checking the original policy name and tenant in Intune, enter the corrected object ID. The next retry will read and verify its creation fields before any follow-up writes."
-    : "After checking Intune, enter the ID of the object this request applied to. A retry will reuse this result instead of repeating the write."
+    ? `After checking the original object name and tenant in ${center}, enter the corrected object ID. The next retry will read and verify its creation fields before any follow-up writes.`
+    : `After checking ${center}, enter the ID of the object this request applied to. A retry will reuse this result instead of repeating the write.`
 
   useEffect(() => {
     if (saving) inputContainer.current?.focus()
@@ -171,7 +173,7 @@ function TenantRestoreWrites({ tenantId, active }: { tenantId: string; active: b
       <CardHeader>
         <CardTitle>Restore write history</CardTitle>
         <Button ref={refreshButton} variant="outline" onClick={() => void request({ action: "list" }).catch(e => setError(String(e)))}>Refresh history</Button>
-        <CardDescription>Interrupted writes stay blocked across restarts. Check the target tenant in Intune before resolving an uncertain result. Request payloads and tokens are not stored here.</CardDescription>
+        <CardDescription>Interrupted writes stay blocked across restarts. Check the target tenant in the admin center for the affected service before resolving an uncertain result. Request payloads and tokens are not stored here.</CardDescription>
       </CardHeader>
       <CardContent>
         {error && <p role="alert" className="text-red-700">{error}</p>}
@@ -201,7 +203,7 @@ function TenantRestoreWrites({ tenantId, active }: { tenantId: string; active: b
                   setEditing(record.key)
                 }}>Confirm applied</Button>
                 <Button variant="outline" onClick={async () => {
-                  if (await confirm({ title: "Allow another attempt?", description: "I checked the target tenant in Intune and confirmed this request was NOT applied. Allow another attempt?", confirmLabel: "Allow another attempt" })) {
+                  if (await confirm({ title: "Allow another attempt?", description: `I checked the target tenant in ${restoreAdminCenter(record.path)} and confirmed this request was not applied. Allow another attempt?`, confirmLabel: "Allow another attempt" })) {
                     void request({ action: "not-applied", key: record.key, confirmed: true }).catch(e => setError(String(e)))
                   }
                 }}>Confirm not applied</Button>
