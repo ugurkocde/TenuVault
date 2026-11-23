@@ -32,8 +32,19 @@ describe("New-TenuVaultStorage.ps1", () => {
     }
     expect(createStoragePage).toContain("New-TenuVaultStorage.ps1")
     // Update-AzStorageBlobServiceProperty has no retention parameters; the Enable cmdlets are the supported call.
-    // It is only used to turn on versioning for the Backup Reader.
+    // It is only used to turn on versioning.
     expect(storageScript).not.toMatch(/Update-AzStorageBlobServiceProperty(?![^\n]*-IsVersioningEnabled \$true)/)
+  })
+
+  it("enables versioning before creating an immutable container and leaves locking to the admin", () => {
+    const versioningAt = storageScript.indexOf("-IsVersioningEnabled $true")
+    const immutabilityAt = storageScript.indexOf("-Name $container -EnableImmutableStorageWithVersioning")
+    expect(storageScript).toContain("[ValidateRange(1, 146000)][int]$ImmutableDays = 30")
+    expect(versioningAt).toBeGreaterThan(0)
+    expect(immutabilityAt).toBeGreaterThan(versioningAt)
+    expect(storageScript).toContain("Set-AzRmStorageContainerImmutabilityPolicy -Container $backupContainer -ImmutabilityPeriod $ImmutableDays")
+    expect(storageScript).not.toMatch(/ -LockPolicy|Lock-AzRmStorageContainerImmutabilityPolicy/)
+    expect(createStoragePage).toContain("**Lock policy**")
   })
 
   it("adds firewall addresses before switching the default action to deny", () => {

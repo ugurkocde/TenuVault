@@ -794,7 +794,7 @@ export class BackupEngine {
     const days = this.deps.retentionDays?.(job.tenantId) ?? 0
     if (days <= 0) return 0
     const cutoff = this.now().getTime() - days * 24 * 60 * 60 * 1000
-    const { prefixes } = await storage.list("backup-", "/")
+    const { prefixes } = await storage.list("backup-", { delimiter: "/" })
     const backups = prefixes
       .map((prefix) => {
         const match = /^backup-(\d{4})-(\d{2})-(\d{2})-(\d{2})(\d{2})(\d{2})\/$/.exec(prefix)
@@ -849,7 +849,8 @@ export class BackupEngine {
     let kept = 0
     let unowned = 0
     let protectedKept = 0
-    let partlyRemoved = 0
+    let latestExpiry = 0
+    const includeProtection = !isLocalAccount(job.storageAccountName)
     for (const [index, backup] of backups.entries()) {
       const entry = owners[index]
       if (!entry?.metadata || entry.owner === "other" || (entry.owner === "untagged" && shared)) {
@@ -872,10 +873,17 @@ export class BackupEngine {
         kept++
         continue
       }
-      const { blobs } = await storage.list(backup.prefix)
-      // The manifest goes first: a delete that stops at a protected file must not leave a
-      // metadata.json that still reports the backup as complete. A protected manifest stops
-      // before any policy file is touched.
+      // Read every page before issuing a delete. The last blob written can expire later than
+      // the rest, and a legal hold can apply to just one policy file.
+      const { blobs, legalHold, immutableUntil } = await storage.list(backup.prefix, { includeProtection })
+      const activePolicy = immutableUntil > this.now().getTime()
+      if (legalHold || activePolicy) {
+        protectedKept++
+        if (activePolicy) latestExpiry = Math.max(latestExpiry, immutableUntil)
+        continue
+      }
+      // Azure deletes are independent requests. Remove the manifest first so an unexpected
+      // interruption after this point cannot leave a partial folder listed as a complete backup.
       const manifest = `${backup.prefix}metadata.json`
       const marker = `${backup.prefix}${BACKUP_OWNER_FILE}`
       let deleted = 0
@@ -886,11 +894,9 @@ export class BackupEngine {
           deleted++
         }
       } catch (error) {
-        // Provider retention wins over local retention: the backup stays, and nothing here
-        // tries to shorten a policy or clear a hold to make the delete succeed.
         if (!(error instanceof ProtectedBlobError)) throw error
+        if (deleted > 0) throw new StorageError("Storage blocked a delete after cleanup started. The backup may be incomplete. Review the backup in storage.", { cause: error })
         protectedKept++
-        if (deleted > 0) partlyRemoved++
         continue
       }
       removed++
@@ -898,7 +904,8 @@ export class BackupEngine {
     if (removed > 0) this.write(job, `Removed ${removed} backup${removed === 1 ? "" : "s"} older than ${days} days.`, "info")
     if (kept > 0) this.write(job, `Kept ${kept} older backup${kept === 1 ? "" : "s"} because ${kept === 1 ? "it holds" : "they hold"} the newest copy of types this backup leaves out.`, "info")
     if (protectedKept > 0) {
-      this.write(job, `Kept ${protectedKept} older backup${protectedKept === 1 ? "" : "s"} protected by the storage account's immutability policy or legal hold.${partlyRemoved > 0 ? ` ${partlyRemoved} of them lost some files before the protected ones were reached, including ${partlyRemoved === 1 ? "its" : "their"} metadata, so ${partlyRemoved === 1 ? "it is" : "they are"} no longer offered as complete.` : ""}`, "info")
+      const expiry = latestExpiry ? ` The latest immutability expiry is ${new Date(latestExpiry).toUTCString()}.` : ""
+      this.write(job, `Kept ${protectedKept} older backup${protectedKept === 1 ? "" : "s"} because of storage policy or delete permissions.${expiry}`, "info")
     }
     if (unowned > 0) this.write(job, `Kept ${unowned} older backup${unowned === 1 ? "" : "s"} not recorded as this tenant's (another tenant's, without readable metadata, or from an earlier version in a container another tenant also uses).`, "info")
     if (unreadable.size > 0) this.write(job, `Could not read the metadata of ${unreadable.size} older backup${unreadable.size === 1 ? "" : "s"}: ${unreadableReason.replace(/\.$/, "")}. ${unreadable.size === 1 ? "It was" : "They were"} left in place.`, "warning")

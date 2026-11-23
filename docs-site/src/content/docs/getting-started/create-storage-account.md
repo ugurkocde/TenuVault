@@ -40,7 +40,21 @@ The script prints the storage account name when it finishes. Running it again wi
 | Soft delete | 7 days for blobs and containers | Undo window for accidental deletion, separate from TenuVault retention |
 | Roles for the admin group | **Reader** and **Storage Blob Data Contributor** on the storage account | Reader makes the account appear in the TenuVault storage picker; Storage Blob Data Contributor reads and writes the backup files |
 
-TenuVault itself creates the `intune-backups` and `audit-logs` containers on first use, with one exception: the optional Backup Reader cannot create containers, so with `-BackupReaderAppId` the script creates `intune-backups` for it (see below). For what they hold, see [What is stored in the storage account](/backups/storage/#what-is-stored-in-the-storage-account).
+The script creates `audit-logs` and also creates `intune-backups` when you pass `-Immutable` or `-BackupReaderAppId`. Otherwise, TenuVault creates the backup container on first use. [What is stored in the storage account](/backups/storage/#what-is-stored-in-the-storage-account)
+
+## Immutable storage
+
+Azure backups on Pro and MSP can use a time-based Azure policy to protect backup versions from deletion, including after a compromised account or an accidental cleanup. Enable it before the first backup. Use Az.Storage 3.12.0 or later and a StorageV2 account with hierarchical namespace, NFS and SFTP disabled.
+
+```powershell
+./New-TenuVaultStorage.ps1 -AdminGroupId 00000000-0000-0000-0000-000000000000 -Location westeurope -Immutable -ImmutableDays 90
+```
+
+The script turns on blob versioning and configures a default version-level policy on `intune-backups`. `-ImmutableDays` defaults to 30 and accepts 1 to 146,000 days. Set it to at least your planned TenuVault retention period, or choose a finite protection window if TenuVault is set to **Forever**. The policy applies to new versions. For a container that already exists without version-level immutability, use a new storage account or migrate the container in Azure first. Rerunning the script preserves any existing policy that meets the requested period. [Microsoft's guidance on version-level policies and migration](https://learn.microsoft.com/en-us/azure/storage/blobs/immutable-policy-configure-version-scope)
+
+The policy starts unlocked so you can verify backups and restores. After testing, go to **Storage account** > **Containers** > **intune-backups** > **Access policy**. Under **Immutable blob versions**, open the policy menu, select **Lock policy**, and confirm. Locking is permanent. A locked policy can be extended, and nobody can delete a protected blob version before its expiry. Check the policy and expiry on any versions you must retain, especially those written before setup. [Microsoft's guidance on locking a policy](https://learn.microsoft.com/en-us/azure/storage/blobs/immutable-policy-configure-version-scope#lock-a-time-based-retention-policy)
+
+Azure bills for stored versions. TenuVault keeps an entire backup while any of its current blobs is protected. After expiry, normal TenuVault retention can remove the current blobs, and Azure may still retain previous versions. Plan version cleanup in Azure and budget for that storage. [Immutable storage and retention](/backups/storage/#immutable-storage)
 
 ## Optional: let the Backup Reader write backups
 
@@ -73,7 +87,7 @@ If you cannot run PowerShell, create the same account in the [Azure portal](http
 2. Choose the subscription, a resource group (a dedicated one such as `rg-tenuvault-backups`) and the region your backup data must stay in.
 3. Enter a storage account name. **Performance:** Standard. **Redundancy:** locally redundant storage, or geo-redundant storage when these backups are the only copy.
 4. On **Advanced**: **Require secure transfer** on, **Minimum TLS version** 1.2, **Allow storage account key access** off, **Allow Blob anonymous access** off, **Default access tier** Hot. Leave hierarchical namespace off.
-5. On **Data protection**: turn on soft delete for blobs and for containers, 7 days each. Leave version-level immutability support off; see [Settings that conflict with TenuVault](#settings-that-conflict-with-tenuvault).
+5. On **Data protection**, turn on soft delete for blobs and for containers, 7 days each. For immutable backups, turn on blob versioning, then enable version-level immutability when creating the backup container and configure its default policy. [Microsoft's setup steps](https://learn.microsoft.com/en-us/azure/storage/blobs/immutable-policy-configure-version-scope)
 6. Review and create the account.
 
 ### 2. Grant access to your Intune admins
@@ -98,7 +112,6 @@ Backups are Intune configuration as JSON files, so most tenants store a modest a
 
 ## Settings that conflict with TenuVault
 
-* **Immutability policies and legal holds** on the `intune-backups` container block the deletes that retention performs. Older backups then stay in place and TenuVault reports that old backups could not be removed.
 * **Lifecycle management rules** that move backup blobs to Cool, Cold or Archive, or that delete them, fight with TenuVault retention and can remove files a backup still lists. Let TenuVault decide what to delete.
 * A **CannotDelete** resource lock is compatible and recommended: it blocks deleting the storage account itself, while blob writes and deletes continue normally.
 * Backups are stored as plain JSON policies, protected by Azure encryption at rest and these role assignments, and audit log events are plain JSON too. Everyone who can read the containers can read the backups, including the plain-text values of secret OMA-URI settings, and everyone who can write to `intune-backups` is trusted like an Intune admin, because a restore writes what it finds there. Keep the roles above limited to the admin group. See [Backups in Azure](/security/encryption/#backups-in-azure).

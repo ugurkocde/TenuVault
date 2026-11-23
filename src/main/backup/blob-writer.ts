@@ -5,7 +5,7 @@ import { oversizedOwnershipFile } from "../../shared/backup-ownership"
 import { retryDelay, retryableStatus, sleep } from "../graph-retry"
 import { FetchApplicationError } from "../api/network-error"
 import type { NetworkCircuit } from "./engine"
-import { MAX_LIST_PAGES, REQUEST_ATTEMPTS, BlobClaimError, ProtectedBlobError, RequestTimeoutError, RetryableStorageError, StorageError, TokenError, isImmutabilityRefusal, requestFailure, storageError, storageFailure, withAbort, withRequestTimeout } from "./request"
+import { MAX_LIST_PAGES, REQUEST_ATTEMPTS, BlobClaimError, ProtectedBlobError, RequestTimeoutError, RetryableStorageError, StorageError, TokenError, isImmutabilityRefusal, isProtectedDelete, requestFailure, storageError, storageFailure, withAbort, withRequestTimeout } from "./request"
 
 /** Writes blobs to Azure or, for local accounts, to the encrypted store via the fetch bridge. */
 export class BlobWriter {
@@ -65,14 +65,23 @@ export class BlobWriter {
   }
 
   /** Lists blob names and, with a delimiter, virtual folders under a prefix. */
-  async list(prefix: string, delimiter = ""): Promise<{ blobs: string[]; prefixes: string[] }> {
+  async list(prefix: string, options: { delimiter?: string; includeProtection?: boolean } = {}): Promise<{
+    blobs: string[]
+    prefixes: string[]
+    legalHold: boolean
+    immutableUntil: number
+  }> {
     const blobs: string[] = []
     const prefixes: string[] = []
+    const { delimiter, includeProtection } = options
+    let legalHold = false
+    let immutableUntil = 0
     let marker = ""
     const seen = new Set<string>()
     do {
       if (seen.size >= MAX_LIST_PAGES) throw new Error(`Storage listing did not finish after ${MAX_LIST_PAGES} pages`)
       const query = new URLSearchParams({ restype: "container", comp: "list", prefix, ...(delimiter ? { delimiter } : {}), ...(marker ? { marker } : {}) })
+      if (includeProtection) query.set("include", "immutabilitypolicy,legalhold")
       const xml = await this.request(`${BACKUP_CONTAINER}?${query.toString()}`, { method: "GET" }, async (response) => {
         if (response.status === 404) return null
         if (!response.ok) throw await storageFailure(response, this.account)
@@ -82,12 +91,20 @@ export class BlobWriter {
       const decode = (value: string) => value.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&amp;/g, "&")
       for (const m of xml.matchAll(/<BlobPrefix><Name>([^<]*)<\/Name><\/BlobPrefix>/g)) prefixes.push(decode(m[1]!))
       for (const m of xml.matchAll(/<Blob><Name>([^<]*)<\/Name>/g)) blobs.push(decode(m[1]!))
+      if (includeProtection) {
+        legalHold ||= /<LegalHold>\s*true\s*<\/LegalHold>/i.test(xml)
+        for (const [, value] of xml.matchAll(/<ImmutabilityPolicyUntilDate>([^<]*)<\/ImmutabilityPolicyUntilDate>/g)) {
+          const until = Date.parse(value!)
+          if (!Number.isFinite(until)) throw new StorageError("Azure returned an unreadable immutability expiry date.")
+          immutableUntil = Math.max(immutableUntil, until)
+        }
+      }
       // The marker is XML-escaped like the names; send back the name it stands for.
       marker = decode(/<NextMarker>([^<]+)<\/NextMarker>/.exec(xml)?.[1] ?? "")
       if (marker && seen.has(marker)) throw new Error("Storage returned a repeated continuation marker")
       seen.add(marker)
     } while (marker)
-    return { blobs, prefixes }
+    return { blobs, prefixes, legalHold, immutableUntil }
   }
 
   /**
@@ -115,10 +132,10 @@ export class BlobWriter {
     }, async (response) => {
       if (!response.ok && response.status !== 404) {
         const code = response.headers.get("x-ms-error-code") ?? ""
-        if (isImmutabilityRefusal(response.status, code)) throw new ProtectedBlobError(code)
+        if (isProtectedDelete(response.status, code)) throw new ProtectedBlobError(code)
         const text = await response.clone().text()
         const bodyCode = /<Code>([^<]+)<\/Code>/.exec(text)?.[1] ?? ""
-        if (isImmutabilityRefusal(response.status, bodyCode)) throw new ProtectedBlobError(bodyCode)
+        if (isProtectedDelete(response.status, bodyCode)) throw new ProtectedBlobError(bodyCode)
         throw await storageFailure(response, this.account)
       }
     })

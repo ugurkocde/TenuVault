@@ -152,6 +152,16 @@ On Community, backups are kept for 30 days at most. A longer setting, or **Forev
 
 On Community, when the oldest listed backup is at least 23 days old, a line above **Backup Timeline** shows its date, explains removal after the next complete backup and describes longer retention included in TenuVault Pro and MSP.
 
+## Immutable storage
+
+Pro and MSP tenants using Azure storage can protect new backup blob versions with Azure's version-level immutability. A locked policy protects those versions from deletion until they expire, including when someone with delete access makes a mistake or an attacker gains that access. A write can still create a new current version in Azure. The protected version remains available through Azure version history. [Azure version-level immutability](https://learn.microsoft.com/en-us/azure/storage/blobs/immutable-version-level-worm-policies)
+
+Set the immutable period to at least the number of days you plan to retain backups in TenuVault. For an expired backup, TenuVault checks all its current blobs before starting cleanup. If any has an active immutability expiry or legal hold, the whole backup stays, and the run log reports that it was kept. The log shows the latest expiry when Azure provides one. A legal hold lasts until an Azure administrator clears it. Once a backup is past TenuVault retention and its blobs are eligible for deletion, the next complete backup made with an admin's sign-in can remove it.
+
+Longer protection and extra blob versions use more billed space. Azure can keep previous versions after TenuVault removes a backup from its history. Review that usage in Azure and plan how to clean up expired previous versions.
+
+To enable the policy, run the storage setup script with `-Immutable`. After testing, lock it under **Access policy** for `intune-backups` in the Azure portal. [Set up and lock immutable storage](/getting-started/create-storage-account/#immutable-storage)
+
 ## Export a backup as a ZIP file
 
 1. Open **Backup & Restore**, select a backup in the **Backup Timeline**.

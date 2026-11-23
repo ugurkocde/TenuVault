@@ -353,13 +353,14 @@ describe("retention and storage protection", () => {
 
   it("touches no policy file when the metadata of an old backup is protected", async () => {
     const { job, left, old } = await run("metadata.json")
-    expect(job.log.join("\n")).toContain("Kept 1 older backup protected")
+    expect(job.log.join("\n")).toContain("Kept 1 older backup because of storage policy or delete permissions.")
     expect(left).toEqual([`${old}/CompliancePolicies/A.json`, `${old}/DeviceConfigurations/B.json`, `${old}/metadata.json`])
   })
 
-  it("removes the metadata first, so a partly deleted backup is not reported as complete", async () => {
+  it("warns when a delete is unexpectedly refused after cleanup started", async () => {
     const { job, left, old } = await run("DeviceConfigurations/B.json")
-    expect(job.log.join("\n")).toContain("no longer offered as complete")
+    expect(job.results?.warnings).toBe(1)
+    expect(job.log.join("\n")).toContain("blocked a delete after cleanup started. The backup may be incomplete.")
     expect(left).toEqual([`${old}/DeviceConfigurations/B.json`])
   })
 })

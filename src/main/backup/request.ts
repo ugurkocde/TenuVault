@@ -8,9 +8,7 @@ export const REQUEST_ATTEMPTS = 3
 
 /**
  * The storage provider refused a delete because the blob is protected by an immutability
- * policy or a legal hold (for example 409 BlobImmutableDueToPolicy or
- * BlobImmutableDueToLegalHold). Retention treats the backup as protected and kept; it never
- * tries to weaken the policy or remove the hold.
+ * policy, legal hold or role without delete permission.
  */
 export class ProtectedBlobError extends Error {
   constructor(readonly code: string) {
@@ -24,6 +22,10 @@ export function isImmutabilityRefusal(status: number, code: string): boolean {
   return (status === 409 || status === 403) && /immutab|legalhold/i.test(code)
 }
 
+/** A valid Azure identity can read and write while lacking permission to delete. */
+export function isProtectedDelete(status: number, code: string): boolean {
+  return isImmutabilityRefusal(status, code) || (status === 403 && code === "AuthorizationPermissionMismatch")
+}
 
 /** Sign-in or license problems affect every request, so they stop the backup instead of becoming per-policy warnings. */
 export class TokenError extends Error {}
