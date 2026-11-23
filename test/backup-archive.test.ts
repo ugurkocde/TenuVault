@@ -90,3 +90,18 @@ it('admits an archive file up to the backup download total and refuses a larger 
   expect(() => assertArchiveFileSize(64 * 1024 * 1024)).not.toThrow()
   expect(() => assertArchiveFileSize(MAX_BACKUP_ARCHIVE_TOTAL_BYTES + 1)).toThrow('Choose an archive smaller than 128 MiB')
 })
+
+it('preserves an audit archive from a complete backup and rejects a missing audit file', async () => {
+  const window = { from: '2026-09-25T12:00:00.000Z', to: '2026-09-26T12:00:00.000Z', count: 1 }
+  const withAudit = async (missing: boolean) => {
+    const zip = await JSZip.loadAsync(await archive())
+    const metadata = JSON.parse(await zip.file('metadata.json')!.async('string'))
+    zip.file('metadata.json', JSON.stringify({ ...metadata, AuditArchive: window }))
+    if (!missing) zip.file('AuditEvents/auditEvents.json', JSON.stringify({ window, value: [{ id: 'event', activityDateTime: window.to }] }))
+    return zip.generateAsync({ type: 'nodebuffer' })
+  }
+  const reviewed = await reviewArchive(await withAudit(false))
+  expect(reviewed.count).toBe(1)
+  expect(reviewed.files.has('AuditEvents/auditEvents.json')).toBe(true)
+  await expect(reviewArchive(await withAudit(true))).rejects.toThrow('auditEvents.json')
+})

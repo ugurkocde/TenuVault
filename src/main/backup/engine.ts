@@ -5,6 +5,8 @@ export { ProtectedBlobError, isImmutabilityRefusal } from "./request"
 import { createHash, randomUUID } from "node:crypto"
 import { BACKUP_CANCELLED_MESSAGE, BACKUP_OWNER_FILE } from "../../shared/constants"
 import { resolveBackupOwnership, type OwnershipFile } from "../../shared/backup-ownership"
+import { archiveIntuneAudit } from "./audit-archive"
+import { AUDIT_ARCHIVE_WARNING, type AuditArchiveWindow } from "../../shared/intune/audit-archive"
 import { BlobWriter } from "./blob-writer"
 import { GraphSession, type GraphItem } from "./graph-session"
 import { GRAPH, BlobClaimError, GraphError, InventoryDamagedError, ProtectedBlobError, RequestTimeoutError, StorageError, TokenError, isUnreachable } from "./request"
@@ -108,6 +110,7 @@ export interface BackupEngineDeps {
   enabledModules?: (tenantId: string) => ModuleId[]
   /** Backups older than this many days are deleted after each backup; 0 keeps everything. */
   retentionDays?: (tenantId: string) => number
+  archiveIntuneAudit?: (tenantId: string) => boolean
   now?: () => Date
   /** Items read at the same time. Graph throttling (429) pauses every reader. */
   concurrency?: number
@@ -673,11 +676,31 @@ export class BackupEngine {
       }
     }, network.signal)
 
-    const ended = this.now()
     const totalPolicies = policyCount(counts)
     const saved = Object.values(counts).reduce((sum, count) => sum + count, 0)
     const inventory = Object.entries(counts).filter(([folder, count]) => count > 0 && typeForFolder(folder)?.inventory)
-    const metadata = manifest(failures > 0 && saved === 0 ? "Failed" : failures ? "CompletedWithWarnings" : "Success", ended)
+    let archive: AuditArchiveWindow | undefined
+    let archiveWarning = false
+    if ((failures === 0 || saved > 0) && this.deps.archiveIntuneAudit?.(request.tenantId)) {
+      // Optional reads have their own circuit and leave time for the core backup to commit.
+      const archiveDeadline = Math.min(deadline - 5_000, Date.now() + 120_000)
+      try {
+        const archiveSignal = AbortSignal.any([signal, AbortSignal.timeout(Math.max(0, archiveDeadline - Date.now()))])
+        const archiveNetwork = new NetworkCircuit(3 * concurrency, archiveSignal, archiveDeadline)
+        archive = await archiveIntuneAudit(
+          new BlobWriter(this.deps.fetch, request.storageAccountName, storageToken, archiveNetwork),
+          new GraphSession(this.deps.fetch, graphToken, archiveNetwork),
+          request.tenantId, backupFolder, started,
+        )
+      } catch {
+        archiveWarning = true
+        this.write(job, AUDIT_ARCHIVE_WARNING, "warning")
+      }
+    }
+    const metadata = manifest(failures > 0 && saved === 0 ? "Failed" : failures ? "CompletedWithWarnings" : "Success", this.now(), {
+      ...(archive ? { AuditArchive: archive } : {}),
+      ...(archiveWarning ? { AuditArchiveWarning: true, Warnings: [...itemTimeoutWarnings, AUDIT_ARCHIVE_WARNING] } : {}),
+    })
 
     // Detach cancellation at the first manifest PUT, after cancellable token acquisition.
     // Retention reads cannot delay the manifest, and a saved backup must not burn a retry slot.
@@ -741,7 +764,7 @@ export class BackupEngine {
     if (maskedItems.length) {
       this.write(job, `Saved ${maskedItems.length} object${maskedItems.length === 1 ? "" : "s"} with encrypted OMA-URI values masked (****): Microsoft refused the plain-text read, so these copies cannot be restored. A manual backup with your sign-in captures them when Microsoft returns the values.`, "warning")
     }
-    const warnings = failures + retentionWarnings + (maskedItems.length ? 1 : 0)
+    const warnings = failures + retentionWarnings + Number(archiveWarning) + (maskedItems.length ? 1 : 0)
     results.warnings = warnings
     job.progressMessage =
       job.status === "Failed" ? "Backup failed: no policies could be saved" : warnings > 0 ? `Backup completed with ${warnings} warning${warnings === 1 ? "" : "s"}` : "Backup completed successfully"

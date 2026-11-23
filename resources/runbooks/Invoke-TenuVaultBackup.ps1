@@ -31,7 +31,8 @@
     admin's sign-in. An age-based lifecycle rule on the container is no substitute: it keeps none
     of the desktop protections (newest backup kept, failed runs never counted). A per tenant
     cloud-backup-status-<tenant>.json blob in the container records the last run so the desktop
-    app can show cloud status without opening the Automation account.
+    app can show cloud status without opening the Automation account. Each backup also archives
+    Intune audit events in AuditEvents/auditEvents.json.
 
     Configuration comes from Automation variables (environment variables of the same name are
     accepted outside Azure Automation so the flow can be exercised locally):
@@ -64,7 +65,9 @@ param(
     [switch]$ReplayOlderAudit
 )
 
-$script:RunbookVersion = "1.5.0"
+$script:RunbookVersion = "1.6.0"
+$script:AuditArchiveFile = "AuditEvents/auditEvents.json"
+$script:AuditArchiveWarning = "Intune audit log not archived. The next backup will retry from the last saved archive."
 $script:GraphBeta = "https://graph.microsoft.com/beta"
 $script:Container = "intune-backups"
 # One status blob per tenant, so status blobs never collide when tenants share tooling.
@@ -2968,20 +2971,28 @@ function Get-TvBackupRef {
 $script:MaxPredecessorFolders = 500
 $script:MaxPredecessorManifests = 30
 
-# The newest complete plain backup of this tenant older than $Current that records item
-# fingerprints. Sealed backups cannot be opened here: they are skipped and counted, and Notes
-# says why other folders were skipped or the search stopped, for the job output.
-function Find-TvPreviousBackup {
-    param([Parameter(Mandatory)][hashtable]$Context, [Parameter(Mandatory)][string]$Current)
+function Get-TvBackupFolders {
+    param([Parameter(Mandatory)][hashtable]$Context)
     $names = [System.Collections.Generic.List[string]]::new()
     $marker = $null
+    $markers = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     do {
         $uri = "https://$($Context.StorageAccount).blob.core.windows.net/$script:Container`?restype=container&comp=list&delimiter=/&prefix=backup-&maxresults=5000"
         if ($marker) { $uri += "&marker=$([uri]::EscapeDataString($marker))" }
         $text = (Invoke-TvHttp -Uri $uri -Token $Context.StorageToken -Method "Get" -Headers @{ "x-ms-version" = "2021-12-02" }).Text
         foreach ($match in [regex]::Matches($text, '<BlobPrefix><Name>(backup-\d{4}-\d{2}-\d{2}-\d{6})/</Name></BlobPrefix>')) { $names.Add($match.Groups[1].Value) }
-        $marker = [regex]::Match($text, '<NextMarker>([^<]+)</NextMarker>').Groups[1].Value
+        $marker = [Net.WebUtility]::HtmlDecode([regex]::Match($text, '<NextMarker>([^<]+)</NextMarker>').Groups[1].Value)
+        if ($marker -and (-not $markers.Add($marker) -or $markers.Count -ge 10000)) { throw "Storage listing did not finish." }
     } while ($marker)
+    return $names
+}
+
+# The newest complete plain backup of this tenant older than $Current that records item
+# fingerprints. Sealed backups cannot be opened here: they are skipped and counted, and Notes
+# says why other folders were skipped or the search stopped, for the job output.
+function Find-TvPreviousBackup {
+    param([Parameter(Mandatory)][hashtable]$Context, [Parameter(Mandatory)][string]$Current)
+    $names = @(Get-TvBackupFolders $Context)
     $older = @($names | Where-Object { [string]::CompareOrdinal($_, $Current) -lt 0 } | Sort-Object -Descending -CaseSensitive -Unique)
     $sealed = 0
     $notes = [System.Collections.Generic.List[string]]::new()
@@ -3025,6 +3036,88 @@ function Read-TvSettingDefinitions {
         }
     }
     return $definitions
+}
+
+# The same window and raw Graph event envelope as src/main/backup/audit-archive.ts.
+function Save-TvIntuneAuditArchive {
+    param([hashtable]$Context, [string]$Folder, [DateTime]$Started, [string]$GraphToken)
+    $end = ([DateTimeOffset]$Started).ToUnixTimeMilliseconds()
+    $historyStart = $end - 365L * 24 * 60 * 60000
+    $start = $historyStart
+    $hasPrevious = $false
+    $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $deadline = [DateTime]::UtcNow.AddMinutes(2)
+    foreach ($name in @(Get-TvBackupFolders $Context | Sort-Object -Descending -CaseSensitive -Unique)) {
+        if ([DateTime]::UtcNow -ge $deadline) { throw "Intune audit archive timed out." }
+        if ($name -eq $Folder) { continue }
+        $time = ([DateTimeOffset]::Parse((Get-TvBackupTimestamp $name))).ToUnixTimeMilliseconds()
+        if ($time + 999 -lt $start) { break }
+        try { $metadata = Read-TvPlainJson $Context "$name/metadata.json" }
+        catch [TvSealedBlobError] { continue }
+        catch [TvHttpError] {
+            if ($_.Exception.Status -ne 404) { throw }
+            if ($time -ge $end - 6 * 60 * 60000) {
+                $owner = Read-TvOwnerMarker $Context $name
+                if ($owner -eq "owned") { throw "Another backup is still running." }
+                if ($owner -eq "unreadable") { throw "The owner of a recent backup could not be read." }
+            }
+            continue
+        }
+        if ([string]$metadata.TenantId -ne $Context.TenantId -or -not $metadata.Contains("AuditArchive")) { continue }
+        $previous = $metadata.AuditArchive
+        if ($previous.from -isnot [string] -or $previous.to -isnot [string] -or
+            -not (Test-TvJsNumber $previous.count) -or $previous.count -lt 0 -or $previous.count % 1 -ne 0) { throw "Invalid Intune audit archive window." }
+        $checkpoint = ([DateTimeOffset]::Parse($previous.to)).ToUnixTimeMilliseconds()
+        if ([DateTimeOffset]::Parse($previous.from) -gt [DateTimeOffset]::Parse($previous.to)) { throw "Invalid Intune audit archive window." }
+        if ($checkpoint -ge $end) { throw "A newer backup already archived the Intune audit log." }
+        if (-not $hasPrevious) {
+            $start = [Math]::Max($historyStart, $checkpoint - 10 * 60000)
+            $hasPrevious = $true
+        }
+        if ($checkpoint -lt $start -or $previous.count -eq 0) { continue }
+        $archive = Read-TvPlainJson $Context "$name/$script:AuditArchiveFile"
+        if ($archive.window.from -cne $previous.from -or $archive.window.to -cne $previous.to -or
+            $archive.window.count -ne $previous.count -or $archive.value -isnot [array] -or $archive.value.Count -ne $previous.count) {
+            throw "The saved Intune audit archive is missing or invalid."
+        }
+        foreach ($event in $archive.value) {
+            if ($event.id -isnot [string] -or -not $event.id) { throw "Invalid saved Intune audit event." }
+            if (([DateTimeOffset]::Parse($event.activityDateTime)).ToUnixTimeMilliseconds() -ge $start) { $null = $seen.Add($event.id) }
+        }
+    }
+
+    $from = [DateTimeOffset]::FromUnixTimeMilliseconds($start).UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ss.fffZ")
+    $to = [DateTimeOffset]::FromUnixTimeMilliseconds($end).UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ss.fffZ")
+    $filter = [uri]::EscapeDataString("activityDateTime ge $from and activityDateTime le $to")
+    $next = "$script:GraphBeta/deviceManagement/auditEvents?`$filter=$filter&`$top=200"
+    $links = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $events = [System.Collections.Generic.List[string]]::new()
+    $bytes = 256 # Reserve space for the JSON envelope and its window.
+    while ($next) {
+        if ([DateTime]::UtcNow -ge $deadline) { throw "Intune audit archive timed out." }
+        if ($links.Count -ge 10000 -or -not $links.Add($next)) { throw "Intune audit listing did not finish." }
+        $uri = [uri]$next
+        if ($uri.Scheme -ne "https" -or $uri.Authority -ne "graph.microsoft.com" -or -not $uri.AbsolutePath.StartsWith("/beta/")) {
+            throw "Invalid Graph continuation link."
+        }
+        $page = Invoke-TvGraphGet $next $GraphToken
+        $value = $page["value"]
+        if ($value -isnot [array]) { throw "Graph returned an invalid Intune audit collection." }
+        foreach ($event in $value) {
+            if ($event.id -isnot [string] -or -not $event.id -or $event.activityDateTime -isnot [string]) { throw "Invalid Intune audit event." }
+            $time = ([DateTimeOffset]::Parse($event.activityDateTime)).ToUnixTimeMilliseconds()
+            if ($time -lt $start -or $time -gt $end -or -not $seen.Add($event.id)) { continue }
+            $json = ConvertTo-Json -InputObject $event -Depth 100 -Compress
+            $bytes += [Text.Encoding]::UTF8.GetByteCount($json) + 1
+            if ($bytes -gt $script:MaxBlobBytes) { throw "The Intune audit archive exceeds the backup file size limit." }
+            $events.Add($json)
+        }
+        $next = Get-TvProp $page "@odata.nextLink"
+    }
+    $window = [ordered]@{ from = $from; to = $to; count = $events.Count }
+    $windowJson = ConvertTo-Json -InputObject $window -Compress
+    Set-TvBlob $Context.StorageAccount "$Folder/$script:AuditArchiveFile" ('{"window":' + $windowJson + ',"value":[' + ($events -join ',') + ']}') $Context.StorageToken
+    return $window
 }
 
 # Intune audit events between the two backups, like readAudit in the desktop app. No $orderby:
@@ -3322,8 +3415,6 @@ function Invoke-TvBackup {
             if ($list.Items.Count) { Write-Output "Backed up $($counts[$type.Folder]) $($type.Label)." }
         }
 
-        $ended = [DateTime]::UtcNow
-        $seconds = [int][Math]::Round(($ended - $started).TotalSeconds)
         # Inventory such as Autopilot devices is counted under its own folder, not as policies.
         $totalPolicies = 0
         $saved = 0
@@ -3338,6 +3429,18 @@ function Invoke-TvBackup {
         $sortedItems = [ordered]@{}
         foreach ($key in @($items.Keys | Sort-Object)) { $sortedItems[$key] = $items[$key] }
         $status = if ($failures -gt 0) { if ($saved -eq 0) { "Failed" } else { "CompletedWithWarnings" } } else { "Success" }
+        $archive = $null
+        $archiveWarning = $false
+        # Cloud backups already require Pro or MSP, the same plans as the desktop auditLog gate.
+        if ($status -ne "Failed") {
+            try { $archive = Save-TvIntuneAuditArchive $context $backupFolder $started $graphToken }
+            catch {
+                $archiveWarning = $true
+                Write-Warning $script:AuditArchiveWarning
+            }
+        }
+        $ended = [DateTime]::UtcNow
+        $seconds = [int][Math]::Round(($ended - $started).TotalSeconds)
         $metadata = [ordered]@{
             BackupDate     = ConvertTo-TvFolderTimestamp $started
             BackupFolder   = $backupFolder
@@ -3361,6 +3464,11 @@ function Invoke-TvBackup {
         }
         if ($notReadable.Count) { $metadata.AppOnlyExcludedTypes = $notReadable }
         if ($maskedItems.Count) { $metadata.MaskedSecretItems = @($maskedItems) }
+        if ($archive) { $metadata.AuditArchive = $archive }
+        if ($archiveWarning) {
+            $metadata.AuditArchiveWarning = $true
+            $metadata.Warnings = @($script:AuditArchiveWarning)
+        }
         $metadata.Items = $sortedItems
         Set-TvBlob $storageAccount "$backupFolder/metadata.json" ($metadata | ConvertTo-Json -Depth 100) $storageToken
         Write-Output "Backup completed: $totalPolicies policies in $($metadata.Duration) ($status). Older backups were kept: the cloud identity cannot delete. The next desktop backup made with an admin's sign-in applies retention."

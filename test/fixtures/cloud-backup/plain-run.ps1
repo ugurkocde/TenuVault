@@ -25,6 +25,7 @@ $script:failReportList = $false
 $script:failCompliance = $false
 $script:maskOma = $false
 $script:failAuditReceipt = $false
+$script:failIntuneAudit = $false
 
 function Get-TvManagedIdentityToken {
     param([string]$Resource)
@@ -40,6 +41,7 @@ function Invoke-TvHttp {
     $body = if ($null -ne $BodyBytes) { [Text.Encoding]::UTF8.GetString($BodyBytes) } else { $null }
     $script:calls.Add([pscustomobject]@{ uri = $Uri; method = $Method; contentType = $ContentType; ifNoneMatch = $Headers["If-None-Match"]; body = $body })
     if ($script:failAuditReceipt -and $Uri -like "*/tenuvault-backup-results/audit-receipts/*") { throw [TvHttpError]::new(403, "Audit receipt denied") }
+    if ($script:failIntuneAudit -and $Uri -like "*/deviceManagement/auditEvents?*") { throw [TvHttpError]::new(403, "HTTP 403") }
     $text = '{"value":[]}'
     if ($Uri -like "*/tenuvault-backup-results?*comp=list*") {
         $text = "<EnumerationResults><Blobs /><NextMarker /></EnumerationResults>"
@@ -140,3 +142,12 @@ $errorText = $null
 $output = [System.Collections.Generic.List[string]]::new()
 try { Invoke-TvBackup 2>&1 | ForEach-Object { $output.Add([string]$_) } } catch { $errorText = $_.Exception.Message }
 Write-Output (@{ calls = @($script:calls.ToArray()); output = $output.ToArray(); error = $errorText } | ConvertTo-Json -Compress -Depth 5)
+
+# 10. Graph denies the Intune audit read, while the policy backup succeeds.
+$script:calls.Clear()
+$script:OutcomeSent = $false
+$script:failAuditReceipt = $false
+$script:failIntuneAudit = $true
+[Environment]::SetEnvironmentVariable("TenuVaultChangeReport", $null)
+$output = @(Invoke-TvBackup 3>&1 | ForEach-Object { [string]$_ })
+Write-Output (@{ calls = @($script:calls.ToArray()); output = $output } | ConvertTo-Json -Compress -Depth 5)

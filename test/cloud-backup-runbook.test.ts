@@ -31,7 +31,7 @@ let plainRuns: Run[] | undefined
 /** The scenarios of the plain-run fixture: a full run, an early failure, a failed manifest, and two runs with change reports on. */
 function runPlainFixture(): Run[] {
   const script = fileURLToPath(new URL("./fixtures/cloud-backup/plain-run.ps1", import.meta.url))
-  plainRuns ??= execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8" }).trim().split(/\r?\n/).map((line) => JSON.parse(line) as Run)
+  plainRuns ??= execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8" }).trim().split(/\r?\n/).filter((line) => line.startsWith("{")).map((line) => JSON.parse(line) as Run)
   return plainRuns
 }
 const TENANT = "11111111-2222-3333-4444-555555555555"
@@ -64,7 +64,7 @@ describe("Cloud audit contract", () => {
       expect(write.uri).toMatch(new RegExp(`-event-${TENANT}-${entry.job.runId}\\.json$`))
       expect(file).toMatchObject({ version: "2.0", metadata: { entryCount: 1, createdAt: entry.timestamp } })
       expect(entry).toMatchObject({ user: { tenantId: TENANT, name: "Cloud backup managed identity" },
-        job: { status, producer: "cloud-runbook", producerVersion: "1.5.0", stage: "terminal" } })
+        job: { status, producer: "cloud-runbook", producerVersion: "1.6.0", stage: "terminal" } })
       const note = JSON.parse(scenario.calls.find(call => call.method === "Put" && call.uri.includes("/cloud-backup-outcomes/"))!.body!)
       expect(entry.job.runId).toBe(note.runId)
       const name = new URL(write.uri).pathname.slice("/audit-logs/".length)
@@ -569,7 +569,7 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
   it("carries a plain runbook version, which the app does not flag for upgrade", () => {
     const version = RUNBOOK_VERSION
     // 1.3.0 adds change reports on top of the first plain runbook, 1.2.0; 1.4.0 records how a run started.
-    expect(version).toBe("1.5.0")
+    expect(version).toBe("1.6.0")
     expect(PLAIN_CLOUD_RUNBOOK).toBe("1.2.0")
     expect(cloudRunbookNeedsUpgrade(version!)).toBe(false)
     expect(cloudRunbookNeedsUpgrade("1.1.0")).toBe(true)
@@ -635,7 +635,9 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
     // A backup with warnings gets no report, and the job output says so.
     expect(warnings!.error).toBeNull()
     expect(warnings!.output).toContain("No change report: the backup completed with warnings.")
-    expect(warnings!.calls.some((call) => call.uri.includes("/intune-backups?") && call.uri.includes("comp=list"))).toBe(false)
+    const archive = warnings!.calls.find((call) => call.uri.endsWith("/AuditEvents/auditEvents.json"))
+    expect(archive?.method).toBe("Put")
+    expect(warnings!.calls.filter((call) => call.uri.includes("/intune-backups?") && call.uri.includes("comp=list"))).toHaveLength(1)
   }, 60_000)
 
   it.runIf(Boolean(pwsh))("puts only plain JSON blobs during a run, records early failures and never calls Key Vault", () => {
@@ -667,6 +669,14 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
     expect(policy["@odata.context"]).toBeUndefined()
     const metadata = JSON.parse(puts.find((call) => call.uri.endsWith("/metadata.json"))!.body!)
     expect(metadata).toMatchObject({ Status: "Success", RunbookVersion: RUNBOOK_VERSION, Source: "TenuVault Cloud Backup", TenantId: "11111111-2222-3333-4444-555555555555" })
+    const archive = JSON.parse(puts.find((call) => call.uri.endsWith("/AuditEvents/auditEvents.json"))!.body!)
+    expect(metadata.AuditArchive).toEqual(archive.window)
+    expect(archive.value).toEqual([])
+    const denied = runPlainFixture()[9]!
+    expect(denied.output).toContain("Intune audit log not archived. The next backup will retry from the last saved archive.")
+    expect(denied.calls.some((call) => call.method === "Put" && call.uri.endsWith("/AuditEvents/auditEvents.json"))).toBe(false)
+    const auditFailed = denied.calls.find((call) => call.method === "Put" && call.uri.endsWith("/metadata.json"))
+    expect(JSON.parse(auditFailed!.body!)).toMatchObject({ Status: "Success", AuditArchiveWarning: true })
     const status = JSON.parse(puts.find((call) => call.uri.endsWith("/cloud-backup-status-11111111.json"))!.body!)
     expect(parseCloudStatus(status, "11111111-2222-3333-4444-555555555555")).toMatchObject({ lastStatus: "Success", runbookVersion: RUNBOOK_VERSION })
     // A run that fails before any backup write still records why, in the status blob and the note.

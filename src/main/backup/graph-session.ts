@@ -18,6 +18,13 @@ export class GraphSession {
 
   async list(url: string): Promise<GraphItem[]> {
     const items: GraphItem[] = []
+    for await (const page of this.listPages(url)) {
+      for (const item of page) items.push(item)
+    }
+    return items
+  }
+
+  async *listPages(url: string): AsyncGenerator<GraphItem[]> {
     let next: string | undefined = url
     const seen = new Set<string>()
     while (next) {
@@ -27,10 +34,9 @@ export class GraphSession {
       seen.add(next)
       const page: { value?: GraphItem[]; "@odata.nextLink"?: string } = await this.get(next)
       if (!Array.isArray(page.value)) throw new Error("Graph returned an invalid policy collection")
-      items.push(...page.value)
+      yield page.value
       next = page["@odata.nextLink"]
     }
-    return items
   }
 
   /** GET with bounded retries for throttling, transient status codes and network failures. */

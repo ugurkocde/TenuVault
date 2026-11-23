@@ -4,7 +4,7 @@ import { POST as restoreBackup } from "../src/portal/app/api/restore-backup/rout
 import { POST as restoreValidate } from "../src/portal/app/api/restore-validate/route"
 import { POST as restorePreview } from "../src/portal/app/api/restore-preview/route"
 import { POST as listBackupContents } from "../src/portal/app/api/list-backup-contents/route"
-import { POST as downloadBackup } from "../src/portal/app/api/download-backup/route"
+import { POST as downloadBackup, setAuditArchiveSaver } from "../src/portal/app/api/download-backup/route"
 import { POST as backupChanges } from "../src/portal/app/api/backup-changes/route"
 import { UNTAGGED_BACKUP } from "../src/portal/lib/policies/backup-owner"
 import { INVALID_MANIFEST_TENANT } from "../src/shared/backup-ownership"
@@ -21,6 +21,7 @@ const base = { tenantId: OWN, appId: "app", clientSecret: "placeholder", storage
 const request = (path: string, data: object) => new NextRequest(`http://tenuvault.internal${path}`, { method: "POST", body: JSON.stringify(data) })
 afterEach(() => {
   setMainAuditSink(undefined)
+  setAuditArchiveSaver(undefined)
   vi.unstubAllGlobals()
 })
 
@@ -223,4 +224,20 @@ describe("ownership is settled before other files are read", () => {
     expect(response.status).toBe(200)
     expect((await response.json()).comparedWith).toBe(legacy)
   })
+})
+
+it("exports an owned audit archive as JSON and spreadsheet-safe CSV", async () => {
+  const window = { from: "2026-09-25T11:00:00.000Z", to: "2026-09-25T12:00:00.000Z", count: 1 }
+  const archive = { window, value: [{ id: "event", activityDateTime: window.to, activity: "Change policy", actor: { userPrincipalName: "=Contoso" }, resources: [] }] }
+  const save = vi.fn(async (_content: string, _filename: string) => ({ saved: true }))
+  setAuditArchiveSaver(save)
+  const blobs = { [`${backupId}/metadata.json`]: { TenantId: OWN, AuditArchive: window }, [`${backupId}/AuditEvents/auditEvents.json`]: archive }
+  stubStorage(blobs)
+  const send = (format: string, tenantId = OWN) => downloadBackup(request("/api/download-backup", { ...base, tenantId, auditArchiveFormat: format }))
+  expect((await send("json", OTHER)).status).toBe(403)
+  expect(save).not.toHaveBeenCalled()
+  expect((await send("json")).status).toBe(200)
+  expect(save).toHaveBeenLastCalledWith(JSON.stringify(archive), `${backupId}-intune-audit.json`)
+  expect((await send("csv")).status).toBe(200)
+  expect(save).toHaveBeenLastCalledWith(expect.stringContaining("'=Contoso"), `${backupId}-intune-audit.csv`)
 })

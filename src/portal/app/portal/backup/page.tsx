@@ -29,6 +29,8 @@ import { autopilotDevicesCsv } from "../../../../shared/intune/autopilot-devices
 import { storageLabel } from "~/lib/storage-label"
 import { changeTenantStorage, type StorageChoice } from "@desktop/lib/storage"
 import { LinkedMessage } from "~/components/linked-message"
+import { AUDIT_ARCHIVE_WARNING } from "../../../../shared/intune/audit-archive"
+import { Notice, useSaveNotice } from "@desktop/components/oib/notices"
 import { SERVICES_PAGE } from "../../../../shared/services/modules"
 
 type Tab = "backup" | "restore" | "schedule"
@@ -426,6 +428,7 @@ export default function BackupRestorePage() {
               onDownload={() => void download(selected)}
               onExportDevices={() => void exportDevices(selected)}
               onRestore={() => restore(selected)}
+              auditTenant={plan && allows(plan, "auditLog") ? tenant : null}
             />
           )}
         </div>
@@ -537,11 +540,12 @@ interface BackupDetailsProps {
   onDownload: () => void
   onExportDevices: () => void
   onRestore: () => void
+  auditTenant: BackupTenant | null
   ref: React.Ref<HTMLDivElement>
 }
 
 /** Everything known about one backup, from its metadata and file listing. */
-function BackupDetails({ backup, first, storageAccountName, downloading, exportingDevices, onChanges, onDownload, onExportDevices, onRestore, ref }: BackupDetailsProps) {
+function BackupDetails({ backup, first, storageAccountName, downloading, exportingDevices, onChanges, onDownload, onExportDevices, onRestore, auditTenant, ref }: BackupDetailsProps) {
   const kind = statusKind(backup.status)
   // Damaged or unreadable files of this backup on this device: nothing can be read from it.
   const unavailable = backup.status === "unavailable"
@@ -618,6 +622,8 @@ function BackupDetails({ backup, first, storageAccountName, downloading, exporti
         <div>
           <h3 className="mb-3 text-xs font-medium text-gray-500">Contents</h3>
           <div className="space-y-2">
+            {auditTenant && backup.auditArchive && <AuditArchiveDetails key={`${auditTenant.credentials.tenantId}/${backup.id}`} backup={backup} tenant={auditTenant} />}
+            {auditTenant && backup.auditArchiveWarning && <p className="rounded-xl bg-amber-50 px-3 py-2.5 text-sm text-amber-900">{AUDIT_ARCHIVE_WARNING}</p>}
             {areas
               .filter((entry) => entry.count > 0 || entry.left < entry.all)
               .map((entry) => (
@@ -673,6 +679,36 @@ function BackupDetails({ backup, first, storageAccountName, downloading, exporti
           </dl>
         </div>
       </div>
+    </div>
+  )
+}
+
+function AuditArchiveDetails({ backup, tenant }: { backup: BackupSummary; tenant: BackupTenant }) {
+  const notice = useSaveNotice()
+  const window = backup.auditArchive!
+  const exportAudit = (format: "csv" | "json") => void notice.save(async () => {
+    const response = await fetch("/api/download-backup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...tenant.credentials, storageAccountName: tenant.storageAccountName, backupId: backup.id, auditArchiveFormat: format }),
+    })
+    if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || "The archived Intune audit log could not be read.")
+    const result = await response.json() as { saved: boolean; fileName: string; path?: string }
+    return { ...result, fileName: result.path?.split(/[\\/]/).pop() ?? result.fileName }
+  })
+
+  return (
+    <div className="rounded-xl bg-gray-50 px-3 py-2.5 text-sm">
+      <div className="flex items-center justify-between gap-2">
+        <span className="font-medium text-gray-900">Intune audit log</span>
+        <span className="text-gray-700">{window.count.toLocaleString()} {window.count === 1 ? "event" : "events"}</span>
+      </div>
+      <p className="mt-1 text-xs text-gray-600">{formatDate(window.from)} to {formatDate(window.to)}</p>
+      <div className="mt-2 flex flex-wrap gap-2">
+        <Button variant="outline" size="sm" disabled={notice.saving} onClick={() => exportAudit("json")}>Export audit log (JSON)</Button>
+        <Button variant="outline" size="sm" disabled={notice.saving} onClick={() => exportAudit("csv")}>Export CSV</Button>
+      </div>
+      <Notice result={notice.result} onDismiss={notice.clear} className="mt-2" />
     </div>
   )
 }

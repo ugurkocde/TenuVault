@@ -1,3 +1,4 @@
+import { AUDIT_ARCHIVE_FILE, auditArchiveWindow } from "../../../../shared/intune/audit-archive"
 import { BlobListError, decodeXml, listBlobPages } from "~/lib/storage/list"
 import { typeForFolder } from "../../../../shared/intune/registry"
 import { describeScope } from "../../../../shared/intune/scope"
@@ -153,6 +154,8 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
   // Inventory such as Autopilot devices is an item of the backup but not a policy.
   const policyCount = Object.entries(counts).reduce((sum, [folder, value]) => (typeForFolder(folder)?.inventory ? sum : sum + value), 0)
   const excluded: string[] = Array.isArray(metadata?.Scope?.Excluded) ? metadata.Scope.Excluded : []
+  const auditWindow = auditArchiveWindow(metadata?.AuditArchive)
+  const hasAuditFile = filesText.includes(`<Name>${name}/${AUDIT_ARCHIVE_FILE}</Name>`)
 
   return {
     id: name,
@@ -183,6 +186,8 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
     failures: typeof metadata?.Failures === 'number' ? metadata.Failures : 0,
     skippedTypes: Array.isArray(metadata?.SkippedTypes) ? metadata.SkippedTypes : [],
     failedTypes: Array.isArray(metadata?.FailedTypes) ? metadata.FailedTypes : [],
+    auditArchive: owner.kind === "owned" && hasAuditFile ? auditWindow : undefined,
+    auditArchiveWarning: metadata?.AuditArchiveWarning === true || (metadata?.AuditArchive !== undefined && (!hasAuditFile || !auditWindow)) || undefined,
     size,
     sizeFormatted: formatBytes(size),
     duration: typeof metadata?.DurationSeconds === 'number' ? metadata.DurationSeconds : metadata?.Duration ?? metadata?.duration ?? null,
