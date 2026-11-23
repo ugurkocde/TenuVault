@@ -57,6 +57,27 @@ describe("audit callbacks cannot replace a completed route response", () => {
     expect(dispatch).toHaveBeenCalledTimes(expected)
   })
 
+  it("records an archive download for the admin who started it, even when another admin is signed in when its save ends", async () => {
+    const { setMainAuditSink } = await import("../src/main/api/audit-sink")
+    const { captureDownloadAudit } = await import("../src/main/api/audit")
+    let admin = "first@contoso.com"
+    const record = vi.fn(async () => undefined)
+    setMainAuditSink({ bind: () => ({ tenantId: TENANT, storageAccountName: "fixturestore", user: { id: admin, email: admin, name: admin } }), record } as never)
+    try {
+      const body = JSON.stringify({ ...credentials, id: "backup-2026-11-21-000000" })
+      const metadata = {}
+      captureDownloadAudit(new Request("http://tenuvault.internal/api/download-backup", { method: "POST" }), body, metadata)
+      // The save outlasts the sign-in: another admin is signed in when it is recorded.
+      admin = "second@contoso.com"
+      const dispatch = vi.fn(async () => Response.json({ success: true }))
+      createAuditRecorder(dispatch, () => null)(new Request("http://tenuvault.internal/api/download-backup", { method: "POST" }), body, Response.json({ saved: true }), metadata)
+      await new Promise<void>((resolve) => setTimeout(resolve, 0))
+      expect(dispatch).not.toHaveBeenCalled()
+      expect(record).toHaveBeenCalledTimes(1)
+      expect(record.mock.calls[0]![0]).toMatchObject({ user: { id: "first@contoso.com" } })
+    } finally { setMainAuditSink(undefined) }
+  })
+
   it.each(["null", "[]", "42", "true", "{invalid"])("skips malformed audit bodies (%s)", (body) => {
     const dispatch = vi.fn(async () => Response.json({ success: true }))
     const record = createAuditRecorder(dispatch, () => null)

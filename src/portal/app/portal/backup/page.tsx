@@ -125,9 +125,10 @@ export default function BackupRestorePage() {
   const [completedBackup, setCompletedBackup] = useState<{ jobId: string; tenantId: string } | null>(null)
   const [changesOpen, setChangesOpen] = useState(false)
   const [isDownloading, setIsDownloading] = useState(false)
-  // Backups whose full download the route refused while offering the ordinary items, so the next
-  // download is the ordinary-only copy.
-  const [ordinaryOnlyIds, setOrdinaryOnlyIds] = useState<ReadonlySet<string>>(new Set())
+  // A backup whose full download the route refused while offering the ordinary items: its next download is
+  // the ordinary-only copy. It belongs to the backup list the download started from, so a refreshed list
+  // or another tenant offers the full download again.
+  const [ordinaryOnly, setOrdinaryOnly] = useState<{ list: unknown; id: string } | null>(null)
   const [exportingDevices, setExportingDevices] = useState(false)
   const detailRef = useRef<HTMLDivElement | null>(null)
 
@@ -143,7 +144,7 @@ export default function BackupRestorePage() {
     .map((entry) => ({ tenantId: entry.credentials!.tenantId, appId: entry.credentials!.appId, name: entry.name, domain: entry.domain }))
   const trends = useMemo(() => backupTypeTrends(backups).filter(type => matchesBackupService(type.folder, service)), [backups, service])
   const listed = backups.find((backup) => backup.id === selectedId) ?? null
-  const selected = listed && ordinaryOnlyIds.has(listed.id) ? { ...listed, ordinaryOnlyExport: true } : listed
+  const selected = listed && ordinaryOnly?.list === backups && ordinaryOnly.id === listed.id ? { ...listed, ordinaryOnlyExport: true } : listed
   const latest = backups.find((backup) => backup.counts && statusKind(backup.status) === "success")
 
   useEffect(() => {
@@ -190,6 +191,7 @@ export default function BackupRestorePage() {
 
   const download = async (backup: BackupSummary) => {
     if (!tenant) return
+    const startedFrom = backups
     setIsDownloading(true)
     try {
       const response = await fetch("/api/download-backup", {
@@ -199,7 +201,7 @@ export default function BackupRestorePage() {
       })
       if (!response.ok) {
         const problem = await response.json().catch(() => ({}))
-        if (problem.ordinaryOnlyAvailable && response.status === 503) setOrdinaryOnlyIds(current => new Set(current).add(backup.id))
+        if (problem.ordinaryOnlyAvailable && response.status === 503) setOrdinaryOnly({ list: startedFrom, id: backup.id })
         else if (problem.ordinaryOnlyAvailable) void fetchBackups()
         throw new Error(problem.error || "Failed to download backup")
       }

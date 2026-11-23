@@ -57,7 +57,7 @@ import { ProxyAuth, ProxyPrompts, type ProxyAuthAttempt, type ProxyChallenge } f
 import { basename, dirname, join } from "node:path"
 import type { ApiRequest, AppPreferences, ScheduleInput } from "../shared/ipc"
 import { BACKUP_RUN_RECORD_FILE, INTERNAL_API_ORIGIN, RESOURCE_SCOPES, localStorageAccountName } from "../shared/constants"
-import { createAuditRecorder } from "./api/audit"
+import { captureDownloadAudit, createAuditRecorder } from "./api/audit"
 import { setAuditOutboxStore } from "../portal/lib/audit/outbox"
 import { backupRoutes, surfaceTokenErrors } from "./api/desktop-routes"
 import { createBridgedFetch } from "./api/fetch-bridge"
@@ -743,6 +743,7 @@ async function bootstrap(): Promise<void> {
     },
   })
   const host: ApiHost = new ApiHost({
+    beforeSave: captureDownloadAudit,
     saveDownload: response => saveArchiveResponse(response, name => dialog.showSaveDialog(mainWindow!, { title: "Export backup", defaultPath: name, filters: [{ name: "Large backup archive", extensions: ["tar"] }] })),
     routes: { ...routes, ...backupRoutes(engine, (tenantId) => scopes.get(tenantId).scope), ...featureRoutes(featureDeps), ...driftScanRoutes(driftJobs), ...restoreSafetyRoutes(guardedRestoreJournal(), recoveryAccounts, restoreConnection, async tenant => { await restoreConnection(tenant) }, identityRestore) },
     transform: surfaceTokenErrors,

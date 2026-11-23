@@ -1,12 +1,11 @@
 import type { ExecutionMetadata } from "./execution-metadata"
-import { DOWNLOAD_CANCELLED_HEADER } from "./host"
 import { mainAuditSink } from "./audit-sink"
 import { requiredFeatures } from "./plan-gates"
 import type { Feature } from "../../shared/plans"
 import { randomUUID } from "node:crypto"
 import { AuditEventType, AuditResult, AuditSeverity, type CreateAuditLogInput } from "~/lib/audit/types"
 import type { SignedInAccount } from "../../shared/ipc"
-import { DELEGATED_CLIENT_SECRET, INTERNAL_API_ORIGIN, localStorageAccountName } from "../../shared/constants"
+import { DELEGATED_CLIENT_SECRET, DOWNLOAD_CANCELLED_HEADER, INTERNAL_API_ORIGIN, localStorageAccountName } from "../../shared/constants"
 
 /** Which API calls are audited, and how they are described. */
 export const API_AUDIT_MAP: Record<string, { eventType: AuditEventType; action: string; resourceType: string }> = {
@@ -38,6 +37,15 @@ export interface RestoreNotice {
   failed: number
   partial: number
   message: string | null
+}
+
+/**
+ * Binds the audit of an archive download to the admin and storage of when it was authorized, before a
+ * save that can outlast a sign-in.
+ */
+export function captureDownloadAudit(_request: Request, requestBody: string, metadata: ExecutionMetadata): void {
+  const tenantId = (JSON.parse(requestBody) as { tenantId?: unknown }).tenantId
+  if (typeof tenantId === "string" && tenantId) metadata.downloadAudit = mainAuditSink()?.bind(tenantId)
 }
 
 export function createAuditRecorder(
@@ -89,6 +97,8 @@ export function createAuditRecorder(
 
     const account = accountFor(body.tenantId)
     const ok = response.status >= 200 && response.status < 300
+    // An archive download is recorded for the admin who started it, as bound before its save.
+    const captured = path === "/api/download-backup" ? metadata?.downloadAudit : undefined
     const logEntry: CreateAuditLogInput = {
       eventType: config.eventType,
       action: config.action,
@@ -102,6 +112,10 @@ export function createAuditRecorder(
       details: { method: request.method, path, statusCode: response.status, source: "desktop" },
     }
 
+    if (captured) {
+      void mainAuditSink()?.record(captured, logEntry).catch(() => console.error("[audit] Failed to write audit entry"))
+      return
+    }
     void dispatch(
       new Request(`${INTERNAL_API_ORIGIN}/api/audit/log`, {
         method: "POST",

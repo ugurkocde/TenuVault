@@ -44,6 +44,7 @@ async function getAccessToken(tenantId: string, appId: string, clientSecret: str
 
 /** How long a split run's record may take before the early manifest stands. */
 const RUN_RECORD_TIMEOUT_MS = 10_000
+const RECORD_UNAVAILABLE = "The run's final result could not be read in time, so the full download did not start. Try again in a moment, or download the ordinary items only."
 
 export async function POST(request: NextRequest) {
   try {
@@ -99,6 +100,9 @@ export async function POST(request: NextRequest) {
       if (metadata && !ordinaryOnlyRequest && !isLargeBackup(backupId) && metadata.CompanionBackup !== undefined && typeof metadata.RunStatus !== "string") {
         let record: Record<string, any> | null = null
         try { record = await readJson(`${backupId}/${BACKUP_RUN_RECORD_FILE}`, AbortSignal.timeout(RUN_RECORD_TIMEOUT_MS)) } catch (error) { recordUnavailable = !missing(error) }
+        // Without the record the full download cannot be judged, so the admin hears it now, not after a
+        // companion lookup that could stall as well.
+        if (recordUnavailable) return NextResponse.json({ error: RECORD_UNAVAILABLE, ordinaryOnlyAvailable: true }, { status: 503 })
         metadata = withRunRecord(backupId, metadata, record) ?? metadata
       }
       if (metadata && (metadata.CompanionBackup !== undefined || metadata.LargeBackupOutcomes !== undefined)) {
@@ -121,7 +125,7 @@ export async function POST(request: NextRequest) {
             headers: { "content-type": "application/x-tar", "content-disposition": `attachment; filename="${ordinaryId}.tar"` },
           })
         }
-        if (recordUnavailable && body.ordinaryOnly !== true) return NextResponse.json({ error: "The run's final result could not be read in time, so the full download did not start. Try again in a moment, or download the ordinary items only.", ordinaryOnlyAvailable: !isLargeBackup(backupId) }, { status: 503 })
+        if (recordUnavailable && body.ordinaryOnly !== true) return NextResponse.json({ error: RECORD_UNAVAILABLE, ordinaryOnlyAvailable: !isLargeBackup(backupId) }, { status: 503 })
         if (isLargeBackup(backupId) || body.ordinaryOnly !== true) return NextResponse.json({ error: "The mixed run is incomplete or its companion does not match. Choose Download ordinary only to export the ordinary snapshots.", ordinaryOnlyAvailable: !isLargeBackup(backupId) }, { status: 409 })
         ordinaryExport = ordinaryOnlyManifest(metadata, ordinaryOnlyRequest ? "An ordinary-only copy was requested." : matches ? "Large companion is incomplete, or an ordinary-only copy was requested." : "Large companion is missing, unreadable or does not match.")
         // Without the run's record an early manifest's placeholders say nothing about the large types, so

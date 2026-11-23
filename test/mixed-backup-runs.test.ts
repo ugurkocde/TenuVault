@@ -533,8 +533,11 @@ for (const azure of [false, true]) describe(azure ? "Azure emulator mixed runs" 
     // History keeps the full download offered while the record cannot be read.
     const rows = await (await history(f.request({ summary: true }))).json()
     expect(rows.backups.find((entry: any) => entry.id === ordinary)).toMatchObject({ ordinaryOnlyExport: false })
+    f.requests.length = 0
     const refused = await download(f.request({ backupId: ordinary }))
     expect(refused.status).toBe(503)
+    // The retry answer comes before any companion lookup.
+    expect(f.requests.some(value => value.includes(`${large}/metadata.json`))).toBe(false)
     expect((await refused.json()).error).toContain("Try again in a moment")
     // An explicit ordinary-only copy reads neither the record nor the companion.
     f.requests.length = 0
