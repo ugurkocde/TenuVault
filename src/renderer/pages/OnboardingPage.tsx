@@ -92,7 +92,7 @@ export default function OnboardingPage() {
   const [services, setServices] = useState<PermissionChoice>(initial?.services ?? DEFAULT_ONBOARDING_CHOICE)
   // A saved choice that could not be read must be confirmed with Continue on the service step; picking a
   // service there is not enough, so a setup file that arrives meanwhile waits for that Continue.
-  const reconfirm = useRef(!confirmedChoice(initial?.services ?? DEFAULT_ONBOARDING_CHOICE))
+  const reconfirm = useRef(initial?.reconfirm === true || !confirmedChoice(initial?.services ?? DEFAULT_ONBOARDING_CHOICE))
   const [permissionAccepted, setPermissionAccepted] = useState(false)
   const [permissionCheck, setPermissionCheck] = useState<{ account: SignedInAccount; services: PermissionChoice; step: Step; result: { missing: string[]; error?: string } } | null>(null)
   const permissionGeneration = useRef(0)
@@ -179,7 +179,7 @@ export default function OnboardingPage() {
 
   useEffect(() => {
     if (step === 3) clearOnboardingDraft()
-    else saveOnboardingDraft({ step, ...fields, account, services })
+    else saveOnboardingDraft({ step, ...fields, account, services, ...(reconfirm.current ? { reconfirm: true } : {}) })
   }, [step, fields, account, services])
 
   useEffect(() => {
@@ -323,7 +323,7 @@ export default function OnboardingPage() {
       if (!account) {
         const next = { tenant: connection.tenantId, clientId: connection.clientId, displayName: connection.name }
         setFields(next)
-        saveOnboardingDraft({ step: -1, ...next, account: null, services })
+        saveOnboardingDraft({ step: -1, ...next, account: null, services, ...(reconfirm.current ? { reconfirm: true } : {}) })
       }
       setStep(-1)
       return

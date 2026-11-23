@@ -17,6 +17,8 @@ export interface OnboardingDraft {
   displayName: string
   /** The sign-in of a tenant that was not saved yet; resumed only while it is still signed in. */
   account: SignedInAccount | null
+  /** A saved choice could not be read, and the service step's Continue has not confirmed a new one yet. */
+  reconfirm?: boolean
 }
 
 const KEY = "tenuvault.onboarding.draft"
@@ -65,6 +67,9 @@ export function loadOnboardingDraft(): OnboardingDraft | null {
         step = -1
       }
     }
+    // A choice that still has to be confirmed stays on the service step, even after a valid pick was saved.
+    const reconfirm = value.reconfirm === true
+    if (reconfirm) step = -1
     const account = recentAccount(value)
     const draft: OnboardingDraft = {
       step: step === 2 && !account ? 1 : step,
@@ -73,6 +78,7 @@ export function loadOnboardingDraft(): OnboardingDraft | null {
       displayName: text(value.displayName),
       account,
       services,
+      ...(reconfirm ? { reconfirm } : {}),
     }
     return isEmptyDraft(draft) ? null : draft
   } catch {

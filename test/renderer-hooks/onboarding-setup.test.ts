@@ -1255,6 +1255,22 @@ describe("setup from a file", () => {
     expect(container.textContent).toContain("Connect your tenant")
   })
 
+  it("keeps a service choice that must be confirmed again across a restart, even after a service was picked", async () => {
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 1, tenant: "", clientId: "", displayName: "", services: "broken" }))
+    const first = await render(createElement(OnboardingPage), false)
+    await act(async () => { first.querySelector<HTMLInputElement>('[aria-label="Back up Intune"]')!.click() })
+    await flush()
+    expect(JSON.parse(state.store.get(DRAFT_KEY)!)).toMatchObject({ step: -1, reconfirm: true })
+    for (const root of roots.splice(0)) act(() => root.unmount())
+    const container = await openWith(filePreview())
+    expect(container.textContent).toContain("What do you want to back up?")
+    expect(container.querySelector("#tenant")).toBeNull()
+    await act(async () => { button(container, "Continue with Intune")!.click() })
+    await flush()
+    expect(container.querySelector<HTMLInputElement>("#tenant")!.value).toBe(FILE_TENANT)
+    expect(JSON.parse(state.store.get(DRAFT_KEY)!).reconfirm).toBeUndefined()
+  })
+
   it("keeps a matching sign-in when a setup file waited for the service choice, and goes on to storage", async () => {
     const account = { tenantId: FILE_TENANT, clientId: FILE_CLIENT, username: "admin@fabrikam.com" }
     state.store.set(DRAFT_KEY, JSON.stringify({ step: 1, tenant: FILE_TENANT, clientId: FILE_CLIENT, displayName: "", account, signedInAt: Date.now(), services: "broken" }))

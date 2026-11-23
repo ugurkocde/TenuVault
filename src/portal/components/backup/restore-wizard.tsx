@@ -267,6 +267,8 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
   const [largePage, setLargePage] = useState(0)
   const [companionError, setCompanionError] = useState("")
   const [largePaging, setLargePaging] = useState<{ hasMore: boolean; total: number } | null>(null)
+  // The page whose items are loading; page buttons wait for it, so no page is skipped.
+  const [pageLoading, setPageLoading] = useState(false)
   const [openTypes, setOpenTypes] = useState<Set<string>>(new Set())
   /** How many items each type's list and the readiness list show, beyond LIST_PAGE. */
   const [shown, setShown] = useState<Record<string, number>>({})
@@ -401,19 +403,21 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
       // A mixed run keeps its large types, such as directory objects, in a verified companion backup.
       // It is added on its own and never holds back or removes the chosen backup's items.
       if (!companionId) return
-      // A later companion page that fails or is empty keeps Previous page, so the admin goes back without
-      // a reload that would clear the chosen backup's items and selections.
-      const lastPage = () => { if (!chosen.paging && largePage > 0) setLargePaging(previous => previous && { ...previous, hasMore: false }) }
+      // A later companion page keeps its paging, so the admin moves on without a reload that would clear
+      // the chosen backup's items and selections: an empty page is the last one, and one that cannot be
+      // read keeps Next page so a readable later page stays reachable.
+      setPageLoading(true)
       try {
         const companion = await load(companionId)
         if (controller.signal.aborted) return
         setItems(previous => [...(previous ?? []), ...companion.items])
         if (companion.paging) setLargePaging(companion.paging)
-        else lastPage()
+        else if (!chosen.paging && largePage > 0) setLargePaging(previous => previous && { ...previous, hasMore: false })
       } catch (error) {
         if (controller.signal.aborted || (error instanceof DOMException && error.name === "AbortError")) return
         setCompanionError(COMPANION_UNREADABLE)
-        lastPage()
+      } finally {
+        if (!controller.signal.aborted) setPageLoading(false)
       }
     })().catch((error: unknown) => {
       if (controller.signal.aborted) return
@@ -423,7 +427,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
       showPlanError(error)
       setItemsError(error instanceof Error ? error.message : String(error))
     })
-    return () => controller.abort()
+    return () => { controller.abort(); setPageLoading(false) }
   }, [backupId, companionId, tenant, largePage, contentsService])
 
   const selectionBlocker = (item: BackupItem) => mode === "replace" && !community && !copying ? item.replaceBlocker : item.blocker
@@ -836,8 +840,8 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
             <>
               {largePaging && <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl bg-blue-50 p-4 text-sm text-blue-900">
                 <span>Inventory page {largePage + 1}. This backup contains {largePaging.total.toLocaleString()} objects. Search and selection apply to this page.</span>
-                <Button variant="outline" size="sm" disabled={largePage === 0} onClick={() => setLargePage(page => page - 1)}>Previous page</Button>
-                <Button variant="outline" size="sm" disabled={!largePaging.hasMore} onClick={() => setLargePage(page => page + 1)}>Next page</Button>
+                <Button variant="outline" size="sm" disabled={largePage === 0 || pageLoading} onClick={() => setLargePage(page => page - 1)}>Previous page</Button>
+                <Button variant="outline" size="sm" disabled={!largePaging.hasMore || pageLoading} onClick={() => setLargePage(page => page + 1)}>Next page</Button>
               </div>}
               <details className="mt-4 rounded-xl border p-4 text-sm"><summary className="cursor-pointer font-medium">Recovery readiness for {items.length} objects</summary>
                 <p className="my-2 text-gray-600">Readiness is conservative for cross-tenant recovery. Supply installers and Apple tokens through Intune, then map supported resulting objects below. No tenant changes occur during this review.</p>

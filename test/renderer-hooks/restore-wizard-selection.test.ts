@@ -300,10 +300,14 @@ it("keeps the chosen backup's items and selections when a later page of its link
   await act(async () => group.click())
   await act(async () => itemBoxes(container)[0]!.click())
   expect(container.textContent).toMatch(/1 of \d+ selected/)
+  // No page can be skipped while page 2 is loading.
+  expect(buttonNamed(container, "Next page")!.disabled).toBe(true)
+  expect(buttonNamed(container, "Previous page")!.disabled).toBe(true)
   await act(async () => { failSecond(); await new Promise((resolve) => setTimeout(resolve, 0)) })
   expect(container.textContent).toContain("The linked large backup with this run's directory objects could not be read")
   expect(container.textContent).toContain("Inventory page 2")
   expect(container.textContent).toMatch(/1 of \d+ selected/)
-  expect(buttonNamed(container, "Next page")!.disabled).toBe(true)
+  // A page that cannot be read keeps Next page, so a readable later page stays reachable.
+  expect(buttonNamed(container, "Next page")!.disabled).toBe(false)
   expect(buttonNamed(container, "Previous page")!.disabled).toBe(false)
 })

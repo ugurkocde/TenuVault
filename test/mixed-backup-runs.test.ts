@@ -352,6 +352,22 @@ for (const azure of [false, true]) describe(azure ? "Azure emulator mixed runs" 
     expect(job.commitUnconfirmed).toBeFalsy()
     expect(job.failures).toBeGreaterThan(0)
   })
+  it("reports warnings, not a failure, when an empty ordinary half stands and the large inventory commit fails", async () => {
+    undo = registerTestTypes([largeType])
+    const f = await setup()
+    const original = f.fetcher.getMockImplementation()!
+    // Both selected collections are empty, so nothing is saved, but the ordinary half is read in full.
+    f.fetcher.mockImplementation(async (input, init) => {
+      const url = new URL(String(input))
+      if (url.hostname === "graph.microsoft.com" && (url.pathname === "/v1.0/synthetic" || url.pathname === "/beta/deviceManagement/deviceCategories")) return Response.json({ value: [] })
+      return original(input, init)
+    })
+    f.refuse(500, "metadata.json")
+    const engine = new BackupEngine({ now: () => new Date("2026-11-17T12:00:00Z"), fetch: f.fetcher, getToken: async () => jwt({ scp: "Policy.Read.All" }), services: () => ({ services: ["intune", "entra"] }), retentionDays: () => 0 })
+    const job = await engine.waitForJob(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: f.account, scope: { excluded: INTUNE_TYPES.filter(type => !["DeviceCategories", "AuthorizationPolicy"].includes(type.folder)).map(type => type.folder) } }))
+    expect(job.status, job.exception).toBe("Completed")
+    expect((await f.read(job.backupFolder!)).RunStatus).toBe("CompletedWithWarnings")
+  })
   it("leaves a large-only run unconfirmed when its own manifest commit gets a server error", async () => {
     undo = registerTestTypes([largeType])
     const f = await setup()
@@ -361,6 +377,9 @@ for (const azure of [false, true]) describe(azure ? "Azure emulator mixed runs" 
     expect(job.backupFolder).toMatch(/^backup-large-/)
     expect(job.commitUnconfirmed).toBe(true)
     expect(job.status).toBe("Failed")
+    // A server outage is reported as what it was, without the provisioning guidance.
+    expect(job.exception).toContain("Storage returned 500")
+    expect(job.exception).not.toContain("Storage not provisioned for large backups")
   })
   it.each([403, 404])("fails a large-only run whose only manifest storage refuses with %s, with the provisioning guidance", async status => {
     undo = registerTestTypes([largeType])

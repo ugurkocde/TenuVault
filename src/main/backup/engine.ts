@@ -1015,6 +1015,8 @@ export class BackupEngine {
       await commitManifest(ordinaryFolder, manifest(failures ? "CompletedWithWarnings" : "Success", this.now(), outcomesNow("Success", this.now(), true)), false)
     }
     let largeClaimed = false
+    // Large types failed only because their inventory commit failed, while the ordinary half stands.
+    let largeCommitFailures = 0
     if (largeTypes.length) {
       releaseTurn()
       try {
@@ -1119,14 +1121,17 @@ export class BackupEngine {
           if (endedTypes.has(type.folder) || settled.get(type.folder)?.outcome === "failed") continue
           endedTypes.add(type.folder)
           failures++
+          largeCommitFailures++
           failedTypes.push(type.folder)
           Object.assign(result(type.folder), { state: "unreadable", errors: [reason] })
           settle(type.folder, { outcome: "failed", error: reason })
           this.write(job, `Could not save ${type.label}: ${reason}`, "warning")
         }
-        // A large-only run has no other record: without its manifest there is no backup, so the run fails,
-        // with the provisioning guidance when storage refused it.
-        if (!mixed) throw error
+        // A large-only run has no other record: without its manifest there is no backup, so the run fails.
+        // Only a 403 or 404 carries the provisioning guidance; another failure is reported as what it was.
+        if (!mixed) throw error instanceof LargeStorageError && error.status !== 403 && error.status !== 404
+          ? new StorageError(`${reason}${error.status ? ` Storage returned ${error.status}.` : ""}`, { cause: error })
+          : error
       }
     }
     const ended = this.now()
@@ -1137,7 +1142,10 @@ export class BackupEngine {
     // A run with failures keeps its status and its message as they were.
     const ending = typesNow(false)
     const unread = failures === 0 && nothingRead(ending) ? nothingReadReason(ending, { mode: tokens.mode, settingsPage: SERVICES_PAGE }) : null
-    const status = failures > 0 ? (saved === 0 ? "Failed" : "CompletedWithWarnings") : unread ? "Failed" : "Success"
+    // A split run whose only failures come from its large inventory commit keeps its ordinary half, even
+    // an empty one, so it reports warnings; any other run that saved nothing failed.
+    const ordinaryStands = mixed && largeCommitFailures > 0 && failures === largeCommitFailures
+    const status = failures > 0 ? (saved === 0 && !ordinaryStands ? "Failed" : "CompletedWithWarnings") : unread ? "Failed" : "Success"
     const outcomes = outcomesNow(status, ended, false)
     // A split run's last manifest also names the run's own status. It is written only once the large
     // phase ended, committed or not, so audit recovery can confirm the run from it.
