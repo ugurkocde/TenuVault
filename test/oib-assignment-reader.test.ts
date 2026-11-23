@@ -65,5 +65,11 @@ describe("reading only a policy's assignments", () => {
       [`deviceManagement/configurationPolicies/${ID}/assignments`]: { status: 503, body: { error: { message: "busy" } } },
     })
     await expect(readCurrentAssignments(call, type, ID)).rejects.toThrow("could not be read (503)")
+    // A missing assignment page is a failed read, never a deleted policy.
+    const page = graph({
+      [`deviceManagement/configurationPolicies/${ID}?$select=id,name`]: { body: { id: ID, name: "x" } },
+      [`deviceManagement/configurationPolicies/${ID}/assignments`]: { status: 404, body: { error: { code: "ResourceNotFound" } } },
+    })
+    await expect(readCurrentAssignments(page.call, type, ID)).rejects.toThrow("could not be read (404)")
   })
 })

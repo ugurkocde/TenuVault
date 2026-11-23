@@ -11,7 +11,7 @@ import { extractOibId } from "../../shared/oib/manifest"
 import { compareToTenant } from "../../shared/oib/match"
 import { definitionIdsOf, describePolicy, policyChanges, type OibPolicyChanges, type OibPolicySettings } from "../../shared/oib/policy-settings"
 import { replaceTenantVariables } from "../../shared/oib/variables"
-import { AssignmentSpecError, assignmentsFor, assignsAnything, conflictingGroups, directAssignments, emptySpec, mergeAssignments, oibScope, parseSpec, sameAssignments, writableAssignment, type OibAssignmentSpec } from "../../shared/oib/assignments"
+import { AssignmentSpecError, REPORTS_SET_AS_DIRECT, assignmentsFor, assignsAnything, conflictingGroups, directAssignments, emptySpec, mergeAssignments, oibScope, parseSpec, sameAssignments, writableAssignment, type OibAssignmentSpec } from "../../shared/oib/assignments"
 import { isFullValidation, OIB_BACKUP_REUSE_MINUTES, OIB_PLATFORMS, type DeployItem, type OibAssignMode, type OibPolicyAssignments, type OibBackupChoice, type OibBackupOptions, type OibComparison, type OibPlatform, type OibProgress, type OibRecentBackup, type OibRun, type PolicyValidation, type TenantPolicy, type UndoResult, type ValidationRun } from "../../shared/oib/types"
 import { backupGaps, describeMissing, describeStatus, folderLabel } from "../backup/completeness"
 import { apiBody } from "../features/deps"
@@ -583,8 +583,6 @@ async function currentMatches(graph: GraphCall, pack: LoadedPack, folders: strin
 }
 
 const NOT_THE_POLICY = "This tenant policy is not the deployed copy of this OIB policy. Compare again."
-/** Types whose policy-set assignments Intune reports as direct (Microsoft Learn, policy sets known issues). */
-const REPORTS_SET_AS_DIRECT = new Set(["AppProtectionIOS", "AppProtectionAndroid"])
 const REPLACE_APP_PROTECTION = "Replace is not available for app protection policies: Intune reports their policy set assignments as direct ones, so replacing could remove them. Nothing was changed; add groups instead."
 
 /** The registry type of a pack policy, when its assignments can be written with /assign. */
@@ -717,7 +715,7 @@ async function assign(body: RecordJson): Promise<OibRun> {
           run.skipped!.push({ name, reason: "No group was chosen for this policy's scope." })
           continue
         }
-        const next = mode === "replace" ? planned.assignments : mergeAssignments(current, planned.assignments)
+        const next = mode === "replace" ? planned.assignments : mergeAssignments(current, planned.assignments, { keepExisting: REPORTS_SET_AS_DIRECT.has(policy.folder) })
         if (sameAssignments(current, next)) {
           run.skipped!.push({ name, reason: "Already assigned this way." })
           continue
@@ -859,7 +857,9 @@ async function undo(body: RecordJson): Promise<UndoResult> {
           continue
         }
         const response = await writer("POST", `${type.path}/${encodeURIComponent(item.id)}/assign`, { [type.assign.key]: item.previous }, { noRetry: true })
-        const gone = response.status === 404 || (response.status === 400 && /ResourceNotFound/i.test(JSON.stringify(response.body)))
+        const notFound = response.status === 404 || (response.status === 400 && /ResourceNotFound/i.test(JSON.stringify(response.body)))
+        // A not-found answer only clears the record once a read confirms the policy itself is gone.
+        const gone = notFound && await readCurrentAssignments(graph, type, item.id).then((policy) => !policy, () => false)
         if (response.status < 300) results.push({ name: item.name, id: item.id, action: "reassigned", done: true })
         else if (gone) results.push({ name: item.name, id: item.id, action: "reassigned", done: true, note: "already deleted in Intune" })
         else {

@@ -95,6 +95,12 @@ describe("merging assignments", () => {
     expect(sameAssignments(current, [include(A)])).toBe(false)
   })
 
+  it("adds only new groups when existing entries must stay as they are", () => {
+    const existing = include(A)
+    const filtered = include(A, { deviceAndAppManagementAssignmentFilterId: F, deviceAndAppManagementAssignmentFilterType: "include" })
+    expect(mergeAssignments([existing], [filtered, include(B)], { keepExisting: true })).toEqual([existing, include(B)])
+  })
+
   it("keeps a group's own filter when the added include has none", () => {
     const filtered = include(A, { deviceAndAppManagementAssignmentFilterId: F, deviceAndAppManagementAssignmentFilterType: "exclude" })
     expect(mergeAssignments([filtered], [include(A), include(B)])).toEqual([filtered, include(B)])

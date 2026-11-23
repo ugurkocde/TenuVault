@@ -169,7 +169,7 @@ export async function readCurrentAssignments(graph: GraphCall, type: IntuneType,
   for (let page = 0; next; page++) {
     if (page >= MAX_ASSIGNMENT_PAGES) throw new FrameworkError("The assignments of the policy could not be read completely.", 502)
     const response = await graph("GET", next)
-    if (gone(response.status, response.body)) return undefined
+    // Only the policy itself reading as not found means it is gone; a missing assignment page is a failed read.
     if (response.status >= 300) throw new FrameworkError(`The assignments could not be read (${response.status}). ${errorOf(response.body)}`.trim(), 502)
     if (!Array.isArray(response.body.value)) throw new FrameworkError("The assignments of the policy were not returned.", 502)
     assignments.push(...(response.body.value as Item[]))

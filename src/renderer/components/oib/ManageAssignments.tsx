@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react"
 import { AlertTriangle, ArrowRight, CheckCircle2, RefreshCw, Users, XCircle } from "lucide-react"
 import { cn } from "~/lib/utils"
 import type { Item } from "../../../shared/intune/registry"
-import { assignmentsFor, assignsAnything, describeAssignment, mergeAssignments, sameAssignments } from "../../../shared/oib/assignments"
+import { assignmentsFor, assignsAnything, describeAssignment, mergeAssignments, REPORTS_SET_AS_DIRECT, sameAssignments } from "../../../shared/oib/assignments"
 import { policyTypeName } from "../../../shared/oib/licensing"
 import { OIB_PLATFORMS, type OibAssignMode, type OibPlatform, type OibPolicyAssignments, type OibRun } from "../../../shared/oib/types"
 import { PlanBadge } from "../UpgradeNote"
@@ -27,8 +27,7 @@ type Step = "platforms" | "select" | "review"
 const STEPS = [{ id: "platforms", label: "Platforms" }, { id: "select", label: "Policies" }, { id: "review", label: "Review and assign" }]
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
 const SCOPE_LABEL = { device: "Device", user: "User" } as const
-/** App protection types whose policy set assignments Intune reports as direct; Replace is refused for them. */
-const REPORTS_SET_AS_DIRECT = new Set(["AppProtectionIOS", "AppProtectionAndroid"])
+
 
 /** Deployed OIB policies whose assignments can be managed: matched to one tenant policy of the same type. */
 const assignable = (r: MatchRow) => !!r.match.tenant && r.match.tenant.folder === r.policy.folder && (r.match.status === "current" || r.match.status === "outdated" || r.match.status === "newer")
@@ -181,7 +180,7 @@ function ReviewAssign({ batches: given, onBack, onFinished, next }: { batches: D
     // Intune reports policy set assignments of app protection as direct, so replacing them is refused (see the main process).
     const blocked = mode === "replace" && REPORTS_SET_AS_DIRECT.has(item.folder ?? "")
     const planned = assignmentsFor({ folder: item.folder ?? "", scope: item.scope }, item.platform, spec).assignments
-    const after = live?.assignments && !blocked ? mode === "replace" ? planned : mergeAssignments(live.assignments, planned) : undefined
+    const after = live?.assignments && !blocked ? mode === "replace" ? planned : mergeAssignments(live.assignments, planned, { keepExisting: REPORTS_SET_AS_DIRECT.has(item.folder ?? "") }) : undefined
     return { item, live, after, blocked, unchanged: !!live?.assignments && !!after && sameAssignments(live.assignments, after) }
   })
   const changing = preview.filter(p => p.after && !p.unchanged).length

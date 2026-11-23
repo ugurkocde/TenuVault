@@ -597,6 +597,19 @@ describe("assignments", () => {
     expect(await handleOib({ action: "oib-undo", tenantId, appId, runId: run.runId })).toMatchObject({ run: null, results: [{ done: true, note: "already assigned as before the run" }] })
   })
 
+  it("keeps the undo record when the undo write is answered not found while the policy still exists", async () => {
+    const state: Tenant = { policies: [{ id: EXISTING, name: "Win - OIB - SC - Test - v3.8" }], assignments: { [EXISTING]: [] } }
+    const inner = world(state, [])
+    let refuse = false
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => refuse && init?.method === "POST" && String(input).endsWith("/assign")
+      ? Response.json({ error: { code: "ResourceNotFound", message: "Not found" } }, { status: 404 }) : inner(input, init)))
+    await source()
+    const run = await handleOib({ ...base, action: "oib-assign", commit, backup: { mode: "none" }, mode: "add", items: [{ source: SC, targetId: EXISTING, expected: [] }], assignments: { deviceGroups: [DEVICES], userGroups: [] } }) as OibRun
+    refuse = true
+    const undone = await handleOib({ action: "oib-undo", tenantId, appId, runId: run.runId }) as UndoResult
+    expect(undone).toMatchObject({ run: { runId: run.runId }, results: [{ action: "reassigned", done: false }] })
+  })
+
   it("refuses groups on a deployment that creates no policy", async () => {
     const writes: string[] = []
     vi.stubGlobal("fetch", world({ policies: [{ id: EXISTING, name: "Win - OIB - SC - Test - v3.1", value: 7 }] }, writes))

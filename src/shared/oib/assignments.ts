@@ -74,6 +74,9 @@ export function oibScope(policy: { scope?: string; name: string }): OibScope | u
   return marker === "D" ? "device" : marker === "U" ? "user" : undefined
 }
 
+/** App protection types whose policy set assignments Intune reports as direct (Microsoft Learn, policy sets known issues). */
+export const REPORTS_SET_AS_DIRECT: ReadonlySet<string> = new Set(["AppProtectionIOS", "AppProtectionAndroid"])
+
 /** Types whose assignments take no filter (Microsoft Learn: Windows update profiles). */
 const NO_FILTER_FOLDERS = new Set(["DriverUpdateProfiles", "FeatureUpdateProfiles", "QualityUpdateProfiles"])
 const FOLDER_FILTER_PLATFORM: Record<string, FilterPlatform> = {
@@ -228,8 +231,14 @@ export function writableAssignment(assignment: Item): Item {
  * chosen. A group the spec includes but the policy excludes (or the other way round) keeps both
  * entries; Intune lets the exclusion win.
  */
-export function mergeAssignments(current: Item[], added: Item[]): Item[] {
+export function mergeAssignments(current: Item[], added: Item[], options: { keepExisting?: boolean } = {}): Item[] {
   const key = (assignment: Item) => `${kindOf(assignment)}|${groupOf(assignment)}`
+  // Strictly additive: a group already targeted keeps its entry as it is (app protection, whose
+  // policy set assignments Intune reports as direct, so an existing entry may belong to a set).
+  if (options.keepExisting) {
+    const present = new Set(current.map(writableAssignment).filter(groupOf).map(key))
+    return [...current.map(writableAssignment), ...added.filter((assignment) => !groupOf(assignment) || !present.has(key(assignment)))]
+  }
   const existing = new Map(current.map(writableAssignment).filter(groupOf).map((assignment) => [key(assignment), assignment]))
   const merged = added.map((assignment) => {
     const before = existing.get(key(assignment))
