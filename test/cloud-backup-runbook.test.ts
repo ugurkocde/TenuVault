@@ -399,7 +399,7 @@ describe("Cloud audit contract", () => {
       if (resource.type !== "Microsoft.Authorization/roleAssignments") expect(resource.dependsOn).toContain("automationVariables")
     }
     expect(resources.filter(resource => !audit.includes(resource)).every(resource => resource.condition?.includes("not(parameters('auditOnly'))"))).toBe(true)
-    expect(template.outputs.pasteIntoTenuVault).toMatchObject({ condition: "[not(parameters('auditOnly'))]" })
+    expect(template.outputs.pasteIntoTenuVault).toMatchObject({ condition: "[and(not(parameters('auditOnly')), parameters('linkSchedule'))]" })
     expect(template.parameters.auditOnly).toMatchObject({ type: "bool", defaultValue: false })
     expect(template.parameters.scheduleStartTime).not.toHaveProperty("defaultValue")
     expect(template.parameters).not.toHaveProperty("deploySchedule")
@@ -1091,6 +1091,7 @@ describe("azuredeploy.json", () => {
       name: "[concat(parameters('automationAccountName'), '/', variables('jobScheduleId'))]",
       condition: "[and(not(parameters('auditOnly')), parameters('linkSchedule'))]",
     })
+    expect(template.outputs.pasteIntoTenuVault).toMatchObject({ condition: "[and(not(parameters('auditOnly')), parameters('linkSchedule'))]" })
     expect(template.resources.find(resource => resource.type === "Microsoft.Automation/automationAccounts/schedules")).toMatchObject({
       properties: { startTime: "[variables('scheduleStart')]" },
     })
