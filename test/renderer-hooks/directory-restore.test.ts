@@ -10,7 +10,7 @@ const tenant = { name: "Contoso", credentials: { tenantId: "tenant", appId: "app
 const button = (name: string) => [...document.querySelectorAll("button")].find(item => item.textContent === name)!
 const props = { tenant, backupId: "backup", path: "backup/Groups/group.json" }
 const page = { runId: "run", fingerprint: "bound", more: true, rows: [{ key: "member", review: { principal: { id: "p", name: "Member", type: "user" }, resource: { id: "g", name: "Team", type: "group" }, privilege: "member", scope: "tenant/group/g", approvals: ["directory-item", "security-response"], notices: ["The current state looks deliberate."], changes: [{ property: "present", before: false, after: true }], roleAssignable: false } }] }
-afterEach(async () => { if (root) await act(async () => root.unmount()); document.body.innerHTML = ""; accounts.discover.mockReset(); vi.unstubAllGlobals() })
+afterEach(async () => { if (root) await act(async () => root.unmount()); document.body.innerHTML = ""; accounts.discover.mockReset(); vi.unstubAllGlobals(); vi.unstubAllEnvs() })
 const click = async (name: string) => act(async () => button(name).click())
 it("shows who gets what and requires each approval before sending its saved page", async () => {
   const fetcher = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => Response.json(JSON.parse(String(init?.body)).action === "preview" ? page : { status: "complete", replacedReferences: [{ path: "DeviceConfigurations/p", property: "groupId", mapping: { kind: "objectId", folder: "Groups", source: "old", target: "new" } }] }))
@@ -34,11 +34,13 @@ it("shows who gets what and requires each approval before sending its saved page
 })
 
 it.each([
-  ["RoleAssignmentSchedules", "Active role schedule", "Active", "2026-12-30T18:00:00Z"],
-  ["PimGroupEligibilitySchedules", "Eligible group member", "Eligible", "No expiration"],
-] as const)("shows readable schedule and relationship values for %s", async (folder, privilege, status, end) => {
+  ["RoleAssignmentSchedules", "Active role schedule", "Assigned", "2026-12-30T18:00:00Z", "assigned", "Assigned"],
+  ["RoleEligibilitySchedules", "Role eligibility", "Eligible", "2026-12-30T18:00:00Z", "eligible", "Eligible"],
+  ["PimGroupEligibilitySchedules", "Eligible group member", "Eligible", "No expiration", "eligible", "Eligible"],
+] as const)("shows readable schedule and relationship values for %s", async (folder, privilege, status, end, absent, restore) => {
+  vi.stubEnv("TZ", "Europe/Berlin")
   const start = "2026-11-22T10:00:00Z"
-  const date = (value: string) => new Date(value).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })
+  const date = (value: string) => new Date(value).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short", timeZone: "Europe/Berlin" }) + " (UTC+01:00)"
   const review = { ...page.rows[0]!.review, privilege, changes: [
     { property: "Schedule", before: null, after: { start, end } },
     { property: "Relationship", before: "Absent", after: "Present" },
@@ -48,9 +50,40 @@ it.each([
   await act(async () => root.render(createElement(DirectoryRestore, { ...props, path: `backup/${folder}/schedule.json` })))
   await click("Review directory restore"); await click("Preview directory changes")
   expect(document.body.textContent).toContain("Current: None")
-  expect(document.body.textContent).toContain(`Restore: ${status} from ${date(start)}${end === "No expiration" ? ". No end date" : ` to ${date(end)}`}`)
-  expect(document.body.textContent).toContain("Current: Not assigned now")
-  expect(document.body.textContent).toContain("Restore: Assigned after restore")
+  expect(document.body.textContent).toContain(`Current: Not ${absent} now`)
+  expect(document.body.textContent).toContain(`Restore: ${restore} after restore`)
+  expect(document.body.textContent).toContain(`Saved in backup: ${status} from ${date(start)}${end === "No expiration" ? ". No end date" : ` to ${date(end)}`}`)
+})
+
+it("distinguishes current and saved instants in the repeated daylight-saving hour", async () => {
+  vi.stubEnv("TZ", "Europe/Berlin")
+  const current = "2026-10-25T00:30:00Z", saved = "2026-10-25T01:30:00Z"
+  const local = (value: string) => new Date(value).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short", timeZone: "Europe/Berlin" })
+  const review = { ...page.rows[0]!.review, changes: [
+    { property: "Schedule", before: [{ start: current, end: "No expiration" }], after: { start: saved, end: "No expiration" } },
+    { property: "Relationship", before: "Present", after: "Present" },
+  ] }
+  vi.stubGlobal("fetch", vi.fn(async () => Response.json({ ...page, rows: [{ key: "schedule", review }] })))
+  root = createRoot(document.body.appendChild(document.createElement("div")))
+  await act(async () => root.render(createElement(DirectoryRestore, { ...props, path: "backup/RoleAssignmentSchedules/schedule.json" })))
+  await click("Review directory restore"); await click("Preview directory changes")
+  expect(local(current)).toBe(local(saved))
+  expect(document.body.textContent).toContain(`Current: Assigned from ${local(current)} (UTC+02:00). No end date`)
+  expect(document.body.textContent).toContain(`Saved in backup: Assigned from ${local(saved)} (UTC+01:00). No end date`)
+})
+
+it.each([[["Not read"]], [null]])("shows unread schedule dates for an existing relationship (%j)", async before => {
+  const review = { ...page.rows[0]!.review, changes: [
+    { property: "Schedule", before, after: { end: "No expiration" } },
+    { property: "Relationship", before: "Present", after: "Present" },
+  ] }
+  vi.stubGlobal("fetch", vi.fn(async () => Response.json({ ...page, rows: [{ key: "schedule", review }] })))
+  root = createRoot(document.body.appendChild(document.createElement("div")))
+  await act(async () => root.render(createElement(DirectoryRestore, { ...props, path: "backup/PimGroupEligibilitySchedules/schedule.json" })))
+  await click("Review directory restore"); await click("Preview directory changes")
+  expect(document.body.textContent).toContain("Current: Not read")
+  expect(document.body.textContent).toContain("Current: Eligible now")
+  expect(document.body.textContent).not.toContain("Current: None")
 })
 
 it("explains the roles and PIM restriction on an existing saved review", async () => {

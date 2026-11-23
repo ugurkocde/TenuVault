@@ -148,7 +148,7 @@ export async function checkDirectoryRestore({ check, evaluate, waitForCondition,
             principal: { id: 'user', name: 'Fixture reader', type: 'user' }, resource: { id: 'role', name: 'Reader', type: 'directory role' },
             privilege: 'Active role schedule', scope: 'Entire tenant', approvals: ['directory-item', 'privileged-relationship', 'security-response'],
             notices: ['The current state looks deliberate. Restoring removed access may undo a security response.'],
-            changes: [{ property: 'Schedule', before: null, after: { end: '2026-12-01T18:00:00Z' } }], blocker: 'Restoring roles and PIM is not available yet. You can review what would change.', roleAssignable: false,
+            changes: [{ property: 'Schedule', before: null, after: { end: '2026-12-01T18:00:00Z' } }, { property: 'Relationship', before: 'Absent', after: 'Present' }], blocker: 'Restoring roles and PIM is not available yet. You can review what would change.', roleAssignable: false,
           } }] }));
         }
         return window.__directoryFetch(input, init);
@@ -166,7 +166,7 @@ export async function checkDirectoryRestore({ check, evaluate, waitForCondition,
       await click("Review directory restore")
       await click("Preview directory changes")
       assert(await waitForCondition(`document.body.innerText.includes('Fixture reader (user)')`), "PIM principal did not resolve in the review")
-      assert(await evaluate(`document.body.innerText.includes('Entire tenant') && document.body.innerText.includes('Active until ' + new Date('2026-12-01T18:00:00Z').toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })) && document.body.innerText.includes('Blocked: Restoring roles and PIM is not available yet. You can review what would change.') && document.body.innerText.includes('undo a security response') && ![...document.querySelectorAll('button')].some(b => b.innerText.startsWith('Execute approved'))`), "PIM scope, saved end date or execution blocker is missing")
+      assert(await evaluate(`document.body.innerText.includes('Entire tenant') && document.body.innerText.includes('Current: None') && document.body.innerText.includes('Saved in backup: Assigned until ' + new Date('2026-12-01T18:00:00Z').toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) + ' (UTC') && document.body.innerText.includes('Blocked: Restoring roles and PIM is not available yet. You can review what would change.') && document.body.innerText.includes('undo a security response') && ![...document.querySelectorAll('button')].some(b => b.innerText.startsWith('Execute approved'))`), "PIM scope, saved end date or execution blocker is missing")
       await send("Emulation.setDeviceMetricsOverride", { width: 1024, height: 900, deviceScaleFactor: 1, mobile: false })
       for (const dark of [false, true]) {
         await evaluate(`document.documentElement.classList.toggle('dark', ${dark}); [...document.querySelectorAll('strong')].find(b => b.innerText.includes('Fixture reader (user)')).scrollIntoView({ block: 'center' })`)

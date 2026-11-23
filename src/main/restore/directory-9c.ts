@@ -28,6 +28,13 @@ const object = (value: unknown): Item | undefined => value && typeof value === "
 const date = (value: unknown) => typeof value === "string" && /^\d{4}-\d\d-\d\dT.*(?:Z|[+-]\d\d:\d\d)$/.test(value) ? Date.parse(value) : NaN
 const collectionFilter = (path: string, field: "principalId" | "groupId", id: string) => path + "?$filter=" + encodeURIComponent(`${field} eq '${requirePrivilegeId(id)}'`)
 
+function reviewSchedule(value: unknown) {
+  const info = object(value), expiration = object(info?.expiration)
+  const start = Number.isFinite(date(info?.startDateTime)) ? info?.startDateTime : null
+  const end = expiration?.type === "noExpiration" ? "No expiration" : Number.isFinite(date(expiration?.endDateTime)) ? expiration?.endDateTime : null
+  return start || end ? { start, end } : null
+}
+
 function schedule(source: Item, eligibility: boolean, now: number): Item {
   if (String(source.assignmentType).toLowerCase() === "activated") fail(NEVER_RESTORED["Activated PIM instances"])
   if (!eligibility && String(source.assignmentType).toLowerCase() !== "assigned") fail("The backup cannot prove this was an administrator-assigned schedule.")
@@ -107,11 +114,8 @@ export async function privilegeReview(folder: string, candidate: PrivilegeCandid
       : folder === "RoleEligibilitySchedules" ? "Role eligibility" : folder === "RoleAssignmentSchedules" ? "Active role schedule" : "Role assignment",
     scope: "Unresolved scope", approvals, notices: [], roleAssignable: false, changes: [],
   }
-  const savedSchedule = object(source.scheduleInfo), end = object(savedSchedule?.expiration)
-  if (savedSchedule) review.changes.push({ property: "Schedule", before: null, after: {
-    start: Number.isFinite(date(savedSchedule.startDateTime)) ? savedSchedule.startDateTime : null,
-    end: end?.type === "noExpiration" ? "No expiration" : Number.isFinite(date(end?.endDateTime)) ? end?.endDateTime : null,
-  } })
+  const scheduleCollection = scheduleCollections[folder]
+  let currentSchedules: unknown = "Not read"
   let blocker = candidate.blocker
   const unresolved: string[] = []
   const resolve = async <T>(kind: string, savedId: unknown, read: (id: string, identify: (mappedId: string) => void) => Promise<T>) => {
@@ -232,12 +236,19 @@ export async function privilegeReview(folder: string, candidate: PrivilegeCandid
   }
   let present = candidate.present
   if (present === undefined && !blocker && principalId) {
-    const collection = scheduleCollections[folder] ?? roleAssignments
-    const current = await reader.list(collectionFilter(collection, group ? "groupId" : "principalId", groupId ?? principalId))
-    present = current.some(row => String(row.principalId).toLowerCase() === principalId && (group
-      ? String(row.groupId).toLowerCase() === groupId && row.accessId === source.accessId
-      : String(row.roleDefinitionId).toLowerCase() === roleId && row.directoryScopeId === directoryScopeId && !row.appScopeId))
+    try {
+      const current = await reader.list(collectionFilter(scheduleCollection ?? roleAssignments, group ? "groupId" : "principalId", groupId ?? principalId))
+      const matches = current.filter(row => String(row.principalId).toLowerCase() === principalId && (group
+        ? String(row.groupId).toLowerCase() === groupId && row.accessId === source.accessId
+        : String(row.roleDefinitionId).toLowerCase() === roleId && row.directoryScopeId === directoryScopeId && !row.appScopeId))
+      present = matches.length > 0
+      if (scheduleCollection) currentSchedules = present ? matches.map(row => reviewSchedule(row.scheduleInfo) ?? "Not read") : null
+    } catch (error) {
+      if (!scheduleCollection || error instanceof RestoreWriteDeferredError || isRestorePersistenceError(error)) throw error
+      blocker = error instanceof RestoreSafetyError ? error.message : "The current schedule could not be read."
+    }
   }
+  if (scheduleCollection) review.changes.push({ property: "Schedule", before: currentSchedules, after: reviewSchedule(source.scheduleInfo) })
   if (present === false && !removeMember) {
     approvals.push("security-response")
     review.notices.push("The current state looks deliberate. Restoring removed access may undo a security response.")

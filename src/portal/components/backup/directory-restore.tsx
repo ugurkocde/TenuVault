@@ -13,28 +13,37 @@ import { directoryPageUnresolved } from "../../../shared/intune/directory-page-s
 interface Review { options?: DirectoryOptions; runId: string; fingerprint: string; more: boolean; discarded?: boolean; unresolved?: boolean; selection?: string[]; rows: Array<{ key: string; review: DirectoryReview }> }
 const approvalLabel: Record<string, string> = { "directory-item": "Approve this individual change", "privileged-relationship": "Approve this privileged relationship", "security-response": "Approve undoing the apparent security response", "recycle-relationships": "Approve recovered relationships and account state", "exact-group": "Approve this removal for this group", "exact-unit": "Approve this removal for this administrative unit" }
 const legacyPrivilegeBlocker = "This relationship is available for review. A live restore and cleanup round trip is required before execution."
-const scheduleDate = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" })
 
 function formatScheduleDate(value: unknown) {
   if (typeof value !== "string") return null
   const date = new Date(value)
-  return Number.isFinite(date.getTime()) ? scheduleDate.format(date) : null
+  if (!Number.isFinite(date.getTime())) return null
+  const offset = -date.getTimezoneOffset(), minutes = Math.abs(offset)
+  const hoursText = String(Math.floor(minutes / 60)).padStart(2, "0")
+  const minutesText = String(minutes % 60).padStart(2, "0")
+  return `${date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })} (UTC${offset < 0 ? "-" : "+"}${hoursText}:${minutesText})`
 }
 
-function formatDirectoryValue(property: string, value: unknown, folder: string, side: "before" | "after") {
-  if (value == null) return "None"
-  if (property === "Schedule" && typeof value === "object") {
+function formatDirectorySchedule(value: unknown, eligibility: boolean, fallback: string): string {
+  if (Array.isArray(value)) return value.map(schedule => formatDirectorySchedule(schedule, eligibility, fallback)).join(". ")
+  if (value && typeof value === "object") {
     const schedule = value as { start?: unknown; end?: unknown }
-    const status = folder === "RoleEligibilitySchedules" || folder === "PimGroupEligibilitySchedules" ? "Eligible" : "Active"
+    const status = eligibility ? "Eligible" : "Assigned"
     const start = formatScheduleDate(schedule.start), end = formatScheduleDate(schedule.end)
     if (start && end) return `${status} from ${start} to ${end}`
     if (end) return `${status} until ${end}`
     if (schedule.end === "No expiration") return start ? `${status} from ${start}. No end date` : "No end date"
-    return start ? `${status} from ${start}` : "No schedule dates saved"
+    if (start) return `${status} from ${start}`
   }
+  return typeof value === "string" ? value : fallback
+}
+
+function formatDirectoryValue(property: string, value: unknown, eligibility: boolean, side: "before" | "after") {
+  if (value == null) return "None"
   if (property === "Relationship" || property === "present") {
-    if (value === true || value === "Present") return side === "before" ? "Assigned now" : "Assigned after restore"
-    if (value === false || value === "Absent") return side === "before" ? "Not assigned now" : "Not assigned after restore"
+    const when = side === "before" ? "now" : "after restore"
+    if (value === true || value === "Present") return `${eligibility ? "Eligible" : "Assigned"} ${when}`
+    if (value === false || value === "Absent") return `Not ${eligibility ? "eligible" : "assigned"} ${when}`
   }
   return typeof value === "string" ? value : JSON.stringify(value)
 }
@@ -141,6 +150,7 @@ export function DirectoryRestore({ tenant, backupId = "", path = "", active = tr
   const folder = path.split("/")[1]!
   const applications = APPLICATION_REVIEW_FOLDERS.includes(folder)
   const privileged = PRIVILEGED_REVIEW_FOLDERS.includes(folder)
+  const eligibility = folder === "RoleEligibilitySchedules" || folder === "PimGroupEligibilitySchedules"
   const unit = folder === "AdministrativeUnits"
   const selected = review?.rows.some(row => !row.review.blocker && row.review.approvals.every(kind => approvals[row.key]?.includes(kind)))
   const unresolved = review?.discarded ? false : review?.unresolved ?? directoryPageUnresolved(false, review?.selection ?? outcomes.map(row => row.key), outcomes)
@@ -148,7 +158,7 @@ export function DirectoryRestore({ tenant, backupId = "", path = "", active = tr
     <Button size="sm" variant="outline" disabled={busy} aria-expanded={open} onClick={() => { setOpen(!open); invalidate() }}>Review directory restore</Button>
     {open && <div className="mt-2 space-y-3 rounded-lg border border-blue-200 bg-blue-50 p-3 text-gray-900">
       {!privileged && <p>Review who receives access. Each change needs its own approval and is never part of restore all. {!applications && <>Recreated objects get a new ID. Restore the object before reviewing relationships.</>}</p>}
-      {privileged ? <p>Review the current principal, privilege, scope and any saved schedule. {PRIVILEGED_RESTORE_BLOCKER}</p> : applications ? <p>Only nonempty app registration name and description updates run. Everything else is blocked, including creation, enterprise app metadata, recycle recovery, owners, consent, app roles, policy bindings, SAML signing keys, provisioning secrets and all credentials.</p> : <><p>Object updates restore a user's display name or a security group's nonempty description. Clearing descriptions remains blocked after inconsistent live read-back. Other profile and group properties have no admitted restore round trip.</p>
+      {privileged ? <p>Review the current principal, privilege and scope. For PIM schedules, compare the current and saved dates. {PRIVILEGED_RESTORE_BLOCKER}</p> : applications ? <p>Only nonempty app registration name and description updates run. Everything else is blocked, including creation, enterprise app metadata, recycle recovery, owners, consent, app roles, policy bindings, SAML signing keys, provisioning secrets and all credentials.</p> : <><p>Object updates restore a user's display name or a security group's nonempty description. Clearing descriptions remains blocked after inconsistent live read-back. Other profile and group properties have no admitted restore round trip.</p>
       <p>Exact member removal is blocked for Conditional Access targeted groups because it can affect policy enforcement. Remove those members in Microsoft Entra. Other admitted changes remain available.</p>
       <p>Account activation, recycle recovery, invitations, licenses, dynamic rules, role-assignable groups and nested group relationships remain blocked. Their live evidence or privileged safety integration is incomplete.</p></>}
       {!privileged && <label className="block">Review <select className="ml-2 rounded border bg-white p-1 text-gray-900" disabled={busy} value={stage} onChange={event => { setStage(event.target.value); invalidate() }}><option value="object">Directory object</option><option value="relationships">Relationships</option></select></label>}
@@ -168,7 +178,14 @@ export function DirectoryRestore({ tenant, backupId = "", path = "", active = tr
           <p className="break-words"><strong>{row.principal ? `${row.principal.name} (${row.principal.type})` : row.resource.name}</strong>: {row.privilege} on {row.resource.name} ({row.resource.type})</p>
           <p className="break-all">Scope: {row.scope}</p>
           {row.notices.map(notice => <p key={notice}>{notice}</p>)}
-          {row.changes.map(change => <div key={change.property} className="break-words"><strong>{change.property}</strong><p>Current: {formatDirectoryValue(change.property, change.before, folder, "before")}</p><p>Restore: {formatDirectoryValue(change.property, change.after, folder, "after")}</p></div>)}
+          {row.changes.map(change => {
+            if (change.property === "Schedule") {
+              // Older saved reviews used null for both an unread and an absent schedule.
+              const absent = row.changes.some(entry => entry.property === "Relationship" && entry.before === "Absent")
+              return <div key={change.property} className="break-words"><strong>Schedule</strong><p>Current: {formatDirectorySchedule(change.before, eligibility, absent ? "None" : "Not read")}</p><p>Saved in backup: {formatDirectorySchedule(change.after, eligibility, "Not saved")}</p></div>
+            }
+            return <div key={change.property} className="break-words"><strong>{change.property}</strong><p>Current: {formatDirectoryValue(change.property, change.before, eligibility, "before")}</p><p>Restore: {formatDirectoryValue(change.property, change.after, eligibility, "after")}</p></div>
+          })}
           {row.blocker ? <p role="status">Blocked: {row.blocker === legacyPrivilegeBlocker ? PRIVILEGED_RESTORE_BLOCKER : row.blocker}</p> : row.approvals.map(kind => <label key={kind} className="flex items-start gap-2"><input type="checkbox" disabled={busy || review.discarded} checked={approvals[key]?.includes(kind) ?? false} onChange={event => setApprovals(previous => ({ ...previous, [key]: event.target.checked ? [...(previous[key] ?? []), kind] : (previous[key] ?? []).filter(value => value !== kind) }))} />{approvalLabel[kind] ?? kind}</label>)}
         </div>)}</div>
         {review.more && <div className="space-y-2"><p>{unresolved ? "Resolve or discard this saved page before previewing the next page. Unresolved changes keep their objects locked." : unit ? "More relationships remain to be checked." : "More changes remain. Completed differences are omitted. Blocked rows do not prevent reviewing the next page."}</p><Button size="sm" variant="outline" disabled={busy || unresolved} onClick={() => void send("next")}>Preview next page</Button></div>}

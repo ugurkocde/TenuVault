@@ -161,7 +161,7 @@ Token lifetime, claims mapping, home realm discovery and app management policy a
 
 ## Review roles, PIM and administrative unit relationships
 
-Open **Review directory restore** on a role assignment, PIM schedule or administrative unit in an owned backup for the connected tenant. Each row shows the current principal name and type, the privilege and scope, and any saved schedule dates in your local time. A missing or ambiguous role, principal or scope blocks that relationship. The row keeps the details it could verify and shows the unresolved reference and its ID when available. A role or administrative unit recreated by an earlier configuration restore resolves through its recorded mapping.
+Open **Review directory restore** on a role assignment, PIM schedule or administrative unit in an owned backup for the connected tenant. Each row shows the current principal name and type, the privilege and scope. PIM schedule rows show **Current** and **Saved in backup** dates separately, in your local time with the UTC offset. **None** means the review verified there is no matching current schedule. **Not read** means the current schedule dates are unavailable. A missing or ambiguous role, principal or scope blocks that relationship. The row keeps the details it could verify and shows the unresolved reference and its ID when available. A role or administrative unit recreated by an earlier configuration restore resolves through its recorded mapping.
 
 Restoring roles and PIM is not available yet. You can review what would change. The review adds no write permissions to the app registration.
 

@@ -27,6 +27,7 @@ function world(largeUnit = false) {
   const scopes = areaPermissions(ENTRA_AREAS.find(area => area.id === "roles")!, "restore", "delegated")
   const connection = { ...actor, token: `h.${Buffer.from(JSON.stringify({ tid: tenant, oid: admin, appid: client, scp: scopes.join(" ") })).toString("base64url")}.s` }
   let status = 200, restricted = false
+  let liveSchedules: Record<string, unknown>[] = []
   const missing = new Set<string>()
   const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     expect(init?.method).toBe("GET")
@@ -54,12 +55,13 @@ function world(largeUnit = false) {
     }
     if (path === "roleManagement/directory/roleAssignmentSchedules") {
       if (!url.searchParams.has("$skiptoken")) return Response.json({ value: [], "@odata.nextLink": String(url) + "&$skiptoken=page2" })
-      return Response.json({ value: [] })
+      return Response.json({ value: liveSchedules })
     }
     return new Response(null, { status: 404 })
   })
   const start = () => new DirectoryRestoreService(store, new RecoveryAccounts(store), async () => connection, async () => connection, fetcher, undefined, undefined, () => now)
-  return { start, fetcher, status: (value: number) => { status = value }, restrict: () => { restricted = true }, missing }
+  return { start, fetcher, status: (value: number) => { status = value }, restrict: () => { restricted = true }, missing,
+    liveSchedules: (value: Record<string, unknown>[]) => { liveSchedules = value } }
 }
 
 it("uses distinct eligibility and assignment requests and preserves the absolute end time", () => {
@@ -102,7 +104,7 @@ it("uses the Roles and PIM restore scopes for actor and principal reads, then sa
     scope: "Entire tenant", approvals: ["directory-item", "privileged-relationship", "security-response"],
     notices: [expect.stringContaining("looks deliberate")],
     blocker: "Restoring roles and PIM is not available yet. You can review what would change.",
-    changes: [{ property: "Schedule", after: { end: endsAt } }, { property: "Relationship", before: "Absent", after: "Present" }],
+    changes: [{ property: "Schedule", before: null, after: { end: endsAt } }, { property: "Relationship", before: "Absent", after: "Present" }],
   })
   expect(env.fetcher.mock.calls.filter(([url]) => String(url).includes("roleAssignmentSchedules"))).toHaveLength(2)
   const saved = { ...request, runId: page.runId }
@@ -112,6 +114,37 @@ it("uses the Roles and PIM restore scopes for actor and principal reads, then sa
   expect(env.fetcher.mock.calls).toHaveLength(reads)
   expect(await service.saved(tenant, page.runId, "reconcile")).toMatchObject({ status: "nothing-sent" })
   await expect(service.prepare(tenant, { ...request, origin: "import" }, options, noBackupReads)).rejects.toThrow(/owned same-tenant/)
+})
+
+it.each([
+  ["shows the live schedule separately from the saved dates", { startDateTime: "2026-11-23T10:00:00Z", expiration: { type: "noExpiration" } }, { start: "2026-11-23T10:00:00Z", end: "No expiration" }],
+  ["keeps a live relationship whose schedule was not read", undefined, "Not read"],
+] as const)("%s", async (_name, liveScheduleInfo, current) => {
+  const env = world()
+  env.liveSchedules([
+    { ...scheduled, roleDefinitionId: role, directoryScopeId: `/administrativeUnits/${unit}` },
+    { ...scheduled, roleDefinitionId: role, scheduleInfo: liveScheduleInfo },
+  ])
+  const request = { path: "backup/RoleAssignmentSchedules/saved-schedule.json", snapshot: scheduled, origin: "restore" as const }
+  const page = await env.start().prepare(tenant, request, options, noBackupReads)
+  expect(page.rows[0]?.review).toMatchObject({
+    blocker: expect.stringContaining("A current relationship occupies this scope"),
+    changes: [
+      { property: "Schedule", before: [current], after: { start: scheduleInfo.startDateTime, end: endsAt } },
+      { property: "Relationship", before: "Present", after: "Present" },
+    ],
+  })
+})
+
+it("keeps saved dates and marks the current schedule unread when the list fails", async () => {
+  const env = world()
+  env.missing.add("roleManagement/directory/roleAssignmentSchedules")
+  const request = { path: "backup/RoleAssignmentSchedules/saved-schedule.json", snapshot: scheduled, origin: "restore" as const }
+  const page = await env.start().prepare(tenant, request, options, noBackupReads)
+  expect(page.rows[0]?.review).toMatchObject({
+    blocker: expect.stringContaining("404"),
+    changes: [{ property: "Schedule", before: "Not read", after: { start: scheduleInfo.startDateTime, end: endsAt } }],
+  })
 })
 
 it("blocks self-benefit and isolates an unavailable principal", async () => {
@@ -138,7 +171,7 @@ it.each([
   const review = page.rows[0]!.review
   expect(review.blocker).toContain(`${kind} ${missingId}`)
   expect(review.privilege).toBe("Active role schedule")
-  expect(review.changes).toEqual([{ property: "Schedule", before: null, after: { start: scheduleInfo.startDateTime, end: endsAt } }])
+  expect(review.changes).toEqual([{ property: "Schedule", before: "Not read", after: { start: scheduleInfo.startDateTime, end: endsAt } }])
   expect(review.principal).toEqual(kind === "principal" ? null : { id: user, name: "Current user", type: "user" })
   expect(review.resource).toEqual({ id: role, name: kind === "role" ? "Unresolved directory role" : "Custom role", type: "directory role" })
   expect(review.scope).toBe(kind === "scope" ? `Unresolved administrative unit (${unit})` : `Administrative unit Unit (${unit})`)
