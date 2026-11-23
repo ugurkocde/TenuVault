@@ -115,6 +115,8 @@ export async function checkSpec(graph: GraphCall, spec: OibAssignmentSpec): Prom
   const ids = specGroupIds(spec)
   const lookup = ids.length ? await lookupGroups(graph, ids) : { readable: true, groups: [], missing: [] }
   if (lookup.missing.length) throw new FrameworkError(`${lookup.missing.length === 1 ? "This group does" : "These groups do"} not exist in the tenant: ${lookup.missing.join(", ")}. Nothing was changed.`)
+  const unassignable = lookup.groups.filter((group) => group.kind === "other")
+  if (unassignable.length) throw new FrameworkError(`Intune cannot assign distribution lists: ${unassignable.map((group) => group.displayName).join(", ")}. Choose a security or Microsoft 365 group. Nothing was changed.`)
   const groupNames = Object.fromEntries(lookup.groups.map((group) => [group.id, group.displayName]))
   const chosen = Object.entries(spec.filters).filter((entry): entry is [FilterPlatform, NonNullable<OibAssignmentSpec["filters"][FilterPlatform]>] => !!entry[1])
   const filterNames: Record<string, string> = {}

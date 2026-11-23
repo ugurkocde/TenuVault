@@ -44,6 +44,17 @@ describe("deploying several platforms to one tenant", () => {
     expect(noStorage.every(o => o.error?.includes("no backup storage") || o.error?.startsWith("Skipped"))).toBe(true)
   })
 
+  it("continues after a batch refused before its backup for another reason", async () => {
+    const sent: string[] = []
+    const outcomes = await deployToTenant(batches, { backup: NEW, storage: true }, async (b) => {
+      sent.push(b.platform)
+      if (b.platform === "windows") throw new Error("This group does not exist in the tenant: x. Nothing was changed.")
+      return run(b.platform, `backup-${b.platform}`)
+    })
+    expect(sent).toEqual(["windows", "macos", "byod"])
+    expect(outcomes.map(o => !!o.run)).toEqual([false, true, true])
+  })
+
   it("continues after a failed batch when no backup was asked for", async () => {
     const sent: Array<[string, BackupRequest]> = []
     const outcomes = await deployToTenant(batches, { backup: { mode: "none" }, storage: false }, async (b, backup) => {

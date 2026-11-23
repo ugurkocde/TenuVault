@@ -61,7 +61,8 @@ export const deployItem = ({ source, mode, targetId }: DeployEntry): DeployItem 
  * a backup made by an earlier batch when that covered all of its folders, else backs up its own.
  * With "none" nothing is backed up.
  * When a backup is missing, fails or is not confirmed by the run, the remaining batches of this
- * tenant are skipped: nothing deploys without the backup that was asked for.
+ * tenant are skipped: nothing deploys without the backup that was asked for. Other failures (a
+ * group or filter the tenant does not have) stop only their own batch.
  */
 export async function deployToTenant(
   batches: DeployBatch[],
@@ -92,8 +93,10 @@ export async function deployToTenant(
         else stopped = "Skipped: the backup before the first deployment was not confirmed."
       }
     } catch (error) {
-      outcomes.push({ platform: batch.platform, error: error instanceof Error ? error.message : "The request failed.", backup })
-      if (backup.mode !== "none") stopped = "Skipped: the backup of this tenant could not be used, so nothing else was deployed."
+      const message = error instanceof Error ? error.message : "The request failed."
+      outcomes.push({ platform: batch.platform, error: message, backup })
+      // Only a backup problem stops the tenant; a refused group or filter changed nothing and needs no backup to be skipped.
+      if (backup.mode !== "none" && /backup/i.test(message)) stopped = "Skipped: the backup of this tenant could not be used, so nothing else was changed."
     }
   }
   return outcomes

@@ -241,7 +241,7 @@ function readRuns(tenant: string): OibRun[] {
 
 /**
  * Saves a run, replacing an earlier version of it; a run with nothing left to undo is removed.
- * The latest RUNS_KEPT runs are kept within MAX_HISTORY_CHARS. Runs migrated from Quick Start
+ * The latest RUNS_KEPT runs of deployments and fixes, and as many assignment changes, are kept within MAX_HISTORY_CHARS. Runs migrated from Quick Start
  * are outside that limit: they are small (IDs only) and are the only record of what those
  * deployments created, so they stay until they are undone.
  */
@@ -249,7 +249,9 @@ function saveRun(run: OibRun): void {
   let runs = readRuns(run.tenantId).filter((r) => r.runId !== run.runId)
   if (run.created.length || run.updated.length || run.reassigned?.length) runs.push(run)
   const legacy = runs.filter((r) => r.legacy === "quickstart")
-  let recent = runs.filter((r) => r.legacy !== "quickstart").slice(-RUNS_KEPT)
+  // Assignment changes keep their own RUNS_KEPT, so reassigning often never pushes out a deployment's undo.
+  const kept = (assign: boolean) => runs.filter((r) => r.legacy !== "quickstart" && (r.kind === "assign") === assign).slice(-RUNS_KEPT)
+  let recent = [...kept(false), ...kept(true)].sort((a, b) => a.createdAt.localeCompare(b.createdAt))
   const combine = () => [...legacy, ...recent].sort((a, b) => a.createdAt.localeCompare(b.createdAt))
   let json = JSON.stringify(combine())
   while (json.length > MAX_HISTORY_CHARS && recent.length > 1) {
@@ -603,7 +605,8 @@ async function readAssignments(body: RecordJson): Promise<{ policies: OibPolicyA
     }
   }
   const groupIds = policies.flatMap((policy) => (policy.assignments ?? []).map((entry) => (entry.target as Item | undefined)?.groupId).filter((id): id is string => typeof id === "string"))
-  const groups = groupIds.length ? await lookupGroups(graph, groupIds).catch(() => ({ readable: false, groups: [], missing: [] })) : { readable: true, groups: [], missing: [] }
+  // Names only make the review easier to read; a failed read (not a refused one) shows IDs without blaming permissions.
+  const groups = groupIds.length ? await lookupGroups(graph, groupIds).catch(() => ({ readable: true, groups: [], missing: [] })) : { readable: true, groups: [], missing: [] }
   const usesFilters = policies.some((policy) => (policy.assignments ?? []).some((entry) => typeof (entry.target as Item | undefined)?.deviceAndAppManagementAssignmentFilterId === "string"))
   const filters = usesFilters ? await listFilters(graph).catch(() => []) : []
   return {

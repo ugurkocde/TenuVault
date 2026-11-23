@@ -70,7 +70,7 @@ export default function OibPage() {
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-4xl font-medium tracking-tight text-gray-900">OpenIntuneBaseline</h1>
-          <p className="mt-3 max-w-2xl text-lg text-gray-500">Deploy, compare and validate the community OpenIntuneBaseline security policies in {tenant?.name ?? "your tenant"}.</p>
+          <p className="mt-3 max-w-2xl text-lg text-gray-500">Deploy, compare, validate and assign the community OpenIntuneBaseline security policies in {tenant?.name ?? "your tenant"}.</p>
         </div>
         <a href={`https://github.com/${OIB_REPO}`} target="_blank" rel="noreferrer" className={button}>Source <ExternalLink className="h-4 w-4" aria-hidden="true" /></a>
       </div>

@@ -168,7 +168,7 @@ Each list takes up to 25 groups. A group cannot be both included and excluded.
 
 ### Find groups
 
-Type at least two characters to search groups whose name starts with them, or paste a group's object ID. Distribution lists are shown but cannot be chosen, because Intune cannot assign them.
+Type at least two characters to search groups whose name starts with them, or paste a group's object ID. Distribution lists are shown but cannot be chosen, because Intune cannot assign them; a pasted distribution list is refused before anything changes.
 
 Searching by name needs a permission to read groups, the optional delegated `Group.Read.All` (see [Permissions](/security/permissions/)). Without it the editor says so and you paste object IDs from Entra instead. When groups can be read, an ID the tenant does not have is marked "not found in this tenant" and **Continue** stays off until you remove it.
 
@@ -188,7 +188,7 @@ Pro and MSP. **Assignments** changes the assignments of OIB policies that are al
 2. **Policies**: TenuVault finds the deployed OIB policies the same way Existing Deployment matches them. Policies the tenant does not have, and policies that match more than one tenant policy, are not listed. Each policy shows whether it is a device or user policy.
 3. **Review and assign**: choose **Add to the current assignments** or **Replace the current assignments**, then the groups and filters. The review reads the current assignments of each policy and shows them next to the assignments after the change. Policies already assigned that way are left alone.
 
-* **Add** keeps what each policy is assigned to and adds the groups. A group already assigned gets the new filter. If you include a group the policy excludes, both stay and the exclusion wins; the result says so.
+* **Add** keeps what each policy is assigned to and adds the groups. A group already assigned gets the filter you chose for its platform, or keeps its own filter when you chose none. If you include a group the policy excludes, both stay and the exclusion wins; the result says so.
 * **Replace** makes the direct assignments exactly the groups you chose. With no groups, every direct assignment of the selected policies is removed. You confirm that the current assignments are replaced.
 * Assignments that come from a policy set are never changed.
 * A policy whose current assignments cannot be read is not changed.

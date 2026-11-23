@@ -253,7 +253,7 @@ function ReviewAssign({ batches: given, onBack, onFinished, next }: { batches: D
     {title("Review the assignments")}
     <fieldset className="mt-4">
       <legend className="text-sm font-medium text-gray-800">What to do</legend>
-      <div className="mt-2 grid gap-2 sm:grid-cols-2">{([["add", "Add to the current assignments", "Keeps what the policies are assigned to and adds the groups below. A group already assigned gets the new filter."], ["replace", "Replace the current assignments", "The direct assignments of the selected policies become exactly the groups below. With no groups, every direct assignment is removed."]] as const).map(([value, label, text]) =>
+      <div className="mt-2 grid gap-2 sm:grid-cols-2">{([["add", "Add to the current assignments", "Keeps what the policies are assigned to and adds the groups below. A group already assigned gets the filter chosen below, or keeps its own when none is chosen."], ["replace", "Replace the current assignments", "The direct assignments of the selected policies become exactly the groups below. With no groups, every direct assignment is removed."]] as const).map(([value, label, text]) =>
         <label key={value} className={cn("flex cursor-pointer items-start gap-3 rounded-2xl border p-4 text-sm", mode === value ? "border-primary bg-blue-50/60" : "border-gray-200")}>
           <input type="radio" name="oib-assign-mode" checked={mode === value} onChange={() => setMode(value)} className="mt-1 h-4 min-h-0 w-4 shrink-0" />
           <span><span className="font-medium text-gray-900">{label}</span><span className="mt-1 block text-xs leading-5 text-gray-600">{text}</span></span>
@@ -276,7 +276,7 @@ function ReviewAssign({ batches: given, onBack, onFinished, next }: { batches: D
       {known && !known.groupsReadable && <p className="mt-2 text-xs text-gray-500">Group names cannot be read with this app's permissions, so object IDs are shown.</p>}
       {unreadable.length > 0 && <p className="mt-2 text-xs text-amber-800">{plural(unreadable.length, "policy", "policies")} could not be read and will not be changed.</p>}
     </section>
-    <div className="mt-5"><BackupChoice storage={storage} backup={backup} mode={backupMode} onChoose={setChoice} noun="change" skip="Undo puts back the previous assignments, saved in the run on this device only." /></div>
+    <div className="mt-5"><BackupChoice storage={storage} backup={backup} mode={backupMode} onChoose={setChoice} noun="run" skip="Undo puts back the previous assignments, saved in the run on this device only." /></div>
     <ActionBar summary={`${plural(items.length, "policy", "policies")}${known ? `, ${changing} would change` : ""}${removeAll ? ", every direct assignment removed" : ""}`} status={backup.loading ? "Checking the latest backup" : null} error={error}
       back={{ label: "Change selection", onClick: () => { setRetry(null); onBack() } }}>
       <button type="button" className={primary} disabled={!ready || !changing || backup.loading} onClick={() => { setAcknowledged(false); setPhase("confirm") }}>Continue</button>

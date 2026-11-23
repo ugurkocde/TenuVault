@@ -85,6 +85,11 @@ describe("merging assignments", () => {
     expect(sameAssignments(current, [include(A)])).toBe(false)
   })
 
+  it("keeps a group's own filter when the added include has none", () => {
+    const filtered = include(A, { deviceAndAppManagementAssignmentFilterId: F, deviceAndAppManagementAssignmentFilterType: "exclude" })
+    expect(mergeAssignments([filtered], [include(A), include(B)])).toEqual([filtered, include(B)])
+  })
+
   it("keeps an exclusion of a group the admin now includes, and reports it", () => {
     const merged = mergeAssignments([exclude(A)], [include(A)])
     expect(merged).toEqual([exclude(A), include(A)])

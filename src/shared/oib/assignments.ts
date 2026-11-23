@@ -198,13 +198,21 @@ export function writableAssignment(assignment: Item): Item {
 
 /**
  * Adds the spec's assignments to the current ones. A group that is already a target keeps one
- * entry: the new one (an include gets the new filter). A group the spec includes but the policy
- * excludes (or the other way round) keeps both entries; Intune lets the exclusion win.
+ * entry: the new one, which takes the new filter, or keeps its current filter when no filter was
+ * chosen. A group the spec includes but the policy excludes (or the other way round) keeps both
+ * entries; Intune lets the exclusion win.
  */
 export function mergeAssignments(current: Item[], added: Item[]): Item[] {
   const key = (assignment: Item) => `${kindOf(assignment)}|${groupOf(assignment)}`
+  const existing = new Map(current.map(writableAssignment).filter(groupOf).map((assignment) => [key(assignment), assignment]))
+  const merged = added.map((assignment) => {
+    const before = existing.get(key(assignment))
+    const filter = before ? targetOf(before).deviceAndAppManagementAssignmentFilterId : undefined
+    if (!before || !filter || targetOf(assignment).deviceAndAppManagementAssignmentFilterId) return assignment
+    return { ...assignment, target: { ...targetOf(assignment), deviceAndAppManagementAssignmentFilterId: filter, deviceAndAppManagementAssignmentFilterType: targetOf(before).deviceAndAppManagementAssignmentFilterType ?? "include" } }
+  })
   const replaced = new Set(added.filter(groupOf).map(key))
-  return [...current.map(writableAssignment).filter((assignment) => !groupOf(assignment) || !replaced.has(key(assignment))), ...added]
+  return [...current.map(writableAssignment).filter((assignment) => !groupOf(assignment) || !replaced.has(key(assignment))), ...merged]
 }
 
 /** Whether two assignment lists target the same groups the same way, in any order. */
