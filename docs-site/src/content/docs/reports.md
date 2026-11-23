@@ -1,11 +1,13 @@
 ---
 title: "Change reports"
-description: A report of what changed in Intune between two backups, setting by setting, with who made each change. Save it as PDF, Markdown or JSON, or have it sent by email after every scheduled backup.
+description: Review changes across Defender, Entra ID and Intune backups. Export a report or send it by email.
 ---
 
-A change report documents what changed in a tenant between two backups: every added, changed and deleted item, the settings that changed with their old and new values, the settings of new and deleted items (up to 300 per item), and who made each change according to the Intune and Entra audit logs. Reports are made from your backups and the audit logs only. Nothing in the tenant is changed.
+A change report documents what changed in a tenant between two backups: every added, changed and deleted item, the settings that changed with their old and new values, the settings of new and deleted items (up to 300 per item), and the actors identified by matching audit events. Reports are made from your backups and the audit logs only. Nothing in the tenant is changed.
 
 Open **Reports** in the sidebar. The page works on the tenant selected in the tenant switcher.
+
+Change reports cover saved Defender, Entra ID and Intune configuration. Conditional Access changes fall under Entra ID. Reports can name actors for supported Conditional Access and Intune audit events. Other areas can show configuration changes with no actor attribution.
 
 ## What your plan includes
 
@@ -60,7 +62,7 @@ TenuVault reads the audit events between the times the two backups started and m
 
 * Intune changes come from the Intune audit log, which TenuVault can already read with its standard permissions. Your account needs an Intune role that can read audit logs.
 * Conditional Access changes come from the Entra audit log, which needs the optional delegated `AuditLog.Read.All` permission. It is only read when the report contains Conditional Access policies, named locations or authentication strengths. Without the permission, those items have no actors and the report says why. See [Permissions](/security/permissions/).
-* Intune and Entra keep audit events for a limited time, so reports of older backups can have fewer matching events.
+* Entra and Intune keep audit events for a limited time, so reports of older backups can have fewer matching events.
 * A change made during a backup can appear in the audit events of one report and in the item changes of the next.
 
 When the audit log cannot be read at all, the report is still made and says that who made the changes is unknown, and why. In the app, a throttled read (429) suggests generating the report again in a few minutes. [Cloud backup reports](/backups/cloud/#change-reports-by-email) arrive by email instead, so they only name the reason, for example "Microsoft Graph throttled the Intune audit log request."

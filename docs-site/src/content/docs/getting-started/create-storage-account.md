@@ -1,6 +1,6 @@
 ---
 title: "Create a storage account for TenuVault"
-description: Create the Azure storage account TenuVault stores Intune backups in, with a script or in the Azure portal, and grant your Intune admins access.
+description: Create the Azure storage account TenuVault stores configuration backups in, with a script or in the Azure portal, and grant your backup admins access.
 ---
 
 TenuVault stores Azure backups in a storage account in your own subscription and never creates Azure resources itself. This page is for the Azure administrator who creates that account, for example when an Intune administrator asks for one. If a suitable storage account already exists, only the role assignments below are needed.

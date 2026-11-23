@@ -1,9 +1,9 @@
 ---
 title: "Drift detection"
-description: Pick two backups and see every Intune setting that changed between them, then revert it or restore a copy.
+description: Compare Defender, Entra ID and Intune backups, then revert supported changes or restore a copy.
 ---
 
-Drift detection shows what changed in your Intune configuration between two backups: new items, changed settings and deleted items. By default it compares your two newest complete backups, and you can pick any other pair. From each change you can put the item back to its backed-up version, or restore it as a separate copy.
+Drift detection shows what changed in your Defender, Entra ID and Intune configuration between two backups: new items, changed settings and deleted items. By default it compares your two newest complete backups, and you can pick any other pair. When the item supports it, you can revert the change or restore a separate copy. Conditional Access is part of Entra ID coverage.
 
 TenuVault compares backups, not the live tenant. To include the latest changes, run a backup first. See [Run a backup](/backups/).
 
@@ -30,7 +30,7 @@ At the top of the page, choose:
 * **Baseline (older)**: the backup to compare from
 * **Comparison (newer)**: the backup to compare with
 
-Each list offers only the backups that can be compared, with their date and time and, when it was recorded, how they started (**Manual**, **Scheduled** or **From tray**). Backups that completed with warnings are offered and marked, because items they could not read may show up as deleted or added. Backups that did not finish or whose summary could not be read are not listed; a line under the lists says how many there are and links to **Backup & Restore**, where they are shown. Choosing a backup keeps the older of the two as the baseline: choosing the backup that is already chosen on the other side, or a baseline newer than the comparison, puts them in order. The swap button between the lists exchanges them as they are. The baseline must be older than the comparison.
+Each list offers only the backups that can be compared, with their date and time and, when it was recorded, how they started (**Manual**, **Scheduled** or **From tray**). Backups that completed with warnings are offered and marked. Only types read completely in both backups can establish an addition or deletion. Backups that did not finish or whose summary could not be read are not listed; a line under the lists says how many there are and links to **Backup & Restore**, where they are shown. Choosing a backup keeps the older of the two as the baseline: choosing the backup that is already chosen on the other side, or a baseline newer than the comparison, puts them in order. The swap button between the lists exchanges them as they are. The baseline must be older than the comparison.
 
 When only two backups can be compared, they are already chosen, and the page says so and offers **Back up now**. A backup started there is added to the lists when it finishes, even if you open another page meanwhile, so you can compare it with an older one.
 

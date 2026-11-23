@@ -3,9 +3,11 @@ title: Entra ID configuration backups
 description: Back up Entra ID tenant settings, authentication, external identities, roles, PIM policies, administrative units and governance with TenuVault.
 ---
 
-Entra ID backups cover **74 types**, including seven opt-in directory inventories and **67 configuration types**: 20 in **Tenant settings**, eight in **Authentication**, 14 in **External identities**, 12 in **Roles and PIM**, 11 in **Governance**, and two tenant-wide settings in the opt-in **Groups** area. Conditional Access adds its [three existing types](/backups/conditional-access/) through an independent switch. Intune still has 41 types. With every supported service and area enabled, the desktop registry has 135 types.
+Entra ID backups cover **74 types**, including seven opt-in directory inventories and **67 configuration types**: 20 in **Tenant settings**, eight in **Authentication**, 14 in **External identities**, 12 in **Roles and PIM**, 11 in **Governance**, and two tenant-wide settings in the opt-in **Groups** area. The [Conditional Access area](/backups/conditional-access/) adds three types through an independent switch, for 77 total.
 
-Turn on **Entra ID** in **Settings > Services and permissions**. Existing tenants keep Entra ID off after updating, even with an **Everything** backup scope. **Groups** must be enabled separately. The scope picker offers only types of services and opt-in areas that are on. Areas without types in this build say so in Settings and setup.
+## Enable backups
+
+Select Entra ID during setup or turn on **Entra ID** in **Settings > Services and permissions**. Existing tenants keep Entra ID off after updating, even with an **Everything** backup scope. **Groups** must be enabled separately. The scope picker offers only types of services and opt-in areas that are on. Areas without types in this build say so in Settings and setup.
 
 Seven configuration types support individually confirmed restore subsets: token lifetime policies, activity-based timeout policies, company branding, authentication flows, the cross-tenant parent policy name, unpublished access-package catalogs and the access-review ownership flag. See [restore safety and limitations](/restore/identity/). Users and Groups also have separately reviewed directory restore subsets described below. Other types remain backup and comparison only. Copy to Tenants, drift revert and cross-tenant copy cannot write these new types. A selected type that cannot be read gives **coverage incomplete**, with its cause in backup results. An empty list is a covered answer, not a missing backup. The federated token validation and continuous access evaluation policies can be **not configured**.
 
@@ -137,7 +139,11 @@ All 67 types can be compared between backups, including singletons. Reports show
 
 Azure Automation cloud backups remain limited to Intune and the separately configured Conditional Access types in 0.6. Use desktop manual or desktop scheduled backups for these Entra ID types. The Backup Reader cannot read the four Admin-only types above.
 
-## Governance verification and limits
+## Permissions and verification
+
+Open [Entra ID delegated permissions](/security/permissions/#entra-id) for the per-area permission list. In Settings, review last-backup verification on the Entra ID card and expand **Areas and access** for Conditional Access and other areas.
+
+### Governance verification and limits
 
 Governance and PIM features can require Entra ID P2 or ID Governance. Lifecycle workflows require the applicable Governance license. The lab's 58-permission app token read the General catalog, entitlement settings and access review policy. Access packages, assignment policies, connected organizations, review definitions and agreements returned covered empty lists. All three lifecycle endpoints returned HTTP 403 with code `Access denied` and an explicit insufficient-license message. Those exact answers on each type's own list or singleton read are classified as license or not onboarded, with incomplete coverage. They do not say the app lacks a permission. Detail and sub-read errors keep their own meaning; unknown license errors fail visibly.
 
@@ -204,7 +210,11 @@ Directory objects are inventory in the dashboard and reports. Hygiene skips them
 
 The dashboard counts directory objects separately as inventory. A directory-only backup protects zero policies; mixed backups show the policy count and the inventory count independently, including the latest backup and activity cards.
 
-## Verified configuration restore subsets
+## Restore
+
+See [Restore Entra ID configuration](/restore/identity/) for the review steps and safeguards.
+
+### Verified configuration restore subsets
 
 External identities restore writes only the parent cross-tenant policy display name. Defaults, partners and cloud endpoints are excluded. Governance restore supports unpublished, externally hidden user-managed catalog metadata without resources or assignments, and the access-review ownership flag (beta), never review definitions, decisions or notifications. Each operation needs its own preview and confirmation. The [permission table](/security/permissions/#restore-write-permissions-in-06) lists every write scope, why it is the least-privileged option and when it is requested.
 

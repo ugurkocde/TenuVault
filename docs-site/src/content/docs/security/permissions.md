@@ -54,12 +54,14 @@ Delegated permissions let an app act on behalf of a signed-in user. They never g
 
 ### Microsoft Graph
 
+The default setup includes the Intune permission pack, shared profile reads and Conditional Access read access.
+
 | Permission | Why TenuVault needs it |
 | --- | --- |
 | `User.Read` | Signs you in and reads your own basic profile. |
 | `Organization.Read.All` | Reads your organization's name and verified domains for the tenant overview. |
 | `GroupMember.Read.All` | Searches groups by name, reads group properties and membership counts, and checks whether referenced or selected groups exist. Used by OpenIntuneBaseline, promotion group mappings, Conflicts and hygiene, App Backup and notification group recipients. Included in new app registrations. |
-| `Policy.Read.All` | Backs up Entra Conditional Access policies, named locations and authentication strengths, when the Conditional Access service is turned on for the tenant. Read only. See [Conditional Access backups](/backups/conditional-access/). |
+| `Policy.Read.All` | Backs up Entra Conditional Access policies, named locations and authentication strengths, when the Conditional Access area is turned on under Entra ID for the tenant. Read only. See [Conditional Access backups](/backups/conditional-access/). |
 | `DeviceManagementConfiguration.ReadWrite.All` | Backs up and restores device configuration profiles, Settings Catalog and endpoint security policies, administrative templates, compliance policies, security baselines, Windows update profiles, assignment filters, policy sets, compliance notification templates and related configuration. Also used by the OpenIntuneBaseline section to read, create and update the OIB policies you choose, and by Framework coverage to read and create Settings Catalog policies. |
 | `DeviceManagementApps.ReadWrite.All` | Backs up and restores apps, app categories, app configuration policies and app protection policies. |
 | `DeviceManagementServiceConfig.ReadWrite.All` | Backs up and restores enrollment configurations, Windows Autopilot deployment profiles and devices, Apple enrollment profiles, terms and conditions and Company Portal branding. For Autopilot devices, restore only sets the group tag, the assigned user and its friendly name, and the device name of registered devices. Your Intune role also needs to allow reading Autopilot devices for backups and updating them for restores; Intune Administrator does both. |
@@ -76,11 +78,22 @@ Delegated permissions let an app act on behalf of a signed-in user. They never g
 **About `Policy.Read.All`:** Conditional Access uses it to read policies, named locations and authentication strengths. Entra ID configuration backups also use it. Remove it only if neither selected service needs those reads.
 :::
 
-### Entra ID and Defender
+### Defender and Entra ID permission packs
 
-The setup requests the permissions above unless you choose other services. When you choose **Entra ID** or **Defender**, with `-Services` on the [setup script](/getting-started/app-registration/#parameters), the app registration gets the read permissions of that service, and its write permissions only for a service you also name in `-RestoreAccess`. A service you leave out brings no permission. Every permission below is a delegated Microsoft Graph permission.
+Choose services during setup or use `-Services` with the [setup script](/getting-started/app-registration/#parameters). The app requests the read permissions for the selected areas and the write permissions for eligible areas selected for restore.
 
-**Entra ID**
+#### Defender
+
+<!-- permissions:defender:begin -->
+| Area | Backup | Restore adds |
+| --- | --- | --- |
+| Detection and response | `CustomDetection.Read.All`, `Workbooks.Read.All`, `CaseManagement.Read.All` | None |
+| Email and collaboration | `AttackSimulation.Read.All`, `ThreatSubmission.Read.All` | None |
+| Identity | `SecurityIdentitiesSensors.Read.All`, `SecurityIdentitiesAutoConfig.Read.All` | None |
+| Posture and access | `SecurityEvents.Read.All`, `RoleManagement.Read.Defender` | None |
+<!-- permissions:defender:end -->
+
+#### Entra ID
 
 <!-- permissions:entra:begin -->
 | Area | Backup | Restore adds |
@@ -95,16 +108,7 @@ The setup requests the permissions above unless you choose other services. When 
 | Applications (only when you turn the area on) | `Application.Read.All`, `Synchronization.Read.All`, `Directory.Read.All` | `Application.ReadWrite.All` |
 <!-- permissions:entra:end -->
 
-**Defender**
-
-<!-- permissions:defender:begin -->
-| Area | Backup | Restore adds |
-| --- | --- | --- |
-| Detection and response | `CustomDetection.Read.All`, `Workbooks.Read.All`, `CaseManagement.Read.All` | None |
-| Email and collaboration | `AttackSimulation.Read.All`, `ThreatSubmission.Read.All` | None |
-| Identity | `SecurityIdentitiesSensors.Read.All`, `SecurityIdentitiesAutoConfig.Read.All` | None |
-| Posture and access | `SecurityEvents.Read.All`, `RoleManagement.Read.Defender` | None |
-<!-- permissions:defender:end -->
+Conditional Access has an independent switch under Entra ID. See its [backup and restore permissions](/backups/conditional-access/#permissions).
 
 How to read the tables:
 
@@ -120,7 +124,7 @@ Some settings stay out because no requestable read permission was verified for t
 
 #### Restore write permissions in 0.6
 
-These are all write permissions requested for the enabled configuration restores from layers 8b and 8c. Each is the least-privileged delegated permission in Microsoft's per-operation table, checked on 2026-11-18. The linked permission reference explains its full reach. Grants belong to the registration, so a narrow restore payload does not narrow the scope of the grant itself.
+These are all write permissions requested for the supported Entra ID configuration restores. Each is the least-privileged delegated permission in Microsoft's per-operation table, checked on 2026-11-18. The linked permission reference explains its full reach. Grants belong to the registration, so a narrow restore payload does not narrow the scope of the grant itself.
 
 | Permission and Microsoft reference | Restore that needs it | Why and least privilege | When requested |
 | --- | --- | --- | --- |
@@ -137,7 +141,7 @@ Token lifetime restore also requests the read permission [Application.Read.All](
 
 ## Check what the app registration allows
 
-**Settings > Services and permissions** shows Intune, Entra ID and Defender, with Conditional Access as a separately controlled area inside Entra ID. A tenant selector opens that tenant's report. Entra ID has [67 configuration types](/backups/entra/). Each area states when this build has no types for it yet. Defender has [17 configuration backup types](/backups/defender/), with no restore yet.
+**Settings > Services and permissions** shows Defender, Entra ID and Intune, with Conditional Access as a separately controlled area inside Entra ID. A tenant selector opens that tenant's report. The cards show requested access, current permissions and verification from prior runs. Expand **Areas and access** for the details of each area.
 
 The connection check requests a fresh token without opening a sign-in window. **Permissions present** describes the token, not the admin's role, license or whether the service is onboarded. **Verified by the last backup** names the date and sign-in that read the selected types. After granting permissions, select **Check again**, then run a backup to verify access.
 

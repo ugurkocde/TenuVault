@@ -1,15 +1,19 @@
 ---
-title: Entra ID and Defender restore safety
-description: Restore availability, protected identities, adds-only changes and partial recovery for Entra ID and Defender policies.
+title: Restore Entra ID configuration
+description: Review Entra ID restore coverage, protection checks and individually approved changes.
 ---
 
 import RestoreMatrix from '../../../components/RestoreMatrix.astro';
 
+## Coverage
+
+Conditional Access is an Entra ID area. For its policies, named locations and strengths, see [Conditional Access restore](/backups/conditional-access/#how-restores-stay-safe).
+
 Selected Tenant settings, Authentication, External identities and Governance policies can be restored individually after an exact preview and a separate confirmation. Confirmation belongs to that restore run, tenant, signed-in admin and backup source. A new preview requires its own confirmation. If an earlier restore recreated a policy with a new ID, replacement previews and updates use that saved target mapping. [Users and groups](#users-and-groups) have limited directory restore subsets. App registrations support nonempty displayName and description updates through their [individual application review](#app-registrations-enterprise-apps-and-consent). All other Entra ID types and every Defender type remain backup-only. Cross-tenant copy and bulk restore of the new types remain refused. A documented Microsoft Graph API does not enable restore in TenuVault.
 
-Conditional Access and Intune retain their existing restore behavior. See [Restore modes and assignments](/restore/modes/) for those policies.
+## Before you restore
 
-## Protection before enabling restore
+### Protect recovery access
 
 The restore safety boundary requires the signed-in admin for the connected tenant and registration. A Backup Reader, an app-only token or an unreadable token cannot write a new type. Missing write permissions require adding restore access from Services in Settings and signing in again.
 
@@ -19,7 +23,9 @@ The boundary protects the signed-in admin's own account, roles and authenticatio
 
 Members, owners and collection entries are added by default. Removing existing entries requires a choice for that individual policy. Consent grant changes merge scopes by default. Consent grants and role assignments from imported backups are refused. New Entra ID and Defender types cannot be copied to another tenant.
 
-## Review recovery accounts and saved results
+## Recover from a backup
+
+### Review recovery accounts and saved results
 
 Open **Settings > Storage and recovery** and choose the restore history tenant. **Identity restore safety** shows the recovery account object IDs saved for that tenant. Enter one ID per line and select **Save recovery accounts**. TenuVault verifies that each is an enabled cloud member account before saving the choice on this device. An empty list designates no additional recovery accounts. The signed-in admin, connected registration and enterprise app remain protected.
 
@@ -29,7 +35,9 @@ Open **Settings > Storage and recovery** and choose the restore history tenant. 
 
 The same panel lists saved guarded runs, each policy's state, created IDs and the per-policy Intune and Conditional Access reference report. **Read back saved outcome** uses fresh tenant reads and never repeats a write. An absent, ambiguous or unreadable result stays uncertain. There is no manual reset for guarded runs. Pending steps need the reviewed restore flow; a partial result does not authorize a new create. The existing Intune history controls retain their behavior.
 
-## What partial means
+## Verify the result
+
+### What partial means
 
 Microsoft Graph offers no transaction across policies. A restore can finish some steps before another is blocked, cancelled or unanswered. A partial result records each policy's state and its dependencies. It does not promise that earlier changes were rolled back.
 

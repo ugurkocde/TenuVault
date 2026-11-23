@@ -12,7 +12,7 @@ All connections use HTTPS on TCP port 443. TenuVault opens no inbound ports. Dur
 | Destination | Purpose | Carries tenant data? |
 | --- | --- | --- |
 | `login.microsoftonline.com` | Microsoft sign-in and tokens | Your sign-in only. With the optional Backup Reader, also its certificate sign-in for scheduled backups (no tenant data) |
-| `graph.microsoft.com` | Read and write your Intune configuration | Yes, between your machine and Microsoft |
+| `graph.microsoft.com` | Read Defender, Entra ID and Intune configuration and write supported changes | Yes, between your machine and Microsoft |
 | `management.azure.com` | List subscriptions and storage accounts for the storage picker | No |
 | `<your account>.blob.core.windows.net` | Your own Azure storage account, when you store backups there | Yes, backups in your account, over HTTPS |
 | Hosts under `manage.microsoft.com`: one that the Intune agent on the PC discovered, one that Intune returns | [App Backup](#app-backup), only when you capture an installer on an enrolled Windows PC: Intune's device content service and the installer download | Yes, between your PC and Microsoft. The selected app's ID, version and name and this PC's Intune device identity go out, the encrypted installer comes back |
@@ -41,12 +41,12 @@ TenuVault also asks Microsoft for a new token to check a tenant's connection: on
 
 With the optional [Backup Reader](/backups/backup-reader/), scheduled backups sign in differently, to the same host: TenuVault requests an app-only token for the separate Backup Reader app registration and proves the app's identity with a short-lived assertion signed on your machine with the reader's certificate private key. No browser opens, no person signs in, and Microsoft returns only an access token (no refresh token and no ID token). The private key itself is never sent; it stays in the same encrypted store. Only scheduled backups use these tokens, for the Graph and Azure Storage calls below. A connection check also asks for a reader token, before a scheduled backup that runs with the reader and when you ask TenuVault to check the connection again; that token is only checked and is never used for a request. Each token is checked for the right tenant, app, audience and app-only type before use. On top of that, Graph tokens must carry exactly the reader's verified read permissions; storage tokens carry no Graph roles, and Azure instead authorizes them through the container-scoped **TenuVault Backup Writer** role. No new destination is added, so the firewall allow list below does not change.
 
-### Intune: `graph.microsoft.com`
+### Microsoft Graph: `graph.microsoft.com`
 
-All Intune work goes directly from your machine to Microsoft Graph with your delegated token. The one exception is a scheduled backup of a tenant with a [Backup Reader](/backups/backup-reader/): it reads with the reader's app-only token instead, from the same machine to the same host. Writes never use it.
+The app sends tenant requests for Defender, Entra ID and Intune directly from your machine to Microsoft Graph with your delegated token. The one exception is a scheduled backup of a tenant with a [Backup Reader](/backups/backup-reader/): it reads with the reader's app-only token instead, from the same machine to the same host. Writes never use it.
 
-* Backups read your Intune configuration, including assignments.
-* Restores, drift reverts, the OpenIntuneBaseline section and Framework coverage write the objects you choose to your tenant.
+* Backups read the configuration and inventories you enable. Conditional Access is an Entra ID backup area, and Intune policies keep assignment references where supported.
+* Supported restores and drift reverts write the objects you choose to your tenant. OpenIntuneBaseline and Framework coverage are Intune workflows.
 * The tenant overview reads your organization's name and verified domains, policy counts, and your managed device count and compliance rate.
 * [App Backup](#app-backup) reads the tenant's Win32 apps with their settings, scripts and assignments, and the tenant's Intune account ID. **Assignment check for this PC** also reads the groups this PC's Entra device belongs to, the names and visibility of the assigned groups, and the assignment filters. **Restore to tenant** creates a new Win32 app in the tenant you choose.
 
@@ -102,7 +102,7 @@ What each field is:
 
 * **License key:** the key from your purchase email. Community sends no key.
 * **Installation ID:** a random identifier generated on your machine and kept in its encrypted store. It identifies this installation, not you or your device.
-* **Tenant ID:** the ID of the tenant being licensed. Licenses are counted per tenant.
+* **Tenant ID:** key activation and refresh send the tenant identifier in the request. Organization license requests use the tenant claim in the Microsoft ID token. Licenses are counted per tenant.
 * **Client ID:** the application (client) ID of your app registration. When you share a license with your tenant, only admins who sign in through this app registration are licensed by it.
 * **Operating system and app version:** `win32` or `darwin`, and the TenuVault version number.
 * **Microsoft ID token:** proof of which tenant and app registration you signed in to. It contains identity claims, such as your name and user principal name. The app only sends a token issued within the last few minutes, and never sends access tokens or refresh tokens.

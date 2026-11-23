@@ -5,6 +5,8 @@ description: Choose between creating copies and replacing in place, and decide w
 
 Every restore uses one of two methods: **Create copies** or **Replace in place**. You can also choose to bring back the assignments recorded in the backup. This page explains what each choice does to your tenant.
 
+Use these modes for supported [Intune](/restore/intune/) and [Conditional Access](/backups/conditional-access/) policies. Other [Entra ID restores](/restore/identity/) use individual review. [Defender backups](/restore/defender/) are available for comparison.
+
 ## Compare the methods
 
 | | **Create copies** | **Replace in place** |

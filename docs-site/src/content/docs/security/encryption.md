@@ -1,6 +1,6 @@
 ---
 title: "Encryption and recovery key"
-description: How TenuVault protects Intune backups on your device and in your Azure storage account, and when you need the recovery key.
+description: How TenuVault protects configuration and directory backups on your device and in your Azure storage account, and when you need the recovery key.
 ---
 
 TenuVault encrypts every backup it keeps on your device. Backups in your own Azure storage account are stored as plain JSON policies: Azure encrypts them at rest, and your Azure role assignments decide who can read them. The recovery key only matters for backups on this device, and for older Azure backups that an earlier TenuVault version encrypted. This page explains what is protected, how, and how to use the recovery key.

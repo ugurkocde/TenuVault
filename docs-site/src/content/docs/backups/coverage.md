@@ -1,6 +1,6 @@
 ---
 title: "What gets backed up"
-description: Every Intune object type TenuVault backs up, grouped by area, and what is not covered.
+description: Backup coverage and exclusions for Defender, Entra ID and Intune.
 faq:
   - question: "Which Intune objects does TenuVault back up?"
     answer: "41 Intune object types in nine areas: device configuration, compliance, endpoint security, scripts and remediations, Windows updates, apps, app protection and configuration, enrollment, and tenant administration. Each object is saved as it is in Microsoft Graph (beta for Intune, v1.0 or beta as declared for Entra), with its settings and, where Intune has them, its assignments. Directory snapshots retain only the documented property allowlists."
@@ -14,21 +14,41 @@ faq:
     answer: "TenuVault skips types it is denied access to, for example when the app registration lacks a permission or its admin consent, or when your Intune role excludes the type. A scheduled backup made by the optional Backup Reader also leaves out device categories and device clean-up rules unless the reader has the optional device inventory permission. The backup log and Backup Details say which types were skipped."
 ---
 
-TenuVault backs up 41 Intune object types in nine areas, plus [17 Defender configuration types](/backups/defender/), [74 Entra ID types, including seven opt-in directory inventories](/backups/entra/) and [three Conditional Access types](/backups/conditional-access/) when their services and areas are turned on. Each object is saved as it is in Microsoft Graph (beta for Intune, v1.0 or beta as declared for Entra), with its settings and, where Intune has them, its assignments. Directory snapshots retain only the documented property allowlists.
+With every service and opt-in area selected, TenuVault backs up 135 types. Open **Settings > Services and permissions** to see which types your tenant can read. In **Backup & Restore**, use **Custom** to choose types within the enabled services.
 
-The area and type names below are the ones the **Back up** dialog shows under **Custom**. See [Choose what to back up](/backups/#choose-what-to-back-up).
-
-For the product overview of how to [back up Intune policies](https://www.tenuvault.com/intune-backup), see the backup page on the product site.
-
-Installer content stays separate from this metadata. The free [App Backup Windows preview](/apps/app-backup/#back-up-a-windows-installer) retrieves supported Win32 installers on a PC enrolled in the source tenant. Its captured backups can be restored as new, unassigned apps in the same tenant on every plan, or in another connected tenant with Pro or MSP for that tenant. Earlier local archives remain exportable but do not qualify for that restore flow. macOS installer capture is not available yet.
+| Service | Available types | Coverage |
+| --- | ---: | --- |
+| Defender | 17 | [Defender configuration](/backups/defender/) covers detection and response, email and collaboration, identity, and posture and access. |
+| Entra ID | 77 | [Entra ID configuration](/backups/entra/) covers 67 configuration types and seven opt-in directory inventories. [Conditional Access](/backups/conditional-access/) adds three types through its own switch. |
+| Intune | 41 | [Intune configuration](/backups/intune/) covers policies, updates, scripts, apps, enrollment and tenant administration. |
 
 ## How to read the tables
 
 * **Assignments**: whether the backup holds the object's assignments (the groups and filters it targets). Restoring assignments is a separate choice. See [Restore modes and assignments](/restore/modes/).
-* **Everything except apps**: every type is included in this choice except **Apps**. **Everything** includes every supported type of the services and opt-in areas that are on. With every supported area enabled, there are 135 types.
+* **Everything except apps**: every type is included in this choice except **Apps**. **Everything** includes every supported type of the services and opt-in areas that are on.
 * Built-in objects that Intune creates itself are skipped. The backup log reports how many were skipped.
 
-## Device configuration
+## Defender
+
+See [Defender coverage and exclusions](/backups/defender/#coverage) for supported configuration and the products and types excluded from backup.
+
+## Entra ID
+
+See [Entra ID coverage](/backups/entra/#coverage) for configuration and [opt-in directory inventories](/backups/entra/#opt-in-directory-inventories).
+
+### Conditional Access
+
+Off until you turn the area on under Entra ID for the tenant in **Settings** > **Services and permissions**. **Everything** does not include these types while Conditional Access is off. See [Conditional Access backups](/backups/conditional-access/).
+
+| Type | Assignments | Notes |
+| --- | --- | --- |
+| Conditional Access policies | No | Who a policy covers is part of its settings. Microsoft-managed policies are backed up for drift detection only. |
+| Named locations | No | |
+| Authentication strengths | No | Built-in authentication strengths are skipped |
+
+## Intune
+
+### Device configuration
 
 | Type | Assignments | Notes |
 | --- | --- | --- |
@@ -38,7 +58,7 @@ Installer content stays separate from this metadata. The free [App Backup Window
 | Reusable settings | No | The reusable setting itself |
 | BIOS configurations | Yes | |
 
-## Compliance
+### Compliance
 
 | Type | Assignments | Notes |
 | --- | --- | --- |
@@ -49,13 +69,13 @@ Installer content stays separate from this metadata. The free [App Backup Window
 
 Microsoft Graph returns the compliance policy settings together with unrelated tenant features, such as log collection, Autopilot diagnostics, Android device administrator enrollment and derived credentials. Those other features are not part of the backup.
 
-## Endpoint security
+### Endpoint security
 
 | Type | Assignments | Notes |
 | --- | --- | --- |
 | Security baselines and template profiles | Yes | Template-based profiles with their settings. Settings catalog based endpoint security policies are under **Device configuration**. |
 
-## Scripts and remediations
+### Scripts and remediations
 
 | Type | Assignments | Notes |
 | --- | --- | --- |
@@ -64,7 +84,7 @@ Microsoft Graph returns the compliance policy settings together with unrelated t
 | macOS custom attributes | Yes | |
 | Remediations | Yes | Remediations provided by Microsoft are skipped |
 
-## Windows updates
+### Windows updates
 
 | Type | Assignments | Notes |
 | --- | --- | --- |
@@ -75,7 +95,7 @@ Microsoft Graph returns the compliance policy settings together with unrelated t
 
 Update rings are device configuration profiles and are backed up with **Device configuration**.
 
-## Apps
+### Apps
 
 | Type | Assignments | Notes |
 | --- | --- | --- |
@@ -85,7 +105,7 @@ Update rings are device configuration profiles and are backed up with **Device c
 
 Apps are the slowest type to include in a configuration backup. This backup does not download installer files, so its metadata alone cannot recreate Win32 and line-of-business apps; store, web and Microsoft 365 apps can be recreated. Use [App Backup](/apps/app-backup/) separately to capture and restore supported Win32 installers. See [What cannot be restored](/restore/limitations/).
 
-## App protection and configuration
+### App protection and configuration
 
 | Type | Assignments | Notes |
 | --- | --- | --- |
@@ -95,7 +115,7 @@ Apps are the slowest type to include in a configuration backup. This backup does
 | Android app protection policies | Yes | With the apps they target |
 | Windows app protection policies | Yes | With the apps they target |
 
-## Enrollment
+### Enrollment
 
 | Type | Assignments | Notes |
 | --- | --- | --- |
@@ -108,7 +128,7 @@ Apps are the slowest type to include in a configuration backup. This backup does
 | Device categories | No | In a scheduled backup made by the [Backup Reader](/backups/backup-reader/), only with its optional device inventory permission; otherwise left out |
 | Terms and conditions | Yes | |
 
-### Windows Autopilot devices
+#### Windows Autopilot devices
 
 A backup records each device registered in Windows Autopilot, one file per device, named by its serial number. It keeps what identifies the device and what admins set on it: serial number, manufacturer, model, group tag, purchase order, assigned user and its friendly name, and device name. It leaves out what changes on its own, such as the last contact time, the enrollment state, the profile status and the Intune and Entra device IDs, so a device shows as changed only when someone changes it. The product key and the Surface Hub device account password are never stored.
 
@@ -122,7 +142,7 @@ What you can do with the device records:
 
 Devices are counted as items of the backup, not as policies, and hygiene checks and alert suggestions leave them out. Large tenants are supported: a backup reads the device list page by page, without one request per device.
 
-## Tenant administration
+### Tenant administration
 
 | Type | Assignments | Notes |
 | --- | --- | --- |
@@ -136,16 +156,6 @@ Devices are counted as items of the backup, not as policies, and hygiene checks 
 
 Entra ID configuration stores people by ID, excluding subject descriptions and returned personal profiles. Configured notification recipient email addresses remain stored as policy settings. Runtime state, including workflow next-run times, is excluded so it does not appear as configuration drift. See the [per-type Entra ID table](/backups/entra/) for stored data and exclusions.
 
-## Entra Conditional Access (opt-in)
-
-Off until you turn the service on for the tenant in **Settings** > **Services and permissions**. **Everything** does not include these types while the service is off. See [Conditional Access backups](/backups/conditional-access/).
-
-| Type | Assignments | Notes |
-| --- | --- | --- |
-| Conditional Access policies | No | Who a policy covers is part of its settings. Microsoft-managed policies are backed up for drift detection only. |
-| Named locations | No | |
-| Authentication strengths | No | Built-in authentication strengths are skipped |
-
 ## What is not backed up
 
 * **App installer files in configuration backups.** These backups save app details only. Capture supported Win32 installers separately with [App Backup](/apps/app-backup/).
@@ -155,9 +165,9 @@ Off until you turn the service on for the tenant in **Settings** > **Services an
 * **The groups that assignments target**, unless the opt-in Groups area of Entra ID is on. Assignments are saved as references to groups. See [Entra ID backups](/backups/entra/).
 * **Other tenant-wide Intune settings** that Microsoft Graph returns with the compliance policy settings, such as log collection, Autopilot diagnostics, Android device administrator enrollment and derived credentials.
 * **Windows Autopilot hardware hashes.** Microsoft Graph does not return them once a device is registered.
-* **Anything not listed on this page**, such as enrolled devices and their inventory.
+* **Intune enrolled-device inventory.** The Entra ID Users and devices area can back up a separate Entra directory device inventory.
 * **Types you leave out** with **Everything except apps** or **Custom**.
-* **Types TenuVault is denied access to.** The app registration may lack the permission, for example when it was created with an older version of the setup script, or the permission may not have admin consent. Your Intune role can also exclude a type. The backup skips those types and says so in the log and in **Backup Details**. Open the app registration in Microsoft Entra, go to **API permissions** and select **Grant admin consent for &lt;your tenant&gt;**, or run the setup script again. Then sign out of the tenant in TenuVault and sign in again. If every permission already shows **Granted**, check that your Intune role covers these items. See [Create the app registration](/getting-started/app-registration/#3-add-the-delegated-permissions).
+* **Types TenuVault is denied access to.** The app registration may lack the permission, for example when it was created with an older version of the setup script, or the permission may not have admin consent. Your role for that service can also exclude a type. The backup skips those types and says so in the log and in **Backup Details**. Open the app registration in Microsoft Entra, go to **API permissions** and select **Grant admin consent for &lt;your tenant&gt;**, or run the setup script again. Then sign out of the tenant in TenuVault and sign in again. If every permission already shows **Granted**, check that your role for that service covers these policies. See [Create the app registration](/getting-started/app-registration/#3-add-the-delegated-permissions).
 
 Some backed-up items cannot be restored in full, for example apps that need an installer. See [What cannot be restored](/restore/limitations/).
 
@@ -165,8 +175,6 @@ Some backed-up items cannot be restored in full, for example apps that need an i
 
 * [Intune backup](https://www.tenuvault.com/intune-backup): coverage and plans, on the product site
 * [Your own Intune export script or a backup app](https://www.tenuvault.com/compare/intune-export-script-vs-backup-app): what a Graph script has to read and restore, on the product site
-
-Defender covers only Microsoft Graph configuration, with no restore. [Defender coverage and exclusions](/backups/defender/) names every supported type and the threat policies Graph does not expose.
 
 ## Directory inventories
 

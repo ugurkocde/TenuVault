@@ -7,6 +7,8 @@ With TenuVault MSP you can copy items from a backup of one tenant into one or mo
 
 For the planning steps around the copy itself, see the [Intune tenant to tenant migration](https://www.tenuvault.com/guides/intune-tenant-to-tenant-migration) guide.
 
+This workflow applies to eligible [Intune policies](/restore/intune/) and [Conditional Access policies](/backups/conditional-access/). Other [Entra ID types](/restore/identity/) and [Defender types](/restore/defender/) are unavailable for cross-tenant copy.
+
 ## Requirements
 
 * **MSP plan on every tenant involved.** Copying to other tenants is an MSP feature. TenuVault checks the plan of the source tenant and of every target tenant before anything is written, and stops with an upgrade message if one of them is not covered.

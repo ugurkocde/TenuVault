@@ -177,7 +177,7 @@ TenuVault keeps your sign-in in a token cache encrypted with Windows data protec
 
 ## Follow your service choice
 
-Before Connect, **What do you want to back up?** offers Intune, Entra ID and Defender. The main button names your choice. Each connect route uses the same permissions:
+Before Connect, **What do you want to back up?** offers Defender, Entra ID and Intune. The main button names your choice. Each connect route uses the same permissions:
 
 * **Set up with Microsoft sign-in** creates the registration with your chosen services, opt-in areas and access levels. Before Microsoft opens, TenuVault explains that Microsoft Graph Command Line Tools gets broader setup-only access, Application.ReadWrite.All and DelegatedPermissionGrant.ReadWrite.All, to create the registration and grant consent. Its sign-in stays in memory and is dropped when setup ends. A second sign-in follows through TenuVault with the chosen permissions.
 * **Use the setup script instead** shows the generated command, including `-Services`, `-RestoreAccess` and `-Areas` as needed. Save the script and run the displayed command.

@@ -1,6 +1,6 @@
 ---
 title: "Work with other admins in one tenant"
-description: Let several Intune admins share one TenuVault setup for a tenant, with one app registration, one Azure storage account and the same backups, policies and restores for everyone.
+description: Let several Microsoft tenant admins share one TenuVault setup for a tenant, with one app registration, one Azure storage account and the same backups, policies and restores for everyone.
 ---
 
 Several admins can use TenuVault for the same tenant, each on their own computer and with their own sign-in. When the tenant's backups are in an Azure storage account, every admin sees, compares and restores the same backups, with no key to hand over. This page lists what the admins share and what stays on each computer.
@@ -10,7 +10,7 @@ Several admins can use TenuVault for the same tenant, each on their own computer
 | | How |
 | --- | --- |
 | App registration | One per tenant. Create it once with the [setup script](/getting-started/app-registration/). Every admin signs in through it with their own account, so you share the client ID, never a secret. Changes are attributed to the admin who made them in the Intune and Entra audit logs. |
-| Roles | Each admin needs an Intune role that covers the policies they back up and restore. For Azure storage, each admin also needs **Storage Blob Data Contributor** and read access (for example **Reader**) on the storage account. The [storage setup script](/getting-started/create-storage-account/) grants both to one admin group. |
+| Roles | Each admin needs [the roles for the services they use](/getting-started/requirements/#admins-who-use-tenuvault), including write access for supported restores. For Azure storage, each admin also needs **Storage Blob Data Contributor** and read access (for example **Reader**) on the storage account. The [storage setup script](/getting-started/create-storage-account/) grants both to one admin group. |
 | License | The key holder shares the license with the tenant, so the other admins need no key of their own. See [Share the license with your tenant's admins](/licensing/manage/#share-the-license-with-your-tenants-admins). Each tenant can be active on up to 5 installations. |
 | Backups | Choose the same storage account in **Your Azure storage account** on every computer. Backups made by one admin appear for all of them, for [drift detection](/drift/), [restore](/restore/) and download. |
 | Audit log | Kept in the same storage account, so every admin sees who started each action. See [Audit log](/audit-log/). |
@@ -35,9 +35,9 @@ To set up the second admin by hand instead:
 
 ## Who is trusted
 
-Everyone who can write to the `intune-backups` container is trusted like an Intune admin, because TenuVault restores what it finds there, including replacing live policies and restoring assignments. Backups in Azure are not encrypted by TenuVault: Azure encrypts them at rest, and your role assignments decide who can read and change them. They include the plain-text values of secret OMA-URI settings, so a restore is complete.
+Treat write access to backup containers as privileged. An admin may restore configuration from those files, including replacing live policies and restoring supported assignments. Backups in Azure are not encrypted by TenuVault: Azure encrypts them at rest, and your role assignments decide who can read and change them. They include the plain-text values of secret OMA-URI settings, so a restore is complete.
 
-* Grant the blob data roles on the storage account only to the Intune admin group.
+* Grant the blob data roles on the storage account only to the group of admins who need that storage access.
 * Keep soft delete on for blobs and containers, which the storage setup script turns on. See [Backups in Azure](/security/encryption/#backups-in-azure).
 
 ## What stays on each computer

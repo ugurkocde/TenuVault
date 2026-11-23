@@ -1,9 +1,9 @@
 ---
 title: "Manage tenants"
-description: Add, switch, monitor, rename, tag and remove the Intune tenants TenuVault works with.
+description: Add, switch, monitor, rename, tag and remove the Microsoft tenants connected to TenuVault.
 ---
 
-A tenant in TenuVault is one Microsoft Intune tenant you have signed in to, together with the place its backups are stored. This page covers how you add tenants, switch between them, read the dashboards and remove a tenant you no longer need.
+A tenant in TenuVault is one Microsoft tenant you have signed in to, together with the place its backups are stored. This page covers how you add tenants, switch between them, read the dashboards and remove a tenant you no longer need.
 
 ## Where you work with tenants
 
@@ -13,7 +13,7 @@ A tenant in TenuVault is one Microsoft Intune tenant you have signed in to, toge
 | **Dashboard** | Sidebar | Backup overview of the selected tenant |
 | **All tenants** | Sidebar, when two or more tenants are connected | Status of every connected tenant at a glance |
 | **Tenants** | Sidebar | The **Tenant Management** page: rename, tag, refresh, back up and remove tenants |
-| **Services** | Below **Backup & Restore** in the sidebar | **Intune**, **Entra ID** and **Defender** shortcuts to filtered backup contents for the selected tenant |
+| **Services** | Below **Backup & Restore** in the sidebar | **Defender**, **Entra ID** and **Intune** shortcuts to filtered backup contents for the selected tenant |
 | **Settings** | Sidebar | Sign in again and change where a tenant's backups are stored |
 | **License** | Sidebar | License state of each tenant and license sharing |
 
@@ -44,13 +44,15 @@ Every button that adds a tenant opens the guided setup:
 
 * **Connect a tenant** in the tenant switcher or on the **All tenants** page.
 * **Connect tenant** on the **Tenants** page or in the dashboard's **Quick Actions**.
-* **Set up TenuVault** on the dashboard when no tenant is connected. The dashboard then shows **Protect your Intune policies** with this one button.
+* **Set up TenuVault** on the dashboard when no tenant is connected. The dashboard then shows **Protect your tenant configuration** with this one button.
 
 The setup walks you through the app registration, signing in, choosing storage and running a first backup. Select **Back to dashboard** to leave it. See [Sign in to your tenant](/getting-started/connect-tenant/).
 
 TenuVault checks the license when you sign in and again before it saves the tenant. If your license does not cover the tenant, the tenant is not added, the new sign-in is removed and the setup shows the reason.
 
 After the tenant is added, TenuVault reads its organization name, primary domain and policy counts from Microsoft Graph. If you connected the same tenant before with the same storage location, the custom name and tags you gave it are restored from that storage.
+
+Use **Settings > Services and permissions** to change what the tenant backs up and check coverage for Defender, Entra ID and Intune. Conditional Access has its own switch under Entra ID.
 
 ## The tenant dashboard
 
@@ -128,7 +130,7 @@ Click a tenant's name, or its arrow button, to select it and open its dashboard.
 
 Open **Tenants** in the sidebar. Use the search box to filter by name or domain, and the grid and list buttons to switch views.
 
-In the grid view, each tenant card shows the tenant's initials, name, domain, tags, live counts of **Compliance Policies** and **Configuration Profiles** read from Intune, the **Backup storage**, when data was last refreshed (**Last sync**) and the next automatic backup. **Backup Now** opens the backup dialog.
+In either view, select Defender, Entra ID or Intune beside a tenant to open its filtered backup contents. In the grid view, each tenant card also shows the tenant's initials, name, domain, tags, live counts of **Compliance Policies** and **Configuration Profiles** read from Intune, the **Backup storage**, when data was last refreshed (**Last sync**) and the next automatic backup. **Backup Now** opens the backup dialog.
 
 The list view shows the same tenants as a table with the columns **Tenant**, **Status**, **Region**, **Policies**, **Tags**, **Last Backup**, **Plan**, **Drift** and **Actions**.
 

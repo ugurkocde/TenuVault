@@ -1,24 +1,24 @@
 ---
-title: "Intune backup: run a backup"
-description: "Run an Intune backup with TenuVault: back up 41 Microsoft Intune object types with assignments, encrypted on your device or in your own Azure storage account."
+title: "Run a configuration backup"
+description: "Back up Defender, Entra ID and Intune configuration on your device or in your own Azure storage account."
 faq:
-  - question: "How do I back up Microsoft Intune policies?"
-    answer: "In TenuVault, select the tenant, open Backup & Restore and click Run Backup. Keep the saved backup choice or change it, then click Start backup. TenuVault reads the Intune configuration through Microsoft Graph with your own delegated sign-in and saves the objects in your backup choice, with their assignments where Intune has them."
-  - question: "What does an Intune backup include?"
-    answer: "A full configuration backup covers 41 Intune object types in nine areas, including Settings Catalog and device configuration policies, compliance policies, scripts, Administrative Templates, enrollment and tenant settings, plus app details and assignments. It excludes installer files, Apple tokens and private keys. Use the separate App Backup Windows preview to capture supported Win32 installer content."
+  - question: "How do I back up Microsoft tenant configuration?"
+    answer: "In TenuVault, select the tenant, open Backup & Restore and click Run Backup. Keep the saved backup choice or change it, then click Start backup. TenuVault saves supported configuration for the services and areas in your backup choice."
+  - question: "What does a configuration backup include?"
+    answer: "TenuVault covers 17 Defender types, 77 Entra ID types including Conditional Access, and 41 Intune types. The backup includes the services and areas you enable and the types you select. App installer content is captured separately with App Backup."
   - question: "Does Microsoft Intune have a built-in backup?"
     answer: "No. Intune has no native backup, point-in-time restore or recycle bin for policies, so a deleted or changed policy cannot be recovered from the Intune portal. A backup tool such as TenuVault saves the configuration through Microsoft Graph before something goes wrong."
-  - question: "Where are Intune backups stored?"
+  - question: "Where are configuration backups stored?"
     answer: "On every plan, backups are encrypted with AES-256-GCM and stored in a local folder or on a network share. On Pro and MSP they can go to your own Azure storage account instead, where Azure encrypts them at rest and your role assignments decide which admins can read them. Backups are never sent to a TenuVault server."
-  - question: "How often should I back up Intune?"
+  - question: "How often should I run a backup?"
     answer: "On a schedule, so a recent backup always exists before you need it. Community includes manual and weekly scheduled backups. Pro and MSP add daily schedules. Also run a manual backup before any large policy change."
 ---
 
-An Intune backup is a complete, point-in-time copy of your Microsoft Intune configuration: policies, scripts, enrollment and tenant settings, saved with their assignments so they can be restored later. Intune itself has no native backup or recycle bin for policies, which is why TenuVault saves the configuration through Microsoft Graph. This page shows how to start a backup, choose what it covers, follow it while it runs and read the result. For the product overview, see [Intune backup with TenuVault](https://www.tenuvault.com/intune-backup).
+A configuration backup captures the selected Defender, Entra ID and Intune policies and settings that TenuVault can read at run time. Use **Backup & Restore** to choose what to back up, follow the run and check its coverage before relying on it for recovery.
 
 ## How a backup works
 
-TenuVault reads your Intune configuration through Microsoft Graph (beta) with your own delegated sign-in. It saves every object as its own file, together with its assignments, in a new backup folder named after the start time in UTC, for example `backup-2026-09-28-020000`. When all objects are read, it writes a summary with the item counts, the result and a fingerprint of every item, which later lets TenuVault [compare backups](/backups/compare/).
+TenuVault uses your signed-in account for manual backups. It saves each supported object as its own file, with assignment references where supported, in a new backup folder named after the start time in UTC, for example `backup-2026-09-28-020000`. When all objects are read, it writes a summary with the item counts, the result and a fingerprint of every item, which later lets TenuVault [compare backups](/backups/compare/).
 
 Backups go to the storage you chose for the tenant: encrypted on this device, or in your own Azure storage account, which every admin with access shares. See [Backup storage and retention](/backups/storage/).
 
@@ -28,9 +28,9 @@ To retrieve supported Win32 installer content from Intune, use [free App Backup]
 
 ## Browse backups by service
 
-Below **Backup & Restore**, the sidebar's **Services** group lists **Intune**, **Entra ID** and **Defender**. Select an enabled service to open this page filtered to its policies. A service marked **Off** opens **Settings > Services and permissions** instead. While service status is loading or unavailable, each link opens filtered backup contents without an **Off** badge. Only a confirmed off service opens Settings.
+Below **Backup & Restore**, the sidebar's **Services** group lists **Defender**, **Entra ID** and **Intune**. Select an enabled service to open this page filtered to its policies. A service marked **Off** opens **Settings > Services and permissions** instead. While service status is loading or unavailable, each link opens filtered backup contents without an **Off** badge. Only a confirmed off service opens Settings.
 
-The **Service** filter offers **All**, **Intune**, **Entra ID** and **Defender**. It narrows **Contents**, **Trends by policy type**, large inventory and the **Restore** type lists. Entra ID includes Conditional Access, which still has its own backup switch. The filter stays in the page address across reloads, tab changes and back/forward navigation. Choose **All** to clear the highlighted sidebar service. An unknown service in an address shows All.
+The **Service** filter offers **All**, **Defender**, **Entra ID** and **Intune**. It narrows **Contents**, **Trends by policy type**, large inventory and the **Restore** type lists. Backup contents group the areas under their services. Conditional Access appears under Entra ID and keeps its own backup switch. If only Conditional Access is on, the Entra ID sidebar link still opens backup contents. The filter stays in the page address across reloads, tab changes and back/forward navigation. Choose **All** to clear the highlighted sidebar service. An unknown service in an address shows All.
 
 The timeline, totals, downloads and **Run Backup** still cover the whole backup. This view does not change the tenant's saved backup scope or which services new backups include. Turn services on or off in Settings.
 
@@ -71,11 +71,11 @@ The **Back up** dialog offers three choices:
 
 | Choice | What it covers |
 | --- | --- |
-| **Everything except apps** | "Policies, scripts, updates, enrollment and tenant settings." Every type except apps. App categories, policy sets, app configuration and app protection policies are still included. |
+| **Everything except apps** | Every enabled type except Intune app details. App categories, policy sets, app configuration and app protection policies are still included. |
 | **Everything** | "Also app details and assignments. Installer files are never included." Every supported type of the services and opt-in areas that are on. |
 | **Custom** | "Choose areas and individual types." |
 
-With **Custom**, TenuVault lists the areas (for example **Device configuration** or **Enrollment**). Tick an area to include all of its types, or expand it to tick individual types. When the tenant has an earlier backup, each area and type shows how many items it held last time, and the dialog estimates the total number of items.
+With **Custom**, TenuVault lists the areas under Defender, Entra ID and Intune, in that order. Tick an area to include all of its types, or expand it to tick individual types. When the tenant has an earlier backup, each area and type shows how many items it held last time, and the dialog estimates the total number of items.
 
 The line under the choices shows how many of the available types the backup covers, grouped by service and area. **Start backup** is unavailable until at least one type is ticked ("Choose at least one type.").
 
@@ -137,7 +137,7 @@ The log lists what TenuVault did, with a time stamp per line. Typical lines:
 
 If Microsoft Graph throttles requests, TenuVault pauses and retries automatically. If your sign-in expires during a backup, the backup stops instead of reporting every remaining item as a warning, whichever service was being read. Sign in again and run a new backup.
 
-Some Entra ID and Defender endpoints refuse a read with the same answer Microsoft gives for a sign-in that ended. TenuVault asks such a request once more with a new sign-in token. Only when the new token gets the same answer is the type left out; when no new token can be had, the backup stops and you are asked to sign in again.
+Some Defender and Entra ID endpoints refuse a read with the same answer Microsoft gives for a sign-in that ended. TenuVault asks such a request once more with a new sign-in token. Only when the new token gets the same answer is the type left out; when no new token can be had, the backup stops and you are asked to sign in again.
 
 ## Read the result
 
@@ -178,13 +178,13 @@ A backup with a type that was left out or not read shows **Coverage incomplete**
 
 One case is different: when every selected type was left out, the backup read nothing and holds nothing. It ends as **Failed** with "Backup failed: nothing could be read" and the cause most of the types share, for example a missing permission or a product the tenant has no license for. Scheduled backups retry it, a failure is notified, and older backups are kept. A backup whose types are all empty or not set up in the tenant did read the tenant and stays **Complete**.
 
-An Entra ID or Defender endpoint that fails ends its own type, and the backup goes on with the other types and services. When Microsoft Graph stops answering the requests of one of these services, the rest of that service is not read and the other services are.
+A Defender or Entra ID endpoint that fails ends its own type, and the backup goes on with the other types and services. When Microsoft Graph stops answering the requests of one of these services, the rest of that service is not read and the other services are.
 
 Types the backup choice leaves out, and the types of a service that is turned off for the tenant, are not selected. They never make coverage incomplete.
 
 Retention follows coverage per type: an older backup stays while it holds the newest copy of a type that later backups left out or did not read.
 
-Types skipped because access was denied do not change the result. **Backup Details** lists them: "Left out because access was denied". Open the app registration in Microsoft Entra, go to **API permissions** and select **Grant admin consent for &lt;your tenant&gt;**, or run the setup script again. Then sign out of the tenant in TenuVault and sign in again. If every permission already shows **Granted**, check that your Intune role covers these items. See [Create the app registration](/getting-started/app-registration/#3-add-the-delegated-permissions).
+A run can finish when an individual type is denied. If every selected type is left out, the run fails. **Backup Details** lists them: "Left out because access was denied". Open the app registration in Microsoft Entra, go to **API permissions** and select **Grant admin consent for &lt;your tenant&gt;**, or run the setup script again. Then sign out of the tenant in TenuVault and sign in again. If every permission already shows **Granted**, check that your role for the affected service covers these policies. See [Create the app registration](/getting-started/app-registration/#3-add-the-delegated-permissions).
 
 ## Backup history
 

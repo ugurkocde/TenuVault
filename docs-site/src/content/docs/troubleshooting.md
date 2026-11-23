@@ -66,6 +66,16 @@ If Microsoft shows an error in the sign-in window itself (an `AADSTS` code), che
 
 If the browser shows `AADSTS50011` (redirect URI mismatch), the app registration is missing the `http://localhost` redirect URI. Add it under **Authentication** > **Mobile and desktop applications**, as described in [Create the app registration](/getting-started/app-registration/), and sign in again.
 
+### Sign-in error codes
+
+| Code | What to check |
+| --- | --- |
+| `AADSTS50011` | Verify the desktop app registration's redirect URI. |
+| `AADSTS50105` | Ask an administrator to verify assignment to the enterprise application. |
+| `AADSTS53003` | Check the Conditional Access result in the Entra sign-in logs. |
+| `AADSTS65001` or `AADSTS650057` | Check the registration's permissions and consent for the resource named in the error. |
+| `AADSTS70044` | Sign in again. If scheduled desktop backups repeatedly stop when your session ends, review the [Backup Reader](/backups/backup-reader/) option. |
+
 ### Read the connection health report
 
 Open **Settings > Services and permissions**, choose the tenant and select **Check again**. Graph sign-in, the Backup Reader and backup storage have separate states and next steps. A problem with one is never presented as proof that another is broken.
@@ -131,6 +141,8 @@ Each TenuVault installation has its own installation ID, kept with the app's sav
 
 More on licenses: [Activate and manage your license](/licensing/manage/).
 
+For a backup access problem, open **Settings > Services and permissions** for the affected tenant. Check the Defender, Entra ID or Intune card for missing permissions and last-backup verification. Conditional Access has a separate status under Entra ID.
+
 ## Backup
 
 | Message | Cause | Fix |
@@ -152,7 +164,7 @@ More on licenses: [Activate and manage your license](/licensing/manage/).
 | Could not back up "*name*": *message* | Saving one item failed. | Check the message and the storage. Retry the backup. |
 | Backup failed: no policies could be saved | Nothing could be written. | Check storage access and sign-in, then retry. |
 | Backup failed: nothing could be read / Nothing could be read. Every selected type was left out because *cause*. | Every type the backup was asked to cover was left out, so the backup holds nothing. The message names the cause most types share: a permission or its admin consent is missing, your account has no role that can read the types, the tenant has no license for the product or never set it up, or only a signed-in admin can read them and the backup ran as the Backup Reader. **Needs attention** gives the reason per type. Older backups are kept, and a scheduled backup tries again. | Fix the cause the message names. For a missing permission, open **Settings** > **Services and permissions**. If the tenant does not use the service at all, turn the service off for the tenant there, so its types are no longer selected. Then run a new backup. |
-| The backup stopped with a sign-in message while reading Entra ID or Defender, for example "Microsoft Graph authentication failed (HTTP 401)." or "Your session for *user* has ended. Sign in again to continue." | Microsoft no longer accepted the sign-in during the backup, or TenuVault could not get a new sign-in token to confirm a refused read. Every read after that would fail the same way, so the backup stops, as it does for Intune. | Sign in again and run a new backup. For scheduled backups, see [Conditional Access and TenuVault](/security/conditional-access/). |
+| The backup stopped with a sign-in message while reading Defender or Entra ID, for example "Microsoft Graph authentication failed (HTTP 401)." or "Your session for *user* has ended. Sign in again to continue." | Microsoft no longer accepted the sign-in during the backup, or TenuVault could not get a new sign-in token to confirm a refused read. Every read after that would fail the same way, so the backup stops, as it does for Intune. | Sign in again and run a new backup. For scheduled backups, see [Conditional Access and TenuVault](/security/conditional-access/). |
 | Could not read *type*: Microsoft Graph did not respond for *N* consecutive requests of this service, so the rest of the service was not read. | Microsoft Graph stopped answering the requests of Entra ID or Defender. The remaining types of that service were not read; the other services were. The backup completes with warnings. | Check your connection and run the backup again later. |
 | Could not read *type*: Invalid Graph continuation link / Microsoft Graph returned a list that continues on another page where one tenant-wide object was expected | Microsoft Graph answered with a link to a further page that does not belong to the list being read, or with several pages where a single setting was expected. TenuVault does not follow such a link, so the type was not read and nothing wrong was stored. | Run the backup again. If the message returns, share the backup log through **Share feedback**. |
 | A different backup is already running for this tenant. Wait for it to finish, then try again. | A backup with another storage account or scope is already running for this tenant, so this request did not start. A scheduled backup that meets this message counts as a failed attempt and is retried. | Wait for the running backup to finish, then start the backup again. |

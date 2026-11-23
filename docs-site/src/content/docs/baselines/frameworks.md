@@ -45,7 +45,7 @@ Native framework pages link to the publisher with **Publisher reference**. Polic
 
 <figure class="docs-screenshot">
   <a href="/images/screenshots/frameworks-light.webp" aria-label="Open full-size screenshot: frameworks light">
-    <img src="/images/screenshots/frameworks-light.webp" alt="The framework catalog offers the available comparison workflows" width="2880" height="1800" loading="lazy" decoding="async" />
+    <img src="/images/screenshots/frameworks-light.webp" alt="The framework catalog offers the available comparison workflows" width="2880" height="2000" loading="lazy" decoding="async" />
   </a>
   <figcaption>The framework catalog offers the available comparison workflows. Captured from the current app; no assessment was run. Select the image to view it full size.</figcaption>
 </figure>

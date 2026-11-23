@@ -4,7 +4,7 @@
 
 # TenuVault: Intune Backup, Restore and Disaster Recovery
 
-**Intune backup, restore, drift detection and OpenIntuneBaseline, on your machine.**
+**Back up Defender, Entra ID and Intune configuration, restore supported policies and detect drift on your machine.**
 
 A desktop app for Windows and macOS, built for organisations whose admins are not allowed to sign in
 to third-party web apps, or whose Conditional Access policies block them.
@@ -43,13 +43,10 @@ Rather set it up together? Book a [free setup call](https://www.tenuvault.com/se
 
 ## What it does
 
-- **[Intune backup](https://www.tenuvault.com/intune-backup).** Settings Catalog, device configurations, compliance, scripts, Administrative Templates
-  and more, with their assignments. On demand or on a daily or weekly schedule, encrypted on this
-  device or in your own Azure storage account. Schedules run on the admin's computer, or as
-  [cloud backups](https://docs.tenuvault.com/backups/cloud/) in an Azure Automation runbook in your
-  own subscription (Pro and MSP), so no computer has to be on or signed in. See [what gets backed up](https://docs.tenuvault.com/backups/coverage/).
-- **[Intune restore](https://www.tenuvault.com/intune-restore).** Bring back single policies or whole sets of policies from any backup, including deleted policies. Copies are created as separate
-  policies; cross-tenant copies arrive unassigned and need reviewed target dependencies. For tenant-wide loss, see the [Intune disaster recovery plan](https://www.tenuvault.com/intune-disaster-recovery) and the [disaster recovery runbook](https://docs.tenuvault.com/restore/disaster-recovery/).
+- **Defender.** Back up and compare supported configuration for detection and response, email and collaboration, identity, and posture and access. See [Defender coverage](https://docs.tenuvault.com/backups/defender/).
+- **Entra ID.** Back up tenant settings, authentication, Conditional Access, external identities, roles and governance. Enable directory inventories separately and recover supported policies through individual review. See [Entra ID coverage](https://docs.tenuvault.com/backups/entra/).
+- **Intune.** Back up policies, scripts and enrollment settings, with their assignments where supported. Restore eligible policies and review dependencies before copying them to another tenant. See [Intune coverage](https://docs.tenuvault.com/backups/intune/).
+- **Backup storage and schedules.** Back up on demand or on a desktop schedule, to encrypted local storage or your Azure storage account. [Azure Automation](https://docs.tenuvault.com/backups/cloud/) supports Intune and separately configured Conditional Access on Pro and MSP.
 - **[Drift detection](https://www.tenuvault.com/intune-drift-detection).** See what changed between backups, down to the setting, and export the result
   as JSON or CSV.
 - **OpenIntuneBaseline.** Deploy, compare and validate OpenIntuneBaseline policies from the latest

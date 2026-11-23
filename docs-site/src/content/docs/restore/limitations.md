@@ -16,6 +16,8 @@ Most Intune items restore directly from a backup. A few cannot, because Intune d
 
 [App Backup](/apps/app-backup/) covers installer content separately. Its Windows preview retrieves supported Win32 installers on an enrolled PC and restores captured backups as new, unassigned apps to the same tenant on every plan, or to another connected tenant with Pro or MSP for that tenant. The configuration-backup wizard described below does not use those installer captures; start that restore from **App Backup → Backups → Restore to tenant…**. Earlier administrator-selected archives remain exportable, but do not qualify as captured backups for restore.
 
+Availability depends on the service and policy type. Start with the limits for [Defender](/restore/defender/), [Entra ID](/restore/identity/) or [Intune](/restore/intune/).
+
 ## Items that cannot be restored
 
 The **Backup & Restore** configuration wizard marks these items as **Cannot be restored** (or greys them out on **Choose what to restore**) and shows the reason under the item.

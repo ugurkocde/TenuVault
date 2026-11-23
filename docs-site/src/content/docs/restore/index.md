@@ -1,6 +1,6 @@
 ---
-title: "Intune restore: restore policies from a backup"
-description: "Restore Microsoft Intune policies from a TenuVault backup: recreate deleted policies, replace changed policies in place, or create unassigned copies."
+title: "Restore configuration from a backup"
+description: "Restore supported Entra ID and Intune configuration from a TenuVault backup and review Defender recovery limits."
 faq:
   - question: "How do I restore an Intune policy?"
     answer: "Open Backup & Restore in TenuVault and start the restore wizard, or pick a backup in Backup History and click Restore from this backup. Choose the policies, choose Create copies or Replace in place, review what will happen to each policy, then confirm."
@@ -14,13 +14,19 @@ faq:
     answer: "Yes, with the MSP plan. Copies keep their original names, get the Default scope tag and are never assigned, so you recreate groups, exclusions and filters in the target tenant and then assign the copies."
 ---
 
-An Intune restore brings Microsoft Intune policies back as they were when a backup ran, including policies that were changed or deleted afterwards. Recreated policies get new IDs in Intune, and references within the same restore are pointed to them. The restore wizard walks you through it: pick a backup, choose the policies, decide how to restore them, review exactly what will happen to each policy, and then watch the restore run. For the product overview, see [Intune restore with TenuVault](https://www.tenuvault.com/intune-restore).
+Restore supported configuration from a saved tenant backup. The available actions depend on the service, type, backup contents and the signed-in admin’s access.
+
+| Service | Restore availability |
+| --- | --- |
+| Defender | Browse and compare backups. See [Defender recovery limits](/restore/defender/). |
+| Entra ID | Restore supported Conditional Access policies and individually review eligible configuration and directory changes. See [Restore Entra ID configuration](/restore/identity/). |
+| Intune | Recreate supported policies, replace them in place or create copies. See [Restore Intune configuration](/restore/intune/). |
 
 ## Before you start
 
 * The tenant is signed in and its license is active. If not, TenuVault shows a notice with **Open sign-in settings** and **Open license** above the page. See [Sign in to your tenant](/getting-started/connect-tenant/) and [Activate and manage your license](/licensing/manage/).
 * The tenant has backup storage chosen, and at least one backup with items in it. See [Run a backup](/backups/).
-* Your admin account has an Intune role that can write the item types you restore, for example Intune Administrator. TenuVault uses delegated permissions, so it can never do more than your account can.
+* Your admin account has a role and delegated permissions that allow the selected type to be restored. TenuVault uses delegated permissions, so it can never do more than your account can.
 * If the backup is in a folder from another device, import that device's recovery key first. Azure backups need no key, except older Azure backups that an earlier TenuVault version encrypted. See [Encryption and recovery key](/security/encryption/).
 
 ## What your plan includes
@@ -103,6 +109,8 @@ Click **Next** when your selection is ready, or **Other backup** to go back.
 </figure>
 
 ## Step 3: How to restore
+
+The standard wizard below handles supported Intune and Conditional Access policies. For eligible Entra ID configuration or directory objects, follow the individual review described in [Restore Entra ID configuration](/restore/identity/).
 
 **How to restore** shows how many items are selected and offers the restore options:
 

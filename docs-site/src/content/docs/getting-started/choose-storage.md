@@ -1,6 +1,6 @@
 ---
 title: "Choose where backups are stored"
-description: Keep Intune backups encrypted on this device or in your own Azure storage account, and know when you need the recovery key.
+description: Keep configuration backups on this device or in your own Azure storage account, and know when you need the recovery key.
 ---
 
 On the **Storage** step, **Choose where backups are stored**, you choose where this tenant's backups go. On this device, TenuVault encrypts every backup with AES-256-GCM. In your Azure storage account, Azure encrypts the backups at rest and your Azure role assignments decide who can read them. Neither option sends anything to TenuVault.

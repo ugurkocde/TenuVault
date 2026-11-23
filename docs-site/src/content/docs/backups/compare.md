@@ -1,6 +1,6 @@
 ---
 title: "Compare backups"
-description: See what was added, changed and deleted in Intune between one backup and the one before it.
+description: See what changed across Defender, Entra ID and Intune between two configuration backups.
 ---
 
 Every backup records a fingerprint of each item it saved. TenuVault compares these fingerprints with the previous backup, so you can see what was added, changed and deleted in the tenant between two backups, down to the individual setting.
@@ -70,11 +70,11 @@ To compare the tenant as it is right now with your last backup, run a new backup
 
 Large directory inventories use a separate paged comparison in **Drift Detection**. Choose the inventory and use **Next page** to inspect the next window. Each window compares at most 1,000 identities, returns at most 200 changes and replaces the rows already shown. Matching fingerprints avoid reading the snapshots. Both backups must completely cover the selected type. An unread index is an error, never an empty collection interpreted as deletions.
 
-Backup History and the policy drift totals exclude this separately paged inventory and say that it is compared on demand. Backup Details browses its object IDs in pages. These controls prepare for directory types; the infrastructure layer adds no such types itself. See [Large tenants](/backups/storage/#large-tenants) for limits and the reproducible synthetic check.
+Backup History and the policy drift totals exclude this separately paged inventory and say that it is compared on demand. Backup Details browses its object IDs in pages. Conditional Access comparisons are part of Entra ID coverage. See [Large tenants](/backups/storage/#large-tenants) for limits and the reproducible synthetic check.
 
 ## Act on a change
 
-* To put an item back as it was, open **Restore from this backup** on the older backup. See [Restore Intune policies](/restore/).
+* To put an item back as it was, open **Restore from this backup** on the older backup. See [Restore supported configuration](/restore/).
 * To revert a recent change in place, or restore a copy, use [Drift detection](/drift/).
 
 ## Related pages

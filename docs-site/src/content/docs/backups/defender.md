@@ -3,7 +3,11 @@ title: Defender configuration backups
 description: Back up the Microsoft Defender configuration exposed by Microsoft Graph, with explicit coverage limits.
 ---
 
-TenuVault backs up 17 Defender configuration types when you enable **Defender** in **Settings > Services and permissions**. Defender starts off for existing tenants. Manual backups use the signed-in admin; scheduled backups use the Backup Reader. All supported types accept both modes. Restore, Copy to Tenants and drift revert are not available for these types.
+TenuVault backs up 17 Defender configuration types when you enable **Defender** in **Settings > Services and permissions**. Defender starts off for existing tenants. Manual backups use the signed-in admin. Scheduled backups use that sign-in or a configured Backup Reader. All supported types accept both modes. Restore, Copy to Tenants and drift revert are not available for these types.
+
+## Enable backups
+
+Select Defender during setup or turn it on in **Settings > Services and permissions**. Review the permissions for the areas you use.
 
 ## Coverage
 
@@ -31,9 +35,9 @@ Attack content sends `source eq 'tenant'` on every list page and refuses global 
 
 Object collections without an authored order are sorted by stable identity, including role assignment principals and inherited role references. Detection scope names, response action device groups and sensor domain controller references are also treated as unordered sets. Workbook document order is preserved. Advancing run state does not make unchanged configuration appear changed. Each type has a shared 120-second and 500-request read budget across its pages, details, retries and sub-reads. Exhausting it leaves that type incomplete and other types continue.
 
-## Permissions and outcomes
+## Permissions and verification
 
-The [permissions page](/security/permissions/#entra-id-and-defender) lists the read permissions per area. A permission in the token does not establish the admin's role, product license or onboarding. Defender for Identity requires its license and workspace; attack simulations require the corresponding Defender for Office 365 entitlement. Beta APIs may change.
+The [permissions page](/security/permissions/#defender-and-entra-id-permission-packs) lists the read permissions per area. A permission in the token does not establish the admin's role, product license or onboarding. Defender for Identity requires its license and workspace; attack simulations require the corresponding Defender for Office 365 entitlement. Beta APIs may change.
 
 An exact recorded Defender for Identity onboarding refusal or case-management inactive-account refusal is **license or not onboarded**, never missing permission. That result can come only from the type's own list or singleton request. A failed detail or relationship remains incomplete. The recorded threat-submission HTML 401 page is a permission refusal and does not refresh or end your sign-in. Empty RBAC 403 and detection-role 403 answers are permission refusals. Other services continue when a Defender endpoint throttles or refuses a read. No unread list counts as empty coverage.
 
@@ -64,6 +68,6 @@ Workbooks were previously deferred. They are now included: the lab app holds `Wo
 
 The lab read on 2026-11-16 saved the user reported settings policy. Detection rules, workbooks, attack simulation lists and unified RBAC lists were empty. Identity endpoints returned their onboarding refusal; case management returned the inactive-tenant refusal. Secure Score returned HTTP 504 repeatedly, including isolated and smaller-page probes, so a successful current live read could not be verified. That remains a failed read, never a permission or licensing result. Nonempty definitions and sub-resources use labelled documented synthetic fixtures. No delegated live read is claimed.
 
-## Restore verification
+## Restore
 
 Defender restore remains blocked. A disabled, never-matching custom detection fixture was created in the lab, but its detectionAction read-back contained service-added null fields, empty mappings and empty action collections that the closed candidate could not reconcile. Update and restore were not attempted. Cleanup removed the fixture. No CustomDetection.ReadWrite.All scope is requested. Workflow execution, detection activation and automated response actions are not enabled by these tests. See [restore safety](/restore/identity/) for per-type reasons.
