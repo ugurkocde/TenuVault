@@ -161,7 +161,7 @@ function ResultDetails({ result }: { result: Validation }) {
 /** OIBDeployer's Policy Validation: setting-level drift of matched policies, read-only, with history and Fix drift (Pro). */
 export function PolicyValidation({ selections }: { selections: Selections }) {
   const { tenant, can, plan } = useOibTenant()
-  const readOnly = useRegistrationAccess(tenant?.tenantId, tenant?.appId)
+  const readOnly = useRegistrationAccess(tenant?.tenantId)
   const job = useOibJob<ValidateAll>(tenant?.tenantId, { kind: "validate", flow: "validate" })
   const fixJob = useOibJob<DeployOutcome[]>(tenant?.tenantId, { kind: "fix", flow: "validate" })
   // Returning to the page: a fix job opens its progress or result, a validation its results.

@@ -149,7 +149,9 @@ export function setupHandoffText(mode: RegistrationMode = "full"): string {
     "It grants tenant-wide admin consent for these delegated permissions:",
     permissions,
     "",
-    `Guide: ${mode === "backup-only" ? READ_ONLY_REGISTRATION_URL : APP_REGISTRATION_GUIDE_URL}`,
+    mode === "backup-only"
+      ? `Guide: ${READ_ONLY_REGISTRATION_URL}`
+      : `Guide, including how to create it by hand in the Entra admin center: ${APP_REGISTRATION_GUIDE_URL}`,
   ].join("\n")
 }
 

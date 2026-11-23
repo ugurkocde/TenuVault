@@ -120,7 +120,7 @@ export default function BackupRestorePage() {
         : null,
     [selectedTenant?.name, selectedTenant?.credentials, selectedTenant?.resources?.storageAccountName],
   )
-  const readOnlyTargets = useReadOnlyTenants(tenants, activeTab === "restore" && canCopyToTenants && !readOnly)
+  const readOnlyTargets = useReadOnlyTenants()
   const copyCandidates = tenants
     .filter((entry) => entry.id !== selectedTenantId && entry.credentials?.tenantId && entry.credentials.appId && !readOnlyTargets.has(entry.credentials.tenantId.toLowerCase()))
     .map((entry) => ({ tenantId: entry.credentials!.tenantId, appId: entry.credentials!.appId, name: entry.name, domain: entry.domain }))

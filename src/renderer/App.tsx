@@ -1,3 +1,4 @@
+import { RegistrationAccessProvider } from "./components/RegistrationAccessProvider"
 import { CommunityTenantPicker } from "./components/CommunityTenantPicker"
 import "./lib/appearance"
 import { lazy, Suspense, useState, type ReactNode } from "react"
@@ -100,6 +101,7 @@ export function App() {
       <LicenseProvider>
         <WhatsNewProvider>
         <TenantProvider>
+          <RegistrationAccessProvider>
           <BackupProgressProvider>
             <DisclaimerHost />
             <ErrorBoundary>
@@ -142,6 +144,7 @@ export function App() {
             </HashRouter>
             </ErrorBoundary>
           </BackupProgressProvider>
+          </RegistrationAccessProvider>
         </TenantProvider>
         </WhatsNewProvider>
       </LicenseProvider>

@@ -33,7 +33,7 @@ export function DeployPanel({ batches, onDeployed }: { batches: DeployBatch[]; o
  * The list refreshes when a job of the tenant finishes; `onChanged` runs after an undo.
  */
 export function RunsList({ tenant, empty, flow, onChanged }: { tenant: OibTenant; empty?: string; flow?: OibFlow; onChanged?: () => void }) {
-  const readOnly = useRegistrationAccess(tenant.tenantId, tenant.appId)
+  const readOnly = useRegistrationAccess(tenant.tenantId)
   const [runs, setRuns] = useState<OibRun[]>([])
   const [confirming, setConfirming] = useState<string | null>(null)
   const [error, setError] = useState("")

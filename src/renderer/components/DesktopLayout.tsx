@@ -1,5 +1,5 @@
 import { READ_ONLY_REGISTRATION_MESSAGE } from "../../shared/app-registration"
-import { useReadOnlyRegistration } from "../lib/registration-access"
+import { useSelectedRegistrationAccess } from "../lib/registration-access"
 import { Package } from "lucide-react"
 import { trialEndWhen, organizationLicenseRefusal } from "../../shared/trial-notices"
 import { Button } from "~/components/ui/button"
@@ -471,8 +471,7 @@ export function DesktopLayout() {
   const { pathname } = location
   const appBackupPage = isAppBackupPath(pathname)
   const tenants = useTenants()
-  const { selectedTenant } = useSelectedTenant()
-  const readOnly = useReadOnlyRegistration(selectedTenant)
+  const readOnly = useSelectedRegistrationAccess()
   useScoreInvalidation()
   // MSPs with several tenants get the all-tenants overview at the top.
   const groups: NavGroup[] = tenants.length > 1

@@ -78,7 +78,7 @@ export default function SyncPage() {
 function SyncWorkspace({ selected }: { selected: Tenant }) {
   const queryClient = useQueryClient()
   const tenants = useTenants().filter((tenant) => tenant.credentials?.tenantId)
-  const readOnlyTenants = useReadOnlyTenants(tenants)
+  const readOnlyTenants = useReadOnlyTenants()
   const tenantOf = (tenantId: string) => tenants.find((tenant) => tenant.credentials!.tenantId.toLowerCase() === tenantId.toLowerCase())
   const [step, setStep] = useState(1)
   const [sourceId, setSourceId] = useState(selected.credentials!.tenantId.toLowerCase())

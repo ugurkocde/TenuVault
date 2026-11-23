@@ -101,9 +101,9 @@ export function ReviewDeploy({ batches: given, flow, kind = "deploy", onBack, ba
   notes?: ReactNode
 }) {
   const { tenant, can } = useOibTenant()
-  const readOnly = useRegistrationAccess(tenant?.tenantId, tenant?.appId)
+  const readOnly = useRegistrationAccess(tenant?.tenantId)
   const tenants = useTenants()
-  const readOnlyTenants = useReadOnlyTenants(tenants, can("bulkActions"))
+  const readOnlyTenants = useReadOnlyTenants()
   const job = useOibJob<DeployOutcome[]>(tenant?.tenantId, { kind, flow })
   const blocking = useBlockingJob(tenant?.tenantId, kind)
   const [phase, setPhase] = useState<"review" | "confirm">("review")

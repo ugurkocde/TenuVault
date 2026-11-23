@@ -1,30 +1,23 @@
-import { useQueries, useQuery } from "@tanstack/react-query"
+import { createContext, useContext } from "react"
 import type { Tenant } from "~/contexts/TenantContext"
 
+export const RegistrationAccessContext = createContext<{
+  readOnlyTenants: ReadonlySet<string>
+  selectedReadOnly: boolean
+}>({ readOnlyTenants: new Set(), selectedReadOnly: false })
+
 export function useReadOnlyRegistration(tenant: Tenant | null | undefined): boolean {
-  return useRegistrationAccess(tenant?.credentials?.tenantId, tenant?.credentials?.appId)
+  return useRegistrationAccess(tenant?.credentials?.tenantId)
 }
 
-export function useRegistrationAccess(tenantId?: string, clientId?: string): boolean {
-  return useQuery(registrationStatus(tenantId, clientId)).data?.readOnlyRegistration === true
+export function useRegistrationAccess(tenantId?: string): boolean {
+  return useReadOnlyTenants().has(tenantId?.toLowerCase() ?? "")
 }
 
-function registrationStatus(tenantId?: string, clientId?: string) {
-  return {
-    queryKey: ["services-status", tenantId, clientId],
-    queryFn: async () => {
-      const { bridge } = await import("./bridge")
-      return bridge.services.status(tenantId!, clientId!)
-    },
-    enabled: Boolean(tenantId && clientId),
-    staleTime: 60_000,
-    retry: false,
-  }
+export function useReadOnlyTenants(): ReadonlySet<string> {
+  return useContext(RegistrationAccessContext).readOnlyTenants
 }
 
-/** Use the same cached token check for each destination in a multi-tenant workflow. */
-export function useReadOnlyTenants(tenants: Tenant[], enabled = true): ReadonlySet<string> {
-  const results = useQueries({ queries: enabled ? tenants.flatMap(({ credentials }) =>
-    credentials ? [registrationStatus(credentials.tenantId, credentials.appId)] : []) : [] })
-  return new Set(results.flatMap(({ data }) => data?.readOnlyRegistration ? [data.tenantId.toLowerCase()] : []))
+export function useSelectedRegistrationAccess(): boolean {
+  return useContext(RegistrationAccessContext).selectedReadOnly
 }

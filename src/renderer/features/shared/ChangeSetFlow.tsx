@@ -1,5 +1,4 @@
-import { useTenants } from "~/contexts/TenantContext"
-import { useReadOnlyRegistration } from "../../lib/registration-access"
+import { useRegistrationAccess } from "../../lib/registration-access"
 import { READ_ONLY_REGISTRATION_MESSAGE } from "../../../shared/app-registration"
 import { TENANT_ADMIN, inTenant } from "../../../shared/intune/admin-links"
 import { showFeaturePlanError } from "../../lib/plan-dialog"
@@ -48,7 +47,7 @@ const inputClass = "h-9 w-full rounded-full border border-gray-200 bg-white px-3
  * change set whose stored choice is to apply without a backup.
  */
 export function ChangeSetFlow({ changeSet, actions, tenantName, onChanged, rollbackHint, embedded = false, intro, settingNames, sourceLabel, onApplied, decisionFields = true, backupSkipped = false }: { changeSet: ChangeSet; actions: ChangeSetActions | null; tenantName: string; onChanged: () => void; rollbackHint?: string; embedded?: boolean; intro?: ReactNode; settingNames?: SettingNames; sourceLabel?: string; onApplied?: () => void; decisionFields?: boolean; backupSkipped?: boolean }) {
-  const readOnly = useReadOnlyRegistration(useTenants().find(tenant => tenant.credentials?.tenantId.toLowerCase() === changeSet.tenantId.toLowerCase()))
+  const readOnly = useRegistrationAccess(changeSet.tenantId)
   const [preview, setPreview] = useState<ChangeSetPreview | null>(null)
   const [rollback, setRollback] = useState<RollbackPreview | null>(null)
   const [busy, setBusy] = useState<string | null>(null)

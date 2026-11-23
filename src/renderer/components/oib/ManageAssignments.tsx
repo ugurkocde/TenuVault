@@ -40,7 +40,7 @@ interface Current { policies: OibPolicyAssignments[]; groupNames: Record<string,
 
 export function ManageAssignments({ selections }: { selections: Selections }) {
   const { tenant, can } = useOibTenant()
-  const readOnly = useRegistrationAccess(tenant?.tenantId, tenant?.appId)
+  const readOnly = useRegistrationAccess(tenant?.tenantId)
   const job = useOibJob<DeployOutcome[]>(tenant?.tenantId, { kind: "assign", flow: "assign" })
   const [step, setStep] = useState<Step>(job ? "review" : "platforms")
   const [platforms, setPlatformsState] = useState<OibPlatform[]>(() => (tenant && chosenPlatforms.get(tenant.tenantId)) ?? [])
@@ -128,7 +128,7 @@ const attempts = new Map<string, { batches: DeployBatch[]; choice: BackupRequest
 
 function ReviewAssign({ batches: given, onBack, onFinished, next }: { batches: DeployBatch[]; onBack: () => void; onFinished: () => void; next: Array<{ label: string; onClick: () => void; primary?: boolean }> }) {
   const { tenant } = useOibTenant()
-  const readOnly = useRegistrationAccess(tenant?.tenantId, tenant?.appId)
+  const readOnly = useRegistrationAccess(tenant?.tenantId)
   const job = useOibJob<DeployOutcome[]>(tenant?.tenantId, { kind: "assign", flow: "assign" })
   const blocking = useBlockingJob(tenant?.tenantId, "assign")
   const [retry, setRetry] = useState<DeployBatch[] | null>(null)
