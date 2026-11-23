@@ -29,6 +29,7 @@ Most downloaders never connect a tenant. Today the only path creates an app regi
 
 Rules:
 - Method A is read-only: no restore, drift revert, deploy or Copy to Tenants, even if Graph Command Line Tools holds write scopes. Never ask anyone to grant more scopes to Graph Command Line Tools (that widens every admin's PowerShell in the tenant). Upgrades from A always lead to B or C.
+- Method A only uses grants that already exist. In a tenant where Graph Command Line Tools has no grant for Microsoft Graph, the `.default` sign-in shows a Microsoft consent prompt. TenuVault tells the admin before the browser opens that a consent prompt means method A is not available in this tenant and to cancel it. If the prompt appears, the sign-in is declined, or the token carries none of the service scopes, the result is "Start now is not available in this tenant" with the routes to method B or C. TenuVault never asks anyone to approve that prompt.
 - Method A cannot reach non-Graph resources (Defender for Endpoint API, Exchange Online).
 - Every Microsoft refusal gets a next step: 65001, 65004, 90094, 90095, 50105, 53000/53001/53003, 50076/50079, 700016/500011, 7000218, 50020/90072, Graph 403 (role) and "Intune not licensed".
 
@@ -53,9 +54,9 @@ Rules:
 ## 6. Tier-0 safeguards for Entra restore (app registrations and roles)
 
 - Request the privileged pack just in time, when a restore of that type starts.
-- After the restore, offer to remove the permission again, pre-checked (needs an Application Administrator).
+- After the restore, always remove the permissions this operation added, also when the restore fails or is cancelled. Track exactly which scopes were added for this operation and remove only those; permissions that existed before stay. Cleanup is not optional. If the signed-in admin cannot remove them (it needs an Application Administrator or higher), the restore result says so prominently, offers "Send to my admin" with the exact permissions to remove, and the tenant page keeps a warning until a later check finds them gone.
 - Multi-admin approval is on by default for these restore types.
-- Recycle bin first (`directory/deletedItems`, within 30 days, restores the original object). Re-creating from backup is the last resort and is labeled clearly: a re-created app registration gets a new appId and object ID, so consents, Conditional Access references and federated credentials point to the old one, and secrets and certificates cannot be restored.
+- Recycle bin first, within 30 days, which restores the original object: `directory/deletedItems` for applications, service principals, groups and users, and `roleManagement/directory/deletedItems/roleDefinitions` for deleted custom role definitions. Role assignments have no recycle bin, so they are always re-created and their targets checked first. Re-creating from backup is the last resort and is labeled clearly: a re-created app registration gets a new appId and object ID, so consents, Conditional Access references and federated credentials point to the old one, and secrets and certificates cannot be restored.
 - Never available through method A.
 - Lab cases for each of these before stable.
 
@@ -97,4 +98,4 @@ Rules:
 
 ## 11. Tests
 
-Lab tenants: defaults with Graph Command Line Tools never used; Graph Command Line Tools pre-consented with Read only and with ReadWrite; user consent off with and without the admin consent workflow; Conditional Access (compliant device, Graph Command Line Tools blocked, assignment required, 1 hour sign-in frequency); Graph Command Line Tools service principal disabled; Intune not licensed; Defender for Endpoint not licensed; an MSP pair. Accounts: Intune Administrator, Global Reader, a custom Intune role, Security Administrator, Conditional Access Administrator, Application Administrator, Cloud Application Administrator, Privileged Role Administrator, Global Administrator, guest. Matrix: method × tenant × role × service, expected coverage and message for each, on Windows and macOS, plus the privileged restore safeguards and a new tenant added on an install with old-style tenants.
+Lab tenants: defaults with Graph Command Line Tools never used (expected: method A shows the consent warning, then "not available in this tenant" with the routes to B and C, and no grant is created); Graph Command Line Tools pre-consented with Read only and with ReadWrite; user consent off with and without the admin consent workflow; Conditional Access (compliant device, Graph Command Line Tools blocked, assignment required, 1 hour sign-in frequency); Graph Command Line Tools service principal disabled; Intune not licensed; Defender for Endpoint not licensed; an MSP pair. Accounts: Intune Administrator, Global Reader, a custom Intune role, Security Administrator, Conditional Access Administrator, Application Administrator, Cloud Application Administrator, Privileged Role Administrator, Global Administrator, guest. Matrix: method × tenant × role × service, expected coverage and message for each, on Windows and macOS, plus the privileged restore safeguards and a new tenant added on an install with old-style tenants.
