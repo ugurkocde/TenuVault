@@ -876,7 +876,9 @@ async function undo(body: RecordJson): Promise<UndoResult> {
           reassigned.push(item)
           continue
         }
-        // Undo only takes back this run's change: assignments changed since are never overwritten.
+        const groupIds = item.previous.map(groupOf).filter(Boolean)
+        const groups = await lookupGroups(graph, groupIds).catch(() => ({ readable: false, missing: [] }))
+        // Undo only takes back this run's change: read the current assignments just before writing.
         let live: Awaited<ReturnType<typeof readCurrentAssignments>>
         try {
           live = await readCurrentAssignments(graph, type, item.id)
@@ -905,8 +907,6 @@ async function undo(body: RecordJson): Promise<UndoResult> {
           reassigned.push(item)
           continue
         }
-        const groupIds = item.previous.map(groupOf).filter(Boolean)
-        const groups = await lookupGroups(graph, groupIds).catch(() => ({ readable: false, missing: [] }))
         if (groups.readable && groups.missing.length) {
           const count = groups.missing.length
           results.push({ name: item.name, id: item.id, action: "reassigned", done: false, error: `${count} ${count === 1 ? "group" : "groups"} this policy was assigned to no longer exist (${groups.missing.join(", ")}). Undo did not change this policy; assign it again in Assignments.` })

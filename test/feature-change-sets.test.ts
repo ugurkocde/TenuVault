@@ -534,6 +534,73 @@ describe("rollback assignment checks across operations", () => {
     expect(review.body.blockers).toEqual([GROUP_CHECK_REQUIRED])
   })
 
+  it.each(["update", "create"] as const)("finishes only the assignments after a rollback %s was blocked following its configuration write", async (action) => {
+    const context = setup()
+    const group = { id: "aaaaaaaa-0000-4000-8000-000000000001", displayName: "Previous group", securityEnabled: true, groupTypes: [] }
+    const assignments = [{ target: { "@odata.type": "#microsoft.graph.groupAssignmentTarget", groupId: group.id } }]
+    context.tenant.groups.set(group.id, group)
+    const policy = context.tenant.addPolicy({ name: "Policy", assignments })
+    const folder = "ConfigurationPolicies"
+    const targetId = policy.id as string
+    const original = await createChangeSet(context.deps, TENANT_A, {
+      title: "Change policy",
+      operations: [action === "update"
+        ? { folder, action: "update", targetId, proposed: { ...policy, description: "Updated" }, assignments: [] }
+        : { folder, action: "delete", targetId }],
+    }, "Admin")
+    const review = await approve(context, original.id)
+    expect((await context.post({ action: "apply", id: original.id, contentHash: review.contentHash, confirm: true })).body.changeSet.status).toBe("applied")
+
+    // The rollback planner recreates deleted policies unassigned. Exercise the engine with a reviewed create that explicitly includes assignments.
+    const id = action === "update"
+      ? (await context.post({ action: "rollback-create", id: original.id })).body.changeSet.id as string
+      : (await createChangeSet(context.deps, TENANT_A, {
+        title: "Recreate policy with assignments",
+        kind: "rollback",
+        rollbackOf: original.id,
+        operations: [{ folder, action: "create", proposed: policy, assignments }],
+      }, "Admin")).id
+    const rollback = await approve(context, id)
+    const apply = (action: "apply" | "retry") => context.post({ action, id, contentHash: rollback.contentHash, confirm: true })
+    const configurationPath = action === "update" ? `${POLICIES.path}/${targetId}` : POLICIES.path
+    context.tenant.failWrite = (_method, path) => {
+      if (path === configurationPath) context.tenant.groups.delete(group.id)
+      return undefined
+    }
+    const writesBefore = context.tenant.writeCount()
+    const first = await apply("apply")
+    expect(first.body.changeSet).toMatchObject({ status: "uncertain", results: {
+      "op-1": { status: "uncertain", message: expect.stringContaining(group.id) },
+    } })
+    const objectId = first.body.changeSet.results["op-1"].objectId as string
+    expect(context.tenant.policies.get(objectId)).toMatchObject({ name: "Policy", description: "", assignments: [] })
+    expect(context.tenant.writeCount()).toBe(writesBefore + 1)
+    context.tenant.failWrite = undefined
+
+    const blocked = await apply("retry")
+    expect(blocked).toMatchObject({ status: 409, body: { error: expect.stringContaining("Restore any recoverable groups in Entra") } })
+    expect(context.tenant.writeCount()).toBe(writesBefore + 1)
+    context.tenant.groups.set(group.id, group)
+
+    const live = context.tenant.policies.get(objectId)!
+    live.assignments = [{ target: { "@odata.type": "#microsoft.graph.allDevicesAssignmentTarget" } }]
+    const changed = await apply("retry")
+    expect(changed.body.changeSet.results["op-1"]).toMatchObject({ status: "uncertain", message: expect.stringContaining("Review the policy in Intune") })
+    expect(context.tenant.writeCount()).toBe(writesBefore + 1)
+    live.assignments = []
+
+    const callsBeforeRetry = context.tenant.calls.length
+    const retried = await apply("retry")
+    expect(retried.body.changeSet).toMatchObject({ status: "applied", results: {
+      "op-1": { status: "verified", objectId, readBack: "match" },
+    } })
+    expect(context.tenant.calls.slice(callsBeforeRetry).filter(call => call.method !== "GET")).toMatchObject([
+      { method: "POST", path: `${POLICIES.path}/${objectId}/assign`, journaled: true },
+    ])
+    expect(context.tenant.policies.get(objectId)?.assignments).toMatchObject(assignments)
+    expect(context.tenant.policies.size).toBe(1)
+  })
+
   it("keeps a partial rollback retryable when a pending group's deletion blocks the retry", async () => {
     const context = await setupRollback()
     const id = context.rollbackId

@@ -19,6 +19,26 @@ describe("group membership counts", () => {
     expect(fetch).toHaveBeenCalledTimes(3)
   })
 
+  it("keeps user and device counts when Graph rejects the nested-group cast", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async url => {
+      if (String(url).includes("microsoft.graph.group/")) return Response.json({ error: { code: "Request_UnsupportedQuery" } }, { status: 400 })
+      return new Response(String(url).includes("microsoft.graph.user/") ? "7" : "0")
+    })
+    await expect(createGroupCounter()(graphCaller("token", fetch), "tenant", "app", [first])).resolves.toEqual({
+      [first]: { users: 7, devices: 0, groups: 0 },
+    })
+  })
+
+  it.each([
+    ["group", 400, "BadRequest"], ["group", 401, "Unauthorized"], ["group", 403, "Forbidden"],
+    ["group", 503, "ServiceUnavailable"], ["user", 400, "Request_UnsupportedQuery"], ["device", 400, "Request_UnsupportedQuery"],
+  ])("omits counts when the %s cast fails with %i %s", async (type, status, code) => {
+    const graph: GraphCall = async (_, path): ReturnType<GraphCall> => path.includes(`microsoft.graph.${type}/`)
+      ? { status, body: { error: { code } } }
+      : { status: 200, body: {}, rawBody: "7" }
+    await expect(createGroupCounter()(graph, "tenant", "app", [first])).resolves.toEqual({})
+  })
+
   it("limits concurrency across requests, deduplicates in-flight reads and expires the per-tenant and app cache", async () => {
     let active = 0
     let peak = 0

@@ -1,6 +1,9 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
+import { act, createElement, useState } from "react"
+import { createRoot } from "react-dom/client"
 import { describe, expect, it, vi } from "vitest"
 import { groupAccessMissing, groupRecheckResult } from "../../src/renderer/components/GroupAccess"
-import { assignmentSummary, newAssignment, specFor, unknownGroups, type AssignmentTargets } from "../../src/renderer/components/oib/AssignmentEditor"
+import { AssignmentEditor, assignmentPickerBlockers, assignmentSummary, newAssignment, specFor, unknownGroups, type AssignmentTargets } from "../../src/renderer/components/oib/AssignmentEditor"
 import { emptySpec } from "../../src/shared/oib/assignments"
 import { OPTIONAL_PERMISSIONS } from "../../src/shared/services/optional-permissions"
 
@@ -34,6 +37,56 @@ describe("effective OIB assignment choices", () => {
   it("drops exclusions without an included group of the same scope", () => {
     const withoutUsers = { ...data, spec: { ...data.spec, userGroups: [] } }
     expect(specFor(withoutUsers, { ...targets, user: 1 }).excludeUserGroups).toEqual([])
+  })
+
+  it("uses only active scopes to block picks, including exclusions picked before an inclusion", () => {
+    const unmarked = { ...targets, device: 0, unmarked: 1 }
+    const spec = { ...data.spec, userGroups: [] }
+    expect(assignmentPickerBlockers(spec, unmarked)).toEqual({ inclusions: [], exclusions: [excludedUsers] })
+    expect(assignmentPickerBlockers({ ...spec, unmarked: "device" }, unmarked)).toEqual({
+      inclusions: [devices], exclusions: [excludedDevices],
+    })
+    expect(assignmentPickerBlockers({ ...spec, unmarked: "both" }, unmarked)).toEqual({
+      inclusions: [devices], exclusions: [excludedDevices, excludedUsers],
+    })
+  })
+
+  it("lets admins remove saved picks after their scope becomes inactive", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true)
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ readable: true, groups: [], missing: [], counts: {} })))
+    const node = document.createElement("div")
+    document.body.append(node)
+    const root = createRoot(node)
+    const client = new QueryClient()
+    const tenant = { tenantId: "tenant", appId: "app", name: "Tenant" }
+    function Editor() {
+      const [current, update] = useState(data)
+      return createElement(AssignmentEditor, {
+        state: { tenant, data: current, update },
+        targets: { ...targets, device: 0, unmarked: 1 },
+        accessMissing: false,
+        accessContext: "test",
+      })
+    }
+    try {
+      await act(async () => root.render(createElement(QueryClientProvider, { client }, createElement(Editor))))
+      expect(node.querySelector('input[aria-label="Excluded user groups"]')).toBeTruthy()
+      const select = node.querySelector("select")!
+      await act(async () => {
+        select.value = "device"
+        select.dispatchEvent(new Event("change", { bubbles: true }))
+      })
+      expect(node.querySelector('input[aria-label="Excluded user groups"]')).toBeNull()
+      const remove = node.querySelector<HTMLButtonElement>(`button[aria-label="Remove ${excludedUsers.name}"]`)!
+      expect(remove.disabled).toBe(false)
+      await act(async () => remove.click())
+      expect(node.textContent).not.toContain(excludedUsers.name)
+    } finally {
+      await act(async () => root.unmount())
+      client.clear()
+      node.remove()
+      vi.unstubAllGlobals()
+    }
   })
 
   it("checks and summarizes only groups in the effective spec", () => {

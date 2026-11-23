@@ -18,6 +18,8 @@ export function createGroupCounter(now = Date.now) {
     else await new Promise<void>(resolve => waiting.push(resolve))
     try {
       const result = await graph("GET", `groups/${id}/members/microsoft.graph.${type}/$count`, undefined, { consistencyLevel: "eventual" })
+      // A Microsoft 365 group cannot contain nested groups, so Graph can reject this cast.
+      if (type === "group" && result.status === 400 && (result.body.error as { code?: string } | undefined)?.code === "Request_UnsupportedQuery") return 0
       const text = result.rawBody?.trim() ?? ""
       if (result.status !== 200 || !/^\d+$/.test(text)) return null
       const value = Number(text)

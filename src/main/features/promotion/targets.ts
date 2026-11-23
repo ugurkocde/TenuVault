@@ -109,6 +109,12 @@ export async function groupState(graph: GraphCall, id: string): Promise<{ state:
   }
 }
 
+class DestinationGroupError extends FeatureError {
+  constructor(message: string, readonly code: DependencyFinding["code"], status: number) {
+    super(message, status)
+  }
+}
+
 /**
  * Hash of the destination objects a plan relied on: mapped filters (including their rule),
  * scope tags, reusable settings and groups. Destination tags and unacknowledged redaction
@@ -146,7 +152,9 @@ export async function targetStateHash(graph: GraphCall, reads: TargetReads, poli
   state.reusableSettings = await subset("reusableSetting", reads.reusableSettingIds)
   state.groups = await Promise.all(reads.groupIds.map(async (id) => {
     const group = await groupState(graph, id)
-    if (group.state === "unknown") throw new FeatureError(GROUP_CHECK_REQUIRED, 403)
+    if (group.state === "unknown") throw new DestinationGroupError(GROUP_CHECK_REQUIRED, "unknown-membership", 403)
+    if (group.state === "missing") throw new DestinationGroupError(`The mapped destination group (${id}) does not exist in the target tenant.`, "rejected-mapping", 409)
+    if (group.state === "unassignable") throw new DestinationGroupError(`Intune cannot assign the distribution list "${group.name ?? id}". Choose a security or Microsoft 365 group.`, "rejected-mapping", 409)
     return { id: id.toLowerCase(), ...group }
   }))
   return hashOf(state)
@@ -234,7 +242,11 @@ export async function resolveTarget(deps: FeatureDeps, destinationTenantId: stri
 
   const confirmed = (kind: ReferenceKind) => resolutions.filter((entry) => entry.kind === kind && entry.targetId && entry.state !== "missing" && entry.state !== "rejected").map((entry) => entry.targetId!)
   const targetReads: TargetReads = { policyId: input.targetObjectId, policyFolder: type.folder, requireUnredacted: input.acknowledgeRedacted !== true, filterIds: confirmed("filter"), scopeTagIds: input.targetObjectId ? destinationTags : confirmed("scopeTag"), reusableSettingIds: confirmed("reusableSetting"), groupIds: resolutions.flatMap(entry => entry.kind === "group" && entry.state === "mapped" && entry.targetId ? [entry.targetId] : []) }
-  const stateHash = await read("The destination state", () => targetStateHash(targetGraph, targetReads, targetPolicy, targetListings))
+  const stateHash = await read("The destination state", () => targetStateHash(targetGraph, targetReads, targetPolicy, targetListings)).catch(error => {
+    if (!(error instanceof DestinationGroupError)) throw error
+    if (!findings.some(finding => finding.message === error.message)) findings.push({ code: error.code, severity: "blocking", message: error.message })
+    return ""
+  })
   const blocked = findings.some((finding) => finding.severity === "blocking") || !translated.body
   return {
     sourceName,
@@ -270,7 +282,8 @@ export async function staleTargets(deps: FeatureDeps, tenantId: string, items: A
     try {
       if (await targetStateHash(graph, item.targetReads, undefined, listings) !== item.targetStateHash) reasons.push(`The destination objects "${item.sourceName}" relied on changed after planning. Plan again.`)
     } catch (error) {
-      reasons.push(`The destination objects of "${item.sourceName}" could not be re-checked: ${error instanceof Error ? error.message : String(error)}`)
+      if (error instanceof DestinationGroupError) reasons.push(`"${item.sourceName}": ${error.message} Plan again.`)
+      else reasons.push(`The destination objects of "${item.sourceName}" could not be re-checked: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
   return reasons

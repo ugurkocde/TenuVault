@@ -500,11 +500,13 @@ describe("assignments", () => {
 
   it.each(["deleted", "refused", "inconclusive"])("checks previous group assignments during undo when group lookup is %s", async (outcome) => {
     const writes: string[] = []
+    const undoCalls: string[] = []
     const previous = [{ target: { "@odata.type": "#microsoft.graph.exclusionGroupAssignmentTarget", groupId: EXCLUDED } }]
     const state: Tenant = { policies: [{ id: EXISTING, name: "Win - OIB - SC - Test - v3.8" }], groups: [DEVICES, EXCLUDED], assignments: { [EXISTING]: previous } }
     const inner = world(state, writes)
     let undoing = false
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (undoing && String(input).startsWith("https://graph.microsoft.com/beta/")) undoCalls.push(String(input))
       if (undoing && String(input).includes("graph.microsoft.com/beta/groups?")) {
         expect(decodeURIComponent(String(input))).toContain(`id in ('${EXCLUDED}')`)
         if (outcome === "deleted") return Response.json({ error: { code: "Request_ResourceNotFound" } }, { status: 404 })
@@ -521,6 +523,8 @@ describe("assignments", () => {
     undoing = true
     state.groupsDenied = outcome === "refused"
     const undone = await handleOib({ action: "oib-undo", tenantId, appId, runId: run.runId }) as UndoResult
+    expect(undoCalls[0]).toContain("/beta/groups?")
+    expect(undoCalls).toContain(`https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/${EXISTING}/assignments`)
     if (outcome === "deleted") {
       expect(undone).toMatchObject({ run: { runId: run.runId }, results: [{ action: "reassigned", done: false, error: `1 group this policy was assigned to no longer exist (${EXCLUDED}). Undo did not change this policy; assign it again in Assignments.` }] })
       expect(writes).toHaveLength(writesBefore)

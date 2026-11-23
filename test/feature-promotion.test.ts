@@ -649,6 +649,38 @@ describe("promotion dependency mapping", () => {
     expect(promotion.items[0]!.findings).not.toContainEqual(expect.objectContaining({ message: GROUP_CHECK_REQUIRED }))
   })
 
+  it.each([
+    ["missing", "does not exist in the target tenant", "rejected-mapping"],
+    ["unassignable", 'Intune cannot assign the distribution list "Pilot devices"', "rejected-mapping"],
+    ["unknown", GROUP_CHECK_REQUIRED, "unknown-membership"],
+  ])("blocks freezing and re-checking a promotion when a mapped group becomes %s", async (state, message, code) => {
+    const context = targeted()
+    const plan = { action: "plan", title: "x", includeAssignments: true, items: [{ sourceId: context.policy.id }], mappings: TARGETING_MAPPINGS }
+    const valid = (await context.post(plan)).body.promotion as PromotionRecord
+    expect(valid.status).toBe("in-review")
+
+    const graph = context.deps.graph
+    let reads = 0
+    context.deps.graph = async (tenant, options) => {
+      const call = await graph(tenant, options)
+      return async (method, path, body, requestOptions) => {
+        if (tenant === TENANT_B && method === "GET" && path.startsWith(`groups/${TARGET_GROUP}?`) && ++reads === 2) {
+          if (state === "missing") context.prod.groups.delete(TARGET_GROUP)
+          else if (state === "unassignable") context.prod.groups.get(TARGET_GROUP)!.securityEnabled = false
+          else context.prod.groupsForbidden = true
+        }
+        return call(method, path, body, requestOptions)
+      }
+    }
+    const blocked = await context.post(plan)
+    expect(blocked.status).toBe(200)
+    expect(blocked.body.promotion).toMatchObject({ status: "blocked", changeSetId: null, items: [{ targetStateHash: "", findings: expect.arrayContaining([
+      { code, severity: "blocking", message: expect.stringContaining(message) },
+    ]) }] })
+    expect(await staleTargets(context.deps, TENANT_B, valid.items)).toEqual([expect.stringContaining(message)])
+    expect(context.prod.writeCount()).toBe(0)
+  })
+
   it("blocks a reviewed promotion before applying if the destination stops allowing group checks", async () => {
     const context = targeted()
     const result = await context.post({ action: "plan", title: "x", includeAssignments: true, items: [{ sourceId: context.policy.id }], mappings: TARGETING_MAPPINGS })

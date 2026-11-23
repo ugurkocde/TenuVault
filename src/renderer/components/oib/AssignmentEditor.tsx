@@ -120,6 +120,16 @@ export function specFor(data: AssignmentData, targets: AssignmentTargets): OibAs
 const groupName = (data: AssignmentData, id: string) => data.names[id] ?? id
 export const groupNames = (data: AssignmentData, list: OibGroupRef[]) => list.map(g => groupName(data, g.id))
 
+export function assignmentPickerBlockers(spec: OibAssignmentSpec, targets: AssignmentTargets) {
+  const device = scopeUsed(targets, spec, "device")
+  const user = scopeUsed(targets, spec, "user")
+  return {
+    inclusions: [...(device ? spec.deviceGroups : []), ...(user ? spec.userGroups : [])],
+    // Reserve exclusions in active scopes even before their first inclusion is picked.
+    exclusions: [...(device ? spec.excludeDeviceGroups : []), ...(user ? spec.excludeUserGroups : [])],
+  }
+}
+
 function GroupPicker({ state, directory, list, onChange, label, hint, blocked, scope, used, exclusionNotice }: {
   state: AssignmentState
   directory: GroupDirectory
@@ -137,14 +147,9 @@ function GroupPicker({ state, directory, list, onChange, label, hint, blocked, s
   for (const group of list) unavailable.set(group.id, "Already chosen")
   const counts = useGroupCounts(directory, used ? list.map(group => group.id).filter(id => !data.missing.includes(id)) : [])
   const full = list.length >= MAX_GROUPS_PER_LIST
-  if (!used) return <div aria-disabled="true">
-    <p className="text-sm font-medium text-gray-500">{label}</p>
-    <p className="text-xs text-gray-500">Not used: no {scope} policy is selected.</p>
-  </div>
-
   return <div>
-    <p className="text-sm font-medium text-gray-800">{label}</p>
-    <p className="mt-0.5 text-xs text-gray-500">{hint}</p>
+    <p className={cn("text-sm font-medium", used ? "text-gray-800" : "text-gray-500")}>{label}</p>
+    <p className="mt-0.5 text-xs text-gray-500">{used ? hint : `Not used: no ${scope} policy is selected.`}</p>
     {list.length > 0 && <ul className="mt-2 flex flex-wrap gap-2" aria-label={label}>{list.map(group => {
       const notFound = data.missing.includes(group.id)
       return <li key={group.id} className={cn("inline-flex max-w-full flex-wrap items-center gap-x-2 rounded-full py-1 pl-3 pr-1 text-xs", notFound ? "bg-red-50 text-red-800" : "bg-gray-100 text-gray-800")}>
@@ -153,14 +158,16 @@ function GroupPicker({ state, directory, list, onChange, label, hint, blocked, s
         <button type="button" className="rounded-full p-1 hover:bg-white/70" aria-label={`Remove ${groupName(data, group.id)}`} onClick={() => onChange(list.filter(entry => entry.id !== group.id))}><X className="h-3 w-3" aria-hidden="true" /></button>
       </li>
     })}</ul>}
-    {exclusionNotice && <p className="mt-1 text-xs text-amber-800">{exclusionNotice}</p>}
-    {full && <p className="mt-1 text-xs text-gray-500">At most {MAX_GROUPS_PER_LIST} groups.</p>}
-    <div className="sm:w-[28rem]">
-      <GroupSearch directory={directory} label={label} scope={scope} disabled={full} unavailable={unavailable} onPick={group => {
-        update(current => ({ ...current, names: { ...current.names, [group.id]: group.displayName }, missing: current.missing.filter(id => id !== group.id) }))
-        onChange([...list, { id: group.id }])
-      }} />
-    </div>
+    {used && <>
+      {exclusionNotice && <p className="mt-1 text-xs text-amber-800">{exclusionNotice}</p>}
+      {full && <p className="mt-1 text-xs text-gray-500">At most {MAX_GROUPS_PER_LIST} groups.</p>}
+      <div className="sm:w-[28rem]">
+        <GroupSearch directory={directory} label={label} scope={scope} disabled={full} unavailable={unavailable} onPick={group => {
+          update(current => ({ ...current, names: { ...current.names, [group.id]: group.displayName }, missing: current.missing.filter(id => id !== group.id) }))
+          onChange([...list, { id: group.id }])
+        }} />
+      </div>
+    </>}
   </div>
 }
 
@@ -212,8 +219,7 @@ export function AssignmentEditor({ state, targets, accessMissing, accessContext,
   }
   const device = scopeUsed(targets, spec, "device")
   const user = scopeUsed(targets, spec, "user")
-  const inclusions = [...spec.deviceGroups, ...spec.userGroups]
-  const exclusions = [...spec.excludeDeviceGroups, ...spec.excludeUserGroups]
+  const { inclusions, exclusions } = assignmentPickerBlockers(spec, targets)
   return <>
     {accessMissing && <GroupAccessCard tenant={tenant} context={accessContext} onRecheck={() => {
       update(d => ({ ...d, readable: null, missing: [] }))

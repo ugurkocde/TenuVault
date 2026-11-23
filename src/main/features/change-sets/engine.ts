@@ -668,16 +668,22 @@ function saveResult(deps: FeatureDeps, tenantId: string, id: string, key: string
   deps.records.update<ChangeSetRecord>(DOMAINS.changeSets, tenantId, id, (current) => ({ ...current, results: { ...current.results, [key]: result } }), { actor, reason })
 }
 
-type Reconciled = { decision: "verified"; objectId: string; readBack: OperationResult["readBack"]; readBackHash?: string } | { decision: "write" } | { decision: "stop"; status: "failed" | "uncertain"; message: string; objectId: string | null }
+type Reconciled = { decision: "verified"; objectId: string; readBack: OperationResult["readBack"]; readBackHash?: string } | { decision: "write"; resumeAssignmentId?: string } | { decision: "stop"; status: "failed" | "uncertain"; message: string; objectId: string | null }
 
 /**
  * Settles an operation whose previous write may or may not have happened, by reading live
- * state first. Verified results are recorded without writing again; only an operation whose
- * target still holds the captured pre-change state is written again. A target that holds
- * neither state may have been partly written (for example the configuration but not the
- * assignments), so it stays uncertain and rollback restores it from the capture.
+ * state first. The full write is retried when the target still holds the captured state.
+ * A rollback can also finish assignments when its configuration matches the proposal and
+ * the assignments still match the state before the assignment write.
  */
-async function reconcile(graph: GraphCall, type: IntuneType, operation: ChangeOperation, result: OperationResult, entry: { body: Item | null; assignments: Item[] | null }, captured: { body: Item | null; sameNameIds: string[] }): Promise<Reconciled> {
+async function reconcile(graph: GraphCall, type: IntuneType, operation: ChangeOperation, result: OperationResult, entry: { body: Item | null; assignments: Item[] | null }, captured: { body: Item | null; assignments: Item[] | null; sameNameIds: string[] }, recovery: boolean): Promise<Reconciled> {
+  const reconcileProposed = (id: string, live: Item, previousAssignments: Item[] | null): Reconciled | undefined => {
+    if (!matchesProposed(type, entry.body ?? {}, live)) return
+    if (entry.assignments === null || sameAssignments(entry.assignments, live.assignments)) return { decision: "verified", objectId: id, readBack: "match", readBackHash: snapshotHash(type, live) }
+    if (!recovery) return
+    if (previousAssignments && Array.isArray(live.assignments) && sameAssignments(previousAssignments, live.assignments)) return { decision: "write", resumeAssignmentId: id }
+    return { decision: "stop", status: "uncertain", message: "The configuration matches the review, but the live assignments could not be confirmed as unchanged. Review the policy in Intune and restore its assignments manually.", objectId: id }
+  }
   try {
     if (operation.action === "create") {
       let id = result.objectId
@@ -690,15 +696,15 @@ async function reconcile(graph: GraphCall, type: IntuneType, operation: ChangeOp
       }
       const live = await readCurrent(graph, type, id)
       if (!live) return { decision: "stop", status: "uncertain", message: "The created object no longer exists. Check Intune before retrying.", objectId: id }
-      if (matchesProposed(type, entry.body ?? {}, live) && (entry.assignments === null || sameAssignments(entry.assignments, live.assignments))) return { decision: "verified", objectId: id, readBack: "match", readBackHash: snapshotHash(type, live) }
-      return { decision: "stop", status: "uncertain", message: "An object was created but it does not match the proposed configuration. Review it in Intune.", objectId: id }
+      return reconcileProposed(id, live, result.objectId ? [] : null) ?? { decision: "stop", status: "uncertain", message: "An object was created but it does not match the proposed configuration. Review it in Intune.", objectId: id }
     }
     const live = await readCurrent(graph, type, operation.targetId!)
     if (operation.action === "delete") {
       if (!live) return { decision: "verified", objectId: operation.targetId!, readBack: "missing" }
     } else {
       if (!live) return { decision: "stop", status: "failed", message: "The object no longer exists in the tenant. An earlier attempt may have written to it before it was deleted; check Intune.", objectId: operation.targetId }
-      if (matchesProposed(type, entry.body ?? {}, live) && (entry.assignments === null || sameAssignments(entry.assignments, live.assignments))) return { decision: "verified", objectId: operation.targetId!, readBack: "match", readBackHash: snapshotHash(type, live) }
+      const proposed = reconcileProposed(operation.targetId!, live, captured.assignments)
+      if (proposed) return proposed
     }
     const sanitized = sanitizeSnapshot(type, live!).snapshot
     const before = captured.body ? operationFingerprint(operation.action, { snapshot: captured.body, sameNameIds: [] }) : "missing"
@@ -793,8 +799,8 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
         for (const operation of record.operations) {
           const result = record.results[operation.key]
           if (result?.status === "verified" || (result?.status === "approval" && result.partial)) continue
-          const blockers = await rollbackGroupBlockers(gated, tenantName, entries[operation.key]?.assignments)
-          if (blockers.length) markStale(deps, tenant, id, `${operation.name}: ${blockers.join(" ")}`, actor)
+          const blockers = await rollbackGroupBlockers(gated, tenantName, entries[operation.key]?.assignments, record.preChange ? GROUP_CHECK_GUIDANCE : GROUP_CHECK_REQUIRED)
+          if (blockers.length) markStale(deps, tenant, id, `${operation.name}: ${blockers.join(" ")}${record.preChange ? " Resolve the group checks and retry." : ""}`, actor)
         }
       }
       await checkGroups()
@@ -874,8 +880,13 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
       if (stopIfCisRevoked()) break operations
       const entry = entries[operation.key]!
       const at = () => deps.now().toISOString()
+      let resumeAssignmentId: string | undefined
       if (current.status === "uncertain" || current.status === "writing") {
-        const settled = await reconcile(gated, type, operation, current, entry, { body: captured[operation.key]?.body ?? null, sameNameIds: capturedNames[operation.key] ?? [] })
+        const settled = await reconcile(gated, type, operation, current, entry, {
+          body: captured[operation.key]?.body ?? null,
+          assignments: captured[operation.key]?.assignments ?? null,
+          sameNameIds: capturedNames[operation.key] ?? [],
+        }, recovery)
         if (stopIfCisRevoked()) break operations
         if (settled.decision === "verified") {
           saveResult(deps, tenant, id, operation.key, { ...current, status: "verified", objectId: settled.objectId, readBack: settled.readBack, ...(settled.readBackHash ? { readBackHash: settled.readBackHash } : {}), message: "Reconciled from live state; not written again.", at: at() }, actor, `Reconciled ${operation.name}: verified without a repeat write`)
@@ -885,6 +896,7 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
           saveResult(deps, tenant, id, operation.key, { ...current, status: settled.status, objectId: settled.objectId, message: settled.message, at: at() }, actor, `Reconciled ${operation.name}: ${settled.status}`)
           continue
         }
+        resumeAssignmentId = settled.resumeAssignmentId
       } else if (!firstAttempt) {
         let observed: Observation | null = null
         try {
@@ -910,6 +922,7 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
         assignments: entry.assignments,
         current: captured[operation.key]?.body ?? null,
         assignmentBlockers: recovery ? () => rollbackGroupBlockers(gated, tenantName, entry.assignments, GROUP_CHECK_GUIDANCE) : undefined,
+        resumeAssignmentId,
       }, (createdId) => {
         saveResult(deps, tenant, id, operation.key, { ...attempt, objectId: createdId }, actor, `Created ${operation.name}`)
       })
