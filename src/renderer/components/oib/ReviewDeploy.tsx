@@ -233,7 +233,7 @@ export function ReviewDeploy({ batches: given, flow, kind = "deploy", onBack, ba
       {updates.length > 0 && <div className="mt-5"><Toggle checked={acknowledged} onChange={setAcknowledged} label={`I understand ${updates.length === 1 ? "1 existing policy is" : `${updates.length} existing policies are`} replaced with the OIB version`}>
         Settings added or changed in Intune since the policy was deployed are replaced.
       </Toggle></div>}
-      <ActionBar summary={blocking ? `${blocking.label} is still running. Wait for it to finish first.` : undefined} error={error} back={{ label: "Back to the review", onClick: () => setPhase("review") }}>
+      <ActionBar summary={readOnly ? READ_ONLY_REGISTRATION_MESSAGE : blocking ? `${blocking.label} is still running. Wait for it to finish first.` : undefined} error={error} back={{ label: "Back to the review", onClick: () => setPhase("review") }}>
         <button type="button" className={primary} title={readOnly ? READ_ONLY_REGISTRATION_MESSAGE : undefined} disabled={readOnly || !!blocking || (updates.length > 0 && !acknowledged)} onClick={deploy}>
           {kind === "fix" ? <RotateCcw className="h-4 w-4" aria-hidden="true" /> : <Rocket className="h-4 w-4" aria-hidden="true" />}
           {mode === "new" ? `Back up and ${kind === "fix" ? "reset" : "deploy"}` : kind === "fix" ? "Reset the policy" : "Deploy"}{extras.length ? ` to ${extras.length + 1} tenants` : ""}
@@ -277,7 +277,7 @@ export function ReviewDeploy({ batches: given, flow, kind = "deploy", onBack, ba
         })}
       </div>}
     </div>
-    <ActionBar summary={[creates.length && plural(creates.length, "new policy", "new policies"), updates.length && plural(updates.length, "update in place", "updates in place")].filter(Boolean).join(", ")} status={backup.loading ? "Checking the latest backup" : null} error={error}
+    <ActionBar summary={readOnly ? READ_ONLY_REGISTRATION_MESSAGE : [creates.length && plural(creates.length, "new policy", "new policies"), updates.length && plural(updates.length, "update in place", "updates in place")].filter(Boolean).join(", ")} status={backup.loading ? "Checking the latest backup" : null} error={error}
       back={onBack ? { label: backLabel, onClick: () => { setRetry(null); onBack() } } : undefined}>
       <button type="button" className={primary} title={readOnly ? READ_ONLY_REGISTRATION_MESSAGE : undefined} disabled={readOnly || !items.length || !assignmentsReady || backup.loading} onClick={() => { setAcknowledged(false); setPhase("confirm") }}>Continue</button>
     </ActionBar>

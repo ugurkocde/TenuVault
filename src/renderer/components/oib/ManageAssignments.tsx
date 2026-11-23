@@ -108,7 +108,7 @@ export function ManageAssignments({ selections }: { selections: Selections }) {
             </div>
           </li>
         })}{!rows.length && <li className="p-6 text-center text-sm text-gray-500">No deployed OpenIntuneBaseline policies were found for these platforms. Deploy them first with New Deployment or Existing Deployment.</li>}</ul>
-        <ActionBar summary={!allowed ? <span className="flex flex-wrap items-center gap-2">Changing the assignments of deployed policies is part of <PlanBadge feature="replaceRestore" /></span> : chosen.length ? `${chosen.length} selected` : "Select the policies to assign"}
+        <ActionBar summary={readOnly ? READ_ONLY_REGISTRATION_MESSAGE : !allowed ? <span className="flex flex-wrap items-center gap-2">Changing the assignments of deployed policies is part of <PlanBadge feature="replaceRestore" /></span> : chosen.length ? `${chosen.length} selected` : "Select the policies to assign"}
           status={loader.line} back={{ onClick: () => goTo("platforms") }}>
           <button type="button" className={button} disabled={!selected.size} onClick={() => setSelected(new Set())}>Clear selection</button>
           <button type="button" className={button} disabled={!rows.length || selected.size === rows.length} onClick={() => setSelected(new Set(rows.map(rowKey)))}>Select all ({rows.length})</button>
@@ -256,7 +256,7 @@ function ReviewAssign({ batches: given, onBack, onFinished, next }: { batches: D
       {mode === "replace" && <div className="mt-5"><Toggle checked={acknowledged} onChange={setAcknowledged} label={removeAll ? "I understand these policies stop applying to every group they are assigned to now" : "I understand the current direct assignments of these policies are replaced"}>
         Devices and users that lose a policy stop getting its settings at their next check-in.
       </Toggle></div>}
-      <ActionBar summary={blocking ? `${blocking.label} is still running. Wait for it to finish first.` : undefined} error={error} back={{ label: "Back to the review", onClick: () => setPhase("review") }}>
+      <ActionBar summary={readOnly ? READ_ONLY_REGISTRATION_MESSAGE : blocking ? `${blocking.label} is still running. Wait for it to finish first.` : undefined} error={error} back={{ label: "Back to the review", onClick: () => setPhase("review") }}>
         <button type="button" className={primary} title={readOnly ? READ_ONLY_REGISTRATION_MESSAGE : undefined} disabled={readOnly || !!blocking || !changing || (mode === "replace" && !acknowledged)} onClick={start}><Users className="h-4 w-4" aria-hidden="true" />{backupMode === "new" ? "Back up and assign" : removeAll ? "Remove assignments" : "Assign"}</button>
       </ActionBar>
     </div>
@@ -290,7 +290,7 @@ function ReviewAssign({ batches: given, onBack, onFinished, next }: { batches: D
       {unreadable.length > 0 && <p className="mt-2 text-xs text-amber-800">{plural(unreadable.length, "policy", "policies")} could not be read and will not be changed.</p>}
     </section>
     <div className="mt-5"><BackupChoice storage={storage} backup={backup} mode={backupMode} onChoose={setChoice} noun="run" skip="Undo puts back the previous assignments, saved in the run on this device only." /></div>
-    <ActionBar summary={`${plural(items.length, "policy", "policies")}${known ? `, ${changing} would change` : ""}${removeAll ? ", every direct assignment removed" : ""}`} status={backup.loading ? "Checking the latest backup" : null} error={error}
+    <ActionBar summary={readOnly ? READ_ONLY_REGISTRATION_MESSAGE : `${plural(items.length, "policy", "policies")}${known ? `, ${changing} would change` : ""}${removeAll ? ", every direct assignment removed" : ""}`} status={backup.loading ? "Checking the latest backup" : null} error={error}
       back={{ label: "Change selection", onClick: () => { setRetry(null); onBack() } }}>
       <button type="button" className={primary} title={readOnly ? READ_ONLY_REGISTRATION_MESSAGE : undefined} disabled={readOnly || !ready || !changing || backup.loading} onClick={() => { setAcknowledged(false); setPhase("confirm") }}>Continue</button>
     </ActionBar>

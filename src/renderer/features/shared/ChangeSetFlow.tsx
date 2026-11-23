@@ -204,7 +204,7 @@ export function ChangeSetFlow({ changeSet, actions, tenantName, onChanged, rollb
             <CheckCircle2 className="h-4 w-4" />
             {canApply ? "Apply to tenant" : "Reconcile and retry"}
           </Button>
-          <p className="max-w-xl text-xs text-gray-500">{canApply ? "The target is read again first; any change since approval stops the apply and needs a fresh review." : "Verified operations are never written again. Uncertain ones are reconciled from live state before any write."}</p>
+          <p className="max-w-xl text-xs text-gray-500">{readOnly ? READ_ONLY_REGISTRATION_MESSAGE : canApply ? "The target is read again first; any change since approval stops the apply and needs a fresh review." : "Verified operations are never written again. Uncertain ones are reconciled from live state before any write."}</p>
         </div>
       )}
 

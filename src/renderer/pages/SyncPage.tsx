@@ -102,6 +102,7 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
   shownRun.current = runId
   const source = tenantOf(sourceId) ?? selected
   const readOnly = readOnlyTenants.has(sourceId)
+  const writeBlocked = (target: SyncTarget) => readOnly || readOnlyTenants.has(target.targetTenantId)
   const pending = (id: string | null) => !!id && [...active].some((key) => key.startsWith(`${id}:`))
 
   // Policies and their sync status are read again when the window regains focus and after every
@@ -321,7 +322,7 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
   }
 
   const approveAndSync = () => {
-    if (!runId) return
+    if (!runId || runTargets.some(writeBlocked)) return
     const forRun = runId
     const left: Record<string, string> = {}
     const ready = runTargets.filter((target) => {
@@ -342,6 +343,7 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
   }
 
   const retry = (target: SyncTarget) => {
+    if (writeBlocked(target)) return
     const changeSet = target.changeSet
     if (!changeSet || !runId) return
     // The route applies the choice the target was approved with; the page's draft never decides it.
@@ -442,7 +444,7 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
             if (checked && run.data?.run.options.acknowledgeRedacted !== true) void review(true)
           }}
           onBack={() => { abandonPlan(); setStep(2) }}
-          blockedReason={readOnly || runTargets.some(target => readOnlyTenants.has(target.targetTenantId)) ? READ_ONLY_REGISTRATION_MESSAGE : undefined}
+          blockedReason={readOnly || runTargets.some(writeBlocked) ? READ_ONLY_REGISTRATION_MESSAGE : undefined}
           onApprove={approveAndSync}
           busy={pending(runId)}
         />
@@ -462,6 +464,7 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
               notes={notes}
               platforms={platforms}
               onRetry={retry}
+              writeBlocked={writeBlocked}
               retrying={shownActive.size > 0}
               tenantOf={tenantOf}
               onChanged={() => { void run.refetch(); void runs.refetch(); refreshStatus() }}

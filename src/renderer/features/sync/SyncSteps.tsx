@@ -144,7 +144,7 @@ export function ChooseSettings({ sources, sourceId, onSource, folder, onFolder, 
         )}
       </div>
       <Footer>
-        <span className="text-sm text-gray-500">{count ? `${count} selected. ` : ""}Up to {MAX_SYNC_POLICIES} per copy.</span>
+        <span className="text-sm text-gray-500">{blockedReason ?? `${count ? `${count} selected. ` : ""}Up to ${MAX_SYNC_POLICIES} per copy.`}</span>
         <Button type="button" disabled={!count || !!blockedReason} title={blockedReason} onClick={onNext}>
           <Copy className="h-4 w-4" aria-hidden="true" />
           {count ? `Copy ${plural(count, "policy", "policies")}` : "Copy"}

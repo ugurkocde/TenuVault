@@ -1,3 +1,4 @@
+import { READ_ONLY_REGISTRATION_MESSAGE } from "../../../shared/app-registration"
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react"
 import { AlertTriangle, ArrowRight, Check, Clock, ExternalLink, Minus, PenLine, Plus, RotateCcw, Trash2, X } from "lucide-react"
 import type { Tenant } from "~/contexts/TenantContext"
@@ -148,7 +149,7 @@ interface Geometry { x1: number; y1: number; x2: number; y2: number; d: string; 
  * link and the node turn green (verified), amber (partly applied) or red (nothing applied). Only a
  * target left out keeps a neutral dashed link.
  */
-export function SyncFlowchart({ source, policies, policyCount, targets, errors, notes, platforms, onRetry, retrying, detailsOpen, onDetails }: {
+export function SyncFlowchart({ source, policies, policyCount, targets, errors, notes, platforms, onRetry, retrying, writeBlocked, detailsOpen, onDetails }: {
   source: { name: string; domain: string }
   policies: string[]
   policyCount: number
@@ -158,6 +159,7 @@ export function SyncFlowchart({ source, policies, policyCount, targets, errors, 
   platforms: Record<string, string | null>
   onRetry: (target: SyncTarget) => void
   retrying: boolean
+  writeBlocked?: (target: SyncTarget) => boolean
   detailsOpen: string | null
   onDetails: (tenantId: string | null) => void
 }) {
@@ -297,7 +299,7 @@ export function SyncFlowchart({ source, policies, policyCount, targets, errors, 
                     </Button>
                   )}
                   {(phase === "partial" || phase === "failed") && retryable(target) && (
-                    <Button type="button" size="sm" variant="secondary" disabled={retrying} aria-describedby={`retry-${id}`} onClick={() => onRetry(target)}>
+                    <Button type="button" size="sm" variant="secondary" disabled={retrying || writeBlocked?.(target)} aria-describedby={`retry-${id}`} onClick={() => onRetry(target)}>
                       <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
                       Retry failed
                     </Button>
@@ -310,7 +312,7 @@ export function SyncFlowchart({ source, policies, policyCount, targets, errors, 
                 </div>
               )}
               {finished && (phase === "partial" || phase === "failed") && retryable(target) && (
-                <p id={`retry-${id}`} className="mt-2 text-xs text-gray-500">{backupOf(target) === "none" ? "Retry applies without a backup, as this copy started." : "Retry backs up first."}</p>
+                <p id={`retry-${id}`} className="mt-2 text-xs text-gray-500">{writeBlocked?.(target) ? READ_ONLY_REGISTRATION_MESSAGE : backupOf(target) === "none" ? "Retry applies without a backup, as this copy started." : "Retry backs up first."}</p>
               )}
               {mayHaveWritten(target) && !entry.storage && <p className="mt-2 text-xs text-amber-800">{NO_ROLLBACK}</p>}
             </div>
@@ -327,7 +329,7 @@ export function SyncFlowchart({ source, policies, policyCount, targets, errors, 
  * and rollback) of one target, and for a run planned but never approved, the way back to its
  * review or to discard it.
  */
-export function SyncResult({ source, policies = [], policyCount, entries, errors, notes, platforms, onRetry, retrying, tenantOf, onChanged, onContinue, onDiscard, discard }: {
+export function SyncResult({ source, policies = [], policyCount, entries, errors, notes, platforms, onRetry, retrying, writeBlocked, tenantOf, onChanged, onContinue, onDiscard, discard }: {
   source: { name: string; domain: string }
   /** Names of the selected policies, in run order. */
   policies?: string[]
@@ -338,6 +340,7 @@ export function SyncResult({ source, policies = [], policyCount, entries, errors
   platforms: Record<string, string | null>
   onRetry: (target: SyncTarget) => void
   retrying: boolean
+  writeBlocked?: (target: SyncTarget) => boolean
   tenantOf: (tenantId: string) => Tenant | undefined
   onChanged: () => void
   /** Reopens this run at Review; offered while a target is still in review and none was approved. */
@@ -449,7 +452,7 @@ export function SyncResult({ source, policies = [], policyCount, entries, errors
           )}
         </div>
       )}
-      <SyncFlowchart source={source} policies={policies} policyCount={policyCount} targets={entries} errors={errors} notes={notes} platforms={platforms} onRetry={onRetry} retrying={retrying} detailsOpen={detailsOpen} onDetails={setDetailsOpen} />
+      <SyncFlowchart source={source} policies={policies} policyCount={policyCount} targets={entries} errors={errors} notes={notes} platforms={platforms} onRetry={onRetry} retrying={retrying} writeBlocked={writeBlocked} detailsOpen={detailsOpen} onDetails={setDetailsOpen} />
       {!running && written.length > 0 && (
         <div className="flex flex-wrap gap-2" aria-label="Summary">
           {chips.map((chip, index) => <span key={index} className="sync-chip" style={{ animationDelay: `${index * 70}ms` }}>{chip}</span>)}
