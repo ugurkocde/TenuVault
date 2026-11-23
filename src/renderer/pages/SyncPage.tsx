@@ -270,9 +270,9 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
       })))
       setTargets(detail.run.targets.map((target) => target.targetTenantId))
       setAck(detail.run.options.acknowledgeRedacted)
-      setIncludeAssignments(detail.run.options.includeAssignments)
+      setIncludeAssignments(detail.run.options.includeAssignments === true)
       setMappings(Object.fromEntries(detail.targets.map((target) => {
-        const resolutions = target.promotion?.items.flatMap((item) => item.references) ?? []
+        const resolutions = target.promotion?.items.flatMap((item) => item.references ?? []) ?? []
         const remembered = new Map(sessionMappings(sourceId, target.targetTenantId).map((mapping) => [`${mapping.kind}:${mapping.sourceId.toLowerCase()}`, mapping]))
         for (const { kind, sourceId, targetId, state } of resolutions) {
           if (state === "mapped" && targetId) remembered.set(`${kind}:${sourceId.toLowerCase()}`, { kind, sourceId, targetId, confirmed: true })
@@ -462,7 +462,7 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
           mappingsDirty={mappingsDirty}
           mappingPanel={includeAssignments ? (target) => {
             const id = target.targetTenantId
-            const references = target.promotion?.items.flatMap((item) => item.references) ?? []
+            const references = target.promotion?.items.flatMap((item) => item.references ?? []) ?? []
             if (!references.some((reference) => reference.state !== "portable")) return null
             return <div className="space-y-3 border-t border-gray-200 px-4 py-3">
               <h3 className="text-sm font-medium text-gray-900">Assignment and scope tag mappings</h3>
