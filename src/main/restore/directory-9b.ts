@@ -11,7 +11,7 @@ export function requireApplicationRestoreAccess(setting: ModuleSetting | undefin
   if (!setting?.enabled || setting.access !== "restore" || setting.areas.applications !== true) throw new RestoreSafetyError("Enable Entra ID and the Applications area with Backup and restore access before restoring application metadata.")
 }
 
-export const DIRECTORY_9B_FOLDERS = ["Applications", "ServicePrincipals", "OAuth2PermissionGrants"]
+export { APPLICATION_REVIEW_FOLDERS as DIRECTORY_9B_FOLDERS } from "../../shared/intune/directory-review-folders"
 export const DIRECTORY_9B_BLOCKER = "This application operation has no verified live restore contract and remains blocked."
 export const APP_POLICY_REFERENCES: Record<string, string> = { tokenLifetimePolicies: "TokenLifetimePolicies", claimsMappingPolicies: "ClaimsMappingPolicies", homeRealmDiscoveryPolicies: "HomeRealmDiscoveryPolicies", appManagementPolicies: "AppManagementPolicies", tokenIssuancePolicies: "TokenIssuancePolicies" }
 export const appIdentity = (value: unknown): string => {

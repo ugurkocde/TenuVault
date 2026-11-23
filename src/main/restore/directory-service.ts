@@ -1,3 +1,7 @@
+import { guardedRestoreJournal } from "../storage/restore-journal"
+import { mappedReference } from "../../shared/intune/restore-references"
+import { PRIVILEGED_REVIEW_FOLDERS } from "../../shared/intune/directory-review-folders"
+import { administrativeUnits, privilegeObject, privilegeReview, PRIVILEGED_RESTORE_BLOCKER, requirePrivilegeId, unitRelationships, type PrivilegeCandidate } from "./directory-9c"
 import { DIRECTORY_REPLICATION_WINDOW_MS } from "./directory-relationship-history"
 import { restoreTenantKey } from "./restore-tenant-key"
 import { DirectoryPrincipalMappings } from "./directory-principal-mappings"
@@ -57,7 +61,7 @@ export class DirectoryRestoreService {
   constructor(store: PartitionedRestoreStore, private readonly recovery: RecoveryAccounts, private readonly connection: (tenant: string) => Promise<RestoreConnection>, private readonly localOwner: (tenant: string) => Promise<Pick<RestoreConnection, "tenantId" | "userId" | "clientId">>, private readonly fetchImpl: typeof fetch = fetch, private readonly protectedAppIds: (tenant: string) => readonly string[] = () => [], private readonly settings?: Pick<ModuleSettings, "get">, private readonly now: () => number = () => Date.now()) {
     this.store = { partitioned: store.partitioned, get: name => restorePersistence(() => store.get(name)), set: (name, value) => restorePersistence(() => store.set(name, value)), delete: name => restorePersistence(() => store.delete(name)) }
   }
-  private async context(tenant: string, onThrottled?: (retryAt: number) => void, validatedConnection?: RestoreConnection, pageId?: string) {
+  private async actorContext(tenant: string, onThrottled?: (retryAt: number) => void, validatedConnection?: RestoreConnection, version = "v1.0") {
     const connection = validatedConnection ?? await this.connection(tenant)
     if (connection.tenantId.toLowerCase() !== restoreTenantKey(tenant)) fail("The connection belongs to another tenant.")
     requireRestoreActor(connection.token, { ...connection, recoveryAccountIds: [] })
@@ -72,7 +76,12 @@ export class DirectoryRestoreService {
       try { await directoryWriteAuthorization(response, true) } catch (error) { if (error instanceof DirectoryAuthenticationDeferredError) throw error }
       return response
     }
-    const actor = await resolveRestoreActor(safetyReader(connection.token, actorFetch), connection, this.recovery.get(tenant), ["identity-references"])
+    const reader = safetyReader(connection.token, actorFetch, version)
+    const actor = await resolveRestoreActor(reader, connection, this.recovery.get(tenant), ["identity-references"])
+    return { actor, connection, reader }
+  }
+  private async context(tenant: string, onThrottled?: (retryAt: number) => void, validatedConnection?: RestoreConnection, pageId?: string) {
+    const { actor, connection } = await this.actorContext(tenant, onThrottled, validatedConnection)
     const io = directory9aIO(connection.token, actor, async (step) => {
       // The admitted subset cannot remove directory roles or change account state. Group
       // relationships are restricted again at transport to static, nonprivileged user links.
@@ -216,6 +225,7 @@ export class DirectoryRestoreService {
   }
   private async preparePage(tenant: string, request: IdentityRestoreRequest, options: DirectoryOptions, read: (path: string) => Promise<unknown>, onInventory: (discard: () => void) => void) {
     const folder = request.path.split("/")[1]
+    if (PRIVILEGED_REVIEW_FOLDERS.includes(folder ?? "")) return this.preparePrivileges(tenant, request, options, onInventory)
     if (DIRECTORY_9B_FOLDERS.includes(folder ?? "")) return this.prepareApplications(tenant, request, options, read, onInventory)
     if (!["Users", "Groups"].includes(folder ?? "") || request.origin !== "restore") fail("Directory restore requires an owned same-tenant backup.")
     this.requireAccess(tenant, folder!)
@@ -389,6 +399,75 @@ export class DirectoryRestoreService {
     this.save(page)
     return this.view(page)
   }
+  private async preparePrivileges(tenant: string, request: IdentityRestoreRequest, requested: DirectoryOptions, onInventory: (discard: () => void) => void) {
+    if (request.origin !== "restore") fail("Role and PIM review requires an owned same-tenant backup.")
+    const [, folder, file] = request.path.split("/") as [string, string, string]
+    const snapshot = request.snapshot, sourceId = snapshot.id
+    const unitFolder = folder === "AdministrativeUnits"
+    // Administrative units in existing backups are stored under their display name.
+    if (unitFolder ? !isGuid(sourceId) : typeof sourceId !== "string" || !/^[A-Za-z0-9_-]{1,200}$/.test(sourceId) || file !== sourceId + ".json") return fail("The selected backup does not identify the saved relationship.")
+    if (typeof sourceId !== "string") return fail("The saved relationship ID is unavailable.")
+    const exactMembers = unitFolder && requested.exactMembers
+    const options: DirectoryOptions = { stage: unitFolder ? "relationships" : "object", exactMembers, exactOwners: false }
+    const retryAt = directoryObjectState(this.store, tenant, "").retryDeadline({ sourceId })
+    if (retryAt && retryAt > this.now()) throw new RestoreWriteDeferredError("Microsoft Graph asked TenuVault to wait before reading this relationship again.", retryAt, "throttle")
+    const { actor, reader } = await this.actorContext(tenant, deadline => this.recordSourceThrottle(tenant, folder, sourceId, deadline), undefined, "beta")
+    const source = { path: request.path, fingerprint: restoreFingerprint(snapshot) }
+    const run: GuardedRun = { version: 1, id: randomUUID(), tenant, actor, origin: "restore", source, entries: [], mappings: [] }
+    const page: DirectoryPage = { run, rows: [], more: false, options }
+    const configurationMappings = guardedRestoreJournal().mappings(tenant)
+    const map = (type: string, id: string) => requirePrivilegeId(["Users", "Groups"].includes(type)
+      ? directoryMappedId(this.store, tenant, type, id) ?? id
+      : mappedReference(configurationMappings, "objectId", type, id) ?? id)
+    const prefix = `restore.directory.inventory.${restoreTenantKey(tenant)}.`
+    let candidates: PrivilegeCandidate[] = [{ source: snapshot }]
+    if (unitFolder) {
+      const id = map(folder, requirePrivilegeId(sourceId))
+      const unit = await privilegeObject(reader, administrativeUnits, id, "The saved administrative unit no longer resolves.")
+      let inventory: NonNullable<DirectoryPage["inventory"]>
+      if (requested.previousRunId) {
+        const previous = this.load(tenant, requested.previousRunId)
+        if (!previous.inventory || !previous.more || previous.run.source?.path !== source.path || previous.run.source.fingerprint !== source.fingerprint || previous.options.exactMembers !== exactMembers || previous.run.actor.userId !== actor.userId || previous.run.actor.clientId !== actor.clientId || previous.inventory.targetId !== id) return fail("Continue the original administrative unit review with the same membership choice.")
+        inventory = { ...previous.inventory, offset: previous.inventory.offset + previous.rows.length }
+      } else {
+        inventory = { id: run.id, count: 0, offset: 0, targetId: id }
+        let part = 0
+        const path = `${administrativeUnits}/${id}`
+        const savePart = (rows: PrivilegeCandidate[]) => this.store.set(`${prefix}${run.id}.${part++}`, JSON.stringify(rows))
+        onInventory(() => this.cleanupUnpublished(Array.from({ length: part }, (_, index) => () => this.store.delete(`${prefix}${run.id}.${index}`)), () => !!this.store.get(key(tenant, run.id))))
+        let chunk: PrivilegeCandidate[] = []
+        for await (const candidate of unitRelationships(snapshot, reader, path, exactMembers, map)) {
+          if (++inventory.count > 1_000_000) fail("The administrative unit difference limit was reached.")
+          chunk.push(candidate)
+          if (chunk.length === 50) { savePart(chunk); chunk = [] }
+        }
+        if (chunk.length) savePart(chunk)
+      }
+      const raw = this.store.get(`${prefix}${inventory.id}.${inventory.offset / 50}`)
+      if (!raw && inventory.offset < inventory.count) fail("The administrative unit relationship inventory is unavailable.")
+      candidates = (raw ? JSON.parse(raw) as PrivilegeCandidate[] : []).map(candidate => ({ ...candidate, unit }))
+      page.inventory = inventory
+      page.more = inventory.offset + candidates.length < inventory.count
+    } else if (requested.previousRunId) fail("This relationship has only one review page.")
+    for (const [index, candidate] of candidates.entries()) {
+      let review: DirectoryReview
+      try {
+        if (candidate.blocker && !candidate.principalId) fail(candidate.blocker)
+        review = await privilegeReview(folder, candidate, reader, actor, map, this.now())
+      } catch (error) {
+        if (error instanceof RestoreWriteDeferredError || isRestorePersistenceError(error)) throw error
+        review = {
+          principal: null, resource: { id: "", name: "Unresolved relationship", type: "directory" }, privilege: "Relationship review", scope: "Unresolved scope",
+          approvals: ["directory-item", "privileged-relationship"], notices: [], roleAssignable: false, changes: [],
+          blocker: error instanceof RestoreSafetyError ? error.message : "A required relationship reference could not be read.",
+        }
+      }
+      page.rows.push({ key: `privilege-${index}`, review })
+    }
+    await this.verifyLocalOwner(page)
+    this.save(page)
+    return this.view(page)
+  }
   private retryableLock(page: DirectoryPage) {
     return (owner: string) => {
       if (!page.inventory) return false
@@ -442,7 +521,10 @@ export class DirectoryRestoreService {
     const page = this.load(tenant, request.runId!)
     await this.verifyLocalOwner(page)
     const connection = await this.pageConnection(page)
-    const { actor } = await this.context(tenant, retryAt => this.recordPageThrottle(page, retryAt), connection, page.run.id)
+    const privileged = PRIVILEGED_REVIEW_FOLDERS.includes(page.run.source?.path.split("/")[1] ?? "")
+    const { actor } = privileged
+      ? await this.actorContext(tenant, retryAt => this.recordPageThrottle(page, retryAt), connection, "beta")
+      : await this.context(tenant, retryAt => this.recordPageThrottle(page, retryAt), connection, page.run.id)
     if (request.origin !== "restore" || page.run.origin !== request.origin || page.run.source?.path !== request.path || page.run.source.fingerprint !== restoreFingerprint(request.snapshot) || actor.userId !== page.run.actor.userId || actor.clientId !== page.run.actor.clientId) fail("Resume the original backup with the admin and connection that reviewed it.")
     return this.view(page)
   }
@@ -472,6 +554,7 @@ export class DirectoryRestoreService {
     const page = this.load(tenant, request.runId!)
     await this.verifyLocalOwner(page)
     if (request.origin !== "restore" || page.run.origin !== request.origin || page.run.source?.path !== request.path || page.run.source.fingerprint !== restoreFingerprint(request.snapshot) || this.view(page).fingerprint !== fingerprint) fail("The backup or preview changed. Preview this object again.")
+    if (PRIVILEGED_REVIEW_FOLDERS.includes(request.path.split("/")[1] ?? "")) fail(PRIVILEGED_RESTORE_BLOCKER)
     const connection = await this.pageConnection(page)
     const selection = page.rows.filter(row => !row.review.blocker && row.review.approvals.every(kind => approvals[row.key]?.includes(kind))).map(row => row.key)
     if (!selection.length || (page.selection && JSON.stringify(page.selection) !== JSON.stringify(selection))) fail("Approve each selected row separately. A resumed page must keep its original selection.")
@@ -566,6 +649,9 @@ export class DirectoryRestoreService {
         state.release(true)
         if (!state.discarded()) fail("The discard marker could not be verified. This page remains saved.")
         return this.view(page)
+      }
+      if (PRIVILEGED_REVIEW_FOLDERS.includes(page.run.source?.path.split("/")[1] ?? "")) {
+        return { ...this.view(page), ...this.results(page, { status: "nothing-sent", batches: 0, failed: 0 }, []) }
       }
       const connection = await this.pageConnection(page)
       if (action === "reconcile") {

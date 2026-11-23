@@ -6156,7 +6156,30 @@
         "index": "matched",
         "indexPath": "/roleManagement/directory/roleAssignments/{unifiedRoleAssignment-id}"
       }
-    ]
+    ],
+    "directoryRestore": {
+      "phase": "staged",
+      "blocker": "Review only. No relationship write is admitted.",
+      "actions": [
+        "assign"
+      ],
+      "builder": "src/main/restore/directory-9c.ts",
+      "contracts": [
+        {
+          "action": "assign",
+          "method": "POST",
+          "path": "roleManagement/directory/roleAssignments",
+          "delegated": [
+            "RoleManagement.ReadWrite.Directory"
+          ],
+          "application": [
+            "RoleManagement.ReadWrite.Directory"
+          ],
+          "documentation": "https://learn.microsoft.com/en-us/graph/api/rbacapplication-post-roleassignments?view=graph-rest-beta",
+          "blocker": "The saved role link has no permanent-assignment provenance. Replaying an activated or time-bound link could make it permanent."
+        }
+      ]
+    }
   },
   {
     "folder": "RoleEligibilitySchedules",
@@ -6181,7 +6204,30 @@
       "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
     },
     "disposition": "directory-deferred",
-    "supplementalWrites": []
+    "supplementalWrites": [],
+    "directoryRestore": {
+      "phase": "staged",
+      "blocker": "Review only. No relationship write is admitted.",
+      "actions": [
+        "eligible-role"
+      ],
+      "builder": "src/main/restore/directory-9c.ts",
+      "contracts": [
+        {
+          "action": "eligible-role",
+          "method": "POST",
+          "path": "roleManagement/directory/roleEligibilityScheduleRequests",
+          "delegated": [
+            "RoleEligibilitySchedule.ReadWrite.Directory"
+          ],
+          "application": [
+            "RoleEligibilitySchedule.ReadWrite.Directory"
+          ],
+          "documentation": "https://learn.microsoft.com/en-us/graph/api/rbacapplication-post-roleeligibilityschedulerequests?view=graph-rest-beta",
+          "blocker": "Requires a verified eligibility request and schedule read-back."
+        }
+      ]
+    }
   },
   {
     "folder": "RoleAssignmentSchedules",
@@ -6206,7 +6252,30 @@
       "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
     },
     "disposition": "directory-deferred",
-    "supplementalWrites": []
+    "supplementalWrites": [],
+    "directoryRestore": {
+      "phase": "staged",
+      "blocker": "Review only. No relationship write is admitted.",
+      "actions": [
+        "active-role"
+      ],
+      "builder": "src/main/restore/directory-9c.ts",
+      "contracts": [
+        {
+          "action": "active-role",
+          "method": "POST",
+          "path": "roleManagement/directory/roleAssignmentScheduleRequests",
+          "delegated": [
+            "RoleAssignmentSchedule.ReadWrite.Directory"
+          ],
+          "application": [
+            "RoleAssignmentSchedule.ReadWrite.Directory"
+          ],
+          "documentation": "https://learn.microsoft.com/en-us/graph/api/rbacapplication-post-roleassignmentschedulerequests?view=graph-rest-beta",
+          "blocker": "Only direct administrator-assigned schedules with an unexpired absolute end date are candidates."
+        }
+      ]
+    }
   },
   {
     "folder": "RoleManagementPolicies",
@@ -6366,7 +6435,30 @@
       "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
     },
     "disposition": "directory-deferred",
-    "supplementalWrites": []
+    "supplementalWrites": [],
+    "directoryRestore": {
+      "phase": "staged",
+      "blocker": "Review only. No relationship write is admitted.",
+      "actions": [
+        "eligible-group-access"
+      ],
+      "builder": "src/main/restore/directory-9c.ts",
+      "contracts": [
+        {
+          "action": "eligible-group-access",
+          "method": "POST",
+          "path": "identityGovernance/privilegedAccess/group/eligibilityScheduleRequests",
+          "delegated": [
+            "PrivilegedEligibilitySchedule.ReadWrite.AzureADGroup"
+          ],
+          "application": [
+            "PrivilegedEligibilitySchedule.ReadWrite.AzureADGroup"
+          ],
+          "documentation": "https://learn.microsoft.com/en-us/graph/api/privilegedaccessgroup-post-eligibilityschedulerequests?view=graph-rest-beta",
+          "blocker": "Requires an eligibility-only round trip for the resolved member or owner privilege."
+        }
+      ]
+    }
   },
   {
     "folder": "PimGroupAssignmentSchedules",
@@ -6391,7 +6483,30 @@
       "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
     },
     "disposition": "directory-deferred",
-    "supplementalWrites": []
+    "supplementalWrites": [],
+    "directoryRestore": {
+      "phase": "staged",
+      "blocker": "Review only. No relationship write is admitted.",
+      "actions": [
+        "active-group-access"
+      ],
+      "builder": "src/main/restore/directory-9c.ts",
+      "contracts": [
+        {
+          "action": "active-group-access",
+          "method": "POST",
+          "path": "identityGovernance/privilegedAccess/group/assignmentScheduleRequests",
+          "delegated": [
+            "PrivilegedAssignmentSchedule.ReadWrite.AzureADGroup"
+          ],
+          "application": [
+            "PrivilegedAssignmentSchedule.ReadWrite.AzureADGroup"
+          ],
+          "documentation": "https://learn.microsoft.com/en-us/graph/api/privilegedaccessgroup-post-assignmentschedulerequests?view=graph-rest-1.0",
+          "blocker": "Only direct administrator-assigned schedules with an unexpired absolute end date are candidates."
+        }
+      ]
+    }
   },
   {
     "folder": "PimAlertConfigurations",
@@ -6709,6 +6824,57 @@
       "blockedReason": "Recycle-bin-first restoration must preserve the ID before recreation. Membership, restricted units and dynamic membership are excluded; no safe configuration-only lifecycle is verified.",
       "builder": "blocked",
       "lab": "not-run; phase 1 forbids lab writes"
+    },
+    "directoryRestore": {
+      "phase": "staged",
+      "blocker": "Review only. No relationship write is admitted.",
+      "actions": [
+        "add-unit-member",
+        "remove-unit-member",
+        "add-scoped-role-member"
+      ],
+      "builder": "src/main/restore/directory-9c.ts",
+      "contracts": [
+        {
+          "action": "add-unit-member",
+          "method": "POST",
+          "path": "directory/administrativeUnits/{id}/members/$ref",
+          "delegated": [
+            "AdministrativeUnit.ReadWrite.All"
+          ],
+          "application": [
+            "AdministrativeUnit.ReadWrite.All"
+          ],
+          "documentation": "https://learn.microsoft.com/en-us/graph/api/administrativeunit-post-members?view=graph-rest-beta",
+          "blocker": "Static, unrestricted unit membership needs a live round trip and verified downstream access."
+        },
+        {
+          "action": "remove-unit-member",
+          "method": "DELETE",
+          "path": "directory/administrativeUnits/{id}/members/{principalId}/$ref",
+          "delegated": [
+            "AdministrativeUnit.ReadWrite.All"
+          ],
+          "application": [
+            "AdministrativeUnit.ReadWrite.All"
+          ],
+          "documentation": "https://learn.microsoft.com/en-us/graph/api/administrativeunit-delete-members?view=graph-rest-beta",
+          "blocker": "Per-unit exact membership and separate approval are required. Remaining administrator and indirect access protections need verification."
+        },
+        {
+          "action": "add-scoped-role-member",
+          "method": "POST",
+          "path": "directory/administrativeUnits/{id}/scopedRoleMembers",
+          "delegated": [
+            "RoleManagement.ReadWrite.Directory"
+          ],
+          "application": [
+            "RoleManagement.ReadWrite.Directory"
+          ],
+          "documentation": "https://learn.microsoft.com/en-us/graph/api/administrativeunit-post-scopedrolemembers?view=graph-rest-beta",
+          "blocker": "Requires a saved principal and role, a resolved unrestricted unit, and a live round trip."
+        }
+      ]
     }
   },
   {

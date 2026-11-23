@@ -7,10 +7,11 @@ import type { BackupTenant } from "./types"
 import type { ReplacedReference } from "../../../shared/intune/restore-references"
 import type { DirectoryOptions } from "../../../main/restore/directory-service"
 import type { DirectoryReview } from "../../../main/restore/directory-9a"
+import { APPLICATION_REVIEW_FOLDERS, PRIVILEGED_REVIEW_FOLDERS } from "../../../shared/intune/directory-review-folders"
 import { directoryPageUnresolved } from "../../../shared/intune/directory-page-state"
 
 interface Review { options?: DirectoryOptions; runId: string; fingerprint: string; more: boolean; discarded?: boolean; unresolved?: boolean; selection?: string[]; rows: Array<{ key: string; review: DirectoryReview }> }
-const approvalLabel: Record<string, string> = { "directory-item": "Approve this individual change", "privileged-relationship": "Approve this privileged relationship", "security-response": "Approve undoing the apparent security response", "recycle-relationships": "Approve recovered relationships and account state", "exact-group": "Approve this removal for this group" }
+const approvalLabel: Record<string, string> = { "directory-item": "Approve this individual change", "privileged-relationship": "Approve this privileged relationship", "security-response": "Approve undoing the apparent security response", "recycle-relationships": "Approve recovered relationships and account state", "exact-group": "Approve this removal for this group", "exact-unit": "Approve this removal for this administrative unit" }
 /** A bounded page of explicit approvals, outside restore all and row selection. */
 /** `active` is false while the panel is mounted on a hidden tab: it lists saved pages only once shown. */
 export function DirectoryRestore({ tenant, backupId = "", path = "", active = true }: { tenant: BackupTenant; backupId?: string; path?: string; active?: boolean }) {
@@ -110,18 +111,22 @@ export function DirectoryRestore({ tenant, backupId = "", path = "", active = tr
     <div className="flex flex-wrap items-end gap-2"><label>Saved directory page ID<input className="block w-full rounded border bg-card p-1" disabled={busy} value={resumeId} onChange={event => { invalidate(); setResumeId(event.target.value); setInputCanDiscard(null) }} /></label><Button size="sm" variant="outline" disabled={busy || !resumeId} onClick={() => void send("reconcile")}>Confirm saved page results</Button>{resumeId && inputCanDiscard !== false && <Button size="sm" variant="outline" disabled={busy} onClick={() => void send("discard", resumeId)}>Discard entered page</Button>}</div>
     {unfinished}{resultRows}<p role="status" aria-live="polite">{message}</p>
   </div>
-  const applications = ["Applications", "ServicePrincipals", "OAuth2PermissionGrants"].includes(path.split("/")[1]!)
+  const folder = path.split("/")[1]!
+  const applications = APPLICATION_REVIEW_FOLDERS.includes(folder)
+  const privileged = PRIVILEGED_REVIEW_FOLDERS.includes(folder)
+  const unit = folder === "AdministrativeUnits"
   const selected = review?.rows.some(row => !row.review.blocker && row.review.approvals.every(kind => approvals[row.key]?.includes(kind)))
   const unresolved = review?.discarded ? false : review?.unresolved ?? directoryPageUnresolved(false, review?.selection ?? outcomes.map(row => row.key), outcomes)
   return <div className="px-4 pb-3 pl-11 text-sm" data-no-select>
     <Button size="sm" variant="outline" disabled={busy} aria-expanded={open} onClick={() => { setOpen(!open); invalidate() }}>Review directory restore</Button>
     {open && <div className="mt-2 space-y-3 rounded-lg border border-blue-200 bg-blue-50 p-3 text-gray-900">
       <p>Review who receives access. Each change needs its own approval and is never part of restore all. {!applications && <>Recreated objects get a new ID. Restore the object before reviewing relationships.</>}</p>
-      {applications ? <p>Only nonempty app registration name and description updates run. Everything else is blocked, including creation, enterprise app metadata, recycle recovery, owners, consent, app roles, policy bindings, SAML signing keys, provisioning secrets and all credentials.</p> : <><p>Object updates restore a user's display name or a security group's nonempty description. Clearing descriptions remains blocked after inconsistent live read-back. Other profile and group properties have no admitted restore round trip.</p>
+      {privileged ? <p>Review directory roles, PIM schedules and administrative unit relationships. Execution requires a verified restore and cleanup round trip.</p> : applications ? <p>Only nonempty app registration name and description updates run. Everything else is blocked, including creation, enterprise app metadata, recycle recovery, owners, consent, app roles, policy bindings, SAML signing keys, provisioning secrets and all credentials.</p> : <><p>Object updates restore a user's display name or a security group's nonempty description. Clearing descriptions remains blocked after inconsistent live read-back. Other profile and group properties have no admitted restore round trip.</p>
       <p>Exact member removal is blocked for Conditional Access targeted groups because it can affect policy enforcement. Remove those members in Microsoft Entra. Other admitted changes remain available.</p>
       <p>Account activation, recycle recovery, invitations, licenses, dynamic rules, role-assignable groups and nested group relationships remain blocked. Their live evidence or privileged safety integration is incomplete.</p></>}
-      <label className="block">Review <select className="ml-2 rounded border bg-white p-1 text-gray-900" disabled={busy} value={stage} onChange={event => { setStage(event.target.value); invalidate() }}><option value="object">Directory object</option><option value="relationships">Relationships</option></select></label>
-      {path.split("/")[1] === "Groups" && stage === "relationships" && <>
+      {!privileged && <label className="block">Review <select className="ml-2 rounded border bg-white p-1 text-gray-900" disabled={busy} value={stage} onChange={event => { setStage(event.target.value); invalidate() }}><option value="object">Directory object</option><option value="relationships">Relationships</option></select></label>}
+      {unit && <label className="flex items-start gap-2"><input type="checkbox" disabled={busy} checked={exactMembers} onChange={event => { setExactMembers(event.target.checked); invalidate() }} />Review exact membership for this administrative unit, including members absent from the backup</label>}
+      {folder === "Groups" && stage === "relationships" && <>
         <label className="flex items-start gap-2"><input type="checkbox" disabled={busy} checked={exactMembers} onChange={event => { setExactMembers(event.target.checked); invalidate() }} />Exact membership for this group, remove members absent from the backup</label>
         <label className="flex items-start gap-2"><input type="checkbox" disabled={busy} checked={exactOwners} onChange={event => { setExactOwners(event.target.checked); invalidate() }} />Exact ownership for this group, remove owners absent from the backup</label>
       </>}
@@ -129,7 +134,7 @@ export function DirectoryRestore({ tenant, backupId = "", path = "", active = tr
       <div className="flex flex-wrap items-end gap-2"><label className="min-w-0">Saved page ID<input className="block w-full rounded border bg-white p-1 text-gray-900" disabled={busy} value={resumeId} onChange={event => { setResumeId(event.target.value); setInputCanDiscard(null) }} /></label><Button size="sm" variant="outline" disabled={busy || !resumeId} onClick={() => void send("resume")}>Resume saved page</Button><Button size="sm" variant="outline" disabled={busy || !(review?.runId ?? resumeId)} onClick={() => void send("reconcile")}>Confirm this page's results</Button>{resumeId && inputCanDiscard !== false && <Button size="sm" variant="outline" disabled={busy} onClick={() => void send("discard", resumeId)}>Discard entered page</Button>}</div>
       {unfinished}
       {!review && resumeId && <p>Saved page: <span className="break-all">{resumeId}</span>. Discard checks the saved owner and refuses any uncertain result locally.</p>}
-      {review && <><p>Saved page: <span className="break-all">{review.runId}</span>. Up to 50 changes per page, executed in batches of 20.</p>
+      {review && <><p>Saved page: <span className="break-all">{review.runId}</span>. {privileged ? "Up to 50 relationships per page." : "Up to 50 changes per page, executed in batches of 20."}</p>
         {canDiscard !== false && <Button size="sm" variant="outline" disabled={busy} onClick={() => void send("discard", review.runId)}>Discard saved restore</Button>}
         {review.discarded && <p>Saved restore discarded. This page can never send again.</p>}
         <div className="max-h-96 space-y-3 overflow-auto">{review.rows.map(({ key, review: row }) => <div key={key} className="space-y-2 rounded border bg-white p-3 text-gray-900">
@@ -140,7 +145,7 @@ export function DirectoryRestore({ tenant, backupId = "", path = "", active = tr
           {row.blocker ? <p role="status">Blocked: {row.blocker}</p> : row.approvals.map(kind => <label key={kind} className="flex items-start gap-2"><input type="checkbox" disabled={busy || review.discarded} checked={approvals[key]?.includes(kind) ?? false} onChange={event => setApprovals(previous => ({ ...previous, [key]: event.target.checked ? [...(previous[key] ?? []), kind] : (previous[key] ?? []).filter(value => value !== kind) }))} />{approvalLabel[kind] ?? kind}</label>)}
         </div>)}</div>
         {review.more && <div className="space-y-2"><p>{unresolved ? "Resolve or discard this saved page before previewing the next page. Unresolved changes keep their objects locked." : "More changes remain. Completed differences are omitted. Blocked rows do not prevent reviewing the next page."}</p><Button size="sm" variant="outline" disabled={busy || unresolved} onClick={() => void send("next")}>Preview next page</Button></div>}
-        <div className="flex flex-wrap gap-2"><Button size="sm" disabled={busy || review.discarded || !selected} onClick={() => void send("restore")}>Execute approved changes or resume page</Button>{busy && activeRestore === review.runId && <Button size="sm" variant="outline" onClick={() => void send("cancel")}>Cancel directory restore</Button>}</div>
+        {!privileged && <div className="flex flex-wrap gap-2"><Button size="sm" disabled={busy || review.discarded || !selected} onClick={() => void send("restore")}>Execute approved changes or resume page</Button>{busy && activeRestore === review.runId && <Button size="sm" variant="outline" onClick={() => void send("cancel")}>Cancel directory restore</Button>}</div>}
       </>}
       {resultRows}
       {references.length > 0 && <div className="max-h-64 space-y-2 overflow-auto"><p>Policies that still reference old IDs need review:</p>{references.map((reference, index) => <p className="break-all" key={index}>{reference.path}, {reference.property}. Old ID: {reference.mapping.source}. New ID: {reference.mapping.target}.</p>)}</div>}

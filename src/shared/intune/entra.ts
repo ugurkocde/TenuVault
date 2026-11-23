@@ -1,6 +1,7 @@
 import { restoreMatrixRow } from "./restore-matrix"
 import type { Extra, IntuneType } from "./registry"
 import { ENTRA_DIRECTORY_TYPES } from "./entra-directory"
+import { isGuid } from "../security"
 import { entraSnapshot } from "./entra-snapshot"
 
 /** Configuration restore capabilities come only from individually verified matrix subsets. */
@@ -155,10 +156,24 @@ export const ENTRA_5B_TYPES: IntuneType[] = [
   { ...roles("PimAlertConfigurations", "PIM alert configurations", "identityGovernance/roleManagementAlerts/alertConfigurations"), apiVersion: "beta", filter: directoryScope },
   {
     ...roles("AdministrativeUnits", "Administrative units", "directory/administrativeUnits"),
+    additionalReadVersions: ["beta"],
+    unorderedCollections: { scopedRoleMembers: "id" },
+    normalizeSnapshot: snapshot => {
+      if (!Array.isArray(snapshot.scopedRoleMembers)) return entraSnapshot(snapshot)
+      return entraSnapshot({ ...snapshot, scopedRoleMembers: snapshot.scopedRoleMembers.map(entry => {
+        if (!entry || typeof entry !== "object" || Array.isArray(entry)) return entry
+        const member = entry.roleMemberInfo
+        return {
+          id: entry.id ?? null,
+          roleId: isGuid(entry.roleId) ? entry.roleId : null,
+          roleMemberInfo: { id: member && typeof member === "object" && !Array.isArray(member) && isGuid(member.id) ? member.id : null },
+        }
+      }) })
+    },
     select: "id,displayName,description,visibility,membershipType,membershipRule,membershipRuleProcessingState,isMemberManagementRestricted",
     extras: [
       { property: "members", path: id => `directory/administrativeUnits/${id}/members?$select=id&$top=999`, ids: true },
-      { property: "scopedRoleMembers", path: id => `directory/administrativeUnits/${id}/scopedRoleMembers?$select=id`, ids: true },
+      { property: "scopedRoleMembers", path: id => `https://graph.microsoft.com/beta/directory/administrativeUnits/${id}/scopedRoleMembers?$select=id,roleId,roleMemberInfo` },
     ],
   },
   roles("AttributeSets", "Attribute sets", "directory/attributeSets"),

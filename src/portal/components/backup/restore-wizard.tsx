@@ -1,6 +1,7 @@
 "use client"
 
 import { matchesBackupService, type BackupServiceFilter } from "@desktop/lib/backup-service"
+import { DIRECTORY_REVIEW_FOLDERS } from "../../../shared/intune/directory-review-folders"
 import { DirectoryRestore } from "./directory-restore"
 import { ConfigurationRestore } from "./configuration-restore"
 import { INTUNE_TYPES, restoreCapability } from "../../../shared/intune/registry"
@@ -969,8 +970,8 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
                                       )}
                                     </span>
                                   </label>
-                                  {!copying && ["Users", "Groups", "Applications", "ServicePrincipals", "OAuth2PermissionGrants"].includes(item.folder) && <DirectoryRestore key={`${tenant.credentials.tenantId}:${tenant.credentials.appId}:${tenant.storageAccountName}:${backupId}:${item.path}`} tenant={tenant} backupId={item.source} path={item.path} active={active} />}
-                                  {!copying && !["Users", "Groups", "Applications", "ServicePrincipals", "OAuth2PermissionGrants"].includes(item.folder) && typeForFolder(item.folder)?.restoreSafety === "identity" && !["none", "metadata"].includes(restoreCapability(typeForFolder(item.folder)!)) && <ConfigurationRestore key={`${tenant.credentials.tenantId}:${tenant.credentials.appId}:${tenant.storageAccountName}:${backupId}:${item.path}`} tenant={tenant} backupId={backupId!} path={item.path} singleton={restoreCapability(typeForFolder(item.folder)!) === "singleton"} />}
+                                  {!copying && DIRECTORY_REVIEW_FOLDERS.includes(item.folder) && <DirectoryRestore key={`${tenant.credentials.tenantId}:${tenant.credentials.appId}:${tenant.storageAccountName}:${backupId}:${item.path}`} tenant={tenant} backupId={item.source} path={item.path} active={active} />}
+                                  {!copying && (!DIRECTORY_REVIEW_FOLDERS.includes(item.folder) || item.folder === "AdministrativeUnits") && typeForFolder(item.folder)?.restoreSafety === "identity" && !["none", "metadata"].includes(restoreCapability(typeForFolder(item.folder)!)) && <ConfigurationRestore key={`${tenant.credentials.tenantId}:${tenant.credentials.appId}:${tenant.storageAccountName}:${backupId}:${item.path}`} tenant={tenant} backupId={backupId!} path={item.path} singleton={restoreCapability(typeForFolder(item.folder)!) === "singleton"} />}
                                 </li>
                               ))}
                               <li className="pl-11">
