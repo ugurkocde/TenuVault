@@ -38,7 +38,7 @@ export function tenantWriteTargets(pathname: string, body: Record<string, unknow
 }
 
 const WRITE_ACTIONS = {
-  oib: new Set(["oib-deploy", "oib-fix", "oib-undo"]),
+  oib: new Set(["oib-deploy", "oib-fix", "oib-undo", "oib-assign"]),
   promotion: new Set(["apply", "retry", "rollback-apply"]),
   cisRemediation: new Set(["apply", "retry", "rollback-apply"]),
 }

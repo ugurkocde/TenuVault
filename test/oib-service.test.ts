@@ -12,6 +12,12 @@ const OIB_A = "92CE33B8-FF64-4604-A18D-35555F26C4BE"
 const OIB_OLD = "86EB0653-DD3D-4CBA-BB51-1FFDC3E1F39C"
 const EXISTING = "55555555-5555-5555-5555-555555555555"
 const CREATED = "66666666-6666-6666-6666-666666666666"
+const CREATED_COMPLIANCE = "67676767-6767-6767-6767-676767676767"
+const DEVICES = "d0d0d0d0-0000-4000-8000-000000000001"
+const USERS = "a0a0a0a0-0000-4000-8000-000000000002"
+const EXCLUDED = "e0e0e0e0-0000-4000-8000-000000000003"
+const WIN_FILTER = "f0f0f0f0-0000-4000-8000-000000000004"
+const MAC_FILTER = "f1f1f1f1-0000-4000-8000-000000000005"
 const SC = "WINDOWS/IntuneManagement/SettingsCatalog/Win - OIB - SC - Test - v3.8.json"
 const COMPLIANCE = "WINDOWS/IntuneManagement/CompliancePolicies/Win - OIB - Compliance - Password - v3.1.json"
 
@@ -23,8 +29,8 @@ const settingsCatalog = (name: string, value = 1) => ({
 const compliance = { "@odata.type": "#microsoft.graph.windows10CompliancePolicy", id: "c", displayName: "Win - OIB - Compliance - Password - v3.1", passwordRequired: true,
   scheduledActionsForRule: [{ ruleName: "PasswordRequired", scheduledActionConfigurations: [{ actionType: "block", gracePeriodHours: 0 }] }] }
 const manifest = { oibVersion: "3.8", policies: [
-  { oibId: OIB_A, name: "Win - OIB - SC - Test - v3.8", policyType: "SettingsCatalog", previousVersions: [OIB_OLD] },
-  { oibId: "BDE95674-F4F0-4E6E-A49A-D0197BE56560", name: "Win - OIB - Compliance - Password - v3.1", policyType: "CompliancePolicies", licenseRequirements: "" },
+  { oibId: OIB_A, name: "Win - OIB - SC - Test - v3.8", policyType: "SettingsCatalog", scope: "Device", previousVersions: [OIB_OLD] },
+  { oibId: "BDE95674-F4F0-4E6E-A49A-D0197BE56560", name: "Win - OIB - Compliance - Password - v3.1", policyType: "CompliancePolicies", scope: "User", licenseRequirements: "" },
 ] }
 
 interface Tenant {
@@ -41,6 +47,14 @@ interface Tenant {
   started?: Array<Record<string, unknown>>
   /** oib-progress answers read while the backup ran. */
   seen?: OibProgress[]
+  /** Groups the tenant has; every requested group exists when left out. */
+  groups?: string[]
+  /** Group reads answer 403, as without a group read permission. */
+  groupsDenied?: boolean
+  /** Assignment filters the tenant has. */
+  filters?: Array<{ id: string; displayName: string; platform: string; assignmentFilterManagementType?: string }>
+  /** Direct assignments of the Settings Catalog policies, by policy ID; one group "prod" when left out. */
+  assignments?: Record<string, unknown[]>
 }
 
 const COMPLETE = { Status: "Success", Failures: 0, TenantId: tenantId, Scope: { Excluded: [] }, SkippedTypes: [], FailedTypes: [], DurationSeconds: 120 }
@@ -81,6 +95,12 @@ function world(state: Tenant, writes: string[]) {
       return Response.json({ backupId, content: { groups: [], metadata: metadata ?? null } })
     }
     const path = url.replace("https://graph.microsoft.com/beta/", "")
+    if (method === "GET" && path.startsWith("groups?")) {
+      if (state.groupsDenied) return Response.json({ error: { code: "Authorization_RequestDenied", message: "Insufficient privileges" } }, { status: 403 })
+      const ids = [...decodeURIComponent(path).matchAll(/'([0-9a-f-]{36})'/g)].map(m => m[1]!)
+      return Response.json({ value: ids.filter(id => !state.groups || state.groups.includes(id)).map(id => ({ id, displayName: `Group ${id.slice(0, 4)}`, securityEnabled: true, groupTypes: [] })) })
+    }
+    if (method === "GET" && path.startsWith("deviceManagement/assignmentFilters?")) return Response.json({ value: (state.filters ?? []).map(f => ({ assignmentFilterManagementType: "devices", ...f })) })
     if (method === "GET" && path.startsWith("deviceManagement/configurationPolicies?")) {
       return Response.json({ value: state.policies.map(p => ({ id: p.id, name: p.name, description: p.description ?? "" })) })
     }
@@ -89,11 +109,17 @@ function world(state: Tenant, writes: string[]) {
     if (method === "GET" && detail) {
       const found = state.policies.find(p => p.id === decodeURIComponent(detail[1]!))
       if (!found) return Response.json({ error: { code: "ResourceNotFound", message: "Not found" } }, { status: 404 })
-      if (detail[2]) return Response.json({ value: [{ id: "a1", target: { "@odata.type": "#microsoft.graph.groupAssignmentTarget", groupId: "prod" } }] })
+      if (detail[2]) return Response.json({ value: state.assignments?.[found.id] ?? [{ id: "a1", target: { "@odata.type": "#microsoft.graph.groupAssignmentTarget", groupId: "prod" } }] })
       return Response.json({ id: found.id, name: found.name, description: found.description ?? "", platforms: "windows10", technologies: "mdm", ...(found.tags ? { roleScopeTagIds: found.tags } : {}), settings: [setting(found.value ?? 1)] })
     }
     writes.push(`${method} ${path}${init?.body ? ` ${String(init.body)}` : ""}`)
     if (method === "POST" && path === "deviceManagement/configurationPolicies") return Response.json({ id: CREATED, name: "created" })
+    if (method === "POST" && path === "deviceManagement/deviceCompliancePolicies") return Response.json({ id: CREATED_COMPLIANCE, displayName: "created" })
+    const assigned = /^deviceManagement\/configurationPolicies\/([^/]+)\/assign$/.exec(path)
+    if (method === "POST" && assigned && state.assignments) {
+      state.assignments[assigned[1]!] = (JSON.parse(String(init!.body)) as { assignments: unknown[] }).assignments
+      return Response.json({ value: [] })
+    }
     if (method === "PUT") {
       const id = path.split("/")[2]
       const body = JSON.parse(String(init!.body)) as { name: string; settings: Array<{ settingInstance: { simpleSettingValue: { value: number } } }> }
@@ -225,7 +251,9 @@ describe("deployments", () => {
     vi.stubGlobal("fetch", world({ policies: [] }, writes))
     await source()
     const run = await handleOib({ ...base, action: "oib-deploy", commit, items: [{ source: SC, mode: "create" }], pilotGroupId: pilot }) as OibRun
-    expect(run).toMatchObject({ kind: "deploy", commit, backupFolder: "backup-1", pilotGroupId: pilot, failed: [], created: [{ folder: "ConfigurationPolicies", id: CREATED, name: "Win - OIB - SC - Test - v3.8" }] })
+    // A pilot group, as earlier versions sent it, assigns every new policy to that group.
+    expect(run).toMatchObject({ kind: "deploy", commit, backupFolder: "backup-1", assignments: { deviceGroups: [{ id: pilot }], userGroups: [{ id: pilot }] }, failed: [],
+      created: [{ folder: "ConfigurationPolicies", id: CREATED, name: "Win - OIB - SC - Test - v3.8", assignment: { include: 1, exclude: 0 } }] })
     // The pilot group is checked live before anything is created.
     expect(writes[0]).toBe(`GET groups/${pilot}`)
     const [create, assign] = writes.filter(write => !write.startsWith("GET "))
@@ -333,6 +361,135 @@ describe("deployments", () => {
     await expect(handleOib({ ...base, action: "oib-deploy", commit, items: [{ source: SC, mode: "create" }], pilotGroupId: "All devices" })).rejects.toThrow("object ID")
     await expect(handleOib({ ...base, action: "oib-fix", commit, items: [{ source: SC, mode: "create" }] })).rejects.toThrow("updates an existing policy")
     await expect(handleOib({ ...base, action: "oib-deploy", commit, backup: false, items: [{ source: "WINDOWS/elsewhere.json", mode: "create" }] })).rejects.toThrow("not part of this OIB pack")
+  })
+})
+
+describe("assignments", () => {
+  const spec = { deviceGroups: [{ id: DEVICES }], userGroups: [{ id: USERS }], excludeGroups: [{ id: EXCLUDED }], unmarked: "none", filters: { windows10AndLater: { id: WIN_FILTER, mode: "include" } } }
+  const filters = [{ id: WIN_FILTER, displayName: "Corporate Windows", platform: "windows10AndLater" }, { id: MAC_FILTER, displayName: "Corporate Macs", platform: "macOS" }]
+  const assignBody = (writes: string[], path: string) => {
+    const write = writes.find(w => w.startsWith(`POST ${path}/assign `))
+    return write ? JSON.parse(write.slice(write.indexOf(" {") + 1)) as { assignments: Array<{ target: Record<string, unknown> }> } : undefined
+  }
+
+  it("assigns device groups to device policies and user groups to user policies, with the exclusions and the platform filter", async () => {
+    const writes: string[] = []
+    vi.stubGlobal("fetch", world({ policies: [], filters }, writes))
+    await source()
+    const run = await handleOib({ ...base, action: "oib-deploy", commit, backup: false, storageAccountName: null, items: [{ source: SC, mode: "create" }, { source: COMPLIANCE, mode: "create" }], assignments: spec }) as OibRun
+    expect(run.failed).toEqual([])
+    expect(run.created).toMatchObject([{ id: CREATED, assignment: { include: 1, exclude: 1 } }, { id: CREATED_COMPLIANCE, assignment: { include: 1, exclude: 1 } }])
+    // Names come from the tenant, not from the request.
+    expect(run.assignments).toMatchObject({ deviceGroups: [{ id: DEVICES, name: "Group d0d0" }], filters: { windows10AndLater: { id: WIN_FILTER, name: "Corporate Windows" } } })
+    const filter = { deviceAndAppManagementAssignmentFilterId: WIN_FILTER, deviceAndAppManagementAssignmentFilterType: "include" }
+    expect(assignBody(writes, `deviceManagement/configurationPolicies/${CREATED}`)?.assignments).toEqual([
+      { target: { "@odata.type": "#microsoft.graph.groupAssignmentTarget", groupId: DEVICES, ...filter } },
+      { target: { "@odata.type": "#microsoft.graph.exclusionGroupAssignmentTarget", groupId: EXCLUDED } },
+    ])
+    expect(assignBody(writes, `deviceManagement/deviceCompliancePolicies/${CREATED_COMPLIANCE}`)?.assignments).toEqual([
+      { target: { "@odata.type": "#microsoft.graph.groupAssignmentTarget", groupId: USERS, ...filter } },
+      { target: { "@odata.type": "#microsoft.graph.exclusionGroupAssignmentTarget", groupId: EXCLUDED } },
+    ])
+  })
+
+  it("leaves policies without groups for their scope unassigned", async () => {
+    const writes: string[] = []
+    vi.stubGlobal("fetch", world({ policies: [] }, writes))
+    await source()
+    const run = await handleOib({ ...base, action: "oib-deploy", commit, backup: false, storageAccountName: null, items: [{ source: SC, mode: "create" }, { source: COMPLIANCE, mode: "create" }], assignments: { ...spec, userGroups: [], filters: {} } }) as OibRun
+    expect(run.created[0]).toMatchObject({ assignment: { include: 1 } })
+    expect(run.created[1]).not.toHaveProperty("assignment")
+    expect(assignBody(writes, `deviceManagement/deviceCompliancePolicies/${CREATED_COMPLIANCE}`)).toBeUndefined()
+  })
+
+  it("changes nothing when a group does not exist or a filter is for another platform", async () => {
+    const writes: string[] = []
+    vi.stubGlobal("fetch", world({ policies: [], groups: [DEVICES, EXCLUDED], filters }, writes))
+    await source()
+    const deploy = (assignments: unknown) => handleOib({ ...base, action: "oib-deploy", commit, items: [{ source: SC, mode: "create" }], assignments })
+    await expect(deploy(spec)).rejects.toThrow(`This group does not exist in the tenant: ${USERS}. Nothing was changed.`)
+    await expect(deploy({ ...spec, userGroups: [], filters: { windows10AndLater: { id: MAC_FILTER, mode: "include" } } })).rejects.toThrow("Corporate Macs is not a Windows filter")
+    await expect(deploy({ ...spec, userGroups: [], filters: { windows10AndLater: { id: "99999999-0000-4000-8000-000000000000", mode: "exclude" } } })).rejects.toThrow("does not exist in the tenant")
+    await expect(deploy({ ...spec, excludeGroups: [{ id: DEVICES }] })).rejects.toThrow("both included and excluded")
+    await expect(deploy({ ...spec, deviceGroups: ["All devices"] })).rejects.toThrow("Entra group object ID")
+    await expect(handleOib({ ...base, action: "oib-fix", commit, items: [{ source: SC, mode: "update", targetId: EXISTING }], assignments: spec })).rejects.toThrow("new policies of a deployment")
+    expect(writes).toEqual([])
+    expect(await handleOib({ action: "oib-runs", tenantId })).toEqual({ runs: [] })
+  })
+
+  it("deploys with group IDs when groups cannot be read", async () => {
+    const writes: string[] = []
+    vi.stubGlobal("fetch", world({ policies: [], groupsDenied: true }, writes))
+    await source()
+    const run = await handleOib({ ...base, action: "oib-deploy", commit, backup: false, storageAccountName: null, items: [{ source: SC, mode: "create" }], assignments: { ...spec, filters: {} } }) as OibRun
+    expect(run.created[0]).toMatchObject({ assignment: { include: 1, exclude: 1 } })
+    expect(run.assignments!.deviceGroups).toEqual([{ id: DEVICES }])
+  })
+
+  it("searches groups by name and reports when groups cannot be read", async () => {
+    vi.stubGlobal("fetch", world({ policies: [], groupsDenied: true }, []))
+    expect(await handleOib({ ...base, action: "oib-groups", query: "Pilot" })).toEqual({ readable: false, groups: [] })
+    expect(await handleOib({ ...base, action: "oib-group-lookup", ids: [DEVICES] })).toEqual({ readable: false, groups: [], missing: [] })
+    vi.stubGlobal("fetch", world({ policies: [], groups: [DEVICES] }, []))
+    expect(await handleOib({ ...base, action: "oib-group-lookup", ids: [DEVICES, USERS] })).toMatchObject({ readable: true, groups: [{ id: DEVICES }], missing: [USERS] })
+  })
+
+  it("adds groups to the assignments of a deployed policy, and undo puts the previous assignments back", async () => {
+    const writes: string[] = []
+    const prod = { id: "a1", source: "direct", target: { "@odata.type": "#microsoft.graph.groupAssignmentTarget", groupId: "prod", deviceAndAppManagementAssignmentFilterId: null, deviceAndAppManagementAssignmentFilterType: "none" } }
+    const fromSet = { id: "a2", source: "policySets", target: { "@odata.type": "#microsoft.graph.groupAssignmentTarget", groupId: "set-group" } }
+    const state: Tenant = { policies: [{ id: EXISTING, name: "Win - OIB - SC - Test - v3.8", description: `OIBID:${OIB_A}` }], assignments: { [EXISTING]: [prod, fromSet] }, filters }
+    vi.stubGlobal("fetch", world(state, writes))
+    await source()
+    const read = await handleOib({ ...base, action: "oib-assignments-read", commit, items: [{ source: SC, targetId: EXISTING }] }) as { policies: Array<{ assignments: unknown[]; inherited: number }> }
+    expect(read.policies[0]).toMatchObject({ inherited: 1, assignments: [{ target: { groupId: "prod" } }] })
+
+    const run = await handleOib({ ...base, action: "oib-assign", commit, backup: { mode: "none" }, mode: "add", items: [{ source: SC, targetId: EXISTING }], assignments: { ...spec, filters: {} } }) as OibRun
+    expect(run).toMatchObject({ kind: "assign", assignMode: "add", failed: [], reassigned: [{ id: EXISTING, assignment: { include: 1, exclude: 1 } }] })
+    expect(run.reassigned![0]).not.toHaveProperty("previous")
+    // The policy set's assignment is never written; the existing direct one stays.
+    expect(state.assignments![EXISTING]).toEqual([
+      { target: { "@odata.type": "#microsoft.graph.groupAssignmentTarget", groupId: "prod" } },
+      { target: { "@odata.type": "#microsoft.graph.groupAssignmentTarget", groupId: DEVICES } },
+      { target: { "@odata.type": "#microsoft.graph.exclusionGroupAssignmentTarget", groupId: EXCLUDED } },
+    ])
+    // Assignment runs install nothing, but they can be undone.
+    expect(await handleOib({ action: "oib-runs", tenantId })).toMatchObject({ runs: [{ runId: run.runId, kind: "assign" }] })
+
+    const again = await handleOib({ ...base, action: "oib-assign", commit, backup: { mode: "none" }, mode: "add", items: [{ source: SC, targetId: EXISTING }], assignments: { ...spec, filters: {} } }) as OibRun
+    expect(again).toMatchObject({ reassigned: [], skipped: [{ reason: "Already assigned this way." }] })
+
+    const undone = await handleOib({ action: "oib-undo", tenantId, appId, runId: run.runId }) as UndoResult
+    expect(undone).toMatchObject({ run: null, results: [{ action: "reassigned", done: true }] })
+    expect(state.assignments![EXISTING]).toEqual([{ target: { "@odata.type": "#microsoft.graph.groupAssignmentTarget", groupId: "prod" } }])
+  })
+
+  it("replaces assignments, removes them all with an empty replace, and refuses an add without groups", async () => {
+    const writes: string[] = []
+    const state: Tenant = { policies: [{ id: EXISTING, name: "Win - OIB - SC - Test - v3.8" }], assignments: { [EXISTING]: [{ id: "a1", target: { "@odata.type": "#microsoft.graph.groupAssignmentTarget", groupId: "prod" } }] } }
+    vi.stubGlobal("fetch", world(state, writes))
+    await source()
+    const assign = (mode: string, assignments: unknown) => handleOib({ ...base, action: "oib-assign", commit, backup: { mode: "none" }, mode, items: [{ source: SC, targetId: EXISTING }], assignments })
+    await assign("replace", { ...spec, excludeGroups: [], filters: {} })
+    expect(state.assignments![EXISTING]).toEqual([{ target: { "@odata.type": "#microsoft.graph.groupAssignmentTarget", groupId: DEVICES } }])
+    const cleared = await assign("replace", { deviceGroups: [], userGroups: [], excludeGroups: [] }) as OibRun
+    expect(state.assignments![EXISTING]).toEqual([])
+    expect(cleared.reassigned).toMatchObject([{ id: EXISTING }])
+    expect(cleared.reassigned![0]).not.toHaveProperty("assignment")
+    await expect(assign("add", { deviceGroups: [], userGroups: [], excludeGroups: [{ id: EXCLUDED }] })).rejects.toThrow("at least one device or user group")
+    await expect(assign("merge", spec)).rejects.toThrow("add the groups or replace")
+  })
+
+  it("changes nothing when the current assignments cannot be read", async () => {
+    const writes: string[] = []
+    const state: Tenant = { policies: [{ id: EXISTING, name: "Win - OIB - SC - Test - v3.8" }], assignments: {} }
+    const inner = world(state, writes)
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => String(input).endsWith(`${EXISTING}/assignments`) ? Response.json({ error: { code: "BadRequest", message: "busy" } }, { status: 400 }) : inner(input, init)))
+    await source()
+    const run = await handleOib({ ...base, action: "oib-assign", commit, backup: { mode: "none" }, mode: "replace", items: [{ source: SC, targetId: EXISTING }], assignments: { deviceGroups: [], userGroups: [], excludeGroups: [] } }) as OibRun
+    expect(run.reassigned).toEqual([])
+    expect(run.failed[0]!.error).toMatch(/could not be read/)
+    expect(writes.filter(w => !w.startsWith("GET "))).toEqual([])
   })
 })
 

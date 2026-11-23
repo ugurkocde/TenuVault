@@ -9,9 +9,11 @@ import { normalizeScope } from "../../shared/intune/scope"
 import { VALIDATED_FOLDERS, validatePolicy } from "../../shared/oib/compare"
 import { extractOibId } from "../../shared/oib/manifest"
 import { compareToTenant } from "../../shared/oib/match"
+import { assignmentsUnread } from "../../shared/intune/read"
 import { definitionIdsOf, describePolicy, policyChanges, type OibPolicyChanges, type OibPolicySettings } from "../../shared/oib/policy-settings"
 import { replaceTenantVariables } from "../../shared/oib/variables"
-import { isFullValidation, OIB_BACKUP_REUSE_MINUTES, OIB_PLATFORMS, type DeployItem, type OibBackupChoice, type OibBackupOptions, type OibComparison, type OibPlatform, type OibProgress, type OibRecentBackup, type OibRun, type PolicyValidation, type TenantPolicy, type UndoResult, type ValidationRun } from "../../shared/oib/types"
+import { AssignmentSpecError, assignmentsFor, assignsAnything, conflictingGroups, directAssignments, emptySpec, mergeAssignments, oibScope, parseSpec, sameAssignments, writableAssignment, type OibAssignmentSpec } from "../../shared/oib/assignments"
+import { isFullValidation, OIB_BACKUP_REUSE_MINUTES, OIB_PLATFORMS, type DeployItem, type OibAssignMode, type OibPolicyAssignments, type OibBackupChoice, type OibBackupOptions, type OibComparison, type OibPlatform, type OibProgress, type OibRecentBackup, type OibRun, type PolicyValidation, type TenantPolicy, type UndoResult, type ValidationRun } from "../../shared/oib/types"
 import { backupGaps, describeMissing, describeStatus, folderLabel } from "../backup/completeness"
 import { apiBody } from "../features/deps"
 import { withTenantWrite } from "../features/write-lock"
@@ -20,14 +22,17 @@ import type { KeyValueStore } from "../storage/secure-store"
 import { FrameworkError, tokenFor } from "../frameworks/service"
 import { readSettingNamesReport } from "../../portal/lib/drift/setting-names"
 import { loadPack, oibDownloads, oibVersions, resolveMain, type LoadedPack } from "./source"
+import { checkSpec, listFilters, lookupGroups, searchGroups } from "./assignments"
 
 /**
  * OpenIntuneBaseline deployments, comparison and validation (the OIBDeployer flows).
  *
- * Deployments can back the tenant up first, create policies under their OIB names (unassigned unless
- * a pilot group is given) and update outdated policies in place without touching their assignments.
- * Every run keeps the IDs it created and the previous version of everything it updated, so it can be
- * undone. Comparison and validation only read the tenant.
+ * Deployments can back the tenant up first, create policies under their OIB names (assigned to the
+ * device and user groups chosen for them, or unassigned) and update outdated policies in place
+ * without touching their assignments. Manage assignments changes the assignments of deployed
+ * policies. Every run keeps the IDs it created, the previous version of everything it updated and
+ * the previous assignments of what it reassigned, so it can be undone. Comparison and validation
+ * only read the tenant.
  */
 
 const GRAPH_BETA = "https://graph.microsoft.com/beta/"
@@ -242,7 +247,7 @@ function readRuns(tenant: string): OibRun[] {
  */
 function saveRun(run: OibRun): void {
   let runs = readRuns(run.tenantId).filter((r) => r.runId !== run.runId)
-  if (run.created.length || run.updated.length) runs.push(run)
+  if (run.created.length || run.updated.length || run.reassigned?.length) runs.push(run)
   const legacy = runs.filter((r) => r.legacy === "quickstart")
   let recent = runs.filter((r) => r.legacy !== "quickstart").slice(-RUNS_KEPT)
   const combine = () => [...legacy, ...recent].sort((a, b) => a.createdAt.localeCompare(b.createdAt))
@@ -256,7 +261,7 @@ function saveRun(run: OibRun): void {
 
 /** A run without the saved previous versions, which stay in the main process. */
 function publicRun(run: OibRun): OibRun {
-  return { ...run, updated: run.updated.map(({ before: _before, ...rest }) => rest) }
+  return { ...run, updated: run.updated.map(({ before: _before, ...rest }) => rest), ...(run.reassigned ? { reassigned: run.reassigned.map(({ previous: _previous, ...rest }) => rest) } : {}) }
 }
 
 export function listRuns(tenantId: unknown): OibRun[] {
@@ -393,12 +398,34 @@ function deployItems(value: unknown, kind: OibRun["kind"]): DeployItem[] {
   })
 }
 
+/** An assignment spec from a request, with its problems as FrameworkErrors. */
+function specOf(value: unknown): OibAssignmentSpec {
+  try {
+    return parseSpec(value)
+  } catch (error) {
+    if (error instanceof AssignmentSpecError) throw new FrameworkError(error.message)
+    throw error
+  }
+}
+
+/**
+ * The groups a deployment assigns its new policies to, or undefined when they stay unassigned. A
+ * pilot group (the single field of earlier versions) assigns every new policy to that group.
+ */
+function deploySpec(body: RecordJson, kind: OibRun["kind"]): OibAssignmentSpec | undefined {
+  const pilot = body.pilotGroupId == null || body.pilotGroupId === "" ? undefined : body.pilotGroupId
+  if (pilot !== undefined && (kind !== "deploy" || typeof pilot !== "string" || !GUID.test(pilot))) throw new FrameworkError("The pilot group must be an Entra group object ID.")
+  if (body.assignments == null) return pilot ? { ...emptySpec(), deviceGroups: [{ id: pilot.toLowerCase() }], userGroups: [{ id: pilot.toLowerCase() }] } : undefined
+  if (kind !== "deploy" || pilot !== undefined) throw new FrameworkError("Assignments are chosen for the new policies of a deployment.")
+  const spec = specOf(body.assignments)
+  return assignsAnything(spec) ? spec : undefined
+}
+
 async function deploy(body: RecordJson, kind: OibRun["kind"]): Promise<OibRun> {
   const platform = platformOf(body.platform)
   const tenant = tenantOf(body.tenantId)
   const items = deployItems(body.items, kind)
-  const pilot = body.pilotGroupId == null || body.pilotGroupId === "" ? undefined : body.pilotGroupId
-  if (pilot !== undefined && (kind !== "deploy" || typeof pilot !== "string" || !GUID.test(pilot))) throw new FrameworkError("The pilot group must be an Entra group object ID.")
+  const spec = deploySpec(body, kind)
   // Undo puts back the previous version saved in the run, so an update may skip the backup too.
   const backup = backupChoice(body.backup)
   if (backup.mode !== "none" && !hasStorage(body)) throw new FrameworkError("Choose where backups for this tenant are stored in Settings first, or skip the backup.")
@@ -416,6 +443,12 @@ async function deploy(body: RecordJson, kind: OibRun["kind"]): Promise<OibRun> {
       const { token } = await tokenFor(body)
       const graph = graphCaller(token, fetch, { tenant, refreshToken: async () => (await tokenFor(body, true)).token })
       const written = [...new Set(chosen.map((item) => item.policy.folder))]
+      // Groups and filters are checked before the backup, so a wrong group changes nothing.
+      let checked: Awaited<ReturnType<typeof checkSpec>> | undefined
+      if (spec && chosen.some((item) => item.mode === "create")) {
+        report({ stage: "Checking the groups and filters" })
+        checked = await checkSpec(graph, spec)
+      }
       let backupFolder: string | undefined
       if (backup.mode === "new") {
         report({ stage: "Backing up the tenant" })
@@ -427,16 +460,15 @@ async function deploy(body: RecordJson, kind: OibRun["kind"]): Promise<OibRun> {
       }
       const run: OibRun = {
         runId: randomUUID(), tenantId: tenant, createdAt: new Date().toISOString(), kind, platform, reference: pack.catalog.reference, commit: pack.catalog.commit,
-        ...(backupFolder ? { backupFolder } : {}), backupMode: backup.mode, ...(pilot ? { pilotGroupId: pilot.toLowerCase() } : {}), created: [], updated: [], failed: [], skipped: [],
+        ...(backupFolder ? { backupFolder } : {}), backupMode: backup.mode, ...(checked ? { assignments: checked.spec } : {}), created: [], updated: [], failed: [], skipped: [],
       }
       report({ stage: "Checking existing policies" })
       const creates = chosen.filter((item) => item.mode === "create")
       // The refresh-capable caller: the token from before a long pre-deploy backup may have expired since.
       const existing = creates.length ? await inventory(graph, creates.map((item) => item.policy.folder)) : []
-      const creator = new Restorer(graph, { mode: "copy", prefix: "", assignments: !!pilot })
+      const creator = new Restorer(graph, { mode: "copy", prefix: "", assignments: !!checked })
       // A policy deleted after it was read is reported, never recreated under an ID the run would not record.
       const replacer = new Restorer(graph, { mode: "replace", assignments: false, recreateMissing: false })
-      const assignments = pilot ? [{ target: { "@odata.type": "#microsoft.graph.groupAssignmentTarget", groupId: pilot } }] : []
       for (const [index, item] of chosen.entries()) {
         const { policy } = item
         report({ stage: `${item.mode === "create" ? "Creating" : "Updating"} ${policy.name}`, done: index, total: chosen.length })
@@ -449,9 +481,15 @@ async function deploy(body: RecordJson, kind: OibRun["kind"]): Promise<OibRun> {
             run.skipped!.push({ name: policy.name, reason: `Already in the tenant as ${clash.name}.` })
             continue
           }
-          const outcome = await creator.restore(path, { ...snapshot, assignments })
+          const type = typeForFolder(policy.folder)
+          // Device groups for device policies, user groups for user policies (OIB marks each).
+          const planned = checked ? assignmentsFor({ folder: policy.folder, scope: oibScope(item.meta ?? { name: policy.name }), typeLabel: type?.label, exclusionsUnsupported: type?.exclusionsUnsupported }, platform, checked.spec) : undefined
+          const outcome = await creator.restore(path, { ...snapshot, assignments: planned?.assignments ?? [] })
           if (outcome.policyId) {
-            run.created.push({ folder: policy.folder, id: outcome.policyId, name: policy.name, ...(outcome.partial ? { partial: true } : {}), ...(outcome.warnings ? { warnings: outcome.warnings } : {}) })
+            const warnings = [...(outcome.warnings ?? []), ...(planned?.notes ?? [])]
+            // Counted only when every step succeeded: a partial creation may have stopped before the assignments.
+            const assigned = outcome.success && planned?.include ? { assignment: { include: planned.include, exclude: planned.exclude } } : {}
+            run.created.push({ folder: policy.folder, id: outcome.policyId, name: policy.name, ...(outcome.partial ? { partial: true } : {}), ...(warnings.length ? { warnings } : {}), ...assigned })
             // Saved after every object, so an interrupted run can still be undone.
             saveRun(run)
           }
@@ -494,6 +532,168 @@ async function deploy(body: RecordJson, kind: OibRun["kind"]): Promise<OibRun> {
   })
 }
 
+// Manage assignments
+
+/** Deployed OIB policies a request names: the pack policy and the tenant policy it matched. */
+function assignTargets(value: unknown): Array<{ source: string; targetId: string }> {
+  if (!Array.isArray(value) || !value.length || value.length > 200) throw new FrameworkError("Select between 1 and 200 deployed policies.")
+  const targets = new Set<string>()
+  return value.map((entry) => {
+    if (!record(entry) || typeof entry.source !== "string" || typeof entry.targetId !== "string" || !OBJECT_ID.test(entry.targetId)) throw new FrameworkError("The policy selection is invalid.")
+    if (targets.has(entry.targetId.toLowerCase())) throw new FrameworkError("A tenant policy is selected twice.")
+    targets.add(entry.targetId.toLowerCase())
+    return { source: entry.source, targetId: entry.targetId }
+  })
+}
+
+/** The registry type of a pack policy, when its assignments can be written with /assign. */
+function assignableType(folder: string) {
+  const type = typeForFolder(folder)
+  return type && type.assign && type.assign !== "post" ? { ...type, assign: type.assign } : undefined
+}
+
+const nameOf = (type: { nameKey: string }, live: Item, fallback: string) => {
+  const name = live[type.nameKey] ?? live.displayName ?? live.name
+  return typeof name === "string" && name ? name : fallback
+}
+
+/** The current direct assignments of deployed policies, with group and filter names where they can be read. */
+async function readAssignments(body: RecordJson): Promise<{ policies: OibPolicyAssignments[]; groupNames: Record<string, string>; filterNames: Record<string, string>; groupsReadable: boolean }> {
+  const platform = platformOf(body.platform)
+  tenantOf(body.tenantId)
+  const targets = assignTargets(body.items)
+  const pack = await loadPack(platform, body.commit, body.tag)
+  const graph = graphCaller((await tokenFor(body)).token)
+  const policies: OibPolicyAssignments[] = []
+  for (const { source, targetId } of targets) {
+    const policy = pack.items.get(source)
+    const base = { source, targetId, name: policy?.name ?? source, folder: policy?.folder ?? "", inherited: 0 }
+    const type = policy ? assignableType(policy.folder) : undefined
+    if (!policy || !type) {
+      policies.push({ ...base, error: policy ? "The assignments of this policy type cannot be managed here." : "This policy is not part of the loaded OIB pack." })
+      continue
+    }
+    try {
+      const live = await readLive(graph, type, targetId)
+      if (!live) policies.push({ ...base, error: "The tenant policy no longer exists. Compare again." })
+      else if (!Array.isArray(live.assignments) || assignmentsUnread(type, live)) policies.push({ ...base, name: nameOf(type, live, base.name), error: "The current assignments could not be read." })
+      else {
+        const direct = directAssignments(live.assignments)
+        policies.push({ ...base, name: nameOf(type, live, base.name), assignments: direct.map(writableAssignment), inherited: live.assignments.length - direct.length })
+      }
+    } catch (error) {
+      policies.push({ ...base, error: `The current assignments could not be read: ${message(error)}` })
+    }
+  }
+  const groupIds = policies.flatMap((policy) => (policy.assignments ?? []).map((entry) => (entry.target as Item | undefined)?.groupId).filter((id): id is string => typeof id === "string"))
+  const groups = groupIds.length ? await lookupGroups(graph, groupIds).catch(() => ({ readable: false, groups: [], missing: [] })) : { readable: true, groups: [], missing: [] }
+  const usesFilters = policies.some((policy) => (policy.assignments ?? []).some((entry) => typeof (entry.target as Item | undefined)?.deviceAndAppManagementAssignmentFilterId === "string"))
+  const filters = usesFilters ? await listFilters(graph).catch(() => []) : []
+  return {
+    policies,
+    groupNames: Object.fromEntries(groups.groups.map((group) => [group.id, group.displayName])),
+    filterNames: Object.fromEntries(filters.map((filter) => [filter.id, filter.displayName])),
+    groupsReadable: groups.readable,
+  }
+}
+
+/**
+ * Adds the chosen groups to the assignments of deployed OIB policies, or replaces their direct
+ * assignments (with nothing, to remove them). Assignments from policy sets are left alone. The
+ * previous direct assignments of every changed policy are kept in the run, so undo can put them back.
+ */
+async function assign(body: RecordJson): Promise<OibRun> {
+  const platform = platformOf(body.platform)
+  const tenant = tenantOf(body.tenantId)
+  const targets = assignTargets(body.items)
+  if (body.mode !== "add" && body.mode !== "replace") throw new FrameworkError("Choose whether to add the groups or replace the assignments.")
+  const mode: OibAssignMode = body.mode
+  const spec = specOf(body.assignments)
+  if (mode === "add" && !assignsAnything(spec)) throw new FrameworkError("Choose at least one device or user group to add.")
+  const backup = backupChoice(body.backup)
+  if (backup.mode !== "none" && !hasStorage(body)) throw new FrameworkError("Choose where backups for this tenant are stored in Settings first, or skip the backup.")
+  requireStore()
+  return withTenantWrite(tenant, "OpenIntuneBaseline assignments", async () => {
+    const report = tracker(tenant, "assign")
+    try {
+      report({ stage: "Loading the OIB pack" })
+      const pack = await loadPack(platform, body.commit, body.tag)
+      const chosen = targets.map((target) => {
+        const policy = pack.items.get(target.source)
+        if (!policy) throw new FrameworkError(`${target.source} is not part of this OIB pack.`)
+        const type = assignableType(policy.folder)
+        if (!type) throw new FrameworkError(`The assignments of ${policy.name} cannot be managed here.`)
+        return { ...target, policy, type, meta: pack.catalog.policies.find((entry) => entry.source === target.source) }
+      })
+      const { token } = await tokenFor(body)
+      const graph = graphCaller(token, fetch, { tenant, refreshToken: async () => (await tokenFor(body, true)).token })
+      report({ stage: "Checking the groups and filters" })
+      const checked = await checkSpec(graph, spec)
+      const written = [...new Set(chosen.map((item) => item.policy.folder))]
+      let backupFolder: string | undefined
+      if (backup.mode === "new") {
+        report({ stage: "Backing up the tenant" })
+        backupFolder = await backUp(body, tenant, written, report)
+      } else if (backup.mode === "reuse") {
+        report({ stage: "Checking the chosen backup" })
+        await requireReusable(body, tenant, backup.folder, written)
+        backupFolder = backup.folder
+      }
+      const run: OibRun = {
+        runId: randomUUID(), tenantId: tenant, createdAt: new Date().toISOString(), kind: "assign", platform, reference: pack.catalog.reference, commit: pack.catalog.commit,
+        ...(backupFolder ? { backupFolder } : {}), backupMode: backup.mode, assignments: checked.spec, assignMode: mode, created: [], updated: [], reassigned: [], failed: [], skipped: [],
+      }
+      for (const [index, item] of chosen.entries()) {
+        const { policy, type } = item
+        report({ stage: `Assigning ${policy.name}`, done: index, total: chosen.length })
+        let live: Item | undefined
+        try {
+          live = await readLive(graph, type, item.targetId)
+        } catch (error) {
+          run.failed.push({ name: policy.name, error: `The current assignments could not be read, so nothing was changed: ${message(error)}` })
+          continue
+        }
+        if (!live) {
+          run.failed.push({ name: policy.name, error: "The tenant policy no longer exists. Compare again." })
+          continue
+        }
+        const name = nameOf(type, live, policy.name)
+        // Replacing assignments that could not be read would remove ones nobody saw.
+        if (!Array.isArray(live.assignments) || assignmentsUnread(type, live)) {
+          run.failed.push({ name, error: "The current assignments could not be read, so nothing was changed." })
+          continue
+        }
+        const current = directAssignments(live.assignments).map(writableAssignment)
+        const planned = assignmentsFor({ folder: policy.folder, scope: oibScope(item.meta ?? { name: policy.name }), typeLabel: type.label, exclusionsUnsupported: type.exclusionsUnsupported }, platform, checked.spec)
+        if (mode === "add" && !planned.assignments.length) {
+          run.skipped!.push({ name, reason: "No group was chosen for this policy's scope." })
+          continue
+        }
+        const next = mode === "replace" ? planned.assignments : mergeAssignments(current, planned.assignments)
+        if (sameAssignments(current, next)) {
+          run.skipped!.push({ name, reason: "Already assigned this way." })
+          continue
+        }
+        const response = await graph("POST", `${type.path}/${encodeURIComponent(item.targetId)}/assign`, { [type.assign.key]: next })
+        if (response.status >= 300) {
+          const error = (response.body.error as Item | undefined)?.message
+          run.failed.push({ name, error: response.approval ? approvalMessage(response.approval, type.label) : typeof error === "string" && error ? error : `Microsoft Graph returned ${response.status}` })
+          continue
+        }
+        const conflicts = conflictingGroups(next).map((id) => checked.groupNames[id] ?? id)
+        const warnings = [...planned.notes, ...(conflicts.length ? [`${conflicts.join(", ")} ${conflicts.length === 1 ? "is" : "are"} both included and excluded; the exclusion wins.`] : [])]
+        run.reassigned!.push({ folder: policy.folder, id: item.targetId, name, previous: current, ...(planned.include || planned.exclude ? { assignment: { include: planned.include, exclude: planned.exclude } } : {}), ...(warnings.length ? { warnings } : {}) })
+        // Saved after every policy, so an interrupted run can still be undone.
+        saveRun(run)
+      }
+      saveRun(run)
+      return publicRun(run)
+    } finally {
+      progress.delete(tenant)
+    }
+  })
+}
+
 /** Deletes the objects a run created and puts back the previous version of what it updated. */
 async function undo(body: RecordJson): Promise<UndoResult> {
   const tenant = tenantOf(body.tenantId)
@@ -501,7 +701,7 @@ async function undo(body: RecordJson): Promise<UndoResult> {
     const run = readRuns(tenant).find((r) => r.runId === body.runId)
     if (!run) throw new FrameworkError("This run was already undone or is not recorded on this device.", 404)
     const report = tracker(tenant, "undo")
-    const total = run.created.length + run.updated.length
+    const total = run.created.length + run.updated.length + (run.reassigned?.length ?? 0)
     try {
       // No count yet: "1 of 6" would read as if something were being undone.
       report({ stage: "Signing in" })
@@ -545,9 +745,28 @@ async function undo(body: RecordJson): Promise<UndoResult> {
           updated.push(item)
         }
       }
-      const remaining = { ...run, created, updated }
+      const reassigned: NonNullable<OibRun["reassigned"]> = []
+      for (const item of run.reassigned ?? []) {
+        report({ stage: `Putting back the assignments of ${item.name}`, done: results.length, total })
+        const type = assignableType(item.folder)
+        if (!type || !OBJECT_ID.test(item.id) || !Array.isArray(item.previous)) {
+          results.push({ name: item.name, id: item.id, action: "reassigned", done: false, error: "The previous assignments were not saved for this policy. Assign it in Intune." })
+          reassigned.push(item)
+          continue
+        }
+        const response = await graph("POST", `${type.path}/${encodeURIComponent(item.id)}/assign`, { [type.assign.key]: item.previous })
+        const gone = response.status === 404 || (response.status === 400 && /ResourceNotFound/i.test(JSON.stringify(response.body)))
+        if (response.status < 300) results.push({ name: item.name, id: item.id, action: "reassigned", done: true })
+        else if (gone) results.push({ name: item.name, id: item.id, action: "reassigned", done: true, note: "already deleted in Intune" })
+        else {
+          const error = (response.body.error as Item | undefined)?.message
+          results.push({ name: item.name, id: item.id, action: "reassigned", done: false, error: response.approval ? approvalMessage(response.approval, type.label) : typeof error === "string" && error ? error : `Microsoft Graph returned ${response.status}` })
+          reassigned.push(item)
+        }
+      }
+      const remaining = { ...run, created, updated, ...(run.reassigned ? { reassigned } : {}) }
       saveRun(remaining)
-      return { run: created.length || updated.length ? publicRun(remaining) : null, results }
+      return { run: created.length || updated.length || reassigned.length ? publicRun(remaining) : null, results }
     } finally {
       progress.delete(tenant)
     }
@@ -665,6 +884,23 @@ export async function handleOib(body: RecordJson): Promise<unknown> {
       return deploy(body, "fix")
     case "oib-undo":
       return undo(body)
+    case "oib-assign":
+      return assign(body)
+    case "oib-assignments-read":
+      return readAssignments(body)
+    case "oib-groups": {
+      tenantOf(body.tenantId)
+      return searchGroups(graphCaller((await tokenFor(body)).token), typeof body.query === "string" ? body.query : "")
+    }
+    case "oib-group-lookup": {
+      tenantOf(body.tenantId)
+      const ids = Array.isArray(body.ids) ? body.ids.filter((id): id is string => typeof id === "string" && GUID.test(id)).slice(0, 100) : []
+      return lookupGroups(graphCaller((await tokenFor(body)).token), ids)
+    }
+    case "oib-filters": {
+      tenantOf(body.tenantId)
+      return { filters: await listFilters(graphCaller((await tokenFor(body)).token)) }
+    }
     case "oib-backup-options":
       return backupOptions(body)
     case "oib-runs":

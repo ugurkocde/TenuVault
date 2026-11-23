@@ -21,7 +21,7 @@ export const OPTIONAL_PERMISSIONS: readonly OptionalPermission[] = [
   { id: "notificationEmail", label: "Notification email", permissions: ["Mail.Send"], setupSwitch: "-IncludeNotifications" },
   { id: "groupRecipients", label: "Entra group recipients of notification email", permissions: ["GroupMember.Read.All", "User.Read.All"], setupSwitch: "-IncludeNotifications" },
   { id: "conditionalAccessWatching", label: "Conditional Access change watching", permissions: ["AuditLog.Read.All"], setupSwitch: "-IncludeAuditLog" },
-  { id: "groupRead", label: "Hygiene check for groups that no longer exist", permissions: ["Group.Read.All"], setupSwitch: "-IncludeGroupRead" },
+  { id: "groupRead", label: "Group names: hygiene check for groups that no longer exist, OpenIntuneBaseline group search", permissions: ["Group.Read.All"], setupSwitch: "-IncludeGroupRead" },
 ]
 
 export interface OptionalPermissionStatus extends OptionalPermission {

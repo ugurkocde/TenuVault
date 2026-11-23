@@ -22,13 +22,14 @@ const fixedReasons = new Set([
 const numericDetails = [
   'statusCode', 'restoredCount', 'partialCount', 'failedCount', 'approvalCount', 'skippedCount',
   'unchangedCount', 'duration', 'undone', 'notUndone', 'created', 'updated', 'skipped', 'failed',
-  'attempt', 'operations', 'verified', 'uncertain', 'pending', 'deleted',
+  'attempt', 'operations', 'verified', 'uncertain', 'pending', 'deleted', 'reassigned', 'assignedPolicies',
 ]
 const enums: Record<string, readonly string[]> = {
   source: ['desktop', 'desktop-frameworks', 'desktop-oib', 'desktop-change-sets', 'schedule', 'desktop-governance'],
   method: ['POST'],
   path: ['/api/backup/start', '/api/download-backup'],
   status: ['Completed', 'Failed', 'PartiallyCompleted', 'AwaitingApproval', 'applied', 'partial', 'failed'],
+  assignMode: ['add', 'replace'],
   workflow: ['promotion', 'baseline-upgrade', 'standard-adoption', 'custom-baseline', 'cis-remediation', 'sync'],
   link: ["/portal/changes", "/portal/changes/promotion", "/portal/changes/baseline-upgrades", "/portal/sync", "/portal/baselines", "/portal/frameworks", "/portal/governance/customizations", "/portal/governance/standards", "/portal/governance/hygiene", "/portal/reports"],
   kind: ['apply', 'rollback'],
@@ -40,7 +41,7 @@ const fixedActions = new Set([
   'Restore submitted for approval', 'Complete approved restore item', 'Approval request withdrawn',
   'Revert policy to the backed-up version in place', 'Restore policy as an unassigned copy', 'Restore app backup',
   'Create unassigned baseline policy', 'Undo OpenIntuneBaseline run', 'Reset OpenIntuneBaseline policy drift',
-  'Deploy OpenIntuneBaseline policies', 'Apply change set', 'Roll back change set', 'Approve change set',
+  'Deploy OpenIntuneBaseline policies', 'Change OpenIntuneBaseline policy assignments', 'Apply change set', 'Roll back change set', 'Approve change set',
   'Reject change set', 'Document customization', 'Revise customization', 'Retire customization',
   'Start standard adoption', 'Decide standard exceptions', 'Mark hygiene finding as false positive',
   'Acknowledge hygiene finding', 'Reopen hygiene finding', 'Send change report',
