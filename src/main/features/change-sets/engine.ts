@@ -3,6 +3,8 @@ import type { GraphCall } from "../../../portal/lib/policies/graph-restore"
 import { GROUP_CHECK_GUIDANCE, GROUP_CHECK_REQUIRED } from "../../../shared/group-access"
 import { changeSetTitle } from "../../../shared/sync-wording"
 import { typeForFolder, type IntuneType, type Item } from "../../../shared/intune/registry"
+import { isScopeTagGroupTarget } from "../../../shared/intune/restore-assignments"
+import { manualRollbackNote } from "../../../shared/intune/rollback-support"
 import { isGraphId } from "../../../shared/security"
 import { replaceTenantVariables } from "../../../shared/oib/variables"
 import { PlanRequired } from "../../../shared/plans"
@@ -324,8 +326,9 @@ export async function createChangeSet(deps: FeatureDeps, tenantId: string, input
   const operations: ChangeOperation[] = []
   const entries: ChangeSetContent["entries"] = {}
   const seenTargets = new Set<string>()
+  const isPromotion = input.kind !== "rollback" && (input.origin?.workflow === "promotion" || input.origin?.workflow === "sync")
   for (const [index, operation] of input.operations.entries()) {
-    const unsupported = unsupportedReason(operation.folder, operation.action)
+    const unsupported = unsupportedReason(operation.folder, operation.action, isPromotion)
     if (unsupported) throw new FeatureError(unsupported)
     const type = typeOf(operation.folder)
     const key = `op-${index + 1}`
@@ -442,7 +445,8 @@ function integrity(deps: FeatureDeps, tenantId: string, record: ChangeSetRecord)
 async function rollbackGroupBlockers(graph: GraphCall, tenant: string, assignments: Item[] | null | undefined, permissionMessage = GROUP_CHECK_REQUIRED): Promise<string[]> {
   const ids = new Set<string>()
   for (const assignment of assignments ?? []) {
-    const groupId = (assignment.target as Item | undefined)?.groupId
+    const target = assignment.target as Item | undefined
+    const groupId = target && (isScopeTagGroupTarget(target) ? target.entraObjectId : target.groupId)
     if (typeof groupId === "string" && groupId) ids.add(groupId.toLowerCase())
   }
   const groups = await Promise.all([...ids].map(async (id) => ({ id, ...await groupState(graph, id) })))
@@ -707,8 +711,8 @@ async function reconcile(graph: GraphCall, type: IntuneType, operation: ChangeOp
       if (proposed) return proposed
     }
     const sanitized = sanitizeSnapshot(type, live!).snapshot
-    const before = captured.body ? operationFingerprint(operation.action, { snapshot: captured.body, sameNameIds: [] }) : "missing"
-    if (operationFingerprint(operation.action, { snapshot: sanitized, sameNameIds: [] }) === before) return { decision: "write" }
+    const before = captured.body ? operationFingerprint(operation.action, { snapshot: captured.body, sameNameIds: [] }, type.folder) : "missing"
+    if (operationFingerprint(operation.action, { snapshot: sanitized, sameNameIds: [] }, type.folder) === before) return { decision: "write" }
     if (operation.action === "update") return { decision: "stop", status: "uncertain", message: "The object holds neither the captured nor the proposed state, so an earlier attempt may have written part of the update. It is not written again; review it in Intune or roll it back to the captured state.", objectId: operation.targetId }
     return { decision: "stop", status: "failed", message: "The object changed after the review and holds neither the captured nor the proposed state. Create a fresh review.", objectId: operation.targetId }
   } catch (error) {
@@ -986,6 +990,11 @@ function inverseOperations(deps: FeatureDeps, tenantId: string, record: ChangeSe
     const object = record.preChange.objects.find((entry) => entry.key === operation.key)
     const snapshot = captured[operation.key]?.body ?? null
     if (result.status === "pending" || result.status === "failed") continue
+    const inverseAction = operation.action === "create" ? "delete" : operation.action === "update" ? "update" : "create"
+    if (unsupportedReason(operation.folder, inverseAction)) {
+      manual.push(manualRollbackNote(operation.name))
+      continue
+    }
     const warnings = result.status === "verified" ? [] : [`The outcome of "${operation.name}" was ${result.status}; the rollback is based on the captured state and live state is re-read at review.`]
     const source = { tenantId: record.targetTenantId, objectId: operation.targetId, version: record.preChange.capturedAt, label: `Pre-change capture of "${record.title}"` }
     if (operation.action === "create") {
@@ -1024,6 +1033,7 @@ export async function previewRollback(deps: FeatureDeps, tenantId: string, id: s
   const graph = await reader(deps, tenantId, { changeSetId: record.id })
   const tenantName = deps.tenant(tenantId)?.name || tenantId
   const operations: RollbackPreview["operations"] = []
+  const irreversible: string[] = []
   for (const input of inputs) {
     const type = typeOf(input.folder)
     let live: Item | null = null
@@ -1043,13 +1053,15 @@ export async function previewRollback(deps: FeatureDeps, tenantId: string, id: s
         asFeatureError(error, "The destination groups could not be read.")
       }
     }
-    operations.push({ key: input.key, action: input.action, name: input.name ?? String(input.proposed?.[type.nameKey] ?? ""), targetId: input.targetId ?? null, blocked, warnings, diff })
+    const name = input.name ?? String(input.proposed?.[type.nameKey] ?? "")
+    operations.push({ key: input.key, action: input.action, name, targetId: input.targetId ?? null, blocked, warnings, diff })
+    if (!blocked) irreversible.push(...irreversibleSteps({ folder: input.folder, action: input.action, name, setsAssignments: false }))
   }
   return {
     changeSetId: record.id,
     operations,
     manual,
-    irreversible: operations.filter((operation) => !operation.blocked).flatMap((operation) => irreversibleSteps({ action: operation.action, name: operation.name, setsAssignments: false })),
+    irreversible,
     unsupportedRecovery: UNSUPPORTED_RECOVERY,
     notice: "Rollback writes the captured pre-change state back as a new reviewed change set. It is not an atomic transaction and does not guarantee the previous state on devices.",
   }

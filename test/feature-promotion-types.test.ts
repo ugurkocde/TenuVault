@@ -138,13 +138,13 @@ describe("promotion of compliance, endpoint security and device configuration po
       expect(listed.body.source.map((entry: { name: string }) => entry.name)).toContain(name)
       expect(listed.body.source[0].folder).toBe(folder)
     }
-    const rejected = await context.post({ action: "policies", folder: "GroupPolicyConfigurations" })
+    const rejected = await context.post({ action: "policies", folder: "HardwareConfigurations" })
     expect(rejected.status).toBe(400)
   })
 
   it("blocks a type promotion cannot handle explicitly and writes nothing", async () => {
     const context = setup()
-    const source = context.dev.addGroupPolicy({ displayName: "ADMX A", roleScopeTagIds: ["0"] })
+    const source = context.dev.addGroupPolicy({ displayName: "Uploaded ADMX", roleScopeTagIds: ["0"], policyConfigurationIngestionType: "custom" })
     const response = await context.post({ action: "plan", title: "x", items: [{ sourceId: source.id, folder: "GroupPolicyConfigurations" }], mappings: [] })
     expect(response.status).toBe(200)
     const promotion = response.body.promotion as PromotionRecord & { id: string }

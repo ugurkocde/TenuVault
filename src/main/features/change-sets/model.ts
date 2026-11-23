@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto"
 import { comparableSnapshot } from "../../../shared/intune/compare"
+import { PROMOTION_FOLDERS } from "../../../shared/intune/promotion-types"
 import { buildRestorePlan } from "../../../shared/intune/restore-plan"
 import { cleanAssignment, typeForFolder, type IntuneType, type Item, type Json } from "../../../shared/intune/registry"
+import { manualRollbackNote, SUPPORTED_OPERATIONS, supportsAutomaticRollback, type OperationAction } from "../../../shared/intune/rollback-support"
 import { MAX_SETTING_LEAVES, settingValues, type SettingLeaf } from "../../../shared/frameworks/setting-summary"
 import type { ListedRecord } from "../contracts"
 
@@ -12,18 +14,7 @@ import type { ListedRecord } from "../contracts"
  * storage and the backup.
  */
 
-export type OperationAction = "create" | "update" | "delete"
-
-/**
- * Operation types the engine can apply, by registry folder. A new type is added here only
- * after its create, update and delete requests and its read-back were verified.
- */
-export const SUPPORTED_OPERATIONS: Readonly<Record<string, readonly OperationAction[]>> = {
-  ConfigurationPolicies: ["create", "update", "delete"],
-  CompliancePolicies: ["create", "update", "delete"],
-  DeviceConfigurations: ["create", "update", "delete"],
-  EndpointSecurityIntents: ["create", "update", "delete"],
-}
+export type { OperationAction }
 
 /** Most operations in one change set; keeps review, capture and storage bounded. */
 export const MAX_OPERATIONS = 25
@@ -231,7 +222,7 @@ export function contentHashOf(record: Pick<ChangeSetRecord, "kind" | "targetTena
 
 /** sha256 of a live object as stored and compared: sanitized, without volatile properties. */
 export function snapshotHash(type: IntuneType, live: Item): string {
-  return hashOf(comparableSnapshot(sanitizeSnapshot(type, live).snapshot))
+  return hashOf(comparableSnapshot(sanitizeSnapshot(type, live).snapshot, type.folder))
 }
 
 /** The combined target fingerprint of per-operation fingerprints. */
@@ -244,9 +235,9 @@ export function combinedFingerprint(perOperation: Record<string, string>): strin
  * (configuration and assignments) or "missing". Create: the IDs of objects of that type with
  * the same name, so a concurrent creation of the same name invalidates the review.
  */
-export function operationFingerprint(action: OperationAction, observed: { snapshot: Item | null; sameNameIds: string[] }): string {
+export function operationFingerprint(action: OperationAction, observed: { snapshot: Item | null; sameNameIds: string[] }, folder: string): string {
   if (action === "create") return hashOf({ sameName: [...observed.sameNameIds].map((id) => id.toLowerCase()).sort() })
-  return observed.snapshot ? hashOf(comparableSnapshot(observed.snapshot)) : "missing"
+  return observed.snapshot ? hashOf(comparableSnapshot(observed.snapshot, folder)) : "missing"
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -299,10 +290,23 @@ export function containsRedaction(value: Json | undefined): boolean {
 // ---------------------------------------------------------------------------------------------
 // Bodies, diff and read-back
 
-/** The body Graph receives for a snapshot: read-only fields and annotations removed. */
+/** The writable configuration for review and verification, including any ADMX follow-up values. */
 export function writableBody(type: IntuneType, snapshot: Item): Item {
   const { assignments: _assignments, ...rest } = snapshot
-  return buildRestorePlan(type, rest as Item, { includeAssignments: false }).create.body
+  const plan = buildRestorePlan(type, rest as Item, { includeAssignments: false })
+  if (type.folder === "GroupPolicyConfigurations") {
+    const added = plan.steps[0]?.body.added
+    // Definition values are written after create. Include them in diffs, verification and Sync status.
+    const values = Array.isArray(added) ? (added as Item[]) : []
+    plan.create.body.definitionValues = Object.fromEntries(values.map((value) => [
+      String(value["definition@odata.bind"]),
+      {
+        enabled: value.enabled ?? false,
+        presentationValues: Object.fromEntries((value.presentationValues as Item[]).map((entry) => [String(entry["presentation@odata.bind"]), entry])),
+      },
+    ]))
+  }
+  return plan.create.body
 }
 
 /** Arrays of settings are compared by their definition, not by position. */
@@ -331,8 +335,8 @@ const short = (value: Json | undefined): string => {
  * through writableBody and comparableSnapshot, so server-managed fields never show up.
  */
 export function diffConfigurations(type: IntuneType, before: Item | null, after: Item | null): { entries: DiffEntry[]; truncated: boolean } {
-  const left = before ? keyed(comparableSnapshot(writableBody(type, before))) : null
-  const right = after ? keyed(comparableSnapshot(writableBody(type, after))) : null
+  const left = before ? keyed(comparableSnapshot(writableBody(type, before), type.folder)) : null
+  const right = after ? keyed(comparableSnapshot(writableBody(type, after), type.folder)) : null
   const entries: DiffEntry[] = []
   let truncated = false
   const push = (entry: DiffEntry) => {
@@ -393,7 +397,11 @@ export function containsExpected(expected: Json | undefined, actual: Json | unde
 
 /** Whether the live object matches the proposed configuration (assignments compared separately). */
 export function matchesProposed(type: IntuneType, proposed: Item, live: Item): boolean {
-  return containsExpected(keyed(comparableSnapshot(writableBody(type, proposed))), keyed(comparableSnapshot(writableBody(type, live))))
+  const expected = writableBody(type, proposed)
+  const actual = writableBody(type, live)
+  // A replace must also remove destination-only ADMX definitions and presentations.
+  if (type.folder === "GroupPolicyConfigurations" && canonicalJson(expected.definitionValues) !== canonicalJson(actual.definitionValues)) return false
+  return containsExpected(keyed(comparableSnapshot(expected, type.folder)), keyed(comparableSnapshot(actual, type.folder)))
 }
 
 /** Assignment targets only, comparable across reads (IDs Intune assigns are dropped). */
@@ -423,21 +431,23 @@ export function sameAssignments(expected: Item[], actual: Json | undefined): boo
 // Validation and explanation
 
 /** Why an operation is not supported, or undefined. */
-export function unsupportedReason(folder: string, action: OperationAction): string | undefined {
+export function unsupportedReason(folder: string, action: OperationAction, promotion = false): string | undefined {
   const type = typeForFolder(folder)
   if (!type) return `${folder} is not an Intune type TenuVault knows.`
   const actions = SUPPORTED_OPERATIONS[type.folder]
+  if (promotion && action !== "delete" && (PROMOTION_FOLDERS as readonly string[]).includes(type.folder)) return undefined
   if (!actions) return `Change sets do not support ${type.label} yet. Supported: ${Object.keys(SUPPORTED_OPERATIONS).map((folder) => typeForFolder(folder)?.label ?? folder).join(", ")}.`
   if (!actions.includes(action)) return `Change sets do not support ${action} for ${type.label}.`
   return undefined
 }
 
 /** What cannot be undone for one operation, in plain language. */
-export function irreversibleSteps(operation: Pick<ChangeOperation, "action" | "name" | "setsAssignments">): string[] {
+export function irreversibleSteps(operation: Pick<ChangeOperation, "folder" | "action" | "name" | "setsAssignments">): string[] {
   const notes: string[] = []
-  if (operation.action === "delete") notes.push(`Deleting "${operation.name}" is irreversible. A rollback recreates it with a new ID and without assignments; references to the old ID and its reporting history are lost.`)
-  if (operation.action === "update") notes.push(`Devices that already received the new settings of "${operation.name}" are not guaranteed to return to the previous values when the captured configuration is written back.`)
-  if (operation.action === "create") notes.push(`A rollback deletes "${operation.name}" again; anything added to it after creation is lost.`)
+  if (!supportsAutomaticRollback(operation.folder)) notes.push(manualRollbackNote(operation.name))
+  else if (operation.action === "delete") notes.push(`Deleting "${operation.name}" is irreversible. A rollback recreates it with a new ID and without assignments; references to the old ID and its reporting history are lost.`)
+  else if (operation.action === "update") notes.push(`Devices that already received the new settings of "${operation.name}" are not guaranteed to return to the previous values when the captured configuration is written back.`)
+  else if (operation.action === "create") notes.push(`A rollback deletes "${operation.name}" again; anything added to it after creation is lost.`)
   if (operation.setsAssignments) notes.push(`Assignments of "${operation.name}" change which devices and users receive it as soon as Intune processes the write.`)
   return notes
 }

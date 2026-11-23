@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import type { SyncStatusEntry, SyncTarget } from "../src/renderer/features/sync/api"
-import { applyStage, discardable, excludedReason, failedItems, initials, intuneLink, linkPath, mayHaveWritten, outcomeCounts, policyStatus, progress, readiness, relativeTime, reviewRows, runOutcome, targetPhase } from "../src/renderer/features/sync/model"
+import { applyStage, discardable, excludedReason, failedItems, initials, intuneLink, linkPath, outcomeCounts, policyStatus, possibleWrites, progress, readiness, relativeTime, reviewRows, runOutcome, targetPhase } from "../src/renderer/features/sync/model"
 import { stillReading } from "../src/renderer/features/sync/loading"
 
 const TARGET = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
@@ -55,11 +55,11 @@ describe("Sync result states", () => {
 
   it("counts a write whose outcome is unknown as possibly written, for rollback availability", () => {
     const ops = [{ key: "op-1", folder: "ConfigurationPolicies", name: "A" }]
-    expect(mayHaveWritten(target("failed", { "op-1": { status: "uncertain" } }, ops))).toBe(true)
-    expect(mayHaveWritten(target("applying", { "op-1": { status: "writing" } }, ops))).toBe(true)
-    expect(mayHaveWritten(target("partial", { "op-1": { status: "verified" } }, ops))).toBe(true)
-    expect(mayHaveWritten(target("failed", { "op-1": { status: "failed", message: "403" } }, ops))).toBe(false)
-    expect(mayHaveWritten(target(null))).toBe(false)
+    expect(possibleWrites(target("failed", { "op-1": { status: "uncertain" } }, ops))).toMatchObject(ops)
+    expect(possibleWrites(target("applying", { "op-1": { status: "writing" } }, ops))).toMatchObject(ops)
+    expect(possibleWrites(target("partial", { "op-1": { status: "verified" } }, ops))).toMatchObject(ops)
+    expect(possibleWrites(target("failed", { "op-1": { status: "failed", message: "403" } }, ops))).toEqual([])
+    expect(possibleWrites(target(null))).toEqual([])
     expect(progress(target("failed", { "op-1": { status: "uncertain" } }, ops)).done).toBe(0)
   })
 

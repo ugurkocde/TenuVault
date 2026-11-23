@@ -2,7 +2,8 @@ import { GROUP_CHECK_REQUIRED } from "../../../shared/group-access"
 import { usableReference, type Mapping, type ReferenceKind, type ReferenceResolution } from "../../../shared/intune/reference-mapping"
 import type { IntuneType, Item, Json } from "../../../shared/intune/registry"
 import { cleanAssignment } from "../../../shared/intune/registry"
-import { isGraphId } from "../../../shared/security"
+import { isScopeTagGroupTarget, isLegacyScopeTagAssignment, LEGACY_SCOPE_TAG_ASSIGNMENT_WARNING } from "../../../shared/intune/restore-assignments"
+import { isGraphId, isGuid } from "../../../shared/security"
 import { containsRedaction, containsSecret } from "../change-sets/model"
 
 /**
@@ -18,7 +19,7 @@ import { containsRedaction, containsSecret } from "../change-sets/model"
 export { resolveReferences, type Mapping, type ReferenceKind, type ReferenceResolution } from "../../../shared/intune/reference-mapping"
 
 export interface DependencyFinding {
-  code: "missing-mapping" | "rejected-mapping" | "unsupported-type" | "unsupported-target" | "ordering" | "unknown-membership" | "exclusion-unsupported" | "exclusion-dropped" | "display-name-only" | "assignments-excluded" | "secret-values" | "scope-tags-kept" | "scope-tag-default" | "sync-link-missing" | "sync-unconfirmed"
+  code: "missing-mapping" | "rejected-mapping" | "unsupported-type" | "unsupported-target" | "ordering" | "unknown-membership" | "exclusion-unsupported" | "exclusion-dropped" | "display-name-only" | "assignments-excluded" | "secret-values" | "scope-tags-kept" | "scope-tag-default" | "sync-link-missing" | "sync-unconfirmed" | "legacy-scope-tag-assignment" | "feature-update-dates"
   severity: "blocking" | "warning" | "info"
   message: string
 }
@@ -62,20 +63,28 @@ export function directAssignments(snapshot: Item | null): Item[] {
   return (Array.isArray(snapshot?.assignments) ? (snapshot!.assignments as Item[]) : []).filter((assignment) => typeof assignment.source !== "string" || assignment.source === "direct")
 }
 
-/** Every tenant-specific reference in a Settings Catalog snapshot, deduplicated. */
-export function extractReferences(snapshot: Item, includeAssignments: boolean): Array<{ kind: ReferenceKind; sourceId: string }> {
+/** Assignment filters use a different property name for the same Intune scope tag IDs. */
+export function scopeTagKey(type: IntuneType): "roleScopeTags" | "roleScopeTagIds" {
+  return type.folder === "AssignmentFilters" ? "roleScopeTags" : "roleScopeTagIds"
+}
+
+/** Every tenant-specific reference in a policy snapshot, deduplicated. */
+export function extractReferences(type: IntuneType, snapshot: Item, includeAssignments: boolean): Array<{ kind: ReferenceKind; sourceId: string }> {
   const found = new Map<string, { kind: ReferenceKind; sourceId: string }>()
   const add = (kind: ReferenceKind, id: string | null) => {
     if (id) found.set(`${kind}:${id.toLowerCase()}`, { kind, sourceId: id })
   }
-  for (const tag of Array.isArray(snapshot.roleScopeTagIds) ? snapshot.roleScopeTagIds : []) add("scopeTag", str(tag))
+  const tags = snapshot[scopeTagKey(type)]
+  for (const tag of Array.isArray(tags) ? tags : []) add("scopeTag", str(tag))
   visit(snapshot.settings ?? null, (object) => {
     if (object["@odata.type"] === REFERENCE_VALUE) add("reusableSetting", str(object.value))
   })
   if (includeAssignments) {
     for (const assignment of directAssignments(snapshot)) {
+      if (isLegacyScopeTagAssignment(type, assignment)) continue
       const target = (assignment.target ?? {}) as Item
-      add("group", str(target.groupId))
+      const scopeTagGroup = type.folder === "ScopeTags" && isScopeTagGroupTarget(target)
+      add("group", str(scopeTagGroup ? target.entraObjectId : target.groupId))
       const filterType = str(target.deviceAndAppManagementAssignmentFilterType)
       if (filterType && filterType !== "none") add("filter", str(target.deviceAndAppManagementAssignmentFilterId))
     }
@@ -137,12 +146,15 @@ export function translate(
   let unresolved = false
   const { assignments: _assignments, ...rest } = structuredClone(source)
   const body = rest as Item
+  const tagKey = scopeTagKey(type)
+  const sourceTags = body[tagKey]
   if (options.destinationSnapshot !== undefined) {
-    delete body.roleScopeTagIds
+    delete body[tagKey]
     // PUT resets omitted tags to Default, so send the live destination array explicitly.
-    if (Array.isArray(options.destinationSnapshot?.roleScopeTagIds)) body.roleScopeTagIds = structuredClone(options.destinationSnapshot.roleScopeTagIds)
-  } else if (Array.isArray(body.roleScopeTagIds)) {
-    body.roleScopeTagIds = [...new Set((body.roleScopeTagIds as Json[]).map((tag) => {
+    const destinationTags = options.destinationSnapshot?.[tagKey]
+    if (Array.isArray(destinationTags)) body[tagKey] = structuredClone(destinationTags)
+  } else if (Array.isArray(sourceTags)) {
+    body[tagKey] = [...new Set(sourceTags.map((tag) => {
       const mapped = typeof tag === "string" ? usable("scopeTag", tag) : null
       if (!mapped && options.verifyScopeTags) unresolved = true
       if (!mapped && !options.verifyScopeTags) {
@@ -173,11 +185,17 @@ export function translate(
   let assignments: Item[] | null = null
   if (options.includeAssignments) {
     assignments = []
+    let legacySkipped = false
     for (const assignment of directAssignments(source)) {
+      if (isLegacyScopeTagAssignment(type, assignment)) {
+        legacySkipped = true
+        continue
+      }
       const clean = cleanAssignment(assignment)
       const target = { ...((clean.target ?? {}) as Item) }
+      const scopeTagGroup = type.folder === "ScopeTags" && isScopeTagGroupTarget(target)
       const odataType = str(target["@odata.type"]) ?? "unknown"
-      const kind = TARGET_KINDS[odataType.toLowerCase()]
+      const kind = scopeTagGroup ? { target: "group", intent: "include" } : TARGET_KINDS[odataType.toLowerCase()]
       if (!kind) {
         findings.push({ code: "unsupported-target", severity: "blocking", message: `An assignment target of type ${odataType.replace("#microsoft.graph.", "")} is not supported by promotion.` })
         unresolved = true
@@ -192,9 +210,13 @@ export function translate(
         continue
       }
       if (kind.target === "group") {
-        const mapped = str(target.groupId) ? usable("group", target.groupId as string) : null
-        if (!mapped) unresolved = true
-        target.groupId = mapped ?? ""
+        const key = scopeTagGroup ? "entraObjectId" : "groupId"
+        const sourceId = str(target[key])
+        const mapped = sourceId ? usable("group", sourceId) : null
+        const invalidScopeGroup = scopeTagGroup && (!isGuid(sourceId) || (mapped !== null && !isGuid(mapped)))
+        if (invalidScopeGroup) findings.push({ code: "unsupported-target", severity: "blocking", message: "The scope tag assignment needs valid source and destination Entra group IDs." })
+        if (!mapped || invalidScopeGroup) unresolved = true
+        target[key] = mapped ?? ""
       }
       const filterType = str(target.deviceAndAppManagementAssignmentFilterType)
       if (filterType && filterType !== "none") {
@@ -203,11 +225,15 @@ export function translate(
         target.deviceAndAppManagementAssignmentFilterId = mapped ?? ""
         // The filter type (include or exclude) is preserved exactly.
         target.deviceAndAppManagementAssignmentFilterType = filterType
-      } else {
+      } else if (!scopeTagGroup || "deviceAndAppManagementAssignmentFilterType" in target || "deviceAndAppManagementAssignmentFilterId" in target) {
         target.deviceAndAppManagementAssignmentFilterId = null
         target.deviceAndAppManagementAssignmentFilterType = "none"
       }
       assignments.push({ ...clean, target })
+    }
+    if (legacySkipped) {
+      findings.push({ code: "legacy-scope-tag-assignment", severity: "warning", message: LEGACY_SCOPE_TAG_ASSIGNMENT_WARNING })
+      if (!assignments.length) assignments = null
     }
   } else if (directAssignments(source).length) {
     findings.push({ code: "assignments-excluded", severity: "info", message: "Assignments are not copied. The object is created unassigned (or keeps its current assignments) until targeting is reviewed separately." })

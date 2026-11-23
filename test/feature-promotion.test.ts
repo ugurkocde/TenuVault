@@ -42,6 +42,25 @@ const MAPPINGS: Mapping[] = [
   { kind: "reusableSetting", sourceId: DEV_REUSABLE, targetId: PROD_REUSABLE, confirmed: true },
 ]
 
+it.each([false, true])("blocks a scope tag selected with a policy in Dev to Prod (linked update: %s)", async (update) => {
+  const context = setup()
+  context.dev.collection(typeForFolder("ScopeTags")!.path).set("4", { id: "4", displayName: "Pilot", assignments: [] })
+  const destinationId = update ? context.prod.addPolicy({ name: "Existing policy", roleScopeTagIds: ["0"] }).id : undefined
+  const response = await context.post({
+    action: "plan",
+    title: "Promote tagged policy",
+    items: [{ sourceId: context.simple.id, destinationId }, { folder: "ScopeTags", sourceId: "4" }],
+    mappings: [],
+  })
+  expect(response.status).toBe(200)
+  const promotion = response.body.promotion as PromotionRecord
+  expect(promotion).toMatchObject({ status: "blocked", changeSetId: null })
+  expect(promotion.items[0]?.findings).toContainEqual({
+    code: "ordering", severity: "blocking", message: 'Copy the scope tag "Pilot" first, then copy this policy in a second run.',
+  })
+  expect(promotion.items[0]?.findings).not.toContainEqual(expect.objectContaining({ code: "scope-tag-default" }))
+})
+
 async function planned(context: ReturnType<typeof setup>, items?: Array<{ sourceId: unknown; destinationId?: unknown }>) {
   const response = await context.post({ action: "plan", title: "Promote OIB", ticket: "CHG-7", items: items ?? [{ sourceId: context.simple.id }, { sourceId: context.withReference.id }], mappings: MAPPINGS })
   expect(response.status).toBe(200)
@@ -636,6 +655,28 @@ describe("promotion dependency mapping", () => {
     expect(group.sourceName).toBeNull()
     expect(promotion.status).toBe("blocked")
     expect(promotion.items[0]!.findings).toContainEqual({ code: "unknown-membership", severity: "blocking", message: GROUP_CHECK_REQUIRED })
+    expect(context.prod.writeCount()).toBe(0)
+  })
+
+  it("blocks scope tag promotion when the mapped group cannot be read", async () => {
+    const context = targeted()
+    const folder = "ScopeTags"
+    context.dev.collection(typeForFolder(folder)!.path).set("4", {
+      id: "4", displayName: "Pilot",
+      assignments: [{ target: { "@odata.type": "#microsoft.graph.scopeTagGroupAssignmentTarget", entraObjectId: SOURCE_GROUP, targetType: "device" } }],
+    })
+    context.prod.groupsForbidden = true
+    const response = await context.post({
+      action: "plan", title: "Promote scope tag", includeAssignments: true,
+      items: [{ sourceId: "4", folder }], mappings: TARGETING_MAPPINGS,
+    })
+    expect(response.status).toBe(200)
+    const promotion = response.body.promotion as PromotionRecord
+    expect(promotion).toMatchObject({ status: "blocked", changeSetId: null })
+    expect(promotion.items[0]).toMatchObject({
+      references: [expect.objectContaining({ kind: "group", sourceId: SOURCE_GROUP, targetId: TARGET_GROUP, state: "mapped-unverified" })],
+      findings: expect.arrayContaining([{ code: "unknown-membership", severity: "blocking", message: GROUP_CHECK_REQUIRED }]),
+    })
     expect(context.prod.writeCount()).toBe(0)
   })
 

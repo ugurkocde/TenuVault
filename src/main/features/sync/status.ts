@@ -40,9 +40,9 @@ export interface SyncStatus {
 export function linkState(type: IntuneType, link: SyncLink, sourceLive: Item, targetLive: Item): Pick<SyncStatusEntry, "state" | "changedIn" | "identical" | "error"> {
   const sourceSnapshot = sanitizeSnapshot(type, sourceLive).snapshot
   const targetSnapshot = sanitizeSnapshot(type, targetLive).snapshot
-  const sourceMoved = hashOf(comparableSnapshot(sourceSnapshot)) !== link.sourceHash
-  const targetMoved = link.targetHash === null ? null : hashOf(comparableSnapshot(targetSnapshot)) !== link.targetHash
-  const identical = sameSnapshot(writableBody(type, sourceSnapshot), writableBody(type, targetSnapshot))
+  const sourceMoved = hashOf(comparableSnapshot(sourceSnapshot, type.folder)) !== link.sourceHash
+  const targetMoved = link.targetHash === null ? null : hashOf(comparableSnapshot(targetSnapshot, type.folder)) !== link.targetHash
+  const identical = sameSnapshot(writableBody(type, sourceSnapshot), writableBody(type, targetSnapshot), type.folder)
   if (targetMoved === null && !sourceMoved) return { state: "unknown", changedIn: null, identical, error: "The target was not read back when it was linked, so a change there cannot be told." }
   const changedIn = sourceMoved && targetMoved ? "both" : sourceMoved ? "source" : targetMoved ? "target" : null
   return { state: changedIn ? "changed" : "in-sync", changedIn, identical, error: null }

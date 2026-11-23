@@ -5,6 +5,7 @@ import type { Tenant } from "~/contexts/TenantContext"
 import { Button } from "~/components/ui/button"
 import { Chip } from "~/components/dashboard/tiles"
 import { cn } from "~/lib/utils"
+import { supportsAutomaticRollback } from "../../../shared/intune/rollback-support"
 import { bridge } from "../../lib/bridge"
 import { settingsHref } from "../../lib/settings-section"
 import { MAX_SYNC_POLICIES, SYNC_TYPES, type PolicyOption, type SyncBackup, type SyncTarget, type SyncTargetOption } from "./api"
@@ -282,6 +283,11 @@ export function ReviewStep({ targets, reviews, planning, planError, reading, ten
   const gated = secrets.needed && !(ack && secrets.acknowledged)
   // Nothing is written when no target has a change to review: the backup choice does not apply.
   const writes = planning || targets.some((target) => !!target.changeSet && target.promotion?.status !== "blocked")
+  const manualRecovery = targets.some((target) => target.changeSet?.operations.some((operation) => !supportsAutomaticRollback(operation.folder)))
+  const savedVersions = "TenuVault saves the current version of every policy it changes before writing. Those saved versions are kept on this device only."
+  const skipBackupDescription = manualRecovery
+    ? `Automatic rollback is available only for supported policy types and requires backup storage in the target tenant. Undo the other changes in Intune. ${savedVersions}`
+    : "Rollback still works from the saved versions: TenuVault saves the current version of every policy it changes before writing. A rollback always backs up first, so it needs backup storage in the target tenant. Those saved versions are kept on this device only; without a backup they are the only copy."
   const option = (value: SyncBackup, label: string, description: ReactNode) => (
     <label className={cn("flex cursor-pointer items-start gap-3 rounded-2xl border p-4 text-sm", backup === value ? "border-primary bg-blue-50/60" : "border-gray-200")}>
       <input type="radio" name="sync-backup" value={value} checked={backup === value} onChange={() => onBackup(value)} className="mt-1 h-4 min-h-0 w-4 shrink-0" />
@@ -350,7 +356,7 @@ export function ReviewStep({ targets, reviews, planning, planError, reading, ten
           <legend className="text-sm font-medium text-gray-800">Backup before changes</legend>
           <div className="mt-2 grid gap-2 md:grid-cols-2">
             {option("new", "Back up first", "Each target is backed up first, using that tenant's backup settings. If the backup does not cover every policy type this copy changes, or fails, nothing is changed in that tenant.")}
-            {option("none", "Skip the backup", "Rollback still works from the saved versions: TenuVault saves the current version of every policy it changes before writing. A rollback always backs up first, so it needs backup storage in the target tenant. Those saved versions are kept on this device only; without a backup they are the only copy.")}
+            {option("none", "Skip the backup", skipBackupDescription)}
           </div>
           {backup === "new" && targets.some((target) => !tenantOf(target.targetTenantId)?.resources?.storageAccountName) && (
             <p className="mt-2 text-xs text-gray-500">A tenant without backup storage cannot be backed up. <Link to={settingsHref("signin")} className="text-blue-700 underline">Choose backup storage in Settings</Link>.</p>
@@ -359,7 +365,7 @@ export function ReviewStep({ targets, reviews, planning, planError, reading, ten
       </div>
       <Footer>
         <Button type="button" variant="ghost" onClick={onBack}>Back</Button>
-        <span className="text-sm text-gray-500">{!writes ? "Nothing is written." : backup === "new" ? "Each target is backed up before anything is written." : "No backup is taken. Rollback uses the saved current versions."}</span>
+        <span className="text-sm text-gray-500">{!writes ? "Nothing is written." : backup === "new" ? "Each target is backed up before anything is written." : manualRecovery ? "No backup is taken. Saved versions are kept on this device." : "No backup is taken. Rollback uses the saved current versions."}</span>
         <Button type="button" disabled={busy || checking || gated || mappingsDirty || !(ready || inSync)} onClick={onApprove}>
           <ShieldCheck className="h-4 w-4" aria-hidden="true" />
           {/* No count until a target is ready: while planning or checking there is nothing to approve yet. */}

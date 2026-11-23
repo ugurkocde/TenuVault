@@ -57,7 +57,7 @@ export function ConfirmWriteDialog({
         <div className="max-h-[50vh] space-y-4 overflow-y-auto text-sm">
           {irreversible.length > 0 && (
             <div>
-              <p className="font-medium text-gray-900 dark:text-gray-100">What cannot be undone</p>
+              <p className="font-medium text-gray-900 dark:text-gray-100">Limits of automatic rollback</p>
               <ul className="mt-1 list-disc space-y-1 pl-5 text-gray-700 dark:text-gray-300">
                 {irreversible.map((line, index) => <li key={index}>{line}</li>)}
               </ul>

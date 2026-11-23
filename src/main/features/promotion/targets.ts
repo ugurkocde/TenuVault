@@ -4,14 +4,14 @@ import { assignmentsUnread } from "../../../shared/intune/read"
 import type { GraphCall } from "../../../portal/lib/policies/graph-restore"
 import { GROUP_CHECK_REQUIRED } from "../../../shared/group-access"
 import { toGroup } from "../../oib/assignments"
-import { itemName, typeForFolder, type Item } from "../../../shared/intune/registry"
+import { itemName, typeForFolder, type IntuneType, type Item } from "../../../shared/intune/registry"
 import { isGraphId, isGuid } from "../../../shared/security"
 import type { Plan } from "../../../shared/plans"
 import type { FeatureDeps } from "../deps"
 import { FeatureError } from "../route"
 import { createListingMemo, GraphReadError, getOne, listAll, readCurrent, sameNameIds, type ListingMemo } from "../change-sets/graph"
 import { containsRedaction, hashOf, sanitizeSnapshot, unsupportedReason } from "../change-sets/model"
-import { extractReferences, referenceFindings, resolveReferences, translate, type DependencyFinding, type Mapping, type ReferenceKind, type ReferenceResolution, type TargetReads } from "./mapping"
+import { extractReferences, referenceFindings, resolveReferences, scopeTagKey, translate, type DependencyFinding, type Mapping, type ReferenceKind, type ReferenceResolution, type TargetReads } from "./mapping"
 
 /**
  * Destination resolution for promotion (#145) against live destination objects.
@@ -33,6 +33,8 @@ export interface ResolveInput {
   dropUnsupportedExclusions: boolean
   acknowledgeRedacted?: boolean
   mappings: Mapping[]
+  /** Folder and source ID keys for items being written in this plan. */
+  selectedItems?: ReadonlySet<string>
   /** A source snapshot already read and sanitized. */
   sourceSnapshot: Item
 }
@@ -130,7 +132,7 @@ export async function targetStateHash(graph: GraphCall, reads: TargetReads, poli
   if (reads.policyId && reads.policyFolder) {
     const type = typeForFolder(reads.policyFolder)!
     const policy = policySnapshot === undefined ? await readCurrent(graph, type, reads.policyId) : policySnapshot
-    state.policyScopeTags = policy ? policy.roleScopeTagIds ?? null : "missing"
+    state.policyScopeTags = policy ? policy[scopeTagKey(type)] ?? null : "missing"
     if (reads.requireUnredacted) {
       const sanitized = policy ? sanitizeSnapshot(type, policy) : null
       state.policyRedacted = sanitized ? sanitized.redacted || containsRedaction(sanitized.snapshot) : null
@@ -164,6 +166,68 @@ export async function targetStateHash(graph: GraphCall, reads: TargetReads, poli
   return hashOf(state)
 }
 
+/** Refuse a copy or replacement whose complete configuration this workflow cannot replay. */
+function portabilityBlocker(type: IntuneType, snapshot: Item): string | undefined {
+  if (type.folder === "ScopeTags" || type.folder === "Remediations") {
+    const skipped = type.skip?.(snapshot)
+    if (skipped) return `${skipped} cannot be copied or replaced.`
+  }
+  if (type.folder === "PowerShellScripts" || type.folder === "ShellScripts") {
+    if (typeof snapshot.scriptContent !== "string" || !snapshot.scriptContent.trim()) return "Intune did not provide the script content."
+  }
+  if (type.folder === "Remediations") {
+    if (snapshot.deviceHealthScriptType !== "deviceHealthScript") return "Only custom remediation scripts can be copied."
+    if (typeof snapshot.detectionScriptContent !== "string" || !snapshot.detectionScriptContent.trim()
+      || (snapshot.remediationScriptContent !== null && typeof snapshot.remediationScriptContent !== "string")) {
+      return "Intune did not provide the complete remediation script content."
+    }
+  }
+  if (type.folder === "GroupPolicyConfigurations") {
+    const values = snapshot.definitionValues
+    if (snapshot.policyConfigurationIngestionType === "custom" || snapshot.policyConfigurationIngestionType === "mixed"
+      || !Array.isArray(values) || (values as Item[]).some((value) => {
+        const definition = value.definition as Item | undefined
+        return definition?.policyType !== "admxBacked" || !isGraphId(definition.id)
+          || (value.configurationType != null && value.configurationType !== "policy")
+      })) {
+      return "Only administrative templates with confirmed built-in definitions can be copied."
+    }
+    if ((values as Item[]).some(({ presentationValues }) => presentationValues != null
+      && (!Array.isArray(presentationValues) || (presentationValues as Array<Item | null>).some((value) =>
+        !isGraphId((value?.presentation as Item | undefined)?.id))))) {
+      return "Every administrative template presentation value needs a valid built-in presentation ID."
+    }
+  }
+  return undefined
+}
+
+function featureUpdateWarnings(snapshot: Item, now: number): DependencyFinding[] {
+  const findings: DependencyFinding[] = []
+  const past = (date: unknown) => typeof date === "string" && Date.parse(date) < now
+  if (past(snapshot.endOfSupportDate)) {
+    findings.push({ code: "feature-update-dates", severity: "warning", message: `"${snapshot.featureUpdateVersion}" is past its end of support (${snapshot.endOfSupportDate}). Review the Windows version before copying.` })
+  }
+  const rollout = snapshot.rolloutSettings as Item | undefined
+  for (const [field, label] of [["offerStartDateTimeInUTC", "start"], ["offerEndDateTimeInUTC", "end"]] as const) {
+    const date = rollout?.[field]
+    if (past(date)) findings.push({ code: "feature-update-dates", severity: "warning", message: `The rollout ${label} date (${date}) is in the past. Review the rollout schedule before copying.` })
+  }
+  return findings
+}
+
+function immutableDifference(type: IntuneType, source: Item, target: Item): string | undefined {
+  if (type.folder === "AssignmentFilters" && (source.platform !== target.platform || source.assignmentFilterManagementType !== target.assignmentFilterManagementType)) {
+    return "The assignment filter must have the same platform and management type. Choose a matching filter or create a new one."
+  }
+  if (type.folder === "FeatureUpdateProfiles" && (source.installLatestWindows10OnWindows11IneligibleDevice ?? false) !== (target.installLatestWindows10OnWindows11IneligibleDevice ?? false)) {
+    return "Intune cannot change the Windows 10 fallback on an existing feature update profile. Choose a profile with the same fallback setting or create a new one."
+  }
+  if (type.folder === "Remediations" && source.deviceHealthScriptType !== target.deviceHealthScriptType) {
+    return "Intune cannot change the script type of an existing remediation. Choose the same script type or create a new item."
+  }
+  return undefined
+}
+
 /**
  * Resolves one source policy against the destination: references through confirmed mappings,
  * blocking findings, the translated content and the destination state it relied on. Reads only.
@@ -194,13 +258,28 @@ export async function resolveTarget(deps: FeatureDeps, destinationTenantId: stri
   const sanitized = sanitizeSnapshot(type, input.sourceSnapshot)
   const sourceSnapshot = sanitized.snapshot
   const findings: DependencyFinding[] = []
-  const unsupported = unsupportedReason(type.folder, input.targetObjectId ? "update" : "create")
+  const unsupported = unsupportedReason(type.folder, input.targetObjectId ? "update" : "create", true)
   if (unsupported) findings.push({ code: "unsupported-type", severity: "blocking", message: unsupported })
+  if (type.folder === "FeatureUpdateProfiles") findings.push(...featureUpdateWarnings(sourceSnapshot, deps.now().getTime()))
 
   const targetPolicy = input.targetObjectId ? await read("The destination object", () => readCurrent(targetGraph, type, input.targetObjectId!)) : null
-  const sourceTags = Array.isArray(sourceSnapshot.roleScopeTagIds) ? sourceSnapshot.roleScopeTagIds.map(String) : []
-  const destinationTags = Array.isArray(targetPolicy?.roleScopeTagIds) ? targetPolicy.roleScopeTagIds.map(String) : []
-  const references = extractReferences(sourceSnapshot, input.includeAssignments).filter((reference) => !input.targetObjectId || reference.kind !== "scopeTag")
+  const sourceBlocker = portabilityBlocker(type, sourceSnapshot)
+  const destinationBlocker = targetPolicy && portabilityBlocker(type, targetPolicy)
+  const updateBlocker = targetPolicy && immutableDifference(type, sourceSnapshot, targetPolicy)
+  for (const [side, blocker] of [["Source", sourceBlocker], ["Destination", destinationBlocker ?? updateBlocker]]) {
+    if (blocker) findings.push({ code: "unsupported-type", severity: "blocking", message: `${side}: ${blocker}` })
+  }
+  const tagKey = scopeTagKey(type)
+  const tags = sourceSnapshot[tagKey]
+  const targetTags = targetPolicy?.[tagKey]
+  const sourceTags = Array.isArray(tags) ? tags.map(String) : []
+  const destinationTags = Array.isArray(targetTags) ? targetTags.map(String) : []
+  const extracted = extractReferences(type, sourceSnapshot, input.includeAssignments)
+  const sameRun = extracted.flatMap(({ kind, sourceId }) => {
+    const folder = kind === "filter" ? "assignmentfilters" : kind === "scopeTag" ? "scopetags" : null
+    return folder && input.selectedItems?.has(`${folder}:${sourceId.toLowerCase()}`) ? [{ kind, sourceId }] : []
+  })
+  const references = extracted.filter((reference) => !input.targetObjectId || reference.kind !== "scopeTag")
   const kinds = new Set(references.map((reference) => reference.kind))
   const targetObjects: Partial<Record<ReferenceKind, Map<string, string> | null>> = {}
   const sourceNames: Partial<Record<ReferenceKind, Map<string, string>>> = {}
@@ -230,13 +309,21 @@ export async function resolveTarget(deps: FeatureDeps, destinationTenantId: stri
       return new Map(groups.flatMap((group) => typeof group.id === "string" ? [[group.id.toLowerCase(), String(group.displayName ?? "")]] : []))
     })
   }
-  findings.push(...referenceFindings(resolutions.filter((reference) => input.verifyAssignments || reference.kind !== "scopeTag" || reference.state === "mapped-unverified")))
+  findings.push(...referenceFindings(resolutions.filter(({ kind, sourceId, state }) =>
+    !sameRun.some((reference) => reference.kind === kind && reference.sourceId === sourceId)
+      && (input.verifyAssignments || kind !== "scopeTag" || state === "mapped-unverified"))))
   if (input.verifyAssignments) {
-    if (assignmentsUnread(type, sourceSnapshot) || !Array.isArray(sourceSnapshot.assignments)) {
+    if (type.assign && (assignmentsUnread(type, sourceSnapshot) || !Array.isArray(sourceSnapshot.assignments))) {
       findings.push({ code: "unsupported-target", severity: "blocking", message: "Source assignments could not be read. Check the source policy before copying its assignments." })
     }
   }
-  const translated = translate(type, sourceSnapshot, resolutions, { includeAssignments: input.includeAssignments, dropUnsupportedExclusions: input.dropUnsupportedExclusions, destinationSnapshot: input.targetObjectId ? targetPolicy : undefined, acknowledgeRedacted: input.acknowledgeRedacted, verifyScopeTags: input.verifyAssignments })
+  for (const { kind, sourceId } of sameRun) {
+    const name = sourceNames[kind]?.get(sourceId.toLowerCase()) || sourceId
+    findings.push({ code: "ordering", severity: "blocking", message: `Copy the ${kind === "filter" ? "assignment filter" : "scope tag"} "${name}" first, then copy this policy in a second run.` })
+  }
+  const translated = sameRun.length
+    ? { body: null, assignments: null, findings: [] }
+    : translate(type, sourceSnapshot, resolutions, { includeAssignments: input.includeAssignments, dropUnsupportedExclusions: input.dropUnsupportedExclusions, destinationSnapshot: input.targetObjectId ? targetPolicy : undefined, acknowledgeRedacted: input.acknowledgeRedacted, verifyScopeTags: input.verifyAssignments })
   findings.push(...translated.findings)
 
   if (input.targetObjectId && !targetPolicy) findings.push({ code: "missing-mapping", severity: "blocking", message: "The chosen destination object does not exist in the destination tenant." })

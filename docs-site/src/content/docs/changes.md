@@ -37,14 +37,23 @@ To copy policies to several tenants, or to keep updating the same policies in a 
 ### Before you start
 
 * Connect both tenants and make sure one license covers both, or that each of them runs a Pro trial. On Pro the source must be the other tenant of the same license, or, during a trial, another tenant that also runs a Pro trial; the app enforces this. If no other tenant is connected, the screen says "Connect the development tenant covered by the same license to promote from it. Two tenants that each run a Pro trial also work."
-* Supported types are Settings Catalog policies, compliance policies, endpoint security policies and device configuration profiles. Other policy types cannot be promoted and are blocked with an explicit finding when planned.
+
+### Supported types
+
+* Settings Catalog policies, compliance policies, endpoint security policies, and device configuration profiles, including Windows update rings.
+* Administrative templates that use built-in ADMX definitions.
+* Windows PowerShell scripts, macOS shell scripts, and custom remediations.
+* Windows feature update profiles.
+* Assignment filters and custom scope tags.
+
+TenuVault blocks templates with uploaded ADMX definitions and scripts whose content Intune did not return. Assignment filters use scope tag mappings. Their rules are copied as written, so review any tenant-specific values in those rules before applying.
 
 ### Plan a promotion
 
 1. Select the production tenant in the tenant switcher.
 2. Open **Changes** in the sidebar and choose **Dev to Prod**.
 3. In **Promote settings into** the destination tenant, choose the **Source (development) tenant**. The **Destination (production) tenant** is the selected tenant and cannot be changed here; select another tenant in the switcher to promote into it instead.
-4. Choose the **Policy type**: Settings Catalog policies, compliance policies, endpoint security policies or device configuration profiles.
+4. Choose the **Policy type** from the supported types above.
 5. In the policy list, tick **Promote** for each source policy to include. For each one, choose **Create a new policy**, or **Update:** an existing destination policy. A destination policy with the same name is only marked as "same name, confirm it is the same policy"; a matching name never selects the target for you.
 6. Leave **Promote assignments too, after reviewing their mapped groups and filters (default: created unassigned, existing assignments untouched)** unticked to keep assignments out, or tick it to include assignments after review. By default new policies are created unassigned and existing assignments stay untouched.
 7. Tick **I understand that secrets in this policy are not promoted and must be set again in the destination** when the policies carry secret values. Secrets are never promoted.
@@ -71,7 +80,6 @@ Stored promotions stay listed under **Promotions** with their status, and open r
 
 ### Limits
 
-* Only Settings Catalog policies, compliance policies, endpoint security policies and device configuration profiles are supported. Other policy types cannot be promoted.
 * Promotion is one way and runs only when you start it. It never synchronizes later source edits.
 * Secret values are not promoted and must be set again in the destination.
 * Assignments stay out unless you include them and review their mapped groups and filters.
