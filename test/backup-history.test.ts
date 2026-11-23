@@ -52,21 +52,28 @@ const blobs = {
 describe("backup history", () => {
   it("reports a backup's coverage with the types it did not read in full, and nothing for a backup that does not record it", async () => {
     const recorded = "backup-2026-11-10-020000"
+    const included = ["DeviceConfigurations", "PowerShellScripts", "DeviceCategories", "Apps", "CompliancePolicies"]
     storage({
       ...blobs,
       [`${recorded}/metadata.json`]: {
-        Status: "Success", Failures: 0, Scope: { Excluded: [] }, SkippedTypes: ["PowerShellScripts"], FailedTypes: [], Items: {}, Coverage: "Incomplete",
+        Status: "Success", Failures: 0, Scope: { Included: included, Excluded: [] }, SkippedTypes: ["PowerShellScripts"], FailedTypes: [], Items: {}, Coverage: "Incomplete",
         Outcomes: [
           { Folder: "DeviceConfigurations", Outcome: "saved", Saved: 2 },
           { Folder: "PowerShellScripts", Outcome: "skipped", Cause: "permission", Reason: "Access was denied." },
           { Folder: "DeviceCategories", Outcome: "skipped", Cause: "permission", Reason: "The Backup Reader has no permission for this type.", Reader: true },
           { Folder: "Apps", Outcome: "failed", Error: "Timed out", Saved: 0 },
+          { Folder: "CompliancePolicies", Outcome: "saved", Saved: 0 },
         ],
       },
     })
     const { backups } = await (await listBackups(request({}))).json()
     // The status is unchanged; coverage is next to it.
     expect(backups[0]).toMatchObject({ id: recorded, status: "Success", failures: 0, skippedTypes: ["PowerShellScripts"], coverage: "incomplete", notRead: ["PowerShellScripts", "DeviceCategories", "Apps"] })
+    expect(backups[0]).toMatchObject({
+      scope: { included },
+      emptyTypes: ["CompliancePolicies"],
+      notReadReasons: { PowerShellScripts: "Access was denied.", DeviceCategories: "The Backup Reader has no permission for this type.", Apps: "Timed out" },
+    })
     // Backups made before coverage was recorded: not known, which is never shown as incomplete.
     expect(backups[1]).toMatchObject({ id: newer, coverage: null, notRead: [] })
   })

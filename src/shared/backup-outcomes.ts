@@ -100,14 +100,26 @@ export function manifestOutcomes(types: readonly TypeOutcome[]): Array<Record<st
  * What a backup's manifest says about its coverage: null for a backup of a version that did not
  * record it, and the folders of the selected types that were not read in full.
  */
-export function manifestCoverage(metadata: { Coverage?: unknown; Outcomes?: unknown } | null | undefined): { coverage: Coverage | null; notRead: string[] } {
+export function manifestCoverage(metadata: { Coverage?: unknown; Outcomes?: unknown } | null | undefined): { coverage: Coverage | null; notRead: string[]; notReadReasons?: Record<string, string>; emptyTypes?: string[] } {
   const coverage = metadata?.Coverage === "Complete" ? "complete" : metadata?.Coverage === "Incomplete" ? "incomplete" : null
   const entries = Array.isArray(metadata?.Outcomes) ? metadata.Outcomes : []
-  const notRead = entries.flatMap((entry) => {
-    const { Folder, Outcome } = entry && typeof entry === "object" ? (entry as { Folder?: unknown; Outcome?: unknown }) : {}
-    return typeof Folder === "string" && (Outcome === "skipped" || Outcome === "failed") ? [Folder] : []
-  })
-  return { coverage, notRead }
+  const notRead: string[] = []
+  const reasons: Array<[string, string]> = []
+  const emptyTypes: string[] = []
+  for (const entry of entries) {
+    const { Folder, Outcome, Saved, Reason, Error } = entry && typeof entry === "object" ? (entry as { Folder?: unknown; Outcome?: unknown; Saved?: unknown; Reason?: unknown; Error?: unknown }) : {}
+    if (typeof Folder !== "string") continue
+    if (Outcome === "notConfigured" || (Outcome === "saved" && Saved === 0)) emptyTypes.push(Folder)
+    if (Outcome !== "skipped" && Outcome !== "failed") continue
+    notRead.push(Folder)
+    const reason = Outcome === "skipped" ? Reason : Error
+    if (typeof reason === "string" && reason.trim()) reasons.push([Folder, reason])
+  }
+  return {
+    coverage, notRead,
+    ...(reasons.length ? { notReadReasons: Object.fromEntries(reasons) } : {}),
+    ...(emptyTypes.length ? { emptyTypes } : {}),
+  }
 }
 
 /** A refused request as the classifier sees it. */

@@ -8,9 +8,9 @@ vi.mock("../../src/renderer/components/ServiceBackupNotice", () => ({ ServiceBac
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const state = vi.hoisted(() => ({ warnings: [] as string[], tenant: 0, damagedFiles: 3, sealed: 0, refresh: (() => Promise.resolve("updated")) as () => Promise<string> }))
-const downloadState = vi.hoisted(() => ({ rows: [] as BackupSummary[], storage: "" }))
+const downloadState = vi.hoisted(() => ({ rows: [] as BackupSummary[], storage: "", search: "" }))
 const backups = vi.hoisted(() => ({ importRecoveryKey: vi.fn(), openFolder: vi.fn() }))
-vi.mock("react-router-dom", () => ({ useSearchParams: () => [new URLSearchParams(), vi.fn()] }))
+vi.mock("react-router-dom", () => ({ useSearchParams: () => [new URLSearchParams(downloadState.search), vi.fn()] }))
 const tenants = vi.hoisted(() => [
   { id: 1, name: "Contoso", status: "healthy", credentials: { tenantId: "11111111-1111-1111-1111-111111111111", appId: "app" }, resources: { storageAccountName: "tvlocal-11111111-1111-1111-1111-111111111111" } },
   { id: 2, name: "Fabrikam", status: "healthy", credentials: { tenantId: "22222222-2222-2222-2222-222222222222", appId: "app" }, resources: { storageAccountName: "tvlocal-22222222-2222-2222-2222-222222222222" } },
@@ -42,10 +42,11 @@ afterEach(() => {
   document.body.innerHTML = ""
   downloadState.rows = []
   downloadState.storage = ""
+  downloadState.search = ""
   vi.unstubAllGlobals()
 })
 
-describe("Backup History downloads", () => {
+describe("Backup Details", () => {
   function renderBackup(fields: Record<string, unknown> = {}) {
     state.tenant = 0
     downloadState.rows = [{ id: "backup-2020-01-01-000000", timestamp: "2020-01-01T00:00:00Z", status: "Success", totalPolicies: 1, type: null, scope: null, size: 1, duration: null, changes: null, comparedWith: null, ...fields }]
@@ -57,6 +58,39 @@ describe("Backup History downloads", () => {
     const button = (label: string) => [...container.querySelectorAll("button")].find(node => node.textContent?.trim() === label)
     return { container, button, render }
   }
+
+  it("shows an Intune-only backup as excluded when opened through the Defender filter", () => {
+    downloadState.search = "service=defender"
+    const { container } = renderBackup({ scope: { included: ["ConfigurationPolicies"], excluded: [], description: "Everything" } })
+    const defender = container.querySelector('section[aria-label="Defender"]')!
+    expect(defender.textContent).toContain("Not included in this backup")
+    expect(defender.textContent).not.toContain("None in the tenant")
+    expect(defender.querySelector("details")).toBeNull()
+  })
+
+  it("shows an unread type with its reason even if the backup holds some of its policies", () => {
+    const { container } = renderBackup({
+      scope: { included: ["CompliancePolicies"], excluded: [], description: "Custom" },
+      counts: { CompliancePolicies: 1 },
+      coverage: "incomplete",
+      notRead: ["CompliancePolicies"],
+      notReadReasons: { CompliancePolicies: "The read timed out." },
+    })
+    const row = [...container.querySelectorAll("details li")].find(node => node.textContent?.startsWith("Compliance policies"))!
+    expect(row.textContent).toContain("Not read: The read timed out.")
+    expect(row.textContent).not.toContain("None in the tenant")
+  })
+
+  it("shows a type read successfully with zero results as empty even when other reads failed", () => {
+    const { container } = renderBackup({
+      status: "CompletedWithWarnings",
+      scope: { included: ["CompliancePolicies", "ConfigurationPolicies"], excluded: [], description: "Custom" },
+      emptyTypes: ["CompliancePolicies"],
+      notRead: ["ConfigurationPolicies"],
+    })
+    const row = [...container.querySelectorAll("details li")].find(node => node.textContent?.startsWith("Compliance policies"))!
+    expect(row.textContent).toContain("None in the tenant")
+  })
 
   it("keeps full Download enabled beside Download ordinary only when the companion is temporarily unreadable", async () => {
     const fetch = vi.fn().mockImplementation(async () => Response.json({ saved: true }))

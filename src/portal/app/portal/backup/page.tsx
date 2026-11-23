@@ -36,6 +36,7 @@ import { LinkedMessage } from "~/components/linked-message"
 import { SERVICES_PAGE } from "../../../../shared/services/modules"
 
 import { BACKUP_SERVICES, BACKUP_SERVICE_AREAS, matchesBackupService, parseBackupService, type BackupServiceFilter } from "@desktop/lib/backup-service"
+import { LEGACY_FOLDERS } from "../../../../shared/intune/scope"
 
 type Tab = "backup" | "restore" | "schedule"
 
@@ -612,15 +613,33 @@ function BackupDetails({ credentials, service, backup, first, storageAccountName
   const unavailable = backup.status === "unavailable"
   const counts = backup.counts ?? {}
   const excluded = new Set(backup.scope?.excluded ?? [])
+  const included = new Set(backup.scope?.included ?? LEGACY_FOLDERS)
+  const empty = new Set(backup.emptyTypes ?? [])
+  const unread = new Set([...(backup.notRead ?? []), ...(backup.skippedTypes ?? []), ...(backup.failedTypes ?? [])])
+  const largeReasons = new Map(backup.largeProblems?.map(problem => [problem.folder, problem.reason]))
+  const statusFor = (folder: string, count: number) => {
+    if (excluded.has(folder)) return "Not included in this backup"
+    const reason = largeReasons.get(folder) ?? backup.notReadReasons?.[folder]
+    if (reason || unread.has(folder)) return `Not read: ${reason ?? "See the backup log for details."}`
+    if (count > 0) return null
+    if (backup.scope && !included.has(folder)) return "Not included in this backup"
+    if (empty.has(folder) || backup.coverage === "complete" || (backup.scope && !backup.scope.included && kind === "success" && backup.coverage == null)) return "None in the tenant"
+    return "Coverage not recorded"
+  }
   const groups = BACKUP_SERVICE_AREAS.filter(group => service === "all" || service === group.id).map(group => ({
     ...group,
-    areas: group.areas.map(({ area, types }) => ({
-      area,
-      count: types.reduce((sum, type) => sum + (counts[type.folder] ?? 0), 0),
-      types: types.filter((type) => !excluded.has(type.folder) && (counts[type.folder] ?? 0) > 0),
-      left: types.filter((type) => excluded.has(type.folder)).length,
-      all: types.length,
-    })),
+    areas: group.areas.map(({ area, types }) => {
+      const rows = types.map(type => {
+        const count = counts[type.folder] ?? 0
+        return { ...type, count, status: statusFor(type.folder, count) }
+      })
+      return {
+        area,
+        count: rows.reduce((sum, row) => sum + row.count, 0),
+        excluded: rows.every(row => row.status === "Not included in this backup"),
+        rows,
+      }
+    }),
   }))
   const typeLabel = (folder: string) => capitalize(typeForFolder(folder)?.label ?? folder)
 
@@ -700,38 +719,37 @@ function BackupDetails({ credentials, service, backup, first, storageAccountName
                 <h4 className="mb-2 text-sm font-medium text-gray-900">{group.label}</h4>
               <div className="space-y-2">
                 {group.areas
-                  .filter((entry) => entry.count > 0 || entry.left < entry.all)
+                  .filter((entry) => !entry.excluded)
                   .map((entry) => (
                     <details key={entry.area} className="group rounded-xl bg-gray-50 px-3 py-2.5 text-sm">
                       <summary className="flex cursor-pointer list-none items-center justify-between">
                         <span className="text-gray-700">{entry.area}</span>
-                        <span className="font-medium text-gray-900">{entry.count}</span>
+                        {entry.count > 0 && <span className="font-medium text-gray-900">{entry.count}</span>}
                       </summary>
                       <ul className="mt-2 space-y-1 border-t border-gray-100 pt-2 text-xs">
-                        {entry.types.map((type) => (
-                          <li key={type.folder} className="flex items-center justify-between gap-2 text-gray-600">
+                        {entry.rows.map((type) => (
+                          <li key={type.folder} className="flex items-start justify-between gap-2 text-gray-600">
                             <span>{capitalize(type.label)}</span>
-                            <span className="flex items-center gap-2">
-                              {type.folder === "AutopilotDevices" && !unavailable && (
+                            <span className="min-w-0 text-right">
+                              {type.folder === "AutopilotDevices" && type.count > 0 && !unavailable && (
                                 <button type="button" className="font-medium text-coral-700 underline disabled:text-gray-400" disabled={exportingDevices} onClick={onExportDevices}>
                                   {exportingDevices ? "Exporting..." : "Export CSV"}
                                 </button>
                               )}
-                              <span>{counts[type.folder]}</span>
+                              {type.count > 0 && <span className="ml-2">{type.count}</span>}
+                              {type.status && <span className="block break-words text-gray-500">{type.status}</span>}
                             </span>
                           </li>
                         ))}
-                        {entry.types.length === 0 && <li className="text-gray-500">No items of these types in the tenant.</li>}
-                        {entry.left > 0 && <li className="text-gray-500">{entry.left} type{entry.left === 1 ? "" : "s"} not included in this backup</li>}
                       </ul>
                     </details>
                   ))}
                 {group.areas
-                  .filter((entry) => entry.left === entry.all)
+                  .filter((entry) => entry.excluded)
                   .map((entry) => (
-                    <div key={entry.area} className="flex justify-between rounded-xl px-3 py-2 text-sm text-gray-500">
+                    <div key={entry.area} className="flex justify-between gap-2 rounded-xl px-3 py-2 text-sm text-gray-500">
                       <span>{entry.area}</span>
-                      <span>Not included</span>
+                      <span className="text-right">Not included in this backup</span>
                     </div>
                   ))}
               </div>
@@ -745,7 +763,7 @@ function BackupDetails({ credentials, service, backup, first, storageAccountName
             {[
               ["Status", statusLabel(backup.status)],
               ["Started", backup.type ? TRIGGER_LABEL[backup.type] : "Not recorded"],
-              ["Included", backup.scope ? backup.scope.description : "Everything"],
+              ["Included", backup.scope?.included ? `${backup.scope.included.length} types` : backup.scope?.description ?? "Not recorded"],
               ["Stored", storageLabel(storageAccountName)],
               ["Backup ID", backup.id],
             ].map(([label, value]) => (

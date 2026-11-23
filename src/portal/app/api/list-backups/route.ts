@@ -174,6 +174,7 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
   // Inventory such as Autopilot devices is an item of the backup but not a policy.
   const policyCount = Object.entries(counts).reduce((sum, [folder, value]) => (typeForFolder(folder) && !backupTypeUse(typeForFolder(folder)!).policyCount ? sum : sum + value), 0)
   const excluded: string[] = Array.isArray(metadata?.Scope?.Excluded) ? metadata.Scope.Excluded : []
+  const included = recordedInclusion(metadata)
 
   return {
     id: name,
@@ -201,7 +202,7 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
       appProtectionPolicies: count('AppProtectionIOS', 'AppProtectionAndroid', 'AppProtectionWindows', 'AppProtectionPolicies'),
       conditionalAccess: count('ConditionalAccess'),
     },
-    scope: metadata ? { excluded, description: describeScope({ excluded }) } : null,
+    scope: metadata ? { excluded, included, description: describeScope({ excluded }) } : null,
     failures: typeof metadata?.Failures === 'number' ? metadata.Failures : 0,
     skippedTypes: Array.isArray(metadata?.SkippedTypes) ? metadata.SkippedTypes : [],
     failedTypes: Array.isArray(metadata?.FailedTypes) ? metadata.FailedTypes : [],
@@ -229,6 +230,11 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
     // Sealed by an earlier version and not opened on this device: its manifest, or its ownership marker.
     sealed: Boolean(metadataResult.sealed) || (foreignMarker && isLegacySealedError(markerFailure)),
   }
+}
+
+function recordedInclusion(metadata: { Scope?: { Included?: unknown } } | null | undefined): string[] | undefined {
+  const value = metadata?.Scope?.Included
+  return Array.isArray(value) ? value.filter((folder): folder is string => typeof folder === "string") : undefined
 }
 
 export async function POST(request: NextRequest) {
@@ -515,7 +521,16 @@ export async function POST(request: NextRequest) {
           if (typeof other.Failures === "number") backup.failures += other.Failures
         }
       }
-      backup.largeProblems = largeRunProblems(metadata, cause, matches ? other : null)
+      const largeProblems = largeRunProblems(metadata, cause, matches ? other : null)
+      backup.largeProblems = largeProblems
+      if (backup.scope?.included) {
+        const companionTypes = matches ? recordedInclusion(other) : undefined
+        backup.scope.included = [...new Set([...backup.scope.included, ...(companionTypes ?? []), ...largeProblems.map(problem => problem.folder).filter(folder => typeForFolder(folder))])]
+      }
+      if (matches) {
+        const { emptyTypes } = manifestCoverage(other)
+        if (emptyTypes?.length) backup.emptyTypes = [...(backup.emptyTypes ?? []), ...emptyTypes]
+      }
       // An unread record or an unresolved companion can still belong to a complete run.
       // Keep the full download offered so it can check storage again.
       backup.ordinaryOnlyAvailable = companionUnavailable && (!evidence || matches)

@@ -90,8 +90,8 @@ describe("coverage", () => {
       { Folder: "D", Outcome: "skipped", Cause: "permission", Reason: "No permission.", Reader: true },
       { Folder: "E", Outcome: "failed", Saved: 2, Error: "Timed out" },
     ])
-    expect(manifestCoverage({ Coverage: "Incomplete", Outcomes: written })).toEqual({ coverage: "incomplete", notRead: ["C", "D", "E"] })
-    expect(manifestCoverage({ Coverage: "Complete", Outcomes: written.slice(0, 2) })).toEqual({ coverage: "complete", notRead: [] })
+    expect(manifestCoverage({ Coverage: "Incomplete", Outcomes: written })).toEqual({ coverage: "incomplete", notRead: ["C", "D", "E"], notReadReasons: { C: "Not set up.", D: "No permission.", E: "Timed out" }, emptyTypes: ["B"] })
+    expect(manifestCoverage({ Coverage: "Complete", Outcomes: [...written.slice(0, 2), { Folder: "Z", Outcome: "saved", Saved: 0 }] })).toEqual({ coverage: "complete", notRead: [], emptyTypes: ["B", "Z"] })
   })
 
   it("is unknown for a backup made before it was recorded, or with a damaged record", () => {

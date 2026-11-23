@@ -16,7 +16,7 @@ export interface BackupSummary {
   largeProblems?: Array<{ folder: string; reason: string }>
   /** Stored bytes per registry folder, from the same listing as `counts`. */
   sizes?: Record<string, number>
-  scope: { excluded: string[]; description: string } | null
+  scope: { excluded: string[]; included?: string[]; description: string } | null
   failures?: number
   skippedTypes?: string[]
   failedTypes?: string[]
@@ -24,6 +24,8 @@ export interface BackupSummary {
   coverage?: "complete" | "incomplete" | null
   /** Folders of the selected types that were not read in full. */
   notRead?: string[]
+  notReadReasons?: Record<string, string>
+  emptyTypes?: string[]
   size: number
   /** Seconds, or a preformatted string from older backups; null when unknown. */
   duration: number | string | null
