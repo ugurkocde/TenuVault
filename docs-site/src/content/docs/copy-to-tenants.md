@@ -21,6 +21,12 @@ Open **Copy to Tenants** in the sidebar, directly under **Drift Detection**.
 
 Copy to Tenants works like [Dev to Prod](/changes/#dev-to-prod), with more than one target and links between the source and target policies: each target gets its own reviewed change set, backup and rollback, and a failure in one target never stops or undoes another.
 
+## Group mappings
+
+To copy assignments with their policies, use [Dev to Prod](/changes/#dev-to-prod) and enable **Promote assignments too**. In **Dependency mappings**, search the destination by the start of the group name or paste a group object ID to search for that group. Pick the named group, review its kind and available device, user and nested group counts, then tick **Confirmed**. TenuVault checks that the destination group exists before the promotion writes any assignments.
+
+Group mappings require delegated [group read access](/security/permissions/#group-read-groupmemberreadall) in the destination. Use **Check again** after granting admin consent.
+
 ## What your plan includes
 
 | | Community | Pro | MSP |

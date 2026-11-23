@@ -83,7 +83,7 @@ For the Azure watcher, **Copy for Azure watcher** copies the layout as JSON. Sav
 
 ### Email
 
-Email is sent through Microsoft Graph as the signed-in admin. It needs the optional delegated `Mail.Send` permission, and Entra group recipients also need `GroupMember.Read.All` and `User.Read.All`. A new app registration gets all three with `-IncludeNotifications` on the setup script. For an existing app registration, add the three delegated permissions to it in the Entra admin center and grant admin consent, then sign in to TenuVault again: running the script again would create a second app registration. See [Permissions](/security/permissions/). Without `Mail.Send`, email deliveries fail with a Graph permission error while other channels keep working.
+Email is sent through Microsoft Graph as the signed-in admin. It needs the optional delegated `Mail.Send` permission, and Entra group recipients also need `GroupMember.Read.All` and `User.Read.All`. New app registrations include `GroupMember.Read.All` by default. The `-IncludeNotifications` switch adds `Mail.Send` and `User.Read.All`. For an existing registration, add any missing delegated permissions in Entra, grant admin consent and select **Check again** in **Settings > Services and permissions**. See [Permissions](/security/permissions/). Without `Mail.Send`, email deliveries fail with a Graph permission error while other channels keep working.
 
 Recipients can be:
 
@@ -284,7 +284,7 @@ Plan for Exchange propagation: a brand-new access policy and scope group can tak
 
 | Symptom | Likely cause |
 | --- | --- |
-| Test message fails with a Graph permission error on email | The app registration lacks `Mail.Send`. Add the delegated `Mail.Send` permission (and `GroupMember.Read.All` and `User.Read.All` for group recipients) to the existing app registration, grant admin consent and sign in again. |
+| Test message fails with a Graph permission error on email | The app registration lacks `Mail.Send`. Add the delegated `Mail.Send` permission (and `GroupMember.Read.All` and `User.Read.All` for group recipients) to the existing app registration, grant admin consent and select **Check again** in **Settings > Services and permissions**. |
 | Teams test returns an error from the workflow | The workflow was deleted, its owner left, or a tenant policy blocks Workflows webhooks. Recreate the workflow, then **Edit** the channel and paste the new URL. |
 | No Intune change digests | Watching is off, you are signed out, an Azure watcher owns change alerts for the tenant, the picked audit categories do not include the change, or the change was made through TenuVault and is ignored. The watch card shows the last poll and its error. |
 | An alert sends no changes | Its filters exclude them. Check the alert's **Which changes** section: with **Changed settings contain** filled in, only updates pass, and settings catalog updates name no settings. Use **Send test** to see the alert's shape. |
