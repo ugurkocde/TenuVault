@@ -300,6 +300,25 @@ for (const azure of [false, true]) describe(azure ? "Azure emulator mixed runs" 
     expect(job.log.join(" ")).toContain("Remnant cleanup")
     expect((await f.store.list(local, BACKUP_CONTAINER, `${ordinaryId}/`)).some(blob => blob.name.endsWith("TermsAndConditions/one.json"))).toBe(true)
   })
+  it("keeps a standalone backup with warnings while it holds a type's newest complete copy, and lets it cover older copies", async () => {
+    const f = await setup()
+    const olderId = "backup-2026-10-01-000000", newerId = "backup-2026-11-01-000000"
+    const snapshot = { id: "one", displayName: "Terms" }
+    for (const id of [olderId, newerId]) {
+      await f.write(id, "TermsAndConditions/one.json", snapshot)
+      await f.write(id, ".tenuvault-owner.json", { Source: "TenuVault Desktop", TenantId: TENANT, RunId: `run-${id}` })
+    }
+    const items = { "TermsAndConditions/one": { file: "one.json", hash: snapshotHash(snapshot) } }
+    await f.write(olderId, "metadata.json", { BackupFolder: olderId, TenantId: TENANT, RunId: `run-${olderId}`, Status: "Success", Failures: 0, Coverage: "Complete", Scope: { Included: ["TermsAndConditions"], Excluded: [] }, Outcomes: [{ Folder: "TermsAndConditions", Outcome: "saved", Saved: 1 }], Items: items, ItemCounts: { TermsAndConditions: 1, TotalPolicies: 1 } })
+    // Terms and conditions were read in full; scope tags failed, so the run finished with warnings.
+    await f.write(newerId, "metadata.json", { BackupFolder: newerId, TenantId: TENANT, RunId: `run-${newerId}`, Status: "CompletedWithWarnings", Failures: 1, Coverage: "Incomplete", Scope: { Included: ["TermsAndConditions", "ScopeTags"], Excluded: [] }, FailedTypes: ["ScopeTags"], Outcomes: [{ Folder: "TermsAndConditions", Outcome: "saved", Saved: 1 }, { Folder: "ScopeTags", Outcome: "failed", Error: "Read failed" }], Items: items, ItemCounts: { TermsAndConditions: 1, TotalPolicies: 1 } })
+    // The current run leaves terms and conditions out of its scope, so it holds no copy of them.
+    const engine = new BackupEngine({ now: () => new Date("2026-11-17T12:00:00Z"), fetch: f.fetcher, getToken: async () => jwt({ scp: "Policy.Read.All" }), services: () => ({ services: ["intune"] }), retentionDays: () => 1 })
+    const job = await engine.waitForJob(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: f.account, scope: { excluded: INTUNE_TYPES.filter(type => type.folder !== "DeviceCategories").map(type => type.folder) } }))
+    expect(job.status, job.exception).toBe("Completed")
+    expect((await f.store.list(local, BACKUP_CONTAINER, `${newerId}/`)).some(blob => blob.name.endsWith("TermsAndConditions/one.json"))).toBe(true)
+    expect(await f.store.list(local, BACKUP_CONTAINER, `${olderId}/`)).toHaveLength(0)
+  })
   it("protects a valid complete run inside retention", async () => {
     const f = await pair()
     const engine = new BackupEngine({ now: () => new Date("2020-01-01T12:00:00Z"), fetch: f.fetcher, getToken: async () => jwt({ scp: "Policy.Read.All" }), services: () => ({ services: ["intune", "entra"] }), retentionDays: () => 1 })

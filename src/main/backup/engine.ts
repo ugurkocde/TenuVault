@@ -1358,14 +1358,17 @@ export class BackupEngine {
         // The ordinary half alone coordinates complete pairs and records both halves' coverage.
         if (paired && (!validPair || isLargeBackup(backup.prefix))) continue
         let holdsUncovered = false
-        // Only a backup that read everything may satisfy coverage: one that finished with
-        // warnings may miss items in any folder it appears to hold. Backups recorded before
-        // failures were counted carry no Failures value and count by their status alone.
+        // A backup with per-type outcomes satisfies coverage for each type it read completely, so one
+        // that finished with warnings is kept while it holds a type's newest complete copy. One recorded
+        // before outcomes may miss items in any folder it appears to hold, so it counts only when it read
+        // everything; those recorded before failures were counted carry no Failures value and count by
+        // their status alone.
         const status = String(metadata.Status ?? "").toLowerCase()
         const complete = (status === "success" || status === "succeeded") && (metadata.Failures === undefined || metadata.Failures === 0)
+        const holds = Array.isArray(metadata.Outcomes) ? completeFolders(metadata) : complete ? restorableFolders(metadata) : new Set<string>()
         // A folder with masked values does not satisfy coverage, so the newest backup with the plain values stays.
         // Coverage is recorded before a pair's own deletion checks, so older copies are judged against it.
-        for (const folder of [...(complete ? restorableFolders(metadata) : []), ...(paired && companion ? restorableFolders(companion) : [])]) {
+        for (const folder of [...holds, ...(paired && companion ? restorableFolders(companion) : [])]) {
           if (uncovered.delete(folder)) holdsUncovered = true
         }
         if (paired) {
@@ -1539,7 +1542,6 @@ function uniqueName(name: string, id: string, used: Set<string>): string {
 }
 
 
-/** The permissions in the run's Graph token, read only when a service with a token pre-check needs checking. */
 /**
  * The type folders a backup half holds a complete, restorable copy of. Per-type outcomes decide:
  * saved or not configured, no masked values, and a complete inventory for a large type. A manifest
@@ -1555,6 +1557,7 @@ function completeFolders(metadata: Record<string, unknown> | null | undefined): 
     && restorable.has(entry.Folder) && (large[entry.Folder] === undefined || large[entry.Folder]!.complete === true)).map(entry => entry.Folder as string))
 }
 
+/** The permissions in the run's Graph token, read only when a service with a token pre-check needs checking. */
 async function moduleGrants(tokens: RunTokens, needed: boolean) {
   if (!needed) return undefined
   try {
