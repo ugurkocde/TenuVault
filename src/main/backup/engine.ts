@@ -1,13 +1,13 @@
 import { auditUserFromToken } from "../api/audit-sink"
 import type { AuditUser } from "~/lib/audit/types"
 export { assertStorageAccountName } from "../../shared/storage-account"
-export { ProtectedBlobError, isImmutabilityRefusal } from "./request"
+export { isImmutabilityRefusal } from "./request"
 import { createHash, randomUUID } from "node:crypto"
 import { BACKUP_CANCELLED_MESSAGE, BACKUP_OWNER_FILE } from "../../shared/constants"
 import { resolveBackupOwnership, type OwnershipFile } from "../../shared/backup-ownership"
 import { BlobWriter } from "./blob-writer"
 import { GraphSession, type GraphItem } from "./graph-session"
-import { GRAPH, BlobClaimError, GraphError, InventoryDamagedError, ProtectedBlobError, RequestTimeoutError, StorageError, TokenError, isUnreachable } from "./request"
+import { GRAPH, BlobClaimError, BlobDeleteRefusal, GraphError, InventoryDamagedError, RequestTimeoutError, StorageError, TokenError, isUnreachable } from "./request"
 import { isLocalAccount } from "../storage/blob-emulator"
 import { FetchApplicationError } from "../api/network-error"
 import { INTUNE_TYPES, itemName, typeForFolder, type IntuneType, type Item } from "../../shared/intune/registry"
@@ -713,8 +713,7 @@ export class BackupEngine {
       const retentionNetwork = new NetworkCircuit(3 * concurrency, signal, deadline)
       const retentionStorage = new BlobWriter(fetchImpl, request.storageAccountName, storageToken, retentionNetwork)
       try {
-        const unreadableOlder = await this.applyRetention(job, retentionStorage, backupFolder, restorableFolders(metadata), retentionNetwork.signal)
-        if (unreadableOlder > 0) retentionWarnings++
+        retentionWarnings = await this.applyRetention(job, retentionStorage, backupFolder, restorableFolders(metadata), retentionNetwork.signal)
       } catch (error) {
         retentionWarnings++
         if (signal.aborted || Date.now() >= deadline) {
@@ -784,9 +783,9 @@ export class BackupEngine {
   /**
    * Deletes backup folders older than the retention period, never the one just written, and never the
    * newest backup that holds a type the current backup left out: a backup of fewer types must not
-   * age out the only copy of the others. Only this tenant's backups are considered: another
-   * tenant's backups and backups without readable metadata are never deleted. A manifest that
-   * names no tenant is placed by the folder's ownership marker. Backups that record no tenant in
+   * age out the only copy of the others. A folder with a missing manifest can be removed once
+   * expired if a TenuVault ownership marker names this tenant. A manifest that names no tenant
+   * is placed by the folder's ownership marker. Backups that record no tenant in
    * either count as this tenant's unless the container also holds a backup recorded as another
    * tenant's, or one whose metadata or marker cannot be read.
    */
@@ -808,7 +807,7 @@ export class BackupEngine {
     // Who each backup belongs to. Every metadata file is read first, because backups from versions
     // that did not record the tenant count as this tenant's only while no backup names another one.
     const tenant = job.tenantId.toLowerCase()
-    const owners: Array<{ metadata: Record<string, unknown> | null; owner: "this" | "other" | "untagged" } | null> = Array.from({ length: backups.length }, () => null)
+    const owners: Array<{ metadata: Record<string, unknown> | null; owner: "this" | "other" | "untagged" | "incomplete" } | null> = Array.from({ length: backups.length }, () => null)
     const unreadable = new Set<number>()
     let unreadableReason = ""
     // Metadata or a marker that cannot be opened (an Azure backup sealed by an earlier version with a
@@ -825,18 +824,30 @@ export class BackupEngine {
       }
     }
     await pool(backups.map((backup, index) => ({ backup, index })), CONCURRENCY, async ({ backup, index }) => {
-      const { manifest, owner } = await resolveBackupOwnership((file) => readFile(`${backup.prefix}${file}`), tenant)
+      let tenuVaultMarker = false
+      const { manifest, owner } = await resolveBackupOwnership(async (file) => {
+        const result = await readFile(`${backup.prefix}${file}`)
+        if (file === BACKUP_OWNER_FILE && result.kind === "found") {
+          const source = (result.value as Record<string, unknown>).Source
+          tenuVaultMarker = source === "TenuVault Desktop" || source === "TenuVault Cloud Backup"
+        }
+        return result
+      }, tenant)
       const failure = manifest.kind === "unreadable" ? manifest.error : owner.kind === "unreadable" ? owner.error : null
       if (failure !== null) {
         unreadable.add(index)
         unreadableReason ||= failure instanceof Error ? failure.message : String(failure)
-        return
       }
-      // A folder without a manifest (running, stopped or older) is never deleted, but its marker
-      // still says whether another tenant uses the container.
-      owners[index] = {
-        metadata: manifest.kind === "found" ? manifest.metadata : null,
-        owner: owner.kind === "owned" ? "this" : owner.kind === "other" ? "other" : "untagged",
+      if (manifest.kind === "missing") {
+        // After an interrupted delete, the marker can still prove ownership. A foreign
+        // marker also tells us the container is shared.
+        const placement = owner.kind === "other" ? "other" : owner.kind === "owned" && tenuVaultMarker ? "this" : "incomplete"
+        owners[index] = { metadata: null, owner: placement }
+      } else if (manifest.kind === "found" && failure === null) {
+        owners[index] = {
+          metadata: manifest.metadata,
+          owner: owner.kind === "owned" ? "this" : owner.kind === "other" ? "other" : "untagged",
+        }
       }
     }, signal)
     // An unreadable backup may be another tenant's, so while one exists the container counts as
@@ -849,11 +860,20 @@ export class BackupEngine {
     let kept = 0
     let unowned = 0
     let protectedKept = 0
+    let permissionRefusals = 0
     let latestExpiry = 0
+    let unknownExpiry = false
+    const partiallyRemoved: string[] = []
+    const incompleteUnverified: string[] = []
     const includeProtection = !isLocalAccount(job.storageAccountName)
     for (const [index, backup] of backups.entries()) {
       const entry = owners[index]
-      if (!entry?.metadata || entry.owner === "other" || (entry.owner === "untagged" && shared)) {
+      const folder = backup.prefix.slice(0, -1)
+      if (entry?.owner === "incomplete") {
+        if (backup.time < cutoff) incompleteUnverified.push(folder)
+        continue
+      }
+      if (!entry || entry.owner === "other" || (entry.owner === "untagged" && shared)) {
         if (backup.time < cutoff && !unreadable.has(index)) unowned++
         continue
       }
@@ -862,8 +882,8 @@ export class BackupEngine {
       // Only a backup that read everything may satisfy coverage: one that finished with
       // warnings may miss items in any folder it appears to hold. Backups recorded before
       // failures were counted carry no Failures value and count by their status alone.
-      const status = String(metadata.Status ?? "").toLowerCase()
-      const complete = (status === "success" || status === "succeeded") && (metadata.Failures === undefined || metadata.Failures === 0)
+      const status = String(metadata?.Status ?? "").toLowerCase()
+      const complete = metadata && (status === "success" || status === "succeeded") && (metadata.Failures === undefined || metadata.Failures === 0)
       // A folder with masked values does not satisfy coverage, so the newest backup with the plain values stays.
       for (const folder of complete ? restorableFolders(metadata) : []) {
         if (uncovered.delete(folder)) holdsUncovered = true
@@ -875,11 +895,12 @@ export class BackupEngine {
       }
       // Read every page before issuing a delete. The last blob written can expire later than
       // the rest, and a legal hold can apply to just one policy file.
-      const { blobs, legalHold, immutableUntil } = await storage.list(backup.prefix, { includeProtection })
+      const { blobs, legalHold, immutableUntil, unknownExpiry: unreadableExpiry } = await storage.list(backup.prefix, { includeProtection })
       const activePolicy = immutableUntil > this.now().getTime()
-      if (legalHold || activePolicy) {
+      if (legalHold || activePolicy || unreadableExpiry) {
         protectedKept++
         if (activePolicy) latestExpiry = Math.max(latestExpiry, immutableUntil)
+        unknownExpiry ||= unreadableExpiry
         continue
       }
       // Azure deletes are independent requests. Remove the manifest first so an unexpected
@@ -894,9 +915,10 @@ export class BackupEngine {
           deleted++
         }
       } catch (error) {
-        if (!(error instanceof ProtectedBlobError)) throw error
-        if (deleted > 0) throw new StorageError("Storage blocked a delete after cleanup started. The backup may be incomplete. Review the backup in storage.", { cause: error })
-        protectedKept++
+        if (!(error instanceof BlobDeleteRefusal)) throw error
+        if (deleted > 0) partiallyRemoved.push(folder)
+        if (error.reason === "permission") permissionRefusals++
+        else if (deleted === 0) protectedKept++
         continue
       }
       removed++
@@ -905,11 +927,28 @@ export class BackupEngine {
     if (kept > 0) this.write(job, `Kept ${kept} older backup${kept === 1 ? "" : "s"} because ${kept === 1 ? "it holds" : "they hold"} the newest copy of types this backup leaves out.`, "info")
     if (protectedKept > 0) {
       const expiry = latestExpiry ? ` The latest immutability expiry is ${new Date(latestExpiry).toUTCString()}.` : ""
-      this.write(job, `Kept ${protectedKept} older backup${protectedKept === 1 ? "" : "s"} because of storage policy or delete permissions.${expiry}`, "info")
+      const unknown = unknownExpiry ? " Azure returned an unreadable immutability expiry for one or more blobs." : ""
+      this.write(job, `Kept ${protectedKept} older backup${protectedKept === 1 ? "" : "s"} because of storage policy or legal hold.${expiry}${unknown}`, "info")
     }
-    if (unowned > 0) this.write(job, `Kept ${unowned} older backup${unowned === 1 ? "" : "s"} not recorded as this tenant's (another tenant's, without readable metadata, or from an earlier version in a container another tenant also uses).`, "info")
-    if (unreadable.size > 0) this.write(job, `Could not read the metadata of ${unreadable.size} older backup${unreadable.size === 1 ? "" : "s"}: ${unreadableReason.replace(/\.$/, "")}. ${unreadable.size === 1 ? "It was" : "They were"} left in place.`, "warning")
-    return unreadable.size
+    let warnings = 0
+    if (permissionRefusals > 0) {
+      this.write(job, `Azure refused deletes for ${permissionRefusals} older backup${permissionRefusals === 1 ? "" : "s"} because the signed-in account is missing delete permission.`, "warning")
+      warnings++
+    }
+    if (partiallyRemoved.length > 0) {
+      this.write(job, `Storage refused a delete after cleanup started. Partially removed backups: ${partiallyRemoved.join(", ")}.`, "warning")
+      warnings++
+    }
+    if (incompleteUnverified.length > 0) {
+      this.write(job, `Kept incomplete backup folders that may be partially deleted because their manifests are missing and TenuVault could not verify ownership: ${incompleteUnverified.join(", ")}.`, "warning")
+      warnings++
+    }
+    if (unowned > 0) this.write(job, `Kept ${unowned} older backup${unowned === 1 ? "" : "s"} not recorded as this tenant's (another tenant's, or from an earlier version in a container another tenant also uses).`, "info")
+    if (unreadable.size > 0) {
+      this.write(job, `Could not read the metadata of ${unreadable.size} older backup${unreadable.size === 1 ? "" : "s"}: ${unreadableReason.replace(/\.$/, "")}. ${unreadable.size === 1 ? "It was" : "They were"} left in place.`, "warning")
+      warnings++
+    }
+    return warnings
   }
 
   /** Adds a line to the log, in local time; a level also lists it among the run's notices. */
@@ -986,7 +1025,7 @@ export async function verifyStorageAccess(
   await writer.put(probe, "{}")
   // An immutable container accepts new blobs but keeps them; write access is still proven.
   await writer.delete(probe).catch((error: unknown) => {
-    if (!(error instanceof ProtectedBlobError)) throw error
+    if (!(error instanceof BlobDeleteRefusal)) throw error
   })
 }
 

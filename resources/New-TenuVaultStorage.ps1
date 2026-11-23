@@ -74,10 +74,12 @@
 
 .PARAMETER VersionRetentionDays
     Days previous blob versions are kept before the lifecycle rule removes them. Only with
-    -BackupReaderAppId. Default: 30.
+    -BackupReaderAppId. Default: 30. With -Immutable, this is raised to at least the
+    immutable policy period.
 
 .PARAMETER Immutable
     Enables blob versioning and creates a default time-based policy on intune-backups.
+    Adds a lifecycle rule for previous blob versions based on the immutable policy period.
     Use a new container or one that already supports version-level immutability. The
     script creates the policy unlocked for testing. Lock it in Azure after verification.
 
@@ -234,12 +236,18 @@ if (-not $account) {
 
 $container = "intune-backups"
 if ($Immutable) {
-    if ($account.EnableHierarchicalNamespace -or $account.EnableNfsV3 -or $account.EnableSftp) {
+    if ($account.Kind -ne "StorageV2" -or $account.EnableHierarchicalNamespace -or $account.EnableNfsV3 -or $account.EnableSftp) {
         throw "Immutable backups need a StorageV2 account without hierarchical namespace, NFS or SFTP."
     }
     $backupContainer = Get-AzRmStorageContainer -ResourceGroupName $ResourceGroupName -StorageAccountName $StorageAccountName -Name $container -ErrorAction SilentlyContinue
-    if ($backupContainer -and -not $backupContainer.ImmutableStorageWithVersioning) {
-        throw "The existing '$container' container needs a version-level immutability migration. Follow Microsoft's migration steps in Azure or choose a new storage account. The script does not migrate containers."
+    if ($backupContainer) {
+        $versioning = $backupContainer.ImmutableStorageWithVersioning
+        if ($versioning -and $versioning.MigrationState -eq "InProgress") {
+            throw "A version-level immutability migration for '$container' is in progress. Wait for Azure to complete it, then run this script again."
+        }
+        if (-not $versioning -or -not $backupContainer.ImmutableStorageWithVersioning.Enabled) {
+            throw "The existing '$container' container needs a version-level immutability migration. Follow Microsoft's migration steps in Azure or choose a new storage account. The script does not migrate containers."
+        }
     }
 }
 
@@ -441,24 +449,41 @@ if ($BackupReaderAppId) {
         Write-Warning "The Backup Reader also has '$($assignment.RoleDefinitionName)' at $($assignment.Scope). Remove it so the reader cannot delete backups."
     }
 
-    $blobService = Get-AzStorageBlobServiceProperty -ResourceGroupName $ResourceGroupName -StorageAccountName $StorageAccountName
-    if (-not $blobService.IsVersioningEnabled -and $PSCmdlet.ShouldProcess($StorageAccountName, "Enable blob versioning")) {
-        Write-Host "Turning on blob versioning..."
-        Update-AzStorageBlobServiceProperty -ResourceGroupName $ResourceGroupName -StorageAccountName $StorageAccountName -IsVersioningEnabled $true | Out-Null
+    if (-not $Immutable) {
+        $blobService = Get-AzStorageBlobServiceProperty -ResourceGroupName $ResourceGroupName -StorageAccountName $StorageAccountName
+        if (-not $blobService.IsVersioningEnabled -and $PSCmdlet.ShouldProcess($StorageAccountName, "Enable blob versioning")) {
+            Write-Host "Turning on blob versioning..."
+            Update-AzStorageBlobServiceProperty -ResourceGroupName $ResourceGroupName -StorageAccountName $StorageAccountName -IsVersioningEnabled $true | Out-Null
+        }
+    }
+    $readerText = "can write to '$container' but not delete"
+}
+
+if ($Immutable -or $BackupReaderAppId) {
+    $previousVersionDays = $VersionRetentionDays
+    if ($Immutable) {
+        $policyDays = $ImmutableDays
+        if ($immutablePolicy) { $policyDays = $immutablePolicy.ImmutabilityPeriodSinceCreationInDays }
+        $previousVersionDays = $policyDays
+        if ($BackupReaderAppId) {
+            $previousVersionDays = [Math]::Max($VersionRetentionDays, $policyDays)
+            if ($previousVersionDays -gt $VersionRetentionDays) {
+                Write-Host "Previous-version retention raised from $VersionRetentionDays to $previousVersionDays days to match the immutable policy."
+            }
+        }
     }
     # Only previous versions age out; current backups are never deleted by the lifecycle rule.
     $ruleName = "tenuvault-previous-versions"
     $policy = Get-AzStorageAccountManagementPolicy -ResourceGroupName $ResourceGroupName -StorageAccountName $StorageAccountName -ErrorAction SilentlyContinue
     $rules = @($policy.Rules | Where-Object { $_.Name -ne $ruleName })
     $current = $policy.Rules | Where-Object { $_.Name -eq $ruleName }
-    if ((-not $current -or $current.Definition.Actions.Version.Delete.DaysAfterCreationGreaterThan -ne $VersionRetentionDays) -and
-        $PSCmdlet.ShouldProcess($StorageAccountName, "Remove previous blob versions after $VersionRetentionDays days")) {
-        $action = Add-AzStorageAccountManagementPolicyAction -BlobVersionAction Delete -DaysAfterCreationGreaterThan $VersionRetentionDays
+    if ((-not $current -or -not $current.Enabled -or $current.Definition.Actions.Version.Delete.DaysAfterCreationGreaterThan -ne $previousVersionDays) -and
+        $PSCmdlet.ShouldProcess($StorageAccountName, "Make previous blob versions eligible for cleanup after $previousVersionDays days")) {
+        $action = Add-AzStorageAccountManagementPolicyAction -BlobVersionAction Delete -DaysAfterCreationGreaterThan $previousVersionDays
         $filter = New-AzStorageAccountManagementPolicyFilter -PrefixMatch "$container/" -BlobType blockBlob
         $rules += New-AzStorageAccountManagementPolicyRule -Name $ruleName -Action $action -Filter $filter
         Set-AzStorageAccountManagementPolicy -ResourceGroupName $ResourceGroupName -StorageAccountName $StorageAccountName -Rule $rules | Out-Null
     }
-    $readerText = "can write to '$container' but not delete; versioning on, previous versions kept $VersionRetentionDays days"
 }
 
 # Read the final firewall state so a rerun without -AllowIpAddresses still reports a
@@ -486,6 +511,9 @@ Write-Host "  Resource group:   $ResourceGroupName"
 Write-Host "  Region:           $($account.Location)"
 Write-Host "  Firewall:         $firewallText"
 if ($readerText) { Write-Host "  Backup Reader:    $readerText" }
+if (($Immutable -or $BackupReaderAppId) -and -not $WhatIfPreference) {
+    Write-Host "  Blob versioning:   enabled; previous backup versions are eligible for lifecycle cleanup after $previousVersionDays days"
+}
 if ($immutablePolicy) {
     Write-Host "  Immutable storage: $($immutablePolicy.ImmutabilityPeriodSinceCreationInDays) days ($($immutablePolicy.State)) for new backup blob versions"
     Write-Host "  Once locked, nobody can delete a protected blob version before it expires."

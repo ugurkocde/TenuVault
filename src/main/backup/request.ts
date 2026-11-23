@@ -6,14 +6,11 @@ export const MAX_LIST_PAGES = 10_000
 export const REQUEST_TIMEOUT_MS = 90_000
 export const REQUEST_ATTEMPTS = 3
 
-/**
- * The storage provider refused a delete because the blob is protected by an immutability
- * policy, legal hold or role without delete permission.
- */
-export class ProtectedBlobError extends Error {
-  constructor(readonly code: string) {
-    super(`The storage provider protects this backup (${code}).`)
-    this.name = "ProtectedBlobError"
+/** A delete refusal retention can handle without stopping the run. */
+export class BlobDeleteRefusal extends Error {
+  constructor(readonly reason: "policy" | "permission", code: string) {
+    super(reason === "permission" ? `Delete permission is missing (${code}).` : `Storage policy protects this backup (${code}).`)
+    this.name = "BlobDeleteRefusal"
   }
 }
 
@@ -23,8 +20,9 @@ export function isImmutabilityRefusal(status: number, code: string): boolean {
 }
 
 /** A valid Azure identity can read and write while lacking permission to delete. */
-export function isProtectedDelete(status: number, code: string): boolean {
-  return isImmutabilityRefusal(status, code) || (status === 403 && code === "AuthorizationPermissionMismatch")
+export function blobDeleteRefusal(status: number, code: string): BlobDeleteRefusal | undefined {
+  if (status === 403 && code === "AuthorizationPermissionMismatch") return new BlobDeleteRefusal("permission", code)
+  if (isImmutabilityRefusal(status, code)) return new BlobDeleteRefusal("policy", code)
 }
 
 /** Sign-in or license problems affect every request, so they stop the backup instead of becoming per-policy warnings. */
@@ -86,7 +84,7 @@ export function isUnreachable(error: unknown): boolean {
 /** Only a fully read HTTP error is a status failure; failed body reads are network failures. */
 export function requestFailure(error: unknown): "network" | "status" | "token" | "other" {
   if (error instanceof TokenError) return "token"
-  if (error instanceof GraphError || error instanceof StorageError || error instanceof RetryableStorageError || error instanceof ProtectedBlobError) return "status"
+  if (error instanceof GraphError || error instanceof StorageError || error instanceof RetryableStorageError || error instanceof BlobDeleteRefusal) return "status"
   if (error instanceof SyntaxError || error instanceof GraphPauseError || error instanceof FetchApplicationError) return "other"
   return "network"
 }

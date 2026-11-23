@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import JSZip from "jszip"
 import { NextRequest } from "next/server"
 import { BackupEngine } from "../src/main/backup/engine"
-import { isProtectedDelete } from "../src/main/backup/request"
+import { blobDeleteRefusal } from "../src/main/backup/request"
 import { legacyAzureReader, registerStorageToken } from "../src/main/storage/azure-seal"
 import { LEGACY_SEALED_MESSAGE } from "../src/shared/legacy-sealed"
 import { sealLegacyAzure } from "./legacy-seal"
@@ -28,15 +28,15 @@ const owner = { Source: "TenuVault Desktop", TenantId: TENANT }
 
 describe("storage delete refusals", () => {
   it.each([
-    [409, "BlobImmutableDueToPolicy", true],
-    [409, "BlobImmutableDueToLegalHold", true],
-    [403, "AuthorizationPermissionMismatch", true],
-    [403, "AuthorizationFailure", false],
-    [403, "AuthenticationFailed", false],
-    [409, "SnapshotsPresent", false],
-    [500, "BlobImmutableDueToPolicy", false],
-  ])("classifies HTTP %i with %s as protected: %s", (status, code, protectedDelete) => {
-    expect(isProtectedDelete(status, code)).toBe(protectedDelete)
+    [409, "BlobImmutableDueToPolicy", "policy"],
+    [409, "BlobImmutableDueToLegalHold", "policy"],
+    [403, "AuthorizationPermissionMismatch", "permission"],
+    [403, "AuthorizationFailure", undefined],
+    [403, "AuthenticationFailed", undefined],
+    [409, "SnapshotsPresent", undefined],
+    [500, "BlobImmutableDueToPolicy", undefined],
+  ])("classifies HTTP %i with %s as %s", (status, code, reason) => {
+    expect(blobDeleteRefusal(status, code)?.reason).toBe(reason)
   })
 })
 
@@ -167,7 +167,8 @@ describe("backup folder ownership", () => {
     expect(calls.filter(call => call.request.method === "DELETE").map(call => call.name)).toEqual([`${expired}metadata.json`, `${expired}DeviceConfigurations/Old.json`, `${expired}${BACKUP_OWNER_FILE}`])
   })
 
-  it.each([old, "backup-2026-08-01-020000/"])("leaves manifestless folder %s untouched with valid same-tenant ownership", async prefix => {
+  it("keeps a recent manifestless folder with valid same-tenant ownership", async () => {
+    const prefix = old
     const { engine, saved, calls, folder } = setup()
     folder(prefix, { ...owner, TenantId: TENANT.toUpperCase() })
     const marker = `${prefix}${BACKUP_OWNER_FILE}`
@@ -176,7 +177,6 @@ describe("backup folder ownership", () => {
     await complete(engine)
     for (const [name, body] of original) expect(saved.get(name)).toEqual(body)
     expect(saved.has(`${prefix}metadata.json`)).toBe(false)
-    // Retention reads the marker of a folder without a manifest to know who uses the container, and changes nothing.
     expect(calls.filter(call => call.name.startsWith(prefix)).map(call => [call.request.method, call.name])).toEqual([["GET", `${prefix}metadata.json`], ["GET", `${prefix}${BACKUP_OWNER_FILE}`]])
     expect(calls.some(call => call.request.method === "DELETE")).toBe(false)
     expect(vi.getTimerCount()).toBe(0)
@@ -188,7 +188,7 @@ describe("backup folder ownership", () => {
       ["backup-2026-08-01-020000/", null, false],
       ["backup-2026-08-02-020000/", { ...owner, TenantId: OTHER }, false],
       ["backup-2026-08-03-020000/", { ...owner, Source: "Another app" }, false],
-      ["backup-2026-08-04-020000/", owner, true],
+      ["backup-2026-08-04-020000/", { ...owner, TenantId: OTHER }, true],
       ["backup-2026-08-05-020000/", "invalid json", false],
     ] as const
     for (const [prefix, marker, sealed] of cases) folder(prefix, marker, sealed)
@@ -197,8 +197,12 @@ describe("backup folder ownership", () => {
     const name = `${broken}${BACKUP_OWNER_FILE}`
     saved.set(name, sealLegacyAzure(Buffer.from(JSON.stringify(owner)), Buffer.alloc(32, 9), TENANT, new URL(`${base}${name}`)))
     const original = new Map(saved)
-    await complete(engine)
+    const job = await complete(engine)
     for (const [name, body] of original) expect(saved.get(name)).toEqual(body)
+    expect(job.results?.notices).toContainEqual({
+      level: "warning",
+      message: "Kept incomplete backup folders that may be partially deleted because their manifests are missing and TenuVault could not verify ownership: backup-2026-08-06-020000, backup-2026-08-05-020000, backup-2026-08-03-020000, backup-2026-08-01-020000.",
+    })
   })
 
   it("ages out plain and openable legacy backups in a mixed container but never one no key opens", async () => {
@@ -269,7 +273,7 @@ describe("backup folder ownership", () => {
 
   it("still ages out an untagged backup when nothing in the container shows another tenant", async () => {
     const { engine, saved, seed, folder } = setup()
-    const abandoned = "backup-2026-08-01-020000/", legacy = "backup-2026-08-02-020000/"
+    const abandoned = old, legacy = "backup-2026-08-02-020000/"
     folder(abandoned)
     folder(legacy, null)
     seed(`${legacy}metadata.json`, { Status: "Success", Scope: { Excluded: request.scope.excluded } })
@@ -316,7 +320,7 @@ describe("backup folder ownership", () => {
     const job = await complete(engine)
     expect(job.results?.notices).toContainEqual({
       level: "info",
-      message: `Kept 1 older backup because of storage policy or delete permissions.${expiryNotice ? ` ${expiryNotice}` : ""}`,
+      message: `Kept 1 older backup because of storage policy or legal hold.${expiryNotice ? ` ${expiryNotice}` : ""}`,
     })
     expect(calls.filter(call => call.request.method === "DELETE")).toEqual([])
     expect([...saved.entries()].filter(([name]) => name.startsWith(expired))).toEqual(original)
@@ -328,7 +332,32 @@ describe("backup folder ownership", () => {
     }
   })
 
-  it("keeps every blob and completes without warnings when the role cannot delete", async () => {
+  it.each([
+    "<ImmutabilityPolicyUntilDate></ImmutabilityPolicyUntilDate>",
+    "<ImmutabilityPolicyUntilDate />",
+    "<ImmutabilityPolicyUntilDate>bad date</ImmutabilityPolicyUntilDate>",
+  ])("keeps an expired backup with %s and removes the next one", async (property) => {
+    const expired = "backup-2026-08-02-020000/"
+    const older = "backup-2026-08-01-020000/"
+    const { engine, saved, calls, seed, folder } = setup({ override: (url) => {
+      if (url.searchParams.get("prefix") !== expired) return
+      return new Response(`<Blobs><Blob><Name>${expired}metadata.json</Name><Properties>${property}</Properties></Blob></Blobs>`)
+    } })
+    for (const prefix of [expired, older]) {
+      folder(prefix)
+      seed(`${prefix}metadata.json`, { TenantId: TENANT })
+    }
+    const job = await complete(engine)
+    expect(job.results?.notices).toContainEqual({
+      level: "info",
+      message: "Kept 1 older backup because of storage policy or legal hold. Azure returned an unreadable immutability expiry for one or more blobs.",
+    })
+    expect(calls.filter((call) => call.request.method === "DELETE").every((call) => call.name.startsWith(older))).toBe(true)
+    expect(saved.has(`${expired}metadata.json`)).toBe(true)
+    expect([...saved.keys()].some((name) => name.startsWith(older))).toBe(false)
+  })
+
+  it("warns about missing delete permission while keeping every blob", async () => {
     const expired = "backup-2026-08-01-020000/"
     const manifest = `${expired}metadata.json`
     const { engine, saved, calls, seed, folder } = setup({ override: (_url, sent) => {
@@ -338,10 +367,48 @@ describe("backup folder ownership", () => {
     seed(manifest, { TenantId: TENANT, Status: "Success", Scope: { Excluded: request.scope.excluded } })
     const original = [...saved.entries()]
     const job = await complete(engine)
-    expect(job.results?.warnings).toBe(0)
-    expect(job.log.join("\n")).toContain("Kept 1 older backup because of storage policy or delete permissions.")
+    expect(job.results?.warnings).toBe(1)
+    expect(job.results?.notices).toContainEqual({
+      level: "warning",
+      message: "Azure refused deletes for 1 older backup because the signed-in account is missing delete permission.",
+    })
     expect(calls.filter(call => call.request.method === "DELETE").map(call => call.name)).toEqual([manifest])
     expect([...saved.entries()].filter(([name]) => name.startsWith(expired))).toEqual(original)
+  })
+
+  it("continues after a mid-delete refusal and finishes the partial folder on a later run", async () => {
+    const partial = "backup-2026-08-02-020000/"
+    const older = "backup-2026-08-01-020000/"
+    const protectedFile = `${partial}DeviceConfigurations/Old.json`
+    let refused = true
+    const { engine, saved, calls, seed, folder } = setup({ override: (url, sent) => {
+      if (refused && sent.method === "DELETE" && url.pathname.endsWith(protectedFile)) {
+        return new Response(null, { status: 409, headers: { "x-ms-error-code": "BlobImmutableDueToPolicy" } })
+      }
+    } })
+    for (const prefix of [partial, older]) {
+      folder(prefix)
+      seed(`${prefix}metadata.json`, { TenantId: TENANT })
+    }
+    const job = await complete(engine)
+    expect(job.results?.warnings).toBe(1)
+    expect(job.results?.notices).toContainEqual({
+      level: "warning",
+      message: "Storage refused a delete after cleanup started. Partially removed backups: backup-2026-08-02-020000.",
+    })
+    expect(job.log.join("\n")).toContain("Removed 1 backup older than 30 days.")
+    expect(saved.has(`${partial}metadata.json`)).toBe(false)
+    expect(saved.has(protectedFile)).toBe(true)
+    expect(saved.has(`${partial}${BACKUP_OWNER_FILE}`)).toBe(true)
+    expect([...saved.keys()].some((name) => name.startsWith(older))).toBe(false)
+
+    refused = false
+    calls.length = 0
+    vi.setSystemTime(new Date("2026-10-13T12:00:00Z"))
+    const retry = await complete(engine)
+    expect(retry.results?.warnings).toBe(0)
+    expect(calls.filter((call) => call.request.method === "DELETE").map((call) => call.name)).toEqual([protectedFile, `${partial}${BACKUP_OWNER_FILE}`])
+    expect([...saved.keys()].some((name) => name.startsWith(partial))).toBe(false)
   })
 
   it("deletes ownership last after a complete retention deletion", async () => {
