@@ -176,6 +176,7 @@ export default defineConfig({
 						{ label: 'Copy to Tenants', slug: 'copy-to-tenants' },
 						{ label: 'Operations', slug: 'operations' },
 						{ label: 'Alerts', slug: 'notifications' },
+						{ label: 'Send alerts to Microsoft Sentinel', slug: 'sentinel' },
 						{ label: 'OpenIntuneBaseline', slug: 'baselines/quick-start' },
 						{ label: 'My baselines', slug: 'baselines/custom-baselines' },
 						{ label: 'Framework coverage', slug: 'baselines/frameworks' },

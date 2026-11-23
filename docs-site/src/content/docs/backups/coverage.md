@@ -38,6 +38,8 @@ Installer content stays separate from this metadata. The free [App Backup Window
 | Reusable settings | No | The reusable setting itself |
 | BIOS configurations | Yes | |
 
+Linux settings catalog policies and Linux custom configuration scripts are backed up, compared, and restored under **Settings catalog and endpoint security policies**.
+
 ## Compliance
 
 | Type | Assignments | Notes |
