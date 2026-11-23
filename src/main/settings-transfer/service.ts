@@ -546,7 +546,10 @@ export class SettingsTransfer {
           "Applies to tenants on this computer. Changing tiers requires Pro or MSP.",
           asDefault && DEFAULT_NOTE,
         ].filter(Boolean).join(" ")
-        items.push(this.item(id, label, describeCount(now), valid ? describeCount(value) : shown(value), valid && value === now && !asDefault, valid ? null : NOT_VALID, {
+        // Community keeps saved tiers but cannot add or lengthen them, as in Settings.
+        const planBlocked = valid && !customRetention && value > now
+        items.push(this.item(id, label, describeCount(now), valid ? describeCount(value) : shown(value), valid && value === now && !asDefault, !valid ? NOT_VALID
+          : planBlocked ? "Monthly and yearly copies are included in Pro and MSP." : null, {
           ...(!customRetention && { feature: "customRetention" as const }),
           note,
           state: [now, saved[key]],

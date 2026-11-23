@@ -767,4 +767,12 @@ describe("retention tier transfer", () => {
     expect(find(preview, "app:retentionMonths")).toMatchObject({ status: "blocked", selected: false })
     expect(find(preview, "app:retentionYears")).toMatchObject({ next: "Off", selected: false, feature: "customRetention", warning: expect.stringContaining("can delete older backups") })
   })
+
+  it("does not let a settings file add or lengthen tiers on Community", () => {
+    const destination = machine([{ tenantId: TENANT }], { [TENANT]: "community" })
+    destination.preferences.set({ retentionYears: 2 })
+    const preview = destination.transfer.open(file({ app: { preferences: { retentionMonths: 12, retentionYears: 7 } }, tenants: [] }), "system")
+    expect(find(preview, "app:retentionMonths")).toMatchObject({ status: "blocked", selected: false, feature: "customRetention" })
+    expect(find(preview, "app:retentionYears")).toMatchObject({ status: "blocked", selected: false, feature: "customRetention" })
+  })
 })
