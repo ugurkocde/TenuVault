@@ -1,8 +1,8 @@
 import { APPLICATION_REVIEW_FOLDERS, DIRECTORY_REVIEW_FOLDERS, PRIVILEGED_REVIEW_FOLDERS } from "../../../../shared/intune/directory-review-folders"
 import { NextResponse, type NextRequest } from "next/server"
 import { backupStoragePath } from "../../../../shared/backup-storage"
-import { typeForFolder, restoreCapability, type Item } from "../../../../shared/intune/registry"
-import { readOwnedBackup } from "~/lib/policies/backup-owner"
+import { typeForFolder, restoreCapability } from "../../../../shared/intune/registry"
+import { readOwnedDirectorySnapshot } from "~/lib/policies/backup-owner"
 import { validPolicyPath } from "~/lib/policies/restore"
 import { directoryRestoreOperation, directoryRestoreRequest, directoryRestoreVerifyOwner } from "../../../../main/restore/directory-dispatch"
 
@@ -36,20 +36,10 @@ export async function POST(request: NextRequest) {
     const storageToken = await token(tenantId, appId, clientSecret, "https://storage.azure.com/.default")
     signal?.throwIfAborted()
     const read = (name: string) => fetch(`https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(name)}`, { headers: { "x-ms-version": "2021-12-02", Authorization: `Bearer ${storageToken}` }, signal })
-    const owned = await readOwnedBackup(read, backupId, tenantId, storageAccountName)
-    signal?.throwIfAborted()
+    const owned = await readOwnedDirectorySnapshot(read, backupId, tenantId, path, storageAccountName, signal)
     if (!owned.ok) return NextResponse.json({ error: owned.error }, { status: owned.status })
-    if (!owned.owned) throw new Error("This backup must identify the connected tenant.")
-    if (!owned.metadata) throw new Error("The backup provenance could not be read. Directory restore requires its backup metadata.")
-    // Ownership markers also place imports in this tenant's store. Only the manifest
-    // records that provenance; renderer inputs and local ownership cannot replace it.
-    const origin = Object.hasOwn(owned.metadata, "Import") ? "import" : "restore"
-    const response = await read(path)
-    if (!response.ok) throw new Error("The backup policy could not be read.")
-    const snapshot = await response.json() as Item
-    signal?.throwIfAborted()
     if (action === "preview" && typeof body.previousRunId === "string") await directoryRestoreVerifyOwner(tenantId, body.previousRunId)
-    const restore = { path, snapshot, origin, runId: typeof body.runId === "string" ? body.runId : undefined } as const
+    const restore = { path, snapshot: owned.snapshot, origin: owned.origin, runId: typeof body.runId === "string" ? body.runId : undefined } as const
     const result = await directoryRestoreRequest(tenantId, restore, { action, options: { stage: body.stage, exactMembers: body.exactMembers === true, exactOwners: body.exactOwners === true, ...(typeof body.previousRunId === "string" ? { previousRunId: body.previousRunId } : {}) }, fingerprint: body.fingerprint, approvals: body.approvals }, async name => {
       const response = await read(name)
       if (!response.ok) throw new Error("A backup relationship shard could not be read.")

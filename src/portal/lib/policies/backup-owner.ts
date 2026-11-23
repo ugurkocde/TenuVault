@@ -1,3 +1,4 @@
+import type { Item } from "../../../shared/intune/registry"
 import { localStorageAccountName, MAX_BACKUP_ARCHIVE_BYTES } from "../../../shared/constants"
 import { readJsonCapped } from "../../../shared/capped-body"
 import { DAMAGED_OWNER_MARKER, INVALID_MANIFEST_TENANT, resolveBackupOwnership, type OwnershipFile } from "../../../shared/backup-ownership"
@@ -70,4 +71,19 @@ export async function readOwnedBackup(read: (name: string) => Promise<Response>,
   if (owner.kind === "other") return { ok: false, status: 403, error: OTHER_TENANT_BACKUP }
   const metadata = manifest.kind === "found" ? manifest.metadata : null
   return { ok: true, metadata, owned: owner.kind === "owned" || ownStore }
+}
+
+/** Directory review derives ownership and provenance from the selected backup's files. */
+export async function readOwnedDirectorySnapshot(read: (name: string) => Promise<Response>, backupId: string, tenantId: string, path: string, storageAccountName?: string, signal?: AbortSignal) {
+  const owned = await readOwnedBackup(read, backupId, tenantId, storageAccountName)
+  signal?.throwIfAborted()
+  if (!owned.ok) return owned
+  if (!owned.owned) throw new Error("This backup must identify the connected tenant.")
+  if (!owned.metadata) throw new Error("The backup provenance could not be read. Directory restore requires its backup metadata.")
+  const origin = Object.hasOwn(owned.metadata, "Import") ? "import" as const : "restore" as const
+  const response = await read(path)
+  if (!response.ok) throw new Error("The backup policy could not be read.")
+  const snapshot = await response.json() as Item
+  signal?.throwIfAborted()
+  return { ok: true as const, snapshot, origin }
 }
