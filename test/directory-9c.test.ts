@@ -195,6 +195,28 @@ it("stores scoped unit member IDs without a name or a profile", async () => {
   expect(JSON.stringify(snapshot)).not.toContain("Personal name")
 })
 
+it("distinguishes a saved AU device from a missing user without device read access", async () => {
+  const env = world()
+  const device = id(93)
+  env.missing.add(`users/${device}`)
+  env.missing.add(`users/${user}`)
+  const snapshot = await readObject(typeForFolder("AdministrativeUnits")!, unit, {
+    get: async () => ({ id: unit }),
+    list: async path => path.includes("scopedRoleMembers") ? [] : [
+      { id: device, "@odata.type": "#microsoft.graph.device", displayName: "Private device name" },
+      { id: user, "@odata.type": "#microsoft.graph.user", displayName: "Private user name" },
+    ],
+  })
+  const request = { path: "backup/AdministrativeUnits/Unit.json", snapshot, origin: "restore" as const }
+  const page = await env.start().prepare(tenant, request, options, noBackupReads)
+  const deviceRow = page.rows.find(row => row.review.principal?.id === device)
+  expect(deviceRow?.review.principal?.type).toBe("device")
+  expect(deviceRow?.review.blocker).toBe("Device members are not restored.")
+  expect(page.rows.some(row => row.review.blocker?.includes(`principal ${user} no longer resolves`))).toBe(true)
+  expect(env.fetcher.mock.calls.some(([url]) => new URL(String(url)).pathname.includes("/devices/"))).toBe(false)
+  expect(JSON.stringify(snapshot)).not.toContain("Private")
+})
+
 it("continues a 50,000-member exact AU review without loading every live member", async () => {
   const env = world(true)
   const request = { path: "backup/AdministrativeUnits/Large unit.json", snapshot: { id: unit, members: [], scopedRoleMembers: [] }, origin: "restore" as const }

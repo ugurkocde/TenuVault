@@ -217,7 +217,7 @@ function stableContent(value: Json): string {
 }
 
 /** The IDs of a collection's entries, each once and in a fixed order, so two reads of the same set compare equal. */
-function sortedIds(entries: Item[], property: string): string[] {
+export function sortedIds(entries: Item[], property: string): string[] {
   const ids = entries.map((entry) => {
     if (typeof entry.id !== "string" || !entry.id) throw new Error(`Microsoft Graph returned an entry without an ID in ${property}`)
     return entry.id

@@ -85,6 +85,7 @@ export function unitChangeBlocker(unit: Item): string | undefined {
 export interface PrivilegeCandidate {
   source: Item
   principalId?: string
+  memberType?: string
   present?: boolean
   unitId?: string
   unit?: Item
@@ -122,8 +123,11 @@ export async function privilegeReview(folder: string, candidate: PrivilegeCandid
       return undefined
     }
   }
-  const beneficiary = candidate.blocker && !candidate.principalId ? undefined : await resolve("principal", candidate.principalId ?? source.principalId, async (rawPrincipal, identify) => {
-    const user = removeMember ? rawPrincipal : map("Users", rawPrincipal), mappedGroup = removeMember ? rawPrincipal : map("Groups", rawPrincipal)
+  const memberType = candidate.memberType
+  const unsupportedMember = memberType && memberType !== "user" && memberType !== "group"
+  const beneficiary = unsupportedMember || candidate.blocker && !candidate.principalId ? undefined : await resolve("principal", candidate.principalId ?? source.principalId, async (rawPrincipal, identify) => {
+    const user = removeMember || memberType === "group" ? rawPrincipal : map("Users", rawPrincipal)
+    const mappedGroup = removeMember || memberType === "user" ? rawPrincipal : map("Groups", rawPrincipal)
     if (user !== rawPrincipal && mappedGroup !== rawPrincipal) return fail("The principal mapping is ambiguous.")
     const id = user !== rawPrincipal ? user : mappedGroup
     identify(id)
@@ -132,7 +136,8 @@ export async function privilegeReview(folder: string, candidate: PrivilegeCandid
       group: `groups/${id}?$select=id,displayName,onPremisesSyncEnabled,onPremisesLastSyncDateTime`,
       servicePrincipal: `servicePrincipals/${id}?$select=id,displayName,appId`,
     }
-    const kinds = user !== rawPrincipal ? ["user"] as const : mappedGroup !== rawPrincipal ? ["group"] as const : ["user", "group", "servicePrincipal"] as const
+    const kinds = memberType === "user" || memberType === "group" ? [memberType] as const
+      : user !== rawPrincipal ? ["user"] as const : mappedGroup !== rawPrincipal ? ["group"] as const : ["user", "group", "servicePrincipal"] as const
     for (const type of kinds) {
       const principal = await reader.getOptional(typedReads[type])
       if (!principal) continue
@@ -140,8 +145,16 @@ export async function privilegeReview(folder: string, candidate: PrivilegeCandid
         && (principal["@odata.type"] === undefined || principal["@odata.type"] === `#microsoft.graph.${type}`)) return { id, principal, type }
       break
     }
+    if (unitId && !scopedMember && !memberType) {
+      blocker ??= `Member ${id} could not be identified. It may be an unsupported member type or may no longer exist.`
+      return undefined
+    }
     return fail("The principal does not have a verified name and type.")
   })
+  if (unsupportedMember && candidate.principalId) {
+    review.principal = { id: candidate.principalId, name: memberType === "device" ? "Device" : "Unsupported member", type: memberType }
+    blocker = memberType === "device" ? "Device members are not restored." : "This administrative unit member type is not supported."
+  }
   const principalId = beneficiary?.id
   const protectedReferences = { complete: !!beneficiary, principals: principalId ? [principalId] : [],
     applications: beneficiary?.type === "servicePrincipal" && isGuid(beneficiary.principal.appId) ? [beneficiary.principal.appId] : [] }
@@ -252,18 +265,26 @@ export async function unitRelationships(snapshot: Item, reader: ReturnType<typeo
     cursor.saved = 1
   } else {
     const savedIds = [...new Set(savedMembers.map(requirePrivilegeId))]
+    const memberTypes = object(snapshot.memberTypes)
+    const savedType = (saved: string) => {
+      const type = memberTypes?.[saved]
+      return typeof type === "string" && /^[a-zA-Z]+$/.test(type) ? type : undefined
+    }
     const targetFor = (saved: string) => {
+      const type = savedType(saved)
+      if (type) return type === "user" ? map("Users", saved) : type === "group" ? map("Groups", saved) : saved
       const user = map("Users", saved), group = map("Groups", saved)
       return user !== saved && group !== saved ? undefined : user !== saved ? user : group
     }
     const end = Math.min(savedIds.length, cursor.saved + limit)
     for (const saved of savedIds.slice(cursor.saved, end)) {
+      const memberType = savedType(saved)
       const target = targetFor(saved)
       if (!target) rows.push({ source: {}, principalId: path ? undefined : saved, blocker: "A saved member has an ambiguous principal mapping. Exact removal requires a complete inventory." })
-      else if (!path) rows.push({ source: {}, principalId: saved })
+      else if (!path) rows.push({ source: {}, principalId: saved, memberType })
       else {
         const member = await reader.getOptional(`${path}/members/${target}`)
-        if (!member) rows.push({ source: {}, principalId: saved, present: false })
+        if (!member) rows.push({ source: {}, principalId: saved, memberType, present: false })
         else if (requirePrivilegeId(member.id) !== target) fail("The current administrative unit member could not be verified.")
       }
     }
@@ -277,8 +298,10 @@ export async function unitRelationships(snapshot: Item, reader: ReturnType<typeo
       const page = await reader.page(path + "/members?$select=id&$top=50", live.next)
       let offset = live.offset
       while (offset < page.rows.length && rows.length < limit) {
-        const id = requirePrivilegeId(page.rows[offset++]!.id)
-        if (!expected.has(id)) rows.push({ source: {}, principalId: id, present: true, removeMember: true })
+        const member = page.rows[offset++]!
+        const id = requirePrivilegeId(member.id), type = member["@odata.type"]
+        const memberType = typeof type === "string" && /^#microsoft\.graph\.[a-zA-Z]+$/.test(type) ? type.slice("#microsoft.graph.".length) : undefined
+        if (!expected.has(id)) rows.push({ source: {}, principalId: id, memberType, present: true, removeMember: true })
       }
       if (offset < page.rows.length) return { rows, cursor: { ...cursor, live: { ...live, offset } } }
       if (page.next) return { rows, cursor: { ...cursor, live: { next: page.next, offset: 0, pages: live.pages + 1 } } }

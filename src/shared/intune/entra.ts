@@ -3,6 +3,7 @@ import type { Extra, IntuneType } from "./registry"
 import { ENTRA_DIRECTORY_TYPES } from "./entra-directory"
 import { isGuid } from "../security"
 import { entraSnapshot } from "./entra-snapshot"
+import { sortedIds } from "./read"
 
 /** Configuration restore capabilities come only from individually verified matrix subsets. */
 const limitation = "Entra ID configuration restore is not available yet."
@@ -159,6 +160,18 @@ export const ENTRA_5B_TYPES: IntuneType[] = [
     additionalReadVersions: ["beta"],
     unorderedCollections: { scopedRoleMembers: "id" },
     normalizeSnapshot: snapshot => {
+      if (Array.isArray(snapshot.members)) {
+        const members = snapshot.members.map(entry => {
+          if (!entry || typeof entry !== "object" || Array.isArray(entry)) throw new Error("Microsoft Graph returned an invalid administrative unit member")
+          return entry
+        })
+        const types = members.flatMap(entry => {
+          const type = entry["@odata.type"]
+          return isGuid(entry.id) && typeof type === "string" && /^#microsoft\.graph\.[a-zA-Z]+$/.test(type)
+            ? [[entry.id.toLowerCase(), type.slice("#microsoft.graph.".length)] as const] : []
+        })
+        snapshot = { ...snapshot, members: sortedIds(members, "members"), ...(types.length ? { memberTypes: Object.fromEntries(types) } : {}) }
+      }
       if (!Array.isArray(snapshot.scopedRoleMembers)) return entraSnapshot(snapshot)
       return entraSnapshot({ ...snapshot, scopedRoleMembers: snapshot.scopedRoleMembers.map(entry => {
         if (!entry || typeof entry !== "object" || Array.isArray(entry)) return entry
@@ -172,7 +185,7 @@ export const ENTRA_5B_TYPES: IntuneType[] = [
     },
     select: "id,displayName,description,visibility,membershipType,membershipRule,membershipRuleProcessingState,isMemberManagementRestricted",
     extras: [
-      { property: "members", path: id => `directory/administrativeUnits/${id}/members?$select=id&$top=999`, ids: true },
+      { property: "members", path: id => `https://graph.microsoft.com/beta/directory/administrativeUnits/${id}/members?$select=id&$top=999` },
       { property: "scopedRoleMembers", path: id => `https://graph.microsoft.com/beta/directory/administrativeUnits/${id}/scopedRoleMembers?$select=id,roleId,roleMemberInfo` },
     ],
   },
