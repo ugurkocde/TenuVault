@@ -96,6 +96,26 @@ and the msgraph skill.
   profiles that TenuVault already backs up. `admin/windows/updates` (deployment service, beta)
   answers 403 here. Blocked: question 5.
 
-## Status
+## Status (2026-11-23, end of day)
 
-Updated as PRs open.
+All open PRs below are green and reviewed, waiting for the owner to merge.
+
+| Gap | PR | Notes |
+|---|---|---|
+| 1 | #390 | Aligned with #392 (group read required). Merge before #394. |
+| 2 | #394 | Stacked on #390: retarget to main after #390 merges. |
+| 7 | #385 | |
+| 8 | #386 | Merge before #393 and #396. |
+| 9 | #396 | Stacked on #386. Tier: azureStorage, owner to confirm. |
+| 10 | #393 | Stacked on #386. |
+| 11 | #395 | Tier: auditLog, owner to confirm. ZIP keeps archived audit data on every plan. |
+| 12 | #387 | Works only for self-built Linux packages; no Linux release exists. |
+| 13 | #389 | |
+| 14 | #388 | |
+| 15, 6 | #384 | Docs only. Native Log Analytics output: follow-up, about 3 to 5 days. |
+| 3, 4, 5 | none | Blocked on Graph: questions 3 to 5. |
+| 16 | none | Waiting for the tier decision (question 1). |
+
+CI note: the macOS "Sign-in end to end in the packaged app" step fails intermittently (browser traffic
+never reaches the local stand-in). Reruns pass. A separate fix: have each browser probe the stand-in
+before sign-in starts.
