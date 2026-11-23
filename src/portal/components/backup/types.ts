@@ -11,6 +11,7 @@ export interface BackupSummary {
   /** Stored bytes per registry folder, from the same listing as `counts`. */
   sizes?: Record<string, number>
   scope: { excluded: string[]; description: string } | null
+  retentionComplete?: boolean
   failures?: number
   skippedTypes?: string[]
   failedTypes?: string[]

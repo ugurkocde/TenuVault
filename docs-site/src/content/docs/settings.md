@@ -176,7 +176,8 @@ The menu bar or tray icon menu has **Open TenuVault**, **Back up all tenants now
 
 Sets how long backups are kept: **7 days**, **14 days**, **30 days**, **60 days**, **90 days**, **180 days**, **365 days** or **Forever**. Default: **30 days**. The setting applies to every tenant on this computer.
 
-* Older backups are deleted after each successful backup. The newest backup is always kept.
+* On Pro and MSP, **Monthly retention** and **Yearly retention** keep the latest complete backup in each eligible local calendar month or year after the daily period. Set a tier to **0** to turn it off.
+* Expired backups are deleted after each successful backup. The newest backup is always kept.
 * If a backup is incomplete, no older backups are deleted.
 * A backup that is the newest copy of a type that later backups left out is kept.
 * Community tenants keep 30 days at most, even if you choose a longer period or **Forever**. Pro and MSP tenants keep what you choose.

@@ -102,6 +102,7 @@ import { setFrameworkStore } from "./frameworks/workspaces"
 import { internalCisBenchmarksEnabled, isAdmittedAssessStatus, setCisBenchmarksPlanProvider, setCisEntitlementProvider, setFrameworkExportSaver, setInternalCisBenchmarksProvider } from "./frameworks/service"
 import { setCisContentEnvOverrideAllowed, setCisContentFallbackBaseUrl } from "./frameworks/cis-content"
 import { setNativeFrameworkStore, setNativeFrameworkAuthorization, setNativeFrameworkNotifier } from "./frameworks/native"
+import { effectiveRetentionTiers } from "../shared/backup-retention"
 import { allows, effectiveRetentionDays, PlanRequired } from "../shared/plans"
 import { APP_STATE_START_OVER_BUTTON, APP_STATE_START_OVER_DETAIL, SecureStore, UnreadableStoreError, type Cipher } from "./storage/secure-store"
 import { Preferences } from "./preferences"
@@ -468,6 +469,7 @@ async function bootstrap(): Promise<void> {
       }
     },
     retentionDays: backupAccess.retentionDays,
+    retentionTiers: (tenantId) => effectiveRetentionTiers(preferences.get(), license.plan(tenantId)),
     onStarted: (job, request, tokens) => {
       checkpointBackupAudit(auditSink, job, request, tokens, backupAuditActor(job.tenantId), app.getVersion())
     },

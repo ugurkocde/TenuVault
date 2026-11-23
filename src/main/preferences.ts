@@ -1,3 +1,4 @@
+import { RETENTION_TIER_LIMITS, validRetentionTier } from "../shared/backup-retention"
 import type { AppPreferences } from "../shared/ipc"
 import type { KeyValueStore } from "./storage/secure-store"
 
@@ -9,6 +10,8 @@ const DEFAULTS: StoredPreferences = {
   startAtLogin: false,
   keepRunningInTray: true,
   retentionDays: 30,
+  retentionMonths: 0,
+  retentionYears: 0,
   firstBackupNoteSeen: false,
   autoUpdate: true,
   nightlyUpdates: false,
@@ -68,6 +71,9 @@ export class Preferences {
     if (!Number.isInteger(next.retentionDays) || next.retentionDays < 0 || next.retentionDays > 3650) {
       throw new Error("Keep backups for 0 (forever) to 3650 days.")
     }
+    for (const key of ["retentionMonths", "retentionYears"] as const) {
+      if (!validRetentionTier(key, next[key])) throw new Error(`Choose a whole number from 0 to ${RETENTION_TIER_LIMITS[key]} for ${key === "retentionMonths" ? "monthly" : "yearly"} retention.`)
+    }
     if (typeof next.nightlyUpdates !== "boolean") throw new Error("Nightly updates must be on or off.")
     this.store.set(KEY, JSON.stringify(stored))
     return next
@@ -80,6 +86,8 @@ export class Preferences {
       if (!validDismissalTimestamp(stored.communityBannerDismissedAt)) delete stored.communityBannerDismissedAt
       if (!validDismissalTimestamp(stored.trialReminderDismissedAt)) delete stored.trialReminderDismissedAt
       if (!validTenantIdList(stored.trialOfferHiddenTenantIds)) delete stored.trialOfferHiddenTenantIds
+      if (!validRetentionTier("retentionMonths", stored.retentionMonths)) delete stored.retentionMonths
+      if (!validRetentionTier("retentionYears", stored.retentionYears)) delete stored.retentionYears
       return stored
     } catch {
       return {}

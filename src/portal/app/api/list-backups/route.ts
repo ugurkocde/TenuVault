@@ -1,4 +1,5 @@
 import { BlobListError, decodeXml, listBlobPages } from "~/lib/storage/list"
+import { completeForRetention, retentionBackupTime } from "../../../../shared/backup-retention"
 import { typeForFolder } from "../../../../shared/intune/registry"
 import { describeScope } from "../../../../shared/intune/scope"
 import { comparable, compareBackups, summarize, type BackupFingerprint, type ChangeSummary } from "../../../../shared/intune/backup-changes"
@@ -180,6 +181,7 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
       conditionalAccess: count('ConditionalAccess'),
     },
     scope: metadata ? { excluded, description: describeScope({ excluded }) } : null,
+    retentionComplete: !unavailable && !metadataError && completeForRetention(metadata),
     failures: typeof metadata?.Failures === 'number' ? metadata.Failures : 0,
     skippedTypes: Array.isArray(metadata?.SkippedTypes) ? metadata.SkippedTypes : [],
     failedTypes: Array.isArray(metadata?.FailedTypes) ? metadata.FailedTypes : [],
@@ -341,7 +343,14 @@ export async function POST(request: NextRequest) {
     // Filtering and attribution use only the shared resolver's outcome, never a raw manifest field.
     const otherTenantSeen = described.some((backup) => backup.ownerKind === 'other' || (backup.foreign && !backup.sealed))
     const sealed = described.filter((backup) => backup.sealed && (backup.ownerKind === 'owned' || (backup.ownerKind !== 'other' && !otherTenantSeen))).length
+    const retentionShared = described.some((backup) => retentionBackupTime(backup.id) !== null &&
+      (backup.ownerKind === 'other' || backup.ownerKind === 'unreadable' || backup.error || backup.foreign || backup.sealed))
     backups.push(...described.filter((backup) => !backup.foreign && !backup.unresolved && backup.ownerKind !== 'other'))
+    if (retentionShared) {
+      for (const backup of backups) {
+        if (backup.ownerKind !== 'owned') backup.retentionComplete = false
+      }
+    }
 
     // Sort by timestamp descending
     backups.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())

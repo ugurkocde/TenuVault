@@ -4,6 +4,7 @@ export { assertStorageAccountName } from "../../shared/storage-account"
 export { isImmutabilityRefusal } from "./request"
 import { createHash, randomUUID } from "node:crypto"
 import { BACKUP_CANCELLED_MESSAGE, BACKUP_OWNER_FILE } from "../../shared/constants"
+import { completeForRetention, retentionBackupTime, retentionCutoff, selectRetentionTiers, type RetentionTiers } from "../../shared/backup-retention"
 import { resolveBackupOwnership, type OwnershipFile } from "../../shared/backup-ownership"
 import { BlobWriter } from "./blob-writer"
 import { GraphSession, type GraphItem } from "./graph-session"
@@ -106,8 +107,9 @@ export interface BackupEngineDeps {
    * modules that are off are never backed up, whatever the scope says. None when left out.
    */
   enabledModules?: (tenantId: string) => ModuleId[]
-  /** Backups older than this many days are deleted after each backup; 0 keeps everything. */
+  /** Backups outside this daily window can expire after each backup. Zero keeps everything. */
   retentionDays?: (tenantId: string) => number
+  retentionTiers?: (tenantId: string) => RetentionTiers
   now?: () => Date
   /** Items read at the same time. Graph throttling (429) pauses every reader. */
   concurrency?: number
@@ -707,13 +709,15 @@ export class BackupEngine {
     // The Backup Reader cannot delete from Azure Storage. The next backup with an admin's sign-in applies
     // retention to every backup of the tenant, Backup Reader backups included, with the same protections.
     const deletesAllowed = local || tokens.mode === "delegated"
-    if (!deletesAllowed && failures === 0 && (this.deps.retentionDays?.(job.tenantId) ?? 0) > 0) {
+    const days = this.deps.retentionDays?.(job.tenantId) ?? 0
+    if (!deletesAllowed && failures === 0 && days > 0) {
       this.write(job, "Older backups were kept: the Backup Reader cannot delete from Azure Storage. The next backup made with an admin's sign-in removes expired ones.", "info")
-    } else if (deletesAllowed && failures === 0 && (this.deps.retentionDays?.(job.tenantId) ?? 0) > 0) {
+    } else if (deletesAllowed && failures === 0 && days > 0) {
       const retentionNetwork = new NetworkCircuit(3 * concurrency, signal, deadline)
       const retentionStorage = new BlobWriter(fetchImpl, request.storageAccountName, storageToken, retentionNetwork)
       try {
-        retentionWarnings = await this.applyRetention(job, retentionStorage, backupFolder, restorableFolders(metadata), retentionNetwork.signal)
+        const tiers = this.deps.retentionTiers?.(job.tenantId)
+        retentionWarnings = await this.applyRetention(job, retentionStorage, backupFolder, restorableFolders(metadata), days, tiers, retentionNetwork.signal)
       } catch (error) {
         retentionWarnings++
         if (signal.aborted || Date.now() >= deadline) {
@@ -789,17 +793,15 @@ export class BackupEngine {
    * either count as this tenant's unless the container also holds a backup recorded as another
    * tenant's, or one whose metadata or marker cannot be read.
    */
-  private async applyRetention(job: BackupJob, storage: BlobWriter, current: string, covered: Set<string>, signal: AbortSignal): Promise<number> {
-    const days = this.deps.retentionDays?.(job.tenantId) ?? 0
-    if (days <= 0) return 0
-    const cutoff = this.now().getTime() - days * 24 * 60 * 60 * 1000
+  private async applyRetention(job: BackupJob, storage: BlobWriter, current: string, covered: Set<string>, days: number, tierPolicy: RetentionTiers | undefined, signal: AbortSignal): Promise<number> {
+    const now = this.now()
+    const cutoff = retentionCutoff(now, days)
     const { prefixes } = await storage.list("backup-", { delimiter: "/" })
     const backups = prefixes
       .map((prefix) => {
-        const match = /^backup-(\d{4})-(\d{2})-(\d{2})-(\d{2})(\d{2})(\d{2})\/$/.exec(prefix)
-        if (!match || prefix === `${current}/`) return null
-        const [, y, mo, d, h, mi, se] = match.map(Number) as number[]
-        return { prefix, time: Date.UTC(y!, mo! - 1, d!, h!, mi!, se!) }
+        if (prefix === `${current}/` || !prefix.endsWith("/")) return null
+        const time = retentionBackupTime(prefix.slice(0, -1))
+        return time === null ? null : { prefix, time }
       })
       .filter((backup) => backup !== null)
       .sort((a, b) => b.time - a.time)
@@ -854,6 +856,18 @@ export class BackupEngine {
     // shared and untagged backups from earlier versions stay, as they did before.
     const shared = owners.some((entry) => entry?.owner === "other") || unreadable.size > 0
 
+    const selection = tierPolicy?.retentionMonths || tierPolicy?.retentionYears
+      ? selectRetentionTiers([
+          { id: `${current}/`, time: retentionBackupTime(current)!, complete: true },
+          ...backups.flatMap((backup, index) => {
+            const entry = owners[index]
+            return entry && (entry.owner === "this" || (entry.owner === "untagged" && !shared))
+              ? [{ id: backup.prefix, time: backup.time, complete: completeForRetention(entry.metadata) }]
+              : []
+          }),
+        ], now, days, tierPolicy)
+      : null
+
     // Types no newer backup holds yet, walking from the newest backup to the oldest.
     const uncovered = new Set(INTUNE_TYPES.map((type) => type.folder).filter((folder) => !covered.has(folder)))
     let removed = 0
@@ -882,8 +896,7 @@ export class BackupEngine {
       // Only a backup that read everything may satisfy coverage: one that finished with
       // warnings may miss items in any folder it appears to hold. Backups recorded before
       // failures were counted carry no Failures value and count by their status alone.
-      const status = String(metadata?.Status ?? "").toLowerCase()
-      const complete = metadata && (status === "success" || status === "succeeded") && (metadata.Failures === undefined || metadata.Failures === 0)
+      const complete = metadata && completeForRetention(metadata)
       // A folder with masked values does not satisfy coverage, so the newest backup with the plain values stays.
       for (const folder of complete ? restorableFolders(metadata) : []) {
         if (uncovered.delete(folder)) holdsUncovered = true
@@ -893,6 +906,7 @@ export class BackupEngine {
         kept++
         continue
       }
+      if (selection?.newest === backup.prefix || selection?.tiers.has(backup.prefix)) continue
       // Read every page before issuing a delete. The last blob written can expire later than
       // the rest, and a legal hold can apply to just one policy file.
       const { blobs, legalHold, immutableUntil, unknownExpiry: unreadableExpiry } = await storage.list(backup.prefix, { includeProtection })
