@@ -600,6 +600,26 @@ for (const azure of [false, true]) describe(azure ? "Azure emulator mixed runs" 
     expect(archive.headers.get("content-type")).toBe("application/x-tar")
     await archive.body?.cancel()
   })
+  it("offers both downloads when a discovery 503 exhausts the companion lookup budget", async () => {
+    const f = await pair()
+    for (let day = 2; day <= 9; day++) {
+      const id = `backup-2020-01-0${day}-000000`, companion = `backup-large-2020-01-0${day}-000000`
+      await f.seed(id); await f.seed(companion, true)
+      await f.write(id, "metadata.json", { ...f.first, BackupFolder: id, RunId: id, CompanionBackup: companion })
+      await f.write(companion, "metadata.json", { ...f.second, BackupFolder: companion, RunId: id, CompanionBackup: id })
+    }
+    f.refuse(503)
+    const rows = await (await history(f.request({ summary: true }))).json()
+    expect(rows.backups).toHaveLength(9)
+    const companionReads = f.requests.filter(value => value.startsWith(`GET /${LARGE_BACKUP_CONTAINER}/`) && value.endsWith("/metadata.json"))
+    expect(companionReads).toHaveLength(8)
+    const skipped = rows.backups.filter((row: any) => !companionReads.includes(`GET /${LARGE_BACKUP_CONTAINER}/${row.id.replace("backup-", "backup-large-")}/metadata.json`))
+    expect(skipped).toHaveLength(1)
+    expect(skipped[0]).toMatchObject({ ordinaryOnlyExport: false, ordinaryOnlyAvailable: true, coverage: "incomplete", warning: expect.stringContaining("lookup recovery budget was reached") })
+    const refused = await download(f.request({ backupId: skipped[0].id, largeInventory: true }))
+    expect(refused.status).toBe(503)
+    expect(await refused.json()).toMatchObject({ ordinaryOnlyAvailable: true })
+  })
   it("asks to retry the full download when the large half of a split run cannot be read in time", async () => {
     const f = await pair()
     const original = f.fetcher.getMockImplementation()!

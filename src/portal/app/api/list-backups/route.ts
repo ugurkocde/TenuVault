@@ -462,6 +462,7 @@ export async function POST(request: NextRequest) {
           if (!reading && largeDiscoveryComplete) {
             cause = "Large companion is missing (not found by complete discovery)."
           } else if (!reading && linkedReads.size >= COMPANION_LOOKUP_BUDGET) {
+            companionUnavailable = true
             cause = `Large companion is unresolved: discovery was unavailable or partial and the ${COMPANION_LOOKUP_BUDGET}-lookup recovery budget was reached. Refresh after checking large storage access.`
           } else if (!reading) {
             reading = (async (): Promise<MetadataRead> => {
@@ -515,7 +516,7 @@ export async function POST(request: NextRequest) {
         }
       }
       backup.largeProblems = largeRunProblems(metadata, cause, matches ? other : null)
-      // An unread record or a transient companion failure can still belong to a complete run.
+      // An unread record or an unresolved companion can still belong to a complete run.
       // Keep the full download offered so it can check storage again.
       backup.ordinaryOnlyAvailable = companionUnavailable && (!evidence || matches)
       backup.ordinaryOnlyExport = !unreadRecords.has(backup.id) && !backup.ordinaryOnlyAvailable && (backup.largeProblems.length > 0 || !matches || !completeHalf(metadata) || !completeHalf(other))
