@@ -181,7 +181,9 @@ function ReviewAssign({ batches: given, onBack, onFinished, next }: { batches: D
     const appProtection = REPORTS_SET_AS_DIRECT.has(item.folder ?? "")
     const blocked = appProtection && (mode === "replace" || ((!!live?.assignments?.length || !!live?.inherited) && excludesFor(item.scope, spec).length > 0))
     const planned = assignmentsFor({ folder: item.folder ?? "", scope: item.scope }, item.platform, spec).assignments
-    const after = live?.assignments && !blocked ? mode === "replace" ? planned : mergeAssignments(live.assignments, planned, { keepExisting: REPORTS_SET_AS_DIRECT.has(item.folder ?? "") }) : undefined
+    // As in the main process: app protection never adds a group a policy set already targets.
+    const additions = appProtection ? planned.filter(entry => !live?.inheritedGroups?.includes(String((entry.target as Item | undefined)?.groupId ?? "").toLowerCase())) : planned
+    const after = live?.assignments && !blocked ? mode === "replace" ? planned : mergeAssignments(live.assignments, additions, { keepExisting: appProtection }) : undefined
     return { item, live, after, blocked, unchanged: !!live?.assignments && !!after && sameAssignments(live.assignments, after) }
   })
   const changing = preview.filter(p => p.after && !p.unchanged).length

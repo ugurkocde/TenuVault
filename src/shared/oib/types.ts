@@ -310,6 +310,8 @@ export interface OibPolicyAssignments {
   assignments?: Item[]
   /** Assignments that come from a policy set; they are never changed here. */
   inherited: number
+  /** The groups those policy set assignments target. */
+  inheritedGroups?: string[]
   error?: string
 }
 

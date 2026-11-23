@@ -623,6 +623,21 @@ describe("assignments", () => {
     expect((await handleOib({ action: "oib-runs", tenantId }) as { runs: OibRun[] }).runs.map(r => r.runId).sort()).toEqual(older.map(r => r.runId).sort())
   })
 
+  it("keeps the undo record and reports the policy when the undo answer is lost", async () => {
+    const state: Tenant = { policies: [{ id: EXISTING, name: "Win - OIB - SC - Test - v3.8" }], assignments: { [EXISTING]: [] } }
+    const inner = world(state, [])
+    let drop = false
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (drop && init?.method === "POST" && String(input).endsWith("/assign")) throw new TypeError("fetch failed")
+      return inner(input, init)
+    }))
+    await source()
+    const run = await handleOib({ ...base, action: "oib-assign", commit, backup: { mode: "none" }, mode: "add", items: [{ source: SC, targetId: EXISTING, expected: [] }], assignments: { deviceGroups: [DEVICES], userGroups: [] } }) as OibRun
+    drop = true
+    const undone = await handleOib({ action: "oib-undo", tenantId, appId, runId: run.runId }) as UndoResult
+    expect(undone).toMatchObject({ run: { runId: run.runId }, results: [{ action: "reassigned", done: false, error: expect.stringContaining("The outcome is unknown") }] })
+  })
+
   it("refuses groups on a deployment that creates no policy", async () => {
     const writes: string[] = []
     vi.stubGlobal("fetch", world({ policies: [{ id: EXISTING, name: "Win - OIB - SC - Test - v3.1", value: 7 }] }, writes))

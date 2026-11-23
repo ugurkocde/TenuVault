@@ -626,7 +626,8 @@ async function readAssignments(body: RecordJson): Promise<{ policies: OibPolicyA
       else if (matched.get(source) !== targetId.toLowerCase()) policies.push({ ...base, name: live.name ?? base.name, error: NOT_THE_POLICY })
       else {
         const direct = directAssignments(live.assignments)
-        policies.push({ ...base, name: live.name ?? base.name, assignments: direct.map(writableAssignment), inherited: live.assignments.length - direct.length })
+        const inheritedGroups = live.assignments.filter((entry) => !direct.includes(entry)).map((entry) => (entry.target as Item | undefined)?.groupId).filter((id): id is string => typeof id === "string").map((id) => id.toLowerCase())
+        policies.push({ ...base, name: live.name ?? base.name, assignments: direct.map(writableAssignment), inherited: live.assignments.length - direct.length, ...(inheritedGroups.length ? { inheritedGroups } : {}) })
       }
     } catch (error) {
       policies.push({ ...base, error: `The current assignments could not be read: ${message(error)}` })
@@ -734,13 +735,18 @@ async function assign(body: RecordJson): Promise<OibRun> {
           run.skipped!.push({ name, reason: "No group was chosen for this policy's scope." })
           continue
         }
-        const next = mode === "replace" ? planned.assignments : mergeAssignments(current, planned.assignments, { keepExisting: REPORTS_SET_AS_DIRECT.has(policy.folder) })
+        const keepExisting = REPORTS_SET_AS_DIRECT.has(policy.folder)
+        // App protection: a group targeted through a policy set counts as targeted too, so it is not added
+        // again as a direct entry (set entries themselves are never written).
+        const inherited = live.assignments.filter((entry) => !directAssignments([entry]).length).map(writableAssignment)
+        const additions = keepExisting ? planned.assignments.filter((entry) => !alreadyTargeted(inherited, [entry]).length) : planned.assignments
+        const next = mode === "replace" ? planned.assignments : mergeAssignments(current, additions, { keepExisting })
         if (sameAssignments(current, next)) {
           run.skipped!.push({ name, reason: "Already assigned this way." })
           continue
         }
         const conflicts = conflictingGroups(next).map((id) => checked.groupNames[id] ?? id)
-        const untouched = mode === "add" && REPORTS_SET_AS_DIRECT.has(policy.folder) ? alreadyTargeted(current, planned.assignments).map((id) => checked.groupNames[id] ?? id) : []
+        const untouched = mode === "add" && REPORTS_SET_AS_DIRECT.has(policy.folder) ? alreadyTargeted([...current, ...inherited], planned.assignments).map((id) => checked.groupNames[id] ?? id) : []
         const warnings = [...planned.notes, ...(conflicts.length ? [`${conflicts.join(", ")} ${conflicts.length === 1 ? "is" : "are"} both included and excluded; the exclusion wins.`] : []),
           ...(untouched.length ? [`${untouched.join(", ")} ${untouched.length === 1 ? "is" : "are"} already targeted by this app protection policy and ${untouched.length === 1 ? "was" : "were"} left as ${untouched.length === 1 ? "it is" : "they are"}.`] : [])]
         const entry: NonNullable<OibRun["reassigned"]>[number] = { folder: policy.folder, id: item.targetId, name, previous: current, applied: next, pending: true, pendingAt: new Date().toISOString(),
@@ -890,7 +896,15 @@ async function undo(body: RecordJson): Promise<UndoResult> {
           reassigned.push(item)
           continue
         }
-        const response = await writer("POST", `${type.path}/${encodeURIComponent(item.id)}/assign`, { [type.assign.key]: item.previous }, { noRetry: true })
+        let response: Awaited<ReturnType<GraphCall>>
+        try {
+          response = await writer("POST", `${type.path}/${encodeURIComponent(item.id)}/assign`, { [type.assign.key]: item.previous }, { noRetry: true })
+        } catch (error) {
+          // A lost answer stops only this policy: its entry stays for the next undo, the others go on.
+          results.push({ name: item.name, id: item.id, action: "reassigned", done: false, error: `The outcome is unknown: ${message(error)}. Check the policy in Intune and undo again.` })
+          reassigned.push(item)
+          continue
+        }
         const notFound = response.status === 404 || (response.status === 400 && /ResourceNotFound/i.test(JSON.stringify(response.body)))
         // A not-found answer only clears the record once a read confirms the policy itself is gone.
         const gone = notFound && await readCurrentAssignments(graph, type, item.id).then((policy) => !policy, () => false)
