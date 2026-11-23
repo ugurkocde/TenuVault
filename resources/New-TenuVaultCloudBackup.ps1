@@ -24,7 +24,7 @@
         watcher's state
       * tries to create the private audit-logs container and grants the managed identity read and
         create access there. If Azure refuses, setup continues and prints the manual steps
-      * links the runbook to a daily or weekly schedule in the timezone you choose
+      * links the runbook to a schedule every 4, 6 or 12 hours, daily or weekly, in the timezone you choose
       * with -AlertEmail, creates an Azure Monitor action group and a metric alert on failed
         Automation jobs, before the schedule is linked. Without it, -NoFailureAlert is the
         explicit opt out. Setup refuses to guess: a backup that fails silently is worse than none.

@@ -21,7 +21,7 @@ export function prepareScheduledCoverage(
         checked.set(schedule.tenantId, now())
       } else {
         checked.delete(schedule.tenantId)
-        if (plan !== "community" || schedule.frequency !== "daily") continue
+        if (plan !== "community" || schedule.frequency === "weekly") continue
       }
       await license.requireEntitlement(schedule.tenantId).catch(() => undefined)
     }
