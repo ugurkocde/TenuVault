@@ -9,7 +9,7 @@ const licenseOpen = vi.hoisted(() => vi.fn(async () => undefined))
 vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { license: { open: licenseOpen } } }))
 vi.mock("@desktop/lib/plan-dialog", () => ({ showFeaturePlanError: vi.fn() }))
 
-import { RestoreWizard } from "../../src/portal/components/backup/restore-wizard"
+import { COMPANION_DEADLINE_MS, RestoreWizard } from "../../src/portal/components/backup/restore-wizard"
 
 const roots: Root[] = []
 afterEach(() => {
@@ -309,5 +309,40 @@ it("keeps the chosen backup's items and selections when a later page of its link
   expect(container.textContent).toMatch(/1 of \d+ selected/)
   // A page that cannot be read keeps Next page, so a readable later page stays reachable.
   expect(buttonNamed(container, "Next page")!.disabled).toBe(false)
+  expect(buttonNamed(container, "Previous page")!.disabled).toBe(false)
+})
+
+it("counts a later page of its linked large backup that never answers as unreadable, so paging is not locked", async () => {
+  const companion = { largePage: 0, hasMore: true, content: { groups: [{ folder: "Groups", label: "group", area: "Entra ID", count: 5000, policies: [{ path: "backup-large-1/Groups/g.json", displayName: "Team" }] }] } }
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body ?? "{}"))
+    if (String(input).endsWith("/api/list-backup-contents")) {
+      if (body.backupId !== "backup-large-1") return Response.json(contents)
+      if (body.largePage === 0) return Response.json(companion)
+      // The second page never answers; only an abort ends the request.
+      return new Promise<Response>((_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError"))))
+    }
+    if (String(input).endsWith("/api/restore-preview")) return Response.json(body.backupId === "backup-large-1" ? { items: [{ path: "backup-large-1/Groups/g.json", name: "Team" }] } : preview)
+    return Response.json({})
+  }))
+  const container = document.body.appendChild(document.createElement("div"))
+  const root = createRoot(container)
+  roots.push(root)
+  await act(async () => root.render(createElement(MemoryRouter, null, createElement(RestoreWizard, {
+    tenant: { name: "Contoso", credentials: { tenantId: "tenant", appId: "app", clientSecret: "" }, storageAccountName: "tvlocal-tenant" },
+    backups: [{ id: "backup-1", companionId: "backup-large-1", timestamp: "2026-10-16T02:00:00Z", type: "manual", status: "Completed", totalPolicies: 3, scope: null, size: 1, duration: 4, changes: null, comparedWith: null }],
+    initialBackupId: "backup-1", community: false, canCopyToTenants: false, copyCandidates: [],
+  }))))
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
+  try {
+    await act(async () => buttonNamed(container, "Next page")!.click())
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(buttonNamed(container, "Previous page")!.disabled).toBe(true)
+    await act(async () => { await vi.advanceTimersByTimeAsync(COMPANION_DEADLINE_MS) })
+  } finally { vi.useRealTimers() }
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+  expect(container.textContent).toContain("The linked large backup with this run's directory objects could not be read")
+  expect(container.textContent).toContain("Configuration profile")
   expect(buttonNamed(container, "Previous page")!.disabled).toBe(false)
 })

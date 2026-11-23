@@ -1108,6 +1108,8 @@ export class BackupEngine {
         await commitManifest(largeFolder, manifest(status, this.now(), outcomesNow(status, this.now(), false), {}, largeFolder), !mixed)
       } catch (error) {
         network.signal.throwIfAborted()
+        // Without their inventory the uploaded snapshots cannot be opened, so none of them counts as saved.
+        for (const type of largeTypes) counts[type.folder] = 0
         // Storage that refuses the large container (403 or 404) needs provisioning: like a refused claim,
         // the large types are skipped with that guidance and the ordinary backup stands.
         if (error instanceof LargeStorageError && (error.status === 403 || error.status === 404)) {
@@ -1129,9 +1131,13 @@ export class BackupEngine {
         }
         // A large-only run has no other record: without its manifest there is no backup, so the run fails.
         // Only a 403 or 404 carries the provisioning guidance; another failure is reported as what it was.
-        if (!mixed) throw error instanceof LargeStorageError && error.status !== 403 && error.status !== 404
-          ? new StorageError(`${reason}${error.status ? ` Storage returned ${error.status}.` : ""}`, { cause: error })
-          : error
+        // An ended sign-in keeps its own handling; anything else, including a commit that got no answer,
+        // is reported with the inventory-save reason.
+        if (!mixed) {
+          if (error instanceof TokenError || (error instanceof LargeStorageError && (error.status === 403 || error.status === 404))) throw error
+          const status = error instanceof LargeStorageError ? error.status : undefined
+          throw new StorageError(`${reason}${status ? ` Storage returned ${status}.` : ""}`, { cause: error })
+        }
       }
     }
     const ended = this.now()

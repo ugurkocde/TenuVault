@@ -368,6 +368,37 @@ for (const azure of [false, true]) describe(azure ? "Azure emulator mixed runs" 
     expect(job.status, job.exception).toBe("Completed")
     expect((await f.read(job.backupFolder!)).RunStatus).toBe("CompletedWithWarnings")
   })
+  it("fails a split run whose ordinary reads failed when its large uploads have no committed inventory", async () => {
+    undo = registerTestTypes([largeType])
+    const f = await setup()
+    const original = f.fetcher.getMockImplementation()!
+    // Every ordinary object read fails; the large snapshots upload, but their manifest commit fails.
+    f.fetcher.mockImplementation(async (input, init) => {
+      const url = new URL(String(input))
+      if (url.hostname === "graph.microsoft.com" && url.pathname.startsWith("/beta/deviceManagement/deviceCategories/")) return Response.json({ error: { code: "BadRequest", message: "Bad request" } }, { status: 400 })
+      return original(input, init)
+    })
+    f.refuse(500, "metadata.json")
+    const engine = new BackupEngine({ now: () => new Date("2026-11-17T12:00:00Z"), fetch: f.fetcher, getToken: async () => jwt({ scp: "Policy.Read.All" }), services: () => ({ services: ["intune", "entra"] }), retentionDays: () => 0 })
+    const job = await engine.waitForJob(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: f.account, scope: { excluded: INTUNE_TYPES.filter(type => !["DeviceCategories", "AuthorizationPolicy"].includes(type.folder)).map(type => type.folder) } }))
+    expect(job.status).toBe("Failed")
+    expect((await f.read(job.backupFolder!)).RunStatus).toBe("Failed")
+  })
+  it("reports a large-only commit that gets no answer with the inventory-save reason", async () => {
+    undo = registerTestTypes([largeType])
+    const f = await setup()
+    const original = f.fetcher.getMockImplementation()!
+    f.fetcher.mockImplementation(async (input, init) => {
+      const url = new URL(String(input))
+      if (init?.method === "PUT" && url.pathname.startsWith(`/${LARGE_BACKUP_CONTAINER}`) && url.pathname.endsWith("metadata.json")) throw new TypeError("fetch failed")
+      return original(input, init)
+    })
+    const engine = new BackupEngine({ now: () => new Date("2026-11-17T12:00:00Z"), fetch: f.fetcher, getToken: async () => jwt({ scp: "Policy.Read.All" }), services: () => ({ services: ["entra"] }), retentionDays: () => 0 })
+    const job = await engine.waitForJob(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: f.account, scope: { excluded: INTUNE_TYPES.filter(type => type.folder !== "AuthorizationPolicy").map(type => type.folder) } }))
+    expect(job.status).toBe("Failed")
+    expect(job.exception).toContain("The directory inventory could not be saved to large backup storage.")
+    expect(job.commitUnconfirmed).toBe(true)
+  })
   it("leaves a large-only run unconfirmed when its own manifest commit gets a server error", async () => {
     undo = registerTestTypes([largeType])
     const f = await setup()

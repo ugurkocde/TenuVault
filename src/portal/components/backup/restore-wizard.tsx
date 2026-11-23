@@ -87,6 +87,8 @@ const STEPS: Array<{ id: Step; label: string }> = [
   { id: "run", label: "Restore" },
 ]
 
+/** How long a page of the linked large backup may take before it counts as unreadable. */
+export const COMPANION_DEADLINE_MS = 120_000
 const COMPANION_UNREADABLE = "The linked large backup with this run's directory objects could not be read. Other items can still be restored. Refresh the backup list after it finishes, or check its status in Backup History."
 
 interface BackupItem {
@@ -370,11 +372,11 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
     const controller = new AbortController()
     const credentials = { ...tenant.credentials, storageAccountName: tenant.storageAccountName, subscriptionId: "local", resourceGroupName: "local", backupId }
     // One backup's items for the selected service, with names and restore blockers from its snapshots.
-    const load = async (source: string) => {
+    const load = async (source: string, signal: AbortSignal = controller.signal) => {
       const contents = await post<{ largePage?: number; hasMore?: boolean; content: { groups: Array<{ folder: string; label: string; area: string; limitation?: string; count?: number; policies: Array<{ path: string; displayName?: string }> }> } }>(
         "/api/list-backup-contents",
         { ...credentials, backupId: source, largePage },
-        controller.signal,
+        signal,
       )
       const groups = contents.content.groups.filter(group => matchesBackupService(group.folder, contentsService))
       const listed: BackupItem[] = groups.flatMap((group) =>
@@ -384,7 +386,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
         const preview = await post<{ items: Array<{ path: string; name: string; blocker?: string; replaceBlocker?: string; snapshot?: unknown; readiness?: RecoveryReadiness }> }>(
           "/api/restore-preview",
           { ...credentials, backupId: source, paths: listed.slice(start, start + PREVIEW_CHUNK).map((item) => item.path) },
-          controller.signal,
+          signal,
         )
         for (const item of preview.items) details[item.path] = item
       }
@@ -407,16 +409,23 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
       // the chosen backup's items and selections: an empty page is the last one, and one that cannot be
       // read keeps Next page so a readable later page stays reachable.
       setPageLoading(true)
+      // A companion page that does not answer in time counts as unreadable, so paging never stays locked.
+      const companionLoad = new AbortController()
+      const stopCompanion = () => companionLoad.abort()
+      controller.signal.addEventListener("abort", stopCompanion)
+      const deadline = setTimeout(stopCompanion, COMPANION_DEADLINE_MS)
       try {
-        const companion = await load(companionId)
+        const companion = await load(companionId, companionLoad.signal)
         if (controller.signal.aborted) return
         setItems(previous => [...(previous ?? []), ...companion.items])
         if (companion.paging) setLargePaging(companion.paging)
         else if (!chosen.paging && largePage > 0) setLargePaging(previous => previous && { ...previous, hasMore: false })
-      } catch (error) {
-        if (controller.signal.aborted || (error instanceof DOMException && error.name === "AbortError")) return
+      } catch {
+        if (controller.signal.aborted) return
         setCompanionError(COMPANION_UNREADABLE)
       } finally {
+        clearTimeout(deadline)
+        controller.signal.removeEventListener("abort", stopCompanion)
         if (!controller.signal.aborted) setPageLoading(false)
       }
     })().catch((error: unknown) => {
