@@ -1,3 +1,4 @@
+import type { HourlyInterval, ScheduleFrequency } from "./schedule-frequency"
 import type { AppSourcesBridge } from "./app-sources/types"
 import type { OptionalPermissionStatus } from "./services/optional-permissions"
 import type { PlanIpcError } from "./plan-errors"
@@ -254,7 +255,9 @@ export interface BackupScopeSetting {
 export interface ScheduleInput {
   tenantId: string
   enabled: boolean
-  frequency: "daily" | "weekly"
+  frequency: ScheduleFrequency
+  /** Required for hourly schedules. */
+  intervalHours?: HourlyInterval
   /** Local time, "HH:MM". */
   time: string
   /** 0 = Sunday. Required for weekly schedules. */

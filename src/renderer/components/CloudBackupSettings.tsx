@@ -1,3 +1,4 @@
+import { HOURLY_INTERVALS, type HourlyInterval, type ScheduleFrequency } from "../../shared/schedule-frequency"
 import { useEffect, useMemo, useState } from "react"
 import { AlertCircle, CalendarClock, Check, CheckCircle2, Cloud, Copy, ExternalLink, RefreshCw, Trash2 } from "lucide-react"
 import { Button } from "~/components/ui/button"
@@ -16,6 +17,7 @@ import {
 } from "../../shared/cloud-backup"
 import { LOCAL_STORAGE_PREFIX } from "../../shared/constants"
 import { normalizeScope, presetOf } from "../../shared/intune/scope"
+import { allows, type Plan } from "../../shared/plans"
 import { bridge } from "../lib/bridge"
 import type { CloudBackupState } from "../lib/cloud-backup"
 import { formatWhen } from "../lib/schedules"
@@ -25,7 +27,7 @@ import { UpgradeNote } from "./UpgradeNote"
 const dayKey = (date: Date) => `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`
 
 /** One month with the days a backup runs marked, starting with the month of the next run. */
-function RunsCalendar({ runs }: { runs: Date[] }) {
+function RunsCalendar({ runs, hourly }: { runs: Date[]; hourly: boolean }) {
   const first = runs[0] ?? new Date()
   const year = first.getFullYear()
   const month = first.getMonth()
@@ -51,7 +53,7 @@ function RunsCalendar({ runs }: { runs: Date[] }) {
               key={index}
               className={[
                 "flex aspect-square items-center justify-center rounded-full",
-                runDays.has(dayKey(date)) ? "bg-coral-500 font-medium text-white" : "text-gray-600",
+                (hourly ? date.getDate() >= first.getDate() : runDays.has(dayKey(date))) ? "bg-coral-500 font-medium text-white" : "text-gray-600",
                 dayKey(date) === today ? "ring-2 ring-gray-300 ring-inset" : "",
               ].join(" ")}
             >
@@ -78,7 +80,9 @@ function RunsCalendar({ runs }: { runs: Date[] }) {
  * the printed result back), then the recorded schedule, its next runs and the runbook's last
  * reported result. The app itself never creates or edits the Azure resources.
  */
-export function CloudBackupSettings({ tenant, community, cloud, scopeVersion = 0 }: { tenant: Tenant | null | undefined; community: boolean; cloud: CloudBackupState; scopeVersion?: number }) {
+export function CloudBackupSettings({ tenant, plan, cloud, scopeVersion = 0 }: { tenant: Tenant | null | undefined; plan: Plan | null; cloud: CloudBackupState; scopeVersion?: number }) {
+  const community = plan === "community"
+  const hourlyAvailable = plan !== null && allows(plan, "dailySchedule")
   const tenantId = tenant?.credentials?.tenantId ?? ""
   const tenantName = tenant?.name ?? "this tenant"
   const storageAccount = tenant?.resources?.storageAccountName ?? ""
@@ -87,7 +91,8 @@ export function CloudBackupSettings({ tenant, community, cloud, scopeVersion = 0
   const [pasteError, setPasteError] = useState<string | null>(null)
   const [copied, setCopied] = useState<string | null>(null)
   const [replacing, setReplacing] = useState(false)
-  const [frequency, setFrequency] = useState<"daily" | "weekly">("daily")
+  const [frequency, setFrequency] = useState<ScheduleFrequency>("daily")
+  const [intervalHours, setIntervalHours] = useState<HourlyInterval>(6)
   const [time, setTime] = useState("02:00")
   const [weekday, setWeekday] = useState(0)
   const [excluded, setExcluded] = useState<string[]>(["Apps"])
@@ -123,6 +128,7 @@ export function CloudBackupSettings({ tenant, community, cloud, scopeVersion = 0
       tenantId,
       storageAccount,
       frequency,
+      intervalHours,
       time,
       weekday,
       timeZone,
@@ -135,7 +141,7 @@ export function CloudBackupSettings({ tenant, community, cloud, scopeVersion = 0
       subscriptionId: tenant?.resources?.subscriptionId || undefined,
     })
     return preset === "custom" ? `${base} -ExcludedFolders "${excluded.join(",")}"` : base
-  }, [tenantId, storageAccount, frequency, time, weekday, timeZone, preset, excluded, changeReport, withoutActors, tenant])
+  }, [tenantId, storageAccount, frequency, intervalHours, time, weekday, timeZone, preset, excluded, changeReport, withoutActors, tenant])
 
   const applyPaste = async () => {
     const config = parseCloudSetup(pasted)
@@ -169,10 +175,10 @@ export function CloudBackupSettings({ tenant, community, cloud, scopeVersion = 0
 
   const config = cloud.config
   const runs = useMemo(
-    () => (config?.linked && config.time ? nextRunsInZone(config, config.timeZone || timeZone, new Date(), 40) : []),
+    () => (config?.linked && config.time ? nextRunsInZone(config, config.timeZone || timeZone, new Date(), config.frequency === "hourly" ? 3 : 40) : []),
     [config, timeZone],
   )
-  const previewRuns = useMemo(() => nextRunsInZone({ frequency, time, weekday }, timeZone, new Date(), 40), [frequency, time, weekday, timeZone])
+  const previewRuns = useMemo(() => nextRunsInZone({ frequency, intervalHours, time, weekday }, timeZone, new Date(), frequency === "hourly" ? 3 : 40), [frequency, intervalHours, time, weekday, timeZone])
   const select = "h-10 rounded-full border border-gray-300 bg-white px-4 text-sm"
 
   return (
@@ -278,7 +284,7 @@ export function CloudBackupSettings({ tenant, community, cloud, scopeVersion = 0
               paste its output here. Forgetting here only removes this computer's record; the Azure schedule keeps running.
             </p>
           </div>
-          {runs.length > 0 ? <RunsCalendar runs={runs} /> : (
+          {runs.length > 0 ? <RunsCalendar runs={runs} hourly={config.frequency === "hourly"} /> : (
             <p className="self-start rounded-2xl border border-gray-100 p-4 text-sm text-gray-500">
               No upcoming runs to show{config.time ? "" : " (the pasted setup did not include the backup time)"}.
             </p>
@@ -293,11 +299,20 @@ export function CloudBackupSettings({ tenant, community, cloud, scopeVersion = 0
               <div className="mt-3 flex flex-wrap items-end gap-4">
                 <div className="space-y-1.5">
                   <label htmlFor="cloud-frequency" className="block text-sm font-medium text-gray-900">Repeat</label>
-                  <select id="cloud-frequency" className={select} value={frequency} onChange={(e) => setFrequency(e.target.value as "daily" | "weekly")}>
+                  <select id="cloud-frequency" className={select} value={frequency} onChange={(e) => setFrequency(e.target.value as ScheduleFrequency)}>
                     <option value="daily">Every day</option>
                     <option value="weekly">Every week</option>
+                    <option value="hourly" disabled={!hourlyAvailable}>{hourlyAvailable ? "Every N hours" : "Every N hours (Pro)"}</option>
                   </select>
                 </div>
+                {frequency === "hourly" && (
+                  <div className="space-y-1.5">
+                    <label htmlFor="cloud-interval" className="block text-sm font-medium text-gray-900">Interval</label>
+                    <select id="cloud-interval" className={select} value={intervalHours} disabled={!hourlyAvailable} onChange={(e) => setIntervalHours(Number(e.target.value) as HourlyInterval)}>
+                      {HOURLY_INTERVALS.map(hours => <option key={hours} value={hours}>{hours} hours</option>)}
+                    </select>
+                  </div>
+                )}
                 {frequency === "weekly" && (
                   <div className="space-y-1.5">
                     <label htmlFor="cloud-weekday" className="block text-sm font-medium text-gray-900">Day</label>
@@ -322,7 +337,7 @@ export function CloudBackupSettings({ tenant, community, cloud, scopeVersion = 0
                   </div>
                 )}
                 <div className="space-y-1.5">
-                  <label htmlFor="cloud-time" className="block text-sm font-medium text-gray-900">Time ({timeZone})</label>
+                  <label htmlFor="cloud-time" className="block text-sm font-medium text-gray-900">{frequency === "hourly" ? "Anchor time" : "Time"} ({timeZone})</label>
                   <input id="cloud-time" type="time" className={select} value={time} onChange={(e) => setTime(e.target.value)} />
                 </div>
                 <div className="space-y-1.5">
@@ -348,19 +363,21 @@ export function CloudBackupSettings({ tenant, community, cloud, scopeVersion = 0
                   </p>
                 </>
               )}
-              {previewRuns.length > 0 && <div className="mt-4 max-w-sm"><RunsCalendar runs={previewRuns} /></div>}
+              {previewRuns.length > 0 && <div className="mt-4 max-w-sm"><RunsCalendar runs={previewRuns} hourly={frequency === "hourly"} /></div>}
             </li>
             <li>
-              Create the Azure resources, in whichever way fits whoever owns Azure. The script also grants the Graph
-              roles (as a Global Administrator) and creates the failure alert; the template deploys everything ARM
-              can and lists the roles in its outputs. The Deploy to Azure link cannot carry the choices above with
-              it: enter frequency, day, time, timezone, scope, the change report (changeReport) and, for a custom choice, the excluded folders
-              (excludedFolders) in the template as well (its defaults are daily, everything except apps, no change report).
+              {frequency === "hourly" ? "Use the PowerShell setup command to create an hourly schedule in Azure." : <>
+                Create the Azure resources, in whichever way fits whoever owns Azure. The script also grants the Graph
+                roles (as a Global Administrator) and creates the failure alert; the template deploys everything ARM
+                can and lists the roles in its outputs. The Deploy to Azure link cannot carry the choices above with
+                it: enter frequency, day, time, timezone, scope, the change report (changeReport) and, for a custom choice, the excluded folders
+                (excludedFolders) in the template as well (its defaults are daily, everything except apps, no change report).
+              </>}
               <div className="mt-3 flex flex-wrap gap-2">
-                <Button size="sm" disabled={community || localStorage} onClick={() => void bridge.app.openExternal(deployToAzureUrl())}>
+                {frequency !== "hourly" && <Button size="sm" disabled={community || localStorage} onClick={() => void bridge.app.openExternal(deployToAzureUrl())}>
                   <Cloud className="mr-2 h-4 w-4" /> Deploy to Azure
-                </Button>
-                {copyButton("command", "Copy setup command", command)}
+                </Button>}
+                {(frequency !== "hourly" || hourlyAvailable) && copyButton("command", "Copy setup command", command)}
                 {copyButton("setup", "Copy setup script", `# Save as New-TenuVaultCloudBackup.ps1, next to a runbooks folder holding Invoke-TenuVaultBackup.ps1\n# Guide: ${CLOUD_BACKUP_GUIDE_URL}\n\n${setupScript}`)}
                 {copyButton("runbook", "Copy runbook", `# Save as runbooks/Invoke-TenuVaultBackup.ps1 next to New-TenuVaultCloudBackup.ps1\n\n${runbookScript}`)}
                 <Button variant="ghost" size="sm" onClick={() => void bridge.app.openExternal(CLOUD_BACKUP_GUIDE_URL)}>

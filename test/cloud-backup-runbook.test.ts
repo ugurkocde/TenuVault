@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process"
+import { execFileSync, spawnSync } from "node:child_process"
 import { existsSync, readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { join } from "node:path"
@@ -881,6 +881,25 @@ describe("New-TenuVaultCloudBackup.ps1", () => {
       })
       if (baseline) expect(result).toEqual(variableResult(baseline.get(scenario)!))
     }
+  }, 60_000)
+
+  it.runIf(Boolean(pwsh))("validates hourly parameters before provisioning and creates a phased Azure schedule", () => {
+    const script = fileURLToPath(new URL("../resources/New-TenuVaultCloudBackup.ps1", import.meta.url))
+    for (const args of [
+      ["-Frequency", "Hourly"],
+      ["-Frequency", "Hourly", "-IntervalHours", "5"],
+      ["-Frequency", "Hourly", "-IntervalHours", "6.1"],
+      ["-Frequency", "Daily", "-IntervalHours", "6"],
+      ["-Frequency", "Weekly", "-IntervalHours", "12"],
+    ]) {
+      const result = spawnSync(pwsh!, ["-NoProfile", "-File", script, "-TenantId", "11111111-2222-3333-4444-555555555555", "-StorageAccountName", "stcontoso", ...args], { encoding: "utf8" })
+      expect(result.status).toBe(1)
+      expect(result.stderr).toContain("IntervalHours")
+    }
+    expect(setupRun("hourly-replacement")).toMatchObject({
+      error: null, schedule: true, enabled: true, link: true, hourInterval: 6,
+      scheduleSettings: { timeZone: "UTC", frequency: "Hour", time: expect.stringMatching(/^(05|11|17|23):15$/) },
+    })
   }, 60_000)
 
   it.runIf(Boolean(pwsh))("publishes, creates and links the schedule when audit provisioning is denied", () => {

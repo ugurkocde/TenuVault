@@ -31,7 +31,7 @@ Setup creates or reuses, in your subscription:
 | Runbook `Invoke-TenuVaultBackup` (PowerShell 7.2) | Reads Intune and writes one backup per run, in the desktop backup format. 7.2 is required: the default 5.1 runtime lacks the .NET JSON parser the runbook uses. |
 | Automation variables with a per-tenant suffix | Tenant id, storage account, scope. No secrets in variables. Set `TenuVaultIncludeConditionalAccess` to `true` (and grant the managed identity `Policy.Read.All`) to include [Conditional Access](/backups/conditional-access/). |
 | Custom role **TenuVault Backup Writer** on the `intune-backups` container | Read and write blobs, no delete. The runbook cannot remove backups. |
-| Schedule `TenuVaultBackup-<tenant>` and its runbook link | Daily or weekly, in the timezone you choose. |
+| Schedule `TenuVaultBackup-<tenant>` and its runbook link | Daily, weekly, or every 4, 6, or 12 hours, in the timezone you choose. |
 | Optional Azure Monitor action group and metric alert | Emails you when Automation jobs fail. Setup refuses to finish without an explicit choice. |
 
 Microsoft Graph application roles are the one part Azure role assignments and ARM templates cannot grant. A Global Administrator assigns the read-only roles below to the managed identity. They are the same set as the [Backup Reader](/backups/backup-reader/#permissions):
@@ -78,6 +78,10 @@ Download [`New-TenuVaultCloudBackup.ps1`](/downloads/New-TenuVaultCloudBackup.ps
 ```powershell
 ./New-TenuVaultCloudBackup.ps1 -TenantId 11111111-1111-1111-1111-111111111111 -ResourceGroupName rg-tenuvault-backups -Location westeurope -StorageAccountName tvbkp1234567890ab -Frequency Daily -Time 02:00 -TimeZone Europe/Berlin -Scope policies -GrantGraphRoles -AlertEmail ops@contoso.com
 ```
+
+For an hourly schedule, choose **Every N hours** in the app and copy the setup command, or pass `-Frequency Hourly -IntervalHours 6 -Time 02:00` to the script. The supported intervals are 4, 6, and 12 hours. The example anchors the schedule at 02:00 in `-TimeZone`, with slots at 02:00, 08:00, 14:00, and 20:00. Use the PowerShell setup for hourly schedules.
+
+If you use the Azure notification watcher, set `-MissedBackupHours` in its setup to the maximum acceptable time since a backup. For example, use 8 hours for a 6-hour schedule with a two-hour grace period.
 
 Send a colleague this request if Azure and Entra are not yours:
 

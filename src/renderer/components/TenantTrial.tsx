@@ -311,7 +311,7 @@ export function TrialChanges({ tenantId }: { tenantId?: string }) {
     return () => { active = false }
   }, [trialIds])
   useEffect(() => {
-    void bridge.schedules.list().then(schedules => setDaily(schedules.some(s => s.enabled && s.frequency === "daily" && status?.tenants.some(t => t.trialEndsAt && (!status?.tenantTrialsEnabled || !tenantId || t.tenantId === tenantId) && t.tenantId === s.tenantId)))).catch(() => {})
+    void bridge.schedules.list().then(schedules => setDaily(schedules.some(s => s.enabled && s.frequency !== "weekly" && s.fallbackWeekday === undefined && status?.tenants.some(t => t.trialEndsAt && (!status?.tenantTrialsEnabled || !tenantId || t.tenantId === tenantId) && t.tenantId === s.tenantId)))).catch(() => {})
     void bridge.preferences.get().then(prefs => setLongHistory(prefs.retentionDays > 30)).catch(() => {})
   }, [status, tenantId])
   const azure = tenants.some(t => t.resources?.storageAccountName && !t.resources.storageAccountName.startsWith(LOCAL_STORAGE_PREFIX) && status?.tenants.some(licensed => licensed.trialEndsAt && (!status?.tenantTrialsEnabled || !tenantId || licensed.tenantId === tenantId) && licensed.tenantId === t.credentials?.tenantId?.toLowerCase()))

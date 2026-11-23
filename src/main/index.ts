@@ -920,7 +920,10 @@ async function bootstrap(): Promise<void> {
     // folder, an unattended one through the shared origin. Only a job this scheduled call started
     // is keyed by its slot, so the retries of one failing slot send one alert.
     const liveBefore = new Set(engine.liveRuns(tenantId))
-    const job = await runUnattended(engine, { tenantId, clientId: profile.clientId, storageAccountName: profile.storageAccountName, scope: scopes.get(tenantId).scope, trigger, slot, scheduleFrequency: scheduler.list().find(s => s.tenantId === tenantId)?.frequency }, (started) => {
+    const schedule = scheduler.list().find(s => s.tenantId === tenantId)
+    // The usage observer records the existing dailySchedule feature for both Pro cadences.
+    const scheduleFrequency = schedule?.frequency === "hourly" ? (schedule.fallbackWeekday === undefined ? "daily" : "weekly") : schedule?.frequency
+    const job = await runUnattended(engine, { tenantId, clientId: profile.clientId, storageAccountName: profile.storageAccountName, scope: scopes.get(tenantId).scope, trigger, slot, scheduleFrequency }, (started) => {
       origin = unattendedBackupTriggers.get(started) ?? { trigger, notified: false }
       unattendedBackupTriggers.set(started, origin)
       return waitForJob(started)
@@ -948,7 +951,7 @@ async function bootstrap(): Promise<void> {
     mainWindow?.webContents.send("schedules:changed", scheduler.list())
     tray.refresh()
   }, () => new Date(), (tenantId) => scheduledCoverage(license, tenantId, tenantProfile(tenantId)), async () => { await prepareCoverage(scheduler); pushLicense() }, (tenantId) => {
-    if (Notification.isSupported()) new Notification({ title: "Backup schedule now weekly", body: `${tenantProfile(tenantId)?.name ?? "This tenant"}: Runs weekly on Community (daily needs Pro).` }).show()
+    if (Notification.isSupported()) new Notification({ title: "Backup schedule now weekly", body: `${tenantProfile(tenantId)?.name ?? "This tenant"}: Runs weekly on Community. Daily and hourly schedules need Pro.` }).show()
   }, (tenantId, reason) => {
     if (reason === "choice") { pushLicense(); return }
     if (Notification.isSupported()) new Notification({ title: "Paused: Azure storage needs Pro", body: `${tenantProfile(tenantId)?.name ?? "This tenant"}: Open TenuVault to switch to local backups. Existing Azure backups are kept.` }).show()

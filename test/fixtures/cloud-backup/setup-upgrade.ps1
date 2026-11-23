@@ -29,7 +29,7 @@ $scheduleStart = $text.IndexOf('# Schedule and link.')
 $scheduleEnd = $text.IndexOf('# Summary and next steps.')
 $scheduleParameters = @'
 [CmdletBinding(SupportsShouldProcess)]
-param([string]$Time = "02:00", [switch]$GraphRolesGranted)
+param([string]$Time = "02:00", [switch]$GraphRolesGranted, [string]$Frequency = "Daily", [string]$IntervalHours)
 '@
 $scheduleStep = [scriptblock]::Create($scheduleParameters + "`n" + $text.Substring($scheduleStart, $scheduleEnd - $scheduleStart))
 
@@ -185,10 +185,10 @@ function Set-AzAutomationSchedule {
     $script:actions.Add("schedule enabled=$IsEnabled")
 }
 function New-AzAutomationSchedule {
-    param($ResourceGroupName, $AutomationAccountName, $Name, $StartTime, $TimeZone, $DayInterval, $WeekInterval, $DaysOfWeek)
+    param($ResourceGroupName, $AutomationAccountName, $Name, $StartTime, $TimeZone, $DayInterval, $WeekInterval, $DaysOfWeek, $HourInterval)
     $script:schedule = $true
     $script:scheduleSettings = @{ Name = $Name; IsEnabled = $true; TimeZone = $TimeZone
-        StartTime = $StartTime; Frequency = $(if ($WeekInterval) { "Week" } else { "Day" }); DaysOfWeek = @($DaysOfWeek) }
+        StartTime = $StartTime; Frequency = $(if ($HourInterval) { "Hour" } elseif ($WeekInterval) { "Week" } else { "Day" }); HourInterval = $HourInterval; DaysOfWeek = @($DaysOfWeek) }
     $script:actions.Add("create schedule")
 }
 function Register-AzAutomationScheduledRunbook {
@@ -281,6 +281,7 @@ function Write-Scenario {
             time = $script:scheduleSettings.StartTime.ToString("HH:mm")
             days = @($script:scheduleSettings.DaysOfWeek | ForEach-Object { [string]$_ })
         }
+        hourInterval = $script:scheduleSettings.HourInterval
         link = $script:link
         output = @($Output | ForEach-Object { [string]$_ })
     } | ConvertTo-Json -Compress -Depth 5)
@@ -389,6 +390,9 @@ $script:actions.Clear()
 Invoke-LinkedUpgrade -Scenario "disabled-time-override" -ScheduleArguments @{ Time = "10:00" }
 $script:actions.Clear()
 Invoke-LinkedUpgrade -Scenario "disabled-explicit-replacement" -ScheduleArguments @{ Time = "10:00"; GraphRolesGranted = $true }
+
+Reset-OldSetup
+Invoke-LinkedUpgrade -Scenario "hourly-replacement" -ScheduleArguments @{ Time = "23:15"; GraphRolesGranted = $true; Frequency = "Hourly"; IntervalHours = "6" }
 
 foreach ($failure in "container", "role-definition", "role-assignment") {
     Reset-OldSetup

@@ -377,6 +377,21 @@ describe("tenants on the importing computer", () => {
 describe("plans on the importing computer", () => {
   const branded = file({ app: { preferences: { retentionDays: 365 }, pdfBranding: { companyName: "Contoso" } }, tenants: [{ tenantId: TENANT, schedule: { enabled: true, frequency: "daily", time: "02:00" } }] })
 
+  it("imports both hourly schedules with their intervals and gates the desktop schedule on Community", () => {
+    const hourly = { enabled: true, frequency: "hourly", intervalHours: 6, time: "02:00" } as const
+    const cloudBackup = { ...CLOUD, frequency: "hourly", intervalHours: 12, time: "03:00" } as const
+    const input = file({ tenants: [{ tenantId: TENANT, schedule: hourly, cloudBackup }] })
+    const pro = machine([{ tenantId: TENANT }], { [TENANT]: "pro" })
+    const preview = pro.transfer.open(input, "system")
+    expect(find(preview, `${TENANT}:schedule`)).toMatchObject({ status: "change" })
+    const result = pro.transfer.apply(preview.importId, [`${TENANT}:schedule`, `${TENANT}:cloudBackup`], "system")
+    expect(result.items.map(item => item.outcome)).toEqual(["applied", "applied"])
+    expect(pro.scheduler.list()[0]).toMatchObject(hourly)
+    expect(JSON.parse(pro.store.get(`renderer.tenuvault_cloud_backup_${TENANT}`)!)).toMatchObject(cloudBackup)
+    const community = machine([{ tenantId: TENANT }], { [TENANT]: "community" })
+    expect(find(community.transfer.open(input, "system"), `${TENANT}:schedule`)).toMatchObject({ status: "blocked", feature: "dailySchedule" })
+  })
+
   it("keeps the Community rules: no daily schedule, no branding, retention saved but applied up to 30 days", () => {
     const b = machine([{ tenantId: TENANT }], { [TENANT]: "community" })
     const preview = b.transfer.open(branded, "system")

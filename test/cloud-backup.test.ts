@@ -127,6 +127,20 @@ describe("nextRunsInZone", () => {
 })
 
 describe("cloudSetupCommand", () => {
+  it("builds and reads an hourly schedule with its anchor time and interval", () => {
+    const hourly = SETUP_BLOCK.replace("frequency=weekly", "frequency=hourly")
+    expect(parseCloudSetup(hourly)).toBeNull()
+    expect(parseCloudSetup(hourly + "\nintervalHours=3")).toBeNull()
+    const config = parseCloudSetup(hourly + "\nintervalHours=6")!
+    expect(describeCloudSchedule(config)).toBe("Every 6 hours from 02:30 (Europe/Berlin)")
+    expect(cloudSetupCommand({ ...config, scope: "policies" })).toContain("-Frequency Hourly -Time 02:30 -ResourceGroupName")
+    expect(cloudSetupCommand({ ...config, scope: "policies" })).toContain("-IntervalHours 6 -TimeZone Europe/Berlin")
+    expect(cloudSetupCommand({ ...config, scope: "policies" })).not.toContain("-WeekDay")
+    expect(nextRunsInZone({ ...config, time: "20:30" }, config.timeZone, new Date("2026-03-28T18:00:00Z"), 4).map(at => at.toISOString())).toEqual([
+      "2026-03-28T19:30:00.000Z", "2026-03-29T01:30:00.000Z", "2026-03-29T06:30:00.000Z", "2026-03-29T12:30:00.000Z",
+    ])
+  })
+
   it("fills in the choices and keeps secrets off the command line", () => {
     const command = cloudSetupCommand({ tenantId: TENANT, storageAccount: "tvbkp1", frequency: "weekly", time: "02:00", weekday: 1, timeZone: "Europe/Berlin", scope: "policies" })
     expect(command).toContain(`-TenantId ${TENANT}`)
