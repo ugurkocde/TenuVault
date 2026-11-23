@@ -1514,7 +1514,7 @@ function ConvertFrom-TenuVaultBackupOutcome {
     $trigger = (Get-TvNoteField $Note "trigger").Value
     $typeList = (Get-TvNoteField $Note "failedTypes").Value
     $failedTypes = @(@(if ($typeList -is [array]) { $typeList }) | Where-Object { $_ -is [string] -and $_ -cmatch '^[A-Za-z]{1,64}\z' } | Select-Object -First 10)
-    return [pscustomobject][ordered]@{
+    $outcome = [pscustomobject][ordered]@{
         status = [string]$status
         runId = [string]$runId
         backupFolder = $folder
@@ -1524,6 +1524,11 @@ function ConvertFrom-TenuVaultBackupOutcome {
         failedTypes = $failedTypes
         trigger = if ($trigger -is [string] -and $trigger -ceq "manual") { "manual" } else { "scheduled" }
     }
+    $secondaryCopy = (Get-TvNoteField $Note "secondaryCopy").Value
+    if ($secondaryCopy -is [string] -and $secondaryCopy -cin @("Verified", "Failed", "Skipped")) {
+        $outcome | Add-Member -NotePropertyName secondaryCopy -NotePropertyValue $secondaryCopy
+    }
+    return $outcome
 }
 
 # Reads the result notes the cloud backup runbook left under cloud-backup-outcomes/ in the
@@ -1614,10 +1619,13 @@ $script:TvOutcomeTrigger = @{ scheduled = "Cloud backup schedule"; manual = "Clo
 function New-TenuVaultCloudOutcomeEvent {
     param([Parameter(Mandatory)][object]$Outcome, [Parameter(Mandatory)][string]$TenantId, [object]$TenantName)
     $key = if ($Outcome.backupFolder) { [string]$Outcome.backupFolder } else { "run:$($Outcome.runId)" }
+    $summary = if ($Outcome.status -eq "CompletedWithWarnings" -and $Outcome.failures -eq 0 -and (Get-TvProp $Outcome "secondaryCopy") -eq "Failed") {
+        "The primary cloud backup completed, but the secondary copy could not be verified. Check the Azure Automation job for details."
+    } else { $script:TvOutcomeSummary[[string]$Outcome.status] }
     return New-TenuVaultBackupEvent -TenantId $TenantId -TenantName $TenantName -Status $Outcome.status `
         -BackupFolder $Outcome.backupFolder -NaturalKey $key -OccurredAt $Outcome.finishedAt `
         -TotalPolicies $Outcome.totalPolicies -Failures $Outcome.failures -FailedTypes @($Outcome.failedTypes) `
-        -Trigger $script:TvOutcomeTrigger[[string]$Outcome.trigger] -Message $script:TvOutcomeSummary[[string]$Outcome.status]
+        -Trigger $script:TvOutcomeTrigger[[string]$Outcome.trigger] -Message $summary
 }
 
 # ---------------------------------------------------------------------------
@@ -2816,7 +2824,7 @@ if ($LibraryOnly) { return }
 # ---------------------------------------------------------------------------
 
 $ErrorActionPreference = "Stop"
-$runbookVersion = "1.5.0"
+$runbookVersion = "1.6.0"
 $runAt = [DateTime]::UtcNow
 $runAtIso = ConvertTo-TvIso $runAt
 $eventsSent = 0

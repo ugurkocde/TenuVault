@@ -168,6 +168,11 @@ export function CloudBackupSettings({ tenant, community, cloud, scopeVersion = 0
   }
 
   const config = cloud.config
+  const secondaryAccount = config?.secondaryStorageAccount
+  const secondaryContainer = config?.secondaryContainer
+  const secondaryCopy = !cloud.statusError && cloud.status?.secondaryStorageAccount === secondaryAccount &&
+    cloud.status?.secondaryContainer === secondaryContainer ? cloud.status?.secondaryCopy : undefined
+  const viewingSecondary = storageAccount === secondaryAccount && secondaryContainer === "intune-backups"
   const runs = useMemo(
     () => (config?.linked && config.time ? nextRunsInZone(config, config.timeZone || timeZone, new Date(), 40) : []),
     [config, timeZone],
@@ -228,12 +233,26 @@ export function CloudBackupSettings({ tenant, community, cloud, scopeVersion = 0
                   )}
                 </dd>
               </div>
+              {!community && secondaryAccount && secondaryContainer && (
+                <div>
+                  <dt className="text-xs text-gray-500">Secondary copy</dt>
+                  <dd className="mt-0.5 break-words text-base text-gray-900">{secondaryAccount} / {secondaryContainer}</dd>
+                  <dd className={`text-xs ${secondaryCopy === "Failed" ? "text-amber-800" : "text-gray-500"}`}>
+                    {secondaryCopy === "Verified" ? "Last copy verified."
+                      : secondaryCopy === "Failed" ? "Last copy could not be verified. Check the Automation job output."
+                        : secondaryCopy === "Skipped" ? "Copy skipped because the last primary backup was incomplete."
+                          : "No copy result reported for this target."}
+                  </dd>
+                </div>
+              )}
             </dl>
             {storageAccount && config.storageAccount && storageAccount.toLowerCase() !== config.storageAccount.toLowerCase() && (
               <p className="rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900">
-                This tenant's storage is now {storageAccount}, but the cloud runner still writes to {config.storageAccount},
-                so its backups and status do not appear here. Run the setup again for the new account and paste its
-                output, or change the storage back in step 1.
+                {viewingSecondary
+                  ? `Backup History is showing the secondary account. Select ${config.storageAccount} in step 1 to see the cloud run status.`
+                  : <>This tenant's storage is now {storageAccount}, but the cloud runner still writes to {config.storageAccount},
+                    so its backups and status do not appear here. Run the setup again for the new account and paste its
+                    output, or change the storage back in step 1.</>}
               </p>
             )}
             {cloud.status && cloudRunbookNeedsUpgrade(cloud.status.runbookVersion) && (

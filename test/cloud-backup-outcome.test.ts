@@ -58,6 +58,11 @@ describe("cloud backup result notes", () => {
     expect(events[22]!.details).toContainEqual({ label: "Backup", value: "backup-2026-11-13-101500" })
   })
 
+  it("keeps the primary warning summary when the note also reports a secondary copy failure", () => {
+    expect(events[26]!.summary).toContain("secondary copy could not be verified")
+    expect(events[27]!.summary).toBe(events[1]!.summary)
+  })
+
   it("writes fixed result notes to the dedicated results container", () => {
     expect(backupRunbook.match(/Invoke-TvHttp -Uri \$target\.Uri -Token \$Token -Method "Put"/g)).toHaveLength(1)
     const sendOutcome = backupRunbook.slice(backupRunbook.indexOf("function Send-TvBackupOutcome"), backupRunbook.indexOf("# Audit receipts live"))

@@ -13,6 +13,8 @@ export interface CloudBackupConfig {
   resourceGroup: string
   automationAccount: string
   storageAccount: string
+  secondaryStorageAccount?: string
+  secondaryContainer?: string
   /**
    * Only in setup output from before runbook 1.2.0, which kept the recovery key in this Key
    * Vault. Current setups create no vault and print no keyVault line.
@@ -36,6 +38,9 @@ export interface CloudBackupStatus {
   lastMessage: string
   backupFolder: string | null
   runbookVersion: string
+  secondaryStorageAccount?: string
+  secondaryContainer?: string
+  secondaryCopy?: SecondaryCopyResult
   auditCapability?: boolean
   auditStatusUnavailable?: boolean
   auditPending?: number
@@ -47,6 +52,16 @@ export interface CloudBackupStatus {
 
 const GUID = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+const STORAGE_ACCOUNT = /^[a-z0-9]{3,24}$/
+const BLOB_CONTAINER = /^[a-z0-9](?:[a-z0-9]|-(?!-)){1,61}[a-z0-9]$/
+
+export type SecondaryCopyResult = "Verified" | "Failed" | "Skipped"
+
+function secondaryStorage(account: string, container: string) {
+  return STORAGE_ACCOUNT.test(account) && BLOB_CONTAINER.test(container)
+    ? { secondaryStorageAccount: account, secondaryContainer: container }
+    : {}
+}
 
 /** The per tenant suffix setup uses for Automation variables and the schedule name. */
 export function cloudTenantKey(tenantId: string): string {
@@ -92,7 +107,7 @@ export function parseCloudSetup(text: string): CloudBackupConfig | null {
   const storageAccount = get("storageaccount")
   const automationAccount = get("automationaccount")
   const resourceGroup = get("resourcegroup")
-  if (!GUID.test(tenantId) || !/^[a-z0-9]{3,24}$/.test(storageAccount) || !automationAccount || !resourceGroup) return null
+  if (!GUID.test(tenantId) || !STORAGE_ACCOUNT.test(storageAccount) || !automationAccount || !resourceGroup) return null
   const frequency = get("frequency").toLowerCase() === "weekly" || get("frequency").toLowerCase() === "week" ? "weekly" : "daily"
   const weekdayName = get("weekday")
   // The stored configuration round trips through this parser with a numeric weekday.
@@ -106,6 +121,7 @@ export function parseCloudSetup(text: string): CloudBackupConfig | null {
     resourceGroup,
     automationAccount,
     storageAccount,
+    ...secondaryStorage(get("secondarystorageaccount"), get("secondarycontainer")),
     ...(get("keyvault") ? { keyVault: get("keyvault") } : {}),
     scheduleName: get("schedulename") || `TenuVaultBackup-${cloudTenantKey(tenantId)}`,
     frequency,
@@ -128,12 +144,15 @@ export function parseCloudStatus(value: unknown, tenantId: string, auditStatus?:
   const audit = record.AuditStatusInResults !== true ? record
     : typeof record.RunId === "string" && auditRecord?.RunId === record.RunId && auditRecord.TenantId === record.TenantId
       ? auditRecord : null
+  const secondaryCopy = record.SecondaryCopy
   return {
     lastRunAt: text("LastRunAt"),
     lastStatus: text("LastStatus"),
     lastMessage: text("LastMessage"),
     backupFolder: typeof record.BackupFolder === "string" ? record.BackupFolder : null,
     runbookVersion: text("RunbookVersion"),
+    ...secondaryStorage(text("SecondaryStorageAccount"), text("SecondaryContainer")),
+    ...(secondaryCopy === "Verified" || secondaryCopy === "Failed" || secondaryCopy === "Skipped" ? { secondaryCopy } : {}),
     ...(record.AuditCapability === true ? {
       auditCapability: true,
       ...(audit ? {

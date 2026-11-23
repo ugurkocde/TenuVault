@@ -10,7 +10,8 @@ import { INTUNE_TYPES, typeForFolder } from "../src/shared/intune/registry"
 import { listSnapshot } from "../src/shared/intune/read"
 import { comparableSnapshot } from "../src/shared/intune/compare"
 import { COMPLIANCE_SETTING_KEYS, COMPLIANCE_SETTINGS_ID } from "../src/shared/intune/compliance-settings"
-import { PLAIN_CLOUD_RUNBOOK, cloudRunbookNeedsUpgrade, cloudStatusBlobName, parseCloudStatus } from "../src/shared/cloud-backup"
+import { PLAIN_CLOUD_RUNBOOK, cloudRunbookNeedsUpgrade, cloudStatusBlobName, parseCloudSetup, parseCloudStatus } from "../src/shared/cloud-backup"
+import { cloudOutcomeEvent, parseCloudOutcome } from "../src/shared/notifications/cloud-outcome"
 import { resolveBackupOwnership } from "../src/shared/backup-ownership"
 import { BACKUP_OWNER_FILE } from "../src/shared/constants"
 import { OTHER_TENANT_BACKUP, readOwnedBackup } from "../src/portal/lib/policies/backup-owner"
@@ -64,7 +65,7 @@ describe("Cloud audit contract", () => {
       expect(write.uri).toMatch(new RegExp(`-event-${TENANT}-${entry.job.runId}\\.json$`))
       expect(file).toMatchObject({ version: "2.0", metadata: { entryCount: 1, createdAt: entry.timestamp } })
       expect(entry).toMatchObject({ user: { tenantId: TENANT, name: "Cloud backup managed identity" },
-        job: { status, producer: "cloud-runbook", producerVersion: "1.5.0", stage: "terminal" } })
+        job: { status, producer: "cloud-runbook", producerVersion: RUNBOOK_VERSION, stage: "terminal" } })
       const note = JSON.parse(scenario.calls.find(call => call.method === "Put" && call.uri.includes("/cloud-backup-outcomes/"))!.body!)
       expect(entry.job.runId).toBe(note.runId)
       const name = new URL(write.uri).pathname.slice("/audit-logs/".length)
@@ -568,8 +569,7 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
 
   it("carries a plain runbook version, which the app does not flag for upgrade", () => {
     const version = RUNBOOK_VERSION
-    // 1.3.0 adds change reports on top of the first plain runbook, 1.2.0; 1.4.0 records how a run started.
-    expect(version).toBe("1.5.0")
+    expect(version).toBe("1.6.0")
     expect(PLAIN_CLOUD_RUNBOOK).toBe("1.2.0")
     expect(cloudRunbookNeedsUpgrade(version!)).toBe(false)
     expect(cloudRunbookNeedsUpgrade("1.1.0")).toBe(true)
@@ -750,6 +750,110 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
     expect(runbook).not.toMatch(/Method\s+"(Delete|Post|Patch)"/)
     expect(runbook).not.toMatch(/Get-AutomationVariable -Name \$Name/)
   })
+})
+
+describe("Secondary cloud backup copies", () => {
+  it.runIf(Boolean(pwsh))("copies one complete folder, verifies paged listings and reports copy failures as backup warnings", () => {
+    const script = fileURLToPath(new URL("./fixtures/cloud-backup/plain-run.ps1", import.meta.url))
+    const runs = execFileSync(pwsh!, ["-NoProfile", "-File", script, "-SecondaryCopyTests"], { encoding: "utf8", timeout: 60_000 })
+      .trim().split(/\r?\n/).map((line) => JSON.parse(line) as Run & { scenario: string; copyAttempts: number })
+    expect(runs.map((run) => run.scenario)).toEqual(["verified", "denied", "wrong-size", "primary-warnings", "data-retry", "manifest-denied", "malformed", "off"])
+    for (const run of runs) {
+      const verified = run.scenario === "verified" || run.scenario === "data-retry"
+      const primaryWarnings = run.scenario === "primary-warnings"
+      const malformed = run.scenario === "malformed"
+      const off = run.scenario === "off"
+      const skipped = primaryWarnings || malformed
+      const copy = verified ? "Verified" : skipped ? "Skipped" : off ? undefined : "Failed"
+      const statusName = primaryWarnings || copy === "Failed" ? "CompletedWithWarnings" : "Success"
+      expect(run.copyAttempts).toBe(run.scenario === "data-retry" ? 2 : 0)
+      expect(run.error).toBeNull()
+      const manifest = run.calls.find((call) => call.uri.startsWith(BACKUP_CONTAINER_URL) && call.uri.endsWith("/metadata.json"))!
+      expect(JSON.parse(manifest.body!)).toMatchObject({ Status: primaryWarnings ? "CompletedWithWarnings" : "Success" })
+      const status = run.calls.find((call) => call.uri.endsWith(cloudStatusBlobName(TENANT)) && call.method === "Put")!
+      const rawStatus = JSON.parse(status.body!)
+      const parsedStatus = parseCloudStatus(rawStatus, TENANT)!
+      expect(parsedStatus.lastStatus).toBe(statusName)
+      expect(parsedStatus.secondaryCopy).toBe(copy)
+      if (off || malformed) {
+        expect(rawStatus).not.toHaveProperty("SecondaryStorageAccount")
+        expect(rawStatus).not.toHaveProperty("SecondaryContainer")
+        expect(run.output!.join("\n").includes("Secondary backup copy skipped")).toBe(malformed)
+      } else {
+        expect(parsedStatus).toMatchObject({ secondaryStorageAccount: "stcontosorecovery", secondaryContainer: "backup-copies" })
+      }
+      const note = run.calls.find((call) => call.uri.includes("/cloud-backup-outcomes/"))!
+      const outcome = parseCloudOutcome(JSON.parse(note.body!), TENANT)!
+      expect(outcome.secondaryCopy).toBe(copy)
+      const alert = cloudOutcomeEvent(outcome, TENANT, "Contoso")
+      expect(alert.type).toBe(statusName === "Success" ? "backup.succeeded" : "backup.warning")
+      if (copy === "Failed") {
+        expect(outcome.failures).toBe(0)
+        expect(alert.summary).toContain("secondary copy could not be verified")
+        expect(run.output!.join("\n")).toContain(run.scenario === "wrong-size" ? "blob names or sizes differ" : "HTTP 403")
+      }
+      const secondary = run.calls.filter((call) => call.uri.includes("stcontosorecovery.blob.core.windows.net"))
+      const copies = secondary.filter((call) => call.method === "Put")
+      if (skipped || off) expect(secondary).toHaveLength(0)
+      else {
+        expect(run.calls.indexOf(copies[0]!)).toBeGreaterThan(run.calls.indexOf(manifest))
+        expect(copies[0]!.uri).toMatch(/\/\.tenuvault-owner\.json$/)
+        expect(copies.every((call) => call.ifNoneMatch === "*")).toBe(true)
+      }
+      if (verified || run.scenario === "manifest-denied") {
+        expect(secondary.filter((call) => call.uri.includes("&marker=page%2B2"))).toHaveLength(1)
+        expect(secondary.at(-2)!.method).toBe("Get")
+        expect(secondary.at(-1)!.uri).toMatch(/\/metadata\.json$/)
+        expect(run.calls.indexOf(status)).toBeGreaterThan(run.calls.indexOf(secondary.at(-1)!))
+      } else expect(copies.some((call) => call.uri.endsWith("/metadata.json"))).toBe(false)
+    }
+  }, 60_000)
+
+  it.runIf(Boolean(pwsh))("validates the target and assigns the same managed identity to the secondary container across subscriptions", () => {
+    const script = fileURLToPath(new URL("./fixtures/cloud-backup/setup-upgrade.ps1", import.meta.url))
+    type Setup = { scenario: string; error: string | null; actions: string[]; assignment: object | null; subscriptionAfter: string; saved: string; writes: string[]; output: string[]; assignmentAttempts: number }
+    const rows = execFileSync(pwsh!, ["-NoProfile", "-File", script, "-SecondaryCopyTests"], { encoding: "utf8", timeout: 60_000 })
+      .trim().split(/\r?\n/).map((line) => JSON.parse(line) as Setup)
+    const run = (name: string) => rows.find((row) => row.scenario === name)!
+    for (const [name, container] of [["default", "intune-backups"], ["custom", "backup-copies"]] as const) {
+      const row = run(name)
+      expect(row.error).toBeNull()
+      expect(row.assignment).toEqual({
+        Subscription: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        ObjectId: "00000000-0000-0000-0000-00000000aaaa", ObjectType: "ServicePrincipal",
+        Scope: `/subscriptions/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/resourceGroups/rg-copy/providers/Microsoft.Storage/storageAccounts/stcontosorecovery/blobServices/default/containers/${container}`,
+        RoleDefinitionId: "existing-writer-role",
+      })
+      expect(row.actions).toContain(`create ${container} with access None`)
+      expect(row.actions).toContain("extend writer")
+      expect(row.saved).toBe((row.assignment as { Scope: string }).Scope)
+      expect(parseCloudSetup(row.output.join("\n"))).toMatchObject({ secondaryStorageAccount: "stcontosorecovery", secondaryContainer: container })
+    }
+    expect(rows.every((row) => row.subscriptionAfter === "bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee")).toBe(true)
+    expect(run("rerun").actions).not.toContain("grant secondary")
+    expect(run("omitted").saved).toBe(run("custom").saved)
+    expect(run("omitted").writes).not.toContain("TenuVaultSecondaryStorage-11111111")
+    expect(run("disable").saved).toBe("off")
+    expect(parseCloudSetup(run("disable").output.join("\n"))).not.toHaveProperty("secondaryContainer")
+    expect(run("denied")).toMatchObject({ error: expect.stringContaining("-AllowSecondaryDeleteRole"), assignment: null })
+    expect(run("denied").writes).not.toContain("TenuVaultSecondaryStorage-11111111")
+    expect(run("fallback").assignment).toMatchObject({ RoleDefinitionId: "ba92f5b4-2d11-453d-a403-e96b0029c9fe" })
+    expect(run("fallback").output.join("\n")).toContain("This role can delete blobs")
+    for (const name of ["fallback-omitted", "fallback-rerun"]) {
+      expect(run(name).error).toBeNull()
+      expect(run(name).output.join("\n")).toContain("Remove-AzRoleAssignment -ObjectId '00000000-0000-0000-0000-00000000aaaa' -RoleDefinitionId 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'")
+    }
+    expect(run("fallback-rerun").assignment).toMatchObject({ RoleDefinitionId: "existing-writer-role" })
+    expect(run("propagation")).toMatchObject({ error: null, assignmentAttempts: 3 })
+    expect(run("propagation").actions.filter((action) => action.startsWith("retry"))).toEqual(["retry after 2s", "retry after 4s"])
+    expect(run("missing-role-definition-write")).toMatchObject({ error: expect.stringContaining("Missing: Microsoft.Authorization/roleDefinitions/write"), assignment: null, actions: [] })
+    expect(run("container-forbidden")).toMatchObject({ error: "Forbidden reading secondary container", assignment: null })
+    expect(run("container-forbidden").actions).not.toContain("create intune-backups with access None")
+    expect(run("unexpected")).toMatchObject({ error: "Temporary network error", assignment: null })
+    for (const name of ["bad-id", "bad-container", "container-only", "same-account", "different-tenant"]) {
+      expect(run(name)).toMatchObject({ error: expect.any(String), assignment: null, actions: [] })
+    }
+  }, 60_000)
 })
 
 describe("New-TenuVaultCloudBackup.ps1", () => {

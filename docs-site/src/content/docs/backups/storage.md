@@ -119,6 +119,12 @@ New backups go to the new location. Existing backups stay where they are, and Te
 
 The **TenuVault Backup Writer** role can overwrite existing blobs in `intune-backups`. The storage owner chooses whether to enable blob versioning or apply an immutability policy. The separate audit writer grant permits read and create on the audit container.
 
+### Restore from a secondary cloud copy
+
+When [a second cloud copy](/backups/cloud/#copy-future-backups-to-a-second-storage-account) is in `intune-backups`, use **Change storage** to select the secondary account. Confirm access, save, then open Backup History and select the backup to restore. You need access to the account even if it is in another subscription. When both accounts are available, switch back to the primary after recovery to resume desktop backups and see the cloud schedule status there.
+
+If setup used a custom container, first [copy the complete backup folder](https://learn.microsoft.com/en-us/azure/storage/common/storage-use-azcopy-blobs-copy), including its ownership marker and `metadata.json`, into `intune-backups` in the recovery account. Keep the folder name and its paths intact. Then select that account with **Change storage** and restore from Backup History.
+
 ## Retention
 
 TenuVault deletes old backups automatically so storage does not grow without limit.

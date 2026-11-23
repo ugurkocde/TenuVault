@@ -99,6 +99,22 @@ function file(content: Record<string, unknown>) {
 }
 
 describe("settings file export", () => {
+  it("round trips the cloud backup second copy target", () => {
+    const a = configured()
+    const b = configured()
+    const key = `renderer.tenuvault_cloud_backup_${TENANT}`
+    const secondary = { secondaryStorageAccount: "contosorecovery", secondaryContainer: "backup-copies" }
+    a.store.set(key, JSON.stringify({ ...CLOUD, ...secondary }))
+    const exported = a.transfer.exportFile({ app: false, tenantIds: [TENANT], connection: false, appearance: "system" })
+    expect(JSON.parse(exported).tenants[0].cloudBackup).toMatchObject(secondary)
+    const preview = b.transfer.open(exported, "system")
+    const id = `${TENANT}:cloudBackup`
+    expect(find(preview, id)).toMatchObject({ status: "change", note: expect.stringMatching(/secondary storage account.*secondary container/) })
+    expect(preview.skipped).toEqual([])
+    b.transfer.apply(preview.importId, [id], "system")
+    expect(JSON.parse(b.store.get(key)!)).toMatchObject(secondary)
+  })
+
   it("writes a readable, versioned file with only the chosen parts and the preferences the admin set", () => {
     const a = configured()
     const exported = JSON.parse(a.transfer.exportFile({ app: true, tenantIds: [TENANT], connection: false, appearance: "dark" }))
@@ -453,6 +469,10 @@ describe("review integrity", () => {
       { ...CLOUD, weekday: 9 },
       { ...CLOUD, time: "25:00" },
       { ...CLOUD, subscriptionId: "not-a-guid" },
+      { ...CLOUD, secondaryStorageAccount: "contosorecovery", secondaryContainer: "copies\nkeyVault=injected" },
+      { ...CLOUD, secondaryStorageAccount: 1, secondaryContainer: "copies" },
+      { ...CLOUD, secondaryStorageAccount: "contosorecovery", secondaryContainer: "bad--container" },
+      { ...CLOUD, secondaryStorageAccount: "contosorecovery" },
     ]) {
       const preview = b.transfer.open(file({ tenants: [{ tenantId: TENANT, cloudBackup }] }), "system")
       expect(find(preview, `${TENANT}:cloudBackup`)).toMatchObject({ status: "blocked", reason: "The value in the file is not valid." })

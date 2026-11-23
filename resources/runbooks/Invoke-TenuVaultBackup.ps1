@@ -64,7 +64,7 @@ param(
     [switch]$ReplayOlderAudit
 )
 
-$script:RunbookVersion = "1.5.0"
+$script:RunbookVersion = "1.6.0"
 $script:GraphBeta = "https://graph.microsoft.com/beta"
 $script:Container = "intune-backups"
 # One status blob per tenant, so status blobs never collide when tenants share tooling.
@@ -359,6 +359,7 @@ function Get-TvFolderList {
 
 $script:HttpClient = [System.Net.Http.HttpClient]::new()
 $script:HttpClient.Timeout = [TimeSpan]::FromSeconds(90)
+$script:CopyHttpClient = $null
 
 class TvHttpError : System.Exception {
     [int]$Status
@@ -435,6 +436,17 @@ function Invoke-TvHttp {
         [long]$MaxBytes = 0,
         [int]$BudgetMs = 0
     )
+    $client = $script:HttpClient
+    if ($Headers -and $Headers.ContainsKey("x-ms-copy-source-authorization")) {
+        if (-not $script:CopyHttpClient) {
+            # HttpClient strips Authorization on redirect but preserves the source bearer header.
+            $handler = [System.Net.Http.HttpClientHandler]::new()
+            $handler.AllowAutoRedirect = $false
+            $script:CopyHttpClient = [System.Net.Http.HttpClient]::new($handler)
+            $script:CopyHttpClient.Timeout = [TimeSpan]::FromMinutes(5)
+        }
+        $client = $script:CopyHttpClient
+    }
     $clock = if ($BudgetMs) { [System.Diagnostics.Stopwatch]::StartNew() }
     $attempts = if ($BudgetMs) { 1 } else { 3 }
     $lastError = $null
@@ -451,8 +463,8 @@ function Invoke-TvHttp {
         $completion = if ($MaxBytes -gt 0) { [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead } else { [System.Net.Http.HttpCompletionOption]::ResponseContentRead }
         $cancel = if ($BudgetMs) { [System.Threading.CancellationTokenSource]::new([Math]::Max(1, $BudgetMs - [int]$clock.ElapsedMilliseconds)) }
         try {
-            $response = if ($cancel) { $script:HttpClient.SendAsync($request, $completion, $cancel.Token).GetAwaiter().GetResult() }
-                else { $script:HttpClient.SendAsync($request, $completion).GetAwaiter().GetResult() }
+            $response = if ($cancel) { $client.SendAsync($request, $completion, $cancel.Token).GetAwaiter().GetResult() }
+                else { $client.SendAsync($request, $completion).GetAwaiter().GetResult() }
         }
         catch {
             $lastError = $_
@@ -522,9 +534,9 @@ function Invoke-TvHttp {
 # ---------------------------------------------------------------------------
 
 function Get-TvBlobTarget {
-    param([Parameter(Mandatory)][string]$Account, [Parameter(Mandatory)][string]$BlobName)
+    param([Parameter(Mandatory)][string]$Account, [Parameter(Mandatory)][string]$BlobName, [string]$Container = $script:Container)
     $encoded = ($BlobName -split "/" | ForEach-Object { [uri]::EscapeDataString($_) }) -join "/"
-    return @{ Uri = "https://$Account.blob.core.windows.net/$script:Container/$encoded" }
+    return @{ Uri = "https://$Account.blob.core.windows.net/$Container/$encoded" }
 }
 
 function Set-TvBlob {
@@ -543,6 +555,93 @@ function Set-TvBlob {
     }
     if ($CreateOnly) { $headers["If-None-Match"] = "*" }
     [void](Invoke-TvHttp -Uri $target.Uri -Token $Token -Method "Put" -Headers $headers -BodyBytes ([Text.Encoding]::UTF8.GetBytes($Body)) -ContentType "application/json")
+}
+
+function Get-TvSecondaryTarget {
+    param([string]$PrimaryAccount)
+    $value = Get-TvAutomationVariable "TenuVaultSecondaryStorage"
+    if (-not $value -or $value -eq "off") { return }
+    if ($value -notmatch '^/subscriptions/[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}/resourceGroups/[\w.()-]+/providers/Microsoft\.Storage/storageAccounts/([a-z0-9]{3,24})/blobServices/default/containers/((?-i:[a-z0-9](?:[a-z0-9]|-(?!-)){1,61}[a-z0-9]))\z' -or $Matches[1] -eq $PrimaryAccount) {
+        throw "TenuVaultSecondaryStorage must name a container in a separate storage account."
+    }
+    return @{ Account = $Matches[1].ToLowerInvariant(); Container = $Matches[2].ToLowerInvariant() }
+}
+
+function Get-TvCopyFolderBlobs {
+    param([string]$Account, [string]$Container, [string]$Prefix, [string]$Token)
+    $base = "https://$Account.blob.core.windows.net/$Container`?restype=container&comp=list&prefix=$([uri]::EscapeDataString($Prefix))"
+    $headers = @{ "x-ms-version" = "2021-12-02"; "x-ms-date" = [DateTime]::UtcNow.ToString("R") }
+    $blobs = [System.Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
+    $markers = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $next = ""
+    do {
+        $uri = if ($next) { "$base&marker=$([uri]::EscapeDataString($next))" } else { $base }
+        [xml]$page = (Invoke-TvHttp -Uri $uri -Token $Token -Headers $headers -MaxBytes (16MB)).Text
+        foreach ($blob in $page.EnumerationResults.Blobs.Blob) {
+            if (-not $blob) { continue }
+            $name = [string]$blob.Name
+            $length = [long]0
+            if (-not $name.StartsWith($Prefix, [StringComparison]::Ordinal) -or
+                -not [long]::TryParse([string]$blob.Properties.'Content-Length', [ref]$length) -or $length -lt 0) {
+                throw "Azure returned an invalid backup blob listing."
+            }
+            $blobs.Add($name, @{ Length = $length; ETag = [string]$blob.Properties.Etag })
+        }
+        $next = [string]$page.EnumerationResults.NextMarker
+        if ($next -and -not $markers.Add($next)) { throw "Azure repeated a backup blob listing page." }
+    } while ($next)
+    return ,$blobs
+}
+
+function Copy-TvBackupBlob {
+    param([hashtable]$Context, [hashtable]$Target, [string]$Name, [string]$ETag, [switch]$VerifyExisting)
+    if (-not $ETag) { throw "Azure did not return a source blob ETag." }
+    $source = Get-TvBlobTarget $Context.StorageAccount $Name
+    $destination = Get-TvBlobTarget $Target.Account $Name $Target.Container
+    # Put Blob From URL accepts the storage bearer token separately for source and destination.
+    $headers = @{
+        "x-ms-version" = "2021-12-02"
+        "x-ms-date" = [DateTime]::UtcNow.ToString("R")
+        "x-ms-blob-type" = "BlockBlob"
+        "x-ms-copy-source" = $source.Uri
+        "x-ms-copy-source-authorization" = "Bearer $($Context.StorageToken)"
+        "x-ms-source-if-match" = '"' + $ETag.Trim('"') + '"'
+        "If-None-Match" = "*"
+    }
+    try {
+        $response = Invoke-TvHttp -Uri $destination.Uri -Token $Context.StorageToken -Method Put -Headers $headers -BodyBytes ([byte[]]@())
+    } catch [TvHttpError] {
+        # A prior HTTP attempt can commit a data blob before its response is lost. The
+        # destination listing checks that the create-only write left a blob of the right size.
+        if ($VerifyExisting -and $_.Exception.Status -eq 412 -and $_.Exception.Message -ceq "HTTP 412 ConditionNotMet") { return }
+        throw
+    }
+    if ($response.Status -ne 201) { throw "Azure did not confirm the synchronous blob copy." }
+}
+
+function Copy-TvBackupToSecondary {
+    param([hashtable]$Context, [hashtable]$Target, [string]$Folder, [int]$Saved)
+    $prefix = "$Folder/"
+    $manifest = "$Folder/metadata.json"
+    $owner = "$Folder/.tenuvault-owner.json"
+    $source = Get-TvCopyFolderBlobs $Context.StorageAccount $script:Container $prefix $Context.StorageToken
+    if ($source.Count -lt ($Saved + 2) -or -not $source.ContainsKey($manifest) -or -not $source.ContainsKey($owner)) {
+        throw "The primary backup listing does not match the completed backup."
+    }
+    # Claim the destination folder first. Publish the manifest only after all its data verifies.
+    Copy-TvBackupBlob $Context $Target $owner $source[$owner].ETag
+    foreach ($name in $source.Keys) {
+        if ($name -cne $owner -and $name -cne $manifest) { Copy-TvBackupBlob $Context $Target $name $source[$name].ETag -VerifyExisting }
+    }
+    $copied = Get-TvCopyFolderBlobs $Target.Account $Target.Container $prefix $Context.StorageToken
+    if ($copied.Count -ne ($source.Count - 1)) { throw "Secondary copy verification failed: blob counts differ." }
+    foreach ($name in $copied.Keys) {
+        if ($name -ceq $manifest -or -not $source.ContainsKey($name) -or $copied[$name].Length -ne $source[$name].Length) {
+            throw "Secondary copy verification failed: blob names or sizes differ."
+        }
+    }
+    # The final, conditional synchronous copy guarantees the full source manifest was written.
+    Copy-TvBackupBlob $Context $Target $manifest $source[$manifest].ETag
 }
 
 # ---------------------------------------------------------------------------
@@ -572,7 +671,8 @@ function Send-TvBackupOutcome {
         [int]$Failures = 0,
         [string[]]$FailedTypes = @(),
         # How the run started (Get-TvRunTrigger), so the watcher's alert names a run started by hand.
-        [ValidateSet("scheduled", "manual")][string]$Trigger = "scheduled"
+        [ValidateSet("scheduled", "manual")][string]$Trigger = "scheduled",
+        [ValidateSet("Verified", "Failed", "Skipped")][string]$SecondaryCopy
     )
     # One note per run: the failure path can follow a Failed result that was already noted.
     if ($script:OutcomeSent) { return }
@@ -589,6 +689,7 @@ function Send-TvBackupOutcome {
         failedTypes   = @($FailedTypes | Where-Object { $_ } | Select-Object -First 10 | ForEach-Object { [string]$_ })
         trigger       = $Trigger
     }
+    if ($SecondaryCopy) { $note.secondaryCopy = $SecondaryCopy }
     $name = if ($BackupFolder) { $BackupFolder } else { "run-$RunId" }
     $uri = "https://$Account.blob.core.windows.net/$script:OutcomeContainer/cloud-backup-outcomes/$([uri]::EscapeDataString($name)).json"
     $headers = @{
@@ -3155,8 +3256,15 @@ function Set-TvCloudStatus {
         RunId          = $Context.RunId
         AuditCapability = $true
         AuditStatusInResults = $true
-    } | ConvertTo-Json
-    try { Set-TvBlob $Context.StorageAccount "$script:StatusBlobPrefix$($Context.TenantId.Substring(0, 8).ToLowerInvariant()).json" $body $Context.StorageToken }
+    }
+    if ($Context.SecondaryCopy) {
+        $body.SecondaryCopy = $Context.SecondaryCopy
+    }
+    if ($Context.SecondaryTarget) {
+        $body.SecondaryStorageAccount = $Context.SecondaryTarget.Account
+        $body.SecondaryContainer = $Context.SecondaryTarget.Container
+    }
+    try { Set-TvBlob $Context.StorageAccount "$script:StatusBlobPrefix$($Context.TenantId.Substring(0, 8).ToLowerInvariant()).json" ($body | ConvertTo-Json) $Context.StorageToken }
     catch { Write-Output "Could not record the cloud backup status: $(Get-TvSafeError $_.Exception.Message)" }
 }
 
@@ -3364,8 +3472,33 @@ function Invoke-TvBackup {
         $metadata.Items = $sortedItems
         Set-TvBlob $storageAccount "$backupFolder/metadata.json" ($metadata | ConvertTo-Json -Depth 100) $storageToken
         Write-Output "Backup completed: $totalPolicies policies in $($metadata.Duration) ($status). Older backups were kept: the cloud identity cannot delete. The next desktop backup made with an admin's sign-in applies retention."
-        Set-TvCloudStatus $context $status "Backup $status, $totalPolicies policies." $backupFolder
-        Send-TvBackupOutcome -Account $storageAccount -Token $storageToken -TenantId $tenantId -RunId $runId -Status $status -BackupFolder $backupFolder -TotalPolicies $totalPolicies -Failures $failures -FailedTypes @($failedTypes) -Trigger $runTrigger
+        $reportedStatus = $status
+        try {
+            $context.SecondaryTarget = Get-TvSecondaryTarget $storageAccount
+            if ($context.SecondaryTarget) {
+                $context.SecondaryCopy = "Skipped"
+                if ($status -eq "Success") {
+                    Copy-TvBackupToSecondary $context $context.SecondaryTarget $backupFolder $saved
+                    $context.SecondaryCopy = "Verified"
+                    Write-Output "Secondary backup copy verified."
+                }
+            }
+        } catch {
+            if ($context.SecondaryTarget) {
+                $context.SecondaryCopy = "Failed"
+                $reportedStatus = "CompletedWithWarnings"
+                Write-Warning -WarningAction Continue "Secondary backup copy could not be verified: $(Get-TvSafeError $_.Exception.Message)"
+            } else {
+                $context.SecondaryCopy = "Skipped"
+                Write-Warning -WarningAction Continue "Secondary backup copy skipped: $(Get-TvSafeError $_.Exception.Message)"
+            }
+        }
+        $message = if ($status -eq "Success" -and $reportedStatus -eq "CompletedWithWarnings") {
+            "Primary backup succeeded, $totalPolicies policies. Secondary copy could not be verified."
+        } else { "Backup $status, $totalPolicies policies." }
+        Set-TvCloudStatus $context $reportedStatus $message $backupFolder
+        $outcomeArgs = if ($context.SecondaryCopy) { @{ SecondaryCopy = $context.SecondaryCopy } } else { @{} }
+        Send-TvBackupOutcome -Account $storageAccount -Token $storageToken -TenantId $tenantId -RunId $runId -Status $reportedStatus -BackupFolder $backupFolder -TotalPolicies $totalPolicies -Failures $failures -FailedTypes @($failedTypes) -Trigger $runTrigger @outcomeArgs
         if ($status -eq "Failed") { throw "The backup saved no policies. See the runbook output above." }
         # Only a complete backup is compared, like the desktop app's report after a scheduled backup:
         # items a backup with warnings could not read would show up as deleted.
