@@ -1,4 +1,4 @@
-import { completeHalf, largeRunProblems, matchingCompanions, ordinaryOnlyManifest } from "../../../../shared/backup-companion"
+import { completeHalf, largeRunProblems, matchingCompanions, ordinaryOnlyManifest, withRunRecord } from "../../../../shared/backup-companion"
 import { backupStoragePath, isLargeBackup } from "../../../../shared/backup-storage"
 import { exportLargeArchive, exportMixedArchive } from "../../../../main/backup/large-archive"
 import { Readable } from "node:stream"
@@ -83,12 +83,23 @@ export async function POST(request: NextRequest) {
     let ordinaryExport: Record<string, any> | null = null
     const archiveResponse = async (largeOwner: BackupOwnerRead): Promise<NextResponse | null> => {
       if (!largeOwner.ok) return NextResponse.json({ error: largeOwner.error }, { status: largeOwner.status })
-      const metadata = largeOwner.metadata
+      let metadata = largeOwner.metadata
+      // A split run whose early manifest could not be replaced keeps its final result in its own record.
+      if (metadata && !isLargeBackup(backupId) && metadata.CompanionBackup !== undefined && typeof metadata.RunStatus !== "string") {
+        let record: Record<string, any> | null = null
+        try { record = await readJson(`${backupId}/${BACKUP_RUN_RECORD_FILE}`) } catch { /* Without a record the early manifest stands. */ }
+        metadata = withRunRecord(backupId, metadata, record) ?? metadata
+      }
       if (metadata && (metadata.CompanionBackup !== undefined || metadata.LargeBackupOutcomes !== undefined)) {
         const otherId = metadata.CompanionBackup
         let other: Record<string, any> | null = null
         if (typeof otherId === "string" && isBackupName(otherId)) {
           try { other = await readJson(`${otherId}/metadata.json`) } catch { /* The ordinary subset remains exportable. */ }
+          if (other && isLargeBackup(backupId) && typeof other.RunStatus !== "string") {
+            let record: Record<string, any> | null = null
+            try { record = await readJson(`${otherId}/${BACKUP_RUN_RECORD_FILE}`) } catch { /* Without a record the early manifest stands. */ }
+            other = withRunRecord(otherId, other, record) ?? other
+          }
         }
         const matches = matchingCompanions(backupId, metadata, otherId, other) && metadata.TenantId?.toLowerCase() === String(tenantId).toLowerCase()
         if (matches && completeHalf(metadata) && completeHalf(other) && !largeRunProblems(isLargeBackup(backupId) ? other! : metadata).length && body.ordinaryOnly !== true) {

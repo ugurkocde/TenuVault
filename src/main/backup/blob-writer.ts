@@ -6,7 +6,7 @@ import { oversizedOwnershipFile } from "../../shared/backup-ownership"
 import { retryDelay, retryableStatus, sleep } from "../graph-retry"
 import { FetchApplicationError } from "../api/network-error"
 import type { NetworkCircuit } from "./engine"
-import { MAX_LIST_PAGES, REQUEST_ATTEMPTS, BlobClaimError, ProtectedBlobError, RequestTimeoutError, RetryableStorageError, StorageError, LargeStorageError, TokenError, isImmutabilityRefusal, requestFailure, storageError, storageFailure, withAbort, withRequestTimeout } from "./request"
+import { MAX_LIST_PAGES, REQUEST_ATTEMPTS, BlobClaimError, ImmutableBlobError, ProtectedBlobError, RequestTimeoutError, RetryableStorageError, StorageError, LargeStorageError, TokenError, isImmutabilityRefusal, requestFailure, storageError, storageFailure, withAbort, withRequestTimeout } from "./request"
 
 /** Writes blobs to Azure or, for local accounts, to the encrypted store via the fetch bridge. */
 export class BlobWriter {
@@ -62,6 +62,11 @@ export class BlobWriter {
         || isImmutabilityRefusal(response.status, response.headers.get("x-ms-error-code") ?? ""))) {
         if (await landed(response, signal)) return
       }
+      // A refusal by an immutability policy or legal hold keeps the provider's code, so a caller can tell
+      // it from a permission refusal.
+      const headerCode = response.headers.get("x-ms-error-code") ?? ""
+      const bodyCode = isImmutabilityRefusal(response.status, headerCode) ? headerCode : /<Code>([^<]+)<\/Code>/.exec(await response.clone().text())?.[1] ?? ""
+      if (isImmutabilityRefusal(response.status, bodyCode)) throw new ImmutableBlobError(bodyCode, await storageError(response, this.account))
       throw new StorageError(await storageError(response, this.account))
     }, beforeCommit, onDispatch, onUnconfirmed)
   }

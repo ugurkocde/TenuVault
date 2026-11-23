@@ -404,8 +404,11 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
       const chosen = await load(backupId)
       if (controller.signal.aborted) return
       setItems(chosen.items)
-      // A companion's later page keeps the paging it was opened with until the companion answers.
-      if (chosen.paging || !companionId || largePage === 0) setLargePaging(chosen.paging)
+      // A companion's later page keeps the paging it was opened with until the companion answers. An empty
+      // later page of a large backup is past its last one: Previous stays and Next turns off.
+      if (chosen.paging) setLargePaging(chosen.paging)
+      else if (largePage > 0 && isLargeBackup(backupId)) setLargePaging(previous => previous && { ...previous, hasMore: false })
+      else if (!companionId || largePage === 0) setLargePaging(null)
       // A mixed run keeps its large types, such as directory objects, in a verified companion backup.
       // It is added on its own and never holds back or removes the chosen backup's items.
       if (!companionId) return
@@ -441,11 +444,15 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
     })().catch((error: unknown) => {
       if (controller.signal.aborted) return
       if (error instanceof DOMException && error.name === "AbortError") return
+      // An ordinary backup has no pages of its own, so a failure on a later page of its companion returns
+      // once to page 1, where the chosen backup's items show again.
+      if (largePage > 0 && !isLargeBackup(backupId)) { setLargePage(0); return }
       showPlanError(error)
       setItemsError(error instanceof Error ? error.message : String(error))
       // A large backup's unreadable page may be the only one, so the pages around it stay reachable, up to
-      // the last page the route serves; an empty page still ends paging.
-      if (isLargeBackup(backupId)) {
+      // the last page the route serves; an empty page still ends paging. A service view that hides every
+      // large type has no page to reach.
+      if (isLargeBackup(backupId) && INTUNE_TYPES.some(type => type.volume === "large" && matchesBackupService(type.folder, contentsService))) {
         setItems([])
         setLargePaging(previous => ({ hasMore: true, total: previous?.total ?? null }))
       }

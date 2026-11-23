@@ -3,6 +3,19 @@ import { isBackupName } from "./intune/backup-names"
 
 export type RunManifest = Record<string, any>
 
+/**
+ * The ordinary manifest of a split run as its final version would read. When storage refused replacing
+ * the early manifest, the run's own record beside it supplies the run status, totals and large outcomes,
+ * but only when it names the same folder, run, tenant and sign-in mode. Anything else returns the
+ * manifest unchanged.
+ */
+export function withRunRecord(id: string, metadata: RunManifest | null | undefined, record: RunManifest | null | undefined): RunManifest | null | undefined {
+  if (!metadata || metadata.CompanionBackup === undefined || typeof metadata.RunStatus === "string" || !record || typeof record !== "object") return metadata
+  if (record.BackupFolder !== id || metadata.BackupFolder !== id || typeof record.RunStatus !== "string" || typeof metadata.RunId !== "string" || record.RunId !== metadata.RunId
+    || typeof record.TenantId !== "string" || record.TenantId.toLowerCase() !== String(metadata.TenantId).toLowerCase() || record.AuthMode !== metadata.AuthMode) return metadata
+  return { ...metadata, RunStatus: record.RunStatus, RunCounts: record.RunCounts, ...(Array.isArray(record.LargeBackupOutcomes) ? { LargeBackupOutcomes: record.LargeBackupOutcomes } : {}) }
+}
+
 /** Links are evidence only when both manifests identify the same run and tenant. */
 export function matchingCompanions(id: string, metadata: RunManifest, otherId: unknown, other: RunManifest | null | undefined): boolean {
   return typeof otherId === "string" && isBackupName(id) && isBackupName(otherId) && isLargeBackup(id) !== isLargeBackup(otherId)

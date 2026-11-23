@@ -67,7 +67,8 @@ for (const azure of [false, true]) describe(azure ? "Azure emulator mixed runs" 
     undo = registerTestTypes([largeType])
     const f = await setup()
     await f.seed(ordinary); await f.seed(large, true)
-    const first = { ...await f.read(ordinary), RunId: "same-run", CompanionBackup: large, LargeBackupOutcomes: [{ Folder: "AuthorizationPolicy", Outcome: "saved", Saved: 1 }] }
+    // A finished split run's ordinary manifest is its final one, with the run's status.
+    const first = { ...await f.read(ordinary), RunId: "same-run", CompanionBackup: large, LargeBackupOutcomes: [{ Folder: "AuthorizationPolicy", Outcome: "saved", Saved: 1 }], RunStatus: "Success", RunCounts: { saved: 2, failures: 0 } }
     const second = { ...await f.read(large), RunId: "same-run", CompanionBackup: ordinary }
     await f.write(ordinary, "metadata.json", first); await f.write(large, "metadata.json", second)
     return { ...f, first, second }
@@ -439,6 +440,33 @@ for (const azure of [false, true]) describe(azure ? "Azure emulator mixed runs" 
     expect(early.RunStatus).toBeUndefined()
     expect(await f.read(job.backupFolder!, "run-status.json")).toMatchObject({ BackupFolder: job.backupFolder, TenantId: TENANT, RunId: early.RunId, RunStatus: "Success", RunCounts: { failures: 0 } })
     expect((await validate(f.request({ backupId: job.backupFolder }))).status).toBe(200)
+    // History and the full export read the run's final result from its record.
+    const rows = await (await history(f.request({ summary: true }))).json()
+    expect(rows.backups.find((entry: any) => entry.id === job.backupFolder)).toMatchObject({ ordinaryOnlyExport: false })
+    const archive = await download(f.request({ backupId: job.backupFolder }))
+    expect(archive.status).toBe(200)
+    expect(archive.headers.get("content-type")).toBe("application/x-tar")
+    const bytes = Buffer.from(await archive.arrayBuffer()).toString("latin1")
+    expect(bytes).not.toContain("run-status.json")
+    expect(bytes).toMatch(/"RunStatus":\s*"Success"/)
+  })
+  it("keeps a permission refusal of the final ordinary manifest a failure, without a run record", async () => {
+    undo = registerTestTypes([largeType])
+    const f = await setup()
+    const original = f.fetcher.getMockImplementation()!
+    let ordinaryManifestWrites = 0
+    // A path-scoped permission refuses replacing the manifest but would allow creating another file.
+    f.fetcher.mockImplementation(async (input, init) => {
+      const url = new URL(String(input))
+      if (init?.method === "PUT" && url.pathname.startsWith(`/${BACKUP_CONTAINER}/`) && url.pathname.endsWith("/metadata.json") && ++ordinaryManifestWrites > 1) {
+        return new Response("<Error><Code>AuthorizationPermissionMismatch</Code></Error>", { status: 403, headers: { "x-ms-error-code": "AuthorizationPermissionMismatch" } })
+      }
+      return original(input, init)
+    })
+    const engine = new BackupEngine({ now: () => new Date("2026-11-17T12:00:00Z"), fetch: f.fetcher, getToken: async () => jwt({ scp: "Policy.Read.All" }), services: () => ({ services: ["intune", "entra"] }), retentionDays: () => 0 })
+    const job = await engine.waitForJob(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: f.account, scope: { excluded: INTUNE_TYPES.filter(type => !["DeviceCategories", "AuthorizationPolicy"].includes(type.folder)).map(type => type.folder) } }))
+    expect(job.status).toBe("Failed")
+    expect((await f.store.list(local, BACKUP_CONTAINER, `${job.backupFolder}/`)).some(blob => blob.name.endsWith("run-status.json"))).toBe(false)
   })
   it("leaves a large-only run unconfirmed when its own manifest commit gets a server error", async () => {
     undo = registerTestTypes([largeType])

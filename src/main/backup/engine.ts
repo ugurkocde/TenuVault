@@ -14,7 +14,7 @@ import { resolveBackupOwnership, type OwnershipFile } from "../../shared/backup-
 import { BlobWriter } from "./blob-writer"
 import { GraphSession, type GraphItem, type ReadControl } from "./graph-session"
 import { ReadBudgetError, typeReadBudget, withReadBudget } from "./read-budget"
-import { GRAPH, BlobClaimError, GraphError, GraphUnansweredError, InventoryDamagedError, ProtectedBlobError, RequestTimeoutError, StorageError, LargeStorageError, TokenError, isUnreachable, withAbort } from "./request"
+import { GRAPH, BlobClaimError, ImmutableBlobError, GraphError, GraphUnansweredError, InventoryDamagedError, ProtectedBlobError, RequestTimeoutError, StorageError, LargeStorageError, TokenError, isUnreachable, withAbort } from "./request"
 import { RetryDelayError } from "../graph-retry"
 import { isLocalAccount } from "../storage/blob-emulator"
 import { FetchApplicationError } from "../api/network-error"
@@ -1169,7 +1169,7 @@ export class BackupEngine {
         // A split run replaces its early ordinary manifest. Storage with an immutability policy or legal
         // hold refuses that overwrite, so the run's own record is created once beside it instead, and
         // audit recovery confirms the run from it. An unanswered commit stays unconfirmed as before.
-        if (!mixed || job.commitUnconfirmed || !(error instanceof StorageError) || error instanceof LargeStorageError) throw error
+        if (!mixed || job.commitUnconfirmed || !(error instanceof ImmutableBlobError)) throw error
         try {
           await commitManifest(backupFolder, { BackupFolder: backupFolder, TenantId: metadata.TenantId, RunId: metadata.RunId, AuthMode: metadata.AuthMode, CompletedAt: metadata.CompletedAt, RunStatus: status, RunCounts: { saved: totalPolicies, failures }, LargeBackupOutcomes: metadata.LargeBackupOutcomes }, true, BACKUP_RUN_RECORD_FILE)
         } catch { throw error }

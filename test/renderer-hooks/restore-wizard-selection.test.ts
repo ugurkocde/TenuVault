@@ -461,3 +461,58 @@ it("keeps later pages of a chosen large backup reachable when its first page can
   expect(container.textContent).toContain("Later team")
   expect(container.textContent).not.toContain("Inventory shard 0 is missing.")
 })
+
+it("keeps Previous page on an empty page after an unreadable last page of a chosen large backup", async () => {
+  const page = (largePage: number) => ({ largePage, hasMore: true, content: { groups: [{ folder: "Groups", label: "group", area: "Entra ID", count: 10000, policies: [{ path: `backup-large-1/Groups/g${largePage}.json`, displayName: `Team ${largePage}` }] }] } })
+  const empty = { largePage: 2, hasMore: false, content: { groups: [{ folder: "Groups", label: "group", area: "Entra ID", count: 10000, policies: [] }] } }
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body ?? "{}"))
+    if (String(input).endsWith("/api/list-backup-contents")) return body.largePage === 1 ? Response.json({ error: "Inventory shard 1 is damaged." }, { status: 500 }) : Response.json(body.largePage === 2 ? empty : page(0))
+    if (String(input).endsWith("/api/restore-preview")) return Response.json({ items: body.paths.map((path: string) => ({ path, name: path })) })
+    return Response.json({})
+  }))
+  const container = document.body.appendChild(document.createElement("div"))
+  const root = createRoot(container)
+  roots.push(root)
+  await act(async () => root.render(createElement(MemoryRouter, null, createElement(RestoreWizard, {
+    tenant: { name: "Contoso", credentials: { tenantId: "tenant", appId: "app", clientSecret: "" }, storageAccountName: "tvlocal-tenant" },
+    backups: [{ id: "backup-large-1", timestamp: "2026-10-16T02:00:00Z", type: "manual", status: "Completed", totalPolicies: 10000, scope: null, size: 1, duration: 4, changes: null, comparedWith: null }],
+    initialBackupId: "backup-large-1", community: false, canCopyToTenants: false, copyCandidates: [],
+  }))))
+  const settle = async () => { await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) }) }
+  await settle()
+  for (let step = 0; step < 2; step++) { await act(async () => buttonNamed(container, "Next page")!.click()); await settle() }
+  expect(container.textContent).toContain("Inventory page 3")
+  expect(buttonNamed(container, "Next page")!.disabled).toBe(true)
+  expect(buttonNamed(container, "Previous page")!.disabled).toBe(false)
+})
+
+it("returns a chosen ordinary backup to page 1 when it cannot be read on a later page of its linked large backup", async () => {
+  const companion = (largePage: number) => ({ largePage, hasMore: true, content: { groups: [{ folder: "Groups", label: "group", area: "Entra ID", count: 10000, policies: [{ path: `backup-large-1/Groups/g${largePage}.json`, displayName: `Team ${largePage}` }] }] } })
+  let ordinaryReads = 0
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body ?? "{}"))
+    if (String(input).endsWith("/api/list-backup-contents")) {
+      if (body.backupId === "backup-large-1") return Response.json(companion(body.largePage))
+      // The chosen backup reads, fails once on page 2, then reads again.
+      return ++ordinaryReads === 2 ? Response.json({ error: "Storage is busy." }, { status: 503 }) : Response.json(contents)
+    }
+    if (String(input).endsWith("/api/restore-preview")) return Response.json(body.backupId === "backup-large-1" ? { items: body.paths.map((path: string) => ({ path, name: path })) } : preview)
+    return Response.json({})
+  }))
+  const container = document.body.appendChild(document.createElement("div"))
+  const root = createRoot(container)
+  roots.push(root)
+  await act(async () => root.render(createElement(MemoryRouter, null, createElement(RestoreWizard, {
+    tenant: { name: "Contoso", credentials: { tenantId: "tenant", appId: "app", clientSecret: "" }, storageAccountName: "tvlocal-tenant" },
+    backups: [{ id: "backup-1", companionId: "backup-large-1", timestamp: "2026-10-16T02:00:00Z", type: "manual", status: "Completed", totalPolicies: 3, scope: null, size: 1, duration: 4, changes: null, comparedWith: null }],
+    initialBackupId: "backup-1", community: false, canCopyToTenants: false, copyCandidates: [],
+  }))))
+  const settle = async () => { await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) }) }
+  await settle()
+  await act(async () => buttonNamed(container, "Next page")!.click())
+  await settle()
+  await settle()
+  expect(container.textContent).toContain("Inventory page 1")
+  expect(container.textContent).toContain("Configuration profile")
+})

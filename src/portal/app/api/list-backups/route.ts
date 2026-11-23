@@ -1,11 +1,11 @@
-import { ownedRemnant, REMNANT_RECOVERY_DAYS, completeHalf, largeRunProblems, matchingCompanions } from "../../../../shared/backup-companion"
+import { ownedRemnant, REMNANT_RECOVERY_DAYS, completeHalf, largeRunProblems, matchingCompanions, withRunRecord } from "../../../../shared/backup-companion"
 import { backupStoragePath, isLargeBackup, LARGE_BACKUP_CONTAINER, LARGE_STORAGE_UNAVAILABLE } from "../../../../shared/backup-storage"
 import { backupTypeUse } from "../../../../shared/services/backup-use"
 import { BlobListError, decodeXml, listBlobPages, listLargeBackupPages } from "~/lib/storage/list"
 import { typeForFolder } from "../../../../shared/intune/registry"
 import { describeScope } from "../../../../shared/intune/scope"
 import { comparable, compareBackups, summarize, type BackupFingerprint, type ChangeSummary } from "../../../../shared/intune/backup-changes"
-import { BACKUP_OWNER_FILE, LOCAL_STORAGE_PREFIX, MAX_BACKUP_ARCHIVE_BYTES } from "../../../../shared/constants"
+import { BACKUP_OWNER_FILE, BACKUP_RUN_RECORD_FILE, LOCAL_STORAGE_PREFIX, MAX_BACKUP_ARCHIVE_BYTES } from "../../../../shared/constants"
 import { mapLimit } from "../../../../shared/map-limit"
 import { MetadataCache } from "~/lib/storage/metadata-cache"
 import { manifestStatus } from "../../../../shared/intune/backup-status"
@@ -401,8 +401,16 @@ export async function POST(request: NextRequest) {
     const hidden = new Set<string>()
     const mismatched = new Set<string>()
     for (const backup of backups.filter(backup => !isLargeBackup(backup.id))) {
-      const metadata = backup.fingerprint
+      let metadata = backup.fingerprint
       if (!metadata || (metadata.CompanionBackup === undefined && metadata.LargeBackupOutcomes === undefined)) continue
+      // A split run whose early manifest could not be replaced keeps its final result in its own record.
+      if (metadata.CompanionBackup !== undefined && typeof metadata.RunStatus !== "string") {
+        try {
+          const response = await fetch(`https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(`${backup.id}/${BACKUP_RUN_RECORD_FILE}`)}`, { headers: storageHeaders(accessToken) })
+          const read = response.ok ? await readJsonCapped(response, MAX_BACKUP_ARCHIVE_BYTES) : null
+          if (read?.kind === "json") metadata = withRunRecord(backup.id, metadata, read.value as Record<string, any>) ?? metadata
+        } catch { /* Without a record the early manifest stands. */ }
+      }
       const companionId = metadata.CompanionBackup
       const describedCompanion = byId.get(companionId)
       let other: any = describedCompanion?.fingerprint

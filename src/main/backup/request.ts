@@ -56,6 +56,10 @@ export class GraphPauseError extends Error {}
 export class GraphUnansweredError extends Error {}
 
 export class StorageError extends Error {}
+/** A write that an immutability policy or legal hold refused, with the provider's error code. */
+export class ImmutableBlobError extends StorageError {
+  constructor(readonly code: string, message: string) { super(message) }
+}
 export class LargeStorageError extends StorageError {
   constructor(readonly status?: number, options?: ErrorOptions) {
     super(`${LARGE_STORAGE_UNAVAILABLE}${status ? ` Storage returned ${status}.` : ""}`, options)
