@@ -75,7 +75,7 @@ Large-inventory preparation uses encrypted temporary merge files for sorted obje
 
 ## tenuvault.com: license checks and CIS Benchmarks content
 
-The app talks to TenuVault services on `www.tenuvault.com`: the licensing service at `https://www.tenuvault.com/api/desktop-license/`, used to activate, refresh and release licenses, the trial service at `https://www.tenuvault.com/api/desktop-trial`, used only when you start the free trial, and on Pro and MSP the CIS Benchmarks content service at `https://www.tenuvault.com/cis/v1/` (see [CIS Benchmarks content](#cis-benchmarks-content) below). The app never contacts the payment provider directly.
+The app talks to TenuVault services on `www.tenuvault.com`: the licensing service at `https://www.tenuvault.com/api/desktop-license/`, used for license activation, refresh, release and tenant trials, the trial key service at `https://www.tenuvault.com/api/desktop-trial`, used when you request a trial key by email, and on Pro and MSP the CIS Benchmarks content service at `https://www.tenuvault.com/cis/v1/` (see [CIS Benchmarks content](#cis-benchmarks-content) below). The app never contacts the payment provider directly.
 
 When you open the pricing page or the checkout (`https://www.tenuvault.com/api/desktop-checkout`) from the app, the link names the screen it was opened from (for example `src=app-license-page`) and carries no identifier.
 
@@ -92,11 +92,13 @@ The link to the free setup call page (`https://www.tenuvault.com/setup-call`) wo
 
 | Request | Fields sent |
 | --- | --- |
-| Activate a license key for a tenant | License key, installation ID, tenant ID, operating system, app version. When you are signed in to the tenant: the app registration's client ID and, when one can be obtained without prompting you, a Microsoft ID token. |
-| Refresh a license key activation | License key, activation ID, installation ID, tenant ID, app version. When sharing is on or not yet decided: the client ID and, when available, a Microsoft ID token. Your sharing choice, once one is set. |
+| Activate a license key for a tenant | License key, installation ID, raw tenant ID, operating system and app version. When the tenant has a valid app registration client ID, that client ID and, if available without a prompt, a Microsoft ID token. |
+| Refresh a license key activation | License key, activation ID, installation ID, raw tenant ID and app version. When sharing is on or undecided and the tenant has a valid app registration client ID, that client ID and, if available without a prompt, a Microsoft ID token. The sharing choice is included once set. |
 | Organization license (a license shared with your tenant) | Microsoft ID token, installation ID, operating system, app version, the action (activate, refresh or release) and, for refresh and release, the activation ID and the license's ID. The license key is not sent and never reaches your machine. |
 | Release (remove a tenant or deactivate the machine) | License key and activation ID. For an organization license, the fields in the row above. |
-| Start the free trial | The email address you enter and the screen you started it from, such as `app-license-page`. Nothing else, and only when you click **Start free trial**. The service emails the trial key to that address and keeps a record of the request (see the [privacy policy](https://tenuvault.com/privacy#free-trial)). |
+| Start a tenant trial | Microsoft ID token, installation ID, operating system, app version, action (`start_trial`) and source (`auto` for an automatic start or `opt-in` when you choose to start it). |
+| Update the optional tenant trial contact | Microsoft ID token, installation ID, operating system, app version, action (`trial_contact`) and trial activation ID. The email address is included only when you tap **Email me setup tips and a reminder before the trial ends**. Removing the address sends the same action without an email address. |
+| Request a trial key by email | The email address you enter and, when provided, the screen you started it from, such as `app-license-page`. Nothing else, and only when you click **Start free trial**. The service emails the trial key to that address and keeps a record of the request (see the [privacy policy](https://tenuvault.com/privacy#free-trial)). |
 
 What each field is:
 

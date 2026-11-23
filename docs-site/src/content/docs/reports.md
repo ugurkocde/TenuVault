@@ -3,7 +3,7 @@ title: "Change reports"
 description: Review changes across Defender, Entra ID and Intune backups. Export a report or send it by email.
 ---
 
-A change report documents what changed in a tenant between two backups: every added, changed and deleted item, the settings that changed with their old and new values, the settings of new and deleted items (up to 300 per item), and the actors identified by matching audit events. Reports are made from your backups and the audit logs only. Nothing in the tenant is changed.
+A change report documents added, changed and deleted policies between two backups. It includes the old and new values of changed settings, up to 300 settings per new or deleted policy, and the actors identified by matching audit events. It also summarizes changes to covered directory records. Reports are made from your backups and the audit logs only. Nothing in the tenant is changed.
 
 Open **Reports** in the sidebar. The page works on the tenant selected in the tenant switcher.
 
@@ -29,7 +29,7 @@ Reports generated on a paid plan stay readable and can still be saved as PDF, Ma
    * **Choose two backups**: pick the older and the newer backup yourself.
 3. Click **Generate report**.
 
-The report runs in the background and shows in the activity panel, so you can open another page meanwhile. It needs two complete backups. Backups that failed, are still running or completed with warnings are not offered by the first three periods; with **Choose two backups** you can pick a backup that completed with warnings, and items it could not read may then show as deleted or added.
+The report runs in the background and shows in the activity panel, so you can open another page meanwhile. It needs two complete backups. Backups that failed, are still running or completed with warnings are not offered by the first three periods; with **Choose two backups** you can pick a backup that completed with warnings, and policies it could not read may then show as deleted or added.
 
 <figure class="docs-screenshot">
   <a href="/images/screenshots/reports.webp" aria-label="Open full-size screenshot: reports">
@@ -42,7 +42,7 @@ The report runs in the background and shows in the activity panel, so you can op
 
 Click a report in the **Reports** list to open it. It has these parts, in the app and in every saved format:
 
-* **Summary**: how many items were changed, added and deleted, and how many of them have matching audit events.
+* **Summary**: how many policies were changed, added and deleted, and how many of them have matching audit events.
 * **Deleted**: each deleted item with the settings it had, and the backup that still holds it, so you can [restore](/restore/) it.
 * **Changed**: each changed item with the settings that changed, before and after. A renamed item shows its previous name.
 * **Added**: each new item with the settings it has, including its assignments.
@@ -58,10 +58,10 @@ The settings use the same readable names and values as [drift detection](/drift/
 
 ## Who made a change
 
-TenuVault reads the audit events between the times the two backups started and matches them to the report's items by the object's ID. When an event names no ID, it is matched by the item's name.
+TenuVault reads the audit events between the times the two backups started and matches them to the report's policies by object ID. When an event names no ID, it is matched by the policy's name.
 
 * Intune changes come from the Intune audit log, which TenuVault can already read with its standard permissions. Your account needs an Intune role that can read audit logs.
-* Conditional Access changes come from the Entra audit log, which needs the optional delegated `AuditLog.Read.All` permission. It is only read when the report contains Conditional Access policies, named locations or authentication strengths. Without the permission, those items have no actors and the report says why. See [Permissions](/security/permissions/).
+* Conditional Access changes come from the Entra audit log, which needs the optional delegated `AuditLog.Read.All` permission. It is only read when the report contains Conditional Access policies, named locations or authentication strengths. Without the permission, those changes have no actors and the report says why. See [Permissions](/security/permissions/).
 * Entra and Intune keep audit events for a limited time, so reports of older backups can have fewer matching events.
 * A change made during a backup can appear in the audit events of one report and in the item changes of the next.
 

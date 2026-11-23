@@ -64,7 +64,7 @@ The cards show **Defender**, **Entra ID** and **Intune**. Expand **Areas and acc
 | Service switch | Changes what new manual and scheduled backups cover. Turning Intune off asks for confirmation and names what will stop being backed up. Existing backups keep their contents. Backup history and Schedule show **Intune is off** when it is off. |
 | Opt-in area switch | Includes that area only after you choose it. Groups and users and devices explain the personal data stored before you turn them on. Turn the service on before changing its opt-in areas. |
 | **Access to request** | Chooses backup permissions or backup and restore permissions. This grants nothing and never blocks a restore your token allows. |
-| **Add the missing permissions** | Opens Azure CLI commands, a link to the exact registration in Entra and text to copy to an administrator, each for the missing permissions. **Add in the app** is reserved for a later build. |
+| **Add the missing permissions** | Offers **Add in the app**, Azure CLI commands, a link to the exact Entra registration and instructions you can copy to an administrator. **Add in the app** opens a Microsoft sign-in and shows the proposed additions for your approval. |
 | **Check again** | Rechecks current access after a permission, consent or registration change. Run a backup afterwards to verify reads. |
 
 **Permissions present** means the token carries the permissions. **Verified by the last backup** means the selected types were actually read, with the date and whether it used your sign-in or the Backup Reader. A Backup Reader loss remains visible even when your own backup verifies the same area. A refusal with the permission present may involve an admin role or license; TenuVault says when it cannot tell which. A type the reader leaves out by design needs no fix.
@@ -124,7 +124,7 @@ Without the recovery key, backups on this device can only be read on this comput
 
 ### Restore write history
 
-When a restore write to Intune ends without a clear answer (for example a timeout or a dropped connection), TenuVault records it and blocks an identical write until you confirm what happened. This history is where you do that.
+When a restore write ends without a clear answer (for example a timeout or a dropped connection), TenuVault records it and blocks an identical write until you confirm what happened. This history is where you do that.
 
 | Control | What it does |
 | --- | --- |
@@ -135,14 +135,14 @@ Each entry shows the object name, time, state, tenant and the request (method an
 
 | State | Buttons | Use them when |
 | --- | --- | --- |
-| `uncertain` | **Confirm applied** | You checked the target tenant in Intune and the change was made. Enter the object ID in the inline form and choose **Save applied ID**; a retry reuses it instead of repeating the write. |
-| `uncertain` | **Confirm not applied** | You checked in Intune and the change was not made. The next attempt sends the write again. |
+| `uncertain` | **Confirm applied** | You checked the target tenant in the admin center for the affected service and the change was made. Enter the object ID in the inline form and choose **Save applied ID**; a retry reuses it instead of repeating the write. |
+| `uncertain` | **Confirm not applied** | You checked in the admin center for the affected service and the change was not made. The next attempt sends the write again. |
 | `reconciled` | **Correct applied ID** | You entered the wrong object ID earlier. Edit the recorded ID in the inline form and choose **Save applied ID**. The next retry reads and verifies the object before any follow-up writes. |
 | `reconciled` | **Allow a new operation** | You deliberately want to send the same request again, which may create another object. Do not use it while resuming a repair. |
 
 The object ID must be a GUID. Invalid IDs and failed requests show an error in the form. After a failed save, focus returns to the input. **Cancel** or **Escape** closes the form without saving while no save is in progress. Closing the form returns focus to the record's recovery button or, if the entry is gone, to **Refresh history**, including after a successful save.
 
-Always check the target tenant in Intune before you resolve an entry. See [What cannot be restored and restore write history](/restore/limitations/).
+Use the admin center named in the confirmation to check the target tenant before you resolve an entry. See [What cannot be restored and restore write history](/restore/limitations/).
 
 <figure class="docs-screenshot">
   <a href="/images/screenshots/settings-storage.webp" aria-label="Open full-size screenshot: settings storage">

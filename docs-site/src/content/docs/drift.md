@@ -3,7 +3,7 @@ title: "Drift detection"
 description: Compare Defender, Entra ID and Intune backups, then revert supported changes or restore a copy.
 ---
 
-Drift detection shows what changed in your Defender, Entra ID and Intune configuration between two backups: new items, changed settings and deleted items. By default it compares your two newest complete backups, and you can pick any other pair. When the item supports it, you can revert the change or restore a separate copy. Conditional Access is part of Entra ID coverage.
+Drift detection shows what changed in your Defender, Entra ID and Intune configuration between two backups: added and deleted policies, changes to policy settings, and changes to covered directory records. By default it compares your two newest complete backups, and you can pick any other pair. Where the policy type supports restore, you can revert the change or restore a separate copy. Conditional Access is part of Entra ID coverage.
 
 TenuVault compares backups, not the live tenant. To include the latest changes, run a backup first. See [Run a backup](/backups/).
 
@@ -12,7 +12,7 @@ For the product overview, see [Intune drift detection](https://www.tenuvault.com
 ## Requirements
 
 * The tenant is signed in and has a storage location.
-* At least two complete backups of the tenant exist. Backups that failed, are still running, stopped early or whose summary could not be read cannot be compared, because missing items would show up as deleted.
+* At least two complete backups of the tenant exist. Backups that failed, are still running, stopped early or whose summary could not be read cannot be compared, because missing policies would show up as deleted.
 
 If there are not enough complete backups, the page says **Two complete backups are needed**, with **Back up now** to start a backup from this page and a link to **Backup & Restore**.
 
@@ -49,7 +49,7 @@ Each tenant runs one scan at a time. The last result of every tenant is kept on 
 
 ## Read the results
 
-Above the results, a line names the two compared backups, for example "Baseline: Oct 1, 2026, 10:00 (manual) → Comparison: Oct 6, 2026, 02:00 (scheduled)". Under it are the number of changes, how many items were **added** (in the comparison backup but not the baseline), **modified** (settings changed) and **deleted** (in the baseline but no longer in the comparison backup), how many items were checked and when the comparison ran.
+Above the results, a line names the two compared backups, for example "Baseline: Oct 1, 2026, 10:00 (manual) → Comparison: Oct 6, 2026, 02:00 (scheduled)". Under it are the number of changes, how many policies were **added** (in the comparison backup but not the baseline), **modified** (settings changed) and **deleted** (in the baseline but no longer in the comparison backup), how many policies were checked and when the comparison ran.
 
 The same colors mark each change type everywhere on the page: green for added, amber for modified and red for deleted. Each change also carries its type as a word.
 
@@ -65,7 +65,7 @@ Copies TenuVault made with **Restore as copy** are listed as added and marked **
 
 Above the list, narrow it down with:
 
-* **Search policy or setting**: matches the item name, its previous name, its type, and the names and property paths of its changed settings. Every word you type must match, in any order, so "firewall domain" finds a firewall profile with a changed domain profile setting. Upper and lower case do not matter.
+* **Search policy or setting**: matches the policy name, its previous name, its type, and the names and property paths of its changed settings. Every word you type must match, in any order, so "firewall domain" finds a firewall profile with a changed domain profile setting. Upper and lower case do not matter.
 * **All**, **Added**, **Modified** and **Deleted**: shows one change type. Each button shows how many changes it would show with the current search and policy type.
 * **All policy types**: shows one policy type. This list appears when the result holds more than one type.
 
@@ -91,9 +91,9 @@ A change marked **Reverted** was already reverted with TenuVault. A change marke
 
 <figure class="docs-screenshot">
   <a href="/images/screenshots/drift-results.webp" aria-label="Open full-size screenshot: drift results">
-    <img src="/images/screenshots/drift-results.webp" alt="Drift results group added, modified and deleted items, with filters for reviewing changes" width="2880" height="2000" loading="lazy" decoding="async" />
+    <img src="/images/screenshots/drift-results.webp" alt="Drift results group added, modified and deleted policies, with filters for reviewing changes" width="2880" height="2000" loading="lazy" decoding="async" />
   </a>
-  <figcaption>Drift results group added, modified and deleted items, with filters for reviewing changes. Example comparison data. Select the image to view it full size.</figcaption>
+  <figcaption>Drift results group added, modified and deleted policies, with filters for reviewing changes. Example comparison data. Select the image to view it full size.</figcaption>
 </figure>
 
 ## What drift detection compares
@@ -103,7 +103,7 @@ A change marked **Reverted** was already reverted with TenuVault. A change marke
 * Items whose fingerprint (recorded in each backup) is the same in both backups are unchanged and are not read again, so comparisons of large tenants finish faster. Backups made by earlier versions without fingerprints are compared file by file.
 * Lists of settings are matched by the setting itself, so an added, removed or reordered setting is reported as that setting, not as a change to every setting after it.
 * Earlier TenuVault versions saved Settings Catalog policies (including endpoint security and Settings Catalog compliance policies) without their assignments. When the older backup comes from such a version, the assignments of these policies are not compared, so the first backup that includes them does not show every assigned policy as changed. Their settings are still compared.
-* New items whose name starts with **[Restored]** are reported as added and marked **Likely restored copy**. TenuVault creates copies with this prefix when you restore, and a policy created in Intune can carry the same prefix, so the item is shown rather than hidden.
+* New policies whose name starts with **[Restored]** are reported as added and marked **Likely restored copy**. TenuVault creates copies with this prefix when you restore, and a policy created in Intune can carry the same prefix, so the result stays visible.
 
 ### Severity
 
@@ -112,27 +112,27 @@ Every change also has a severity. It appears in the exported report and in **Che
 | Severity | When |
 | --- | --- |
 | Critical | A compliance policy was deleted, or a changed setting's name contains passwordRequired, encryption, jailbreak, firewall, antivirus, bitLocker or secureByDefault (**Mark devices with no compliance policy assigned as** in the compliance policy settings) |
-| Warning | Any other deleted item, or a changed compliance policy, device configuration profile or compliance policy settings |
+| Warning | Any other deleted policy, or a changed compliance policy, device configuration profile or compliance policy settings |
 | Info | Everything else |
 
 On Community, a completed comparison shows a note only when at least one changed or deleted policy still has a Revert or Recreate action. Added policies, policies already reverted and changes caused by a revert are excluded from the count. The note says: **Pro reverts these {N} changed or deleted policies with one click and records the change in the audit log.** A **See plans** link appears beside it.
 
 ## Act on a change
 
-For **modified** and **deleted** items that were not reverted yet, the expanded card offers two actions:
+For **modified** and **deleted** policies that were not reverted yet, the expanded card offers two actions:
 
 | Button | What it does | Plans |
 | --- | --- | --- |
-| **Revert** (modified items) | Puts the existing item back to its backed-up version. The current settings are overwritten and reach devices at their next check-in. Assignments stay as they are. | Pro and MSP |
-| **Recreate** (deleted items) | Recreates the item from the backup under its original name. Assignments are not restored. | Pro and MSP |
-| **Restore previous version as copy** (modified items) | Creates a new, unassigned item with the "[Restored]" prefix and the backed-up settings. The current item is not changed. | All plans |
-| **Restore as copy** (deleted items) | Creates the deleted item again as a new, unassigned item with the "[Restored]" prefix | All plans |
+| **Revert** (modified policies) | Puts the existing policy back to its backed-up version. The current settings are overwritten and reach devices at their next check-in. Assignments stay as they are. | Pro and MSP |
+| **Recreate** (deleted policies) | Recreates the policy from the backup under its original name. Assignments are not restored. | Pro and MSP |
+| **Restore previous version as copy** (modified policies) | Creates a new, unassigned policy with the "[Restored]" prefix and the backed-up settings. The current policy stays intact. | All plans |
+| **Restore as copy** (deleted policies) | Creates the deleted policy again as a new, unassigned policy with the "[Restored]" prefix | All plans |
 
 To run an action:
 
 1. Click the action button.
 2. Read the confirmation, which names the item and what will happen.
-3. Click the confirming button to go ahead, or **Cancel**. It names the action: **Revert policy** or **Recreate policy** (shown in red, since they change the live item), or **Create copy**.
+3. Click the confirming button to go ahead, or **Cancel**. It names the action: **Revert policy** or **Recreate policy** (shown in red, since they change the live policy), or **Create copy**.
 
 A progress dialog shows each step: **Fetching policy from backup**, **Preparing policy data**, **Applying changes to Intune** (or **Creating new policy in Intune**), **Updating metadata** and **Refreshing drift detection**, which compares the same two backups again in the background. It cannot be cancelled once started. When it finishes, click **Done**, or **View in Intune** to open the Intune admin center. If a step fails, the dialog shows **Operation Failed** with the reason.
 
@@ -146,14 +146,14 @@ An action that Intune cannot run is greyed out and shows its reason under the bu
 When TenuVault picks the two backups to compare, it skips backups it cannot open, such as older encrypted ones without their key. A backup you choose yourself that cannot be opened says why.
 :::
 
-For restoring several items, choosing assignments or restoring into another tenant, use the restore wizard instead. See [Restore Intune policies](/restore/).
+For restoring several policies, choosing assignments or restoring into another tenant, use the restore wizard instead. See [Restore Intune policies](/restore/).
 
 ## Export a drift report
 
 Click **Export** and choose:
 
-* **CSV, one row per changed setting**: the columns Item, Item type, Change, Severity, Previous name, Setting, Setting path, Before and After, plus the item's ID. Added and deleted items get one row without a setting.
-* **JSON**: the tenant, when the comparison ran, the two compared backups, the number of added, modified and deleted items, files that could not be read, and every item with its changed settings (readable values and the values as stored)
+* **CSV, one row per changed setting**: the columns Item, Item type, Change, Severity, Previous name, Setting, Setting path, Before and After, plus the policy's ID. Added and deleted policies get one row without a setting.
+* **JSON**: the tenant, when the comparison ran, the two compared backups, the number of added, modified and deleted policies, files that could not be read, and every policy with its changed settings (readable values and the values as stored)
 
 The export holds the changes the page shows. While a filter is active, the menu says how many changes it exports, only those changes are written, the file name ends in `-filtered`, and the JSON file names the filter in its `filter` field, for example `search: firewall; change: modified`. Clear the filters to export every change.
 
