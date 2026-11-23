@@ -98,4 +98,17 @@ describe("Overview tenant license labels", () => {
     expect(trigger.getAttribute("aria-label")).toContain("Pro trial")
   })
 
+  it("pairs sidebar tenant colors and updates the pill immediately when the theme changes", async () => {
+    const container = document.createElement("div"); document.body.append(container)
+    const root = createRoot(container); roots.push(root)
+    await act(async () => { root.render(createElement(MemoryRouter, null, createElement(TenantSwitcher))) })
+    const trigger = container.querySelector('button[aria-label^="Switch tenant"]')!
+    expect(trigger.classList).toContain("bg-secondary")
+    expect(trigger.classList).toContain("text-secondary-foreground")
+    expect(trigger.classList).toContain("hover:bg-secondary/80")
+    expect(trigger.classList).not.toContain("transition-colors")
+    const name = [...trigger.querySelectorAll("span")].find(span => span.textContent === "Contoso")!
+    expect(name.classList).not.toContain("text-gray-900")
+  })
+
 })
