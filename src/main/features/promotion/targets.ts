@@ -96,7 +96,7 @@ async function names(graph: GraphCall, kind: Exclude<ReferenceKind, "group">, me
 }
 
 /** Whether the tenant can verify the group and whether Intune can assign it. */
-async function groupState(graph: GraphCall, id: string): Promise<{ state: "found" | "missing" | "unknown" | "unassignable"; name: string | null }> {
+export async function groupState(graph: GraphCall, id: string): Promise<{ state: "found" | "missing" | "unknown" | "unassignable"; name: string | null }> {
   try {
     const group = await getOne(graph, `groups/${encodeURIComponent(id)}?$select=id,displayName,securityEnabled,groupTypes`)
     if (!group) return { state: "missing", name: null }

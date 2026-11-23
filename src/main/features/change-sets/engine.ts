@@ -1,5 +1,6 @@
 import { AuditEventType, AuditResult, AuditSeverity, type CreateAuditLogInput } from "../../../portal/lib/audit/types"
 import type { GraphCall } from "../../../portal/lib/policies/graph-restore"
+import { GROUP_CHECK_REQUIRED } from "../../../shared/group-access"
 import { changeSetTitle } from "../../../shared/sync-wording"
 import { typeForFolder, type IntuneType, type Item } from "../../../shared/intune/registry"
 import { isGraphId } from "../../../shared/security"
@@ -12,6 +13,7 @@ import type { Stored } from "../records"
 import { FeatureError } from "../route"
 import { withTenantWrite } from "../write-lock"
 import { cisBenchmarksAllowed } from "../../frameworks/service"
+import { groupState } from "../promotion/targets"
 import { requirePreChangeBackup } from "./backup"
 import { createListingMemo, GraphReadError, observe, readBack, readCurrent, sameNameIds, writeOperation, type Observation } from "./graph"
 import {
@@ -436,6 +438,21 @@ function integrity(deps: FeatureDeps, tenantId: string, record: ChangeSetRecord)
   return { entries, problem: null }
 }
 
+/** Checks the groups a Dev to Prod rollback would restore, including exclusions. */
+async function rollbackGroupBlockers(graph: GraphCall, tenant: string, assignments: Item[] | null | undefined): Promise<string[]> {
+  const ids = new Set<string>()
+  for (const assignment of assignments ?? []) {
+    const groupId = (assignment.target as Item | undefined)?.groupId
+    if (typeof groupId === "string" && groupId) ids.add(groupId.toLowerCase())
+  }
+  const groups = await Promise.all([...ids].map(async (id) => ({ id, ...await groupState(graph, id) })))
+  const blockers: string[] = []
+  if (groups.some((group) => group.state === "unknown")) blockers.push(GROUP_CHECK_REQUIRED)
+  const missing = groups.filter((group) => group.state === "missing").map((group) => group.id)
+  if (missing.length) blockers.push(`${missing.length} group${missing.length === 1 ? "" : "s"} this policy was assigned to before no longer exist in ${tenant}: ${missing.join(", ")}. Assign the policy again after the rollback, or remove the assignment from the rollback.`)
+  return blockers
+}
+
 /**
  * Reads the target now and explains what applying would do: affected objects, fresh diff,
  * blockers, irreversible steps and unsupported recovery areas, with the content hash and
@@ -445,6 +462,8 @@ export async function previewChangeSet(deps: FeatureDeps, tenantId: string, id: 
   const record = getChangeSet(deps, tenantId, id)
   const recovery = isRecovery(record)
   requireCisChangeSetEnabled(record.origin.workflow, tenantId, recovery)
+  const checkRollbackGroups = recovery && record.origin.workflow === "promotion"
+  const tenantName = checkRollbackGroups ? deps.tenant(tenantId)?.name || tenantId : tenantId
   const { entries, problem } = integrity(deps, tenantId, record)
   const graph = gatedGraph(await reader(deps, tenantId, recoveryScope(record)), record.origin.workflow, tenantId, recovery)
   const listings = createListingMemo()
@@ -458,6 +477,7 @@ export async function previewChangeSet(deps: FeatureDeps, tenantId: string, id: 
     requireCisChangeSetEnabled(record.origin.workflow, tenantId, recovery)
     try {
       observed = await observe(graph, type, operation, listings)
+      if (checkRollbackGroups) blockers.push(...await rollbackGroupBlockers(graph, tenantName, entries[operation.key]?.assignments))
     } catch (error) {
       asFeatureError(error, "The target tenant could not be read.")
     }
@@ -489,6 +509,7 @@ export async function previewChangeSet(deps: FeatureDeps, tenantId: string, id: 
   let reason: string | null = null
   if (!review || review.decision !== "approved") reason = "Not approved."
   else if (review.contentHash !== record.contentHash) reason = "The content changed after approval."
+  else if (checkRollbackGroups && blockers.length) reason = blockers.join(" ")
   else if (review.targetFingerprint !== targetFingerprint) reason = "The target tenant changed after approval."
   return {
     id: record.id,
@@ -760,6 +781,17 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
       writer = gatedGraph(await deps.graph(tenant, recovery ? { journal: true, recovery: recoveryScope(record) } : { journal: true }), record.origin.workflow, tenantId, recovery)
       requireCisChangeSetEnabled(record.origin.workflow, tenantId, recovery)
       gated = gatedGraph(graph, record.origin.workflow, tenantId, recovery)
+      const checkGroups = async () => {
+        if (!recovery || record.origin.workflow !== "promotion") return
+        const tenantName = deps.tenant(tenant)?.name || tenant
+        for (const operation of record.operations) {
+          const result = record.results[operation.key]
+          if (result?.status === "verified" || (result?.status === "approval" && result.partial)) continue
+          const blockers = await rollbackGroupBlockers(gated, tenantName, entries[operation.key]?.assignments)
+          if (blockers.length) markStale(deps, tenant, id, `${operation.name}: ${blockers.join(" ")}`, actor)
+        }
+      }
+      await checkGroups()
       if (!preChange) {
         const check = async () => {
           const observations: Record<string, Observation> = {}
@@ -786,6 +818,7 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
         if (staleAfterBackup.length) markStale(deps, tenant, id, staleAfterBackup.join(" "), actor)
         listings = createListingMemo()
         const observations = await check()
+        await checkGroups()
         captured = Object.fromEntries(record.operations.map((operation) => {
           const observed = observations[operation.key]!
           return [operation.key, { body: observed.snapshot, assignments: observed.snapshot && Array.isArray(observed.snapshot.assignments) ? (observed.snapshot.assignments as Item[]) : null }]
@@ -963,6 +996,8 @@ export async function previewRollback(deps: FeatureDeps, tenantId: string, id: s
   const record = getChangeSet(deps, tenantId, id)
   const { inputs, manual } = inverseOperations(deps, tenantId, record)
   const graph = await reader(deps, tenantId, { changeSetId: record.id })
+  const checkRollbackGroups = record.origin.workflow === "promotion"
+  const tenantName = checkRollbackGroups ? deps.tenant(tenantId)?.name || tenantId : tenantId
   const operations: RollbackPreview["operations"] = []
   for (const input of inputs) {
     const type = typeOf(input.folder)
@@ -975,7 +1010,15 @@ export async function previewRollback(deps: FeatureDeps, tenantId: string, id: s
     }
     if (input.action !== "create" && input.targetId && !live) warnings.push(`"${input.name}" no longer exists in the tenant.`)
     const diff = input.action === "update" && live && input.proposed ? diffConfigurations(type, sanitizeSnapshot(type, live).snapshot, input.proposed).entries : input.action === "create" && input.proposed ? diffConfigurations(type, null, input.proposed).entries : []
-    operations.push({ key: input.key, action: input.action, name: input.name ?? String(input.proposed?.[type.nameKey] ?? ""), targetId: input.targetId ?? null, blocked: input.blocked, warnings, diff })
+    let blocked = input.blocked
+    if (!blocked && checkRollbackGroups) {
+      try {
+        blocked = (await rollbackGroupBlockers(graph, tenantName, input.assignments)).join(" ") || null
+      } catch (error) {
+        asFeatureError(error, "The destination groups could not be read.")
+      }
+    }
+    operations.push({ key: input.key, action: input.action, name: input.name ?? String(input.proposed?.[type.nameKey] ?? ""), targetId: input.targetId ?? null, blocked, warnings, diff })
   }
   return {
     changeSetId: record.id,

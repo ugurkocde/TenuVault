@@ -130,6 +130,8 @@ To add group read to an existing registration:
 
 Email notification channels send as the signed-in admin and can resolve Entra group recipients. For a new registration, `-IncludeNotifications` adds delegated `Mail.Send` and `User.Read.All` alongside the default `GroupMember.Read.All`. For an existing registration, add any missing permissions in Entra and grant admin consent.
 
+In **Services and permissions**, **Entra group recipients of notification email** checks `User.Read.All` or `User.ReadWrite.All`. The **Group read** row checks the group membership access also required for those recipients.
+
 ```powershell
 ./New-TenuVaultDesktopApp.ps1 -TenantId contoso.onmicrosoft.com -IncludeNotifications
 ```

@@ -1,7 +1,7 @@
 import { GROUP_CHECK_REQUIRED } from "../src/shared/group-access"
 import { describe, expect, it } from "vitest"
 import { routes } from "../src/main/features/promotion"
-import { containsRedaction, containsSecret, REDACTED, type ChangeSetContent, type ChangeSetRecord } from "../src/main/features/change-sets/model"
+import { containsRedaction, containsSecret, REDACTED, sameAssignments, type ChangeSetContent, type ChangeSetRecord } from "../src/main/features/change-sets/model"
 import { CONTENT_DOMAIN } from "../src/main/features/change-sets/engine"
 import { readCurrent } from "../src/main/features/change-sets/graph"
 import { DOMAINS } from "../src/main/features/domains"
@@ -425,6 +425,88 @@ const TARGETING_MAPPINGS = [
   { kind: "filter", sourceId: SOURCE_FILTER, targetId: TARGET_FILTER, confirmed: true },
   { kind: "filter", sourceId: SOURCE_FILTER_EX, targetId: TARGET_FILTER_EX, confirmed: true },
 ]
+
+const PREVIOUS_GROUP = "bbbbbbbb-0000-0000-0000-000000000005"
+const PREVIOUS_EXCLUSION = "bbbbbbbb-0000-0000-0000-000000000006"
+
+async function rollbackWithAssignments() {
+  const context = targeted()
+  const originalAssignments = [
+    { target: { "@odata.type": "#microsoft.graph.groupAssignmentTarget", groupId: PREVIOUS_GROUP } },
+    { target: { "@odata.type": "#microsoft.graph.exclusionGroupAssignmentTarget", groupId: PREVIOUS_EXCLUSION } },
+  ]
+  const destination = context.prod.addPolicy({ name: "Previous EPM rules", assignments: originalAssignments })
+  context.prod.groups.set(PREVIOUS_GROUP, { id: PREVIOUS_GROUP, displayName: "Previous pilot", securityEnabled: true, groupTypes: [] })
+  context.prod.groups.set(PREVIOUS_EXCLUSION, { id: PREVIOUS_EXCLUSION, displayName: "Previous exclusion", securityEnabled: true, groupTypes: [] })
+  const planned = await context.post({ action: "plan", title: "Promote EPM", includeAssignments: true, items: [{ sourceId: context.policy.id, destinationId: destination.id }], mappings: TARGETING_MAPPINGS })
+  expect(planned.status).toBe(200)
+  const { id } = planned.body.promotion
+  const { changeSet } = await approved(context, id)
+  const applied = await context.post({ action: "apply", id, contentHash: changeSet.contentHash, confirm: true })
+  expect(applied.body.promotion.status).toBe("applied")
+  const rollback = (action: string, body: Record<string, unknown> = {}) => context.post({ ...body, action: `rollback-${action}`, id }, { targetTenants: [] })
+  return { ...context, destination, originalAssignments, rollback }
+}
+
+describe("Dev to Prod rollback assignment groups", () => {
+  it.each([PREVIOUS_GROUP, PREVIOUS_EXCLUSION])("blocks review and approval when captured group %s is gone", async (groupId) => {
+    const context = await rollbackWithAssignments()
+    context.prod.groups.delete(groupId)
+    const message = `1 group this policy was assigned to before no longer exist in Tenant 2222: ${groupId}. Assign the policy again after the rollback, or remove the assignment from the rollback.`
+    const preview = await context.rollback("preview")
+    expect(preview.body.operations[0].blocked).toBe(message)
+    expect((await context.rollback("create")).status).toBe(200)
+    const review = await context.rollback("review")
+    expect(review.body.blockers).toEqual([message])
+    expect(review.body.operations[0].blockers).toEqual([message])
+    expect((await context.rollback("approve", review.body)).status).toBe(409)
+  })
+
+  it("blocks review and approval when the destination denies group reads", async () => {
+    const context = await rollbackWithAssignments()
+    context.prod.groupsForbidden = true
+    expect((await context.rollback("create")).status).toBe(200)
+    const review = await context.rollback("review")
+    expect(review.body.blockers).toEqual([GROUP_CHECK_REQUIRED])
+    expect((await context.rollback("approve", review.body)).status).toBe(409)
+  })
+
+  it("restores included and excluded assignments when both captured groups exist", async () => {
+    const context = await rollbackWithAssignments()
+    expect((await context.rollback("create")).status).toBe(200)
+    const review = await context.rollback("review")
+    expect(review.body.blockers).toEqual([])
+    expect((await context.rollback("approve", review.body)).status).toBe(200)
+    const applied = await context.rollback("apply", { contentHash: review.body.contentHash, confirm: true })
+    expect(applied.body.changeSet.status).toBe("applied")
+    expect(sameAssignments(context.originalAssignments, context.prod.policies.get(String(context.destination.id))?.assignments)).toBe(true)
+  })
+
+  it.each([false, true])("refuses apply when a group disappears after approval (during backup: %s)", async (duringBackup) => {
+    const context = await rollbackWithAssignments()
+    expect((await context.rollback("create")).status).toBe(200)
+    const review = await context.rollback("review")
+    expect((await context.rollback("approve", review.body)).status).toBe(200)
+    const writes = context.prod.writeCount()
+    if (duringBackup) {
+      const api = context.deps.api
+      context.deps.api = (path, ...args) => {
+        if (path === "/api/backup/status") context.prod.groups.delete(PREVIOUS_EXCLUSION)
+        return api(path, ...args)
+      }
+    } else {
+      context.prod.groups.delete(PREVIOUS_EXCLUSION)
+      const fresh = await context.rollback("review")
+      expect(fresh.body.approval.valid).toBe(false)
+    }
+    const applied = await context.rollback("apply", { contentHash: review.body.contentHash, confirm: true })
+    expect(applied.status).toBe(409)
+    expect(applied.body.error).toContain(PREVIOUS_EXCLUSION)
+    expect(context.prod.writeCount()).toBe(writes)
+    expect(context.backups).toHaveLength(duringBackup ? 2 : 1)
+    expect(context.deps.records.get<ChangeSetRecord>(DOMAINS.changeSets, TENANT_B, review.body.id)?.status).toBe("stale")
+  })
+})
 
 describe("promotion dependency mapping", () => {
   it("searches groups in the destination tenant and flags unassignable results", async () => {

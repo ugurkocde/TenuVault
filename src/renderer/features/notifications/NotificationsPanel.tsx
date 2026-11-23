@@ -344,13 +344,13 @@ function ChannelRow({ tenant, channel, licensed, ruleCount, onChanged, onEdit, o
   })
   // Called for every row (hooks cannot be conditional); only email rows use the answer.
   const mailPermission = useOptionalPermission(tenant, "notificationEmail")
-  const groupPermission = useOptionalPermission(tenant, "groupRecipients")
+  const groupWarning = useGroupRecipientPermissionWarning(tenant)
   const mailWarning = channel.kind !== "email"
     ? null
     : mailPermission?.granted === false
       ? `Your sign-in does not carry ${mailPermission.missing.join(", ")} yet, so mail from this channel, including a test, fails. Add it to the app registration in Entra, grant admin consent and sign in again.`
-      : groupPermission?.granted === false && channel.recipients.some((recipient) => recipient.type === "group")
-        ? `Group recipients need ${groupPermission.missing.join(", ")}, which your sign-in does not carry yet; without it a group resolves to nobody.`
+      : channel.recipients.some((recipient) => recipient.type === "group")
+        ? groupWarning
         : null
   const last = channel.lastDelivery
   return (
@@ -475,9 +475,16 @@ function RecipientRows({ tenant, rows, onChange }: { tenant: Tenant; rows: Recip
   )
 }
 
+function useGroupRecipientPermissionWarning(tenant: Tenant): string | null {
+  const userRead = useOptionalPermission(tenant, "groupRecipients")
+  const groupRead = useOptionalPermission(tenant, "groupRead")
+  const missing = [userRead, groupRead].flatMap((permission) => permission?.granted === false ? permission.missing : [])
+  return missing.length ? `Group recipients need ${missing.join(", ")} to resolve member email addresses. Check Settings > Services and permissions.` : null
+}
+
 function ChannelDialog({ tenant, channel, open, onClose, onSaved }: { tenant: Tenant; channel?: PublicChannel; open: boolean; onClose: () => void; onSaved: (channel?: PublicChannel) => void }) {
   const mailPermission = useOptionalPermission(tenant, "notificationEmail")
-  const groupPermission = useOptionalPermission(tenant, "groupRecipients")
+  const groupWarning = useGroupRecipientPermissionWarning(tenant)
   const editing = Boolean(channel)
   const [kind, setKind] = useState<ChannelKind>(channel?.kind ?? "teams")
   const [title, setTitle] = useState(channel?.title ?? "")
@@ -607,7 +614,7 @@ function ChannelDialog({ tenant, channel, open, onClose, onSaved }: { tenant: Te
               <RecipientRows tenant={tenant} rows={rows} onChange={setRows} />
               <p className="text-xs text-gray-500">Mail is sent through Microsoft Graph as the account you are signed in with for this tenant, and is not kept in Sent Items.</p>
               {mailPermission?.granted === false && <p className="text-xs text-amber-700" role="status">Your sign-in does not carry {mailPermission.missing.join(", ")} yet, so mail would fail. Add it to the app registration in Entra (setup switch {mailPermission.setupSwitch} for a new one), grant admin consent and sign in again.</p>}
-              {groupPermission?.granted === false && rows.some((row) => row.type === "group") && <p className="text-xs text-amber-700" role="status">Group recipients also need {groupPermission.missing.join(", ")}; without it a group resolves to nobody.</p>}
+              {groupWarning && rows.some((row) => row.type === "group") && <p className="text-xs text-amber-700" role="status">{groupWarning}</p>}
             </>
           )}
           <div className="flex flex-wrap justify-end gap-2">

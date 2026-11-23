@@ -17,14 +17,10 @@ describe("optional permissions", () => {
     expect(status.find(entry => entry.id === "groupRecipients")).toMatchObject({ granted: false, missing: ["User.Read.All"] })
   })
 
-  it("recommends the least privileged group scope when the token lacks group read access", () => {
-    const status = optionalPermissionStatus({ kind: "delegated", permissions: new Set(["User.Read.All", "Group.Create"]) })
+  it.each(["User.Read.All", "User.ReadWrite.All"])("grants the group recipients row with %s while reporting missing group read separately", (scope) => {
+    const status = optionalPermissionStatus({ kind: "delegated", permissions: new Set([scope, "Group.Create"]) })
+    expect(status.find(entry => entry.id === "groupRecipients")).toMatchObject({ permissions: ["User.Read.All"], granted: true, missing: [] })
     expect(status.find(entry => entry.id === "groupRead")).toMatchObject({ granted: false, missing: ["GroupMember.Read.All"] })
-  })
-
-  it("names only the missing half of a pair", () => {
-    const status = optionalPermissionStatus({ kind: "delegated", permissions: new Set(["GroupMember.Read.All"]) })
-    expect(status.find((entry) => entry.id === "groupRecipients")).toMatchObject({ granted: false, missing: ["User.Read.All"] })
   })
 
   it("cannot judge an unreadable or app-only token", () => {

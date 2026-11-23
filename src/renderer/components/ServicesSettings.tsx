@@ -390,6 +390,7 @@ function OptionalPermissions({ entries, clientId, checking }: { entries: Optiona
       </p>
       <p className="text-xs text-gray-500">
         For feature permissions with a setup switch, use that switch when creating a new app registration. You can also add the delegated permission in Entra, grant admin consent, then check again.
+        {" "}<span className="font-mono">-IncludeNotifications</span> adds <span className="font-mono">Mail.Send</span> and <span className="font-mono">User.Read.All</span>.
       </p>
       <ul className="divide-y divide-gray-100 dark:divide-gray-800">
         {entries.map((entry) => (
@@ -398,6 +399,7 @@ function OptionalPermissions({ entries, clientId, checking }: { entries: Optiona
             <span className="font-medium text-gray-900">{entry.label}</span>
             <span className="font-mono text-xs text-gray-600">{entry.permissions.join(", ")}</span>
             <span className="text-xs text-gray-500">{entry.granted === true ? "Granted" : entry.granted === false ? `Not granted: ${entry.missing.join(", ")}` : "Could not be checked"}</span>
+            {entry.id === "groupRecipients" && <span className="text-xs text-gray-500">Also needs Group read.</span>}
             {entry.id === "groupRead" && <span className="basis-full text-xs text-gray-500">Included in new app registrations. For an older registration, add the delegated GroupMember.Read.All permission in Entra and grant admin consent, then select Check again.</span>}
             {entry.granted === false && (
               <span className="ml-auto flex flex-wrap items-center gap-2 text-xs text-gray-500">
