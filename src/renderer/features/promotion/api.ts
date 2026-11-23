@@ -1,3 +1,4 @@
+import type { GroupCounts, GroupSearchResult } from "../../../shared/group-access"
 import type { Tenant } from "~/contexts/TenantContext"
 import { featureCall } from "../../lib/feature-api"
 import type { PromotionRecord } from "../../../main/features/promotion/engine"
@@ -18,6 +19,8 @@ export const listPromotions = (tenant: Tenant) => featureCall<{ promotions: Prom
 export const getPromotion = (tenant: Tenant, id: string) => featureCall<{ promotion: Promotion; changeSet: ChangeSet | null; rollbackChangeSet: ChangeSet | null }>(PATH, tenant, "get", { id })
 export const promotionPolicies = (tenant: Tenant, sourceTenantId: string, folder: string) => featureCall<{ source: PolicyOption[]; destination: PolicyOption[] }>(PATH, tenant, "policies", { ...source(sourceTenantId), folder })
 export const targetObjects = (tenant: Tenant, kind: Exclude<ReferenceKind, "group">) => featureCall<{ objects: Array<{ id: string; name: string }>; readable: boolean; reason?: string }>(PATH, tenant, "target-objects", { kind })
+export const targetGroups = (tenant: Tenant, query: string) => featureCall<GroupSearchResult>(PATH, tenant, "target-groups", { query })
+export const targetGroupCounts = (tenant: Tenant, ids: string[]) => featureCall<{ counts: Record<string, GroupCounts> }>(PATH, tenant, "target-group-counts", { ids })
 export const planPromotion = (tenant: Tenant, input: { sourceTenantId: string; title: string; ticket: string; includeAssignments: boolean; acknowledgeRedacted: boolean; items: Array<{ sourceId: string; destinationId: string | null; folder: string }>; mappings: Mapping[] }) =>
   featureCall<{ promotion: Promotion }>(PATH, tenant, "plan", { ...input, ...source(input.sourceTenantId) })
 

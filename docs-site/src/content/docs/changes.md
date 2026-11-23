@@ -72,7 +72,7 @@ You can plan at most 25 policies at once.
 ### Review and apply
 
 1. In **Promotions**, click the planned promotion. Each policy shows **ready** or **blocked**, whether it creates a new policy or updates an existing one, and its findings. Blocking findings must be resolved before the change set can be applied.
-2. When a plan is blocked, use **Dependency mappings** to map each tenant specific reference, such as a group, filter or scope tag, to its target in the destination, tick to confirm each mapping, then click **Plan again**.
+2. When a plan is blocked, use **Dependency mappings** to map each tenant-specific reference to its target in the destination. For groups, search by the start of the group name or paste an object ID to search for that group. Select the named result and review its kind and member counts. Tick **Confirmed** for each mapping, then click **Plan again**. Group mappings require [group read access](/security/permissions/#group-read-groupmemberreadall) in the destination.
 3. Work through the change set as described in [How change sets work](#how-change-sets-work): review against the live tenant, approve, then apply. Production is backed up and its current state is captured before anything is written.
 4. After an apply, use the **Rollback** change set on the same promotion to review, approve and apply the reverse change.
 

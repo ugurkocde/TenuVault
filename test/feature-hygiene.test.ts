@@ -111,18 +111,18 @@ describe("hygiene rules", () => {
     expect(resolved.findings.find((f) => f.ruleId === "missing-group")?.details.groupId).toBe(G2)
   })
 
-  it("names the Group.Read.All opt-in in the unresolved groups rule limits only", () => {
-    expect(RULES["missing-group"].limits).toContain("Group.Read.All")
-    expect(RULES["missing-group"].limits).toContain("-IncludeGroupRead")
+  it("names the GroupMember.Read.All permission in the unresolved groups rule limits only", () => {
+    expect(RULES["missing-group"].limits).toContain("GroupMember.Read.All")
+    expect(RULES["missing-group"].limits).toContain("Check again")
     for (const rule of Object.values(RULES)) {
       if (rule.id === "missing-group") continue
-      expect(rule.limits).not.toContain("Group.Read.All")
-      expect(rule.limits).not.toContain("-IncludeGroupRead")
+      expect(rule.limits).not.toContain("GroupMember.Read.All")
+      expect(rule.limits).not.toContain("Check again")
     }
     // Other rules keep their unknown wording free of the group hint.
     const item = catalog("p1", "A", [], [allDevices(FILTER)])
     const partial = detect([item], new Set(["ConfigurationPolicies"]))
-    expect(partial.unknowns.find((u) => u.ruleId === "missing-filter")?.reason).not.toContain("Group.Read.All")
+    expect(partial.unknowns.find((u) => u.ruleId === "missing-filter")?.reason).not.toContain("GroupMember.Read.All")
   })
 
   it("never puts snapshot secrets into evidence", () => {
@@ -325,16 +325,16 @@ describe("/api/hygiene", () => {
     expect((await call(r, "/api/hygiene", { tenantId: TENANT_A, action: "get", findingId: missing.id })).body.finding.status).toBe("resolved")
   })
 
-  it("explains the Group.Read.All opt-in where the unresolved groups rule reports unknown", async () => {
+  it("explains the GroupMember.Read.All permission where the unresolved groups rule reports unknown", async () => {
     const policies = [{ id: "p1", name: "A", platforms: "windows10", settings: [], assignments: [group(G1)], roleScopeTagIds: ["0"] }]
     const { api } = backupApi({ policies })
     const res = await call(routes(fakeDeps({ api, graph: graphOf(async () => ({ status: 403, body: {} })) })), "/api/hygiene", { tenantId: TENANT_A, action: "scan" })
     expect(res.body.scans[0].groupResolution.state).toBe("unavailable")
-    expect(res.body.scans[0].groupResolution.reason).toContain("Group.Read.All")
-    expect(res.body.scans[0].groupResolution.reason).toContain("-IncludeGroupRead")
+    expect(res.body.scans[0].groupResolution.reason).toContain("GroupMember.Read.All")
+    expect(res.body.scans[0].groupResolution.reason).toContain("Check again")
     const unknown = res.body.scans[0].unknowns.find((u: { ruleId: string }) => u.ruleId === "missing-group")
-    expect(unknown.reason).toContain("Group.Read.All")
-    expect(unknown.reason).toContain("-IncludeGroupRead")
+    expect(unknown.reason).toContain("GroupMember.Read.All")
+    expect(unknown.reason).toContain("Check again")
     expect(res.body.findings.some((f: { ruleId: string }) => f.ruleId === "missing-group")).toBe(false)
   })
 
@@ -479,30 +479,10 @@ describe("/api/hygiene", () => {
   })
 })
 
-describe("Group.Read.All opt-in", () => {
-  const script = readFileSync(new URL("../resources/New-TenuVaultDesktopApp.ps1", import.meta.url), "utf8")
+it("shows the group permission hint only for the unresolved groups unknown", () => {
   const scanSummary = readFileSync(new URL("../src/renderer/features/hygiene/ScanSummary.tsx", import.meta.url), "utf8")
-  const hygieneApi = readFileSync(new URL("../src/renderer/features/hygiene/api.ts", import.meta.url), "utf8")
-
-  it("keeps the default setup permissions unchanged and adds Group.Read.All only with the opt-in flag", () => {
-    expect(script).toContain("[switch]$IncludeGroupRead")
-    const resourcesAt = script.indexOf("$resources = @(")
-    const flagAt = script.indexOf("if ($IncludeGroupRead)")
-    expect(resourcesAt).toBeGreaterThan(0)
-    expect(flagAt).toBeGreaterThan(resourcesAt)
-    // The default scope lists sit between the resources block and the opt-in block.
-    expect(script.slice(resourcesAt, flagAt)).not.toContain("Group.Read.All")
-    expect(script.slice(flagAt)).toContain('"Group.Read.All"')
-    expect(script.match(/"Group\.Read\.All"/g)).toHaveLength(1)
-  })
-
-  it("shows the opt-in hint only for the unresolved groups unknown", () => {
-    expect(hygieneApi).toContain("GROUP_READ_OPT_IN_HINT")
-    expect(hygieneApi).toContain("Group.Read.All")
-    expect(hygieneApi).toContain("-IncludeGroupRead")
-    expect(scanSummary).toContain('unknown.ruleId === "missing-group"')
-    expect(scanSummary).toContain("GROUP_READ_OPT_IN_HINT")
-  })
+  expect(scanSummary).toContain('unknown.ruleId === "missing-group"')
+  expect(scanSummary).toContain("HYGIENE_GROUP_READ_HINT")
 })
 
 describe("hygiene work signals", () => {

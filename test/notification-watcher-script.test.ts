@@ -235,12 +235,12 @@ describe("Azure notification watcher scripts", () => {
     expect(new Set(none.posts.map((post) => post.host))).toEqual(new Set(["hooks.example.test", "contoso.webhook.office.com"]))
   }, 180_000)
 
-  it("desktop setup adds notification scopes only with the opt-in switch", () => {
+  it("desktop setup adds Mail.Send and User.Read.All only with the notification switch", () => {
     expect(desktopApp).toContain("[switch]$IncludeNotifications")
     const at = desktopApp.indexOf("if ($IncludeNotifications)")
     expect(at).toBeGreaterThan(0)
     expect(desktopApp.indexOf('"Mail.Send"')).toBeGreaterThan(at)
-    expect(desktopApp.indexOf('"GroupMember.Read.All"')).toBeGreaterThan(at)
+    expect(desktopApp.indexOf('"GroupMember.Read.All"')).toBeLessThan(at)
     expect(desktopApp.indexOf('"User.Read.All"')).toBeGreaterThan(at)
   })
 
@@ -259,7 +259,6 @@ describe("Azure notification watcher scripts", () => {
     const service = readFileSync(new URL("../src/main/features/notifications/service.ts", import.meta.url), "utf8")
     expect(service).toContain("activityOperationType ne 'Get'")
     expect(service).toContain("activityOperationType ne 'Search'")
-    expect(desktopApp).toContain("Mail.Send, GroupMember.Read.All and User.Read.All")
   })
 
   it.runIf(Boolean(pwsh))("PowerShell renders the identical canonical digest as TypeScript", () => {

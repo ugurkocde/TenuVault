@@ -1,6 +1,7 @@
+import { GROUP_CHECK_REQUIRED } from "../src/shared/group-access"
 import { describe, expect, it } from "vitest"
 import { routes } from "../src/main/features/promotion"
-import { containsRedaction, containsSecret, REDACTED, type ChangeSetContent, type ChangeSetRecord } from "../src/main/features/change-sets/model"
+import { containsRedaction, containsSecret, REDACTED, sameAssignments, type ChangeSetContent, type ChangeSetRecord } from "../src/main/features/change-sets/model"
 import { CONTENT_DOMAIN } from "../src/main/features/change-sets/engine"
 import { readCurrent } from "../src/main/features/change-sets/graph"
 import { DOMAINS } from "../src/main/features/domains"
@@ -419,11 +420,11 @@ const TARGET_FILTER_EX = "bbbbbbbb-0000-0000-0000-000000000004"
 function targeted() {
   const context = setup()
   context.dev.filters = [{ id: SOURCE_FILTER, displayName: "Corporate Windows", platform: "windows10AndLater", rule: "(device.deviceOwnership -eq \"Corporate\")" }, { id: SOURCE_FILTER_EX, displayName: "Kiosks", platform: "windows10AndLater", rule: "(device.model -eq \"Kiosk\")" }]
-  context.dev.groups.set(SOURCE_GROUP, { id: SOURCE_GROUP, displayName: "Pilot devices" })
-  context.dev.groups.set(SOURCE_EXCLUDED, { id: SOURCE_EXCLUDED, displayName: "Excluded devices" })
+  context.dev.groups.set(SOURCE_GROUP, { id: SOURCE_GROUP, displayName: "Pilot devices", securityEnabled: true, groupTypes: [] })
+  context.dev.groups.set(SOURCE_EXCLUDED, { id: SOURCE_EXCLUDED, displayName: "Excluded devices", securityEnabled: true, groupTypes: [] })
   context.prod.filters = [{ id: TARGET_FILTER, displayName: "Corporate Windows", platform: "windows10AndLater", rule: "(device.deviceOwnership -eq \"Corporate\")" }, { id: TARGET_FILTER_EX, displayName: "Kiosk devices", platform: "windows10AndLater", rule: "(device.model -eq \"Kiosk\")" }]
-  context.prod.groups.set(TARGET_GROUP, { id: TARGET_GROUP, displayName: "Pilot devices" })
-  context.prod.groups.set(TARGET_EXCLUDED, { id: TARGET_EXCLUDED, displayName: "Excluded devices" })
+  context.prod.groups.set(TARGET_GROUP, { id: TARGET_GROUP, displayName: "Pilot devices", securityEnabled: true, groupTypes: [] })
+  context.prod.groups.set(TARGET_EXCLUDED, { id: TARGET_EXCLUDED, displayName: "Excluded devices", securityEnabled: true, groupTypes: [] })
   const policy = context.dev.addPolicy({
     name: "EPM rules",
     roleScopeTagIds: ["0", "4"],
@@ -444,7 +445,153 @@ const TARGETING_MAPPINGS = [
   { kind: "filter", sourceId: SOURCE_FILTER_EX, targetId: TARGET_FILTER_EX, confirmed: true },
 ]
 
+const PREVIOUS_GROUP = "bbbbbbbb-0000-0000-0000-000000000005"
+const PREVIOUS_EXCLUSION = "bbbbbbbb-0000-0000-0000-000000000006"
+
+async function rollbackWithAssignments() {
+  const context = targeted()
+  const originalAssignments = [
+    { target: { "@odata.type": "#microsoft.graph.groupAssignmentTarget", groupId: PREVIOUS_GROUP } },
+    { target: { "@odata.type": "#microsoft.graph.exclusionGroupAssignmentTarget", groupId: PREVIOUS_EXCLUSION } },
+  ]
+  const destination = context.prod.addPolicy({ name: "Previous EPM rules", assignments: originalAssignments })
+  context.prod.groups.set(PREVIOUS_GROUP, { id: PREVIOUS_GROUP, displayName: "Previous pilot", securityEnabled: true, groupTypes: [] })
+  context.prod.groups.set(PREVIOUS_EXCLUSION, { id: PREVIOUS_EXCLUSION, displayName: "Previous exclusion", securityEnabled: true, groupTypes: [] })
+  const planned = await context.post({ action: "plan", title: "Promote EPM", includeAssignments: true, items: [{ sourceId: context.policy.id, destinationId: destination.id }], mappings: TARGETING_MAPPINGS })
+  expect(planned.status).toBe(200)
+  const { id } = planned.body.promotion
+  const { changeSet } = await approved(context, id)
+  const applied = await context.post({ action: "apply", id, contentHash: changeSet.contentHash, confirm: true })
+  expect(applied.body.promotion.status).toBe("applied")
+  const rollback = (action: string, body: Record<string, unknown> = {}) => context.post({ ...body, action: `rollback-${action}`, id }, { targetTenants: [] })
+  return { ...context, destination, originalAssignments, rollback }
+}
+
+describe("Dev to Prod rollback assignment groups", () => {
+  it.each([PREVIOUS_GROUP, PREVIOUS_EXCLUSION])("blocks review and approval when captured group %s is gone", async (groupId) => {
+    const context = await rollbackWithAssignments()
+    context.prod.groups.delete(groupId)
+    const message = `1 group this policy was assigned to before no longer exists in Tenant 2222: ${groupId}. Restore any recoverable groups in Entra (eligible groups keep their ID for 30 days), or restore this policy and its assignments manually.`
+    const preview = await context.rollback("preview")
+    expect(preview.body.operations[0].blocked).toBe(message)
+    expect((await context.rollback("create")).status).toBe(200)
+    const review = await context.rollback("review")
+    expect(review.body.blockers).toEqual([message])
+    expect(review.body.operations[0].blockers).toEqual([message])
+    expect((await context.rollback("approve", review.body)).status).toBe(409)
+  })
+
+  it("lists both missing groups with plural wording", async () => {
+    const context = await rollbackWithAssignments()
+    context.prod.groups.delete(PREVIOUS_GROUP)
+    context.prod.groups.delete(PREVIOUS_EXCLUSION)
+    const preview = await context.rollback("preview")
+    const blocker = preview.body.operations[0].blocked
+    expect(blocker).toContain("2 groups this policy was assigned to before no longer exist in Tenant 2222:")
+    expect(blocker).toContain(PREVIOUS_GROUP)
+    expect(blocker).toContain(PREVIOUS_EXCLUSION)
+  })
+
+  it("blocks a captured group that Intune cannot assign", async () => {
+    const context = await rollbackWithAssignments()
+    context.prod.groups.get(PREVIOUS_GROUP)!.securityEnabled = false
+    const message = 'Intune cannot assign "Previous pilot": it is a distribution list.'
+    expect((await context.rollback("preview")).body.operations[0].blocked).toBe(message)
+    expect((await context.rollback("create")).status).toBe(200)
+    const review = await context.rollback("review")
+    expect(review.body.blockers).toEqual([message])
+    expect((await context.rollback("approve", review.body)).status).toBe(409)
+  })
+
+  it("blocks review and approval when the destination denies group reads", async () => {
+    const context = await rollbackWithAssignments()
+    context.prod.groupsForbidden = true
+    expect((await context.rollback("create")).status).toBe(200)
+    const review = await context.rollback("review")
+    expect(review.body.blockers).toEqual([GROUP_CHECK_REQUIRED])
+    expect((await context.rollback("approve", review.body)).status).toBe(409)
+  })
+
+  it("restores included and excluded assignments when both captured groups exist", async () => {
+    const context = await rollbackWithAssignments()
+    expect((await context.rollback("create")).status).toBe(200)
+    const review = await context.rollback("review")
+    expect(review.body.blockers).toEqual([])
+    expect((await context.rollback("approve", review.body)).status).toBe(200)
+    const applied = await context.rollback("apply", { contentHash: review.body.contentHash, confirm: true })
+    expect(applied.body.changeSet.status).toBe("applied")
+    expect(sameAssignments(context.originalAssignments, context.prod.policies.get(String(context.destination.id))?.assignments)).toBe(true)
+  })
+
+  it.each([false, true])("blocks assignments when group reads become forbidden at apply (after configuration write: %s)", async (afterConfigurationWrite) => {
+    const context = await rollbackWithAssignments()
+    expect((await context.rollback("create")).status).toBe(200)
+    const review = await context.rollback("review")
+    expect((await context.rollback("approve", review.body)).status).toBe(200)
+    const writes = context.prod.writeCount()
+    const assignmentWrites = context.prod.writeCount(({ path }) => path.endsWith("/assign"))
+    if (afterConfigurationWrite) {
+      context.prod.failWrite = () => {
+        context.prod.groupsForbidden = true
+        return undefined
+      }
+    } else {
+      context.prod.groupsForbidden = true
+    }
+    const applied = await context.rollback("apply", { contentHash: review.body.contentHash, confirm: true })
+    expect(context.prod.writeCount(({ path }) => path.endsWith("/assign"))).toBe(assignmentWrites)
+    if (afterConfigurationWrite) {
+      expect(applied.status).toBe(200)
+      expect(applied.body.changeSet.status).toBe("uncertain")
+      expect(applied.body.changeSet.results["op-1"].message).toContain("The configuration was written but the reviewed assignments failed")
+      expect(applied.body.changeSet.results["op-1"].message).toContain("GroupMember.Read.All")
+      expect(context.prod.writeCount()).toBeGreaterThan(writes)
+    } else {
+      expect(applied.status).toBe(409)
+      expect(applied.body.error).toContain(GROUP_CHECK_REQUIRED)
+      expect(context.prod.writeCount()).toBe(writes)
+    }
+  })
+
+  it.each([false, true])("refuses apply when a group disappears after approval (during backup: %s)", async (duringBackup) => {
+    const context = await rollbackWithAssignments()
+    expect((await context.rollback("create")).status).toBe(200)
+    const review = await context.rollback("review")
+    expect((await context.rollback("approve", review.body)).status).toBe(200)
+    const writes = context.prod.writeCount()
+    if (duringBackup) {
+      const api = context.deps.api
+      context.deps.api = (path, ...args) => {
+        if (path === "/api/backup/status") context.prod.groups.delete(PREVIOUS_EXCLUSION)
+        return api(path, ...args)
+      }
+    } else {
+      context.prod.groups.delete(PREVIOUS_EXCLUSION)
+      const fresh = await context.rollback("review")
+      expect(fresh.body.approval.valid).toBe(false)
+    }
+    const applied = await context.rollback("apply", { contentHash: review.body.contentHash, confirm: true })
+    expect(applied.status).toBe(409)
+    expect(applied.body.error).toContain(PREVIOUS_EXCLUSION)
+    expect(context.prod.writeCount()).toBe(writes)
+    expect(context.backups).toHaveLength(duringBackup ? 2 : 1)
+    expect(context.deps.records.get<ChangeSetRecord>(DOMAINS.changeSets, TENANT_B, review.body.id)?.status).toBe("stale")
+  })
+})
+
 describe("promotion dependency mapping", () => {
+  it("searches groups in the destination tenant and flags unassignable results", async () => {
+    const context = targeted()
+    context.prod.groups.get(TARGET_EXCLUDED)!.securityEnabled = false
+    const id = await context.post({ action: "target-groups", query: TARGET_GROUP })
+    expect(id.body).toEqual({ readable: true, groups: [{ id: TARGET_GROUP, displayName: "Pilot devices", kind: "security", dynamic: false }] })
+    const prefix = await context.post({ action: "target-groups", query: "Excluded" })
+    expect(prefix.body).toEqual({ readable: true, groups: [{ id: TARGET_EXCLUDED, displayName: "Excluded devices", kind: "other", dynamic: false }] })
+    context.prod.groupsForbidden = true
+    expect((await context.post({ action: "target-groups", query: "Pilot" })).body).toEqual({ readable: false, groups: [] })
+    expect(context.dev.calls).toEqual([])
+  })
+
   it("preserves exclusions and filter types when reviewed assignments are promoted", async () => {
     const context = targeted()
     const planned = (await context.post({ action: "plan", title: "x", includeAssignments: true, items: [{ sourceId: context.policy.id }], mappings: TARGETING_MAPPINGS })).body.promotion as PromotionRecord & { id: string }
@@ -498,7 +645,7 @@ describe("promotion dependency mapping", () => {
     expect(promotion.items[0]!.findings.some((finding) => finding.code === "rejected-mapping")).toBe(true)
   })
 
-  it("shows unreadable groups as unknown instead of verified", async () => {
+  it("blocks promotion when a confirmed destination group is unreadable", async () => {
     const context = targeted()
     context.prod.groupsForbidden = true
     context.dev.groupsForbidden = true
@@ -506,7 +653,86 @@ describe("promotion dependency mapping", () => {
     const group = promotion.items[0]!.references.find((reference) => reference.kind === "group")!
     expect(group.state).toBe("mapped-unverified")
     expect(group.sourceName).toBeNull()
-    expect(promotion.items[0]!.findings.some((finding) => finding.code === "unknown-membership")).toBe(true)
+    expect(promotion.status).toBe("blocked")
+    expect(promotion.items[0]!.findings).toContainEqual({ code: "unknown-membership", severity: "blocking", message: GROUP_CHECK_REQUIRED })
+    expect(context.prod.writeCount()).toBe(0)
+  })
+
+  it("blocks scope tag promotion when the mapped group cannot be read", async () => {
+    const context = targeted()
+    const folder = "ScopeTags"
+    context.dev.collection(typeForFolder(folder)!.path).set("4", {
+      id: "4", displayName: "Pilot",
+      assignments: [{ target: { "@odata.type": "#microsoft.graph.scopeTagGroupAssignmentTarget", entraObjectId: SOURCE_GROUP, targetType: "device" } }],
+    })
+    context.prod.groupsForbidden = true
+    const response = await context.post({
+      action: "plan", title: "Promote scope tag", includeAssignments: true,
+      items: [{ sourceId: "4", folder }], mappings: TARGETING_MAPPINGS,
+    })
+    expect(response.status).toBe(200)
+    const promotion = response.body.promotion as PromotionRecord
+    expect(promotion).toMatchObject({ status: "blocked", changeSetId: null })
+    expect(promotion.items[0]).toMatchObject({
+      references: [expect.objectContaining({ kind: "group", sourceId: SOURCE_GROUP, targetId: TARGET_GROUP, state: "mapped-unverified" })],
+      findings: expect.arrayContaining([{ code: "unknown-membership", severity: "blocking", message: GROUP_CHECK_REQUIRED }]),
+    })
+    expect(context.prod.writeCount()).toBe(0)
+  })
+
+  it("distinguishes a missing destination group from denied group access", async () => {
+    const context = targeted()
+    context.prod.groups.delete(TARGET_GROUP)
+    const promotion = (await context.post({ action: "plan", title: "x", includeAssignments: true, items: [{ sourceId: context.policy.id }], mappings: TARGETING_MAPPINGS })).body.promotion as PromotionRecord
+    expect(promotion.status).toBe("blocked")
+    expect(promotion.items[0]!.references).toContainEqual(expect.objectContaining({ kind: "group", sourceId: SOURCE_GROUP, state: "rejected" }))
+    expect(promotion.items[0]!.findings).toContainEqual(expect.objectContaining({ code: "rejected-mapping", severity: "blocking" }))
+    expect(promotion.items[0]!.findings).not.toContainEqual(expect.objectContaining({ message: GROUP_CHECK_REQUIRED }))
+  })
+
+  it.each([
+    ["missing", "does not exist in the target tenant", "rejected-mapping"],
+    ["unassignable", 'Intune cannot assign the distribution list "Pilot devices"', "rejected-mapping"],
+    ["unknown", GROUP_CHECK_REQUIRED, "unknown-membership"],
+  ])("blocks freezing and re-checking a promotion when a mapped group becomes %s", async (state, message, code) => {
+    const context = targeted()
+    const plan = { action: "plan", title: "x", includeAssignments: true, items: [{ sourceId: context.policy.id }], mappings: TARGETING_MAPPINGS }
+    const valid = (await context.post(plan)).body.promotion as PromotionRecord
+    expect(valid.status).toBe("in-review")
+
+    const graph = context.deps.graph
+    let reads = 0
+    context.deps.graph = async (tenant, options) => {
+      const call = await graph(tenant, options)
+      return async (method, path, body, requestOptions) => {
+        if (tenant === TENANT_B && method === "GET" && path.startsWith(`groups/${TARGET_GROUP}?`) && ++reads === 2) {
+          if (state === "missing") context.prod.groups.delete(TARGET_GROUP)
+          else if (state === "unassignable") context.prod.groups.get(TARGET_GROUP)!.securityEnabled = false
+          else context.prod.groupsForbidden = true
+        }
+        return call(method, path, body, requestOptions)
+      }
+    }
+    const blocked = await context.post(plan)
+    expect(blocked.status).toBe(200)
+    expect(blocked.body.promotion).toMatchObject({ status: "blocked", changeSetId: null, items: [{ targetStateHash: "", findings: expect.arrayContaining([
+      { code, severity: "blocking", message: expect.stringContaining(message) },
+    ]) }] })
+    expect(await staleTargets(context.deps, TENANT_B, valid.items)).toEqual([expect.stringContaining(message)])
+    expect(context.prod.writeCount()).toBe(0)
+  })
+
+  it("blocks a reviewed promotion before applying if the destination stops allowing group checks", async () => {
+    const context = targeted()
+    const result = await context.post({ action: "plan", title: "x", includeAssignments: true, items: [{ sourceId: context.policy.id }], mappings: TARGETING_MAPPINGS })
+    const promotion = result.body.promotion as PromotionRecord & { id: string }
+    expect(promotion.status).toBe("in-review")
+    const { changeSet } = await approved(context, promotion.id)
+    context.prod.groupsForbidden = true
+    const applied = await context.post({ action: "apply", id: promotion.id, contentHash: changeSet.contentHash, confirm: true })
+    expect(JSON.stringify(applied.body)).toContain(GROUP_CHECK_REQUIRED)
+    expect(context.prod.writeCount()).toBe(0)
+    expect(context.backups).toEqual([])
   })
 
   it("blocks approval when a mapped filter changes in the destination after planning", async () => {

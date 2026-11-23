@@ -171,11 +171,11 @@ Each list takes up to 25 groups. A group cannot be both included and excluded.
 
 ### Find groups
 
-Type at least two characters to search groups whose name starts with them, or paste a group's object ID. Distribution lists are shown but cannot be chosen, because Intune cannot assign them; a pasted distribution list is refused before anything changes.
+Type at least two characters to search by the start of a group name. Pasting a group's object ID searches for the matching group in the tenant. Select the named result to add it. Distribution lists appear in the results with selection disabled. Results and selected groups show available counts for devices, users and nested groups.
 
-Searching by name needs a permission to read groups, the optional delegated `Group.Read.All` (see [Permissions](/security/permissions/)). Without it the editor says so and you paste object IDs from Entra instead. When groups can be read, an ID the tenant does not have is marked "not found in this tenant" and **Continue** stays off until you remove it.
+Group search requires delegated `GroupMember.Read.All` or an equivalent permission. If group access is missing, follow the [group read setup steps](/security/permissions/#group-read-groupmemberreadall) and select **Check again**. You can deploy new policies unassigned while access is missing. Changing the assignments of deployed policies requires group access.
 
-Before anything changes, TenuVault checks the groups and filters again in the tenant: every group must exist (when groups can be read), and every filter must exist with the platform it was chosen for. If a check fails, nothing is changed, not even the backup runs.
+Before any deployment backup or write, TenuVault verifies that every selected group exists in the tenant and each filter matches the platform it was chosen for. If a chosen group is marked "not found in this tenant", remove it to continue.
 
 ### Assign when you deploy
 
@@ -269,7 +269,7 @@ If the old OpenIntuneBaseline framework page saved policy pack comparisons for t
 | Tenant *type* could not be read (*status*). | Check your Intune role and the app registration permissions. |
 | Another change is being applied to this tenant: *label*. Try again when it finishes. | Another deployment, undo, change set or framework creation is running for this tenant. Wait for it to finish. See [Troubleshooting](/troubleshooting/). |
 | This run was already undone or is not recorded on this device. | Runs are stored per device. Delete leftover policies in Intune. |
-| Each of the device groups must be an Entra group object ID. | Paste the group's object ID (GUID), or search the group by name. |
+| TenuVault cannot read groups in this tenant, so the groups could not be checked. Add the delegated GroupMember.Read.All permission to the app registration and grant admin consent. Nothing was changed. | Follow the [group read setup steps](/security/permissions/#group-read-groupmemberreadall), then select **Check again** and retry. |
 | This group does not exist in the tenant: *ID*. Nothing was changed. | The group was deleted or belongs to another tenant. Remove it and choose another group. |
 | The assignment filter *name* is not a *platform* filter. Nothing was changed. | Choose a filter of the platform shown next to it. |
 | A group cannot be both included and excluded. | Remove the group from one of the lists. |

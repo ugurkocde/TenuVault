@@ -37,12 +37,10 @@
     groups do not). Off by default so an admin who is not in the group is not locked out.
 
 .PARAMETER IncludeGroupRead
-    When set, also requests the delegated Group.Read.All permission. The hygiene
-    unresolved groups check needs it to tell whether a referenced group exists. Without
-    it that check stays unknown. Off by default, so the default permission set is unchanged.
+    Deprecated and accepted for compatibility. GroupMember.Read.All is added by default.
 
 .PARAMETER IncludeNotifications
-    When set, also requests the delegated Mail.Send, GroupMember.Read.All and User.Read.All permissions.
+    When set, also requests the delegated Mail.Send and User.Read.All permissions. GroupMember.Read.All is already included by default.
     Notification email channels send as the signed-in admin and can resolve Entra group
     recipients. Without it, email channels fail with a Graph permission error while
     webhook and Teams channels keep working. Off by default.
@@ -76,8 +74,6 @@
 .EXAMPLE
     ./New-TenuVaultDesktopApp.ps1 -UseDeviceCode
 
-.EXAMPLE
-    ./New-TenuVaultDesktopApp.ps1 -TenantId contoso.onmicrosoft.com -IncludeGroupRead
 #>
 [CmdletBinding()]
 param(
@@ -338,6 +334,8 @@ $resources = @(
         Scopes = @(
             "User.Read",
             "Organization.Read.All",
+            # Reads group names and membership for assignments and the hygiene group check.
+            "GroupMember.Read.All",
             "Policy.Read.All",
             "DeviceManagementConfiguration.ReadWrite.All",
             "DeviceManagementApps.ReadWrite.All",
@@ -362,8 +360,7 @@ $resources = @(
 )
 
 if ($IncludeGroupRead) {
-    # Opt-in only: lets the hygiene unresolved groups check read group existence.
-    $resources[0].Scopes += "Group.Read.All"
+    Write-Warning "-IncludeGroupRead is no longer needed: group read (GroupMember.Read.All) is part of the default permissions."
 }
 
 if ($IncludeConditionalAccessRestore) {
@@ -379,7 +376,6 @@ if ($IncludeAuditLog) {
 if ($IncludeNotifications) {
     # Opt-in only: notification email as the signed-in admin, plus group recipient resolution.
     $resources[0].Scopes += "Mail.Send"
-    $resources[0].Scopes += "GroupMember.Read.All"
     # Reading other members' mail and userType needs their basic profile properties.
     $resources[0].Scopes += "User.Read.All"
 }

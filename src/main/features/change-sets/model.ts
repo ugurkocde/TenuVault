@@ -88,7 +88,7 @@ export interface DependencyRef {
   sourceId: string | null
   targetId: string | null
   name: string | null
-  /** "verified" read in the target; "unknown" could not be read (for example groups without Group.Read.All). */
+  /** "verified" read in the target; "unknown" could not be read (for example groups without group read access). */
   state: "verified" | "unknown"
 }
 

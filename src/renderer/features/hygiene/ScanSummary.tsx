@@ -1,5 +1,5 @@
 import { Chip, Fact } from "~/components/dashboard/tiles"
-import { formatDate, GROUP_READ_OPT_IN_HINT, type Scan } from "./api"
+import { formatDate, HYGIENE_GROUP_READ_HINT, type Scan } from "./api"
 
 const REASONS: Record<string, string> = { excluded: "left out of the backup scope", skipped: "skipped, missing permission", failed: "could not be read", unreadable: "backup files unreadable" }
 
@@ -32,7 +32,7 @@ export function ScanSummary({ scan, ruleName }: { scan: Scan; ruleName: (id: str
         <div className="space-y-1 text-sm">
           <p className="font-medium text-gray-800">Checks that could not be made</p>
           <ul className="space-y-1 text-gray-600">
-            {scan.unknowns.map((unknown) => <li key={unknown.ruleId}>{ruleName(unknown.ruleId)}: {unknown.reason} ({unknown.count} objects, shown as unknown){unknown.ruleId === "missing-group" && !unknown.reason.includes("Group.Read.All") && <span className="block">{GROUP_READ_OPT_IN_HINT}</span>}</li>)}
+            {scan.unknowns.map((unknown) => <li key={unknown.ruleId}>{ruleName(unknown.ruleId)}: {unknown.reason} ({unknown.count} objects, shown as unknown){unknown.ruleId === "missing-group" && !unknown.reason.includes(HYGIENE_GROUP_READ_HINT) && <span className="block">{HYGIENE_GROUP_READ_HINT}</span>}</li>)}
           </ul>
         </div>
       )}

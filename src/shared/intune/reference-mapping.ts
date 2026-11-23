@@ -32,8 +32,9 @@ export function referenceTargetId(kind: ReferenceKind, sourceId: string, mapping
   return mapping?.targetId ?? (sameTenant ? sourceId : null)
 }
 
-export const usableReference = (reference: ReferenceResolution) =>
-  reference.state === "mapped" || reference.state === "portable" || reference.state === "mapped-unverified"
+export const usableReference = (reference: ReferenceResolution, allowUnverifiedGroup = false) =>
+  reference.state === "mapped" || reference.state === "portable" ||
+  (reference.state === "mapped-unverified" && (reference.kind !== "group" || allowUnverifiedGroup))
 
 export async function suggestGroups(references: ReferenceResolution[], names: (name: string) => Promise<Map<string, string>>) {
   await Promise.all(references.map(async (reference) => {
@@ -55,7 +56,7 @@ export function resolveReferences(
     mappings: Mapping[]
     sourceNames: Partial<Record<ReferenceKind, Map<string, string>>>
     targetObjects: Partial<Record<ReferenceKind, Map<string, string> | null>>
-    groupStates: ReadonlyMap<string, GroupState>
+    groupStates: ReadonlyMap<string, GroupState | { state: "unassignable"; name: string | null }>
     sameTenant: boolean
   },
 ): ReferenceResolution[] {
@@ -69,7 +70,7 @@ export function resolveReferences(
     const name = targetId ? objects?.get(targetId.toLowerCase()) : undefined
     const state: ReferenceResolution["state"] = !targetId ? "missing"
       : kind === "group" ? group?.state === "found" ? "mapped"
-        : group?.state === "missing" ? "rejected" : "mapped-unverified"
+        : group?.state === "missing" || group?.state === "unassignable" ? "rejected" : "mapped-unverified"
       : kind === "scopeTag" && targetId === "0" ? "mapped"
       : !objects ? "mapped-unverified" : name === undefined ? "rejected" : "mapped"
     let suggestion: ReferenceResolution["suggestion"] = null

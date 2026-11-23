@@ -101,7 +101,7 @@ When a selected policy holds secrets, tick **I understand that secrets in these 
 
 #### Map assignments and scope tags
 
-With **Include assignments** on, review the mapping table for each target. Enter the destination group object ID or choose a filter or scope tag from the target. When a unique display-name match is available, you can select it as a candidate. Tick **Confirmed** for each mapping, then select **Review updated mappings**. A target with unresolved assignments is left out. The built-in Default scope tag is portable. New policies can use confirmed scope tag mappings and linked policies keep their existing scope tags.
+With **Include assignments** on, review the mapping table for each target. Search for a destination group by name or object ID, then select the named result. Choose target filters and scope tags from the lists. A unique display-name match is offered as a candidate. If TenuVault cannot read a mapped group, the target is blocked until you grant [Group read access](/security/permissions/#group-read-groupmemberreadall) and review the mappings again. Tick **Confirmed** for each mapping, then select **Review updated mappings**. A target with unresolved assignments is left out. The built-in Default scope tag is portable. New policies can use confirmed scope tag mappings and linked policies keep their existing scope tags.
 
 Confirmed mappings are remembered per source and target tenant for the current app session. Include and exclude targeting and filter intent are carried over as reviewed. Only direct assignments are copied.
 

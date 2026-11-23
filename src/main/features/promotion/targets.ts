@@ -1,13 +1,15 @@
-import { groupNamePath, readGroupStates, type GroupState } from "../../../shared/intune/group-reads"
+import { groupNamePath, readGroupStates } from "../../../shared/intune/group-reads"
 import { referenceTargetId, suggestGroups } from "../../../shared/intune/reference-mapping"
 import { assignmentsUnread } from "../../../shared/intune/read"
 import type { GraphCall } from "../../../portal/lib/policies/graph-restore"
+import { GROUP_CHECK_REQUIRED } from "../../../shared/group-access"
+import { toGroup } from "../../oib/assignments"
 import { itemName, typeForFolder, type IntuneType, type Item } from "../../../shared/intune/registry"
 import { isGraphId, isGuid } from "../../../shared/security"
 import type { Plan } from "../../../shared/plans"
 import type { FeatureDeps } from "../deps"
 import { FeatureError } from "../route"
-import { createListingMemo, GraphReadError, listAll, readCurrent, sameNameIds, type ListingMemo } from "../change-sets/graph"
+import { createListingMemo, GraphReadError, getOne, listAll, readCurrent, sameNameIds, type ListingMemo } from "../change-sets/graph"
 import { containsRedaction, hashOf, sanitizeSnapshot, unsupportedReason } from "../change-sets/model"
 import { extractReferences, referenceFindings, resolveReferences, scopeTagKey, translate, type DependencyFinding, type Mapping, type ReferenceKind, type ReferenceResolution, type TargetReads } from "./mapping"
 
@@ -71,7 +73,7 @@ export function requireSourceTenant(context: { tenantId: string; plan: Plan; dep
   return source
 }
 
-/** Objects of the destination a mapping can point to; groups are entered by object ID. */
+/** Objects of the destination a non-group mapping can point to. */
 export async function mappableObjects(deps: FeatureDeps, tenantId: string, kind: unknown): Promise<{ objects: Array<{ id: string; name: string }>; readable: boolean; reason?: string }> {
   if (kind !== "filter" && kind !== "scopeTag" && kind !== "reusableSetting") throw new FeatureError("Choose filter, scopeTag or reusableSetting.")
   try {
@@ -99,13 +101,33 @@ async function names(graph: GraphCall, kind: Exclude<ReferenceKind, "group">, me
   }
 }
 
+/** Whether the tenant can verify the group and whether Intune can assign it. */
+export async function groupState(graph: GraphCall, id: string): Promise<{ state: "found" | "missing" | "unknown" | "unassignable"; name: string | null }> {
+  try {
+    const group = await getOne(graph, `groups/${encodeURIComponent(id)}?$select=id,displayName,securityEnabled,groupTypes`)
+    if (!group) return { state: "missing", name: null }
+    const verified = toGroup(group)
+    if (verified?.id !== id.toLowerCase()) throw new FeatureError("Microsoft Graph did not return the requested group.", 502)
+    return { state: verified.kind === "other" ? "unassignable" : "found", name: verified.displayName }
+  } catch (error) {
+    if (error instanceof GraphReadError && (error.status === 401 || error.status === 403)) return { state: "unknown", name: null }
+    throw error
+  }
+}
+
+class DestinationGroupError extends FeatureError {
+  constructor(message: string, readonly code: DependencyFinding["code"], status: number) {
+    super(message, status)
+  }
+}
+
 /**
  * Hash of the destination objects a plan relied on: mapped filters (including their rule),
  * scope tags, reusable settings and groups. Destination tags and unacknowledged redaction
  * are checked here so changes require a new plan. The change set's target fingerprint owns
  * the remaining content, so a retry after a verified update still matches.
  */
-export async function targetStateHash(graph: GraphCall, reads: TargetReads, policySnapshot?: Item | null, memo?: ListingMemo, groups?: ReadonlyMap<string, GroupState>): Promise<string> {
+export async function targetStateHash(graph: GraphCall, reads: TargetReads, policySnapshot?: Item | null, memo?: ListingMemo): Promise<string> {
   const state: Record<string, unknown> = {}
   if (reads.policyId && reads.policyFolder) {
     const type = typeForFolder(reads.policyFolder)!
@@ -134,8 +156,13 @@ export async function targetStateHash(graph: GraphCall, reads: TargetReads, poli
   state.filters = await subset("filter", reads.filterIds)
   state.scopeTags = await subset("scopeTag", reads.scopeTagIds.filter((id) => id !== "0"))
   state.reusableSettings = await subset("reusableSetting", reads.reusableSettingIds)
-  const groupStates = groups ?? await readGroupStates(graph, reads.groupIds)
-  state.groups = reads.groupIds.map((id) => ({ id: id.toLowerCase(), ...groupStates.get(id.toLowerCase()) }))
+  state.groups = await Promise.all(reads.groupIds.map(async (id) => {
+    const group = await groupState(graph, id)
+    if (group.state === "unknown") throw new DestinationGroupError(GROUP_CHECK_REQUIRED, "unknown-membership", 403)
+    if (group.state === "missing") throw new DestinationGroupError(`The mapped destination group (${id}) does not exist in the target tenant.`, "rejected-mapping", 409)
+    if (group.state === "unassignable") throw new DestinationGroupError(`Intune cannot assign the distribution list "${group.name ?? id}". Choose a security or Microsoft 365 group.`, "rejected-mapping", 409)
+    return { id: id.toLowerCase(), ...group }
+  }))
   return hashOf(state)
 }
 
@@ -265,8 +292,12 @@ export async function resolveTarget(deps: FeatureDeps, destinationTenantId: stri
   }
   const sourceGroupIds = references.filter((entry) => entry.kind === "group").map((entry) => entry.sourceId)
   const targetGroupIds = sourceGroupIds.flatMap((id) => referenceTargetId("group", id, input.mappings, sameTenant) ?? [])
-  const groupStates = await readGroupStates(targetGraph, sameTenant ? [...targetGroupIds, ...sourceGroupIds] : targetGroupIds)
-  const originals = sameTenant ? groupStates : await readGroupStates(sourceGraph, sourceGroupIds)
+  const [groupStates, originals] = await Promise.all([
+    read("The destination group", async () => new Map(await Promise.all(
+      [...new Set(targetGroupIds.map((id) => id.toLowerCase()))].map(async (id) => [id, await groupState(targetGraph, id)] as const),
+    ))),
+    readGroupStates(sourceGraph, sourceGroupIds),
+  ])
   sourceNames.group = new Map(sourceGroupIds.flatMap((id) => {
     const name = originals.get(id.toLowerCase())?.name
     return name ? [[id.toLowerCase(), name]] : []
@@ -314,8 +345,12 @@ export async function resolveTarget(deps: FeatureDeps, destinationTenantId: stri
   }
 
   const confirmed = (kind: ReferenceKind) => resolutions.filter((entry) => entry.kind === kind && entry.targetId && entry.state !== "missing" && entry.state !== "rejected").map((entry) => entry.targetId!)
-  const targetReads: TargetReads = { policyId: input.targetObjectId, policyFolder: type.folder, requireUnredacted: input.acknowledgeRedacted !== true, filterIds: confirmed("filter"), scopeTagIds: input.targetObjectId ? destinationTags : confirmed("scopeTag"), reusableSettingIds: confirmed("reusableSetting"), groupIds: confirmed("group") }
-  const stateHash = await read("The destination state", () => targetStateHash(targetGraph, targetReads, targetPolicy, targetListings, groupStates))
+  const targetReads: TargetReads = { policyId: input.targetObjectId, policyFolder: type.folder, requireUnredacted: input.acknowledgeRedacted !== true, filterIds: confirmed("filter"), scopeTagIds: input.targetObjectId ? destinationTags : confirmed("scopeTag"), reusableSettingIds: confirmed("reusableSetting"), groupIds: resolutions.flatMap(entry => entry.kind === "group" && entry.state === "mapped" && entry.targetId ? [entry.targetId] : []) }
+  const stateHash = await read("The destination state", () => targetStateHash(targetGraph, targetReads, targetPolicy, targetListings)).catch(error => {
+    if (!(error instanceof DestinationGroupError)) throw error
+    if (!findings.some(finding => finding.message === error.message)) findings.push({ code: error.code, severity: "blocking", message: error.message })
+    return ""
+  })
   const blocked = findings.some((finding) => finding.severity === "blocking") || !translated.body
   return {
     sourceName,
@@ -351,7 +386,8 @@ export async function staleTargets(deps: FeatureDeps, tenantId: string, items: A
     try {
       if (await targetStateHash(graph, item.targetReads, undefined, listings) !== item.targetStateHash) reasons.push(`The destination objects "${item.sourceName}" relied on changed after planning. Plan again.`)
     } catch (error) {
-      reasons.push(`The destination objects of "${item.sourceName}" could not be re-checked: ${error instanceof Error ? error.message : String(error)}`)
+      if (error instanceof DestinationGroupError) reasons.push(`"${item.sourceName}": ${error.message} Plan again.`)
+      else reasons.push(`The destination objects of "${item.sourceName}" could not be re-checked: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
   return reasons

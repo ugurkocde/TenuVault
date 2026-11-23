@@ -1,3 +1,4 @@
+import { GROUP_CHECK_GUIDANCE, GROUP_CHECK_REQUIRED } from "../group-access"
 import type { GroupState } from "./group-reads"
 import type { Mapping, ReferenceKind, ReferenceResolution } from "./reference-mapping"
 import { resolveReferences, usableReference } from "./reference-mapping"
@@ -122,11 +123,13 @@ export function resolveRestoreAssignments(type: IntuneType, snapshot: Item, inpu
   const errors: string[] = []
   const unverified = new Set<ReferenceResolution>()
   const uses = new Set<ReferenceResolution>()
+  const canUse = (reference: ReferenceResolution) =>
+    usableReference(reference, input.sameTenant && reference.targetId?.toLowerCase() === reference.sourceId.toLowerCase())
   let invalidTargetId = false
   const translate = (kind: AssignmentKind, id: string) => {
     const reference = byKey.get(referenceKey(kind, id))!
     uses.add(reference)
-    if (!usableReference(reference) || !reference.targetId) return id
+    if (!canUse(reference) || !reference.targetId) return id
     if (kind === "group" ? isGuid(reference.targetId) : isGraphId(reference.targetId)) return reference.targetId
     invalidTargetId = true
     return id
@@ -139,7 +142,7 @@ export function resolveRestoreAssignments(type: IntuneType, snapshot: Item, inpu
     uses.clear()
     invalidTargetId = false
     const mapped = rewrite(value, translate, key) as Json[]
-    if (invalidTargetId || mapped.some((tag) => !isGraphId(tag)) || [...uses].some((reference) => !usableReference(reference))) errors.push("Map each unresolved scope tag before restoring. Choose Default if appropriate.")
+    if (invalidTargetId || mapped.some((tag) => !isGraphId(tag)) || [...uses].some((reference) => !canUse(reference))) errors.push("Map each unresolved scope tag before restoring. Choose Default if appropriate.")
     for (const reference of uses) if (reference.state === "mapped-unverified") unverified.add(reference)
     next[key] = [...new Set(mapped)]
   }
@@ -155,7 +158,8 @@ export function resolveRestoreAssignments(type: IntuneType, snapshot: Item, inpu
     const mapped = entry ? rewrite(entry, translate, "", role) as Item : null
     const key = String(index)
     const skipped = input.sameTenant && input.skipped.has(key)
-    const unresolved = [...uses].some((reference) => !usableReference(reference))
+    const unreadableGroup = [...uses].some((reference) => reference.kind === "group" && reference.state === "mapped-unverified" && !canUse(reference))
+    const unresolved = [...uses].some((reference) => !canUse(reference))
     const target = entry?.target as Item | undefined
     const invalid = invalidTargetId || !entry || (!role && (!target || typeof target["@odata.type"] !== "string" ||
       (/(?:^|\.)(?:exclusion)?groupAssignmentTarget$/i.test(target["@odata.type"]) && !isGuid(target.groupId)) ||
@@ -164,8 +168,9 @@ export function resolveRestoreAssignments(type: IntuneType, snapshot: Item, inpu
         !["", "none"].includes(target.deviceAndAppManagementAssignmentFilterType) &&
         !isGuid(target.deviceAndAppManagementAssignmentFilterId))))
     const blocked = !skipped && (unresolved || invalid)
-    if (blocked) errors.push(`Assignment ${index + 1} has a missing or invalid target. Confirm a mapping${input.sameTenant ? " or skip the assignment" : ""}.`)
-    if (!skipped) for (const reference of uses) if (reference.state === "mapped-unverified") unverified.add(reference)
+    if (blocked && unreadableGroup) errors.push(GROUP_CHECK_REQUIRED)
+    else if (blocked) errors.push(`Assignment ${index + 1} has a missing or invalid target. Confirm a mapping${input.sameTenant ? " or skip the assignment" : ""}.`)
+    if (!skipped) for (const reference of uses) if (reference.state === "mapped-unverified" && canUse(reference)) unverified.add(reference)
     if (unresolved || invalid || skipped || [...uses].some((reference) => reference.state === "mapped-unverified")) assignments.push({
       key, index, references: [...uses], skipped, blocked,
       label: role ? (typeof entry?.displayName === "string" ? entry.displayName : "Role assignment")
@@ -179,7 +184,9 @@ export function resolveRestoreAssignments(type: IntuneType, snapshot: Item, inpu
       .filter((entry) => !isLegacyScopeTagAssignment(type, entry))
   }
   const allAssignmentsSkipped = (legacySkipped || replacements.size > 0) && assignments.filter((entry) => entry.skipped).length === replacements.size
-  const warnings = [...unverified].map((reference) => `Could not verify ${reference.kind === "scopeTag" ? "scope tag" : reference.kind} ${reference.targetName ?? reference.targetId} in the destination. Restore will use this ID.`)
+  const warnings = [...unverified].map((reference) => reference.kind === "group"
+    ? `${GROUP_CHECK_GUIDANCE} Restore will use the original group ID ${reference.targetId}.`
+    : `Could not verify ${reference.kind === "scopeTag" ? "scope tag" : reference.kind} ${reference.targetName ?? reference.targetId} in the destination. Restore will use this ID.`)
   if (legacySkipped) warnings.push(LEGACY_SCOPE_TAG_ASSIGNMENT_WARNING)
   return { snapshot: next, review: { references: resolutions, assignments, errors: [...new Set(errors)], warnings, allAssignmentsSkipped } }
 }

@@ -1,5 +1,6 @@
 import { typeForFolder, type Item } from "../src/shared/intune/registry"
 import { LEGACY_SCOPE_TAG_ASSIGNMENT_WARNING } from "../src/shared/intune/restore-assignments"
+import { GROUP_CHECK_REQUIRED } from "../src/shared/group-access"
 import { describe, expect, it } from "vitest"
 import { routes as syncRoutes } from "../src/main/features/sync"
 import { routes as promotionRoutes } from "../src/main/features/promotion"
@@ -1124,6 +1125,25 @@ describe("Sync and Dev to Prod stay apart", () => {
     context.setSameLicense(false)
     expect((await context.post({ tenantId: TENANT_A, action: "target-objects", targetTenantId: TENANT_B, kind: "filter" })).status).toBe(402)
   })
+
+  it("looks up destination groups for the picker under the Copy to Tenants plan rules", async () => {
+    const context = setup()
+    const destination = context.targets[TENANT_B]!
+    const id = "bbbbbbbb-0000-4000-8000-000000000015"
+    const group = { id, displayName: "Pilot devices", securityEnabled: true, groupTypes: [] }
+    destination.groups.set(id, group)
+    const search = (query: string) => context.post({ tenantId: TENANT_A, action: "target-groups", targetTenantId: TENANT_B, query })
+    for (const query of ["Pilot", id]) {
+      const answer = await search(query)
+      expect(answer.status).toBe(200)
+      expect(answer.body).toEqual({ readable: true, groups: [{ id, displayName: group.displayName, kind: "security", dynamic: false }] })
+    }
+    destination.groupsForbidden = true
+    expect((await search("Pilot")).body).toEqual({ readable: false, groups: [] })
+    context.setSameLicense(false)
+    expect((await search("Pilot")).status).toBe(402)
+    expect((await context.post({ tenantId: TENANT_A, action: "target-group-counts", targetTenantId: TENANT_B, ids: [id] })).status).toBe(402)
+  })
 })
 
 describe("Sync targets", () => {
@@ -1198,6 +1218,40 @@ describe("Sync rollback of a created policy", () => {
     expect((await context.post({ tenantId: TENANT_B, action: "rollback-approve", id, contentHash: review.body.contentHash, targetFingerprint: review.body.targetFingerprint })).status).toBe(200)
     expect((await context.post({ tenantId: TENANT_B, action: "rollback-apply", id, contentHash: review.body.contentHash, confirm: true })).body.changeSet.status).toBe("applied")
     expect(Object.values(syncLinks(context.deps, TENANT_B, TENANT_A)).map((link) => link.targetPolicyId)).toEqual(Object.values(before).map((link) => link.targetPolicyId))
+  })
+
+  it("checks captured assignment groups in Sync rollback preview, approval and apply", async () => {
+    const context = setup()
+    await synced(context)
+    const target = context.targets[TENANT_B]!
+    const policy = [...target.policies.values()][0]!
+    const group = { id: "bbbbbbbb-0000-4000-8000-000000000001", displayName: "Previous pilot", securityEnabled: true, groupTypes: [] }
+    target.groups.set(group.id, group)
+    policy.assignments = [{ target: { "@odata.type": "#microsoft.graph.groupAssignmentTarget", groupId: group.id } }]
+    editSource(context)
+    const planned = await plan(context, [TENANT_B], { includeAssignments: true })
+    expect(planned.status).toBe(200)
+    const id = planned.body.targets[0].promotion.id as string
+    expect((await applied(context, TENANT_B, id)).body.changeSet.status).toBe("applied")
+    expect(target.policies.get(policy.id as string)?.assignments).toEqual([])
+
+    const rollback = (action: string, body: Record<string, unknown> = {}) => context.post({ ...body, tenantId: TENANT_B, action: `rollback-${action}`, id })
+    target.groups.delete(group.id)
+    expect((await rollback("preview")).body.operations).toMatchObject([{ blocked: expect.stringContaining(group.id) }])
+    expect((await rollback("create")).status).toBe(200)
+    const review = await rollback("review")
+    expect(review.body.blockers).toEqual([expect.stringContaining(group.id)])
+    expect((await rollback("approve", review.body)).status).toBe(409)
+
+    target.groups.set(group.id, group)
+    const fresh = await rollback("review")
+    expect((await rollback("approve", fresh.body)).status).toBe(200)
+    target.groups.delete(group.id)
+    const writes = target.writeCount()
+    const refused = await rollback("apply", { contentHash: fresh.body.contentHash, confirm: true })
+    expect(refused.status).toBe(409)
+    expect(refused.body.error).toContain(group.id)
+    expect(target.writeCount()).toBe(writes)
   })
 })
 
@@ -1371,25 +1425,35 @@ describe("Copy to Tenants assignment option", () => {
     expect(context.targets[TENANT_B]!.writeCount((write) => write.path.endsWith("/assign"))).toBe(0)
   })
 
-  it("replaces a linked policy's assignments using a confirmed group when directory reads return 403", async () => {
+  it("blocks a linked policy update until the confirmed destination group can be read", async () => {
     const context = setup()
     await synced(context)
     const destination = context.targets[TENANT_B]!
     const target = [...destination.policies.values()][0]!
-    target.assignments = [{ target: { "@odata.type": "#microsoft.graph.allDevicesAssignmentTarget" } }]
+    const existing = [{ target: { "@odata.type": "#microsoft.graph.allDevicesAssignmentTarget" } }]
+    target.assignments = existing
+    const writes = destination.writeCount()
     context.source.groupsForbidden = true
     destination.groupsForbidden = true
     destination.filters = [{ id: newFilter, displayName: "Corporate devices" }]
     context.policy.assignments = [assignment]
-    const response = await plan(context, [TENANT_B], { includeAssignments: true, mappings: { [TENANT_B]: entries.slice(0, 2) } })
+    const planAssignments = () => plan(context, [TENANT_B], { includeAssignments: true, mappings: { [TENANT_B]: entries.slice(0, 2) } })
+    const response = await planAssignments()
     expect(response.status).toBe(200)
     const promotion = response.body.targets[0].promotion
     expect(promotion.items[0]).toMatchObject({
       action: "update", destinationId: target.id,
       references: expect.arrayContaining([expect.objectContaining({ kind: "group", targetId: newGroup, state: "mapped-unverified" })]),
-      findings: expect.arrayContaining([expect.objectContaining({ code: "unknown-membership", severity: "warning" })]),
+      findings: expect.arrayContaining([{ code: "unknown-membership", severity: "blocking", message: GROUP_CHECK_REQUIRED }]),
     })
-    expect((await applied(context, TENANT_B, promotion.id)).body.changeSet.status).toBe("applied")
+    expect(promotion).toMatchObject({ status: "blocked", changeSetId: null })
+    expect(destination.policies.get(String(target.id))?.assignments).toEqual(existing)
+    expect(destination.writeCount()).toBe(writes)
+
+    destination.groupsForbidden = false
+    destination.groups.set(newGroup, { id: newGroup, displayName: "Windows pilot", securityEnabled: true, groupTypes: [] })
+    const ready = (await planAssignments()).body.targets[0].promotion
+    expect((await applied(context, TENANT_B, ready.id)).body.changeSet.status).toBe("applied")
     expect(destination.policies.size).toBe(1)
     expect(destination.policies.get(String(target.id))?.assignments).toMatchObject([
       { target: { ...assignment.target, groupId: newGroup, deviceAndAppManagementAssignmentFilterId: newFilter } },
@@ -1405,7 +1469,7 @@ describe("Copy to Tenants assignment option", () => {
     context.source.filters = [{ id: filterId, displayName: "Corporate devices" }]
     context.source.scopeTags.push({ id: "2", displayName: "IT" })
     for (const id of [TENANT_B, TENANT_C]) {
-      context.targets[id]!.groups.set(newGroup, { id: newGroup, displayName: "Windows pilot" })
+      context.targets[id]!.groups.set(newGroup, { id: newGroup, displayName: "Windows pilot", securityEnabled: true, groupTypes: [] })
       context.targets[id]!.filters = [{ id: newFilter, displayName: "Corporate devices" }]
       context.targets[id]!.scopeTags.push({ id: "7", displayName: "IT" })
     }
@@ -1469,7 +1533,7 @@ describe("copying additional Intune types", () => {
     context.source.filters.push({ id: filterId, displayName: "Managed" })
     target.filters.push({ id: mappedFilterId, displayName: "Managed" })
     context.source.groups.set(groupId, { id: groupId, displayName: "Source Group" })
-    target.groups.set(mappedGroupId, { id: mappedGroupId, displayName: "Target Group" })
+    target.groups.set(mappedGroupId, { id: mappedGroupId, displayName: "Target Group", securityEnabled: true, groupTypes: [] })
 
     const listed = await context.post({ tenantId: TENANT_A, action: "policies", folder })
     expect(listed.status).toBe(200)
@@ -1548,7 +1612,7 @@ describe("copying additional Intune types", () => {
     context.source.collection(path).set("5", source)
     const objects = target.collection(path)
     context.source.groups.set(groupId, { id: groupId, displayName: "Source group" })
-    target.groups.set(mappedGroupId, { id: mappedGroupId, displayName: "Target group" })
+    target.groups.set(mappedGroupId, { id: mappedGroupId, displayName: "Target group", securityEnabled: true, groupTypes: [] })
     const input = { items: [{ folder, sourceId: "5" }], includeAssignments: true, mappings: { [TENANT_B]: [groupMapping] } }
     const create = (await planned(context, [TENANT_B], input)).targets[0]!.promotion!
     expect((await applied(context, TENANT_B, create.id)).body.promotion.status).toBe("applied")
@@ -1563,6 +1627,26 @@ describe("copying additional Intune types", () => {
     expect((await applied(context, TENANT_B, update.id)).body.promotion.status).toBe("applied")
     expect(objects.get(id!)?.assignments).toMatchObject([{ target: scopeTagGroup(mappedGroupId) }])
     expect(target.writeCount((write) => write.path.endsWith("/assign"))).toBe(1)
+  })
+
+  it("blocks copying scope tag assignments when the mapped group cannot be read", async () => {
+    const context = setup()
+    const folder = "ScopeTags"
+    const destination = context.targets[TENANT_B]!
+    context.source.collection(typeForFolder(folder)!.path).set("5", {
+      id: "5", displayName: "Pilot", assignments: [{ target: scopeTagGroup(groupId) }],
+    })
+    destination.groupsForbidden = true
+    const result = await planned(context, [TENANT_B], {
+      items: [{ folder, sourceId: "5" }], includeAssignments: true, mappings: { [TENANT_B]: [groupMapping] },
+    })
+    const promotion = result.targets[0]!.promotion!
+    expect(promotion).toMatchObject({ status: "blocked", changeSetId: null })
+    expect(promotion.items[0]).toMatchObject({
+      references: [expect.objectContaining({ kind: "group", sourceId: groupId, targetId: mappedGroupId, state: "mapped-unverified" })],
+      findings: expect.arrayContaining([{ code: "unknown-membership", severity: "blocking", message: GROUP_CHECK_REQUIRED }]),
+    })
+    expect(destination.writeCount()).toBe(0)
   })
 
   const dependencyCases: Array<{ folder: string; sourceId: string; label: string; body: Item }> = [

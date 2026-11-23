@@ -7,7 +7,7 @@ import { featureRoute, FeatureError, optionalText, text, type Body } from "../ro
 import { tenantWriteLabel, withTenantWrite } from "../write-lock"
 import type { ChangeSetRecord } from "../change-sets/model"
 import { applyChangeSet, approveChangeSet, createRollbackChangeSet, previewChangeSet, previewRollback, rejectChangeSet } from "../change-sets/engine"
-import { policies } from "../promotion"
+import { countTargetGroups, policies, searchTargetGroups } from "../promotion"
 import { approvePromotion, previewPromotion, promotionChangeSet, promotionRollback, PROMOTION_FOLDER, syncPromotion, type PromotionRecord } from "../promotion/engine"
 import { parseMappings, type Mapping } from "../promotion/mapping"
 import { mappableObjects } from "../promotion/targets"
@@ -258,6 +258,14 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
     "target-objects": async ({ tenantId, body }) => {
       const { targets } = await requireSyncTenants(deps, tenantId, [body.targetTenantId])
       return mappableObjects(deps, targets[0]!, body.kind)
+    },
+    "target-groups": async ({ tenantId, body }) => {
+      const { targets } = await requireSyncTenants(deps, tenantId, [body.targetTenantId])
+      return searchTargetGroups(deps, targets[0]!, body.query)
+    },
+    "target-group-counts": async ({ tenantId, body }) => {
+      const { targets } = await requireSyncTenants(deps, tenantId, [body.targetTenantId])
+      return countTargetGroups(deps, targets[0]!, body.ids)
     },
     plan: async ({ tenantId, body, actor }) => {
       const { source, targets } = await requireSyncTenants(deps, tenantId, targetIds(body.targetTenants))

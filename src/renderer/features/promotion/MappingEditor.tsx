@@ -1,36 +1,86 @@
+import { useState, type ReactNode } from "react"
+import { GroupAccessCard, useGroupAccessMissing } from "../../components/GroupAccess"
+import { GroupCountLabel, GroupSearch, groupKindLabel, useGroupCounts, type GroupDirectory } from "../../components/GroupSearch"
+import type { TenantGroup } from "../../../shared/group-access"
 import { useQuery } from "@tanstack/react-query"
 import type { Tenant } from "~/contexts/TenantContext"
 import { Chip } from "~/components/dashboard/tiles"
-import { KIND_LABEL, STATE_TONE, targetObjects, type Mapping, type ReferenceKind, type ReferenceResolution } from "./api"
+import { KIND_LABEL, STATE_TONE, targetGroupCounts, targetGroups, targetObjects, type Mapping, type ReferenceKind, type ReferenceResolution } from "./api"
 
 const fieldClass = "h-9 w-full rounded-full border border-gray-200 bg-white px-3 text-sm text-gray-800 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100"
-const STATE_LABEL = { portable: "Built in", mapped: "Verified", "mapped-unverified": "Unverified", missing: "Needs mapping", rejected: "Target missing" } as const
+const STATE_LABEL = { portable: "Built in", mapped: "Verified", "mapped-unverified": "Unverified", missing: "Needs mapping", rejected: "Target rejected" } as const
 const GUID = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i
-
-/**
- * Maps each tenant-specific reference to a target-tenant object. A same-name candidate can be
- * copied in, but a mapping only counts once "Confirmed" is ticked: a name match is never
- * proof. Groups cannot be listed without Group.Read.All, so their object ID is entered.
- */
-export function MappingEditor({ tenant, references, mappings, onChange }: { tenant: Tenant; references: ReferenceResolution[]; mappings: Mapping[]; onChange: (mappings: Mapping[]) => void }) {
-  return <RemoteMappingEditor tenantId={tenant.credentials?.tenantId} source="promotion" loadObjects={(kind) => targetObjects(tenant, kind)} references={references} mappings={mappings} onChange={onChange} />
-}
 
 export type MappingObjects = Partial<Record<ReferenceKind, { readable: boolean; objects: Array<{ id: string; name: string }>; reason?: string }>>
 type MappingsProps = { references: ReferenceResolution[]; mappings: Mapping[]; onChange: (mappings: Mapping[]) => void }
 
-export function RemoteMappingEditor({ tenantId, source, loadObjects, ...props }: MappingsProps & {
-  tenantId?: string
-  source: string
-  loadObjects: (kind: Exclude<ReferenceKind, "group">) => Promise<NonNullable<MappingObjects[ReferenceKind]>>
-}) {
-  const kinds = new Set(props.references.map((reference) => reference.kind))
-  const useTargetList = (kind: Exclude<ReferenceKind, "group">) => useQuery({ queryKey: [source, "objects", tenantId, kind], queryFn: () => loadObjects(kind), enabled: kinds.has(kind) }).data
-  const objects = { filter: useTargetList("filter"), scopeTag: useTargetList("scopeTag"), reusableSetting: useTargetList("reusableSetting") }
-  return <ReferenceMappingTable {...props} objects={objects} help={source === "promotion" ? "New policies use Default for source scope tags without a usable mapping. Updates keep their scope tags." : undefined} />
+export function MappingEditor({ tenant, ...props }: MappingsProps & { tenant: Tenant }) {
+  return <RemoteMappingEditor {...props} tenant={tenant} source="promotion"
+    loadObjects={(kind) => targetObjects(tenant, kind)}
+    search={(query) => targetGroups(tenant, query)}
+    counts={(ids) => targetGroupCounts(tenant, ids)}
+    help="New policies use Default for source scope tags without a usable mapping. Updates keep their scope tags." />
 }
 
-export function ReferenceMappingTable({ references, mappings, onChange, objects, help }: MappingsProps & { objects: MappingObjects; help?: string }) {
+export function RemoteMappingEditor({ tenant, source, loadObjects, search, counts, help, onRecheck, ...props }: MappingsProps & {
+  tenant: Tenant
+  source: string
+  loadObjects: (kind: Exclude<ReferenceKind, "group">) => Promise<NonNullable<MappingObjects[ReferenceKind]>>
+  search: GroupDirectory["search"]
+  counts: GroupDirectory["counts"]
+  help?: string
+  onRecheck?: () => void
+}) {
+  const { references } = props
+  const credentials = tenant.credentials
+  const tenantId = credentials?.tenantId
+  const tenantKey = `${tenantId}:${credentials?.appId}`
+  const [lastRead, setLastRead] = useState<{ tenantKey: string; refused: boolean; reviewed?: ReferenceResolution } | null>(null)
+  const [chosenGroups, setChosenGroups] = useState<Record<string, TenantGroup>>({})
+  const unreadable = references.find((reference) => reference.kind === "group" && reference.state === "mapped-unverified")
+  const graphRefused = lastRead?.tenantKey === tenantKey && lastRead.refused
+  const planRefused = !!unreadable && lastRead?.reviewed !== unreadable
+  const kinds = new Set(references.map((reference) => reference.kind))
+  const accessMissing = useGroupAccessMissing(kinds.has("group") ? credentials ?? null : null, graphRefused || planRefused ? false : null)
+  const directory: GroupDirectory = {
+    tenantKey, search, counts,
+    enabled: Boolean(credentials && !accessMissing),
+    onRefused: () => setLastRead({ tenantKey, refused: true, reviewed: unreadable }),
+  }
+  const useTargetList = (kind: Exclude<ReferenceKind, "group">) => useQuery({
+    queryKey: [source, "objects", tenantId, kind], queryFn: () => loadObjects(kind), enabled: kinds.has(kind),
+  }).data
+  const objects = { filter: useTargetList("filter"), scopeTag: useTargetList("scopeTag"), reusableSetting: useTargetList("reusableSetting") }
+
+  return <div className="space-y-2">
+    {credentials && kinds.has("group") && accessMissing && <GroupAccessCard tenant={{ ...credentials, name: tenant.name }}
+      context="Group mappings are unavailable until TenuVault can read groups in the destination."
+      onRecheck={() => {
+        setLastRead({ tenantKey, refused: false, reviewed: unreadable })
+        onRecheck?.()
+      }} />}
+    <ReferenceMappingTable {...props} objects={objects} help={help} groupAccessMissing={accessMissing}
+      renderGroup={(reference, mapping, set) => {
+        if (!directory.enabled) return null
+        const selectedGroup = mapping && chosenGroups[`${tenantKey}:${mapping.targetId}`]
+        return <TargetGroupPicker directory={directory} label={`Target group for ${reference.sourceName ?? reference.sourceId}`}
+          candidate={reference.suggestion?.targetId !== mapping?.targetId ? reference.suggestion : null}
+          selectedId={mapping?.targetId} selectedName={selectedGroup?.displayName ?? (mapping?.targetId === reference.targetId ? reference.targetName : null)}
+          selectedKind={selectedGroup && groupKindLabel(selectedGroup)}
+          onPick={(group) => {
+            setChosenGroups((groups) => ({ ...groups, [`${tenantKey}:${group.id}`]: group }))
+            set({ targetId: group.id })
+          }} onClear={() => set({ targetId: "", confirmed: false })} />
+      }} />
+  </div>
+}
+
+export function ReferenceMappingTable({ references, mappings, onChange, objects, help, renderGroup, groupAccessMissing }: MappingsProps & {
+  objects: MappingObjects
+  help?: string
+  groupAccessMissing?: boolean
+  renderGroup?: (reference: ReferenceResolution, mapping: Mapping | undefined, set: (change: Partial<Mapping>) => void) => ReactNode
+}) {
   const unique = references.filter((reference, index) => reference.state !== "portable" && references.findIndex((entry) => entry.kind === reference.kind && entry.sourceId.toLowerCase() === reference.sourceId.toLowerCase()) === index)
   if (!unique.length) return <p className="text-sm text-gray-600">No tenant-specific references need a mapping.</p>
 
@@ -62,14 +112,15 @@ export function ReferenceMappingTable({ references, mappings, onChange, objects,
                 <td className="py-2 pr-3 align-top">
                   <Chip tone={STATE_TONE[reference.state]}>{STATE_LABEL[reference.state]}</Chip>
                   {reference.state === "mapped" && reference.targetName && <span className="mt-1 block text-xs text-gray-600">{reference.targetName}</span>}
-                  {reference.suggestion && mapping?.targetId !== reference.suggestion.targetId && (
+                  {reference.suggestion && (!renderGroup || reference.kind !== "group") && mapping?.targetId !== reference.suggestion.targetId && (
                     <button type="button" className="mt-1 block text-left text-xs text-blue-700 underline dark:text-blue-300" onClick={() => set(reference, { targetId: reference.suggestion!.targetId })}>
                       Same name in target: "{reference.suggestion.targetName}". Use as candidate
                     </button>
                   )}
                 </td>
                 <td className="py-2 pr-3 align-top">
-                  {reference.kind === "group" && !list?.readable ? (
+                  {reference.kind === "group" && renderGroup ? renderGroup(reference, mapping, (change) => set(reference, change))
+                    : reference.kind === "group" && !list?.readable ? (
                     <input className={fieldClass} aria-label={`Target group object ID for ${reference.sourceName ?? reference.sourceId}`} placeholder="Target group object ID" value={mapping?.targetId ?? ""} onChange={(event) => set(reference, { targetId: event.target.value.trim() })} aria-invalid={!!mapping?.targetId && !GUID.test(mapping.targetId)} />
                   ) : list && !list.readable && reference.kind !== "scopeTag" ? (
                     <span className="text-xs text-amber-800 dark:text-amber-300">Target objects could not be read: {list.reason}</span>
@@ -82,7 +133,7 @@ export function ReferenceMappingTable({ references, mappings, onChange, objects,
                   )}
                 </td>
                 <td className="py-2 align-top">
-                  <input type="checkbox" className="h-4 w-4" aria-label={`Confirm mapping for ${reference.sourceName ?? reference.sourceId}`} disabled={!mapping?.targetId} checked={!!mapping?.confirmed} onChange={(event) => set(reference, { confirmed: event.target.checked })} />
+                  <input type="checkbox" className="h-4 w-4" aria-label={`Confirm mapping for ${reference.sourceName ?? reference.sourceId}`} disabled={!mapping?.targetId || (reference.kind === "group" && groupAccessMissing)} checked={!!mapping?.confirmed} onChange={(event) => set(reference, { confirmed: event.target.checked })} />
                 </td>
               </tr>
             )
@@ -92,4 +143,26 @@ export function ReferenceMappingTable({ references, mappings, onChange, objects,
       <p className="mt-2 text-xs text-gray-500">Only confirmed mappings are used. {help}</p>
     </div>
   )
+}
+
+function TargetGroupPicker({ directory, label, candidate, selectedId, selectedName, selectedKind, onPick, onClear }: {
+  directory: GroupDirectory
+  label: string
+  candidate?: ReferenceResolution["suggestion"]
+  selectedId?: string
+  selectedName?: string | null
+  selectedKind?: string
+  onPick: (group: TenantGroup) => void
+  onClear: () => void
+}) {
+  const counts = useGroupCounts(directory, selectedId ? [selectedId] : [])
+  return <div className="min-w-72">
+    {selectedId && <div className="flex flex-wrap items-center gap-2 text-xs">
+      <span title={selectedId}>{selectedName ?? selectedId}</span>
+      {selectedKind && <span className="text-gray-500">{selectedKind}</span>}
+      <GroupCountLabel counts={counts?.[selectedId]} />
+      <button type="button" className="underline" aria-label={`Clear ${label.toLowerCase()}`} onClick={onClear}>Clear</button>
+    </div>}
+    <GroupSearch directory={directory} label={label} candidate={candidate} onPick={onPick} />
+  </div>
 }
