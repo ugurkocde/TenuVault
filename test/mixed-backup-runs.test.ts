@@ -559,6 +559,17 @@ for (const azure of [false, true]) describe(azure ? "Azure emulator mixed runs" 
     const refused = await download(f.request({ backupId: ordinary }))
     expect(refused.status).toBe(409)
   })
+  it("asks to retry the full download when the large half of a split run cannot be read in time", async () => {
+    const f = await pair()
+    const original = f.fetcher.getMockImplementation()!
+    f.fetcher.mockImplementation(async (input, init) => {
+      if (String(input).includes(`${large}/metadata.json`)) return new Response("<Error><Code>ServerBusy</Code></Error>", { status: 503 })
+      return original(input, init)
+    })
+    const refused = await download(f.request({ backupId: ordinary }))
+    expect(refused.status).toBe(503)
+    expect(await refused.json()).toMatchObject({ error: expect.stringContaining("other half of this run"), ordinaryOnlyAvailable: true })
+  })
   it("protects a valid complete run inside retention", async () => {
     const f = await pair()
     const engine = new BackupEngine({ now: () => new Date("2020-01-01T12:00:00Z"), fetch: f.fetcher, getToken: async () => jwt({ scp: "Policy.Read.All" }), services: () => ({ services: ["intune", "entra"] }), retentionDays: () => 1 })

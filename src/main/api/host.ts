@@ -20,8 +20,8 @@ export interface ApiHostOptions {
   onHandled?: (request: Request, requestBody: string, response: Response, metadata?: ExecutionMetadata) => void
   /** Streams large downloads to a native save destination before IPC can buffer them. */
   saveDownload?: (response: Response) => Promise<Response>
-  /** Captures who started an archive download before its save, which can outlast a sign-in. */
-  beforeSave?: (request: Request, body: string, metadata: ExecutionMetadata) => void
+  /** Captures who started a request before its route runs, for audits recorded after a long save. */
+  beforeRoute?: (request: Request, body: string, metadata: ExecutionMetadata) => void
   /** Adjusts responses before they reach the caller. */
   transform?: (response: Response) => Promise<Response>
 }
@@ -64,6 +64,8 @@ export class ApiHost {
 
     const body = request.method === "GET" || request.method === "HEAD" ? "" : await request.clone().text()
     const metadata: ExecutionMetadata = {}
+    // Bound before the route takes its token, so a sign-in that changes meanwhile never moves the audit.
+    try { this.options.beforeRoute?.(request, body, metadata) } catch (error) { console.error(`[api] ${request.method} ${url.pathname} could not capture the audit binding:`, error) }
     let response: Response
     try {
       response = await executionMetadata.run(metadata, () => withRouteTenant(tenantId, () => handler(new NextRequest(request)), storageAccountName))
@@ -78,7 +80,6 @@ export class ApiHost {
     // An archive is saved before the request is audited, so the audit records what was saved: a save that
     // fails is a failed download, and a cancelled save dialog is no download at all.
     if (response.ok && response.headers.get("content-type") === "application/x-tar" && this.options.saveDownload) {
-      try { this.options.beforeSave?.(request, body, metadata) } catch (error) { console.error(`[api] ${request.method} ${url.pathname} could not capture the download audit:`, error) }
       try {
         response = await this.options.saveDownload(response)
       } catch (error) {

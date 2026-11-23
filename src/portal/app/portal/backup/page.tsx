@@ -128,7 +128,9 @@ export default function BackupRestorePage() {
   // A backup whose full download the route refused while offering the ordinary items: its next download is
   // the ordinary-only copy. It belongs to the backup list the download started from, so a refreshed list
   // or another tenant offers the full download again.
-  const [ordinaryOnly, setOrdinaryOnly] = useState<{ list: unknown; id: string } | null>(null)
+  const [ordinaryOnly, setOrdinaryOnly] = useState<{ list: unknown; id: string; scope: string } | null>(null)
+  // The tenant and storage on screen, so an answer that arrives after a switch never applies here.
+  const scopeRef = useRef("")
   const [exportingDevices, setExportingDevices] = useState(false)
   const detailRef = useRef<HTMLDivElement | null>(null)
 
@@ -144,7 +146,11 @@ export default function BackupRestorePage() {
     .map((entry) => ({ tenantId: entry.credentials!.tenantId, appId: entry.credentials!.appId, name: entry.name, domain: entry.domain }))
   const trends = useMemo(() => backupTypeTrends(backups).filter(type => matchesBackupService(type.folder, service)), [backups, service])
   const listed = backups.find((backup) => backup.id === selectedId) ?? null
-  const selected = listed && ordinaryOnly?.list === backups && ordinaryOnly.id === listed.id ? { ...listed, ordinaryOnlyExport: true } : listed
+  const scope = tenant ? `${tenant.credentials.tenantId}:${tenant.storageAccountName}` : ""
+  scopeRef.current = scope
+  // Leaving a tenant ends its fallback, so coming back offers the full download again.
+  useEffect(() => { setOrdinaryOnly(null) }, [scope])
+  const selected = listed && ordinaryOnly?.list === backups && ordinaryOnly.id === listed.id && ordinaryOnly.scope === scope ? { ...listed, ordinaryOnlyExport: true } : listed
   const latest = backups.find((backup) => backup.counts && statusKind(backup.status) === "success")
 
   useEffect(() => {
@@ -191,7 +197,7 @@ export default function BackupRestorePage() {
 
   const download = async (backup: BackupSummary) => {
     if (!tenant) return
-    const startedFrom = backups
+    const startedFrom = backups, startedIn = `${tenant.credentials.tenantId}:${tenant.storageAccountName}`
     setIsDownloading(true)
     try {
       const response = await fetch("/api/download-backup", {
@@ -201,7 +207,7 @@ export default function BackupRestorePage() {
       })
       if (!response.ok) {
         const problem = await response.json().catch(() => ({}))
-        if (problem.ordinaryOnlyAvailable && response.status === 503) setOrdinaryOnly({ list: startedFrom, id: backup.id })
+        if (problem.ordinaryOnlyAvailable && response.status === 503) { if (scopeRef.current === startedIn) setOrdinaryOnly({ list: startedFrom, id: backup.id, scope: startedIn }) }
         else if (problem.ordinaryOnlyAvailable) void fetchBackups()
         throw new Error(problem.error || "Failed to download backup")
       }

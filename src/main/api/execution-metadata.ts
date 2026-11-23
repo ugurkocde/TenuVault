@@ -5,7 +5,7 @@ import type { AuditBinding } from "./audit-sink"
 
 export interface ExecutionMetadata {
   directoryActor?: Pick<SignedInAccount, "username" | "name">
-  /** The audit binding of the admin who started an archive download, captured before the save runs. */
+  /** The audit binding of the admin who started an archive download, captured before its route runs. */
   downloadAudit?: AuditBinding
 }
 /** Main-process context only. Request bodies, headers and response JSON cannot set it. */

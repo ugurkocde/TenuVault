@@ -743,7 +743,7 @@ async function bootstrap(): Promise<void> {
     },
   })
   const host: ApiHost = new ApiHost({
-    beforeSave: captureDownloadAudit,
+    beforeRoute: captureDownloadAudit,
     saveDownload: response => saveArchiveResponse(response, name => dialog.showSaveDialog(mainWindow!, { title: "Export backup", defaultPath: name, filters: [{ name: "Large backup archive", extensions: ["tar"] }] })),
     routes: { ...routes, ...backupRoutes(engine, (tenantId) => scopes.get(tenantId).scope), ...featureRoutes(featureDeps), ...driftScanRoutes(driftJobs), ...restoreSafetyRoutes(guardedRestoreJournal(), recoveryAccounts, restoreConnection, async tenant => { await restoreConnection(tenant) }, identityRestore) },
     transform: surfaceTokenErrors,

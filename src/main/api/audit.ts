@@ -18,6 +18,7 @@ interface AuditBody {
   clientSecret?: string
   storageAccountName?: string
   id?: string
+  backupId?: string
   scheduleId?: string
   policyId?: string
   name?: string
@@ -43,7 +44,8 @@ export interface RestoreNotice {
  * Binds the audit of an archive download to the admin and storage of when it was authorized, before a
  * save that can outlast a sign-in.
  */
-export function captureDownloadAudit(_request: Request, requestBody: string, metadata: ExecutionMetadata): void {
+export function captureDownloadAudit(request: Request, requestBody: string, metadata: ExecutionMetadata): void {
+  if (request.method !== "POST" || new URL(request.url).pathname.replace(/(.)\/$/, "$1") !== "/api/download-backup") return
   const tenantId = (JSON.parse(requestBody) as { tenantId?: unknown }).tenantId
   if (typeof tenantId === "string" && tenantId) metadata.downloadAudit = mainAuditSink()?.bind(tenantId)
 }
@@ -104,7 +106,7 @@ export function createAuditRecorder(
       action: config.action,
       resource: {
         type: config.resourceType as CreateAuditLogInput["resource"]["type"],
-        id: body.id ?? body.scheduleId ?? body.policyId ?? body.tenantId,
+        id: body.id ?? body.backupId ?? body.scheduleId ?? body.policyId ?? body.tenantId,
         name: config.action,
       },
       result: ok ? AuditResult.SUCCESS : AuditResult.FAILURE,

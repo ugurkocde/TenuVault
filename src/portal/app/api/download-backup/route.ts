@@ -44,6 +44,7 @@ async function getAccessToken(tenantId: string, appId: string, clientSecret: str
 
 /** How long a split run's record may take before the early manifest stands. */
 const RUN_RECORD_TIMEOUT_MS = 10_000
+const COMPANION_UNAVAILABLE = "The other half of this run could not be read in time, so the full download did not start. Try again in a moment, or download the ordinary items only."
 const RECORD_UNAVAILABLE = "The run's final result could not be read in time, so the full download did not start. Try again in a moment, or download the ordinary items only."
 
 export async function POST(request: NextRequest) {
@@ -91,7 +92,7 @@ export async function POST(request: NextRequest) {
       let metadata = largeOwner.metadata
       // A record that exists but could not be read in time says nothing about the run, so the full
       // download is offered again instead of being refused as incomplete.
-      let recordUnavailable = false
+      let recordUnavailable = false, companionUnavailable = false
       // A record that is absent or not valid JSON names no run, the same way history reads it.
       const missing = (error: unknown) => error instanceof Error && (error.message.includes("(404)") || error.message.includes("invalid or oversized"))
       // An ordinary-only copy needs neither the run record nor the companion, so large storage never delays it.
@@ -109,7 +110,9 @@ export async function POST(request: NextRequest) {
         const otherId = metadata.CompanionBackup
         let other: Record<string, any> | null = null
         if (!ordinaryOnlyRequest && typeof otherId === "string" && isBackupName(otherId)) {
-          try { other = await readJson(`${otherId}/metadata.json`) } catch { /* The ordinary subset remains exportable. */ }
+          // A companion that does not answer in time is not a broken run: the admin can retry, or take the
+          // ordinary items.
+          try { other = await readJson(`${otherId}/metadata.json`, AbortSignal.timeout(RUN_RECORD_TIMEOUT_MS)) } catch (error) { if (!missing(error) && !(error instanceof Error && /could not be read \(4\d\d\)/.test(error.message))) companionUnavailable = true }
           if (other && isLargeBackup(backupId) && typeof other.RunStatus !== "string") {
             let record: Record<string, any> | null = null
             try { record = await readJson(`${otherId}/${BACKUP_RUN_RECORD_FILE}`, AbortSignal.timeout(RUN_RECORD_TIMEOUT_MS)) } catch (error) { recordUnavailable = !missing(error) }
@@ -125,7 +128,7 @@ export async function POST(request: NextRequest) {
             headers: { "content-type": "application/x-tar", "content-disposition": `attachment; filename="${ordinaryId}.tar"` },
           })
         }
-        if (recordUnavailable && body.ordinaryOnly !== true) return NextResponse.json({ error: RECORD_UNAVAILABLE, ordinaryOnlyAvailable: !isLargeBackup(backupId) }, { status: 503 })
+        if ((recordUnavailable || companionUnavailable) && body.ordinaryOnly !== true) return NextResponse.json({ error: recordUnavailable ? RECORD_UNAVAILABLE : COMPANION_UNAVAILABLE, ordinaryOnlyAvailable: !isLargeBackup(backupId) }, { status: 503 })
         if (isLargeBackup(backupId) || body.ordinaryOnly !== true) return NextResponse.json({ error: "The mixed run is incomplete or its companion does not match. Choose Download ordinary only to export the ordinary snapshots.", ordinaryOnlyAvailable: !isLargeBackup(backupId) }, { status: 409 })
         ordinaryExport = ordinaryOnlyManifest(metadata, ordinaryOnlyRequest ? "An ordinary-only copy was requested." : matches ? "Large companion is incomplete, or an ordinary-only copy was requested." : "Large companion is missing, unreadable or does not match.")
         // Without the run's record an early manifest's placeholders say nothing about the large types, so

@@ -61,10 +61,11 @@ describe("audit callbacks cannot replace a completed route response", () => {
     const { setMainAuditSink } = await import("../src/main/api/audit-sink")
     const { captureDownloadAudit } = await import("../src/main/api/audit")
     let admin = "first@contoso.com"
-    const record = vi.fn(async () => undefined)
+    const record = vi.fn(async (..._args: unknown[]) => undefined)
     setMainAuditSink({ bind: () => ({ tenantId: TENANT, storageAccountName: "fixturestore", user: { id: admin, email: admin, name: admin } }), record } as never)
     try {
-      const body = JSON.stringify({ ...credentials, id: "backup-2026-11-21-000000" })
+      // The page sends the backup as backupId; the audit names that backup.
+      const body = JSON.stringify({ ...credentials, backupId: "backup-2026-11-21-000000" })
       const metadata = {}
       captureDownloadAudit(new Request("http://tenuvault.internal/api/download-backup", { method: "POST" }), body, metadata)
       // The save outlasts the sign-in: another admin is signed in when it is recorded.
@@ -75,6 +76,29 @@ describe("audit callbacks cannot replace a completed route response", () => {
       expect(dispatch).not.toHaveBeenCalled()
       expect(record).toHaveBeenCalledTimes(1)
       expect(record.mock.calls[0]![0]).toMatchObject({ user: { id: "first@contoso.com" } })
+      expect(record.mock.calls[0]![1]).toMatchObject({ resource: { id: "backup-2026-11-21-000000" } })
+    } finally { setMainAuditSink(undefined) }
+  })
+
+  it("binds an archive download's audit before its route runs, so a sign-in during the route never moves it", async () => {
+    const { setMainAuditSink } = await import("../src/main/api/audit-sink")
+    const { captureDownloadAudit } = await import("../src/main/api/audit")
+    let admin = "first@contoso.com"
+    const record = vi.fn(async (..._args: unknown[]) => undefined)
+    setMainAuditSink({ bind: () => ({ tenantId: TENANT, storageAccountName: "fixturestore", user: { id: admin, email: admin, name: admin } }), record } as never)
+    try {
+      // Another admin signs in while the route is still reading manifests, before the archive is saved.
+      const route = vi.fn(async () => { admin = "second@contoso.com"; return new Response("archive", { headers: { "content-type": "application/x-tar" } }) })
+      const recorder = createAuditRecorder(vi.fn(async () => Response.json({ success: true })), () => null)
+      const host = new ApiHost({ routes: { "/api/download-backup": { POST: route } }, beforeRoute: captureDownloadAudit, saveDownload: async response => { await response.text(); return Response.json({ saved: true }) }, onHandled: recorder })
+      await host.handleIpc({ path: "/api/download-backup", method: "POST", headers: {}, body: new TextEncoder().encode(JSON.stringify({ ...credentials, backupId: "backup-2026-11-21-000000" })) })
+      await new Promise<void>((resolve) => setTimeout(resolve, 0))
+      expect(record).toHaveBeenCalledTimes(1)
+      expect(record.mock.calls[0]![0]).toMatchObject({ user: { id: "first@contoso.com" } })
+      // Other routes are never bound this way.
+      const metadata: Record<string, unknown> = {}
+      captureDownloadAudit(new Request("http://tenuvault.internal/api/backup-start", { method: "POST" }), JSON.stringify(credentials), metadata)
+      expect(metadata.downloadAudit).toBeUndefined()
     } finally { setMainAuditSink(undefined) }
   })
 
