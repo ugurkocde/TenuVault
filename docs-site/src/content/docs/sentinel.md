@@ -46,7 +46,11 @@ Use a Log Analytics workspace where you can create tables and a data collection 
      ```
 
    - In the HTTP action's settings, set **Retry policy** to **None** so the sender can handle retries.
-4. Add two built-in **Response** actions on parallel branches after **HTTP**. Return `204` when **HTTP** succeeds. Set the second action's **Run after** to failure or timeout only and return `502` so TenuVault sees a delivery failure. Save the workflow. [Response action](https://learn.microsoft.com/en-us/azure/connectors/connectors-native-reqres) and [run-after settings](https://learn.microsoft.com/en-us/azure/logic-apps/error-exception-handling).
+4. Add one built-in **Response** action directly after **HTTP**. Set **Run after** to run when **HTTP** succeeded, failed, or timed out. Leave the response body empty. Enter this expression in **Status Code** and save the workflow. The `502` lets TenuVault treat an ingestion failure as a delivery failure and retry it. [Response action](https://learn.microsoft.com/en-us/azure/connectors/connectors-native-reqres) and [run-after settings](https://learn.microsoft.com/en-us/azure/logic-apps/error-exception-handling).
+
+   ```text
+   if(equals(actions('HTTP')?['status'], 'Succeeded'), 204, 502)
+   ```
 5. In TenuVault, go to **Alerts** > **Channels** and add a **Webhook** channel with the workflow's HTTP URL. Select **Send test**, then choose this channel on the alerts you want to route. For the Azure watcher, use the same URL with `-WebhookUrl` in the [watcher setup script](/notifications/#alerts-while-this-computer-is-off-the-azure-watcher).
 
 If the test fails, open the Logic App's run history and inspect the HTTP action. A `403` points to the identity's DCR role or a role assignment still propagating. A `404` can indicate an incorrect DCR ID or input stream. [Microsoft's ingestion troubleshooting steps](https://learn.microsoft.com/en-us/azure/azure-monitor/logs/tutorial-logs-ingestion-portal#troubleshoot-common-issues).
