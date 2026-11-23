@@ -289,13 +289,13 @@ export function ServicesSettings() {
   }
 
   const status = statuses.get(current.tenantId)
-  const run = async (action: () => Promise<ServicesStatus>) => {
+  const run = async (action: () => Promise<ServicesStatus>, statusKey?: readonly string[]) => {
     setBusy(true)
     try {
       const next = await action()
       setStatuses((previous) => new Map(previous).set(next.tenantId, next))
-      // Notifications reads the same status; a fresh check here must not leave it stale there.
-      void queryClient.invalidateQueries({ queryKey: ["services-status"] })
+      if (statusKey) queryClient.setQueryData(statusKey, next)
+      else void queryClient.invalidateQueries({ queryKey: ["services-status"] })
     } catch (error) {
       toast(error instanceof Error ? error.message : String(error), "error")
     } finally {
@@ -303,28 +303,28 @@ export function ServicesSettings() {
     }
   }
 
-  // A failed re-check leaves the module list as it was but marks the optional permissions
-  // unknown, so an old Granted or Not granted is never shown or announced as current.
+  // A failed re-check leaves the module list as it was and clears the cached permission indicators.
   const recheck = async (tenantId: string, clientId: string) => {
+    const statusKey = ["services-status", tenantId, clientId]
     setCheckingTenant(tenantId)
     try {
       await run(async () => {
+        await queryClient.cancelQueries({ queryKey: statusKey, exact: true })
         try {
           return await bridge.services.status(tenantId, clientId, true)
         } catch (error) {
           setStatuses((previous) => {
             const before = previous.get(tenantId)
-            if (!before || before === "loading" || !before.optional) return previous
-            return new Map(previous).set(tenantId, { ...before, optional: before.optional.map((entry) => ({ ...entry, granted: null, missing: [] })) })
+            if (!before || before === "loading") return previous
+            return new Map(previous).set(tenantId, { ...before, readOnlyRegistration: undefined, optional: before.optional?.map((entry) => ({ ...entry, granted: null, missing: [] })) })
           })
-          // The Notifications section reads its own cached copy; mark that unknown too.
-          queryClient.setQueryData<ServicesStatus>(["services-status", tenantId, clientId], (cached) => {
-            if (!cached?.optional) return cached
-            return { ...cached, optional: cached.optional.map((entry) => ({ ...entry, granted: null, missing: [] })) }
+          queryClient.setQueryData<ServicesStatus>(statusKey, (cached) => {
+            if (!cached) return cached
+            return { ...cached, readOnlyRegistration: undefined, optional: cached.optional?.map((entry) => ({ ...entry, granted: null, missing: [] })) }
           })
           throw error
         }
-      })
+      }, statusKey)
     } finally {
       setCheckingTenant((value) => (value === tenantId ? null : value))
     }

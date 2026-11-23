@@ -63,7 +63,8 @@ export function createBridgedFetch(options: FetchBridgeOptions): typeof fetch {
       if (url.origin === "https://graph.microsoft.com") {
         const source = input instanceof Request ? input : undefined
         const method = (init?.method ?? source?.method ?? "GET").toUpperCase()
-        if (method !== "GET" && method !== "HEAD") {
+        const isSendMail = method === "POST" && /^\/(beta|v1\.0)\/me\/sendMail$/i.test(url.pathname)
+        if (method !== "GET" && method !== "HEAD" && !isSendMail) {
           const authorization = new Headers(init?.headers ?? source?.headers).get("Authorization")
           const token = /^Bearer (.+)$/i.exec(authorization ?? "")?.[1]
           if (isReadOnlyRegistration(grantedPermissions(token))) {

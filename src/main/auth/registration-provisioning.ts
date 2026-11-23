@@ -1,4 +1,4 @@
-import { isReadOnlyRegistration } from "../../shared/services/token"
+import { isReadOnlyRegistration, isTenantWriteScope } from "../../shared/services/token"
 import { CONSENT_ROLES_TEXT, desktopAppPermissions, READ_ONLY_REGISTRATION_NAME, type RegistrationMode } from "../../shared/app-registration"
 import { OPTIONAL_PERMISSIONS } from "../../shared/services/optional-permissions"
 import type { RegistrationResult, SetupProgress } from "../../shared/ipc"
@@ -22,7 +22,6 @@ interface Principal {
   /** False when an administrator turned sign-in to the enterprise application off. */
   accountEnabled?: boolean
   oauth2PermissionScopes?: { id: string; value: string; isEnabled?: boolean }[]
-  publishedPermissionScopes?: { id: string; value: string; isEnabled?: boolean }[]
 }
 interface Grant { id: string; resourceId: string; consentType: string; scope: string }
 export interface ProvisioningOptions {
@@ -35,7 +34,7 @@ export interface ProvisioningOptions {
   mode?: RegistrationMode
   sleep?: (ms: number) => Promise<void>
 }
-const ROOT = "https://graph.microsoft.com/beta"
+const ROOT = "https://graph.microsoft.com/v1.0"
 const NOTES = "Used by the TenuVault desktop app. Delegated permissions only, no credentials."
 const GRAPH_APP_ID = "00000003-0000-0000-c000-000000000000"
 const APPLICATION_FIELDS = "id,appId,displayName,notes,signInAudience,publicClient,web,spa,passwordCredentials,keyCredentials,createdDateTime"
@@ -78,7 +77,7 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
   // failed, so a stalled connection cannot keep the setup, and the token it holds, alive.
   async function graph<T>(method: string, path: string, body?: object, replication = false, cleanup = false): Promise<T> {
     const url = new URL(path.startsWith("https:") ? path : `${ROOT}${path}`)
-    if (url.origin !== "https://graph.microsoft.com" || url.username || url.password || url.hash || !url.pathname.startsWith("/beta/")) throw new Error("Unexpected Graph paging address.")
+    if (url.origin !== "https://graph.microsoft.com" || url.username || url.password || url.hash || !url.pathname.startsWith("/v1.0/")) throw new Error("Unexpected Graph paging address.")
     const attempts = replication ? 12 : 4
     // A write that may have been carried out is never sent twice: only a throttled request (which
     // was not carried out) and a replication delay repeat a POST.
@@ -137,7 +136,7 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
   progress({ phase: "registration" })
   const backupOnly = options.mode === "backup-only"
   const permissions = desktopAppPermissions(options.mode)
-  const principalFields = "$select=id,appId,accountEnabled,publishedPermissionScopes"
+  const principalFields = "$select=id,appId,accountEnabled,oauth2PermissionScopes"
   // Microsoft's own enterprise applications for the APIs TenuVault uses. One the tenant has not
   // used yet is only added when a registration is created: while an existing one is used, the
   // setup writes nothing at all.
@@ -153,14 +152,15 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
   // Even then the setup writes nothing to it: it only ever gives consent to the one it creates.
   const graphResource = resources.find(resource => resource.appId === GRAPH_APP_ID)!
   const graphPrincipalId = graphResource.principal?.id
-  const publishedScopes = graphResource.principal?.publishedPermissionScopes ?? graphResource.principal?.oauth2PermissionScopes ?? []
-  const safeGraphScopes = new Set([...graphResource.permissions, "openid", "profile", "offline_access"])
+  const publishedScopes = graphResource.principal?.oauth2PermissionScopes ?? []
+  const optionalScopes = OPTIONAL_PERMISSIONS.flatMap(entry => entry.permissions)
+  const safeGraphScopes = new Set([...graphResource.permissions, ...optionalScopes, "openid", "profile", "offline_access"].filter(scope => !isTenantWriteScope(scope)))
   const safeGraphScopeIds = new Set(publishedScopes.filter(scope => safeGraphScopes.has(scope.value) && scope.isEnabled !== false).map(scope => scope.id))
   const intune = new Set(graphResource.permissions.filter(permission => permission.startsWith("DeviceManagement")))
   // For choosing among several, only permissions TenuVault knows count: the default set and the
   // ones its switches add. Consent for anything else says nothing about which one the admins use.
   const known = new Map(resources.flatMap(resource => resource.principal ? [[resource.principal.id, new Set<string>(
-    resource.appId === GRAPH_APP_ID ? [...resource.permissions, ...OPTIONAL_PERMISSIONS.flatMap(entry => entry.permissions), "Policy.ReadWrite.ConditionalAccess"] : resource.permissions,
+    resource.appId === GRAPH_APP_ID ? [...resource.permissions, ...optionalScopes, "Policy.ReadWrite.ConditionalAccess"] : resource.permissions,
   )] as const] : []))
   const candidates = []
   const applicationFields = backupOnly ? APPLICATION_FIELDS + ",requiredResourceAccess" : APPLICATION_FIELDS
@@ -174,10 +174,12 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
     const readOnly = isReadOnlyRegistration({ kind: "delegated", permissions: graphScopes })
     if (backupOnly) {
       // Check the manifest and personal grants too: a write scope on either could appear at sign-in.
-      const graphAccess = candidate.requiredResourceAccess?.find(resource => resource.resourceAppId === GRAPH_APP_ID)?.resourceAccess
+      const manifest = candidate.requiredResourceAccess ?? []
+      const graphAccess = manifest.filter(resource => resource.resourceAppId === GRAPH_APP_ID).flatMap(resource => resource.resourceAccess)
       const allGraphGrants = grants.filter(grant => grant.resourceId === graphPrincipalId)
       if (!readOnly || !graphResource.permissions.every(scope => graphScopes.has(scope)) ||
-          !graphAccess?.length || graphAccess.some(access => access.type !== "Scope" || !safeGraphScopeIds.has(access.id)) ||
+          manifest.some(resource => resource.resourceAccess.some(access => access.type !== "Scope")) ||
+          !graphAccess.length || graphAccess.some(access => !safeGraphScopeIds.has(access.id)) ||
           allGraphGrants.some(grant => grant.scope.split(/\s+/).some(scope => scope && !safeGraphScopes.has(scope)))) continue
     } else if (readOnly && (candidate.displayName === READ_ONLY_REGISTRATION_NAME || candidate.notes?.includes("Backup only."))) continue
     const score = new Set(tenantWide.flatMap(grant => grant.scope.split(/\s+/).filter(scope => known.get(grant.resourceId)?.has(scope)).map(scope => `${grant.resourceId}:${scope}`))).size
@@ -205,7 +207,7 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
         // A Microsoft API the tenant has not used yet is added to it, as the setup script does.
         // These are Microsoft's own enterprise applications and stay when a later step fails.
         resource.principal ??= await graph<Principal>("POST", "/servicePrincipals", { appId: resource.appId }, true)
-        const scopes = resource.principal.publishedPermissionScopes ?? resource.principal.oauth2PermissionScopes ?? []
+        const scopes = resource.principal.oauth2PermissionScopes ?? []
         requiredResourceAccess.push({ resourceAppId: resource.appId, resourceAccess: resource.permissions.map(value => {
           const scope = scopes.find(scope => scope.value === value && scope.isEnabled !== false)
           if (!scope) throw new Error(`Delegated permission ${value} was not found on ${resource.api}.`)

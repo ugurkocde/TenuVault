@@ -16,7 +16,7 @@ Before you add it, check whether a policy change is simpler: see [Conditional Ac
 
 ## Backing up with a read-only user sign-in
 
-Choose [Backup only (read-only)](/getting-started/app-registration/#backup-only-read-only-registration) in desktop setup when the people who sign in only need to run backups, browse, compare, or export. That registration uses Microsoft Graph delegated permissions and your signed-in user's access. It disables restores and other tenant changes.
+Choose [Backup only (read-only)](/getting-started/app-registration/#backup-only-read-only-registration) in desktop setup when the people who sign in only need to run backups, browse, compare, or export. That registration uses Microsoft Graph delegated permissions and your signed-in user's access. Restores and other tenant changes require write access in the destination tenant.
 
 The Backup Reader is a separate app-only registration with a certificate for scheduled backups. You can set it up alongside the read-only desktop registration so scheduled runs continue when your user session expires.
 

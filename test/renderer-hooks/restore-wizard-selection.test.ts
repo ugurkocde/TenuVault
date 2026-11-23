@@ -10,6 +10,7 @@ vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { license: { open: lic
 vi.mock("@desktop/lib/plan-dialog", () => ({ showFeaturePlanError: vi.fn() }))
 
 import { RestoreWizard } from "../../src/portal/components/backup/restore-wizard"
+import { READ_ONLY_REGISTRATION_MESSAGE } from "../../src/shared/app-registration"
 
 const roots: Root[] = []
 afterEach(() => {
@@ -23,7 +24,7 @@ afterEach(() => {
 const contents = { content: { groups: [{ folder: "DeviceConfigurations", label: "configuration profile", area: "Devices", policies: [{ path: "DeviceConfigurations/a.json", displayName: "Profile A" }, { path: "DeviceConfigurations/b.json", displayName: "Profile B" }] }] } }
 const preview = { items: [{ path: "DeviceConfigurations/a.json", name: "Profile A" }, { path: "DeviceConfigurations/b.json", name: "Profile B" }] }
 
-async function renderItems(community: boolean): Promise<HTMLDivElement> {
+async function renderItems(community: boolean, currentTenantReadOnly = false): Promise<HTMLDivElement> {
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => Response.json(String(input).endsWith("/api/list-backup-contents") ? contents : String(input).endsWith("/api/restore-preview") ? preview : {})))
   const container = document.body.appendChild(document.createElement("div"))
   const root = createRoot(container)
@@ -31,7 +32,8 @@ async function renderItems(community: boolean): Promise<HTMLDivElement> {
   await act(async () => root.render(createElement(MemoryRouter, null, createElement(RestoreWizard, {
     tenant: { name: "Contoso", credentials: { tenantId: "tenant", appId: "app", clientSecret: "" }, storageAccountName: "tvlocal-tenant" },
     backups: [{ id: "backup-1", timestamp: "2026-10-16T02:00:00Z", type: "manual", status: "Completed", totalPolicies: 2, scope: null, size: 1, duration: 4, changes: null, comparedWith: null }],
-    initialBackupId: "backup-1", community, canCopyToTenants: false, copyCandidates: [],
+    initialBackupId: "backup-1", community, currentTenantReadOnly, canCopyToTenants: currentTenantReadOnly,
+    copyCandidates: currentTenantReadOnly ? [{ tenantId: "target", appId: "app", name: "Fabrikam" }] : [],
   }))))
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
   // Open the group so each item's checkbox shows.
@@ -54,6 +56,20 @@ it("reads access policies only at the review step", async () => {
   await act(async () => buttonNamed(container, "Review")!.click())
   expect(requests()).toHaveLength(1)
   expect(JSON.parse(String(requests()[0]![1]?.body))).toMatchObject({ approvalAction: "detect" })
+})
+
+it("opens review from a read-only source after a writable destination is selected", async () => {
+  const container = await renderItems(false, true)
+  await act(async () => buttonNamed(container, "Select all")!.click())
+  await act(async () => buttonNamed(container, "Next")!.click())
+  const review = [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.title === READ_ONLY_REGISTRATION_MESSAGE)!
+  expect(review.disabled).toBe(true)
+  const destination = container.querySelector<HTMLInputElement>('[aria-label="Tenants to copy to"] input')!
+  await act(async () => destination.click())
+  expect(review.disabled).toBe(false)
+  await act(async () => review.click())
+  expect(container.textContent).toContain("Copies go to 1 tenant")
+  expect(buttonNamed(container, " Restore 2 items")!.disabled).toBe(false)
 })
 
 describe("restore wizard item selection", () => {

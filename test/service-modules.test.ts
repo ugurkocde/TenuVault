@@ -4,6 +4,7 @@ import { checkModules, disabledFolders, missingPermissions, MODULES, moduleForFo
 import { grantedPermissions } from "../src/shared/services/token"
 import { ModuleSettings } from "../src/main/services/settings"
 import { servicesStatus } from "../src/main/services/status"
+import { BACKUP_ONLY_GRAPH_PERMISSIONS } from "../src/shared/app-registration"
 import { memoryStore } from "./helpers"
 
 const token = (claims: Record<string, unknown>) => `e30.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.sig`
@@ -82,14 +83,25 @@ describe("Services status", () => {
     }
     const status = await servicesStatus("tenant", new ModuleSettings(memoryStore()), graph)
     expect(status.checkedAt).toBe(new Date(1_800_000_000_000).toISOString())
+    expect(status.readOnlyRegistration).toBe(false)
     expect(status.modules.find((module) => module.id === "intune")).toMatchObject({ enabled: true, check: { backup: "ready" } })
     await servicesStatus("tenant", new ModuleSettings(memoryStore()), graph, true)
     expect(calls).toEqual([false, true])
   })
 
+  it("reports read-only status from a backup-only token and clears it after a writable refresh", async () => {
+    const settings = new ModuleSettings(memoryStore())
+    const graph = async (force: boolean) => ({
+      accessToken: token({ scp: (force ? SETUP_DEFAULT : BACKUP_ONLY_GRAPH_PERMISSIONS).join(" ") }),
+    })
+    expect((await servicesStatus("tenant", settings, graph)).readOnlyRegistration).toBe(true)
+    expect((await servicesStatus("tenant", settings, graph, true)).readOnlyRegistration).toBe(false)
+  })
+
   it("reports a sign-in problem instead of failing", async () => {
     const status = await servicesStatus("tenant", new ModuleSettings(memoryStore()), async () => { throw new Error("Sign in again to continue.") })
     expect(status.error).toBe("Sign in again to continue.")
+    expect(status.readOnlyRegistration).toBeUndefined()
     expect(status.modules.every((module) => module.check === null)).toBe(true)
   })
 })

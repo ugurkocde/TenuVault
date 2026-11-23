@@ -117,7 +117,7 @@ The table above is the default permission set. It does not change unless you opt
 
 ## Backup only (read-only) registration
 
-Choose **Backup only (read-only)** under **App registration access** in **Set up TenuVault**, then select **Set up with Microsoft sign-in**. This option is available on every plan. The user who signs in can run backups, browse saved policies, compare changes, and export reports. TenuVault disables actions that change Intune or Entra, including restore, drift revert, Copy to Tenants, promotions, baseline deployment, and assignment changes. Azure storage can still save backups.
+Choose **Backup only (read-only)** under **App registration access** in **Set up TenuVault**, then select **Set up with Microsoft sign-in**. This option is available on every plan. The user who signs in can run backups, browse saved policies, compare changes, and export reports. The registration can also send notification and report email if an admin grants the optional `Mail.Send` permission. Restores, drift reverts, promotions, baseline deployments, and assignment changes require write access in the destination tenant. With an eligible plan, a read-only tenant can be the source for **Copy to Tenants** and for policy or app restores into another tenant with write access. Azure storage can still save backups.
 
 For manual setup, follow [Create the app registration manually](#create-the-app-registration-manually). Name the app `TenuVault Desktop (Backup only)`. In step 3, use the following delegated Microsoft Graph permissions in place of the default Microsoft Graph list:
 

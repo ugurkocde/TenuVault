@@ -14,6 +14,7 @@ import { AuditSink, setMainAuditSink } from "../src/main/api/audit-sink"
 import { pendingEvents, setAuditOutboxStore } from "../src/portal/lib/audit/outbox"
 import { restoreDestinationPlan } from "../src/main/app-backup/restore-plan"
 import { withPlanError } from "../src/shared/plan-errors"
+import { BACKUP_ONLY_GRAPH_PERMISSIONS, READ_ONLY_REGISTRATION_MESSAGE } from "../src/shared/app-registration"
 import { LicenseService } from "../src/main/license/service"
 import { memoryStore } from "./helpers"
 import { PlanRequired, type Plan } from "../src/shared/plans"
@@ -313,6 +314,16 @@ it.each(["cancelled", "failed"] as const)("queues one %s preflight outcome witho
     setMainAuditSink(undefined)
     setAuditOutboxStore()
   }
+})
+
+it("surfaces the read-only destination message before sending a Graph request", async () => {
+  const f = await fixture()
+  const token = `e30.${Buffer.from(JSON.stringify({ scp: BACKUP_ONLY_GRAPH_PERMISSIONS.join(" ") })).toString("base64url")}.sig`
+  const fetch = vi.fn()
+  await expect(restoreAppWithAudit(f.store, f.source, snapshot, target, "Restored", {
+    getGraphToken: async () => token, fetch, signal: new AbortController().signal, progress: vi.fn(), operationId: randomUUID(),
+  })).rejects.toMatchObject({ message: READ_ONLY_REGISTRATION_MESSAGE, status: 409 })
+  expect(fetch).not.toHaveBeenCalled()
 })
 
 it.each([true, false])("binds service restore to both configured tenants and the reviewed settings hash (destination storage: %s)", async (destinationHasStorage) => {

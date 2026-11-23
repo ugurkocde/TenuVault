@@ -68,7 +68,7 @@ function Footer({ children }: { children: ReactNode }) {
 export interface SelectedPolicy { folder: string; sourceId: string; name: string; platforms: string | null }
 
 /** Step 1: the source tenant, the policy type tabs and the policies with their sync status. */
-export function ChooseSettings({ sources, sourceId, onSource, folder, onFolder, policies, loading, error, selected, onToggle, status, onNext, blockedReason }: {
+export function ChooseSettings({ sources, sourceId, onSource, folder, onFolder, policies, loading, error, selected, onToggle, status, onNext }: {
   sources: Tenant[]
   sourceId: string
   onSource: (tenantId: string) => void
@@ -80,7 +80,6 @@ export function ChooseSettings({ sources, sourceId, onSource, folder, onFolder, 
   selected: Record<string, SelectedPolicy>
   onToggle: (policy: PolicyOption) => void
   status: (policy: PolicyOption) => { label: string; tone: Tone; title?: string } | null
-  blockedReason?: string
   onNext: () => void
 }) {
   const count = Object.keys(selected).length
@@ -144,8 +143,8 @@ export function ChooseSettings({ sources, sourceId, onSource, folder, onFolder, 
         )}
       </div>
       <Footer>
-        <span className="text-sm text-gray-500">{blockedReason ?? `${count ? `${count} selected. ` : ""}Up to ${MAX_SYNC_POLICIES} per copy.`}</span>
-        <Button type="button" disabled={!count || !!blockedReason} title={blockedReason} onClick={onNext}>
+        <span className="text-sm text-gray-500">{count ? `${count} selected. ` : ""}Up to {MAX_SYNC_POLICIES} per copy.</span>
+        <Button type="button" disabled={!count} onClick={onNext}>
           <Copy className="h-4 w-4" aria-hidden="true" />
           {count ? `Copy ${plural(count, "policy", "policies")}` : "Copy"}
         </Button>

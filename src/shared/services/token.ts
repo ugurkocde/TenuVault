@@ -30,18 +30,29 @@ export function grantedPermissions(token: string | undefined): GrantedPermission
 }
 
 
-/** Only classify a readable delegated token that has an Intune backup scope. */
+export function isTenantWriteScope(scope: string): boolean {
+  return /^(DeviceManagement[^.]*|Policy)\.ReadWrite\./i.test(scope)
+}
+
+/** Classify delegated .default tokens. A token requested for specific scopes can omit consented writes. */
 export function isReadOnlyRegistration(granted: GrantedPermissions | undefined): boolean {
   if (granted?.kind !== "delegated") return false
   const scopes = granted.permissions
   return READER_REQUIRED_ROLES.some(scope => scopes.has(scope))
-    && ![...scopes].some(scope => /^(DeviceManagement[^.]*|Policy)\.ReadWrite\./i.test(scope))
+    && ![...scopes].some(isTenantWriteScope)
 }
 
+export class ReadOnlyRegistrationError extends Error {
+  readonly status = 409
+
+  constructor() {
+    super(READ_ONLY_REGISTRATION_MESSAGE)
+  }
+}
 
 /** Fail before preparing a write when the workflow already has the Graph token. */
 export function requireWritableRegistration(token: string): void {
   if (isReadOnlyRegistration(grantedPermissions(token))) {
-    throw Object.assign(new Error(READ_ONLY_REGISTRATION_MESSAGE), { status: 409 })
+    throw new ReadOnlyRegistrationError()
   }
 }

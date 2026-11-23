@@ -101,8 +101,7 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
   const shownRun = useRef(runId)
   shownRun.current = runId
   const source = tenantOf(sourceId) ?? selected
-  const readOnly = readOnlyTenants.has(sourceId)
-  const writeBlocked = (target: SyncTarget) => readOnly || readOnlyTenants.has(target.targetTenantId)
+  const writeBlocked = (target: SyncTarget) => readOnlyTenants.has(target.targetTenantId.toLowerCase())
   const pending = (id: string | null) => !!id && [...active].some((key) => key.startsWith(`${id}:`))
 
   // Policies and their sync status are read again when the window regains focus and after every
@@ -404,7 +403,6 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
           selected={chosen}
           onToggle={toggle}
           status={policyChip}
-          blockedReason={readOnly ? READ_ONLY_REGISTRATION_MESSAGE : undefined}
           onNext={() => setStep(2)}
         />
       )}
@@ -421,7 +419,7 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
           selected={targets.filter(id => !readOnlyTenants.has(id))}
           onToggle={toggleTarget}
           onBack={() => setStep(1)}
-          onNext={() => { if (readOnly || targets.some(id => readOnlyTenants.has(id))) return; setAck(false); void review(false) }}
+          onNext={() => { if (targets.some(id => readOnlyTenants.has(id))) return; setAck(false); void review(false) }}
           planning={planning}
         />
       )}
@@ -444,7 +442,7 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
             if (checked && run.data?.run.options.acknowledgeRedacted !== true) void review(true)
           }}
           onBack={() => { abandonPlan(); setStep(2) }}
-          blockedReason={readOnly || runTargets.some(writeBlocked) ? READ_ONLY_REGISTRATION_MESSAGE : undefined}
+          blockedReason={runTargets.some(writeBlocked) ? READ_ONLY_REGISTRATION_MESSAGE : undefined}
           onApprove={approveAndSync}
           busy={pending(runId)}
         />

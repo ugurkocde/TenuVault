@@ -83,7 +83,6 @@ export default function BackupRestorePage() {
     setSearchParams(next, { replace: true })
   }, [requestedTenant, tenants, selectedTenantId, setSelectedTenantId, searchParams, setSearchParams])
   const readOnly = useReadOnlyRegistration(selectedTenant)
-  const activeTab: Tab = requested === "schedule" || requested === "restore" && !readOnly ? requested : "backup"
   const plan = useTenantPlan(selectedTenant?.credentials?.tenantId)
   const community = plan === "community"
   // Copying to other tenants is an MSP action; the main process also checks every target.
@@ -124,6 +123,8 @@ export default function BackupRestorePage() {
   const copyCandidates = tenants
     .filter((entry) => entry.id !== selectedTenantId && entry.credentials?.tenantId && entry.credentials.appId && !readOnlyTargets.has(entry.credentials.tenantId.toLowerCase()))
     .map((entry) => ({ tenantId: entry.credentials!.tenantId, appId: entry.credentials!.appId, name: entry.name, domain: entry.domain }))
+  const restoreBlocked = readOnly && !(canCopyToTenants && copyCandidates.length > 0)
+  const activeTab: Tab = requested === "schedule" || requested === "restore" && !restoreBlocked ? requested : "backup"
   const trends = useMemo(() => backupTypeTrends(backups), [backups])
   const selected = backups.find((backup) => backup.id === selectedId) ?? null
   const latest = backups.find((backup) => backup.counts && statusKind(backup.status) === "success")
@@ -275,8 +276,8 @@ export default function BackupRestorePage() {
         ].map((tab) => (
           <button
             key={tab.id}
-            disabled={readOnly && tab.id === "restore"}
-            title={readOnly && tab.id === "restore" ? READ_ONLY_REGISTRATION_MESSAGE : undefined}
+            disabled={restoreBlocked && tab.id === "restore"}
+            title={restoreBlocked && tab.id === "restore" ? READ_ONLY_REGISTRATION_MESSAGE : undefined}
             onClick={() => {
               if (tab.id === "restore") setRestoreFrom(null)
               setActiveTab(tab.id)
@@ -432,13 +433,13 @@ export default function BackupRestorePage() {
               onDownload={() => void download(selected)}
               onExportDevices={() => void exportDevices(selected)}
               onRestore={() => restore(selected)}
-              readOnly={readOnly}
+              restoreBlocked={restoreBlocked}
             />
           )}
         </div>
       )}
 
-      {activeTab === "restore" && !readOnly && tenant && !isLoading && !blockingError && (
+      {activeTab === "restore" && tenant && !isLoading && !blockingError && (
         <RestoreWizard
           key={`${selectedTenant?.id}:${restoreFrom ?? ""}`}
           tenant={tenant}
@@ -447,6 +448,7 @@ export default function BackupRestorePage() {
           community={community}
           canCopyToTenants={canCopyToTenants}
           copyCandidates={copyCandidates}
+          currentTenantReadOnly={readOnly}
         />
       )}
 
@@ -544,12 +546,12 @@ interface BackupDetailsProps {
   onDownload: () => void
   onExportDevices: () => void
   onRestore: () => void
-  readOnly: boolean
+  restoreBlocked: boolean
   ref: React.Ref<HTMLDivElement>
 }
 
 /** Everything known about one backup, from its metadata and file listing. */
-function BackupDetails({ backup, first, storageAccountName, downloading, exportingDevices, onChanges, onDownload, onExportDevices, onRestore, readOnly, ref }: BackupDetailsProps) {
+function BackupDetails({ backup, first, storageAccountName, downloading, exportingDevices, onChanges, onDownload, onExportDevices, onRestore, restoreBlocked, ref }: BackupDetailsProps) {
   const kind = statusKind(backup.status)
   // Damaged or unreadable files of this backup on this device: nothing can be read from it.
   const unavailable = backup.status === "unavailable"
@@ -580,7 +582,7 @@ function BackupDetails({ backup, first, storageAccountName, downloading, exporti
             {downloading ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Download className="mr-1 h-4 w-4" />}
             Download
           </Button>
-          <Button size="sm" className="bg-coral-600 text-white hover:bg-coral-700" onClick={onRestore} title={readOnly ? READ_ONLY_REGISTRATION_MESSAGE : undefined} disabled={readOnly || kind === "running" || backup.totalPolicies === 0 || unavailable}>
+          <Button size="sm" className="bg-coral-600 text-white hover:bg-coral-700" onClick={onRestore} title={restoreBlocked ? READ_ONLY_REGISTRATION_MESSAGE : undefined} disabled={restoreBlocked || kind === "running" || backup.totalPolicies === 0 || unavailable}>
             <RefreshCw className="mr-1 h-4 w-4" />
             Restore from this backup
           </Button>

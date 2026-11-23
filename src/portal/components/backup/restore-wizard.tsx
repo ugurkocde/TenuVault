@@ -8,6 +8,7 @@ import { moduleForFolder } from "../../../shared/services/modules"
 import { inTenant, type AdminLink } from "../../../shared/intune/admin-links"
 import { passwordResetWarning } from "../../../shared/intune/restore-plan"
 import { ACKNOWLEDGEMENT_REQUIRED } from "../../../shared/disclaimer"
+import { READ_ONLY_REGISTRATION_MESSAGE } from "../../../shared/app-registration"
 
 import { useEffect, useMemo, useRef, useState } from "react"
 import {
@@ -68,6 +69,7 @@ interface RestoreWizardProps {
   community: boolean
   canCopyToTenants: boolean
   copyCandidates: CopyTarget[]
+  currentTenantReadOnly?: boolean
 }
 
 type Step = "backup" | "items" | "options" | "review" | "run"
@@ -234,7 +236,7 @@ async function post<T>(path: string, body: unknown, signal?: AbortSignal): Promi
  * Restores items from a backup in five steps: choose the backup, the items and how to restore them,
  * review what will happen to each item in the tenant as it is now, then watch the restore run.
  */
-export function RestoreWizard({ tenant, backups, initialBackupId, community, canCopyToTenants, copyCandidates }: RestoreWizardProps) {
+export function RestoreWizard({ tenant, backups, initialBackupId, community, canCopyToTenants, copyCandidates, currentTenantReadOnly = false }: RestoreWizardProps) {
   const showPlanError = (error: unknown) => showFeaturePlanError(error, community
     ? ["fullRestore", "replaceRestore", "restoreAssignments", "bulkActions"]
     : !canCopyToTenants ? ["bulkActions"] : [])
@@ -257,6 +259,11 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
   const [assignments, setAssignments] = useState(false)
   const [copyTargets, setCopyTargets] = useState<string[]>([])
   const copying = copyTargets.length > 0
+  const copyOnly = copying || currentTenantReadOnly
+  const unavailableCopyTarget = copyTargets.some(id => !copyCandidates.some(target => target.tenantId === id))
+  const destinationBlocker = copying
+    ? unavailableCopyTarget ? "Choose destinations that are still available for restore." : undefined
+    : currentTenantReadOnly ? READ_ONLY_REGISTRATION_MESSAGE : undefined
   const [mappingJson, setMappingJson] = useState("[]")
   const [mappingsConfirmed, setMappingsConfirmed] = useState(false)
 
@@ -279,7 +286,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
   const [justification, setJustification] = useState("")
   useEffect(() => {
     setUsesApproval(false)
-    if (step !== "review" || copying) return
+    if (step !== "review" || copying || currentTenantReadOnly) return
     const controller = new AbortController()
     void post<{ enabled: boolean }>("/api/restore-backup", { ...tenant.credentials, approvalAction: "detect" }, controller.signal).then(data => {
       if (!controller.signal.aborted) {
@@ -288,7 +295,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
       }
     }).catch(() => {})
     return () => controller.abort()
-  }, [step, copying, tenant.credentials.tenantId])
+  }, [step, copying, currentTenantReadOnly, tenant.credentials.tenantId])
 
   const [validating, setValidating] = useState(false)
   const [validation, setValidation] = useState<BackupValidation | null>(null)
@@ -307,11 +314,11 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
   }, [community])
   // Copies to other tenants are always unassigned copies under the original names.
   useEffect(() => {
-    if (!copying) return
+    if (!copyOnly) return
     setMode("copy")
     setAssignments(false)
     setMappingsConfirmed(false)
-  }, [copying, copyTargets.join(",")])
+  }, [copyOnly, copyTargets.join(",")])
 
   useEffect(() => {
     if (initialBackupId) {
@@ -515,7 +522,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
 
   const progressId = useRef("")
   const run = async (paths: string[], retry = false) => {
-    if (!backupId || !paths.length) return
+    if (!backupId || !paths.length || destinationBlocker) return
     let dependencyMappings
     try { dependencyMappings = copying ? reviewedDependencyMappings(mappingJson, mappingsConfirmed, copyTargets.length) : undefined }
     catch (error) { setReviewError(error instanceof Error ? error.message : String(error)); setStep("review"); return }
@@ -613,7 +620,8 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
     if (running || step === "run") return target === "run"
     if (target === "backup") return true
     if (target === "items") return backupId !== null
-    if (target === "options" || target === "review") return selected.size > 0
+    if (target === "options") return selected.size > 0
+    if (target === "review") return selected.size > 0 && !destinationBlocker
     return false
   }
 
@@ -892,7 +900,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
                 ["replace", "Replace in place", "Items that still exist are put back to the backed-up version. Deleted items are recreated with their original name. Items that already match are left alone.", RotateCcw],
               ] as const
             ).map(([value, title, text, Icon]) => {
-              const locked = (community || copying) && value === "replace"
+              const locked = (community || copyOnly) && value === "replace"
               return (
                 <label key={value} className={cn("flex items-start gap-3 rounded-2xl border p-5 transition-colors", mode === value ? "border-blue-200 bg-blue-50" : "border-gray-200", locked ? "cursor-not-allowed opacity-60" : "cursor-pointer")}>
                   <input type="radio" name="restore-mode" className="mt-1" checked={mode === value} disabled={locked} onChange={() => setMode(value)} />
@@ -910,8 +918,8 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
             {mode === "replace" && (
               <p className="text-sm text-amber-800">Restore assignments applies to every selected item. For Windows Autopilot profiles, Apple user enrollment profiles, terms and conditions, and Intune roles, turn it off and reconcile assignments in Intune. Restore assignments for supported types in a separate selection.</p>
             )}
-            <label className={cn("flex items-start gap-3 rounded-2xl border border-gray-200 p-5", community || copying ? "cursor-not-allowed opacity-60" : "cursor-pointer")}>
-              <input type="checkbox" className="mt-1" checked={assignments} disabled={community || copying} onChange={(event) => setAssignments(event.target.checked)} />
+            <label className={cn("flex items-start gap-3 rounded-2xl border border-gray-200 p-5", community || copyOnly ? "cursor-not-allowed opacity-60" : "cursor-pointer")}>
+              <input type="checkbox" className="mt-1" checked={assignments} disabled={community || copyOnly} onChange={(event) => setAssignments(event.target.checked)} />
               <span>
                 <span className="flex items-center gap-2 font-medium text-gray-900">
                   Restore assignments{community && <PlanBadge feature="restoreAssignments" />}
@@ -928,7 +936,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
             <p className="flex items-center gap-2 font-medium text-gray-900">
               Copy to other tenants instead{!canCopyToTenants && <PlanBadge feature="bulkActions" />}
             </p>
-            <p className="mt-1 text-sm text-gray-500">Leave all unchecked to restore to {tenant.name}. Copies in other tenants keep their original names, get the Default scope tag and no assignments.</p>
+            <p className="mt-1 text-sm text-gray-500">{currentTenantReadOnly ? "Choose a destination with write access." : `Leave all unchecked to restore to ${tenant.name}.`} Copies in other tenants keep their original names, get the Default scope tag and no assignments.</p>
             {canCopyToTenants &&
               (copyCandidates.length ? (
                 <div className="mt-4 max-h-56 space-y-2 overflow-auto" role="group" aria-label="Tenants to copy to">
@@ -949,6 +957,9 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
               ) : (
                 <p className="mt-3 text-sm text-gray-500">Connect another tenant to copy items to it.</p>
               ))}
+            {unavailableCopyTarget && <Button variant="outline" size="sm" className="mt-3" onClick={() => setCopyTargets(current => current.filter(id => copyCandidates.some(target => target.tenantId === id)))}>
+              Clear unavailable destinations
+            </Button>}
           </div>
 
           {/* One note per screen explains every badged option above (see PlanGate.tsx). */}
@@ -966,7 +977,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
             <Button variant="outline" onClick={() => setStep("items")}>
               <ArrowLeft className="h-4 w-4" /> Items
             </Button>
-            <Button className="bg-coral-600 text-white hover:bg-coral-700" disabled={selected.size === 0} onClick={() => goTo("review")}>
+            <Button className="bg-coral-600 text-white hover:bg-coral-700" disabled={selected.size === 0 || !!destinationBlocker} title={destinationBlocker} onClick={() => goTo("review")}>
               Review <ArrowRight className="h-4 w-4" />
             </Button>
           </div>
@@ -1130,7 +1141,8 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
               </Button>
               <Button
                 className="bg-coral-600 text-white hover:bg-coral-700"
-                disabled={!review || actionable.length === 0 || (changesTenant && !confirmed) || (usesApproval && !justification.trim())}
+                disabled={!!destinationBlocker || !review || actionable.length === 0 || (changesTenant && !confirmed) || (usesApproval && !justification.trim())}
+                title={destinationBlocker}
                 onClick={() => void run(actionable)}
               >
                 <RefreshCw className="h-4 w-4" /> Restore {actionable.length} item{actionable.length === 1 ? "" : "s"}
@@ -1229,6 +1241,8 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
               {retryBatches(result.results).length > 0 && (
                 <Button
                   variant="outline"
+                  disabled={!!destinationBlocker}
+                  title={destinationBlocker}
                   onClick={() => void run(runPaths, true)}
                 >
                   <RotateCcw className="h-4 w-4" /> Retry failed items

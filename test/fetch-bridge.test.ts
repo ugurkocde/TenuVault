@@ -208,6 +208,15 @@ describe("read-only Graph writes", () => {
     expect(realFetch).toHaveBeenCalledTimes(3)
   })
 
+  it.each(["beta", "v1.0"])("lets a read-only registration with Mail.Send send mail through %s", async version => {
+    const { fetch, realFetch, headers } = fixture(token({ scp: scopes + " Mail.Send" }))
+    const url = `https://graph.microsoft.com/${version}/me/sendMail`
+    expect((await fetch(url, { method: "POST", headers })).status).toBe(204)
+    expect(realFetch).toHaveBeenCalledExactlyOnceWith(url, { method: "POST", headers })
+    expect((await fetch(url, { method: "PATCH", headers })).status).toBe(409)
+    expect((await fetch(url + "/other", { method: "POST", headers })).status).toBe(409)
+  })
+
   it.each([{ scp: scopes + " DeviceManagementConfiguration.ReadWrite.All" }, { roles: BACKUP_ONLY_GRAPH_PERMISSIONS }, { scp: "Application.ReadWrite.All DelegatedPermissionGrant.ReadWrite.All" }])("lets full, app-only and setup sign-ins through", async claims => {
     const { fetch, realFetch, headers } = fixture(token(claims))
     await fetch(graph + "applications", { method: "POST", headers })

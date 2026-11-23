@@ -133,7 +133,6 @@ export async function POST(request: NextRequest) {
       getAccessToken(tenantId, appId, clientSecret, "https://storage.azure.com/.default"),
       getAccessToken(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default")
     ])
-    if (isReadOnlyRegistration(grantedPermissions(graphToken))) return NextResponse.json({ error: READ_ONLY_REGISTRATION_MESSAGE }, { status: 409 })
     if (!targetTenants) destinationTokens[0] = graphToken
 
     // A shared container can hold other tenants' backups; never restore one of those. Everyone who
@@ -345,7 +344,7 @@ async function approvalAction(body: any): Promise<Response> {
     }))
     return NextResponse.json({ records: refreshed.map(record => approvalRow(record, record.requesterId.toLowerCase() === context.requesterId.toLowerCase())) })
   }
-  if (isReadOnlyRegistration(grantedPermissions(token))) return NextResponse.json({ error: READ_ONLY_REGISTRATION_MESSAGE }, { status: 409 })
+  if (action !== "dismiss" && isReadOnlyRegistration(grantedPermissions(token))) return NextResponse.json({ error: READ_ONLY_REGISTRATION_MESSAGE }, { status: 409 })
   const record = restoreApprovals(tenantId).find(entry => entry.id === approvalId)
   if (!record) return NextResponse.json({ error: "Request not found" }, { status: 404 })
   const completion = action === "complete"

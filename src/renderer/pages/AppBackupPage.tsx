@@ -1,5 +1,3 @@
-import { READ_ONLY_REGISTRATION_MESSAGE } from "../../shared/app-registration"
-import { useReadOnlyRegistration } from "../lib/registration-access"
 import { useEffect, useRef, useState } from "react"
 import { Link, useParams, useSearchParams } from "react-router-dom"
 import { ArrowDownToLine, CheckCircle2, FolderOpen, Package, RefreshCw, Shield } from "lucide-react"
@@ -18,17 +16,16 @@ const certificateLabels: Record<RecoveryDeviceStatus["certificate"], string> = {
 
 export default function AppBackupPage() {
   const { selectedTenant } = useSelectedTenant()
-  const readOnly = useReadOnlyRegistration(selectedTenant)
   const tenant = selectedTenant?.credentials?.tenantId
   useEffect(() => { window.scrollTo(0, 0) }, [tenant])
   // A tenant switch unmounts its operation view. Its cancellation stays bound to the old tenant.
   return <div className="mx-auto max-w-[1600px] space-y-6 p-6 lg:p-8">
     <header><h1 className="text-4xl font-light tracking-tight text-gray-900">App Backup</h1><p className="mt-2 text-sm text-gray-600">Installer backups from Intune. Free on every plan. Restoring into another tenant needs Pro or MSP for that tenant. {selectedTenant ? `Tenant: ${selectedTenant.name}.` : ""}</p></header>
-    {tenant ? <SourceWorkspace key={tenant} tenant={tenant} readOnly={readOnly} /> : <div className="rounded-3xl bg-card p-6 text-sm text-gray-600">Select a configured tenant to view or store its installers. <Link to="/portal/tenants" className="ml-2 underline underline-offset-4">Connect a tenant</Link></div>}
+    {tenant ? <SourceWorkspace key={tenant} tenant={tenant} /> : <div className="rounded-3xl bg-card p-6 text-sm text-gray-600">Select a configured tenant to view or store its installers. <Link to="/portal/tenants" className="ml-2 underline underline-offset-4">Connect a tenant</Link></div>}
   </div>
 }
 
-export function SourceWorkspace({ tenant, readOnly = false }: { tenant: string; readOnly?: boolean }) {
+export function SourceWorkspace({ tenant }: { tenant: string }) {
   const { tabId } = useParams()
   const [searchParams, setSearchParams] = useSearchParams()
   const selectedSource = searchParams.get("source")
@@ -203,7 +200,7 @@ export function SourceWorkspace({ tenant, readOnly = false }: { tenant: string; 
           <p className="mt-2 text-xs text-gray-600">{source.provenance === "intune-capture" ? "Captured from Intune" : "Legacy local archive"} · {size(source.bytes)} · {new Date(source.createdAt).toLocaleString()}</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          {source.provenance === "intune-capture" && <Button disabled={busy || readOnly} title={readOnly ? READ_ONLY_REGISTRATION_MESSAGE : undefined} onClick={() => setRestoringSource(source)}>Restore to tenant…</Button>}
+          {source.provenance === "intune-capture" && <Button disabled={busy} onClick={() => setRestoringSource(source)}>Restore to tenant…</Button>}
           <Button variant="outline" disabled={busy} onClick={() => void run(id => bridge.appSources.export(tenant, id, source.id), "Installer exported.", source.id)}><ArrowDownToLine className="mr-2 size-4" aria-hidden="true" />{source.provenance === "intune-capture" ? "Export installer" : "Export archive"}</Button>
           <Button variant="outline" disabled={busy || openingFolder !== null} onClick={() => void openFolder(source.id)}><FolderOpen className="mr-2 size-4" aria-hidden="true" />{openingFolder === source.id ? "Opening folder…" : "Open local folder"}</Button>
         </div>
@@ -215,6 +212,6 @@ export function SourceWorkspace({ tenant, readOnly = false }: { tenant: string; 
         {feedbackSource === source.id && <div className="min-w-0 basis-full">{feedback}</div>}
       </li>)}</ul> : <p className="py-8 text-sm text-gray-600">{!state ? "The source store is unavailable. Reconnect it and check the matching recovery key." : selectedSource ? "This backup is unavailable in this tenant’s connected folder. View all backups or reconnect its original folder." : search ? "No stored packages match your search." : "No Intune backups yet. Choose a Win32 app in the Intune apps tab to start."}</p>}
     </section>}
-    {restoringSource && !readOnly && <RestoreAppDialog tenant={tenant} source={restoringSource} onClose={() => setRestoringSource(null)} onBusy={setBusy} />}
+    {restoringSource && <RestoreAppDialog tenant={tenant} source={restoringSource} onClose={() => setRestoringSource(null)} onBusy={setBusy} />}
   </>
 }
