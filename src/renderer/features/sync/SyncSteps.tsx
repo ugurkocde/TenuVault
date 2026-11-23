@@ -159,7 +159,7 @@ const REASON: Record<NonNullable<SyncTargetOption["reason"]>, { chip: string; ti
 }
 
 /** Step 2: every other connected tenant as a card; on Pro only the other tenant of the license can be chosen. */
-export function ChooseTargets({ sourceName, options, loading, error, tenantOf, linked, selected, onToggle, onBack, onNext, planning }: {
+export function ChooseTargets({ sourceName, options, loading, error, tenantOf, linked, selected, onToggle, onBack, onNext, planning, includeAssignments, onAssignments }: {
   sourceName: string
   options: SyncTargetOption[]
   loading: boolean
@@ -171,6 +171,8 @@ export function ChooseTargets({ sourceName, options, loading, error, tenantOf, l
   onBack: () => void
   onNext: () => void
   planning: boolean
+  includeAssignments: boolean
+  onAssignments: (value: boolean) => void
 }) {
   const mspOnly = options.some((option) => option.reason === "msp")
   return (
@@ -224,6 +226,13 @@ export function ChooseTargets({ sourceName, options, loading, error, tenantOf, l
             })}
           </div>
         )}
+        <label className="mt-4 flex items-start gap-3 rounded-2xl border border-gray-200 p-4 text-sm">
+          <input type="checkbox" checked={includeAssignments} onChange={(event) => onAssignments(event.target.checked)} className="mt-1 h-4 w-4" />
+          <span>
+            <span className="block font-medium text-gray-900">Include assignments</span>
+            <span className="text-xs text-gray-600">Map groups and filters in each target. Copying assignments replaces the current targeting of linked policies.</span>
+          </span>
+        </label>
         {mspOnly && (
           <p className="mt-3 flex items-center gap-2.5 rounded-2xl bg-secondary px-4 py-3 text-sm text-gray-700">
             <Info className="h-4 w-4 shrink-0" aria-hidden="true" />
@@ -247,7 +256,7 @@ export function ChooseTargets({ sourceName, options, loading, error, tenantOf, l
 const NOTE_TONE = { danger: "text-red-700", warning: "text-amber-800", neutral: "text-gray-500" } as const
 
 /** Step 3: what each target gets, why a target is left out, the secret acknowledgement and the backup choice. */
-export function ReviewStep({ targets, reviews, planning, planError, reading, tenantOf, backup, onBackup, secrets, ack, onAck, onBack, onApprove, busy }: {
+export function ReviewStep({ targets, reviews, planning, planError, reading, tenantOf, backup, onBackup, secrets, ack, onAck, onBack, onApprove, busy, mappingPanel, mappingsDirty }: {
   targets: SyncTarget[]
   /** What the plan reads while it runs: the source tenant and how many targets. */
   reading: { source: string; targets: number }
@@ -262,6 +271,8 @@ export function ReviewStep({ targets, reviews, planning, planError, reading, ten
   onAck: (checked: boolean) => void
   onBack: () => void
   onApprove: () => void
+  mappingPanel?: (target: SyncTarget) => ReactNode
+  mappingsDirty: boolean
   busy: boolean
 }) {
   const states = targets.map((target) => readiness(target, reviews[target.targetTenantId], backup, !!tenantOf(target.targetTenantId)?.resources?.storageAccountName))
@@ -316,6 +327,7 @@ export function ReviewStep({ targets, reviews, planning, planError, reading, ten
                 ))}
               </ul>
               )}
+              {mappingPanel?.(target)}
               {(review?.preview?.sourceChanges.length ?? 0) > 0 && (
                 <ul className="list-disc border-t border-gray-200 py-2.5 pl-8 pr-4 text-xs text-amber-800">{review!.preview!.sourceChanges.map((line, lineIndex) => <li key={lineIndex}>{line}</li>)}</ul>
               )}
@@ -348,7 +360,7 @@ export function ReviewStep({ targets, reviews, planning, planError, reading, ten
       <Footer>
         <Button type="button" variant="ghost" onClick={onBack}>Back</Button>
         <span className="text-sm text-gray-500">{!writes ? "Nothing is written." : backup === "new" ? "Each target is backed up before anything is written." : "No backup is taken. Rollback uses the saved current versions."}</span>
-        <Button type="button" disabled={busy || checking || gated || !(ready || inSync)} onClick={onApprove}>
+        <Button type="button" disabled={busy || checking || gated || mappingsDirty || !(ready || inSync)} onClick={onApprove}>
           <ShieldCheck className="h-4 w-4" aria-hidden="true" />
           {/* No count until a target is ready: while planning or checking there is nothing to approve yet. */}
           {ready ? `Approve and copy to ${plural(ready, "tenant", "tenants")}` : inSync && !checking ? "Continue: nothing to write" : "Approve and copy"}

@@ -184,11 +184,49 @@ describe('Copy to other tenants', () => {
     }
   })
 
-  it('refuses to copy to the source tenant or with assignments', async () => {
+  it('copies assignments only after each destination reference has a confirmed live mapping', async () => {
+    const targetTenantId = '33333333-3333-4333-8333-333333333333'
+    const sourceId = '11111111-1111-4111-8111-111111111111'
+    const targetId = '22222222-2222-4222-8222-222222222222'
+    const writes: Array<{ route: string; token: string; payload: unknown }> = []
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input))
+      if (url.hostname === 'login.microsoftonline.com') return Response.json({ access_token: `token-${url.pathname.split('/')[1]}` })
+      if (url.hostname.endsWith('.blob.core.windows.net')) {
+        if (url.pathname.endsWith('/metadata.json')) return Response.json({ Status: 'Success', TenantId: body.tenantId })
+        return Response.json({ id: 'firewall', displayName: 'Firewall', '@odata.type': '#microsoft.graph.windows10CustomConfiguration', omaSettings: [], roleScopeTagIds: ['7'],
+          assignments: [{ target: { '@odata.type': '#microsoft.graph.groupAssignmentTarget', groupId: sourceId } }] })
+      }
+      const token = new Headers(init?.headers).get('Authorization') ?? ''
+      const destination = token === `Bearer token-${targetTenantId}`
+      if (url.pathname === '/beta/groups') return Response.json({ value: [{ id: destination ? targetId : sourceId, displayName: 'Contoso pilot' }] })
+      if (url.pathname === '/beta/deviceManagement/roleScopeTags') return Response.json({ value: [{ id: destination ? '8' : '7', displayName: 'Contoso IT' }] })
+      writes.push({ route: url.pathname, token, payload: JSON.parse(String(init?.body)) })
+      return Response.json({ id: 'copied-firewall' }, { status: 201 })
+    }))
+    const copy = (extra: object = {}) => POST(request({
+      ...body, restoreType: 'selective', selectedPolicies: [{ path }], mode: 'copy', assignments: true,
+      targetTenants: [{ tenantId: targetTenantId, appId: targetTenantId }], ...extra,
+    }))
+    expect((await copy()).status).toBe(409)
+    expect(writes).toEqual([])
+    const response = await copy({ assignmentMappings: { [targetTenantId]: [
+      { kind: 'group', sourceId, targetId, confirmed: true },
+      { kind: 'scopeTag', sourceId: '7', targetId: '8', confirmed: true },
+    ] } })
+    expect(await response.json()).toMatchObject({ success: true, details: { restoredCount: 1 } })
+    expect(writes).toMatchObject([
+      { route: '/beta/deviceManagement/deviceConfigurations', token: `Bearer token-${targetTenantId}`, payload: { displayName: 'Firewall', roleScopeTagIds: ['8'] } },
+      { route: '/beta/deviceManagement/deviceConfigurations/copied-firewall/assign', token: `Bearer token-${targetTenantId}`,
+        payload: { assignments: [{ target: { groupId: targetId } }] } },
+    ])
+  })
+
+  it('refuses to copy to the source tenant or replace policies in another tenant', async () => {
     vi.stubGlobal('fetch', vi.fn())
     const copy = (extra: object) => POST(request({ ...body, restoreType: 'selective', selectedPolicies: [{ path }], mode: 'copy', ...extra }))
     expect((await copy({ targetTenants: [{ tenantId: body.tenantId, appId: body.tenantId }] })).status).toBe(400)
-    expect((await copy({ assignments: true, targetTenants: [{ tenantId: '33333333-3333-3333-3333-333333333333', appId: '33333333-3333-3333-3333-333333333333' }] })).status).toBe(400)
+    expect((await copy({ mode: 'replace', targetTenants: [{ tenantId: '33333333-3333-3333-3333-333333333333', appId: '33333333-3333-3333-3333-333333333333' }] })).status).toBe(400)
   })
 })
 

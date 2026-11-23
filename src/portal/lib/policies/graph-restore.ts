@@ -43,8 +43,8 @@ export interface RestoreOptions {
   /** Name prefix for copies; "[Restored]" unless given. An empty string keeps the original name. */
   prefix?: string
   /**
-   * The snapshot comes from another tenant: scope tags go back to Default and assignments are
-   * never copied, because those IDs only exist in the source tenant.
+   * The snapshot comes from another tenant. Without a verified assignment plan, copies use
+   * Default scope tags and omit the source assignments.
    */
   crossTenant?: boolean
   /**
@@ -298,27 +298,36 @@ export class Restorer {
     for (const mapping of mappings) this.reviewed.set(mapping.sourceId.toLowerCase(), mapping.targetId)
   }
 
-  async restore(path: string, snapshot: Item): Promise<RestoreOutcome> {
+  async restore(path: string, snapshot: Item, targeting?: { snapshot: Item; skipped: number }): Promise<RestoreOutcome> {
     this.writeDispatched = false
-    return withAdminLink(path, { ...await this.restoreOnce(path, snapshot), auditSourceId: typeof snapshot.id === "string" ? snapshot.id : undefined }, snapshot)
+    return withAdminLink(path, { ...await this.restoreOnce(path, snapshot, targeting), auditSourceId: typeof snapshot.id === "string" ? snapshot.id : undefined }, snapshot)
   }
 
-  private async restoreOnce(path: string, snapshot: Item): Promise<RestoreOutcome> {
+  private async restoreOnce(path: string, snapshot: Item, targeting?: { snapshot: Item; skipped: number }): Promise<RestoreOutcome> {
     const folder = path.split("/")[1] ?? ""
     const type = typeForFolder(folder === "DeviceCompliancePolicies" ? "CompliancePolicies" : folder)
     if (!type) return { success: false, path, error: "This backup file is not an Intune type TenuVault can restore." }
     const unpermitted = restorePermissionBlocker(type.folder, this.options.granted)
     if (unpermitted) return { success: false, path, action: "skipped", retryable: false, error: unpermitted }
     const source = this.remap(this.options.crossTenant ? forOtherTenant(snapshot) : snapshot)
-    // A backup that could not read the assignments must not replace the live ones with an empty list.
-    const unread = this.options.assignments && !this.options.crossTenant && assignmentsUnread(type, snapshot)
-    const assignments = this.options.assignments && !this.options.crossTenant && !unread
-    const withNote = (outcome: RestoreOutcome): RestoreOutcome => unread && outcome.success
-      ? { ...outcome, warnings: [...(outcome.warnings ?? []), "Assignments were not restored: this backup was made by an earlier TenuVault version that could not read them. Assign the policy in Intune."] }
-      : outcome
+    if (targeting) {
+      for (const key of ["assignments", "roleAssignments", "roleScopeTagIds", "roleScopeTags"]) {
+        if (targeting.snapshot[key] !== undefined) source[key] = targeting.snapshot[key]
+      }
+    }
+    // Keep live assignments when the backup could not read them.
+    const unread = this.options.assignments && (!this.options.crossTenant || targeting) && assignmentsUnread(type, snapshot)
+    const assignments = this.options.assignments && (!this.options.crossTenant || !!targeting) && !unread
+    const withNote = (outcome: RestoreOutcome): RestoreOutcome => {
+      if (!outcome.success) return outcome
+      const warnings = [...(outcome.warnings ?? [])]
+      if (unread) warnings.push("Assignments were not restored: this backup was made by an earlier TenuVault version that could not read them. Assign the policy in Intune.")
+      if (targeting?.skipped) warnings.push(`Skipped ${targeting.skipped} assignment(s) as reviewed.`)
+      return warnings.length ? { ...outcome, warnings } : outcome
+    }
     try {
       const current = this.options.mode === "replace" && typeof snapshot.id === "string" ? await this.current(type, snapshot.id) : undefined
-      if (current && this.matches(snapshot, current, assignments)) {
+      if (current && this.matches(targeting ? source : snapshot, current, assignments)) {
         const name = type.singleton?.name ?? current[type.nameKey] ?? current.displayName ?? current.name
         return withNote({ success: true, path, policyId: snapshot.id as string, policyName: typeof name === "string" ? name : undefined, action: "unchanged" })
       }
@@ -326,7 +335,7 @@ export class Restorer {
       // Added again under a new ID (such as an Autopilot device imported again): found by the type's locateBy property.
       const located = this.options.mode === "replace" && !this.options.crossTenant && type.locateBy ? await locateLive(this.graph, type, snapshot) : undefined
       if (located && typeof located.id === "string") {
-        if (this.matches({ ...snapshot, id: located.id }, located, assignments)) {
+        if (this.matches({ ...(targeting ? source : snapshot), id: located.id }, located, assignments)) {
           const name = located[type.nameKey] ?? located.displayName ?? located.name
           return withNote({ success: true, path, policyId: located.id, policyName: typeof name === "string" ? name : undefined, action: "unchanged" })
         }
@@ -338,7 +347,7 @@ export class Restorer {
         const recreated = await this.recreated(type, snapshot)
         if (recreated) {
           if (!this.reviewed.has(snapshot.id.toLowerCase())) this.remapped.set(snapshot.id, recreated.id)
-          if (this.matches({ ...snapshot, id: recreated.id }, recreated.object, assignments)) {
+          if (this.matches({ ...(targeting ? source : snapshot), id: recreated.id }, recreated.object, assignments)) {
             const name = type.singleton?.name ?? recreated.object[type.nameKey] ?? recreated.object.displayName ?? recreated.object.name
             return withNote({ success: true, path, policyId: recreated.id, policyName: typeof name === "string" ? name : undefined, action: "unchanged" })
           }
@@ -348,7 +357,7 @@ export class Restorer {
       if (this.options.mode === "replace" && this.options.recreateMissing === false) return { success: false, path, policyId: typeof snapshot.id === "string" ? snapshot.id : undefined, action: "skipped", missing: true, retryable: false, error: "The object no longer exists in Intune, so it was not recreated." }
       const blocker = restoreBlocker(type, source)
       if (blocker) return { success: false, path, action: "skipped", error: blocker }
-      return withNote(await this.create(type, path, source, snapshot, assignments))
+      return withNote(await this.create(type, path, source, snapshot, assignments, !!targeting))
     } catch (error) {
       return { success: false, path, retryable: false, auditUncertain: this.writeDispatched, error: error instanceof Error ? error.message : String(error) }
     }
@@ -390,13 +399,16 @@ export class Restorer {
     return auditChanges(type, create ? "create" : "update", step.body, baseline, recording)
   }
 
-  private async create(type: IntuneType, path: string, source: Item, snapshot: Item, assignments: boolean): Promise<RestoreOutcome> {
+  private async create(type: IntuneType, path: string, source: Item, snapshot: Item, assignments: boolean, verifiedTargeting: boolean): Promise<RestoreOutcome> {
     const plan = buildRestorePlan(type, source, {
       prefix: this.options.mode === "copy" ? (this.options.prefix ?? "[Restored]") : undefined,
       includeAssignments: assignments,
     })
     const bodies = [plan.create, ...plan.steps, ...plan.assignments]
-    const unresolved = await this.unresolved(bodies.flatMap(step => dependencyReferences(step.body)))
+    const dependencies = bodies.flatMap((step) => dependencyReferences(step.body).filter((reference) =>
+      !verifiedTargeting || !(reference.key === "roleScopeTagIds" && reference.path.startsWith("snapshot.roleScopeTagIds["))
+        && !("kind" in step && step.kind === "assignments" && ["groupId", "deviceAndAppManagementAssignmentFilterId", "roleScopeTagIds"].includes(reference.key))))
+    const unresolved = await this.unresolved(dependencies)
     if (unresolved.length) return { success: false, path, retryable: false, error: this.options.crossTenant
       ? `Unresolved target dependencies (${unresolved.join(", ")}). Copy the dependencies first or reconcile this object in the target tenant.`
       : `Unresolved dependencies (${unresolved.join(", ")}). Restore the dependencies first or reconcile this object in Intune.` }

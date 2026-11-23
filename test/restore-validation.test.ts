@@ -109,12 +109,13 @@ describe('Restore validation dry run', () => {
 })
 
 /** Stubs token and blob fetches and records every request, so a test can prove no write happened. */
-function stubFetch(blobs: Record<string, Item>, options: { list?: string[] } = {}) {
+function stubFetch(blobs: Record<string, Item>, options: { list?: string[]; groups?: Item[] } = {}) {
   const requests: Array<{ method: string; host: string; path: string }> = []
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input))
     requests.push({ method: init?.method ?? 'GET', host: url.hostname, path: url.pathname })
     if (url.hostname === 'login.microsoftonline.com') return Response.json({ access_token: 'test' })
+    if (url.hostname === 'graph.microsoft.com' && url.pathname === '/beta/groups') return Response.json({ value: options.groups ?? [] })
     if (url.hostname.endsWith('.blob.core.windows.net')) {
       if (url.searchParams.get('comp') === 'list') {
         const names = (options.list ?? []).map((name) => `<Blob><Name>${name}</Name></Blob>`).join('')
@@ -148,6 +149,25 @@ describe('Restore validation route', () => {
     expect(requests.filter((entry) => entry.host.endsWith('.blob.core.windows.net') && entry.method !== 'GET')).toEqual([])
   })
 
+  it("reports missing and mapped groups from a read-only live check", async () => {
+    const tenantId = "33333333-2222-4333-8444-555555555555"
+    const replacement = "11111111-2222-4333-8444-555555555556"
+    const metadata = { ...metadataFor([["DeviceConfigurations/policy-1", policy, "Example.json"]]), TenantId: tenantId }
+    const requests = stubFetch({ [`${backupId}/metadata.json`]: metadata, [policyPath]: policy }, { list: [policyPath], groups: [{ id: replacement, displayName: "Contoso pilot" }] })
+    const input = { ...baseBody, tenantId, liveAssignmentTargets: true }
+    const missing = await (await POST(request(input))).json()
+    expect(missing.items[0].checks).toContainEqual(expect.objectContaining({ id: "assignments", ok: false }))
+    const mapped = await (await POST(request({
+      ...input, assignmentMappings: { [tenantId]: [{ kind: "group", sourceId: groupId, targetId: replacement, confirmed: true }] },
+    }))).json()
+    expect(mapped.ok).toBe(true)
+    expect(requests.filter((entry) => entry.host === "graph.microsoft.com")).toEqual([
+      { method: "GET", host: "graph.microsoft.com", path: "/beta/groups" },
+      { method: "GET", host: "graph.microsoft.com", path: "/beta/groups" },
+    ])
+  })
+
+
   it('names the failing item when a file in the manifest is missing', async () => {
     const metadata = metadataFor([['DeviceConfigurations/policy-1', policy, 'Example.json'], ['Apps/app-1', app, 'Web.json']])
     stubFetch({ [`${backupId}/metadata.json`]: metadata, [policyPath]: policy }, { list: [policyPath] })
@@ -164,9 +184,8 @@ describe('Restore validation write isolation', () => {
   it('does not import a tenant write path', () => {
     for (const file of ['src/portal/lib/policies/restore-validation.ts', 'src/portal/app/api/restore-validate/route.ts']) {
       const source = readFileSync(file, 'utf8')
-      expect(source).not.toContain('graph-restore')
       expect(source).not.toContain('Restorer')
-      expect(source).not.toContain('graph.microsoft.com')
+      expect(source).not.toMatch(/graph\(["'](?:POST|PATCH|PUT|DELETE)["']/)
       expect(source).not.toContain('change-set')
     }
   })

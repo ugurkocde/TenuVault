@@ -1342,3 +1342,60 @@ describe("Codex round 1", () => {
     expect(listed.outcome).toBe("failed")
   })
 })
+
+describe("Copy to Tenants assignment option", () => {
+  const groupId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+  const filterId = "ffffffff-ffff-4fff-8fff-ffffffffffff"
+  const newGroup = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+  const newFilter = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
+  const assignment = { target: { "@odata.type": "#microsoft.graph.exclusionGroupAssignmentTarget", groupId, deviceAndAppManagementAssignmentFilterType: "include", deviceAndAppManagementAssignmentFilterId: filterId } }
+  const entries = [
+    { kind: "group", sourceId: groupId, targetId: newGroup, confirmed: true },
+    { kind: "filter", sourceId: filterId, targetId: newFilter, confirmed: true },
+    { kind: "scopeTag", sourceId: "2", targetId: "7", confirmed: true },
+  ]
+
+  it("defaults to unassigned copies and preserves existing target assignments on update", async () => {
+    const context = setup()
+    context.policy.assignments = [assignment]
+    await synced(context)
+    const target = [...context.targets[TENANT_B]!.policies.values()][0]!
+    expect(target.assignments ?? []).toEqual([])
+    const existing = { target: { "@odata.type": "#microsoft.graph.allDevicesAssignmentTarget" } }
+    target.assignments = [existing]
+    editSource(context)
+    await synced(context)
+    expect(context.targets[TENANT_B]!.policies.get(String(target.id))?.assignments).toEqual([existing])
+    expect(context.targets[TENANT_B]!.writeCount((write) => write.path.endsWith("/assign"))).toBe(0)
+  })
+
+  it("uses confirmed mappings independently in each destination and blocks an unconfirmed group", async () => {
+    const context = setup({ plans: MSP })
+    context.policy.assignments = [assignment]
+    context.policy.roleScopeTagIds = ["2"]
+    context.source.groups.set(groupId, { id: groupId, displayName: "Windows pilot" })
+    context.source.filters = [{ id: filterId, displayName: "Corporate devices" }]
+    context.source.scopeTags.push({ id: "2", displayName: "IT" })
+    for (const id of [TENANT_B, TENANT_C]) {
+      context.targets[id]!.groups.set(newGroup, { id: newGroup, displayName: "Windows pilot" })
+      context.targets[id]!.filters = [{ id: newFilter, displayName: "Corporate devices" }]
+      context.targets[id]!.scopeTags.push({ id: "7", displayName: "IT" })
+    }
+    const response = await plan(context, [TENANT_B, TENANT_C], {
+      includeAssignments: true,
+      mappings: { [TENANT_B]: entries, [TENANT_C]: entries.map((entry) => ({ ...entry, confirmed: entry.kind !== "group" })) },
+    })
+    expect(response.status).toBe(200)
+    const [ready, blocked] = response.body.targets
+    expect(ready.promotion.status).toBe("in-review")
+    expect(blocked.promotion.status).toBe("blocked")
+    expect(blocked.promotion.items[0].references).toContainEqual(expect.objectContaining({
+      kind: "group", state: "missing", suggestion: { targetId: newGroup, targetName: "Windows pilot" },
+    }))
+    expect((await applied(context, TENANT_B, ready.promotion.id)).body.changeSet.status).toBe("applied")
+    const target = [...context.targets[TENANT_B]!.policies.values()][0]!
+    expect(target.roleScopeTagIds).toEqual(["7"])
+    expect(target.assignments).toMatchObject([{ target: { ...assignment.target, groupId: newGroup, deviceAndAppManagementAssignmentFilterId: newFilter } }])
+    expect(context.targets[TENANT_C]!.writeCount()).toBe(0)
+  })
+})

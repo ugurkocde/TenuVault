@@ -19,10 +19,10 @@ If the source tenant's plan does not include MSP features, **Copy to other tenan
 
 Items copied to another tenant are handled differently from restores in the same tenant, because group, filter and scope tag IDs only exist in the source tenant:
 
-* Copies always use **Create copies**. **Replace in place** and **Restore assignments** are turned off and cannot be selected.
+* Copies always use **Create copies**. **Restore assignments** is optional.
 * Copies keep their **original names**, without the `[Restored]` prefix.
-* Copies get the **Default** scope tag.
-* Copies are **never assigned**. Recreate group targeting, exclusions and filters in the target tenant after you review the copies.
+* When **Restore assignments** is off, copies are unassigned and use the **Default** scope tag.
+* With **Restore assignments** on, confirm mappings to existing groups, filters and scope tags for each destination in **Review**. The built-in **Default** tag is portable.
 * **Windows Autopilot devices** are not copied. A device is registered with its hardware hash, which backups cannot include, so the review shows them as **Cannot be restored**.
 * **Compliance policy settings** are not copied. They are a tenant-wide setting, not a policy, so the review shows them as **Cannot be restored**. Set them in the target tenant's Intune admin center if it needs the same values.
 * The source tenant does not change. The review step says "Copies go to *N* tenants; *source tenant* does not change."
@@ -33,7 +33,7 @@ Items copied to another tenant are handled differently from restores in the same
 2. **Choose a backup**, then select the items to copy on **Choose what to restore**.
 3. Click **Next**. On **How to restore**, under **Where**, tick each target tenant under **Copy to other tenants instead**. Each tenant shows its name and domain.
 4. Optional, for one target tenant only: go back to **Items** to enter reviewed dependency mappings. See [Map dependencies](#map-dependencies).
-5. Click **Review**. Each item is labelled **Copy to the chosen tenants**, or **Cannot be restored** with a reason.
+5. To copy assignment targeting, turn on **Restore assignments** after choosing the destinations. Click **Review**. Confirm mappings for every tenant-specific assignment reference and choose **Check assignment references**. If any reference remains unresolved, the restore stops before writing a policy.
 6. Click **Restore N items**. The progress bar counts one step per item per target tenant.
 7. Check the results. Each outcome starts with the target tenant's name, for example `Fabrikam: Contoso Defender Antivirus`, and shows **Copied** or the error.
 
@@ -43,7 +43,7 @@ Items copied to another tenant are handled differently from restores in the same
 
 Many Intune objects refer to other objects by ID, for example a policy that references a scope tag or an assignment filter, or an app that references an app category. Those IDs do not exist in the target tenant.
 
-TenuVault handles this in two ways:
+When restoring with assignments, create or identify the target groups, assignment filters and scope tags before the restore so you can confirm their mappings. Other dependencies can be handled in the following ways.
 
 * **Copy the dependencies in the same restore.** TenuVault restores referenced objects first (scope tags, assignment filters, Intune roles, app categories, device categories, notification templates and reusable settings) and rewrites references in later items to the new IDs it just created. Select the dependencies together with the items that use them.
 * **Map to objects that already exist in the target tenant.** For apps and app categories you can supply reviewed mappings, described below.
@@ -98,7 +98,7 @@ Mapping errors you may see:
 ## After the copy
 
 * Open each target tenant in the Intune admin center and review the copied items.
-* Recreate assignments, exclusions and filters for the target tenant's own groups.
+* Verify any copied targeting and exclusions. Set up targeting in Intune if you copied the policies with assignments off.
 * Adjust scope tags if the target tenant uses more than **Default**.
 * Review Intune roles and their memberships separately, so a copy does not grant access you did not intend.
 

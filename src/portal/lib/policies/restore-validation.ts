@@ -6,9 +6,8 @@ import { buildRestorePlan, buildUpdatePlan, restoreBlocker } from "../../../shar
 
 /**
  * A restore dry run: reads a whole backup back and checks every item without writing to the
- * tenant. This module never calls Microsoft Graph and never creates a change set; it only
- * reads snapshots through the reader it is given and reuses the restore manifest checks and
- * the restore planner, so a passing item is one a real restore could read and rebuild.
+ * tenant. It reads snapshots through the reader it is given, checks the restore payload and optionally checks
+ * assignment references through a read-only callback.
  */
 
 export type ValidationCheckId = "read" | "fingerprint" | "payload" | "assignments"
@@ -58,6 +57,7 @@ export interface ValidateBackupInput {
   /** Policy files present in backup storage for this backup. */
   listedPaths: string[]
   readSnapshot: (path: string) => Promise<SnapshotRead>
+  checkAssignmentTargets?: (path: string, snapshot: Item) => Promise<string | undefined>
 }
 
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -166,7 +166,7 @@ export async function validateBackup(input: ValidateBackupInput): Promise<Backup
           checks.push(check("payload", false, error instanceof Error ? error.message : String(error)))
         }
         if (checks.find((entryCheck) => entryCheck.id === "payload")?.ok) {
-          const failure = assignmentFailure(type, snapshot)
+          const failure = assignmentFailure(type, snapshot) ?? await input.checkAssignmentTargets?.(path, snapshot)
           checks.push(failure ? check("assignments", false, failure) : check("assignments", true, snapshot.assignments === undefined ? "No assignments recorded." : undefined))
         } else {
           checks.push(check("assignments", false, "Not checked: the policy payload cannot be restored."))

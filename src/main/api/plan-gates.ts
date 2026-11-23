@@ -44,7 +44,7 @@ export function requiredFeatures(pathname: string, body: Record<string, unknown>
       return features
     }
     case "/api/restore-validate":
-      return ["fullRestore"]
+      return ["fullRestore", ...(body.liveAssignmentTargets === true ? ["restoreAssignments" as const] : []), ...(body.targetTenants !== undefined ? ["bulkActions" as const] : [])]
     case "/api/revert-policy":
       return body.action === "revert" ? ["driftRevert"] : []
     // The audit log is Pro and MSP; /api/audit/log stays open so the main process can write entries.

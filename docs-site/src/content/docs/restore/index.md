@@ -9,7 +9,7 @@ faq:
   - question: "What is the difference between Create copies and Replace in place?"
     answer: "Create copies adds separate copies and never changes existing policies. With Restore assignments turned off the copies are unassigned and reach no device, which makes them safe for testing a restore. With Restore assignments on (Pro and MSP), copies get the backed-up groups and filters and do reach devices at their next check-in. Replace in place overwrites the current version with the backed-up version and recreates deleted policies. Replace in place and restoring several policies at once need Pro or MSP."
   - question: "Are assignments restored with an Intune policy?"
-    answer: "Only when you turn on Restore assignments, which needs Pro or MSP. With it on, the policies you restore get the assignments recorded in the backup, where assignment replacement is supported. Windows Autopilot profiles, Apple user enrollment profiles, terms and conditions and Intune roles do not support assignment replacement in place: restore them in a separate selection with assignments off. Copies with assignments off and cross-tenant restores arrive unassigned."
+    answer: "Only when you turn on Restore assignments, which needs Pro or MSP. With it on, the policies you restore get the assignments recorded in the backup, where assignment replacement is supported. Windows Autopilot profiles, Apple user enrollment profiles, terms and conditions and Intune roles do not support assignment replacement in place: restore them in a separate selection with assignments off. Copies with assignments off arrive unassigned. Cross-tenant restores use confirmed mappings for every tenant-specific assignment reference when Restore assignments is on."
   - question: "Can I restore Intune configuration to another tenant?"
     answer: "Yes, with the MSP plan. Copies keep their original names, get the Default scope tag and are never assigned, so you recreate groups, exclusions and filters in the target tenant and then assign the copies."
 ---
@@ -106,7 +106,7 @@ Click **Next** when your selection is ready, or **Other backup** to go back.
 
 * **Create copies**: "Each item is created next to the current one with a [Restored] name. Nothing existing changes."
 * **Replace in place**: "Items that still exist are put back to the backed-up version. Deleted items are recreated with their original name. Items that already match are left alone."
-* **Restore assignments**: "Assign restored items to the same groups and filters as in the backup."
+* **Restore assignments** checks the groups, filters and scope tags used by the selected items. Resolve missing references in Review before restoring.
 * **Where**: **Copy to other tenants instead** lets MSP tenants send copies to other connected tenants. Leave all tenants unchecked to restore to the selected tenant.
 
 The details of each option, including which types support assignment restore, are in [Restore modes and assignments](/restore/modes/). Copying to other tenants is covered in [Restore to another tenant](/restore/cross-tenant/).
@@ -156,7 +156,7 @@ Next to the restore button, **Validate backup (no changes)** runs a dry run over
 * **Readable and decryptable**: the file can be read back and decrypted with the keys on this device.
 * **Recorded fingerprint**: the content still matches the fingerprint recorded when the backup ran.
 * **Policy payload**: the payload parses and a restore plan can be built from it.
-* **Assignment references**: recorded assignments point at valid targets.
+* **Assignment references** checks the recorded targets against the live tenant. It uses your confirmed mappings and explicit skips. When restoring with assignments to other tenants, it checks the selected destinations.
 
 The result lists, per policy type, how many items passed and failed, and names every failing item with the check that failed. A valid backup reports that all items passed. Nothing is written to your tenant, to Microsoft Graph or to a change set, and no restore starts. Run it when you want to prove a backup is restorable before you need it, or to find the exact item that is missing or corrupt. Validating a whole backup is included in TenuVault Pro and MSP, like restoring several items at once.
 

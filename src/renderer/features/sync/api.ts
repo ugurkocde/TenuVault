@@ -1,3 +1,5 @@
+import type { Mapping, ReferenceKind } from "../promotion/api"
+import type { MappingObjects } from "../promotion/MappingEditor"
 import type { Tenant } from "~/contexts/TenantContext"
 import { featureCall } from "../../lib/feature-api"
 import type { SyncRunRecord, SyncSkip } from "../../../main/features/sync/engine"
@@ -47,13 +49,16 @@ export const syncPolicies = (source: Tenant, folder: string) => featureCall<{ so
 export const syncTargets = (source: Tenant) => featureCall<{ multiple: boolean; targets: SyncTargetOption[] }>(PATH, source, "targets")
 export const syncStatus = (source: Tenant, targetTenantIds: string[]) => featureCall<SyncStatus>(PATH, source, "status", { targetTenants: named(targetTenantIds) })
 
-export const planSync = (source: Tenant, input: { title: string; targets: string[]; items: Array<{ folder: string; sourceId: string }>; acknowledgeRedacted: boolean }) =>
+export const syncTargetObjects = (source: Tenant, targetTenantId: string, kind: Exclude<ReferenceKind, "group">) =>
+  featureCall<NonNullable<MappingObjects[ReferenceKind]>>(PATH, source, "target-objects", { targetTenantId, kind })
+
+export const planSync = (source: Tenant, input: { title: string; targets: string[]; items: Array<{ folder: string; sourceId: string }>; acknowledgeRedacted: boolean; includeAssignments?: boolean; mappings?: Record<string, Mapping[]> }) =>
   featureCall<{ run: SyncRun; targets: Array<{ targetTenantId: string; promotion: Promotion | null; error: string | null; skipped: SyncSkip[] }> }>(PATH, source, "plan", {
     title: input.title,
     targetTenants: named(input.targets),
     items: input.items,
-    // Assignments are never synced: policies are created unassigned and existing assignments stay.
-    includeAssignments: false,
+    includeAssignments: input.includeAssignments === true,
+    mappings: input.includeAssignments ? input.mappings : undefined,
     acknowledgeRedacted: input.acknowledgeRedacted,
   })
 

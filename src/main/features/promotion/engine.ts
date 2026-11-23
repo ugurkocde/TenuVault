@@ -160,6 +160,7 @@ export async function planPromotion(deps: FeatureDeps, destinationTenantId: stri
       acknowledgeRedacted: input.acknowledgeRedacted,
       mappings: input.mappings,
       sourceSnapshot: snapshot,
+      verifyAssignments: input.workflow === "sync" && input.includeAssignments,
     }, listings)
     const promotable = (PROMOTION_FOLDERS as readonly string[]).includes(type.folder)
     const findings = promotable ? resolved.findings : [...resolved.findings, { code: "unsupported-type" as const, severity: "blocking" as const, message: `Promotion does not support ${type.label} yet. Supported: Settings Catalog policies, compliance policies, endpoint security policies and device configuration profiles.` }]

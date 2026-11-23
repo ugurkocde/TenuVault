@@ -53,7 +53,7 @@ For a rehearsal checklist, follow the guide to [practice an Intune restore](http
 8. Resolve any **Incomplete object** or unknown outcomes as described in [What cannot be restored and restore write history](/restore/limitations/).
 9. Complete the items that cannot be restored automatically. See [Handle external artifacts](#handle-external-artifacts).
 
-TenuVault restores dependencies such as scope tags, assignment filters and categories before the items that use them, and policy sets last. Recreated items get new IDs, and later items in the same restore are pointed to them. Restore dependencies and the items that use them in the same selection.
+TenuVault restores dependencies such as scope tags, assignment filters and categories before the items that use them, and policy sets last. Recreated items get new IDs, and later items in the same restore are pointed to them. Restore dependencies and the items that use them in the same selection. When restoring with assignments, restore any missing groups, filters and scope tags first so you can confirm their mappings in Review.
 
 ## Recover on a new device
 

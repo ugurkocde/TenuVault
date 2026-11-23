@@ -178,6 +178,9 @@ export class FakeTenant {
     if (route === "deviceManagement/assignmentFilters") return { status: 200, body: { value: structuredClone(this.filters) } }
     if (route === "deviceManagement/roleScopeTags") return { status: 200, body: { value: structuredClone(this.scopeTags) } }
     if (route === "deviceManagement/reusablePolicySettings") return { status: 200, body: { value: structuredClone(this.reusable) } }
+    if (route === "groups") {
+      return this.groupsForbidden ? { status: 403, body: {} } : { status: 200, body: { value: [...this.groups.values()] } }
+    }
     if (segments[0] === "groups" && segments.length === 2) {
       if (this.groupsForbidden) return { status: 403, body: { error: { code: "Authorization_RequestDenied", message: "Insufficient privileges to complete the operation." } } }
       const group = this.groups.get(decodeURIComponent(segments[1]!).toLowerCase())

@@ -1,3 +1,4 @@
+import { assignmentDirectory, assignmentReviewer, parseAssignmentMappings, parseSkippedAssignments, type AssignmentDirectory } from "~/lib/policies/assignment-review"
 import { auditUserFromToken, mainAuditSink } from "../../../../main/api/audit-sink"
 import { AuditEventType, type AuditJobItem } from "~/lib/audit/types"
 import { beginRestoreAudit, recordRestorePreparationFailure, restoreAuditItem } from "~/lib/audit/restore"
@@ -65,6 +66,7 @@ export async function POST(request: NextRequest) {
     body = await request.json()
     if (body.approvalAction) return await approvalAction(body)
     if (body.justification !== undefined && (typeof body.justification !== "string" || body.justification.length > 700)) return NextResponse.json({ error: "Justification must be at most 700 characters" }, { status: 400 })
+    const reviewAssignments = body.action === "assignment-review"
     const {
       tenantId,
       appId,
@@ -97,11 +99,11 @@ export async function POST(request: NextRequest) {
     }
 
     // Copying to other tenants (MSP): each target is written with its own sign-in, as copies
-    // under the original names, without assignments.
+    // under the original names. Assignments are opt-in and must be mapped per target.
     const guid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-    if (targetTenants !== undefined && (!Array.isArray(targetTenants) || !targetTenants.length || targetTenants.length > 50 || mode !== 'copy' || assignments ||
+    if (targetTenants !== undefined && (!Array.isArray(targetTenants) || !targetTenants.length || targetTenants.length > 50 || mode !== 'copy' ||
       targetTenants.some((t: any) => !guid.test(t?.tenantId ?? '') || !guid.test(t?.appId ?? '') || String(t.tenantId).toLowerCase() === String(tenantId).toLowerCase()))) {
-      return NextResponse.json({ error: 'Choose other connected tenants to copy to. Copies are created without assignments.' }, { status: 400 })
+      return NextResponse.json({ error: 'Choose other connected tenants to copy to.' }, { status: 400 })
     }
 
     let dependencyMappings
@@ -114,12 +116,17 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Repair requests must select one target and valid repair tokens' }, { status: 400 })
     }
 
+    if (reviewAssignments && (!assignments || repairSelections.length)) return NextResponse.json({ error: "Choose assignments to review." }, { status: 400 })
+
     const jobId = randomUUID()
     const destinations: string[] = targetTenants?.map((target: { tenantId: string }) => target.tenantId.toLowerCase()) ?? [tenantId.toLowerCase()]
+    let assignmentMappings
+    try { assignmentMappings = parseAssignmentMappings(body.assignmentMappings, destinations) }
+    catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "Invalid assignment mappings" }, { status: 400 }) }
     const action = mode === 'replace' ? 'Restore backup in place' : 'Restore backup as policy copies'
     const destinationTokens: string[] = []
     let correlated: string = jobId
-    preparationFailed = () => {
+    if (!reviewAssignments) preparationFailed = () => {
       for (const [index, destination] of destinations.entries()) {
         void recordRestorePreparationFailure({
           destination, sourceTenantId: tenantId, graphToken: destinationTokens[index], sourceBackupId: backupId, operationId: correlated, runId: jobId, action,
@@ -145,7 +152,7 @@ export async function POST(request: NextRequest) {
 
     // Correlate the completed operation with its desktop audit event.
     const actor = auditUserFromToken(graphToken, tenantId)?.id.toLowerCase()
-    const repairScope = (target: string) => JSON.stringify([tenantId, storageAccountName, backupId, target.toLowerCase(), mode, assignments, dependencyMappings])
+    const repairScope = (target: string) => JSON.stringify([tenantId, storageAccountName, backupId, target.toLowerCase(), mode, assignments, dependencyMappings, assignmentMappings[target.toLowerCase()] ?? []])
     const correlationSource = JSON.stringify([String(tenantId).toLowerCase(), storageAccountName, backupId])
     const prior = actor && typeof body.retryOf === "string" && guid.test(body.retryOf) ? mainAuditSink()?.restoreCorrelation(body.retryOf) : undefined
     correlated = prior?.actor === actor && prior?.source === correlationSource && destinations.every(id => prior.destinations.includes(id))
@@ -190,17 +197,17 @@ export async function POST(request: NextRequest) {
     const auditProgress: { save?: (result: RestoreOutcome) => void; submitted?: (result: RestoreOutcome) => void } = {}
     const onProgress = (result: RestoreOutcome) => auditProgress.save?.(result)
     const onSubmitted = (result: RestoreOutcome) => auditProgress.submitted?.(result)
-    const targets: Array<{ restorer: Restorer; graphToken: string; targetTenantId?: string }> = targetTenants
+    const targets: Array<{ restorer: Restorer; graphToken: string; directory: AssignmentDirectory; targetTenantId?: string }> = targetTenants
       ? await Promise.all((targetTenants as Array<{ tenantId: string; appId: string }>).map(async (target, index) => {
           const targetToken = await getAccessToken(target.tenantId, target.appId, clientSecret, "https://graph.microsoft.com/.default")
           destinationTokens[index] = targetToken
           return {
-            targetTenantId: target.tenantId.toLowerCase(), graphToken: targetToken,
+            targetTenantId: target.tenantId.toLowerCase(), graphToken: targetToken, directory: assignmentDirectory(graphCaller(targetToken)),
             restorer: new Restorer(graphCaller(targetToken, fetch, { tenant: target.tenantId, refreshToken: () => getAccessToken(target.tenantId, target.appId, clientSecret, "https://graph.microsoft.com/.default", true) }),
-              { mode: 'copy', assignments: false, prefix: '', crossTenant: true, repairScope: repairScope(target.tenantId), granted: grantedPermissions(targetToken), operationId: correlated, auditProgress: onProgress, auditSubmitted: onSubmitted }),
+              { mode: 'copy', assignments, prefix: '', crossTenant: true, repairScope: repairScope(target.tenantId), granted: grantedPermissions(targetToken), operationId: correlated, auditProgress: onProgress, auditSubmitted: onSubmitted }),
           }
         }))
-      : [{ graphToken, restorer: new Restorer(graphCaller(graphToken, fetch, { tenant: tenantId, refreshToken: () => getAccessToken(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default", true) }), { mode, assignments, approvalContext: requesterContext(graphToken, tenantId, body.justification), repairScope: repairScope(tenantId), granted: grantedPermissions(graphToken), operationId: correlated, auditProgress: onProgress, auditSubmitted: onSubmitted }) }]
+      : [{ graphToken, directory: assignmentDirectory(graphCaller(graphToken)), restorer: new Restorer(graphCaller(graphToken, fetch, { tenant: tenantId, refreshToken: () => getAccessToken(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default", true) }), { mode, assignments, approvalContext: requesterContext(graphToken, tenantId, body.justification), repairScope: repairScope(tenantId), granted: grantedPermissions(graphToken), operationId: correlated, auditProgress: onProgress, auditSubmitted: onSubmitted }) }]
     try {
       if (dependencyMappings.length) for (const { restorer } of targets) await restorer.mapDependencies(dependencyMappings)
     } catch (error) {
@@ -211,6 +218,39 @@ export async function POST(request: NextRequest) {
     const checked = checkRestoreManifest(metadata, backupId, paths, restoreType !== 'selective')
     if (!checked.ok) return NextResponse.json({ error: checked.error }, { status: 400 })
     const manifest = checked.manifest
+
+    let skipped
+    try { skipped = parseSkippedAssignments(body.skippedAssignments, paths) }
+    catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "Invalid skipped assignments" }, { status: 400 }) }
+    if (targetTenants && Object.keys(skipped).length) return NextResponse.json({ error: "Cross-tenant copies require mappings for every assignment." }, { status: 400 })
+
+    // Read back the selected snapshots and check every destination before the first write.
+    const sourceDirectory = targets[0]?.targetTenantId ? assignmentDirectory(graphCaller(graphToken)) : targets[0]!.directory
+    const prepared = new Map<string, Map<string, { original: Item; resolved: Item; skipped: number }>>()
+    const assignmentReviews = []
+    if (assignments) {
+      const freshPaths = paths.filter((path) => !repairSelections.some((entry: { path: string }) => entry.path === path))
+      const originals = new Map<string, Item>()
+      for (const path of freshPaths) originals.set(path, await readSnapshot(path, storageAccountName, storageToken, manifest?.get(path)))
+      for (const target of targets) {
+        const destination = target.targetTenantId ?? tenantId.toLowerCase()
+        const reviewer = assignmentReviewer(sourceDirectory, target.directory, metadata, !target.targetTenantId, assignmentMappings[destination] ?? [], skipped)
+        const snapshots = new Map<string, { original: Item; resolved: Item; skipped: number }>()
+        const items = []
+        for (const [path, original] of originals) {
+          const result = await reviewer.review(path, original)
+          if (!result) continue
+          const count = result.review.assignments.filter((entry) => entry.skipped).length
+          snapshots.set(path, { original, resolved: result.snapshot, skipped: count })
+          if (result.review.references.length || result.review.assignments.length || result.review.errors.length) items.push({ path, ...result.review })
+        }
+        prepared.set(destination, snapshots)
+        assignmentReviews.push({ tenantId: destination, items, objects: reviewAssignments ? reviewer.objects() : {} })
+      }
+      if (reviewAssignments) return NextResponse.json({ targets: assignmentReviews })
+      const blocked = assignmentReviews.flatMap((target) => target.items).filter((item) => item.errors.length)
+      if (blocked.length) return NextResponse.json({ error: `Assignment references could not be verified for ${blocked.length} item(s). Review the mappings or skip unresolved assignments to continue. No policies were written.` }, { status: 409 })
+    }
 
     const progress = progressId ? startProgress(progressId, paths.length * targets.length) : null
     preparationFailed = undefined
@@ -240,7 +280,10 @@ export async function POST(request: NextRequest) {
                 eventType: AuditEventType.CONFIG_UPDATED, items: [item],
               })?.finish()
             }
-            const result = await restoreSinglePolicy(restorer, path, storageAccountName, storageToken, manifest?.get(path), repairSelections.find((p: any) => p.path === path)?.repairToken)
+            const snapshot = prepared.get(targetTenantId ?? tenantId.toLowerCase())?.get(path)
+            const result = snapshot
+              ? await restorer.restore(path, snapshot.original, { snapshot: snapshot.resolved, skipped: snapshot.skipped })
+              : await restoreSinglePolicy(restorer, path, storageAccountName, storageToken, manifest?.get(path), repairSelections.find((p: any) => p.path === path)?.repairToken)
             auditProgress.save(result)
             auditProgress.save = undefined
             auditProgress.submitted = undefined
