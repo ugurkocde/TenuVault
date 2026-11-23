@@ -20,6 +20,7 @@ import { createRequire } from "node:module"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { assert, checker, launch, sleep } from "./app.mjs"
+import { completeLogin, signInEach } from "./login.mjs"
 import { hidden, hide, maskedCapture, maskPage, matchesTestAccount } from "./secrets.mjs"
 
 const SECRETS = ["TENUVAULT_E2E_TENANT_ID", "TENUVAULT_E2E_CLIENT_ID", "TENUVAULT_E2E_USERNAME", "TENUVAULT_E2E_PASSWORD"]
@@ -35,46 +36,6 @@ function clipboard() {
   if (process.platform === "darwin") return execFileSync("pbpaste", { encoding: "utf8" }).trim()
   if (process.platform === "win32") return execFileSync("powershell.exe", ["-NoProfile", "-Command", "Get-Clipboard -Raw"], { encoding: "utf8" }).trim()
   return execFileSync("xclip", ["-selection", "clipboard", "-o"], { encoding: "utf8" }).trim()
-}
-
-/** The visible error text on Microsoft's login page, if any. */
-async function loginError(page) {
-  for (const selector of ["#usernameError", "#passwordError", "#service_exception_message", "#idTD_Error", "div[role='alert']"]) {
-    const text = await page.locator(selector).first().innerText({ timeout: 200 }).catch(() => "")
-    if (text.trim()) return text.trim().slice(0, 300)
-  }
-  return ""
-}
-
-/** Completes Microsoft's login page until it redirects to the app's loopback address. */
-async function completeLogin(page, username, password) {
-  const atApp = () => /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?\//.test(page.url())
-  await page.locator('input[name="loginfmt"]').fill(username, { timeout: 60_000 })
-  await page.locator("#idSIButton9").click()
-  const passwordField = page.locator('input[name="passwd"]')
-  await passwordField.waitFor({ state: "visible", timeout: 30_000 }).catch(async () => {
-    throw new Error(`Microsoft did not ask for the password: ${(await loginError(page)) || page.url().split("?")[0]}`)
-  })
-  await passwordField.fill(password)
-  await page.locator("#idSIButton9").click()
-  const deadline = Date.now() + 90_000
-  while (Date.now() < deadline) {
-    if (atApp()) return
-    const body = await page.locator("body").innerText({ timeout: 1000 }).catch(() => "")
-    if (/Stay signed in\?/i.test(body) && (await page.locator("#idBtn_Back").isVisible().catch(() => false))) {
-      // "No": the test browser keeps nothing, and the answer does not change the sign-in.
-      await page.locator("#idBtn_Back").click().catch(() => {})
-    } else if (/Permissions requested|Need admin approval/i.test(body)) {
-      throw new Error("Microsoft asks for consent. Grant tenant-wide admin consent to the E2E app registration (RELEASING.md).")
-    } else if (/More information required|Let's keep your account secure|Action Required/i.test(body)) {
-      throw new Error("Microsoft asks the test user for more information, such as MFA registration. The test user must have no MFA and be outside Conditional Access.")
-    } else {
-      const error = await loginError(page)
-      if (error) throw new Error(`Microsoft refused the sign-in: ${error}`)
-    }
-    await sleep(500)
-  }
-  throw new Error(`Microsoft's login did not return to the app within 90 seconds (stopped at ${page.url().split("?")[0]}).`)
 }
 
 async function signInWith(browserName, playwright, secrets) {
@@ -130,7 +91,9 @@ async function signInWith(browserName, playwright, secrets) {
   } catch (error) {
     await app?.screenshot(`fail-${browserName}-app`, hidden(secrets)).catch(() => {})
     // The logs are public; GitHub masks secrets in them, and so does this.
-    throw new Error(hide(error instanceof Error ? error.message : String(error), secrets))
+    const masked = new Error(hide(error instanceof Error ? error.message : String(error), secrets))
+    masked.stopped = error?.stopped === true
+    throw masked
   } finally {
     await browser?.close().catch(() => {})
     await app?.close().catch(() => {})
@@ -153,9 +116,7 @@ async function main() {
   const secrets = Object.fromEntries(SECRETS.map((name) => [name, process.env[name].trim()]))
   // Playwright comes from this folder's own locked install (npm ci --prefix scripts/nightly-verification).
   const playwright = createRequire(import.meta.url)("playwright")
-  for (const name of browsers) {
-    await check(`the installed app signs in to the test tenant through ${name}`, () => signInWith(name, playwright, secrets))
-  }
+  await signInEach(browsers, check, (name) => signInWith(name, playwright, secrets))
 }
 
 main()
