@@ -19,7 +19,8 @@ it("shows who gets what and requires each approval before sending its saved page
   await act(async () => root.render(createElement(DirectoryRestore, props)))
   await click("Review directory restore"); await click("Preview directory changes")
   expect(document.body.textContent).toContain("Member (user): member on Team (group)")
-  expect(document.body.textContent).toContain("Current: false")
+  expect(document.body.textContent).toContain("Current: Not assigned now")
+  expect(document.body.textContent).toContain("Restore: Assigned after restore")
   expect(document.body.textContent).toContain("More changes remain")
   expect((button("Execute approved changes or resume page") as HTMLButtonElement).disabled).toBe(true)
   const checks = [...document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
@@ -30,6 +31,50 @@ it("shows who gets what and requires each approval before sending its saved page
   expect(JSON.parse(String(fetcher.mock.calls[1]![1]?.body))).toMatchObject({ action: "restore", runId: "run", fingerprint: "bound", approvals: { member: ["directory-item", "security-response"] }, exactMembers: false, exactOwners: false })
   expect(document.body.textContent).toContain("Directory page completed")
   expect(document.body.textContent).toContain("DeviceConfigurations/p, groupId. Old ID: old. New ID: new.")
+})
+
+it.each([
+  ["RoleAssignmentSchedules", "Active role schedule", "Active", "2026-12-30T18:00:00Z"],
+  ["PimGroupEligibilitySchedules", "Eligible group member", "Eligible", "No expiration"],
+] as const)("shows readable schedule and relationship values for %s", async (folder, privilege, status, end) => {
+  const start = "2026-11-22T10:00:00Z"
+  const date = (value: string) => new Date(value).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })
+  const review = { ...page.rows[0]!.review, privilege, changes: [
+    { property: "Schedule", before: null, after: { start, end } },
+    { property: "Relationship", before: "Absent", after: "Present" },
+  ] }
+  vi.stubGlobal("fetch", vi.fn(async () => Response.json({ ...page, rows: [{ key: "schedule", review }] })))
+  root = createRoot(document.body.appendChild(document.createElement("div")))
+  await act(async () => root.render(createElement(DirectoryRestore, { ...props, path: `backup/${folder}/schedule.json` })))
+  await click("Review directory restore"); await click("Preview directory changes")
+  expect(document.body.textContent).toContain("Current: None")
+  expect(document.body.textContent).toContain(`Restore: ${status} from ${date(start)}${end === "No expiration" ? ". No end date" : ` to ${date(end)}`}`)
+  expect(document.body.textContent).toContain("Current: Not assigned now")
+  expect(document.body.textContent).toContain("Restore: Assigned after restore")
+})
+
+it("explains the roles and PIM restriction on an existing saved review", async () => {
+  const review = { ...page.rows[0]!.review, blocker: "This relationship is available for review. A live restore and cleanup round trip is required before execution." }
+  vi.stubGlobal("fetch", vi.fn(async () => Response.json({ ...page, rows: [{ key: "schedule", review }] })))
+  root = createRoot(document.body.appendChild(document.createElement("div")))
+  await act(async () => root.render(createElement(DirectoryRestore, { ...props, path: "backup/RoleAssignmentSchedules/schedule.json" })))
+  await click("Review directory restore"); await click("Preview directory changes")
+  expect(document.body.textContent).toContain("Blocked: Restoring roles and PIM is not available yet. You can review what would change.")
+  expect(document.body.textContent).not.toContain("round trip")
+  expect(button("Execute approved changes or resume page")).toBeUndefined()
+})
+
+it("shows directory text properties without quotes and keeps structured property differences", async () => {
+  const review = { ...page.rows[0]!.review, changes: [
+    { property: "description", before: null, after: "Recovery app" },
+    { property: "metadata", before: { value: "old" }, after: { value: "new" } },
+  ] }
+  vi.stubGlobal("fetch", vi.fn(async () => Response.json({ ...page, rows: [{ key: "app", review }] })))
+  root = createRoot(document.body.appendChild(document.createElement("div")))
+  await act(async () => root.render(createElement(DirectoryRestore, { ...props, path: "backup/Applications/app.json" })))
+  await click("Review directory restore"); await click("Preview directory changes")
+  expect(document.body.textContent).toContain("descriptionCurrent: NoneRestore: Recovery app")
+  expect(document.body.textContent).toContain('metadataCurrent: {"value":"old"}Restore: {"value":"new"}')
 })
 it("invalidates the preview when the per-group exact choice changes", async () => {
   vi.stubGlobal("fetch", vi.fn(async () => Response.json(page)))

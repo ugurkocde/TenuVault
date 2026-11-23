@@ -101,13 +101,14 @@ it("uses the Roles and PIM restore scopes for actor and principal reads, then sa
     principal: { id: user, name: "Current user", type: "user" }, resource: { id: role, name: "Custom role" },
     scope: "Entire tenant", approvals: ["directory-item", "privileged-relationship", "security-response"],
     notices: [expect.stringContaining("looks deliberate")],
+    blocker: "Restoring roles and PIM is not available yet. You can review what would change.",
     changes: [{ property: "Schedule", after: { end: endsAt } }, { property: "Relationship", before: "Absent", after: "Present" }],
   })
   expect(env.fetcher.mock.calls.filter(([url]) => String(url).includes("roleAssignmentSchedules"))).toHaveLength(2)
   const saved = { ...request, runId: page.runId }
   expect((await env.start().resume(tenant, saved))).toMatchObject({ fingerprint: page.fingerprint, rows: page.rows })
   const reads = env.fetcher.mock.calls.length
-  await expect(service.execute(tenant, saved, page.fingerprint, { "privilege-0": page.rows[0]!.review.approvals })).rejects.toThrow(/required before execution/)
+  await expect(service.execute(tenant, saved, page.fingerprint, { "privilege-0": page.rows[0]!.review.approvals })).rejects.toThrow("Restoring roles and PIM is not available yet.")
   expect(env.fetcher.mock.calls).toHaveLength(reads)
   expect(await service.saved(tenant, page.runId, "reconcile")).toMatchObject({ status: "nothing-sent" })
   await expect(service.prepare(tenant, { ...request, origin: "import" }, options, noBackupReads)).rejects.toThrow(/owned same-tenant/)
@@ -156,7 +157,7 @@ it("pages a legacy-named administrative unit, preserving exact choice, role IDs 
   expect(page.rows[0]?.review.privilege).toBe("Add unit member")
   const next = await env.start().prepare(tenant, request, { ...options, exactMembers: true, previousRunId: page.runId }, noBackupReads)
   expect(next.rows.map(row => row.review.blocker)).toEqual([
-    expect.stringContaining("last Global Administrator"), expect.stringContaining("lacks the principal or role ID"), expect.stringContaining("round trip"),
+    expect.stringContaining("last Global Administrator"), expect.stringContaining("lacks the principal or role ID"), expect.stringContaining("Restoring roles and PIM is not available yet."),
   ])
   expect(next.rows[0]?.review.approvals).toContain("exact-unit")
   expect(next.rows[2]?.review.privilege).toBe("Scoped role member: Custom role")
