@@ -21,16 +21,28 @@ interface BackupBody {
  *
  * Without a scope, the tenant's saved scope applies.
  */
-export function backupRoutes(engine: BackupEngine, scopeFor: (tenantId: string) => BackupScope = () => ({ excluded: [] })): Record<string, RouteModule> {
+export function backupRoutes(
+  engine: BackupEngine,
+  scopeFor: (tenantId: string) => BackupScope = () => ({ excluded: [] }),
+  savedDestinationFor: (tenantId: string) => string | null | undefined = () => undefined,
+): Record<string, RouteModule> {
   return {
     "/api/backup/start": {
       POST: async (request: NextRequest) => {
         const body = (await request.json().catch(() => ({}))) as BackupBody
-        if (!body.tenantId || !body.appId || !body.storageAccountName) {
+        if (typeof body.tenantId !== "string" || !body.tenantId || !body.appId ||
+          typeof body.storageAccountName !== "string" || !body.storageAccountName) {
           return Response.json({ error: "Choose where to store backups for this tenant first." }, { status: 400 })
         }
+        const savedDestination = savedDestinationFor(body.tenantId)
+        if (savedDestination === null) {
+          return Response.json({ error: "Choose where to store backups for this tenant first." }, { status: 400 })
+        }
+        if (savedDestination && body.storageAccountName.toLowerCase() !== savedDestination.toLowerCase()) {
+          return Response.json({ error: "The requested backup destination differs from this tenant's saved backup storage. Use the saved destination or change it in Settings." }, { status: 400 })
+        }
         const scope = body.scope ? normalizeScope(body.scope) : scopeFor(body.tenantId)
-        const job = engine.start({ tenantId: body.tenantId, clientId: body.appId, storageAccountName: body.storageAccountName, scope, trigger: "manual" })
+        const job = engine.start({ tenantId: body.tenantId, clientId: body.appId, storageAccountName: savedDestination ?? body.storageAccountName, scope, trigger: "manual" })
         return Response.json({ success: true, jobId: job.id, status: job.status, message: "Backup started" })
       },
     },

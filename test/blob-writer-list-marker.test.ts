@@ -21,3 +21,33 @@ describe("BlobWriter.list", () => {
     expect(markers).toEqual([null, `A & <B> "C"`])
   })
 })
+
+describe("BlobWriter confirmed-missing reads", () => {
+  const writer = (body: string) => new BlobWriter(async () => new Response(body, { status: 404 }), "stcontoso", async () => "token")
+  it("reads the error code from a small XML body", async () => {
+    expect(await writer("<Error><Code>BlobNotFound</Code></Error>").readJson("policy.json", true)).toBeNull()
+  })
+  it("does not confirm a miss from a proxy page that only mentions an Azure code", async () => {
+    await expect(writer("<html><body><Error><Code>BlobNotFound</Code></Error></body></html>").readJson("policy.json", true)).rejects.toThrow()
+    expect(await writer('<?xml version="1.0" encoding="utf-8"?>\n<Error><Code>ContainerNotFound</Code><Message>x</Message></Error>').readJson("policy.json", true)).toBeNull()
+    await expect(writer("<Error><Code>BlobNotFound</Code><Message>a & b</Message></Error>").readJson("policy.json", true)).rejects.toThrow()
+    await expect(writer("<?xml garbage?><Error><Code>BlobNotFound</Code></Error>").readJson("policy.json", true)).rejects.toThrow()
+    await expect(writer("<Error><Code>BlobNotFound</Code><Message>a ]]> b</Message></Error>").readJson("policy.json", true)).rejects.toThrow()
+    await expect(writer("<Error><Code>BlobNotFound</Code><Message>\uFFFE</Message></Error>").readJson("policy.json", true)).rejects.toThrow()
+    await expect(writer("<Error><Code>BlobNotFound</Code>").readJson("policy.json", true)).rejects.toThrow()
+    await expect(writer("<Error><Code>BlobNotFound</Code><Message>The specified").readJson("policy.json", true)).rejects.toThrow()
+    expect(await writer("\uFEFF<?xml version=\"1.0\"?><Error><Code>BlobNotFound</Code><Message>The specified blob does not exist.\nRequestId:x</Message></Error>\n").readJson("policy.json", true)).toBeNull()
+  })
+  it("treats an oversized 404 body as unconfirmed instead of buffering it", async () => {
+    const body = `<Error><Code>BlobNotFound</Code>${" ".repeat(70 * 1024)}</Error>`
+    await expect(writer(body).readJson("policy.json", true)).rejects.toThrow()
+  })
+})
+
+describe("BlobWriter policy reads", () => {
+  it("accepts only a whole file when the read decides a policy", async () => {
+    const partial = new BlobWriter(async () => new Response('{"version":1}', { status: 206 }), "stcontoso", async () => "token")
+    await expect(partial.readJson("policy.json", true)).rejects.toThrow("HTTP 206")
+    expect(await partial.readJson("other.json")).toEqual({ version: 1 })
+  })
+})

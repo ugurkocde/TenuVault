@@ -6,6 +6,8 @@ import {
   nextRunsInZone,
   parseCloudSetup,
   parseCloudStatus,
+  cloudRunbookLacksOmission,
+  requireCloudOmissionSupport,
 } from "../src/shared/cloud-backup"
 
 const TENANT = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"
@@ -87,6 +89,18 @@ describe("parseCloudStatus", () => {
     Source: "TenuVault Cloud Backup",
     TenantId: TENANT.toLowerCase(),
   }
+  it("blocks enabling with an older reported runbook unless cloud backups were stopped", () => {
+    const version = parseCloudStatus({ ...body, RunbookVersion: "1.5.0" }, TENANT)!.runbookVersion
+    expect(cloudRunbookLacksOmission(version)).toBe(true)
+    expect(() => requireCloudOmissionSupport(version, false)).toThrow("must be upgraded")
+    expect(() => requireCloudOmissionSupport(version, "true")).toThrow("must be upgraded")
+    expect(() => requireCloudOmissionSupport(version, true)).not.toThrow()
+    expect(() => requireCloudOmissionSupport("1.6.0", false)).not.toThrow()
+    for (const unknown of [undefined, "", "unknown"]) {
+      expect(() => requireCloudOmissionSupport(unknown, false)).toThrow("Confirm that every cloud runbook")
+      expect(() => requireCloudOmissionSupport(unknown, true)).not.toThrow()
+    }
+  })
   it("reads the runbook status for its tenant only", () => {
     expect(parseCloudStatus(body, TENANT)).toMatchObject({ lastStatus: "Success", backupFolder: "backup-2026-10-30-020000" })
     expect(parseCloudStatus(body, "ffffffff-bbbb-cccc-dddd-eeeeeeeeeeee")).toBeNull()

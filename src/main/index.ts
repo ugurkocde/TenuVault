@@ -1,7 +1,10 @@
 import { checkpointBackupAudit, reconcileBackupAudit, recordBackupAudit } from "./backup/audit"
 import { auditUserFromToken, AuditSink, setMainAuditSink } from "./api/audit-sink"
 import { AuditContainerMissingError, AuditStorageService } from "../portal/lib/audit/storage"
+import { BlobWriter } from "./backup/blob-writer"
+import { cloudStatusBlobName, parseCloudStatus, requireCloudOmissionSupport } from "../shared/cloud-backup"
 import { requestWindowsContent } from "./app-backup/windows-helper"
+import { configuredCloudPolicyAccount, OmissionPolicyStore } from "./backup/omission-policy"
 import { requireCaptureEnabled } from "./app-backup/capture-policy"
 import { checkCaptureMetadata } from "./app-backup/capture-preflight"
 import { restoreAppWithAudit } from "./app-backup/restore"
@@ -32,7 +35,7 @@ import { readFile, stat } from "node:fs/promises"
 import { randomUUID } from "node:crypto"
 import { pathToFileURL } from "node:url"
 import { isGuid, isMicrosoftLoginUrl, sameRendererDocument } from "../shared/security"
-import { rendererStorageKey, rendererStorageValue } from "./renderer-storage"
+import { assertTenantStorageUpdates, changeTenantAccount, rendererStorageKey, rendererStorageValue } from "./renderer-storage"
 import { prepareGeneratedFile, prepareSaveFile, type PreparedFile } from "./save-file"
 import { pdfBrandingFor, PdfBrandingPolicy, PdfBrandingStore, setPdfBrandingPolicy, validateBranding } from "./pdf-branding"
 import { SettingsTransfer } from "./settings-transfer/service"
@@ -43,7 +46,7 @@ import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, net, Notif
 import { createChromiumFetch } from "./chromium-fetch"
 import { ProxyAuth, ProxyPrompts, type ProxyAuthAttempt, type ProxyChallenge } from "./proxy-auth"
 import { basename, dirname, join } from "node:path"
-import type { ApiRequest, AppPreferences, ScheduleInput } from "../shared/ipc"
+import type { ApiRequest, AppPreferences, ScheduleInput, TenantStorageResources } from "../shared/ipc"
 import { INTERNAL_API_ORIGIN, RESOURCE_SCOPES, localStorageAccountName } from "../shared/constants"
 import { createAuditRecorder } from "./api/audit"
 import { setAuditOutboxStore } from "../portal/lib/audit/outbox"
@@ -96,7 +99,7 @@ import { knownFeedbackPage, type FeedbackSendResult, type FeedbackSnapshot } fro
 import { planGuard } from "./api/plan-gates"
 import { cisGuard } from "./api/cis-gate"
 import { DisclaimerAcknowledgements, disclaimerGuard } from "./disclaimer"
-import { migrateLegacyOibRuns, setOibStore } from "./oib/service"
+import { migrateLegacyOibRuns, setOibOmissionPolicy, setOibStore } from "./oib/service"
 import { setOibCacheDir } from "./oib/source"
 import { setFrameworkStore } from "./frameworks/workspaces"
 import { internalCisBenchmarksEnabled, isAdmittedAssessStatus, setCisBenchmarksPlanProvider, setCisEntitlementProvider, setFrameworkExportSaver, setInternalCisBenchmarksProvider } from "./frameworks/service"
@@ -443,7 +446,37 @@ async function bootstrap(): Promise<void> {
     const account = accounts.get(tenantId)
     return { id: account?.username ?? "unknown", email: account?.username ?? "", name: account?.name ?? account?.username ?? "Unknown user" }
   }
+  const omissionPolicies = new OmissionPolicyStore(appStore, bridgedFetch)
+  const cloudPolicyAccount = (tenantId: string) => configuredCloudPolicyAccount(
+    appStore.get(`${RENDERER_STORAGE_PREFIX}tenuvault_cloud_backup_${tenantId.toLowerCase()}`), tenantId,
+  )
+  const cloudRunbookVersion = async (tenantId: string, account: string | undefined, token: () => Promise<string>) => {
+    if (!account) return undefined
+    const blobs = new BlobWriter(bridgedFetch, account, token, undefined, true, AbortSignal.timeout(10_000))
+    const status = parseCloudStatus(await blobs.readJson(cloudStatusBlobName(tenantId)), tenantId)
+    return status?.runbookVersion || undefined
+  }
+  const omissionAccess = (tenantId: unknown) => {
+    if (!isGuid(tenantId)) throw new Error("Choose a tenant.")
+    const profile = tenantProfile(tenantId)
+    if (!profile) throw new Error("Connect the tenant before changing backup settings.")
+    return {
+      tenantId,
+      destination: profile.storageAccountName,
+      cloud: cloudPolicyAccount(tenantId),
+      token: async () => (await tokenFor(tenantId, profile.clientId, "https://storage.azure.com/.default")).accessToken,
+    }
+  }
+  const readOmissionForTenant = async (tenant: string, enrolledOnly = false) => {
+    const profile = tenantProfile(tenant)
+    const destination = profile?.storageAccountName ?? localStorageAccountName(tenant)
+    if (enrolledOnly && !omissionPolicies.hasRollbackPolicy(tenant, destination)) return { enabled: false, scripts: false, generation: "default" }
+    return omissionPolicies.readForRollback(tenant, destination,
+      async () => (await auth.getAccessToken(tenant, profile?.clientId ?? signedInClient(tenant), "https://storage.azure.com/.default")).accessToken)
+  }
+  setOibOmissionPolicy(readOmissionForTenant)
   const engine = new BackupEngine({
+    omissionPolicy: (request, storage, signal) => omissionPolicies.readForBackup(request.tenantId, request.storageAccountName, storage, signal),
     fetch: bridgedFetch,
     getToken: backupAccess.getToken,
     enabledModules: (tenantId) => moduleSettings.enabled(tenantId),
@@ -494,6 +527,7 @@ async function bootstrap(): Promise<void> {
     return account.clientId
   }
   const featureDeps: FeatureDeps = {
+    omissionPolicy: readOmissionForTenant,
     records,
     plan: (tenantId) => license.requireEntitlement(tenantId),
     sameLicense: (a, b) => sameLicense(license.status([]).tenants, a, b),
@@ -654,7 +688,15 @@ async function bootstrap(): Promise<void> {
     },
   })
   const host: ApiHost = new ApiHost({
-    routes: { ...routes, ...backupRoutes(engine, (tenantId) => scopes.get(tenantId).scope), ...featureRoutes(featureDeps), ...driftScanRoutes(driftJobs) },
+    routes: {
+      ...routes,
+      ...backupRoutes(engine, (tenantId) => scopes.get(tenantId).scope, (tenantId) => {
+        return tenantProfile(tenantId)?.storageAccountName ??
+          (connectedTenantIds().some(id => id.toLowerCase() === tenantId.toLowerCase()) ? null : undefined)
+      }),
+      ...featureRoutes(featureDeps),
+      ...driftScanRoutes(driftJobs),
+    },
     transform: surfaceTokenErrors,
     // Disabled CIS routes refuse before any licensing work. The plan comes next, so the
     // disclaimer is never accepted for a change the plan refuses anyway.
@@ -1504,8 +1546,35 @@ async function bootstrap(): Promise<void> {
     const text = rendererStorageValue(value)
     // The first tenant saved on this computer is the end of the setup.
     const firstTenant = name === "tenuvault_tenants" && connectedTenantIds().length === 0
+    if (name === "tenuvault_tenants") {
+      assertTenantStorageUpdates(appStore.get(RENDERER_STORAGE_PREFIX + name), text,
+        (tenant, account) => omissionPolicies.hasStorageEnrollment(tenant, account))
+    }
     appStore.set(RENDERER_STORAGE_PREFIX + name, text)
     if (firstTenant && connectedTenantIds().length > 0) diagnostics.record({ name: "tenant_added" })
+  })
+  handleTrusted("storage:changeTenantAccount", (_event, tenant: unknown, previous: unknown, resources: TenantStorageResources) => {
+    if (!isGuid(tenant) || typeof previous !== "string") throw new Error("Choose a tenant and storage account.")
+    const id = tenant.toLowerCase()
+    const key = `${RENDERER_STORAGE_PREFIX}tenuvault_tenants`
+    return changeTenantAccount(id, previous.toLowerCase(), resources, {
+      readProfiles: () => appStore.get(key),
+      writeProfiles: (value) => appStore.set(key, value),
+      enrolled: (tenantId, account) => omissionPolicies.hasStorageEnrollment(tenantId, account),
+      destinationEnabled: async (account, clientId) => (await omissionPolicies.read(id, account,
+        async () => (await tokenFor(id, clientId, "https://storage.azure.com/.default")).accessToken,
+        AbortSignal.timeout(15_000))).enabled,
+      confirmOff: async (account) => {
+        if (!mainWindow || mainWindow.isDestroyed()) return false
+        return (await dialog.showMessageBox(mainWindow, {
+          type: "warning",
+          title: "Switch storage with secret omission off?",
+          message: `New backups in ${isLocalAccount(account) ? "device storage" : account} may include secret values.`,
+          detail: "The current storage is enrolled in secret omission. To keep omitting values, enable the policy on the destination before switching.",
+          buttons: ["Cancel", "Switch with omission off"], defaultId: 0, cancelId: 0,
+        })).response === 1
+      },
+    })
   })
   handleTrusted("storage:remove", (_event, key: unknown) => appStore.delete(RENDERER_STORAGE_PREFIX + rendererStorageKey(key)))
 
@@ -1525,6 +1594,32 @@ async function bootstrap(): Promise<void> {
     } finally { importingArchive = false }
   })
   handleTrusted("backups:settings", () => backupSettings())
+  handleTrusted("backups:omission", async (_event, tenantId: unknown) => {
+    const { tenantId: tenant, destination, cloud, token } = omissionAccess(tenantId)
+    const accounts = [...new Set([destination, ...(cloud ? [cloud] : [])])]
+    const [policies, cloudRunbook] = await Promise.all([
+      Promise.allSettled(accounts.map(account => omissionPolicies.read(tenant, account, token, AbortSignal.timeout(10_000)))),
+      cloudRunbookVersion(tenant, cloud, token).catch(() => undefined),
+    ])
+    const primary = policies[0]!
+    const policy = primary.status === "fulfilled" ? primary.value : null
+    const inconsistent = !!policy && policies.some(other => other.status === "fulfilled" && (other.value.enabled !== policy.enabled || other.value.scripts !== policy.scripts))
+    const warnings = await Promise.all(accounts.map((account, i) => {
+      const state = policies[i]!
+      return state.status === "fulfilled" ? omissionPolicies.warnings(tenant, account, state.value, token).catch(() => null) : null
+    }))
+    return { enabled: policy?.enabled ?? false, scripts: policy?.scripts ?? false, cloudRunbook, inconsistent,
+      policyUnavailable: !policy, warnings: warnings.flatMap(value => value ?? []), historyUnavailable: warnings.includes(null) }
+  })
+  handleTrusted("backups:setOmission", async (_event, tenantId: unknown, enabled: unknown, scripts: unknown, cloudStopped: unknown) => {
+    const { tenantId: tenant, destination, cloud, token } = omissionAccess(tenantId)
+    if (typeof enabled !== "boolean" || typeof scripts !== "boolean") throw new Error("Choose which backup values to leave out.")
+    if (enabled && cloudStopped !== true) {
+      requireCloudOmissionSupport(await cloudRunbookVersion(tenant, cloud, token).catch(() => undefined), cloudStopped)
+    }
+    if (cloud && cloud !== destination) await omissionPolicies.save(tenant, cloud, token, { enabled, scripts })
+    await omissionPolicies.save(tenant, destination, token, { enabled, scripts })
+  })
   handleTrusted("backups:inventoryProblem", (_event, tenantId: unknown) => {
     if (!isGuid(tenantId)) throw new Error("Unknown tenant.")
     return localInventoryProblem(getCheckStore(), localFolder(), tenantId)

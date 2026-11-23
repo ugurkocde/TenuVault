@@ -45,6 +45,16 @@ describe('Restore validation dry run', () => {
     expect(report.items.every((item) => item.checks.every((entry) => entry.ok))).toBe(true)
   })
 
+  it('passes a decrypted Base64 value that only looks like a mask, and keeps blocking ****', async () => {
+    const withValue = (value: string) => {
+      const snapshot: Item = { ...policy, assignments: [], omaSettings: [{ '@odata.type': '#microsoft.graph.omaSettingBase64', displayName: 'Value', omaUri: './Device/Value', isEncrypted: true, value }] }
+      const metadata = { Status: 'Success', Failures: 0, FailedTypes: [], Items: { 'DeviceConfigurations/policy-1': { file: 'Example.json', hash: snapshotHash(snapshot), hydratedOmaMasks: [0] } } }
+      return validateBackup({ backupId, metadata, listedPaths: [policyPath], readSnapshot: reader({ [policyPath]: snapshot }) })
+    }
+    expect((await withValue('KioqKg==')).items[0]?.checks.find((entry) => entry.id === 'payload')?.ok).toBe(true)
+    expect((await withValue('****')).items[0]?.checks.find((entry) => entry.id === 'payload')?.detail).toContain('masked OMA-URI')
+  })
+
   it('names the exact item whose file is missing from storage', async () => {
     const metadata = metadataFor([['DeviceConfigurations/policy-1', policy, 'Example.json'], ['Apps/app-1', app, 'Web.json']])
     const report = await validateBackup({ backupId, metadata, listedPaths: [policyPath], readSnapshot: reader({ [policyPath]: policy }) })

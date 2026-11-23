@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { auditUserFromToken, mainAuditSink, type AuditSink } from '../../../main/api/audit-sink'
 import { typeForFolder } from '../../../shared/intune/registry'
+import { OMISSION_BLOCKER } from '../../../shared/intune/secret-omission'
 import type { RestoreOutcome } from '../policies/graph-restore'
 import { auditId } from './projection'
 import { AuditEventType, AuditResult, AuditSeverity, type AuditJobItem, type AuditJobStage } from './types'
@@ -52,7 +53,7 @@ export function restoreAuditItem(path: string, result?: RestoreOutcome, sourceId
       : result.action ?? 'uncertain'
   const reason = {
     unattempted: 'NOT_ATTEMPTED', pending: 'AWAITING_INTUNE_APPROVAL', partial: 'WRITE_PARTIAL',
-    skipped: 'RESTORE_SKIPPED', failed: 'WRITE_FAILED', uncertain: 'WRITE_UNCONFIRMED',
+    skipped: result?.error === OMISSION_BLOCKER ? 'RESTORE_VALUES_OMITTED' : 'RESTORE_SKIPPED', failed: 'WRITE_FAILED', uncertain: 'WRITE_UNCONFIRMED',
     created: undefined, updated: undefined, unchanged: undefined,
   }[outcome]
   return {

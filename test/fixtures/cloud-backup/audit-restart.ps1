@@ -112,7 +112,8 @@ $script:HttpClient | Add-Member ScriptMethod SendAsync {
         $script:blobs[$uri] = $body
         return New-Response 201 ""
     }
-    if (-not $script:blobs.ContainsKey($uri)) { return New-Response 404 "Blob not found" }
+    # A missing blob answers like Azure Storage, so a confirmed 404 reads as BlobNotFound (the omission policy check needs it).
+    if (-not $script:blobs.ContainsKey($uri)) { return New-Response 404 "<?xml version=`"1.0`" encoding=`"utf-8`"?><Error><Code>BlobNotFound</Code></Error>" }
     return New-Response 200 $script:blobs[$uri]
 }
 

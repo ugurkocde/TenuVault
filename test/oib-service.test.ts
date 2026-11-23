@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { handleOib, migrateLegacyOibRuns, OIB_BACKUP_POLLING, setOibStore } from "../src/main/oib/service"
+import { handleOib, migrateLegacyOibRuns, OIB_BACKUP_POLLING, setOibOmissionPolicy, setOibStore } from "../src/main/oib/service"
 import { packFolder, packItems, parsePackFile, resetOibSource } from "../src/main/oib/source"
 import type { OibBackupOptions, OibCatalog, OibComparison, OibProgress, OibRun, UndoResult, ValidationRun } from "../src/shared/oib/types"
 import { memoryStore } from "./helpers"
+import { OmissionPolicyStore } from "../src/main/backup/omission-policy"
 
 const tenantId = "11111111-1111-1111-1111-111111111111"
 const appId = "22222222-2222-2222-2222-222222222222"
@@ -30,6 +31,8 @@ const manifest = { oibVersion: "3.8", policies: [
 interface Tenant {
   /** Settings Catalog policies the tenant has, returned by list and detail reads. */
   policies: Array<{ id: string; name: string; description?: string; value?: number; tags?: string[] }>
+  captureError?: { id: string; operand: string }
+  secret?: string
   backupOk?: boolean
   /** metadata.json of the backup the deployment takes (backup-1); complete when left out. */
   metadata?: Record<string, unknown> | null
@@ -88,12 +91,16 @@ function world(state: Tenant, writes: string[]) {
     const detail = /^deviceManagement\/configurationPolicies\/([^?/]+)(\/assignments)?(\?|$)/.exec(path)
     if (method === "GET" && detail) {
       const found = state.policies.find(p => p.id === decodeURIComponent(detail[1]!))
+      if (state.captureError && state.captureError.id === found?.id) return Response.json({ error: { message: state.captureError.operand } }, { status: 400 })
       if (!found) return Response.json({ error: { code: "ResourceNotFound", message: "Not found" } }, { status: 404 })
       if (detail[2]) return Response.json({ value: [{ id: "a1", target: { "@odata.type": "#microsoft.graph.groupAssignmentTarget", groupId: "prod" } }] })
-      return Response.json({ id: found.id, name: found.name, description: found.description ?? "", platforms: "windows10", technologies: "mdm", ...(found.tags ? { roleScopeTagIds: found.tags } : {}), settings: [setting(found.value ?? 1)] })
+      return Response.json({ id: found.id, name: found.name, description: found.description ?? "", platforms: "windows10", technologies: "mdm", ...(found.tags ? { roleScopeTagIds: found.tags } : {}), settings: [setting(found.value ?? 1), ...(state.secret ? [{ settingInstance: {
+        settingDefinitionId: "secret", simpleSettingValue: { "@odata.type": "#microsoft.graph.deviceManagementConfigurationSecretSettingValue", value: state.secret },
+      } }] : [])] })
     }
     writes.push(`${method} ${path}${init?.body ? ` ${String(init.body)}` : ""}`)
     if (method === "POST" && path === "deviceManagement/configurationPolicies") return Response.json({ id: CREATED, name: "created" })
+    if (state.captureError && method === "POST" && path === "deviceManagement/deviceCompliancePolicies") return Response.json({ id: CREATED, displayName: "Created compliance policy" })
     if (method === "PUT") {
       const id = path.split("/")[2]
       const body = JSON.parse(String(init!.body)) as { name: string; settings: Array<{ settingInstance: { simpleSettingValue: { value: number } } }> }
@@ -107,7 +114,7 @@ function world(state: Tenant, writes: string[]) {
 
 let store: ReturnType<typeof memoryStore>
 beforeEach(() => { store = memoryStore(); setOibStore(store); resetOibSource(); OIB_BACKUP_POLLING.intervalMs = 0 })
-afterEach(() => { vi.unstubAllGlobals(); setOibStore(null) })
+afterEach(() => { vi.unstubAllGlobals(); setOibStore(null); setOibOmissionPolicy(undefined) })
 
 async function source() {
   const { commit: resolved } = await handleOib({ action: "oib-source" }) as { commit: string }
@@ -271,6 +278,82 @@ describe("deployments", () => {
     expect(await handleOib({ action: "oib-runs", tenantId })).toEqual({ runs: [] })
   })
 
+  it("shows a pre-deploy omission notice and persists the warning with the projected capture", async () => {
+    const state: Tenant = {
+      policies: [{ id: EXISTING, name: "Old policy", value: 7 }],
+      secret: "secret operand present in raw OIB capture",
+    }
+    vi.stubGlobal("fetch", world(state, []))
+    setOibOmissionPolicy(async () => ({ enabled: true, scripts: false }))
+    expect(await handleOib({ ...base, action: "oib-backup-options", folders: ["ConfigurationPolicies"] })).toMatchObject({
+      omissionNotice: expect.stringContaining("cannot be undone automatically"),
+    })
+    await source()
+    const run = await handleOib({ ...base, action: "oib-deploy", commit, backup: { mode: "none" }, items: [{ source: SC, mode: "update", targetId: EXISTING }] }) as OibRun
+    const stored = store.get(`oib:runs:${tenantId}`)!
+    expect(stored).not.toContain(state.secret)
+    expect(stored).toContain("cannot be undone automatically")
+    expect(run.updated[0]?.warnings?.join(" ")).toContain("cannot be undone automatically")
+  })
+
+  it("returns the rollback notice when recent backup discovery fails", async () => {
+    const fetch = world({ policies: [] }, [])
+    vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => String(input).endsWith("/api/list-backups")
+      ? Promise.resolve(Response.json({ error: "Cannot list storage" }, { status: 403 })) : fetch(input, init))
+    setOibOmissionPolicy(async () => ({ enabled: true, scripts: false }))
+    expect(await handleOib({ ...base, action: "oib-backup-options", folders: ["ConfigurationPolicies"] })).toMatchObject({
+      recent: null, omissionNotice: expect.stringContaining("cannot be undone automatically"),
+    })
+  })
+
+  it.each([true, false])("reports Graph write errors according to the captured omission mode (%s)", async (enabled) => {
+    const canary = "write echoed sensitive operand"
+    const writes: string[] = []
+    const fetch = world({ policies: [{ id: EXISTING, name: "Old policy" }] }, writes)
+    vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if ((init?.method === "PUT" && url.endsWith(`configurationPolicies/${EXISTING}`)) ||
+          (init?.method === "POST" && url.endsWith("/assign"))) {
+        return Promise.resolve(Response.json({ error: { message: canary } }, { status: 400 }))
+      }
+      if (init?.method === "POST" && url.endsWith("/deviceCompliancePolicies")) {
+        return Promise.resolve(Response.json({ id: CREATED, displayName: "Created compliance policy" }))
+      }
+      return fetch(input, init)
+    })
+    setOibOmissionPolicy(async () => ({ enabled, scripts: false }))
+    await source()
+    const run = await handleOib({ ...base, action: "oib-deploy", commit, backup: { mode: "none" }, pilotGroupId: pilot,
+      items: [{ source: SC, mode: "update", targetId: EXISTING }, { source: COMPLIANCE, mode: "create" }],
+    }) as OibRun
+    expect(run.failed).toHaveLength(2)
+    expect(run.created[0]?.partial).toBe(true)
+    const stored = store.get(`oib:runs:${tenantId}`)!
+    if (enabled) {
+      expect(JSON.stringify(run)).not.toContain(canary)
+      expect(stored).not.toContain(canary)
+      expect(stored).toContain("HTTP 400")
+    } else {
+      expect(stored).toContain(canary)
+    }
+  })
+
+  it("does not persist operands Graph echoes while reading an OIB update", async () => {
+    const canary = "secret echoed by Graph in OIB capture"
+    const writes: string[] = []
+    vi.stubGlobal("fetch", world({ policies: [{ id: EXISTING, name: "Old policy" }], captureError: { id: EXISTING, operand: canary } }, writes))
+    setOibOmissionPolicy(async () => ({ enabled: true, scripts: false }))
+    await source()
+    const run = await handleOib({ ...base, action: "oib-deploy", commit, backup: { mode: "none" },
+      items: [{ source: SC, mode: "update", targetId: EXISTING }, { source: COMPLIANCE, mode: "create" }],
+    }) as OibRun
+    expect(run.failed[0]?.error).toContain("HTTP 400")
+    const stored = store.get(`oib:runs:${tenantId}`)!
+    expect(stored).toContain("HTTP 400")
+    expect(stored).not.toContain(canary)
+    expect(writes.some((write) => write.includes(EXISTING))).toBe(false)
+  })
+
   it("undo leaves a policy the admin deleted since the run deleted and reports it, instead of recreating it", async () => {
     const writes: string[] = []
     const state: Tenant = { policies: [{ id: EXISTING, name: "Win - OIB - SC - Test - v3.1", value: 7 }] }
@@ -282,6 +365,49 @@ describe("deployments", () => {
     const undone = await handleOib({ action: "oib-undo", tenantId, appId, runId: run.runId }) as UndoResult
     expect(writes).toEqual([])
     expect(undone).toMatchObject({ run: null, results: [{ action: "restored", done: true, note: "already deleted in Intune, so the previous version was not recreated" }] })
+  })
+
+  it.each(["enabled", "unverified", "off"] as const)("uses the current %s policy for Undo diagnostics and keeps an older capture eligible", async (mode) => {
+    const canary = "Graph echoed an Undo token"
+    const state: Tenant = { policies: [{ id: EXISTING, name: "Prior Settings Catalog policy", value: 7 }] }
+    const tenant = world(state, [])
+    let refuse = false
+    const refusedMethods: string[] = []
+    vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
+      const method = init?.method
+      if (refuse && (method === "PUT" || method === "DELETE")) {
+        refusedMethods.push(method)
+        return Promise.resolve(Response.json({ error: { message: canary } }, { status: 400 }))
+      }
+      if (method === "POST" && String(input).endsWith("/deviceCompliancePolicies")) {
+        return Promise.resolve(Response.json({ id: CREATED, displayName: "Created compliance policy" }))
+      }
+      return tenant(input, init)
+    })
+    await source()
+    const run = await handleOib({ ...base, action: "oib-deploy", commit, backup: { mode: "none" },
+      items: [{ source: SC, mode: "update", targetId: EXISTING }, { source: COMPLIANCE, mode: "create" }],
+    }) as OibRun
+    expect(run.updated).toHaveLength(1)
+    expect(run.created).toHaveLength(1)
+    const policy = new OmissionPolicyStore(memoryStore(), async () => {
+      if (mode === "enabled") return Response.json({
+        version: 1, tenantId, enabled: true, scripts: false, generation: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      })
+      return new Response(null, mode === "unverified" ? { status: 403 } : { status: 404, headers: { "x-ms-error-code": "BlobNotFound" } })
+    })
+    setOibOmissionPolicy(tenant => policy.readForRollback(tenant, "stcontoso", async () => "silent-token"))
+    refuse = true
+    const result = await handleOib({ action: "oib-undo", tenantId, appId, runId: run.runId }) as UndoResult
+    expect(refusedMethods).toEqual(["DELETE", "PUT"])
+    expect(result.results).toEqual(["removed", "restored"].map(action => expect.objectContaining({
+      action, done: false, error: expect.stringContaining(mode === "off" ? canary : "HTTP 400"),
+    })))
+    if (mode !== "off") expect(JSON.stringify(result)).not.toContain(canary)
+
+    refuse = false
+    expect(await handleOib({ action: "oib-undo", tenantId, appId, runId: run.runId })).toMatchObject({ run: null })
+    expect(state.policies[0]).toMatchObject({ name: "Prior Settings Catalog policy", value: 7 })
   })
 
   it("does not recreate a policy deleted between reading it and updating it", async () => {
@@ -513,6 +639,32 @@ describe("legacy data", () => {
     expect(ids).toContain("qs-old")
     expect(ids).not.toContain("new-0")
     expect(ids).toHaveLength(21)
+  })
+
+  it.each([false, true])("undo restores a decrypted Base64 value that looks like a mask only for a capture made with omission off (omission %s)", async (captureOmission) => {
+    const id = "88888888-8888-4888-8888-888888888888"
+    const before = { id, displayName: "Custom", "@odata.type": "#microsoft.graph.windows10CustomConfiguration",
+      omaSettings: [{ "@odata.type": "#microsoft.graph.omaSettingBase64", displayName: "Value", omaUri: "./Device/Value", isEncrypted: true, value: "KioqKg==", secretReferenceValueId: "ref" }] }
+    const run: OibRun = { runId: "undo-b64", tenantId, createdAt: "2026-11-20T00:00:00Z", kind: "deploy", platform: "windows", reference: "r",
+      ...(captureOmission ? { omission: { enabled: true, scripts: false, generation: "on" } } : {}),
+      created: [], updated: [{ folder: "DeviceConfigurations", id, name: "Custom", previousName: "Custom", before }], failed: [] } as OibRun
+    store.set(`oib:runs:${tenantId}`, JSON.stringify([run]))
+    const writes: string[] = []
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.includes("oauth2")) return Response.json({ access_token: "test" })
+      if (init?.method && init.method !== "GET") { writes.push(`${init.method} ${url}`); return new Response(null, { status: 204 }) }
+      if (url.includes("getOmaSettingPlainTextValue")) return Response.json({ value: "current" })
+      return Response.json({ ...before, displayName: "Changed", omaSettings: [{ ...before.omaSettings[0], value: "current" }] })
+    }))
+    const result = await handleOib({ action: "oib-undo", tenantId, appId, runId: "undo-b64" }) as { results: Array<Record<string, unknown>> }
+    if (captureOmission) {
+      expect(result.results[0]).toMatchObject({ done: false, error: expect.stringContaining("masked") })
+      expect(writes).toEqual([])
+    } else {
+      expect(result.results[0]).toMatchObject({ action: "restored", done: true })
+      expect(writes.length).toBeGreaterThan(0)
+    }
   })
 
   it("leaves unreadable Quick Start records where they are", () => {

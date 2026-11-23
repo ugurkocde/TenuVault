@@ -16,6 +16,21 @@
       "maxLength": 24,
       "metadata": { "description": "Existing storage account that holds the intune-backups container, the same account the tenant uses in TenuVault. Deploy this template into that storage account's resource group (New-TenuVaultStorage.ps1 uses rg-tenuvault-backups). For a storage account in another resource group, use New-TenuVaultCloudBackup.ps1 instead." }
     },
+    "omissionMigrationIdentityId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": { "description": "For a storage move, an existing user-assigned managed identity with permission to read the Automation variables and the exact policy blob in both accounts, plus create-only access to that blob in the destination. The deployer must be allowed to attach this identity." }
+    },
+    "initializeOmissionEnrollment": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": { "description": "Set true only on a first deployment or after confirming the omission enrollment variable is missing. Leave false on redeployments to preserve existing enrollment." }
+    },
+    "omissionCheckNonce": {
+      "type": "string",
+      "defaultValue": "[newGuid()]",
+      "metadata": { "description": "Leave at the generated default to rerun migration on deployments that supply a migration identity." }
+    },
     "location": {
       "type": "string",
       "defaultValue": "[resourceGroup().location]",
@@ -98,6 +113,7 @@
   },
   "variables": {
     "tenantKey": "[take(toLower(parameters('tenantId')), 8)]",
+    "omissionMigrationName": "[concat('tenuvault-omission-', variables('tenantKey'))]",
     "runbookName": "Invoke-TenuVaultBackup",
     "scheduleName": "[concat('TenuVaultBackup-', variables('tenantKey'))]",
     "container": "intune-backups",
@@ -284,6 +300,60 @@
       }
     },
     {
+      "condition": "[and(not(parameters('auditOnly')), not(empty(parameters('omissionMigrationIdentityId'))))]",
+      "type": "Microsoft.Resources/deploymentScripts",
+      "apiVersion": "2023-08-01",
+      "name": "[variables('omissionMigrationName')]",
+      "location": "[parameters('location')]",
+      "kind": "AzureCLI",
+      "identity": {
+        "type": "UserAssigned",
+        "userAssignedIdentities": "[createObject(parameters('omissionMigrationIdentityId'), createObject())]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName'))]"
+      ],
+      "properties": {
+        "azCliVersion": "2.67.0",
+        "retentionInterval": "P1D",
+        "cleanupPreference": "OnSuccess",
+        "timeout": "PT10M",
+        "forceUpdateTag": "[parameters('omissionCheckNonce')]",
+        "environmentVariables": [
+          {
+            "name": "AUTOMATION_ID",
+            "value": "[resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName'))]"
+          },
+          {
+            "name": "TENANT_ID",
+            "value": "[toLower(parameters('tenantId'))]"
+          },
+          {
+            "name": "TENANT_KEY",
+            "value": "[variables('tenantKey')]"
+          },
+          {
+            "name": "NEW_ACCOUNT",
+            "value": "[parameters('storageAccountName')]"
+          }
+        ],
+        "scriptContent": "set -eu\nreport() {\n  jq -n --arg message \"$1\" '{message: $message}' > \"$AZ_SCRIPTS_OUTPUT_PATH\"\n}\n# List variables before the template updates the destination.\nurl=\"https://management.azure.com$AUTOMATION_ID/variables?api-version=2024-10-23\"\nentries='[]'\nwhile [ -n \"$url\" ]; do\n  if ! page=$(az rest --method get --url \"$url\" --output json --only-show-errors 2>/dev/null) ||\n     ! entries=$(jq -ce --argjson entries \"$entries\" '.value | if type == \"array\" then $entries + . else error(\"Invalid Automation variables response\") end' <<< \"$page\"); then\n    report 'Migration skipped because the Automation variables could not be read.'\n    exit 0\n  fi\n  url=$(jq -r '.nextLink // empty' <<< \"$page\")\ndone\nlookup() {\n  jq -r --arg name \"$1\" '.[] | select((.name | ascii_downcase) == ($name | ascii_downcase)) | .properties.value | fromjson? | select(type == \"string\")' <<< \"$entries\"\n}\nbinding=$(lookup \"TenuVaultOmissionAccount-$TENANT_KEY\")\nprevious=$(lookup \"TenuVaultStorageAccount-$TENANT_KEY\")\nif [ -z \"$previous\" ]; then previous=$(lookup 'TenuVaultStorageAccount'); fi\nif [ -z \"$previous\" ] || [ \"$previous\" = \"$NEW_ACCOUNT\" ]; then\n  report 'No previous storage account to migrate.'\n  exit 0\nfi\nblob=\".tenuvault-control/$TENANT_ID/secret-omission.json\"\nfile=$(mktemp)\ntrap 'rm -f \"$file\"' EXIT\nread_policy() {\n  az storage blob download --account-name \"$1\" --auth-mode login --container-name intune-backups --name \"$blob\" --file \"$file\" --overwrite --only-show-errors >/dev/null 2>&1 &&\n    jq -e -s --arg tenant \"$TENANT_ID\" 'length == 1 and (.[0] | type == \"object\" and ([keys[] | ascii_downcase] | length == (unique | length)) and .version == 1 and .tenantId == $tenant and (.enabled | type == \"boolean\") and (.scripts | type == \"boolean\") and (.generation | type == \"string\") and ((.generation | test(\"^[a-f0-9-]{36}$\")) or (.generation == \"default\" and (.enabled | not))) and (.enabled or (.scripts | not)))' \"$file\" >/dev/null 2>&1\n}\nif read_policy \"$NEW_ACCOUNT\"; then\n  report \"Keeping the omission policy already set on $NEW_ACCOUNT.\"\nelif [[ \"$previous\" =~ ^[a-z0-9]{3,24}$ ]] && read_policy \"$previous\" &&\n     az storage blob upload --account-name \"$NEW_ACCOUNT\" --auth-mode login --container-name intune-backups --name \"$blob\" --file \"$file\" --if-none-match '*' --content-type application/json --only-show-errors >/dev/null 2>&1; then\n  report \"Copied the omission policy to $NEW_ACCOUNT.\"\nelif read_policy \"$NEW_ACCOUNT\"; then\n  report \"Keeping the omission policy already set on $NEW_ACCOUNT.\"\nelif [ -n \"$binding\" ]; then\n  message=\"Verify the omission setting in $NEW_ACCOUNT before resuming cloud backups.\"\n  printf '%s\\n' \"$message\" >&2\n  report \"$message\"\nelse\n  report 'No omission policy migrated.'\nfi"
+      }
+    },
+    {
+      "condition": "[and(not(parameters('auditOnly')), parameters('initializeOmissionEnrollment'))]",
+      "type": "Microsoft.Automation/automationAccounts/variables",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(parameters('automationAccountName'), '/TenuVaultOmissionAccount-', variables('tenantKey'))]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName'))]"
+      ],
+      "properties": {
+        "value": "\"\"",
+        "isEncrypted": false
+      }
+    },
+    {
       "condition": "[not(parameters('auditOnly'))]",
       "copy": {
         "name": "automationVariables",
@@ -292,7 +362,11 @@
       "type": "Microsoft.Automation/automationAccounts/variables",
       "apiVersion": "2023-11-01",
       "name": "[concat(parameters('automationAccountName'), '/', variables('variableValues')[copyIndex()].name)]",
-      "dependsOn": ["[resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName'))]"],
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName'))]",
+        "[resourceId('Microsoft.Resources/deploymentScripts', variables('omissionMigrationName'))]",
+        "[resourceId('Microsoft.Automation/automationAccounts/variables', parameters('automationAccountName'), concat('TenuVaultOmissionAccount-', variables('tenantKey')))]"
+      ],
       "properties": {
         "value": "[concat('\"', variables('variableValues')[copyIndex()].value, '\"')]",
         "isEncrypted": false
@@ -342,6 +416,10 @@
       "type": "string",
       "value": "DeviceManagementConfiguration.Read.All, DeviceManagementApps.Read.All, DeviceManagementServiceConfig.Read.All, DeviceManagementScripts.Read.All, DeviceManagementRBAC.Read.All (plus DeviceManagementManagedDevices.Read.All only when includeDeviceCategories is true)",
       "metadata": { "description": "Read-only Microsoft Graph application roles for the managed identity. Until they are assigned every run fails with access denied, on purpose." }
+    },
+    "omissionPolicyMigration": {
+      "type": "string",
+      "value": "[if(or(parameters('auditOnly'), empty(parameters('omissionMigrationIdentityId'))), 'No omission policy migration was requested.', reference(variables('omissionMigrationName')).outputs.message)]"
     },
     "pasteIntoTenuVault": {
       "condition": "[not(parameters('auditOnly'))]",

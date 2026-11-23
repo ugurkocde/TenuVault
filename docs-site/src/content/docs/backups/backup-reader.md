@@ -219,6 +219,14 @@ When a computer is retired or lost, remove its certificate from the app registra
 
 A refusal that retrying cannot fix (an unknown or expired certificate, a missing or disabled app registration, or a workload identity policy) stops that night's backup without retries, notifies you once and tries again at the next scheduled time. Network failures and transient refusals from Microsoft are retried like any other failed scheduled backup.
 
+## Audit delivery
+
+The Backup Reader card shows audit deliveries waiting to be saved. TenuVault retries with the original Reader identity, including after restart. If that registration is replaced or removed, select **Deliver audit events as administrator** to deliver the stuck events with your sign-in. The original run ID and Backup Reader actor stay in the audit entry. When your sign-in saves an event, the export records your principal ID separately in the job details. After an interruption, the app checks the saved manifest under the original run ID. If storage is temporarily unreachable, the checkpoint stays pending until the app can retry. If the manifest is missing or belongs to another run, the app records an uncertain result. If the audit container is missing, the card prompts you to rerun Azure storage setup. For shared Azure storage, each producer with the audit writer role is trusted with the contents of the audit container. Check broader or inherited grants on the Reader if its existing assignments extend beyond the scoped setup roles.
+
+## Secret omission
+
+The Backup Reader follows the tenant's **Leave secret values out of policy backups** setting. In this mode it does not request the decrypted values of OMA-URI strings. The Backup Reader reads the policy from the storage it writes to. For Azure backups it uses its existing storage identity. If this installation previously saw omission enabled on that account, a missing or unreadable policy stops the backup. [Backup coverage](/backups/coverage/#leave-secret-values-out-of-policy-backups)
+
 ## Related pages
 
 * [Conditional Access and TenuVault](/security/conditional-access/)
@@ -226,6 +234,3 @@ A refusal that retrying cannot fix (an unknown or expired certificate, a missing
 * [Create a storage account for TenuVault](/getting-started/create-storage-account/#optional-let-the-backup-reader-write-backups): the Azure administrator's half of step 3
 * [App registration and delegated permissions](/security/permissions/)
 * [Settings](/settings/#backup-reader): where the card and its controls are described
-
-
-The Backup Reader card shows audit deliveries waiting to be saved. TenuVault retries with the original Reader identity, including after restart. If that registration is replaced or removed, select **Deliver audit events as administrator** to deliver the stuck events with your sign-in. The original run ID and Backup Reader actor stay in the audit entry. When your sign-in saves an event, the export records your principal ID separately in the job details. After an interruption, the app checks the saved manifest under the original run ID. If storage is temporarily unreachable, the checkpoint stays pending until the app can retry. If the manifest is missing or belongs to another run, the app records an uncertain result. If the audit container is missing, the card prompts you to rerun Azure storage setup. For shared Azure storage, each producer with the audit writer role is trusted with the contents of the audit container. Check broader or inherited grants on the Reader if its existing assignments extend beyond the scoped setup roles.

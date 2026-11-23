@@ -1,3 +1,5 @@
+import { comparisonOmission, hasOmissions, observablePair, OMISSION_MARKER, projectSecrets, snapshotPath } from "../../../../shared/intune/secret-omission"
+import { applyHydrationEvidence, readProjectedSnapshot } from "~/lib/policies/backup-manifest"
 import { decodeXml, listBlobPages } from "~/lib/storage/list"
 import { typeForFolder, type Item } from "../../../../shared/intune/registry"
 import { restoreCapabilities } from "../../../../shared/intune/restore-plan"
@@ -319,7 +321,8 @@ async function fetchPolicyFiles(
     const name = decodeXml(nameMatch[1])
     // Files in the backup's own folder (metadata.json) and in types not compared are left out.
     const rest = name.slice(backupFolder.length + 1)
-    const files = rest.includes('/') ? byFolder.get(rest.slice(0, rest.indexOf('/'))) : undefined
+    const logical = rest.replace(/^\.omitted\//, "")
+    const files = logical.includes('/') ? byFolder.get(logical.slice(0, logical.indexOf('/'))) : undefined
     files?.push({
       name,
       url: `https://${storageAccountName}.blob.core.windows.net/intune-backups/${name.split("/").map(encodeURIComponent).join("/")}`,
@@ -332,12 +335,17 @@ async function fetchPolicyFiles(
 }
 
 /** "<type folder>/<Intune ID>" to the item's file path (Type/Name.json) and fingerprint, from a backup's metadata.json Items. */
-function itemsByIdentity(metadata: BackupMetadata): Map<string, { path: string; item: BackupItems[string] }> | null {
+function itemsByIdentity(metadata: BackupMetadata, normalized: boolean): Map<string, { path: string; item: BackupItems[string] }> | null {
   const items = itemsOf(metadata as BackupFingerprint)
   if (!items) return null
   const entries = new Map<string, { path: string; item: BackupItems[string] }>()
   for (const [key, item] of Object.entries(items)) {
-    if (item && typeof item.file === 'string' && typeof item.hash === 'string') entries.set(key, { path: `${key.slice(0, key.indexOf('/'))}/${item.file}`, item })
+    if (item && typeof item.file === 'string' && typeof item.hash === 'string') {
+      const folder = key.split("/")[0]!
+      // Folder aliases and ID case are normalized only when omission or projected files are involved; otherwise keys stay as on main.
+      const identity = normalized ? `${canonicalFolder(folder)}/${key.slice(folder.length + 1).toLowerCase()}` : key
+      entries.set(identity, { path: snapshotPath(folder, item), item })
+    }
   }
   return entries
 }
@@ -368,6 +376,7 @@ async function detectDrifts(
   const { signal, report } = options
   const detectedAt = new Date().toISOString()
   const warnings: DriftWarning[] = []
+  const omission = comparisonOmission(olderBackup.metadata, newerBackup.metadata)
   
   // Remove the backup folder prefix to compare just the policy path
   const relative = (p: PolicyFile) => p.name.substring(p.name.indexOf('/') + 1)
@@ -375,20 +384,55 @@ async function detectDrifts(
   const olderMap = new Map(olderPolicies.map(p => [relative(p), p]))
 
   // Items are matched by their Intune ID, as compareBackups (the backup list) does, so a renamed
-  // policy is one modified item rather than a deleted and an added file. Backups made before
-  // metadata recorded Items, and any file Items does not name, are matched by file path.
+  // policy is one modified item rather than a deleted and an added file. Legacy files use IDs
+  // from their bodies when only one inventory exists or a projection is involved.
   type Task = { name: string; change: Drift["changeType"]; newer?: PolicyFile; older?: PolicyFile }
   const tasks: Task[] = []
   const pairedNewer = new Set<string>()
   const pairedOlder = new Set<string>()
   let unchanged = 0
-  const newerItems = itemsByIdentity(newerBackup.metadata)
-  const olderItems = itemsByIdentity(olderBackup.metadata)
+  // Without omission or projected files on either side, files pair by path and inventory key as on main.
+  const projected = [...olderMap.keys(), ...newerMap.keys()].some(path => path.startsWith(".omitted/"))
+  const newerItems = itemsByIdentity(newerBackup.metadata, !!omission || projected)
+  const olderItems = itemsByIdentity(olderBackup.metadata, !!omission || projected)
+  const byPath = (items: typeof olderItems) => new Map([...(items ?? [])].map(([key, entry]) => [entry.path, { ...entry.item, id: key.slice(key.indexOf("/") + 1) }]))
+  const records = new Map([[olderBackup.name, byPath(olderItems)], [newerBackup.name, byPath(newerItems)]])
+  const identifiedBodies = new Map<PolicyFile, PolicyContent>()
+  const read = async (file: PolicyFile, backup: string): Promise<PolicyContent | null> => {
+    const known = identifiedBodies.get(file)
+    if (known) return known
+    try {
+      const expected = records.get(backup)?.get(relative(file))
+      if (relative(file).startsWith(".omitted/")) {
+        if (!expected?.omitted) throw new Error("The projected backup file has no omission inventory.")
+        const response = await fetch(file.url, { headers: { "x-ms-version": "2021-12-02", Authorization: `Bearer ${accessToken}` }, signal })
+        if (!response.ok) throw new Error("The projected backup file could not be read.")
+        return await readProjectedSnapshot(response, expected) as PolicyContent
+      }
+      return await fetchPolicyContent(file.url, accessToken, signal)
+    } catch (error) {
+      if (signal?.aborted) throw error
+      warnings.push({ file: relative(file), backup, message: error instanceof Error ? error.message : 'The file could not be read.' })
+      return null
+    }
+  }
+  const projectedPathsWithoutRecord = new Set<string>()
+  for (const [files, backup] of [[olderPolicies, olderBackup], [newerPolicies, newerBackup]] as const) {
+    for (const file of files) {
+      const path = relative(file)
+      if (path.startsWith(".omitted/") && !records.get(backup.name)?.get(path)?.omitted) projectedPathsWithoutRecord.add(folderOf(path))
+    }
+  }
+  if (projectedPathsWithoutRecord.size || [...records.values()].some((entries) => [...entries.values()].some((entry) => entry.omitted))) {
+    warnings.push({ file: "", backup: newerBackup.name, message: "Some values could not be compared because they were left out of a backup." })
+  }
+  for (const path of newerMap.keys()) if (projectedPathsWithoutRecord.has(folderOf(path))) newerMap.delete(path)
+  for (const path of olderMap.keys()) if (projectedPathsWithoutRecord.has(folderOf(path))) olderMap.delete(path)
   if (newerItems && olderItems) {
     // A file metadata names but storage does not hold cannot be compared; reported rather than
     // shown as the item being added or deleted.
     const missing = (path: string, backup: string) => warnings.push({ file: path, backup, message: 'Could not be compared: the file is missing from the backup.' })
-    const compared = (path: string) => options.folders.has(path.slice(0, path.indexOf('/')))
+    const compared = (path: string) => options.folders.has(omission || projected ? canonicalFolder(folderOf(path)) : path.slice(0, path.indexOf('/')))
     for (const [key, after] of newerItems) {
       const before = olderItems.get(key)
       const newer = newerMap.get(after.path)
@@ -404,7 +448,13 @@ async function detectDrifts(
       if (!before || !older) { tasks.push({ name: after.path, change: 'added', newer }); continue }
       pairedOlder.add(before.path)
       // The same assignment handling as compareBackups: reading assignments now that an older version could not is no change.
-      if (sameItem(before.item, after.item)) { unchanged++; continue }
+      if (sameItem(before.item, after.item)) {
+        const excludedPaths = omission || before.item.omitted || after.item.omitted
+          ? [...new Set([...(before.item.partialCollections ?? []), ...(after.item.partialCollections ?? [])])] : []
+        if (excludedPaths.length) warnings.push({ file: before.path, backup: newerBackup.name, message: `Paged collections could not be compared: ${excludedPaths.join(", ")}.`, excludedPaths })
+        unchanged++
+        continue
+      }
       // Named by the baseline file: reverting a modified item restores it from the baseline backup.
       tasks.push({ name: before.path, change: 'modified', newer, older })
     }
@@ -415,14 +465,63 @@ async function detectDrifts(
       tasks.push({ name: before.path, change: 'deleted', older })
     }
   }
-  for (const [name, newer] of newerMap) {
-    if (pairedNewer.has(name)) continue
-    const older = pairedOlder.has(name) ? undefined : olderMap.get(name)
-    if (!older) { tasks.push({ name, change: 'added', newer }); continue }
-    pairedOlder.add(name)
-    tasks.push({ name, change: 'modified', newer, older })
+  const identifyLegacy = !!omission || projected
+  if (identifyLegacy) {
+    // A legacy file can have a different name from the same policy in the manifest. Learn
+    // its identity before classifying additions or deletions, and keep failures indeterminate.
+    const indeterminate = new Set<string>()
+    const identify = async (files: typeof newerMap, backup: SelectedBackup, paired: Set<string>) => {
+      const entries = [...files].filter(([path]) => !paired.has(path))
+      const identified = await mapLimit(entries, READ_CONCURRENCY, async ([path, file]) => {
+        signal?.throwIfAborted()
+        const record = records.get(backup.name)?.get(path)
+        const folder = canonicalFolder(folderOf(path))
+        if (record) return { folder, id: record.id, path, file }
+        const content = await read(file, backup.name)
+        if (content && typeof content.id === "string" && content.id) {
+          identifiedBodies.set(file, content)
+          return { folder, id: content.id, path, file }
+        }
+        indeterminate.add(folder)
+        if (content) warnings.push({ file: path, backup: backup.name, message: "Could not determine the policy ID from the backup file." })
+        return null
+      })
+      const byId = new Map<string, { folder: string; path: string; file: PolicyFile }>()
+      const duplicates = new Set<string>()
+      for (const entry of identified) {
+        if (!entry) continue
+        const key = `${entry.folder}/${entry.id.toLowerCase()}`
+        if (byId.has(key) || duplicates.has(key)) {
+          duplicates.add(key)
+          byId.delete(key)
+          indeterminate.add(entry.folder)
+          warnings.push({ file: entry.path, backup: backup.name, message: "Could not pair policies with duplicate IDs in the backup." })
+        } else byId.set(key, entry)
+      }
+      return byId
+    }
+    const oldIds = await identify(olderMap, olderBackup, pairedOlder)
+    const newIds = await identify(newerMap, newerBackup, pairedNewer)
+    for (const [key, after] of newIds) {
+      const before = oldIds.get(key)
+      if (before) tasks.push({ name: before.path, change: "modified", newer: after.file, older: before.file })
+      else if (!indeterminate.has(after.folder)) tasks.push({ name: after.path, change: "added", newer: after.file })
+    }
+    for (const [key, before] of oldIds) {
+      if (!newIds.has(key) && !indeterminate.has(before.folder)) tasks.push({ name: before.path, change: "deleted", older: before.file })
+    }
+  } else {
+    for (const [name, newer] of newerMap) {
+      if (pairedNewer.has(name)) continue
+      const logical = name.replace(/^\.omitted\//, "")
+      const oldName = [name, logical, `.omitted/${logical}`].find((path) => !pairedOlder.has(path) && olderMap.has(path))
+      const older = oldName === undefined ? undefined : olderMap.get(oldName)
+      if (!oldName || !older) { tasks.push({ name, change: 'added', newer }); continue }
+      pairedOlder.add(oldName)
+      tasks.push({ name: oldName, change: 'modified', newer, older })
+    }
+    for (const [name, older] of olderMap) if (!pairedOlder.has(name)) tasks.push({ name, change: 'deleted', older })
   }
-  for (const [name, older] of olderMap) if (!pairedOlder.has(name)) tasks.push({ name, change: 'deleted', older })
 
   const base = {
     tenant: "Current Tenant",
@@ -445,19 +544,11 @@ async function detectDrifts(
   const results = await mapLimit(tasks, READ_CONCURRENCY, async (task): Promise<Omit<Drift, 'id'> | null> => {
     // Checked before every read, so a cancelled scan reads nothing further.
     signal?.throwIfAborted()
-    const read = async (file: PolicyFile, backup: string): Promise<PolicyContent | null> => {
-      try {
-        return await fetchPolicyContent(file.url, accessToken, signal)
-      } catch (error) {
-        if (signal?.aborted) throw error
-        warnings.push({ file: relative(file), backup, message: error instanceof Error ? error.message : 'The file could not be read.' })
-        return null
-      }
-    }
     try {
       const policyType = getPolicyType(task.name)
       if (task.change === 'added') {
         const policyContent = await read(task.newer!, newerBackup.name)
+        if (identifyLegacy && !policyContent) return null
         const likelyRestoredCopy = [policyContent?.displayName, policyContent?.name].some(name => typeof name === 'string' && name.startsWith('[Restored]'))
         return {
           ...base,
@@ -470,11 +561,12 @@ async function detectDrifts(
           description: `New ${policyType} policy added`,
           impact: determineImpact(policyType, "added", policyContent),
           ...(likelyRestoredCopy ? { likelyRestoredCopy: true } : {}),
-          ...(options.documentItems && policyContent ? { changes: documentItem(policyContent, "added") } : {}),
+          ...(options.documentItems && policyContent ? { changes: documentItem(omission ? projectSecrets(folderOf(task.name), policyContent, omission.scripts).snapshot : policyContent, "added") } : {}),
         }
       }
       if (task.change === 'deleted') {
         const policyContent = await read(task.older!, olderBackup.name)
+        if (identifyLegacy && !policyContent) return null
         return {
           ...base,
           severity: determineSeverity(policyType, "deleted", policyContent),
@@ -485,14 +577,19 @@ async function detectDrifts(
           changeType: "deleted",
           description: `${policyType} policy deleted`,
           impact: determineImpact(policyType, "deleted", policyContent),
-          ...restoreBlockers(task.name, policyContent),
-          ...(options.documentItems && policyContent ? { changes: documentItem(policyContent, "deleted") } : {}),
+          ...restoreBlockers(task.name, policyContent, records.get(olderBackup.name)?.get(relative(task.older!))),
+          ...(options.documentItems && policyContent ? { changes: documentItem(omission ? projectSecrets(folderOf(task.name), policyContent, omission.scripts).snapshot : policyContent, "deleted") } : {}),
         }
       }
       const [newerContent, olderContent] = await Promise.all([read(task.newer!, newerBackup.name), read(task.older!, olderBackup.name)])
       // Without both versions there is nothing to compare; the warning says which file is missing.
       if (!newerContent || !olderContent) return null
-      const compared = withoutUnreadAssignments(typeOfFile(task.name), olderContent, newerContent)
+      const folder = folderOf(task.name)
+      const masked = records.get(olderBackup.name)?.get(relative(task.older!))?.secretsMasked ||
+        records.get(newerBackup.name)?.get(relative(task.newer!))?.secretsMasked
+      const [left, right, excluded] = observablePair(folder, olderContent, newerContent, masked, omission)
+      if (excluded.length) warnings.push({ file: task.name, backup: newerBackup.name, message: `Paged collections could not be compared: ${excluded.join(", ")}.`, excludedPaths: excluded })
+      const compared = withoutUnreadAssignments(typeOfFile(task.name), left, right)
       const changes = options.documentItems ? redactedChanges(compared[0], compared[1]) : compareObjects(...compared)
       if (changes.length === 0) return null
       const previousName = olderContent?.displayName || olderContent?.name
@@ -508,7 +605,7 @@ async function detectDrifts(
         description: generateChangeDescription(policyType, changes),
         impact: determineImpact(policyType, "modified", newerContent, changes),
         changes,
-        ...restoreBlockers(task.name, olderContent),
+        ...restoreBlockers(task.name, olderContent, records.get(olderBackup.name)?.get(relative(task.older!))),
       }
     } finally {
       done++
@@ -527,7 +624,7 @@ async function detectDrifts(
  * OMA-URI settings are one row each; other properties one row per value.
  */
 export function documentItem(content: unknown, change: "added" | "deleted"): DriftChange[] {
-  const redacted = reportRedact(content)
+  const redacted = reportRedact(hasOmissions(content) ? Object.fromEntries(Object.entries(content as Item).filter(([key]) => key !== OMISSION_MARKER)) : content)
   const empty = emptyLike(redacted)
   // Every row: the report lists the first MAX_REPORT_SETTINGS and counts the rest.
   return change === "added" ? compareObjects(empty, redacted) : compareObjects(redacted, empty)
@@ -589,9 +686,10 @@ function folderOf(fileName: string): string {
   return parts[parts.length - 2] ?? ''
 }
 
+const canonicalFolder = (folder: string) => folder === "DeviceCompliancePolicies" ? "CompliancePolicies" : folder
+
 function typeOfFile(fileName: string) {
-  const folder = folderOf(fileName)
-  return typeForFolder(folder === 'DeviceCompliancePolicies' ? 'CompliancePolicies' : folder)
+  return typeForFolder(canonicalFolder(folderOf(fileName)))
 }
 
 /**
@@ -603,10 +701,13 @@ function typeOfFile(fileName: string) {
  * that cannot run leaves the actions offered; the restore itself still refuses server-side,
  * and one odd snapshot must not fail the whole comparison.
  */
-function restoreBlockers(fileName: string, snapshot: PolicyContent | null): Pick<Drift, 'createBlocker' | 'replaceBlocker'> {
+function restoreBlockers(fileName: string, snapshot: PolicyContent | null, record?: { id: string; hash: string; hydratedOmaMasks?: unknown }): Pick<Drift, 'createBlocker' | 'replaceBlocker'> {
   const type = typeOfFile(fileName)
   if (!type || !snapshot) return {}
   try {
+    // The same hydration evidence the restore itself applies (verifySnapshot).
+    const masks = Array.isArray(record?.hydratedOmaMasks) ? record.hydratedOmaMasks.filter((index): index is number => Number.isSafeInteger(index) && index >= 0) : undefined
+    applyHydrationEvidence(snapshot as Item, record && { id: record.id, hash: record.hash, ...(masks?.length ? { hydratedOmaMasks: masks } : {}) })
     const { blocker, replaceBlocker } = restoreCapabilities(type, snapshot as Item)
     return { ...(blocker ? { createBlocker: blocker } : {}), ...(replaceBlocker ? { replaceBlocker } : {}) }
   } catch {
@@ -648,6 +749,7 @@ const SKIP_FIELDS = [
   'version',  // Version auto-increments
   'description',  // Description contains our revert notices
   'settings@odata.context',  // Contains policy ID in URL
+  '_tenuvaultOmaMasked',
   'secretReferenceValueId'  // Regenerated by Intune on every write of an encrypted OMA-URI value
 ]
 const skippedKey = (key: string) => SKIP_FIELDS.includes(key) || key.endsWith('@odata.context') || key.endsWith('@odata.nextLink')

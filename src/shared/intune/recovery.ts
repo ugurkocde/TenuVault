@@ -1,6 +1,6 @@
 import { buildRestorePlan, restoreBlocker } from './restore-plan'
 import { unresolvedDependencies } from './dependencies'
-import type { IntuneType, Item } from './registry'
+import { hydratedOmaMasks, rememberHydratedOmaMasks, type IntuneType, type Item } from './registry'
 export interface RecoveryReadiness { automatic: boolean; externalArtifacts: string[]; missingMappings: string[]; manualActions: string[] }
 export function recoveryReadiness(type: IntuneType, snapshot: Item): RecoveryReadiness {
   const blocker = restoreBlocker(type, snapshot), externalArtifacts: string[] = [], manualActions: string[] = []
@@ -11,7 +11,11 @@ export function recoveryReadiness(type: IntuneType, snapshot: Item): RecoveryRea
     else if (/hardware hash/i.test(blocker)) externalArtifacts.push("Recover the device's hardware hash, from the file used to import it or from its OEM or reseller, and import the device again in Intune.")
   } else {
     try {
-      const source = structuredClone(snapshot); delete source.assignments; delete source.roleAssignments; if (source.roleScopeTagIds) source.roleScopeTagIds = ['0']
+      const source = structuredClone(snapshot)
+      rememberHydratedOmaMasks(source, hydratedOmaMasks(snapshot))
+      delete source.assignments
+      delete source.roleAssignments
+      if (source.roleScopeTagIds) source.roleScopeTagIds = ['0']
       const plan = buildRestorePlan(type, source, { includeAssignments: false })
       missingMappings = [...new Set([plan.create, ...plan.steps].flatMap(step => unresolvedDependencies(step.body, new Set()))) ]
     } catch (error) { manualActions.push(error instanceof Error ? error.message : String(error)) }

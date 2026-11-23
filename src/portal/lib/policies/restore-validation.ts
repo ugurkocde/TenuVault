@@ -1,4 +1,5 @@
-import { backupManifest, incompleteReason, snapshotHash } from "./backup-manifest"
+import { applyHydrationEvidence, backupManifest, incompleteReason, snapshotHash } from "./backup-manifest"
+import { OMISSION_BLOCKER } from "../../../shared/intune/secret-omission"
 import { dependencyReferences } from "../../../shared/intune/dependencies"
 import { assignmentsUnread } from "../../../shared/intune/read"
 import { INTUNE_TYPES, itemName, typeForFolder, type Item } from "../../../shared/intune/registry"
@@ -120,6 +121,11 @@ export async function validateBackup(input: ValidateBackupInput): Promise<Backup
     const checks: ValidationCheck[] = []
 
     if (manifest && !entry) checks.push(check("fingerprint", false, "This file is not listed in the backup manifest."))
+    if (entry?.omitted) {
+      checks.push(check("payload", false, OMISSION_BLOCKER))
+      items.push({ path, folder: type?.folder ?? folder, label: type?.label ?? folder, name: fallbackName, ok: false, checks })
+      continue
+    }
     if (!listed.has(path)) {
       checks.push(check("read", false, "Listed in the backup manifest but the file is missing from backup storage."))
       checks.push(check("fingerprint", false, "Not checked: the file is missing."))
@@ -140,6 +146,8 @@ export async function validateBackup(input: ValidateBackupInput): Promise<Backup
     }
     checks.push(check("read", true))
     const snapshot = read.snapshot
+    // Same hydration evidence as the restore itself (verifySnapshot), when the file matches its manifest.
+    applyHydrationEvidence(snapshot, entry)
 
     if (!checks.some((entryCheck) => entryCheck.id === "fingerprint")) {
       if (!manifest) checks.push(check("fingerprint", true, "No recorded fingerprint in this backup."))

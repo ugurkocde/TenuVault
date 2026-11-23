@@ -4,9 +4,9 @@ import { MemoryRouter } from "react-router-dom"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { LicenseStatus, TenantLicenseStatus } from "../../src/shared/ipc"
 import { formatDate, licenseChipState, trialReminder } from "../../src/renderer/lib/license"
-const state = vi.hoisted(() => ({ status: null as LicenseStatus | null, action: vi.fn(async () => undefined), start: vi.fn(async () => undefined), emailTrial: vi.fn(async () => undefined), update: vi.fn(), open: vi.fn(async () => undefined), configured: vi.fn(async () => true), usage: vi.fn(async (): Promise<string | null> => null), refresh: vi.fn(async () => undefined) }))
+const state = vi.hoisted(() => ({ status: null as LicenseStatus | null, action: vi.fn(async () => undefined), start: vi.fn(async () => undefined), emailTrial: vi.fn(async () => undefined), update: vi.fn(), switchStorage: vi.fn(async () => true), open: vi.fn(async () => undefined), configured: vi.fn(async () => true), usage: vi.fn(async (): Promise<string | null> => null), refresh: vi.fn(async () => undefined) }))
 vi.mock("../../src/renderer/lib/license", async original => ({ ...(await original<typeof import("../../src/renderer/lib/license")>()), useLicense: () => ({ status: state.status, refresh: state.refresh }) }))
-vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { app: { openExternal: state.open }, auth: { accounts: async () => [{ tenantId: "tenant", username: "admin@contoso.example" }] }, license: { trialWorkflowsConfigured: state.configured, trialUsage: state.usage, tenantTrialAction: state.action, startTenantTrial: state.start, startTrial: state.emailTrial, open: state.open }, schedules: { list: async () => [{ tenantId: "tenant", enabled: true, frequency: "daily" }] }, preferences: { get: async () => ({ retentionDays: 90 }) } } }))
+vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { storage: { changeTenantAccount: state.switchStorage }, app: { openExternal: state.open }, auth: { accounts: async () => [{ tenantId: "tenant", username: "admin@contoso.example" }] }, license: { trialWorkflowsConfigured: state.configured, trialUsage: state.usage, tenantTrialAction: state.action, startTenantTrial: state.start, startTrial: state.emailTrial, open: state.open }, schedules: { list: async () => [{ tenantId: "tenant", enabled: true, frequency: "daily" }] }, preferences: { get: async () => ({ retentionDays: 90 }) } } }))
 vi.mock("~/contexts/TenantContext", () => ({ useTenantOperations: () => ({ updateTenant: state.update }), useTenants: () => [{ id: 1, name: "Contoso", credentials: { tenantId: "tenant" }, resources: { storageAccountName: "contosobackups" } }, { id: 2, name: "Fabrikam", credentials: { tenantId: "ended" } }] }))
 import { TenantTrialCard, TenantTrialNotices, TenantTrialOptions, TrialActions, TrialChanges, TrialResume, TrialShortcuts, TrialStartedRow } from "../../src/renderer/components/TenantTrial"
 import { TrialReminderBanner } from "../../src/renderer/components/DesktopLayout"
@@ -24,6 +24,7 @@ beforeEach(() => {
   state.open.mockReset().mockResolvedValue(undefined)
   state.refresh.mockReset().mockResolvedValue(undefined)
   state.update.mockReset()
+  state.switchStorage.mockReset().mockResolvedValue(true)
   tenant = { tenantId: "tenant", signedIn: true, entitled: true, activated: true, plan: "pro", source: "trial", tenants: 2, expiresAt: null, validUntil: null, shared: null, shareNeedsSignIn: false, displayKey: null, message: null, trial: true, trialEndsAt: new Date(Date.now() + 5 * day).toISOString(), canEnd: true, trialCanExtend: true }
   state.status = { hasKey: false, keyState: "none", keyMessage: null, keyHint: null, persisted: true, offline: false, message: null, plan: "pro", tenantLimit: 2, validUntil: null, communityTenantId: null, tenants: [tenant], tenantTrialsEnabled: true, trial: true, trialEndsAt: tenant.trialEndsAt }
   container = document.createElement("div"); document.body.append(container); root = createRoot(container)
@@ -189,7 +190,7 @@ describe("tenant trial UI", () => {
   })
   it("handles a rejected Azure switch after real confirmation", async () => {
     tenant.entitled = false; tenant.trial = false; tenant.source = null; tenant.trialEndsAt = new Date(Date.now() - day).toISOString()
-    state.update.mockImplementationOnce(async () => { throw new Error("Storage switch failed") })
+    state.switchStorage.mockRejectedValueOnce(new Error("Storage switch failed"))
     state.refresh.mockRejectedValueOnce(new Error("Status refresh failed"))
     await render(createElement(TenantTrialNotices))
     await click("Switch Contoso to weekly local backups")
@@ -332,7 +333,9 @@ describe("tenant trial UI", () => {
     await click("Switch Contoso to weekly local backups")
     expect(document.body.textContent).toContain("Save new backups on this computer?")
     expect(state.update).not.toHaveBeenCalled()
+    expect(state.switchStorage).not.toHaveBeenCalled()
     await act(async () => [...document.body.querySelectorAll("button")].find(b => b.textContent === "Switch to local backups")!.click())
+    expect(state.switchStorage).toHaveBeenCalledWith("tenant", "contosobackups", expect.objectContaining({ storageAccountName: "tvlocal-tenant" }))
     expect(state.update).toHaveBeenCalledWith(1, expect.objectContaining({ resources: expect.objectContaining({ storageAccountName: "tvlocal-tenant" }) }))
   })
   it("lets a page own the welcome card without hiding an independent end notice", async () => {

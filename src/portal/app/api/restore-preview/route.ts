@@ -1,3 +1,5 @@
+import { applyHydrationEvidence, backupPreviewManifest, readProjectedSnapshot } from "~/lib/policies/backup-manifest"
+import { hasOmissions, OMISSION_BLOCKER, type OmittedField } from "../../../../shared/intune/secret-omission"
 import { recoveryReadiness, type RecoveryReadiness } from "../../../../shared/intune/recovery"
 import { type NextRequest, NextResponse } from "next/server"
 import { validPolicyPath } from "~/lib/policies/restore"
@@ -23,6 +25,7 @@ export interface PreviewItem {
   replaceBlocker?: string
   readiness?: RecoveryReadiness
   snapshot?: Item
+  omitted?: OmittedField[]
   /** The item in the tenant now, when `live` was requested: deleted, identical, or changed since the backup. */
   live?: "missing" | "same" | "changed" | "error"
   /** Only the assignments differ from the backup. */
@@ -78,6 +81,7 @@ export async function POST(request: NextRequest) {
     }), backupId, tenantId, storageAccountName)
     if (!owned.ok) return NextResponse.json({ error: owned.error }, { status: owned.status })
     // A backup that records no tenant cannot change live policies; it can still be restored as a copy.
+    const manifest = backupPreviewManifest(owned.metadata, backupId)
     const ownership = owned.owned ? undefined : UNTAGGED_BACKUP
     const graph = graphCaller(graphToken, fetch, { tenant: tenantId, refreshToken: () => token(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default", true) })
 
@@ -86,11 +90,16 @@ export async function POST(request: NextRequest) {
       const type = typeForFolder(folder === "DeviceCompliancePolicies" ? "CompliancePolicies" : folder)
       const fallbackName = (path.split("/")[2] ?? "").replace(/\.json$/, "")
       if (!type) return { path, folder, name: fallbackName, blocker: "This backup file is not an Intune type TenuVault can restore.", replaceBlocker: "This type cannot be replaced." }
-      const response = await fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${path.split("/").map(encodeURIComponent).join("/")}`, {
+      const entry = manifest?.get(path)
+      const projectedPath = entry?.omitted ? path.replace(`${backupId}/`, `${backupId}/.omitted/`) : path
+      const response = await fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${projectedPath.split("/").map(encodeURIComponent).join("/")}`, {
         headers: { "x-ms-version": "2021-12-02", Authorization: `Bearer ${storageToken}` },
       })
       if (!response.ok) return { path, folder: type.folder, name: fallbackName, live: "error", error: "The backup file could not be read.", blocker: "The backup file could not be read.", replaceBlocker: "The backup file could not be read." }
-      const snapshot = (await response.json()) as Item
+      const snapshot = entry?.omitted ? await readProjectedSnapshot(response, entry) : (await response.json()) as Item
+      if (entry?.omitted || hasOmissions(snapshot)) return { path, folder: type.folder, name: itemName(type, snapshot), blocker: OMISSION_BLOCKER, replaceBlocker: OMISSION_BLOCKER, omitted: entry?.omitted }
+      // Same hydration evidence as the restore itself (verifySnapshot), when the file matches its manifest.
+      applyHydrationEvidence(snapshot, entry)
       const item: PreviewItem = { path, folder: type.folder, name: itemName(type, snapshot), snapshot, readiness: recoveryReadiness(type, snapshot), ...restoreCapabilities(type, snapshot) }
       if (ownership) item.replaceBlocker = ownership
       if (live !== true || typeof snapshot.id !== "string") return item

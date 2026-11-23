@@ -1,12 +1,14 @@
-import { execFileSync } from "node:child_process"
-import { existsSync, readFileSync } from "node:fs"
-import { fileURLToPath } from "node:url"
+import { execFileSync, spawnSync } from "node:child_process"
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { fileURLToPath } from "node:url"
 import { describe, expect, it, vi } from "vitest"
 import { AuditStorageService } from "../src/portal/lib/audit/storage"
 import { auditExportJSON } from "../src/portal/lib/audit/export"
 import { createHash } from "node:crypto"
 import { INTUNE_TYPES, typeForFolder } from "../src/shared/intune/registry"
+import { verifyProjectedSnapshot } from "../src/portal/lib/policies/backup-manifest"
 import { listSnapshot } from "../src/shared/intune/read"
 import { comparableSnapshot } from "../src/shared/intune/compare"
 import { COMPLIANCE_SETTING_KEYS, COMPLIANCE_SETTINGS_ID } from "../src/shared/intune/compliance-settings"
@@ -25,8 +27,8 @@ function runAuditSetup(shell: (file: string, args: string[], options: { encoding
   const script = fileURLToPath(new URL("./fixtures/cloud-backup/audit-setup.ps1", import.meta.url))
   return shell(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8", timeout: auditSetupTimeout })
 }
-type RunCall = { condition?: string; uri: string; method: string; contentType: string | null; ifNoneMatch: string | null; body: string | null }
-type Run = { calls: RunCall[]; error?: string | null; output?: string[] }
+type RunCall = { condition?: string; uri: string; method: string; contentType: string | null; ifNoneMatch: string | null; ifMatch?: string | null; body: string | null }
+type Run = { scenario?: string; calls: RunCall[]; error?: string | null; output?: string[] }
 let plainRuns: Run[] | undefined
 /** The scenarios of the plain-run fixture: a full run, an early failure, a failed manifest, and two runs with change reports on. */
 function runPlainFixture(): Run[] {
@@ -46,7 +48,7 @@ const folderOf = (blobs: Map<string, string>) => [...blobs.keys()].find((name) =
 
 const template = JSON.parse(readFileSync(new URL("../resources/cloud-backup/azuredeploy.json", import.meta.url), "utf8")) as {
   parameters: Record<string, unknown>
-  resources: Array<{ type: string }>
+  resources: Array<{ type: string; condition?: string; dependsOn?: string[]; properties?: { scriptContent?: string } }>
   variables: Record<string, string>
   outputs: Record<string, unknown>
 }
@@ -64,7 +66,7 @@ describe("Cloud audit contract", () => {
       expect(write.uri).toMatch(new RegExp(`-event-${TENANT}-${entry.job.runId}\\.json$`))
       expect(file).toMatchObject({ version: "2.0", metadata: { entryCount: 1, createdAt: entry.timestamp } })
       expect(entry).toMatchObject({ user: { tenantId: TENANT, name: "Cloud backup managed identity" },
-        job: { status, producer: "cloud-runbook", producerVersion: "1.5.0", stage: "terminal" } })
+        job: { status, producer: "cloud-runbook", producerVersion: RUNBOOK_VERSION, stage: "terminal" } })
       const note = JSON.parse(scenario.calls.find(call => call.method === "Put" && call.uri.includes("/cloud-backup-outcomes/"))!.body!)
       expect(entry.job.runId).toBe(note.runId)
       const name = new URL(write.uri).pathname.slice("/audit-logs/".length)
@@ -258,7 +260,8 @@ describe("Cloud audit contract", () => {
     expect(JSON.parse(first.calls[start]!.body!)).toMatchObject({ runId: prior.RunId, folder: prior.BackupFolder })
     expect(restarted.error).toBeNull()
     expect(manifestFiles(restarted)).toHaveLength(2)
-    expect(restarted.calls.some(call => call.method === "Get" && call.uri.startsWith(BACKUP_CONTAINER_URL))).toBe(false)
+    // The only backup container read is the omission policy check every run makes before capture.
+    expect(restarted.calls.some(call => call.method === "Get" && call.uri.startsWith(BACKUP_CONTAINER_URL) && !call.uri.includes("/.tenuvault-control/"))).toBe(false)
     const jobs = auditFiles(restarted).map(([, body]) => JSON.parse(body).entries[0].job)
     expect(jobs).toHaveLength(2)
     expect(jobs).toContainEqual(expect.objectContaining({ runId: prior.RunId, status: "uncertain" }))
@@ -569,7 +572,7 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
   it("carries a plain runbook version, which the app does not flag for upgrade", () => {
     const version = RUNBOOK_VERSION
     // 1.3.0 adds change reports on top of the first plain runbook, 1.2.0; 1.4.0 records how a run started.
-    expect(version).toBe("1.5.0")
+    expect(version).toBe("1.6.0")
     expect(PLAIN_CLOUD_RUNBOOK).toBe("1.2.0")
     expect(cloudRunbookNeedsUpgrade(version!)).toBe(false)
     expect(cloudRunbookNeedsUpgrade("1.1.0")).toBe(true)
@@ -650,7 +653,7 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
         expect(() => JSON.parse(put.body!), put.uri).not.toThrow()
       }
     }
-    const puts = run!.calls.filter((call) => call.method === "Put")
+    const puts = run!.calls.filter((call) => call.method === "Put" && !call.uri.includes("/.tenuvault-control/"))
     const backup = "https://stcontoso.blob.core.windows.net/intune-backups/"
     const names = puts.map((call) => call.uri.replace(/backup-\d{4}-\d{2}-\d{2}-\d{6}/, "backup-<time>"))
     expect(names).toEqual(expect.arrayContaining([
@@ -675,6 +678,46 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
     expect(parseCloudStatus(JSON.parse(failedStatus!.body!), "11111111-2222-3333-4444-555555555555")).toMatchObject({ lastStatus: "Failed" })
     expect(failed!.calls.some((call) => call.method === "Put" && call.uri.includes("/tenuvault-backup-results/cloud-backup-outcomes/run-"))).toBe(true)
     expect(failed!.calls.some((call) => call.uri.includes("/intune-backups/backup-"))).toBe(false)
+  }, 60_000)
+
+  it.runIf(Boolean(pwsh))("uses the existing storage identity to omit credentials and stops on an enrolled policy read failure", () => {
+    const runs = runPlainFixture()
+    const [active, missing, graphError] = ["on", "missing", "graphError"].map(name => runs.find(run => run.scenario === name)!)
+    const blobs = writtenBlobs(active!)
+    const folder = folderOf(blobs)
+    const projected = blobs.get(`${folder}/.omitted/DeviceConfigurations/Baseline Wi-Fi.json`)!
+    const manifest = JSON.parse(blobs.get(`${folder}/metadata.json`)!)
+    expect(manifest).toMatchObject({ OmissionEnabled: true, OmissionVersion: 1, OmissionPolicyGeneration: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", SkippedTypes: ["DeviceConfigurations"], ActualSkippedTypes: [] })
+    expect(verifyProjectedSnapshot(projected, { ...manifest.Items["DeviceConfigurations/cfg-1"], id: "cfg-1" })).toHaveProperty("displayName", "Baseline Wi-Fi")
+    expect(blobs.has(`${folder}/DeviceConfigurations/Baseline Wi-Fi.json`)).toBe(false)
+    const completedAudit = active!.calls.find(call => call.method === "Put" && call.uri.includes("/audit-logs/"))
+    expect(JSON.parse(completedAudit!.body!).entries[0].job).toMatchObject({ status: "warnings", reason: "BACKUP_VALUES_OMITTED" })
+    expect(manifest.Status).toBe("Success")
+    expect(JSON.stringify([active, missing, graphError])).not.toMatch(/omission-test-value|omission-test-secret-reference|getOmaSettingPlainTextValue/)
+    expect(missing!.error).toContain("omission policy could not be verified")
+    const audit = missing!.calls.find(call => call.method === "Put" && call.uri.includes("/audit-logs/"))
+    expect(JSON.parse(audit!.body!).entries[0].job).toMatchObject({ status: "failed", reason: "OMISSION_POLICY_UNVERIFIED" })
+    expect(missing!.calls.some(({ uri }) => uri.startsWith("https://graph.microsoft.com") || uri.includes("/intune-backups/backup-"))).toBe(false)
+  }, 60_000)
+
+  it.runIf(Boolean(pwsh))("records the starting mode, streams partial backups and writes to immutable storage", () => {
+    const runs = runPlainFixture()
+    const startingOff = runs.find(run => run.scenario === "modeChanged")!
+    expect(startingOff.error).toBeNull()
+    const inFlight = writtenBlobs(startingOff)
+    expect(JSON.parse(inFlight.get(`${folderOf(inFlight)}/metadata.json`)!)).toMatchObject({ OmissionEnabled: false, OmissionPolicyGeneration: "default" })
+    expect(startingOff.calls.filter(call => call.uri.endsWith("secret-omission.json")).map(call => call.method)).toEqual(["Get"])
+    const interrupted = runs[2]!
+    const saved = interrupted.calls.findIndex(call => call.method === "Put" && call.uri.endsWith("/DeviceConfigurations/First.json"))
+    expect(saved).toBeGreaterThan(-1)
+    expect(saved).toBeLessThan(interrupted.calls.findIndex(call => call.method === "Get" && call.uri.includes("/deviceConfigurations/cfg-1")))
+    expect(JSON.parse([...writtenBlobs(interrupted)].find(([path]) => path.endsWith("metadata.json"))![1])).toMatchObject({ Status: "Failed", ItemCounts: { DeviceConfigurations: 1 } })
+    for (const name of ["immutable1", "immutable2"]) {
+      const immutable = runs.find(run => run.scenario === name)!
+      expect(immutable.error).toBeNull()
+      expect(immutable.calls.some(call => call.method === "Put" && call.uri.endsWith("/metadata.json"))).toBe(true)
+      expect(immutable.calls.every(call => !call.uri.includes(".blob.core.windows.net") || call.uri.startsWith("https://stcontoso."))).toBe(true)
+    }
   }, 60_000)
 
   it.runIf(Boolean(pwsh))("saves a list-only type from its list entry, with the desktop snapshot and fingerprint", () => {
@@ -750,6 +793,139 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
     expect(runbook).not.toMatch(/Method\s+"(Delete|Post|Patch)"/)
     expect(runbook).not.toMatch(/Get-AutomationVariable -Name \$Name/)
   })
+})
+
+type SetupScenario = {
+  scenario: string; plain: boolean; reason: string | null; error: string | null; actions: string[]; legacyVariableKept: boolean
+  changeReport?: string | null; changeReportActors?: string | null; tenantName?: string | null; variables: string[]
+  schedule: boolean; link: boolean; output: string[]; omissionBinding: string | null; storageAccount: string | null; scope?: string | null
+}
+let setupScenarios: Map<string, SetupScenario> | undefined
+function setupRun(name: string): SetupScenario {
+  if (!setupScenarios) {
+    const script = fileURLToPath(new URL("./fixtures/cloud-backup/setup-upgrade.ps1", import.meta.url))
+    const lines = execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8", timeout: 120_000 })
+      .split(/\r?\n/).filter(line => line.startsWith("{"))
+    setupScenarios = new Map(lines.map(line => JSON.parse(line) as SetupScenario).map(run => [run.scenario, run]))
+  }
+  return setupScenarios.get(name)!
+}
+
+it.runIf(Boolean(pwsh))("copies policies on a best-effort basis and allows cloud storage moves and fresh installs", () => {
+  expect(setupRun("move-copies-policy")).toMatchObject({ error: null, storageAccount: "stcontoso", omissionBinding: "stprevious,stcontoso", actions: expect.arrayContaining(["copy-policy"]) })
+  expect(setupRun("move-skips-partial")).toMatchObject({ error: null, storageAccount: "stcontoso" })
+  expect(setupRun("move-skips-partial").actions).not.toContain("copy-policy")
+  expect(setupRun("move-copies-off")).toMatchObject({ error: null, storageAccount: "stcontoso", omissionBinding: "stprevious", actions: expect.arrayContaining(["copy-policy"]) })
+  expect(setupRun("move-warns-on-denied")).toMatchObject({ error: null, storageAccount: "stcontoso", omissionBinding: "stprevious", output: expect.arrayContaining([expect.stringContaining("Verify the omission setting")]) })
+  expect(setupRun("move-quiet-on-denied")).toMatchObject({ error: null, storageAccount: "stcontoso" })
+  expect(setupRun("move-quiet-on-denied").output.join(" ")).not.toContain("Verify the omission setting")
+  expect(setupRun("move-continues-on-list-error")).toMatchObject({ error: null, storageAccount: "stcontoso", omissionBinding: "stprevious" })
+  for (const [scenario, binding] of [["move-keeps-destination", "stprevious,stcontoso"], ["move-keeps-off", "stprevious"]] as const) {
+    expect(setupRun(scenario)).toMatchObject({ error: null, storageAccount: "stcontoso", omissionBinding: binding,
+      output: expect.arrayContaining([expect.stringContaining("Keeping the omission policy already set")]),
+    })
+    expect(setupRun(scenario).actions).not.toContain("copy-policy")
+  }
+  expect(setupRun("fresh-recovers-after-list-error")).toMatchObject({ error: null, storageAccount: "stcontoso", omissionBinding: "", plain: true })
+  expect(setupRun("fresh-continues-on-list-error")).toMatchObject({ error: null, storageAccount: "stcontoso", omissionBinding: null, plain: true })
+  expect(setupRun("upgrade-preserves-binding").omissionBinding).toBe("stprevious")
+  expect(setupRun("upgrade-creates-binding").omissionBinding).toBe("")
+  const denied = setupRun("upgrade-binding-denied")
+  expect(denied).toMatchObject({ error: null, storageAccount: "stcontoso", scope: "policies", omissionBinding: null })
+  expect(denied.output.join("\n")).toContain("could not be written")
+  expect(setupRun("upgrade-keeps-unreadable-binding").omissionBinding).toBe("stprevious")
+}, 130_000)
+
+it("adds no migration resources to the default ARM deployment", () => {
+  expect(template.parameters.omissionMigrationIdentityId).toMatchObject({ defaultValue: "" })
+  expect(template.parameters.initializeOmissionEnrollment).toMatchObject({ defaultValue: false })
+  const migration = template.resources.find(resource => resource.type === "Microsoft.Resources/deploymentScripts")
+  expect(migration?.condition).toBe("[and(not(parameters('auditOnly')), not(empty(parameters('omissionMigrationIdentityId'))))]")
+  const defaultResources = template.resources.filter(resource =>
+    !resource.condition?.includes("omissionMigrationIdentityId") &&
+    !resource.condition?.includes("initializeOmissionEnrollment"))
+  expect(defaultResources.map(resource => resource.type)).toEqual([
+    "Microsoft.Automation/automationAccounts",
+    "Microsoft.Authorization/roleDefinitions",
+    "Microsoft.Authorization/roleAssignments",
+    "Microsoft.Storage/storageAccounts/blobServices/containers",
+    "Microsoft.Authorization/roleAssignments",
+    "Microsoft.Authorization/roleDefinitions",
+    "Microsoft.Storage/storageAccounts/blobServices/containers",
+    "Microsoft.Authorization/roleAssignments",
+    "Microsoft.Automation/automationAccounts/runbooks",
+    "Microsoft.Automation/automationAccounts/variables",
+    "Microsoft.Automation/automationAccounts/schedules",
+    "Microsoft.Automation/automationAccounts/jobSchedules",
+  ])
+})
+
+it("includes the initialization parameter in the Deploy to Azure instructions", () => {
+  const docs = readFileSync(new URL("../docs-site/src/content/docs/backups/cloud.md", import.meta.url), "utf8")
+  expect(docs.split("### Deploy to Azure")[1]?.split("### Test it now")[0]).toContain("`initializeOmissionEnrollment`")
+})
+
+it.runIf(process.platform !== "win32" && spawnSync("jq", ["--version"]).status === 0)("allows an ARM storage move when optional migration cannot copy or finds an off policy", () => {
+  const migration = template.resources.find(resource => resource.type === "Microsoft.Resources/deploymentScripts")!
+  expect(migration.properties?.scriptContent).toContain("--if-none-match '*'")
+  expect(template.outputs).toHaveProperty("omissionPolicyMigration")
+  expect(template.resources.find(resource => resource.type === "Microsoft.Automation/automationAccounts/variables" && !resource.condition?.includes("initializeOmissionEnrollment"))?.dependsOn)
+    .toContain("[resourceId('Microsoft.Resources/deploymentScripts', variables('omissionMigrationName'))]")
+  const schedules = template.resources.find(resource => resource.type === "Microsoft.Automation/automationAccounts/schedules")!
+  // The schedule keeps main's dependencies, so optional omission provisioning never holds it back.
+  expect(schedules.dependsOn).toEqual(["[resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName'))]"])
+  const dir = mkdtempSync(join(tmpdir(), "tv-omission-arm-"))
+  const output = join(dir, "output.json")
+  const az = `az() {
+    if [ "$1" = rest ]; then
+      if [ -z "$VARIABLES" ]; then return 1; fi
+      printf '%s' "$VARIABLES"
+    elif [ "$3" = download ]; then
+      shift 3
+      while [ "$#" -gt 1 ]; do
+        case "$1" in
+          --account-name) account=$2 ;;
+          --file) file=$2 ;;
+        esac
+        shift
+      done
+      if [ "$account" = newacct ] && [ -n "$DESTINATION_POLICY" ]; then printf '%s' "$DESTINATION_POLICY" > "$file"; else return 1; fi
+    else
+      return 1
+    fi
+  }
+  `
+  const variables = (binding: string) => JSON.stringify({ value: [
+    { name: "TenuVaultOmissionAccount-11111111", properties: { value: JSON.stringify(binding) } },
+    { name: "TenuVaultStorageAccount-11111111", properties: { value: '"oldacct"' } },
+  ] })
+  const run = (binding: string | undefined, enabled?: boolean) => spawnSync("/bin/bash", ["-c", az + migration.properties!.scriptContent!], {
+    encoding: "utf8", env: { ...process.env,
+      AZ_SCRIPTS_OUTPUT_PATH: output, AUTOMATION_ID: "/mock", TENANT_KEY: "11111111", TENANT_ID: TENANT,
+      NEW_ACCOUNT: "newacct", VARIABLES: binding === undefined ? "" : variables(binding),
+      DESTINATION_POLICY: enabled === undefined ? "" : JSON.stringify({ version: 1, tenantId: TENANT, enabled, scripts: false, generation: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" }),
+    },
+  })
+  try {
+    const enrolled = run("oldacct")
+    expect(enrolled.status).toBe(0)
+    expect(enrolled.stderr).toContain("Verify the omission setting")
+    expect(JSON.parse(readFileSync(output, "utf8")).message).toContain("Verify the omission setting")
+    const neverEnrolled = run("")
+    expect(neverEnrolled.status).toBe(0)
+    expect(neverEnrolled.stderr).toBe("")
+    for (const enabled of [false, true]) {
+      const keepsPolicy = run("oldacct", enabled)
+      expect(keepsPolicy.status).toBe(0)
+      expect(keepsPolicy.stderr).toBe("")
+      expect(JSON.parse(readFileSync(output, "utf8")).message).toContain("Keeping the omission policy")
+    }
+    const listingFailed = run(undefined)
+    expect(listingFailed.status).toBe(0)
+    expect(listingFailed.stderr).toBe("")
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 describe("New-TenuVaultCloudBackup.ps1", () => {
@@ -837,7 +1013,7 @@ describe("New-TenuVaultCloudBackup.ps1", () => {
     expect(setupRun("rerun-sets-report")).toMatchObject({ error: null, changeReport: "full", changeReportActors: "true", tenantName: "11111111-2222-3333-4444-555555555555" })
     expect(setup).toContain('$changeReportPassed = $PSBoundParameters.ContainsKey("ChangeReport")')
     expect(setup).toContain('$changeReportActorsPassed = $PSBoundParameters.ContainsKey("ChangeReportWithoutActors")')
-  }, 60_000)
+  }, 130_000)
 
   it.runIf(Boolean(pwsh))("follows main for disabled schedules, including stale markers and partial overrides", () => {
     expect(setup).not.toContain("TenuVaultAuditPausedSchedule")
@@ -869,8 +1045,9 @@ describe("New-TenuVaultCloudBackup.ps1", () => {
   }, 60_000)
 
   it.runIf(Boolean(pwsh))("writes main's scope variables on default and Everything reruns", () => {
+    // The omission enrollment variable is new in this release; every variable main writes is unchanged.
     const variableResult = ({ scope, exclusions, appOnlyExcluded, variableWrites }: SetupScenario) => ({
-      scope, exclusions, appOnlyExcluded, variableWrites,
+      scope, exclusions, appOnlyExcluded, variableWrites: variableWrites.filter(name => !name.startsWith("TenuVaultOmissionAccount-")),
     })
     const baseline = mainSetup()
     for (const [scenario, scope] of [["linked-upgrade", "policies"], ["linked-upgrade-everything", "everything"]] as const) {
@@ -1095,17 +1272,21 @@ describe("azuredeploy.json", () => {
     for (const keyVault of ["keyVault", "TenuVaultKeyVault", "tenuvault-recovery-key", "keyVaultSecretsUserRoleId", "4633458b-17de-408a-b874-0445c86b69e6"]) {
       expect(text, keyVault).not.toContain(keyVault)
     }
-    // The vault assignment is gone; the two writer assignments on the containers remain.
+    // The vault assignment is gone; two backup writer assignments and one audit writer assignment remain.
     expect(template.resources.filter((resource) => resource.type === "Microsoft.Authorization/roleAssignments")).toHaveLength(3)
   })
 
-  it("links the schedule with TENANTKEY only, writes no account id and grants nothing on the Automation account", () => {
+  it("links with TENANTKEY only and uses an existing identity for optional migration", () => {
     const resources = template.resources as unknown as Array<{ type: string; scope?: string; properties: Record<string, unknown> }>
     const jobSchedule = resources.find((resource) => resource.type === "Microsoft.Automation/automationAccounts/jobSchedules")!
     expect(jobSchedule.properties.parameters).toEqual({ TenantKey: "[variables('tenantKey')]" })
-    expect(resources.filter((resource) => resource.type === "Microsoft.Authorization/roleAssignments").every((resource) => resource.scope?.startsWith("[concat('Microsoft.Storage/storageAccounts/"))).toBe(true)
+    const accountGrants = resources.filter((resource) => resource.type === "Microsoft.Authorization/roleAssignments" && resource.scope?.includes("Microsoft.Automation/automationAccounts/"))
+    expect(accountGrants).toHaveLength(0)
+    expect(resources.find(resource => resource.type === "Microsoft.Resources/deploymentScripts")).toMatchObject({
+      identity: { type: "UserAssigned", userAssignedIdentities: "[createObject(parameters('omissionMigrationIdentityId'), createObject())]" },
+    })
     const text = JSON.stringify(template)
-    for (const absent of ["TenuVaultAutomationAccountId", "TenuVaultScheduleSetsTrigger", "acdd72a7-3385-48ef-bd42-f606fba81ae7", "readerRoleId", "Trigger"]) expect(text, absent).not.toContain(absent)
+    for (const absent of ["TenuVaultAutomationAccountId", "TenuVaultScheduleSetsTrigger", "Trigger"]) expect(text, absent).not.toContain(absent)
   })
 
   it("lets the identity leave result notes in the watcher's container with the same write-only role", () => {
@@ -1122,3 +1303,109 @@ describe("azuredeploy.json", () => {
     expect(JSON.stringify((role.properties as { permissions: unknown }).permissions)).not.toContain("delete")
   })
 })
+
+
+it.runIf(Boolean(pwsh))("cloud runs fail closed on unverified policies and preserve the off-mode OMA snapshot format", () => {
+  const runs = runPlainFixture()
+  for (const scenario of ["forbidden", "ambiguous404", "unavailable", "malformed", "arrayTenant", "caseDuplicate", "unrelatedNotFound"]) {
+    const run = runs.find(entry => entry.scenario === scenario)!
+    expect(run.error).toContain("omission policy could not be verified")
+    expect(run.calls.some(({ uri }) => uri.startsWith("https://graph.microsoft.com") || uri.includes("/intune-backups/backup-"))).toBe(false)
+  }
+  const off = runs.find(entry => entry.scenario === "containerMissing")!
+  expect(off.error).toBeNull()
+  expect(off.calls.filter(({ uri }) => uri.includes("getOmaSettingPlainTextValue"))).toHaveLength(1)
+  const blobs = writtenBlobs(off)
+  const folder = folderOf(blobs)
+  const snapshot = JSON.parse(blobs.get(`${folder}/DeviceConfigurations/Baseline Wi-Fi.json` )!)
+  expect(snapshot.omaSettings).toEqual([
+    { isEncrypted: true, value: "Graph value" },
+    { isEncrypted: true, secretReferenceValueId: "ref", value: "****" },
+  ])
+  const item = JSON.parse(blobs.get(`${folder}/metadata.json`)!).Items["DeviceConfigurations/cfg-1"]
+  // **** stays blocked on restore as on main, so it is not recorded as hydration evidence.
+  expect(item).not.toHaveProperty("hydratedOmaMasks")
+  expect(item).not.toHaveProperty("secretsMasked")
+  expect(item).not.toHaveProperty("partialCollections")
+}, 60_000)
+
+it.runIf(Boolean(pwsh))("requires verified Automation enrollment before treating an absent policy as off", () => {
+  const runs = runPlainFixture()
+  const unavailable = runs.find(entry => entry.scenario === "unreadableEnrollment")!
+  expect(unavailable.error).toContain("Automation enrollment variable could not be read")
+  expect(unavailable.calls.some(({ uri }) => uri.includes("secret-omission.json"))).toBe(true)
+  expect(unavailable.calls.some(({ uri }) => uri.includes("graph.microsoft.com") || uri.includes("/intune-backups/backup-"))).toBe(false)
+  const absent = runs.find(entry => entry.scenario === "missingEnrollment")!
+  expect(absent.error).toBeNull()
+  const blobs = writtenBlobs(absent)
+  expect(JSON.parse(blobs.get(`${folderOf(blobs)}/metadata.json`)!)).toMatchObject({ OmissionEnabled: false })
+}, 60_000)
+
+it.runIf(Boolean(pwsh))("writes a default-off manifest without Automation cmdlets unless the environment records enrollment", () => {
+  const runs = runPlainFixture()
+  for (const scenario of ["environmentUnset", "environmentEmpty"]) {
+    const run = runs.find(entry => entry.scenario === scenario)!
+    expect(run.error).toBeNull()
+    const blobs = writtenBlobs(run)
+    expect(JSON.parse(blobs.get(`${folderOf(blobs)}/metadata.json`)!)).toMatchObject({ Status: "Success", OmissionEnabled: false })
+  }
+  const enrolled = runs.find(entry => entry.scenario === "environmentEnrolled")!
+  expect(enrolled.error).toContain("omission policy could not be verified")
+  expect(enrolled.calls.some(({ uri }) => uri.includes("/intune-backups/backup-"))).toBe(false)
+}, 60_000)
+
+it.runIf(Boolean(pwsh))("stops capture after an enrolled storage move until the destination has an explicit policy", () => {
+  const runs = runPlainFixture()
+  const missing = runs.find(entry => entry.scenario === "movedWithoutPolicy")!
+  expect(missing.error).toContain("Enable omission on the new account or explicitly set it off")
+  expect(missing.calls.some(({ uri }) => uri.includes("graph.microsoft.com") || uri.includes("/intune-backups/backup-"))).toBe(false)
+  for (const [scenario, enabled] of [["movedWithOffPolicy", false], ["movedWithOnPolicy", true]] as const) {
+    const run = runs.find(entry => entry.scenario === scenario)!
+    expect(run.error).toBeNull()
+    const blobs = writtenBlobs(run)
+    expect(JSON.parse(blobs.get(`${folderOf(blobs)}/metadata.json`)!)).toMatchObject({ OmissionEnabled: enabled })
+  }
+}, 60_000)
+
+it.runIf(Boolean(pwsh))("hydrates an empty OMA reference off-mode and reports a failed lookup", () => {
+  const runs = runPlainFixture()
+  const success = runs.find(entry => entry.scenario === "emptyOmaSuccess")!
+  const refused = runs.find(entry => entry.scenario === "emptyOmaFailure")!
+  for (const run of [success, refused]) {
+    expect(run.calls.filter(({ uri }) => uri.endsWith("getOmaSettingPlainTextValue(secretReferenceValueId='')"))).toHaveLength(1)
+  }
+  const blobs = writtenBlobs(success)
+  expect(JSON.parse(blobs.get(`${folderOf(blobs)}/DeviceConfigurations/Baseline Wi-Fi.json`)!)).toMatchObject({
+    omaSettings: [{ value: "Hydrated empty reference", secretReferenceValueId: "" }],
+  })
+  const failedBlobs = writtenBlobs(refused)
+  const failedFolder = folderOf(failedBlobs)
+  expect(failedBlobs.has(`${failedFolder}/DeviceConfigurations/Baseline Wi-Fi.json`)).toBe(false)
+  expect(JSON.parse(failedBlobs.get(`${failedFolder}/metadata.json`)!)).toMatchObject({ Status: "CompletedWithWarnings", Failures: 1 })
+}, 60_000)
+
+it.runIf(Boolean(pwsh))("reads a single Azure error-code header whole, so a missing policy confirms as on Azure", () => {
+  const script = fileURLToPath(new URL("./fixtures/cloud-backup/error-code-header.ps1", import.meta.url))
+  const codes = JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8", timeout: 60_000 }))
+  expect(codes).toEqual({ single: "BlobNotFound", container: "ContainerNotFound", repeated: "", absent: "" })
+}, 60_000)
+
+it.runIf(Boolean(pwsh))("expands a nested Graph collection of zero or one entries that has a continuation link", () => {
+  const script = fileURLToPath(new URL("./fixtures/cloud-backup/nested-collections.ps1", import.meta.url))
+  const { counts, scalar } = JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8", timeout: 60_000 }))
+  for (const [listed, entry] of Object.entries(counts)) expect(entry).toEqual({ count: Number(listed) + 1, last: "from-continuation", linkRemoved: true })
+  expect(scalar).toBe("Invalid expanded Graph collection.")
+}, 60_000)
+
+it.runIf(Boolean(pwsh))("keeps off-mode cloud report fields and compares matched typed and untyped tokens only under omission", () => {
+  const script = fileURLToPath(new URL("./fixtures/cloud-backup/omission-compare.ps1", import.meta.url))
+  const { off, on, offWithOneSkip, offWithScalarSkip } = JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8", timeout: 60_000 }))
+  expect(off.ExcludedPaths).toEqual([])
+  expect(off.Warnings).toEqual([])
+  expect(off.Drifts).toHaveLength(1)
+  expect(JSON.stringify(off.Drifts[0].changes)).toContain("nested.children")
+  expect(offWithOneSkip.Drifts).toEqual([])
+  expect(offWithScalarSkip.Drifts).toHaveLength(1)
+  expect(on.ExcludedPaths).toEqual(["/nested/children"])
+  expect(on.Drifts).toEqual([])
+}, 60_000)

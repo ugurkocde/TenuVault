@@ -94,6 +94,26 @@ describe("unreachable backup jobs", () => {
     expect(scheduledResult(job)).toEqual({ status: "Failed", message: job.exception, unreachable: true })
   })
 
+  it("keeps a Reader Graph outage uncounted after storage confirms there is no omission policy", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response(null, {
+      status: 404, headers: { "x-ms-error-code": "BlobNotFound" },
+    }))
+    const engine = new BackupEngine({
+      fetch: fetchImpl,
+      getToken: async () => "token",
+      unattendedTokens: () => ({
+        mode: "app-only", graph: async () => { throw msalNetworkError() }, storage: async () => "reader",
+      }),
+      omissionPolicy: async (_request, storage) => {
+        expect(await storage.readJson("secret-omission.json", true)).toBeNull()
+        return { enabled: false, scripts: false, generation: "default" }
+      },
+    })
+    const job = await engine.waitForJob(engine.start({ ...request, storageAccountName: "stcontoso", trigger: "scheduled" }))
+    expect(job).toMatchObject({ status: "Failed", unreachable: true })
+    expect(fetchImpl).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("secret-omission.json"), expect.objectContaining({ method: "GET" }))
+  })
+
   it("marks a job stopped because Microsoft Graph could not be reached", async () => {
     vi.useFakeTimers()
     const engine = engineWith(async () => "token", withNetworkErrors(async (input) => {

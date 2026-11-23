@@ -95,6 +95,7 @@ export interface DriftBackupRef {
 
 /** A policy file that could not be read; it is left out of the comparison. */
 export interface DriftWarning {
+  excludedPaths?: string[]
   file: string
   backup: string
   message: string
@@ -170,6 +171,8 @@ export interface BackupMetadata {
   Status?: unknown
   status?: unknown
   TenantId?: unknown
+  OmissionVersion?: unknown
+  OmissionScripts?: unknown
   Trigger?: unknown
   [key: string]: unknown
 }

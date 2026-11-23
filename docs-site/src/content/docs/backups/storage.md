@@ -191,3 +191,7 @@ The archive declares its source tenant, but it is not signed. Import only files 
 ## Related pages
 
 * [Intune backup](https://www.tenuvault.com/intune-backup): storage options and plans, on the product site
+
+## Retention when values were left out
+
+TenuVault keeps the newest fully restorable backup for each policy type when later backups leave out values for that type. Storage lifecycle rules configured in Azure apply independently of desktop retention. ZIP exports retain the omission inventory. Use a current TenuVault version to import these ZIPs.

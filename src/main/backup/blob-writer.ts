@@ -7,6 +7,35 @@ import { FetchApplicationError } from "../api/network-error"
 import type { NetworkCircuit } from "./engine"
 import { MAX_LIST_PAGES, REQUEST_ATTEMPTS, BlobClaimError, ProtectedBlobError, RequestTimeoutError, RetryableStorageError, StorageError, TokenError, isImmutabilityRefusal, requestFailure, storageError, storageFailure, withAbort, withRequestTimeout } from "./request"
 
+/**
+ * The code of a complete, well-formed Azure Storage <Error> document: a Code element first, then
+ * only flat text elements with the five XML entities, then the closing tag. Any other body, also
+ * a truncated or malformed one, confirms nothing.
+ */
+// XML character data: no markup, no "]]>", no characters XML forbids, surrogates only in pairs.
+const XML_TEXT = String.raw`(?:(?!\]\]>)[^<&\u0000-\u0008\u000B\u000C\u000E-\u001F\uD800-\uDFFF\uFFFE\uFFFF]|[\uD800-\uDBFF][\uDC00-\uDFFF]|&(?:amp|lt|gt|quot|apos);)*`
+const XML_DECLARATION = String.raw`<\?xml\s+version=(?:"1\.[0-9]"|'1\.[0-9]')(?:\s+encoding=(?:"[A-Za-z][A-Za-z0-9._-]*"|'[A-Za-z][A-Za-z0-9._-]*'))?(?:\s+standalone=(?:"(?:yes|no)"|'(?:yes|no)'))?\s*\?>`
+const AZURE_ERROR_CODE = new RegExp(String.raw`^\uFEFF?\s*(?:${XML_DECLARATION}\s*)?<Error>\s*<Code>([A-Za-z]+)<\/Code>(?:\s*<([A-Za-z][A-Za-z0-9]*)>${XML_TEXT}<\/\2>)*\s*<\/Error>\s*$`)
+
+/** An Azure error body, read up to 64 KiB. A larger body is not a confirmed result and reads as empty. */
+async function errorText(response: Response, limit = 64 * 1024): Promise<string> {
+  const reader = response.body?.getReader()
+  if (!reader) return ""
+  const chunks: Uint8Array[] = []
+  let size = 0
+  try {
+    for (;;) {
+      const part = await reader.read()
+      if (part.done) break
+      size += part.value.byteLength
+      // Not awaited: cancelling one branch of a cloned body settles only when the other is read too.
+      if (size > limit) { void reader.cancel().catch(() => undefined); return "" }
+      chunks.push(part.value)
+    }
+  } catch { return "" } finally { reader.releaseLock() }
+  return Buffer.concat(chunks).toString("utf8")
+}
+
 /** Writes blobs to Azure or, for local accounts, to the encrypted store via the fetch bridge. */
 export class BlobWriter {
   constructor(
@@ -14,6 +43,8 @@ export class BlobWriter {
     private readonly account: string,
     private readonly token: () => Promise<string>,
     private readonly network?: NetworkCircuit,
+    private readonly hideErrorDetails = false,
+    private readonly signal?: AbortSignal,
   ) {
     assertStorageAccountName(account)
   }
@@ -21,7 +52,7 @@ export class BlobWriter {
   async ensureContainer(): Promise<void> {
     await this.request(`${BACKUP_CONTAINER}?restype=container`, { method: "PUT" }, async (response) => {
       if (response.ok || response.status === 409) return
-      throw new StorageError(await storageError(response, this.account))
+      throw new StorageError(await storageError(response, this.account, this.hideErrorDetails))
     })
   }
 
@@ -30,12 +61,13 @@ export class BlobWriter {
    * A create-only body must be unique to its writer (the engine includes the run id), so a retry
    * that finds identical bytes knows its own earlier attempt created the blob.
    */
-  async put(name: string, body: string, beforeCommit?: NetworkCircuit, createOnly = false, onDispatch?: () => void, onUnconfirmed?: () => void): Promise<void> {
+  async put(name: string, body: string, beforeCommit?: NetworkCircuit, createOnly = false, onDispatch?: () => void, options?: { onUnconfirmed?: () => void; ifMatch?: string }): Promise<void> {
+    const { onUnconfirmed, ifMatch } = options ?? {}
     const path = `${BACKUP_CONTAINER}/${name.split("/").map(encodeURIComponent).join("/")}`
     // The earlier PUT may have landed. Read it back and compare it with what this writer sent.
     const landed = async (response: Response, signal: AbortSignal) => {
       const stored = await this.request(path, { method: "GET", signal }, async (readBack) => {
-        if (!readBack.ok) throw new StorageError(await storageError(readBack, this.account))
+        if (!readBack.ok) throw new StorageError(await storageError(readBack, this.account, this.hideErrorDetails))
         return readBack.text()
       })
       if (stored !== body) return false
@@ -44,7 +76,7 @@ export class BlobWriter {
     }
     await this.request(path, {
       method: "PUT",
-      headers: { "x-ms-blob-type": "BlockBlob", "content-type": "application/json", ...(createOnly ? { "if-none-match": "*" } : {}) },
+      headers: { "x-ms-blob-type": "BlockBlob", "content-type": "application/json", ...(createOnly ? { "if-none-match": "*" } : {}), ...(ifMatch ? { "if-match": ifMatch } : {}) },
       body,
     }, async (response, signal, ambiguous) => {
       if (response.ok) return
@@ -60,7 +92,7 @@ export class BlobWriter {
         || isImmutabilityRefusal(response.status, response.headers.get("x-ms-error-code") ?? ""))) {
         if (await landed(response, signal)) return
       }
-      throw new StorageError(await storageError(response, this.account))
+      throw await storageFailure(response, this.account, this.hideErrorDetails, ifMatch !== undefined)
     }, beforeCommit, onDispatch, onUnconfirmed)
   }
 
@@ -75,7 +107,7 @@ export class BlobWriter {
       const query = new URLSearchParams({ restype: "container", comp: "list", prefix, ...(delimiter ? { delimiter } : {}), ...(marker ? { marker } : {}) })
       const xml = await this.request(`${BACKUP_CONTAINER}?${query.toString()}`, { method: "GET" }, async (response) => {
         if (response.status === 404) return null
-        if (!response.ok) throw await storageFailure(response, this.account)
+        if (!response.ok) throw await storageFailure(response, this.account, this.hideErrorDetails)
         return response.text()
       })
       if (xml === null) break
@@ -95,17 +127,30 @@ export class BlobWriter {
    * (damaged, or written by something else) throws a FetchApplicationError: it is unreadable, never
    * the same as a missing blob, so retention keeps it and counts the container as shared.
    */
-  async readJson(name: string): Promise<Record<string, unknown> | null> {
+  async readJson(name: string, confirmedMissing = false): Promise<Record<string, unknown> | null> {
+    return (await this.readJsonWithETag(name, confirmedMissing))?.value ?? null
+  }
+
+  async readJsonWithETag(name: string, confirmedMissing = false): Promise<{ value: Record<string, unknown>; etag: string | null } | null> {
     return this.request(`${BACKUP_CONTAINER}/${name.split("/").map(encodeURIComponent).join("/")}`, { method: "GET" }, async (response) => {
-      if (response.status === 404) return null
-      if (!response.ok) throw await storageFailure(response, this.account)
+      if (response.status === 404) {
+        const code = response.headers.get("x-ms-error-code") ??
+          (confirmedMissing ? AZURE_ERROR_CODE.exec(await errorText(response.clone()))?.[1] : undefined)
+        if (!confirmedMissing || code === "BlobNotFound" || code === "ContainerNotFound") return null
+      }
+      if (!response.ok) throw await storageFailure(response, this.account, this.hideErrorDetails)
+      // A read that must confirm absence or presence accepts only a complete answer, never a partial one.
+      if (confirmedMissing && response.status !== 200) {
+        await response.body?.cancel().catch(() => undefined)
+        throw new FetchApplicationError(new Error(`${name.split("/").pop()} returned HTTP ${response.status} instead of the whole file.`))
+      }
       // Capped like every other backup read; an oversized file is unreadable, never buffered whole.
       const body = await readJsonCapped(response, MAX_BACKUP_ARCHIVE_BYTES)
       if (body.kind === "oversized") throw new FetchApplicationError(new Error(oversizedOwnershipFile(name.split("/").pop() ?? name)))
       if (body.kind === "invalid") throw new FetchApplicationError(new Error(`${name.split("/").pop()} is not valid JSON`))
       const value = body.value
       if (!value || typeof value !== "object" || Array.isArray(value)) throw new FetchApplicationError(new Error(`${name.split("/").pop()} is not a JSON object`))
-      return value as Record<string, unknown>
+      return { value: value as Record<string, unknown>, etag: response.headers.get("etag") }
     })
   }
 
@@ -119,7 +164,7 @@ export class BlobWriter {
         const text = await response.clone().text()
         const bodyCode = /<Code>([^<]+)<\/Code>/.exec(text)?.[1] ?? ""
         if (isImmutabilityRefusal(response.status, bodyCode)) throw new ProtectedBlobError(bodyCode)
-        throw await storageFailure(response, this.account)
+        throw await storageFailure(response, this.account, this.hideErrorDetails)
       }
     })
   }
@@ -127,6 +172,7 @@ export class BlobWriter {
   private async request<T>(path: string, init: RequestInit, read: (response: Response, signal: AbortSignal, ambiguous: boolean) => Promise<T>, beforeCommit?: NetworkCircuit, onDispatch?: () => void, onUnconfirmed?: () => void): Promise<T> {
     let ambiguous = false
     for (let attempt = 0; ; attempt++) {
+      this.signal?.throwIfAborted()
       this.network?.signal.throwIfAborted()
       beforeCommit?.signal.throwIfAborted()
       let response: Response | undefined
@@ -135,8 +181,11 @@ export class BlobWriter {
         return await withRequestTimeout(async (signal) => {
           const token = beforeCommit
             ? await withAbort(this.token, AbortSignal.any([signal, beforeCommit.signal]))
-            : await this.token()
+            : await withAbort(this.token, signal)
           signal.throwIfAborted()
+          // Recheck the wall clock after acquiring the token, including when a sleeping
+          // computer resumed before the job's abort timer could run.
+          this.network?.signal.throwIfAborted()
           beforeCommit?.signal.throwIfAborted()
           beforeCommit = undefined
           attempted = true
@@ -152,15 +201,16 @@ export class BlobWriter {
             },
           })
           if (retryableStatus(response.status) && attempt < REQUEST_ATTEMPTS - 1) {
-            throw new RetryableStorageError(await storageError(response, this.account))
+            throw new RetryableStorageError(await storageError(response, this.account, this.hideErrorDetails))
           }
           const result = await read(response, signal, ambiguous)
           signal.throwIfAborted()
           if (response.ok) this.network?.succeeded("backup storage")
           return result
-        }, this.network?.signal, init.signal ?? undefined)
+        }, this.network?.signal, init.signal ?? undefined, this.signal)
       } catch (error) {
         if (attempted && (!response || response.ok || response.status === 408 || response.status >= 500)) onUnconfirmed?.()
+        this.signal?.throwIfAborted()
         this.network?.signal.throwIfAborted()
         beforeCommit?.signal.throwIfAborted()
         if (response && (response.status === 401 || response.status === 403) && !(error instanceof ProtectedBlobError)) {
@@ -170,9 +220,8 @@ export class BlobWriter {
         if (!attempted && error instanceof RequestTimeoutError && attempt >= REQUEST_ATTEMPTS - 1) throw new TokenError(error.message, { cause: error })
         if (error instanceof FetchApplicationError || error instanceof TokenError || error instanceof StorageError || error instanceof ProtectedBlobError || init.signal?.aborted || attempt >= REQUEST_ATTEMPTS - 1) throw error
         ambiguous = true
-        const retrySignal = beforeCommit
-          ? AbortSignal.any([beforeCommit.signal, ...(this.network ? [this.network.signal] : [])])
-          : this.network?.signal
+        const retrySignal = AbortSignal.any([beforeCommit?.signal, this.network?.signal, init.signal, this.signal]
+          .filter((value): value is AbortSignal => !!value))
         await sleep(retryDelay(response, attempt), retrySignal)
       }
     }
