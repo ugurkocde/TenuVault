@@ -74,6 +74,11 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      - name: Install zsh for the remediation command tests
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends zsh
+
       - name: Unit tests
         if: github.event_name == 'pull_request'
         run: npm test
