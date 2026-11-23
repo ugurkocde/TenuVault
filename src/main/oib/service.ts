@@ -570,7 +570,7 @@ async function deploy(body: RecordJson, kind: OibRun["kind"]): Promise<OibRun> {
  * Deployed OIB policies a request names: the pack policy and the tenant policy it matched, and for
  * a change the direct assignments the admin reviewed (`expected`), so nothing unseen is replaced.
  */
-function assignTargets(value: unknown, reviewed = false): Array<{ source: string; targetId: string; expected?: Item[] }> {
+function assignTargets(value: unknown, reviewed = false): Array<{ source: string; targetId: string; expected?: Item[]; after?: Item[] }> {
   if (!Array.isArray(value) || !value.length || value.length > 200) throw new FrameworkError("Select between 1 and 200 deployed policies.")
   const targets = new Set<string>()
   return value.map((entry) => {
@@ -579,7 +579,8 @@ function assignTargets(value: unknown, reviewed = false): Array<{ source: string
     targets.add(entry.targetId.toLowerCase())
     if (!reviewed) return { source: entry.source, targetId: entry.targetId }
     if (!Array.isArray(entry.expected) || entry.expected.length > 500 || !entry.expected.every(record)) throw new FrameworkError("Review the current assignments of every policy first.")
-    return { source: entry.source, targetId: entry.targetId, expected: entry.expected as Item[] }
+    if (!Array.isArray(entry.after) || entry.after.length > 500 || !entry.after.every(record)) throw new FrameworkError("Review the current assignments of every policy first.")
+    return { source: entry.source, targetId: entry.targetId, expected: entry.expected as Item[], after: entry.after as Item[] }
   })
 }
 
@@ -741,6 +742,12 @@ async function assign(body: RecordJson): Promise<OibRun> {
         const inherited = live.assignments.filter((entry) => !directAssignments([entry]).length).map(writableAssignment)
         const additions = keepExisting ? planned.assignments.filter((entry) => !alreadyTargeted(inherited, [entry]).length) : planned.assignments
         const next = mode === "replace" ? planned.assignments : mergeAssignments(current, additions, { keepExisting })
+        // What is written must be what the review showed as "After": anything that changed the outcome
+        // since (a policy set, a filter, the merge) sends the policy back to review.
+        if (!sameAssignments(next, item.after ?? [])) {
+          run.failed.push({ name, error: "The assignments changed after the review, so nothing was changed. Review them again." })
+          continue
+        }
         if (sameAssignments(current, next)) {
           run.skipped!.push({ name, reason: "Already assigned this way." })
           continue
@@ -858,7 +865,8 @@ async function undo(body: RecordJson): Promise<UndoResult> {
       }
       const reassigned: NonNullable<OibRun["reassigned"]> = []
       // Assignment writes go around the restore write journal and are never resent, as in assign().
-      const writer = graphCaller((await tokenFor(body)).token, fetch)
+      // Only runs that changed assignments need the writer, so other undos never wait on another token.
+      const writer = run.reassigned?.length ? graphCaller((await tokenFor(body)).token, fetch) : undefined
       for (const item of run.reassigned ?? []) {
         report({ stage: `Putting back the assignments of ${item.name}`, done: results.length, total })
         const type = assignableType(item.folder)
@@ -898,7 +906,7 @@ async function undo(body: RecordJson): Promise<UndoResult> {
         }
         let response: Awaited<ReturnType<GraphCall>>
         try {
-          response = await writer("POST", `${type.path}/${encodeURIComponent(item.id)}/assign`, { [type.assign.key]: item.previous }, { noRetry: true })
+          response = await writer!("POST", `${type.path}/${encodeURIComponent(item.id)}/assign`, { [type.assign.key]: item.previous }, { noRetry: true })
         } catch (error) {
           // A lost answer stops only this policy: its entry stays for the next undo, the others go on.
           results.push({ name: item.name, id: item.id, action: "reassigned", done: false, error: `The outcome is unknown: ${message(error)}. Check the policy in Intune and undo again.` })

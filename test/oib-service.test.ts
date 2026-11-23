@@ -3,7 +3,8 @@ import { handleOib, migrateLegacyOibRuns, OIB_BACKUP_POLLING, setOibStore } from
 import { packFolder, packItems, parsePackFile, resetOibSource } from "../src/main/oib/source"
 import type { OibBackupOptions, OibCatalog, OibComparison, OibProgress, OibRun, UndoResult, ValidationRun } from "../src/shared/oib/types"
 import { memoryStore } from "./helpers"
-import type { Json } from "../src/shared/intune/registry"
+import type { Item, Json } from "../src/shared/intune/registry"
+import { assignmentsFor, mergeAssignments, parseSpec } from "../src/shared/oib/assignments"
 
 const tenantId = "11111111-1111-1111-1111-111111111111"
 const appId = "22222222-2222-2222-2222-222222222222"
@@ -368,6 +369,13 @@ describe("deployments", () => {
   })
 })
 
+/** A reviewed item for oib-assign, with "after" computed as the review computes it (SC is a device policy). */
+const reviewedItem = (expected: unknown, mode: string, spec: Json, extra: Record<string, unknown> = {}): Json => {
+  const planned = assignmentsFor({ folder: "ConfigurationPolicies", scope: "device" }, "windows", parseSpec(spec)).assignments
+  const after = mode === "replace" ? planned : mergeAssignments(expected as Item[], planned)
+  return { source: SC, targetId: EXISTING, expected: expected as Json, after: after as Json, ...extra } as Json
+}
+
 describe("assignments", () => {
   const spec = { deviceGroups: [{ id: DEVICES }], userGroups: [{ id: USERS }], excludeDeviceGroups: [{ id: EXCLUDED }], excludeUserGroups: [], unmarked: "none", filters: { windows10AndLater: { id: WIN_FILTER, mode: "include" } } }
   const filters = [{ id: WIN_FILTER, displayName: "Corporate Windows", platform: "windows10AndLater" }, { id: MAC_FILTER, displayName: "Corporate Macs", platform: "macOS" }]
@@ -449,7 +457,7 @@ describe("assignments", () => {
     expect(read.policies[0]).toMatchObject({ inherited: 1, assignments: [{ target: { groupId: "prod" } }] })
 
     const reviewed = [{ target: { "@odata.type": "#microsoft.graph.groupAssignmentTarget", groupId: "prod" } }]
-    const run = await handleOib({ ...base, action: "oib-assign", commit, backup: { mode: "none" }, mode: "add", items: [{ source: SC, targetId: EXISTING, expected: reviewed }], assignments: { ...spec, filters: {} } }) as OibRun
+    const run = await handleOib({ ...base, action: "oib-assign", commit, backup: { mode: "none" }, mode: "add", items: [reviewedItem(reviewed, "add", { ...spec, filters: {} })], assignments: { ...spec, filters: {} } }) as OibRun
     expect(run).toMatchObject({ kind: "assign", assignMode: "add", failed: [], reassigned: [{ id: EXISTING, assignment: { include: 1, exclude: 1 } }] })
     expect(run.reassigned![0]).not.toHaveProperty("previous")
     expect(run.reassigned![0]).not.toHaveProperty("applied")
@@ -464,11 +472,14 @@ describe("assignments", () => {
     expect(await handleOib({ action: "oib-runs", tenantId })).toMatchObject({ runs: [{ runId: run.runId, kind: "assign" }] })
 
     const now = state.assignments![EXISTING] as never[]
-    const again = await handleOib({ ...base, action: "oib-assign", commit, backup: { mode: "none" }, mode: "add", items: [{ source: SC, targetId: EXISTING, expected: now }], assignments: { ...spec, filters: {} } }) as OibRun
+    const again = await handleOib({ ...base, action: "oib-assign", commit, backup: { mode: "none" }, mode: "add", items: [reviewedItem(now, "add", { ...spec, filters: {} })], assignments: { ...spec, filters: {} } }) as OibRun
     expect(again).toMatchObject({ reassigned: [], skipped: [{ reason: "Already assigned this way." }] })
     // What the admin reviewed no longer matches the tenant: nothing changes.
-    const stale = await handleOib({ ...base, action: "oib-assign", commit, backup: { mode: "none" }, mode: "replace", items: [{ source: SC, targetId: EXISTING, expected: reviewed }], assignments: { deviceGroups: [], userGroups: [], excludeDeviceGroups: [] } }) as OibRun
+    const stale = await handleOib({ ...base, action: "oib-assign", commit, backup: { mode: "none" }, mode: "replace", items: [reviewedItem(reviewed, "replace", { deviceGroups: [], userGroups: [], excludeDeviceGroups: [] })], assignments: { deviceGroups: [], userGroups: [], excludeDeviceGroups: [] } }) as OibRun
     expect(stale).toMatchObject({ reassigned: [], failed: [{ error: "The assignments changed after the review, so nothing was changed. Review them again." }] })
+    // The reviewed "After" must be what the service would write.
+    const otherAfter = await handleOib({ ...base, action: "oib-assign", commit, backup: { mode: "none" }, mode: "add", items: [reviewedItem(now, "add", { ...spec, filters: {} }, { after: [] })], assignments: { deviceGroups: [{ id: USERS }], userGroups: [], filters: {} } }) as OibRun
+    expect(otherAfter).toMatchObject({ reassigned: [], failed: [{ error: "The assignments changed after the review, so nothing was changed. Review them again." }] })
     expect(state.assignments![EXISTING]).toEqual(now)
 
     const undone = await handleOib({ action: "oib-undo", tenantId, appId, runId: run.runId }) as UndoResult
@@ -481,7 +492,7 @@ describe("assignments", () => {
     const state: Tenant = { policies: [{ id: EXISTING, name: "Win - OIB - SC - Test - v3.8" }], assignments: { [EXISTING]: [{ id: "a1", target: { "@odata.type": "#microsoft.graph.groupAssignmentTarget", groupId: "prod" } }] } }
     vi.stubGlobal("fetch", world(state, writes))
     await source()
-    const assign = (mode: string, assignments: Json) => handleOib({ ...base, action: "oib-assign", commit, backup: { mode: "none" }, mode, items: [{ source: SC, targetId: EXISTING, expected: state.assignments![EXISTING] as Json }], assignments })
+    const assign = (mode: string, assignments: Json) => handleOib({ ...base, action: "oib-assign", commit, backup: { mode: "none" }, mode, items: [reviewedItem(state.assignments![EXISTING], mode, assignments)], assignments })
     await assign("replace", { ...spec, excludeDeviceGroups: [], filters: {} })
     expect(state.assignments![EXISTING]).toEqual([{ target: { "@odata.type": "#microsoft.graph.groupAssignmentTarget", groupId: DEVICES } }])
     const cleared = await assign("replace", { deviceGroups: [], userGroups: [], excludeDeviceGroups: [] }) as OibRun
@@ -498,7 +509,7 @@ describe("assignments", () => {
     const inner = world(state, writes)
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => String(input).endsWith(`${EXISTING}/assignments`) ? Response.json({ error: { code: "BadRequest", message: "busy" } }, { status: 400 }) : inner(input, init)))
     await source()
-    const run = await handleOib({ ...base, action: "oib-assign", commit, backup: { mode: "none" }, mode: "replace", items: [{ source: SC, targetId: EXISTING, expected: [] }], assignments: { deviceGroups: [], userGroups: [], excludeDeviceGroups: [] } }) as OibRun
+    const run = await handleOib({ ...base, action: "oib-assign", commit, backup: { mode: "none" }, mode: "replace", items: [reviewedItem([], "replace", { deviceGroups: [], userGroups: [], excludeDeviceGroups: [] })], assignments: { deviceGroups: [], userGroups: [], excludeDeviceGroups: [] } }) as OibRun
     expect(run.reassigned).toEqual([])
     expect(run.failed[0]!.error).toMatch(/could not be read/)
     expect(writes.filter(w => !w.startsWith("GET "))).toEqual([])
@@ -511,7 +522,7 @@ describe("assignments", () => {
     await source()
     const assign = (item: Json) => handleOib({ ...base, action: "oib-assign", commit, backup: { mode: "none" }, mode: "replace", items: [item], assignments: { deviceGroups: [DEVICES], userGroups: [], excludeDeviceGroups: [] } })
     await expect(assign({ source: SC, targetId: EXISTING })).rejects.toThrow("Review the current assignments")
-    const run = await assign({ source: SC, targetId: EXISTING, expected: [] }) as OibRun
+    const run = await assign(reviewedItem([], "replace", { deviceGroups: [DEVICES], userGroups: [], excludeDeviceGroups: [] })) as OibRun
     expect(run).toMatchObject({ reassigned: [], failed: [{ error: "This tenant policy is not the deployed copy of this OIB policy. Compare again." }] })
     const read = await handleOib({ ...base, action: "oib-assignments-read", commit, items: [{ source: SC, targetId: EXISTING }] }) as { policies: Array<{ error?: string }> }
     expect(read.policies[0]!.error).toMatch(/not the deployed copy/)
@@ -525,7 +536,7 @@ describe("assignments", () => {
     let refuse = true
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => refuse && init?.method === "POST" && String(input).endsWith("/assign") ? Response.json({ error: { code: "BadRequest", message: "Refused" } }, { status: 400 }) : inner(input, init)))
     await source()
-    const assign = () => handleOib({ ...base, action: "oib-assign", commit, backup: { mode: "none" }, mode: "add", items: [{ source: SC, targetId: EXISTING, expected: state.assignments![EXISTING] as Json }], assignments: { deviceGroups: [DEVICES], userGroups: [], excludeDeviceGroups: [] } }) as Promise<OibRun>
+    const assign = () => handleOib({ ...base, action: "oib-assign", commit, backup: { mode: "none" }, mode: "add", items: [reviewedItem(state.assignments![EXISTING], "add", { deviceGroups: [DEVICES], userGroups: [], excludeDeviceGroups: [] })], assignments: { deviceGroups: [DEVICES], userGroups: [], excludeDeviceGroups: [] } }) as Promise<OibRun>
     expect(await assign()).toMatchObject({ reassigned: [], failed: [{ error: "Refused" }] })
     expect(await handleOib({ action: "oib-runs", tenantId })).toEqual({ runs: [] })
     refuse = false
@@ -556,7 +567,7 @@ describe("assignments", () => {
       return inner(input, init)
     }))
     await source()
-    const run = await handleOib({ ...base, action: "oib-assign", commit, backup: { mode: "none" }, mode: "add", items: [{ source: SC, targetId: EXISTING, expected: [] }], assignments: { deviceGroups: [DEVICES], userGroups: [], excludeDeviceGroups: [] } }) as OibRun
+    const run = await handleOib({ ...base, action: "oib-assign", commit, backup: { mode: "none" }, mode: "add", items: [reviewedItem([], "add", { deviceGroups: [DEVICES], userGroups: [], excludeDeviceGroups: [] })], assignments: { deviceGroups: [DEVICES], userGroups: [], excludeDeviceGroups: [] } }) as OibRun
     expect(run).toMatchObject({ reassigned: [{ id: EXISTING, pending: true }], failed: [{ error: "The outcome is unknown: Microsoft Graph returned 504." }] })
     expect(await handleOib({ action: "oib-undo", tenantId, appId, runId: run.runId })).toMatchObject({ run: null, results: [{ action: "reassigned", done: true }] })
     expect(state.assignments![EXISTING]).toEqual([])
@@ -575,7 +586,7 @@ describe("assignments", () => {
       return inner(input, init)
     }))
     await source()
-    const assign = () => handleOib({ ...base, action: "oib-assign", commit, backup: { mode: "none" }, mode: "add", items: [{ source: SC, targetId: EXISTING, expected: [] }], assignments: { deviceGroups: [DEVICES], userGroups: [] } }) as Promise<OibRun>
+    const assign = () => handleOib({ ...base, action: "oib-assign", commit, backup: { mode: "none" }, mode: "add", items: [reviewedItem([], "add", { deviceGroups: [DEVICES], userGroups: [] })], assignments: { deviceGroups: [DEVICES], userGroups: [] } }) as Promise<OibRun>
     expect(await assign()).toMatchObject({ reassigned: [], failed: [{ error: "Too many requests" }] })
     expect(posts).toBe(1)
     // A gateway error: the write may still land, so a quick undo keeps the record.
@@ -604,7 +615,7 @@ describe("assignments", () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => refuse && init?.method === "POST" && String(input).endsWith("/assign")
       ? Response.json({ error: { code: "ResourceNotFound", message: "Not found" } }, { status: 404 }) : inner(input, init)))
     await source()
-    const run = await handleOib({ ...base, action: "oib-assign", commit, backup: { mode: "none" }, mode: "add", items: [{ source: SC, targetId: EXISTING, expected: [] }], assignments: { deviceGroups: [DEVICES], userGroups: [] } }) as OibRun
+    const run = await handleOib({ ...base, action: "oib-assign", commit, backup: { mode: "none" }, mode: "add", items: [reviewedItem([], "add", { deviceGroups: [DEVICES], userGroups: [] })], assignments: { deviceGroups: [DEVICES], userGroups: [] } }) as OibRun
     refuse = true
     const undone = await handleOib({ action: "oib-undo", tenantId, appId, runId: run.runId }) as UndoResult
     expect(undone).toMatchObject({ run: { runId: run.runId }, results: [{ action: "reassigned", done: false }] })
@@ -619,7 +630,7 @@ describe("assignments", () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => init?.method === "POST" && String(input).endsWith("/assign")
       ? Response.json({ error: { code: "BadRequest", message: "Refused" } }, { status: 400 }) : inner(input, init)))
     await source()
-    await handleOib({ ...base, action: "oib-assign", commit, backup: { mode: "none" }, mode: "add", items: [{ source: SC, targetId: EXISTING, expected: [] }], assignments: { deviceGroups: [DEVICES], userGroups: [] } })
+    await handleOib({ ...base, action: "oib-assign", commit, backup: { mode: "none" }, mode: "add", items: [reviewedItem([], "add", { deviceGroups: [DEVICES], userGroups: [] })], assignments: { deviceGroups: [DEVICES], userGroups: [] } })
     expect((await handleOib({ action: "oib-runs", tenantId }) as { runs: OibRun[] }).runs.map(r => r.runId).sort()).toEqual(older.map(r => r.runId).sort())
   })
 
@@ -632,7 +643,7 @@ describe("assignments", () => {
       return inner(input, init)
     }))
     await source()
-    const run = await handleOib({ ...base, action: "oib-assign", commit, backup: { mode: "none" }, mode: "add", items: [{ source: SC, targetId: EXISTING, expected: [] }], assignments: { deviceGroups: [DEVICES], userGroups: [] } }) as OibRun
+    const run = await handleOib({ ...base, action: "oib-assign", commit, backup: { mode: "none" }, mode: "add", items: [reviewedItem([], "add", { deviceGroups: [DEVICES], userGroups: [] })], assignments: { deviceGroups: [DEVICES], userGroups: [] } }) as OibRun
     drop = true
     const undone = await handleOib({ action: "oib-undo", tenantId, appId, runId: run.runId }) as UndoResult
     expect(undone).toMatchObject({ run: { runId: run.runId }, results: [{ action: "reassigned", done: false, error: expect.stringContaining("The outcome is unknown") }] })

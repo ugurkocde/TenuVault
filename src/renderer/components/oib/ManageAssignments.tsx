@@ -192,7 +192,7 @@ function ReviewAssign({ batches: given, onBack, onFinished, next }: { batches: D
   function start() {
     setError("")
     // Only policies the review read and that change are sent, each with the assignments it showed.
-    const reviewed = new Map(preview.filter(p => p.live?.assignments && p.after && !p.unchanged).map(p => [p.item.targetId!, p.live!.assignments!]))
+    const reviewed = new Map(preview.filter(p => p.live?.assignments && p.after && !p.unchanged).map(p => [p.item.targetId!, { expected: p.live!.assignments!, after: p.after! }]))
     const sending = batches.map(b => ({ ...b, items: b.items.filter(i => reviewed.has(i.targetId!)) })).filter(b => b.items.length)
     try {
       void startJob<DeployOutcome[]>({ tenantId: tenant!.tenantId, tenantName: tenant!.name, kind: "assign", flow: "assign", label: `Changing assignments in ${tenant!.name}` }, async context => {
@@ -200,7 +200,7 @@ function ReviewAssign({ batches: given, onBack, onFinished, next }: { batches: D
         const results = await deployToTenant(sending, { backup: request, storage }, async (batch, backupRequest) => {
           context.update({ detail: batches.length > 1 ? `${tenant!.name}, ${OIB_PLATFORMS[batch.platform].label}` : undefined })
           const run = await oibRequest<OibRun>({ action: "oib-assign", tenantId: tenant!.tenantId, appId: tenant!.appId, storageAccountName: tenant!.storageAccountName,
-            platform: batch.platform, commit: batch.commit, ...(batch.tag ? { tag: batch.tag } : {}), items: batch.items.map(i => ({ source: i.source, targetId: i.targetId, expected: reviewed.get(i.targetId!) })), mode,
+            platform: batch.platform, commit: batch.commit, ...(batch.tag ? { tag: batch.tag } : {}), items: batch.items.map(i => ({ source: i.source, targetId: i.targetId, ...reviewed.get(i.targetId!) })), mode,
             // Only the filters this platform's policies use, so a stale filter of another platform cannot stop it.
             assignments: specFor(assignment, assignmentTargets(batch.items.map(i => ({ ...i, platform: batch.platform })))), backup: backupRequest })
           outcomes.push({ tenantId: tenant!.tenantId, tenantName: tenant!.name, platform: batch.platform, run, backup: backupRequest })
