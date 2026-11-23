@@ -335,7 +335,7 @@ export function DeployResult({ outcomes, kind = "deploy" }: { outcomes: DeployOu
     const name = `${outcome.tenantName}, ${OIB_PLATFORMS[outcome.platform].label}`
     if (error || !run) return <div key={index} role="alert" className="flex items-start gap-3 rounded-2xl bg-red-50 p-4 text-sm text-red-800"><XCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" /><p><strong className="font-medium">{name}:</strong> {error ?? "No result."}</p></div>
     const list = [
-      ...run.created.map(c => ({ text: `${c.name}: ${c.partial ? "created incomplete, kept so undo can remove it" : "created"}${c.warnings ? `. ${c.warnings.join(" ")}` : ""}`, tone: "" })),
+      ...run.created.map(c => ({ text: `${c.name}: ${c.partial ? "created incomplete, kept so undo can remove it" : "created"}${c.assignmentUnknown ? ". Its assignments may or may not be in place: check it in Intune" : ""}${c.warnings ? `. ${c.warnings.join(" ")}` : ""}`, tone: c.assignmentUnknown ? "text-amber-900" : "" })),
       ...run.updated.map(u => ({ text: `${u.previousName}: ${u.partial ? "partly updated" : "updated in place"} to ${u.name}${u.warnings ? `. ${u.warnings.join(" ")}` : ""}`, tone: "" })),
       ...(run.skipped ?? []).map(s => ({ text: `${s.name}: ${s.reason}`, tone: "text-gray-600" })),
       ...run.failed.map(f => ({ text: `${f.name}: ${f.error}`, tone: "text-red-800" })),

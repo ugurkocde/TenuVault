@@ -583,6 +583,9 @@ async function currentMatches(graph: GraphCall, pack: LoadedPack, folders: strin
 }
 
 const NOT_THE_POLICY = "This tenant policy is not the deployed copy of this OIB policy. Compare again."
+/** Types whose policy-set assignments Intune reports as direct (Microsoft Learn, policy sets known issues). */
+const REPORTS_SET_AS_DIRECT = new Set(["AppProtectionIOS", "AppProtectionAndroid"])
+const REPLACE_APP_PROTECTION = "Replace is not available for app protection policies: Intune reports their policy set assignments as direct ones, so replacing could remove them. Nothing was changed; add groups instead."
 
 /** The registry type of a pack policy, when its assignments can be written with /assign. */
 function assignableType(folder: string) {
@@ -671,7 +674,8 @@ async function assign(body: RecordJson): Promise<OibRun> {
       const matched = await currentMatches(graph, pack, written)
       // The run's own record is the journal of these writes: the restore write journal would replay an
       // old answer for an identical later write instead of sending it.
-      const writer = graphCaller(token, fetch, { refreshToken: async () => (await tokenFor(body, true)).token })
+      // A token taken now, after the backup: the writer never refreshes and resends (see noRetry).
+      const writer = graphCaller((await tokenFor(body)).token, fetch)
       const run: OibRun = {
         runId: randomUUID(), tenantId: tenant, createdAt: new Date().toISOString(), kind: "assign", platform, reference: pack.catalog.reference, commit: pack.catalog.commit,
         ...(backupFolder ? { backupFolder } : {}), backupMode: backup.mode, assignments: checked.spec, assignMode: mode, created: [], updated: [], reassigned: [], failed: [], skipped: [],
@@ -694,6 +698,12 @@ async function assign(body: RecordJson): Promise<OibRun> {
         const name = live.name ?? policy.name
         if (matched.get(item.source) !== item.targetId.toLowerCase()) {
           run.failed.push({ name, error: NOT_THE_POLICY })
+          continue
+        }
+        // Intune reports policy-set assignments of iOS and Android app protection as direct, so a
+        // replace could remove targeting that comes from a policy set: only adding is offered there.
+        if (mode === "replace" && REPORTS_SET_AS_DIRECT.has(policy.folder)) {
+          run.failed.push({ name, error: REPLACE_APP_PROTECTION })
           continue
         }
         const current = directAssignments(live.assignments).map(writableAssignment)
@@ -810,7 +820,7 @@ async function undo(body: RecordJson): Promise<UndoResult> {
       }
       const reassigned: NonNullable<OibRun["reassigned"]> = []
       // Assignment writes go around the restore write journal and are never resent, as in assign().
-      const writer = graphCaller(token, fetch, { refreshToken: async () => (await tokenFor(body, true)).token })
+      const writer = graphCaller((await tokenFor(body)).token, fetch)
       for (const item of run.reassigned ?? []) {
         report({ stage: `Putting back the assignments of ${item.name}`, done: results.length, total })
         const type = assignableType(item.folder)

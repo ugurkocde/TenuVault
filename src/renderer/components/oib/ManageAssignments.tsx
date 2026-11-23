@@ -27,6 +27,8 @@ type Step = "platforms" | "select" | "review"
 const STEPS = [{ id: "platforms", label: "Platforms" }, { id: "select", label: "Policies" }, { id: "review", label: "Review and assign" }]
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
 const SCOPE_LABEL = { device: "Device", user: "User" } as const
+/** App protection types whose policy set assignments Intune reports as direct; Replace is refused for them. */
+const REPORTS_SET_AS_DIRECT = new Set(["AppProtectionIOS", "AppProtectionAndroid"])
 
 /** Deployed OIB policies whose assignments can be managed: matched to one tenant policy of the same type. */
 const assignable = (r: MatchRow) => !!r.match.tenant && r.match.tenant.folder === r.policy.folder && (r.match.status === "current" || r.match.status === "outdated" || r.match.status === "newer")
@@ -176,9 +178,11 @@ function ReviewAssign({ batches: given, onBack, onFinished, next }: { batches: D
   /** Each selected policy now and after the change, computed here the way the main process will. */
   const preview = items.map(item => {
     const live = known?.policies.find(p => p.targetId === item.targetId)
+    // Intune reports policy set assignments of app protection as direct, so replacing them is refused (see the main process).
+    const blocked = mode === "replace" && REPORTS_SET_AS_DIRECT.has(item.folder ?? "")
     const planned = assignmentsFor({ folder: item.folder ?? "", scope: item.scope }, item.platform, spec).assignments
-    const after = live?.assignments ? mode === "replace" ? planned : mergeAssignments(live.assignments, planned) : undefined
-    return { item, live, after, unchanged: !!live?.assignments && !!after && sameAssignments(live.assignments, after) }
+    const after = live?.assignments && !blocked ? mode === "replace" ? planned : mergeAssignments(live.assignments, planned) : undefined
+    return { item, live, after, blocked, unchanged: !!live?.assignments && !!after && sameAssignments(live.assignments, after) }
   })
   const changing = preview.filter(p => p.after && !p.unchanged).length
   const describe = (list: Item[]) => list.length ? list.map(a => describeAssignment(a, names, filterNames)).join("; ") : "Not assigned"
@@ -268,9 +272,9 @@ function ReviewAssign({ batches: given, onBack, onFinished, next }: { batches: D
       <h4 id="oib-assign-preview" className="text-sm font-medium text-gray-800">Current and new assignments</h4>
       {current.loading ? <p role="status" className="mt-2 text-sm text-gray-500">Reading the current assignments…</p>
         : current.error ? <p role="alert" className="mt-2 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-800">{current.error}</p>
-        : <ul className="mt-2 max-h-96 divide-y divide-gray-100 overflow-auto rounded-2xl bg-gray-50 text-sm">{preview.map(({ item, live, after, unchanged }) => <li key={item.targetId} className="p-3">
+        : <ul className="mt-2 max-h-96 divide-y divide-gray-100 overflow-auto rounded-2xl bg-gray-50 text-sm">{preview.map(({ item, live, after, unchanged, blocked }) => <li key={item.targetId} className="p-3">
           <p className="text-gray-900">{live?.name ?? item.targetName ?? item.name}<span className="ml-2 text-xs text-gray-500">{item.scope ? `${SCOPE_LABEL[item.scope]} policy` : "Not marked"}</span></p>
-          {live?.error ? <p className="mt-1 text-xs text-red-800">{live.error} It is left unchanged.</p> : <>
+          {live?.error ? <p className="mt-1 text-xs text-red-800">{live.error} It is left unchanged.</p> : blocked ? <p className="mt-1 text-xs text-amber-800">Replace is not available for app protection policies, because Intune reports their policy set assignments as direct ones. It is left unchanged; add groups to it instead.</p> : <>
             <p className="mt-1 text-xs text-gray-600">Now: {describe(live?.assignments ?? [])}{live?.inherited ? ` (and ${plural(live.inherited, "assignment", "assignments")} from a policy set)` : ""}</p>
             <p className={cn("mt-0.5 text-xs", unchanged ? "text-gray-500" : "text-gray-900")}>{unchanged ? "No change" : `After: ${describe(after ?? [])}`}</p>
           </>}

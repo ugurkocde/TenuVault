@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { readCurrentAssignments } from "../src/main/oib/assignments"
-import type { GraphCall } from "../src/portal/lib/policies/graph-restore"
+import { graphCaller, type GraphCall } from "../src/portal/lib/policies/graph-restore"
 import { typeForFolder, type Item } from "../src/shared/intune/registry"
 
 const ID = "11111111-2222-4333-8444-555555555555"
@@ -37,6 +37,25 @@ describe("reading only a policy's assignments", () => {
     expect(calls).toEqual([`GET deviceManagement/groupPolicyConfigurations/${ID}?$select=id,displayName&$expand=assignments`])
     const missing = graph({ [`deviceManagement/groupPolicyConfigurations/${ID}?$select=id,displayName&$expand=assignments`]: { status: 404, body: { error: { code: "ResourceNotFound" } } } })
     expect(await readCurrentAssignments(missing.call, type, ID)).toBeUndefined()
+  })
+
+  it("follows an expanded list onto its further pages", async () => {
+    const type = typeForFolder("GroupPolicyConfigurations")!
+    const { call } = graph({
+      [`deviceManagement/groupPolicyConfigurations/${ID}?$select=id,displayName&$expand=assignments`]: { body: { id: ID, displayName: "Admin template", assignments: [target("a")], "assignments@odata.nextLink": `https://graph.microsoft.com/beta/deviceManagement/groupPolicyConfigurations/${ID}/assignments?$skiptoken=2` } },
+      [`deviceManagement/groupPolicyConfigurations/${ID}/assignments?$skiptoken=2`]: { body: { value: [target("b")] } },
+    })
+    expect((await readCurrentAssignments(call, type, ID))!.assignments).toEqual([target("a"), target("b")])
+  })
+
+  it("sends a write marked noRetry once, even after a 401 or 429", async () => {
+    for (const status of [401, 429]) {
+      let sent = 0
+      const fetcher = (async () => { sent++; return Response.json({ error: { message: "no" } }, { status, headers: { "retry-after": "0" } }) }) as unknown as typeof fetch
+      const call = graphCaller("token", fetcher, { refreshToken: async () => "fresh", sleep: async () => undefined })
+      expect((await call("POST", `deviceManagement/configurationPolicies/${ID}/assign`, { assignments: [] }, { noRetry: true })).status).toBe(status)
+      expect(sent).toBe(1)
+    }
   })
 
   it("fails instead of returning a partial list", async () => {

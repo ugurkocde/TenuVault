@@ -199,7 +199,7 @@ async function recordOib(
   if (typeof body?.tenantId !== "string" || !body.tenantId || !["oib-deploy", "oib-fix", "oib-undo", "oib-assign"].includes(body.action ?? "") || !body.appId) return
   const data = await response.json().catch(() => ({})) as {
     runId?: string; reference?: string; backupFolder?: string; pilotGroupId?: string; error?: string; assignMode?: string
-    created?: Array<{ assignment?: unknown }>; updated?: unknown[]; reassigned?: Array<{ pending?: unknown }>; failed?: unknown[]; skipped?: unknown[]; results?: { done: boolean }[]
+    created?: Array<{ assignment?: unknown; assignmentUnknown?: unknown }>; updated?: unknown[]; reassigned?: Array<{ pending?: unknown }>; failed?: unknown[]; skipped?: unknown[]; results?: { done: boolean }[]
   }
   const undo = body.action === "oib-undo"
   const failed = undo ? (data.results ?? []).filter((r) => !r.done).length : (data.failed?.length ?? 0)
@@ -224,7 +224,7 @@ async function recordOib(
       ...(undo
         ? { undone: (data.results ?? []).filter((r) => r.done).length, notUndone: failed }
         : reassign ? { reassigned: (data.reassigned ?? []).filter((item) => item?.pending !== true).length, uncertain: (data.reassigned ?? []).filter((item) => item?.pending === true).length, skipped: data.skipped?.length ?? 0, failed, backupFolder: data.backupFolder, assignMode: data.assignMode === "replace" ? "replace" : "add" }
-        : { created: data.created?.length ?? 0, updated: data.updated?.length ?? 0, skipped: data.skipped?.length ?? 0, failed, backupFolder: data.backupFolder, assignedPolicies: (data.created ?? []).filter((item) => item?.assignment).length }),
+        : { created: data.created?.length ?? 0, updated: data.updated?.length ?? 0, skipped: data.skipped?.length ?? 0, failed, backupFolder: data.backupFolder, assignedPolicies: (data.created ?? []).filter((item) => item?.assignment).length, uncertain: (data.created ?? []).filter((item) => item?.assignmentUnknown === true).length }),
       error: data.error ? { code: "OIB_FAILED", message: "Operation failed" } : undefined,
     },
   }

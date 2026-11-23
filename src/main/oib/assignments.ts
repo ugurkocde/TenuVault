@@ -155,12 +155,17 @@ export async function readCurrentAssignments(graph: GraphCall, type: IntuneType,
   if (gone(head.status, head.body)) return undefined
   if (head.status >= 300) throw new FrameworkError(`The policy could not be read (${head.status}). ${errorOf(head.body)}`.trim(), 502)
   const name = typeof head.body[type.nameKey] === "string" ? (head.body[type.nameKey] as string) : undefined
-  if (!separate) {
-    if (!Array.isArray(head.body.assignments)) throw new FrameworkError("The assignments of the policy were not returned.", 502)
-    return { name, assignments: head.body.assignments as Item[] }
-  }
   const assignments: Item[] = []
   let next: string | undefined = `${path}/assignments`
+  if (!separate) {
+    if (!Array.isArray(head.body.assignments)) throw new FrameworkError("The assignments of the policy were not returned.", 502)
+    assignments.push(...(head.body.assignments as Item[]))
+    // An expanded list can continue on further pages; a list cut short would drop groups from the write and from undo.
+    const link = head.body["assignments@odata.nextLink"]
+    if (link == null || link === "") return { name, assignments }
+    if (!(typeof link === "string" && link.startsWith(GRAPH_BETA))) throw new FrameworkError("The assignments of the policy could not be read completely.", 502)
+    next = link.slice(GRAPH_BETA.length)
+  }
   for (let page = 0; next; page++) {
     if (page >= MAX_ASSIGNMENT_PAGES) throw new FrameworkError("The assignments of the policy could not be read completely.", 502)
     const response = await graph("GET", next)
