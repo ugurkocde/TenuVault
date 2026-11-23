@@ -3,6 +3,7 @@ import { handleOib, migrateLegacyOibRuns, OIB_BACKUP_POLLING, setOibStore } from
 import { packFolder, packItems, parsePackFile, resetOibSource } from "../src/main/oib/source"
 import type { OibBackupOptions, OibCatalog, OibComparison, OibProgress, OibRun, UndoResult, ValidationRun } from "../src/shared/oib/types"
 import { memoryStore } from "./helpers"
+import type { Json } from "../src/shared/intune/registry"
 
 const tenantId = "11111111-1111-1111-1111-111111111111"
 const appId = "22222222-2222-2222-2222-222222222222"
@@ -406,7 +407,7 @@ describe("assignments", () => {
     const writes: string[] = []
     vi.stubGlobal("fetch", world({ policies: [], groups: [DEVICES, EXCLUDED], filters }, writes))
     await source()
-    const deploy = (assignments: unknown) => handleOib({ ...base, action: "oib-deploy", commit, items: [{ source: SC, mode: "create" }], assignments })
+    const deploy = (assignments: Json) => handleOib({ ...base, action: "oib-deploy", commit, items: [{ source: SC, mode: "create" }], assignments })
     await expect(deploy(spec)).rejects.toThrow(`This group does not exist in the tenant: ${USERS}. Nothing was changed.`)
     await expect(deploy({ ...spec, userGroups: [], filters: { windows10AndLater: { id: MAC_FILTER, mode: "include" } } })).rejects.toThrow("Corporate Macs is not a Windows filter")
     await expect(deploy({ ...spec, userGroups: [], filters: { windows10AndLater: { id: "99999999-0000-4000-8000-000000000000", mode: "exclude" } } })).rejects.toThrow("does not exist in the tenant")
@@ -469,7 +470,7 @@ describe("assignments", () => {
     const state: Tenant = { policies: [{ id: EXISTING, name: "Win - OIB - SC - Test - v3.8" }], assignments: { [EXISTING]: [{ id: "a1", target: { "@odata.type": "#microsoft.graph.groupAssignmentTarget", groupId: "prod" } }] } }
     vi.stubGlobal("fetch", world(state, writes))
     await source()
-    const assign = (mode: string, assignments: unknown) => handleOib({ ...base, action: "oib-assign", commit, backup: { mode: "none" }, mode, items: [{ source: SC, targetId: EXISTING }], assignments })
+    const assign = (mode: string, assignments: Json) => handleOib({ ...base, action: "oib-assign", commit, backup: { mode: "none" }, mode, items: [{ source: SC, targetId: EXISTING }], assignments })
     await assign("replace", { ...spec, excludeGroups: [], filters: {} })
     expect(state.assignments![EXISTING]).toEqual([{ target: { "@odata.type": "#microsoft.graph.groupAssignmentTarget", groupId: DEVICES } }])
     const cleared = await assign("replace", { deviceGroups: [], userGroups: [], excludeGroups: [] }) as OibRun

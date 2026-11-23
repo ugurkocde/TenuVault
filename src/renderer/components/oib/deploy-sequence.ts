@@ -1,3 +1,4 @@
+import { oibScope, type OibScope } from "../../../shared/oib/assignments"
 import type { DeployItem, OibBackupChoice, OibCatalog, OibPlatform, OibRun } from "../../../shared/oib/types"
 
 /** A policy to deploy, with the names and registry folder the review shows. */
@@ -7,6 +8,8 @@ export interface DeployEntry extends DeployItem {
   folder?: string
   /** The tenant policy an update replaces, by name. */
   targetName?: string
+  /** Device or user targeted, as OIB marks the policy; undefined when it is not marked. */
+  scope?: OibScope
 }
 
 /** The policies of one platform pack to deploy. */
@@ -35,7 +38,10 @@ export function batchFor(catalog: OibCatalog, items: Array<DeployItem & { target
   const policies = new Map(catalog.policies.map(p => [p.source, p]))
   return {
     platform: catalog.platform, commit: catalog.commit, tag: catalog.tag, reference: catalog.reference,
-    items: items.map(item => ({ ...item, name: policies.get(item.source)?.name, folder: policies.get(item.source)?.folder })),
+    items: items.map(item => {
+      const policy = policies.get(item.source)
+      return { ...item, name: policy?.name, folder: policy?.folder, ...(policy && oibScope(policy) ? { scope: oibScope(policy) } : {}) }
+    }),
   }
 }
 
