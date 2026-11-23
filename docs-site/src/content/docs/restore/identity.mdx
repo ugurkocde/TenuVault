@@ -158,3 +158,15 @@ Delegated consent remains blocked after inconsistent live lifecycle results. One
 Service-principal references resolve through the app IDs stored in the owned backup, never by replaying saved object IDs. A missing or ambiguous match blocks the relationship. Principal-specific delegated grants and user or group app role assignments remain blocked pending verified typed principal mappings. Raw saved user or group IDs are never replayed for these grants. Consent scopes merge with the current grant, adding only. Imported consent and assignments and all cross-tenant directory restores are refused. There is no bulk consent approval or exact-owner removal mode.
 
 Token lifetime, claims mapping, home realm discovery and app management policy assignments reference the corresponding layer 8 configuration types. They are not replayed as app metadata. Bindings remain blocked until their typed configuration mappings and binding contracts are verified. Display names cannot uniquely reconcile a lost application or gallery create response, so those candidates remain blocked too. Non-gallery enterprise app creation also remains blocked because delegated caller ownership and inherited backing-app access have no verified safety contract.
+
+## Review roles, PIM and administrative unit relationships
+
+Open **Review directory restore** on a role assignment, PIM schedule or administrative unit in an owned backup for the connected tenant. Each row shows the current principal name and type, the privilege and scope, and any saved schedule dates. A missing or ambiguous role, principal or scope blocks that relationship. A role or administrative unit recreated by an earlier configuration restore resolves through its recorded mapping.
+
+These relationships are available for review. Execution depends on a verified live restore and cleanup round trip. The review adds no write permissions to the app registration.
+
+A privileged relationship requires individual approval. If access is absent now, the review flags the possibility that an administrator deliberately removed it. Restoring that access also requires a separate security-response approval. The signed-in administrator, the connected registration and recovery accounts are protected.
+
+Administrative unit review shows missing members by default. The **exact membership** choice also shows live members absent from that unit's backup. Each proposed removal needs separate approval and proof the protected administrator roles retain access. Restricted management and dynamic units remain blocked. Older backups saved scoped role membership IDs only. A removed scoped role member needs a backup that captured the role and principal IDs.
+
+PIM eligibility uses an eligibility request. An active time-bound assignment must keep its original end date. Activated, inherited and expired schedules are blocked. A saved role link with no evidence that it was a permanent assignment stays blocked because it may reflect a PIM activation or time-bound schedule.
