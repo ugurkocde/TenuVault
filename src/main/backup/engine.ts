@@ -1108,8 +1108,9 @@ export class BackupEngine {
         await commitManifest(largeFolder, manifest(status, this.now(), outcomesNow(status, this.now(), false), {}, largeFolder), !mixed)
       } catch (error) {
         network.signal.throwIfAborted()
-        // Without their inventory the uploaded snapshots cannot be opened, so none of them counts as saved.
-        for (const type of largeTypes) counts[type.folder] = 0
+        // Without their inventory the uploaded snapshots cannot be opened, so none of them counts as saved,
+        // in the run's totals or in each type's own result.
+        for (const type of largeTypes) { counts[type.folder] = 0; result(type.folder).saved = 0 }
         // Storage that refuses the large container (403 or 404) needs provisioning: like a refused claim,
         // the large types are skipped with that guidance and the ordinary backup stands.
         if (error instanceof LargeStorageError && (error.status === 403 || error.status === 404)) {

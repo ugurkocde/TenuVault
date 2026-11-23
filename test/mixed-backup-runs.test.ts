@@ -399,6 +399,25 @@ for (const azure of [false, true]) describe(azure ? "Azure emulator mixed runs" 
     expect(job.exception).toContain("The directory inventory could not be saved to large backup storage.")
     expect(job.commitUnconfirmed).toBe(true)
   })
+  it("fails a split run with nothing read when its ordinary list is refused and storage refuses its large inventory", async () => {
+    undo = registerTestTypes([largeType])
+    const f = await setup()
+    const original = f.fetcher.getMockImplementation()!
+    f.fetcher.mockImplementation(async (input, init) => {
+      const url = new URL(String(input))
+      if (url.hostname === "graph.microsoft.com" && url.pathname === "/beta/deviceManagement/deviceCategories") return Response.json({ error: { code: "Forbidden", message: "Forbidden" } }, { status: 403 })
+      return original(input, init)
+    })
+    // The large snapshots upload; storage then refuses their manifest, which skips the large type.
+    f.refuse(403, "metadata.json")
+    const engine = new BackupEngine({ now: () => new Date("2026-11-17T12:00:00Z"), fetch: f.fetcher, getToken: async () => jwt({ scp: "Policy.Read.All" }), services: () => ({ services: ["intune", "entra"] }), retentionDays: () => 0 })
+    const job = await engine.waitForJob(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: f.account, scope: { excluded: INTUNE_TYPES.filter(type => !["DeviceCategories", "AuthorizationPolicy"].includes(type.folder)).map(type => type.folder) } }))
+    const final = await f.read(job.backupFolder!)
+    expect(final.RunStatus).toBe("Failed")
+    expect(job.status).toBe("Failed")
+    const large = (final.LargeBackupOutcomes as Array<{ Folder: string; Saved?: number }>).find(entry => entry.Folder === "AuthorizationPolicy")
+    expect(large?.Saved ?? 0).toBe(0)
+  })
   it("leaves a large-only run unconfirmed when its own manifest commit gets a server error", async () => {
     undo = registerTestTypes([largeType])
     const f = await setup()

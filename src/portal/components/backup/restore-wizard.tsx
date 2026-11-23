@@ -87,6 +87,8 @@ const STEPS: Array<{ id: Step; label: string }> = [
   { id: "run", label: "Restore" },
 ]
 
+/** The last inventory page the backup contents route serves. */
+const LAST_INVENTORY_PAGE = 500
 /** How long a page of the linked large backup may take before it counts as unreadable. */
 export const COMPANION_DEADLINE_MS = 120_000
 const COMPANION_UNREADABLE = "The linked large backup with this run's directory objects could not be read. Other items can still be restored. Refresh the backup list after it finishes, or check its status in Backup History."
@@ -268,7 +270,8 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
   const [query, setQuery] = useState("")
   const [largePage, setLargePage] = useState(0)
   const [companionError, setCompanionError] = useState("")
-  const [largePaging, setLargePaging] = useState<{ hasMore: boolean; total: number } | null>(null)
+  // Total is null when the first page of a linked large backup could not be read, so it is not known yet.
+  const [largePaging, setLargePaging] = useState<{ hasMore: boolean; total: number | null } | null>(null)
   // The page whose items are loading; page buttons wait for it, so no page is skipped.
   const [pageLoading, setPageLoading] = useState(false)
   const [openTypes, setOpenTypes] = useState<Set<string>>(new Set())
@@ -420,9 +423,13 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
         setItems(previous => [...(previous ?? []), ...companion.items])
         if (companion.paging) setLargePaging(companion.paging)
         else if (!chosen.paging && largePage > 0) setLargePaging(previous => previous && { ...previous, hasMore: false })
-      } catch {
+      } catch (error) {
         if (controller.signal.aborted) return
         setCompanionError(COMPANION_UNREADABLE)
+        // A page that timed out or met a server error may be the only unreadable one, so later pages stay
+        // reachable, up to the last page the inventory allows. A refusal of the whole backup does not.
+        const transient = companionLoad.signal.aborted || !(error instanceof FeatureApiError && error.status < 500)
+        if (transient && !chosen.paging) setLargePaging(previous => previous ?? { hasMore: true, total: null })
       } finally {
         clearTimeout(deadline)
         controller.signal.removeEventListener("abort", stopCompanion)
@@ -848,9 +855,9 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
           {items && (
             <>
               {largePaging && <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl bg-blue-50 p-4 text-sm text-blue-900">
-                <span>Inventory page {largePage + 1}. This backup contains {largePaging.total.toLocaleString()} objects. Search and selection apply to this page.</span>
+                <span>Inventory page {largePage + 1}.{largePaging.total !== null && ` This backup contains ${largePaging.total.toLocaleString()} objects.`} Search and selection apply to this page.</span>
                 <Button variant="outline" size="sm" disabled={largePage === 0 || pageLoading} onClick={() => setLargePage(page => page - 1)}>Previous page</Button>
-                <Button variant="outline" size="sm" disabled={!largePaging.hasMore || pageLoading} onClick={() => setLargePage(page => page + 1)}>Next page</Button>
+                <Button variant="outline" size="sm" disabled={!largePaging.hasMore || pageLoading || largePage >= LAST_INVENTORY_PAGE} onClick={() => setLargePage(page => page + 1)}>Next page</Button>
               </div>}
               <details className="mt-4 rounded-xl border p-4 text-sm"><summary className="cursor-pointer font-medium">Recovery readiness for {items.length} objects</summary>
                 <p className="my-2 text-gray-600">Readiness is conservative for cross-tenant recovery. Supply installers and Apple tokens through Intune, then map supported resulting objects below. No tenant changes occur during this review.</p>

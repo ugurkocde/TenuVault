@@ -346,3 +346,37 @@ it("counts a later page of its linked large backup that never answers as unreada
   expect(container.textContent).toContain("Configuration profile")
   expect(buttonNamed(container, "Previous page")!.disabled).toBe(false)
 })
+
+it("keeps later pages of its linked large backup reachable when the first page never answers", async () => {
+  const second = { largePage: 1, hasMore: false, content: { groups: [{ folder: "Groups", label: "group", area: "Entra ID", count: 5001, policies: [{ path: "backup-large-1/Groups/g2.json", displayName: "Later team" }] }] } }
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body ?? "{}"))
+    if (String(input).endsWith("/api/list-backup-contents")) {
+      if (body.backupId !== "backup-large-1") return Response.json(contents)
+      if (body.largePage === 1) return Response.json(second)
+      return new Promise<Response>((_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError"))))
+    }
+    if (String(input).endsWith("/api/restore-preview")) return Response.json(body.backupId === "backup-large-1" ? { items: [{ path: "backup-large-1/Groups/g2.json", name: "Later team" }] } : preview)
+    return Response.json({})
+  }))
+  const container = document.body.appendChild(document.createElement("div"))
+  const root = createRoot(container)
+  roots.push(root)
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
+  try {
+    await act(async () => root.render(createElement(MemoryRouter, null, createElement(RestoreWizard, {
+      tenant: { name: "Contoso", credentials: { tenantId: "tenant", appId: "app", clientSecret: "" }, storageAccountName: "tvlocal-tenant" },
+      backups: [{ id: "backup-1", companionId: "backup-large-1", timestamp: "2026-10-16T02:00:00Z", type: "manual", status: "Completed", totalPolicies: 3, scope: null, size: 1, duration: 4, changes: null, comparedWith: null }],
+      initialBackupId: "backup-1", community: false, canCopyToTenants: false, copyCandidates: [],
+    }))))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    await act(async () => { await vi.advanceTimersByTimeAsync(COMPANION_DEADLINE_MS) })
+  } finally { vi.useRealTimers() }
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+  expect(container.textContent).toContain("The linked large backup with this run's directory objects could not be read")
+  expect(container.textContent).toContain("Inventory page 1.")
+  await act(async () => buttonNamed(container, "Next page")!.click())
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+  expect(container.textContent).toContain("Inventory page 2")
+  expect(container.textContent).toContain("Later team")
+})
