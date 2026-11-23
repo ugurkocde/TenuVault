@@ -187,6 +187,7 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
     skippedTypes: Array.isArray(metadata?.SkippedTypes) ? metadata.SkippedTypes : [],
     failedTypes: Array.isArray(metadata?.FailedTypes) ? metadata.FailedTypes : [],
     auditArchive: owner.kind === "owned" && hasAuditFile ? auditWindow : undefined,
+    auditArchivePartial: metadata?.AuditArchivePartial === true || undefined,
     auditArchiveWarning: metadata?.AuditArchiveWarning === true || (metadata?.AuditArchive !== undefined && (!hasAuditFile || !auditWindow)) || undefined,
     size,
     sizeFormatted: formatBytes(size),

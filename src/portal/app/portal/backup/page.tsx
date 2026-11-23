@@ -29,7 +29,7 @@ import { autopilotDevicesCsv } from "../../../../shared/intune/autopilot-devices
 import { storageLabel } from "~/lib/storage-label"
 import { changeTenantStorage, type StorageChoice } from "@desktop/lib/storage"
 import { LinkedMessage } from "~/components/linked-message"
-import { AUDIT_ARCHIVE_WARNING } from "../../../../shared/intune/audit-archive"
+import { AUDIT_ARCHIVE_WARNING, auditArchivePartialMessage } from "../../../../shared/intune/audit-archive"
 import { Notice, useSaveNotice } from "@desktop/components/oib/notices"
 import { SERVICES_PAGE } from "../../../../shared/services/modules"
 
@@ -623,6 +623,9 @@ function BackupDetails({ backup, first, storageAccountName, downloading, exporti
           <h3 className="mb-3 text-xs font-medium text-gray-500">Contents</h3>
           <div className="space-y-2">
             {auditTenant && backup.auditArchive && <AuditArchiveDetails key={`${auditTenant.credentials.tenantId}/${backup.id}`} backup={backup} tenant={auditTenant} />}
+            {auditTenant && backup.auditArchive && backup.auditArchivePartial && (
+              <p className="rounded-xl bg-gray-50 px-3 py-2.5 text-sm text-gray-700">{auditArchivePartialMessage(backup.auditArchive.to)}</p>
+            )}
             {auditTenant && backup.auditArchiveWarning && <p className="rounded-xl bg-amber-50 px-3 py-2.5 text-sm text-amber-900">{AUDIT_ARCHIVE_WARNING}</p>}
             {areas
               .filter((entry) => entry.count > 0 || entry.left < entry.all)

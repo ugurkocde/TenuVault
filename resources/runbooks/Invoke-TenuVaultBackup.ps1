@@ -31,8 +31,8 @@
     admin's sign-in. An age-based lifecycle rule on the container is no substitute: it keeps none
     of the desktop protections (newest backup kept, failed runs never counted). A per tenant
     cloud-backup-status-<tenant>.json blob in the container records the last run so the desktop
-    app can show cloud status without opening the Automation account. Each backup also archives
-    Intune audit events in AuditEvents/auditEvents.json.
+    app can show cloud status without opening the Automation account. With archiving enabled,
+    each backup saves Intune audit events in AuditEvents/auditEvents.json.
 
     Configuration comes from Automation variables (environment variables of the same name are
     accepted outside Azure Automation so the flow can be exercised locally):
@@ -43,6 +43,7 @@
       TenuVaultAppOnlyExcluded   Comma separated folders the managed identity has no permission
                                  for by design (setup sets DeviceCategories,DeviceCleanupRules
                                  unless the device inventory permission was granted).
+      TenuVaultArchiveIntuneAudit "true" enables Intune audit archiving (off when unset).
       TenuVaultChangeReport      "off" (default when unset), "names" or "full": after a complete
                                  backup, leave a change report for the notification watcher.
       TenuVaultChangeReportActors "false" leaves out who made each change.
@@ -436,12 +437,15 @@ function Invoke-TvHttp {
         [string]$ContentType,
         # A cap on the response body in bytes; 0 reads it whole. Over the cap: TvOversizedError.
         [long]$MaxBytes = 0,
-        [int]$BudgetMs = 0
+        [int]$BudgetMs = 0,
+        [switch]$BytesOnly,
+        [switch]$RetryWithinBudget
     )
     $clock = if ($BudgetMs) { [System.Diagnostics.Stopwatch]::StartNew() }
-    $attempts = if ($BudgetMs) { 1 } else { 3 }
+    $attempts = if ($BudgetMs -and -not $RetryWithinBudget) { 1 } else { 3 }
     $lastError = $null
     foreach ($attempt in 1..$attempts) {
+        if ($BudgetMs -and $clock.ElapsedMilliseconds -ge $BudgetMs) { throw [TvAuditBudgetError]::new() }
         $request = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::new($Method), $Uri)
         $request.Headers.Authorization = [System.Net.Http.Headers.AuthenticationHeaderValue]::new("Bearer", $Token)
         if ($Headers) { foreach ($name in $Headers.Keys) { [void]$request.Headers.TryAddWithoutValidation($name, [string]$Headers[$name]) } }
@@ -459,8 +463,12 @@ function Invoke-TvHttp {
         }
         catch {
             $lastError = $_
-            if ($attempt -lt $attempts) { Start-Sleep -Seconds $attempt; continue }
             if ($cancel -and $cancel.IsCancellationRequested) { throw [TvAuditBudgetError]::new() }
+            if ($attempt -lt $attempts) {
+                if ($BudgetMs -and $clock.ElapsedMilliseconds + $attempt * 1000 -ge $BudgetMs) { throw [TvAuditBudgetError]::new() }
+                Start-Sleep -Seconds $attempt
+                continue
+            }
             throw [TvHttpError]::new(0, (Get-TvSafeError $_.Exception.Message))
         } finally {
             if ($cancel) {
@@ -469,13 +477,16 @@ function Invoke-TvHttp {
             }
         }
         $status = [int]$response.StatusCode
-        $retryAfter = if ($response.Headers.RetryAfter -and $response.Headers.RetryAfter.Delta) { $response.Headers.RetryAfter.Delta } else { $null }
+        $retryAfter = $response.Headers.RetryAfter.Delta
+        if ($RetryWithinBudget -and $response.Headers.RetryAfter.Date) { $retryAfter = $response.Headers.RetryAfter.Date - [DateTimeOffset]::UtcNow }
         $bodyMs = if ($BudgetMs) { [Math]::Max(1, $BudgetMs - [int]$clock.ElapsedMilliseconds) } else { $script:BodyReadSeconds * 1000 }
         try {
             if ($MaxBytes -gt 0) {
                 if ($status -ge 200 -and $status -lt 300) {
                     $bytes = Read-TvCappedBody $response $MaxBytes $bodyMs
-                    return @{ Status = $status; Bytes = $bytes; Text = [Text.Encoding]::UTF8.GetString($bytes); ETag = [string]$response.Headers.ETag }
+                    $result = @{ Status = $status; Bytes = $bytes; ETag = [string]$response.Headers.ETag }
+                    if (-not $BytesOnly) { $result.Text = [Text.Encoding]::UTF8.GetString($bytes) }
+                    return $result
                 }
                 # Only the error text is needed: the same reader with a small cap and the same
                 # deadline, so a stalled or large error body can neither hang nor exhaust the run.
@@ -510,8 +521,10 @@ function Invoke-TvHttp {
         if ($retryable -and $attempt -lt $attempts) {
             $delay = $attempt
             if ($retryAfter) { $delay = [Math]::Ceiling($retryAfter.TotalSeconds) }
+            $delay = [Math]::Max(1, $delay)
+            if ($BudgetMs -and $clock.ElapsedMilliseconds + $delay * 1000 -ge $BudgetMs) { throw [TvAuditBudgetError]::new($status) }
             if ($delay -gt 300) { throw $lastError }
-            Start-Sleep -Seconds ([Math]::Max(1, $delay))
+            Start-Sleep -Seconds $delay
             continue
         }
         throw $lastError
@@ -536,7 +549,8 @@ function Set-TvBlob {
         [Parameter(Mandatory)][string]$BlobName,
         [Parameter(Mandatory)][string]$Body,
         [Parameter(Mandatory)][string]$Token,
-        [switch]$CreateOnly
+        [switch]$CreateOnly,
+        [int]$BudgetMs = 0
     )
     $target = Get-TvBlobTarget $Account $BlobName
     $headers = @{
@@ -545,7 +559,7 @@ function Set-TvBlob {
         "x-ms-date"      = [DateTime]::UtcNow.ToString("R", [Globalization.CultureInfo]::InvariantCulture)
     }
     if ($CreateOnly) { $headers["If-None-Match"] = "*" }
-    [void](Invoke-TvHttp -Uri $target.Uri -Token $Token -Method "Put" -Headers $headers -BodyBytes ([Text.Encoding]::UTF8.GetBytes($Body)) -ContentType "application/json")
+    [void](Invoke-TvHttp -Uri $target.Uri -Token $Token -Method "Put" -Headers $headers -BodyBytes ([Text.Encoding]::UTF8.GetBytes($Body)) -ContentType "application/json" -BudgetMs $BudgetMs)
 }
 
 # ---------------------------------------------------------------------------
@@ -660,7 +674,9 @@ function New-TvAuditFile {
 }
 
 class TvAuditBudgetError : System.Exception {
+    [int]$Status
     TvAuditBudgetError() : base("Cloud backup audit reached its request or time budget.") { }
+    TvAuditBudgetError([int]$status) : base("Cloud backup audit reached its request or time budget.") { $this.Status = $status }
 }
 
 function Get-TvAuditRequestBudget {
@@ -1193,8 +1209,9 @@ function Get-TvGraphUrl {
 }
 
 function Invoke-TvGraphGet {
-    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Token)
-    $result = Invoke-TvHttp -Uri (Get-TvGraphUrl $Path) -Token $Token -Method "Get" -Headers @{ Accept = "application/json" }
+    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Token, [int]$BudgetMs = 0)
+    $requestBudget = if ($BudgetMs) { @{ BudgetMs = $BudgetMs; RetryWithinBudget = $true; MaxBytes = $script:MaxBlobBytes } } else { @{} }
+    $result = Invoke-TvHttp -Uri (Get-TvGraphUrl $Path) -Token $Token -Method "Get" -Headers @{ Accept = "application/json" } @requestBudget
     return ConvertFrom-TvJson $result.Text
 }
 
@@ -2890,11 +2907,11 @@ $script:MaxBlobBytes = 33554432
 # buffered or parsed. A sealed blob throws TvSealedBlobError, a larger one TvOversizedError, a
 # missing one TvHttpError 404, and anything that is not a JSON object a plain error.
 function Read-TvPlainJson {
-    param([Parameter(Mandatory)][hashtable]$Context, [Parameter(Mandatory)][string]$BlobName)
+    param([Parameter(Mandatory)][hashtable]$Context, [Parameter(Mandatory)][string]$BlobName, [int]$BudgetMs = 0)
     $target = Get-TvBlobTarget $Context.StorageAccount $BlobName
     $file = ($BlobName -split "/")[-1]
     $tooLarge = "$file is larger than the 32 MiB TenuVault reads."
-    try { $result = Invoke-TvHttp -Uri $target.Uri -Token $Context.StorageToken -Method "Get" -Headers @{ "x-ms-version" = "2021-12-02" } -MaxBytes $script:MaxBlobBytes }
+    try { $result = Invoke-TvHttp -Uri $target.Uri -Token $Context.StorageToken -Method "Get" -Headers @{ "x-ms-version" = "2021-12-02" } -MaxBytes $script:MaxBlobBytes -BudgetMs $BudgetMs }
     catch [TvOversizedError] { throw [TvOversizedError]::new($tooLarge) }
     catch [TvReadTimeoutError] { throw [TvReadTimeoutError]::new("$file did not arrive within $($script:BodyReadSeconds) seconds.") }
     if ($result.Bytes.Length -gt $script:MaxBlobBytes) { throw [TvOversizedError]::new($tooLarge) }
@@ -2910,8 +2927,8 @@ function Test-TvRecordedTenant { param([AllowNull()][object]$Value) return ($Val
 # The ownership marker of a backup folder: owned, other (names another tenant), missing, sealed or
 # unreadable (too large, damaged, or naming no tenant), like the marker step of resolveBackupOwnership.
 function Read-TvOwnerMarker {
-    param([Parameter(Mandatory)][hashtable]$Context, [Parameter(Mandatory)][string]$Name)
-    try { $marker = Read-TvPlainJson $Context "$Name/.tenuvault-owner.json" }
+    param([Parameter(Mandatory)][hashtable]$Context, [Parameter(Mandatory)][string]$Name, [int]$BudgetMs = 0)
+    try { $marker = Read-TvPlainJson $Context "$Name/.tenuvault-owner.json" -BudgetMs $BudgetMs }
     catch [TvSealedBlobError] { return "sealed" }
     catch [TvHttpError] { if ($_.Exception.Status -eq 404) { return "missing" } return "unreadable" }
     catch { return "unreadable" }
@@ -2972,14 +2989,15 @@ $script:MaxPredecessorFolders = 500
 $script:MaxPredecessorManifests = 30
 
 function Get-TvBackupFolders {
-    param([Parameter(Mandatory)][hashtable]$Context)
+    param([Parameter(Mandatory)][hashtable]$Context, [DateTime]$Deadline = [DateTime]::MaxValue)
     $names = [System.Collections.Generic.List[string]]::new()
     $marker = $null
     $markers = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     do {
         $uri = "https://$($Context.StorageAccount).blob.core.windows.net/$script:Container`?restype=container&comp=list&delimiter=/&prefix=backup-&maxresults=5000"
         if ($marker) { $uri += "&marker=$([uri]::EscapeDataString($marker))" }
-        $text = (Invoke-TvHttp -Uri $uri -Token $Context.StorageToken -Method "Get" -Headers @{ "x-ms-version" = "2021-12-02" }).Text
+        $budgetMs = if ($Deadline -ne [DateTime]::MaxValue) { Get-TvArchiveBudgetMs $Deadline } else { 0 }
+        $text = (Invoke-TvHttp -Uri $uri -Token $Context.StorageToken -Method "Get" -Headers @{ "x-ms-version" = "2021-12-02" } -BudgetMs $budgetMs).Text
         foreach ($match in [regex]::Matches($text, '<BlobPrefix><Name>(backup-\d{4}-\d{2}-\d{2}-\d{6})/</Name></BlobPrefix>')) { $names.Add($match.Groups[1].Value) }
         $marker = [Net.WebUtility]::HtmlDecode([regex]::Match($text, '<NextMarker>([^<]+)</NextMarker>').Groups[1].Value)
         if ($marker -and (-not $markers.Add($marker) -or $markers.Count -ge 10000)) { throw "Storage listing did not finish." }
@@ -3038,85 +3056,246 @@ function Read-TvSettingDefinitions {
     return $definitions
 }
 
-# The same window and raw Graph event envelope as src/main/backup/audit-archive.ts.
-function Save-TvIntuneAuditArchive {
-    param([hashtable]$Context, [string]$Folder, [DateTime]$Started, [string]$GraphToken)
-    $end = ([DateTimeOffset]$Started).ToUnixTimeMilliseconds()
-    $historyStart = $end - 365L * 24 * 60 * 60000
-    $start = $historyStart
-    $hasPrevious = $false
-    $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
-    $deadline = [DateTime]::UtcNow.AddMinutes(2)
-    foreach ($name in @(Get-TvBackupFolders $Context | Sort-Object -Descending -CaseSensitive -Unique)) {
-        if ([DateTime]::UtcNow -ge $deadline) { throw "Intune audit archive timed out." }
-        if ($name -eq $Folder) { continue }
-        $time = ([DateTimeOffset]::Parse((Get-TvBackupTimestamp $name))).ToUnixTimeMilliseconds()
-        if ($time + 999 -lt $start) { break }
-        try { $metadata = Read-TvPlainJson $Context "$name/metadata.json" }
-        catch [TvSealedBlobError] { continue }
-        catch [TvHttpError] {
-            if ($_.Exception.Status -ne 404) { throw }
-            if ($time -ge $end - 6 * 60 * 60000) {
-                $owner = Read-TvOwnerMarker $Context $name
-                if ($owner -eq "owned") { throw "Another backup is still running." }
-                if ($owner -eq "unreadable") { throw "The owner of a recent backup could not be read." }
+# Read the same window and raw Graph event envelope written by the desktop.
+# Walk the prior archive's UTF-8 tokens without materializing its event objects in PowerShell.
+function Initialize-TvArchiveOverlapReader {
+    if (-not ("TvAuditOverlapReader" -as [type])) {
+        Add-Type -ErrorAction Stop -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Text.Json;
+
+public static class TvAuditOverlapReader
+{
+    public static HashSet<string> Read(byte[] bytes, string from, string to, int count, long overlapStart, long overlapEnd)
+    {
+        var reader = new Utf8JsonReader(bytes, new JsonReaderOptions { MaxDepth = 100 });
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        bool window = false, events = false;
+        Require(reader.Read() && reader.TokenType == JsonTokenType.StartObject);
+        while (reader.Read() && reader.TokenType == JsonTokenType.PropertyName)
+        {
+            string property = reader.GetString();
+            Require(reader.Read());
+            if (property == "window")
+            {
+                Require(!window && reader.TokenType == JsonTokenType.StartObject);
+                string savedFrom = null, savedTo = null;
+                int savedCount = -1;
+                while (reader.Read() && reader.TokenType == JsonTokenType.PropertyName)
+                {
+                    string field = reader.GetString();
+                    Require(reader.Read());
+                    if (field == "from") savedFrom = reader.GetString();
+                    else if (field == "to") savedTo = reader.GetString();
+                    else if (field == "count") savedCount = reader.GetInt32();
+                    else reader.Skip();
+                }
+                Require(reader.TokenType == JsonTokenType.EndObject && savedFrom == from && savedTo == to && savedCount == count);
+                window = true;
             }
+            else if (property == "value")
+            {
+                Require(!events && reader.TokenType == JsonTokenType.StartArray);
+                int savedCount = 0;
+                while (reader.Read() && reader.TokenType == JsonTokenType.StartObject)
+                {
+                    string id = null, activityDateTime = null;
+                    while (reader.Read() && reader.TokenType == JsonTokenType.PropertyName)
+                    {
+                        string field = reader.GetString();
+                        Require(reader.Read());
+                        if (field == "id") id = reader.GetString();
+                        else if (field == "activityDateTime") activityDateTime = reader.GetString();
+                        else reader.Skip();
+                    }
+                    Require(reader.TokenType == JsonTokenType.EndObject && !String.IsNullOrEmpty(id));
+                    var at = DateTimeOffset.Parse(activityDateTime, CultureInfo.InvariantCulture).ToUnixTimeMilliseconds();
+                    if (at >= overlapStart && at <= overlapEnd) ids.Add(id);
+                    savedCount++;
+                }
+                Require(reader.TokenType == JsonTokenType.EndArray && savedCount == count);
+                events = true;
+            }
+            else reader.Skip();
+        }
+        Require(reader.TokenType == JsonTokenType.EndObject && window && events && !reader.Read());
+        return ids;
+    }
+
+    private static void Require(bool valid)
+    {
+        if (!valid) throw new JsonException("The saved Intune audit archive is invalid.");
+    }
+}
+'@
+    }
+}
+
+function Read-TvArchiveOverlap {
+    param([hashtable]$Context, [string]$Name, $Window, [long]$From, [long]$To, [DateTime]$Deadline)
+    $target = Get-TvBlobTarget $Context.StorageAccount "$Name/$script:AuditArchiveFile"
+    $result = Invoke-TvHttp -Uri $target.Uri -Token $Context.StorageToken -Headers @{ "x-ms-version" = "2021-12-02" } -MaxBytes $script:MaxBlobBytes -BytesOnly -BudgetMs (Get-TvArchiveBudgetMs $Deadline)
+    return , [TvAuditOverlapReader]::Read($result.Bytes, $Window.from, $Window.to, $Window.count, $From, $To)
+}
+
+function Get-TvArchiveBudgetMs {
+    param([DateTime]$Deadline)
+    $left = [int]($Deadline - [DateTime]::UtcNow).TotalMilliseconds
+    if ($left -le 0) { throw [TvAuditBudgetError]::new() }
+    return $left
+}
+
+function ConvertTo-TvArchiveTime {
+    param([long]$Time)
+    return [DateTimeOffset]::FromUnixTimeMilliseconds($Time).UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", [Globalization.CultureInfo]::InvariantCulture)
+}
+
+class TvAuditArchiveError : System.Exception {
+    TvAuditArchiveError([string]$message) : base($message) { }
+}
+
+function Get-TvArchiveFailure {
+    param([System.Exception]$Error)
+    if ($Error -is [TvAuditBudgetError]) {
+        if ($Error.Status) { return "The Intune audit archive timed out after HTTP $($Error.Status)." }
+        return "The Intune audit archive timed out."
+    }
+    if ($Error -is [TvHttpError]) {
+        if ($Error.Status -eq 403) { return "Microsoft Graph returned 403 for the Intune audit log. The cloud backup identity needs DeviceManagementApps.Read.All." }
+        if ($Error.Status) { return "HTTP $($Error.Status)." }
+    }
+    if ($Error -is [TvOversizedError]) { return "The Intune audit archive reached the backup file size limit." }
+    if ($Error -is [TvAuditArchiveError]) { return $Error.Message }
+    return "The Intune audit archive could not be read or saved."
+}
+
+function Save-TvIntuneAuditArchive {
+    param(
+        [hashtable]$Context, [string]$Folder, [DateTime]$Started, [string]$GraphToken,
+        [System.Collections.Generic.List[string]]$Notes = [System.Collections.Generic.List[string]]::new(),
+        [DateTime]$Deadline = [DateTime]::UtcNow.AddMinutes(2)
+    )
+    $end = ([DateTimeOffset]$Started).ToUnixTimeMilliseconds()
+    $dayMs = 24L * 60 * 60000
+    $historyStart = $end - 365 * $dayMs
+    $start = $historyStart
+    $checkpoint = $null
+    $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($name in @(Get-TvBackupFolders $Context -Deadline $Deadline | Sort-Object -Descending -CaseSensitive -Unique)) {
+        if ($name -eq $Folder) { continue }
+        $date = [DateTimeOffset]::MinValue
+        if (-not [DateTimeOffset]::TryParse((Get-TvBackupTimestamp $name), [ref]$date)) { continue }
+        $time = $date.ToUnixTimeMilliseconds()
+        if ($time + 999 -lt $start) { break }
+        $budgetMs = Get-TvArchiveBudgetMs $Deadline
+        $metadata = $null
+        try { $metadata = Read-TvPlainJson $Context "$name/metadata.json" -BudgetMs $budgetMs }
+        catch [TvHttpError] {
+            if ($_.Exception.Status -ne 404) {
+                $Notes.Add("Skipped $name for the Intune audit checkpoint: its backup metadata could not be read.")
+                continue
+            }
+        }
+        catch [TvAuditBudgetError] { throw }
+        catch {
+            $Notes.Add("Skipped $name for the Intune audit checkpoint: its backup metadata could not be read.")
+            continue
+        }
+        if (-not $metadata) {
+            if ($time -ge $end - 6 * 60 * 60000 -and (Read-TvOwnerMarker $Context $name -BudgetMs (Get-TvArchiveBudgetMs $Deadline)) -eq "owned") {
+                throw [TvAuditArchiveError]::new("Another backup is still running.")
+            }
+            $Notes.Add("Skipped $name for the Intune audit checkpoint: its backup metadata is missing.")
             continue
         }
         if ([string]$metadata.TenantId -ne $Context.TenantId -or -not $metadata.Contains("AuditArchive")) { continue }
         $previous = $metadata.AuditArchive
+        $previousFrom = $previousTo = [DateTimeOffset]::MinValue
         if ($previous.from -isnot [string] -or $previous.to -isnot [string] -or
-            -not (Test-TvJsNumber $previous.count) -or $previous.count -lt 0 -or $previous.count % 1 -ne 0) { throw "Invalid Intune audit archive window." }
-        $checkpoint = ([DateTimeOffset]::Parse($previous.to)).ToUnixTimeMilliseconds()
-        if ([DateTimeOffset]::Parse($previous.from) -gt [DateTimeOffset]::Parse($previous.to)) { throw "Invalid Intune audit archive window." }
-        if ($checkpoint -ge $end) { throw "A newer backup already archived the Intune audit log." }
-        if (-not $hasPrevious) {
-            $start = [Math]::Max($historyStart, $checkpoint - 10 * 60000)
-            $hasPrevious = $true
+            -not (Test-TvJsNumber $previous.count) -or $previous.count -lt 0 -or $previous.count -gt [int]::MaxValue -or $previous.count % 1 -ne 0 -or
+            -not [DateTimeOffset]::TryParse($previous.from, [ref]$previousFrom) -or
+            -not [DateTimeOffset]::TryParse($previous.to, [ref]$previousTo) -or $previousFrom -gt $previousTo) {
+            $Notes.Add("Skipped $name for the Intune audit checkpoint: its archive window is invalid.")
+            continue
         }
-        if ($checkpoint -lt $start -or $previous.count -eq 0) { continue }
-        $archive = Read-TvPlainJson $Context "$name/$script:AuditArchiveFile"
-        if ($archive.window.from -cne $previous.from -or $archive.window.to -cne $previous.to -or
-            $archive.window.count -ne $previous.count -or $archive.value -isnot [array] -or $archive.value.Count -ne $previous.count) {
-            throw "The saved Intune audit archive is missing or invalid."
+        $to = $previousTo.ToUnixTimeMilliseconds()
+        if ($to -lt $start) { continue }
+        $overlapStart = if ($null -eq $checkpoint) { [Math]::Max($historyStart, $to - 30 * 60000) } else { $start }
+        Initialize-TvArchiveOverlapReader
+        try { $seen.UnionWith((Read-TvArchiveOverlap $Context $name $previous $overlapStart $to $Deadline)) }
+        catch [TvAuditBudgetError] { throw }
+        catch {
+            $Notes.Add("Skipped $name for the Intune audit checkpoint: its archive is missing or unreadable.")
+            continue
         }
-        foreach ($event in $archive.value) {
-            if ($event.id -isnot [string] -or -not $event.id) { throw "Invalid saved Intune audit event." }
-            if (([DateTimeOffset]::Parse($event.activityDateTime)).ToUnixTimeMilliseconds() -ge $start) { $null = $seen.Add($event.id) }
+        if ($to -ge $end) { throw [TvAuditArchiveError]::new("A newer backup already archived the Intune audit log.") }
+        if ($null -eq $checkpoint) {
+            $checkpoint = $to
+            $start = $overlapStart
         }
     }
 
-    $from = [DateTimeOffset]::FromUnixTimeMilliseconds($start).UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ss.fffZ")
-    $to = [DateTimeOffset]::FromUnixTimeMilliseconds($end).UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ss.fffZ")
-    $filter = [uri]::EscapeDataString("activityDateTime ge $from and activityDateTime le $to")
-    $next = "$script:GraphBeta/deviceManagement/auditEvents?`$filter=$filter&`$top=200"
-    $links = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     $events = [System.Collections.Generic.List[string]]::new()
     $bytes = 256 # Reserve space for the JSON envelope and its window.
-    while ($next) {
-        if ([DateTime]::UtcNow -ge $deadline) { throw "Intune audit archive timed out." }
-        if ($links.Count -ge 10000 -or -not $links.Add($next)) { throw "Intune audit listing did not finish." }
-        $uri = [uri]$next
-        if ($uri.Scheme -ne "https" -or $uri.Authority -ne "graph.microsoft.com" -or -not $uri.AbsolutePath.StartsWith("/beta/")) {
-            throw "Invalid Graph continuation link."
+    $cursor = $start
+    $sliceMs = $dayMs
+    while ($cursor -lt $end) {
+        $sliceEnd = [Math]::Min($cursor + $sliceMs, $end)
+        $upper = if ($sliceEnd -eq $end) { "le" } else { "lt" }
+        $filter = [uri]::EscapeDataString("activityDateTime ge $(ConvertTo-TvArchiveTime $cursor) and activityDateTime $upper $(ConvertTo-TvArchiveTime $sliceEnd)")
+        $next = "$script:GraphBeta/deviceManagement/auditEvents?`$filter=$filter&`$top=200"
+        $links = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+        $sliceIds = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+        $sliceCount = $events.Count
+        $sliceBytes = 0
+        try {
+            while ($next) {
+                if ($links.Count -ge 10000 -or -not $links.Add($next)) { throw [TvAuditArchiveError]::new("Intune audit listing did not finish.") }
+                $uri = [uri]$next
+                if ($uri.Scheme -ne "https" -or $uri.Authority -ne "graph.microsoft.com" -or -not $uri.AbsolutePath.StartsWith("/beta/")) {
+                    throw [TvAuditArchiveError]::new("Invalid Graph continuation link.")
+                }
+                $page = Invoke-TvGraphGet $next $GraphToken -BudgetMs (Get-TvArchiveBudgetMs $Deadline)
+                $value = $page["value"]
+                if ($value -isnot [array]) { throw [TvAuditArchiveError]::new("Graph returned an invalid Intune audit collection.") }
+                foreach ($event in $value) {
+                    $date = [DateTimeOffset]::MinValue
+                    if ($event.id -isnot [string] -or -not $event.id -or $event.activityDateTime -isnot [string] -or
+                        -not [DateTimeOffset]::TryParse($event.activityDateTime, [ref]$date)) { throw [TvAuditArchiveError]::new("Invalid Intune audit event.") }
+                    $time = $date.ToUnixTimeMilliseconds()
+                    if ($time -lt $cursor -or $time -gt $sliceEnd -or ($upper -eq "lt" -and $time -eq $sliceEnd) -or
+                        $seen.Contains($event.id) -or -not $sliceIds.Add($event.id)) { continue }
+                    $json = ConvertTo-Json -InputObject $event -Depth 100 -Compress
+                    $sliceBytes += [Text.Encoding]::UTF8.GetByteCount($json) + 1
+                    if ($bytes + $sliceBytes -gt $script:MaxBlobBytes) { throw [TvOversizedError]::new("The Intune audit archive reached the backup file size limit.") }
+                    $events.Add($json)
+                }
+                $next = Get-TvProp $page "@odata.nextLink"
+            }
+            $null = Get-TvArchiveBudgetMs $Deadline
+        } catch {
+            $size = $_.Exception -is [TvOversizedError]
+            if (-not $size -and $_.Exception -isnot [TvAuditBudgetError]) { throw }
+            $events.RemoveRange($sliceCount, $events.Count - $sliceCount)
+            if ($cursor -gt [Math]::Max($start, [long]$checkpoint)) { break }
+            if (-not $size -or $sliceEnd - $cursor -le 1000) { throw }
+            $sliceMs = [Math]::Max(1000L, [long][Math]::Floor(($sliceEnd - $cursor) / 2))
+            continue
         }
-        $page = Invoke-TvGraphGet $next $GraphToken
-        $value = $page["value"]
-        if ($value -isnot [array]) { throw "Graph returned an invalid Intune audit collection." }
-        foreach ($event in $value) {
-            if ($event.id -isnot [string] -or -not $event.id -or $event.activityDateTime -isnot [string]) { throw "Invalid Intune audit event." }
-            $time = ([DateTimeOffset]::Parse($event.activityDateTime)).ToUnixTimeMilliseconds()
-            if ($time -lt $start -or $time -gt $end -or -not $seen.Add($event.id)) { continue }
-            $json = ConvertTo-Json -InputObject $event -Depth 100 -Compress
-            $bytes += [Text.Encoding]::UTF8.GetByteCount($json) + 1
-            if ($bytes -gt $script:MaxBlobBytes) { throw "The Intune audit archive exceeds the backup file size limit." }
-            $events.Add($json)
-        }
-        $next = Get-TvProp $page "@odata.nextLink"
+        $seen.UnionWith($sliceIds)
+        $bytes += $sliceBytes
+        $cursor = $sliceEnd
     }
-    $window = [ordered]@{ from = $from; to = $to; count = $events.Count }
+    $window = [ordered]@{ from = (ConvertTo-TvArchiveTime $start); to = (ConvertTo-TvArchiveTime $cursor); count = $events.Count }
     $windowJson = ConvertTo-Json -InputObject $window -Compress
-    Set-TvBlob $Context.StorageAccount "$Folder/$script:AuditArchiveFile" ('{"window":' + $windowJson + ',"value":[' + ($events -join ',') + ']}') $Context.StorageToken
+    try {
+        Set-TvBlob $Context.StorageAccount "$Folder/$script:AuditArchiveFile" ('{"window":' + $windowJson + ',"value":[' + ($events -join ',') + ']}') $Context.StorageToken -BudgetMs 10000
+    } catch [TvHttpError] {
+        $detail = if ($_.Exception.Status) { " HTTP $($_.Exception.Status)." } else { "" }
+        throw [TvAuditArchiveError]::new("Could not save the Intune audit archive to backup storage.$detail")
+    }
     return $window
 }
 
@@ -3430,13 +3609,20 @@ function Invoke-TvBackup {
         foreach ($key in @($items.Keys | Sort-Object)) { $sortedItems[$key] = $items[$key] }
         $status = if ($failures -gt 0) { if ($saved -eq 0) { "Failed" } else { "CompletedWithWarnings" } } else { "Success" }
         $archive = $null
-        $archiveWarning = $false
-        # Cloud backups already require Pro or MSP, the same plans as the desktop auditLog gate.
-        if ($status -ne "Failed") {
-            try { $archive = Save-TvIntuneAuditArchive $context $backupFolder $started $graphToken }
+        $archivePartial = $false
+        $archiveWarning = $null
+        if ($status -ne "Failed" -and ([string](Get-TvAutomationVariable "TenuVaultArchiveIntuneAudit")).Trim() -eq "true") {
+            $archiveNotes = [System.Collections.Generic.List[string]]::new()
+            try {
+                $archive = Save-TvIntuneAuditArchive $context $backupFolder $started $graphToken -Notes $archiveNotes
+                $archivePartial = $archive.to -ne (ConvertTo-TvArchiveTime ([DateTimeOffset]$started).ToUnixTimeMilliseconds())
+                if ($archivePartial) { Write-Output "Intune audit log partial: archived up to $($archive.to)." }
+            }
             catch {
-                $archiveWarning = $true
-                Write-Warning $script:AuditArchiveWarning
+                $archiveWarning = "$script:AuditArchiveWarning $(Get-TvArchiveFailure $_.Exception)"
+                Write-Warning $archiveWarning
+            } finally {
+                foreach ($note in $archiveNotes) { Write-Output $note }
             }
         }
         $ended = [DateTime]::UtcNow
@@ -3465,15 +3651,17 @@ function Invoke-TvBackup {
         if ($notReadable.Count) { $metadata.AppOnlyExcludedTypes = $notReadable }
         if ($maskedItems.Count) { $metadata.MaskedSecretItems = @($maskedItems) }
         if ($archive) { $metadata.AuditArchive = $archive }
+        if ($archivePartial) { $metadata.AuditArchivePartial = $true }
         if ($archiveWarning) {
             $metadata.AuditArchiveWarning = $true
-            $metadata.Warnings = @($script:AuditArchiveWarning)
+            $metadata.Warnings = @($archiveWarning)
         }
         $metadata.Items = $sortedItems
         Set-TvBlob $storageAccount "$backupFolder/metadata.json" ($metadata | ConvertTo-Json -Depth 100) $storageToken
         Write-Output "Backup completed: $totalPolicies policies in $($metadata.Duration) ($status). Older backups were kept: the cloud identity cannot delete. The next desktop backup made with an admin's sign-in applies retention."
-        Set-TvCloudStatus $context $status "Backup $status, $totalPolicies policies." $backupFolder
-        Send-TvBackupOutcome -Account $storageAccount -Token $storageToken -TenantId $tenantId -RunId $runId -Status $status -BackupFolder $backupFolder -TotalPolicies $totalPolicies -Failures $failures -FailedTypes @($failedTypes) -Trigger $runTrigger
+        $outcomeStatus = if ($status -eq "Success" -and $archiveWarning) { "CompletedWithWarnings" } else { $status }
+        Set-TvCloudStatus $context $outcomeStatus "Backup $outcomeStatus, $totalPolicies policies." $backupFolder
+        Send-TvBackupOutcome -Account $storageAccount -Token $storageToken -TenantId $tenantId -RunId $runId -Status $outcomeStatus -BackupFolder $backupFolder -TotalPolicies $totalPolicies -Failures $failures -FailedTypes @($failedTypes) -Trigger $runTrigger
         if ($status -eq "Failed") { throw "The backup saved no policies. See the runbook output above." }
         # Only a complete backup is compared, like the desktop app's report after a scheduled backup:
         # items a backup with warnings could not read would show up as deleted.
@@ -3517,7 +3705,7 @@ function Invoke-TvBackup {
         Complete-TvAuditRun $context "Failed" $backupFolder $totalPolicies ([Math]::Max(1, $failures)) $runTrigger "BACKUP_FAILED"
         throw
     }
-    $auditStatus = if ($status -eq "Success" -and $maskedItems.Count) { "CompletedWithWarnings" } else { $status }
+    $auditStatus = if ($outcomeStatus -eq "Success" -and $maskedItems.Count) { "CompletedWithWarnings" } else { $outcomeStatus }
     $auditReason = if ($auditStatus -eq "CompletedWithWarnings") { "BACKUP_WARNINGS" }
     Complete-TvAuditRun $context $auditStatus $backupFolder $totalPolicies $failures $runTrigger $auditReason
 }

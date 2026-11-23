@@ -17,6 +17,7 @@ export interface BackupSummary {
   skippedTypes?: string[]
   failedTypes?: string[]
   auditArchive?: AuditArchiveWindow
+  auditArchivePartial?: boolean
   auditArchiveWarning?: boolean
   size: number
   /** Seconds, or a preformatted string from older backups; null when unknown. */

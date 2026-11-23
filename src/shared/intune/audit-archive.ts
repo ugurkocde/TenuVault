@@ -1,7 +1,11 @@
 export const AUDIT_ARCHIVE_FILE = "AuditEvents/auditEvents.json"
 export const AUDIT_ARCHIVE_WARNING = "Intune audit log not archived. The next backup will retry from the last saved archive."
-export const AUDIT_ARCHIVE_OVERLAP_MS = 10 * 60_000
+export const AUDIT_ARCHIVE_OVERLAP_MS = 30 * 60_000
 export const AUDIT_ARCHIVE_HISTORY_MS = 365 * 24 * 60 * 60_000
+
+export function auditArchivePartialMessage(to: string): string {
+  return `Intune audit log partial: archived up to ${to}.`
+}
 
 export interface AuditArchiveWindow {
   from: string

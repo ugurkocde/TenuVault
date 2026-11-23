@@ -35,13 +35,13 @@ function Get-TvManagedIdentityToken {
 }
 
 function Invoke-TvHttp {
-    param([string]$Uri, [string]$Token, [string]$Method = "Get", [hashtable]$Headers, [byte[]]$BodyBytes, [string]$ContentType, [long]$MaxBytes = 0)
+    param([string]$Uri, [string]$Token, [string]$Method = "Get", [hashtable]$Headers, [byte[]]$BodyBytes, [string]$ContentType, [long]$MaxBytes = 0, [int]$BudgetMs = 0, [switch]$RetryWithinBudget)
     if ($script:failReportList -and $Uri -like "*/intune-backups?*comp=list*") { throw [InvalidOperationException]::new("storage listing is unavailable") }
     if ($script:failCompliance -and $Uri -like "https://graph.microsoft.com/beta/deviceManagement/deviceCompliancePolicies*") { throw [TvHttpError]::new(500, "HTTP 500") }
     $body = if ($null -ne $BodyBytes) { [Text.Encoding]::UTF8.GetString($BodyBytes) } else { $null }
     $script:calls.Add([pscustomobject]@{ uri = $Uri; method = $Method; contentType = $ContentType; ifNoneMatch = $Headers["If-None-Match"]; body = $body })
     if ($script:failAuditReceipt -and $Uri -like "*/tenuvault-backup-results/audit-receipts/*") { throw [TvHttpError]::new(403, "Audit receipt denied") }
-    if ($script:failIntuneAudit -and $Uri -like "*/deviceManagement/auditEvents?*") { throw [TvHttpError]::new(403, "HTTP 403") }
+    if ($script:failIntuneAudit -and $Uri -like "*/deviceManagement/auditEvents?*") { throw [TvHttpError]::new(403, "HTTP 403 private Graph message") }
     $text = '{"value":[]}'
     if ($Uri -like "*/tenuvault-backup-results?*comp=list*") {
         $text = "<EnumerationResults><Blobs /><NextMarker /></EnumerationResults>"
@@ -64,8 +64,10 @@ function Invoke-TvHttp {
     return @{ Status = 200; Bytes = [Text.Encoding]::UTF8.GetBytes($text); Text = $text }
 }
 
-# 1. A successful run.
+# 1. A successful run with archiving enabled.
+[Environment]::SetEnvironmentVariable("TenuVaultArchiveIntuneAudit", "true")
 $output = @(Invoke-TvBackup)
+[Environment]::SetEnvironmentVariable("TenuVaultArchiveIntuneAudit", $null)
 Write-Output (@{ calls = @($script:calls.ToArray()); output = $output } | ConvertTo-Json -Compress -Depth 5)
 
 # 2. The Graph token fails: the run still records its status and leaves a note.
@@ -97,7 +99,8 @@ $output = @()
 try { $output = @(Invoke-TvBackup) } catch { $errorText = $_.Exception.Message }
 Write-Output (@{ calls = @($script:calls.ToArray()); output = @($output | ForEach-Object { [string]$_ }); error = $errorText } | ConvertTo-Json -Compress -Depth 5)
 
-# 5. Change reports on and a backup with warnings: no report, and the job output says so.
+# 5. Change reports and archiving on: warnings skip the report but still save the archive.
+[Environment]::SetEnvironmentVariable("TenuVaultArchiveIntuneAudit", "true")
 $script:calls.Clear()
 $script:OutcomeSent = $false
 $script:failReportList = $false
@@ -106,6 +109,7 @@ $errorText = $null
 $output = @()
 try { $output = @(Invoke-TvBackup) } catch { $errorText = $_.Exception.Message }
 [Environment]::SetEnvironmentVariable("TenuVaultChangeReport", $null)
+[Environment]::SetEnvironmentVariable("TenuVaultArchiveIntuneAudit", $null)
 Write-Output (@{ calls = @($script:calls.ToArray()); output = @($output | ForEach-Object { [string]$_ }); error = $errorText } | ConvertTo-Json -Compress -Depth 5)
 
 # 6. and 7. Started by hand with TRIGGER Manual, and with a value that is neither Manual nor
@@ -148,6 +152,14 @@ $script:calls.Clear()
 $script:OutcomeSent = $false
 $script:failAuditReceipt = $false
 $script:failIntuneAudit = $true
+[Environment]::SetEnvironmentVariable("TenuVaultArchiveIntuneAudit", "true")
 [Environment]::SetEnvironmentVariable("TenuVaultChangeReport", $null)
+$output = @(Invoke-TvBackup 3>&1 | ForEach-Object { [string]$_ })
+Write-Output (@{ calls = @($script:calls.ToArray()); output = $output } | ConvertTo-Json -Compress -Depth 5)
+
+# 11. Restored permissions let the next run archive normally.
+$script:calls.Clear()
+$script:OutcomeSent = $false
+$script:failIntuneAudit = $false
 $output = @(Invoke-TvBackup 3>&1 | ForEach-Object { [string]$_ })
 Write-Output (@{ calls = @($script:calls.ToArray()); output = $output } | ConvertTo-Json -Compress -Depth 5)

@@ -127,6 +127,7 @@ export function CloudBackupSettings({ tenant, community, cloud, scopeVersion = 0
       weekday,
       timeZone,
       scope: preset === "everything" ? "everything" : "policies",
+      archiveIntuneAudit: !community,
       changeReport: changeReport === "keep" ? undefined : changeReport,
       withoutActors,
       tenantName: tenant?.name,
@@ -135,7 +136,7 @@ export function CloudBackupSettings({ tenant, community, cloud, scopeVersion = 0
       subscriptionId: tenant?.resources?.subscriptionId || undefined,
     })
     return preset === "custom" ? `${base} -ExcludedFolders "${excluded.join(",")}"` : base
-  }, [tenantId, storageAccount, frequency, time, weekday, timeZone, preset, excluded, changeReport, withoutActors, tenant])
+  }, [tenantId, storageAccount, frequency, time, weekday, timeZone, preset, excluded, community, changeReport, withoutActors, tenant])
 
   const applyPaste = async () => {
     const config = parseCloudSetup(pasted)
@@ -355,7 +356,7 @@ export function CloudBackupSettings({ tenant, community, cloud, scopeVersion = 0
               roles (as a Global Administrator) and creates the failure alert; the template deploys everything ARM
               can and lists the roles in its outputs. The Deploy to Azure link cannot carry the choices above with
               it: enter frequency, day, time, timezone, scope, the change report (changeReport) and, for a custom choice, the excluded folders
-              (excludedFolders) in the template as well (its defaults are daily, everything except apps, no change report).
+              (excludedFolders) in the template as well. Set archiveIntuneAudit to true to capture the Intune audit log.
               <div className="mt-3 flex flex-wrap gap-2">
                 <Button size="sm" disabled={community || localStorage} onClick={() => void bridge.app.openExternal(deployToAzureUrl())}>
                   <Cloud className="mr-2 h-4 w-4" /> Deploy to Azure

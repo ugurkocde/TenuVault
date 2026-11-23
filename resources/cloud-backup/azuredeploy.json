@@ -80,6 +80,11 @@
       "defaultValue": "UTC",
       "metadata": { "description": "IANA timezone for the schedule, for example Europe/Berlin. Daylight saving follows the timezone." }
     },
+    "archiveIntuneAudit": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": { "description": "Set true for Pro or MSP cloud backup setup to archive the Intune audit log with each backup." }
+    },
     "enableAudit": {
       "type": "bool",
       "defaultValue": true,
@@ -295,6 +300,17 @@
       "dependsOn": ["[resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName'))]"],
       "properties": {
         "value": "[concat('\"', variables('variableValues')[copyIndex()].value, '\"')]",
+        "isEncrypted": false
+      }
+    },
+    {
+      "condition": "[and(not(parameters('auditOnly')), parameters('archiveIntuneAudit'))]",
+      "type": "Microsoft.Automation/automationAccounts/variables",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(parameters('automationAccountName'), '/TenuVaultArchiveIntuneAudit-', variables('tenantKey'))]",
+      "dependsOn": ["[resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName'))]"],
+      "properties": {
+        "value": "\"true\"",
         "isEncrypted": false
       }
     },

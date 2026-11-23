@@ -144,6 +144,8 @@ describe("cloudSetupCommand", () => {
   it("passes the change report choice only when one was made, so a rerun keeps the earlier one", () => {
     const base = { tenantId: TENANT, storageAccount: "tvbkp1", frequency: "daily", time: "02:00", weekday: 0, timeZone: "UTC", scope: "policies" } as const
     // No choice made in this hand-off: no parameter, and the setup keeps level and actors.
+    expect(cloudSetupCommand(base)).not.toContain("-ArchiveIntuneAudit")
+    expect(cloudSetupCommand({ ...base, archiveIntuneAudit: true })).toContain("-ArchiveIntuneAudit -GrantGraphRoles")
     expect(cloudSetupCommand(base)).not.toContain("-ChangeReport")
     expect(cloudSetupCommand({ ...base, tenantName: "Contoso" })).not.toContain("-TenantName")
     expect(cloudSetupCommand({ ...base, changeReport: "off" })).toContain("-Scope policies -ChangeReport Off -GrantGraphRoles")

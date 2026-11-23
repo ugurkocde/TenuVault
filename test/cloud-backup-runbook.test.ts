@@ -46,7 +46,7 @@ const folderOf = (blobs: Map<string, string>) => [...blobs.keys()].find((name) =
 
 const template = JSON.parse(readFileSync(new URL("../resources/cloud-backup/azuredeploy.json", import.meta.url), "utf8")) as {
   parameters: Record<string, unknown>
-  resources: Array<{ type: string }>
+  resources: Array<{ type: string; name: string }>
   variables: Record<string, string>
   outputs: Record<string, unknown>
 }
@@ -378,6 +378,15 @@ describe("Cloud audit contract", () => {
     expect(run.calls.some(call => call.uri.includes(".tenuvault-owner.json"))).toBe(false)
   }, 60_000)
 
+  it("sets the tenant's Intune archive variable only when a full deployment opts in", () => {
+    const variable = template.resources.find(resource => resource.name.includes("TenuVaultArchiveIntuneAudit-"))
+    expect(template.parameters.archiveIntuneAudit).toMatchObject({ type: "bool", defaultValue: false })
+    expect(variable).toMatchObject({
+      condition: "[and(not(parameters('auditOnly')), parameters('archiveIntuneAudit'))]",
+      properties: { value: '"true"', isEncrypted: false },
+    })
+  })
+
   it("offers an ARM upgrade that leaves a PowerShell setup's backup writer, variables and schedule in place", () => {
     const resources = template.resources as Array<{ type: string; name: string; condition?: string; dependsOn?: string[] }>
     const audit = resources.filter(resource => resource.name.includes("audit"))
@@ -408,7 +417,7 @@ describe("Cloud audit contract", () => {
     if (main) {
       const base = JSON.parse(readFileSync(join(main, "resources/cloud-backup/azuredeploy.json"), "utf8")) as typeof template
       expect(template.parameters.scheduleStartTime).toEqual(base.parameters.scheduleStartTime)
-      const existing = resources.filter(resource => !audit.includes(resource))
+      const existing = resources.filter(resource => !audit.includes(resource) && !resource.name.includes("TenuVaultArchiveIntuneAudit-"))
       expect(existing.map(({ condition: _condition, ...definition }) => definition)).toEqual(base.resources)
     }
   })
@@ -673,7 +682,18 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
     expect(metadata.AuditArchive).toEqual(archive.window)
     expect(archive.value).toEqual([])
     const denied = runPlainFixture()[9]!
-    expect(denied.output).toContain("Intune audit log not archived. The next backup will retry from the last saved archive.")
+    expect(denied.output!.join(" ")).toContain("The cloud backup identity needs DeviceManagementApps.Read.All.")
+    expect(denied.output!.join(" ")).not.toContain("private Graph message")
+    expect(JSON.parse(denied.calls.find((call) => call.method === "Put" && call.uri.includes("/cloud-backup-outcomes/"))!.body!)).toMatchObject({ status: "CompletedWithWarnings" })
+    expect(JSON.parse(denied.calls.find((call) => call.method === "Put" && call.uri.includes("/cloud-backup-status-"))!.body!)).toMatchObject({ LastStatus: "CompletedWithWarnings" })
+    const recovered = runPlainFixture()[10]!
+    const recoveredMetadata = JSON.parse(recovered.calls.find((call) => call.method === "Put" && call.uri.endsWith("/metadata.json"))!.body!)
+    expect(recoveredMetadata.AuditArchive).toMatchObject({ count: 0 })
+    expect(recoveredMetadata).not.toHaveProperty("AuditArchiveWarning")
+    const off = runPlainFixture()[5]!
+    expect(off.calls.some((call) => call.uri.includes("/deviceManagement/auditEvents"))).toBe(false)
+    expect(off.output!.join(" ")).not.toContain("Intune audit")
+    expect(JSON.parse(off.calls.find((call) => call.method === "Put" && call.uri.endsWith("/metadata.json"))!.body!)).not.toHaveProperty("AuditArchiveWarning")
     expect(denied.calls.some((call) => call.method === "Put" && call.uri.endsWith("/AuditEvents/auditEvents.json"))).toBe(false)
     const auditFailed = denied.calls.find((call) => call.method === "Put" && call.uri.endsWith("/metadata.json"))
     expect(JSON.parse(auditFailed!.body!)).toMatchObject({ Status: "Success", AuditArchiveWarning: true })

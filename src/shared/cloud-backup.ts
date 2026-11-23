@@ -188,6 +188,7 @@ export function cloudSetupCommand(options: {
   weekday: number
   timeZone: string
   scope: "everything" | "policies"
+  archiveIntuneAudit?: boolean
   /**
    * Change reports by email through the notification watcher, when the admin chose a level in this
    * hand-off. Left out, the command carries no change report parameter, so a rerun keeps the
@@ -228,6 +229,7 @@ export function cloudSetupCommand(options: {
   const cut = cleaned && cleaned.length > 200 && /[\uD800-\uDBFF]/.test(cleaned[199]!) ? 199 : 200
   const name = cleaned?.slice(0, cut).trim()
   if (name && reportOn) parts.push(`-TenantName '${name.replace(/'/g, "''")}'`)
+  if (options.archiveIntuneAudit) parts.push("-ArchiveIntuneAudit")
   parts.push("-GrantGraphRoles")
   return parts.join(" ")
 }
