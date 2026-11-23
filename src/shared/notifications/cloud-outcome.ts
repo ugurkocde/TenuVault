@@ -14,6 +14,7 @@
  * desktop sends; test/notification-watcher-script.test.ts compares both.
  */
 import { backupEvent, type NotificationEnvelope } from "./envelope"
+import type { SecondaryCopyResult } from "../cloud-backup"
 
 export const CLOUD_OUTCOME_SCHEMA = "tenuvault.cloud-backup-outcome/v1"
 export const CLOUD_OUTCOME_CONTAINER = "tenuvault-backup-results"
@@ -31,6 +32,7 @@ export interface CloudBackupOutcome {
   failedTypes: string[]
   /** How the run started. Notes from backup runbooks before 1.4.0 carry none and count as scheduled. */
   trigger: "scheduled" | "manual"
+  secondaryCopy?: SecondaryCopyResult
 }
 
 // ASCII only and anchored at the very end, the same as the runbook's \z patterns.
@@ -69,6 +71,7 @@ export const CLOUD_OUTCOME_SUMMARY: Record<CloudOutcomeStatus, string> = {
   CompletedWithWarnings: "The cloud backup in Azure saved policies, but some could not be read. Open TenuVault for the details.",
   Failed: "The cloud backup in Azure failed, so this backup is incomplete. Open the runbook job in the Automation account for the reason.",
 }
+const SECONDARY_COPY_WARNING = "The primary cloud backup completed, but the secondary copy could not be verified. Check the Azure Automation job for details."
 
 /** The Trigger detail of the alert, by how the run started. */
 export const CLOUD_OUTCOME_TRIGGER: Record<CloudBackupOutcome["trigger"], string> = {
@@ -98,6 +101,8 @@ export function parseCloudOutcome(value: unknown, tenantId: string): CloudBackup
     failures: count(note.failures, 1_000_000) ?? 0,
     failedTypes,
     trigger: note.trigger === "manual" ? "manual" : "scheduled",
+    ...(note.secondaryCopy === "Verified" || note.secondaryCopy === "Failed" || note.secondaryCopy === "Skipped"
+      ? { secondaryCopy: note.secondaryCopy } : {}),
   }
 }
 
@@ -114,7 +119,8 @@ export function cloudOutcomeEvent(outcome: CloudBackupOutcome, tenantId: string,
     failures: outcome.failures,
     failedTypes: outcome.failedTypes,
     trigger: CLOUD_OUTCOME_TRIGGER[outcome.trigger],
-    message: CLOUD_OUTCOME_SUMMARY[outcome.status],
+    message: outcome.status === "CompletedWithWarnings" && outcome.secondaryCopy === "Failed"
+      ? SECONDARY_COPY_WARNING : CLOUD_OUTCOME_SUMMARY[outcome.status],
     source,
   })
 }

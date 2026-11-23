@@ -5,7 +5,7 @@
 .DESCRIPTION
     Creates everything the Invoke-TenuVaultBackup runbook needs, in the customer's own tenant and
     subscription. Nothing is created in a TenuVault tenant and no backup leaves the customer's
-    storage account.
+    storage accounts.
 
       * creates or reuses a resource group and an Azure Automation account with a system assigned
         managed identity, imports the sibling runbook runbooks/Invoke-TenuVaultBackup.ps1 and
@@ -22,6 +22,7 @@
         counts, failed type names, time; never policy content) for the notification watcher to
         alert on. A container of its own: the identity never gets write access to the
         watcher's state
+      * optionally prepares a second storage account for verified copies of successful backups
       * tries to create the private audit-logs container and grants the managed identity read and
         create access there. If Azure refuses, setup continues and prints the manual steps
       * links the runbook to a daily or weekly schedule in the timezone you choose
@@ -78,6 +79,13 @@
     Storage account that holds (or will hold) the intune-backups container. Create it first, for
     example with New-TenuVaultStorage.ps1. It must be the account the tenant uses in TenuVault.
 
+.PARAMETER SecondaryStorageAccountId
+    ARM resource ID of a separate storage account in the same Entra tenant, optionally in another
+    subscription. Omit to keep the saved target or pass an empty string to turn future copies off.
+
+.PARAMETER SecondaryContainerName
+    Private container for the second copy. Defaults to intune-backups when setting a target.
+
 .PARAMETER Time
     Local time of day the backup runs, "HH:mm". Default 02:00.
 
@@ -133,6 +141,8 @@
 param(
     [Parameter(Mandatory)][string]$TenantId,
     [Parameter(Mandatory)][string]$StorageAccountName,
+    [AllowEmptyString()][string]$SecondaryStorageAccountId,
+    [string]$SecondaryContainerName,
     [string]$SubscriptionId,
     [string]$ResourceGroupName = "rg-tenuvault-backups",
     [string]$Location,
@@ -164,10 +174,14 @@ $backupContainer = "intune-backups"
 $outcomeContainer = "tenuvault-backup-results"
 $auditContainer = "audit-logs"
 $auditRunbookVersion = "1.5.0"
+$secondaryRunbookVersion = "1.6.0"
 $runbookPath = Join-Path $PSScriptRoot "runbooks/Invoke-TenuVaultBackup.ps1"
 $tenantKey = $TenantId.Substring(0, [Math]::Min(8, $TenantId.Length)).ToLowerInvariant()
 $scheduleName = "TenuVaultBackup-$tenantKey"
 $writerRoleName = "TenuVault Backup Writer"
+$secondaryVariable = "TenuVaultSecondaryStorage-$tenantKey"
+$secondaryPassed = $PSBoundParameters.ContainsKey("SecondaryStorageAccountId")
+$secondaryContainerPassed = $PSBoundParameters.ContainsKey("SecondaryContainerName")
 
 $graphRoleNames = @(
     "DeviceManagementConfiguration.Read.All",
@@ -182,7 +196,8 @@ $appOnlyExcluded = if ($IncludeDeviceCategories) { "" } else { "DeviceCategories
 $variableNames = @(
     "TenuVaultTenantId-$tenantKey", "TenuVaultStorageAccount-$tenantKey",
     "TenuVaultScope-$tenantKey", "TenuVaultExcludedFolders-$tenantKey", "TenuVaultAppOnlyExcluded-$tenantKey",
-    "TenuVaultChangeReport-$tenantKey", "TenuVaultChangeReportActors-$tenantKey", "TenuVaultTenantName-$tenantKey"
+    "TenuVaultChangeReport-$tenantKey", "TenuVaultChangeReportActors-$tenantKey", "TenuVaultTenantName-$tenantKey",
+    $secondaryVariable
 )
 # Setups before runbook 1.2.0 also wrote the Key Vault that held the recovery key. The runbook
 # no longer reads it; a rerun or -Remove deletes that variable.
@@ -204,6 +219,26 @@ if ($TenantId -notmatch '^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$') {
 }
 if ($StorageAccountName -notmatch '^[a-z0-9]{3,24}$') {
     throw "Storage account name '$StorageAccountName' is invalid: use 3 to 24 lower case letters and digits."
+}
+if ($secondaryContainerPassed -and -not $SecondaryStorageAccountId) {
+    throw "Pass -SecondaryStorageAccountId when choosing -SecondaryContainerName."
+}
+if ($secondaryPassed -and ($Remove -or $AuditRoleOnly)) {
+    throw "Set the secondary target in a normal setup run."
+}
+if (-not $secondaryContainerPassed) { $SecondaryContainerName = $backupContainer }
+$storageIdPattern = '^(/subscriptions/([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})/resourceGroups/([\w.()-]+))/providers/Microsoft\.Storage/storageAccounts/([a-z0-9]{3,24})'
+$containerPattern = '[a-z0-9](?:[a-z0-9]|-(?!-)){1,61}[a-z0-9]'
+$secondaryTarget = $null
+if ($SecondaryStorageAccountId) {
+    if ($SecondaryStorageAccountId -notmatch "$storageIdPattern\z") {
+        throw "Pass -SecondaryStorageAccountId as the full ARM resource ID of the storage account."
+    }
+    $secondaryTarget = @{ GroupScope = $Matches[1]; Subscription = $Matches[2]; Group = $Matches[3]; Account = $Matches[4].ToLowerInvariant() }
+    if ($secondaryTarget.Account -eq $StorageAccountName) { throw "Choose a different storage account for the second copy." }
+    if ($SecondaryContainerName -cnotmatch "^$containerPattern\z") { throw "Pass a valid Azure blob container name for -SecondaryContainerName." }
+    $secondaryTarget.Container = $SecondaryContainerName
+    $secondaryTarget.Scope = "$SecondaryStorageAccountId/blobServices/default/containers/$SecondaryContainerName"
 }
 if ($Time -notmatch '^([01]\d|2[0-3]):[0-5]\d$') {
     throw "-Time '$Time' is invalid: use HH:mm, for example 02:00."
@@ -633,6 +668,54 @@ function Assert-TenuVaultAuthorizationActions {
     }
 }
 
+function Invoke-TenuVaultSecondaryContext {
+    param([hashtable]$Target, [scriptblock]$Operation)
+    if ($Target.Subscription -eq $context.Subscription.Id) { return & $Operation }
+    try {
+        Set-AzContext -Subscription $Target.Subscription -Tenant $contextTenantId -Scope Process -WhatIf:$false -Confirm:$false | Out-Null
+        & $Operation
+    } finally {
+        Set-AzContext -Context $context -Scope Process -WhatIf:$false -Confirm:$false | Out-Null
+    }
+}
+
+function Initialize-TenuVaultSecondaryAccess {
+    [CmdletBinding(SupportsShouldProcess)]
+    param([hashtable]$Target, [object]$Role, [string]$PrincipalId)
+    if (-not $Role -or -not $PrincipalId) { return }
+    if (-not $PSCmdlet.ShouldProcess($Target.Scope, "Grant the cloud backup identity access to the secondary container")) { return }
+    $roleName = $writerRoleName
+    $roleId = ([string]$Role.Id).Split("/")[-1]
+    if ($Role.AssignableScopes -notcontains $Target.GroupScope -and $Role.AssignableScopes -notcontains "/subscriptions/$($Target.Subscription)") {
+        $Role.AssignableScopes.Add($Target.GroupScope)
+        try {
+            Set-AzRoleDefinition -Role $Role -ErrorAction Stop | Out-Null
+        } catch {
+            [void]$Role.AssignableScopes.Remove($Target.GroupScope)
+            # Only fall back when Azure explicitly denies the role definition change.
+            if ($_.ToString() -notmatch 'AuthorizationFailed|Forbidden|RoleDefinitionLimitExceeded|RequestDisallowedByPolicy') { throw }
+            $roleName = "Storage Blob Data Contributor"
+            $roleId = "ba92f5b4-2d11-453d-a403-e96b0029c9fe"
+            Write-Warning "Azure refused to extend the Backup Writer role to the secondary resource group. Assigning Storage Blob Data Contributor on the secondary container only. This role can delete blobs. Review the grant after the Backup Writer role becomes available."
+        }
+    }
+    Invoke-TenuVaultSecondaryContext $Target {
+        $storageContext = New-AzStorageContext -StorageAccountName $Target.Account -UseConnectedAccount
+        if (-not (Get-AzStorageContainer -Name $Target.Container -Context $storageContext -ErrorAction SilentlyContinue)) {
+            New-AzStorageContainer -Name $Target.Container -Context $storageContext -Permission Off | Out-Null
+        }
+        $assignments = @(Get-AzRoleAssignment -ObjectId $PrincipalId -Scope $Target.Scope |
+            Where-Object { $_.Scope -eq $Target.Scope })
+        if (-not ($assignments | Where-Object { $_.RoleDefinitionId -eq $roleId -or $_.RoleDefinitionName -eq $roleName })) {
+            New-AzRoleAssignment -ObjectId $PrincipalId -ObjectType ServicePrincipal -RoleDefinitionId $roleId -Scope $Target.Scope | Out-Null
+        }
+        if ($roleName -eq $writerRoleName -and ($assignments | Where-Object { $_.RoleDefinitionName -eq "Storage Blob Data Contributor" })) {
+            Write-Warning "The secondary container still grants Storage Blob Data Contributor to the cloud backup identity. Review and remove that grant to leave the no-delete Backup Writer role."
+        }
+    }
+    return $true
+}
+
 # Check storage role-management access before the first Azure resource write. The role
 # definition write is only needed when the shared writer role does not yet allow this scope.
 $storageAccount = $null
@@ -651,6 +734,18 @@ if (-not $Remove) {
         $requiredStorageActions += "Microsoft.Authorization/roleDefinitions/write"
     }
     Assert-TenuVaultAuthorizationActions -Scope $storageGroupScope -RequiredActions $requiredStorageActions
+}
+
+if ($secondaryTarget) {
+    $subscription = Get-AzSubscription -SubscriptionId $secondaryTarget.Subscription -TenantId $contextTenantId -ErrorAction Stop
+    if (-not $subscription -or $subscription.TenantId -ne $contextTenantId) {
+        throw "The secondary subscription must be accessible in the Automation account's Entra tenant. Nothing was written."
+    }
+    Invoke-TenuVaultSecondaryContext $secondaryTarget {
+        $account = Get-AzStorageAccount -ResourceGroupName $secondaryTarget.Group -Name $secondaryTarget.Account -ErrorAction Stop
+        if ($account.Id -ne $SecondaryStorageAccountId) { throw "The secondary storage account does not match its ARM resource ID." }
+        Assert-TenuVaultAuthorizationActions -Scope $secondaryTarget.GroupScope -RequiredActions @("Microsoft.Authorization/roleAssignments/write")
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -792,6 +887,7 @@ if ($AuditRoleOnly) {
     return
 }
 
+$secondaryReady = $false
 if ($principalId) {
     # The container assignment lives under the storage account, which may be in another
     # resource group than the Automation account. The role must be assignable there.
@@ -854,6 +950,7 @@ if ($principalId) {
         Add-TenuVaultRoleAssignment -ObjectId $principalId -RoleName $writerRoleName `
             -RoleDefinitionId ([string]$role.Id) `
             -Scope "$($storageAccount.Id)/blobServices/default/containers/$outcomeContainer" -Target "the cloud backup identity (result notes)"
+        if ($secondaryTarget) { $secondaryReady = Initialize-TenuVaultSecondaryAccess $secondaryTarget $role $principalId }
     }
 }
 
@@ -866,6 +963,12 @@ $runbook = Publish-TenuVaultRunbook
 Write-Host "Writing Automation variables for this tenant (suffix -$tenantKey)..."
 Set-TenuVaultAutomationVariable -Name "TenuVaultTenantId-$tenantKey" -Value $TenantId
 Set-TenuVaultAutomationVariable -Name "TenuVaultStorageAccount-$tenantKey" -Value $StorageAccountName
+if ($secondaryPassed -and (-not $secondaryTarget -or $secondaryReady)) {
+    if ($secondaryTarget -and (-not $runbook.Version -or [version]$runbook.Version -lt [version]$secondaryRunbookVersion)) {
+        throw "The published runbook could not be verified as version $secondaryRunbookVersion or later. The secondary target was not saved."
+    }
+    Set-TenuVaultAutomationVariable -Name $secondaryVariable -Value $(if ($secondaryTarget) { $secondaryTarget.Scope } else { "off" })
+}
 Set-TenuVaultAutomationVariable -Name "TenuVaultScope-$tenantKey" -Value $Scope
 Set-TenuVaultAutomationVariable -Name "TenuVaultExcludedFolders-$tenantKey" -Value $ExcludedFolders
 Set-TenuVaultAutomationVariable -Name "TenuVaultAppOnlyExcluded-$tenantKey" -Value $appOnlyExcluded
@@ -1087,6 +1190,9 @@ if (-not $linked) {
 
 Write-TenuVaultLegacyKeyVaultNote $legacyKeyVaults -KeptBecause $runbook.Reason
 
+$secondaryVariables = Get-TenuVaultAutomationVariables
+if ($secondaryVariables.Error) { Write-Warning "The saved secondary target could not be read back. Check the Automation account variables before updating the app." }
+$secondarySetup = $secondaryVariables.Variables[$secondaryVariable]
 Write-Host ""
 Write-Host "--- TenuVault cloud backup setup (paste into TenuVault) ---"
 Write-Host "tenantId=$TenantId"
@@ -1094,6 +1200,10 @@ Write-Host "subscriptionId=$($context.Subscription.Id)"
 Write-Host "resourceGroup=$ResourceGroupName"
 Write-Host "automationAccount=$AutomationAccountName"
 Write-Host "storageAccount=$StorageAccountName"
+if ($secondarySetup -match "$storageIdPattern/blobServices/default/containers/($containerPattern)\z") {
+    Write-Host "secondaryStorageAccount=$($Matches[4].ToLowerInvariant())"
+    Write-Host "secondaryContainer=$($Matches[5])"
+}
 Write-Host "scheduleName=$scheduleName"
 Write-Host "frequency=$($Frequency.ToLowerInvariant())"
 Write-Host "time=$Time"

@@ -4,7 +4,7 @@
     and writes one JSON line per scenario with every HTTP call the run made.
 #>
 [CmdletBinding()]
-param([string]$RunbookPath)
+param([string]$RunbookPath, [switch]$SecondaryCopyTests)
 
 $ErrorActionPreference = "Stop"
 if (-not $RunbookPath) {
@@ -39,6 +39,41 @@ function Invoke-TvHttp {
     if ($script:failCompliance -and $Uri -like "https://graph.microsoft.com/beta/deviceManagement/deviceCompliancePolicies*") { throw [TvHttpError]::new(500, "HTTP 500") }
     $body = if ($null -ne $BodyBytes) { [Text.Encoding]::UTF8.GetString($BodyBytes) } else { $null }
     $script:calls.Add([pscustomobject]@{ uri = $Uri; method = $Method; contentType = $ContentType; ifNoneMatch = $Headers["If-None-Match"]; body = $body })
+    if ($SecondaryCopyTests -and $Uri -like "*.blob.core.windows.net/*") {
+        $targetUri = [uri]$Uri
+        if ($Method -eq "Put" -and $targetUri.AbsolutePath -match "/backup-") {
+            if ($Headers["x-ms-copy-source"]) {
+                if ($Token -ne "token" -or $Headers["x-ms-copy-source-authorization"] -ne "Bearer token" -or
+                    $Headers["x-ms-source-if-match"] -ne '"source-etag"' -or $Headers["If-None-Match"] -ne "*" -or $BodyBytes.Length -ne 0) {
+                    throw "Unexpected copy authentication or conditions."
+                }
+                if ($script:copyScenario -eq "denied" -and $targetUri.AbsolutePath -like "*/Baseline*") {
+                    throw [TvHttpError]::new(403, "HTTP 403 AuthorizationPermissionMismatch")
+                }
+                $length = $script:backupBlobs[$Headers["x-ms-copy-source"]]
+                if ($script:copyScenario -eq "wrong-size" -and $targetUri.AbsolutePath -like "*/Baseline*") { $length++ }
+                $script:backupBlobs[$Uri] = $length
+                return @{ Status = 201 }
+            }
+            $script:backupBlobs[$Uri] = $BodyBytes.Length
+        } elseif ($targetUri.Query -like "*comp=list&prefix=*") {
+            $container = $targetUri.GetLeftPart([UriPartial]::Path) + "/"
+            $prefix = [uri]::UnescapeDataString(($targetUri.Query -split "prefix=")[1].Split("&")[0])
+            $matching = @($script:backupBlobs.Keys | Where-Object { $_.StartsWith($container + $prefix) } | Sort-Object)
+            $next = ""
+            if ($targetUri.Query -like "*&marker=page%2B2*") {
+                $matching = @($matching | Select-Object -Skip 1)
+            } elseif ($matching.Count -gt 1) {
+                $matching = @($matching[0])
+                $next = "page+2"
+            }
+            $blobs = foreach ($key in $matching) {
+                $name = [Security.SecurityElement]::Escape([uri]::UnescapeDataString($key.Substring($container.Length)))
+                "<Blob><Name>$name</Name><Properties><Content-Length>$($script:backupBlobs[$key])</Content-Length><Etag>`"source-etag`"</Etag></Properties></Blob>"
+            }
+            return @{ Status = 200; Text = "<EnumerationResults><Blobs>$blobs</Blobs><NextMarker>$next</NextMarker></EnumerationResults>" }
+        }
+    }
     if ($script:failAuditReceipt -and $Uri -like "*/tenuvault-backup-results/audit-receipts/*") { throw [TvHttpError]::new(403, "Audit receipt denied") }
     $text = '{"value":[]}'
     if ($Uri -like "*/tenuvault-backup-results?*comp=list*") {
@@ -60,6 +95,23 @@ function Invoke-TvHttp {
         }
     }
     return @{ Status = 200; Bytes = [Text.Encoding]::UTF8.GetBytes($text); Text = $text }
+}
+
+if ($SecondaryCopyTests) {
+    [Environment]::SetEnvironmentVariable("TenuVaultSecondaryStorage", "/subscriptions/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/resourceGroups/rg-copy/providers/Microsoft.Storage/storageAccounts/stcontosorecovery/blobServices/default/containers/backup-copies")
+    foreach ($scenario in "verified", "denied", "wrong-size", "primary-warnings") {
+        $script:copyScenario = $scenario
+        $script:backupBlobs = @{}
+        $script:calls.Clear()
+        $script:OutcomeSent = $false
+        $script:failCompliance = $scenario -eq "primary-warnings"
+        $errorText = $null
+        $output = @()
+        try { $output = @(Invoke-TvBackup 3>&1) } catch { $errorText = $_.Exception.Message }
+        @{ scenario = $scenario; calls = @($script:calls.ToArray()); error = $errorText
+           output = @($output | ForEach-Object { [string]$_ }) } | ConvertTo-Json -Compress -Depth 5
+    }
+    return
 }
 
 # 1. A successful run.
