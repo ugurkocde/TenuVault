@@ -56,7 +56,7 @@ export function resolveReferences(
     mappings: Mapping[]
     sourceNames: Partial<Record<ReferenceKind, Map<string, string>>>
     targetObjects: Partial<Record<ReferenceKind, Map<string, string> | null>>
-    groupStates: ReadonlyMap<string, GroupState | { state: "unassignable"; name: string | null }>
+    groupStates: ReadonlyMap<string, GroupState>
     sameTenant: boolean
   },
 ): ReferenceResolution[] {

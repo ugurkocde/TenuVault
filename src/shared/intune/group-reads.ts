@@ -1,16 +1,19 @@
+import { groupKind } from "../group-access"
 import { isGuid } from "../security"
 import type { Item } from "./registry"
 
-export type GroupState = { state: "found" | "missing" | "unknown"; name: string | null }
+export type GroupState = { state: "found" | "missing" | "unknown" | "unassignable"; name: string | null }
 type GroupGraph = (method: "GET" | "POST", path: string, body?: Item) => Promise<{ status: number; body: Item }>
 
 const unknown: GroupState = { state: "unknown", name: null }
-const groupPath = (id: string) => `groups/${id}?$select=id,displayName`
+const groupPath = (id: string) => `groups/${id}?$select=id,displayName,securityEnabled,groupTypes`
 
 function groupState(id: string, status: unknown, body?: Item): GroupState {
   if (status === 404) return { state: "missing", name: null }
   if (status !== 200 || typeof body?.id !== "string" || body.id.toLowerCase() !== id) return unknown
-  return { state: "found", name: typeof body.displayName === "string" ? body.displayName : null }
+  const name = typeof body.displayName === "string" ? body.displayName : null
+  const state = groupKind(body.securityEnabled, body.groupTypes) === "other" ? "unassignable" : "found"
+  return { state, name }
 }
 
 /** Read only the referenced groups. Batch subrequests are GETs and may return in any order. */

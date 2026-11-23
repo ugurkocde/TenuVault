@@ -1,4 +1,4 @@
-import { groupNamePath, readGroupStates } from "../../../shared/intune/group-reads"
+import { groupNamePath, readGroupStates, type GroupState } from "../../../shared/intune/group-reads"
 import { referenceTargetId, suggestGroups } from "../../../shared/intune/reference-mapping"
 import { assignmentsUnread } from "../../../shared/intune/read"
 import type { GraphCall } from "../../../portal/lib/policies/graph-restore"
@@ -102,7 +102,7 @@ async function names(graph: GraphCall, kind: Exclude<ReferenceKind, "group">, me
 }
 
 /** Whether the tenant can verify the group and whether Intune can assign it. */
-export async function groupState(graph: GraphCall, id: string): Promise<{ state: "found" | "missing" | "unknown" | "unassignable"; name: string | null }> {
+export async function groupState(graph: GraphCall, id: string): Promise<GroupState> {
   try {
     const group = await getOne(graph, `groups/${encodeURIComponent(id)}?$select=id,displayName,securityEnabled,groupTypes`)
     if (!group) return { state: "missing", name: null }
