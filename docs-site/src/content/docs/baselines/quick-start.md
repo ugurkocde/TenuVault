@@ -196,7 +196,8 @@ Pro and MSP. **Assignments** changes the assignments of OIB policies that are al
 * Assignments that come from a policy set are never changed.
 * A policy whose current assignments cannot be read is not changed.
 * Only what the review showed is changed: if a policy's assignments change in Intune after the review, or the tenant policy is no longer the matched copy of the OIB policy, it is not changed and the result asks you to review it again.
-* If Microsoft Graph does not confirm a change (a timeout or server error), the run keeps the previous assignments so Undo can still put them back; check the policy in Intune.
+* If Microsoft Graph does not confirm a change (a timeout or server error), the run keeps the previous assignments so Undo can still put them back; check the policy in Intune. Undo right after such a run may say the outcome is not known yet; try again a few minutes later.
+* If Microsoft Graph throttles a change, it is not sent again later, because the assignments may have changed by then. The policy is reported as failed; run the change again.
 
 The backup choice is the same as for deployments. Each change is recorded as a run that can be undone.
 

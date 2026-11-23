@@ -106,6 +106,8 @@ export interface GraphCallOptions {
   justification?: string
   /** Snapshot object ID a creation restores. Recorded in the write journal for later replace runs. */
   sourceId?: string
+  /** Answer a throttled write as it is instead of sending it again later, for writes based on a read that may be stale by then. */
+  noRetry?: boolean
 }
 
 export type GraphCall = (method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE", path: string, body?: Item, options?: GraphCallOptions) => Promise<{ status: number; body: Item; approval?: ApprovalSignal }>
@@ -183,7 +185,7 @@ export function graphCaller(token: string, fetchImpl: typeof fetch = fetch, opti
         beforeAttempt?.()
         refreshed = true; token = await options.refreshToken(); continue
       }
-      const retry = response.status === 429 || (method === "GET" && [408, 500, 502, 503, 504].includes(response.status))
+      const retry = !callOptions.noRetry && (response.status === 429 || (method === "GET" && [408, 500, 502, 503, 504].includes(response.status)))
       if (retry && attempt < 3) {
         const header = response.headers.get("retry-after")
         const seconds = header && /^\d+(?:\.\d+)?$/.test(header) ? Number(header) : NaN

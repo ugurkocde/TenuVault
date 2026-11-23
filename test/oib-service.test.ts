@@ -562,6 +562,39 @@ describe("assignments", () => {
     expect(state.assignments![EXISTING]).toEqual([])
   })
 
+  it("does not resend a throttled assignment write, and keeps a lost write's record while it may still land", async () => {
+    const state: Tenant = { policies: [{ id: EXISTING, name: "Win - OIB - SC - Test - v3.8" }], assignments: { [EXISTING]: [] } }
+    const inner = world(state, [])
+    let answer = 429
+    let posts = 0
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "POST" && String(input).endsWith("/assign") && answer) {
+        posts++
+        return Response.json({ error: { code: "TooManyRequests", message: "Too many requests" } }, { status: answer, headers: { "retry-after": "0" } })
+      }
+      return inner(input, init)
+    }))
+    await source()
+    const assign = () => handleOib({ ...base, action: "oib-assign", commit, backup: { mode: "none" }, mode: "add", items: [{ source: SC, targetId: EXISTING, expected: [] }], assignments: { deviceGroups: [DEVICES], userGroups: [] } }) as Promise<OibRun>
+    expect(await assign()).toMatchObject({ reassigned: [], failed: [{ error: "Too many requests" }] })
+    expect(posts).toBe(1)
+    // A gateway error: the write may still land, so a quick undo keeps the record.
+    answer = 504
+    const run = await assign()
+    expect(run.reassigned).toMatchObject([{ pending: true }])
+    answer = 0
+    const early = await handleOib({ action: "oib-undo", tenantId, appId, runId: run.runId }) as UndoResult
+    expect(early).toMatchObject({ run: { runId: run.runId }, results: [{ done: false, error: "The outcome of the change is not known yet. Try Undo again in a few minutes." }] })
+  })
+
+  it("refuses groups on a deployment that creates no policy", async () => {
+    const writes: string[] = []
+    vi.stubGlobal("fetch", world({ policies: [{ id: EXISTING, name: "Win - OIB - SC - Test - v3.1", value: 7 }] }, writes))
+    await source()
+    await expect(handleOib({ ...base, action: "oib-deploy", commit, items: [{ source: SC, mode: "update", targetId: EXISTING }], assignments: { deviceGroups: [DEVICES] } })).rejects.toThrow("creates none")
+    expect(writes).toEqual([])
+  })
+
   it("checks a spec that assigns nothing against the tenant too", async () => {
     const writes: string[] = []
     vi.stubGlobal("fetch", world({ policies: [], groups: [DEVICES] }, writes))

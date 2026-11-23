@@ -39,6 +39,8 @@ const GRAPH_BETA = "https://graph.microsoft.com/beta/"
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const OBJECT_ID = /^[A-Za-z0-9_-]{1,100}$/
 const RUNS_KEPT = 20
+/** How long a lost write's record is kept by undo while the policy still shows the old assignments. */
+const PENDING_SETTLE_MS = 10 * 60_000
 const VALIDATIONS_KEPT = 50
 const MAX_HISTORY_CHARS = 16_000_000
 const MAX_INVENTORY_PAGES = 1000
@@ -469,6 +471,8 @@ async function deploy(body: RecordJson, kind: OibRun["kind"]): Promise<OibRun> {
       const { token } = await tokenFor(body)
       const graph = graphCaller(token, fetch, { tenant, refreshToken: async () => (await tokenFor(body, true)).token })
       const written = [...new Set(chosen.map((item) => item.policy.folder))]
+      // Assignments are for new policies; a request that creates none cannot carry groups that are never checked.
+      if (spec && body.assignments != null && !chosen.some((item) => item.mode === "create")) throw new FrameworkError("Assignments are chosen for new policies, and this deployment creates none. Nothing was changed.")
       // Groups and filters are checked before the backup, so a wrong group changes nothing.
       let checked: Awaited<ReturnType<typeof checkSpec>> | undefined
       if (spec && chosen.some((item) => item.mode === "create")) {
@@ -668,9 +672,13 @@ async function assign(body: RecordJson): Promise<OibRun> {
       report({ stage: "Checking the groups and filters" })
       const checked = await checkSpec(graph, spec)
       const written = [...new Set(chosen.map((item) => item.policy.folder))]
+      const backupFolder = await backupStage(body, tenant, backup, written, report)
+      // Matched right before the writes, so a copy added during the backup is seen.
       report({ stage: "Checking the deployed policies" })
       const matched = await currentMatches(graph, pack, written)
-      const backupFolder = await backupStage(body, tenant, backup, written, report)
+      // The run's own record is the journal of these writes: the restore write journal would replay an
+      // old answer for an identical later write instead of sending it.
+      const writer = graphCaller(token, fetch, { refreshToken: async () => (await tokenFor(body, true)).token })
       const run: OibRun = {
         runId: randomUUID(), tenantId: tenant, createdAt: new Date().toISOString(), kind: "assign", platform, reference: pack.catalog.reference, commit: pack.catalog.commit,
         ...(backupFolder ? { backupFolder } : {}), backupMode: backup.mode, assignments: checked.spec, assignMode: mode, created: [], updated: [], reassigned: [], failed: [], skipped: [],
@@ -724,7 +732,8 @@ async function assign(body: RecordJson): Promise<OibRun> {
         saveRun(run)
         let response: Awaited<ReturnType<GraphCall>>
         try {
-          response = await graph("POST", `${type.path}/${encodeURIComponent(item.targetId)}/assign`, { [type.assign.key]: next })
+          // Never sent again later: a retry after throttling could overwrite assignments changed in the meantime.
+          response = await writer("POST", `${type.path}/${encodeURIComponent(item.targetId)}/assign`, { [type.assign.key]: next }, { noRetry: true })
         } catch (error) {
           // The outcome is unknown: the entry stays, and undo puts the previous assignments back either way.
           entry.warnings = [...(entry.warnings ?? []), "The answer from Microsoft Graph was lost, so the change may or may not have been made. Check the policy in Intune; undo puts the previous assignments back."]
@@ -809,6 +818,8 @@ async function undo(body: RecordJson): Promise<UndoResult> {
         }
       }
       const reassigned: NonNullable<OibRun["reassigned"]> = []
+      // Assignment writes go around the restore write journal and are never resent, as in assign().
+      const writer = graphCaller(token, fetch, { refreshToken: async () => (await tokenFor(body, true)).token })
       for (const item of run.reassigned ?? []) {
         report({ stage: `Putting back the assignments of ${item.name}`, done: results.length, total })
         const type = assignableType(item.folder)
@@ -837,6 +848,12 @@ async function undo(body: RecordJson): Promise<UndoResult> {
         }
         const now = directAssignments(live.assignments).map(writableAssignment)
         if (sameAssignments(now, item.previous)) {
+          // A write whose answer was lost may still be on its way: keep its record for a while.
+          if (item.pending && Date.now() - Date.parse(run.createdAt) < PENDING_SETTLE_MS) {
+            results.push({ name: item.name, id: item.id, action: "reassigned", done: false, error: "The outcome of the change is not known yet. Try Undo again in a few minutes." })
+            reassigned.push(item)
+            continue
+          }
           results.push({ name: item.name, id: item.id, action: "reassigned", done: true, note: "already assigned as before the run" })
           continue
         }
@@ -845,7 +862,7 @@ async function undo(body: RecordJson): Promise<UndoResult> {
           reassigned.push(item)
           continue
         }
-        const response = await graph("POST", `${type.path}/${encodeURIComponent(item.id)}/assign`, { [type.assign.key]: item.previous })
+        const response = await writer("POST", `${type.path}/${encodeURIComponent(item.id)}/assign`, { [type.assign.key]: item.previous }, { noRetry: true })
         const gone = response.status === 404 || (response.status === 400 && /ResourceNotFound/i.test(JSON.stringify(response.body)))
         if (response.status < 300) results.push({ name: item.name, id: item.id, action: "reassigned", done: true })
         else if (gone) results.push({ name: item.name, id: item.id, action: "reassigned", done: true, note: "already deleted in Intune" })
