@@ -222,6 +222,9 @@ export async function POST(request: NextRequest) {
     let skipped
     try { skipped = parseSkippedAssignments(body.skippedAssignments, paths) }
     catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "Invalid skipped assignments" }, { status: 400 }) }
+    if (repairSelections.some(({ path }) => skipped[path]?.length)) {
+      return NextResponse.json({ error: 'Repair requests must select one target and valid repair tokens' }, { status: 400 })
+    }
     if (targetTenants && Object.keys(skipped).length) return NextResponse.json({ error: "Cross-tenant copies require mappings for every assignment." }, { status: 400 })
 
     // Read back the selected snapshots and check every destination before the first write.
@@ -265,6 +268,8 @@ export async function POST(request: NextRequest) {
     try {
       const ordered = restoreOrder(paths)
       for (const { restorer, targetTenantId, graphToken: targetToken } of targets) {
+        const destination = targetTenantId ?? tenantId.toLowerCase()
+        const mappings = assignmentMappings[destination] ?? []
         const firstRepair = repairSelections[0]
         const operationId = (firstRepair && restorer.repairOperationId(firstRepair.path, firstRepair.repairToken)) || correlated
         const audit = beginRestoreAudit({
@@ -288,11 +293,11 @@ export async function POST(request: NextRequest) {
                 eventType: AuditEventType.CONFIG_UPDATED, items: [item],
               })?.finish()
             }
-            const snapshot = prepared.get(targetTenantId ?? tenantId.toLowerCase())?.get(path)
+            const snapshot = prepared.get(destination)?.get(path)
             const result: RestoreOutcome = snapshot
               ? "blocker" in snapshot
                 ? { success: false, path, action: "skipped", retryable: false, error: snapshot.blocker }
-                : await restorer.restore(path, snapshot.original, { snapshot: snapshot.resolved, skipped: snapshot.skipped, allAssignmentsSkipped: snapshot.allAssignmentsSkipped, warnings: snapshot.warnings })
+                : await restorer.restore(path, snapshot.original, { snapshot: snapshot.resolved, skipped: snapshot.skipped, allAssignmentsSkipped: snapshot.allAssignmentsSkipped, warnings: snapshot.warnings, mappings })
               : await restoreSinglePolicy(restorer, path, storageAccountName, storageToken, manifest?.get(path), repairSelections.find((p: any) => p.path === path)?.repairToken)
             auditProgress.save(result)
             auditProgress.save = undefined
