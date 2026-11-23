@@ -4,7 +4,7 @@ import { createCipheriv, createDecipheriv, createHmac, hkdfSync, randomBytes } f
 import type { BigIntStats } from "node:fs"
 import { link, mkdir, open, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
-import { BACKUP_CONTAINER, BACKUP_OWNER_FILE } from "../../shared/constants"
+import { BACKUP_CONTAINER, BACKUP_OWNER_FILE, BACKUP_RUN_RECORD_FILE } from "../../shared/constants"
 import { DAMAGE_KINDS, type DamageKind, type DamagedFileKinds } from "../../shared/damaged-files"
 import { mapLimit } from "../../shared/map-limit"
 
@@ -883,7 +883,7 @@ export class LocalBlobStore {
     // Blob names whose files can be traced to a backup folder, by the encrypted file name they would have.
     const folders = new Set([...entries.keys(), ...claims.keys()].map(backupFolderOf).filter((folder) => folder !== null))
     const traced = new Map<string, string>()
-    for (const folder of folders) traced.set(`${folder}/metadata.json`, folder).set(`${folder}/${BACKUP_OWNER_FILE}`, folder)
+    for (const folder of folders) traced.set(`${folder}/metadata.json`, folder).set(`${folder}/${BACKUP_OWNER_FILE}`, folder).set(`${folder}/${BACKUP_RUN_RECORD_FILE}`, folder)
     const withManifest = new Set<string>()
     // Folders whose metadata.json has no item list (backups from versions before the manifest).
     const legacy = new Set<string>()

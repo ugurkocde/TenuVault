@@ -6,7 +6,7 @@ import { readJsonCapped } from "../../../../shared/capped-body"
 import { decodeXml } from "~/lib/storage/list"
 import { isSafeArchivePath } from "../../../../shared/security"
 import { isBackupName } from "../../../../shared/intune/backup-names"
-import { BACKUP_OWNER_FILE, MAX_BACKUP_ARCHIVE_BYTES, MAX_BACKUP_ARCHIVE_FILES, MAX_BACKUP_ARCHIVE_TOTAL_BYTES } from "../../../../shared/constants"
+import { BACKUP_OWNER_FILE, BACKUP_RUN_RECORD_FILE, MAX_BACKUP_ARCHIVE_BYTES, MAX_BACKUP_ARCHIVE_FILES, MAX_BACKUP_ARCHIVE_TOTAL_BYTES } from "../../../../shared/constants"
 import { readBytesCapped } from "../../../../shared/capped-body"
 import { type NextRequest, NextResponse } from "next/server"
 import { readOwnedBackup, type BackupOwnerRead } from "~/lib/policies/backup-owner"
@@ -156,7 +156,7 @@ export async function POST(request: NextRequest) {
           if (nameMatch && nameMatch[1]) {
             const blobName = decodeXml(nameMatch[1])
             // Include all files (skip directories which don't have content)
-            if (blobName && !blobName.endsWith('/') && blobName !== `${backupId}/${BACKUP_OWNER_FILE}`) {
+            if (blobName && !blobName.endsWith('/') && blobName !== `${backupId}/${BACKUP_OWNER_FILE}` && blobName !== `${backupId}/${BACKUP_RUN_RECORD_FILE}`) {
               const sizeMatch = blobXml.match(/<Content-Length>(\d+)<\/Content-Length>/)
               const size = sizeMatch ? Number(sizeMatch[1]) : null
               allFiles.push({ path: blobName, size: size !== null && Number.isSafeInteger(size) ? size : null })

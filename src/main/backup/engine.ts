@@ -9,7 +9,7 @@ import type { AuditUser } from "~/lib/audit/types"
 export { assertStorageAccountName } from "../../shared/storage-account"
 export { ProtectedBlobError, isImmutabilityRefusal } from "./request"
 import { createHash, randomUUID } from "node:crypto"
-import { BACKUP_CANCELLED_MESSAGE, BACKUP_OWNER_FILE } from "../../shared/constants"
+import { BACKUP_CANCELLED_MESSAGE, BACKUP_OWNER_FILE, BACKUP_RUN_RECORD_FILE } from "../../shared/constants"
 import { resolveBackupOwnership, type OwnershipFile } from "../../shared/backup-ownership"
 import { BlobWriter } from "./blob-writer"
 import { GraphSession, type GraphItem, type ReadControl } from "./graph-session"
@@ -898,7 +898,7 @@ export class BackupEngine {
         ...extra,
       }
     }
-    const commitManifest = async (folder: string, metadata: Record<string, unknown>, trackCommit = true) => {
+    const commitManifest = async (folder: string, metadata: Record<string, unknown>, trackCommit = true, file = "metadata.json") => {
       // The dispatched manifest may land despite cancellation. Give it the existing commit grace
       // and never follow an ambiguous commit with a failed manifest for the same folder.
       network.signal.throwIfAborted()
@@ -910,7 +910,8 @@ export class BackupEngine {
       const writer = new BlobWriter(fetchImpl, request.storageAccountName, storageToken, commitNetwork)
       let unconfirmed = false
       try {
-        await writer.put(`${folder}/metadata.json`, JSON.stringify(metadata, null, 2), network, false, () => { if (trackCommit) stopped.committing = true }, undefined, () => { unconfirmed = true })
+        // The manifest is replaced in place; any other record of the run is created once.
+        await writer.put(`${folder}/${file}`, JSON.stringify(metadata, null, 2), network, file !== "metadata.json", () => { if (trackCommit) stopped.committing = true }, undefined, () => { unconfirmed = true })
       } catch (error) {
         // Keep the job failure and let audit reconcile the possible storage commit separately.
         if (unconfirmed && trackCommit) job.commitUnconfirmed = true
@@ -1161,7 +1162,20 @@ export class BackupEngine {
     // phase ended, committed or not, so audit recovery can confirm the run from it.
     const metadata = manifest(status, ended, outcomes, { ...(unread ? { Error: unread } : {}), ...(mixed ? { RunStatus: status, RunCounts: { saved: totalPolicies, failures } } : {}) })
 
-    if (!isLargeBackup(backupFolder)) await commitManifest(backupFolder, metadata)
+    if (!isLargeBackup(backupFolder)) {
+      try {
+        await commitManifest(backupFolder, metadata)
+      } catch (error) {
+        // A split run replaces its early ordinary manifest. Storage with an immutability policy or legal
+        // hold refuses that overwrite, so the run's own record is created once beside it instead, and
+        // audit recovery confirms the run from it. An unanswered commit stays unconfirmed as before.
+        if (!mixed || job.commitUnconfirmed || !(error instanceof StorageError) || error instanceof LargeStorageError) throw error
+        try {
+          await commitManifest(backupFolder, { BackupFolder: backupFolder, TenantId: metadata.TenantId, RunId: metadata.RunId, AuthMode: metadata.AuthMode, CompletedAt: metadata.CompletedAt, RunStatus: status, RunCounts: { saved: totalPolicies, failures }, LargeBackupOutcomes: metadata.LargeBackupOutcomes }, true, BACKUP_RUN_RECORD_FILE)
+        } catch { throw error }
+        this.write(job, "Storage refused replacing the backup manifest, so this run's result was saved in its own record.", "warning")
+      }
+    }
     this.conclude(job, outcomes)
 
     // Only a complete backup may replace older ones: if policies could not be read (for

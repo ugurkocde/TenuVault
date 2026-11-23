@@ -418,6 +418,28 @@ for (const azure of [false, true]) describe(azure ? "Azure emulator mixed runs" 
     const large = (final.LargeBackupOutcomes as Array<{ Folder: string; Saved?: number }>).find(entry => entry.Folder === "AuthorizationPolicy")
     expect(large?.Saved ?? 0).toBe(0)
   })
+  it("saves a split run's own record when storage refuses replacing its early ordinary manifest", async () => {
+    undo = registerTestTypes([largeType])
+    const f = await setup()
+    const original = f.fetcher.getMockImplementation()!
+    let ordinaryManifestWrites = 0
+    // An immutability policy accepts the early manifest and refuses replacing it.
+    f.fetcher.mockImplementation(async (input, init) => {
+      const url = new URL(String(input))
+      if (init?.method === "PUT" && url.pathname.startsWith(`/${BACKUP_CONTAINER}/`) && url.pathname.endsWith("/metadata.json") && ++ordinaryManifestWrites > 1) {
+        return new Response("<Error><Code>BlobImmutableDueToPolicy</Code></Error>", { status: 409, headers: { "x-ms-error-code": "BlobImmutableDueToPolicy" } })
+      }
+      return original(input, init)
+    })
+    const engine = new BackupEngine({ now: () => new Date("2026-11-17T12:00:00Z"), fetch: f.fetcher, getToken: async () => jwt({ scp: "Policy.Read.All" }), services: () => ({ services: ["intune", "entra"] }), retentionDays: () => 0 })
+    const job = await engine.waitForJob(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: f.account, scope: { excluded: INTUNE_TYPES.filter(type => !["DeviceCategories", "AuthorizationPolicy"].includes(type.folder)).map(type => type.folder) } }))
+    expect(job.status, job.exception).toBe("Completed")
+    expect(job.commitUnconfirmed).toBeFalsy()
+    const early = await f.read(job.backupFolder!)
+    expect(early.RunStatus).toBeUndefined()
+    expect(await f.read(job.backupFolder!, "run-status.json")).toMatchObject({ BackupFolder: job.backupFolder, TenantId: TENANT, RunId: early.RunId, RunStatus: "Success", RunCounts: { failures: 0 } })
+    expect((await validate(f.request({ backupId: job.backupFolder }))).status).toBe(200)
+  })
   it("leaves a large-only run unconfirmed when its own manifest commit gets a server error", async () => {
     undo = registerTestTypes([largeType])
     const f = await setup()

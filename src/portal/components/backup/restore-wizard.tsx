@@ -4,6 +4,7 @@ import { matchesBackupService, type BackupServiceFilter } from "@desktop/lib/bac
 import { DirectoryRestore } from "./directory-restore"
 import { ConfigurationRestore } from "./configuration-restore"
 import { INTUNE_TYPES, restoreCapability } from "../../../shared/intune/registry"
+import { isLargeBackup } from "../../../shared/backup-storage"
 import { RestoreApprovals } from "./restore-approvals"
 import { reviewedDependencyMappings, type RecoveryReadiness } from "../../../shared/intune/recovery"
 import { settingDefinitionIds, type DeprecatedSettingHit } from "../../../shared/intune/settings-catalog"
@@ -440,10 +441,14 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
     })().catch((error: unknown) => {
       if (controller.signal.aborted) return
       if (error instanceof DOMException && error.name === "AbortError") return
-      // A later inventory page that fails to load returns once to page 1; a failure there is shown.
-      if (largePage > 0) { setLargePage(0); return }
       showPlanError(error)
       setItemsError(error instanceof Error ? error.message : String(error))
+      // A large backup's unreadable page may be the only one, so the pages around it stay reachable, up to
+      // the last page the route serves; an empty page still ends paging.
+      if (isLargeBackup(backupId)) {
+        setItems([])
+        setLargePaging(previous => ({ hasMore: true, total: previous?.total ?? null }))
+      }
     })
     return () => { controller.abort(); setPageLoading(false) }
   }, [backupId, companionId, tenant, largePage, contentsService])

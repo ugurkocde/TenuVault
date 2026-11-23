@@ -56,7 +56,7 @@ import { createChromiumFetch } from "./chromium-fetch"
 import { ProxyAuth, ProxyPrompts, type ProxyAuthAttempt, type ProxyChallenge } from "./proxy-auth"
 import { basename, dirname, join } from "node:path"
 import type { ApiRequest, AppPreferences, ScheduleInput } from "../shared/ipc"
-import { INTERNAL_API_ORIGIN, RESOURCE_SCOPES, localStorageAccountName } from "../shared/constants"
+import { BACKUP_RUN_RECORD_FILE, INTERNAL_API_ORIGIN, RESOURCE_SCOPES, localStorageAccountName } from "../shared/constants"
 import { createAuditRecorder } from "./api/audit"
 import { setAuditOutboxStore } from "../portal/lib/audit/outbox"
 import { backupRoutes, surfaceTokenErrors } from "./api/desktop-routes"
@@ -856,14 +856,14 @@ async function bootstrap(): Promise<void> {
   auditSink.recover()
   const recoverBackupAudits = () => auditSink.recoverBackups((binding, entry) => {
     const read = (folder: string) => readBackupAuditManifest(binding, entry, folder)
-    return reconcileBackupAudit(entry, () => read(entry.resource.id), read)
+    return reconcileBackupAudit(entry, () => read(entry.resource.id), read, (folder) => readBackupAuditManifest(binding, entry, folder, BACKUP_RUN_RECORD_FILE))
   })
   // Ordinary and large backups keep their manifests in separate containers.
-  const readBackupAuditManifest = async (binding: { tenantId: string; storageAccountName: string }, entry: Parameters<Parameters<typeof auditSink.recoverBackups>[0]>[1], folder: string) => {
+  const readBackupAuditManifest = async (binding: { tenantId: string; storageAccountName: string }, entry: Parameters<Parameters<typeof auditSink.recoverBackups>[0]>[1], folder: string, file: "metadata.json" | typeof BACKUP_RUN_RECORD_FILE = "metadata.json") => {
     const { tenantId, storageAccountName } = binding
     if (!/^backup-(?:large-)?\d{4}-\d{2}-\d{2}-\d{6}$/.test(folder)) return new Response(null, { status: 404 })
     assertStorageAccountName(storageAccountName)
-    const url = `https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(`${folder}/metadata.json`)}`
+    const url = `https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(`${folder}/${file}`)}`
     const signal = AbortSignal.timeout(15_000)
     if (isLocalAccount(storageAccountName)) {
       if (storageAccountName !== localStorageAccountName(tenantId)) throw new Error("Audit storage belongs to another tenant")

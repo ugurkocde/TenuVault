@@ -434,3 +434,30 @@ it("offers no inventory paging after an unreadable companion page in a service v
   expect(container.textContent).toContain("Configuration profile")
   expect(container.textContent).not.toContain("Inventory page")
 })
+
+it("keeps later pages of a chosen large backup reachable when its first page cannot be read", async () => {
+  const second = { largePage: 1, hasMore: false, content: { groups: [{ folder: "Groups", label: "group", area: "Entra ID", count: 5001, policies: [{ path: "backup-large-1/Groups/g2.json", displayName: "Later team" }] }] } }
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body ?? "{}"))
+    if (String(input).endsWith("/api/list-backup-contents")) return body.largePage === 1 ? Response.json(second) : Response.json({ error: "Inventory shard 0 is missing." }, { status: 500 })
+    if (String(input).endsWith("/api/restore-preview")) return Response.json({ items: [{ path: "backup-large-1/Groups/g2.json", name: "Later team" }] })
+    return Response.json({})
+  }))
+  const container = document.body.appendChild(document.createElement("div"))
+  const root = createRoot(container)
+  roots.push(root)
+  await act(async () => root.render(createElement(MemoryRouter, null, createElement(RestoreWizard, {
+    tenant: { name: "Contoso", credentials: { tenantId: "tenant", appId: "app", clientSecret: "" }, storageAccountName: "tvlocal-tenant" },
+    backups: [{ id: "backup-large-1", timestamp: "2026-10-16T02:00:00Z", type: "manual", status: "Completed", totalPolicies: 5001, scope: null, size: 1, duration: 4, changes: null, comparedWith: null }],
+    initialBackupId: "backup-large-1", community: false, canCopyToTenants: false, copyCandidates: [],
+  }))))
+  const settle = async () => { await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) }) }
+  await settle()
+  expect(container.textContent).toContain("Inventory shard 0 is missing.")
+  expect(container.textContent).toContain("Inventory page 1.")
+  await act(async () => buttonNamed(container, "Next page")!.click())
+  await settle()
+  expect(container.textContent).toContain("Inventory page 2")
+  expect(container.textContent).toContain("Later team")
+  expect(container.textContent).not.toContain("Inventory shard 0 is missing.")
+})

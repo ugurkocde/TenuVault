@@ -65,6 +65,8 @@ export const MAX_BACKUP_ARCHIVE_FILES = 60000
 
 /** Encrypted ownership evidence for abandoned folders, excluded from exported archives. */
 export const BACKUP_OWNER_FILE = ".tenuvault-owner.json"
+/** A split run's own record, created once when storage refuses replacing its early ordinary manifest. */
+export const BACKUP_RUN_RECORD_FILE = "run-status.json"
 
 /** How a backup the user cancelled begins its error, also in manifests that recorded it as Failed. */
 export const BACKUP_CANCELLED_MESSAGE = "Backup cancelled by you."

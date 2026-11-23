@@ -52,7 +52,7 @@ export function backupAudit(job: BackupJob, request: BackupRequest, tokens: RunT
 }
 
 type BackupManifest = {
-  RunId?: string; TenantId?: string; Status?: string; RunStatus?: string; RunCounts?: { saved?: number; failures?: number }; AuthMode?: string; CompletedAt?: string; CompanionBackup?: string;
+  RunId?: string; TenantId?: string; BackupFolder?: string; Status?: string; RunStatus?: string; RunCounts?: { saved?: number; failures?: number }; AuthMode?: string; CompletedAt?: string; CompanionBackup?: string;
   ItemCounts?: Record<string, number | undefined> & { TotalPolicies?: number }; Failures?: number; MaskedSecretItems?: unknown[];
 }
 type ManifestStatus = 'completed' | 'warnings' | 'failed' | 'cancelled' | 'uncertain'
@@ -83,7 +83,7 @@ const manifestStatus = (manifest: BackupManifest): ManifestStatus => manifest.St
  * manifest, which records the status and totals the run ended with. Nothing is inferred from the
  * halves: an early or stopped manifest leaves the record uncertain, and the large half is never read.
  */
-export async function reconcileBackupAudit(entry: AuditLogEntry, readManifest: () => Promise<Response>, read?: (folder: string) => Promise<Response>): Promise<AuditLogEntry> {
+export async function reconcileBackupAudit(entry: AuditLogEntry, readManifest: () => Promise<Response>, read?: (folder: string) => Promise<Response>, readRecord?: (folder: string) => Promise<Response>): Promise<AuditLogEntry> {
   let folder = entry.resource.id
   let manifest = await runManifest(entry, await readManifest())
   const large = folder.replace(/^backup-(?=\d)/, 'backup-large-')
@@ -93,16 +93,25 @@ export async function reconcileBackupAudit(entry: AuditLogEntry, readManifest: (
   }
   if (!manifest) return entry
   let status = manifestStatus(manifest)
-  let saved = manifest.ItemCounts?.TotalPolicies, failures = manifest.Failures
+  let saved = manifest.ItemCounts?.TotalPolicies, failures = manifest.Failures, completedAt = manifest.CompletedAt
   if (manifest.CompanionBackup !== undefined) {
-    if (folder.startsWith('backup-large-') || typeof manifest.RunStatus !== 'string') return entry
-    status = manifestStatus({ ...manifest, Status: manifest.RunStatus })
-    saved = typeof manifest.RunCounts?.saved === 'number' ? manifest.RunCounts.saved : undefined
-    failures = typeof manifest.RunCounts?.failures === 'number' ? manifest.RunCounts.failures : undefined
+    if (folder.startsWith('backup-large-')) return entry
+    // The final ordinary manifest names the run's status. Where storage refused replacing the early one,
+    // the run's own record beside it does, validated against the same run.
+    let record: BackupManifest | null = typeof manifest.RunStatus === 'string' ? manifest : null
+    if (!record && readRecord) {
+      const candidate = await runManifest(entry, await readRecord(folder))
+      if (candidate && candidate.BackupFolder === folder && typeof candidate.RunStatus === 'string') record = candidate
+    }
+    if (!record) return entry
+    status = manifestStatus({ ...manifest, Status: record.RunStatus })
+    saved = typeof record.RunCounts?.saved === 'number' ? record.RunCounts.saved : undefined
+    failures = typeof record.RunCounts?.failures === 'number' ? record.RunCounts.failures : undefined
+    completedAt = record.CompletedAt
   }
   if (status === 'uncertain') return entry
   return {
-    ...entry, timestamp: time(manifest.CompletedAt) ?? entry.timestamp,
+    ...entry, timestamp: time(completedAt) ?? entry.timestamp,
     resource: { ...entry.resource, id: folder },
     eventType: status === 'failed' ? AuditEventType.BACKUP_FAILED : status === 'cancelled' ? AuditEventType.BACKUP_CANCELLED : AuditEventType.BACKUP_COMPLETED,
     result: status === 'completed' ? AuditResult.SUCCESS : status === 'failed' ? AuditResult.FAILURE : AuditResult.PARTIAL,

@@ -756,6 +756,23 @@ describe("audit recovery for a run split across an ordinary and a large backup",
     const read = vi.fn(async () => manifest({ Status: "Success" }))
     expect(await reconcileBackupAudit(entry, async () => manifest({ Status: status, CompanionBackup: companion }), read)).toBe(entry)
   })
+  it("confirms a split run from its own record when storage refused replacing the early ordinary manifest", async () => {
+    const read = vi.fn(async () => manifest({}))
+    const record = vi.fn(async () => manifest({ BackupFolder: "backup-2026-11-21-000000", RunStatus: "CompletedWithWarnings", RunCounts: { saved: 7, failures: 1 }, CompletedAt: "2026-11-21T02:00:00.000Z" }))
+    const result = await reconcileBackupAudit(entry, async () => manifest({ Status: "Success", CompanionBackup: companion }), read, record)
+    expect(record).toHaveBeenCalledWith("backup-2026-11-21-000000")
+    expect(read).not.toHaveBeenCalled()
+    expect(result.job).toMatchObject({ status: "warnings", counts: { saved: 7, failures: 1 } })
+    expect(result.timestamp).toBe("2026-11-21T02:00:00.000Z")
+  })
+  it.each([
+    ["another folder", { BackupFolder: "backup-2026-11-20-000000", RunStatus: "Success" }],
+    ["another run", { RunId: "other", BackupFolder: "backup-2026-11-21-000000", RunStatus: "Success" }],
+    ["no run status", { BackupFolder: "backup-2026-11-21-000000" }],
+  ])("keeps a split run uncertain when its run record names %s", async (_case, extra) => {
+    const record = vi.fn(async () => manifest(extra))
+    expect(await reconcileBackupAudit(entry, async () => manifest({ Status: "Success", CompanionBackup: companion }), vi.fn(async () => manifest({})), record)).toBe(entry)
+  })
   it("never confirms a split run from its large half", async () => {
     const read = vi.fn(async (folder: string) => folder.startsWith("backup-large-") ? manifest({ Status: "Success", RunStatus: "Success", CompanionBackup: "backup-2026-11-21-000000" }) : new Response(null, { status: 404 }))
     expect(await reconcileBackupAudit(entry, async () => new Response(null, { status: 404 }), read)).toBe(entry)
