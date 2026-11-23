@@ -1,6 +1,6 @@
 import { OnboardingServices } from "../components/OnboardingServices"
 import { PermissionRoutes } from "../components/ServicesSettings"
-import { DEFAULT_ONBOARDING_CHOICE, choiceLabel, hasOnboardingBackups, onboardingPermissions } from "../../shared/services/onboarding"
+import { DEFAULT_ONBOARDING_CHOICE, checkedOnboardingChoice, choiceLabel, hasOnboardingBackups, onboardingPermissions } from "../../shared/services/onboarding"
 import type { PermissionChoice } from "../../shared/services/manifest"
 import { trialKeyRefusalText } from "../../shared/trial-notices"
 import { showCommunityLimitError } from "../lib/plan-dialog"
@@ -40,6 +40,11 @@ function sameRegistration(account: SignedInAccount, connection: SetupConnection)
 
 // The theme the setup file preview compares against. Read here and not through lib/appearance,
 // whose module applies the theme when it loads.
+/** A service choice setup can continue with: valid and naming at least one service. */
+function confirmedChoice(choice: PermissionChoice): boolean {
+  try { return Object.keys(checkedOnboardingChoice(choice)).length > 0 } catch { return false }
+}
+
 function currentAppearance(): AppearanceSetting {
   try {
     const value = localStorage.getItem("tenuvault-appearance")
@@ -306,6 +311,17 @@ export default function OnboardingPage() {
     setSetup({ importId, connection })
     setSetupNotice("")
     setAutoSignIn(null)
+    // A saved choice that had to be confirmed again keeps the file waiting on the service step; its
+    // Continue then goes on to Sign in with the file's IDs.
+    if (!confirmedChoice(services)) {
+      const next = { tenant: connection.tenantId, clientId: connection.clientId, displayName: connection.name }
+      if (!account) {
+        setFields(next)
+        saveOnboardingDraft({ step: -1, ...next, account: null, services })
+      }
+      setStep(-1)
+      return
+    }
     if (account && !releasingAccount.current) {
       if (sameRegistration(account, connection)) {
         setFields((current) => ({ tenant: connection.tenantId, clientId: connection.clientId, displayName: current.displayName || connection.name }))
@@ -565,7 +581,7 @@ export default function OnboardingPage() {
       )}
 
       <div className="@container rounded-3xl bg-card p-5 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
-        {step === -1 && <OnboardingServices choice={services} onChange={setServices} onContinue={() => setStep(0)} />}
+        {step === -1 && <OnboardingServices choice={services} onChange={setServices} onContinue={() => setStep(setup ? 1 : 0)} />}
         {/* A file handed over from Settings can fail on any step, for example after its review expired. */}
         {step > 0 && setupError && (
           <p role="alert" className="rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700">

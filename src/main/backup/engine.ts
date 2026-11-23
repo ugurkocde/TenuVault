@@ -1104,7 +1104,24 @@ export class BackupEngine {
         await commitManifest(largeFolder, manifest(status, this.now(), outcomesNow(status, this.now(), false), {}, largeFolder))
       } catch (error) {
         network.signal.throwIfAborted()
-        for (const type of largeTypes) endType(type, error instanceof LargeStorageError ? error : new LargeStorageError(undefined, { cause: error }))
+        // Storage that refuses the large container (403 or 404) needs provisioning: like a refused claim,
+        // the large types are skipped with that guidance and the ordinary backup stands.
+        if (error instanceof LargeStorageError && (error.status === 403 || error.status === 404)) {
+          for (const type of largeTypes) endType(type, error)
+        }
+        // Any other failure, such as a server error or an unanswered commit, leaves snapshots whose
+        // inventory may not exist. That is a failure of each type that was read, so the run and its
+        // audit report warnings, never success.
+        const reason = "The directory inventory could not be saved to large backup storage."
+        for (const type of largeTypes) {
+          if (endedTypes.has(type.folder) || settled.get(type.folder)?.outcome === "failed") continue
+          endedTypes.add(type.folder)
+          failures++
+          failedTypes.push(type.folder)
+          Object.assign(result(type.folder), { state: "unreadable", errors: [reason] })
+          settle(type.folder, { outcome: "failed", error: reason })
+          this.write(job, `Could not save ${type.label}: ${reason}`, "warning")
+        }
       }
     }
     const ended = this.now()
@@ -1547,14 +1564,17 @@ function uniqueName(name: string, id: string, used: Set<string>): string {
  * saved or not configured, no masked values, and a complete inventory for a large type. A manifest
  * without outcomes counts only when the whole half is complete.
  */
-function completeFolders(metadata: Record<string, unknown> | null | undefined): Set<string> {
+export function completeFolders(metadata: Record<string, unknown> | null | undefined): Set<string> {
   if (!metadata) return new Set()
   const restorable = restorableFolders(metadata)
   const outcomes = Array.isArray(metadata.Outcomes) ? metadata.Outcomes as Array<{ Folder?: unknown; Outcome?: unknown }> : null
   if (!outcomes) return completeHalf(metadata) ? restorable : new Set()
   const large = (metadata.LargeItems ?? {}) as Record<string, { complete?: unknown } | undefined>
+  // A large type is held only with its complete inventory; an outcome without one, for example in an
+  // inconsistent imported archive, holds nothing that can be opened.
+  const indexed = (folder: string) => typeForFolder(folder)?.volume === "large" ? large[folder]?.complete === true : large[folder] === undefined || large[folder]!.complete === true
   return new Set(outcomes.filter(entry => typeof entry.Folder === "string" && (entry.Outcome === "saved" || entry.Outcome === "notConfigured")
-    && restorable.has(entry.Folder) && (large[entry.Folder] === undefined || large[entry.Folder]!.complete === true)).map(entry => entry.Folder as string))
+    && restorable.has(entry.Folder) && indexed(entry.Folder)).map(entry => entry.Folder as string))
 }
 
 /** The permissions in the run's Graph token, read only when a service with a token pre-check needs checking. */

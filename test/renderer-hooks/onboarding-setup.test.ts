@@ -1183,6 +1183,39 @@ describe("setup from a file", () => {
     groups: [{ id: FILE_TENANT, title: "Fabrikam", connected: false, items: [], setup: { tenantId: FILE_TENANT, name: "Fabrikam", clientId, storage: { kind: "local" } } }],
   })
 
+  it("goes from a fresh setup to Sign in with the file's IDs and keeps the service choice", async () => {
+    const container = await openWith(filePreview())
+    expect(container.querySelector<HTMLInputElement>("#tenant")!.value).toBe(FILE_TENANT)
+    expect(container.querySelector<HTMLInputElement>("#clientId")!.value).toBe(FILE_CLIENT)
+    expect(JSON.parse(state.store.get(DRAFT_KEY)!)).toMatchObject({ step: 1, tenant: FILE_TENANT, services: { intune: expect.any(Object) } })
+  })
+
+  it("shows the Connect step with the error when a fresh setup's file cannot be read", async () => {
+    state.transferPreview.mockRejectedValueOnce(new Error("This settings file was reviewed too long ago."))
+    const container = document.createElement("div")
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    roots.push(root)
+    act(() => root.render(createElement(MemoryRouter, { initialEntries: [`/portal/onboarding?setup=import-1&tenant=${FILE_TENANT}`] }, createElement(OnboardingPage))))
+    await flush()
+    await flush()
+    expect(container.textContent).toContain("Connect your tenant")
+    expect(container.textContent).toContain("This settings file was reviewed too long ago.")
+    expect(container.textContent).not.toContain("What do you want to back up?")
+  })
+
+  it("keeps a setup file on the service step until a saved choice that must be confirmed again is chosen", async () => {
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 1, tenant: "", clientId: "", displayName: "", services: "broken" }))
+    const container = await openWith(filePreview())
+    expect(container.textContent).toContain("What do you want to back up?")
+    expect(container.querySelector("#tenant")).toBeNull()
+    await act(async () => { container.querySelector<HTMLInputElement>('[aria-label="Back up Intune"]')!.click() })
+    await act(async () => { button(container, "Continue with Intune")!.click() })
+    await flush()
+    expect(container.querySelector<HTMLInputElement>("#tenant")!.value).toBe(FILE_TENANT)
+    expect(container.querySelector<HTMLInputElement>("#clientId")!.value).toBe(FILE_CLIENT)
+  })
+
   it("keeps a sign-in to the file's tenant and app registration and goes on to storage", async () => {
     const account = { tenantId: FILE_TENANT, clientId: FILE_CLIENT, username: "admin@fabrikam.com" }
     state.store.set(DRAFT_KEY, JSON.stringify({ step: 1, tenant: FILE_TENANT, clientId: FILE_CLIENT, displayName: "", account, signedInAt: Date.now() }))

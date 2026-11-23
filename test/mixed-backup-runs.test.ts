@@ -319,6 +319,35 @@ for (const azure of [false, true]) describe(azure ? "Azure emulator mixed runs" 
     expect((await f.store.list(local, BACKUP_CONTAINER, `${newerId}/`)).some(blob => blob.name.endsWith("TermsAndConditions/one.json"))).toBe(true)
     expect(await f.store.list(local, BACKUP_CONTAINER, `${olderId}/`)).toHaveLength(0)
   })
+  it("keeps an older backup's copy of a type that failed in a newer backup with warnings", async () => {
+    const f = await setup()
+    const olderId = "backup-2026-10-01-000000", newerId = "backup-2026-11-01-000000"
+    const snapshot = { id: "one", displayName: "Tag" }
+    await f.write(olderId, "ScopeTags/one.json", snapshot)
+    await f.write(olderId, ".tenuvault-owner.json", { Source: "TenuVault Desktop", TenantId: TENANT, RunId: `run-${olderId}` })
+    await f.write(olderId, "metadata.json", { BackupFolder: olderId, TenantId: TENANT, RunId: `run-${olderId}`, Status: "Success", Failures: 0, Coverage: "Complete", Scope: { Included: ["ScopeTags"], Excluded: [] }, Outcomes: [{ Folder: "ScopeTags", Outcome: "saved", Saved: 1 }], Items: { "ScopeTags/one": { file: "one.json", hash: snapshotHash(snapshot) } }, ItemCounts: { ScopeTags: 1, TotalPolicies: 1 } })
+    await f.write(newerId, ".tenuvault-owner.json", { Source: "TenuVault Desktop", TenantId: TENANT, RunId: `run-${newerId}` })
+    // The newer run could not read scope tags, so it holds no complete copy of them.
+    await f.write(newerId, "metadata.json", { BackupFolder: newerId, TenantId: TENANT, RunId: `run-${newerId}`, Status: "CompletedWithWarnings", Failures: 1, Coverage: "Incomplete", Scope: { Included: ["ScopeTags"], Excluded: [] }, FailedTypes: ["ScopeTags"], Outcomes: [{ Folder: "ScopeTags", Outcome: "failed", Error: "Read failed" }], Items: {}, ItemCounts: { ScopeTags: 0, TotalPolicies: 0 } })
+    const engine = new BackupEngine({ now: () => new Date("2026-11-17T12:00:00Z"), fetch: f.fetcher, getToken: async () => jwt({ scp: "Policy.Read.All" }), services: () => ({ services: ["intune"] }), retentionDays: () => 1 })
+    const job = await engine.waitForJob(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: f.account, scope: { excluded: INTUNE_TYPES.filter(type => type.folder !== "DeviceCategories").map(type => type.folder) } }))
+    expect(job.status, job.exception).toBe("Completed")
+    expect((await f.store.list(local, BACKUP_CONTAINER, `${olderId}/`)).some(blob => blob.name.endsWith("ScopeTags/one.json"))).toBe(true)
+  })
+  it("reports warnings, live and in its final manifest, when the large inventory commit fails with a server error", async () => {
+    undo = registerTestTypes([largeType])
+    const f = await setup()
+    // The large snapshots and their index are written; the large manifest fails with a server error,
+    // not the 403 or 404 that means large storage is not provisioned.
+    f.refuse(500, "metadata.json")
+    const engine = new BackupEngine({ now: () => new Date("2026-11-17T12:00:00Z"), fetch: f.fetcher, getToken: async () => jwt({ scp: "Policy.Read.All" }), services: () => ({ services: ["intune", "entra"] }), retentionDays: () => 0 })
+    const job = await engine.waitForJob(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: f.account, scope: { excluded: INTUNE_TYPES.filter(type => !["DeviceCategories", "AuthorizationPolicy"].includes(type.folder)).map(type => type.folder) } }))
+    const final = await f.read(job.backupFolder!)
+    expect(final.RunStatus).toBe("CompletedWithWarnings")
+    expect(final.RunCounts.failures).toBeGreaterThan(0)
+    expect(final.LargeBackupOutcomes).toEqual(expect.arrayContaining([expect.objectContaining({ Folder: "AuthorizationPolicy", Outcome: "failed" })]))
+    expect(job.results?.types.find(type => type.folder === "AuthorizationPolicy")?.state).toBe("unreadable")
+  })
   it("protects a valid complete run inside retention", async () => {
     const f = await pair()
     const engine = new BackupEngine({ now: () => new Date("2020-01-01T12:00:00Z"), fetch: f.fetcher, getToken: async () => jwt({ scp: "Policy.Read.All" }), services: () => ({ services: ["intune", "entra"] }), retentionDays: () => 1 })
