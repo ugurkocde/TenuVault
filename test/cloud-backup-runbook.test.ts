@@ -1390,6 +1390,13 @@ it.runIf(Boolean(pwsh))("reads a single Azure error-code header whole, so a miss
   expect(codes).toEqual({ single: "BlobNotFound", container: "ContainerNotFound", repeated: "", absent: "" })
 }, 60_000)
 
+it.runIf(Boolean(pwsh))("expands a nested Graph collection of zero or one entries that has a continuation link", () => {
+  const script = fileURLToPath(new URL("./fixtures/cloud-backup/nested-collections.ps1", import.meta.url))
+  const { counts, scalar } = JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8", timeout: 60_000 }))
+  for (const [listed, entry] of Object.entries(counts)) expect(entry).toEqual({ count: Number(listed) + 1, last: "from-continuation", linkRemoved: true })
+  expect(scalar).toBe("Invalid expanded Graph collection.")
+}, 60_000)
+
 it.runIf(Boolean(pwsh))("keeps off-mode cloud report fields and compares matched typed and untyped tokens only under omission", () => {
   const script = fileURLToPath(new URL("./fixtures/cloud-backup/omission-compare.ps1", import.meta.url))
   const { off, on, offWithOneSkip, offWithScalarSkip } = JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8", timeout: 60_000 }))

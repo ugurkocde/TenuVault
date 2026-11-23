@@ -1526,7 +1526,8 @@ function Expand-TvNestedCollections {
         $link = Get-TvProp $Value $key
         if (-not $key.EndsWith("@odata.nextLink") -or $link -isnot [string]) { continue }
         $property = $key.Substring(0, $key.Length - "@odata.nextLink".Length)
-        $existing = Get-TvProp $Value $property
+        # Read the dictionary directly: a function return would unwrap a list of zero or one entries.
+        $existing = if ($Value.Contains($property)) { , $Value[$property] } else { $null }
         if ($existing -isnot [System.Collections.IList] -or $Seen.Count -ge 1000 -or -not $Seen.Add($link)) { throw "Invalid expanded Graph collection." }
         Set-TvProp $Value $property @(@($existing) + @(Invoke-TvGraphList $link $Token))
         Remove-TvProp $Value $key
