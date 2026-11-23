@@ -599,6 +599,11 @@ export const INTUNE_TYPES: IntuneType[] = [
     restore: "create",
     assign: { key: "deviceHealthScriptAssignments" },
     readOnly: ["isGlobalScript", "highestAvailableVersion"],
+    prepare: (payload, snapshot) => {
+      if (typeof snapshot.version === "string") payload.version = snapshot.version
+      if (snapshot.remediationScriptContent === null) payload.remediationScriptContent = ""
+      return payload
+    },
     // deviceHealthScriptType is accepted on create but PATCH rejects it. PATCH also ignores an empty description.
     update: (payload) => {
       delete payload.deviceHealthScriptType
@@ -980,9 +985,10 @@ export const INTUNE_TYPES: IntuneType[] = [
     nameKey: "displayName",
     restore: "create",
     readOnly: ["payloads"],
-    // PATCH rejects `platform` ("Platform cannot be changed"), even unchanged.
+    // Platform and management type are fixed at creation.
     update: (payload) => {
       delete payload.platform
+      delete payload.assignmentFilterManagementType
       return [patch(payload)]
     },
   },

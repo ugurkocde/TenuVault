@@ -1,6 +1,7 @@
 import type { IntuneType, Item, Json } from "../../../shared/intune/registry"
 import { cleanAssignment } from "../../../shared/intune/registry"
-import { isGraphId } from "../../../shared/security"
+import { isScopeTagGroupTarget, isLegacyScopeTagAssignment, LEGACY_SCOPE_TAG_ASSIGNMENT_WARNING } from "../../../shared/intune/restore-assignments"
+import { isGraphId, isGuid } from "../../../shared/security"
 import { containsRedaction, containsSecret } from "../change-sets/model"
 
 /**
@@ -17,7 +18,7 @@ import { usableReference, type Mapping, type ReferenceKind, type ReferenceResolu
 export { resolveReferences, type Mapping, type ReferenceKind, type ReferenceResolution } from "../../../shared/intune/reference-mapping"
 
 export interface DependencyFinding {
-  code: "missing-mapping" | "rejected-mapping" | "unsupported-type" | "unsupported-target" | "ordering" | "unknown-membership" | "exclusion-unsupported" | "exclusion-dropped" | "display-name-only" | "assignments-excluded" | "secret-values" | "scope-tags-kept" | "scope-tag-default" | "sync-link-missing" | "sync-unconfirmed"
+  code: "missing-mapping" | "rejected-mapping" | "unsupported-type" | "unsupported-target" | "ordering" | "unknown-membership" | "exclusion-unsupported" | "exclusion-dropped" | "display-name-only" | "assignments-excluded" | "secret-values" | "scope-tags-kept" | "scope-tag-default" | "sync-link-missing" | "sync-unconfirmed" | "legacy-scope-tag-assignment" | "feature-update-dates"
   severity: "blocking" | "warning" | "info"
   message: string
 }
@@ -79,8 +80,10 @@ export function extractReferences(type: IntuneType, snapshot: Item, includeAssig
   })
   if (includeAssignments) {
     for (const assignment of directAssignments(snapshot)) {
+      if (isLegacyScopeTagAssignment(type, assignment)) continue
       const target = (assignment.target ?? {}) as Item
-      add("group", str(target.groupId))
+      const scopeTagGroup = type.folder === "ScopeTags" && isScopeTagGroupTarget(target)
+      add("group", str(scopeTagGroup ? target.entraObjectId : target.groupId))
       const filterType = str(target.deviceAndAppManagementAssignmentFilterType)
       if (filterType && filterType !== "none") add("filter", str(target.deviceAndAppManagementAssignmentFilterId))
     }
@@ -177,11 +180,17 @@ export function translate(
   let assignments: Item[] | null = null
   if (options.includeAssignments) {
     assignments = []
+    let legacySkipped = false
     for (const assignment of directAssignments(source)) {
+      if (isLegacyScopeTagAssignment(type, assignment)) {
+        legacySkipped = true
+        continue
+      }
       const clean = cleanAssignment(assignment)
       const target = { ...((clean.target ?? {}) as Item) }
+      const scopeTagGroup = type.folder === "ScopeTags" && isScopeTagGroupTarget(target)
       const odataType = str(target["@odata.type"]) ?? "unknown"
-      const kind = TARGET_KINDS[odataType.toLowerCase()]
+      const kind = scopeTagGroup ? { target: "group", intent: "include" } : TARGET_KINDS[odataType.toLowerCase()]
       if (!kind) {
         findings.push({ code: "unsupported-target", severity: "blocking", message: `An assignment target of type ${odataType.replace("#microsoft.graph.", "")} is not supported by promotion.` })
         unresolved = true
@@ -196,9 +205,13 @@ export function translate(
         continue
       }
       if (kind.target === "group") {
-        const mapped = str(target.groupId) ? usable("group", target.groupId as string) : null
-        if (!mapped) unresolved = true
-        target.groupId = mapped ?? ""
+        const key = scopeTagGroup ? "entraObjectId" : "groupId"
+        const sourceId = str(target[key])
+        const mapped = sourceId ? usable("group", sourceId) : null
+        const invalidScopeGroup = scopeTagGroup && (!isGuid(sourceId) || (mapped !== null && !isGuid(mapped)))
+        if (invalidScopeGroup) findings.push({ code: "unsupported-target", severity: "blocking", message: "The scope tag assignment needs valid source and destination Entra group IDs." })
+        if (!mapped || invalidScopeGroup) unresolved = true
+        target[key] = mapped ?? ""
       }
       const filterType = str(target.deviceAndAppManagementAssignmentFilterType)
       if (filterType && filterType !== "none") {
@@ -207,11 +220,15 @@ export function translate(
         target.deviceAndAppManagementAssignmentFilterId = mapped ?? ""
         // The filter type (include or exclude) is preserved exactly.
         target.deviceAndAppManagementAssignmentFilterType = filterType
-      } else {
+      } else if (!scopeTagGroup || "deviceAndAppManagementAssignmentFilterType" in target || "deviceAndAppManagementAssignmentFilterId" in target) {
         target.deviceAndAppManagementAssignmentFilterId = null
         target.deviceAndAppManagementAssignmentFilterType = "none"
       }
       assignments.push({ ...clean, target })
+    }
+    if (legacySkipped) {
+      findings.push({ code: "legacy-scope-tag-assignment", severity: "warning", message: LEGACY_SCOPE_TAG_ASSIGNMENT_WARNING })
+      if (!assignments.length) assignments = null
     }
   } else if (directAssignments(source).length) {
     findings.push({ code: "assignments-excluded", severity: "info", message: "Assignments are not copied. The object is created unassigned (or keeps its current assignments) until targeting is reviewed separately." })

@@ -15,10 +15,13 @@ import type { ListedRecord } from "../contracts"
 
 export type OperationAction = "create" | "update" | "delete"
 
-/** The registry supplies create and update plans. Delete is used to roll back a create. */
-export const SUPPORTED_OPERATIONS: Readonly<Record<string, readonly OperationAction[]>> = Object.fromEntries(
-  PROMOTION_FOLDERS.map((folder) => [folder, ["create", "update", "delete"]]),
-)
+/** The types available to generic change sets and automatic rollback. */
+export const SUPPORTED_OPERATIONS: Readonly<Record<string, readonly OperationAction[]>> = {
+  ConfigurationPolicies: ["create", "update", "delete"],
+  CompliancePolicies: ["create", "update", "delete"],
+  DeviceConfigurations: ["create", "update", "delete"],
+  EndpointSecurityIntents: ["create", "update", "delete"],
+}
 
 /** Most operations in one change set; keeps review, capture and storage bounded. */
 export const MAX_OPERATIONS = 25
@@ -226,7 +229,7 @@ export function contentHashOf(record: Pick<ChangeSetRecord, "kind" | "targetTena
 
 /** sha256 of a live object as stored and compared: sanitized, without volatile properties. */
 export function snapshotHash(type: IntuneType, live: Item): string {
-  return hashOf(comparableSnapshot(sanitizeSnapshot(type, live).snapshot))
+  return hashOf(comparableSnapshot(sanitizeSnapshot(type, live).snapshot, type.folder))
 }
 
 /** The combined target fingerprint of per-operation fingerprints. */
@@ -239,9 +242,9 @@ export function combinedFingerprint(perOperation: Record<string, string>): strin
  * (configuration and assignments) or "missing". Create: the IDs of objects of that type with
  * the same name, so a concurrent creation of the same name invalidates the review.
  */
-export function operationFingerprint(action: OperationAction, observed: { snapshot: Item | null; sameNameIds: string[] }): string {
+export function operationFingerprint(action: OperationAction, observed: { snapshot: Item | null; sameNameIds: string[] }, folder: string): string {
   if (action === "create") return hashOf({ sameName: [...observed.sameNameIds].map((id) => id.toLowerCase()).sort() })
-  return observed.snapshot ? hashOf(comparableSnapshot(observed.snapshot)) : "missing"
+  return observed.snapshot ? hashOf(comparableSnapshot(observed.snapshot, folder)) : "missing"
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -339,8 +342,8 @@ const short = (value: Json | undefined): string => {
  * through writableBody and comparableSnapshot, so server-managed fields never show up.
  */
 export function diffConfigurations(type: IntuneType, before: Item | null, after: Item | null): { entries: DiffEntry[]; truncated: boolean } {
-  const left = before ? keyed(comparableSnapshot(writableBody(type, before))) : null
-  const right = after ? keyed(comparableSnapshot(writableBody(type, after))) : null
+  const left = before ? keyed(comparableSnapshot(writableBody(type, before), type.folder)) : null
+  const right = after ? keyed(comparableSnapshot(writableBody(type, after), type.folder)) : null
   const entries: DiffEntry[] = []
   let truncated = false
   const push = (entry: DiffEntry) => {
@@ -405,7 +408,7 @@ export function matchesProposed(type: IntuneType, proposed: Item, live: Item): b
   const actual = writableBody(type, live)
   // A replace must also remove destination-only ADMX definitions and presentations.
   if (type.folder === "GroupPolicyConfigurations" && canonicalJson(expected.definitionValues) !== canonicalJson(actual.definitionValues)) return false
-  return containsExpected(keyed(comparableSnapshot(expected)), keyed(comparableSnapshot(actual)))
+  return containsExpected(keyed(comparableSnapshot(expected, type.folder)), keyed(comparableSnapshot(actual, type.folder)))
 }
 
 /** Assignment targets only, comparable across reads (IDs Intune assigns are dropped). */
@@ -435,10 +438,11 @@ export function sameAssignments(expected: Item[], actual: Json | undefined): boo
 // Validation and explanation
 
 /** Why an operation is not supported, or undefined. */
-export function unsupportedReason(folder: string, action: OperationAction): string | undefined {
+export function unsupportedReason(folder: string, action: OperationAction, promotion = false): string | undefined {
   const type = typeForFolder(folder)
   if (!type) return `${folder} is not an Intune type TenuVault knows.`
   const actions = SUPPORTED_OPERATIONS[type.folder]
+  if (promotion && action !== "delete" && (PROMOTION_FOLDERS as readonly string[]).includes(type.folder)) return undefined
   if (!actions) return `Change sets do not support ${type.label} yet. Supported: ${Object.keys(SUPPORTED_OPERATIONS).map((folder) => typeForFolder(folder)?.label ?? folder).join(", ")}.`
   if (!actions.includes(action)) return `Change sets do not support ${action} for ${type.label}.`
   return undefined

@@ -322,8 +322,9 @@ export async function createChangeSet(deps: FeatureDeps, tenantId: string, input
   const operations: ChangeOperation[] = []
   const entries: ChangeSetContent["entries"] = {}
   const seenTargets = new Set<string>()
+  const isPromotion = input.kind !== "rollback" && (input.origin?.workflow === "promotion" || input.origin?.workflow === "sync")
   for (const [index, operation] of input.operations.entries()) {
-    const unsupported = unsupportedReason(operation.folder, operation.action)
+    const unsupported = unsupportedReason(operation.folder, operation.action, isPromotion)
     if (unsupported) throw new FeatureError(unsupported)
     const type = typeOf(operation.folder)
     const key = `op-${index + 1}`
@@ -674,8 +675,8 @@ async function reconcile(graph: GraphCall, type: IntuneType, operation: ChangeOp
       if (matchesProposed(type, entry.body ?? {}, live) && (entry.assignments === null || sameAssignments(entry.assignments, live.assignments))) return { decision: "verified", objectId: operation.targetId!, readBack: "match", readBackHash: snapshotHash(type, live) }
     }
     const sanitized = sanitizeSnapshot(type, live!).snapshot
-    const before = captured.body ? operationFingerprint(operation.action, { snapshot: captured.body, sameNameIds: [] }) : "missing"
-    if (operationFingerprint(operation.action, { snapshot: sanitized, sameNameIds: [] }) === before) return { decision: "write" }
+    const before = captured.body ? operationFingerprint(operation.action, { snapshot: captured.body, sameNameIds: [] }, type.folder) : "missing"
+    if (operationFingerprint(operation.action, { snapshot: sanitized, sameNameIds: [] }, type.folder) === before) return { decision: "write" }
     if (operation.action === "update") return { decision: "stop", status: "uncertain", message: "The object holds neither the captured nor the proposed state, so an earlier attempt may have written part of the update. It is not written again; review it in Intune or roll it back to the captured state.", objectId: operation.targetId }
     return { decision: "stop", status: "failed", message: "The object changed after the review and holds neither the captured nor the proposed state. Create a fresh review.", objectId: operation.targetId }
   } catch (error) {
@@ -927,6 +928,11 @@ function inverseOperations(deps: FeatureDeps, tenantId: string, record: ChangeSe
     const object = record.preChange.objects.find((entry) => entry.key === operation.key)
     const snapshot = captured[operation.key]?.body ?? null
     if (result.status === "pending" || result.status === "failed") continue
+    const inverseAction = operation.action === "create" ? "delete" : operation.action === "update" ? "update" : "create"
+    if (unsupportedReason(operation.folder, inverseAction)) {
+      manual.push(`"${operation.name}" needs manual recovery in Intune because automatic rollback does not support this policy type.`)
+      continue
+    }
     const warnings = result.status === "verified" ? [] : [`The outcome of "${operation.name}" was ${result.status}; the rollback is based on the captured state and live state is re-read at review.`]
     const source = { tenantId: record.targetTenantId, objectId: operation.targetId, version: record.preChange.capturedAt, label: `Pre-change capture of "${record.title}"` }
     if (operation.action === "create") {

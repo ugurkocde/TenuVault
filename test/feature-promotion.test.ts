@@ -41,6 +41,25 @@ const MAPPINGS: Mapping[] = [
   { kind: "reusableSetting", sourceId: DEV_REUSABLE, targetId: PROD_REUSABLE, confirmed: true },
 ]
 
+it.each([false, true])("blocks a scope tag selected with a policy in Dev to Prod (linked update: %s)", async (update) => {
+  const context = setup()
+  context.dev.collection(typeForFolder("ScopeTags")!.path).set("4", { id: "4", displayName: "Pilot", assignments: [] })
+  const destinationId = update ? context.prod.addPolicy({ name: "Existing policy", roleScopeTagIds: ["0"] }).id : undefined
+  const response = await context.post({
+    action: "plan",
+    title: "Promote tagged policy",
+    items: [{ sourceId: context.simple.id, destinationId }, { folder: "ScopeTags", sourceId: "4" }],
+    mappings: [],
+  })
+  expect(response.status).toBe(200)
+  const promotion = response.body.promotion as PromotionRecord
+  expect(promotion).toMatchObject({ status: "blocked", changeSetId: null })
+  expect(promotion.items[0]?.findings).toContainEqual({
+    code: "ordering", severity: "blocking", message: 'Copy the scope tag "Pilot" first, then copy this policy in a second run.',
+  })
+  expect(promotion.items[0]?.findings).not.toContainEqual(expect.objectContaining({ code: "scope-tag-default" }))
+})
+
 async function planned(context: ReturnType<typeof setup>, items?: Array<{ sourceId: unknown; destinationId?: unknown }>) {
   const response = await context.post({ action: "plan", title: "Promote OIB", ticket: "CHG-7", items: items ?? [{ sourceId: context.simple.id }, { sourceId: context.withReference.id }], mappings: MAPPINGS })
   expect(response.status).toBe(200)

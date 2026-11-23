@@ -31,6 +31,8 @@ export interface ResolveInput {
   dropUnsupportedExclusions: boolean
   acknowledgeRedacted?: boolean
   mappings: Mapping[]
+  /** Folder and source ID keys for items being written in this plan. */
+  selectedItems?: ReadonlySet<string>
   /** A source snapshot already read and sanitized. */
   sourceSnapshot: Item
 }
@@ -148,7 +150,8 @@ function portabilityBlocker(type: IntuneType, snapshot: Item): string | undefine
   }
   if (type.folder === "Remediations") {
     if (snapshot.deviceHealthScriptType !== "deviceHealthScript") return "Only custom remediation scripts can be copied."
-    if (typeof snapshot.detectionScriptContent !== "string" || !snapshot.detectionScriptContent.trim() || typeof snapshot.remediationScriptContent !== "string") {
+    if (typeof snapshot.detectionScriptContent !== "string" || !snapshot.detectionScriptContent.trim()
+      || (snapshot.remediationScriptContent !== null && typeof snapshot.remediationScriptContent !== "string")) {
       return "Intune did not provide the complete remediation script content."
     }
   }
@@ -162,8 +165,27 @@ function portabilityBlocker(type: IntuneType, snapshot: Item): string | undefine
       })) {
       return "Only administrative templates with confirmed built-in definitions can be copied."
     }
+    if ((values as Item[]).some(({ presentationValues }) => presentationValues != null
+      && (!Array.isArray(presentationValues) || (presentationValues as Array<Item | null>).some((value) =>
+        !isGraphId((value?.presentation as Item | undefined)?.id))))) {
+      return "Every administrative template presentation value needs a valid built-in presentation ID."
+    }
   }
   return undefined
+}
+
+function featureUpdateWarnings(snapshot: Item, now: number): DependencyFinding[] {
+  const findings: DependencyFinding[] = []
+  const past = (date: unknown) => typeof date === "string" && Date.parse(date) < now
+  if (past(snapshot.endOfSupportDate)) {
+    findings.push({ code: "feature-update-dates", severity: "warning", message: `"${snapshot.featureUpdateVersion}" is past its end of support (${snapshot.endOfSupportDate}). Review the Windows version before copying.` })
+  }
+  const rollout = snapshot.rolloutSettings as Item | undefined
+  for (const [field, label] of [["offerStartDateTimeInUTC", "start"], ["offerEndDateTimeInUTC", "end"]] as const) {
+    const date = rollout?.[field]
+    if (past(date)) findings.push({ code: "feature-update-dates", severity: "warning", message: `The rollout ${label} date (${date}) is in the past. Review the rollout schedule before copying.` })
+  }
+  return findings
 }
 
 function immutableDifference(type: IntuneType, source: Item, target: Item): string | undefined {
@@ -209,8 +231,9 @@ export async function resolveTarget(deps: FeatureDeps, destinationTenantId: stri
   const sanitized = sanitizeSnapshot(type, input.sourceSnapshot)
   const sourceSnapshot = sanitized.snapshot
   const findings: DependencyFinding[] = []
-  const unsupported = unsupportedReason(type.folder, input.targetObjectId ? "update" : "create")
+  const unsupported = unsupportedReason(type.folder, input.targetObjectId ? "update" : "create", true)
   if (unsupported) findings.push({ code: "unsupported-type", severity: "blocking", message: unsupported })
+  if (type.folder === "FeatureUpdateProfiles") findings.push(...featureUpdateWarnings(sourceSnapshot, deps.now().getTime()))
 
   const targetPolicy = input.targetObjectId ? await read("The destination object", () => readCurrent(targetGraph, type, input.targetObjectId!)) : null
   const sourceBlocker = portabilityBlocker(type, sourceSnapshot)
@@ -224,7 +247,12 @@ export async function resolveTarget(deps: FeatureDeps, destinationTenantId: stri
   const targetTags = targetPolicy?.[tagKey]
   const sourceTags = Array.isArray(tags) ? tags.map(String) : []
   const destinationTags = Array.isArray(targetTags) ? targetTags.map(String) : []
-  const references = extractReferences(type, sourceSnapshot, input.includeAssignments).filter((reference) => !input.targetObjectId || reference.kind !== "scopeTag")
+  const extracted = extractReferences(type, sourceSnapshot, input.includeAssignments)
+  const sameRun = extracted.flatMap(({ kind, sourceId }) => {
+    const folder = kind === "filter" ? "assignmentfilters" : kind === "scopeTag" ? "scopetags" : null
+    return folder && input.selectedItems?.has(`${folder}:${sourceId.toLowerCase()}`) ? [{ kind, sourceId }] : []
+  })
+  const references = extracted.filter((reference) => !input.targetObjectId || reference.kind !== "scopeTag")
   const kinds = new Set(references.map((reference) => reference.kind))
   const targetObjects: Partial<Record<ReferenceKind, Map<string, string> | null>> = {}
   const sourceNames: Partial<Record<ReferenceKind, Map<string, string>>> = {}
@@ -250,13 +278,21 @@ export async function resolveTarget(deps: FeatureDeps, destinationTenantId: stri
       return new Map(groups.flatMap((group) => typeof group.id === "string" ? [[group.id.toLowerCase(), String(group.displayName ?? "")]] : []))
     })
   }
-  findings.push(...referenceFindings(resolutions.filter((reference) => input.verifyAssignments || reference.kind !== "scopeTag" || reference.state === "mapped-unverified")))
+  findings.push(...referenceFindings(resolutions.filter(({ kind, sourceId, state }) =>
+    !sameRun.some((reference) => reference.kind === kind && reference.sourceId === sourceId)
+      && (input.verifyAssignments || kind !== "scopeTag" || state === "mapped-unverified"))))
   if (input.verifyAssignments) {
     if (type.assign && (assignmentsUnread(type, sourceSnapshot) || !Array.isArray(sourceSnapshot.assignments))) {
       findings.push({ code: "unsupported-target", severity: "blocking", message: "Source assignments could not be read. Check the source policy before copying its assignments." })
     }
   }
-  const translated = translate(type, sourceSnapshot, resolutions, { includeAssignments: input.includeAssignments, dropUnsupportedExclusions: input.dropUnsupportedExclusions, destinationSnapshot: input.targetObjectId ? targetPolicy : undefined, acknowledgeRedacted: input.acknowledgeRedacted, verifyScopeTags: input.verifyAssignments })
+  for (const { kind, sourceId } of sameRun) {
+    const name = sourceNames[kind]?.get(sourceId.toLowerCase()) || sourceId
+    findings.push({ code: "ordering", severity: "blocking", message: `Copy the ${kind === "filter" ? "assignment filter" : "scope tag"} "${name}" first, then copy this policy in a second run.` })
+  }
+  const translated = sameRun.length
+    ? { body: null, assignments: null, findings: [] }
+    : translate(type, sourceSnapshot, resolutions, { includeAssignments: input.includeAssignments, dropUnsupportedExclusions: input.dropUnsupportedExclusions, destinationSnapshot: input.targetObjectId ? targetPolicy : undefined, acknowledgeRedacted: input.acknowledgeRedacted, verifyScopeTags: input.verifyAssignments })
   findings.push(...translated.findings)
 
   if (input.targetObjectId && !targetPolicy) findings.push({ code: "missing-mapping", severity: "blocking", message: "The chosen destination object does not exist in the destination tenant." })

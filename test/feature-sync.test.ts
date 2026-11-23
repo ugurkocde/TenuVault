@@ -1,9 +1,10 @@
 import { typeForFolder, type Item } from "../src/shared/intune/registry"
+import { LEGACY_SCOPE_TAG_ASSIGNMENT_WARNING } from "../src/shared/intune/restore-assignments"
 import { describe, expect, it } from "vitest"
 import { routes as syncRoutes } from "../src/main/features/sync"
 import { routes as promotionRoutes } from "../src/main/features/promotion"
 import { applyChangeSet, approveChangeSet, createChangeSet, previewChangeSet } from "../src/main/features/change-sets/engine"
-import type { ChangeSetRecord } from "../src/main/features/change-sets/model"
+import { matchesProposed, type ChangeSetRecord } from "../src/main/features/change-sets/model"
 import { DOMAINS } from "../src/main/features/domains"
 import { FeatureError } from "../src/main/features/route"
 import { PROMOTION_NOT_FOUND, type PromotionRecord } from "../src/main/features/promotion/engine"
@@ -1432,6 +1433,7 @@ describe("copying additional Intune types", () => {
   const groupId = "aaaaaaaa-0000-0000-0000-00000000000c"
   const mappedGroupId = "bbbbbbbb-0000-0000-0000-00000000000c"
   const group = (id: string) => ({ "@odata.type": "#microsoft.graph.groupAssignmentTarget", groupId: id })
+  const scopeTagGroup = (id: string) => ({ "@odata.type": "#microsoft.graph.scopeTagGroupAssignmentTarget", entraObjectId: id, targetType: "device" })
   const tagMapping = { kind: "scopeTag", sourceId: "5", targetId: "8", confirmed: true }
   const groupMapping = { kind: "group", sourceId: groupId, targetId: mappedGroupId, confirmed: true }
   const filterId = "aaaaaaaa-0000-0000-0000-00000000000d"
@@ -1441,7 +1443,7 @@ describe("copying additional Intune types", () => {
   const cases: Array<{ folder: string; body: Item; assignmentKey?: string }> = [
     { folder: "PowerShellScripts", body: { fileName: "test.ps1", scriptContent: "V3JpdGUtT3V0cHV0ICdIaSc=" }, assignmentKey: "deviceManagementScriptAssignments" },
     { folder: "ShellScripts", body: { fileName: "test.sh", scriptContent: "ZWNobyBoaQ==" }, assignmentKey: "deviceManagementScriptAssignments" },
-    { folder: "Remediations", body: { deviceHealthScriptType: "deviceHealthScript", detectionScriptContent: "ZXhpdCAw", remediationScriptContent: "" }, assignmentKey: "deviceHealthScriptAssignments" },
+    { folder: "Remediations", body: { deviceHealthScriptType: "deviceHealthScript", detectionScriptContent: "ZXhpdCAw", remediationScriptContent: null, version: "1.0.0" }, assignmentKey: "deviceHealthScriptAssignments" },
     { folder: "FeatureUpdateProfiles", body: { featureUpdateVersion: "Windows 11, version 25H2" }, assignmentKey: "assignments" },
     { folder: "ScopeTags", body: {}, assignmentKey: "assignments" },
     { folder: "AssignmentFilters", body: { platform: "windows10AndLater", assignmentFilterManagementType: "devices", rule: '(device.deviceOwnership -eq "Corporate")' } },
@@ -1454,7 +1456,9 @@ describe("copying additional Intune types", () => {
     const { path } = typeForFolder(folder)!
     const sourceId = "dc613261-5783-4f29-8f96-c67b8bb59644"
     const tagProperty = folder === "AssignmentFilters" ? "roleScopeTags" : "roleScopeTagIds"
-    const assignments = assignmentKey ? [{ target: { ...group(groupId), ...(folder === "ScopeTags" ? {} : { deviceAndAppManagementAssignmentFilterId: filterId, deviceAndAppManagementAssignmentFilterType: "include" }) } }] : undefined
+    const assignments = assignmentKey ? [{ target: folder === "ScopeTags" ? scopeTagGroup(groupId) : {
+      ...group(groupId), deviceAndAppManagementAssignmentFilterId: filterId, deviceAndAppManagementAssignmentFilterType: "include",
+    } }] : undefined
     const source: Item = { displayName: "Contoso policy", description: "Original", id: sourceId, ...structuredClone(body), ...(assignments ? { assignments } : {}), ...(folder === "ScopeTags" ? {} : { [tagProperty]: ["5"] }) }
     const sourceObjects = context.source.collectionForPath(path) ?? context.source.collection(path)
     sourceObjects.set(sourceId, source)
@@ -1481,14 +1485,17 @@ describe("copying additional Intune types", () => {
     const link = syncLinks(context.deps, TENANT_B, TENANT_A)[`${folder}:${sourceId}`]
     expect(link?.targetPolicyId).toBe(id)
     expect(target.calls.find((entry) => entry.method === "POST" && entry.path === path)?.body).toMatchObject({ displayName: "Contoso policy", ...(folder === "ScopeTags" ? {} : { [tagProperty]: ["8"] }) })
+    if (folder === "Remediations") expect(destinationObjects.get(id!)).toMatchObject({ version: "1.0.0", remediationScriptContent: "" })
     if (assignmentKey) {
       const set = target.calls.find((entry) => entry.path === `${path}/${id}/assign`)
-      expect(set?.body).toMatchObject({ [assignmentKey]: [{ target: { groupId: mappedGroupId, ...(folder === "ScopeTags" ? {} : { deviceAndAppManagementAssignmentFilterId: mappedFilterId }) } }] })
+      if (folder === "ScopeTags") expect(set?.body).toEqual({ [assignmentKey]: [{ target: scopeTagGroup(mappedGroupId) }] })
+      else expect(set?.body).toMatchObject({ [assignmentKey]: [{ target: { groupId: mappedGroupId, deviceAndAppManagementAssignmentFilterId: mappedFilterId } }] })
     } else {
       expect(target.calls.some((entry) => entry.path.endsWith("/assign"))).toBe(false)
     }
 
-    source.description = "Changed in Contoso"
+    if (folder === "Remediations") source.version = "2.0.0"
+    else source.description = "Changed in Contoso"
     if (folder === "GroupPolicyConfigurations") (source.definitionValues as Item[])[0]!.enabled = false
     const update = await planned(context, [TENANT_B], input)
     expect(update.targets[0]!.promotion?.items[0]).toMatchObject({ action: "update", blocked: false, destinationId: id })
@@ -1496,7 +1503,16 @@ describe("copying additional Intune types", () => {
     expect(updated.status).toBe(200)
     expect(updated.body.promotion.status).toBe("applied")
     expect(destinationObjects.size).toBe(1)
-    expect(destinationObjects.get(id!)?.description).toBe("Changed in Contoso")
+    if (folder === "Remediations") {
+      expect(destinationObjects.get(id!)?.version).toBe("2.0.0")
+      expect(matchesProposed(typeForFolder(folder)!, source, { ...source, version: "1.0.0" })).toBe(false)
+    } else expect(destinationObjects.get(id!)?.description).toBe("Changed in Contoso")
+    if (folder === "AssignmentFilters") {
+      const patch = target.calls.find((entry) => entry.method === "PATCH" && entry.path === `${path}/${id}`)?.body
+      expect(patch).toMatchObject({ description: "Changed in Contoso" })
+      expect(patch).not.toHaveProperty("platform")
+      expect(patch).not.toHaveProperty("assignmentFilterManagementType")
+    }
     if (folder === "GroupPolicyConfigurations") expect(destinationObjects.get(id!)?.definitionValues).toEqual([expect.objectContaining({ enabled: false })])
     expect(context.source.writeCount()).toBe(0)
   })
@@ -1512,5 +1528,109 @@ describe("copying additional Intune types", () => {
     expect(promotion.status).toBe("blocked")
     expect(promotion.items[0]!.findings).toContainEqual(expect.objectContaining({ message: expect.stringContaining("script content") }))
     expect(context.targets[TENANT_B]!.writeCount()).toBe(0)
+  })
+
+  it("warns about legacy scope tag assignments without clearing a linked tag's targeting", async () => {
+    const context = setup()
+    const folder = "ScopeTags"
+    const path = typeForFolder(folder)!.path
+    const source: Item = { id: "5", displayName: "Pilot", assignments: [{ target: scopeTagGroup(groupId) }] }
+    const target = context.targets[TENANT_B]!
+    context.source.collection(path).set("5", source)
+    const objects = target.collection(path)
+    context.source.groups.set(groupId, { id: groupId, displayName: "Source group" })
+    target.groups.set(mappedGroupId, { id: mappedGroupId, displayName: "Target group" })
+    const input = { items: [{ folder, sourceId: "5" }], includeAssignments: true, mappings: { [TENANT_B]: [groupMapping] } }
+    const create = (await planned(context, [TENANT_B], input)).targets[0]!.promotion!
+    expect((await applied(context, TENANT_B, create.id)).body.promotion.status).toBe("applied")
+    const [id] = objects.keys()
+    source.assignments = [{ members: [groupId], scopeMembers: [groupId] }]
+    const update = (await planned(context, [TENANT_B], input)).targets[0]!.promotion!
+    expect(update.items[0]).toMatchObject({
+      blocked: false,
+      references: [],
+      findings: expect.arrayContaining([{ code: "legacy-scope-tag-assignment", severity: "warning", message: LEGACY_SCOPE_TAG_ASSIGNMENT_WARNING }]),
+    })
+    expect((await applied(context, TENANT_B, update.id)).body.promotion.status).toBe("applied")
+    expect(objects.get(id!)?.assignments).toMatchObject([{ target: scopeTagGroup(mappedGroupId) }])
+    expect(target.writeCount((write) => write.path.endsWith("/assign"))).toBe(1)
+  })
+
+  const dependencyCases: Array<{ folder: string; sourceId: string; label: string; body: Item }> = [
+    { folder: "AssignmentFilters", sourceId: filterId, label: "assignment filter", body: { platform: "windows10AndLater", assignmentFilterManagementType: "devices", rule: "(device.deviceOwnership -eq \"Corporate\")" } },
+    { folder: "ScopeTags", sourceId: "5", label: "scope tag", body: {} },
+  ]
+
+  it.each(dependencyCases)("blocks a policy that also selects its $label for the same run", async ({ folder, sourceId, label, body }) => {
+    const context = setup()
+    context.source.collection(typeForFolder(folder)!.path).set(sourceId, { id: sourceId, displayName: "Pilot", ...body, ...(folder === "ScopeTags" ? { assignments: [] } : {}) })
+    if (folder === "ScopeTags") context.policy.roleScopeTagIds = [sourceId]
+    else context.policy.assignments = [{ target: { "@odata.type": "#microsoft.graph.allDevicesAssignmentTarget", deviceAndAppManagementAssignmentFilterId: sourceId, deviceAndAppManagementAssignmentFilterType: "include" } }]
+    const items = [{ folder: "ConfigurationPolicies", sourceId: context.policy.id }, { folder, sourceId }]
+    const result = await planned(context, [TENANT_B], { items, includeAssignments: true })
+    const promotion = result.targets[0]!.promotion!
+    expect(promotion).toMatchObject({ status: "blocked", changeSetId: null })
+    expect(promotion.items[0]).toMatchObject({
+      blocked: true,
+      findings: expect.arrayContaining([{ code: "ordering", severity: "blocking", message: `Copy the ${label} "Pilot" first, then copy this policy in a second run.` }]),
+    })
+    expect(promotion.items[0]!.findings).not.toContainEqual(expect.objectContaining({ code: "scope-tag-default" }))
+    expect(promotion.items[1]?.blocked).toBe(false)
+    expect(context.targets[TENANT_B]!.writeCount()).toBe(0)
+  })
+
+  it("blocks an administrative template with a missing presentation ID", async () => {
+    const context = setup()
+    const folder = "GroupPolicyConfigurations"
+    const id = String(context.policy.id)
+    const path = typeForFolder(folder)!.path
+    context.source.collectionForPath(path)!.set(id, {
+      id, displayName: "Missing presentation",
+      definitionValues: [{ id: "source-value", definition: { id: "global-id", policyType: "admxBacked" }, presentationValues: [{ value: "Contoso" }] }],
+    })
+    context.targets[TENANT_B]!.collection(path)
+    const result = await planned(context, [TENANT_B], { items: [{ folder, sourceId: id }] })
+    const promotion = result.targets[0]!.promotion!
+    expect(promotion.status).toBe("blocked")
+    expect(promotion.items[0]!.findings).toContainEqual(expect.objectContaining({ severity: "blocking", message: expect.stringContaining("valid built-in presentation ID") }))
+  })
+
+  it("warns about past feature update support and rollout dates", async () => {
+    const context = setup()
+    const folder = "FeatureUpdateProfiles"
+    const path = typeForFolder(folder)!.path
+    const id = String(context.policy.id)
+    context.source.collection(path).set(id, {
+      id, displayName: "Retired Windows release", featureUpdateVersion: "Windows 11, version 22H2", endOfSupportDate: "2025-10-14T00:00:00Z",
+      rolloutSettings: { offerStartDateTimeInUTC: "2025-09-01T00:00:00Z", offerEndDateTimeInUTC: "2025-10-01T00:00:00Z" },
+    })
+    context.targets[TENANT_B]!.collection(path)
+    const result = await planned(context, [TENANT_B], { items: [{ folder, sourceId: id }] })
+    const promotion = result.targets[0]!.promotion!
+    expect(promotion.status).toBe("in-review")
+    expect(promotion.items[0]!.findings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ severity: "warning", message: expect.stringContaining("past its end of support") }),
+      expect.objectContaining({ severity: "warning", message: expect.stringContaining("rollout start date") }),
+      expect.objectContaining({ severity: "warning", message: expect.stringContaining("rollout end date") }),
+    ]))
+  })
+
+  it("keeps added types out of generic change sets and automatic rollback", async () => {
+    const context = setup()
+    const folder = "PowerShellScripts"
+    const id = String(context.policy.id)
+    const path = typeForFolder(folder)!.path
+    const source = { id, displayName: "Test script", scriptContent: "ZXhpdCAw" }
+    context.source.collection(path).set(id, source)
+    context.targets[TENANT_B]!.collection(path)
+    await expect(createChangeSet(context.deps, TENANT_B, {
+      title: "Generic script change", operations: [{ folder, action: "create", proposed: source }],
+    }, null)).rejects.toThrow("Change sets do not support Windows PowerShell scripts")
+    const promotion = (await planned(context, [TENANT_B], { items: [{ folder, sourceId: id }] })).targets[0]!.promotion!
+    expect((await applied(context, TENANT_B, promotion.id)).body.promotion.status).toBe("applied")
+    const preview = await context.post({ tenantId: TENANT_B, action: "rollback-preview", id: promotion.id })
+    expect(preview.status).toBe(200)
+    expect(preview.body.operations).toEqual([])
+    expect(preview.body.manual).toEqual([expect.stringContaining("Test script")])
   })
 })

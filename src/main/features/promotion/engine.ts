@@ -1,5 +1,4 @@
 import { PROMOTION_FOLDERS } from "../../../shared/intune/promotion-types"
-import { comparableSnapshot } from "../../../shared/intune/compare"
 import { typeForFolder } from "../../../shared/intune/registry"
 import { isGraphId } from "../../../shared/security"
 import type { ListedRecord } from "../contracts"
@@ -9,7 +8,7 @@ import type { Stored } from "../records"
 import { FeatureError } from "../route"
 import { applyChangeSet, approveChangeSet, createChangeSet, getChangeSet, previewChangeSet, type ApplyInput, type ChangeSetPreview, type OperationInput } from "../change-sets/engine"
 import { createListingMemo, readCurrent } from "../change-sets/graph"
-import { hashOf, sanitizeSnapshot, type ChangeSetRecord } from "../change-sets/model"
+import { snapshotHash, sanitizeSnapshot, type ChangeSetRecord } from "../change-sets/model"
 import type { DependencyFinding, Mapping, ReferenceResolution, TargetReads } from "./mapping"
 import { resolveTarget, staleTargets } from "./targets"
 
@@ -157,6 +156,7 @@ export async function planPromotion(deps: FeatureDeps, destinationTenantId: stri
       dropUnsupportedExclusions: input.dropUnsupportedExclusions,
       acknowledgeRedacted: input.acknowledgeRedacted,
       mappings: input.mappings,
+      selectedItems: seen,
       sourceSnapshot: snapshot,
       verifyAssignments: input.workflow === "sync" && input.includeAssignments,
     }, listings)
@@ -166,7 +166,7 @@ export async function planPromotion(deps: FeatureDeps, destinationTenantId: stri
     const notes = (item.notes ?? []).map((note) => ({ ...note, severity: note.severity === "blocking" ? "warning" as const : note.severity }))
     const blocked = resolved.blocked || !promotable
     const proposed = blocked ? { body: null, assignments: null } : resolved.proposed
-    items.push({ folder: type.folder, sourceId: item.sourceId, sourceName: resolved.sourceName, sourceVersion, sourceHash: hashOf(comparableSnapshot(snapshot)), destinationId: item.destinationId, action: item.destinationId ? "update" : "create", blocked, findings: [...findings, ...notes], references: resolved.references, targetReads: resolved.targetReads, targetStateHash: resolved.targetStateHash })
+    items.push({ folder: type.folder, sourceId: item.sourceId, sourceName: resolved.sourceName, sourceVersion, sourceHash: snapshotHash(type, raw), destinationId: item.destinationId, action: item.destinationId ? "update" : "create", blocked, findings: [...findings, ...notes], references: resolved.references, targetReads: resolved.targetReads, targetStateHash: resolved.targetStateHash })
     if (!blocked) operations.push({ folder: type.folder, action: item.destinationId ? "update" : "create", targetId: item.destinationId, proposed: proposed.body, assignments: input.includeAssignments ? proposed.assignments : null, source: { tenantId: source, objectId: item.sourceId, version: sourceVersion, label: resolved.sourceName } })
   }
   const blockedCount = items.filter((item) => item.blocked).length
@@ -234,7 +234,7 @@ export async function previewPromotion(deps: FeatureDeps, tenantId: string, id: 
       const type = typeForFolder(item.folder ?? PROMOTION_FOLDER)!
       const live = await readCurrent(graph, type, item.sourceId)
       if (!live) sourceChanges.push(`"${item.sourceName}" was deleted in the source after planning. The reviewed version is still ${promotion.sync ? "copied" : "promoted"}.`)
-      else if (hashOf(comparableSnapshot(sanitizeSnapshot(type, live).snapshot)) !== item.sourceHash) sourceChanges.push(`"${item.sourceName}" changed in the source after planning. Only the reviewed version is ${promotion.sync ? "copied" : "promoted"}; plan again to include later edits.`)
+      else if (snapshotHash(type, live) !== item.sourceHash) sourceChanges.push(`"${item.sourceName}" changed in the source after planning. Only the reviewed version is ${promotion.sync ? "copied" : "promoted"}; plan again to include later edits.`)
     }
   } catch (error) {
     sourceChanges.push(`The source tenant could not be re-read: ${error instanceof Error ? error.message : String(error)}`)

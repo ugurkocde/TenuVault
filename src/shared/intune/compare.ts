@@ -12,19 +12,19 @@ const volatile = (key: string) => VOLATILE.has(key) || key === "@odata.context" 
  * A snapshot with volatile properties removed and object keys sorted, so two reads of an unchanged
  * object serialize the same. Array order is kept: Intune returns settings in a stable order.
  */
-export function comparableSnapshot(value: Json | undefined): Json {
+export function comparableSnapshot(value: Json | undefined, folder?: string): Json {
   if (Array.isArray(value)) return value.map((entry) => comparableSnapshot(entry))
   if (value === null || typeof value !== "object") return value ?? null
   const result: { [key: string]: Json } = {}
   for (const key of Object.keys(value).sort()) {
     // A JSON "__proto__" key would replace the copy's prototype instead of becoming a property.
-    if (volatile(key) || key === "__proto__") continue
+    if ((volatile(key) && !(key === "version" && folder === "Remediations")) || key === "__proto__") continue
     result[key] = comparableSnapshot(value[key])
   }
   return result
 }
 
 /** True when two snapshots hold the same configuration. */
-export function sameSnapshot(a: Json | undefined, b: Json | undefined): boolean {
-  return JSON.stringify(comparableSnapshot(a)) === JSON.stringify(comparableSnapshot(b))
+export function sameSnapshot(a: Json | undefined, b: Json | undefined, folder?: string): boolean {
+  return JSON.stringify(comparableSnapshot(a, folder)) === JSON.stringify(comparableSnapshot(b, folder))
 }
