@@ -559,6 +559,47 @@ for (const azure of [false, true]) describe(azure ? "Azure emulator mixed runs" 
     const refused = await download(f.request({ backupId: ordinary }))
     expect(refused.status).toBe(409)
   })
+  if (!azure) it.each(["fetch", "body"])("keeps the full download offered when a local run record stalls during %s past the history budget", async stage => {
+    const f = await pair()
+    const { RunStatus: _status, RunCounts: _counts, ...early } = f.first
+    await f.write(ordinary, "metadata.json", { ...early, LargeBackupOutcomes: [{ Folder: "AuthorizationPolicy", Outcome: "failed" }] })
+    const budget = new AbortController()
+    const realTimeout = AbortSignal.timeout.bind(AbortSignal)
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockImplementation(ms => ms === 15_000 ? budget.signal : realTimeout(ms))
+    const original = f.fetcher.getMockImplementation()!
+    let reading = false
+    f.fetcher.mockImplementation(async (input, init) => {
+      if (!String(input).endsWith("/run-status.json")) return original(input, init)
+      if (stage === "body") return new Response(new ReadableStream({ pull: () => { reading = true; budget.abort() } }))
+      reading = true
+      budget.abort()
+      return new Promise<Response>(() => {})
+    })
+    try {
+      let rows: any
+      const result = history(f.request({ summary: true })).then(async response => { rows = await response.json() })
+      await vi.waitFor(() => {
+        expect(reading).toBe(true)
+        expect(rows?.backups.find((entry: any) => entry.id === ordinary)).toMatchObject({ ordinaryOnlyExport: false })
+      })
+      await result
+    } finally { timeout.mockRestore() }
+  })
+  it.each(["discovered", "linked"])("offers both downloads while the %s companion returns a transient 503", async discovery => {
+    const f = await pair()
+    f.refuse(503, discovery === "discovered" ? "metadata.json" : "all")
+    const rows = await (await history(f.request({ summary: true }))).json()
+    const row = rows.backups.find((entry: any) => entry.id === ordinary)
+    expect(row).toMatchObject({ ordinaryOnlyExport: false, ordinaryOnlyAvailable: true, coverage: "incomplete" })
+    const refused = await download(f.request({ backupId: ordinary, largeInventory: true }))
+    expect(refused.status).toBe(503)
+    const ordinaryCopy = await download(f.request({ backupId: ordinary, ordinaryOnly: true }))
+    expect(ordinaryCopy.headers.get("content-disposition")).toContain("ordinary-only.zip")
+    f.refuse(0)
+    const archive = await download(f.request({ backupId: ordinary, largeInventory: true }))
+    expect(archive.headers.get("content-type")).toBe("application/x-tar")
+    await archive.body?.cancel()
+  })
   it("asks to retry the full download when the large half of a split run cannot be read in time", async () => {
     const f = await pair()
     const original = f.fetcher.getMockImplementation()!

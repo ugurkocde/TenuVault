@@ -66,27 +66,31 @@ export class ApiHost {
     const metadata: ExecutionMetadata = {}
     // Bound before the route takes its token, so a sign-in that changes meanwhile never moves the audit.
     try { this.options.beforeRoute?.(request, body, metadata) } catch (error) { console.error(`[api] ${request.method} ${url.pathname} could not capture the audit binding:`, error) }
-    let response: Response
-    try {
-      response = await executionMetadata.run(metadata, () => withRouteTenant(tenantId, () => handler(new NextRequest(request)), storageAccountName))
-    } catch (error) {
-      console.error(`[api] ${request.method} ${url.pathname} failed:`, error)
-      response = Response.json(
-        { error: error instanceof Error ? error.message : "Unexpected error" },
-        { status: 500 },
-      )
-    }
-    if (this.options.transform) response = await this.options.transform(response)
-    // An archive is saved before the request is audited, so the audit records what was saved: a save that
-    // fails is a failed download, and a cancelled save dialog is no download at all.
-    if (response.ok && response.headers.get("content-type") === "application/x-tar" && this.options.saveDownload) {
+    // The archive stream keeps reading storage during the native save. Hold the route's tenant
+    // context and local folder guard until the save settles.
+    const response = await withRouteTenant(tenantId, async () => {
+      let response: Response
       try {
-        response = await this.options.saveDownload(response)
+        response = await executionMetadata.run(metadata, () => handler(new NextRequest(request)))
       } catch (error) {
-        console.error(`[api] ${request.method} ${url.pathname} could not save the archive:`, error)
-        response = Response.json({ error: "The archive could not be saved. No file was written." }, { status: 500 })
+        console.error(`[api] ${request.method} ${url.pathname} failed:`, error)
+        response = Response.json(
+          { error: error instanceof Error ? error.message : "Unexpected error" },
+          { status: 500 },
+        )
       }
-    }
+      if (this.options.transform) response = await this.options.transform(response)
+      // A failed save is audited as a failed download. A cancelled save dialog is no download at all.
+      if (response.ok && response.headers.get("content-type") === "application/x-tar" && this.options.saveDownload) {
+        try {
+          response = await this.options.saveDownload(response)
+        } catch (error) {
+          console.error(`[api] ${request.method} ${url.pathname} could not save the archive:`, error)
+          response = Response.json({ error: "The archive could not be saved. No file was written." }, { status: 500 })
+        }
+      }
+      return response
+    }, storageAccountName)
     try {
       this.options.onHandled?.(request, body, response, metadata)
     } catch (error) {

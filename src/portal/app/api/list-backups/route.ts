@@ -31,7 +31,7 @@ const storageHeaders = (token: string) => ({ 'x-ms-version': '2021-12-02', 'x-ms
 // At most eight missing-discovery companion lookups per history request.
 export const COMPANION_LOOKUP_BUDGET = 8
 
-interface MetadataRead { metadata: any; metadataError?: string; unavailable?: boolean; sealed?: boolean; foreign?: boolean }
+interface MetadataRead { metadata: any; metadataError?: string; retryable?: boolean; unavailable?: boolean; sealed?: boolean; foreign?: boolean }
 
 /**
  * Why a backup on this device is unavailable, from the local store's refusal: damaged or
@@ -64,9 +64,9 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
       if (response.ok) {
         const body = await readJsonCapped(response, MAX_BACKUP_ARCHIVE_BYTES)
         if (body.kind === 'oversized') return { metadata: null, metadataError: oversizedOwnershipFile('metadata.json') }
-        if (body.kind === 'invalid') throw new Error('Invalid metadata')
+        if (body.kind === 'invalid') return { metadata: null, metadataError: 'Backup metadata could not be read or parsed.' }
         const metadata = body.value as any
-        if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) throw new Error('Invalid metadata')
+        if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return { metadata: null, metadataError: 'Backup metadata could not be read or parsed.' }
         return { metadata }
       }
       const body = response.status === 409 ? await response.text() : ''
@@ -75,13 +75,13 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
       // A manifest that may only be in a file no backup can be traced to: the folder is treated as
       // having none, so it shows as running or incomplete and is never used as a complete backup.
       if (response.status === 409 && body.includes('<Code>InventoryIncomplete</Code>')) return { metadata: null }
-      return { metadata: null, metadataError: response.status !== 404 ? `Backup metadata is unavailable (${response.status}).` : undefined }
+      return { metadata: null, metadataError: response.status !== 404 ? `Backup metadata is unavailable (${response.status}).` : undefined, retryable: response.status >= 500 }
     } catch (error) {
       // A backup sealed by an earlier version for another tenant signed in here is that tenant's.
       if (isLegacyOtherTenantError(error)) return { metadata: null, foreign: true }
       // A backup sealed by an earlier version that no key on this device opens, or one that cannot be read for another reason, says why.
       if (error instanceof Error && (error.name === 'FetchApplicationError' || error.name === 'FetchPreconditionError')) return { metadata: null, metadataError: error.message, sealed: isLegacySealedError(error) }
-      return { metadata: null, metadataError: 'Backup metadata could not be read or parsed.' }
+      return { metadata: null, metadataError: 'Backup metadata could not be read or parsed.', retryable: true }
     }
   }
   // On this device a backup can become unavailable while its metadata.json stays unchanged (another
@@ -91,7 +91,7 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
     ? (local ? readMetadata() : metadataCache.read(inventory.cacheKey, inventory.version, readMetadata))
     // On this device a listing leaves out a metadata.json it cannot read, so a folder listed without
     // one is asked for it: the store answers 409 when damaged files made the backup unavailable.
-    : inventory ? (local ? readMetadata().then((read) => read.unavailable ? read : { metadata: null }) : Promise.resolve({ metadata: null })) : readMetadata()
+    : inventory ? (local ? readMetadata().then((read) => read.unavailable || (isLargeBackup(name) && read.retryable) ? read : { metadata: null }) : Promise.resolve({ metadata: null })) : readMetadata()
   // A backup made unavailable by damaged files is still listed, with the reason, so the others stay usable.
   const filesRead: Promise<string | { unavailable: string }> = inventory ? Promise.resolve(inventory.text) : listBlobPages(`https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&prefix=${encodeURIComponent(`${name}/`)}`, accessToken).catch((error) => {
     const unavailable = error instanceof BlobListError ? unavailableReason(error.status, error.body) : null
@@ -218,6 +218,7 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
     claim,
     loadClaim,
     error: metadataError,
+    metadataRetryable: metadataResult.retryable,
     warning: undefined,
     runbookVersion: metadata?.RunbookVersion ?? metadata?.runbookVersion ?? null,
     runId,
@@ -417,13 +418,25 @@ export async function POST(request: NextRequest) {
     const budget = AbortSignal.timeout(RUN_RECORD_BUDGET_MS)
     for (let start = 0; start < pending.length && !budget.aborted; start += RUN_RECORD_READS) {
       await Promise.all(pending.slice(start, start + RUN_RECORD_READS).map(async backup => {
+        const signal = AbortSignal.any([AbortSignal.timeout(RUN_RECORD_TIMEOUT_MS), budget])
+        let abort: (() => void) | undefined
         try {
-          const response = await fetch(`https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(`${backup.id}/${BACKUP_RUN_RECORD_FILE}`)}`, { headers: storageHeaders(accessToken), signal: AbortSignal.any([AbortSignal.timeout(RUN_RECORD_TIMEOUT_MS), budget]) })
-          if (!response.ok) { if (response.status !== 404) unreadRecords.add(backup.id); else settledRecords.add(backup.id); return }
-          const read = await readJsonCapped(response, MAX_BACKUP_ARCHIVE_BYTES)
+          // The local store may ignore the signal. Bound the fetch and the body read together.
+          const stopped = new Promise<never>((_resolve, reject) => {
+            abort = () => reject(signal.reason)
+            if (signal.aborted) abort()
+            else signal.addEventListener("abort", abort, { once: true })
+          })
+          const reading = (async () => {
+            const response = await fetch(`https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(`${backup.id}/${BACKUP_RUN_RECORD_FILE}`)}`, { headers: storageHeaders(accessToken), signal })
+            return { status: response.status, read: response.ok ? await readJsonCapped(response, MAX_BACKUP_ARCHIVE_BYTES) : null }
+          })()
+          const { status, read } = await Promise.race([stopped, reading])
+          if (!read && status !== 404) { unreadRecords.add(backup.id); return }
           settledRecords.add(backup.id)
-          if (read.kind === "json" && read.value && typeof read.value === "object") records.set(backup.id, read.value as Record<string, any>)
+          if (read?.kind === "json" && read.value && typeof read.value === "object") records.set(backup.id, read.value as Record<string, any>)
         } catch { unreadRecords.add(backup.id) }
+        finally { if (abort) signal.removeEventListener("abort", abort) }
       }))
     }
     // Only reads the budget cut off or never started are unread; a finished read decided the row already.
@@ -439,6 +452,7 @@ export async function POST(request: NextRequest) {
       const companionId = metadata.CompanionBackup
       const describedCompanion = byId.get(companionId)
       let other: any = describedCompanion?.fingerprint
+      let companionUnavailable = describedCompanion?.metadataRetryable === true
       let cause: string | undefined
       if (!other) {
         if (describedCompanion) {
@@ -453,10 +467,10 @@ export async function POST(request: NextRequest) {
             reading = (async (): Promise<MetadataRead> => {
               try {
                 const response = await fetch(`https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(`${companionId}/metadata.json`)}`, { headers: storageHeaders(accessToken) })
-                if (!response.ok) return { metadata: null, metadataError: response.status === 404 ? "Large companion is missing (removed or never committed)." : `Large companion is unreadable (${response.status}).` }
+                if (!response.ok) return { metadata: null, metadataError: response.status === 404 ? "Large companion is missing (removed or never committed)." : `Large companion is unreadable (${response.status}).`, retryable: response.status >= 500 }
                 const read = await readJsonCapped(response, MAX_BACKUP_ARCHIVE_BYTES)
                 return read.kind === "json" ? { metadata: read.value } : { metadata: null, metadataError: "Large companion is unreadable." }
-              } catch { return { metadata: null, metadataError: "Large companion is unreadable." } }
+              } catch { return { metadata: null, metadataError: "Large companion is unreadable.", retryable: true } }
             })()
             linkedReads.set(companionId, reading)
           }
@@ -464,6 +478,7 @@ export async function POST(request: NextRequest) {
             const read = await reading
             other = read.metadata
             cause = read.metadataError
+            companionUnavailable = read.retryable === true
           }
         } else cause = "Large companion does not match: invalid or missing companion ID."
       }
@@ -500,14 +515,15 @@ export async function POST(request: NextRequest) {
         }
       }
       backup.largeProblems = largeRunProblems(metadata, cause, matches ? other : null)
-      // An unread record may still name a complete run, so the full download stays offered; that request
-      // reads the record again and answers with a retry when it still cannot.
-      backup.ordinaryOnlyExport = !unreadRecords.has(backup.id) && (backup.largeProblems.length > 0 || !matches || !completeHalf(metadata) || !completeHalf(other))
-      if (backup.largeProblems.length || backup.ordinaryOnlyExport) {
+      // An unread record or a transient companion failure can still belong to a complete run.
+      // Keep the full download offered so it can check storage again.
+      backup.ordinaryOnlyAvailable = companionUnavailable && (!evidence || matches)
+      backup.ordinaryOnlyExport = !unreadRecords.has(backup.id) && !backup.ordinaryOnlyAvailable && (backup.largeProblems.length > 0 || !matches || !completeHalf(metadata) || !completeHalf(other))
+      if (backup.largeProblems.length || backup.ordinaryOnlyExport || backup.ordinaryOnlyAvailable) {
         backup.coverage = "incomplete"
         backup.status = "incomplete"
         backup.notRead = [...new Set([...backup.notRead, ...backup.largeProblems.map((problem: { folder: string }) => problem.folder)])]
-        backup.warning = backup.largeProblems.map((problem: { folder: string; reason: string }) => `${problem.folder}: ${problem.reason}`).join(" ")
+        backup.warning = backup.largeProblems.map((problem: { folder: string; reason: string }) => `${problem.folder}: ${problem.reason}`).join(" ") || cause
       }
       if (backup.ordinaryOnlyExport && metadata.Export?.kind !== "ordinary-only") {
         backup.remnant = true
@@ -563,6 +579,7 @@ export async function POST(request: NextRequest) {
       delete backup.loadClaim
       delete backup.claim
       delete backup.fingerprint
+      delete backup.metadataRetryable
       delete backup.ownerTenantId
       delete (backup as { ownerKind?: unknown }).ownerKind
       delete backup.foreign

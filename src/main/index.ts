@@ -1737,10 +1737,10 @@ async function bootstrap(): Promise<void> {
     return scopes.set(tenantId, normalized)
   })
   // Every local storage request resolves the folder when it is made, so a change while a backup,
-  // restore or import uses it would split that work across two folders.
+  // restore, download or import uses it would split that work across two folders.
   const assertLocalFolderIdle = () => {
     if (importingArchive || engine.hasLocalWork() || localRoutesRunning()) {
-      throw new Error("A backup, restore or archive import is using the backup folder. Wait for it to finish, then change the folder.")
+      throw new Error("A backup, restore, download or archive import is using the backup folder. Wait for it to finish, then change the folder.")
     }
   }
   handleTrusted("backups:chooseFolder", async () => {

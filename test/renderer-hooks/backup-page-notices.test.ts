@@ -1,12 +1,14 @@
 import { act, createElement } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, describe, expect, it, vi } from "vitest"
+import type { BackupSummary } from "../../src/portal/components/backup/types"
 
 vi.mock("../../src/renderer/components/ServiceBackupNotice", () => ({ ServiceBackupNotice: () => null }))
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const state = vi.hoisted(() => ({ warnings: [] as string[], tenant: 0, damagedFiles: 3, sealed: 0, refresh: (() => Promise.resolve("updated")) as () => Promise<string> }))
+const downloadState = vi.hoisted(() => ({ rows: [] as BackupSummary[], storage: "" }))
 const backups = vi.hoisted(() => ({ importRecoveryKey: vi.fn(), openFolder: vi.fn() }))
 vi.mock("react-router-dom", () => ({ useSearchParams: () => [new URLSearchParams(), vi.fn()] }))
 const tenants = vi.hoisted(() => [
@@ -15,13 +17,16 @@ const tenants = vi.hoisted(() => [
 ])
 vi.mock("~/contexts/TenantContext", () => ({
   useTenants: () => tenants,
-  useSelectedTenant: () => ({ selectedTenantId: tenants[state.tenant]!.id, selectedTenant: tenants[state.tenant], setSelectedTenantId: vi.fn() }),
+  useSelectedTenant: () => {
+    const tenant = tenants[state.tenant]!
+    return { selectedTenantId: tenant.id, selectedTenant: downloadState.storage ? { ...tenant, resources: { storageAccountName: downloadState.storage } } : tenant, setSelectedTenantId: vi.fn() }
+  },
   useTenantOperations: () => ({ updateTenant: vi.fn() }),
 }))
 vi.mock("@desktop/lib/license", () => ({ useTenantPlan: () => null }))
 vi.mock("@desktop/lib/bridge", () => ({ bridge: { license: { open: vi.fn() }, backups } }))
 vi.mock("@desktop/lib/backup-list", () => ({
-  useBackupList: () => ({ warnings: state.warnings, backups: [], loading: false, error: "", unresolved: 0, sealed: state.sealed, damagedFiles: state.damagedFiles, damagedFileNames: [], damagedKinds: { counts: { key: state.damagedFiles, os: 0, duplicate: 0, damaged: 0 }, codes: [], names: { key: [], os: [], duplicate: [], damaged: [] } }, refresh: () => state.refresh() }),
+  useBackupList: () => ({ warnings: state.warnings, backups: downloadState.rows, loading: false, error: "", unresolved: 0, sealed: state.sealed, damagedFiles: state.damagedFiles, damagedFileNames: [], damagedKinds: { counts: { key: state.damagedFiles, os: 0, duplicate: 0, damaged: 0 }, codes: [], names: { key: [], os: [], duplicate: [], damaged: [] } }, refresh: () => state.refresh() }),
 }))
 vi.mock("@desktop/components/BackupSchedulePanel", () => ({ BackupSchedulePanel: () => null }))
 vi.mock("@desktop/components/RunBackupDialog", () => ({ RunBackupDialog: () => null }))
@@ -35,6 +40,67 @@ const roots: Root[] = []
 afterEach(() => {
   for (const root of roots.splice(0)) act(() => root.unmount())
   document.body.innerHTML = ""
+  downloadState.rows = []
+  downloadState.storage = ""
+  vi.unstubAllGlobals()
+})
+
+describe("Backup History downloads", () => {
+  function renderBackup(fields: Record<string, unknown> = {}) {
+    state.tenant = 0
+    downloadState.rows = [{ id: "backup-2020-01-01-000000", timestamp: "2020-01-01T00:00:00Z", status: "Success", totalPolicies: 1, type: null, scope: null, size: 1, duration: null, changes: null, comparedWith: null, ...fields }]
+    const container = document.body.appendChild(document.createElement("div"))
+    const root = createRoot(container)
+    roots.push(root)
+    const render = () => act(() => root.render(createElement(BackupRestorePage)))
+    render()
+    const button = (label: string) => [...container.querySelectorAll("button")].find(node => node.textContent?.trim() === label)
+    return { container, button, render }
+  }
+
+  it("keeps full Download enabled beside Download ordinary only when the companion is temporarily unreadable", async () => {
+    const fetch = vi.fn().mockImplementation(async () => Response.json({ saved: true }))
+    vi.stubGlobal("fetch", fetch)
+    const { container, button } = renderBackup({ ordinaryOnlyAvailable: true })
+    expect(button("Download")?.disabled).toBe(false)
+    expect(button("Download ordinary only")?.disabled).toBe(false)
+    await click(container, "Download")
+    await click(container, "Download ordinary only")
+    expect(fetch.mock.calls.map(([, init]) => JSON.parse(init.body))).toEqual([
+      expect.objectContaining({ ordinaryOnly: false, largeInventory: true }),
+      expect.objectContaining({ ordinaryOnly: true, largeInventory: true }),
+    ])
+  })
+
+  it("offers ordinary-only after a 503 only for the backup list that started the download", async () => {
+    vi.stubGlobal("alert", vi.fn())
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ ordinaryOnlyAvailable: true }, { status: 503 })))
+    const { container, button, render } = renderBackup()
+    await click(container, "Download")
+    expect(button("Download")?.disabled).toBe(false)
+    expect(button("Download ordinary only")?.disabled).toBe(false)
+    downloadState.rows = [...downloadState.rows]
+    render()
+    expect(button("Download")?.disabled).toBe(false)
+    expect(button("Download ordinary only")).toBeUndefined()
+  })
+
+  it.each(["tenant", "storage"])("drops a late ordinary-only offer after switching %s away and back", async scope => {
+    vi.stubGlobal("alert", vi.fn())
+    let finish!: (response: Response) => void
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(resolve => { finish = resolve })))
+    const { container, button, render } = renderBackup()
+    await click(container, "Download")
+    if (scope === "tenant") state.tenant = 1
+    else downloadState.storage = "anotheraccount"
+    render()
+    state.tenant = 0
+    downloadState.storage = ""
+    render()
+    await act(async () => finish(Response.json({ ordinaryOnlyAvailable: true }, { status: 503 })))
+    expect(button("Download")?.disabled).toBe(false)
+    expect(button("Download ordinary only")).toBeUndefined()
+  })
 })
 
 async function flush(): Promise<void> {

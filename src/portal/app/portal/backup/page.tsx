@@ -125,9 +125,7 @@ export default function BackupRestorePage() {
   const [completedBackup, setCompletedBackup] = useState<{ jobId: string; tenantId: string } | null>(null)
   const [changesOpen, setChangesOpen] = useState(false)
   const [isDownloading, setIsDownloading] = useState(false)
-  // A backup whose full download the route refused while offering the ordinary items: its next download is
-  // the ordinary-only copy. It belongs to the backup list the download started from, so a refreshed list
-  // or another tenant offers the full download again.
+  // An ordinary-only option offered by the download route belongs to the list and scope the download started from.
   const [ordinaryOnly, setOrdinaryOnly] = useState<{ list: unknown; id: string; scope: string } | null>(null)
   // The tenant and storage on screen, and how often they changed, so an answer that arrives after a
   // switch, even one back to the same tenant, never applies.
@@ -152,8 +150,7 @@ export default function BackupRestorePage() {
   // Leaving a tenant ends its fallback, so coming back offers only the full download again.
   useEffect(() => { setOrdinaryOnly(null) }, [scope])
   const selected = listed
-  // The ordinary-only copy is offered beside the full download after the route refused the full one.
-  const offerOrdinary = Boolean(listed && !listed.ordinaryOnlyExport && ordinaryOnly?.list === backups && ordinaryOnly.id === listed.id && ordinaryOnly.scope === scope)
+  const offerOrdinary = Boolean(listed && !listed.ordinaryOnlyExport && (listed.ordinaryOnlyAvailable || (ordinaryOnly?.list === backups && ordinaryOnly.id === listed.id && ordinaryOnly.scope === scope)))
   const latest = backups.find((backup) => backup.counts && statusKind(backup.status) === "success")
 
   useEffect(() => {
@@ -207,7 +204,7 @@ export default function BackupRestorePage() {
       const response = await fetch("/api/download-backup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...tenant.credentials, storageAccountName: tenant.storageAccountName, backupId: backup.id, largeInventory: backup.largeInventory === true || Boolean(backup.companionId) || ordinaryOnlyCopy, ordinaryOnly: ordinaryOnlyCopy }),
+        body: JSON.stringify({ ...tenant.credentials, storageAccountName: tenant.storageAccountName, backupId: backup.id, largeInventory: backup.largeInventory === true || Boolean(backup.companionId) || backup.ordinaryOnlyAvailable === true || ordinaryOnlyCopy, ordinaryOnly: ordinaryOnlyCopy }),
       })
       if (!response.ok) {
         const problem = await response.json().catch(() => ({}))
@@ -659,7 +656,7 @@ function BackupDetails({ credentials, service, backup, first, storageAccountName
           <div className="space-y-1">
             {backup.warning && <p><LinkedMessage text={backup.warning} /></p>}
             {unavailable && <p>{backup.error ?? "Files of this backup could not be read."} Until then it cannot be downloaded, compared or restored, and older backups are kept.</p>}
-            {backup.status === "incomplete" && <p>This backup stopped before it finished, for example because TenuVault was closed. It holds only part of the tenant.</p>}
+            {backup.status === "incomplete" && !backup.ordinaryOnlyAvailable && <p>This backup stopped before it finished, for example because TenuVault was closed. It holds only part of the tenant.</p>}
             {backup.status !== "incomplete" && !unavailable && kind === "failed" && backup.totalPolicies > 0 && <p>This backup failed before it finished. It holds only the policies it saved and is never used as a complete backup.</p>}
             {kind === "cancelled" && <p>This backup was cancelled before it finished. It holds only the policies it saved and is never used as a complete backup.</p>}
             {backup.status === "unknown" && <p>{backup.error ?? "This backup does not record whether it finished."} Until its details can be read, whether it finished is not known and drift detection does not offer it.</p>}
