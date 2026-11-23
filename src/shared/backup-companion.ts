@@ -13,7 +13,9 @@ export function withRunRecord(id: string, metadata: RunManifest | null | undefin
   if (!metadata || metadata.CompanionBackup === undefined || typeof metadata.RunStatus === "string" || !record || typeof record !== "object") return metadata
   if (record.BackupFolder !== id || metadata.BackupFolder !== id || typeof record.RunStatus !== "string" || typeof metadata.RunId !== "string" || record.RunId !== metadata.RunId
     || typeof record.TenantId !== "string" || record.TenantId.toLowerCase() !== String(metadata.TenantId).toLowerCase() || record.AuthMode !== metadata.AuthMode) return metadata
-  return { ...metadata, RunStatus: record.RunStatus, RunCounts: record.RunCounts, ...(Array.isArray(record.LargeBackupOutcomes) ? { LargeBackupOutcomes: record.LargeBackupOutcomes } : {}) }
+  // The run ended when its record was written, so its timing replaces the early manifest's.
+  const timing = Object.fromEntries(["CompletedAt", "EndTime", "Duration", "DurationSeconds"].filter(key => record[key] !== undefined).map(key => [key, record[key]]))
+  return { ...metadata, ...timing, RunStatus: record.RunStatus, RunCounts: record.RunCounts, ...(Array.isArray(record.LargeBackupOutcomes) ? { LargeBackupOutcomes: record.LargeBackupOutcomes } : {}) }
 }
 
 /** Links are evidence only when both manifests identify the same run and tenant. */

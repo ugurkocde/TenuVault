@@ -1171,7 +1171,7 @@ export class BackupEngine {
         // audit recovery confirms the run from it. An unanswered commit stays unconfirmed as before.
         if (!mixed || job.commitUnconfirmed || !(error instanceof ImmutableBlobError)) throw error
         try {
-          await commitManifest(backupFolder, { BackupFolder: backupFolder, TenantId: metadata.TenantId, RunId: metadata.RunId, AuthMode: metadata.AuthMode, CompletedAt: metadata.CompletedAt, RunStatus: status, RunCounts: { saved: totalPolicies, failures }, LargeBackupOutcomes: metadata.LargeBackupOutcomes }, true, BACKUP_RUN_RECORD_FILE)
+          await commitManifest(backupFolder, { BackupFolder: backupFolder, TenantId: metadata.TenantId, RunId: metadata.RunId, AuthMode: metadata.AuthMode, CompletedAt: metadata.CompletedAt, EndTime: metadata.EndTime, Duration: metadata.Duration, DurationSeconds: metadata.DurationSeconds, RunStatus: status, RunCounts: { saved: totalPolicies, failures }, LargeBackupOutcomes: metadata.LargeBackupOutcomes }, true, BACKUP_RUN_RECORD_FILE)
         } catch { throw error }
         this.write(job, "Storage refused replacing the backup manifest, so this run's result was saved in its own record.", "warning")
       }

@@ -48,6 +48,9 @@ const metadataCache = new MetadataCache<MetadataRead>(result => !!result.metadat
  * recovery key, or storage answering again, brings the folder back.
  */
 const ownerCache = new MetadataCache<OwnershipFile>(result => result.kind === 'found')
+/** Run records read at once in history, and how long one may take before the early manifest stands. */
+const RUN_RECORD_READS = 8
+const RUN_RECORD_TIMEOUT_MS = 10_000
 
 /** One backup folder, described from metadata and either a folder listing or the summary inventory. */
 async function describeBackup(storageAccountName: string, name: string, accessToken: string, tenantId: string, inventory?: { text: string; cacheKey: string; version: string; owner: string }) {
@@ -400,16 +403,27 @@ export async function POST(request: NextRequest) {
     const linkedReads = new Map<string, Promise<MetadataRead>>()
     const hidden = new Set<string>()
     const mismatched = new Set<string>()
+    // A split run whose early manifest could not be replaced keeps its final result in its own record. Only
+    // those manifests, which lack the run status, are read for one: a few at a time and each bounded, so
+    // a slow record leaves the early manifest standing instead of holding up history.
+    const records = new Map<string, Record<string, any>>()
+    const pending = backups.filter(backup => !isLargeBackup(backup.id) && backup.fingerprint?.CompanionBackup !== undefined && typeof backup.fingerprint?.RunStatus !== "string")
+    for (let start = 0; start < pending.length; start += RUN_RECORD_READS) {
+      await Promise.all(pending.slice(start, start + RUN_RECORD_READS).map(async backup => {
+        try {
+          const response = await fetch(`https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(`${backup.id}/${BACKUP_RUN_RECORD_FILE}`)}`, { headers: storageHeaders(accessToken), signal: AbortSignal.timeout(RUN_RECORD_TIMEOUT_MS) })
+          const read = response.ok ? await readJsonCapped(response, MAX_BACKUP_ARCHIVE_BYTES) : null
+          if (read?.kind === "json" && read.value && typeof read.value === "object") records.set(backup.id, read.value as Record<string, any>)
+        } catch { /* Without a record the early manifest stands. */ }
+      }))
+    }
     for (const backup of backups.filter(backup => !isLargeBackup(backup.id))) {
       let metadata = backup.fingerprint
       if (!metadata || (metadata.CompanionBackup === undefined && metadata.LargeBackupOutcomes === undefined)) continue
-      // A split run whose early manifest could not be replaced keeps its final result in its own record.
-      if (metadata.CompanionBackup !== undefined && typeof metadata.RunStatus !== "string") {
-        try {
-          const response = await fetch(`https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(`${backup.id}/${BACKUP_RUN_RECORD_FILE}`)}`, { headers: storageHeaders(accessToken) })
-          const read = response.ok ? await readJsonCapped(response, MAX_BACKUP_ARCHIVE_BYTES) : null
-          if (read?.kind === "json") metadata = withRunRecord(backup.id, metadata, read.value as Record<string, any>) ?? metadata
-        } catch { /* Without a record the early manifest stands. */ }
+      const merged = withRunRecord(backup.id, metadata, records.get(backup.id))
+      if (merged && merged !== metadata) {
+        metadata = merged
+        backup.duration = typeof merged.DurationSeconds === "number" ? merged.DurationSeconds : merged.Duration ?? backup.duration
       }
       const companionId = metadata.CompanionBackup
       const describedCompanion = byId.get(companionId)

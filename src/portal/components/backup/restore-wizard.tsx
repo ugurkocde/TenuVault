@@ -399,9 +399,14 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
       const paging = contents.largePage !== undefined && items.length ? { hasMore: contents.hasMore === true, total: groups.reduce((sum, group) => sum + (group.count ?? group.policies.length), 0) } : null
       return { items, paging }
     }
+    // A page of a large backup that does not answer in time counts as unreadable, so its pages stay reachable.
+    const chosenLoad = new AbortController()
+    const stopChosen = () => chosenLoad.abort()
+    controller.signal.addEventListener("abort", stopChosen)
+    const chosenDeadline = isLargeBackup(backupId) ? setTimeout(stopChosen, COMPANION_DEADLINE_MS) : undefined
     void (async () => {
       // The chosen backup is shown as soon as it loads. Its failure is the error.
-      const chosen = await load(backupId)
+      const chosen = await load(backupId, chosenLoad.signal).finally(() => { clearTimeout(chosenDeadline); controller.signal.removeEventListener("abort", stopChosen) })
       if (controller.signal.aborted) return
       setItems(chosen.items)
       // A companion's later page keeps the paging it was opened with until the companion answers. An empty
@@ -443,7 +448,8 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
       }
     })().catch((error: unknown) => {
       if (controller.signal.aborted) return
-      if (error instanceof DOMException && error.name === "AbortError") return
+      // A deadline ends the request as an abort; it is reported like any page that could not be read.
+      if (chosenLoad.signal.aborted) error = new Error("This inventory page did not answer in time.")
       // An ordinary backup has no pages of its own, so a failure on a later page of its companion returns
       // once to page 1, where the chosen backup's items show again.
       if (largePage > 0 && !isLargeBackup(backupId)) { setLargePage(0); return }

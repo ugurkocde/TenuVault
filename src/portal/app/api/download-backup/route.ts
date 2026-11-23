@@ -42,6 +42,9 @@ async function getAccessToken(tenantId: string, appId: string, clientSecret: str
   return tokenData.access_token
 }
 
+/** How long a split run's record may take before the early manifest stands. */
+const RUN_RECORD_TIMEOUT_MS = 10_000
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
@@ -68,11 +71,12 @@ export async function POST(request: NextRequest) {
     // Get access token for Azure Storage
     const accessToken = await getAccessToken(tenantId, appId, clientSecret)
 
-    const readFile = (name: string) => fetch(`https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(name)}`, {
+    const readFile = (name: string, signal?: AbortSignal) => fetch(`https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(name)}`, {
       headers: { "x-ms-version": "2021-12-02", Authorization: `Bearer ${accessToken}` },
+      ...(signal ? { signal } : {}),
     })
-    const readJson = async (name: string) => {
-      const response = await readFile(name)
+    const readJson = async (name: string, signal?: AbortSignal) => {
+      const response = await readFile(name, signal)
       if (!response.ok) throw new Error(`A backup file could not be read (${response.status})`)
       const content = await readJsonCapped(response, 8 * 1024 * 1024)
       if (content.kind !== "json") throw new Error("A backup file is invalid or oversized")
@@ -87,7 +91,7 @@ export async function POST(request: NextRequest) {
       // A split run whose early manifest could not be replaced keeps its final result in its own record.
       if (metadata && !isLargeBackup(backupId) && metadata.CompanionBackup !== undefined && typeof metadata.RunStatus !== "string") {
         let record: Record<string, any> | null = null
-        try { record = await readJson(`${backupId}/${BACKUP_RUN_RECORD_FILE}`) } catch { /* Without a record the early manifest stands. */ }
+        try { record = await readJson(`${backupId}/${BACKUP_RUN_RECORD_FILE}`, AbortSignal.timeout(RUN_RECORD_TIMEOUT_MS)) } catch { /* Without a record the early manifest stands. */ }
         metadata = withRunRecord(backupId, metadata, record) ?? metadata
       }
       if (metadata && (metadata.CompanionBackup !== undefined || metadata.LargeBackupOutcomes !== undefined)) {
@@ -97,7 +101,7 @@ export async function POST(request: NextRequest) {
           try { other = await readJson(`${otherId}/metadata.json`) } catch { /* The ordinary subset remains exportable. */ }
           if (other && isLargeBackup(backupId) && typeof other.RunStatus !== "string") {
             let record: Record<string, any> | null = null
-            try { record = await readJson(`${otherId}/${BACKUP_RUN_RECORD_FILE}`) } catch { /* Without a record the early manifest stands. */ }
+            try { record = await readJson(`${otherId}/${BACKUP_RUN_RECORD_FILE}`, AbortSignal.timeout(RUN_RECORD_TIMEOUT_MS)) } catch { /* Without a record the early manifest stands. */ }
             other = withRunRecord(otherId, other, record) ?? other
           }
         }

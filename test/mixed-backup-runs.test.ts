@@ -507,6 +507,18 @@ for (const azure of [false, true]) describe(azure ? "Azure emulator mixed runs" 
     expect(job.status, job.exception).toBe("Completed")
     expect((await f.store.list(local, BACKUP_CONTAINER, `${olderId}/`)).some(blob => blob.name.endsWith("ScopeTags/one.json"))).toBe(true)
   })
+  it("shows a split run's final result and timing from its record when the early ordinary manifest stayed", async () => {
+    const f = await pair()
+    const { RunStatus: _status, RunCounts: _counts, ...early } = f.first
+    await f.write(ordinary, "metadata.json", { ...early, LargeBackupOutcomes: [{ Folder: "AuthorizationPolicy", Outcome: "failed", Error: "The backup stopped before this type was read in full." }], DurationSeconds: 5 })
+    await f.write(ordinary, "run-status.json", { BackupFolder: ordinary, TenantId: TENANT, RunId: "same-run", AuthMode: early.AuthMode, CompletedAt: "2020-01-01T00:45:00.000Z", DurationSeconds: 2700, RunStatus: "Success", RunCounts: { saved: 2, failures: 0 }, LargeBackupOutcomes: [{ Folder: "AuthorizationPolicy", Outcome: "saved", Saved: 1 }] })
+    const rows = await (await history(f.request({ summary: true }))).json()
+    expect(rows.backups.find((entry: any) => entry.id === ordinary)).toMatchObject({ duration: 2700, ordinaryOnlyExport: false })
+    // A record from another run changes nothing.
+    await f.write(ordinary, "run-status.json", { BackupFolder: ordinary, TenantId: TENANT, RunId: "other-run", AuthMode: early.AuthMode, DurationSeconds: 2700, RunStatus: "Success", LargeBackupOutcomes: [{ Folder: "AuthorizationPolicy", Outcome: "saved", Saved: 1 }] })
+    const again = await (await history(f.request({ summary: true }))).json()
+    expect(again.backups.find((entry: any) => entry.id === ordinary)).toMatchObject({ duration: 5, ordinaryOnlyExport: true })
+  })
   it("protects a valid complete run inside retention", async () => {
     const f = await pair()
     const engine = new BackupEngine({ now: () => new Date("2020-01-01T12:00:00Z"), fetch: f.fetcher, getToken: async () => jwt({ scp: "Policy.Read.All" }), services: () => ({ services: ["intune", "entra"] }), retentionDays: () => 1 })
