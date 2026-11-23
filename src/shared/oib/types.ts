@@ -238,6 +238,8 @@ export interface RunObject {
   partial?: boolean
   /** The groups a created or reassigned policy was assigned to, counted; absent when it stayed unassigned. */
   assignment?: { include: number; exclude: number }
+  /** A created policy that should have been assigned, but whose creation did not finish cleanly: it may or may not be assigned. */
+  assignmentUnknown?: boolean
 }
 
 export interface UpdatedObject extends RunObject {

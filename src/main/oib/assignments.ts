@@ -1,5 +1,5 @@
 import type { GraphCall } from "../../portal/lib/policies/graph-restore"
-import type { Item } from "../../shared/intune/registry"
+import type { IntuneType, Item } from "../../shared/intune/registry"
 import { FILTER_PLATFORM_LABELS, FILTER_PLATFORMS, filterManagementType, specGroupIds, type FilterPlatform, type OibAssignmentSpec } from "../../shared/oib/assignments"
 import { FrameworkError } from "../frameworks/service"
 
@@ -135,4 +135,42 @@ export async function checkSpec(graph: GraphCall, spec: OibAssignmentSpec): Prom
     spec: { ...spec, deviceGroups: named(spec.deviceGroups), userGroups: named(spec.userGroups), excludeDeviceGroups: named(spec.excludeDeviceGroups), excludeUserGroups: named(spec.excludeUserGroups), filters },
     groupNames, filterNames, groupsChecked: lookup.readable,
   }
+}
+
+const MAX_ASSIGNMENT_PAGES = 50
+
+/**
+ * A deployed policy's name and its assignments, and nothing else: the full backup read of some
+ * types (administrative templates read every definition value) would widen the time between
+ * reading the assignments and writing them. The assignments come last. Settings Catalog returns
+ * an empty list for $expand on a single object, so its assignments are read as their own
+ * collection; the other types expand them (app protection lists them late otherwise).
+ * Undefined when the policy no longer exists.
+ */
+export async function readCurrentAssignments(graph: GraphCall, type: IntuneType, id: string): Promise<{ name?: string; assignments: Item[] } | undefined> {
+  const gone = (status: number, body: Item) => status === 404 || (status === 400 && /ResourceNotFound/i.test(JSON.stringify(body)))
+  const path = `${type.path}/${encodeURIComponent(id)}`
+  const separate = !!type.extras?.some((extra) => extra.property === "assignments")
+  const head = await graph("GET", `${path}?$select=id,${type.nameKey}${separate ? "" : "&$expand=assignments"}`)
+  if (gone(head.status, head.body)) return undefined
+  if (head.status >= 300) throw new FrameworkError(`The policy could not be read (${head.status}). ${errorOf(head.body)}`.trim(), 502)
+  const name = typeof head.body[type.nameKey] === "string" ? (head.body[type.nameKey] as string) : undefined
+  if (!separate) {
+    if (!Array.isArray(head.body.assignments)) throw new FrameworkError("The assignments of the policy were not returned.", 502)
+    return { name, assignments: head.body.assignments as Item[] }
+  }
+  const assignments: Item[] = []
+  let next: string | undefined = `${path}/assignments`
+  for (let page = 0; next; page++) {
+    if (page >= MAX_ASSIGNMENT_PAGES) throw new FrameworkError("The assignments of the policy could not be read completely.", 502)
+    const response = await graph("GET", next)
+    if (gone(response.status, response.body)) return undefined
+    if (response.status >= 300) throw new FrameworkError(`The assignments could not be read (${response.status}). ${errorOf(response.body)}`.trim(), 502)
+    if (!Array.isArray(response.body.value)) throw new FrameworkError("The assignments of the policy were not returned.", 502)
+    assignments.push(...(response.body.value as Item[]))
+    const link = response.body["@odata.nextLink"]
+    if (link != null && link !== "" && !(typeof link === "string" && link.startsWith(GRAPH_BETA))) throw new FrameworkError("The assignments of the policy could not be read completely.", 502)
+    next = typeof link === "string" && link ? link.slice(GRAPH_BETA.length) : undefined
+  }
+  return { name, assignments }
 }

@@ -311,9 +311,11 @@ function createdAssignments(run: OibRun): string {
   if (!run.created.length) return ""
   if (run.pilotGroupId && !run.assignments) return " New policies are assigned to the pilot group only."
   const assigned = run.created.filter(c => c.assignment).length
-  const unassigned = run.created.length - assigned
+  const unknown = run.created.filter(c => c.assignmentUnknown).length
+  const unassigned = run.created.length - assigned - unknown
   return [
     assigned ? ` ${plural(assigned, "new policy was", "new policies were")} assigned to the groups chosen for ${assigned === 1 ? "its" : "their"} scope.` : "",
+    unknown ? ` ${plural(unknown, "new policy", "new policies")} may or may not be assigned, because ${unknown === 1 ? "its" : "their"} creation did not finish cleanly: check ${unknown === 1 ? "it" : "them"} in Intune.` : "",
     unassigned ? ` ${plural(unassigned, "new policy is", "new policies are")} unassigned: review ${unassigned === 1 ? "it" : "them"} in Intune before assigning.` : "",
   ].join("")
 }

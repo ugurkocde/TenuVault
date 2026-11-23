@@ -120,7 +120,9 @@ function GroupPicker({ state, list, onChange, label, hint }: { state: Assignment
 
   useEffect(() => {
     setError("")
-    if (query.length < 2 || pasted || data.readable === false) { setResults([]); setSearching(false); return }
+    // Results of the previous query never answer this one, not even to Enter.
+    setResults([])
+    if (query.length < 2 || pasted || data.readable === false) { setSearching(false); return }
     let live = true
     setSearching(true)
     const timer = setTimeout(() => {

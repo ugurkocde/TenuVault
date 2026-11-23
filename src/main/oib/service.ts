@@ -9,7 +9,6 @@ import { normalizeScope } from "../../shared/intune/scope"
 import { VALIDATED_FOLDERS, validatePolicy } from "../../shared/oib/compare"
 import { extractOibId } from "../../shared/oib/manifest"
 import { compareToTenant } from "../../shared/oib/match"
-import { assignmentsUnread } from "../../shared/intune/read"
 import { definitionIdsOf, describePolicy, policyChanges, type OibPolicyChanges, type OibPolicySettings } from "../../shared/oib/policy-settings"
 import { replaceTenantVariables } from "../../shared/oib/variables"
 import { AssignmentSpecError, assignmentsFor, assignsAnything, conflictingGroups, directAssignments, emptySpec, mergeAssignments, oibScope, parseSpec, sameAssignments, writableAssignment, type OibAssignmentSpec } from "../../shared/oib/assignments"
@@ -22,7 +21,7 @@ import type { KeyValueStore } from "../storage/secure-store"
 import { FrameworkError, tokenFor } from "../frameworks/service"
 import { readSettingNamesReport } from "../../portal/lib/drift/setting-names"
 import { loadPack, oibDownloads, oibVersions, resolveMain, type LoadedPack } from "./source"
-import { checkSpec, listFilters, lookupGroups, searchGroups } from "./assignments"
+import { checkSpec, listFilters, lookupGroups, readCurrentAssignments, searchGroups } from "./assignments"
 
 /**
  * OpenIntuneBaseline deployments, comparison and validation (the OIBDeployer flows).
@@ -510,7 +509,7 @@ async function deploy(body: RecordJson, kind: OibRun["kind"]): Promise<OibRun> {
           if (outcome.policyId) {
             const warnings = [...(outcome.warnings ?? []), ...(planned?.notes ?? [])]
             // Counted only when every step succeeded: a partial creation may have stopped before the assignments.
-            const assigned = outcome.success && planned?.include ? { assignment: { include: planned.include, exclude: planned.exclude } } : {}
+            const assigned = planned?.include ? outcome.success ? { assignment: { include: planned.include, exclude: planned.exclude } } : { assignmentUnknown: true } : {}
             run.created.push({ folder: policy.folder, id: outcome.policyId, name: policy.name, ...(outcome.partial ? { partial: true } : {}), ...(warnings.length ? { warnings } : {}), ...assigned })
             // Saved after every object, so an interrupted run can still be undone.
             saveRun(run)
@@ -591,11 +590,6 @@ function assignableType(folder: string) {
   return type && type.assign && type.assign !== "post" ? { ...type, assign: type.assign } : undefined
 }
 
-const nameOf = (type: { nameKey: string }, live: Item, fallback: string) => {
-  const name = live[type.nameKey] ?? live.displayName ?? live.name
-  return typeof name === "string" && name ? name : fallback
-}
-
 /** The current direct assignments of deployed policies, with group and filter names where they can be read. */
 async function readAssignments(body: RecordJson): Promise<{ policies: OibPolicyAssignments[]; groupNames: Record<string, string>; filterNames: Record<string, string>; groupsReadable: boolean }> {
   const platform = platformOf(body.platform)
@@ -614,13 +608,12 @@ async function readAssignments(body: RecordJson): Promise<{ policies: OibPolicyA
       continue
     }
     try {
-      const live = await readLive(graph, type, targetId)
+      const live = await readCurrentAssignments(graph, type, targetId)
       if (!live) policies.push({ ...base, error: "The tenant policy no longer exists. Compare again." })
-      else if (matched.get(source) !== targetId.toLowerCase()) policies.push({ ...base, name: nameOf(type, live, base.name), error: NOT_THE_POLICY })
-      else if (!Array.isArray(live.assignments) || assignmentsUnread(type, live)) policies.push({ ...base, name: nameOf(type, live, base.name), error: "The current assignments could not be read." })
+      else if (matched.get(source) !== targetId.toLowerCase()) policies.push({ ...base, name: live.name ?? base.name, error: NOT_THE_POLICY })
       else {
         const direct = directAssignments(live.assignments)
-        policies.push({ ...base, name: nameOf(type, live, base.name), assignments: direct.map(writableAssignment), inherited: live.assignments.length - direct.length })
+        policies.push({ ...base, name: live.name ?? base.name, assignments: direct.map(writableAssignment), inherited: live.assignments.length - direct.length })
       }
     } catch (error) {
       policies.push({ ...base, error: `The current assignments could not be read: ${message(error)}` })
@@ -686,9 +679,10 @@ async function assign(body: RecordJson): Promise<OibRun> {
       for (const [index, item] of chosen.entries()) {
         const { policy, type } = item
         report({ stage: `Assigning ${policy.name}`, done: index, total: chosen.length })
-        let live: Item | undefined
+        // Only the name and the assignments, read right before the comparison and the write.
+        let live: Awaited<ReturnType<typeof readCurrentAssignments>>
         try {
-          live = await readLive(graph, type, item.targetId)
+          live = await readCurrentAssignments(graph, type, item.targetId)
         } catch (error) {
           run.failed.push({ name: policy.name, error: `The current assignments could not be read, so nothing was changed: ${message(error)}` })
           continue
@@ -697,14 +691,9 @@ async function assign(body: RecordJson): Promise<OibRun> {
           run.failed.push({ name: policy.name, error: "The tenant policy no longer exists. Compare again." })
           continue
         }
-        const name = nameOf(type, live, policy.name)
+        const name = live.name ?? policy.name
         if (matched.get(item.source) !== item.targetId.toLowerCase()) {
           run.failed.push({ name, error: NOT_THE_POLICY })
-          continue
-        }
-        // Replacing assignments that could not be read would remove ones nobody saw.
-        if (!Array.isArray(live.assignments) || assignmentsUnread(type, live)) {
-          run.failed.push({ name, error: "The current assignments could not be read, so nothing was changed." })
           continue
         }
         const current = directAssignments(live.assignments).map(writableAssignment)
@@ -831,9 +820,9 @@ async function undo(body: RecordJson): Promise<UndoResult> {
           continue
         }
         // Undo only takes back this run's change: assignments changed since are never overwritten.
-        let live: Item | undefined
+        let live: Awaited<ReturnType<typeof readCurrentAssignments>>
         try {
-          live = await readLive(graph, type, item.id)
+          live = await readCurrentAssignments(graph, type, item.id)
         } catch (error) {
           results.push({ name: item.name, id: item.id, action: "reassigned", done: false, error: `The current assignments could not be read, so nothing was changed: ${message(error)}` })
           reassigned.push(item)
@@ -841,11 +830,6 @@ async function undo(body: RecordJson): Promise<UndoResult> {
         }
         if (!live) {
           results.push({ name: item.name, id: item.id, action: "reassigned", done: true, note: "already deleted in Intune" })
-          continue
-        }
-        if (!Array.isArray(live.assignments) || assignmentsUnread(type, live)) {
-          results.push({ name: item.name, id: item.id, action: "reassigned", done: false, error: "The current assignments could not be read, so nothing was changed." })
-          reassigned.push(item)
           continue
         }
         const now = directAssignments(live.assignments).map(writableAssignment)
