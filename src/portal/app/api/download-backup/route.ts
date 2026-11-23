@@ -77,13 +77,24 @@ export async function POST(request: NextRequest) {
       headers: { "x-ms-version": "2021-12-02", Authorization: `Bearer ${accessToken}` },
       ...(signal ? { signal } : {}),
     })
-    const readJson = async (name: string, signal?: AbortSignal) => {
+    const readJsonNow = async (name: string, signal?: AbortSignal) => {
       const response = await readFile(name, signal)
       if (!response.ok) throw new Error(`A backup file could not be read (${response.status})`)
       const content = await readJsonCapped(response, 8 * 1024 * 1024)
       if (content.kind !== "json") throw new Error("A backup file is invalid or oversized")
       return content.value as Record<string, any>
     }
+    // A deadline covers the whole read, including storage that does not observe the signal, such as
+    // this device's store.
+    const readJson = (name: string, signal?: AbortSignal): Promise<Record<string, any>> => !signal ? readJsonNow(name) : Promise.race([
+      readJsonNow(name, signal),
+      new Promise<never>((_resolve, reject) => {
+        const fail = () => reject(new Error("A backup file could not be read in time"))
+        if (signal.aborted) fail()
+        else signal.addEventListener("abort", fail, { once: true })
+      }),
+    ])
+
     const readLarge = (name: string) => readJson(`${backupId}/${name}`)
     // Ownership is checked before either archive path reads snapshots.
     let ordinaryExport: Record<string, any> | null = null
@@ -113,7 +124,8 @@ export async function POST(request: NextRequest) {
           // A companion that does not answer in time is not a broken run: the admin can retry, or take the
           // ordinary items.
           try { other = await readJson(`${otherId}/metadata.json`, AbortSignal.timeout(RUN_RECORD_TIMEOUT_MS)) } catch (error) { if (!missing(error) && !(error instanceof Error && /could not be read \(4\d\d\)/.test(error.message))) companionUnavailable = true }
-          if (other && isLargeBackup(backupId) && typeof other.RunStatus !== "string") {
+          // An ordinary half that already does not match needs no record to be refused.
+          if (other && isLargeBackup(backupId) && typeof other.RunStatus !== "string" && matchingCompanions(backupId, metadata, otherId, other)) {
             let record: Record<string, any> | null = null
             try { record = await readJson(`${otherId}/${BACKUP_RUN_RECORD_FILE}`, AbortSignal.timeout(RUN_RECORD_TIMEOUT_MS)) } catch (error) { recordUnavailable = !missing(error) }
             other = withRunRecord(otherId, other, record) ?? other

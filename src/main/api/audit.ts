@@ -114,8 +114,11 @@ export function createAuditRecorder(
       details: { method: request.method, path, statusCode: response.status, source: "desktop" },
     }
 
+    // The admin whose token authorized the download is the actor, whenever that token was issued.
+    const actor = path === "/api/download-backup" ? metadata?.tokenActor : undefined
+    const actorUser = actor ? { id: actor.username, email: actor.username, name: actor.name ?? actor.username } : undefined
     if (captured) {
-      void mainAuditSink()?.record(captured, logEntry).catch(() => console.error("[audit] Failed to write audit entry"))
+      void mainAuditSink()?.record(actorUser ? { ...captured, user: actorUser } : captured, logEntry).catch(() => console.error("[audit] Failed to write audit entry"))
       return
     }
     void dispatch(
@@ -127,7 +130,7 @@ export function createAuditRecorder(
           appId: body.appId,
           clientSecret: body.clientSecret,
           storageAccountName: body.storageAccountName,
-          user: {
+          user: actorUser ?? {
             id: account?.username ?? "unknown",
             email: account?.username ?? "unknown",
             name: account?.name ?? account?.username ?? "Unknown user",

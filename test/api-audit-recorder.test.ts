@@ -102,6 +102,29 @@ describe("audit callbacks cannot replace a completed route response", () => {
     } finally { setMainAuditSink(undefined) }
   })
 
+  it("names the admin whose token authorized an archive download, whatever account was current when it started", async () => {
+    const { setMainAuditSink } = await import("../src/main/api/audit-sink")
+    const { captureDownloadAudit } = await import("../src/main/api/audit")
+    const { captureTokenActor, executionMetadata } = await import("../src/main/api/execution-metadata")
+    const record = vi.fn(async (..._args: unknown[]) => undefined)
+    setMainAuditSink({ bind: () => ({ tenantId: TENANT, storageAccountName: "fixturestore", user: { id: "first@contoso.com", email: "first@contoso.com", name: "First" } }), record } as never)
+    try {
+      // The route starts as the first admin; its token is issued for the second, who signed in meanwhile.
+      const route = vi.fn(async () => {
+        captureTokenActor({ username: "second@contoso.com", name: "Second" })
+        captureTokenActor({ username: "third@contoso.com", name: "Third" })
+        return new Response("archive", { headers: { "content-type": "application/x-tar" } })
+      })
+      const recorder = createAuditRecorder(vi.fn(async () => Response.json({ success: true })), () => null)
+      const host = new ApiHost({ routes: { "/api/download-backup": { POST: route } }, beforeRoute: captureDownloadAudit, saveDownload: async response => { await response.text(); return Response.json({ saved: true }) }, onHandled: recorder })
+      await host.handleIpc({ path: "/api/download-backup", method: "POST", headers: {}, body: new TextEncoder().encode(JSON.stringify({ ...credentials, backupId: "backup-2026-11-21-000000" })) })
+      await new Promise<void>((resolve) => setTimeout(resolve, 0))
+      expect(record.mock.calls[0]![0]).toMatchObject({ tenantId: TENANT, storageAccountName: "fixturestore", user: { id: "second@contoso.com", name: "Second" } })
+      // Outside a request nothing is captured.
+      expect(executionMetadata.getStore()).toBeUndefined()
+    } finally { setMainAuditSink(undefined) }
+  })
+
   it.each(["null", "[]", "42", "true", "{invalid"])("skips malformed audit bodies (%s)", (body) => {
     const dispatch = vi.fn(async () => Response.json({ success: true }))
     const record = createAuditRecorder(dispatch, () => null)

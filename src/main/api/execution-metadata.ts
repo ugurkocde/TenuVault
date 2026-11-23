@@ -7,6 +7,14 @@ export interface ExecutionMetadata {
   directoryActor?: Pick<SignedInAccount, "username" | "name">
   /** The audit binding of the admin who started an archive download, captured before its route runs. */
   downloadAudit?: AuditBinding
+  /** The account whose delegated token the request used first: the admin who really acted. */
+  tokenActor?: Pick<SignedInAccount, "username" | "name">
+}
+
+/** Records the account a delegated token was issued for, once per request. */
+export function captureTokenActor(actor: Pick<SignedInAccount, "username" | "name">): void {
+  const metadata = executionMetadata.getStore()
+  if (metadata && !metadata.tokenActor) metadata.tokenActor = actor
 }
 /** Main-process context only. Request bodies, headers and response JSON cannot set it. */
 export const executionMetadata = new AsyncLocalStorage<ExecutionMetadata>()

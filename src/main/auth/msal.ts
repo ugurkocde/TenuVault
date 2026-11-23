@@ -7,6 +7,7 @@ import {
   type ICachePlugin,
 } from "@azure/msal-node"
 import type { SignedInAccount } from "../../shared/ipc"
+import { captureTokenActor } from "../api/execution-metadata"
 import { RESOURCE_SCOPES } from "../../shared/constants"
 import { FIRST_SIGN_IN_TIMEOUT_MESSAGE } from "../../shared/app-registration"
 import { namedSignInCode, signInErrorRow } from "../../shared/sign-in-errors"
@@ -281,7 +282,11 @@ export class AuthManager {
     }
     try {
       const result = await app.acquireTokenSilent({ account, scopes: [scope], authority: authority(tenantId), forceRefresh })
-      if (result) return result
+      if (result) {
+        // The request is attributed to the account this token was issued for.
+        captureTokenActor({ username: result.account?.username || account.username || stored.username, name: result.account?.name ?? account.name ?? undefined })
+        return result
+      }
     } catch (error) {
       if (error instanceof InteractionRequiredAuthError) {
         throw new SignInRequiredError(tenantId, clientId, signInAgainMessage(stored.username, scope, error), scope, error)

@@ -129,8 +129,9 @@ export default function BackupRestorePage() {
   // the ordinary-only copy. It belongs to the backup list the download started from, so a refreshed list
   // or another tenant offers the full download again.
   const [ordinaryOnly, setOrdinaryOnly] = useState<{ list: unknown; id: string; scope: string } | null>(null)
-  // The tenant and storage on screen, so an answer that arrives after a switch never applies here.
-  const scopeRef = useRef("")
+  // The tenant and storage on screen, and how often they changed, so an answer that arrives after a
+  // switch, even one back to the same tenant, never applies.
+  const scopeRef = useRef({ scope: "", generation: 0 })
   const [exportingDevices, setExportingDevices] = useState(false)
   const detailRef = useRef<HTMLDivElement | null>(null)
 
@@ -147,10 +148,12 @@ export default function BackupRestorePage() {
   const trends = useMemo(() => backupTypeTrends(backups).filter(type => matchesBackupService(type.folder, service)), [backups, service])
   const listed = backups.find((backup) => backup.id === selectedId) ?? null
   const scope = tenant ? `${tenant.credentials.tenantId}:${tenant.storageAccountName}` : ""
-  scopeRef.current = scope
-  // Leaving a tenant ends its fallback, so coming back offers the full download again.
+  if (scopeRef.current.scope !== scope) scopeRef.current = { scope, generation: scopeRef.current.generation + 1 }
+  // Leaving a tenant ends its fallback, so coming back offers only the full download again.
   useEffect(() => { setOrdinaryOnly(null) }, [scope])
-  const selected = listed && ordinaryOnly?.list === backups && ordinaryOnly.id === listed.id && ordinaryOnly.scope === scope ? { ...listed, ordinaryOnlyExport: true } : listed
+  const selected = listed
+  // The ordinary-only copy is offered beside the full download after the route refused the full one.
+  const offerOrdinary = Boolean(listed && !listed.ordinaryOnlyExport && ordinaryOnly?.list === backups && ordinaryOnly.id === listed.id && ordinaryOnly.scope === scope)
   const latest = backups.find((backup) => backup.counts && statusKind(backup.status) === "success")
 
   useEffect(() => {
@@ -195,19 +198,20 @@ export default function BackupRestorePage() {
     }
   }
 
-  const download = async (backup: BackupSummary) => {
+  const download = async (backup: BackupSummary, chooseOrdinary = false) => {
     if (!tenant) return
-    const startedFrom = backups, startedIn = `${tenant.credentials.tenantId}:${tenant.storageAccountName}`
+    const startedFrom = backups, startedIn = `${tenant.credentials.tenantId}:${tenant.storageAccountName}`, generation = scopeRef.current.generation
+    const ordinaryOnlyCopy = backup.ordinaryOnlyExport === true || chooseOrdinary
     setIsDownloading(true)
     try {
       const response = await fetch("/api/download-backup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...tenant.credentials, storageAccountName: tenant.storageAccountName, backupId: backup.id, largeInventory: backup.largeInventory === true || Boolean(backup.companionId) || backup.ordinaryOnlyExport === true, ordinaryOnly: backup.ordinaryOnlyExport === true }),
+        body: JSON.stringify({ ...tenant.credentials, storageAccountName: tenant.storageAccountName, backupId: backup.id, largeInventory: backup.largeInventory === true || Boolean(backup.companionId) || ordinaryOnlyCopy, ordinaryOnly: ordinaryOnlyCopy }),
       })
       if (!response.ok) {
         const problem = await response.json().catch(() => ({}))
-        if (problem.ordinaryOnlyAvailable && response.status === 503) { if (scopeRef.current === startedIn) setOrdinaryOnly({ list: startedFrom, id: backup.id, scope: startedIn }) }
+        if (problem.ordinaryOnlyAvailable && response.status === 503) { if (scopeRef.current.generation === generation) setOrdinaryOnly({ list: startedFrom, id: backup.id, scope: startedIn }) }
         else if (problem.ordinaryOnlyAvailable) void fetchBackups()
         throw new Error(problem.error || "Failed to download backup")
       }
@@ -216,7 +220,7 @@ export default function BackupRestorePage() {
       const url = URL.createObjectURL(await response.blob())
       const link = document.createElement("a")
       link.href = url
-      link.download = `${backup.id}${backup.ordinaryOnlyExport ? "-ordinary-only" : ""}.${response.headers.get("content-type") === "application/x-tar" ? "tar" : "zip"}`
+      link.download = `${backup.id}${ordinaryOnlyCopy ? "-ordinary-only" : ""}.${response.headers.get("content-type") === "application/x-tar" ? "tar" : "zip"}`
       document.body.appendChild(link)
       link.click()
       link.remove()
@@ -476,6 +480,7 @@ export default function BackupRestorePage() {
               exportingDevices={exportingDevices}
               onChanges={() => setChangesOpen(true)}
               onDownload={() => void download(selected)}
+              onDownloadOrdinary={offerOrdinary ? () => void download(selected, true) : undefined}
               onExportDevices={() => void exportDevices(selected)}
               onRestore={() => restore(selected)}
             />
@@ -596,13 +601,15 @@ interface BackupDetailsProps {
   exportingDevices: boolean
   onChanges: () => void
   onDownload: () => void
+  /** Offered after the full download was refused while the ordinary items can still be exported. */
+  onDownloadOrdinary?: () => void
   onExportDevices: () => void
   onRestore: () => void
   ref: React.Ref<HTMLDivElement>
 }
 
 /** Everything known about one backup, from its metadata and file listing. */
-function BackupDetails({ credentials, service, backup, first, storageAccountName, downloading, exportingDevices, onChanges, onDownload, onExportDevices, onRestore, ref }: BackupDetailsProps) {
+function BackupDetails({ credentials, service, backup, first, storageAccountName, downloading, exportingDevices, onChanges, onDownload, onDownloadOrdinary, onExportDevices, onRestore, ref }: BackupDetailsProps) {
   const kind = statusKind(backup.status)
   // Damaged or unreadable files of this backup on this device: nothing can be read from it.
   const unavailable = backup.status === "unavailable"
@@ -633,6 +640,12 @@ function BackupDetails({ credentials, service, backup, first, storageAccountName
             {downloading ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Download className="mr-1 h-4 w-4" />}
             {backup.ordinaryOnlyExport ? "Download ordinary only" : "Download"}
           </Button>
+          {onDownloadOrdinary && (
+            <Button variant="outline" size="sm" onClick={onDownloadOrdinary} disabled={downloading || unavailable}>
+              <Download className="mr-1 h-4 w-4" />
+              Download ordinary only
+            </Button>
+          )}
           <Button size="sm" className="bg-coral-600 text-white hover:bg-coral-700" onClick={onRestore} disabled={kind === "running" || backup.totalPolicies === 0 || unavailable}>
             <RefreshCw className="mr-1 h-4 w-4" />
             Restore from this backup

@@ -570,6 +570,25 @@ for (const azure of [false, true]) describe(azure ? "Azure emulator mixed runs" 
     expect(refused.status).toBe(503)
     expect(await refused.json()).toMatchObject({ error: expect.stringContaining("other half of this run"), ordinaryOnlyAvailable: true })
   })
+  it("refuses a download from the large half whose ordinary half does not match, without reading its record", async () => {
+    const f = await pair()
+    const { RunStatus: _status, RunCounts: _counts, ...early } = f.first
+    await f.write(ordinary, "metadata.json", { ...early, RunId: "another-run" })
+    const original = f.fetcher.getMockImplementation()!
+    f.fetcher.mockImplementation(async (input, init) => String(input).includes("run-status.json") ? new Response("busy", { status: 500 }) : original(input, init))
+    const refused = await download(f.request({ backupId: large }))
+    expect(refused.status).toBe(409)
+    expect(f.fetcher.mock.calls.some(([input]) => String(input).includes("run-status.json"))).toBe(false)
+  })
+  it("answers within the deadline when the large half never answers, even from storage that ignores the signal", async () => {
+    const f = await pair()
+    const original = f.fetcher.getMockImplementation()!
+    f.fetcher.mockImplementation(async (input, init) => String(input).includes(`${large}/metadata.json`) ? new Promise<Response>(() => {}) : original(input, init))
+    const started = Date.now()
+    const refused = await download(f.request({ backupId: ordinary }))
+    expect(refused.status).toBe(503)
+    expect(Date.now() - started).toBeLessThan(30_000)
+  }, 60_000)
   it("protects a valid complete run inside retention", async () => {
     const f = await pair()
     const engine = new BackupEngine({ now: () => new Date("2020-01-01T12:00:00Z"), fetch: f.fetcher, getToken: async () => jwt({ scp: "Policy.Read.All" }), services: () => ({ services: ["intune", "entra"] }), retentionDays: () => 1 })
