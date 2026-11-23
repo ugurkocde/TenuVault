@@ -185,13 +185,16 @@ function ReviewAssign({ batches: given, onBack, onFinished, next }: { batches: D
 
   function start() {
     setError("")
+    // Only policies the review read and that change are sent, each with the assignments it showed.
+    const reviewed = new Map(preview.filter(p => p.live?.assignments && p.after && !p.unchanged).map(p => [p.item.targetId!, p.live!.assignments!]))
+    const sending = batches.map(b => ({ ...b, items: b.items.filter(i => reviewed.has(i.targetId!)) })).filter(b => b.items.length)
     try {
       void startJob<DeployOutcome[]>({ tenantId: tenant!.tenantId, tenantName: tenant!.name, kind: "assign", flow: "assign", label: `Changing assignments in ${tenant!.name}` }, async context => {
         const outcomes: DeployOutcome[] = []
-        const results = await deployToTenant(batches, { backup: request, storage }, async (batch, backupRequest) => {
+        const results = await deployToTenant(sending, { backup: request, storage }, async (batch, backupRequest) => {
           context.update({ detail: batches.length > 1 ? `${tenant!.name}, ${OIB_PLATFORMS[batch.platform].label}` : undefined })
           const run = await oibRequest<OibRun>({ action: "oib-assign", tenantId: tenant!.tenantId, appId: tenant!.appId, storageAccountName: tenant!.storageAccountName,
-            platform: batch.platform, commit: batch.commit, ...(batch.tag ? { tag: batch.tag } : {}), items: batch.items.map(i => ({ source: i.source, targetId: i.targetId })), mode, assignments: spec, backup: backupRequest })
+            platform: batch.platform, commit: batch.commit, ...(batch.tag ? { tag: batch.tag } : {}), items: batch.items.map(i => ({ source: i.source, targetId: i.targetId, expected: reviewed.get(i.targetId!) })), mode, assignments: spec, backup: backupRequest })
           outcomes.push({ tenantId: tenant!.tenantId, tenantName: tenant!.name, platform: batch.platform, run, backup: backupRequest })
           context.setResult([...outcomes])
           return run

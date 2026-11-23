@@ -251,6 +251,10 @@ export interface UpdatedObject extends RunObject {
 export interface ReassignedObject extends RunObject {
   /** The direct assignments before the run, as /assign takes them; kept so undo can put them back. */
   previous?: Item[]
+  /** The direct assignments the run wrote; undo only puts the previous ones back while these are still in place. */
+  applied?: Item[]
+  /** Saved before the write was sent and not confirmed since: the write may or may not have taken effect. */
+  pending?: boolean
 }
 
 export interface OibRun {
