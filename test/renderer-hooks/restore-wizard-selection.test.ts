@@ -269,3 +269,41 @@ it("shows the chosen backup's items while its linked large backup is still loadi
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
   expect(container.textContent).toContain("Configuration profile")
 })
+
+it("keeps the chosen backup's items and selections when a later page of its linked large backup fails", async () => {
+  const companion = { largePage: 0, hasMore: true, content: { groups: [{ folder: "Groups", label: "group", area: "Entra ID", count: 5000, policies: [{ path: "backup-large-1/Groups/g.json", displayName: "Team" }] }] } }
+  let failSecond!: () => void
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body ?? "{}"))
+    if (String(input).endsWith("/api/list-backup-contents")) {
+      if (body.backupId !== "backup-large-1") return Response.json(contents)
+      if (body.largePage === 0) return Response.json(companion)
+      return new Promise<Response>((resolve) => { failSecond = () => resolve(Response.json({ error: "Storage access denied." }, { status: 403 })) })
+    }
+    if (String(input).endsWith("/api/restore-preview")) return Response.json(body.backupId === "backup-large-1" ? { items: [{ path: "backup-large-1/Groups/g.json", name: "Team" }] } : preview)
+    return Response.json({})
+  }))
+  const container = document.body.appendChild(document.createElement("div"))
+  const root = createRoot(container)
+  roots.push(root)
+  await act(async () => root.render(createElement(MemoryRouter, null, createElement(RestoreWizard, {
+    tenant: { name: "Contoso", credentials: { tenantId: "tenant", appId: "app", clientSecret: "" }, storageAccountName: "tvlocal-tenant" },
+    backups: [{ id: "backup-1", companionId: "backup-large-1", timestamp: "2026-10-16T02:00:00Z", type: "manual", status: "Completed", totalPolicies: 3, scope: null, size: 1, duration: 4, changes: null, comparedWith: null }],
+    initialBackupId: "backup-1", community: false, canCopyToTenants: false, copyCandidates: [],
+  }))))
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+  expect(container.textContent).toContain("Inventory page 1")
+  await act(async () => buttonNamed(container, "Next page")!.click())
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+  // The chosen backup's items show on page 2 while the linked large backup's page loads.
+  const group = [...container.querySelectorAll<HTMLButtonElement>("button[aria-expanded]")].find((button) => button.textContent?.includes("Configuration profile"))!
+  await act(async () => group.click())
+  await act(async () => itemBoxes(container)[0]!.click())
+  expect(container.textContent).toMatch(/1 of \d+ selected/)
+  await act(async () => { failSecond(); await new Promise((resolve) => setTimeout(resolve, 0)) })
+  expect(container.textContent).toContain("The linked large backup with this run's directory objects could not be read")
+  expect(container.textContent).toContain("Inventory page 2")
+  expect(container.textContent).toMatch(/1 of \d+ selected/)
+  expect(buttonNamed(container, "Next page")!.disabled).toBe(true)
+  expect(buttonNamed(container, "Previous page")!.disabled).toBe(false)
+})

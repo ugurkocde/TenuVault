@@ -1235,6 +1235,26 @@ describe("setup from a file", () => {
     expect(container.textContent).toContain("This settings file was reviewed too long ago.")
   })
 
+  it("waits for Continue on a service choice that must be confirmed again, even when a service is picked before a setup link fails", async () => {
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 1, tenant: "", clientId: "", displayName: "", services: "broken" }))
+    let reject!: (error: Error) => void
+    state.transferPreview.mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail }))
+    const container = document.createElement("div")
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    roots.push(root)
+    act(() => root.render(createElement(MemoryRouter, { initialEntries: [`/portal/onboarding?setup=import-1&tenant=${FILE_TENANT}`] }, createElement(OnboardingPage))))
+    await flush()
+    await act(async () => { container.querySelector<HTMLInputElement>('[aria-label="Back up Intune"]')!.click() })
+    await act(async () => { reject(new Error("This settings file was reviewed too long ago.")) })
+    await flush()
+    expect(container.textContent).toContain("What do you want to back up?")
+    expect(container.textContent).toContain("This settings file was reviewed too long ago.")
+    await act(async () => { button(container, "Continue with Intune")!.click() })
+    await flush()
+    expect(container.textContent).toContain("Connect your tenant")
+  })
+
   it("keeps a matching sign-in when a setup file waited for the service choice, and goes on to storage", async () => {
     const account = { tenantId: FILE_TENANT, clientId: FILE_CLIENT, username: "admin@fabrikam.com" }
     state.store.set(DRAFT_KEY, JSON.stringify({ step: 1, tenant: FILE_TENANT, clientId: FILE_CLIENT, displayName: "", account, signedInAt: Date.now(), services: "broken" }))

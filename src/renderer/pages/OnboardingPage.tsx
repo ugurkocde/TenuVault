@@ -90,6 +90,9 @@ export default function OnboardingPage() {
   const [initial] = useState(loadOnboardingDraft)
   const [step, setStep] = useState<Step>(initial?.step ?? -1)
   const [services, setServices] = useState<PermissionChoice>(initial?.services ?? DEFAULT_ONBOARDING_CHOICE)
+  // A saved choice that could not be read must be confirmed with Continue on the service step; picking a
+  // service there is not enough, so a setup file that arrives meanwhile waits for that Continue.
+  const reconfirm = useRef(!confirmedChoice(initial?.services ?? DEFAULT_ONBOARDING_CHOICE))
   const [permissionAccepted, setPermissionAccepted] = useState(false)
   const [permissionCheck, setPermissionCheck] = useState<{ account: SignedInAccount; services: PermissionChoice; step: Step; result: { missing: string[]; error?: string } } | null>(null)
   const permissionGeneration = useRef(0)
@@ -315,7 +318,7 @@ export default function OnboardingPage() {
     setAutoSignIn(null)
     // A saved choice that had to be confirmed again keeps the file waiting on the service step; its
     // Continue then runs this again with the confirmed choice.
-    if (!confirmedChoice(services)) {
+    if (reconfirm.current || !confirmedChoice(services)) {
       setHeldSetup({ importId, connection })
       if (!account) {
         const next = { tenant: connection.tenantId, clientId: connection.clientId, displayName: connection.name }
@@ -342,7 +345,7 @@ export default function OnboardingPage() {
   // The Connect step shows what a setup file could not do. A service choice that has to be confirmed
   // again comes first: its step shows the error, and its Continue then opens Connect.
   const showConnect = () => {
-    if (confirmedChoice(latest.current.services)) setStep((current) => (current === -1 ? 0 : current))
+    if (!reconfirm.current && confirmedChoice(latest.current.services)) setStep((current) => (current === -1 ? 0 : current))
   }
 
   /** The tenants of a settings file that can be connected from it: with connection details and not connected yet. */
@@ -588,7 +591,11 @@ export default function OnboardingPage() {
       )}
 
       <div className="@container rounded-3xl bg-card p-5 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
-        {step === -1 && <OnboardingServices choice={services} onChange={setServices} onContinue={() => { if (heldSetup) continueWithSetup(heldSetup.importId, heldSetup.connection); else setStep(0) }} />}
+        {step === -1 && <OnboardingServices choice={services} onChange={setServices} onContinue={() => {
+          reconfirm.current = false
+          if (heldSetup) continueWithSetup(heldSetup.importId, heldSetup.connection)
+          else setStep(setup ? 1 : 0)
+        }} />}
         {/* A file handed over from Settings can fail on any step, for example after its review expired. */}
         {step !== 0 && setupError && (
           <p role="alert" className="rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700">

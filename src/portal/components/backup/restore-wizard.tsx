@@ -396,21 +396,24 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
       const chosen = await load(backupId)
       if (controller.signal.aborted) return
       setItems(chosen.items)
-      setLargePaging(chosen.paging)
+      // A companion's later page keeps the paging it was opened with until the companion answers.
+      if (chosen.paging || !companionId || largePage === 0) setLargePaging(chosen.paging)
       // A mixed run keeps its large types, such as directory objects, in a verified companion backup.
       // It is added on its own and never holds back or removes the chosen backup's items.
       if (!companionId) return
+      // A later companion page that fails or is empty keeps Previous page, so the admin goes back without
+      // a reload that would clear the chosen backup's items and selections.
+      const lastPage = () => { if (!chosen.paging && largePage > 0) setLargePaging(previous => previous && { ...previous, hasMore: false }) }
       try {
         const companion = await load(companionId)
         if (controller.signal.aborted) return
         setItems(previous => [...(previous ?? []), ...companion.items])
         if (companion.paging) setLargePaging(companion.paging)
-        else if (!chosen.paging && largePage > 0) setLargePage(0)
+        else lastPage()
       } catch (error) {
         if (controller.signal.aborted || (error instanceof DOMException && error.name === "AbortError")) return
         setCompanionError(COMPANION_UNREADABLE)
-        // A later inventory page of a backup that is no longer shown would leave no way back.
-        if (!chosen.paging && largePage > 0) setLargePage(0)
+        lastPage()
       }
     })().catch((error: unknown) => {
       if (controller.signal.aborted) return

@@ -360,7 +360,33 @@ for (const azure of [false, true]) describe(azure ? "Azure emulator mixed runs" 
     const job = await engine.waitForJob(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: f.account, scope: { excluded: INTUNE_TYPES.filter(type => type.folder !== "AuthorizationPolicy").map(type => type.folder) } }))
     expect(job.backupFolder).toMatch(/^backup-large-/)
     expect(job.commitUnconfirmed).toBe(true)
-    expect(job.outcomes?.types.find(type => type.folder === "AuthorizationPolicy")).toMatchObject({ outcome: "failed" })
+    expect(job.status).toBe("Failed")
+  })
+  it.each([403, 404])("fails a large-only run whose only manifest storage refuses with %s, with the provisioning guidance", async status => {
+    undo = registerTestTypes([largeType])
+    const f = await setup()
+    f.refuse(status, "metadata.json")
+    const engine = new BackupEngine({ now: () => new Date("2026-11-17T12:00:00Z"), fetch: f.fetcher, getToken: async () => jwt({ scp: "Policy.Read.All" }), services: () => ({ services: ["entra"] }), retentionDays: () => 0 })
+    const job = await engine.waitForJob(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: f.account, scope: { excluded: INTUNE_TYPES.filter(type => type.folder !== "AuthorizationPolicy").map(type => type.folder) } }))
+    expect(job.status).toBe("Failed")
+    expect(job.exception).toContain("Storage not provisioned for large backups")
+  })
+  it("never lets a legacy manifest that says its coverage is incomplete replace an older complete copy", async () => {
+    const f = await setup()
+    const olderId = "backup-2026-10-01-000000", newerId = "backup-2026-11-01-000000"
+    const snapshot = { id: "one", displayName: "Tag" }
+    for (const id of [olderId, newerId]) {
+      await f.write(id, "ScopeTags/one.json", snapshot)
+      await f.write(id, ".tenuvault-owner.json", { Source: "TenuVault Desktop", TenantId: TENANT, RunId: `run-${id}` })
+    }
+    const items = { "ScopeTags/one": { file: "one.json", hash: snapshotHash(snapshot) } }
+    await f.write(olderId, "metadata.json", { BackupFolder: olderId, TenantId: TENANT, RunId: `run-${olderId}`, Status: "Success", Failures: 0, Coverage: "Complete", Scope: { Included: ["ScopeTags"], Excluded: [] }, Items: items, ItemCounts: { ScopeTags: 1, TotalPolicies: 1 } })
+    // No per-type outcomes, and a coverage that says it is incomplete, as in an inconsistent imported manifest.
+    await f.write(newerId, "metadata.json", { BackupFolder: newerId, TenantId: TENANT, RunId: `run-${newerId}`, Status: "Success", Failures: 0, Coverage: "Incomplete", Scope: { Included: ["ScopeTags"], Excluded: [] }, Items: items, ItemCounts: { ScopeTags: 1, TotalPolicies: 1 } })
+    const engine = new BackupEngine({ now: () => new Date("2026-11-17T12:00:00Z"), fetch: f.fetcher, getToken: async () => jwt({ scp: "Policy.Read.All" }), services: () => ({ services: ["intune"] }), retentionDays: () => 1 })
+    const job = await engine.waitForJob(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: f.account, scope: { excluded: INTUNE_TYPES.filter(type => type.folder !== "DeviceCategories").map(type => type.folder) } }))
+    expect(job.status, job.exception).toBe("Completed")
+    expect((await f.store.list(local, BACKUP_CONTAINER, `${olderId}/`)).some(blob => blob.name.endsWith("ScopeTags/one.json"))).toBe(true)
   })
   it("protects a valid complete run inside retention", async () => {
     const f = await pair()

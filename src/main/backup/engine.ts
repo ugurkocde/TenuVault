@@ -1124,6 +1124,9 @@ export class BackupEngine {
           settle(type.folder, { outcome: "failed", error: reason })
           this.write(job, `Could not save ${type.label}: ${reason}`, "warning")
         }
+        // A large-only run has no other record: without its manifest there is no backup, so the run fails,
+        // with the provisioning guidance when storage refused it.
+        if (!mixed) throw error
       }
     }
     const ended = this.now()
@@ -1383,7 +1386,8 @@ export class BackupEngine {
         // everything; those recorded before failures were counted carry no Failures value and count by
         // their status alone.
         const status = String(metadata.Status ?? "").toLowerCase()
-        const complete = (status === "success" || status === "succeeded") && (metadata.Failures === undefined || metadata.Failures === 0)
+        // Coverage that says it is incomplete never counts; manifests recorded before Coverage existed count by status.
+        const complete = (status === "success" || status === "succeeded") && (metadata.Failures === undefined || metadata.Failures === 0) && (metadata.Coverage === undefined || metadata.Coverage === "Complete")
         const holds = Array.isArray(metadata.Outcomes) ? completeFolders(metadata) : complete ? indexedFolders(metadata, restorableFolders(metadata)) : new Set<string>()
         // A folder with masked values does not satisfy coverage, so the newest backup with the plain values stays.
         // Coverage is recorded before a pair's own deletion checks, so older copies are judged against it.
