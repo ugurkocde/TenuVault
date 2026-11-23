@@ -126,6 +126,7 @@ describe("merging assignments", () => {
   it("describes assignments in words", () => {
     expect(describeAssignment(include(A, { deviceAndAppManagementAssignmentFilterId: F, deviceAndAppManagementAssignmentFilterType: "include" }), { [A]: "Pilot" }, { [F]: "Corporate" })).toBe("Pilot, filter Corporate (include)")
     expect(describeAssignment(exclude(X))).toBe(`Excluded: ${X}`)
+    expect(describeAssignment({ ...include(A), intent: "remove" }, { [A]: "Pilot" })).toBe("Pilot (remove intent)")
     expect(describeAssignment({ target: { "@odata.type": "#microsoft.graph.allLicensedUsersAssignmentTarget" } })).toBe("All users")
   })
 })

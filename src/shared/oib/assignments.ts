@@ -254,9 +254,17 @@ export function mergeAssignments(current: Item[], added: Item[], options: { keep
 }
 
 /** Whether two assignment lists target the same groups the same way, in any order. */
+/**
+ * One assignment as a comparable string: target fields in a fixed order, and a missing intent read
+ * as "apply", Graph's default and what it reads device configuration assignments back with.
+ */
+export const assignmentKey = (assignment: Item): string => {
+  const entry = writableAssignment(assignment)
+  return JSON.stringify(Object.keys(targetOf(entry)).sort().map((k) => [k, targetOf(entry)[k]]).concat([["intent", entry.intent ?? "apply"]]))
+}
+
 export function sameAssignments(a: Item[], b: Item[]): boolean {
-  // Graph reads device configuration assignments back with intent "apply", its default, for assignments written without one.
-  const canonical = (list: Item[]) => list.map(writableAssignment).map((entry) => JSON.stringify(Object.keys(targetOf(entry)).sort().map((k) => [k, targetOf(entry)[k]]).concat([["intent", entry.intent ?? "apply"]]))).sort()
+  const canonical = (list: Item[]) => list.map(assignmentKey).sort()
   return JSON.stringify(canonical(a)) === JSON.stringify(canonical(b))
 }
 
@@ -277,7 +285,7 @@ export function describeAssignment(assignment: Item, names: Record<string, strin
   const filterId = typeof target.deviceAndAppManagementAssignmentFilterId === "string" ? target.deviceAndAppManagementAssignmentFilterId.toLowerCase() : ""
   const filterType = target.deviceAndAppManagementAssignmentFilterType
   const filter = filterId && (filterType === "include" || filterType === "exclude") ? `, filter ${filters[filterId] ?? filterId} (${filterType})` : ""
-  return `${kind === "exclusionGroupAssignmentTarget" ? "Excluded: " : ""}${who}${filter}`
+  return `${kind === "exclusionGroupAssignmentTarget" ? "Excluded: " : ""}${who}${filter}${assignment.intent === "remove" ? " (remove intent)" : ""}`
 }
 
 /** Groups an additive change leaves alone because the policy already targets them (see mergeAssignments keepExisting). */

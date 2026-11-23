@@ -11,7 +11,7 @@ import { extractOibId } from "../../shared/oib/manifest"
 import { compareToTenant } from "../../shared/oib/match"
 import { definitionIdsOf, describePolicy, policyChanges, type OibPolicyChanges, type OibPolicySettings } from "../../shared/oib/policy-settings"
 import { replaceTenantVariables } from "../../shared/oib/variables"
-import { AssignmentSpecError, REPORTS_SET_AS_DIRECT, alreadyTargeted, assignmentsFor, excludesFor, assignsAnything, conflictingGroups, directAssignments, emptySpec, mergeAssignments, oibScope, parseSpec, sameAssignments, writableAssignment, type OibAssignmentSpec } from "../../shared/oib/assignments"
+import { AssignmentSpecError, REPORTS_SET_AS_DIRECT, alreadyTargeted, assignmentKey, assignmentsFor, excludesFor, assignsAnything, conflictingGroups, directAssignments, emptySpec, mergeAssignments, oibScope, parseSpec, sameAssignments, writableAssignment, type OibAssignmentSpec } from "../../shared/oib/assignments"
 import { isFullValidation, OIB_BACKUP_REUSE_MINUTES, OIB_PLATFORMS, type DeployItem, type OibAssignMode, type OibPolicyAssignments, type OibBackupChoice, type OibBackupOptions, type OibComparison, type OibPlatform, type OibProgress, type OibRecentBackup, type OibRun, type PolicyValidation, type TenantPolicy, type UndoResult, type ValidationRun } from "../../shared/oib/types"
 import { backupGaps, describeMissing, describeStatus, folderLabel } from "../backup/completeness"
 import { apiBody } from "../features/deps"
@@ -263,8 +263,10 @@ function saveRun(run: OibRun, prune = true): void {
   let recent = [...kept(false), ...kept(true)].sort((a, b) => a.createdAt.localeCompare(b.createdAt))
   const combine = () => [...legacy, ...recent].sort((a, b) => a.createdAt.localeCompare(b.createdAt))
   let json = JSON.stringify(combine())
-  while (json.length > MAX_HISTORY_CHARS && prune && recent.some((r) => !pinned(r))) {
-    const oldest = recent.findIndex((r) => !pinned(r))
+  // The run being saved is never the one size cleanup removes: its undo record is the reason for saving.
+  const removable = (r: OibRun) => !pinned(r) && r.runId !== run.runId
+  while (json.length > MAX_HISTORY_CHARS && prune && recent.some(removable)) {
+    const oldest = recent.findIndex(removable)
     recent = recent.filter((_, index) => index !== oldest)
     json = JSON.stringify(combine())
   }
@@ -717,7 +719,8 @@ async function assign(body: RecordJson): Promise<OibRun> {
         const current = directAssignments(live.assignments).map(writableAssignment)
         // An exclusion added to an app protection policy that is already assigned could reach people a
         // policy set targets through another group (Intune reports set assignments as direct), so it is refused.
-        if (mode === "add" && REPORTS_SET_AS_DIRECT.has(policy.folder) && current.length && excludesFor(oibScope(item.meta ?? { name: policy.name }), checked.spec).length) {
+        // Any assignment counts here, including ones Graph does report as coming from a policy set.
+        if (mode === "add" && REPORTS_SET_AS_DIRECT.has(policy.folder) && live.assignments.length && excludesFor(oibScope(item.meta ?? { name: policy.name }), checked.spec).length) {
           run.failed.push({ name, error: ADD_EXCLUSION_APP_PROTECTION })
           continue
         }
@@ -790,8 +793,8 @@ async function assign(body: RecordJson): Promise<OibRun> {
  */
 function assignmentCount(mode: OibAssignMode, current: Item[], next: Item[], planned: { include: number; exclude: number }): { assignment?: { include: number; exclude: number } } {
   if (mode === "replace") return planned.include || planned.exclude ? { assignment: { include: planned.include, exclude: planned.exclude } } : {}
-  const before = new Set(current.map((entry) => JSON.stringify(entry)))
-  const added = next.filter((entry) => !before.has(JSON.stringify(entry)))
+  const before = new Set(current.map(assignmentKey))
+  const added = next.filter((entry) => !before.has(assignmentKey(entry)))
   const exclude = added.filter((entry) => String((entry.target as Item | undefined)?.["@odata.type"] ?? "").includes("exclusion")).length
   return added.length ? { assignment: { include: added.length - exclude, exclude } } : {}
 }

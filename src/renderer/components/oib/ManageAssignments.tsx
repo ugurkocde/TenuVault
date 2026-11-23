@@ -179,7 +179,7 @@ function ReviewAssign({ batches: given, onBack, onFinished, next }: { batches: D
     const live = known?.policies.find(p => p.targetId === item.targetId)
     // Intune reports policy set assignments of app protection as direct, so replacing them is refused (see the main process).
     const appProtection = REPORTS_SET_AS_DIRECT.has(item.folder ?? "")
-    const blocked = appProtection && (mode === "replace" || (!!live?.assignments?.length && excludesFor(item.scope, spec).length > 0))
+    const blocked = appProtection && (mode === "replace" || ((!!live?.assignments?.length || !!live?.inherited) && excludesFor(item.scope, spec).length > 0))
     const planned = assignmentsFor({ folder: item.folder ?? "", scope: item.scope }, item.platform, spec).assignments
     const after = live?.assignments && !blocked ? mode === "replace" ? planned : mergeAssignments(live.assignments, planned, { keepExisting: REPORTS_SET_AS_DIRECT.has(item.folder ?? "") }) : undefined
     return { item, live, after, blocked, unchanged: !!live?.assignments && !!after && sameAssignments(live.assignments, after) }
