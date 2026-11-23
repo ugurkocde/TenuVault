@@ -438,7 +438,7 @@ for (const azure of [false, true]) describe(azure ? "Azure emulator mixed runs" 
     expect(job.commitUnconfirmed).toBeFalsy()
     const early = await f.read(job.backupFolder!)
     expect(early.RunStatus).toBeUndefined()
-    expect(await f.read(job.backupFolder!, "run-status.json")).toMatchObject({ BackupFolder: job.backupFolder, TenantId: TENANT, RunId: early.RunId, RunStatus: "Success", RunCounts: { failures: 0 } })
+    expect(await f.read(job.backupFolder!, "run-status.json")).toMatchObject({ BackupFolder: job.backupFolder, TenantId: TENANT, RunId: early.RunId, RunStatus: "Success", RunCounts: { failures: 0 }, EndTime: expect.any(String), Duration: expect.any(String), DurationSeconds: expect.any(Number) })
     expect((await validate(f.request({ backupId: job.backupFolder }))).status).toBe(200)
     // History and the full export read the run's final result from its record.
     const rows = await (await history(f.request({ summary: true }))).json()
@@ -518,6 +518,25 @@ for (const azure of [false, true]) describe(azure ? "Azure emulator mixed runs" 
     await f.write(ordinary, "run-status.json", { BackupFolder: ordinary, TenantId: TENANT, RunId: "other-run", AuthMode: early.AuthMode, DurationSeconds: 2700, RunStatus: "Success", LargeBackupOutcomes: [{ Folder: "AuthorizationPolicy", Outcome: "saved", Saved: 1 }] })
     const again = await (await history(f.request({ summary: true }))).json()
     expect(again.backups.find((entry: any) => entry.id === ordinary)).toMatchObject({ duration: 5, ordinaryOnlyExport: true })
+  })
+  it("asks to retry the full download when a split run's record cannot be read, instead of calling the run incomplete", async () => {
+    const f = await pair()
+    const { RunStatus: _status, RunCounts: _counts, ...early } = f.first
+    await f.write(ordinary, "metadata.json", { ...early, LargeBackupOutcomes: [{ Folder: "AuthorizationPolicy", Outcome: "failed", Error: "The backup stopped before this type was read in full." }] })
+    await f.write(ordinary, "run-status.json", { BackupFolder: ordinary, TenantId: TENANT, RunId: "same-run", AuthMode: early.AuthMode, RunStatus: "Success", LargeBackupOutcomes: [{ Folder: "AuthorizationPolicy", Outcome: "saved", Saved: 1 }] })
+    const original = f.fetcher.getMockImplementation()!
+    let failRecord = true
+    f.fetcher.mockImplementation(async (input, init) => {
+      if (failRecord && String(input).includes("run-status.json")) return new Response("<Error><Code>ServerBusy</Code></Error>", { status: 500 })
+      return original(input, init)
+    })
+    const refused = await download(f.request({ backupId: ordinary }))
+    expect(refused.status).toBe(503)
+    expect((await refused.json()).error).toContain("Try the full download again")
+    failRecord = false
+    const archive = await download(f.request({ backupId: ordinary }))
+    expect(archive.status).toBe(200)
+    expect(archive.headers.get("content-type")).toBe("application/x-tar")
   })
   it("protects a valid complete run inside retention", async () => {
     const f = await pair()

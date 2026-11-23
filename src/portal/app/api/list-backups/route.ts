@@ -51,6 +51,7 @@ const ownerCache = new MetadataCache<OwnershipFile>(result => result.kind === 'f
 /** Run records read at once in history, and how long one may take before the early manifest stands. */
 const RUN_RECORD_READS = 8
 const RUN_RECORD_TIMEOUT_MS = 10_000
+const RUN_RECORD_BUDGET_MS = 15_000
 
 /** One backup folder, described from metadata and either a folder listing or the summary inventory. */
 async function describeBackup(storageAccountName: string, name: string, accessToken: string, tenantId: string, inventory?: { text: string; cacheKey: string; version: string; owner: string }) {
@@ -408,10 +409,12 @@ export async function POST(request: NextRequest) {
     // a slow record leaves the early manifest standing instead of holding up history.
     const records = new Map<string, Record<string, any>>()
     const pending = backups.filter(backup => !isLargeBackup(backup.id) && backup.fingerprint?.CompanionBackup !== undefined && typeof backup.fingerprint?.RunStatus !== "string")
-    for (let start = 0; start < pending.length; start += RUN_RECORD_READS) {
+    // One budget covers every record read, so many stalled records cost history at most this long.
+    const budget = AbortSignal.timeout(RUN_RECORD_BUDGET_MS)
+    for (let start = 0; start < pending.length && !budget.aborted; start += RUN_RECORD_READS) {
       await Promise.all(pending.slice(start, start + RUN_RECORD_READS).map(async backup => {
         try {
-          const response = await fetch(`https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(`${backup.id}/${BACKUP_RUN_RECORD_FILE}`)}`, { headers: storageHeaders(accessToken), signal: AbortSignal.timeout(RUN_RECORD_TIMEOUT_MS) })
+          const response = await fetch(`https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(`${backup.id}/${BACKUP_RUN_RECORD_FILE}`)}`, { headers: storageHeaders(accessToken), signal: AbortSignal.any([AbortSignal.timeout(RUN_RECORD_TIMEOUT_MS), budget]) })
           const read = response.ok ? await readJsonCapped(response, MAX_BACKUP_ARCHIVE_BYTES) : null
           if (read?.kind === "json" && read.value && typeof read.value === "object") records.set(backup.id, read.value as Record<string, any>)
         } catch { /* Without a record the early manifest stands. */ }
