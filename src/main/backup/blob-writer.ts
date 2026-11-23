@@ -5,7 +5,7 @@ import { oversizedOwnershipFile } from "../../shared/backup-ownership"
 import { retryDelay, retryableStatus, sleep } from "../graph-retry"
 import { FetchApplicationError } from "../api/network-error"
 import type { NetworkCircuit } from "./engine"
-import { MAX_LIST_PAGES, REQUEST_ATTEMPTS, BlobClaimError, ProtectedBlobError, RequestTimeoutError, RetryableStorageError, StorageError, TokenError, isImmutabilityRefusal, requestFailure, storageError, storageFailure, withAbort, withRequestTimeout } from "./request"
+import { MAX_LIST_PAGES, REQUEST_ATTEMPTS, BlobClaimError, BlobDeleteRefusal, RequestTimeoutError, RetryableStorageError, StorageError, TokenError, blobDeleteRefusal, isImmutabilityRefusal, requestFailure, storageError, storageFailure, withAbort, withRequestTimeout } from "./request"
 
 /** Writes blobs to Azure or, for local accounts, to the encrypted store via the fetch bridge. */
 export class BlobWriter {
@@ -65,14 +65,25 @@ export class BlobWriter {
   }
 
   /** Lists blob names and, with a delimiter, virtual folders under a prefix. */
-  async list(prefix: string, delimiter = ""): Promise<{ blobs: string[]; prefixes: string[] }> {
+  async list(prefix: string, options: { delimiter?: string; includeProtection?: boolean } = {}): Promise<{
+    blobs: string[]
+    prefixes: string[]
+    legalHold: boolean
+    immutableUntil: number
+    unknownExpiry: boolean
+  }> {
     const blobs: string[] = []
     const prefixes: string[] = []
+    const { delimiter, includeProtection } = options
+    let legalHold = false
+    let immutableUntil = 0
+    let unknownExpiry = false
     let marker = ""
     const seen = new Set<string>()
     do {
       if (seen.size >= MAX_LIST_PAGES) throw new Error(`Storage listing did not finish after ${MAX_LIST_PAGES} pages`)
       const query = new URLSearchParams({ restype: "container", comp: "list", prefix, ...(delimiter ? { delimiter } : {}), ...(marker ? { marker } : {}) })
+      if (includeProtection) query.set("include", "immutabilitypolicy,legalhold")
       const xml = await this.request(`${BACKUP_CONTAINER}?${query.toString()}`, { method: "GET" }, async (response) => {
         if (response.status === 404) return null
         if (!response.ok) throw await storageFailure(response, this.account)
@@ -82,12 +93,20 @@ export class BlobWriter {
       const decode = (value: string) => value.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&amp;/g, "&")
       for (const m of xml.matchAll(/<BlobPrefix><Name>([^<]*)<\/Name><\/BlobPrefix>/g)) prefixes.push(decode(m[1]!))
       for (const m of xml.matchAll(/<Blob><Name>([^<]*)<\/Name>/g)) blobs.push(decode(m[1]!))
+      if (includeProtection) {
+        legalHold ||= /<LegalHold>\s*true\s*<\/LegalHold>/i.test(xml)
+        for (const [, value] of xml.matchAll(/<ImmutabilityPolicyUntilDate(?:\s*\/>|>([\s\S]*?)<\/ImmutabilityPolicyUntilDate>)/g)) {
+          const until = Date.parse(value ?? "")
+          if (Number.isFinite(until)) immutableUntil = Math.max(immutableUntil, until)
+          else unknownExpiry = true
+        }
+      }
       // The marker is XML-escaped like the names; send back the name it stands for.
       marker = decode(/<NextMarker>([^<]+)<\/NextMarker>/.exec(xml)?.[1] ?? "")
       if (marker && seen.has(marker)) throw new Error("Storage returned a repeated continuation marker")
       seen.add(marker)
     } while (marker)
-    return { blobs, prefixes }
+    return { blobs, prefixes, legalHold, immutableUntil, unknownExpiry }
   }
 
   /**
@@ -115,10 +134,12 @@ export class BlobWriter {
     }, async (response) => {
       if (!response.ok && response.status !== 404) {
         const code = response.headers.get("x-ms-error-code") ?? ""
-        if (isImmutabilityRefusal(response.status, code)) throw new ProtectedBlobError(code)
+        const headerRefusal = blobDeleteRefusal(response.status, code)
+        if (headerRefusal) throw headerRefusal
         const text = await response.clone().text()
         const bodyCode = /<Code>([^<]+)<\/Code>/.exec(text)?.[1] ?? ""
-        if (isImmutabilityRefusal(response.status, bodyCode)) throw new ProtectedBlobError(bodyCode)
+        const bodyRefusal = blobDeleteRefusal(response.status, bodyCode)
+        if (bodyRefusal) throw bodyRefusal
         throw await storageFailure(response, this.account)
       }
     })
@@ -163,12 +184,12 @@ export class BlobWriter {
         if (attempted && (!response || response.ok || response.status === 408 || response.status >= 500)) onUnconfirmed?.()
         this.network?.signal.throwIfAborted()
         beforeCommit?.signal.throwIfAborted()
-        if (response && (response.status === 401 || response.status === 403) && !(error instanceof ProtectedBlobError)) {
+        if (response && (response.status === 401 || response.status === 403) && !(error instanceof BlobDeleteRefusal)) {
           this.network?.authFailed("backup storage", response.status, error instanceof Error ? error.message : String(error))
         }
         if ((attempted || error instanceof RequestTimeoutError) && requestFailure(error) === "network" && !init.signal?.aborted) this.network?.failed("backup storage", error)
         if (!attempted && error instanceof RequestTimeoutError && attempt >= REQUEST_ATTEMPTS - 1) throw new TokenError(error.message, { cause: error })
-        if (error instanceof FetchApplicationError || error instanceof TokenError || error instanceof StorageError || error instanceof ProtectedBlobError || init.signal?.aborted || attempt >= REQUEST_ATTEMPTS - 1) throw error
+        if (error instanceof FetchApplicationError || error instanceof TokenError || error instanceof StorageError || error instanceof BlobDeleteRefusal || init.signal?.aborted || attempt >= REQUEST_ATTEMPTS - 1) throw error
         ambiguous = true
         const retrySignal = beforeCommit
           ? AbortSignal.any([beforeCommit.signal, ...(this.network ? [this.network.signal] : [])])

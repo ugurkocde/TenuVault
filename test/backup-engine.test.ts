@@ -308,9 +308,11 @@ describe("retention", () => {
       await store.put(account, "intune-backups", `${folder}/CompliancePolicies/A.json`, Buffer.from("{}"), "application/json")
     }
     const graph = fakeGraph()
+    const listings: URL[] = []
     const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const request = new Request(input, init)
       const url = new URL(request.url)
+      if (localAccountFromUrl(url) && url.searchParams.get("comp") === "list") listings.push(url)
       return localAccountFromUrl(url) ? handleLocalBlobRequest(store, request) : graph(url)
     }) as typeof fetch
     const engine = new BackupEngine({
@@ -322,6 +324,8 @@ describe("retention", () => {
     const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)
     expect(job.status).toBe("Completed")
     expect(job.log.join("\n")).toContain("Removed 1 backup older than 30 days.")
+    expect(listings.some((url) => url.searchParams.get("prefix") === "backup-2026-08-01-020000/")).toBe(true)
+    expect(listings.every((url) => !url.searchParams.has("include"))).toBe(true)
     const folders = new Set((await store.list(account, "intune-backups")).map((b) => b.name.split("/")[0]))
     expect([...folders].sort()).toEqual(["backup-2026-09-20-020000", "backup-2026-09-24-120000"])
   })
@@ -353,13 +357,14 @@ describe("retention and storage protection", () => {
 
   it("touches no policy file when the metadata of an old backup is protected", async () => {
     const { job, left, old } = await run("metadata.json")
-    expect(job.log.join("\n")).toContain("Kept 1 older backup protected")
+    expect(job.log.join("\n")).toContain("Kept 1 older backup because of storage policy or legal hold.")
     expect(left).toEqual([`${old}/CompliancePolicies/A.json`, `${old}/DeviceConfigurations/B.json`, `${old}/metadata.json`])
   })
 
-  it("removes the metadata first, so a partly deleted backup is not reported as complete", async () => {
+  it("warns when a delete is unexpectedly refused after cleanup started", async () => {
     const { job, left, old } = await run("DeviceConfigurations/B.json")
-    expect(job.log.join("\n")).toContain("no longer offered as complete")
+    expect(job.results?.warnings).toBe(1)
+    expect(job.log.join("\n")).toContain(`Storage refused a delete after cleanup started. Partially removed backups: ${old}.`)
     expect(left).toEqual([`${old}/DeviceConfigurations/B.json`])
   })
 })

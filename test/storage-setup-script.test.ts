@@ -32,8 +32,38 @@ describe("New-TenuVaultStorage.ps1", () => {
     }
     expect(createStoragePage).toContain("New-TenuVaultStorage.ps1")
     // Update-AzStorageBlobServiceProperty has no retention parameters; the Enable cmdlets are the supported call.
-    // It is only used to turn on versioning for the Backup Reader.
+    // It is only used to turn on versioning.
     expect(storageScript).not.toMatch(/Update-AzStorageBlobServiceProperty(?![^\n]*-IsVersioningEnabled \$true)/)
+  })
+
+  it("enables versioning before creating an immutable container and leaves locking to the admin", () => {
+    const immutableSetup = /\$immutablePolicy = \$null\r?\nif \(\$Immutable\) \{([\s\S]*?)^}/m.exec(storageScript)?.[1] ?? ""
+    const versioningAt = immutableSetup.indexOf("-IsVersioningEnabled $true")
+    const immutabilityAt = immutableSetup.indexOf("-Name $container -EnableImmutableStorageWithVersioning")
+    expect(storageScript).toContain("[ValidateRange(1, 146000)][int]$ImmutableDays = 30")
+    expect(versioningAt).toBeGreaterThan(0)
+    expect(immutabilityAt).toBeGreaterThan(versioningAt)
+    expect(storageScript).toContain("Set-AzRmStorageContainerImmutabilityPolicy -Container $backupContainer -ImmutabilityPeriod $ImmutableDays")
+    expect(storageScript).not.toMatch(/ -LockPolicy|Lock-AzRmStorageContainerImmutabilityPolicy/)
+    expect(createStoragePage).toContain("**Lock policy**")
+  })
+
+  it("requires StorageV2 and a completed version-level migration before setting up immutability", () => {
+    expect(storageScript).toContain('if ($account.Kind -ne "StorageV2" -or $account.EnableHierarchicalNamespace')
+    const migrationAt = storageScript.indexOf('if ($versioning -and $versioning.MigrationState -eq "InProgress")')
+    const enabledAt = storageScript.indexOf("if (-not $versioning -or -not $backupContainer.ImmutableStorageWithVersioning.Enabled)")
+    const policyAt = storageScript.indexOf("Set-AzRmStorageContainerImmutabilityPolicy -Container $backupContainer")
+    expect(migrationAt).toBeGreaterThan(0)
+    expect(enabledAt).toBeGreaterThan(migrationAt)
+    expect(policyAt).toBeGreaterThan(enabledAt)
+  })
+
+  it("configures previous-version cleanup for either option and respects the immutable policy period", () => {
+    const lifecycle = /^if \(\$Immutable -or \$BackupReaderAppId\) \{([\s\S]*?)^}/m.exec(storageScript)?.[1]
+    expect(lifecycle).toContain("$previousVersionDays = $policyDays")
+    expect(lifecycle).toContain("$previousVersionDays = [Math]::Max($VersionRetentionDays, $policyDays)")
+    expect(lifecycle).toContain("-BlobVersionAction Delete -DaysAfterCreationGreaterThan $previousVersionDays")
+    expect(lifecycle).not.toContain("-BaseBlobAction")
   })
 
   it("adds firewall addresses before switching the default action to deny", () => {
