@@ -19,7 +19,7 @@ export async function checkConfigurationRestore({ check, evaluate, waitForCondit
       };
     })()`)
     const click = async text => {
-      assert(await evaluate(`(() => { const button = [...document.querySelectorAll('button')].find(b => b.innerText.trim().startsWith(${JSON.stringify(text)})); if (!button || button.disabled) return false; button.click(); return true; })()`), `${text} was unavailable`)
+      assert(await waitForCondition(`(() => { const button = [...document.querySelectorAll('button')].find(b => b.innerText.trim().startsWith(${JSON.stringify(text)})); if (!button || button.disabled) return false; button.click(); return true; })()`), `${text} was unavailable`)
     }
     try {
       await go("#/portal/tenants", "Tenant Management")

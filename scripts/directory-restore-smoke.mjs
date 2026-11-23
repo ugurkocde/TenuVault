@@ -22,7 +22,7 @@ export async function checkDirectoryRestore({ check, evaluate, waitForCondition,
         return window.__directoryFetch(input, init);
       };
     })()`)
-    const click = async text => assert(await evaluate(`(() => { const button = [...document.querySelectorAll('button')].find(b => b.innerText.trim().startsWith(${JSON.stringify(text)})); if (!button || button.disabled) return false; button.click(); return true; })()`), `${text} was unavailable`)
+    const click = async text => assert(await waitForCondition(`(() => { const button = [...document.querySelectorAll('button')].find(b => b.innerText.trim().startsWith(${JSON.stringify(text)})); if (!button || button.disabled) return false; button.click(); return true; })()`), `${text} was unavailable`)
     try {
       await go("#/portal/tenants", "Tenant Management"); await go("#/portal/backup", "Backup & Restore")
       await click("Refresh")
@@ -88,7 +88,7 @@ export async function checkDirectoryRestore({ check, evaluate, waitForCondition,
         return window.__directoryFetch(input, init);
       };
     })()`)
-    const click = async text => assert(await evaluate(`(() => { const button = [...document.querySelectorAll('button')].find(b => b.innerText.trim().startsWith(${JSON.stringify(text)})); if (!button || button.disabled) return false; button.click(); return true; })()`), `${text} was unavailable`)
+    const click = async text => assert(await waitForCondition(`(() => { const button = [...document.querySelectorAll('button')].find(b => b.innerText.trim().startsWith(${JSON.stringify(text)})); if (!button || button.disabled) return false; button.click(); return true; })()`), `${text} was unavailable`)
     try {
       await go("#/portal/tenants", "Tenant Management"); await go("#/portal/backup", "Backup & Restore")
       await click("Refresh")
