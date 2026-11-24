@@ -3319,6 +3319,10 @@ function Invoke-TvBackup {
     $counts = [ordered]@{}
     foreach ($type in $types) { $counts[$type.Folder] = 0 }
     $lists = @{}
+    $outcomes = [ordered]@{}
+    foreach ($type in $types) {
+        $outcomes[$type.Folder] = [ordered]@{ Folder = $type.Folder; Outcome = "failed"; Saved = 0; Error = "The backup stopped before this type was read in full." }
+    }
     $skippedTypes = [System.Collections.Generic.List[string]]::new()
     $failedTypes = [System.Collections.Generic.List[string]]::new()
     $failures = 0
@@ -3352,11 +3356,15 @@ function Invoke-TvBackup {
             } else { $consecutiveAuth = 0 }
             if ($status -eq 403 -and $script:OriginalFolders -notcontains $type.Folder) {
                 $skippedTypes.Add([string]$type.Folder)
-                Write-Output "Skipped $($type.Label): access was denied. The managed identity may lack the permission or admin consent."
+                $reason = "Access was denied. The managed identity may lack the permission or admin consent."
+                $outcomes[$type.Folder] = [ordered]@{ Folder = $type.Folder; Outcome = "skipped"; Cause = "permission"; Reason = $reason; Status = $status }
+                Write-Output "Skipped $($type.Label): $reason"
             } else {
                 $failures++
                 $failedTypes.Add([string]$type.Folder)
-                Write-Output "Could not read $($type.Label): $(Get-TvSafeError $_.Exception.Message)"
+                $reason = Get-TvSafeError $_.Exception.Message
+                $outcomes[$type.Folder] = [ordered]@{ Folder = $type.Folder; Outcome = "failed"; Saved = 0; Error = $reason; Status = $status }
+                Write-Output "Could not read $($type.Label): $reason"
             }
         }
     }
@@ -3411,17 +3419,26 @@ function Invoke-TvBackup {
                     }
                     $items["$($type.Folder)/$id"] = $record
                     $counts[$type.Folder]++
-                } catch [TvHttpError] {
-                    if ($_.Exception.Status -eq 401) { throw }
-                    if ($_.Exception.Status -in @(401, 403)) {
-                        if (++$consecutiveAuth -ge 5) { throw "Backup stopped: Microsoft Graph refused five reads in a row. Earlier policies in this run were saved; the backup is incomplete." }
-                    } else { $consecutiveAuth = 0 }
-                    $failures++
-                    Write-Output "Could not back up `"$displayName`": $(Get-TvSafeError $_.Exception.Message)"
                 } catch {
                     $failures++
-                    Write-Output "Could not back up `"$displayName`": $(Get-TvSafeError $_.Exception.Message)"
+                    $reason = Get-TvSafeError $_.Exception.Message
+                    if (-not $failedTypes.Contains([string]$type.Folder)) {
+                        $failedTypes.Add([string]$type.Folder)
+                        $outcomes[$type.Folder].Error = $reason
+                        if ($_.Exception -is [TvHttpError]) { $outcomes[$type.Folder].Status = $_.Exception.Status }
+                    }
+                    if ($_.Exception -is [TvHttpError]) {
+                        if ($_.Exception.Status -eq 401) { throw }
+                        if ($_.Exception.Status -eq 403) {
+                            if (++$consecutiveAuth -ge 5) { throw "Backup stopped: Microsoft Graph refused five reads in a row. Earlier policies in this run were saved; the backup is incomplete." }
+                        } else { $consecutiveAuth = 0 }
+                    }
+                    Write-Output "Could not back up `"$displayName`": $reason"
                 }
+                $outcomes[$type.Folder].Saved = $counts[$type.Folder]
+            }
+            if (-not $failedTypes.Contains([string]$type.Folder)) {
+                $outcomes[$type.Folder] = [ordered]@{ Folder = $type.Folder; Outcome = "saved"; Saved = $counts[$type.Folder] }
             }
             if ($list.Items.Count) { Write-Output "Backed up $($counts[$type.Folder]) $($type.Label)." }
         }
@@ -3461,6 +3478,8 @@ function Invoke-TvBackup {
             Failures       = $failures
             SkippedTypes   = @($skippedTypes)
             FailedTypes    = @($failedTypes)
+            Outcomes       = @($outcomes.Values)
+            Coverage       = if ($failedTypes.Count -or $skippedTypes.Count) { "Incomplete" } else { "Complete" }
             AuthMode       = "app-only"
         }
         if ($notReadable.Count) { $metadata.AppOnlyExcludedTypes = $notReadable }
@@ -3471,8 +3490,7 @@ function Invoke-TvBackup {
         Set-TvCloudStatus $context $status "Backup $status, $totalPolicies policies." $backupFolder
         Send-TvBackupOutcome -Account $storageAccount -Token $storageToken -TenantId $tenantId -RunId $runId -Status $status -BackupFolder $backupFolder -TotalPolicies $totalPolicies -Failures $failures -FailedTypes @($failedTypes) -Trigger $runTrigger
         if ($status -eq "Failed") { throw "The backup saved no policies. See the runbook output above." }
-        # Only a complete backup is compared, like the desktop app's report after a scheduled backup:
-        # items a backup with warnings could not read would show up as deleted.
+        # Automatic reports run after a successful backup, like scheduled desktop reports.
         # The report is optional: nothing it does may change the backup's result.
         if ($status -eq "Success") {
             try { Invoke-TvChangeReport -Context $context -BackupFolder $backupFolder -Metadata $metadata -Types $allTypes -GraphToken $graphToken -RunId $runId -RunTrigger $runTrigger }
@@ -3502,6 +3520,7 @@ function Invoke-TvBackup {
                 Source = "TenuVault Cloud Backup"; TenantId = $tenantId.ToLowerInvariant(); Trigger = $runTrigger; RunId = $runId
                 Scope = [ordered]@{ Excluded = $excluded; Included = @($types | ForEach-Object { $_.Folder }) }
                 Failures = [Math]::Max(1, $failures); SkippedTypes = @($skippedTypes); FailedTypes = @($failedTypes)
+                Outcomes = @($outcomes.Values); Coverage = "Incomplete"
                 AuthMode = "app-only"; Items = $sortedItems; Error = $reason
             }
             if ($notReadable.Count) { $failed.AppOnlyExcludedTypes = $notReadable }

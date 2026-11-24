@@ -9,6 +9,8 @@ import { createHash } from "node:crypto"
 import { moduleForFolder } from "../src/shared/services/modules"
 import { INTUNE_TYPES, typeForFolder } from "../src/shared/intune/registry"
 import { listSnapshot } from "../src/shared/intune/read"
+import { compareBackups } from "../src/shared/intune/backup-changes"
+import { comparisonCoverage } from "../src/shared/intune/backup-read-coverage"
 import { comparableSnapshot } from "../src/shared/intune/compare"
 import { COMPLIANCE_SETTING_KEYS, COMPLIANCE_SETTINGS_ID } from "../src/shared/intune/compliance-settings"
 import { PLAIN_CLOUD_RUNBOOK, cloudRunbookNeedsUpgrade, cloudStatusBlobName, parseCloudStatus } from "../src/shared/cloud-backup"
@@ -27,7 +29,7 @@ function runAuditSetup(shell: (file: string, args: string[], options: { encoding
   return shell(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8", timeout: auditSetupTimeout })
 }
 type RunCall = { condition?: string; uri: string; method: string; contentType: string | null; ifNoneMatch: string | null; body: string | null }
-type Run = { calls: RunCall[]; error?: string | null; output?: string[] }
+type Run = { calls: RunCall[]; error?: string | null; output?: string[]; compared?: { Drifts: Array<{ configId: string }>; UnknownTypes: string[] } }
 let plainRuns: Run[] | undefined
 /** The scenarios of the plain-run fixture: a full run, an early failure, a failed manifest, and two runs with change reports on. */
 function runPlainFixture(): Run[] {
@@ -691,6 +693,27 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
     expect(parseCloudStatus(JSON.parse(failedStatus!.body!), "11111111-2222-3333-4444-555555555555")).toMatchObject({ lastStatus: "Failed" })
     expect(failed!.calls.some((call) => call.method === "Put" && call.uri.includes("/tenuvault-backup-results/cloud-backup-outcomes/run-"))).toBe(true)
     expect(failed!.calls.some((call) => call.uri.includes("/intune-backups/backup-"))).toBe(false)
+  }, 60_000)
+
+  it.runIf(Boolean(pwsh))("captures a timed out detail read and excludes that type from both comparators", () => {
+    const runs = runPlainFixture()
+    const baseline = runs[0]!
+    const timedOut = runs[9]!
+    const manifest = (run: Run) => JSON.parse(run.calls.find(call => call.method === "Put" && call.uri.endsWith("/metadata.json"))!.body!)
+    const older = manifest(baseline)
+    const newer = manifest(timedOut)
+    expect(older.Items["DeviceConfigurations/cfg-1"]).toBeDefined()
+    expect(timedOut.calls.filter(call => call.uri.includes("/deviceManagement/deviceConfigurations")).map(call => call.uri))
+      .toEqual([expect.stringMatching(/deviceConfigurations$/), expect.stringMatching(/deviceConfigurations\/cfg-1/)])
+    expect(timedOut.compared).toMatchObject({ Drifts: [], UnknownTypes: ["DeviceConfigurations"], LegacyReadFailure: false })
+    expect(compareBackups(older, newer)).toEqual([])
+    expect(comparisonCoverage(older, newer)).toMatchObject({ unknown: ["DeviceConfigurations"], legacyReadFailure: false })
+    expect(newer).toMatchObject({ Status: "CompletedWithWarnings", Failures: 1, FailedTypes: ["DeviceConfigurations"], Coverage: "Incomplete" })
+    expect(newer.Outcomes).toEqual(expect.arrayContaining([
+      { Folder: "DeviceConfigurations", Outcome: "failed", Saved: 0, Error: "Detail call timed out" },
+      { Folder: "AutopilotDevices", Outcome: "saved", Saved: 1 },
+      { Folder: "CompliancePolicies", Outcome: "saved", Saved: 0 },
+    ]))
   }, 60_000)
 
   it.runIf(Boolean(pwsh))("saves a list-only type from its list entry, with the desktop snapshot and fingerprint", () => {

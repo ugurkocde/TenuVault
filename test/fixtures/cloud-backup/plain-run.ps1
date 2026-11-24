@@ -21,6 +21,7 @@ if (-not $RunbookPath) {
 $script:calls = [System.Collections.Generic.List[object]]::new()
 $script:failGraphToken = $false
 $script:failDetail = $false
+$script:timeoutDetail = $false
 $script:failReportList = $false
 $script:failCompliance = $false
 $script:maskOma = $false
@@ -53,6 +54,7 @@ function Invoke-TvHttp {
     } elseif ($Uri -like "*getOmaSettingPlainTextValue*") {
         throw [TvHttpError]::new(403, "No access to plaintext")
     } elseif ($Uri -like "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations/cfg-1*") {
+        if ($script:timeoutDetail) { throw [TimeoutException]::new("Detail call timed out") }
         if ($script:failDetail) { throw [TvHttpError]::new(401, "HTTP 401") }
         $text = '{"@odata.context":"x","id":"cfg-1","displayName":"Baseline Wi-Fi","lastModifiedDateTime":"2026-11-01T10:00:00Z","assignments":[]}'
         if ($script:maskOma -and $Uri -match "/cfg-1(?:\?|$)") {
@@ -64,6 +66,8 @@ function Invoke-TvHttp {
 
 # 1. A successful run.
 $output = @(Invoke-TvBackup)
+$baselineCalls = $script:calls.ToArray()
+$baselineManifestWrite = $baselineCalls | Where-Object { $_.method -eq "Put" -and $_.uri -like "*/metadata.json" }
 Write-Output (@{ calls = @($script:calls.ToArray()); output = $output } | ConvertTo-Json -Compress -Depth 5)
 
 # 2. The Graph token fails: the run still records its status and leaves a note.
@@ -140,3 +144,27 @@ $errorText = $null
 $output = [System.Collections.Generic.List[string]]::new()
 try { Invoke-TvBackup 2>&1 | ForEach-Object { $output.Add([string]$_) } } catch { $errorText = $_.Exception.Message }
 Write-Output (@{ calls = @($script:calls.ToArray()); output = $output.ToArray(); error = $errorText } | ConvertTo-Json -Compress -Depth 5)
+
+# 10. List succeeded and one detail read timed out. Compare the actual manifests from both captures.
+$script:calls.Clear()
+$script:OutcomeSent = $false
+$script:failAuditReceipt = $false
+$script:timeoutDetail = $true
+[Environment]::SetEnvironmentVariable("TenuVaultChangeReport", $null)
+$output = @(Invoke-TvBackup)
+$newerWrite = $script:calls | Where-Object { $_.method -eq "Put" -and $_.uri -like "*/metadata.json" }
+$before = ConvertFrom-TvJson $baselineManifestWrite.body
+$after = ConvertFrom-TvJson $newerWrite.body
+$older = @{ Name = "older"; Metadata = $before }
+$newer = @{ Name = "newer"; Metadata = $after }
+$compared = Get-TvBackupDrifts -Older $older -Newer $newer -Types (Get-TvTypes) -ReadItem {
+    param($backup, $file)
+    $root = if ($backup -eq "older") { $baselineManifestWrite.uri } else { $newerWrite.uri }
+    $escapedFile = ($file.Split('/') | ForEach-Object { [uri]::EscapeDataString($_) }) -join '/'
+    $uri = $root -replace 'metadata.json$', $escapedFile
+    $reads = if ($backup -eq "older") { $baselineCalls } else { $script:calls }
+    $write = $reads | Where-Object { $_.method -eq "Put" -and $_.uri -eq $uri }
+    if ($write) { return ConvertFrom-TvJson $write.body }
+    return $null
+}
+Write-Output (@{ calls = @($script:calls.ToArray()); output = $output; compared = $compared } | ConvertTo-Json -Compress -Depth 10)
