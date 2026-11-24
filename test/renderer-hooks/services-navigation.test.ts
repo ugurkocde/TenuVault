@@ -106,6 +106,16 @@ it("links an enabled service that needs access to its tenant's Services card and
   expect(links()[0]!.textContent).toBe("Defender")
 })
 
+it("keeps each service name intact beside its Needs access badge", async () => {
+  mocks.status.mockResolvedValue({ ...status(), needsAccess: ["defender", "entra", "intune"] })
+  await render()
+  expect(links().map(link => link.firstElementChild?.nextElementSibling?.textContent)).toEqual(["Defender", "Entra ID", "Intune"])
+  for (const link of links()) {
+    expect(link.querySelector("span")?.classList.contains("shrink-0")).toBe(true)
+    expect(link.querySelector("span")?.classList.contains("truncate")).toBe(false)
+  }
+})
+
 it.each([true, false])("opens backup contents while pending, then follows an explicit enabled=%s result", async enabled => {
   let finish!: (result: ServicesStatus) => void
   mocks.status.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
