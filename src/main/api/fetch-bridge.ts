@@ -9,6 +9,11 @@ export interface DelegatedToken {
   expiresOn: Date | null
 }
 
+export interface RequestAuthorization {
+  url?: URL
+  beforeDispatch?: () => void
+}
+
 export interface FetchBridgeOptions {
   /** Handles calls the route code makes to its own API. */
   dispatch: (request: Request) => Promise<Response>
@@ -20,7 +25,7 @@ export interface FetchBridgeOptions {
    * local backup store, so no path skips licensing.
    */
   authorizeTenant?: (tenant: string) => unknown
-  authorizeRequest?: (url: URL, input: RequestInfo | URL, init: RequestInit | undefined, tenant: string | null) => Promise<void | URL>
+  authorizeRequest?: (url: URL, input: RequestInfo | URL, init: RequestInit | undefined, tenant: string | null) => Promise<void | RequestAuthorization>
   authorizeResource?: (tenant: string, scope: string) => void
   bindOwnClientCredentials?: (tenant: string, clientId: string, scope: string, token: string, expiresIn?: number) => void
   /** Serves Blob requests for local (`tvlocal-...`) storage accounts from the encrypted store. */
@@ -126,7 +131,9 @@ export function createBridgedFetch(options: FetchBridgeOptions): typeof fetch {
         return response
       }
 
-      const graphCliUrl = await options.authorizeRequest?.(url, input, init, currentRouteTenant())
+      const authorization = await options.authorizeRequest?.(url, input, init, currentRouteTenant())
+      const graphCliUrl = authorization?.url
+      authorization?.beforeDispatch?.()
       if (graphCliUrl) {
         // Keep a Start now read inside Graph, including when Graph returns a redirect.
         const request = new Request(input, { ...init, redirect: "error" })

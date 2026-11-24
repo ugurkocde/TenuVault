@@ -6,6 +6,7 @@ import type { AuditJobItem } from "~/lib/audit/types"
 import type { AppSourceStore } from "../app-sources/store"
 import type { ContentEncryption } from "./content-stream"
 import { encryptRestoreContent, newRestoreSecrets, type RestoreSecrets } from "./restore-encryption"
+import { FetchPreconditionError } from "../api/network-error"
 import { putRestoreBlock, restoreGraph, type RestoreGraph } from "./restore-graph"
 import { assertRestoredSettings, restoreBody, snapshotHash, type AppRestoreSnapshot } from "./restore-snapshot"
 
@@ -165,7 +166,16 @@ async function restoreOwnedApp(store: AppSourceStore, source: CapturedAppSource,
       // can create the app; unknown POST outcomes still require reconciliation.
       record.creationStarted = false; await save(); signal.throwIfAborted()
     }
-    record.appId = identifier((await write(() => graph("POST", BASE, body), { creationApplied: true })).id)
+    try {
+      record.appId = identifier((await write(() => graph("POST", BASE, body), { creationApplied: true })).id)
+    } catch (error) {
+      if (error instanceof FetchPreconditionError) {
+        record.creationStarted = false
+        audit({ dispatched: false })
+        await save()
+      }
+      throw error
+    }
     audit()
     await save()
   }

@@ -9,6 +9,7 @@ import { isPackWriteScope, missingPackScopes, type PermissionPack } from "../../
 import { GRAPH_CLI_CLIENT_ID, GRAPH_CLI_DISABLED, GRAPH_CLI_NEXT_STEP, sharedSignInMethod as sharedMethod } from "../../shared/tenant-connection"
 import type { TenantConnection } from "../../shared/tenant-connection"
 import { executionMetadata } from "../api/execution-metadata"
+import type { RequestAuthorization } from "../api/fetch-bridge"
 
 export const READ_ONLY = `Start now is read-only. ${GRAPH_CLI_NEXT_STEP}`
 const PACK_REQUIRED = "Approve the restore permission pack for this service in Sign-in and access."
@@ -17,6 +18,11 @@ const TOKEN_UNVERIFIED = "TenuVault could not verify the tenant and app in this 
 type SharedMethod = NonNullable<ReturnType<typeof sharedMethod>>
 type IssuedToken = TokenGrant & { tenantId: string; clientId: string; scope: string; expiresAt: number; reader?: true }
 const GRAPH_ONLY = `Start now only connects to Microsoft Graph and uses local backup storage. ${GRAPH_CLI_NEXT_STEP}`
+
+export interface AppRestoreAuthorization {
+  connections: ReadonlyMap<string, string | undefined>
+  authorize: () => Promise<void>
+}
 
 export class ConnectionCapabilities {
   // Retain the acquisition context in memory, keyed by a digest so opaque bearers stay untouched.
@@ -88,19 +94,20 @@ export class ConnectionCapabilities {
     this.issued.set(accessTokenDigest(token), binding)
   }
 
-  appRestoreAuthorization(source: string, destination: string): () => Promise<void> {
-    const sourceClient = this.record(source)?.clientId ?? null
-    const destinationClient = this.record(destination)?.clientId ?? null
+  appRestoreAuthorization(source: string, destination: string): AppRestoreAuthorization {
+    const connections = this.bindConnections([source, destination])
+    const sourceClient = connections.get(normalizeGuid(source)) ?? null
+    const destinationClient = connections.get(normalizeGuid(destination)) ?? null
     this.requireNonGraphCli(source)
     this.requireNonGraphCli(destination)
-    return async () => {
-      this.requireNonGraphCli(source)
-      await this.requireAppRestoreWrite(destination, destinationClient)
-      this.requireNonGraphCli(source)
-      const currentSourceClient = this.record(source)?.clientId ?? null
-      if (sourceClient !== currentSourceClient && (sharedMethod(sourceClient) || sharedMethod(currentSourceClient))) {
-        throw new Error(CONNECTION_CHANGED)
-      }
+    return {
+      connections,
+      authorize: async () => {
+        this.requireNonGraphCli(source)
+        await this.requireAppRestoreWrite(destination, destinationClient)
+        this.requireNonGraphCli(source)
+        this.requireBoundParticipant(source, sourceClient)
+      },
     }
   }
 
@@ -161,7 +168,7 @@ export class ConnectionCapabilities {
     return graphCliScopes(token, explicit)
   }
 
-  async authorizeRequest(url: URL, input: RequestInfo | URL, init: RequestInit | undefined, routeTenant: string | null): Promise<void | URL> {
+  async authorizeRequest(url: URL, input: RequestInfo | URL, init: RequestInit | undefined, routeTenant: string | null): Promise<void | RequestAuthorization> {
     const authorization = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)).get("authorization")
     const token = /^Bearer\s+(.+)$/i.exec(authorization ?? "")?.[1]
     const digest = token ? accessTokenDigest(token) : undefined
@@ -182,15 +189,17 @@ export class ConnectionCapabilities {
     const shared = sharedMethod(clientId)
     // Own registrations keep the original transport. Their acquisition context is used
     // only when a shared connection participates or a tenant switches to one in flight.
-    const sharedParticipant = bound && [...bound].some(([id, admitted]) =>
-      sharedMethod(admitted ?? null) || sharedMethod(this.record(id)?.clientId ?? null))
-    if (!shared && !sharedParticipant && !(tenantId && sharedMethod(this.record(tenantId)?.clientId ?? null))) return
+    const usesSharedConnection = () => shared || (bound && [...bound].some(([id, admitted]) =>
+      sharedMethod(admitted ?? null) || sharedMethod(this.record(id)?.clientId ?? null))) ||
+      (tenantId && sharedMethod(this.record(tenantId)?.clientId ?? null))
+    const appRestoreDestination = metadata?.appRestoreDestination
+    const checkAtDispatch = Boolean(appRestoreDestination) || (graph && (bound?.size ?? 0) > 1)
+    if (!checkAtDispatch && !usesSharedConnection()) return
     const resource = graph ? RESOURCE_SCOPES.graph
       : url.hostname === "management.azure.com" ? RESOURCE_SCOPES.management
       : url.hostname.endsWith(".blob.core.windows.net") ? RESOURCE_SCOPES.storage
       : url.hostname === "api.securitycenter.microsoft.com" ? "https://api.securitycenter.microsoft.com/.default" : undefined
-    if (!graph && (shared === "graphCli" || (resource && bound && [...bound.keys()].some(id => this.isGraphOnly(id))))) throw new Error(GRAPH_ONLY)
-    if (acquisition?.reader && tenantId && this.isGraphOnly(tenantId)) throw new Error(READ_ONLY)
+    if (!graph && shared === "graphCli") throw new Error(GRAPH_ONLY)
     const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase()
     let writes = graph && method !== "GET" && method !== "HEAD" ? [url.pathname] : []
     if (graph && method === "POST" && /^\/(?:beta|v1\.0)\/\$batch$/i.test(url.pathname)) {
@@ -203,52 +212,80 @@ export class ConnectionCapabilities {
         : [""]
     }
 
-    if (token && (resource || shared || bound?.size) && (!tenantId || !clientId)) throw new Error(TOKEN_UNVERIFIED)
-    if (acquisition && (acquisition.expiresAt <= Date.now() || (resource && acquisition.scope !== resource))) throw new Error(TOKEN_UNVERIFIED)
-    if (shared && tenantId && clientId) await this.requireConnectionEnabled(tenantId, clientId, RESOURCE_SCOPES.graph, shared === "graphCli")
+    const check = () => {
+      if (!usesSharedConnection()) return
+      if (appRestoreDestination && bound) {
+        for (const [id, admitted] of bound) {
+          this.requireNonGraphCli(id)
+          this.requireBoundParticipant(id, admitted ?? null)
+        }
+        if (this.record(appRestoreDestination)?.method === "tenuvaultApp" &&
+          !this.restorePacks(appRestoreDestination).some(pack => pack.id === "intune-restore")) throw new Error(PACK_REQUIRED)
+      }
+      if (!graph && (shared === "graphCli" || (resource && bound && [...bound.keys()].some(id => this.isGraphOnly(id))))) throw new Error(GRAPH_ONLY)
+      if (acquisition?.reader && tenantId && this.isGraphOnly(tenantId)) throw new Error(READ_ONLY)
+      if (token && (resource || shared || bound?.size) && (!tenantId || !clientId)) throw new Error(TOKEN_UNVERIFIED)
+      if (acquisition && (acquisition.expiresAt <= Date.now() || (resource && acquisition.scope !== resource))) throw new Error(TOKEN_UNVERIFIED)
 
-    if (tenantId && clientId) {
-      const current = this.record(tenantId)
-      const admitted = bound?.get(tenantId)
-      if (bound?.size && !bound.has(tenantId)) throw new Error(CONNECTION_CHANGED)
-      if (!acquisition?.reader) {
-        if (admitted && normalizeGuid(admitted) !== clientId) throw new Error(CONNECTION_CHANGED)
-        if ((shared || current?.origin === "wizard" || (acquisition && current)) && (!current || normalizeGuid(current.clientId) !== clientId)) {
-          throw new Error(CONNECTION_CHANGED)
+      if (tenantId && clientId) {
+        const current = this.record(tenantId)
+        const admitted = bound?.get(tenantId)
+        if (bound?.size && !bound.has(tenantId)) throw new Error(CONNECTION_CHANGED)
+        if (!acquisition?.reader) {
+          if (admitted && normalizeGuid(admitted) !== clientId) throw new Error(CONNECTION_CHANGED)
+          if ((shared || current?.origin === "wizard" || (acquisition && current)) && (!current || normalizeGuid(current.clientId) !== clientId)) {
+            throw new Error(CONNECTION_CHANGED)
+          }
         }
       }
-    }
 
-    if (!writes.length) {
-      if (shared !== "graphCli") return
-      // Some shared readers still construct a versioned URL for an own registration.
-      const path = url.pathname.replace(/^\/v1\.0(?=\/)/i, "/beta")
-      if (!path.startsWith("/beta/")) throw new Error(GRAPH_ONLY)
-      const beta = new URL(url)
-      beta.pathname = path
-      return beta
-    }
-    const targets = copy
-      ? [copy.source, ...(tenantId && copy.destinations.some(id => normalizeGuid(id) === tenantId) ? [tenantId] : copy.destinations)]
-      : [tenantId ?? routeTenant].filter((id): id is string => id != null)
-    this.requireWrite(targets)
-    if (acquisition?.reader || (shared === "graphCli")) throw new Error(READ_ONLY)
-    if (shared !== "tenuvaultApp") {
-      if (!token && targets.some(id => this.record(id)?.method === "tenuvaultApp")) throw new Error(PACK_REQUIRED)
-      return
-    }
+      if (!writes.length) return
+      if (checkAtDispatch && bound && !appRestoreDestination) {
+        for (const [id, admitted] of bound) {
+          this.requireNonGraphCli(id)
+          this.requireBoundParticipant(id, admitted ?? null)
+        }
+      }
+      const targets = copy
+        ? [copy.source, ...(tenantId && copy.destinations.some(id => normalizeGuid(id) === tenantId) ? [tenantId] : copy.destinations)]
+        : [tenantId ?? routeTenant].filter((id): id is string => id != null)
+      this.requireWrite(targets)
+      if (acquisition?.reader || shared === "graphCli") throw new Error(READ_ONLY)
+      if (shared !== "tenuvaultApp") {
+        if (!token && targets.some(id => this.record(id)?.method === "tenuvaultApp")) throw new Error(PACK_REQUIRED)
+        return
+      }
 
-    if (!token || !tenantId) throw new Error(PACK_REQUIRED)
-    const permissions = sharedTokenScopes(token, acquisition?.grantedScopes)
-    const allowed = this.restorePacks(tenantId)
-    if (writes.some(path => {
-      const recycle = metadata?.directoryRecycle
-      const type = method === "POST" && url.pathname === path && recycle?.path === path && /^\/beta\/directory\/deletedItems\/[0-9a-f-]+\/restore$/i.test(path) ? recycle.type : undefined
-      const pack = allowed.find(pack => pack.id === (type ? "entra-restore" : restorePackForPath(path)))
-      const scopes = type === "user" ? admittedDirectoryPermissions("Users", "recycle") : type === "group" ? ["Group.ReadWrite.All"] : []
-      if (type === "user" && !scopes.length) return true
-      return !pack || missingPackScopes([...pack.scopes, ...scopes], permissions).length > 0
-    })) throw new Error(PACK_REQUIRED)
+      if (!token || !tenantId) throw new Error(PACK_REQUIRED)
+      const permissions = sharedTokenScopes(token, acquisition?.grantedScopes)
+      const allowed = this.restorePacks(tenantId)
+      if (writes.some(path => {
+        const recycle = metadata?.directoryRecycle
+        const type = method === "POST" && url.pathname === path && recycle?.path === path && /^\/beta\/directory\/deletedItems\/[0-9a-f-]+\/restore$/i.test(path) ? recycle.type : undefined
+        const pack = allowed.find(pack => pack.id === (type ? "entra-restore" : restorePackForPath(path)))
+        const scopes = type === "user" ? admittedDirectoryPermissions("Users", "recycle") : type === "group" ? ["Group.ReadWrite.All"] : []
+        if (type === "user" && !scopes.length) return true
+        return !pack || missingPackScopes([...pack.scopes, ...scopes], permissions).length > 0
+      })) throw new Error(PACK_REQUIRED)
+    }
+    if (shared && tenantId && clientId) await this.requireConnectionEnabled(tenantId, clientId, RESOURCE_SCOPES.graph, shared === "graphCli")
+    // Single-tenant calls keep their usual checks. For cross-tenant writes and installer
+    // traffic the bridge runs the check after its last await, in the same turn as fetch.
+    if (!checkAtDispatch) check()
+    const beforeDispatch = checkAtDispatch ? check : undefined
+    if (writes.length || shared !== "graphCli") return beforeDispatch ? { beforeDispatch } : undefined
+
+    // Some shared readers still construct a versioned URL for an own registration.
+    const path = url.pathname.replace(/^\/v1\.0(?=\/)/i, "/beta")
+    if (!path.startsWith("/beta/")) throw new Error(GRAPH_ONLY)
+    const beta = new URL(url)
+    beta.pathname = path
+    return { url: beta, beforeDispatch }
+  }
+
+  private requireBoundParticipant(tenant: string, admitted: string | null): void {
+    const current = this.record(tenant)?.clientId ?? null
+    if ((sharedMethod(admitted) || sharedMethod(current)) && admitted !== current) throw new Error(CONNECTION_CHANGED)
   }
 
   private record(tenant: string) {

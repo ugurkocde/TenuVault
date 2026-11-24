@@ -368,6 +368,35 @@ describe("Start now capability", () => {
     expect(network).toHaveBeenCalledTimes(side === "source" ? 2 : 1)
   })
 
+  it("stops Copy to Tenants if the source switches after the bridge starts authorization", async () => {
+    const own: TenantConnection = { version: 1, method: "ownApp", clientId: OWN, origin: "wizard", createdAt: NOW, updatedAt: NOW }
+    let source = own
+    const cap = new ConnectionCapabilities(id => id === TENANT ? source : own)
+    const network = vi.fn(async () => new Response("{}"))
+    const fetch = createBridgedFetch({
+      dispatch: vi.fn(), getDelegatedToken: vi.fn(), fetch: network,
+      authorizeRequest: (url, input, init, tenant) => {
+        const authorization = cap.authorizeRequest(url, input, init, tenant)
+        queueMicrotask(() => { source = { ...own, method: "graphCli", clientId: GRAPH_CLI_CLIENT_ID } })
+        return authorization
+      },
+    })
+    cap.requireIssuedToken(OTHER, OWN, RESOURCE_SCOPES.graph, "opaque-destination")
+    const host = new ApiHost({ bindConnections: ids => cap.bindConnections(ids), guard: request => cap.guard(request), routes: {
+      "/api/restore-backup": { POST: async () => {
+        await expect(fetch("https://graph.microsoft.com/beta/deviceManagement/configurationPolicies", {
+          method: "POST", headers: { authorization: "Bearer opaque-destination" },
+        })).rejects.toThrow(READ_ONLY)
+        return Response.json({ ok: true })
+      } },
+    } })
+    const response = await host.dispatch(new Request("http://test/api/restore-backup", {
+      method: "POST", body: JSON.stringify({ tenantId: TENANT, targetTenants: [{ tenantId: OTHER, appId: OWN }] }),
+    }))
+    expect(network).not.toHaveBeenCalled()
+    expect(response.status).toBe(200)
+  })
+
   it("blocks writes even with a write token, including copy from or to the tenant", async () => {
     const f = fixture()
     const cap = new ConnectionCapabilities(id => f.connections.get(id), undefined, async () => true)
@@ -533,7 +562,7 @@ describe("TenuVault app capabilities", () => {
       expect(() => cap.requireIssuedToken(TENANT, clientId, RESOURCE_SCOPES.graph, jwt({ tid: OTHER, azp: clientId }))).toThrow("could not verify")
       cap.requireIssuedToken(TENANT, clientId, RESOURCE_SCOPES.graph, "opaque-shared-token", { grantedScopes: scopes })
       const read = cap.authorizeRequest(url, url, { headers }, TENANT)
-      if (method === "graphCli") await expect(read).resolves.toMatchObject({ href: url.href })
+      if (method === "graphCli") await expect(read).resolves.toMatchObject({ url: { href: url.href } })
       else await expect(read).resolves.toBeUndefined()
       const write = cap.authorizeRequest(url, url, { method: "POST", headers }, TENANT)
       if (method === "graphCli") await expect(write).rejects.toThrow(READ_ONLY)
@@ -626,7 +655,7 @@ describe("Start now enrollment and coverage", () => {
     cap.requireIssuedToken(TENANT, GRAPH_CLI_CLIENT_ID, RESOURCE_SCOPES.graph, "opaque")
     const headers = { authorization: "Bearer opaque" }
     const request = (url: string) => cap.authorizeRequest(new URL(url), url, { headers }, TENANT)
-    await expect(request("https://graph.microsoft.com/beta/organization")).resolves.toMatchObject({ pathname: "/beta/organization" })
+    await expect(request("https://graph.microsoft.com/beta/organization")).resolves.toMatchObject({ url: { pathname: "/beta/organization" } })
     expect(health).toHaveBeenLastCalledWith("graphCli", true)
     for (const host of ["management.azure.com", "fixture.blob.core.windows.net", "api.securitycenter.microsoft.com", "api.security.microsoft.com", "outlook.office365.com"]) {
       await expect(request(`https://${host}/test`)).rejects.toThrow("only connects to Microsoft Graph")

@@ -12,6 +12,8 @@ export interface ExecutionMetadata {
   registrationSetup?: { tenantId: string; clientId: string; tokenDigest: string }
   /** Set only around the final write after a fresh deleted-object type check. */
   directoryRecycle?: { path: string; type: "user" | "group" }
+  /** Installer restore also binds its source for metadata reads and content uploads. */
+  appRestoreDestination?: string
   /** The source and destinations admitted for a cross-tenant backup copy. */
   copyTenants?: { source: string; destinations: string[] }
   directoryActor?: Pick<SignedInAccount, "username" | "name">

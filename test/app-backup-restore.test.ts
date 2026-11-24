@@ -21,6 +21,8 @@ import { ingestContent, type ContentEncryption } from "../src/main/app-backup/co
 import { appRestoreAuditItem, restoreAppWithAudit, restoreCapturedApp, type AppRestoreAuditObservation } from "../src/main/app-backup/restore"
 import { restoreGraph, putRestoreBlock, type RestoreGraph } from "../src/main/app-backup/restore-graph"
 import { assertRestoredSettings, readRestoreSnapshot, restoreBody, snapshotHash, type AppRestoreSnapshot } from "../src/main/app-backup/restore-snapshot"
+import { createBridgedFetch } from "../src/main/api/fetch-bridge"
+import { RESOURCE_SCOPES } from "../src/shared/constants"
 import { ConnectionCapabilities, READ_ONLY } from "../src/main/auth/connection-capabilities"
 import { GRAPH_CLI_CLIENT_ID, TENUVAULT_CLIENT_ID, type TenantConnection } from "../src/shared/tenant-connection"
 import { resourcePackScopes, tenantPermissionPacks } from "../src/shared/services/permission-packs"
@@ -155,13 +157,26 @@ it.each([
   }
 })
 
-it.each(["during preflight", "during token acquisition", "between uploads"] as const)("stops an installer restore when its source switches to Start now %s", async boundary => {
+it.each(["during preflight", "during token acquisition", "during bridge availability", "before app creation dispatch", "between uploads"] as const)("stops an installer restore when its source switches to Start now %s", async boundary => {
   const f = await fixture(snapshot, boundary === "between uploads"), d = destination()
   const own: TenantConnection = { version: 1, method: "ownApp", clientId: appId, origin: "wizard", createdAt: "", updatedAt: "", graphScopes: [] }
   let sourceConnection = own
   const switchSource = () => { sourceConnection = { ...own, method: "graphCli", clientId: GRAPH_CLI_CLIENT_ID } }
-  const caps = new ConnectionCapabilities(id => id === tenant ? sourceConnection : own)
-  const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+  const beforeCreation = boundary === "before app creation dispatch"
+  const throughBridge = boundary === "during bridge availability" || beforeCreation
+  const packs = tenantPermissionPacks({ intune: { access: "restore" } }, { azure: false, audit: false })
+  const scopes = resourcePackScopes(packs, "graph")
+  const shared: TenantConnection = { ...own, method: "tenuvaultApp", clientId: TENUVAULT_CLIENT_ID, graphScopes: scopes }
+  let availabilityChecks = 0
+  const caps = new ConnectionCapabilities(id => id === tenant ? sourceConnection : throughBridge ? shared : own, () => packs, async () => {
+    if (++availabilityChecks === (beforeCreation ? 4 : 2)) {
+      await Promise.resolve()
+      switchSource()
+    }
+    return true
+  })
+  if (throughBridge) caps.requireIssuedToken(target, TENUVAULT_CLIENT_ID, RESOURCE_SCOPES.graph, "fixture-token", { grantedScopes: scopes })
+  const network = vi.fn<typeof globalThis.fetch>(async (input, init) => {
     const url = new URL(String(input))
     if (url.hostname.endsWith(".blob.core.windows.net")) {
       const response = await d.fetcher(input, init)
@@ -170,6 +185,10 @@ it.each(["during preflight", "during token acquisition", "between uploads"] as c
     }
     return Response.json(await d.graph(init?.method as "GET" | "POST" | "PATCH", url.href, init?.body ? JSON.parse(String(init.body)) : undefined))
   })
+  const fetch = throughBridge ? createBridgedFetch({
+    dispatch: vi.fn(), getDelegatedToken: vi.fn(), fetch: network,
+    authorizeRequest: (url, input, init, tenant) => caps.authorizeRequest(url, input, init, tenant),
+  }) : network
   const service = new AppSourceService({
     restoreAuthorization: (source, destination) => caps.appRestoreAuthorization(source, destination),
     restorePlan: async () => {
@@ -191,9 +210,16 @@ it.each(["during preflight", "during token acquisition", "between uploads"] as c
     signIn: vi.fn(), details: vi.fn(), apps: vi.fn(), printDetails: vi.fn(), downloadScript: vi.fn(),
   })
   await expect(service.restore(tenant, randomUUID(), f.source.id, target, "Restored", snapshotHash(snapshot))).rejects.toThrow(READ_ONLY)
+  if (throughBridge) expect(availabilityChecks).toBe(beforeCreation ? 4 : 2)
   expect(d.fetcher).toHaveBeenCalledTimes(boundary === "between uploads" ? 1 : 0)
-  if (boundary !== "between uploads") expect(fetch).not.toHaveBeenCalled()
-  expect(d.calls.some(([method, path]) => method === "PATCH" || path.endsWith("/commit"))).toBe(false)
+  if (beforeCreation) {
+    expect(network.mock.calls.map(([, init]) => init?.method)).toEqual(["GET"])
+    sourceConnection = own
+    await expect(service.restore(tenant, randomUUID(), f.source.id, target, "Restored", snapshotHash(snapshot))).resolves.toMatchObject({ sourceId: f.source.id })
+  } else {
+    if (boundary !== "between uploads") expect(network).not.toHaveBeenCalled()
+    expect(d.calls.some(([method, path]) => method === "PATCH" || path.endsWith("/commit"))).toBe(false)
+  }
 })
 
 describe("app restore snapshots", () => {
