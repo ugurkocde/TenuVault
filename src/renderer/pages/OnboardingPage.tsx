@@ -1065,7 +1065,7 @@ export default function OnboardingPage() {
               {serviceChecks.some(service => service.count > 0) && <ul className="space-y-1 text-sm text-gray-700" aria-label="Backup coverage">
                 {serviceChecks.filter(service => service.count > 0).map(service => <li key={service.id}>
                   <span className="font-medium">{service.label}</span>{": "}
-                  {service.unknown ? "Coverage could not be checked" : service.complete === service.count ? `all ${service.count} areas` : `${service.complete} of ${service.count} areas`}
+                  {service.unknown ? "Coverage could not be checked" : service.complete === service.count ? (service.count === 1 ? "1 area" : `all ${service.count} areas`) : `${service.complete} of ${service.count} ${service.count === 1 ? "area" : "areas"}`}
                   {service.scopes.length > 0 && `, ${service.scopes.length} missing permission${service.scopes.length === 1 ? "" : "s"}`}
                 </li>)}
               </ul>}

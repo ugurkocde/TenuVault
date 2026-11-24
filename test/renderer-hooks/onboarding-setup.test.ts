@@ -1705,6 +1705,8 @@ describe("sign-in method wizard", () => {
     expect(container.textContent).toContain("Check (needs attention)")
     await act(async () => button(container, "Continue without Defender")!.click())
     expect(container.textContent).toContain("Connected. Everything you picked can be backed up.")
+    expect(container.textContent).toContain("1 area")
+    expect(container.textContent).not.toContain("all 1 areas")
     expect(state.wizardFinish).not.toHaveBeenCalled()
   })
 
