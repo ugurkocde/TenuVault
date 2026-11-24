@@ -125,7 +125,7 @@ The log lists what TenuVault did, with a time stamp per line. Typical lines:
 | "Intune is turned off for this tenant, so its types are not backed up. ..." | Intune is off for the tenant under **Settings** > **Services and permissions**, so this backup holds no Intune policies. Turn it on there to back them up again. |
 | "Found N ... (N built-in skipped)." | Items found for a type. Built-in objects Intune recreates itself are skipped. |
 | "Backed up N ..." | All items of a type are saved |
-| "Skipped ...: access was denied. The app registration may lack the permission or admin consent, or your Intune role may not allow it." | Microsoft Graph refused access to this type: a permission or its admin consent is missing, or your Intune role does not cover it. The backup continues without it. |
+| "Skipped ... (HTTP 403): access was denied. The app registration may lack the permission or admin consent, or your Intune role may not allow it." | Microsoft Graph refused access to this type. The log includes the error code when available. The backup continues without the type. |
 | "Skipped ... (HTTP ...): Microsoft refused the read ..." | The log gives the HTTP status, the error code when available, and guidance for a missing permission, a role your account lacks, or a product the tenant has no license for or never set up. The backup continues without the type. See [Coverage](#coverage). |
 | "... is not set up in this tenant." | Microsoft answered that this setting was never made. There is nothing to save, and nothing is missing from the backup. |
 | "Could not read ...: ..." | A whole type could not be listed. The backup completes with warnings. |
@@ -135,9 +135,9 @@ The log lists what TenuVault did, with a time stamp per line. Typical lines:
 | "Backup completed: N policies in ..." | The final count and duration |
 | "Backup failed: nothing could be read. ..." | Every selected type was left out, so the backup holds nothing. The line names the cause most types share. See [Coverage](#coverage). |
 
-If Microsoft Graph throttles requests, TenuVault pauses and retries automatically. If your sign-in expires during a backup, the backup stops instead of reporting every remaining item as a warning, whichever service was being read. Sign in again and run a new backup.
+If Microsoft Graph throttles requests, TenuVault pauses and retries automatically. If your sign-in expires during a backup, the backup stops. The log and failed-run history identify the service that needs a new sign-in and show a refusal code when available. Sign in again to that tenant and run a new backup.
 
-For Azure Blob Storage failures, the log gives the HTTP status, the error code when available, and what to check. Graph skip messages and Azure Blob Storage failures use built-in guidance to keep account details from provider messages out of the log.
+For Azure Blob Storage failures, the log gives the HTTP status, the error code when available, and what to check. For `AuthenticationFailed`, sign in to the tenant again. For an unexpected `BlobNotFound`, check the configured container or backup location. Graph skip messages and Azure Blob Storage failures use built-in guidance to keep account details from provider messages out of the log.
 
 Some Defender and Entra ID endpoints refuse a read with the same answer Microsoft gives for a sign-in that ended. TenuVault asks such a request once more with a new sign-in token. Only when the new token gets the same answer is the type left out; when no new token can be had, the backup stops and you are asked to sign in again.
 

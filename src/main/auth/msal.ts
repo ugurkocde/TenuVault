@@ -2,6 +2,7 @@ import {
   InteractionRequiredAuthError,
   LogLevel,
   PublicClientApplication,
+  ServerError,
   type AccountInfo,
   type AuthenticationResult,
   type ICachePlugin,
@@ -11,7 +12,7 @@ import { captureTokenActor } from "../api/execution-metadata"
 import { RESOURCE_SCOPES } from "../../shared/constants"
 import { FIRST_SIGN_IN_TIMEOUT_MESSAGE } from "../../shared/app-registration"
 import { ConnectionSwitchError } from "./switch-failure"
-import { namedSignInCode, signInLogCode, signInErrorRow } from "../../shared/sign-in-errors"
+import { namedSignInCode, oauthSignInCode, signInLogCode, signInErrorRow } from "../../shared/sign-in-errors"
 import { isGuid, isMicrosoftLoginUrl, normalizeGuid } from "../../shared/security"
 import { fetchNetworkClient, msalTokenGrants, type TokenGrant } from "./network-client"
 import { loopbackSignIn } from "./loopback-sign-in"
@@ -68,6 +69,10 @@ function accountForTenant(account: AccountInfo, tenantId: string) {
  * shows a prompt and calls `reauthenticate` when the admin agrees.
  */
 export class SignInRequiredError extends Error {
+  // Account-specific text is for the banner and must stay out of error messages and inspection.
+  readonly #prompt: string
+  get prompt(): string { return this.#prompt }
+
   /**
    * Microsoft's error number and OAuth error of a refused silent request, as MSAL reports them.
    * Connection health reads these; the message is worded for the admin and is never parsed.
@@ -82,12 +87,15 @@ export class SignInRequiredError extends Error {
     /** The resource scope that needs the sign-in, so signing in again requests that scope. */
     readonly scope: string = RESOURCE_SCOPES.graph,
     /** Microsoft's refusal behind it, when there was one. */
-    refusal?: { errorNo?: unknown; errorCode?: unknown },
+    refusal?: SilentRefusal,
   ) {
-    super(reason)
+    const code = silentRefusalCode(refusal)
+    super(`${resourceName(scope)} (${code ?? "sign_in_required"}). Sign in again to this tenant.`)
     this.name = "SignInRequiredError"
-    if (typeof refusal?.errorNo === "string" || typeof refusal?.errorNo === "number") this.errorNo = String(refusal.errorNo)
-    if (typeof refusal?.errorCode === "string") this.errorCode = refusal.errorCode
+    this.#prompt = reason
+    if (code) this.errorNo = code.slice("AADSTS".length)
+    const oauth = oauthSignInCode(refusal?.errorCode)
+    if (oauth) this.errorCode = oauth
   }
 }
 
@@ -102,13 +110,31 @@ export function isResourceScope(scope: unknown): scope is string {
   return typeof scope === "string" && Object.hasOwn(RESOURCE_NAMES, scope)
 }
 
+function resourceName(scope: string): string {
+  return isResourceScope(scope) ? RESOURCE_NAMES[scope]! : "Microsoft"
+}
+
+type SilentRefusal = { errorNo?: unknown; errorCode?: unknown; errorMessage?: string }
+
+function silentRefusalCode(refusal?: SilentRefusal): string | undefined {
+  const number = refusal?.errorNo
+  if ((typeof number === "number" || typeof number === "string") && /^\d{4,9}$/.test(String(number))) return `AADSTS${number}`
+  const code = refusal?.errorCode
+  if (typeof code === "string") {
+    if (/^AADSTS\d{4,9}$/.test(code)) return code
+    const numeric = /^(\d{4,9})( \d{4,9})*$/.exec(code)
+    if (numeric) return `AADSTS${numeric[1]}`
+  }
+  return /\bAADSTS\d{4,9}\b/.exec(refusal?.errorMessage ?? "")?.[0]
+}
+
 /**
  * Message for a silent token request Microsoft refused. It names the resource and the AADSTS
  * code, because a refusal for one resource (such as AADSTS65001, no consent for Azure Storage)
  * can persist while signing in to Microsoft Graph succeeds.
  */
-export function signInAgainMessage(username: string, scope: string, error: { errorCode?: string; errorMessage?: string }): string {
-  const codes = [error.errorCode, /AADSTS\d+/.exec(error.errorMessage ?? "")?.[0]].filter(Boolean)
+export function signInAgainMessage(username: string, scope: string, error: SilentRefusal): string {
+  const codes = [oauthSignInCode(error.errorCode), silentRefusalCode(error)].filter(Boolean)
   const resource = isResourceScope(scope) ? RESOURCE_NAMES[scope] : undefined
   return `Microsoft needs you to sign in again as ${username}${resource ? ` for ${resource}` : ""}${codes.length ? ` (${codes.join(", ")})` : ""}.`
 }
@@ -380,7 +406,7 @@ export class AuthManager {
     const tenant = normalizeGuid(tenantId), stored = this.host.accountStore.get(tenant)
     const account = stored ? await this.findAccount(this.app(stored.clientId), stored.homeAccountId) : null
     const profile = account && accountForTenant(account, tenant)
-    if (!stored || normalizeGuid(stored.tenantId) !== tenant || !profile?.localAccountId) throw new SignInRequiredError(tenantId, stored?.clientId ?? "", "Sign in to this tenant before managing saved directory restores.")
+    if (!stored || normalizeGuid(stored.tenantId) !== tenant || !profile?.localAccountId) throw new Error("Sign in to this tenant before managing saved directory restores.")
     return { tenantId: profile.tenantId, clientId: stored.clientId, userId: profile.localAccountId }
   }
 
@@ -419,6 +445,13 @@ export class AuthManager {
     } catch (error) {
       if (error instanceof InteractionRequiredAuthError) {
         throw new SignInRequiredError(tenantId, clientId, signInAgainMessage(stored.username, scope, error), scope, error)
+      }
+      if (error instanceof ServerError) {
+        // MSAL includes the provider's description, which can identify the account.
+        const code = silentRefusalCode(error)
+        const oauth = oauthSignInCode(error.errorCode) ?? "token_request_failed"
+        const guidance = signInErrorRow(code)?.firstSignIn ?? "Try again."
+        throw new ServerError(oauth, "", `${resourceName(scope)} token request failed${code ? ` (${code})` : ""}. ${guidance}`, undefined, code?.slice("AADSTS".length), error.status)
       }
       throw error
     }

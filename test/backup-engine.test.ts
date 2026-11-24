@@ -13,6 +13,7 @@ import { NextRequest } from "../src/main/api/next-server-shim"
 import { handleLocalBlobRequest, localAccountFromUrl } from "../src/main/storage/blob-emulator"
 import { LocalBlobStore } from "../src/main/storage/local-blob-store"
 import { localStorageAccountName } from "../src/shared/constants"
+import { manifestCoverage } from "../src/shared/backup-outcomes"
 import { INTUNE_TYPES } from "../src/shared/intune/registry"
 import { memoryStore } from "./helpers"
 
@@ -73,11 +74,16 @@ async function finished(engine: BackupEngine, id: string) {
 }
 
 describe("BackupEngine", () => {
-  it("reports Azure Blob failures without copying the provider message into the job or history", async () => {
+  it.each([
+    [400, "InvalidHeaderValue", "Check that the backup storage is available and retry."],
+    [403, "AuthenticationFailed", "Sign in again to this tenant."],
+    [404, "BlobNotFound", "Check the configured container or backup location."],
+    [403, "AuthorizationFailure", "Allow this computer's public IP address in the storage account's networking settings, or connect through a network it allows."],
+  ])("reports Azure Blob HTTP %i %s in the job and history with relevant guidance", async (status, code, guidance) => {
     const identifier = "private-admin@example.test"
     const history = new FailedAttemptLog(memoryStore())
     const engine = new BackupEngine({
-      fetch: async () => new Response(`<Error><Code>InvalidHeaderValue</Code><Message>Could not use ${identifier}.</Message></Error>`, { status: 400 }),
+      fetch: async () => new Response(`<Error><Code>${code}</Code><Message>Could not use ${identifier}.</Message></Error>`, { status }),
       getToken: async () => "token",
       onFinished: (job, request) => history.finished(job, request),
     })
@@ -85,9 +91,26 @@ describe("BackupEngine", () => {
     const attempts = history.list(TENANT)
     expect(job.status).toBe("Failed")
     expect(JSON.stringify({ job, attempts })).not.toContain(identifier)
-    expect(job.log.join("\n")).toContain("HTTP 400, InvalidHeaderValue")
-    expect(attempts).toMatchObject([{ runId: job.id, message: expect.stringContaining("HTTP 400, InvalidHeaderValue") }])
-    expect(firstBackupEvent(job)).toEqual({ name: "first_backup", props: { result: "failed", errorClass: "storage" } })
+    const detail = `HTTP ${status}, ${code}`
+    expect(job.log.join("\n")).toContain(detail)
+    expect(job.log.join("\n")).toContain(guidance)
+    expect(attempts).toMatchObject([{ runId: job.id, message: expect.stringContaining(detail) }])
+    expect(attempts[0]?.message).toContain(code === "AuthorizationFailure" ? "Allow this computer's public IP address" : guidance)
+    expect(firstBackupEvent(job)).toEqual({ name: "first_backup", props: { result: "failed", errorClass: status === 403 ? "permission" : "storage" } })
+  })
+
+  it.each([
+    [404, "Microsoft Graph request failed (HTTP 404)."],
+    [429, "Microsoft Graph throttled the request (HTTP 429)."],
+  ])("keeps Graph HTTP %i guidance for an unreadable type", async (status, guidance) => {
+    const graph = fakeGraph({
+      "/beta/deviceManagement/deviceCompliancePolicies": () => new Response("", { status, headers: { "retry-after": "0.001" } }),
+    })
+    const { engine, store, account } = setup(graph)
+    const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)
+    const metadata = JSON.parse((await store.get(account, "intune-backups", `${job.backupFolder}/metadata.json`)).data.toString())
+    expect(job.log.join("\n")).toContain(guidance)
+    expect(metadata.Outcomes).toContainEqual(expect.objectContaining({ Folder: "CompliancePolicies", Outcome: "failed", Error: guidance, Status: status }))
   })
 
   it("keeps every policy when names and id prefixes repeat", async () => {
@@ -441,14 +464,16 @@ describe("retention after incomplete backups", () => {
   })
 
   it("skips a newly supported type the app registration has no permission for, without blocking retention", async () => {
-    const graph = fakeGraph({ "/beta/deviceManagement/deviceManagementScripts": () => Response.json({ error: { message: "Forbidden" } }, { status: 403 }) })
+    const graph = fakeGraph({ "/beta/deviceManagement/deviceManagementScripts": () => Response.json({ error: { code: "Forbidden" } }, { status: 403 }) })
     const { engine, store, account } = setup(graph)
     const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)
     expect(job.progressMessage).toBe("Backup completed successfully")
-    expect(job.log.join("\n")).toMatch(/Skipped Windows PowerShell scripts: access was denied/)
+    expect(job.log.join("\n")).toContain("Skipped Windows PowerShell scripts (HTTP 403, Forbidden): access was denied.")
     expect(job.results!.types.find((type) => type.folder === "PowerShellScripts")).toMatchObject({ state: "skipped", reason: expect.stringMatching(/^Access was denied\./) })
     const metadata = JSON.parse((await store.get(account, "intune-backups", `${job.backupFolder}/metadata.json`)).data.toString())
     expect(metadata).toMatchObject({ Status: "Success", Failures: 0, SkippedTypes: ["PowerShellScripts"] })
+    expect(metadata.Outcomes).toContainEqual(expect.objectContaining({ Folder: "PowerShellScripts", Outcome: "skipped", Status: 403, Code: "Forbidden" }))
+    expect(manifestCoverage(metadata).notReadReasons?.PowerShellScripts).toContain("(HTTP 403, Forbidden) Access was denied.")
   })
 
   it("backs up administrative templates with paged assignments, definitions and presentation values", async () => {

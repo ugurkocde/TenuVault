@@ -22,7 +22,7 @@ export class BlobWriter {
   async ensureContainer(container = BACKUP_CONTAINER): Promise<void> {
     await this.request(`${container}?restype=container`, { method: "PUT" }, async (response) => {
       if (response.ok || response.status === 409) return
-      throw new StorageError(await storageError(response, this.account))
+      throw await storageError(response, this.account)
     })
   }
 
@@ -36,7 +36,7 @@ export class BlobWriter {
     // The earlier PUT may have landed. Read it back and compare it with what this writer sent.
     const landed = async (response: Response, signal: AbortSignal) => {
       const stored = await this.request(path, { method: "GET", signal }, async (readBack) => {
-        if (!readBack.ok) throw new StorageError(await storageError(readBack, this.account))
+        if (!readBack.ok) throw await storageError(readBack, this.account)
         return readBack.text()
       })
       if (stored !== body) return false
@@ -66,8 +66,9 @@ export class BlobWriter {
       // it from a permission refusal.
       const headerCode = response.headers.get("x-ms-error-code") ?? ""
       const bodyCode = isImmutabilityRefusal(response.status, headerCode) ? headerCode : /<Code>([^<]+)<\/Code>/.exec(await response.clone().text())?.[1] ?? ""
-      if (isImmutabilityRefusal(response.status, bodyCode)) throw new ImmutableBlobError(bodyCode, await storageError(response, this.account))
-      throw new StorageError(await storageError(response, this.account))
+      const error = await storageError(response, this.account)
+      if (isImmutabilityRefusal(response.status, bodyCode)) throw new ImmutableBlobError(bodyCode, error.message)
+      throw error
     }, beforeCommit, onDispatch, onUnconfirmed)
   }
 
@@ -169,7 +170,7 @@ export class BlobWriter {
             },
           })
           if (retryableStatus(response.status) && attempt < REQUEST_ATTEMPTS - 1) {
-            throw new RetryableStorageError(await storageError(response, this.account))
+            throw new RetryableStorageError((await storageError(response, this.account)).message)
           }
           const result = await read(response, signal, ambiguous)
           signal.throwIfAborted()

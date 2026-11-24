@@ -31,7 +31,7 @@
       "Found 0 compliance scripts.",
       "Found 1 compliance policy settings.",
       "Found 0 security baselines and template profiles.",
-      "Skipped Windows PowerShell scripts: access was denied. The app registration may lack the permission or admin consent, or your Intune role may not allow it.",
+      "Skipped Windows PowerShell scripts (HTTP 403, Forbidden): access was denied. The app registration may lack the permission or admin consent, or your Intune role may not allow it.",
       "Found 0 macOS shell scripts.",
       "Found 0 macOS custom attributes.",
       "Found 0 remediations.",

@@ -57,13 +57,19 @@ export class GraphPauseError extends Error {}
 export class GraphUnansweredError extends Error {}
 
 export class StorageError extends Error {}
+class StorageResponseError extends StorageError {
+  constructor(message: string, readonly code: string | undefined) { super(message) }
+}
 /** A write that an immutability policy or legal hold refused, with the provider's error code. */
 export class ImmutableBlobError extends StorageError {
   constructor(readonly code: string, message: string) { super(message) }
 }
 export class LargeStorageError extends StorageError {
   constructor(readonly status?: number, options?: ErrorOptions) {
-    super(`${LARGE_STORAGE_UNAVAILABLE}${status ? ` Storage returned ${status}.` : ""}`, options)
+    const cause = options?.cause
+    const hasSpecificGuidance = cause instanceof StorageResponseError &&
+      ((status === 403 && cause.code === "AuthenticationFailed") || (status === 404 && cause.code === "BlobNotFound"))
+    super(hasSpecificGuidance ? cause.message : `${LARGE_STORAGE_UNAVAILABLE}${status ? ` Storage returned ${status}.` : ""}`, options)
   }
 }
 /**
@@ -81,7 +87,7 @@ export async function storageFailure(response: Response, account: string): Promi
     const decoded = (message ?? "Files in the backup folder could not be read.").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&amp;/g, "&")
     return new InventoryDamagedError(decoded)
   }
-  return new StorageError(await storageError(response, account))
+  return storageError(response, account)
 }
 /** The create-only claim for a backup folder found the marker already there. */
 export class BlobClaimError extends StorageError {}
@@ -187,18 +193,24 @@ export function providerStatus(status: number, code: string | undefined): string
   return `HTTP ${status}${code ? `, ${code}` : ""}`
 }
 
-/** The message for a failed storage response. A network error response rejects with a StorageUnreachableError instead. */
-export async function storageError(response: Response, account: string): Promise<string> {
+/** A failed storage response. A network error response rejects with a StorageUnreachableError instead. */
+export async function storageError(response: Response, account: string): Promise<StorageError> {
   if (response.status === 0 || response.type === "error") throw new StorageUnreachableError(`Storage account ${account} could not be reached.`)
   const text = await response.text()
-  const code = /<Code>([^<]+)<\/Code>/.exec(text)?.[1] ?? response.headers.get("x-ms-error-code") ?? ""
-  const detail = providerStatus(response.status, providerErrorCode(code))
+  const code = providerErrorCode(/<Code>([^<]+)<\/Code>/.exec(text)?.[1] ?? response.headers.get("x-ms-error-code") ?? undefined)
+  const detail = providerStatus(response.status, code)
+  if (response.status === 403 && code === "AuthenticationFailed") {
+    return new StorageResponseError(`Storage account ${account} refused authentication (${detail}). Sign in again to this tenant.`, code)
+  }
+  if (response.status === 404 && code === "BlobNotFound") {
+    return new StorageResponseError(`Storage account ${account} could not find the backup blob (${detail}). Check the configured container or backup location.`, code)
+  }
   // AuthorizationFailure is the storage firewall or network rules rejecting this computer, not a missing role.
   if (code === "AuthorizationFailure") {
-    return `Storage account ${account} rejected the request from this network (${detail}). Allow this computer's public IP address in the storage account's networking settings, or connect through a network it allows.`
+    return new StorageResponseError(`Storage account ${account} rejected the request from this network (${detail}). Allow this computer's public IP address in the storage account's networking settings, or connect through a network it allows.`, code)
   }
-  if (response.status === 403 || code.startsWith("Authorization")) {
-    return `You do not have write access to storage account ${account} (${detail}). Ask an Azure administrator for the "Storage Blob Data Contributor" role on it. New role assignments can take a few minutes to apply.`
+  if (response.status === 403 || code?.startsWith("Authorization")) {
+    return new StorageResponseError(`You do not have write access to storage account ${account} (${detail}). Ask an Azure administrator for the "Storage Blob Data Contributor" role on it. New role assignments can take a few minutes to apply.`, code)
   }
-  return `Storage account ${account} rejected the backup request (${detail}). Check that the backup storage is available and retry.`
+  return new StorageResponseError(`Storage account ${account} rejected the backup request (${detail}). Check that the backup storage is available and retry.`, code)
 }

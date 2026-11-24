@@ -4,11 +4,12 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Readable } from "node:stream"
 import { runObservation } from "../src/shared/connection-health/observe"
+import { SignInRequiredError } from "../src/main/auth/msal"
 import { BackupEngine } from "../src/main/backup/engine"
 import { LocalBlobStore } from "../src/main/storage/local-blob-store"
 import { handleLocalBlobRequest } from "../src/main/storage/blob-emulator"
 import { NextRequest } from "../src/main/api/next-server-shim"
-import { BACKUP_CONTAINER } from "../src/shared/constants"
+import { BACKUP_CONTAINER, RESOURCE_SCOPES } from "../src/shared/constants"
 import { backupBlobName, backupContainer, LARGE_BACKUP_CONTAINER } from "../src/shared/backup-storage"
 import { INTUNE_TYPES } from "../src/shared/intune/registry"
 import { snapshotHash } from "../src/portal/lib/policies/backup-manifest"
@@ -31,7 +32,7 @@ for (const azure of [false, true]) describe(azure ? "Azure emulator isolation" :
     const root = await mkdtemp(join(tmpdir(), "tv-isolation-")); roots.push(root)
     const store = new LocalBlobStore(root, [Buffer.alloc(32, 9)])
     const account = azure ? "isolationstore" : local
-    let refused = 0, failAt = "all"
+    let refused = 0, failAt = "all", refusalCode: string | undefined
     const requests: string[] = []
     const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input))
@@ -44,7 +45,7 @@ for (const azure of [false, true]) describe(azure ? "Azure emulator isolation" :
         throw new Error(`Unexpected Graph request ${url}`)
       }
       requests.push(`${init?.method ?? "GET"} ${url.pathname}${url.search}`)
-      if (refused && url.pathname.startsWith(`/${LARGE_BACKUP_CONTAINER}`) && (failAt === "all" || url.pathname.includes(failAt))) return new Response(`<Error><Code>${refused === 403 ? "AuthorizationPermissionMismatch" : "ContainerNotFound"}</Code></Error>`, { status: refused })
+      if (refused && url.pathname.startsWith(`/${LARGE_BACKUP_CONTAINER}`) && (failAt === "all" || url.pathname.includes(failAt))) return new Response(`<Error><Code>${refusalCode ?? (refused === 403 ? "AuthorizationPermissionMismatch" : "ContainerNotFound")}</Code></Error>`, { status: refused })
       url.hostname = `${local}.blob.core.windows.net`
       return handleLocalBlobRequest(store, new Request(url, init))
     })
@@ -61,8 +62,43 @@ for (const azure of [false, true]) describe(azure ? "Azure emulator isolation" :
       if (large) await write(folder, `_index/${folderName}/000000.json`, [{ id: "one", file: "one.json", hash: snapshotHash(snapshot) }])
       await write(folder, "metadata.json", { BackupFolder: folder, TenantId: TENANT, Status: "Success", Failures: 0, Coverage: "Complete", Scope: { Included: [folderName], Excluded: [] }, Items: large ? {} : { [`${folderName}/one`]: { file: "one.json", hash: snapshotHash(snapshot) } }, ItemCounts: { [folderName]: 1, TotalPolicies: large ? 0 : 1 }, ...(large ? { LargeItems: { [folderName]: { version: 1, count: 1, shards: 1, complete: true } } } : {}) })
     }
-    return { root, store, account, fetcher, requests, write, read, request, seed, refuse: (status: number, at = "all") => { refused = status; failAt = at } }
+    return { root, store, account, fetcher, requests, write, read, request, seed, refuse: (status: number, at = "all", code?: string) => { refused = status; failAt = at; refusalCode = code } }
   }
+  if (azure) it.each([
+    [403, "AuthenticationFailed", "Sign in again to this tenant."],
+    [404, "BlobNotFound", "Check the configured container or backup location."],
+  ])("preserves HTTP %i %s guidance when large storage is skipped", async (status, code, guidance) => {
+    undo = registerTestTypes([largeType])
+    const f = await setup()
+    f.refuse(status, "all", code)
+    const engine = new BackupEngine({ fetch: f.fetcher, getToken: async () => jwt({ scp: "Policy.Read.All" }), services: () => ({ services: ["intune", "entra"] }) })
+    const job = await engine.waitForJob(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: f.account, scope: { excluded: INTUNE_TYPES.filter(type => !["DeviceCategories", "AuthorizationPolicy"].includes(type.folder)).map(type => type.folder) } }))
+    expect(job.status, job.exception).toBe("Completed")
+    expect(job.log.join("\n")).toContain(`HTTP ${status}, ${code}`)
+    expect(job.log.join("\n")).toContain(guidance)
+    expect(await f.read(job.backupFolder!)).toMatchObject({ Status: "Success", LargeBackupOutcomes: [{ Outcome: "skipped", Reason: expect.stringContaining(guidance) }] })
+  })
+  if (azure) it.each(["large storage", "directory read"])("keeps sign-in guidance when delegated sign-in ends during %s", async phase => {
+    undo = registerTestTypes([largeType])
+    const f = await setup()
+    const refusalScope = phase === "large storage" ? RESOURCE_SCOPES.storage : RESOURCE_SCOPES.graph
+    const engine = new BackupEngine({
+      fetch: f.fetcher,
+      getToken: async (tenantId, clientId, scope) => {
+        if (scope === refusalScope && (phase === "large storage" || f.requests.some(request => request.includes(LARGE_BACKUP_CONTAINER)))) {
+          const afterOrdinaryBackup = f.requests.some(request => request.includes("metadata.json"))
+          if (afterOrdinaryBackup) throw new SignInRequiredError(tenantId, clientId, "Sign in again as private-admin@example.test.", scope, { errorNo: "50076" })
+        }
+        return jwt({ scp: "Policy.Read.All" })
+      },
+      services: () => ({ services: ["intune", "entra"] }),
+    })
+    const job = await engine.waitForJob(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: f.account, scope: { excluded: INTUNE_TYPES.filter(type => !["DeviceCategories", "AuthorizationPolicy"].includes(type.folder)).map(type => type.folder) } }))
+    const resource = phase === "large storage" ? "Azure Storage" : "Microsoft Graph"
+    expect(job.status).toBe("Failed")
+    expect(job.log.join("\n")).toContain(`Backup failed: ${resource} (AADSTS50076). Sign in again to this tenant.`)
+    expect(job.log.join("\n")).not.toContain("private-admin@example.test")
+  })
   for (const status of [403, 404]) for (const at of ["all", "payload/", "metadata.json"]) it(`saves all ordinary snapshots in a scheduled app-only run with large storage ${status} at ${at}`, async () => {
     undo = registerTestTypes([largeType])
     const f = await setup()

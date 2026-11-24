@@ -285,7 +285,7 @@ describe("unreachable backup jobs", () => {
     const refused = await signIn.waitForJob(signIn.start(request))
     expect(refused.status).toBe("Failed")
     expect(refused.unreachable).toBeUndefined()
-    expect(scheduledResult(refused)).toEqual({ status: "Failed", message: "Sign in again to continue." })
+    expect(scheduledResult(refused)).toEqual({ status: "Failed", message: "Microsoft Graph (sign_in_required). Sign in again to this tenant." })
     expect("unreachable" in scheduledResult(refused)).toBe(false)
 
     const denied = engineWith(async () => "token", async (input) => new URL(String(input)).hostname === "graph.microsoft.com"

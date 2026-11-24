@@ -32,12 +32,15 @@ function manager(signedIn = true) {
 // The silent token request is the sign-in boundary connection health reads: what Microsoft
 // answered has to leave it as structure, and the message an admin sees has to stay as it was.
 describe("a silent token request Microsoft refused", () => {
-  it("says what it always said, and carries Microsoft's error number and OAuth error next to it", async () => {
+  it("keeps the personalized banner distinct from the error message and carries validated refusal fields", async () => {
     msal.silent.mockRejectedValueOnce(new InteractionRequiredAuthError("interaction_required", "correlation", "AADSTS50076: Due to a configuration change made by your administrator, you must use multi-factor authentication.", undefined, undefined, undefined, undefined, "50076"))
     const error = await manager().getAccessToken(TENANT, CLIENT, RESOURCE_SCOPES.graph).catch((caught: unknown) => caught)
     expect(error).toBeInstanceOf(SignInRequiredError)
-    expect((error as Error).message).toBe("Microsoft needs you to sign in again as admin@contoso.com for Microsoft Graph (interaction_required, AADSTS50076).")
-    expect(error).toMatchObject({ errorNo: "50076", errorCode: "interaction_required", scope: RESOURCE_SCOPES.graph, tenantId: TENANT, clientId: CLIENT })
+    expect(error).toMatchObject({
+      prompt: "Microsoft needs you to sign in again as admin@contoso.com for Microsoft Graph (interaction_required, AADSTS50076).",
+      message: "Microsoft Graph (AADSTS50076). Sign in again to this tenant.",
+      errorNo: "50076", errorCode: "interaction_required", scope: RESOURCE_SCOPES.graph, tenantId: TENANT, clientId: CLIENT,
+    })
     expect(signInFailure(error)).toEqual({ class: "mfa", code: "AADSTS50076" })
   })
 
@@ -50,17 +53,18 @@ describe("a silent token request Microsoft refused", () => {
 
   it("is a sign-in that ended, without any code, when nobody is signed in", async () => {
     const error = await manager(false).getAccessToken(TENANT, CLIENT, RESOURCE_SCOPES.graph).catch((caught: unknown) => caught)
-    expect((error as Error).message).toBe("You are not signed in to this tenant. Sign in to continue.")
+    expect(error).toMatchObject({ prompt: "You are not signed in to this tenant. Sign in to continue.", message: "Microsoft Graph (sign_in_required). Sign in again to this tenant." })
     expect(error).not.toHaveProperty("errorNo")
     expect(signInFailure(error)).toEqual({ class: "session" })
     expect(msal.silent).not.toHaveBeenCalled()
   })
 
-  it("leaves a refusal that interaction cannot fix as MSAL reported it", async () => {
+  it("keeps the classification of a refusal that interaction cannot fix", async () => {
     const refused = new ServerError("unauthorized_client", "correlation", "AADSTS700016: Application was not found in the directory.", undefined, "700016", 400)
     msal.silent.mockRejectedValueOnce(refused)
     const error = await manager().getAccessToken(TENANT, CLIENT, RESOURCE_SCOPES.graph).catch((caught: unknown) => caught)
-    expect(error).toBe(refused)
+    expect(error).toBeInstanceOf(ServerError)
+    expect(error).toMatchObject({ errorNo: "700016", errorCode: "unauthorized_client", status: 400 })
     expect(signInFailure(error)).toEqual({ class: "registration", code: "AADSTS700016" })
   })
 

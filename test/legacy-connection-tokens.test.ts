@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest"
+import { InteractionRequiredAuthError, ServerError } from "@azure/msal-node"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -21,12 +22,14 @@ import { DOMAINS } from "../src/main/features/domains"
 import { backupRoutes } from "../src/main/api/desktop-routes"
 import { planGuard } from "../src/main/api/plan-gates"
 import { BackupEngine } from "../src/main/backup/engine"
+import { FailedAttemptLog } from "../src/main/backup/failed-attempts"
 import { DELEGATED_CLIENT_SECRET, RESOURCE_SCOPES } from "../src/shared/constants"
 import { INTUNE_TYPES } from "../src/shared/intune/registry"
 import { graphCaller } from "../src/portal/lib/policies/graph-restore"
 import { POST as listAzureResources } from "../src/portal/app/api/list-azure-resources/route"
 import { appRestoreToken } from "../src/main/app-backup/sign-in"
 import type { TenantConnection } from "../src/shared/tenant-connection"
+import { memoryStore } from "./helpers"
 
 const msal = vi.hoisted(() => ({ acquire: vi.fn() }))
 vi.mock("@azure/msal-node", async importOriginal => ({
@@ -83,6 +86,52 @@ it.each(["silent token", "installer restore"])("keeps the original registration 
   expect(token).toBe(`token-for-${CLIENT}`)
   expect(cachePlugin).toHaveBeenCalledExactlyOnceWith(CLIENT)
   expect(msal.acquire).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ account: expect.objectContaining({ homeAccountId: CLIENT }) }))
+})
+
+it.each([
+  { name: "an expired cached account", code: "sign_in_required", missing: true },
+  { name: "a numbered MFA refusal in Microsoft Graph", code: "AADSTS50076", errorNo: "50076", graph: true },
+  { name: "an MFA refusal with a code in its description", code: "AADSTS50079", description: "AADSTS50079" },
+  { name: "a Conditional Access refusal", code: "AADSTS53003", errorNo: "53003" },
+  { name: "a refusal with an invalid code", code: "sign_in_required", description: "AADSTS50076suffix", errorNo: "50076@example.test" },
+])("keeps the account from $name out of the job and persisted history", async ({ code, missing, description, errorNo, graph }) => {
+  const username = "private-admin@example.test"
+  const stored = { tenantId: TENANT, clientId: CLIENT, homeAccountId: missing ? "missing" : "account", username }
+  const auth = new AuthManager({
+    fetch: vi.fn(), openBrowser: async () => {}, cachePlugin: () => ({ beforeCacheAccess: vi.fn(), afterCacheAccess: vi.fn() }),
+    accountStore: { get: () => stored, list: () => [stored], set: vi.fn(), delete: vi.fn() },
+  })
+  msal.acquire.mockReset().mockRejectedValue(new InteractionRequiredAuthError("interaction_required", "", `${description ?? ""} Refused for ${username}.`, undefined, undefined, undefined, undefined, errorNo))
+  const state = memoryStore()
+  const history = new FailedAttemptLog(state)
+  const engine = new BackupEngine({
+    fetch: async () => new Response(null, { status: 201 }),
+    getToken: async (tenant, client, scope) => graph && scope === RESOURCE_SCOPES.storage
+      ? "token"
+      : (await auth.getAccessToken(tenant, client, scope)).accessToken,
+    onFinished: (job, request) => history.finished(job, request),
+  })
+  const job = await engine.waitForJob(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: "example" }))
+  const message = `${graph ? "Microsoft Graph" : "Azure Storage"} (${code}). Sign in again to this tenant.`
+  expect(job.status).toBe("Failed")
+  expect(job.log.join("\n")).toContain(`Backup failed: ${message}`)
+  expect(new FailedAttemptLog(state).list(TENANT)).toMatchObject([{ runId: job.id, message }])
+  expect(JSON.stringify({ job, history: [...state.values.values()] })).not.toContain(username)
+  await expect(auth.getAccessToken(TENANT, CLIENT, graph ? RESOURCE_SCOPES.graph : RESOURCE_SCOPES.storage)).rejects.toMatchObject({ prompt: expect.stringContaining(username), message })
+})
+
+it("keeps a silent token server refusal private even when it does not ask for interaction", async () => {
+  const username = "private-admin@example.test"
+  const stored = { tenantId: TENANT, clientId: CLIENT, homeAccountId: "account", username }
+  const auth = new AuthManager({
+    fetch: vi.fn(), openBrowser: async () => {}, cachePlugin: () => ({ beforeCacheAccess: vi.fn(), afterCacheAccess: vi.fn() }),
+    accountStore: { get: () => stored, list: () => [stored], set: vi.fn(), delete: vi.fn() },
+  })
+  msal.acquire.mockReset().mockRejectedValue(new ServerError("temporarily_unavailable", "", `User ${username} could not be signed in.`, undefined, "90033", 503))
+  await expect(auth.getAccessToken(TENANT, CLIENT, RESOURCE_SCOPES.graph)).rejects.toMatchObject({
+    message: "temporarily_unavailable: Microsoft Graph token request failed (AADSTS90033). Try again.",
+    errorNo: "90033", errorCode: "temporarily_unavailable", status: 503,
+  })
 })
 
 let dir: string | undefined

@@ -826,8 +826,9 @@ export class BackupEngine {
             : `Access was denied. The app registration may lack the permission or admin consent, or your ${module?.label ?? "Intune"} role may not allow it.`
           Object.assign(result(type.folder), { state: "skipped", reason })
           const code = providerErrorCode(error.answer.code)
-          settle(type.folder, { outcome: "skipped", cause: "permission", reason, status: 403, ...(code ? { code } : {}) })
-          this.write(job, `Skipped ${type.label}: ${reason.charAt(0).toLowerCase()}${reason.slice(1)}`)
+          const detail = providerStatus(error.status, code)
+          settle(type.folder, { outcome: "skipped", cause: "permission", reason: `(${detail}) ${reason}`, status: error.status, ...(code ? { code } : {}) })
+          this.write(job, `Skipped ${type.label} (${detail}): ${reason.charAt(0).toLowerCase()}${reason.slice(1)}`)
           return
         }
         countAuthFailure(error, service.id)
@@ -1043,6 +1044,7 @@ export class BackupEngine {
         largeClaimed = true
       } catch (error) {
         network.signal.throwIfAborted()
+        if (error instanceof TokenError && causedBy(error, "SignInRequiredError")) throw error
         for (const type of largeTypes) endType(type, error instanceof LargeStorageError ? error : new LargeStorageError(undefined, { cause: error }))
       }
     }
@@ -1105,6 +1107,7 @@ export class BackupEngine {
         this.write(job, `Backed up ${entry.saved} ${type.label}.`)
       } catch (error) {
         network.signal.throwIfAborted()
+        if (error instanceof TokenError && causedBy(error, "SignInRequiredError")) throw error
         // Directory Graph errors can echo profile values. Keep status for classification, but never
         // publish the response text or error code into job logs, outcomes or diagnostics.
         if (signInEnded(error)) throw new TokenError("Microsoft Graph sign-in ended during the directory read.")

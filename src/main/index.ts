@@ -441,7 +441,7 @@ async function bootstrap(): Promise<void> {
         const key = tenantId.toLowerCase()
         if (Date.now() - (lastPrompt.get(key) ?? 0) > 3000) {
           lastPrompt.set(key, Date.now())
-          mainWindow?.webContents.send("auth:signInRequired", { tenantId, clientId, message: error.message, scope: error.scope })
+          mainWindow?.webContents.send("auth:signInRequired", { tenantId, clientId, message: error.prompt, scope: error.scope })
         }
       }
       throw error

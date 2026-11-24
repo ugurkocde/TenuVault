@@ -286,6 +286,10 @@ export function signInLogCode(text: string): string | undefined {
   if (code && /^AADSTS\d{4,8}$/.test(code)) return code
   let error: unknown
   try { error = JSON.parse(text)?.error } catch { return }
+  return oauthSignInCode(error)
+}
+
+export function oauthSignInCode(error: unknown): string | undefined {
   if (typeof error === "string" && [
     "access_denied", "consent_required", "interaction_required", "invalid_client", "invalid_grant", "invalid_request",
     "invalid_scope", "login_required", "server_error", "temporarily_unavailable", "unauthorized_client",
