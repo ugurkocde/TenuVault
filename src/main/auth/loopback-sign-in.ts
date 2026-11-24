@@ -86,6 +86,7 @@ export async function openLoopback(pages: { successPage: string; errorPage: stri
     const path = target.split("?", 1)[0]
     if (accepted || path !== "/") return reply(response, 404)
     if (consent) {
+      if (request.headers.host?.toLowerCase() !== `localhost:${request.socket.localPort}` || request.headersDistinct.host?.length !== 1) return reply(response, 400)
       if (request.method !== "GET") return reply(response, 405)
       if (target.length > MAX_ANSWER_BYTES) return reply(response, 413)
       const query = new URLSearchParams(target.slice(path.length + 1))

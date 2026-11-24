@@ -1,3 +1,4 @@
+import { request } from "node:http"
 import { randomBytes } from "node:crypto"
 import { describe, expect, it, vi } from "vitest"
 import { buildConsentUrl, consentIssue, HANDOFF_REDIRECT, PackConsentFlow, parseConsentCallback } from "../src/main/auth/pack-consent"
@@ -59,16 +60,26 @@ describe("admin consent", () => {
     const openBrowser = async (url: string) => {
       const params = new URL(url).searchParams
       const redirect = new URL(params.get("redirect_uri")!)
-      const address = redirect.href.replace("localhost", "127.0.0.1")
+      expect(redirect.hostname).toBe("localhost")
+      const callback = (query: URLSearchParams, host: string) => new Promise<number>((resolve, reject) => {
+        request({ hostname: "127.0.0.1", port: redirect.port, path: `/?${query}`, headers: { Host: host } }, response => {
+          response.resume()
+          resolve(response.statusCode!)
+        }).on("error", reject).end()
+      })
+      const valid = reply({ state: params.get("state")!, scope: "User.Read" })
       for (const paramsOfReply of [
         reply({ state: "wrong" }),
         reply({ state: params.get("state")!, tenant: ANOTHER }),
-        reply({ state: params.get("state")!, scope: "User.Read" }),
-      ]) statuses.push((await fetch(`${address}?${paramsOfReply}`)).status)
+      ]) statuses.push(await callback(paramsOfReply, redirect.host))
+      for (const host of [`foreign.example.test:${redirect.port}`, "localhost:0", redirect.host]) {
+        statuses.push(await callback(valid, host))
+        if (statuses.at(-1) === 200) break
+      }
     }
     const flow = new PackConsentFlow({ plan: async () => [pack], openBrowser, signInForPack: async () => undefined })
     await expect(flow.act(TENANT, pack.id, "open")).resolves.toEqual({ status: "received" })
-    expect(statuses).toEqual([400, 400, 200])
+    expect(statuses).toEqual([400, 400, 400, 400, 200])
   })
 
   it("hands off one named pack and stays waiting until a fresh pack check succeeds", async () => {
