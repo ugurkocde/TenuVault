@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 import { GuardedRunJournal, assertNoSecrets, executeGuardedRun, restoreFingerprint, type GuardedIO, type GuardedRun, type GuardedStep } from "../src/main/restore/guarded-run"
-import { requireRestoreActor, restoreSignIn } from "../src/main/restore/restore-actor"
+import { requireRestoreActor, restorePermissions, restoreSignIn } from "../src/main/restore/restore-actor"
 import { addsOnly, addsOnlyPayload, RestoreWriteRefusedError, guardRestoreItem, mergeConsentScopes, restoreOriginBlocker, type RestoreActor } from "../src/shared/intune/restore-guards"
 import { dependencyOrder, mappedReference, rememberMapping, replacedReferenceReport, type RestoreMapping } from "../src/shared/intune/restore-references"
 import { INTUNE_TYPES, restoreCapability, type Item } from "../src/shared/intune/registry"
@@ -67,6 +67,21 @@ describe("identity restore admission", () => {
     ]) expect(() => restoreSignIn(actor.tenantId, stored, { ...result, ...patches })).toThrow("signed-in admin")
     expect(restoreSignIn(actor.tenantId, stored, { ...result, account: null, accessToken: delegated }).userId).toBe(actor.userId)
     expect(() => restoreSignIn(actor.tenantId, stored, { ...result, account: null, accessToken: token({ scp: "Policy.ReadWrite.Authorization", oid: "admin", tid: "tenant", appid: "other" }) })).toThrow("signed-in admin")
+  })
+  it.each([
+    ["another actor", { oid: "other", scp: "Policy.ReadWrite.Authorization" }],
+    ["missing scopes", { oid: actor.userId }],
+  ] as const)("rejects a readable bearer with %s even when MSAL has the expected metadata", (_reason, claims) => {
+    const authorization = { ...actor, scopes: ["Policy.ReadWrite.Authorization"] }
+    expect(() => requireRestoreActor(token({ tid: actor.tenantId, appid: actor.clientId, ...claims }), actor, authorization)).toThrow("signed-in admin")
+  })
+  it("uses only permissions present in both the readable bearer and MSAL evidence", () => {
+    const authorization = { ...actor, scopes: ["Policy.ReadWrite.Authorization", "Policy.Read.All"] }
+    const claims = { tid: actor.tenantId, appid: actor.clientId, oid: actor.userId }
+    const readOnly = token({ ...claims, scp: "Policy.Read.All" })
+    requireRestoreActor(readOnly, actor, authorization)
+    expect(restorePermissions(readOnly, authorization.scopes)?.permissions).toEqual(new Set(["Policy.Read.All"]))
+    expect(restorePermissions(delegated, ["Policy.Read.All"])?.permissions.has("Policy.ReadWrite.Authorization")).toBe(false)
   })
   it("refuses protected users, roles, methods, applications and unresolved safety evidence", () => {
     for (const principal of ["ADMIN", "recovery", "sp"]) expect(() => guardRestoreItem(actor, "EntraRoleAssignments", undefined, { ...references, principals: [principal] }, false)).toThrow("protected")
