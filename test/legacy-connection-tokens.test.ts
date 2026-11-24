@@ -50,6 +50,11 @@ function fixture() {
   const network = vi.fn<typeof fetch>(async (input, init) => {
     const request = new Request(input, init)
     const url = new URL(request.url)
+    if (url.hostname === "login.microsoftonline.com") {
+      const form = new URLSearchParams(await request.text())
+      expect(form.get("client_secret")).toBe("fixture-secret")
+      return Response.json({ access_token: tokenFor(TENANT, form.get("scope")!), expires_in: 3600 })
+    }
     const tenant = url.pathname.includes("destination") ? DESTINATION : TENANT
     const scope = url.hostname === "management.azure.com" ? RESOURCE_SCOPES.management
       : url.hostname.endsWith(".blob.core.windows.net") ? RESOURCE_SCOPES.storage : RESOURCE_SCOPES.graph
@@ -65,6 +70,7 @@ function fixture() {
   const fetch = createBridgedFetch({
     fetch: network, dispatch: vi.fn(), getDelegatedToken: getToken,
     authorizeRequest: (url, input, init, tenant) => cap.authorizeRequest(url, input, init, tenant),
+    bindOwnClientCredentials: (tenant, client, scope, token, expiresIn) => cap.bindOwnClientCredentials(tenant, client, scope, token, expiresIn),
   })
   const routeToken = async (scope: string, tenant = TENANT) => {
     const response = await fetch(`https://login.microsoftonline.com/${tenant}/oauth2/v2.0/token`, {
@@ -92,6 +98,22 @@ it.each(["scheduled", "tray"] as const)("completes a %s backup with opaque Graph
   expect((await engine.waitForJob(job)).status).toBe("Completed")
   expect(f.network.mock.calls.some(([url]) => String(url).startsWith(graph))).toBe(true)
   expect(f.network.mock.calls.some(([url, init]) => String(url).startsWith(blob) && init?.method === "PUT")).toBe(true)
+})
+
+it("binds an opaque Blob token from an older client credential profile", async () => {
+  const f = fixture()
+  const response = await f.dispatch("/api/list-backups", async () => {
+    const issued = await f.fetch(`https://login.microsoftonline.com/${TENANT}/oauth2/v2.0/token`, {
+      method: "POST", body: new URLSearchParams({
+        grant_type: "client_credentials", client_secret: "fixture-secret", client_id: CLIENT, scope: RESOURCE_SCOPES.storage,
+      }),
+    })
+    const { access_token } = await issued.json()
+    return f.fetch(blob + "backup/metadata.json", { headers: headers(access_token) })
+  })
+  expect(response.status).toBe(200)
+  expect(await response.json()).toEqual({ TenantId: TENANT })
+  expect(msal.acquire).not.toHaveBeenCalled()
 })
 
 it("discovers ARM subscriptions through the Azure resource route", async () => {
