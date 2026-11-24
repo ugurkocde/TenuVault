@@ -3,7 +3,7 @@ import { signInLogCode } from "../../../../shared/sign-in-errors"
 import { backupStoragePath, isLargeBackup } from "../../../../shared/backup-storage"
 import { largeContents } from "../../../../main/backup/large-page"
 import { readJsonCapped } from "../../../../shared/capped-body"
-import { decodeXml, listBlobPages } from "~/lib/storage/list"
+import { BlobListError, decodeXml, listBlobPages } from "~/lib/storage/list"
 import { INTUNE_TYPES, restoreCapability, typeForFolder } from "../../../../shared/intune/registry"
 import { writeBlocker } from "../../../../shared/intune/restore-plan"
 import { isBackupName } from "../../../../shared/intune/backup-names"
@@ -136,7 +136,8 @@ export async function POST(request: NextRequest) {
       totalPolicies: ordered.reduce((sum, group) => sum + group.policies.length, 0),
     })
   } catch (error) {
-    console.error("List backup contents error:", error)
+    if (error instanceof BlobListError) console.error("blob_request_failed", "backup contents listing", error.status)
+    else console.error("List backup contents error:", error)
     return NextResponse.json(
       { error: "Internal server error while listing backup contents" },
       { status: 500 }

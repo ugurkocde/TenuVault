@@ -304,7 +304,7 @@ export async function POST(request: NextRequest) {
       blobsText = await listBlobPages(blobsUrl, accessToken)
     } catch (error) {
       if (!(error instanceof BlobListError)) throw error
-      console.error("Failed to list blobs:", error.body)
+      console.error("blob_request_failed", "backup listing", error.status)
 
       // A local import may hold only the large container.
       if (error.status === 404) {

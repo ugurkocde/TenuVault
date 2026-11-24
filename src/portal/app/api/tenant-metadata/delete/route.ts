@@ -80,8 +80,8 @@ export async function POST(request: NextRequest) {
         })
       }
 
-      const errorText = await deleteResponse.text()
-      console.error("Failed to delete metadata:", errorText)
+      console.error("blob_request_failed", "metadata delete", deleteResponse.status)
+      const errorText = await deleteResponse.text().catch(() => "")
       
       // If authorization error, provide helpful message
       if (errorText.includes("AuthorizationPermissionMismatch")) {
@@ -92,7 +92,7 @@ export async function POST(request: NextRequest) {
       }
       
       return NextResponse.json(
-        { error: "Failed to delete metadata", details: errorText },
+        { error: "Failed to delete metadata" },
         { status: 500 }
       )
     }

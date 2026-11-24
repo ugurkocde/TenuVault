@@ -6,6 +6,7 @@ import { POST as backups } from "../src/portal/app/api/list-backups/route"
 import { POST as loadMetadata } from "../src/portal/app/api/tenant-metadata/load/route"
 import { POST as saveMetadata } from "../src/portal/app/api/tenant-metadata/save/route"
 import { POST as deleteMetadata } from "../src/portal/app/api/tenant-metadata/delete/route"
+import { POST as detectDrifts } from "../src/portal/app/api/detect-drifts/route"
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
@@ -68,4 +69,49 @@ it.each([
   const response = await tenantDetails(new Request("https://desktop.test/api", { method: "POST", body: JSON.stringify(body) }) as never)
   expect(response.status).toBe(502)
   expect(log.mock.calls).toEqual([[code, "/organization", status]])
+})
+
+it.each([
+  [saveMetadata, "metadata container creation", "container", 403, "AuthorizationPermissionMismatch", 200],
+  [saveMetadata, "metadata upload", "blob", 403, "AuthorizationPermissionMismatch", 403],
+  [loadMetadata, "metadata load", "blob", 403, "AuthorizationPermissionMismatch", 403],
+  [deleteMetadata, "metadata delete", "blob", 403, "AuthorizationPermissionMismatch", 403],
+  [backups, "backup listing", "container", 403, "AuthorizationFailure", 403],
+  [backupContents, "backup contents listing", "container", 403, "AuthorizationFailure", 500],
+  [detectDrifts, "drift backup listing", "container", 403, "AuthorizationFailure", 500],
+  [saveMetadata, "metadata upload", "blob", 503, "ServerBusy", 500],
+  [loadMetadata, "metadata load", "blob", 503, "ServerBusy", 500],
+  [deleteMetadata, "metadata delete", "blob", 503, "ServerBusy", 500],
+] as const)("keeps Blob error details out of logs for $1 (%#)", async (route, endpoint, kind, status, code, expectedStatus) => {
+  const log = vi.spyOn(console, "error").mockImplementation(() => {})
+  const account = "private-account@example.test"
+  vi.stubGlobal("fetch", vi.fn(async (input: string | URL) => {
+    const url = new URL(input)
+    if (url.hostname === "login.microsoftonline.com") return Response.json({ access_token: "fixture" })
+    if (route === backupContents && url.pathname.endsWith("/metadata.json")) {
+      return Response.json({ TenantId: requestBody.tenantId })
+    }
+    if (route === saveMetadata && url.searchParams.has("restype") !== (kind === "container")) {
+      return new Response(null, { status: 201 })
+    }
+    return new Response(`<Error><Code>${code}</Code><Message>Refused for ${account}</Message></Error>`, { status })
+  }))
+  const response = await route(new Request("https://desktop.test/api", { method: "POST", body: JSON.stringify(requestBody) }) as never)
+  expect(response.status).toBe(expectedStatus)
+  const result = await response.text()
+  expect(result).not.toContain(account)
+  if (code === "AuthorizationPermissionMismatch" && expectedStatus === 403) expect(result).toContain("Missing storage permissions")
+  if (route === backups) expect(result).toContain("Storage network access denied")
+  expect(log.mock.calls).toEqual([["blob_request_failed", endpoint, status]])
+})
+
+it("keeps account details out of malformed metadata logs", async () => {
+  const log = vi.spyOn(console, "error").mockImplementation(() => {})
+  vi.stubGlobal("fetch", vi.fn(async (input: string) => new URL(input).hostname === "login.microsoftonline.com"
+    ? Response.json({ access_token: "fixture" })
+    : new Response("private-account@example.test")))
+  const response = await loadMetadata(new Request("https://desktop.test/api", { method: "POST", body: JSON.stringify(requestBody) }) as never)
+  expect(response.status).toBe(500)
+  expect(await response.text()).not.toContain("private-account@example.test")
+  expect(log.mock.calls).toEqual([["blob_invalid_response", "metadata load", 200]])
 })

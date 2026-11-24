@@ -320,7 +320,7 @@ async function writeRevertMetadata(
         }
       } else if (getResponse.status !== 404) {
         // Only a missing file starts a new history. Any other failure would erase it.
-        console.error("Failed to read revert history:", getResponse.status, getResponse.statusText)
+        console.error("blob_request_failed", "revert history", getResponse.status)
         return
       } else {
         // A new history starts with this tenant's entries from the old shared file, which stays as it is.

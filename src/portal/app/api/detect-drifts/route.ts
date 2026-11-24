@@ -1,7 +1,7 @@
 import { backupStoragePath, isLargeBackup, LARGE_BACKUP_CONTAINER, LARGE_STORAGE_UNAVAILABLE } from "../../../../shared/backup-storage"
 import { matchingCompanions, completeHalf } from "../../../../shared/backup-companion"
 import { largeIndexes } from "../../../../shared/large-backup"
-import { decodeXml, listBlobPages, listLargeBackupPages, listOrdinaryBackupPages } from "~/lib/storage/list"
+import { BlobListError, decodeXml, listBlobPages, listLargeBackupPages, listOrdinaryBackupPages } from "~/lib/storage/list"
 import { typeForFolder, type Item } from "../../../../shared/intune/registry"
 import { restoreCapabilities } from "../../../../shared/intune/restore-plan"
 import { complianceSettingLabel, complianceSettingValue } from "../../../../shared/intune/compliance-settings"
@@ -308,7 +308,8 @@ export async function POST(request: NextRequest) {
     // The header tells the audit recorder that the admin stopped the scan; it did not fail.
     if (hooks?.signal.aborted) return NextResponse.json({ error: "The drift scan was cancelled.", code: "CANCELLED" }, { status: 409, headers: { [CANCELLED_HEADER]: "1" } })
     if (error instanceof DriftPairError) return NextResponse.json({ error: error.message, code: error.code }, { status: error.status })
-    console.error("Detect drifts error:", error)
+    if (error instanceof BlobListError) console.error("blob_request_failed", "drift backup listing", error.status)
+    else console.error("Detect drifts error:", error)
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Internal server error while detecting drifts" },
       { status: 500 }

@@ -75,8 +75,7 @@ export async function POST(request: NextRequest) {
 
     // Check if container creation failed (ignore 409 Conflict which means it already exists)
     if (!createContainerResponse.ok && createContainerResponse.status !== 409) {
-      const errorText = await createContainerResponse.text()
-      console.error("Failed to create container:", errorText)
+      console.error("blob_request_failed", "metadata container creation", createContainerResponse.status)
       // Continue anyway - the container might exist but we don't have permissions to create it
     }
 
@@ -111,8 +110,8 @@ export async function POST(request: NextRequest) {
     })
 
     if (!uploadResponse.ok) {
-      const errorText = await uploadResponse.text()
-      console.error("Failed to save metadata:", errorText)
+      console.error("blob_request_failed", "metadata upload", uploadResponse.status)
+      const errorText = await uploadResponse.text().catch(() => "")
       
       // If container doesn't exist, provide helpful message
       if (errorText.includes("ContainerNotFound")) {
@@ -131,7 +130,7 @@ export async function POST(request: NextRequest) {
       }
       
       return NextResponse.json(
-        { error: "Failed to save metadata", details: errorText },
+        { error: "Failed to save metadata" },
         { status: 500 }
       )
     }

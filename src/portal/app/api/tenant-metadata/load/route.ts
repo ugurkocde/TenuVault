@@ -81,10 +81,8 @@ export async function POST(request: NextRequest) {
         })
       }
 
-      const errorText = await metadataResponse.text()
-      console.error("Failed to load metadata:", errorText)
-      console.error("Storage account:", storageAccountName)
-      console.error("Blob URL:", blobUrl)
+      console.error("blob_request_failed", "metadata load", metadataResponse.status)
+      const errorText = await metadataResponse.text().catch(() => "")
       
       // If authorization error, provide helpful message
       if (errorText.includes("AuthorizationPermissionMismatch")) {
@@ -95,12 +93,16 @@ export async function POST(request: NextRequest) {
       }
       
       return NextResponse.json(
-        { error: "Failed to load metadata", details: errorText },
+        { error: "Failed to load metadata" },
         { status: 500 }
       )
     }
 
-    const metadata: TenantMetadata = await metadataResponse.json()
+    const metadata: TenantMetadata | null = await metadataResponse.json().catch(() => null)
+    if (!metadata) {
+      console.error("blob_invalid_response", "metadata load", metadataResponse.status)
+      return NextResponse.json({ error: "Failed to load metadata" }, { status: 500 })
+    }
 
     console.log(`Successfully loaded metadata for tenant ${tenantId}`)
     console.log("Metadata contains Azure resources:", !!metadata.azureResources)
