@@ -1612,6 +1612,29 @@ describe("sign-in method wizard", () => {
     expect(state.wizardFinish).not.toHaveBeenCalled()
   })
 
+  it.each([false, true])("keeps Continue available and respects reduced motion (%s)", async reduce => {
+    state.wizardStage.mockResolvedValue({ result: {
+      ...stageResult,
+      coverage: [{ service: "defender", folders: ["DefenderCustomDetectionRules"], readable: ["DefenderCustomDetectionRules"] }],
+    } })
+    vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: reduce })))
+    const container = await publicConnect("Start now")
+    vi.useFakeTimers()
+    try {
+      await act(async () => button(container, "Sign in with Microsoft")!.click())
+      expect(container.textContent).toContain("Everything you picked can be backed up.")
+      expect(button(container, "Continue to storage")).toBeDefined()
+      await act(async () => vi.advanceTimersByTime(1800))
+      if (reduce) {
+        expect(container.textContent).toContain("Check backup access")
+        await continueToStorage(container)
+      }
+      expect(container.textContent).toContain("Choose where backups are stored")
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it("lists only the selected permissions and copies an admin consent request without an ID", async () => {
     const container = await publicConnect("TenuVault app", ["intune"])
     const writeText = vi.fn(async (_value: string) => undefined)
