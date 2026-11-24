@@ -91,20 +91,30 @@ it("shows all services, Conditional Access separately and the personal data stat
   mocks.check.mockResolvedValue(healthScene("personal-data"))
   await render()
   const cards = [...container.querySelectorAll('[data-service]')].filter(card => !card.parentElement?.closest('[data-service]'))
-  expect(cards.map(card => card.querySelector("h3")?.textContent)).toEqual(["Defender", "Entra ID", "Intune"])
-  expect(cards[1]?.querySelector('[data-service="conditionalAccess"] h3')?.textContent).toBe("Conditional Access")
+  expect(cards.map(card => card.querySelector("h3")?.textContent)).toEqual(["Entra ID", "Intune"])
+  expect(cards[0]?.querySelector('[data-service="conditionalAccess"] h3')?.textContent).toBe("Conditional Access")
   expect(container.textContent).not.toContain("no backup types for Entra ID yet")
-  expect(container.querySelector('[data-area="externalIdentities"]')?.textContent).not.toContain("no backup types for this area yet")
-  expect(container.querySelector('[data-area="externalIdentities"]')?.textContent).toContain("API connectors require the Backup Reader")
-  expect(container.querySelector('[data-area="roles"]')?.textContent).not.toContain("no backup types for this area yet")
+  expect(container.querySelector('[data-area="externalIdentities"]')).toBeNull()
+  expect(container.querySelector('[data-service="entra"] [data-area="roles"]')).toBeNull()
   expect(container.querySelector('[data-area="governance"]')?.textContent).not.toContain("no backup types for this area yet")
-  expect(container.querySelector('[data-area="governance"]')?.textContent).toContain("Some features need Entra ID P2 or ID Governance")
+  expect(container.querySelector('[data-area="governance"]')?.textContent).toContain("Agreement settings and file metadata")
   expect(container.textContent).toContain("These identify people and their group memberships")
   await toggle("Include Groups in backups")
   expect(mocks.setArea).toHaveBeenCalledWith(HEALTH_TENANT, "entra", "groups", true)
   await toggle("Include Conditional Access in backups")
   expect(mocks.setEnabled).toHaveBeenCalledWith(HEALTH_TENANT, HEALTH_CLIENT, "conditionalAccess", false, undefined)
 })
+it("offers eligible group restore and hides deferred areas", async () => {
+  const report = healthScene("entra-all-areas")
+  const entra = report.services.find(service => service.id === "entra")!
+  entra.access = "restore"
+  mocks.check.mockResolvedValue(report)
+  await render()
+  const access = container.querySelector('[aria-label="Entra ID access to request"]')
+  expect(access?.textContent).toContain("Backup and restore")
+  for (const id of ["applications", "roles"]) expect(container.querySelector(`[data-service="entra"] [data-area="${id}"]`)).toBeNull()
+})
+
 it("does not turn Intune off before confirmation and leaves it on after Cancel", async () => {
   await render()
   await toggle("Include Intune in backups")
@@ -297,64 +307,55 @@ it.each(Object.entries(storageExpectations))("explains storage %s independently 
   if (!["healthy", "local"].includes(state)) expect(storage.querySelector('a[href="/portal/settings?section=storage"]')).not.toBeNull()
 })
 
-it("shows Defender coverage and opt-in directory area switches", async () => {
-  mocks.check.mockResolvedValue(healthScene("defender-backup-types"))
-  await render()
-  const card = container.querySelector('[data-service="defender"]')!
-  expect(card.textContent).toContain("17 Microsoft Graph configuration types")
-  expect(card.textContent).toContain("Anti-phishing, Safe Links, Safe Attachments")
-  expect(card.textContent).not.toContain("no backup types")
-  const directory = container.querySelector('[data-service="entra"] [data-area="usersAndDevices"]')!
-  expect(directory.querySelector('input[role="switch"]')).not.toBeNull()
-})
 
-it("keeps Defender on with a Needs access badge and the Start now repair link", async () => {
-  const report = healthScene("defender-backup-types")
+
+it("keeps Entra ID on with a Needs access badge and the Start now repair link", async () => {
+  const report = healthScene("entra-all-areas")
   mocks.check.mockResolvedValue({
     ...report,
     readOnly: true,
-    coverage: [{ service: "defender", folders: ["DefenderCustomDetectionRules"], readable: [] }],
+    coverage: [{ service: "entra", folders: ["TermsOfUseAgreements"], readable: [] }],
   })
   await render()
-  const defender = container.querySelector('[data-service="defender"]')!
-  expect(defender.textContent).toContain("Needs access")
-  expect(defender.textContent).toContain("Defender needs more access. Your choice is saved.")
-  expect(defender.textContent).toContain("Detection and response")
-  expect(defender.querySelector<HTMLInputElement>('input[role="switch"]')?.checked).toBe(true)
-  expect(defender.querySelector("a")?.getAttribute("href")).toBe(`/portal/settings?section=signin#sign-in-${report.tenantId}`)
+  const entra = container.querySelector('[data-service="entra"]')!
+  expect(entra.textContent).toContain("Needs access")
+  expect(entra.textContent).toContain("Entra ID needs more access.")
+  expect(entra.textContent).toContain("Terms of use")
+  expect(entra.querySelector<HTMLInputElement>('input[role="switch"]')?.checked).toBe(true)
+  expect(entra.querySelector("a")?.getAttribute("href")).toBe(`/portal/settings?section=signin#sign-in-${report.tenantId}`)
 })
 
 it("shows the plain status when the Backup Reader covers a service and notes when the sign-in lacks access", async () => {
-  const report = healthScene("defender-backup-types")
-  const folder = "DefenderSecureScoreControlStates"
+  const report = healthScene("entra-all-areas")
+  const folder = "Entra IDSecureScoreControlStates"
   mocks.check.mockResolvedValue({
     ...report,
-    readerReadableServices: ["defender", "intune"],
+    readerReadableServices: ["entra", "intune"],
     coverage: [
-      { service: "defender", folders: [folder], readable: [] },
+      { service: "entra", folders: [folder], readable: [] },
       { service: "intune", folders: ["DeviceConfigurations"], readable: ["DeviceConfigurations"] },
     ],
   })
   await render()
-  const defender = container.querySelector('[data-service="defender"]')!
+  const entra = container.querySelector('[data-service="entra"]')!
   const intune = container.querySelector('[data-service="intune"]')!
-  expect(defender.textContent).not.toContain("Needs access")
-  expect(defender.textContent).toContain("Scheduled backups can read this service with the Backup Reader. Your sign-in can't read it.")
+  expect(entra.textContent).not.toContain("Needs access")
+  expect(entra.textContent).toContain("Scheduled backups can read this service with the Backup Reader. Your sign-in can't read it.")
   expect(intune.textContent).not.toContain("Needs access")
   expect(intune.textContent).not.toContain("Your sign-in can't read it.")
 })
 
 it("clears Needs access from Settings after permissions are added and checked again", async () => {
-  const report = healthScene("defender-backup-types")
-  const folder = "DefenderSecureScoreControlStates"
-  mocks.check.mockResolvedValue({ ...report, coverage: [{ service: "defender", folders: [folder], readable: [] }] })
+  const report = healthScene("entra-all-areas")
+  const folder = "Entra IDSecureScoreControlStates"
+  mocks.check.mockResolvedValue({ ...report, coverage: [{ service: "entra", folders: [folder], readable: [] }] })
   await render()
-  const defender = container.querySelector('[data-service="defender"]')!
-  expect(defender.textContent).toContain("Needs access")
-  mocks.check.mockResolvedValue({ ...report, coverage: [{ service: "defender", folders: [folder], readable: [folder] }] })
+  const entra = container.querySelector('[data-service="entra"]')!
+  expect(entra.textContent).toContain("Needs access")
+  mocks.check.mockResolvedValue({ ...report, coverage: [{ service: "entra", folders: [folder], readable: [folder] }] })
   await click("Check again")
   expect(mocks.check).toHaveBeenLastCalledWith(HEALTH_TENANT, true)
-  expect(defender.textContent).not.toContain("Needs access")
+  expect(entra.textContent).not.toContain("Needs access")
 })
 
 it("shows Start now as read-only and omits permission grant instructions", async () => {

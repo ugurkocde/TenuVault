@@ -167,7 +167,11 @@ export function summarizeBackupResults(results: BackupResults, finished = false)
 /** A completed backup with warnings: the engine's count, or its message for a job without results. */
 export function completedWithWarnings(job: { isComplete: boolean; isSuccessful: boolean; progressMessage: string; results?: BackupResults }): boolean {
   if (!job.isComplete || !job.isSuccessful) return false
-  if (job.results?.coverage === "incomplete") return true
+  // Types left out only for missing access are neutral coverage, not a warning. Without type
+  // results the cause is unknown, so incomplete coverage stays a warning.
+  const types = job.results?.types ?? []
+  const accessOnly = types.some((type) => type.state === "skipped") && types.every((type) => type.state !== "unreadable" && !(type.failed > 0))
+  if (job.results?.coverage === "incomplete" && !accessOnly) return true
   return job.results?.warnings !== undefined ? job.results.warnings > 0 : /with \d+ warnings?/.test(job.progressMessage)
 }
 

@@ -1,9 +1,9 @@
 ---
 title: "Drift detection"
-description: Compare Defender, Entra ID and Intune backups, then revert supported changes or restore a copy.
+description: Compare Entra ID and Intune backups, then revert supported changes or restore a copy.
 ---
 
-Drift detection shows what changed in your Defender, Entra ID and Intune configuration between two backups: added and deleted policies, changes to policy settings, and changes to covered directory records. By default it compares your two newest complete backups, and you can pick any other pair. Where the policy type supports restore, you can revert the change or restore a separate copy. Conditional Access is part of Entra ID coverage.
+Drift detection shows what changed in your Entra ID and Intune configuration between two backups: added and deleted policies, changes to policy settings, and changes to covered directory records. By default it compares your two newest complete backups, and you can pick any other pair. Where the policy type supports restore, you can revert the change or restore a separate copy. Conditional Access is part of Entra ID coverage.
 
 TenuVault compares backups, not the live tenant. To include the latest changes, run a backup first. See [Run a backup](/backups/).
 
@@ -53,7 +53,7 @@ Above the results, a line names the two compared backups, for example "Baseline:
 
 The same colors mark each change type everywhere on the page: green for added, amber for modified and red for deleted. Each change also carries its type as a word.
 
-If a backed-up file could not be read, a notice lists it. That item is left out of the result; the rest is compared normally.
+The coverage notice counts types outside the comparison separately from files that could not be read. Open **Details** to see the affected types grouped by service and the file errors. The rest of the comparison is still available.
 
 The changes are grouped by type, with the number of changes per type. Each change shows the item name, its change type, its previous name if it was renamed, and for a modified item the number of changed settings and the first of their names.
 
@@ -112,7 +112,6 @@ For backups that record per-type outcomes, only complete reads are compared. For
 
 | Service | Example of coverage shown as unknown |
 | --- | --- |
-| Defender | One backup could not read attack simulations. |
 | Entra ID | One backup could not read named locations. |
 | Intune | One backup left apps out of its scope. |
 

@@ -1,5 +1,7 @@
 /** Verify the per-policy confirmation stays outside bulk selection at the minimum window width. */
 export async function checkConfigurationRestore({ check, evaluate, waitForCondition, screenshot, assert, send, go }) {
+  if (process.env.TENUVAULT_SMOKE_EXPANDED_ENTRA !== "1") return
+
   await check("configuration restore has its own difference and confirmation in light and dark at 1024 pixels", async () => {
     await evaluate(`(() => {
       window.__configurationFetch = window.fetch;

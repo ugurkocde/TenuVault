@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import type { Tenant } from "../../src/portal/contexts/TenantContext"
 import type { NotificationRule, NotificationsStatus, PublicChannel, WatcherDeployView } from "../../src/renderer/features/notifications/api"
-import { GRAPH_CLI_CLIENT_ID, GRAPH_CLI_UPGRADE, OWN_APP_UPGRADE } from "../../src/shared/tenant-connection"
+import { GRAPH_CLI_CLIENT_ID } from "../../src/shared/tenant-connection"
 import { optionalPermissionStatus, type OptionalPermissionId } from "../../src/shared/services/optional-permissions"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -106,11 +106,9 @@ describe("the Alerts page", () => {
     state.status = { ...empty, channels: [{ ...teams, kind: "email", recipients: [{ type: "address", address: "ops@example.test" }] }] }
     const startNow = { ...tenant, credentials: { ...tenant.credentials!, appId: GRAPH_CLI_CLIENT_ID } }
     const container = await render(tab, true, "/portal/alerts", startNow)
-    for (let attempt = 0; attempt < 20 && !container.textContent?.includes(GRAPH_CLI_UPGRADE); attempt++) {
-      await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
-    }
-    expect(container.textContent).toContain(GRAPH_CLI_UPGRADE)
-    expect(container.textContent).toContain(OWN_APP_UPGRADE)
+    const links = [...container.querySelectorAll("a")].filter(link => link.textContent === "Review sign-in options")
+    expect(links.length).toBeGreaterThan(0)
+    expect(links.every(link => link.getAttribute("href")?.includes("section=signin#sign-in-"))).toBe(true)
     expect(container.textContent).not.toContain("grant admin consent")
   })
 

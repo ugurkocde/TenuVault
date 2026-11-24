@@ -1,3 +1,5 @@
+vi.hoisted(() => vi.stubGlobal("__TV_LAB_EXPANDED_ENTRA__", true))
+
 import { afterEach, expect, it, vi } from "vitest"
 import { POST } from "../src/portal/app/api/restore-configuration/route"
 import { setIdentityRestoreDispatch, setIdentityRestorePreviews } from "../src/main/restore/dispatch"

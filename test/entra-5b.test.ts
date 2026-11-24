@@ -1,3 +1,5 @@
+vi.hoisted(() => vi.stubGlobal("__TV_LAB_EXPANDED_ENTRA__", true))
+
 import { describe, expect, it, vi } from "vitest"
 import { ENTRA_5B_TYPES as TYPES, PIM_GROUP_READ_BUDGET_MS, PIM_GROUP_SCHEDULE_REQUEST_LIMIT } from "../src/shared/intune/entra"
 import { INTUNE_TYPES, restoreCapability, type Item } from "../src/shared/intune/registry"
@@ -417,7 +419,7 @@ describe("Entra 5b review regressions", () => {
     const answer = refusal(403, "AADB2C", "requires feature: 'EnableMsGraphAuthenticationEventListener'")
     for (const [path, routes, expected] of [
       [type.path, { [`/v1.0/${type.path}`]: answer }, "license"],
-      [type.path, { [`/v1.0/${type.path}`]: { value: [{ id: "a" }] }, [`/v1.0/${type.path}/a`]: answer }, "permission"],
+      [type.path, { [`/v1.0/${type.path}`]: { value: [{ id: "a" }] }, [`/v1.0/${type.path}/a`]: answer }, "failed"],
       [typeOf(folders[0]!).path, { ["/v1.0/" + decodeURIComponent(typeOf(folders[0]!).listSource!.path)]: answer }, "permission"],
       [type.path, { [`/v1.0/${type.path}`]: refusal(403, "Forbidden", "requires feature: 'EnableMsGraphAuthenticationEventListener'") }, "permission"],
       [type.path, { [`/v1.0/${type.path}`]: refusal(403, "AADB2C", "Access denied") }, "permission"],
@@ -425,7 +427,7 @@ describe("Entra 5b review regressions", () => {
       const folder = TYPES.find(type => type.path === path)!.folder
       const setup = fixture(scriptedGraph(routes))
       const job = await setup.run({ scope: only(folder) })
-      expect(job.outcomes?.types[0]).toMatchObject({ outcome: "skipped", cause: expected })
+      expect(job.outcomes?.types[0]).toMatchObject(expected === "failed" ? { outcome: "failed", status: 403 } : { outcome: "skipped", cause: expected })
     }
   })
 })

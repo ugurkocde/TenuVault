@@ -23,7 +23,7 @@ const discardCapture = vi.hoisted(() => vi.fn(async (_id: string) => undefined))
 vi.mock("../../src/renderer/lib/bridge", () => ({
   bridge: {
     app: { info: async () => ({}) },
-    auth: { accounts: async () => [] },
+    auth: { accounts: async () => [], packConsentPlan: async () => null },
     schedules: { list: async () => [] },
     license: { open: async () => undefined, tenantTrialAction: trialAction },
     preferences: { get: async () => ({}), set: async () => ({}) },
@@ -103,8 +103,8 @@ function statusFor(plan: "community" | "pro" | "msp") {
   return { hasKey: paid, keyState: paid ? "active" : "none", keyMessage: null, keyHint: null, persisted: true, offline: false, message: null, plan: paid ? plan : null, tenantLimit: paid ? 2 : null, validUntil: null, communityTenantId: paid ? null : "t-1", tenants: [tenantEntry("t-1", plan)] }
 }
 
-function selectTenant() {
-  selectedTenantState.current = { id: 1, name: "Contoso", credentials: { tenantId: "t-1", appId: "app-1", clientSecret: "" } }
+function selectTenant(appId = "app-1") {
+  selectedTenantState.current = { id: 1, name: "Contoso", credentials: { tenantId: "t-1", appId, clientSecret: "" } }
 }
 
 const PAID_ENTRIES = [["Audit Log", "/portal/audit"], ["Copy to Tenants", "/portal/sync"], ["Governance", "/portal/governance"], ["Changes", "/portal/changes"], ["Operations", "/portal/operations"], ["Reports", "/portal/reports"], ["Alerts", "/portal/alerts"]] as const
@@ -119,7 +119,7 @@ describe("sidebar plan badges for paid screens", () => {
     const nav = container.querySelector('nav[aria-label="Main navigation"]')!
     const group = nav.querySelector('section[aria-label="Services"]')!
     expect(group.querySelector("h2")?.textContent).toBe("Services")
-    expect([...group.querySelectorAll("a")].map(link => link.textContent)).toEqual(["Defender", "Entra ID", "Intune"])
+    expect([...group.querySelectorAll("a")].map(link => link.textContent)).toEqual(["Entra ID", "Intune"])
     expect(group.previousElementSibling?.textContent).toBe("DashboardTenants")
     expect(group.closest("#nav-items-Protect")).toBeNull()
     for (const link of group.querySelectorAll("a")) expect(link.hasAttribute("data-nav-row")).toBe(true)
@@ -383,13 +383,21 @@ describe("license banners after tenant trials", () => {
     const expected = { community: "You are on Community, the free plan.", "not-covered": "not covered by your", offline: "could not reach the licensing service", "organization-expiry": "The license shared by your organization" }[mode]!
     expect(container.textContent).toContain(expected)
   })
-  it.each(["/license", "/portal/onboarding", "/portal/overview"])("renders a global welcome only when the route does not own it (%s)", async route => {
+  it.each(["/license", "/portal/onboarding", "/portal/dashboard", "/portal/overview"])("renders a global welcome only when the route does not own it (%s)", async route => {
     const end = new Date(Date.now() + 9 * 86400_000).toISOString()
     licenseStatus.current = { ...statusFor("pro"), hasKey: false, trial: true, tenantTrialsEnabled: true, trialEndsAt: end, tenants: [{ ...tenantEntry("t-1", "pro"), source: "trial", trial: true, trialEndsAt: end, trialAcknowledged: false }] }
     selectTenant()
     const container = await render(createElement(DesktopLayout), route)
-    expect(container.textContent?.includes("Pro trial started")).toBe(route === "/portal/overview")
+    expect(container.textContent?.includes("Pro trial ·")).toBe(route === "/portal/overview")
   })
+})
+
+it.each(["/portal/dashboard", "/portal/backup", "/portal/settings"])("omits the global Start now strip on %s", async route => {
+  licenseStatus.current = statusFor("pro")
+  selectTenant("14d82eec-204b-4c2f-b7e8-296a70dab67e")
+  const container = await render(createElement(DesktopLayout), route)
+  expect(container.querySelector('[aria-label="Start now sign-in"]')).toBeNull()
+  expect(container.textContent).not.toContain("Start now provides read-only backups on this device.")
 })
 
 describe("License badge in the sidebar", () => {

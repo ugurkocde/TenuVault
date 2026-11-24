@@ -1,10 +1,13 @@
 import { moduleForFolder } from "../src/shared/services/modules"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { guardedGraphIO } from "../src/main/restore/graph-io"
 import { restoreFingerprint, type GuardedStep } from "../src/main/restore/guarded-run"
 import { RESTORE_MATRIX } from "../src/shared/intune/restore-matrix"
 import { INTUNE_TYPES, typeForFolder, type Item } from "../src/shared/intune/registry"
 import type { RestoreActor } from "../src/shared/intune/restore-guards"
+
+vi.hoisted(() => vi.stubGlobal("__TV_LAB_EXPANDED_ENTRA__", true))
+vi.hoisted(() => vi.stubGlobal("__TV_LAB_PRIVILEGED_RESTORE__", true))
 
 const actor: RestoreActor = { tenantId: "tenant", userId: "admin", clientId: "client", applicationObjectId: "app-object", servicePrincipalId: "sp-object", recoveryAccountIds: [] }
 const token = (permissions: string[]) => `header.${Buffer.from(JSON.stringify({ scp: permissions.join(" "), tid: "tenant", oid: "admin", appid: "client" })).toString("base64url")}.signature`
@@ -13,7 +16,7 @@ const references = async () => ({ principals: [], applications: [], complete: tr
 describe("restore write matrix", () => {
   it("has one row for each new-service type without changing capability", () => {
     expect(RESTORE_MATRIX.map(row => row.folder).sort()).toEqual(INTUNE_TYPES.filter(type => type.restoreSafety === "identity").map(type => type.folder).sort())
-    expect(new Set(RESTORE_MATRIX.map(row => row.folder)).size).toBe(91)
+    expect(new Set(RESTORE_MATRIX.map(row => row.folder)).size).toBe(74)
     for (const row of RESTORE_MATRIX) {
       expect(row.reason).not.toBe("")
       expect(row.builtIn).not.toBe("")
@@ -91,7 +94,6 @@ describe("restore write matrix", () => {
     expect(properties("EntraDevices", "update")).not.toContain("isManaged")
     for (const operation of ["create", "update"] as const) {
       expect(properties("B2bManagementPolicies", operation)).not.toContain("deletedDateTime")
-      expect(properties("DefenderAttackSimulationTrainingCampaigns", operation)).not.toContain("createdDateTime")
     }
   })
   it("blocks discrepant contracts, unknown properties and missing permissions before a request", async () => {
@@ -100,6 +102,5 @@ describe("restore write matrix", () => {
     await expect(io.read(step)).rejects.toThrow("permission")
     const permitted = guardedGraphIO(token(["Policy.Read.All", "Policy.ReadWrite.ApplicationConfiguration", "Application.Read.All"]), actor, references)
     await expect(permitted.read({ ...step, properties: ["passwordProfile"] })).rejects.toThrow("outside")
-    await expect(io.read({ ...step, folder: "DefenderIdentityAutoAuditing" })).rejects.toThrow("not been verified")
   })
 })

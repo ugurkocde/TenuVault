@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { Link } from "react-router-dom"
-import { AlertCircle, AlertTriangle, CalendarClock, CheckCircle2, Cloud, Database, HardDrive, Info, Layers, Loader2, Monitor, ShieldAlert } from "lucide-react"
+import { AlertCircle, CalendarClock, CheckCircle2, Cloud, Database, HardDrive, Info, Layers, Loader2, Monitor, ShieldAlert } from "lucide-react"
 import { Button } from "~/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "~/components/ui/dialog"
 import { Label } from "~/components/ui/label"
@@ -24,6 +24,7 @@ import { weeklyScheduleNote } from "../lib/plan-notes"
 import { PlanBadge, UpgradeNote } from "./UpgradeNote"
 import { ServiceBackupNotice } from "./ServiceBackupNotice"
 import { BackupScopePicker } from "./BackupScopePicker"
+import { NoticeCard, noticeActionClass } from "./NoticeCard"
 import { CloudBackupSettings } from "./CloudBackupSettings"
 import { StorageChooser, type StorageChooserDraft } from "./StorageChooser"
 import { DEFAULT_SELECTION, type ServiceSelection } from "../../shared/services/modules"
@@ -191,24 +192,17 @@ function TenantSchedule({ tenantId, tenantName, tenant: tenantProp, onStorageCha
           </button>
         </div>
 
-        {bothRunners && (
-          <p className="rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900">
-            Both runners are on: this computer ({describeSchedule(current!)}) and Azure
-            {cloud.config ? ` (${describeCloudSchedule(cloud.config)})` : ""} each make their own backups into the same
-            storage. That is safe, but usually one is enough. Pause the one you do not want.
-          </p>
-        )}
+        {bothRunners && <NoticeCard tone="warning" summary="Both backup runners are on."
+          details={`This computer (${describeSchedule(current!)}) and Azure${cloud.config ? ` (${describeCloudSchedule(cloud.config)})` : ""} make separate backups in the same storage. Pause either runner if you only need one.`} />}
 
         {runnerKind === "azure" ? (
           <CloudBackupSettings tenant={tenant} community={community} cloud={cloud} scopeVersion={scopeVersion} />
         ) : (
         <>
 
-        {current?.enabled && community && !azurePaused && current.frequency === "daily" && <p role="status" className="rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900">Runs weekly on Community (daily needs Pro)</p>}
+        {current?.enabled && community && !azurePaused && current.frequency === "daily" && <NoticeCard summary="Runs weekly on Community (daily needs Pro)" />}
         {current?.enabled && community && tenant?.resources?.storageAccountName && !tenant.resources.storageAccountName.startsWith(LOCAL_STORAGE_PREFIX) && (
-          <div role="status" className="space-y-3 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900">
-            <p>Paused: Azure storage needs Pro</p>
-            <Button disabled={saving || !onStorageChange || !tenant?.credentials} onClick={async () => {
+          <NoticeCard summary="Paused: Azure storage needs Pro" action={<Button disabled={saving || !onStorageChange || !tenant?.credentials} onClick={async () => {
               if (!tenant?.credentials || !onStorageChange || !await confirm(LOCAL_SWITCH_CONFIRMATION)) return
               setSaving(true)
               try {
@@ -218,15 +212,11 @@ function TenantSchedule({ tenantId, tenantName, tenant: tenantProp, onStorageCha
                 toast("Weekly local backups enabled", "success")
               } catch (error) { toast(error instanceof Error ? error.message : String(error), "error") }
               finally { setSaving(false) }
-            }}>Switch to weekly local backups</Button>
-          </div>
+            }}>Switch to weekly local backups</Button>} />
         )}
-        {schedulesError && (
-          <div className="flex flex-wrap items-center gap-3 rounded-3xl bg-red-50 px-5 py-4">
-            <p role="alert" className="text-sm text-red-700">Could not load the saved schedule: {schedulesError} Saving is paused so the saved schedule is not overwritten.</p>
-            <Button variant="outline" size="sm" onClick={reloadSchedules}>Try again</Button>
-          </div>
-        )}
+        {schedulesError && <NoticeCard tone="error" summary="Could not load the saved schedule."
+          details={`${schedulesError} Saving is paused to protect the saved schedule.`}
+          action={<Button variant="outline" size="sm" onClick={reloadSchedules}>Try again</Button>} />}
 
         <label className="flex items-center gap-3 text-sm text-gray-800">
           <input type="checkbox" className="h-4 w-4" checked={enabled} onChange={(e) => (drafts.set(tenantId, { enabled: e.target.checked, frequency, time, weekday }), setEnabled(e.target.checked))} />
@@ -290,17 +280,8 @@ function TenantSchedule({ tenantId, tenantName, tenant: tenantProp, onStorageCha
         {dailyExplained && <UpgradeNote feature="dailySchedule" />}
         {weeklyMessage && <p className="text-sm text-gray-500">{weeklyMessage}</p>}
 
-        {license && !tenantPlan(license) && (
-          <div className="flex gap-3 rounded-3xl bg-amber-50 px-5 py-4 text-sm text-amber-900">
-            <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
-            <p>
-              Your license does not cover {tenantName} right now, so its automatic backups do not run.{" "}
-              <Link to="/license" className="font-medium underline">
-                Open License
-              </Link>
-            </p>
-          </div>
-        )}
+        {license && !tenantPlan(license) && <NoticeCard summary="Automatic backups need an active license."
+          action={<Link to="/license" className={noticeActionClass}>Open License</Link>} />}
 
         {nextComputerRuns.length > 0 && (
           <div className="rounded-3xl bg-gray-50 px-5 py-4 text-sm text-gray-700">

@@ -1,8 +1,10 @@
-import { describe, expect, it } from "vitest"
+vi.hoisted(() => vi.stubGlobal("__TV_LAB_EXPANDED_ENTRA__", true))
+
+import { describe, expect, it, vi } from "vitest"
 import { configuration8cLab, LAB_8C_TENANT, LAB_8C_APP, LAB_8C_FOLDERS } from "./helpers/configuration-8c-lab"
 import type { Item } from "../src/shared/intune/registry"
 
-const roles = ["Policy.ReadWrite.CrossTenantAccess", "Policy.ReadWrite.ExternalIdentities", "IdentityUserFlow.ReadWrite.All", "EntitlementManagement.ReadWrite.All", "Policy.ReadWrite.AccessReview", "LifecycleWorkflows.ReadWrite.All", "CustomDetection.ReadWrite.All"]
+const roles = ["Policy.ReadWrite.CrossTenantAccess", "Policy.ReadWrite.ExternalIdentities", "IdentityUserFlow.ReadWrite.All", "EntitlementManagement.ReadWrite.All", "Policy.ReadWrite.AccessReview", "LifecycleWorkflows.ReadWrite.All"]
 const token = `header.${Buffer.from(JSON.stringify({ tid: LAB_8C_TENANT, appid: LAB_8C_APP, roles })).toString("base64url")}.signature`
 function world(failure?: string) {
   const calls: Array<{ method: string; path: string; body?: Item }> = [], objects = new Map<string, Item>()
@@ -15,7 +17,7 @@ function world(failure?: string) {
   const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input)), path = url.pathname, method = init?.method ?? "GET", body = init?.body ? JSON.parse(String(init.body)) as Item : undefined
     calls.push({ path, method, ...(body ? { body } : {}) })
-    const collection = /\/(userFlowAttributes|accessPackageCatalogs|detectionRules)$/.test(path)
+    const collection = /\/(userFlowAttributes|accessPackageCatalogs)$/.test(path)
     const singleton = singletons[path.split("/").at(-1)!]
     if (method === "GET") {
       if (collection) return Response.json({ value: [...objects.values()].filter(item => item.collection === path).map(({ collection: _collection, ...item }) => item), ...(failure === "continuation" ? { "@odata.nextLink": "https://evil.invalid/users" } : {}) })
@@ -65,7 +67,7 @@ describe("the prepared app-only lab harness with injected fetch only", () => {
   })
   it("honors bounded throttling recovery for cleanup without retrying an experimental write", async () => {
     const state = world()
-    const collection = "/v1.0/security/rules/detectionRules"
+    const collection = "/v1.0/identity/userFlowAttributes"
     state.objects.set(collection + "/created", { id: "created", displayName: "TV06-TEST-cleanup", collection })
     let throttled = false
     const fetcher = (async (input, init) => {
@@ -173,7 +175,7 @@ describe("the prepared app-only lab harness with injected fetch only", () => {
     const state = world("continuation")
     await expect(state.lab.cleanup()).rejects.toThrow("Cleanup needs attention")
     expect(state.calls.every(call => call.method === "GET")).toBe(true)
-    expect(state.calls).toHaveLength(3)
+    expect(state.calls).toHaveLength(2)
   })
   it("recovers the original after a refused recovery and stops later mutations when recovery cannot finish", async () => {
     const state = world(), durable = new Map<string, Item>()

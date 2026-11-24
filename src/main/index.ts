@@ -8,6 +8,7 @@ import type { AuditWatchRecord } from "./features/notifications/model"
 import { DOMAINS } from "./features/domains"
 import { backupStoragePath } from "../shared/backup-storage"
 import { DirectoryRestoreStore } from "./storage/directory-restore-store"
+import { privilegedRestoreEnabled } from "../shared/intune/directory-review-folders"
 import { AppMetadataAccess } from "./restore/app-metadata-access"
 import { DirectoryRestoreService } from "./restore/directory-service"
 import { directoryRestoreRetryAppMetadataRemoval, directoryRestoreUnfinished, setDirectoryRestoreService } from "./restore/directory-dispatch"
@@ -935,7 +936,7 @@ async function bootstrap(): Promise<void> {
     },
   })
 
-  const metadataAccess = new AppMetadataAccess(directoryStore, {
+  const metadataAccess = privilegedRestoreEnabled ? new AppMetadataAccess(directoryStore, {
     changed: tenant => {
       try { mainWindow?.webContents.send("auth:appMetadataRemovalChanged", tenant) } catch { /* The durable status is available when the window opens. */ }
     },
@@ -957,7 +958,7 @@ async function bootstrap(): Promise<void> {
       const current = await auth.cachedAccountIdentity(connection.tenantId)
       if (current.tenantId !== connection.tenantId || current.clientId !== connection.clientId || current.userId !== connection.userId) throw new Error("The signed-in account changed.")
     },
-  }, bridgedFetch)
+  }, bridgedFetch) : undefined
   setDirectoryRestoreService(new DirectoryRestoreService(directoryStore, recoveryAccounts, restoreConnection, tenant => auth.cachedAccountIdentity(tenant), bridgedFetch, tenant => {
     const id = backupReader.status(tenant)?.clientId
     return id ? [id] : []
@@ -1839,11 +1840,11 @@ async function bootstrap(): Promise<void> {
     if (typeof tenantId !== "string") throw new Error("Choose a signed-in tenant.")
     return directoryRestoreUnfinished(tenantId)
   })
-  handleTrusted("auth:appMetadataRemoval", (_event, tenant: unknown, retry: unknown) => {
+  if (privilegedRestoreEnabled) handleTrusted("auth:appMetadataRemoval", (_event, tenant: unknown, retry: unknown) => {
     if (!isGuid(tenant)) throw new Error("Choose a signed-in tenant.")
     const id = tenant.toLowerCase()
     if (!accounts.get(id)) throw new Error("Sign in to this tenant.")
-    return retry === true ? directoryRestoreRetryAppMetadataRemoval(id) : metadataAccess.status(id)
+    return retry === true ? directoryRestoreRetryAppMetadataRemoval(id) : metadataAccess?.status(id)
   })
   // Stops waiting for a sign-in the admin abandoned in the browser.
   handleTrusted("auth:cancelSignIn", () => { const consent = packConsent.cancel(); return auth.cancelInteractive() || consent })

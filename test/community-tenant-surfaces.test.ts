@@ -99,15 +99,15 @@ describe("Community tenant surfaces", () => {
     state.status = community
     expect(render(createElement(TenantAccessNotice))).toBe("")
     state.status = uncovered
-    expect(render(createElement(TenantAccessNotice))).toContain("An active license is required")
+    expect(render(createElement(TenantAccessNotice))).toContain("Backup and restore need an active license.")
   })
 
   it("does not claim the Community tenant's automatic backups are off", () => {
     state.status = community
     const props = { tenantId: TENANT, tenantName: "Contoso" }
-    expect(render(createElement(BackupSchedulePanel, props))).not.toContain("does not cover")
+    expect(render(createElement(BackupSchedulePanel, props))).not.toContain("Automatic backups need an active license.")
     state.status = uncovered
-    expect(render(createElement(BackupSchedulePanel, props))).toContain("does not cover")
+    expect(render(createElement(BackupSchedulePanel, props))).toContain("Automatic backups need an active license.")
   })
 })
 

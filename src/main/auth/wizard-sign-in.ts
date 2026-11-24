@@ -1,6 +1,6 @@
 import { ORGANIZATIONS, resolveOnboardingTenant } from "./onboarding-tenant"
 import { randomUUID } from "node:crypto"
-import { checkedOnboardingChoice } from "../../shared/services/onboarding"
+import { DEFAULT_ONBOARDING_CHOICE, ONBOARDING_ENTRA_CHOICE, checkedOnboardingChoice } from "../../shared/services/onboarding"
 import { missingForChoice, type PermissionChoice } from "../../shared/services/manifest"
 import { chosenBackupCoverage, graphCliCoverage } from "../../shared/services/graph-cli-coverage"
 import { missingPackScopes } from "../../shared/services/permission-packs"
@@ -99,8 +99,9 @@ export class WizardSignIn {
       // Keep the approved subset for later silent requests. The tenant's saved choice still
       // describes everything the admin wants to protect once access is added.
       const verified = method === "tenuvaultApp" && scopes && staged.graphScopes?.filter(scope => missingPackScopes([scope], scopes).length === 0)
-      const coverage = graphCliCoverage(verified ? new Set(verified) : scopes, method === "tenuvaultApp" ? choice : undefined)
-      const trialEligible = method === "graphCli" || canFinishWithCoverage(coverage)
+      const verifiedScopes = verified || (scopes && [...scopes])
+      const coverage = graphCliCoverage(verifiedScopes && new Set(verifiedScopes))
+      const trialEligible = method === "graphCli" || canFinishWithCoverage(chosenBackupCoverage(coverage, choice!))
       const [organizationName] = await Promise.all([
         this.organizationName(actualTenant, staged.accessToken),
         trialEligible ? this.host.startTrial(staged) : undefined,
@@ -114,7 +115,7 @@ export class WizardSignIn {
       const { homeAccountId: _, ...account } = staged.account
       this.pending = { id, method, staged: verified ? { ...staged, graphScopes: verified } : staged, choice: method === "tenuvaultApp" ? choice : undefined, coverage, trialEligible }
       const missing = staged.missingOnboardingScopes ?? (method === "graphCli" && scopes && choice ? missingForChoice(choice, { kind: "delegated", permissions: scopes }) : undefined)
-      return { result: { id, account, coverage, missing, organizationName } }
+      return { result: { id, account, coverage, missing, organizationName, verifiedScopes } }
     } catch (error) {
       return wizardFailure(error)
     } finally {
@@ -144,7 +145,17 @@ export class WizardSignIn {
     let checkedLicense = false
     try {
       if (typeof profile !== "string" || profile.length > 64_000) throw new ConnectionSwitchError("invalid_request", "Choose valid backup storage.")
-      const choice = pending.method === "tenuvaultApp" ? pending.choice! : wizardChoice(services)
+      // A staged public sign-in can toggle the standard Entra backup selection. Restore
+      // permissions and opt-in inventory still require their own verified connection flow.
+      let choice = pending.method === "tenuvaultApp" ? pending.choice! : wizardChoice(services)
+      if (pending.method === "tenuvaultApp" && choice.intune?.access === "backup") {
+        const requested = wizardChoice(services)
+        const standard = Object.entries(requested).every(([id, service]) =>
+          (id === "intune" || id === "conditionalAccess" || id === "entra") && service.access === "backup" && !service.areas?.length)
+        if (standard && requested.intune && Boolean(requested.entra) === Boolean(requested.conditionalAccess)) {
+          choice = structuredClone(requested.entra ? ONBOARDING_ENTRA_CHOICE : DEFAULT_ONBOARDING_CHOICE)
+        }
+      }
       const coverage = chosenBackupCoverage(pending.coverage, choice)
       if (!canFinishWithCoverage(coverage)) {
         throw new ConnectionSwitchError("AADSTS65001", "Check backup access before continuing.")

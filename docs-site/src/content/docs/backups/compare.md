@@ -1,6 +1,6 @@
 ---
 title: "Compare backups"
-description: See what changed across Defender, Entra ID and Intune between two configuration backups.
+description: See what changed across Entra ID and Intune between two configuration backups.
 ---
 
 Every backup records a fingerprint of each item it saved. TenuVault compares these fingerprints with the previous backup, so you can see what was added, changed and deleted in the tenant between two backups, down to the individual setting.
@@ -74,7 +74,6 @@ When comparing Intune roles from older Azure backups, TenuVault treats empty and
 
 | Service | Example of coverage shown as unknown |
 | --- | --- |
-| Defender | One backup could not read attack simulations. |
 | Entra ID | One backup could not read named locations. |
 | Intune | One backup left apps out of its scope. |
 

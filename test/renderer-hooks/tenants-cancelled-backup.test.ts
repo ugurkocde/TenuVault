@@ -44,6 +44,8 @@ vi.mock("~/components/tenants/tag-management-modal", () => ({ TagManagementModal
 import TenantsPage from "../../src/portal/app/portal/tenants/page"
 import { BackupProgressProvider } from "../../src/portal/contexts/BackupProgressContext"
 
+vi.hoisted(() => vi.stubGlobal("__TV_LAB_PRIVILEGED_RESTORE__", true))
+
 function Harness({ children }: { children: ReactNode }) {
   const [tenants, setTenants] = useState<Tenant[]>([tenant])
   store.tenants = tenants

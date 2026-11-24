@@ -109,7 +109,8 @@ export function statusLabel(status: string, coverage?: BackupSummary["coverage"]
   if (value === "unavailable") return "Unavailable"
   if (value === "unknown") return "Status unknown"
   const kind = statusKind(status)
-  if ((kind === "success" && coverage !== "complete") || (kind === "warning" && coverage === "incomplete")) return "Finished"
+  if (kind === "success" && coverage == null) return "Finished"
+  if (kind === "success" && coverage === "incomplete") return "Completed"
   return STATUS_LABEL[kind]
 }
 

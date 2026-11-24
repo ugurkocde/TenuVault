@@ -82,9 +82,7 @@ export const ARTIFACTS: readonly Artifact[] = [
   script("resources/New-TenuVaultDesktopApp.ps1", desktopScriptTable()),
   script("resources/New-TenuVaultBackupReader.ps1", readerScriptTable()),
   docs("docs-site/src/content/docs/security/permissions.md", "entra", delegatedDocsTable("entra")),
-  docs("docs-site/src/content/docs/security/permissions.md", "defender", delegatedDocsTable("defender")),
   docs("docs-site/src/content/docs/backups/backup-reader.md", "entra", readerDocsTable("entra")),
-  docs("docs-site/src/content/docs/backups/backup-reader.md", "defender", readerDocsTable("defender")),
 ]
 
 /** Where an artifact's body starts and ends in its file; undefined when a marker line is missing. */

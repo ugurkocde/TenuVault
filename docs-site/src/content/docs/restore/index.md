@@ -1,6 +1,6 @@
 ---
 title: "Restore configuration from a backup"
-description: "Restore supported Entra ID and Intune configuration from a TenuVault backup and review Defender recovery limits."
+description: "Restore supported Entra ID and Intune configuration from a TenuVault backup."
 faq:
   - question: "How do I restore an Intune policy?"
     answer: "Open Backup & Restore in TenuVault and start the restore wizard, or pick a backup in Backup History and click Restore from this backup. Choose the policies, choose Create copies or Replace in place, review what will happen to each policy, then confirm."
@@ -18,7 +18,6 @@ Restore supported configuration from a saved tenant backup. The available action
 
 | Service | Restore availability |
 | --- | --- |
-| Defender | Browse and compare backups. See [Defender recovery limits](/restore/defender/). |
 | Entra ID | Restore supported Conditional Access policies and individually review eligible configuration and directory changes. See [Restore Entra ID configuration](/restore/identity/). |
 | Intune | Recreate supported policies, replace them in place or create copies. See [Restore Intune configuration](/restore/intune/). |
 
@@ -74,7 +73,7 @@ Click a backup to continue.
 If the selected backup contains supported policies that need restore access, TenuVault shows the next action:
 
 * **TenuVault app.** Select **Allow restore for** the service. Open admin consent or send the link to your administrator. When they approve the pack, select **Check again** to verify your access.
-* **Your own app registration.** Review the missing permissions and use the in-app update, CLI commands or manual instructions for that registration. Select **Check again** after the permissions are granted.
+* **Your own app registration.** Open **Details** on the restore access notice to review the missing permissions and use the in-app update, CLI commands or manual instructions for that registration. Select **Check again** after the permissions are granted.
 * **Start now.** Upgrade to the TenuVault app or use your own app registration to restore.
 
 TenuVault reads the backup (**Reading the backup...**) and lists its items grouped by area (for example **Device configuration**, **Compliance**, **Apps**) and then by type.

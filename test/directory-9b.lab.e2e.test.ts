@@ -2,10 +2,11 @@ import { closeSync, fsyncSync, mkdirSync, openSync, writeSync, rmSync, appendFil
 import { createHash } from "node:crypto"
 import { join } from "node:path"
 import { describe, it, expect } from "vitest"
+import { privilegedRestoreEnabled } from "../src/shared/intune/directory-review-folders"
 import { restoreMatrixRow } from "../src/shared/intune/restore-matrix"
 import { directory9bLab, type AppLabIntent } from "./helpers/directory-9b-lab"
 import { LAB_8C_TENANT, LAB_8C_APP } from "./helpers/configuration-8c-lab"
-describe.skipIf(process.env.TENUVAULT_LAB_WRITE_9B !== "owner-approved-phase2")("9b approved application lab scope", () => {
+describe.skipIf(!privilegedRestoreEnabled || process.env.TENUVAULT_LAB_WRITE_9B !== "owner-approved-phase2")("9b approved application lab scope", () => {
   it("verifies fixture lifecycles and test-app-only access, then permanently cleans up", async () => {
     if (process.env.TENUVAULT_E2E_TENANT_ID !== LAB_8C_TENANT || process.env.TENUVAULT_E2E_CLIENT_ID !== LAB_8C_APP) throw new Error("Wrong lab connection")
     const recovery = "/tmp/tenuvault-9b-recovery", artifacts = process.env.TENUVAULT_LAB_9B_ARTIFACT

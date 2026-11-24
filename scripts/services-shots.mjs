@@ -8,10 +8,12 @@ import { join, resolve } from "node:path"
 const require = createRequire(import.meta.url)
 const electronPath = require("electron")
 const desktopDir = resolve(import.meta.dirname, "..")
+const requestedWidth = Number(process.env.SHOT_WIDTH ?? 1024)
+const requestedHeight = Number(process.env.SHOT_HEIGHT ?? 0)
 const sidebarShots = process.env.SIDEBAR_SHOTS === "1"
 const shotsDir = resolve(process.argv[2] ?? (sidebarShots ? "/Users/ugurkoc/Desktop/GitHub/TenuVault/tasks/0.6-research/shots/sidebar" : "/Users/ugurkoc/Desktop/GitHub/TenuVault/tasks/0.6-research/shots/2b"))
-const docsDir = join(desktopDir, sidebarShots ? "docs-site/public/images/sidebar" : "docs-site/public/images/services")
-mkdirSync(docsDir, { recursive: true })
+const docsDir = process.env.SHOT_NO_DOCS === "1" ? undefined : join(desktopDir, sidebarShots ? "docs-site/public/images/sidebar" : "docs-site/public/images/services")
+if (docsDir) mkdirSync(docsDir, { recursive: true })
 const { buildSync } = require("esbuild")
 const bundle = buildSync({ entryPoints: [join(desktopDir, "test/fixtures/services-health.ts")], bundle: true, platform: "node", format: "esm", write: false })
 const { healthScene, incompleteBackupFixture } = await import("data:text/javascript;base64," + Buffer.from(bundle.outputFiles[0].text).toString("base64"))
@@ -59,8 +61,8 @@ const inspectPort = port + 400
 const profile = mkdtempSync(join(tmpdir(), "tenuvault-services-"))
 mkdirSync(shotsDir, { recursive: true })
 
-const args = [desktopDir, `--remote-debugging-port=${port}`, `--inspect=${inspectPort}`, `--user-data-dir=${profile}`]
-if (process.platform === "linux") args.push("--no-sandbox", "--ozone-platform=x11")
+const args = [process.env.SHOT_APP_PATH ?? desktopDir, "--proxy-server=http://127.0.0.1:1", `--remote-debugging-port=${port}`, `--inspect=${inspectPort}`, `--user-data-dir=${profile}`]
+if (process.platform === "linux") args.push("--no-sandbox", "--ozone-platform=x11", "--password-store=basic")
 const env = { ...process.env }
 delete env.ELECTRON_RUN_AS_NODE
 const app = spawn(electronPath, args, { stdio: ["ignore", "pipe", "pipe"], env })
@@ -149,7 +151,7 @@ try {
     handle("api", request => {
       if (request.path === "/api/backup/start") return json({ jobId: "desktop-fixture", status: "Running" })
       if (request.path === "/api/backup/status") return json(M.backup)
-      if (request.path === "/api/list-backups") return json({ backups: [{ id: "2026-11-14_02-00-00", name: "2026-11-14_02-00-00", timestamp: "2026-11-14T02:00:00Z", status: "Completed", totalPolicies: ${sidebarShots ? 45 : 36}, policyCount: ${sidebarShots ? 45 : 36}, type: "scheduled", size: 46000, duration: 120, counts: ${JSON.stringify(sidebarShots ? { ConfigurationPolicies: 24, CompliancePolicies: 12, ConditionalAccessPolicies: 3, Organization: 1, SecurityDefaults: 1, DefenderSecureScoreControlStates: 4 } : { ConfigurationPolicies: 24, CompliancePolicies: 12 })} }] })
+      if (request.path === "/api/list-backups") return json({ backups: [{ id: "2026-11-14_02-00-00", name: "2026-11-14_02-00-00", timestamp: "2026-11-14T02:00:00Z", status: "Completed", totalPolicies: ${sidebarShots ? 45 : 36}, policyCount: ${sidebarShots ? 45 : 36}, type: "scheduled", size: 46000, duration: 120, counts: ${JSON.stringify(sidebarShots ? { ConfigurationPolicies: 24, CompliancePolicies: 12, ConditionalAccessPolicies: 3, DeviceRegistrationPolicy: 1, AuthenticationMethodsPolicy: 1, TermsOfUseAgreements: 4 } : { ConfigurationPolicies: 24, CompliancePolicies: 12 })} }] })
       return json({ backups: [], data: [], entries: [], records: [], tenants: [], jobs: [], exists: true })
     })
   })()`)
@@ -174,16 +176,16 @@ try {
     await evaluate(`document.activeElement?.blur?.()`)
     await sleep(150)
     const { data } = await send("Page.captureScreenshot", { format: "png" })
-    for (const folder of [shotsDir, docsDir]) writeFileSync(join(folder, `${state}-${theme}.png`), Buffer.from(data, "base64"))
+    for (const folder of [shotsDir, ...(docsDir ? [docsDir] : [])]) writeFileSync(join(folder, `${state}-${theme}.png`), Buffer.from(data, "base64"))
     console.log(`shot ${state}-${theme}.png`)
   }
   const click = async text => {
     await waitFor(`[...document.querySelectorAll('button')].some(b => b.textContent.trim() === ${JSON.stringify(text)} && !b.disabled)`)
     await evaluate(`[...document.querySelectorAll('button')].find(b => b.textContent.trim() === ${JSON.stringify(text)}).click()`)
   }
-  const sidebarScenes = ["all-services-on", "entra-active", "defender-off"]
+  const sidebarScenes = ["all-services-on", "entra-active", "entra-off"]
   const scenes = sidebarShots ? sidebarScenes : [
-    "healthy", "first-check", "missing-permission", "restore-only-gap", "partly-verified", "graph-consentMissing", "graph-registrationNotFoundInTenant", "graph-applicationDisabled", "registration-replaced", "reader-expiring", "reader-expired", "reader-lost-access", "changes", "personal-data", "intune-confirmation", "intune-off", "entra-backup-types", "defender-backup-types",
+    "healthy", "first-check", "missing-permission", "restore-only-gap", "partly-verified", "graph-consentMissing", "graph-registrationNotFoundInTenant", "graph-applicationDisabled", "registration-replaced", "reader-expiring", "reader-expired", "reader-lost-access", "changes", "personal-data", "intune-confirmation", "intune-off", "entra-backup-types",
     ...["permission", "notVerifiedYet", "refusedWithPermission", "role", "license", "signedIn", "reader", "notRead"].map(cause => `cause-${cause}`),
     ...["notChecked", "unknown", "signInNeeded", "mfaRequired", "blockedByConditionalAccess", "registrationMisconfigured", "servicePrincipalMissing", "notAssigned", "accountDisabled", "accountLockedOrBlocked", "wrongTenantOrAccount", "throttled", "unreachable"].map(state => `graph-${state}`),
     ...["notSetUp", "pending", "rolesChanged", "refused", "throttled", "unreachable"].map(state => `reader-${state}`),
@@ -195,15 +197,15 @@ try {
     for (const theme of ["light", "dark"]) {
       console.log(`capturing ${state}-${theme}`)
       const health = healthScene(state.includes("intune-off") ? "intune-off" : state)
-      if (sidebarShots) health.services.forEach(service => { service.enabled = !(state === "defender-off" && service.id === "defender") })
+      if (sidebarShots) health.services.forEach(service => { service.enabled = !(state === "entra-off" && service.id === "entra") })
       await main.evaluate(`Object.assign(globalThis.__marketingMock, { health: ${JSON.stringify(health)}, loading: ${state === "first-check"}, backup: ${JSON.stringify(incompleteBackupFixture)} })`)
       const route = sidebarShots ? (state === "entra-active" ? "#/portal/backup?service=entra" : "#/portal/backup") : state === "overview-intune-off" ? "#/portal/overview" : state === "dashboard-intune-off" ? "#/portal/dashboard" : (state === "tenants-intune-off" || state === "tenants-list-intune-off") ? "#/portal/tenants" : state === "schedule-intune-off" ? "#/portal/backup?tab=schedule" : state === "backup-list-intune-off" || state === "backup-incomplete" ? "#/portal/backup" : "#/portal/settings?section=services"
-      await send("Emulation.setDeviceMetricsOverride", { width: 1024, height: sidebarShots ? 1700 : 1100, deviceScaleFactor: 1, mobile: false })
+      await send("Emulation.setDeviceMetricsOverride", { width: requestedWidth, height: requestedHeight || (sidebarShots ? 1700 : 1100), deviceScaleFactor: 1, mobile: false })
       await evaluate(`localStorage.setItem("tenuvault-appearance", "${theme}"); location.hash = ${JSON.stringify(route)}; location.reload()`)
       await waitFor(`document.body?.innerText.includes(${JSON.stringify(state === "first-check" ? "Checking connection health" : route.includes("settings") ? "Microsoft Graph sign-in" : state.includes("intune-off") ? "Intune is off" : "Run Backup")})`)
       if (sidebarShots) {
         await waitFor(`document.querySelector('section[aria-label="Services"] a[href$="/portal/backup?service=entra"]') && document.body.innerText.includes("Backup Details")`)
-        if (state === "defender-off") await waitFor(`document.querySelector('section[aria-label="Services"]').innerText.includes("Off")`)
+        if (state === "entra-off") await waitFor(`document.querySelector('section[aria-label="Services"]').innerText.includes("Off")`)
         if (state === "entra-active") await waitFor(`document.querySelector('section[aria-label="Services"] a[aria-current="page"]')?.innerText === "Entra ID" && document.querySelector('#backup-service')?.value === "entra"`)
       }
       await evaluate(`document.documentElement.classList.toggle("dark", ${theme === "dark"}); (() => { const style = document.createElement("style"); style.textContent = "*, *::before, *::after { animation: none !important; transition: none !important; caret-color: transparent !important; }"; document.head.appendChild(style) })()`)
@@ -213,11 +215,7 @@ try {
         await waitFor(`document.querySelector('[data-service="entra"]')?.innerText.includes("Backup: Permissions present")`)
         if (await evaluate(`document.querySelector('[data-service="entra"]').innerText.includes("no backup types for Entra ID yet")`)) throw new Error("Entra ID backup types are missing from Services and permissions")
         await evaluate(`document.querySelector('[data-service="entra"] > details').open = true`)
-        if (await evaluate(`["externalIdentities", "roles", "governance"].some(id => document.querySelector('[data-service="entra"] [data-area="' + id + '"]').innerText.includes("no backup types"))`)) throw new Error("Entra configuration types are missing")
-      }
-      if (state === "defender-backup-types") {
-        await evaluate(`document.querySelector('[data-service="defender"] > details').open = true`)
-        if (await evaluate(`document.querySelector('[data-service="defender"]').innerText.includes("no backup types" )`)) throw new Error("Defender configuration types are missing")
+        if (await evaluate(`["tenantSettings", "authentication", "governance"].some(id => document.querySelector('[data-service="entra"] [data-area="' + id + '"]').innerText.includes("no backup types"))`)) throw new Error("Entra configuration types are missing")
       }
       if (state === "personal-data") await evaluate(`document.querySelector('[data-service="entra"] > details').open = true`)
       if (state === "reader-lost-access" || state === "partly-verified" || state.startsWith("cause-")) await evaluate(`document.querySelector('[data-service="intune"] > details').open = true`)
@@ -229,7 +227,9 @@ try {
         await click("Run Backup")
         await waitFor(`document.querySelector('[role="dialog"]')?.innerText.includes("Start backup")`)
         await click("Start backup")
-        await waitFor(`document.body.innerText.includes("Coverage incomplete")`)
+        await waitFor(`document.querySelector('[role="dialog"]')?.innerText.includes("Backup completed with incomplete coverage")`)
+        await evaluate(`document.querySelector('[role="dialog"] button[aria-label^="Details:"]').click()`)
+        await waitFor(`document.querySelector('[role="dialog"]')?.innerText.includes("Terms of use")`)
       }
       if (state === "tenants-list-intune-off") {
         await evaluate(`document.querySelector('button[aria-label="List view"]').click()`)
@@ -237,13 +237,13 @@ try {
       }
       // Keep width at 1024 and fit the real scroll surface vertically, so long states are reviewable in one image.
       const height = await evaluate(`Math.min(4200, Math.max(1100, ...[...document.querySelectorAll('main, #services, [role="dialog"]')].map(e => e.scrollHeight + 220)))`)
-      if (!sidebarShots && state !== "intune-confirmation" && state !== "backup-list-intune-off" && state !== "schedule-intune-off" && state !== "backup-incomplete") await send("Emulation.setDeviceMetricsOverride", { width: 1024, height, deviceScaleFactor: 1, mobile: false })
+      if (!requestedHeight && !sidebarShots && state !== "intune-confirmation" && state !== "backup-list-intune-off" && state !== "schedule-intune-off" && state !== "backup-incomplete") await send("Emulation.setDeviceMetricsOverride", { width: 1024, height, deviceScaleFactor: 1, mobile: false })
       await evaluate(`[document.scrollingElement, ...document.querySelectorAll('*')].filter(e => e && e.scrollHeight > e.clientHeight + 4 && getComputedStyle(e).overflowY !== "visible").forEach(e => e.scrollTop = 0)`)
       await shot(state, theme)
     }
   }
   const inventory = sidebarShots ? "# Services sidebar screenshots\n\nFictional tenant and backup metadata, built desktop app, 1024px width and 1700px height, both themes. Generate with `SIDEBAR_SHOTS=1 node scripts/services-shots.mjs`.\n\n" + sidebarScenes.map(state => `* ${state}-light.png, ${state}-dark.png: ${state.replaceAll("-", " ")}.\n`).join("") : "# Services and permissions screenshots\n\nFictional health reports, built desktop app, 1024px width, both themes. Generated with `node scripts/services-shots.mjs`. Storage has its own copy for all 18 supported states.\n\n" + scenes.map(state => `* ${state}-light.png, ${state}-dark.png: ${state === "entra-backup-types" ? "Entra ID enabled with configuration backup types available" : state.replaceAll("-", " ")}.\n`).join("")
-  for (const folder of [shotsDir, docsDir]) writeFileSync(join(folder, "README.md"), inventory)
+  for (const folder of [shotsDir, ...(docsDir ? [docsDir] : [])]) writeFileSync(join(folder, "README.md"), inventory)
   rmSync(join(shotsDir, "failure.png"), { force: true })
   console.log(`${selectedScenes.length * 2} fixture screenshots saved to ${shotsDir} and ${docsDir}`)
 } catch (error) {

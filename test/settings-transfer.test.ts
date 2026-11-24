@@ -110,7 +110,7 @@ describe("settings file export", () => {
       tenantId: TENANT,
       name: "Tenant aaaa",
       domain: "aaaa.onmicrosoft.com",
-      services: { intune: { enabled: true }, conditionalAccess: { enabled: true }, entra: { enabled: false }, defender: { enabled: false } },
+      services: { intune: { enabled: true }, conditionalAccess: { enabled: true }, entra: { enabled: false } },
       backupScope: { excluded: [] },
       schedule: { enabled: true, frequency: "weekly", time: "02:00", weekday: 1 },
       cloudBackup: expect.objectContaining({ automationAccount: "aa-tenuvault", storageAccount: "contosobackups" }),
@@ -170,9 +170,9 @@ describe("settings file round trip", () => {
     const preview = b.transfer.open(text, "system")
     expect(preview.groups.map((group) => [group.id, group.connected])).toEqual([["app", true], [TENANT, true]])
     expect(everyItem(preview).filter(item => item.id.startsWith(`${TENANT}:service:`)).map(item => item.label))
-      .toEqual(["Defender", "Entra ID", "Entra ID: Conditional Access", "Intune"])
+      .toEqual(["Entra ID", "Entra ID: Conditional Access", "Intune"])
     // Services that are the same on both computers have nothing to change.
-    const same = ["intune", "entra", "defender"].map((id) => `${TENANT}:service:${id}`)
+    const same = ["intune", "entra"].map((id) => `${TENANT}:service:${id}`)
     expect(everyItem(preview).filter((item) => same.includes(item.id)).every((item) => item.status === "same")).toBe(true)
     expect(everyItem(preview).filter((item) => !same.includes(item.id)).every((item) => item.status === "change")).toBe(true)
     // Items with a warning start unselected; the others are selected.

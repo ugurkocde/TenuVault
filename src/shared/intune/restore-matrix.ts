@@ -1,3 +1,6 @@
+import { PRIVILEGED_WRITES } from "../services/privileged-writes"
+import { deferredPrivilegedRestore, privilegedRestoreEnabled } from "./directory-review-folders"
+import { includesEntraFolder } from "./entra-scope"
 import rows from "./restore-matrix.json"
 import type { GraphVersion } from "./registry"
 
@@ -42,7 +45,22 @@ export interface RestoreMatrixRow {
   verification: { date: string; method: string; resourceFound: boolean; resourceDocumentation: string; live: string; notes: string }
 }
 /** Research is deliberately separate from registry capability. A documented API never enables restore. */
-export const RESTORE_MATRIX = rows as RestoreMatrixRow[]
+const hasPrivilegedWrite = (permissions: readonly string[]) => permissions.some(scope => PRIVILEGED_WRITES.includes(scope))
+export const RESTORE_MATRIX = (rows as RestoreMatrixRow[]).filter(row => !deferredPrivilegedRestore(row.folder) && (row.readPath.startsWith("deviceManagement/") || row.readPath.startsWith("deviceAppManagement/") || ["NamedLocations", "ConditionalAccessPolicies", "AuthenticationStrengths"].includes(row.folder) || includesEntraFolder(row.folder))).map(row => {
+  if (privilegedRestoreEnabled) return row
+  const contract = (write: WriteContract | null) => write && !hasPrivilegedWrite(write.permissions) ? write : null
+  const directory = row.directoryRestore
+  return {
+    ...row,
+    ...(directory?.contracts && { directoryRestore: {
+      ...directory,
+      contracts: directory.contracts.filter(write => !hasPrivilegedWrite([...write.delegated, ...write.application])),
+    } }),
+    create: contract(row.create),
+    update: contract(row.update),
+    supplementalWrites: row.supplementalWrites.filter(write => !hasPrivilegedWrite(write.permissions)),
+  }
+})
 export const restoreMatrixRow = (folder: string): RestoreMatrixRow | undefined => RESTORE_MATRIX.find(row => row.folder === folder)
 
 export const verifiedWriteContract = (write: WriteContract): boolean => write.index === "matched" || (write.index === "not-matched" && write.liveVerification?.result === "round-trip-matched" && !!write.documentation && !!write.permissionDocumentation?.length)

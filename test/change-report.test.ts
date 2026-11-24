@@ -1,4 +1,3 @@
-import { DEFENDER_TYPES } from "../src/shared/intune/defender"
 import { ENTRA_5C_TYPES } from "../src/shared/intune/entra"
 import { describe, expect, it } from "vitest"
 import { buildChangeReport, changeReportJson, changeReportMarkdown, describeAssignment, describeValue, publicAuditNote, reportFileName, reportTitle, summaryLine, type ReportAudit } from "../src/shared/reports/change-report"
@@ -96,15 +95,7 @@ describe("change report model", () => {
     expect(report.otherActivity).toHaveLength(2)
   })
 
-  it("never attributes matching Intune or Conditional Access audit actors to Defender", () => {
-    const intune = auditEvent("intune", "2026-11-05T10:00:00Z", "shared-id", "Finance")
-    for (const byName of [false, true]) {
-      const report = buildChangeReport(result(DEFENDER_TYPES.map(type => drift({ type: type.label, configId: "shared-id", configName: "Finance", backupFile: `${type.folder}/Finance.json` }))), { changes: [{ ...intune, resourceId: byName ? null : "shared-id" }, { ...intune, auditId: "ca", source: "Conditional Access", resourceId: byName ? null : "shared-id" }] }, options)
-      expect(report.items).toHaveLength(17)
-      expect(report.items.every(item => item.activity.length === 0)).toBe(true)
-      expect(report.summary.attributed).toBe(0)
-    }
-  })
+
 
   it("leaves actors unknown for Entra configuration and unknown types without a backup path", () => {
     const report = buildChangeReport(result([

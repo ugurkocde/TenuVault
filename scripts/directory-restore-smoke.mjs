@@ -61,6 +61,8 @@ export async function checkDirectoryRestore({ check, evaluate, waitForCondition,
       await go("#/portal/backup?tab=schedule", "Automatic backups")
     }
   })
+  if (process.env.TENUVAULT_SMOKE_PRIVILEGED_RESTORE !== "1") return
+
   for (const scenario of ["metadata", "recycle", "verified", "pending"]) await check(`application restore review and result for ${scenario}`, async () => {
     const blocked = scenario === "recycle", temporary = scenario === "verified" || scenario === "pending"
     const pack = { label: "Entra app metadata restore", scopes: ["Application.ReadWrite.All", "DelegatedPermissionGrant.ReadWrite.All"] }

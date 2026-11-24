@@ -102,8 +102,9 @@ describe("a backup the user cancelled, in the restore wizard", () => {
   it("names the cancellation in a grey note on the Items step, and still says items may be missing", () => {
     const cancelled = items("Cancelled")
     expect(cancelled).toContain("Choose what to restore")
-    expect(cancelled).toMatch(/bg-gray-100[^"]*text-gray-800"><svg[\s\S]*?<\/svg>Cancelled: this backup was cancelled before it finished, so some items may be missing from it\.<\/p>/)
+    expect(cancelled).toContain('data-notice-tone="neutral"')
+    expect(cancelled).toContain("The backup was cancelled. Some items may be missing.")
     expect(cancelled).not.toContain("bg-amber-50")
-    expect(items("Failed")).toContain("This backup did not complete fully, so some items may be missing from it.")
+    expect(items("Failed")).toContain("The backup did not finish. Some items may be missing.")
   })
 })

@@ -1,3 +1,6 @@
+vi.hoisted(() => vi.stubGlobal("__TV_LAB_EXPANDED_ENTRA__", true))
+
+import { notifiedStatus, scheduledResult } from "../src/main/backup/scheduler"
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest"
 import { CONSECUTIVE_AUTH_FAILURE_LIMIT, NetworkCircuit } from "../src/main/backup/engine"
 import { GraphSession } from "../src/main/backup/graph-session"
@@ -8,7 +11,7 @@ import { fixture, refusal, registerTestTypes, scriptedGraph, testType, type Grap
 import { GRAPH_ANSWERS } from "./fixtures/graph-answers"
 
 /**
- * One failing endpoint of Entra ID or Defender ends the type it belongs to, never the backup and
+ * One failing endpoint of Entra ID ends the type it belongs to, never the backup and
  * never Intune. Intune and Conditional Access keep every limit they had: any 401 ends the backup,
  * five consecutive 401 or 403 answers end it, a pause over five minutes fails every read after it.
  */
@@ -18,8 +21,8 @@ const TYPES = [
   // Twenty objects, each with a sub-read.
   testType("AdministrativeUnits", "directory/administrativeUnits", { extras: [{ property: "members", path: (id) => `directory/administrativeUnits/${id}/members?$select=id`, ids: true }] }),
   testType("TokenLifetimePolicies", "policies/tokenLifetimePolicies", { listOnly: true }),
-  testType("DefenderSecureScoreControlStates", "security/secureScoreControlProfiles", { listOnly: true }),
-  testType("DefenderCustomDetectionRules", "security/rules/detectionRules", { listOnly: true }),
+  testType("AuthenticationContexts", "identity/conditionalAccess/authenticationContextClassReferences", { listOnly: true }),
+  testType("TermsOfUseAgreements", "identityGovernance/termsOfUse/agreements", { listOnly: true }),
 ]
 
 let unregister: () => void
@@ -62,7 +65,7 @@ const noAnswer = () => {
 
 const units = Array.from({ length: UNITS }, (_, index) => ({ id: `au${index + 1}`, displayName: `Unit ${index + 1}` }))
 
-/** A tenant with Intune, Entra ID and Defender objects; `routes` injects the fault. */
+/** A tenant with Intune, Entra ID objects; `routes` injects the fault. */
 function tenant(routes: Record<string, GraphRoute> = {}) {
   return scriptedGraph({
     "/beta/deviceManagement/deviceCompliancePolicies": { value: [{ id: "cp1", displayName: "Compliance" }] },
@@ -75,8 +78,8 @@ function tenant(routes: Record<string, GraphRoute> = {}) {
       [`/beta/directory/administrativeUnits/${unit.id}/members?$select=id`, { value: [{ id: "m1" }] }],
     ])),
     "/beta/policies/tokenLifetimePolicies": { value: [{ id: "tl1", displayName: "Lifetime" }] },
-    "/beta/security/secureScoreControlProfiles": { value: [{ id: "ss1", displayName: "MFA" }] },
-    "/beta/security/rules/detectionRules": { value: [{ id: "dr1", displayName: "Rule" }] },
+    "/beta/identity/conditionalAccess/authenticationContextClassReferences": { value: [{ id: "ss1", displayName: "MFA" }] },
+    "/beta/identityGovernance/termsOfUse/agreements": { value: [{ id: "dr1", displayName: "Rule" }] },
     ...routes,
   })
 }
@@ -87,8 +90,8 @@ const intuneSaved = async (files: string[]) => {
   expect(files).toContain("DeviceCategories/Kiosk.json")
 }
 
-describe("a failing Entra ID or Defender endpoint", () => {
-  it("ends its type on a 401 HTML page; Intune, the rest of Entra ID and Defender are saved", async () => {
+describe("a failing Entra ID endpoint", () => {
+  it("ends its type on a 401 HTML page; Intune, the rest of Entra ID are saved", async () => {
     const html = GRAPH_ANSWERS.find((answer) => answer.name.startsWith("an HTML page"))!
     const { run, files, manifest } = fixture(tenant({ "/beta/policies/tokenLifetimePolicies": () => new Response(html.body, { status: 401, headers: { "content-type": "text/html" } }) }))
     const job = await run()
@@ -97,7 +100,7 @@ describe("a failing Entra ID or Defender endpoint", () => {
     const saved = await files(job)
     await intuneSaved(saved)
     expect(saved.filter((name) => name.startsWith("AdministrativeUnits/"))).toHaveLength(UNITS)
-    expect(saved).toContain("DefenderSecureScoreControlStates/MFA.json")
+    expect(saved).toContain("AuthenticationContexts/MFA.json")
     expect(outcomeOf(job, "TokenLifetimePolicies")).toMatchObject({ outcome: "skipped", cause: "permission", status: 401, service: "entra" })
     // Left out, not failed: the backup is usable and says what it does not hold.
     expect(await manifest(job)).toMatchObject({ Status: "Success", Failures: 0, SkippedTypes: ["TokenLifetimePolicies"], FailedTypes: [], Coverage: "Incomplete" })
@@ -112,16 +115,16 @@ describe("a failing Entra ID or Defender endpoint", () => {
     const saved = await files(job)
     await intuneSaved(saved)
     expect(saved).toContain("TokenLifetimePolicies/Lifetime.json")
-    expect(saved).toContain("DefenderSecureScoreControlStates/MFA.json")
+    expect(saved).toContain("AuthenticationContexts/MFA.json")
     // No unit is stored without its members, and none with an empty member list.
     expect(saved.some((name) => name.startsWith("AdministrativeUnits/"))).toBe(false)
     // At most the reads that were already under way when the first refusal came back: never all twenty.
     const subReads = requests.filter((request) => request.path.includes("/members")).length
     expect(subReads).toBeGreaterThan(0)
     expect(subReads).toBeLessThanOrEqual(8)
-    expect(outcomeOf(job, "AdministrativeUnits")).toMatchObject({ outcome: "skipped", cause: "permission", status: 403, code: "Authorization_RequestDenied" })
-    expect(job.results!.types.find((type) => type.folder === "AdministrativeUnits")).toMatchObject({ state: "skipped", saved: 0, failed: 0 })
-    expect(await manifest(job)).toMatchObject({ Status: "Success", Failures: 0, SkippedTypes: ["AdministrativeUnits"], Coverage: "Incomplete" })
+    expect(outcomeOf(job, "AdministrativeUnits")).toMatchObject({ outcome: "failed", status: 403, code: "Authorization_RequestDenied" })
+    expect(job.results!.types.find((type) => type.folder === "AdministrativeUnits")).toMatchObject({ state: "unreadable", saved: 0 })
+    expect(await manifest(job)).toMatchObject({ Status: "CompletedWithWarnings", Failures: 1, FailedTypes: ["AdministrativeUnits"], Coverage: "Incomplete" })
   })
 
   it("ends its type on a 429 with a ten minute Retry-After, without waiting and without stopping the service's other types", async () => {
@@ -134,7 +137,7 @@ describe("a failing Entra ID or Defender endpoint", () => {
     await intuneSaved(saved)
     // The same service's other type was read after the long pause was asked for.
     expect(saved).toContain("TokenLifetimePolicies/Lifetime.json")
-    expect(saved).toContain("DefenderSecureScoreControlStates/MFA.json")
+    expect(saved).toContain("AuthenticationContexts/MFA.json")
     expect(requests.filter((request) => request.path === "/beta/directory/administrativeUnits")).toHaveLength(1)
     expect(outcomeOf(job, "AdministrativeUnits")).toMatchObject({ outcome: "failed", error: "The service requested a retry delay longer than 5 minutes. Retry this backup later.", saved: 0 })
     // Could not be read, which is a failure a later run may not have: the status says so, as it does for Intune.
@@ -154,12 +157,12 @@ describe("a failing Entra ID or Defender endpoint", () => {
     const { run, files, manifest } = fixture(tenant({ "/beta/directory/administrativeUnits/au3/members?$select=id": refusal(403, "Forbidden", "Access denied.") }), { concurrency: 1 })
     const job = await run()
     expect((await files(job)).filter((name) => name.startsWith("AdministrativeUnits/")).sort()).toEqual(["AdministrativeUnits/Unit 1.json", "AdministrativeUnits/Unit 2.json"])
-    expect(outcomeOf(job, "AdministrativeUnits")).toMatchObject({ outcome: "skipped", saved: 2 })
+    expect(outcomeOf(job, "AdministrativeUnits")).toMatchObject({ outcome: "failed", saved: 2 })
     const metadata = await manifest(job)
     // The manifest lists what is stored, and marks the folder as not covered.
     expect(metadata.ItemCounts.AdministrativeUnits).toBe(2)
-    expect(metadata.SkippedTypes).toEqual(["AdministrativeUnits"])
-    expect(metadata.Outcomes.find((entry: { Folder: string }) => entry.Folder === "AdministrativeUnits")).toMatchObject({ Outcome: "skipped", Saved: 2 })
+    expect(metadata.FailedTypes).toEqual(["AdministrativeUnits"])
+    expect(metadata.Outcomes.find((entry: { Folder: string }) => entry.Folder === "AdministrativeUnits")).toMatchObject({ Outcome: "failed", Saved: 2 })
   })
 
   it("counts an object that could not be read for another reason as a failure, and goes on with the type", async () => {
@@ -177,23 +180,33 @@ describe("a failing Entra ID or Defender endpoint", () => {
     ["a refusal with no body at all", "permission"],
   ])("leaves the type out for %s, with the cause %s", async (name, cause) => {
     const answer = GRAPH_ANSWERS.find((entry) => entry.name.startsWith(name))!
-    const { run, manifest } = fixture(tenant({ "/beta/security/rules/detectionRules": () => new Response(answer.body, { status: answer.status }) }))
+    const { run, manifest } = fixture(tenant({ "/beta/identityGovernance/termsOfUse/agreements": () => new Response(answer.body, { status: answer.status }) }))
     const job = await run()
-    expect(outcomeOf(job, "DefenderCustomDetectionRules")).toMatchObject({ outcome: "skipped", cause, status: answer.status, service: "defender" })
-    expect(await manifest(job)).toMatchObject({ Status: "Success", Failures: 0, SkippedTypes: ["DefenderCustomDetectionRules"] })
-    expect(job.results!.types.find((type) => type.folder === "DefenderSecureScoreControlStates")).toMatchObject({ state: "saved", saved: 1 })
+    expect(outcomeOf(job, "TermsOfUseAgreements")).toMatchObject({ outcome: "skipped", cause, status: answer.status, service: "entra" })
+    expect(await manifest(job)).toMatchObject({ Status: "Success", Failures: 0, SkippedTypes: ["TermsOfUseAgreements"] })
+    expect(job.results!.types.find((type) => type.folder === "AuthenticationContexts")).toMatchObject({ state: "saved", saved: 1 })
+  })
+
+  it("leaves out a product the tenant never onboarded even when the token holds its permission", async () => {
+    const scopes = "DeviceManagementConfiguration.Read.All DeviceManagementManagedDevices.Read.All AdministrativeUnit.Read.All RoleManagement.Read.Directory Policy.Read.All AuthenticationContext.Read.All Agreement.Read.All"
+    const token = `e30.${Buffer.from(JSON.stringify({ scp: scopes })).toString("base64url")}.sig`
+    const answer = GRAPH_ANSWERS.find((entry) => entry.name.startsWith("a tenant that never onboarded the product"))!
+    const { run, manifest } = fixture(tenant({ "/beta/identityGovernance/termsOfUse/agreements": () => new Response(answer.body, { status: answer.status }) }), { getToken: async () => token })
+    const job = await run()
+    expect(outcomeOf(job, "TermsOfUseAgreements")).toMatchObject({ outcome: "skipped", cause: "license" })
+    expect(await manifest(job)).toMatchObject({ Status: "Success", Failures: 0 })
   })
 
   it("names the account's role when the token holds the permission and Microsoft still refuses", async () => {
-    const scopes = "DeviceManagementConfiguration.Read.All DeviceManagementManagedDevices.Read.All AdministrativeUnit.Read.All RoleManagement.Read.Directory Policy.Read.All SecurityEvents.Read.All CustomDetection.Read.All"
+    const scopes = "DeviceManagementConfiguration.Read.All DeviceManagementManagedDevices.Read.All AdministrativeUnit.Read.All RoleManagement.Read.Directory Policy.Read.All AuthenticationContext.Read.All Agreement.Read.All"
     const token = `e30.${Buffer.from(JSON.stringify({ scp: scopes })).toString("base64url")}.sig`
     const account = "private-admin@example.test"
-    const { run, manifest } = fixture(tenant({ "/beta/security/rules/detectionRules": refusal(403, "Forbidden", `Access denied for ${account}.`) }), { getToken: async () => token })
+    const { run, manifest } = fixture(tenant({ "/beta/identityGovernance/termsOfUse/agreements": refusal(403, "Forbidden", `Access denied for ${account}.`) }), { getToken: async () => token })
     const job = await run()
     const metadata = await manifest(job)
     expect(JSON.stringify({ job, metadata })).not.toContain(account)
-    expect(outcomeOf(job, "DefenderCustomDetectionRules")).toMatchObject({ outcome: "skipped", cause: "role", status: 403, code: "Forbidden" })
-    expect(job.results!.types.find((type) => type.folder === "DefenderCustomDetectionRules")!.reason).toContain("Your account may not have a role that can read Defender")
+    expect(outcomeOf(job, "TermsOfUseAgreements")).toMatchObject({ outcome: "failed", status: 403, code: "Forbidden" })
+    expect(job.results!.types.find((type) => type.folder === "TermsOfUseAgreements")!.reason).toContain("Your account may not have a role that can read Entra ID")
     expect(job.log.join("\n")).toContain("HTTP 403, Forbidden")
   })
 
@@ -207,15 +220,15 @@ describe("a failing Entra ID or Defender endpoint", () => {
 
   it("fails the backup of a tenant without Intune when nothing at all could be read", async () => {
     const down = refusal(400, "BadRequest", "Broken")
-    const { run, manifest } = fixture(tenant({ "/beta/directory/administrativeUnits": down, "/beta/policies/tokenLifetimePolicies": down }), { services: () => ({ services: ["entra"] }) })
+    const { run, manifest } = fixture(tenant({ "/beta/directory/administrativeUnits": down, "/beta/policies/tokenLifetimePolicies": down, "/beta/identity/conditionalAccess/authenticationContextClassReferences": down, "/beta/identityGovernance/termsOfUse/agreements": down }), { services: () => ({ services: ["entra"] }) })
     const job = await run()
     expect(job.status).toBe("Failed")
-    expect(await manifest(job)).toMatchObject({ Status: "Failed", Failures: 2, Coverage: "Incomplete" })
+    expect(await manifest(job)).toMatchObject({ Status: "Failed", Failures: 4, Coverage: "Incomplete" })
   })
 })
 
-describe("an Entra ID or Defender endpoint that does not answer", () => {
-  it("ends its type after the attempts of one request; Intune, the rest of Entra ID and Defender are saved", async () => {
+describe("an Entra ID endpoint that does not answer", () => {
+  it("ends its type after the attempts of one request; Intune, the rest of Entra ID are saved", async () => {
     const { run, files, manifest, requests } = fixture(tenant({ "/beta/policies/tokenLifetimePolicies": noAnswer }), { concurrency: 2 })
     const job = await elapse(run)
     expect(job.status).toBe("Completed")
@@ -224,7 +237,7 @@ describe("an Entra ID or Defender endpoint that does not answer", () => {
     const saved = await files(job)
     await intuneSaved(saved)
     expect(saved.filter((name) => name.startsWith("AdministrativeUnits/"))).toHaveLength(UNITS)
-    expect(saved).toContain("DefenderSecureScoreControlStates/MFA.json")
+    expect(saved).toContain("AuthenticationContexts/MFA.json")
     expect(outcomeOf(job, "TokenLifetimePolicies")).toMatchObject({ outcome: "failed", error: "Connection reset", saved: 0, service: "entra" })
     expect(await manifest(job)).toMatchObject({ Status: "CompletedWithWarnings", Failures: 1, FailedTypes: ["TokenLifetimePolicies"], SkippedTypes: [], Coverage: "Incomplete" })
   })
@@ -237,13 +250,13 @@ describe("an Entra ID or Defender endpoint that does not answer", () => {
     expect(job.exception).toBeUndefined()
     const saved = await entra.files(job)
     await intuneSaved(saved)
-    expect(saved).toContain("DefenderSecureScoreControlStates/MFA.json")
-    expect(saved).toContain("DefenderCustomDetectionRules/Rule.json")
+    expect(saved).not.toContain("AuthenticationContexts/MFA.json")
+    expect(saved).not.toContain("TermsOfUseAgreements/Rule.json")
     // The limit is the service's own now: Entra ID stopped, and nothing more was asked of it.
     expect(outcomeOf(job, "TokenLifetimePolicies")).toMatchObject({ outcome: "failed", error: "Microsoft Graph did not respond for 3 consecutive requests of this service, so the rest of the service was not read." })
     expect(outcomeOf(job, "AdministrativeUnits")).toMatchObject({ outcome: "failed", saved: 0 })
     expect(entra.requests.filter((request) => request.path.startsWith("/beta/directory/administrativeUnits/"))).toHaveLength(0)
-    expect(await entra.manifest(job)).toMatchObject({ Status: "CompletedWithWarnings", Failures: 2, FailedTypes: ["TokenLifetimePolicies", "AdministrativeUnits"] })
+    expect(await entra.manifest(job)).toMatchObject({ Status: "CompletedWithWarnings", Failures: 4, FailedTypes: ["TokenLifetimePolicies", "AuthenticationContexts", "TermsOfUseAgreements", "AdministrativeUnits"] })
 
     const intune = fixture(tenant({ "/beta/deviceManagement/deviceCategories": noAnswer }), { concurrency: 1 })
     const stopped = await elapse(intune.run)
@@ -260,10 +273,10 @@ describe("an Entra ID or Defender endpoint that does not answer", () => {
     expect(requests.filter((request) => request.path.startsWith("/beta/directory") || request.path.startsWith("/beta/policies"))).toHaveLength(6)
     const saved = await files(job)
     await intuneSaved(saved)
-    expect(saved).toContain("DefenderSecureScoreControlStates/MFA.json")
+    expect(saved).toContain("AuthenticationContexts/MFA.json")
     expect(outcomeOf(job, "AdministrativeUnits")).toMatchObject({ outcome: "failed", saved: 0 })
     expect(outcomeOf(job, "TokenLifetimePolicies")).toMatchObject({ outcome: "failed", saved: 0 })
-    expect(outcomeOf(job, "DefenderSecureScoreControlStates")).toMatchObject({ outcome: "saved", saved: 1 })
+    expect(outcomeOf(job, "AuthenticationContexts")).toMatchObject({ outcome: "saved", saved: 1 })
     expect(await manifest(job)).toMatchObject({ Status: "CompletedWithWarnings", Failures: 2, Coverage: "Incomplete" })
   })
 
@@ -345,7 +358,7 @@ describe("a sign-in that ended during a backup", () => {
     return { asked, getToken: async (_tenant: string, _client: string, _scope: string, wantsFresh?: boolean) => (asked.push(wantsFresh === true), wantsFresh ? fresh() : "token") }
   }
 
-  it("ends the backup when an Entra ID or Defender list is answered with a token error, like an Intune one", async () => {
+  it("ends the backup when an Entra ID list is answered with a token error, like an Intune one", async () => {
     const { run, requests, manifest } = fixture(tenant({ "/beta/policies/tokenLifetimePolicies": expired }))
     const job = await run()
     expect(job.status).toBe("Failed")
@@ -444,13 +457,13 @@ describe("a sign-in that ended during a backup", () => {
       ["/beta/directory/administrativeUnits/au1/members?$select=id", "Bearer fresh"],
     ])
     expect(asked.filter(Boolean)).toHaveLength(1)
-    expect(outcomeOf(job, "AdministrativeUnits")).toMatchObject({ outcome: "skipped", cause: "permission", status: 401 })
+    expect(outcomeOf(job, "AdministrativeUnits")).toMatchObject({ outcome: "failed", status: 401 })
     await intuneSaved(await files(job))
   })
 
   it("asks the Backup Reader for a new token in the same way", async () => {
     const asked: Array<{ fresh?: boolean } | undefined> = []
-    const { run, requests } = fixture(tenant({ "/beta/security/rules/detectionRules": html }), {
+    const { run, requests } = fixture(tenant({ "/beta/identityGovernance/termsOfUse/agreements": html }), {
       unattendedTokens: () => ({
         mode: "app-only",
         graph: async (options) => (asked.push(options), options?.fresh ? "fresh" : "opaque"),
@@ -460,8 +473,8 @@ describe("a sign-in that ended during a backup", () => {
     const job = await run({ trigger: "scheduled" })
     expect(job.status).toBe("Completed")
     expect(asked.filter((options) => options?.fresh)).toHaveLength(1)
-    expect(requests.filter((request) => request.path === "/beta/security/rules/detectionRules").map((request) => request.headers.get("Authorization"))).toEqual(["Bearer opaque", "Bearer fresh"])
-    expect(outcomeOf(job, "DefenderCustomDetectionRules")).toMatchObject({ outcome: "skipped", cause: "permission" })
+    expect(requests.filter((request) => request.path === "/beta/identityGovernance/termsOfUse/agreements").map((request) => request.headers.get("Authorization"))).toEqual(["Bearer opaque", "Bearer fresh"])
+    expect(outcomeOf(job, "TermsOfUseAgreements")).toMatchObject({ outcome: "skipped", cause: "permission" })
   })
 
   it("never asks an Intune read once more: any 401 ends the backup as before", async () => {
@@ -476,7 +489,7 @@ describe("a sign-in that ended during a backup", () => {
 })
 
 describe("Intune and Conditional Access", () => {
-  it("still end the backup on a 401, also in a tenant with Entra ID and Defender", async () => {
+  it("still end the backup on a 401, also in a tenant with Entra ID", async () => {
     const { run, manifest } = fixture(tenant({ "/beta/deviceManagement/deviceCategories": refusal(401, "InvalidAuthenticationToken", "Access token has expired or is not yet valid.") }))
     const job = await run()
     expect(job.status).toBe("Failed")
@@ -499,7 +512,7 @@ describe("Intune and Conditional Access", () => {
     expect(requests.filter((request) => request.path.startsWith("/beta/deviceManagement/deviceCategories/"))).toHaveLength(CONSECUTIVE_AUTH_FAILURE_LIMIT)
   })
 
-  it("still fail every later Intune read after a pause of more than five minutes, while Entra ID and Defender read on", async () => {
+  it("still fail every later Intune read after a pause of more than five minutes, while Entra ID read on", async () => {
     const { run, files, manifest } = fixture(tenant({ "/beta/deviceManagement/deviceCompliancePolicies": () => new Response("", { status: 429, headers: { "retry-after": "600" } }) }), { concurrency: 1 })
     const job = await run()
     const saved = await files(job)
@@ -509,7 +522,7 @@ describe("Intune and Conditional Access", () => {
     expect(metadata.FailedTypes).toEqual(expect.arrayContaining(["CompliancePolicies", "DeviceCategories", "ScopeTags"]))
     // The other services have their own throttle state.
     expect(saved.filter((name) => name.startsWith("AdministrativeUnits/"))).toHaveLength(UNITS)
-    expect(saved).toContain("DefenderSecureScoreControlStates/MFA.json")
+    expect(saved).toContain("AuthenticationContexts/MFA.json")
   })
 
   it("end the backup or the type by what the service says of itself, not by its name", async () => {
@@ -527,8 +540,8 @@ describe("Intune and Conditional Access", () => {
     expect(await isolated.files(job)).toContain("CompliancePolicies/Compliance.json")
   })
 
-  it("isolate nothing today, and Entra ID and Defender do", () => {
-    expect(Object.fromEntries(MODULES.map((module) => [module.id, module.isolated]))).toEqual({ intune: false, conditionalAccess: false, entra: true, defender: true })
+  it("isolate nothing today, and Entra ID do", () => {
+    expect(Object.fromEntries(MODULES.map((module) => [module.id, module.isolated]))).toEqual({ intune: false, conditionalAccess: false, entra: true })
   })
 })
 
@@ -555,12 +568,12 @@ describe("auth failure and throttle state per service", () => {
       return Response.json({ id: url })
     }) as typeof fetch
     const entra = new GraphSession(fetchImpl, async () => "token", paused, { service: "entra", isolated: true })
-    const defender = new GraphSession(fetchImpl, async () => "token", circuit, { service: "defender", isolated: true })
+    const intune = new GraphSession(fetchImpl, async () => "token", circuit, { service: "intune" })
     // Entra ID is told to wait two minutes and does.
     const waiting = entra.get("https://graph.microsoft.com/beta/entra").then(() => "answered", () => "stopped")
     await new Promise((resolve) => setTimeout(resolve, 20))
-    // Defender reads at once.
-    await expect(defender.get("https://graph.microsoft.com/beta/defender")).resolves.toEqual({ id: "https://graph.microsoft.com/beta/defender" })
+    // Intune reads at once.
+    await expect(intune.get("https://graph.microsoft.com/beta/intune")).resolves.toEqual({ id: "https://graph.microsoft.com/beta/intune" })
     await expect(Promise.race([waiting, new Promise((resolve) => setTimeout(() => resolve("still waiting"), 50))])).resolves.toBe("still waiting")
     controller.abort(new Error("test over"))
     await expect(waiting).resolves.toBe("stopped")
@@ -583,6 +596,16 @@ describe("auth failure and throttle state per service", () => {
 
 describe("Start now backup evidence", () => {
   const clientId = GRAPH_CLI_CLIENT_ID
+
+  it("reports an access-only skip as success in the manifest, schedule and outcome notification", async () => {
+    const f = fixture(tenant(), { graphCliGrant: () => new Set(["DeviceManagementConfiguration.Read.All"]) })
+    const job = await f.run({ clientId, trigger: "scheduled" })
+    expect(f.requests.some(request => request.path.startsWith("/beta/security/"))).toBe(false)
+    expect(outcomeOf(job, "TermsOfUseAgreements")).toMatchObject({ outcome: "skipped", cause: "permission" })
+    expect(await f.manifest(job)).toMatchObject({ Status: "Success", Failures: 0, Coverage: "Incomplete" })
+    expect(scheduledResult(job).status).toBe("Completed")
+    expect(notifiedStatus(job)).toBe("Success")
+  })
 
   it("continues reading device profiles after a detail is refused with the read scope", async () => {
     const path = "/beta/deviceManagement/deviceConfigurations"
@@ -634,42 +657,44 @@ describe("Start now backup evidence", () => {
   })
 
   it.each([
-    [403, "Insufficient privileges", "role"],
-    [400, "Intune is not licensed", "license"],
-  ])("records Intune HTTP %s as a %s refusal with a verified scope", async (status, detail, cause) => {
+    [403, "Insufficient privileges", { outcome: "failed" }],
+    [400, "Intune is not licensed", { outcome: "skipped", cause: "license" }],
+  ])("classifies Intune HTTP %s with a verified scope", async (status, detail, expected) => {
     const f = fixture(tenant({ "/beta/deviceManagement/deviceCompliancePolicies": refusal(status, "Forbidden", detail) }), {
       graphCliGrant: () => new Set(["DeviceManagementConfiguration.ReadWrite.All"]),
     })
     const job = await f.run({ clientId })
-    expect(outcomeOf(job, "CompliancePolicies")).toMatchObject({ outcome: "skipped", status, cause })
+    expect(outcomeOf(job, "CompliancePolicies")).toMatchObject({ ...expected, status })
+    expect(scheduledResult(job).status).toBe(status === 403 ? "Failed" : "Completed")
+    expect(notifiedStatus(job)).toBe(status === 403 ? "CompletedWithWarnings" : "Success")
     expect(job.coverage).toBe("incomplete")
   })
 
   it("classifies a refusal with the opaque bearer used after a refresh", async () => {
-    const path = "/beta/security/rules/detectionRules"
+    const path = "/beta/identityGovernance/termsOfUse/agreements"
     const f = fixture(scriptedGraph({
       [path]: (request: Request) => request.headers.get("authorization") === "Bearer initial"
         ? refusal(401, "Unauthorized", "Access denied")()
         : refusal(403, "Forbidden", "Access denied")(),
     }), {
-      services: () => ({ services: ["defender"] }),
+      services: () => ({ services: ["entra"] }),
       getToken: async (_tenant, _client, _scope, fresh) => fresh ? "opaque" : "initial",
-      graphCliGrant: token => token === "initial" ? new Set(["CustomDetection.Read.All"]) : undefined,
+      graphCliGrant: token => token === "initial" ? new Set(["Agreement.Read.All"]) : undefined,
     })
     const job = await f.run({ clientId })
     expect(f.requests.filter(request => request.path === path).map(request => request.headers.get("authorization")))
       .toEqual(["Bearer initial", "Bearer opaque"])
-    expect(outcomeOf(job, "DefenderCustomDetectionRules")).toMatchObject({
+    expect(outcomeOf(job, "TermsOfUseAgreements")).toMatchObject({
       outcome: "failed", status: 403, error: expect.stringContaining("could not verify the permissions for this request"),
     })
   })
 
   it("records an opaque grant's 403 as unread and keeps account details out of history", async () => {
-    const f = fixture(tenant({ "/beta/security/rules/detectionRules": refusal(403, "Authorization_RequestDenied", "private-admin@example.test") }), {
+    const f = fixture(tenant({ "/beta/identityGovernance/termsOfUse/agreements": refusal(403, "Authorization_RequestDenied", "private-admin@example.test") }), {
       graphCliGrant: () => undefined,
     })
     const job = await f.run({ clientId })
-    expect(outcomeOf(job, "DefenderCustomDetectionRules")).toMatchObject({ outcome: "failed", status: 403 })
+    expect(outcomeOf(job, "TermsOfUseAgreements")).toMatchObject({ outcome: "failed", status: 403 })
     expect(JSON.stringify(await f.manifest(job))).not.toContain("private-admin@example.test")
     expect(job.coverage).toBe("incomplete")
   })

@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest"
+vi.hoisted(() => vi.stubGlobal("__TV_LAB_EXPANDED_ENTRA__", true))
 const execute = vi.hoisted(() => vi.fn(async () => ({ runId: "run", rows: [] })))
 vi.mock("../src/main/restore/directory-dispatch", () => ({ directoryRestoreRequest: execute }))
 import { POST } from "../src/portal/app/api/restore-directory/route"

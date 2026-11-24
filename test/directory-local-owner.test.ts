@@ -6,6 +6,7 @@ import { restoreMatrixRow } from "../src/shared/intune/restore-matrix"
 import { guardedGraphIO } from "../src/main/restore/graph-io"
 import { restoreSignIn } from "../src/main/restore/restore-actor"
 
+vi.hoisted(() => vi.stubGlobal("__TV_LAB_EXPANDED_ENTRA__", true))
 const msal = vi.hoisted(() => ({ accounts: [] as AccountInfo[], acquire: vi.fn<() => Promise<AuthenticationResult>>(async () => { throw new Error("Token refresh unavailable") }) }))
 vi.mock("@azure/msal-node", async original => {
   const actual = await original<typeof import("@azure/msal-node")>()

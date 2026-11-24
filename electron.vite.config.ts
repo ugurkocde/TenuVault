@@ -39,7 +39,9 @@ const CSP = [
 export default defineConfig(({ command, mode }) => {
   const releaseBuild = process.env.TENUVAULT_RELEASE_BUILD === "1"
   const labBuild = command === "build" && mode === "lab-e2e"
-  const labInputs = ["TENUVAULT_LAB_LICENSE_ORIGIN", "TENUVAULT_LAB_LICENSE_PUBLIC_KEY", "TENUVAULT_LAB_RUN"] as const
+  const expandedEntra = labBuild && process.env.TENUVAULT_LAB_EXPANDED_ENTRA === "1"
+  const privilegedRestore = expandedEntra && process.env.TENUVAULT_LAB_PRIVILEGED_RESTORE === "1"
+  const labInputs = ["TENUVAULT_LAB_EXPANDED_ENTRA", "TENUVAULT_LAB_PRIVILEGED_RESTORE", "TENUVAULT_LAB_LICENSE_ORIGIN", "TENUVAULT_LAB_LICENSE_PUBLIC_KEY", "TENUVAULT_LAB_RUN"] as const
   if ((releaseBuild && labBuild) || (!labBuild && labInputs.some(name => process.env[name] !== undefined))) {
     throw new Error("Lab build options require the dedicated lab build command.")
   }
@@ -108,6 +110,8 @@ export default defineConfig(({ command, mode }) => {
       },
       define: {
         __TV_LAB_BUILD__: JSON.stringify(labBuild),
+        __TV_LAB_EXPANDED_ENTRA__: JSON.stringify(expandedEntra),
+        __TV_LAB_PRIVILEGED_RESTORE__: JSON.stringify(privilegedRestore),
         __TV_LAB_REGISTRATION__: JSON.stringify(labBuild ? `TV06-TEST-${run}-${randomUUID()}` : ""),
         __TENUVAULT_LICENSE_API_BASE__: JSON.stringify(new URL(license.apiBase).origin),
         __TENUVAULT_LICENSE_KEYS_JSON__: JSON.stringify(JSON.stringify([license.publicKey, ...rotationKeys])),
@@ -131,7 +135,11 @@ export default defineConfig(({ command, mode }) => {
     },
     renderer: {
       root: renderer,
-      define: { __TV_LAB_BUILD__: JSON.stringify(labBuild) },
+      define: {
+        __TV_LAB_BUILD__: JSON.stringify(labBuild),
+        __TV_LAB_EXPANDED_ENTRA__: JSON.stringify(expandedEntra),
+        __TV_LAB_PRIVILEGED_RESTORE__: JSON.stringify(privilegedRestore),
+      },
       plugins: [
         react(),
         tailwindcss(),

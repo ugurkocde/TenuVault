@@ -2,13 +2,13 @@
 
 import { LEGACY_COMPARISON_NOTICE } from "../../../../shared/intune/backup-read-coverage"
 
-import { BackupCoverage } from "@desktop/components/BackupCoverage"
+import { BackupCoverage, BackupTypeDetails } from "@desktop/components/BackupCoverage"
 import { COVERAGE_ISSUE_TEXT, groupBackupCoverage } from "../../../../shared/services/backup-coverage"
 import { LargeContents } from "~/components/backup/large-inventory"
 import { ServiceBackupNotice } from "../../../../renderer/components/ServiceBackupNotice"
 
 import { useEffect, useMemo, useRef, useState } from "react"
-import { useSearchParams } from "react-router-dom"
+import { Link, useSearchParams } from "react-router-dom"
 import { AlertCircle, AlertTriangle, Calendar, CheckCircle, Download, GitBranch, Loader2, Play, RefreshCw, Upload } from "lucide-react"
 import { useSelectedTenant, useTenantOperations, useTenants, type Tenant } from "~/contexts/TenantContext"
 import { cn } from "~/lib/utils"
@@ -38,7 +38,8 @@ import { autopilotDevicesCsv } from "../../../../shared/intune/autopilot-devices
 import { storageLabel } from "~/lib/storage-label"
 import { changeTenantStorage, type StorageChoice } from "@desktop/lib/storage"
 import { LinkedMessage } from "~/components/linked-message"
-import { SERVICES_PAGE } from "../../../../shared/services/modules"
+import { NoticeCard, noticeActionClass } from "@desktop/components/NoticeCard"
+import { settingsHref } from "@desktop/lib/settings-section"
 
 import { BACKUP_SERVICES, BACKUP_SERVICE_AREAS, matchesBackupService, parseBackupService, type BackupServiceFilter } from "@desktop/lib/backup-service"
 import { LEGACY_FOLDERS } from "../../../../shared/intune/scope"
@@ -110,6 +111,7 @@ export default function BackupRestorePage() {
   const changeStorage = (tenant: Tenant, choice: StorageChoice) => {
     updateTenant(tenant.id, changeTenantStorage(tenant, choice))
   }
+  const requestedBackup = searchParams.get("backup")
   const requestedTenant = searchParams.get("tenant")?.toLowerCase()
   // Notification links select the affected tenant and keep the requested tab.
   useEffect(() => {
@@ -182,6 +184,20 @@ export default function BackupRestorePage() {
   useEffect(() => {
     setSelectedId((current) => (current && backups.some((backup) => backup.id === current) ? current : backups[0]?.id ?? null))
   }, [backups])
+
+  // A Dashboard link selects its exact backup once the tenant's list has loaded.
+  useEffect(() => {
+    if (!requestedBackup || requestedTenant || backupList.backups === null) return
+    if (backups.some(backup => backup.id === requestedBackup)) {
+      setSelectedId(requestedBackup)
+      requestAnimationFrame(() => detailRef.current?.scrollIntoView({ block: "start" }))
+    }
+    setSearchParams(current => {
+      const next = new URLSearchParams(current)
+      next.delete("backup")
+      return next
+    }, { replace: true })
+  }, [requestedBackup, requestedTenant, backupList.backups, backups, setSearchParams])
 
   const fetchBackups = () => backupList.refresh({ force: true })
 
@@ -356,15 +372,7 @@ export default function BackupRestorePage() {
 
       {activeTab !== "schedule" && selectedTenant?.credentials && <ServiceBackupNotice tenantId={selectedTenant.credentials.tenantId} />}
 
-      {tenants.length === 0 && (
-        <div className="flex gap-3 rounded-3xl bg-amber-50 p-5">
-          <AlertCircle className="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-700" />
-          <div>
-            <h3 className="text-sm font-medium text-amber-900">No tenants configured</h3>
-            <p className="mt-1 text-sm text-amber-800">Please add a tenant first to view backup history.</p>
-          </div>
-        </div>
-      )}
+      {tenants.length === 0 && <NoticeCard summary="Connect a tenant to view backup history." />}
 
       {activeTab !== "schedule" && selectedTenant && isLoading && (
         <div className="flex items-center justify-center py-12">
@@ -404,20 +412,19 @@ export default function BackupRestorePage() {
               listLoading={backupList.loading}
               listError={backupList.error}
             />
-            {backupList.unresolved > 0 && (
-              <p className="mb-4 flex items-start gap-2 text-sm text-amber-800">
-                <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
-                {unresolvedNotice(backupList.unresolved)}
-              </p>
-            )}
-            {backupList.warnings?.map(warning => <p key={warning} role="status" className="rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm text-gray-900">{warning}</p>)}
+            {(backupList.unresolved > 0 || Boolean(backupList.warnings?.length)) && <NoticeCard className="mb-4"
+              tone={backupList.unresolved > 0 ? "error" : "warning"}
+              summary={backupList.unresolved > 0 ? unresolvedNotice(backupList.unresolved)
+                : `${new Set(backupList.warnings).size} backup list ${new Set(backupList.warnings).size === 1 ? "warning" : "warnings"}.`}
+              details={backupList.warnings?.length ? <ul className="list-disc pl-4">
+                {[...new Set(backupList.warnings)].map(warning => <li key={warning}>{warning}</li>)}
+              </ul> : undefined} />}
             <LegacySealedBackupsNotice key={`sealed:${listIdentity}`} count={backupList.sealed} onImported={async () => { await backupList.refresh({ force: true }) }} />
-            {retentionMessage && (
-              <p className="mb-4 text-sm text-gray-500">
-                {retentionMessage}{" "}
-                <button type="button" className="font-medium underline" onClick={() => void bridge.license.open("buy", { source: "note-retention" })}>See plans</button>
-              </p>
-            )}
+            {retentionMessage && selectedTenant.credentials && <NoticeCard className="mb-4"
+              summary="Backup history is limited by this tenant's plan."
+              details={retentionMessage}
+              dismiss={{ kind: "tip", tenantId: selectedTenant.credentials.tenantId, id: "backup-retention" }}
+              action={<button type="button" className={noticeActionClass} onClick={() => void bridge.license.open("buy", { source: "note-retention" })}>See plans</button>} />}
 
             {backups.length === 0 ? (
               <div className="flex flex-col items-center py-12 text-center">
@@ -453,6 +460,7 @@ export default function BackupRestorePage() {
                           <div className="flex flex-wrap justify-end gap-2">
                             {backup.type && <span className={cn("rounded-full px-2.5 py-1 text-xs font-medium", backup.type === "scheduled" ? "bg-blue-50 text-blue-700" : "bg-muted text-gray-700")}>{TRIGGER_LABEL[backup.type]}</span>}
                             {(kind !== "success" || backup.coverage === "incomplete") && <span className={cn("rounded-full px-2.5 py-1 text-xs font-medium", style.badge)}>{statusLabel(backup.status, backup.coverage)}</span>}
+                            {backup.coverage === "incomplete" && <span className="rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-gray-700">Coverage incomplete</span>}
                           </div>
                         </div>
                         <div className="mt-3 grid grid-cols-2 gap-4 text-sm xl:grid-cols-4">
@@ -634,7 +642,7 @@ function BackupDetails({ credentials, service, backup, first, storageAccountName
   const excluded = new Set(backup.scope?.excluded ?? [])
   const included = new Set(backup.scope?.included ?? [...LEGACY_FOLDERS, ...Object.keys(counts)])
   const empty = new Set(backup.emptyTypes ?? [])
-  const unread = new Set([...(backup.notRead ?? []), ...(backup.skippedTypes ?? []), ...(backup.failedTypes ?? [])])
+  const unread = new Set([...(backup.notRead ?? []), ...(backup.skippedTypes ?? []), ...(backup.failedTypes ?? []), ...Object.keys(backup.notReadCauses ?? {}), ...(backup.largeProblems ?? []).map(problem => problem.folder)])
   const largeReasons = new Map(backup.largeProblems?.map(problem => [problem.folder, problem.reason]))
   const readable = backup.readableTypes && new Set(backup.readableTypes)
   const isReadable = (folder: string) => !unavailable && !largeReasons.has(folder) && !unread.has(folder)
@@ -663,7 +671,43 @@ function BackupDetails({ credentials, service, backup, first, storageAccountName
       }
     }),
   }))
-  const typeLabel = (folder: string) => capitalize(typeForFolder(folder)?.label ?? folder)
+  const failed = new Set(backup.failedTypes ?? [])
+  const skipped = new Set(backup.skippedTypes ?? [])
+  const recordedCoverage = !unavailable && backup.scope?.included !== undefined && backup.readableTypes !== undefined
+  const omitted = [...new Set([...unread, ...(recordedCoverage ? selected.filter(folder => !isReadable(folder)) : [])])]
+    .filter(folder => !excluded.has(folder) && (service === "all" || matchesBackupService(folder, service)))
+    .map(folder => {
+      const cause = backup.notReadCauses?.[folder]
+      const category = cause && cause !== "unknown" ? "access"
+        : failed.has(folder) || largeReasons.has(folder) ? "failure"
+        : skipped.has(folder) ? "access" : "unknown"
+      const reason = cause && cause !== "unknown" ? COVERAGE_ISSUE_TEXT[cause]
+        : category === "failure" ? "Could not be read"
+        : category === "access" ? "Needs access" : "Cause unknown"
+      const recorded = largeReasons.get(folder) ?? backup.notReadReasons?.[folder]
+      return { folder, category, detail: recorded ? `${reason}. ${recorded}` : reason }
+    })
+  const access = omitted.filter(entry => entry.category === "access").length
+  const unknown = omitted.filter(entry => entry.category === "unknown").length
+  const failedTypes = omitted.filter(entry => entry.category === "failure").length
+  const failures = service === "all" ? backup.failures ?? 0 : 0
+  // A real failure leads, so the warning tone never reads as if missing access were the error.
+  const coverageSummary = [
+    failures > 0 ? `${failures} ${failures === 1 ? "item or type" : "items or types"} could not be read.`
+      : failedTypes > 0 && `${failedTypes} ${failedTypes === 1 ? "type" : "types"} could not be read.`,
+    access > 0 && `Needs access for ${access} backup ${access === 1 ? "type" : "types"}.`,
+    unknown > 0 && `Coverage unknown for ${unknown} ${unknown === 1 ? "type" : "types"}.`,
+  ].filter(Boolean).join(" ")
+  const statusSummary = unavailable ? "This backup could not be opened."
+    : backup.status === "incomplete" && !backup.ordinaryOnlyAvailable ? "This backup stopped before it finished."
+    : kind === "failed" && backup.status !== "incomplete" ? "This backup failed."
+    : kind === "cancelled" ? "This backup was cancelled."
+    : backup.status === "unknown" ? "The status of this backup is unknown."
+    : backup.warning || kind === "warning" && (!coverageSummary || failures > 0 || failedTypes > 0) ? "This backup completed with warnings." : ""
+  const statusDetail = unavailable ? "This backup cannot be downloaded, compared or restored. Older backups are kept."
+    : kind === "cancelled" || kind === "failed" && backup.totalPolicies > 0 && !backup.ordinaryOnlyAvailable
+      ? "Only the policies saved before it stopped are available. It is never used as a complete backup."
+      : backup.status === "unknown" ? "Drift detection does not offer this backup until its details can be read." : ""
 
   return (
     <div ref={ref} className="rounded-3xl bg-white p-6 sm:p-8">
@@ -694,24 +738,27 @@ function BackupDetails({ credentials, service, backup, first, storageAccountName
         </div>
       </div>
 
-      {backup.legacyReadFailure && <p className="mb-4 rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-900">{LEGACY_COMPARISON_NOTICE}</p>}
-      {(backup.warning || kind === "warning" || kind === "failed" || kind === "cancelled" || (backup.skippedTypes?.length ?? 0) > 0 || backup.coverage === "incomplete") && (
-        <div className={cn("mb-6 flex gap-3 rounded-2xl px-4 py-3 text-sm", kind === "failed" ? "bg-red-50 text-red-800" : kind === "cancelled" ? "bg-gray-100 text-gray-800" : "bg-amber-50 text-amber-900")}>
-          <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
-          <div className="space-y-1">
+      <div className="mb-6 space-y-2">
+        {(statusSummary || backup.legacyReadFailure) && <NoticeCard
+          summary={statusSummary || "Some older backup files could not be compared."}
+          tone={kind === "failed" ? "error" : kind === "warning" ? "warning" : "neutral"}
+          details={statusDetail || backup.error || backup.warning || backup.legacyReadFailure ? <>
+            {statusDetail && <p>{statusDetail}</p>}
+            {backup.error && <p>{backup.error}</p>}
             {backup.warning && <p><LinkedMessage text={backup.warning} /></p>}
-            {unavailable && <p>{backup.error ?? "Files of this backup could not be read."} Until then it cannot be downloaded, compared or restored, and older backups are kept.</p>}
-            {backup.status === "incomplete" && !backup.ordinaryOnlyAvailable && <p>This backup stopped before it finished, for example because TenuVault was closed. It holds only part of the tenant.</p>}
-            {backup.status !== "incomplete" && !unavailable && kind === "failed" && backup.totalPolicies > 0 && <p>This backup failed before it finished. It holds only the policies it saved and is never used as a complete backup.</p>}
-            {kind === "cancelled" && <p>This backup was cancelled before it finished. It holds only the policies it saved and is never used as a complete backup.</p>}
-            {backup.status === "unknown" && <p>{backup.error ?? "This backup does not record whether it finished."} Until its details can be read, whether it finished is not known and drift detection does not offer it.</p>}
-            {backup.coverage === "incomplete" && (backup.notRead?.length ?? 0) > 0 && <p>Coverage incomplete. This backup does not hold every type it was asked to cover. Not read in full: {backup.notRead!.map(typeLabel).join(", ")}.</p>}
-            {(backup.failures ?? 0) > 0 && <p>{backup.failures} item{backup.failures === 1 ? "" : "s"} or type{backup.failures === 1 ? "" : "s"} could not be read. The backup log lists them.</p>}
-            {(backup.failedTypes?.length ?? 0) > 0 && <p>Not read: {backup.failedTypes!.map(typeLabel).join(", ")}.</p>}
-            {(backup.skippedTypes?.length ?? 0) > 0 && <p>Left out because the app registration or your role does not allow reading them: {backup.skippedTypes!.map(typeLabel).join(", ")}. <LinkedMessage text={`${SERVICES_PAGE} in Settings shows which permission is missing and how to add it.`} /> Also check that your role for the affected service covers these items.</p>}
-          </div>
-        </div>
-      )}
+            {backup.legacyReadFailure && <p>{LEGACY_COMPARISON_NOTICE}</p>}
+          </> : undefined}
+        />}
+        {(coverageSummary || (service === "all" && backup.coverage === "incomplete")) && <NoticeCard
+          summary={coverageSummary || "Backup coverage is incomplete."}
+          tone={failures || failedTypes ? "error" : "neutral"}
+          action={access > 0 && <Link className={noticeActionClass} to={`${settingsHref("services")}&tenant=${encodeURIComponent(String(credentials.tenantId))}`}>Add access</Link>}
+          details={omitted.length > 0 || failures > 0 ? <>
+            <BackupTypeDetails entries={omitted} />
+            {failures > 0 && <p>See the backup log for individual read failures.</p>}
+          </> : undefined}
+        />}
+      </div>
 
       <div className="mb-6 grid grid-cols-2 gap-4 text-sm lg:grid-cols-4">
         {[
@@ -733,7 +780,7 @@ function BackupDetails({ credentials, service, backup, first, storageAccountName
       </div>
 
       {backup.scope && <div className="mb-6">
-        <BackupCoverage coverage={coverage.filter(row => service === "all" || service === row.service)} emptyLabel="Not included" />
+        <BackupCoverage coverage={coverage.filter(row => service === "all" || service === row.service)} emptyLabel="Not included" countsOnly />
       </div>}
 
       {(backup.largeInventory || backup.companionId) && <LargeContents key={`${String(credentials.tenantId)}/${String(credentials.storageAccountName)}/${backup.companionId ?? backup.id}`} credentials={credentials} backupId={backup.companionId ?? backup.id} service={service} />}

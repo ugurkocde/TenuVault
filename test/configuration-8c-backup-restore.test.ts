@@ -1,4 +1,6 @@
-import { expect, it } from "vitest"
+vi.hoisted(() => vi.stubGlobal("__TV_LAB_EXPANDED_ENTRA__", true))
+
+import { expect, it, vi } from "vitest"
 import { readObject } from "../src/shared/intune/read"
 import { typeForFolder, type Item } from "../src/shared/intune/registry"
 import { restoreMatrixRow } from "../src/shared/intune/restore-matrix"

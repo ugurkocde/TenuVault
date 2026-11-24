@@ -1,31 +1,56 @@
-import type { ReactNode } from "react"
+import { useId, useState, type ReactElement, type ReactNode } from "react"
+import { AlertCircle, AlertTriangle, ChevronDown, Info, X } from "lucide-react"
 import { cn } from "~/lib/utils"
 
-interface NoticeCardProps {
-  /** status for advice, alert for something the admin must act on. */
-  role: "status" | "alert"
-  title: ReactNode
-  /** The explanation under the title, as one or more paragraphs. */
-  body: ReactNode
-  /** Classes for the body, such as a width limit. */
-  bodyClassName?: string
-  /** Buttons, in one row that wraps. */
-  actions?: ReactNode
-  /** Status lines and inline forms under the actions. */
+const tones = {
+  neutral: { icon: Info, style: "border-border bg-muted/50 text-foreground", role: "status" },
+  warning: { icon: AlertTriangle, style: "border-amber-200 bg-amber-50 text-amber-900", role: "status" },
+  error: { icon: AlertCircle, style: "border-red-200 bg-red-50 text-red-800", role: "alert" },
+} as const
+
+type CompactNoticeCardProps = {
+  summary: string
+  details?: ReactNode
+  action?: ReactElement | false | null
   children?: ReactNode
   className?: string
-}
+} & (
+  | { tone?: keyof typeof tones; dismiss?: never }
+  | { tone?: "neutral" | "warning"; dismiss: { kind: "tip" | "banner"; tenantId: string; id: string } }
+)
 
-/** The amber card that backup notices share: title, body, a row of actions, then status lines. */
-export function NoticeCard({ role, title, body, bodyClassName, actions, children, className }: NoticeCardProps) {
+export const noticeActionClass = "shrink-0 rounded-sm text-xs font-medium text-blue-700 underline underline-offset-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+
+export function NoticeCard({ summary, details, action, children, tone = "neutral", dismiss, className }: CompactNoticeCardProps) {
+  const id = useId()
+  const [open, setOpen] = useState(false)
+  const [dismissedKey, setDismissedKey] = useState<string>()
+  const key = dismiss && `tenuvault.notice.${dismiss.kind}.${dismiss.tenantId.toLowerCase()}.${dismiss.id}`
+  const { icon: Icon, style, role } = tones[tone]
+  if (key) {
+    if (dismissedKey === key) return null
+    try { if (localStorage.getItem(key) === "1") return null } catch { /* The notice still works without storage. */ }
+  }
   return (
-    <div role={role} className={cn("space-y-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900", className)}>
-      <div>
-        <p className="font-medium">{title}</p>
-        <div className={cn("mt-1", bodyClassName)}>{body}</div>
+    <div data-no-select data-notice-tone={tone} className={cn("min-w-0 rounded-xl border px-3 py-2 text-left text-sm", style, className)}>
+      <div className="flex flex-wrap items-start gap-x-3 gap-y-1">
+        <p role={role} className="flex min-w-0 flex-[1_1_10rem] items-start gap-2 font-medium">
+          <Icon className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+          <span className="min-w-0 break-words">{summary}</span>
+        </p>
+        {(details || action || key) && <div className="ml-auto flex flex-wrap items-center gap-x-3 gap-y-1">
+          {details && <button type="button" aria-expanded={open} aria-controls={id} aria-label={`Details: ${summary}`} className="inline-flex items-center gap-1 rounded-sm text-xs font-medium hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring" onClick={() => setOpen(!open)}>
+            Details <ChevronDown className={cn("size-3.5", open && "rotate-180")} aria-hidden="true" />
+          </button>}
+          {action}
+          {key && <button type="button" aria-label={`Dismiss: ${summary}`} className="rounded-sm p-0.5 hover:bg-foreground/10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring" onClick={() => {
+            try { localStorage.setItem(key, "1") } catch { /* Remember for this mount. */ }
+            setDismissedKey(key)
+          }}><X className="size-3.5" aria-hidden="true" /></button>}
+        </div>}
       </div>
-      {actions && <div className="flex flex-wrap gap-2">{actions}</div>}
-      {children}
+      {details && <div id={id} hidden={!open} tabIndex={0} role="region" aria-label={`Details: ${summary}`} className="mt-2 max-h-56 space-y-2 overflow-auto overscroll-contain break-words border-t border-border pt-2 text-xs">{details}</div>}
+      {children && <div className="mt-2 space-y-2">{children}</div>}
     </div>
   )
 }

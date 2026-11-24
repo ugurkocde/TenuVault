@@ -52,9 +52,9 @@ function mockReads(restore: () => Promise<Response>) {
     const body = JSON.parse(String(init?.body ?? "{}"))
     if (String(input) === "/api/list-backup-contents") return Response.json({ content: { groups: [
       { folder: "DeviceConfigurations", label: "configuration profile", area: "Devices", policies: paths.map((path, index) => ({ path, displayName: `Profile ${index}` })) },
-      { folder: "Organization", label: "organization", area: "Tenant", policies: [{ path: "Organization/o.json" }] },
+      { folder: "AuthenticationContexts", label: "Authentication contexts", area: "Tenant", policies: [{ path: "AuthenticationContexts/o.json" }] },
     ] } })
-    if (String(input) === "/api/restore-preview") return Response.json({ items: body.paths.map((path: string) => ({ path, name: path.includes("Organization") ? "Organization" : `Profile ${paths.indexOf(path)}` })) })
+    if (String(input) === "/api/restore-preview") return Response.json({ items: body.paths.map((path: string) => ({ path, name: path.includes("AuthenticationContexts") ? "AuthenticationContexts" : `Profile ${paths.indexOf(path)}` })) })
     if (String(input) === "/api/restore-backup/progress") return Response.json({ total: 2, done: 1, current: paths[1], results: outcomes.slice(0, 1) })
     if (String(input) === "/api/restore-backup" && !body.approvalAction) return restore()
     return Response.json({})
@@ -88,7 +88,7 @@ it("keeps a deferred restore, progress and retry context through filter attempts
   expect(writes()).toHaveLength(1)
   await act(async () => finish(Response.json({ success: false, details: { results: outcomes } })))
   expect(filter().disabled).toBe(false)
-  await changeFilter("defender")
+  await changeFilter("entra")
   expect(container.textContent).toContain("1 item completed; 1 failed.")
   expect(container.textContent).toContain("Profile 1")
   expect(container.textContent).toContain("Try this policy again")
@@ -125,7 +125,7 @@ it("returns a new service selection to the first bounded inventory page", async 
       const largePage = JSON.parse(String(init?.body)).largePage ?? 0
       return Response.json({ largePage, hasMore: largePage === 0, content: { groups: [
         { folder: "DeviceConfigurations", label: "configuration profile", area: "Devices", count: 100000, policies: [{ path: paths[0], displayName: `Intune page ${largePage}` }] },
-        { folder: "Organization", label: "organization", area: "Tenant", policies: [{ path: "Organization/o.json" }] },
+        { folder: "AuthenticationContexts", label: "Authentication contexts", area: "Tenant", policies: [{ path: "AuthenticationContexts/o.json" }] },
       ] } })
     }
     return read(input, init)

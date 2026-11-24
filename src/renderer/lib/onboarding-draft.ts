@@ -1,4 +1,4 @@
-import { checkedOnboardingChoice, DEFAULT_ONBOARDING_CHOICE } from "../../shared/services/onboarding"
+import { DEFAULT_ONBOARDING_CHOICE, ONBOARDING_ENTRA_CHOICE } from "../../shared/services/onboarding"
 import type { PermissionChoice } from "../../shared/services/manifest"
 import type { SignedInAccount } from "../../shared/ipc"
 import { bridge } from "./bridge"
@@ -10,20 +10,18 @@ import { bridge } from "./bridge"
  */
 export interface OnboardingDraft {
   /** The first backup and staged public sign-ins are never resumed. */
-  step: -2 | -1 | 0 | 1 | 2 | 4
+  step: -2 | 0 | 1 | 2 | 4
   services?: PermissionChoice
   tenant: string
   clientId: string
   displayName: string
   /** The sign-in of a tenant that was not saved yet; resumed only while it is still signed in. */
   account: SignedInAccount | null
-  /** A saved choice could not be read, and the service step's Continue has not confirmed a new one yet. */
-  reconfirm?: boolean
 }
 
 const KEY = "tenuvault.onboarding.draft"
 
-export const EMPTY_DRAFT: OnboardingDraft = { step: -1, tenant: "", clientId: "", displayName: "", account: null }
+export const EMPTY_DRAFT: OnboardingDraft = { step: -2, tenant: "", clientId: "", displayName: "", account: null }
 
 const text = (value: unknown, max = 256) => (typeof value === "string" ? value.slice(0, max) : "")
 
@@ -52,41 +50,18 @@ function recentAccount(value: Record<string, unknown>, now = Date.now()): Signed
   return account && signedInAt <= now && now - signedInAt < PENDING_SIGN_IN_MAX_AGE_MS ? account : null
 }
 
-const canonical = (choice: PermissionChoice) => JSON.stringify(Object.keys(choice).sort().map(id => {
-  const picked = choice[id as keyof PermissionChoice]!
-  return [id, picked.access, [...(picked.areas ?? [])].sort()]
-}))
-const sameChoice = (a: PermissionChoice, b: PermissionChoice) => canonical(a) === canonical(b)
-
 /** The saved draft, or null when there is none or it cannot be read. An expired sign-in is left out. */
 export function loadOnboardingDraft(): OnboardingDraft | null {
   try {
     const raw = bridge.storage.getItemSync(KEY)
     if (!raw) return null
     const value = JSON.parse(raw) as Record<string, unknown>
-    let step: OnboardingDraft["step"] = value.step === -2 || value.step === -1 || value.step === 1 || value.step === 2 || value.step === 4 ? value.step : 0
-    let services = DEFAULT_ONBOARDING_CHOICE
-    let reconfirm = value.reconfirm === true
-    if (Object.hasOwn(value, "services")) {
-      try { services = checkedOnboardingChoice(value.services) } catch {
-        // A broken choice must never silently approve the default write permissions.
-        services = {}
-        reconfirm = true
-      }
-    }
-    // Older drafts can contain restore access and onboarding opt-ins. Keep only the service choices.
-    const backupOnly: PermissionChoice = {}
-    for (const id of ["defender", "entra", "intune"] as const) {
-      if (services[id] || (id === "entra" && services.conditionalAccess)) backupOnly[id] = { access: "backup" }
-    }
-    if (backupOnly.entra) backupOnly.conditionalAccess = { access: "backup" }
-    // When that changes what the admin picked (restore, opt-in areas or Conditional Access), show the
-    // service cards again so a resumed setup never creates a registration they did not see.
-    if (!reconfirm && Object.hasOwn(value, "services") && sameChoice(services, backupOnly) === false) reconfirm = true
-    services = backupOnly
-    // A choice that still has to be confirmed stays on the service step, even after a valid pick was saved.
-    if (reconfirm || !Object.keys(services).length) step = -1
-    const account = recentAccount(value)
+    const legacyServicesStep = value.step === -1 || value.reconfirm === true
+    const step = legacyServicesStep ? -2 : value.step === 0 || value.step === 1 || value.step === 2 || value.step === 4 ? value.step : -2
+    const saved = value.services as PermissionChoice | undefined
+    const services = !legacyServicesStep && (saved?.entra?.access === "backup" || saved?.conditionalAccess?.access === "backup")
+      ? ONBOARDING_ENTRA_CHOICE : DEFAULT_ONBOARDING_CHOICE
+    const account = legacyServicesStep ? null : recentAccount(value)
     const draft: OnboardingDraft = {
       step: (step === 2 || step === 4) && !account ? 1 : step,
       tenant: text(value.tenant),
@@ -94,9 +69,8 @@ export function loadOnboardingDraft(): OnboardingDraft | null {
       displayName: text(value.displayName),
       account,
       services,
-      ...(reconfirm ? { reconfirm } : {}),
     }
-    return isEmptyDraft(draft) ? null : draft
+    return !legacyServicesStep && isEmptyDraft(draft) ? null : draft
   } catch {
     return null
   }
@@ -118,7 +92,7 @@ export function pendingSignInTenant(now = Date.now()): string | null {
 
 /** Whether a draft holds nothing worth resuming: the Connect step with no input. */
 export function isEmptyDraft(draft: OnboardingDraft): boolean {
-  return draft.step === -1 && !draft.reconfirm && (!draft.services || !Object.keys(draft.services).length) && !draft.tenant && !draft.clientId && !draft.displayName && !draft.account
+  return draft.step === -2 && !draft.services?.entra && !draft.tenant && !draft.clientId && !draft.displayName && !draft.account
 }
 
 let pending: Promise<void> = Promise.resolve()

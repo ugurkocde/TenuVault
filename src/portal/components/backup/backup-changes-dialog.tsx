@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react"
 import { Link } from "react-router-dom"
 import { BellPlus, ChevronDown, ChevronRight, Loader2, Minus, PencilLine, Plus } from "lucide-react"
+import { NoticeCard } from "@desktop/components/NoticeCard"
 import { alertForPolicyHref } from "@desktop/lib/alert-links"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "~/components/ui/dialog"
 import { cn } from "~/lib/utils"
@@ -91,7 +92,7 @@ export function BackupChangesDialog({ open, onOpenChange, tenant, backup, previo
           </DialogDescription>
         </DialogHeader>
 
-        {error && <p className="rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{error}</p>}
+        {error && <NoticeCard summary="Backup changes could not be loaded." tone="error" details={error} />}
         {!items && !error && (
           <div className="flex items-center gap-2 py-8 text-sm text-gray-500">
             <Loader2 className="h-4 w-4 animate-spin" /> Comparing backups...

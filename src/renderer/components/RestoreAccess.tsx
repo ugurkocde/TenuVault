@@ -6,9 +6,10 @@ import type { ConnectionHealthReport } from "../../shared/connection-health/mode
 import { moduleForFolder, MODULE_BY_ID, type ModuleId } from "../../shared/services/modules"
 import { missingPackScopes, servicePack } from "../../shared/services/permission-packs"
 import { backupServiceForFolder, BACKUP_SERVICES } from "../../shared/services/presentation"
-import { GRAPH_CLI_READ_ONLY, sharedSignInMethod } from "../../shared/tenant-connection"
+import { sharedSignInMethod } from "../../shared/tenant-connection"
 import { bridge } from "../lib/bridge"
 import { settingsHref } from "../lib/settings-section"
+import { NoticeCard, noticeActionClass } from "./NoticeCard"
 import { PermissionRoutes } from "./ServicesSettings"
 import { StartNowUpgradeLinks } from "./StartNowNotice"
 import { TenuVaultConsent } from "./TenuVaultConsent"
@@ -99,26 +100,36 @@ export function RestoreAccess({ credentials, issues, checking, error, onCheck }:
   onCheck: () => Promise<void> | void
 }) {
   const { tenantId, appId: clientId } = credentials
-  if (!issues.length) return null
-  if (issues[0]?.method === "graphCli") return <StartNowUpgradeLinks tenantId={tenantId.toLowerCase()} message={GRAPH_CLI_READ_ONLY} />
-  return <div className="space-y-3" data-no-select>
-    {issues.map(issue => {
-      const module = MODULE_BY_ID.get(issue.id)!
-      return <section key={issue.id} aria-label={`${module.label} restore access`} className="space-y-2 rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm text-gray-700">
-        <p className="font-medium text-gray-900">Restore access for {module.label}</p>
-        {issue.method === "tenuvaultApp" ? issue.enabled ? <>
-          <p>An administrator can approve restore access for this service.</p>
-          <TenuVaultConsent tenantId={tenantId} plan={{ packs: [servicePack(issue.id, "restore", issue.areas)] }} active
-            restore={{ id: issue.id, label: module.label }} onRestoreVerified={() => void onCheck()} />
-        </> : <Link className="font-medium underline" to={settingsHref("services")}>Turn on {module.label} in Services and permissions</Link>
-          : <>
-            <p className="break-words">Add these permissions to your app registration to restore the selected policies. {issue.missing.join(", ")}</p>
-            <PermissionRoutes report={{ tenantId, clientId }} missing={issue.missing} inApp restoring />
-            <Button variant="outline" size="sm" disabled={checking} onClick={() => void onCheck()}>Check again</Button>
-          </>}
-      </section>
-    })}
-    {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
+  if (issues[0]?.method === "graphCli") return <StartNowUpgradeLinks tenantId={tenantId.toLowerCase()} message="Start now is read-only. Restore needs a different sign-in." />
+  const services = [...new Set(issues.map(issue => issue.label))]
+  const accessLink = issues.every(issue => issue.method === "tenuvaultApp" && issue.enabled)
+    ? settingsHref("signin", `sign-in-${tenantId.toLowerCase()}`)
+    : `${settingsHref("services")}&tenant=${encodeURIComponent(tenantId)}`
+  return <div className="space-y-2" data-no-select>
+    {services.length > 0 && <NoticeCard
+      summary={services.length === 1 ? `Needs restore access for ${services[0]}.` : `Needs restore access for ${services.length} services.`}
+      action={<Link className={noticeActionClass} to={accessLink}>Add access</Link>}
+      details={<>
+        {services.map(label => {
+          const related = issues.filter(issue => issue.label === label)
+          const permissions = new Set(related.flatMap(issue => issue.missing))
+          return <section key={label} className="space-y-2">
+            <p className="font-medium">{label}{permissions.size > 0 && ` (${permissions.size} missing)`}</p>
+            {related.map(issue => {
+              const module = MODULE_BY_ID.get(issue.id)!
+              return issue.method === "tenuvaultApp"
+                ? issue.enabled
+                  ? <TenuVaultConsent key={issue.id} tenantId={tenantId} plan={{ packs: [servicePack(issue.id, "restore", issue.areas)] }} active
+                    restore={{ id: issue.id, label: module.label }} onRestoreVerified={() => void onCheck()} />
+                  : <p key={issue.id}>Turn on {module.label} in Services and permissions.</p>
+                : <PermissionRoutes key={issue.id} report={{ tenantId, clientId }} missing={issue.missing} inApp restoring />
+            })}
+          </section>
+        })}
+        <Button variant="outline" size="sm" disabled={checking} onClick={() => void onCheck()}>Check again</Button>
+      </>}
+    />}
+    {error && <NoticeCard tone="error" summary={error} />}
   </div>
 }
 

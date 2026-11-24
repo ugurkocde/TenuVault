@@ -17,7 +17,7 @@ describe("restore history refusals", () => {
 
   it("tells a tenant without Intune and Conditional Access which service to turn on", async () => {
     setRestoreJournalStore(memoryStore())
-    for (const services of [[], ["entra"], ["defender"]] as ModuleId[][]) {
+    for (const services of [[], ["entra"]] as ModuleId[][]) {
       authorizeWith(services, () => Response.json({ value: [] }))
       const response = await list()
       expect(response.status).toBe(403)

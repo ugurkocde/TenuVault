@@ -3,7 +3,7 @@ title: "Get started with TenuVault"
 description: Install TenuVault and run your first configuration backup, on Windows or macOS.
 ---
 
-Install TenuVault, connect your Microsoft tenant and run a backup for the services you choose. TenuVault backs up Defender, Entra ID and Intune configuration and restores supported policies.
+Install TenuVault, connect your Microsoft tenant and run a backup for the services you choose. TenuVault backs up Entra ID and Intune configuration and restores supported policies.
 
 See [What gets backed up](/backups/coverage/) to check coverage before setting up.
 

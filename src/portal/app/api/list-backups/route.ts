@@ -565,7 +565,20 @@ export async function POST(request: NextRequest, runStatus?: RunStatus) {
       backup.ordinaryOnlyExport = !unreadRecords.has(backup.id) && !backup.ordinaryOnlyAvailable && (backup.largeProblems.length > 0 || !matches || !completeHalf(metadata) || !completeHalf(other))
       if (backup.largeProblems.length || backup.ordinaryOnlyExport || backup.ordinaryOnlyAvailable) {
         backup.coverage = "incomplete"
-        backup.status = typeof metadata.RunStatus !== "string" && statusOf(backup.runId) === "running" ? "running" : "incomplete"
+        // A verified split run can finish with types left out for access. Keep the export
+        // restrictions for incomplete coverage, but report the recorded run result.
+        const omissions = [metadata.Outcomes, metadata.LargeBackupOutcomes, other?.Outcomes]
+          .flatMap(entries => Array.isArray(entries) ? entries : [])
+          .filter(entry => entry?.Outcome !== "saved" && entry?.Outcome !== "notConfigured")
+        const accessOnly = matches && other && !companionUnavailable && metadata.RunStatus === "Success"
+          && metadata.RunCounts?.failures === 0 && metadata.Failures === 0 && other.Failures === 0
+          && Object.values(other.LargeItems ?? {}).every((index: any) => index?.complete === true)
+          && omissions.length > 0
+          && omissions.every(entry => entry?.Outcome === "skipped" && !entry.Saved && ["permission", "role", "license", "signedIn", "appOnly"].includes(entry.Cause))
+          && largeProblems.every(problem => omissions.some(entry => entry.Folder === problem.folder))
+        const failedResult = metadata.RunCounts?.failures > 0 && ["Failed", "CompletedWithWarnings"].includes(metadata.RunStatus)
+        backup.status = accessOnly ? "Success" : failedResult ? metadata.RunStatus
+          : typeof metadata.RunStatus !== "string" && statusOf(backup.runId) === "running" ? "running" : "incomplete"
         backup.notRead = [...new Set([...backup.notRead, ...backup.largeProblems.map((problem: { folder: string }) => problem.folder)])]
         backup.warning = backup.largeProblems.map((problem: { folder: string; reason: string }) => `${problem.folder}: ${problem.reason}`).join(" ") || cause
       }

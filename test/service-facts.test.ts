@@ -39,13 +39,12 @@ const delegated = (...scopes: string[]): GrantedPermissions => ({ kind: "delegat
 
 const INTUNE_WRITE = "DeviceManagementConfiguration.ReadWrite.All DeviceManagementApps.ReadWrite.All DeviceManagementServiceConfig.ReadWrite.All DeviceManagementScripts.ReadWrite.All DeviceManagementRBAC.ReadWrite.All DeviceManagementManagedDevices.ReadWrite.All"
 
-describe("The four services and their facts", () => {
+describe("The three services and their facts", () => {
   it("keeps today's behaviour for Intune and Conditional Access, and starts the new services off", () => {
     expect(MODULES.map((module) => [module.id, module.switchable, module.defaultOn, module.precheck, module.defaultAccess])).toEqual([
       ["intune", true, true, false, "restore"],
       ["conditionalAccess", true, false, true, "backup"],
       ["entra", true, false, true, "backup"],
-      ["defender", true, false, true, "backup"],
     ])
     // The combined flag is gone from every service.
     expect(MODULES.some((module) => "optIn" in module)).toBe(false)
@@ -53,10 +52,10 @@ describe("The four services and their facts", () => {
 
   it("marks the Entra areas that are opt-in and the ones that hold personal data", () => {
     const entra = MODULE_BY_ID.get("entra")!
-    expect(entra.areas.filter((area) => area.optIn).map((area) => area.id)).toEqual(["groups", "usersAndDevices", "applications"])
-    expect(entra.areas.filter((area) => area.personalData).map((area) => area.id)).toEqual(["groups", "usersAndDevices", "applications"])
-    // No area of Intune, Conditional Access or Defender is opt-in: turning the service on backs all of it up.
-    for (const id of ["intune", "conditionalAccess", "defender"] as const) expect(MODULE_BY_ID.get(id)!.areas.some((area) => area.optIn)).toBe(false)
+    expect(entra.areas.filter((area) => area.optIn).map((area) => area.id)).toEqual(["groups", "usersAndDevices"])
+    expect(entra.areas.filter((area) => area.personalData).map((area) => area.id)).toEqual(["groups", "usersAndDevices"])
+    // No area of Intune or Conditional Access is opt-in: turning the service on backs all of it up.
+    for (const id of ["intune", "conditionalAccess"] as const) expect(MODULE_BY_ID.get(id)!.areas.some((area) => area.optIn)).toBe(false)
   })
 })
 
@@ -106,20 +105,20 @@ describe("The services status reports switchable", () => {
   const status = () => servicesStatus(TENANT, new ModuleSettings(memoryStore()), async () => ({ accessToken: jwt("Policy.Read.All") }))
 
   it("tells the Settings card which services the admin can switch", async () => {
-    expect((await status()).modules.map((module) => [module.id, module.switchable])).toEqual([["intune", true], ["conditionalAccess", true], ["entra", true], ["defender", true]])
+    expect((await status()).modules.map((module) => [module.id, module.switchable])).toEqual([["intune", true], ["conditionalAccess", true], ["entra", true]])
     withFacts("intune", { switchable: false })
-    expect((await status()).modules.map((module) => [module.id, module.switchable])).toEqual([["intune", false], ["conditionalAccess", true], ["entra", true], ["defender", true]])
+    expect((await status()).modules.map((module) => [module.id, module.switchable])).toEqual([["intune", false], ["conditionalAccess", true], ["entra", true]])
   })
 
   it("does not follow the other two facts", async () => {
     withFacts("intune", { defaultOn: false, precheck: true })
     withFacts("conditionalAccess", { defaultOn: true, precheck: false })
-    expect((await status()).modules.map((module) => module.switchable)).toEqual([true, true, true, true])
+    expect((await status()).modules.map((module) => module.switchable)).toEqual([true, true, true])
   })
 
-  it("reports all four services now that Defender has backup types", async () => {
+  it("reports all three modules", async () => {
     const answer = await status()
-    expect(answer.modules.map((module) => module.id)).toEqual(["intune", "conditionalAccess", "entra", "defender"])
+    expect(answer.modules.map((module) => module.id)).toEqual(["intune", "conditionalAccess", "entra"])
     expect(answer.modules.every((module) => module.check !== null)).toBe(true)
   })
 })
@@ -200,17 +199,18 @@ describe("The backup engine reads precheck", () => {
     expect(metadata.SkippedTypes).toEqual(["PolicySets", "NamedLocations", "AuthenticationStrengths", "ConditionalAccessPolicies"])
   })
 
-  it("words a refused read by the same fact: the Intune role, or the roles of a pre-checked service", async () => {
+  it("fails a granted refusal regardless of whether the service prechecks its scopes", async () => {
     const denied = ["/beta/deviceAppManagement/mobileApps", "/beta/identity/conditionalAccess/policies"]
-    const real = await backup({ scopes: `Policy.Read.All ${INTUNE_WRITE}`, denied })
-    expect(real.reason("Apps")).toBe("Access was denied. The app registration may lack the permission or admin consent, or your Intune role may not allow it.")
-    expect(real.reason("ConditionalAccessPolicies")).toBe("Access was denied. The app registration may lack the permission or admin consent, or your account may not have a role that can read Entra Conditional Access (Security Reader or Global Reader to back up).")
-
+    const options = { scopes: `Policy.Read.All ${INTUNE_WRITE}`, denied }
+    const real = await backup(options)
     withFacts("intune", { precheck: true })
     withFacts("conditionalAccess", { precheck: false })
-    const flipped = await backup({ scopes: `Policy.Read.All ${INTUNE_WRITE}`, denied })
-    expect(flipped.reason("Apps")).toBe("Access was denied. The app registration may lack the permission or admin consent, or your account may not have a role that can read Intune (Intune Administrator, or an Intune role that covers the policies you back up and restore.).")
-    expect(flipped.reason("ConditionalAccessPolicies")).toBe("Access was denied. The app registration may lack the permission or admin consent, or your Entra Conditional Access role may not allow it.")
+    const flipped = await backup(options)
+    for (const result of [real, flipped]) {
+      expect(result.job.outcomes?.types).toEqual(expect.arrayContaining(
+        ["Apps", "ConditionalAccessPolicies"].map(folder => expect.objectContaining({ folder, outcome: "failed", status: 403 })),
+      ))
+    }
   })
 })
 

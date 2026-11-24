@@ -9,7 +9,7 @@ The last setup step takes a first backup, so you know sign-in, permissions and s
 
 Select **Start first backup** on **Where should backups go?**. The backup starts automatically and the progress bar shows what TenuVault is saving. Select **Cancel backup** to stop it.
 
-When **Your first backup is done** appears, you can review the counts and duration, expand **See backup details**, or set up the options below. Select **Go to dashboard** when you are ready to leave setup. The diagnostics question below the card is optional.
+When **Your first backup is done** appears, you can review the counts and duration, expand **See backup details**, or set up the options below. Select **Go to dashboard** when you are ready to leave setup. The diagnostics question below the card is optional. On the Dashboard, **Turn on daily backups** (or **Set up automatic backups** on Community) opens Schedule, and **View backup** opens the saved backup. The first-backup card stays until you dismiss it or a second backup succeeds.
 
 <figure class="docs-screenshot">
   <a href="/images/screenshots/setup-first-backup.webp" aria-label="Open the first backup screenshot">
@@ -58,14 +58,14 @@ For more on manual backups, see [Run a backup](/backups/).
 | Result | Meaning |
 | --- | --- |
 | **Backup completed successfully** | Every object in scope was saved. |
-| **Backup completed with &lt;n&gt; warnings** | Most objects were saved, but some could not be read. **Needs attention** lists each one with the reason. Older backups are kept because this backup is incomplete. |
-| **Backup failed: no policies could be saved** | Nothing was saved. Check **Needs attention** or the raw log for the first error. |
-| **Backup failed: nothing could be read** | Every selected type was left out, for example for a missing permission or a product the tenant has no license for. The error names the main cause, and **Needs attention** lists the reason per type. |
+| **Backup completed with &lt;n&gt; warnings** | Most objects were saved, but some could not be read. **Details** lists the affected types and reasons. Older backups are kept because this backup is incomplete. |
+| **Backup failed: no policies could be saved** | Nothing was saved. Open **Details** on the result or check the raw log for the first error. |
+| **Backup failed: nothing could be read** | Every selected type was left out, for example for a missing permission or a product the tenant has no license for. The error names the main cause, and **Details** lists the reason per type. |
 
 Below the result, TenuVault shows:
 
 * **Policies saved**, **Types backed up** and **Duration**, plus inventory such as Autopilot devices, which is counted apart from policies
-* **Needs attention**, when a type could not be read, was left out for a missing permission, or some of its objects could not be saved, each with the reason
+* Separate counts for missing access, read failures and save failures. **Details** groups affected types by service.
 * every type that was backed up, with the number of objects saved
 * **&lt;n&gt; types had nothing to back up**, which you can expand to see the types your tenant has none of
 * **Show raw log**, the full technical log with **Copy log**, for support
@@ -79,7 +79,7 @@ After a successful manual backup on Community, a line beside the completion resu
 | Message | Fix |
 | --- | --- |
 | **Skipped &lt;type&gt;: access was denied. The app registration may lack the permission or admin consent, or your Intune role may not allow it.** | Your app registration is missing a permission TenuVault uses or its admin consent, or your Intune role does not cover this type. Open the app registration in Microsoft Entra, go to **API permissions** and select **Grant admin consent for &lt;your tenant&gt;**, or run the setup script again. Then sign out of the tenant in TenuVault and sign in again. If every permission already shows **Granted**, check that your Intune role covers these items. See [Create the app registration manually](/getting-started/app-registration/#3-add-the-delegated-permissions). |
-| **Could not read &lt;type&gt;** | **Needs attention** shows the error Microsoft Graph returned. If it is an access error, check that your Intune role includes this type. |
+| **Could not read &lt;type&gt;** | **Details** shows the error Microsoft Graph returned. If it is an access error, check that your Intune role includes this type. |
 | A banner asks you to sign in again | Your Microsoft session ended. Select **Sign in** in the banner, then run the backup again. |
 | **You do not have write access to storage account &lt;name&gt; ...** | See [Storage errors](/getting-started/choose-storage/#storage-errors). |
 
@@ -99,4 +99,4 @@ Once you have a successful backup, [practice an Intune restore](https://www.tenu
 
 ## Your chosen services
 
-The first backup step names the services selected during setup. The first backup covers the selected areas for [Defender](/backups/defender/), [Entra ID](/backups/entra/) or [Intune](/backups/intune/). Conditional Access is included when its switch is on under Entra ID. The default scope leaves out Intune app details.
+Your first backup covers Intune and the Entra ID areas you enabled on **Check** that your sign-in can read.

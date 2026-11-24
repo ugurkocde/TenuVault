@@ -39,7 +39,7 @@ const AZURE_APIS: readonly ApiPermissions[] = [
  * The order services come in a permission list. It keeps Conditional Access policies before Intune
  * permissions in the default registration.
  */
-export const REQUEST_ORDER: readonly ModuleId[] = ["conditionalAccess", "intune", "entra", "defender"]
+export const REQUEST_ORDER: readonly ModuleId[] = ["conditionalAccess", "intune", "entra"]
 
 /**
  * What a setup asks for when the admin makes no choice, as it always has: Intune with restore, and
@@ -147,7 +147,7 @@ export function knownPermissions(mode: SignInMode): ApiPermissions[] {
  * permissions a default setup never asks for do not count, nor does the write permission for
  * managed devices.
  *
- * For Entra ID and Defender it takes more than half of what backing the service up asks for,
+ * For Entra ID it takes more than half of what backing the service up asks for,
  * opt-in areas left out. A single permission of those services, such as User.Read.All or
  * Policy.Read.All, is something administrators grant to many apps, so it proves nothing; neither
  * do the permissions every sign-in has.
@@ -165,7 +165,12 @@ export function showsApproval(consented: ReadonlySet<string>): boolean {
     const own = (permissions: string[]) => unique(permissions).filter((permission) => !BASE_PERMISSIONS.includes(permission))
     const asked = own(areas.flatMap((area) => areaPermissions(area, "backup", "delegated")))
     if (asked.length < 3) return [...BASE_PERMISSIONS, ...asked].every(has)
-    const lacking = own(areas.flatMap((area) => areaPermissions(area, "backup", "delegated", consented)))
+    // Conditional Access write access also reads authentication contexts, but it does
+    // not identify an app set up for Entra ID when the device and access pack is small.
+    const evidence = module.id === "entra"
+      ? new Set([...consented].filter(scope => scope !== "Policy.ReadWrite.ConditionalAccess"))
+      : consented
+    const lacking = own(areas.flatMap((area) => areaPermissions(area, "backup", "delegated", evidence)))
     return (asked.length - lacking.length) * 2 > asked.length
   })
 }
@@ -207,7 +212,7 @@ export function checkedChoice(value: unknown): PermissionChoice {
 }
 
 /** The name of a service in the setup scripts' -Services and -RestoreAccess parameters. */
-export const SCRIPT_SERVICE: Readonly<Record<ModuleId, string>> = { intune: "Intune", conditionalAccess: "ConditionalAccess", entra: "Entra", defender: "Defender" }
+export const SCRIPT_SERVICE: Readonly<Record<ModuleId, string>> = { intune: "Intune", conditionalAccess: "ConditionalAccess", entra: "Entra" }
 
 /** The name of an opt-in area in the setup scripts' -Areas parameter. */
 export const scriptArea = (id: string) => id.charAt(0).toUpperCase() + id.slice(1)

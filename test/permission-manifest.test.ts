@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest"
+vi.hoisted(() => vi.stubGlobal("__TV_LAB_EXPANDED_ENTRA__", true))
+
+import { describe, expect, it, vi } from "vitest"
 import {
   areaPermissions, checkedChoice, DEFAULT_READER_CHOICE, DEFAULT_SETUP_CHOICE, graphPermissions, knownPermissions, missingForChoice, READER_ALLOWED_ROLES, readerChoice,
   readerExcludedFolders, readerRequiredRoles, readerRoles, readerScriptArguments, readerSetupArguments, requestedPermissions, setupScriptArguments, showsApproval, type PermissionChoice,
@@ -42,7 +44,7 @@ describe("What a setup asks for by default", () => {
 
   it("follows the access each service has for a tenant that made no choice: Intune restores, Conditional Access is read", () => {
     expect(DEFAULT_SETUP_CHOICE).toEqual({ intune: { access: MODULE_BY_ID.get("intune")!.defaultAccess }, conditionalAccess: { access: MODULE_BY_ID.get("conditionalAccess")!.defaultAccess } })
-    expect(MODULES.map((module) => module.defaultAccess)).toEqual(["restore", "backup", "backup", "backup"])
+    expect(MODULES.map((module) => module.defaultAccess)).toEqual(["restore", "backup", "backup"])
   })
 
   it("is the five Intune read permissions for a Backup Reader, and nothing but Microsoft Graph", () => {
@@ -81,7 +83,7 @@ describe("What a choice of services, areas and access levels asks for", () => {
   })
 
   it("asks for nothing of a service that was not chosen", () => {
-    const families: Record<ModuleId, RegExp> = { intune: /^DeviceManagement/, conditionalAccess: /^Policy\.ReadWrite\.ConditionalAccess$/, entra: /^(RoleManagement\.Read\.Directory|Domain\.|EntitlementManagement|IdentityProvider)/, defender: /^(CustomDetection|AttackSimulation|SecurityEvents|RoleManagement\.Read\.Defender)/ }
+    const families: Record<ModuleId, RegExp> = { intune: /^DeviceManagement/, conditionalAccess: /^Policy\.ReadWrite\.ConditionalAccess$/, entra: /^(RoleManagement\.Read\.Directory|Domain\.|EntitlementManagement|IdentityProvider)/ }
     for (const choice of choices()) for (const id of IDS) {
       const asked = graphPermissions(choice, "delegated").some((permission) => families[id].test(permission))
       // Reading Conditional Access shares Policy.Read.All with Entra ID; its write permission is its own.
@@ -97,12 +99,6 @@ describe("What a choice of services, areas and access levels asks for", () => {
     expect(graph({ conditionalAccess: { access: "backup" } })).toEqual(["Policy.Read.All"])
     // Conditional Access writes also need Policy.Read.All, so restore asks for both.
     expect(graph({ conditionalAccess: { access: "restore" } })).toEqual(["Policy.Read.All", "Policy.ReadWrite.ConditionalAccess"])
-    expect(graph({ defender: { access: "backup" } })).toEqual([
-      "CustomDetection.Read.All", "Workbooks.Read.All", "CaseManagement.Read.All", "AttackSimulation.Read.All", "ThreatSubmission.Read.All",
-      "SecurityIdentitiesSensors.Read.All", "SecurityIdentitiesAutoConfig.Read.All", "SecurityEvents.Read.All", "RoleManagement.Read.Defender",
-    ])
-    // Defender stays backup-only until a type has an enabled restore contract.
-    expect(graph({ defender: { access: "restore" } })).toEqual(graph({ defender: { access: "backup" } }))
     // Entra ID discovers group IDs for PIM, without enabling group object backups.
     const entra = graph({ entra: { access: "backup" } })
     expect(entra).toContain("Policy.Read.All")
@@ -188,9 +184,6 @@ describe("What a choice of services, areas and access levels asks for", () => {
   it("says what a set of granted permissions lacks for a choice, and nothing more", () => {
     expect(missingForChoice(DEFAULT_SETUP_CHOICE, delegated())).toEqual(graphPermissions(DEFAULT_SETUP_CHOICE, "delegated").filter(permission => permission !== "GroupMember.Read.All"))
     expect(missingForChoice(DEFAULT_SETUP_CHOICE, delegated(...graphPermissions(DEFAULT_SETUP_CHOICE, "delegated")))).toEqual([])
-    // An existing default registration that should also back up Defender.
-    const today = delegated(...graphPermissions(DEFAULT_SETUP_CHOICE, "delegated"))
-    expect(missingForChoice({ ...DEFAULT_SETUP_CHOICE, defender: { access: "backup" } }, today)).toEqual(graphPermissions({ defender: { access: "backup" } }, "delegated").slice(3))
     // Another permission that also satisfies a requirement counts: Directory.Read.All reads the directory settings and the administrative units.
     const entra = missingForChoice({ entra: { access: "backup" } }, delegated("User.Read", "Organization.Read.All", "Policy.Read.All", "Directory.Read.All"))
     expect(entra).not.toContain("GroupSettings.Read.All")
@@ -215,7 +208,7 @@ describe("What a choice of services, areas and access levels asks for", () => {
     expect(setupScriptArguments({ conditionalAccess: { access: "backup" }, intune: { access: "restore" } })).toBe("")
     expect(setupScriptArguments({ intune: { access: "backup" } })).toBe(" -Services Intune -RestoreAccess None")
     expect(setupScriptArguments({ intune: { access: "restore" }, conditionalAccess: { access: "restore" } })).toBe(" -Services Intune,ConditionalAccess -RestoreAccess Intune,ConditionalAccess")
-    expect(setupScriptArguments({ entra: { access: "backup", areas: ["usersAndDevices", "groups"] }, defender: { access: "restore" } })).toBe(" -Services Entra,Defender -RestoreAccess Defender -Areas Groups,UsersAndDevices")
+    expect(setupScriptArguments({ entra: { access: "backup", areas: ["usersAndDevices", "groups"] } })).toBe(" -Services Entra -RestoreAccess None -Areas Groups,UsersAndDevices")
   })
 
   it("keeps the opt-in areas of all services apart by name, so one -Areas parameter can name them", () => {
@@ -273,7 +266,6 @@ describe("Permissions per folder and sign-in mode", () => {
     expect(restorePermissionBlocker("TokenLifetimePolicies", delegated("Policy.Read.All"))).toBe("Restoring Entra ID tenant settings needs the Policy.ReadWrite.ApplicationConfiguration and Application.Read.All or Application.ReadWrite.All permission. Review the restore permissions for this service. Services and permissions shows how to add them.")
     expect(restorePermissionBlocker("TokenLifetimePolicies", delegated("Policy.ReadWrite.ApplicationConfiguration", "Application.Read.All"))).toBeUndefined()
     expect(restorePermissionBlocker("HardwareOathDevices", delegated("Policy.ReadWrite.AuthenticationMethod"))).toBe("Entra ID authentication cannot be restored through Microsoft Graph.")
-    expect(restorePermissionBlocker("DefenderCustomDetectionRules", application("CustomDetection.Read.All"))).toBe("Defender detection and response can only be restored by a signed-in admin.")
     // Conditional Access as before, and Intune never.
     expect(restorePermissionBlocker("ConditionalAccessPolicies", delegated("Policy.Read.All"))).toBe("Restoring Entra Conditional Access policies needs the Policy.ReadWrite.ConditionalAccess permission. Review the restore permissions for this service. Services and permissions shows how to add them.")
     expect(restorePermissionBlocker("DeviceCategories", delegated())).toBeUndefined()
@@ -324,19 +316,14 @@ describe("Permissions TenuVault knows", () => {
       expect(approved(...backup("intune"))).toBe(true)
     })
 
-    it("take most of what backing up Entra ID or Defender asks for, and not a part of it that many apps hold", () => {
+    it("take most of what backing up Entra ID asks for, and not a part of it that many apps hold", () => {
       const entra = backup("entra")
-      const defender = backup("defender").filter(permission => permission !== "GroupMember.Read.All")
       expect(approved(...entra)).toBe(true)
-      expect(approved(...defender)).toBe(true)
       // A registration made by an earlier version that lacks a few newer permissions still counts.
       expect(approved(...entra.slice(0, Math.floor(entra.length / 2) + 1))).toBe(true)
       expect(approved(...entra.slice(0, Math.floor(entra.length / 2)))).toBe(false)
-      expect(approved(...defender.slice(0, 5))).toBe(true)
-      expect(approved(...defender.slice(0, 4))).toBe(false)
       // A write permission that also reads counts for the read it stands in for.
-      expect(approved(...graphPermissions({ defender: { access: "restore" } }, "delegated").slice(2))).toBe(true)
-      for (const few of [["Policy.Read.All"], ["Domain.Read.All"], ["SecurityEvents.Read.All", "CustomDetection.Read.All"], ["Policy.Read.All", "Domain.Read.All", "RoleManagement.Read.Directory"]]) expect(approved(...few), few.join(" ")).toBe(false)
+      for (const few of [["Policy.Read.All"], ["Domain.Read.All"], ["Policy.Read.All", "Domain.Read.All", "RoleManagement.Read.Directory"]]) expect(approved(...few), few.join(" ")).toBe(false)
     })
 
     it("recognizes earlier Conditional Access registrations that lack the group read feature", () => {
@@ -363,8 +350,8 @@ describe("Permissions TenuVault knows", () => {
 
 describe("Backup Reader roles from the manifest", () => {
   it("requires the Intune permissions only while Intune is on, and those of no other service", () => {
-    expect(readerRequiredRoles({ services: ["intune", "conditionalAccess", "entra", "defender"] })).toEqual(readerRoles())
-    expect(readerRequiredRoles({ services: ["conditionalAccess", "entra", "defender"] })).toEqual([])
+    expect(readerRequiredRoles({ services: ["intune", "conditionalAccess", "entra"] })).toEqual(readerRoles())
+    expect(readerRequiredRoles({ services: ["conditionalAccess", "entra"] })).toEqual([])
     expect(readerRequiredRoles({ services: [] })).toEqual([])
     // The device inventory permission is never required.
     expect(readerRequiredRoles(DEFAULT_SELECTION)).not.toContain("DeviceManagementManagedDevices.Read.All")
@@ -373,7 +360,7 @@ describe("Backup Reader roles from the manifest", () => {
   it("may hold the read permission of any area of any service, and nothing else", () => {
     const everything = readerRoles(Object.fromEntries(MODULES.map((module) => [module.id, { access: "backup" as const, areas: module.areas.filter((area) => area.optIn || area.appOnlyOptIn).map((area) => area.id) }])))
     expect([...READER_ALLOWED_ROLES].sort()).toEqual([...everything].sort())
-    for (const role of ["DeviceManagementManagedDevices.Read.All", "Policy.Read.All", "Directory.Read.All", "SecurityEvents.Read.All"]) expect(READER_ALLOWED_ROLES.has(role), role).toBe(true)
+    for (const role of ["DeviceManagementManagedDevices.Read.All", "Policy.Read.All", "Directory.Read.All", "Agreement.Read.All"]) expect(READER_ALLOWED_ROLES.has(role), role).toBe(true)
     for (const role of ["Mail.Read", "Policy.ReadWrite.ConditionalAccess", "DeviceManagementApps.ReadWrite.All", "User.Read"]) expect(READER_ALLOWED_ROLES.has(role), role).toBe(false)
   })
 
@@ -391,7 +378,7 @@ describe("Backup Reader roles from the manifest", () => {
 
   it("reads a reader's roles back as the services and areas it was set up for, for every combination", () => {
     const combinations = choices().filter((choice) => Object.values(choice).every((picked) => picked.access === "backup"))
-    expect(combinations.length).toBe(30)
+    expect(combinations.length).toBe(14)
     for (const choice of combinations) {
       const roles = readerRoles(choice)
       // The choice the roles amount to grants the same roles again, so a renewal changes nothing.
@@ -408,7 +395,6 @@ describe("Backup Reader roles from the manifest", () => {
     expect(readerScriptArguments([...five, "DeviceManagementManagedDevices.Read.All"])).toBe(" -IncludeDeviceCategories")
     expect(readerScriptArguments([...five, "Policy.Read.All"])).toBe(" -IncludeConditionalAccess")
     expect(readerScriptArguments([...five, "DeviceManagementManagedDevices.Read.All", "Policy.Read.All"])).toBe(" -IncludeDeviceCategories -IncludeConditionalAccess")
-    expect(readerScriptArguments(readerRoles({ defender: { access: "backup" } }))).toBe(" -Services Defender")
     expect(readerScriptArguments(readerRoles({ intune: { access: "backup" }, entra: { access: "backup", areas: ["usersAndDevices"] } }))).toBe(" -Services Intune,Entra -Areas UsersAndDevices")
   })
 
@@ -440,7 +426,7 @@ describe("Backup Reader roles from the manifest", () => {
     expect(readerSetupArguments({ services: ["intune", "conditionalAccess"] })).toBe("")
     expect(readerSetupArguments({ services: ["entra"] })).toBe(" -Services Entra")
     expect(readerSetupArguments({ services: ["conditionalAccess"] })).toBe(" -Services ConditionalAccess")
-    expect(readerSetupArguments({ services: ["intune", "conditionalAccess", "entra", "defender"], areas: { entra: ["groups"] } })).toBe(" -Services Intune,ConditionalAccess,Entra,Defender")
+    expect(readerSetupArguments({ services: ["intune", "conditionalAccess", "entra"], areas: { entra: ["groups"] } })).toBe(" -Services Intune,ConditionalAccess,Entra")
     expect(readerSetupArguments({ services: [] })).toBe("")
   })
 })

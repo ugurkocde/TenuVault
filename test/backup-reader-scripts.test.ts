@@ -85,10 +85,9 @@ describe("New-TenuVaultBackupReader.ps1", () => {
 
     it.each<[string, PermissionChoice]>([
       ["Entra ID alone", { entra: { access: "backup" } }],
-      ["Defender alone", { defender: { access: "backup" } }],
       ["Conditional Access alone", { conditionalAccess: { access: "backup" } }],
-      ["Intune and Entra ID with two opt-in areas", { intune: { access: "backup" }, entra: { access: "backup", areas: ["groups", "applications"] } }],
-      ["every service with every area", { intune: { access: "backup", areas: ["devices"] }, conditionalAccess: { access: "backup" }, entra: { access: "backup", areas: ["groups", "usersAndDevices", "applications"] }, defender: { access: "backup" } }],
+      ["Intune and Entra ID with two opt-in areas", { intune: { access: "backup" }, entra: { access: "backup", areas: ["groups"] } }],
+      ["every service with every area", { intune: { access: "backup", areas: ["devices"] }, conditionalAccess: { access: "backup" }, entra: { access: "backup", areas: ["groups", "usersAndDevices"] } }],
     ])("grants what the permission manifest names for %s, from the command the app shows", (_name, choice) => {
       const expected = [...readerRoles(choice)]
       // The command the Backup Reader card builds for a reader with these roles asks for the same roles again.
@@ -104,7 +103,7 @@ describe("New-TenuVaultBackupReader.ps1", () => {
     const READER_APP = "44444444-4444-4444-8444-444444444444"
     const ENTRA = [...readerRoles({ entra: { access: "backup" } })]
     it.each<[string, string[]]>([
-      ["one Entra ID permission alone", ["Domain.Read.All"]],
+      ["one Entra ID permission alone", ["Agreement.Read.All"]],
       ["Directory.Read.All alone", ["Directory.Read.All"]],
       ["Intune and one directory permission next to it", [...FIVE, "Directory.Read.All"]],
       ["Intune and Entra ID short of one permission", [...FIVE, ...ENTRA.filter((role) => role !== "Agreement.Read.All")]],
@@ -129,10 +128,10 @@ describe("New-TenuVaultBackupReader.ps1", () => {
     }, 90_000)
 
     it("sets a reader that drifted back to exactly the permissions it is given, and says why it removes one", () => {
-      const result = run({ AppId: READER_APP, Permissions: ["Domain.Read.All", CONDITIONAL_ACCESS_ROLE] }, { existing: true, assigned: [...FIVE, CONDITIONAL_ACCESS_ROLE] })
+      const result = run({ AppId: READER_APP, Permissions: ["Agreement.Read.All", CONDITIONAL_ACCESS_ROLE] }, { existing: true, assigned: [...FIVE, CONDITIONAL_ACCESS_ROLE] })
       expect(result.code, result.text).toBe(0)
-      expect(result.declared).toEqual(["Domain.Read.All", CONDITIONAL_ACCESS_ROLE])
-      expect(result.granted).toEqual(["Domain.Read.All"])
+      expect(result.declared).toEqual(["Agreement.Read.All", CONDITIONAL_ACCESS_ROLE])
+      expect(result.granted).toEqual(["Agreement.Read.All"])
       expect(result.removed).toEqual(FIVE)
       expect(result.text).toContain("Removing DeviceManagementApps.Read.All because -Permissions does not name it.")
       expect(result.text).toContain("Run the script again with DeviceManagementApps.Read.All in -Permissions to keep it.")
@@ -157,9 +156,9 @@ describe("New-TenuVaultBackupReader.ps1", () => {
       expect(all.code, all.text).toBe(0)
       expect(all.declared).toEqual([...READER_ALLOWED_ROLES].sort())
       expect(all.declared.some((role) => role.includes("ReadWrite"))).toBe(false)
-      const switched = run({ Permissions: ["Domain.Read.All"], IncludeConditionalAccess: true })
+      const switched = run({ Permissions: ["Agreement.Read.All"], IncludeConditionalAccess: true })
       expect(switched.code, switched.text).toBe(0)
-      expect(switched.declared).toEqual(["Domain.Read.All", CONDITIONAL_ACCESS_ROLE])
+      expect(switched.declared).toEqual(["Agreement.Read.All", CONDITIONAL_ACCESS_ROLE])
     }, 90_000)
 
     it.each([

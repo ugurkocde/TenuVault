@@ -1,3 +1,5 @@
+import { expandedEntraScope, includesEntraFolder } from "../intune/entra-scope"
+import { privilegedRestoreEnabled } from "../intune/directory-review-folders"
 import { admittedDirectoryPermissions } from "../intune/restore-matrix"
 import { area, part, type PermissionArea } from "./areas"
 
@@ -15,7 +17,7 @@ import { area, part, type PermissionArea } from "./areas"
  * policy, feature rollout policies, on-premises authentication policies and application proxy
  * connector groups.
  */
-export const ENTRA_AREAS: readonly PermissionArea[] = [
+const allEntraAreas: readonly PermissionArea[] = [
   area({ id: "tenantSettings", label: "Tenant settings" }, [
     part(["AuthorizationPolicy"], [["Policy.Read.All", "Policy.ReadWrite.Authorization"]], [["Policy.Read.All"]], "unsupported"),
     part(["SecurityDefaults"], [["Policy.Read.All"]], [["Policy.Read.All"]], "unsupported"),
@@ -69,7 +71,7 @@ export const ENTRA_AREAS: readonly PermissionArea[] = [
   area({
     id: "roles", label: "Roles and PIM",
     // Review resolves the connected registration and the principal's cloud user state.
-    restoreReview: [["Application.Read.All", "Application.ReadWrite.All", "Directory.Read.All"], ["User.Read.All", "User.ReadWrite.All", "Directory.Read.All"]],
+    ...(privilegedRestoreEnabled && { restoreReview: [["Application.Read.All", "Application.ReadWrite.All", "Directory.Read.All"], ["User.Read.All", "User.ReadWrite.All", "Directory.Read.All"]] }),
   }, [
     part(["EntraRoleDefinitions", "EntraRoleAssignments"], [["RoleManagement.Read.Directory", "RoleManagement.ReadWrite.Directory", "Directory.Read.All", "Directory.ReadWrite.All"]], [["RoleManagement.Read.Directory"]], "unsupported"),
     part(["RoleEligibilitySchedules"], [["RoleManagement.Read.Directory", "RoleEligibilitySchedule.Read.Directory", "RoleEligibilitySchedule.ReadWrite.Directory", "RoleManagement.ReadWrite.Directory"]], [["RoleManagement.Read.Directory"]], "unsupported"),
@@ -108,10 +110,19 @@ export const ENTRA_AREAS: readonly PermissionArea[] = [
     part(["OrgContacts"], [["OrgContact.Read.All", "Directory.Read.All", "Directory.ReadWrite.All"]], [["OrgContact.Read.All"]], "unsupported"),
   ]),
   area({ id: "applications", label: "Applications", optIn: true, personalData: true }, [
-    part(["Applications"], [["Application.Read.All", "Application.ReadWrite.All", "Directory.Read.All", "Directory.ReadWrite.All"]], [["Application.Read.All"]], [["Application.ReadWrite.All"]]),
+    part(["Applications"], [["Application.Read.All", "Application.ReadWrite.All", "Directory.Read.All", "Directory.ReadWrite.All"]], [["Application.Read.All"]], privilegedRestoreEnabled ? [["Application.ReadWrite.All"]] : "unsupported"),
     // Provisioning jobs are read with the synchronization permission. App role assignments are written with AppRoleAssignment.ReadWrite.All.
     part(["ServicePrincipals"], [["Application.Read.All", "Application.ReadWrite.All", "Directory.Read.All", "Directory.ReadWrite.All"], ["Synchronization.Read.All", "Synchronization.ReadWrite.All"]], [["Application.Read.All"], ["Synchronization.Read.All"]], "unsupported"),
     // Microsoft offers no narrower read permission.
     part(["OAuth2PermissionGrants"], [["Directory.Read.All", "DelegatedPermissionGrant.ReadWrite.All", "Directory.ReadWrite.All"]], [["Directory.Read.All"]], "unsupported"),
   ]),
 ]
+
+export const ENTRA_AREAS = expandedEntraScope ? allEntraAreas : allEntraAreas.flatMap(entry => {
+  const parts = entry.parts.flatMap(part => {
+    const folders = part.folders.filter(includesEntraFolder)
+    return folders.length ? [{ ...part, folders }] : []
+  })
+  const label = { tenantSettings: "Device settings", usersAndDevices: "Devices", governance: "Terms of use" }[entry.id] ?? entry.label
+  return parts.length ? [area({ ...entry, label }, parts)] : []
+})

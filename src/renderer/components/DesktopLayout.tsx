@@ -51,7 +51,6 @@ import { BackgroundTasksPanel } from "./BackgroundTasksPanel"
 import { useScoreInvalidation } from "../features/scores/invalidate"
 import { DriftScanIndicator, DriftScanNotifier } from "../lib/drift-jobs"
 import { setupCallUrl } from "../../shared/setup-call"
-import { StartNowNotice } from "./StartNowNotice"
 import { SignInBanner } from "./SignInBanner"
 import { SupportDialog } from "./SupportDialog"
 import { FeedbackDialog } from "./FeedbackDialog"
@@ -661,11 +660,10 @@ export function DesktopLayout() {
       )}
 
       <div className={focus ? undefined : "pl-64"}>
-        {!appBackupPage && <TenantTrialNotices showWelcome={pathname !== "/portal/onboarding" && pathname !== "/license"} />}
+        {!appBackupPage && <TenantTrialNotices showWelcome={pathname !== "/portal/onboarding" && pathname !== "/portal/dashboard" && pathname !== "/license"} />}
         {!appBackupPage && !trialEndVisible(licenseStatus) && <CommunityChoiceBanner />}
         {!appBackupPage && !focus && <LicenseBanner />}
         {!focus && <SignInBanner hidden={appBackupPage} />}
-        {!focus && <StartNowNotice />}
         {[/portal\/backup/, /portal\/drift/, /portal\/audit/, /portal\/(governance|changes|operations|reports|alerts|sync)/].some(pattern => pattern.test(pathname)) && <TenantAccessNotice />}
         {/* Room to scroll the end of a page clear of the floating backup and activity panels while they show. */}
         <main className="pb-[calc(var(--floating-progress-offset,0px)+var(--background-tasks-offset,0px))]">

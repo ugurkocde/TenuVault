@@ -73,6 +73,15 @@ for (const azure of [false, true]) describe(azure ? "Azure emulator mixed runs" 
     await f.write(ordinary, "metadata.json", first); await f.write(large, "metadata.json", second)
     return { ...f, first, second }
   }
+  it("shows a verified split backup with access-only omissions as completed with incomplete coverage", async () => {
+    const f = await pair()
+    const skipped = { Folder: "TermsOfUseAgreements", Outcome: "skipped", Cause: "permission", Reason: "Needs access" }
+    await f.write(ordinary, "metadata.json", { ...f.first, Coverage: "Incomplete", Outcomes: [{ Folder: "DeviceCategories", Outcome: "saved", Saved: 1 }, skipped] })
+    const result = await (await history(f.request({ summary: true }))).json()
+    expect(result.backups).toHaveLength(1)
+    expect(result.backups[0]).toMatchObject({ id: ordinary, status: "Success", coverage: "incomplete", notReadCauses: { TermsOfUseAgreements: "permission" }, ordinaryOnlyExport: true })
+  })
+
   it("shows one complete run and adds no requests or payload listings for reciprocal resolution", async () => {
     const f = await pair()
     for (const summary of [true, false]) {

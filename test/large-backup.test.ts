@@ -1,3 +1,5 @@
+vi.hoisted(() => vi.stubGlobal("__TV_LAB_EXPANDED_ENTRA__", true))
+
 import { backupBlobName, LARGE_BACKUP_CONTAINER } from "../src/shared/backup-storage"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { mkdtemp, rm } from "node:fs/promises"

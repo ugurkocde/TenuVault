@@ -1,7 +1,6 @@
-import { useEffect, useId, useRef, useState } from "react"
-import { ChevronDown, FolderOpen, Loader2, Upload } from "lucide-react"
+import { useEffect, useRef, useState } from "react"
+import { FolderOpen, Loader2, Upload } from "lucide-react"
 import { Button } from "~/components/ui/button"
-import { cn } from "~/lib/utils"
 import { DAMAGE_KINDS, type DamageKind, type DamagedFileKinds } from "../../shared/damaged-files"
 import type { RefreshOutcome } from "../lib/backup-list"
 import { bridge } from "../lib/bridge"
@@ -43,7 +42,7 @@ export function damagedFilesBody(count: number, kinds: DamagedFileKinds | null):
   const one = count === 1
   const folder = `${files(count)} in this tenant's backup folder`
   if (present.length > 1) {
-    return `TenuVault cannot read ${folder} for different reasons${kinds!.counts.key > 0 ? ", such as another device's recovery key" : ""}. Show file names lists them by reason.`
+    return `TenuVault cannot read ${folder} for different reasons${kinds!.counts.key > 0 ? ", such as another device's recovery key" : ""}. Details lists them by reason.`
   }
   switch (present[0]) {
     case "key":
@@ -107,8 +106,6 @@ function FileNames({ names, more }: { names: string[]; more: number }) {
  * may have been made with another key, the tenant's folder, and the file names behind a disclosure.
  */
 export function DamagedBackupFilesNotice({ count, kinds, names, unavailable, tenantId, onImported, listLoading = false, listError = "" }: DamagedBackupFilesNoticeProps) {
-  const panelId = useId()
-  const [expanded, setExpanded] = useState(false)
   const [importing, setImporting] = useState(false)
   // An import is running, or the list is read again after one.
   const [pending, setPending] = useState(false)
@@ -164,35 +161,20 @@ export function DamagedBackupFilesNotice({ count, kinds, names, unavailable, ten
 
   return (
     <NoticeCard
-      role="status"
       className="mb-4"
-      title="Some backups may be missing from this list"
-      bodyClassName="max-w-3xl space-y-1"
-      body={
-        <>
-          <p>{damagedFilesBody(count, known)}</p>
-          <p>{damagedFilesImpact(unavailable)}</p>
-        </>
-      }
-      actions={
-        <>
-          {keyFiles > 0 && (
-            <Button type="button" variant="outline" size="sm" className="bg-white" disabled={pending || refreshing} onClick={() => setImporting((value) => !value)}>
-              <Upload className="mr-2 h-4 w-4" /> Import recovery key
-            </Button>
-          )}
-          <Button type="button" variant="outline" size="sm" className="bg-white" onClick={() => void openFolder()}>
+      tone={known && keyFiles === count ? "neutral" : "error"}
+      summary={`${count} backup ${count === 1 ? "file needs" : "files need"} attention.`}
+      action={keyFiles > 0
+        ? <Button type="button" variant="outline" size="sm" className="bg-white" disabled={pending || refreshing} onClick={() => setImporting(value => !value)}>
+            <Upload className="mr-2 h-4 w-4" /> Import recovery key
+          </Button>
+        : <Button type="button" variant="outline" size="sm" className="bg-white" onClick={() => void openFolder()}>
             <FolderOpen className="mr-2 h-4 w-4" /> Open backup folder
-          </Button>
-          <Button type="button" variant="outline" size="sm" className="bg-white" aria-expanded={expanded} aria-controls={panelId} onClick={() => setExpanded((value) => !value)}>
-            <ChevronDown className={cn("mr-2 h-4 w-4 transition-transform", expanded && "rotate-180")} /> {expanded ? "Hide file names" : `Show file names (${count})`}
-          </Button>
-        </>
-      }
-    >
-      {/* Rendered only while open, so a closed panel adds no space under the actions. */}
-      {expanded && (
-        <div id={panelId} className="max-w-3xl space-y-2">
+          </Button>}
+      details={<>
+        <p>{damagedFilesBody(count, known)}</p>
+        <p>{damagedFilesImpact(unavailable)}</p>
+        <div className="space-y-2">
           <p>These are the encrypted names on disk, so you can find the files. They do not match backup or policy names.</p>
           <div className="max-h-40 space-y-2 overflow-auto rounded-xl bg-white p-3">
             {known && present.length > 1
@@ -205,8 +187,10 @@ export function DamagedBackupFilesNotice({ count, kinds, names, unavailable, ten
               : <FileNames names={known && present[0] ? known.names[present[0]] : names} more={count - (known && present[0] ? known.names[present[0]] : names).length} />}
           </div>
           <p>If you have no copy and no recovery key, you can remove these files from the folder yourself. TenuVault never removes them for you.</p>
+          {keyFiles > 0 && <button type="button" className="underline" onClick={() => void openFolder()}>Open backup folder</button>}
         </div>
-      )}
+      </>}
+    >
       {importing && keyFiles > 0 && (
         <RecoveryKeyImport
           onImported={(next) => {

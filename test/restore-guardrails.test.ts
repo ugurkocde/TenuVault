@@ -1,3 +1,5 @@
+vi.hoisted(() => vi.stubGlobal("__TV_LAB_EXPANDED_ENTRA__", true))
+
 import { describe, expect, it, vi } from "vitest"
 import { GuardedRunJournal, assertNoSecrets, executeGuardedRun, restoreFingerprint, type GuardedIO, type GuardedRun, type GuardedStep } from "../src/main/restore/guarded-run"
 import { requireRestoreActor, restorePermissions, restoreSignIn } from "../src/main/restore/restore-actor"
@@ -32,9 +34,9 @@ function setup(count = 3) {
 describe("identity restore admission", () => {
   it("admits only verified identity capabilities and retains the journaled safety boundary", () => {
     const types = INTUNE_TYPES.filter(type => type.restoreSafety === "identity")
-    expect(types).toHaveLength(91)
+    expect(types).toHaveLength(74)
     for (const type of types) {
-      expect(restoreCapability(type)).toBe(["AuthenticationFlowsPolicy", "EntraCompanyBranding", "CrossTenantAccessPolicy", "AccessReviewPolicy"].includes(type.folder) ? "singleton" : ["TokenLifetimePolicies", "ActivityBasedTimeoutPolicies", "AccessPackageCatalogs", "Users", "Groups", "Applications"].includes(type.folder) ? "create" : "none")
+      expect(restoreCapability(type)).toBe(["AuthenticationFlowsPolicy", "EntraCompanyBranding", "CrossTenantAccessPolicy", "AccessReviewPolicy"].includes(type.folder) ? "singleton" : ["TokenLifetimePolicies", "ActivityBasedTimeoutPolicies", "AccessPackageCatalogs", "Users", "Groups"].includes(type.folder) ? "create" : "none")
       for (const operation of ["create", "update", "delete", "assign"] as const) expect(writeBlocker({ ...type, restore: "create" }, operation)).toContain("journaled restore safety")
     }
   })
@@ -109,7 +111,7 @@ describe("identity restore admission", () => {
     guardRestoreItem(actor, "EntraRoleAssignments", "assignment", { ...references, remainingAdministrators: { global: ["a"], privilegedRole: ["b"] } }, true)
   })
   it("refuses imported grants and assignments and every new cross-tenant type", () => {
-    for (const folder of ["OAuth2PermissionGrants", "EntraRoleAssignments", "DefenderRoleAssignments", "PimGroupAssignmentSchedules"]) expect(restoreOriginBlocker(folder, "import")).toContain("never restored")
+    for (const folder of ["OAuth2PermissionGrants", "EntraRoleAssignments", "PimGroupAssignmentSchedules"]) expect(restoreOriginBlocker(folder, "import")).toContain("never restored")
     expect(restoreOriginBlocker("Users", "cross-tenant")).toContain("cannot be copied")
     expect(restoreOriginBlocker("Groups", "restore")).toBeUndefined()
   })

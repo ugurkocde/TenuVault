@@ -1,9 +1,9 @@
 ---
 title: "Sign in to your tenant"
-description: Choose services for a new tenant, then choose how TenuVault signs in.
+description: Choose how TenuVault signs in and review the backup access for a new tenant.
 ---
 
-Open **Connect a tenant** and start at **Which services do you want to connect?**. The same wizard opens on a new installation and when you add another tenant. Previously connected tenants keep their sign-in method and service settings.
+Open **Connect a tenant** and start at **How do you want to connect?**. The same wizard opens on a new installation and when you add another tenant. Previously connected tenants keep their sign-in method and service settings.
 
 | Sign-in method | What it creates in your tenant |
 | --- | --- |
@@ -19,7 +19,7 @@ Start now and the TenuVault app show an availability message when the license se
 
 1. For an eligible tenant, open **Settings > Sign-in and access**, then select **Use Start now**. Switch to backup storage on this device first if you use Azure storage.
 2. Read the warning before continuing to Microsoft. If Microsoft asks you to approve permissions or request administrator approval, cancel and choose another sign-in method.
-3. Sign in with an account in the same tenant. Open **Services and permissions** to see which backup types the granted scopes cover for Defender, Entra ID and Intune. If TenuVault cannot read the grant, it shows coverage as unknown. Your Microsoft role and service licenses also affect which reads succeed.
+3. Sign in with an account in the same tenant. Open **Services and permissions** to see which backup types the granted scopes cover for Entra ID and Intune. If TenuVault cannot read the grant, it shows coverage as unknown. Your Microsoft role and service licenses also affect which reads succeed.
 
 The tenant keeps its schedules, settings and backup history when you switch. Start now supports local policy backups. For restore, deployment, Copy to Tenants, remediation, installer capture or Azure storage, select **Upgrade to the TenuVault app** when available, or **Use your own app registration**. See [Start now troubleshooting](/troubleshooting/#start-now-sign-in).
 
@@ -44,7 +44,7 @@ Open the guided setup, **Set up TenuVault**, to connect a tenant. TenuVault open
 * From **Tenants** or the dashboard's **Quick Actions**: **Connect tenant**.
 * From the **All tenants** page: **Connect a tenant**.
 
-The wizard opens at **Which services do you want to connect?**. **Defender**, **Entra ID** and **Intune** are preselected. Turn off any service you do not want. Entra ID includes Conditional Access. Select **Continue**, then choose a method on **How do you want to connect?**. **Show the exact permissions** lists the backup access for your choices. Sign in or set up your connection, then continue through **Check**, **Storage** and **First backup**. Use **Back** to return to the previous step. The dots above the card show your progress. Open **Help** for **Free setup call**, **License**, **Share feedback** and **Support**. The sidebar returns when you leave setup. When adding another tenant, use **Back to dashboard** on the Services step to exit.
+The wizard has four steps: **Connect**, **Check**, **Storage** and **First backup**. Choose a sign-in method under **How do you want to connect?**. Intune is included. On **Check**, turn on **Also back up Entra ID device and access settings** to include the Entra configuration and Conditional Access types listed under **What’s included**. The switch starts off. If any area needs access, you can continue with what your sign-in can read and add access later in **Settings > Services and permissions**.
 
 ### Continue where you left off
 
@@ -76,7 +76,7 @@ The admins who use TenuVault need roles for the services they choose. For Intune
 When another admin already uses TenuVault for the tenant, they can send you a settings file exported with **Include connection details**. See [Import and export](/settings/#import-and-export).
 
 1. On the connection method step, select **Another admin sent you a setup file?** and open the file. If it holds several tenants that are not connected yet, choose one under **Which tenant do you want to connect?** If you already signed in to the file's tenant and app registration, TenuVault keeps that sign-in and goes on to **Check**. If you signed in to another tenant that is not saved yet, that sign-in stays until you select **Use a different tenant or account**.
-2. TenuVault opens the **Sign in** step with the tenant ID, the client ID and the display name filled in. The sign-in asks for the permissions of your service choice; the services in the file are applied later, in step 5. If you still need to confirm services, TenuVault waits on **Which services do you want to connect?** and then continues with the file. If the file cannot be used, TenuVault says why, on the service choice when it comes first and then on the **Connect** step. Open **Connection details** under **From a setup file** to see the tenant, the app registration and the storage account from the file. Use a setup file only from an admin you trust: it decides which app registration you sign in to and where backups are stored.
+2. TenuVault opens the **Connect** step with the tenant ID, the client ID and the display name filled in. Choose Entra device and access settings on **Check**. After the first backup, you can review and import the services in the file for future backups. If the file cannot be used, TenuVault explains why on **Connect**. Open **Connection details** under **From a setup file** to see the tenant, the app registration and the storage account from the file. Use a setup file only from an admin you trust: it decides which app registration you sign in to and where backups are stored.
 3. Select **Sign in with Microsoft** and sign in with your own account.
 4. On the **Storage** step, the storage from the file is chosen. If the file chooses an Azure storage account, TenuVault checks access automatically.
 5. The first backup starts when you confirm storage. To apply the rest of the setup file to future backups, select **Review settings from the file** and review the settings to import.
@@ -224,7 +224,7 @@ Your own app registration routes use the same permissions for the chosen service
 
 **Check** names the services you can back up and shows how many areas are readable when a service has partial access. Select **Continue** or **Continue with** the services listed. The first backup reads the available policies and settings, including accessible areas of partly readable services. Your role and service license can still affect what the backup reads.
 
-Expand **What's missing and how to add it** for area names, instructions for your sign-in method, and **Check again**. Permission names are under **Show permission names**. If none of your chosen services can be read, follow the access instructions on **Check** before continuing.
+Expand **Details** for area names, instructions for your sign-in method, and **Check again**. Permission names are under **Show permission names**. If none of your chosen services can be read, follow the access instructions on **Check** before continuing.
 
 Your chosen services stay enabled. A service with no readable areas shows **Needs access** in the sidebar and under **Settings > Services and permissions**. Backups skip settings the current sign-in cannot read and include them in the coverage report. With Start now, switch to your own app registration or to the TenuVault app where available to add access.
 

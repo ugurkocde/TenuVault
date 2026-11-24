@@ -4,7 +4,7 @@
 
 # TenuVault: Intune Backup, Restore and Disaster Recovery
 
-**Back up Defender, Entra ID and Intune configuration, restore supported policies and detect drift on your machine.**
+**Back up Intune and selected Entra ID configuration, restore supported policies and detect drift on your machine.**
 
 A desktop app for Windows and macOS, built for organisations whose admins are not allowed to sign in
 to third-party web apps, or whose Conditional Access policies block them.
@@ -43,9 +43,8 @@ Rather set it up together? Book a [free setup call](https://www.tenuvault.com/se
 
 ## What it does
 
-- **Defender.** Back up and compare supported configuration for detection and response, email and collaboration, identity, and posture and access. See [Defender coverage](https://docs.tenuvault.com/backups/defender/).
-- **Entra ID.** Back up tenant settings, authentication, Conditional Access, external identities, roles and governance. Enable directory inventories separately and recover supported policies through individual review. See [Entra ID coverage](https://docs.tenuvault.com/backups/entra/).
-- **Intune.** Back up policies, scripts and enrollment settings, with their assignments where supported. Restore eligible policies and review dependencies before copying them to another tenant. See [Intune coverage](https://docs.tenuvault.com/backups/intune/).
+- **Entra ID.** Back up device registration and enrollment, authentication methods and contexts, terms of use, and Conditional Access. Turn on groups and device inventory separately. See [Entra ID coverage](https://docs.tenuvault.com/backups/entra/).
+- **Intune.** Back up policies, scripts and enrollment settings, including Defender settings you manage in Intune, with their assignments where supported. Restore eligible policies and review dependencies before copying them to another tenant. See [Intune coverage](https://docs.tenuvault.com/backups/intune/).
 - **Backup storage and schedules.** Back up on demand or on a desktop schedule, to encrypted local storage or your Azure storage account. [Azure Automation](https://docs.tenuvault.com/backups/cloud/) supports Intune and separately configured Conditional Access on Pro and MSP.
 - **[Drift detection](https://www.tenuvault.com/intune-drift-detection).** See what changed between backups, down to the setting, and export the result
   as JSON or CSV.

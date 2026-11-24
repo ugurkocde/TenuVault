@@ -60,15 +60,19 @@ export function backupSummary(backups: Array<Backup & BackupRun>, failedAttempts
     if ((item.status !== 'running' && item.status !== 'incomplete') || !item.runId) return item.status
     return failedRuns.has(runKey(item)) ? 'failed' : live.has(runKey(item)!) ? 'running' : item.status
   }
-  const recent = runBackups.filter(inPeriod).map(statusOf)
+  const recent = runBackups.filter(inPeriod)
+  const unsuccessful = (item: Backup & BackupRun) => ['failed', 'partial', 'incomplete'].includes(statusOf(item))
   const unsaved = failedAttempts.filter((attempt) => !attempt.runId || !stored.has(runKey(attempt)))
-  const successful = recent.filter((status) => status === 'success').length
-  const failed = recent.filter((status) => ['failed', 'partial', 'incomplete'].includes(status)).length + unsaved.filter(inPeriod).length
+  const successful = recent.filter((item) => statusOf(item) === 'success').length
+  const unsavedInPeriod = unsaved.filter(inPeriod)
+  const failed = recent.filter(unsuccessful).length + unsavedInPeriod.length
+  const firstFinishedAt = [...recent.filter(item => statusOf(item) === 'success' || unsuccessful(item)), ...unsavedInPeriod]
+    .reduce((first, item) => Math.min(first, item.timestamp.getTime()), Infinity)
   const finished = successful + failed
   const elsewhere = runBackups.filter((item) => statusOf(item) === 'running' && !(item.runId && live.has(runKey(item)!))).length
   const inProgress = live.size + elsewhere
   const newest = runBackups.reduce<(typeof backups)[number] | null>((best, item) => !best || item.timestamp > best.timestamp ? item : best, null)
-  return { stored: backups.length, successful, failed, finished, inProgress,
+  return { stored: backups.length, successful, failed, finished, firstFinishedAt, inProgress,
     successRate: finished ? successful / finished * 100 : null,
     latestStatus: inProgress > 0 ? 'running' as const : newest ? statusOf(newest) : null }
 }

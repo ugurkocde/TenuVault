@@ -6,6 +6,7 @@ import { tmpdir, homedir } from "node:os"
 import { join, resolve } from "node:path"
 import { describe, expect, it } from "vitest"
 import { DESKTOP_APP_PERMISSIONS, parseSetupOutput } from "../src/shared/app-registration"
+import { PRIVILEGED_WRITES } from "../src/shared/services/permission-packs"
 import { graphPermissions, knownPermissions, setupScriptArguments, type PermissionChoice } from "../src/shared/services/manifest"
 
 const override = process.env.TENUVAULT_TEST_POWERSHELL
@@ -223,14 +224,15 @@ describe.runIf(Boolean(powershell))("real setup script over HTTP", () => {
   it.each<[string, PermissionChoice]>([
     ["Entra ID to back up", { entra: { access: "backup" } }],
     ["Intune to back up only", { intune: { access: "backup" } }],
-    ["Defender and Conditional Access to back up", { defender: { access: "backup" }, conditionalAccess: { access: "backup" } }],
     ["Intune to restore and Entra ID with groups to back up", { intune: { access: "restore" }, entra: { access: "backup", areas: ["groups"] } }],
-    ["every service and area to restore", { intune: { access: "restore" }, conditionalAccess: { access: "restore" }, entra: { access: "restore", areas: ["groups", "usersAndDevices", "applications"] }, defender: { access: "restore" } }],
+    ["every service and area to restore", { intune: { access: "restore" }, conditionalAccess: { access: "restore" }, entra: { access: "restore", areas: ["groups", "usersAndDevices"] } }],
   ])("requests exactly the permissions of the manifest for %s, from the parameters the app generates", async (_name, choice) => {
     const result = await run("default", parameters(setupScriptArguments(choice)))
     expect(result.code, result.text).toBe(0)
     const expected = [...graphPermissions(choice, "delegated")]
     expect(requested(result)).toEqual({ declared: expected, consented: expected })
+    const { declared, consented } = requested(result)
+    expect([...declared, ...consented].filter(scope => PRIVILEGED_WRITES.includes(scope))).toEqual([])
     // The Azure APIs are requested as always.
     expect(result.requests.filter(r => r.path.endsWith("/oauth2PermissionGrants") && r.status === 200)).toHaveLength(3)
     // A service that was not chosen brings nothing, and a backup-only choice no write permission.
@@ -245,9 +247,9 @@ describe.runIf(Boolean(powershell))("real setup script over HTTP", () => {
   }, 45000)
 
   it("asks once for a permission that a service and a switch both need", async () => {
-    const result = await run("default", { Services: ["Entra"], Areas: ["UsersAndDevices"], IncludeNotifications: true, IncludeConditionalAccessRestore: true })
+    const result = await run("default", { Services: ["Entra"], Areas: ["Groups"], RestoreAccess: ["Entra"], IncludeNotifications: true, IncludeConditionalAccessRestore: true })
     expect(result.code, result.text).toBe(0)
-    const fromServices = graphPermissions({ entra: { access: "backup", areas: ["usersAndDevices"] } }, "delegated")
+    const fromServices = graphPermissions({ entra: { access: "restore", areas: ["groups"] } }, "delegated")
     expect(fromServices).toContain("User.Read.All")
     expect(fromServices).toContain("GroupMember.Read.All")
     expect(requested(result).declared).toEqual([...new Set([...fromServices, "Policy.ReadWrite.ConditionalAccess", "Mail.Send"])])

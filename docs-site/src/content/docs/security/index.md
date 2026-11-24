@@ -3,7 +3,7 @@ title: "Security and privacy"
 description: How TenuVault accesses your tenant, where your data goes, and what TenuVault the company can and cannot see.
 ---
 
-TenuVault is built so that your Defender, Entra ID and Intune configuration, your backups and your Microsoft tokens stay between your machine, Microsoft and the storage you choose. This page explains the design; the pages below it go into the details.
+TenuVault is built so that your Entra ID and Intune configuration, your backups and your Microsoft tokens stay between your machine, Microsoft and the storage you choose. This page explains the design; the pages below it go into the details.
 
 ## At a glance
 
@@ -73,7 +73,7 @@ Apart from what you write in feedback and a feedback screenshot you choose to at
 
 | TenuVault never sees | |
 | --- | --- |
-| Your tenant configuration | Defender, Entra ID and Intune configuration is read, and supported restores are written between your machine and Microsoft Graph only. A feedback screenshot you tick may show policy names on screen. |
+| Your tenant configuration | Entra ID and Intune configuration is read, and supported restores are written between your machine and Microsoft Graph only. A feedback screenshot you tick may show policy names on screen. |
 | Your backups | Stored on your device or in your Azure storage account, never uploaded to TenuVault. |
 | Access tokens and refresh tokens | They stay in the encrypted token cache on your machine. |
 | Your backup recovery key | It is created on your machine and only leaves it when you save it to a file yourself. |

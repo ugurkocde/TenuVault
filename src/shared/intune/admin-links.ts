@@ -1,4 +1,3 @@
-import { DEFENDER_TYPES } from "./defender"
 import type { Item } from "./registry"
 
 /**
@@ -14,7 +13,7 @@ const ENTRA = "https://entra.microsoft.com"
 
 export interface AdminLink {
   url: string
-  center: "Intune" | "Entra" | "Defender"
+  center: "Intune" | "Entra"
   /** False when the link opens the list the object is in, not the object itself. */
   exact: boolean
 }
@@ -60,7 +59,6 @@ function enrollmentList(item: Item): AdminLink {
  */
 export function adminCenterLink(folder: string, id: string, item: Item = {}): AdminLink | undefined {
   if (!id) return undefined
-  if (DEFENDER_TYPES.some(type => type.folder === folder)) return { url: "https://security.microsoft.com", center: "Defender", exact: false }
   const name = str(item.displayName) || str(item.name)
   switch (folder) {
     case "AuthorizationPolicy": return entra("Microsoft_AAD_IAM/UsersManagementMenuBlade/~/UserSettings", false)

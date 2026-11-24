@@ -1,3 +1,5 @@
+vi.hoisted(() => vi.stubGlobal("__TV_LAB_EXPANDED_ENTRA__", true))
+
 import { ConnectionCapabilities } from "../src/main/auth/connection-capabilities"
 import { createBridgedFetch } from "../src/main/api/fetch-bridge"
 import { TENUVAULT_CLIENT_ID } from "../src/shared/tenant-connection"

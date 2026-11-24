@@ -2,7 +2,7 @@ const assert = require("node:assert/strict")
 const { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } = require("node:fs")
 const { tmpdir } = require("node:os")
 const { dirname, join } = require("node:path")
-const { checkReleaseBundle } = require("./check-release-bundle.cjs")
+const { checkReleaseBundle, checkPrivilegedRestoreOff } = require("./check-release-bundle.cjs")
 
 checkReleaseBundle("out")
 assert.throws(() => checkReleaseBundle("out", "0.6.0-lab.202611241530"), /lab version cannot be used/)
@@ -10,7 +10,9 @@ const lab = "out-lab"
 const version = JSON.parse(readFileSync(join(lab, "main/version.json"), "utf8"))
 assert.match(version, /^0\.6\.0-lab\.\d{12}$/)
 assert.equal(require("../electron-builder.lab.config.cjs").extraMetadata.version, version)
-assert.match(readFileSync(join(lab, "main/index.js"), "utf8"), /TV06-TEST-[a-z0-9-]+/i)
+const labMain = readFileSync(join(lab, "main/index.js"), "utf8")
+assert.match(labMain, /TV06-TEST-[a-z0-9-]+/i)
+checkPrivilegedRestoreOff(labMain, lab)
 assert.throws(() => checkReleaseBundle(lab), /Lab build content found/)
 const fixture = mkdtempSync(join(tmpdir(), "tv-release-guard-"))
 try {
@@ -20,6 +22,11 @@ try {
     writeFileSync(path, "")
   }
   checkReleaseBundle(fixture)
+  writeFileSync(join(fixture, "main/index.js"), 'const restorePack = "entra-app-metadata"')
+  assert.throws(() => checkReleaseBundle(fixture), /Privileged Entra restore path found/)
+  writeFileSync(join(fixture, "main/index.js"), "")
+  writeFileSync(join(fixture, "renderer/index.html"), "expanded-entra-lab-scope")
+  assert.throws(() => checkReleaseBundle(fixture), /Expanded Entra scope found/)
   for (const marker of ["__TV_LAB_BUILD__", "TENUVAULT_LAB_LICENSE_ORIGIN", "TENUVAULT_LAB_LICENSE_PUBLIC_KEY", "TV06-TEST-run-12f51c29-1e42-4e15-8079-68fb1f05535e", "tv06-test-RUN-12F51C29-1E42-4E15-8079-68FB1F05535E", "Lab build", version]) {
     writeFileSync(join(fixture, "renderer/index.html"), marker)
     assert.throws(() => checkReleaseBundle(fixture), /Lab build content found/)

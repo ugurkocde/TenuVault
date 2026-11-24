@@ -112,7 +112,8 @@ describe("Settings sections on IPC errors", () => {
     state.getPrefs.mockResolvedValue(prefs)
     state.scope.mockImplementation(() => new Promise(() => undefined))
     const container = await render(createElement(BackupSchedulePanel, { tenantId: "tenant", tenantName: "Contoso" }))
-    expect(alertText(container)).toContain("schedule IPC down")
+    expect(alertText(container)).toContain("Could not load the saved schedule.")
+    expect(container.querySelector("[data-notice-tone=error] [hidden]")?.textContent).toContain("schedule IPC down")
     const enable = [...container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')].find((input) => input.closest("label")?.textContent?.includes("automatically"))!
     await act(async () => { enable.click() })
     expect(button(container, "Save")!.disabled).toBe(true)

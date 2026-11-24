@@ -58,8 +58,8 @@ const inspectPort = port + 400
 const profile = mkdtempSync(join(tmpdir(), "tenuvault-services-"))
 mkdirSync(shotsDir, { recursive: true })
 
-const args = [desktopDir, `--remote-debugging-port=${port}`, `--inspect=${inspectPort}`, `--user-data-dir=${profile}`]
-if (process.platform === "linux") args.push("--no-sandbox", "--ozone-platform=x11")
+const args = [desktopDir, "--proxy-server=http://127.0.0.1:1", `--remote-debugging-port=${port}`, `--inspect=${inspectPort}`, `--user-data-dir=${profile}`]
+if (process.platform === "linux") args.push("--no-sandbox", "--ozone-platform=x11", "--password-store=basic")
 const env = { ...process.env }
 delete env.ELECTRON_RUN_AS_NODE
 const app = spawn(electronPath, args, { stdio: ["ignore", "pipe", "pipe"], env })

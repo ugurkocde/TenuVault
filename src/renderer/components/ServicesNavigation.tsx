@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react"
 import { Link, useLocation } from "react-router-dom"
-import { Fingerprint, Monitor, ShieldCheck } from "lucide-react"
+import { Fingerprint, Monitor } from "lucide-react"
 import { useSelectedTenant } from "~/contexts/TenantContext"
 import { cn } from "~/lib/utils"
 import type { ServicesStatus } from "../../shared/ipc"
@@ -8,7 +8,7 @@ import { bridge } from "../lib/bridge"
 import { BACKUP_SERVICES, parseBackupService } from "../lib/backup-service"
 import { settingsHref } from "../lib/settings-section"
 
-const ICONS = { intune: Monitor, entra: Fingerprint, defender: ShieldCheck }
+const ICONS = { intune: Monitor, entra: Fingerprint }
 
 export function ServicesNavigation({ linkClass }: { linkClass: (active: boolean) => string }) {
   const { selectedTenant } = useSelectedTenant()

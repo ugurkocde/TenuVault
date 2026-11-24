@@ -35,7 +35,6 @@ Interactive backups and restores use delegated permissions and run within the si
 
 | You want to | You need |
 | --- | --- |
-| Back up Defender configuration | An admin role that covers the [Defender areas](/backups/defender/#coverage) you enable. |
 | Back up or restore supported Entra ID configuration | The Entra role required for the area, including [Conditional Access roles](/backups/conditional-access/#permissions) where applicable. Review [Entra ID restore](/restore/identity/) before adding write access. |
 | Back up, compare and restore Intune configuration | An Intune role, for example **Intune Administrator**. Read access is enough for backups; restores write to Intune and need write access to the objects you restore. |
 | Store backups in your own Azure storage account | **Storage Blob Data Contributor** on the storage account, and a role that can read the storage account in Azure (for example **Reader**) so it appears in the storage picker. |
@@ -58,7 +57,7 @@ TenuVault connects to the global Microsoft cloud endpoints below over HTTPS (TCP
 | Destination | Used for | Required |
 | --- | --- | --- |
 | `login.microsoftonline.com` | Microsoft sign-in and tokens | Yes |
-| `graph.microsoft.com` | Reading configuration for Defender, Entra ID and Intune, and writing supported restores | Yes |
+| `graph.microsoft.com` | Reading configuration for Entra ID and Intune, and writing supported restores | Yes |
 | `www.tenuvault.com` | License checks, and the capture check before an [App Backup](/apps/app-backup/) installer capture | Yes |
 | `management.azure.com` | Listing your subscriptions and storage accounts in the storage picker | Only for Azure storage |
 | `<account>.blob.core.windows.net` | Reading and writing backups in your storage account | Only for Azure storage |

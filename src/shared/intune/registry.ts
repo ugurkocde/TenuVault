@@ -1,3 +1,4 @@
+import { deferredPrivilegedRestore, DEFERRED_RESTORE_MESSAGE } from "./directory-review-folders"
 /**
  * Every object type TenuVault backs up (Intune, and Entra Conditional Access), and how each one is
  * read and rebuilt.
@@ -7,7 +8,6 @@
  * Paths are relative to https://graph.microsoft.com/beta/, or to the version a type names.
  */
 
-import { DEFENDER_TYPES } from "./defender"
 import { ENTRA_TYPES } from "./entra"
 import { COMPLIANCE_SETTING_KEYS, COMPLIANCE_SETTINGS_ID, complianceSettingChanges, complianceSettingsUpdate } from "./compliance-settings"
 import { createState, isMicrosoftManaged, MICROSOFT_MANAGED, policyBody, policyChanges, policyWarnings, replaceState, strengthBody, strengthUpdate } from "./conditional-access"
@@ -36,10 +36,9 @@ export type Area =
   | "External identities"
   | "Roles and PIM"
   | "Governance"
-  | "Detection and response"
-  | "Email and collaboration"
-  | "Identity"
-  | "Posture and access"
+  | "Device settings"
+  | "Terms of use"
+  | "Devices"
 
 /** An extra collection read after the detail GET and stored on the snapshot under `property`. */
 export interface Extra {
@@ -1301,8 +1300,14 @@ export const INTUNE_TYPES: IntuneType[] = [
     warnings: policyWarnings,
   },
   ...ENTRA_TYPES,
-  ...DEFENDER_TYPES,
 ]
+
+for (const type of INTUNE_TYPES) {
+  if (deferredPrivilegedRestore(type.folder)) {
+    delete type.restore
+    type.limitation = DEFERRED_RESTORE_MESSAGE
+  }
+}
 
 export const TYPE_BY_FOLDER = new Map(INTUNE_TYPES.map((type) => [type.folder.toLowerCase(), type]))
 

@@ -1,3 +1,5 @@
+vi.hoisted(() => vi.stubGlobal("__TV_LAB_EXPANDED_ENTRA__", true))
+
 import { describe, expect, it, vi } from "vitest"
 import { moduleForFolder, type Need } from "../src/shared/services/modules"
 import { isConfiguration8c, STAGED_8C_OPERATIONS } from "../src/main/restore/configuration-8c"
@@ -19,7 +21,6 @@ const cases: Record<string, Item> = {
   AccessReviewPolicy: { isGroupOwnerManagementEnabled: false },
   LifecycleWorkflowSettings: { workflowScheduleIntervalInHours: 3 },
   LifecycleWorkflows: { displayName: "TV06-TEST-Workflow", description: "Metadata", isEnabled: false, isSchedulingEnabled: false },
-  DefenderCustomDetectionRules: { id: "TV06-TEST-detection", displayName: "TV06-TEST-Detection", description: "Metadata", status: "disabled", queryCondition: { queryText: "DeviceEvents | where false" }, schedule: { frequency: "P1D" }, detectionAction: { alertTemplate: { title: "Lab", description: "Lab", severity: "informational", recommendedActions: "None" } } },
 }
 const fixtureFor = (folder: string, operation: "create" | "update"): Item => Object.fromEntries(Object.entries(cases[folder]!).filter(([key]) => restoreMatrixRow(folder)![operation]!.properties.includes(key)))
 const store = () => { const values = new Map<string, string>(); return { get: (key: string) => values.get(key) ?? null, set: (key: string, value: string) => { values.set(key, value) }, delete: (key: string) => { values.delete(key) } } }
@@ -117,10 +118,8 @@ describe("verified configuration subsets and blocked candidates", () => {
       })
     }
   }
-  it("forces workflow and detection execution off and refuses action fields, secrets and built-in attributes", () => {
+  it("forces workflow execution off and refuses action fields, secrets and built-in attributes", () => {
     expect(configurationPayload("LifecycleWorkflows", "update", { isEnabled: true, isSchedulingEnabled: true })).toEqual({ isEnabled: false, isSchedulingEnabled: false })
-    expect(configurationPayload("DefenderCustomDetectionRules", "update", { status: "enabled" })).toEqual({ status: "disabled" })
-    for (const body of ([{ detectionAction: { automatedActions: {} } }, { detectionAction: { responseActions: [] } }, { queryCondition: { queryText: "x", extra: true } }, { schedule: { frequency: "PT0S" } }, { clientSecret: "secret" }] as Item[])) expect(() => configurationPayload("DefenderCustomDetectionRules", "update", body)).toThrow()
     expect(() => configurationPayload("UserFlowAttributes", "update", { description: "x", userFlowAttributeType: "builtIn" })).toThrow("Built-in")
     expect(() => configurationPayload("AccessPackageCatalogs", "create", { displayName: "x", state: "published", isExternallyVisible: true })).toThrow("unpublished")
     expect(() => configurationPayload("LifecycleWorkflows", "create", {})).toThrow("recycle-bin")
@@ -192,7 +191,7 @@ for (const [folder, operations] of Object.entries(STAGED_8C_OPERATIONS)) for (co
   }
 })
 
-it.each(["LifecycleWorkflows", "DefenderCustomDetectionRules"])("%s: refuses activation at the final Graph send boundary", async folder => {
+it.each(["LifecycleWorkflows"])("%s: refuses activation at the final Graph send boundary", async folder => {
   const row = restoreMatrixRow(folder)!, contract = row.update!, savedContract = { ...contract }
   const type = typeForFolder(folder)!, previous = type.restore
   const need = moduleForFolder(folder)!.part.restore as { delegated: Need }, previousNeed = need.delegated

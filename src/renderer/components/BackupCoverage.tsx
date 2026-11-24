@@ -1,43 +1,54 @@
-import { type ReactNode } from "react"
-import { cn } from "~/lib/utils"
+import type { ReactElement, ReactNode } from "react"
 import { typeForFolder } from "../../shared/intune/registry"
 import { COVERAGE_ISSUE_TEXT, coverageIssue } from "../../shared/services/backup-coverage"
-import { BACKUP_SERVICES } from "../../shared/services/presentation"
+import { BACKUP_SERVICES, backupServiceForFolder } from "../../shared/services/presentation"
 import type { BackupScopeCoverage } from "../../shared/tenant-connection"
+import { NoticeCard } from "./NoticeCard"
 
-export function BackupCoverage({ coverage, emptyLabel, action, compact = false }: {
-  compact?: boolean
+export type BackupTypeDetail = {
+  folder: string
+  label?: string
+  detail: ReactNode
+}
+
+export function BackupTypeDetails({ entries }: { entries: readonly BackupTypeDetail[] }) {
+  const unique = [...new Map(entries.map(entry => [entry.folder, entry])).values()]
+  return [...BACKUP_SERVICES, { id: undefined, label: "Other types" }].map(({ id, label }) => {
+    const group = unique.filter(entry => backupServiceForFolder(entry.folder) === id)
+    if (!group.length) return null
+    return <section key={label} className="space-y-1" aria-label={label}>
+      <p className="font-medium">{label} ({group.length})</p>
+      <ul className="space-y-1">{group.map(entry => <li key={entry.folder}>
+        <p className="font-medium first-letter:uppercase">{entry.label ?? typeForFolder(entry.folder)?.label ?? entry.folder}</p>
+        {entry.detail && <div className="text-muted-foreground">{entry.detail}</div>}
+      </li>)}</ul>
+    </section>
+  })
+}
+
+export function BackupCoverage({ coverage, emptyLabel, countsOnly, action }: {
   coverage: readonly BackupScopeCoverage[]
   emptyLabel?: string
-  action?: (row: BackupScopeCoverage) => ReactNode
+  countsOnly?: boolean
+  action?: ReactElement | false | null
 }) {
-  if (!coverage.length) return null
-  return <div className={cn("grid gap-2", compact ? "grid-cols-1" : "grid-cols-[repeat(auto-fit,minmax(min(8rem,100%),1fr))]")} aria-label="Backup coverage">
-    {BACKUP_SERVICES.map(({ id, label }) => {
-      const row = coverage.find(entry => entry.service === id)
-      if (!row || (!row.folders.length && !emptyLabel)) return null
-      const issues = row.folders.flatMap(folder => {
-        const cause = coverageIssue(row, folder)
-        return cause ? [{ folder, cause }] : []
-      })
-      const unknown = issues.filter(issue => issue.cause === "unknown").length
-      const allUnknown = unknown > 0 && unknown === row.folders.length
-      const count = !row.folders.length ? emptyLabel : allUnknown ? "Unknown" : `${row.readable?.length ?? 0} of ${row.folders.length}`
-      return <section key={id} aria-label={`${label} backup coverage`} className="min-w-0 space-y-1 rounded-xl border border-border px-3 py-2">
-        <div className={cn(compact && "flex items-baseline justify-between gap-2")}>
-          <h4 className="text-xs font-medium text-gray-700">{label}</h4>
-          <p className="text-base font-medium text-gray-900">{count}</p>
-        </div>
-        {unknown > 0 && !allUnknown && <p className="text-xs text-gray-600">{unknown} unknown</p>}
-        {issues.length > 0 && <details className="text-xs text-gray-600">
-          <summary className="cursor-pointer">{issues.every(issue => issue.cause === "permission") ? `Backup types missing permissions (${issues.length})` : "Coverage details"}</summary>
-          <ul className="mt-2 space-y-2">{issues.map(({ folder, cause }) => <li key={folder}>
-            <span className="block break-words font-medium text-gray-700">{typeForFolder(folder)?.label ?? folder}</span>
-            {COVERAGE_ISSUE_TEXT[cause]}
-          </li>)}</ul>
-        </details>}
-        {action?.(row)}
-      </section>
-    })}
-  </div>
+  const rows = BACKUP_SERVICES.flatMap(({ id }) => coverage.filter(row => row.service === id && (row.folders.length || emptyLabel)))
+  if (!rows.length) return null
+  const issues = rows.flatMap(row => [...new Set(row.folders)].flatMap(folder => {
+    const cause = coverageIssue(row, folder)
+    return cause ? [{ folder, cause, detail: cause === "role" ? `${COVERAGE_ISSUE_TEXT.role}. Ask your administrator to review your role.`
+      : cause === "license" ? `${COVERAGE_ISSUE_TEXT.license}. Check the service license and setup in Microsoft 365.`
+      : COVERAGE_ISSUE_TEXT[cause] }] : []
+  }))
+  const access = issues.filter(issue => issue.cause !== "unknown").length
+  const unknown = issues.length - access
+  const counts = <dl className="flex flex-wrap gap-x-5 gap-y-1 text-xs" aria-label="Backup coverage">
+    {rows.map(row => <div className="flex gap-2" key={row.service} aria-label={`${BACKUP_SERVICES.find(service => service.id === row.service)?.label} backup coverage`}>
+      <dt className="font-medium">{BACKUP_SERVICES.find(service => service.id === row.service)?.label}</dt>
+      <dd className="text-muted-foreground">{!row.folders.length ? emptyLabel : row.readable === null ? "Unknown" : `${new Set(row.readable).size} of ${new Set(row.folders).size} readable`}</dd>
+    </div>)}
+  </dl>
+  if (!issues.length || countsOnly) return counts
+  return <NoticeCard summary={[access ? `Needs access for ${access} backup ${access === 1 ? "type" : "types"}.` : "", unknown ? `Coverage unknown for ${unknown}.` : ""].filter(Boolean).join(" ")}
+    action={action} details={<>{counts}<BackupTypeDetails entries={issues} /></>} />
 }

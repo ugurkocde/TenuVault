@@ -1,3 +1,4 @@
+import { NoticeCard } from "../NoticeCard"
 import { useContext, useState } from "react"
 import { cn } from "~/lib/utils"
 import { OIB_PLATFORMS, type OibPlatform, type OibVersions } from "../../../shared/oib/types"
@@ -73,7 +74,7 @@ export function ChangeVersions({ platforms = [], disabled }: { platforms?: OibPl
       {!open && <button type="button" className="text-blue-700 underline disabled:cursor-not-allowed disabled:opacity-50" disabled={disabled} onClick={() => setOpen(true)}>Change versions</button>}
     </p>
     {notes.info && <p className="mt-1 text-xs text-gray-500">{notes.info}</p>}
-    {notes.warning && <p role="status" className="mt-1 text-xs text-amber-900">{notes.warning}</p>}
+    {notes.warning && <NoticeCard className="mt-1" tone="warning" summary="Test the selected baseline versions in a pilot tenant." details={notes.warning} />}
     {open && <VersionsPanel className="mt-3" versions={versions} selections={selections} allowPrerelease={allowPrerelease} onAllowPrereleaseChange={setAllowPrerelease} onCancel={() => setOpen(false)} onDone={value => { setOpen(false); choose(value) }} />}
   </div>
 }

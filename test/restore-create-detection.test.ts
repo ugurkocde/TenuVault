@@ -1,10 +1,13 @@
 import { applicationAdmission } from "../src/main/restore/directory-9b"
 import { configurationApproval, configurationConfirmation, isEntraConfiguration } from "../src/main/restore/entra-configuration"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { findCreatedByDescriptor } from "../src/main/restore/create-detection"
 import { GuardedRunJournal, executeGuardedRun, restoreFingerprint, type GuardedIO, type GuardedRun, type GuardedStep } from "../src/main/restore/guarded-run"
 import { RESTORE_MATRIX } from "../src/shared/intune/restore-matrix"
 import { typeForFolder, restoreCapability, type Item } from "../src/shared/intune/registry"
+
+vi.hoisted(() => vi.stubGlobal("__TV_LAB_EXPANDED_ENTRA__", true))
+vi.hoisted(() => vi.stubGlobal("__TV_LAB_PRIVILEGED_RESTORE__", true))
 
 const actor = { tenantId: "tenant", userId: "admin", clientId: "client", applicationObjectId: "app-object", servicePrincipalId: "sp-object", recoveryAccountIds: [] }
 const token = `header.${Buffer.from(JSON.stringify({ scp: "test-only", tid: "tenant", oid: "admin", appid: "client" })).toString("base64url")}.signature`

@@ -1,8 +1,10 @@
+vi.hoisted(() => vi.stubGlobal("__TV_LAB_EXPANDED_ENTRA__", true))
+
 import JSZip from "jszip"
 import { reviewArchive } from "../src/main/backup/archive"
 import { snapshotHash } from "../src/portal/lib/policies/backup-manifest"
 import { readFileSync } from "node:fs"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { ENTRA_DIRECTORY_TYPES as TYPES, DIRECTORY_SCHEMAS, DIRECTORY_EXTRA_SCHEMAS, directoryExtraSnapshot, assertDirectoryDefinition } from "../src/shared/intune/entra-directory"
 import { INTUNE_TYPES, restoreCapability, type Item } from "../src/shared/intune/registry"
 import { listPath, listSnapshot } from "../src/shared/intune/read"
@@ -56,7 +58,7 @@ describe("Directory inventory", () => {
       expect(snapshot).not.toHaveProperty("unexpected")
       expect(source.secretText).toBe("client-secret")
       for (const [property, sample] of Object.entries(data.samples)) if (property !== "object" && property in DIRECTORY_EXTRA_SCHEMAS) scan(directoryExtraSnapshot(property, { ...(sample as Item), ...secrets }))
-      expect(restoreCapability(type)).toBe(["Users", "Groups", "Applications"].includes(type.folder) ? "create" : "none")
+      expect(restoreCapability(type)).toBe(["Users", "Groups"].includes(type.folder) ? "create" : "none")
       expect(() => buildRestorePlan(type, snapshot)).toThrow()
       expect(() => buildUpdatePlan(type, snapshot, id)).toThrow()
       expect(adminCenterLink(type.folder, id)?.center).toBe("Entra")

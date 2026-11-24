@@ -12,7 +12,7 @@ All connections use HTTPS on TCP port 443. TenuVault opens no inbound ports. Dur
 | Destination | Purpose | Carries tenant data? |
 | --- | --- | --- |
 | `login.microsoftonline.com` | Microsoft sign-in and tokens | Your sign-in only. With the optional Backup Reader, also its certificate sign-in for scheduled backups (no tenant data) |
-| `graph.microsoft.com` | Read Defender, Entra ID and Intune configuration and write supported changes | Yes, between your machine and Microsoft |
+| `graph.microsoft.com` | Read Entra ID and Intune configuration and write supported changes | Yes, between your machine and Microsoft |
 | `management.azure.com` | List subscriptions and storage accounts for the storage picker | No |
 | `<your account>.blob.core.windows.net` | Your own Azure storage account, when you store backups there | Yes, backups in your account, over HTTPS |
 | Hosts under `manage.microsoft.com`: one that the Intune agent on the PC discovered, one that Intune returns | [App Backup](#app-backup), only when you capture an installer on an enrolled Windows PC: Intune's device content service and the installer download | Yes, between your PC and Microsoft. The selected app's ID, version and name and this PC's Intune device identity go out, the encrypted installer comes back |
@@ -43,7 +43,7 @@ With the optional [Backup Reader](/backups/backup-reader/), scheduled backups si
 
 ### Microsoft Graph: `graph.microsoft.com`
 
-The app sends tenant requests for Defender, Entra ID and Intune directly from your machine to Microsoft Graph with your delegated token. The one exception is a scheduled backup of a tenant with a [Backup Reader](/backups/backup-reader/): it reads with the reader's app-only token instead, from the same machine to the same host. Writes never use it.
+The app sends tenant requests for Entra ID and Intune directly from your machine to Microsoft Graph with your delegated token. The one exception is a scheduled backup of a tenant with a [Backup Reader](/backups/backup-reader/): it reads with the reader's app-only token instead, from the same machine to the same host. Writes never use it.
 
 * Backups read the configuration and inventories you enable. Conditional Access is an Entra ID backup area, and Intune policies keep assignment references where supported.
 * Supported restores and drift reverts write the objects you choose to your tenant. OpenIntuneBaseline and Framework coverage are Intune workflows.
@@ -345,7 +345,7 @@ Capturing an installer also needs the [capture check](#capture-check) at `https:
 
 ## Directory property allowlists
 
-The opt-in Groups, Users and devices, and Applications areas store personal data in your chosen backup storage. These seven types are directory inventories. The [individual directory review](/restore/identity/#users-and-groups) supports disabled cloud user creation, user displayName and manager restore; static security group creation, nonempty description restore, user member additions, exact member removals from ordinary security groups and user owner additions; and app registration updates to nonempty displayName and description. Exact member removal is blocked for Conditional Access targeted groups because membership changes can affect policy enforcement; remove those members in Microsoft Entra. Each change needs individual approval and must pass the documented safety checks. Other directory operations remain blocked. File names contain only object IDs. Names, UPNs and mail values are never used in file names, logs, notifications or diagnostics. Directory content is never sent to TenuVault. Local backups are encrypted; Azure access follows the storage connection. Exports are unencrypted and need the same access controls as the backup. Settings and onboarding describe each area before it is enabled.
+The opt-in Groups and Devices areas store group properties, member and owner IDs, and device inventory in your chosen backup storage. [Directory inventory coverage](/backups/entra/#opt-in-directory-inventories) explains what is stored.
 
 Each list below is closed at every depth. Dotted names describe allowed nested fields, and arrays use the same schema for every entry. No other Graph property is stored. Empty and null values are preserved, and unordered arrays are sorted. Password and key credentials retain metadata only. Public certificate bytes, private keys, secretText, passwords, authentication methods and sign-in activity are excluded.
 

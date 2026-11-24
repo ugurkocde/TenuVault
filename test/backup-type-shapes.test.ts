@@ -1,11 +1,13 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest"
+vi.hoisted(() => vi.stubGlobal("__TV_LAB_EXPANDED_ENTRA__", true))
+
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
 import { fixture, jwt, refusal, registerTestTypes, scriptedGraph, testType } from "./helpers/backup-fixture"
 import { detailPath, listPath, readObject, type GraphReader } from "../src/shared/intune/read"
 import type { Item } from "../src/shared/intune/registry"
 import { MODULES, type ServiceModule } from "../src/shared/services/modules"
 
 /**
- * What a type can declare so the engine can read Entra ID and Defender: a Graph version, request
+ * What a type can declare so the engine can read Entra ID: a Graph version, request
  * headers, a mandatory filter, a tenant-wide object in either shape Graph uses, an answer that
  * means "not configured", properties that are never stored, and sub-collections kept as sorted IDs.
  * Whether only a signed-in admin can read a type is a fact of its folder in the permission manifest.
@@ -27,7 +29,7 @@ const TYPES = {
     extras: [{ property: "members", path: (id) => `directory/administrativeUnits/${id}/members?$select=id`, ids: true }],
   }),
   // A filter Graph requires, and properties that change on their own.
-  payloads: testType("DefenderAttackSimulationPayloads", "security/attackSimulation/payloads", {
+  payloads: testType("CustomAuthenticationExtensions", "identity/customAuthenticationExtensions", {
     apiVersion: "v1.0",
     filter: "source eq 'tenant'",
     listQuery: "$top=2",
@@ -75,7 +77,7 @@ function graph(routes: Record<string, unknown> = {}) {
   return scriptedGraph({
     "/v1.0/roleManagement/directory/roleAssignments": { value: [] },
     "/v1.0/directory/administrativeUnits": { value: [] },
-    "/v1.0/security/attackSimulation/payloads?$filter=source eq 'tenant'&$top=2": { value: [] },
+    "/v1.0/identity/customAuthenticationExtensions?$filter=source eq 'tenant'&$top=2": { value: [] },
     "/v1.0/policies/authorizationPolicy": { id: "authorizationPolicy", displayName: "Authorization Policy" },
     "/v1.0/policies/authorizationPolicy/authorizationPolicy/defaultUserRoleOverrides": { value: [] },
     "/beta/policies/externalIdentitiesPolicy": { value: [{ id: "externalIdentitiesPolicy", allowExternalIdentitiesToLeave: true }] },
@@ -208,51 +210,51 @@ describe("a type with request headers", () => {
 describe("a type whose list needs a filter", () => {
   it("sends the filter with the list and puts it back on a page whose link left it out", async () => {
     const { run, requests, files } = fixture(graph({
-      "/v1.0/security/attackSimulation/payloads?$filter=source eq 'tenant'&$top=2": {
+      "/v1.0/identity/customAuthenticationExtensions?$filter=source eq 'tenant'&$top=2": {
         value: [{ id: "p1", displayName: "One", source: "tenant" }],
         // As the lab tenant returns a filtered link: the filter kept, with + for spaces.
-        "@odata.nextLink": next("/v1.0/security/attackSimulation/payloads?$filter=source+eq+%27tenant%27&$top=2&$skiptoken=A"),
+        "@odata.nextLink": next("/v1.0/identity/customAuthenticationExtensions?$filter=source+eq+%27tenant%27&$top=2&$skiptoken=A"),
       },
-      "/v1.0/security/attackSimulation/payloads?$filter=source+eq+'tenant'&$top=2&$skiptoken=A": {
+      "/v1.0/identity/customAuthenticationExtensions?$filter=source+eq+'tenant'&$top=2&$skiptoken=A": {
         value: [{ id: "p2", displayName: "Two", source: "tenant" }],
         // A link that dropped the filter would list Microsoft's own payloads, or be refused.
-        "@odata.nextLink": next("/v1.0/security/attackSimulation/payloads?$top=2&$skiptoken=B"),
+        "@odata.nextLink": next("/v1.0/identity/customAuthenticationExtensions?$top=2&$skiptoken=B"),
       },
-      "/v1.0/security/attackSimulation/payloads?$top=2&$skiptoken=B&$filter=source eq 'tenant'": { value: [{ id: "p3", displayName: "Three", source: "tenant" }] },
+      "/v1.0/identity/customAuthenticationExtensions?$top=2&$skiptoken=B&$filter=source eq 'tenant'": { value: [{ id: "p3", displayName: "Three", source: "tenant" }] },
     }))
     const job = await run()
-    const pages = requests.filter((request) => request.path.includes("attackSimulation")).map((request) => request.path)
+    const pages = requests.filter((request) => request.path.includes("customAuthenticationExtensions")).map((request) => request.path)
     expect(pages).toEqual([
-      "/v1.0/security/attackSimulation/payloads?$filter=source eq 'tenant'&$top=2",
+      "/v1.0/identity/customAuthenticationExtensions?$filter=source eq 'tenant'&$top=2",
       // Left as Graph sent it: the filter is there.
-      "/v1.0/security/attackSimulation/payloads?$filter=source+eq+'tenant'&$top=2&$skiptoken=A",
-      "/v1.0/security/attackSimulation/payloads?$top=2&$skiptoken=B&$filter=source eq 'tenant'",
+      "/v1.0/identity/customAuthenticationExtensions?$filter=source+eq+'tenant'&$top=2&$skiptoken=A",
+      "/v1.0/identity/customAuthenticationExtensions?$top=2&$skiptoken=B&$filter=source eq 'tenant'",
     ])
-    expect((await files(job)).filter((name) => name.startsWith("DefenderAttackSimulationPayloads/"))).toHaveLength(3)
-    expect(outcome(job, "DefenderAttackSimulationPayloads")).toMatchObject({ outcome: "saved", saved: 3, service: "defender" })
+    expect((await files(job)).filter((name) => name.startsWith("CustomAuthenticationExtensions/"))).toHaveLength(3)
+    expect(outcome(job, "CustomAuthenticationExtensions")).toMatchObject({ outcome: "saved", saved: 3, service: "entra" })
   })
 
   it.each([
     ["moves to another collection with another filter", "/v1.0/users?$filter=source eq 'global'"],
-    ["stays on the collection with another filter", "/v1.0/security/attackSimulation/payloads?$filter=source+eq+%27global%27&$top=2&$skiptoken=A"],
-    ["carries the filter and a second one", "/v1.0/security/attackSimulation/payloads?$filter=source+eq+%27tenant%27&$filter=source+eq+%27global%27&$skiptoken=A"],
-    ["names another filter without the $", "/v1.0/security/attackSimulation/payloads?filter=source+eq+%27global%27&$skiptoken=A"],
-    ["names another filter in another case", "/v1.0/security/attackSimulation/payloads?$Filter=source+eq+%27global%27&$skiptoken=A"],
+    ["stays on the collection with another filter", "/v1.0/identity/customAuthenticationExtensions?$filter=source+eq+%27global%27&$top=2&$skiptoken=A"],
+    ["carries the filter and a second one", "/v1.0/identity/customAuthenticationExtensions?$filter=source+eq+%27tenant%27&$filter=source+eq+%27global%27&$skiptoken=A"],
+    ["names another filter without the $", "/v1.0/identity/customAuthenticationExtensions?filter=source+eq+%27global%27&$skiptoken=A"],
+    ["names another filter in another case", "/v1.0/identity/customAuthenticationExtensions?$Filter=source+eq+%27global%27&$skiptoken=A"],
     // The type's filter would be added after the #, where Graph never sees it.
-    ["drops the filter and carries a fragment", "/v1.0/security/attackSimulation/payloads?$skiptoken=A#section"],
+    ["drops the filter and carries a fragment", "/v1.0/identity/customAuthenticationExtensions?$skiptoken=A#section"],
   ])("refuses a continuation link that %s, and stores nothing of the type", async (_what, link) => {
-    const first = "/v1.0/security/attackSimulation/payloads?$filter=source eq 'tenant'&$top=2"
+    const first = "/v1.0/identity/customAuthenticationExtensions?$filter=source eq 'tenant'&$top=2"
     const { run, requests, files, manifest } = fixture(graph({ [first]: { value: [{ id: "p1", displayName: "One", source: "tenant" }], "@odata.nextLink": next(link) } }))
     const job = await run()
     // Only the first page was requested: the link was not followed, with or without the type's filter added.
-    expect(requests.filter((request) => request.path.includes("attackSimulation") || request.path.includes("/users")).map((request) => request.path)).toEqual([first])
-    expect((await files(job)).some((name) => name.startsWith("DefenderAttackSimulationPayloads/"))).toBe(false)
-    expect(outcome(job, "DefenderAttackSimulationPayloads")).toMatchObject({ outcome: "failed", error: expect.stringMatching(/^Invalid Graph continuation link \(it (moves to another collection|names another filter|carries a fragment)\)$/), saved: 0 })
-    expect(await manifest(job)).toMatchObject({ Status: "CompletedWithWarnings", Failures: 1, FailedTypes: ["DefenderAttackSimulationPayloads"], Coverage: "Incomplete" })
+    expect(requests.filter((request) => request.path.includes("customAuthenticationExtensions") || request.path.includes("/users")).map((request) => request.path)).toEqual([first])
+    expect((await files(job)).some((name) => name.startsWith("CustomAuthenticationExtensions/"))).toBe(false)
+    expect(outcome(job, "CustomAuthenticationExtensions")).toMatchObject({ outcome: "failed", error: expect.stringMatching(/^Invalid Graph continuation link \(it (moves to another collection|names another filter|carries a fragment)\)$/), saved: 0 })
+    expect(await manifest(job)).toMatchObject({ Status: "CompletedWithWarnings", Failures: 1, FailedTypes: ["CustomAuthenticationExtensions"], Coverage: "Incomplete" })
   })
 
   it("builds the list path from the filter and the extra query", () => {
-    expect(listPath(TYPES.payloads)).toBe("security/attackSimulation/payloads?$filter=source%20eq%20'tenant'&$top=2")
+    expect(listPath(TYPES.payloads)).toBe("identity/customAuthenticationExtensions?$filter=source%20eq%20'tenant'&$top=2")
     expect(listPath(TYPES.units)).toBe("directory/administrativeUnits")
   })
 })
@@ -425,9 +427,9 @@ describe("a type the tenant never set up", () => {
     }), { concurrency: 1 })
     const job = await run()
     expect(await files(job)).toContain("HomeRealmDiscoveryPolicies/First.json")
-    expect(outcome(job, "HomeRealmDiscoveryPolicies")).toMatchObject({ outcome: "skipped", cause: "permission", saved: 1 })
-    expect(job.results!.types.find((type) => type.folder === "HomeRealmDiscoveryPolicies")).toMatchObject({ state: "skipped", saved: 1 })
-    expect(await manifest(job)).toMatchObject({ SkippedTypes: ["HomeRealmDiscoveryPolicies"], Coverage: "Incomplete" })
+    expect(outcome(job, "HomeRealmDiscoveryPolicies")).toMatchObject({ outcome: "failed", saved: 1 })
+    expect(job.results!.types.find((type) => type.folder === "HomeRealmDiscoveryPolicies")).toMatchObject({ state: "unreadable", saved: 1 })
+    expect(await manifest(job)).toMatchObject({ FailedTypes: ["HomeRealmDiscoveryPolicies"], Coverage: "Incomplete" })
     // The list answering that way is the type's own answer.
     const unset = fixture(graph({ "/beta/policies/homeRealmDiscoveryPolicies": refusal(403, "Forbidden", "The feature is not enabled.") }))
     expect(outcome(await unset.run(), "HomeRealmDiscoveryPolicies")).toMatchObject({ outcome: "notConfigured" })
@@ -473,17 +475,17 @@ describe("properties a type never stores", () => {
   })
 
   it("are removed from the stored object, at any depth and in every entry of a list, and never the ID", async () => {
-    const { run, file } = fixture(graph({ "/v1.0/security/attackSimulation/payloads?$filter=source eq 'tenant'&$top=2": payload("2026-11-01", "2026-11-02", "09:00") }))
+    const { run, file } = fixture(graph({ "/v1.0/identity/customAuthenticationExtensions?$filter=source eq 'tenant'&$top=2": payload("2026-11-01", "2026-11-02", "09:00") }))
     const job = await run()
-    expect(await file(job, "DefenderAttackSimulationPayloads/One.json")).toEqual({ id: "p1", displayName: "One", source: "tenant", schedule: { period: "24H" }, steps: [{ name: "a" }, { name: "b" }] })
+    expect(await file(job, "CustomAuthenticationExtensions/One.json")).toEqual({ id: "p1", displayName: "One", source: "tenant", schedule: { period: "24H" }, steps: [{ name: "a" }, { name: "b" }] })
   })
 
   it("do not change the object's fingerprint, so two backups of it compare as unchanged", async () => {
     const hash = async (routes: Record<string, unknown>) => {
       const { run, manifest } = fixture(graph(routes))
-      return (await manifest(await run())).Items["DefenderAttackSimulationPayloads/p1"].hash
+      return (await manifest(await run())).Items["CustomAuthenticationExtensions/p1"].hash
     }
-    const key = "/v1.0/security/attackSimulation/payloads?$filter=source eq 'tenant'&$top=2"
+    const key = "/v1.0/identity/customAuthenticationExtensions?$filter=source eq 'tenant'&$top=2"
     expect(await hash({ [key]: payload("2026-11-01", "2026-11-02", "09:00") })).toBe(await hash({ [key]: payload("2026-12-24", "2026-12-25", "17:30") }))
   })
 })

@@ -2,7 +2,7 @@
 
 Reviewed all 48 published documentation pages on 2026-11-14 against app version 0.3.0, source commit `f7b3c9e`. Added 48 placements on 30 pages, using 40 distinct captures. Existing update and notification images remain in place.
 
-The 0.6 captures showing the services sidebar, Setup, Settings, tenants and backup contents use the current built Electron app with fictional Contoso data. Services appear in the order Defender, Entra ID and Intune. Conditional Access appears under Entra ID. The historical update illustrations show the version named in their captions.
+The 0.6 captures showing the services sidebar, Setup, Settings, tenants and backup contents use the current built Electron app with fictional Contoso data. Services appear in the order Entra ID and Intune. Conditional Access appears under Entra ID. The historical update illustrations show the version named in their captions.
 
 ## Capture provenance and accuracy
 

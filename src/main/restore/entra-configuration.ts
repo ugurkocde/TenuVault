@@ -11,7 +11,7 @@ export const isEntraConfiguration = (folder: string): boolean => ENTRA_CONFIGURA
 
 export function configurationConfirmation(folder: string): string {
   if (folder.startsWith("CrossTenantAccess")) return "cross-tenant-access"
-  if (["LifecycleWorkflows", "AccessReviewDefinitions", "DefenderCustomDetectionRules"].includes(folder)) return "disabled-configuration"
+  if (["LifecycleWorkflows", "AccessReviewDefinitions"].includes(folder)) return "disabled-configuration"
   if (folder === "AuthenticationMethodsPolicy") return "authentication-methods"
   if (folder === "AuthorizationPolicy") return "authorization"
   if (folder === "SecurityDefaults") return "security-defaults"

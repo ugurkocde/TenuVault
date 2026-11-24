@@ -56,7 +56,7 @@ describe("Backup History", () => {
     expect(renderToStaticMarkup(createElement(BackupRestorePage))).toContain("No backups found for this tenant")
     state.damagedFiles = 129
     const markup = renderToStaticMarkup(createElement(BackupRestorePage))
-    expect(markup).toContain("Some backups may be missing from this list")
+    expect(markup).toContain("129 backup files need attention.")
     expect(markup).toContain("No readable backups found for this tenant")
     expect(markup).toContain("Some backups may be missing because of the files described above.")
     expect(markup).not.toContain("a change made before your first backup cannot be restored")

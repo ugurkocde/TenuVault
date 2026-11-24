@@ -12,7 +12,7 @@ import { INTUNE_TYPES } from "../src/shared/intune/registry"
 
 /**
  * What a backup of an Intune tenant wrote and reported before the engine learned to read Entra ID
- * and Defender, recorded from the release this work started from (commit d906ad4b). Every run
+ * recorded from the release this work started from (commit d906ad4b). Every run
  * here must still write the same files and the same manifest, and report the same job, scheduler
  * result and retention. Only the fields named in ADDED may appear on top.
  * The policy fingerprints include the explicit expanded arrays returned by the fixture tenant.

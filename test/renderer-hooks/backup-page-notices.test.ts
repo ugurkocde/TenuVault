@@ -10,7 +10,7 @@ vi.mock("../../src/renderer/components/ServiceBackupNotice", () => ({ ServiceBac
 const state = vi.hoisted(() => ({ warnings: [] as string[], tenant: 0, damagedFiles: 3, sealed: 0, refresh: (() => Promise.resolve("updated")) as () => Promise<string> }))
 const downloadState = vi.hoisted(() => ({ rows: [] as BackupSummary[], storage: "", search: "" }))
 const backups = vi.hoisted(() => ({ importRecoveryKey: vi.fn(), openFolder: vi.fn() }))
-vi.mock("react-router-dom", () => ({ useSearchParams: () => [new URLSearchParams(downloadState.search), vi.fn()] }))
+vi.mock("react-router-dom", () => ({ useSearchParams: () => [new URLSearchParams(downloadState.search), vi.fn()], Link: ({ children, to }: { children: string; to: string }) => createElement("a", { href: to }, children) }))
 const tenants = vi.hoisted(() => [
   { id: 1, name: "Contoso", status: "healthy", credentials: { tenantId: "11111111-1111-1111-1111-111111111111", appId: "app" }, resources: { storageAccountName: "tvlocal-11111111-1111-1111-1111-111111111111" } },
   { id: 2, name: "Fabrikam", status: "healthy", credentials: { tenantId: "22222222-2222-2222-2222-222222222222", appId: "app" }, resources: { storageAccountName: "tvlocal-22222222-2222-2222-2222-222222222222" } },
@@ -59,14 +59,19 @@ describe("Backup Details", () => {
     return { container, button, render }
   }
 
-  it("shows an Intune-only backup as excluded when opened through the Defender filter", () => {
-    downloadState.search = "service=defender"
-    const { container } = renderBackup({ scope: { included: ["ConfigurationPolicies"], excluded: [], description: "Everything" } })
-    const defender = container.querySelector('section[aria-label="Defender"]')!
-    expect(defender.textContent).toContain("Not included in this backup")
-    expect(defender.textContent).not.toContain("None in the tenant")
-    expect(defender.querySelector("details")).toBeNull()
+  it("opens the exact backup requested from the Dashboard", () => {
+    const { container, render } = renderBackup()
+    downloadState.search = "backup=backup-2020-01-01-000000"
+    downloadState.rows = [
+      { ...downloadState.rows[0]!, id: "backup-2020-01-02-000000", timestamp: "2020-01-02T00:00:00Z", scope: { excluded: [], description: "Newer run" } },
+      { ...downloadState.rows[0]!, scope: { excluded: [], description: "Requested run" } },
+    ]
+    render()
+    const selected = container.querySelector("button.border-primary")
+    expect(selected?.textContent).toContain("Requested run")
   })
+
+
 
   it("shows an unread type with its reason even if the backup holds some of its policies", () => {
     const { container } = renderBackup({
@@ -81,7 +86,7 @@ describe("Backup Details", () => {
     expect(row.textContent).not.toContain("None in the tenant")
   })
 
-  it("labels the result Finished in the list and Run status when coverage is incomplete", () => {
+  it("labels the result Completed and shows coverage separately in history", () => {
     const { container } = renderBackup({
       coverage: "incomplete",
       scope: { included: ["CompliancePolicies", "DeviceConfigurations"], excluded: [], description: "Custom" },
@@ -89,11 +94,12 @@ describe("Backup Details", () => {
       notRead: ["DeviceConfigurations"],
       notReadCauses: { DeviceConfigurations: "permission" },
     })
-    expect([...container.querySelectorAll("button span")].map(node => node.textContent)).toContain("Finished")
+    expect([...container.querySelectorAll("button span")].map(node => node.textContent)).toContain("Completed")
+    expect([...container.querySelectorAll("button span")].map(node => node.textContent)).toContain("Coverage incomplete")
     const status = [...container.querySelectorAll("dt")].find(node => node.textContent === "Run status")
-    expect(status?.nextElementSibling?.textContent).toBe("Finished")
-    expect(container.querySelector('[aria-label="Intune backup coverage"]')?.textContent).toContain("1 of 2")
-    expect(container.querySelector('[aria-label="Intune backup coverage"]')?.textContent).toContain("Permission not granted")
+    expect(status?.nextElementSibling?.textContent).toBe("Completed")
+    expect(container.querySelector('[aria-label="Backup coverage"]')?.textContent).toContain("1 of 2")
+    expect([...container.querySelectorAll('[data-notice-tone="neutral"] [hidden]')].map(panel => panel.textContent).join(" ")).toContain("Permission not granted")
   })
 
   it("shows a type read successfully with zero results as empty even when other reads failed", () => {
@@ -116,10 +122,10 @@ describe("Backup Details", () => {
       notReadCauses: { DeviceConfigurations: "role" },
       emptyTypes: ["CompliancePolicies"],
     })
-    const coverage = container.querySelector('[aria-label="Intune backup coverage"]')!
+    const coverage = container.querySelector('[aria-label="Backup coverage"]')!
     expect(coverage.textContent).toContain("1 of 3")
-    expect(coverage.textContent).toContain("1 unknown")
-    expect(coverage.textContent).toContain("Your role can't do this")
+    expect(container.textContent).toContain("Coverage unknown for 1 type.")
+    expect([...container.querySelectorAll('[data-notice-tone="neutral"] [hidden]')].map(panel => panel.textContent).join(" ")).toContain("Your role can't do this")
     const row = [...container.querySelectorAll("details li")].find(node => node.textContent?.includes("Not read:"))!
     expect(row.textContent).toContain("3")
     expect(row.textContent).toContain("Your role can't do this")
@@ -184,7 +190,7 @@ async function click(container: HTMLElement, label: string) {
   await flush()
 }
 
-const cards = (container: HTMLElement, title: string) => [...container.querySelectorAll("[role=status]")].filter((card) => card.querySelector("p.font-medium")?.textContent?.includes(title)).length
+const cards = (container: HTMLElement, title: string) => [...container.querySelectorAll("[data-notice-tone] > div > p")].filter(summary => summary.textContent?.includes(title)).length
 
 describe("Backup History notices", () => {
   it("shows the large-storage provisioning warning without hiding ordinary history", () => {
@@ -194,9 +200,9 @@ describe("Backup History notices", () => {
     const root = createRoot(container)
     roots.push(root)
     act(() => root.render(createElement(BackupRestorePage)))
-    const warning = [...container.querySelectorAll('[role="status"]')].find(node => node.textContent?.includes("Storage not provisioned for large backups"))!
+    const warning = container.querySelector('[data-notice-tone="warning"]')!
     expect(warning.textContent).toContain("New-TenuVaultStorage.ps1")
-    expect(warning.classList.contains("bg-blue-50")).toBe(true)
+    expect(warning.querySelector("[hidden]")?.textContent).toContain("Storage not provisioned for large backups")
     state.warnings = []
   })
 
@@ -209,12 +215,12 @@ describe("Backup History notices", () => {
     state.tenant = 0
     state.sealed = 2
     act(() => root.render(createElement(BackupRestorePage)))
-    expect(cards(container, "Some backups may be missing from this list")).toBe(1)
+    expect(cards(container, "backup files need attention")).toBe(1)
     expect(cards(container, "older Azure backups need a recovery key")).toBe(1)
     state.tenant = 1
     state.damagedFiles = 4
     act(() => root.render(createElement(BackupRestorePage)))
-    expect(cards(container, "Some backups may be missing from this list")).toBe(1)
+    expect(cards(container, "backup files need attention")).toBe(1)
     expect(cards(container, "older Azure backups need a recovery key")).toBe(1)
     expect(container.textContent).toContain("TenuVault cannot read 4 files")
   })
@@ -231,7 +237,7 @@ describe("Backup History notices", () => {
     const root = createRoot(container)
     roots.push(root)
     act(() => root.render(createElement(BackupRestorePage)))
-    await click(container, "Show file names (3)")
+    await click(container, "Details")
     await click(container, "Import recovery key")
     const textarea = container.querySelector("textarea")!
     const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!
@@ -250,9 +256,9 @@ describe("Backup History notices", () => {
     await flush()
 
     expect(container.textContent).toContain("TenuVault cannot read 4 files")
-    const toggle = [...container.querySelectorAll("button")].find((button) => button.textContent?.includes("file names"))!
+    const toggle = [...container.querySelectorAll("button")].find((button) => button.textContent?.trim() === "Details")!
     expect(toggle.getAttribute("aria-expanded")).toBe("false")
-    expect(toggle.textContent?.trim()).toBe("Show file names (4)")
+    expect(toggle.textContent?.trim()).toBe("Details")
     expect(container.querySelector("textarea")).toBeNull()
     expect(container.textContent).not.toContain("Checking the backups again...")
     expect(container.textContent).not.toContain("still cannot read")

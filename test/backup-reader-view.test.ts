@@ -61,8 +61,8 @@ describe("Backup Reader card", () => {
   it("keeps the services and areas of the reader in the renewal command, so a renewal never changes its permissions", () => {
     const command = (roles: readonly string[]) => readerView(state(status({ verifiedRoles: [...roles] })), NOW).command.split("-AppId 44444444-4444-4444-4444-444444444444")[1]
     expect(command(readerRoles({ entra: { access: "backup" } }))).toBe(" -Services Entra")
-    expect(command(readerRoles({ intune: { access: "backup" }, entra: { access: "backup", areas: ["groups", "applications"] } }))).toBe(" -Services Intune,Entra -Areas Groups,Applications")
-    expect(command(readerRoles({ intune: { access: "backup", areas: ["devices"] }, defender: { access: "backup" } }))).toBe(" -Services Intune,Defender -IncludeDeviceCategories")
+    expect(command(readerRoles({ intune: { access: "backup" }, entra: { access: "backup", areas: ["groups", "applications"] } }))).toBe(" -Services Intune,Entra -Areas Groups")
+    expect(command(readerRoles({ intune: { access: "backup", areas: ["devices"] } }))).toBe(" -IncludeDeviceCategories")
     expect(command(readerRoles({ conditionalAccess: { access: "backup" } }))).toBe(" -Services ConditionalAccess")
   })
 

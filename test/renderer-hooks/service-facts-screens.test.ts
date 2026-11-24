@@ -70,8 +70,8 @@ describe("The Settings card reads switchable", () => {
     const container = mount(createElement(ServicesSettings))
     await act(async () => undefined)
     const governance = container.querySelector('[data-service="entra"] [data-area="governance"]')!
-    expect(governance.textContent).toContain("Some features need Entra ID P2 or ID Governance")
-    expect(governance.textContent).toContain("PDFs, review decisions and workflow history are excluded")
+    expect(governance.textContent).toContain("Agreement settings and file metadata")
+    expect(governance.textContent).toContain("PDFs and individual acceptances are excluded")
     expect(governance.textContent).not.toContain("no backup types")
   })
 
@@ -95,8 +95,8 @@ describe("The scope picker follows the tenant's selection", () => {
     expect(text).toContain("Entra ID: Authentication")
     expect(text).not.toContain("Intune: Device configuration")
     expect(text).not.toContain("Entra ID: Groups")
-    expect(text).toContain("All of 65 types")
-    expect(text).toContain("Entra ID: Governance")
+    expect(text).toContain("All of 6 types")
+    expect(text).toContain("Entra ID: Terms of use")
   })
   it("uses the explicit tenant choice even when the service defaults change", () => {
     withFacts("conditionalAccess", { defaultOn: true })
@@ -110,7 +110,7 @@ describe("Tenant backup coverage", () => {
   it("shows license and setup guidance for Start now without a sign-in upgrade link", async () => {
     state.report.mockResolvedValue({
       ...answer(), clientId: GRAPH_CLI_CLIENT_ID,
-      coverage: [{ service: "defender", folders: ["DefenderAttackSimulations"], readable: [], issues: { DefenderAttackSimulations: "license" } }],
+      coverage: [{ service: "entra", folders: ["TermsOfUseAgreements"], readable: [], issues: { TermsOfUseAgreements: "license" } }],
     })
     const container = mount(createElement(ServiceBackupNotice, { tenantId: TENANT, showCoverage: true }))
     await act(async () => undefined)
@@ -119,25 +119,24 @@ describe("Tenant backup coverage", () => {
   })
 
   it.each([
-    ["22222222-2222-2222-2222-222222222222", "Repair in Settings", `/portal/settings?section=services&tenant=${TENANT}`],
-    [TENUVAULT_CLIENT_ID, "Add app permissions", `/portal/settings?section=signin&pack=conditionalAccess-backup#sign-in-${TENANT}`],
-    [GRAPH_CLI_CLIENT_ID, "See sign-in upgrade options", `/portal/settings?section=signin#sign-in-${TENANT}`],
+    ["22222222-2222-2222-2222-222222222222", "Add access", `/portal/settings?section=services&tenant=${TENANT}`],
+    [TENUVAULT_CLIENT_ID, "Add access", `/portal/settings?section=signin&pack=conditionalAccess-backup#sign-in-${TENANT}`],
+    [GRAPH_CLI_CLIENT_ID, "Add access", `/portal/settings?section=signin#sign-in-${TENANT}`],
   ])("shows each coverage state and the action for %s", async (clientId, label, href) => {
     state.report.mockResolvedValue({
       ...answer(), clientId,
       coverage: [
         { service: "intune", folders: ["Apps"], readable: [], issues: { Apps: "unknown" } },
-        { service: "entra", folders: ["NamedLocations", "ConditionalAccessPolicies"], readable: [], issues: { NamedLocations: "role", ConditionalAccessPolicies: "permission" } },
-        { service: "defender", folders: ["DefenderAttackSimulations"], readable: ["DefenderAttackSimulations"] },
+        { service: "entra", folders: ["NamedLocations", "ConditionalAccessPolicies", "TermsOfUseAgreements"], readable: ["TermsOfUseAgreements"], issues: { NamedLocations: "role", ConditionalAccessPolicies: "permission" } },
       ],
     })
     const container = mount(createElement(ServiceBackupNotice, { tenantId: TENANT, showCoverage: true }))
     await act(async () => undefined)
-    expect([...container.querySelectorAll("h4")].map(heading => heading.textContent)).toEqual(["Defender", "Entra ID", "Intune"])
-    expect(container.querySelector('[aria-label="Defender backup coverage"]')?.textContent).toBe("Defender1 of 1")
+    expect([...container.querySelectorAll("dt")].map(heading => heading.textContent)).toEqual(["Entra ID", "Intune"])
+    expect(container.querySelector('[aria-label="Entra ID backup coverage"]')?.textContent).toBe("Entra ID1 of 3 readable")
     expect(container.textContent).toContain("Permission not granted")
     expect(container.textContent).toContain("Your role can't do this")
-    expect(container.querySelector('[aria-label="Intune backup coverage"]')?.textContent).toContain("Unknown")
+    expect(container.textContent).toContain("Coverage unknown for 1.")
     expect([...container.querySelectorAll("a")].find(link => link.textContent === label)?.getAttribute("href")).toBe(href)
   })
 })

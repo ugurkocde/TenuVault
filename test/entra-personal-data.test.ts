@@ -1,5 +1,7 @@
+vi.hoisted(() => vi.stubGlobal("__TV_LAB_EXPANDED_ENTRA__", true))
+
 import { readdirSync, readFileSync } from "node:fs"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { ENTRA_5A_TYPES, ENTRA_5B_TYPES, ENTRA_5C_TYPES } from "../src/shared/intune/entra"
 import { INTUNE_TYPES, type Item } from "../src/shared/intune/registry"
 import { listSnapshot, readObject } from "../src/shared/intune/read"

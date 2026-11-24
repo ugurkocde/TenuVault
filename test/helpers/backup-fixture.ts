@@ -14,7 +14,7 @@ import { INTUNE_TYPES, TYPE_BY_FOLDER, type IntuneType } from "../../src/shared/
  * A backup engine over a local store and a scripted Microsoft Graph, and test-only types.
  *
  * Tests that prove what the engine can read isolate the registry and add their own type shapes. A test-only type takes the folder name of a type the permission manifest already
- * knows (shared/services/entra and defender), which gives it that folder's service and permissions.
+ * knows (shared/services/entra), which gives it that folder's service and permissions.
  */
 
 export const TENANT = "11111111-1111-1111-1111-111111111111"
@@ -33,7 +33,7 @@ export function registerTestTypes(types: IntuneType[]): () => void {
   // Machinery tests use an isolated registry: the original services plus their test-only shapes.
   // Real Entra types have their own fixture and integration tests.
   const originals = [...INTUNE_TYPES]
-  for (const type of originals) if (["entra", "defender"].includes(moduleForFolder(type.folder)!.module.id)) {
+  for (const type of originals) if (moduleForFolder(type.folder)!.module.id === "entra") {
     INTUNE_TYPES.splice(INTUNE_TYPES.indexOf(type), 1)
     TYPE_BY_FOLDER.delete(type.folder.toLowerCase())
   }
@@ -102,7 +102,7 @@ export function fixture(graph: ReturnType<typeof scriptedGraph>, deps: Partial<B
     requests.push({ path: decodeURIComponent(url.pathname + url.search), headers: request.headers })
     return graph(request)
   }) as typeof fetch
-  const engine = new BackupEngine({ fetch: fetchImpl, getToken: async () => "token", services: () => ({ services: ["intune", "conditionalAccess", "entra", "defender"] }), ...deps })
+  const engine = new BackupEngine({ fetch: fetchImpl, getToken: async () => "token", services: () => ({ services: ["intune", "conditionalAccess", "entra"] }), ...deps })
   const files = async (job: BackupJob) => (await store.list(account, backupContainer(job.backupFolder!))).map(blob => ({ ...blob, name: logicalBackupName(blob.name) })).filter((blob) => blob.name.startsWith(`${job.backupFolder}/`)).map((blob) => blob.name.slice(job.backupFolder!.length + 1))
   return {
     engine,

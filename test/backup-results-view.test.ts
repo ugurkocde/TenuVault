@@ -59,17 +59,19 @@ describe("backup results summary", () => {
     // The engine's count wins over the message wording.
     expect(completedWithWarnings({ ...done, progressMessage: "Backup completed successfully", results: { types: [], notices: [], warnings: 1 } })).toBe(true)
     expect(completedWithWarnings({ ...done, progressMessage: "Backup completed with 2 warnings", results: { types: [], notices: [], warnings: 0 } })).toBe(false)
+    const skipped = { folder: "TermsOfUseAgreements", label: "terms of use", state: "skipped", saved: 0, failed: 0 } as never
+    expect(completedWithWarnings({ ...done, progressMessage: "Backup completed successfully", results: { types: [skipped], notices: [], warnings: 0, coverage: "incomplete" } })).toBe(false)
   })
 })
 
 describe("BackupResults", () => {
   const job = { status: "Completed", startTime: "2026-11-12T10:00:00Z", endTime: "2026-11-12T10:00:05Z", output: "[10:00:00] Found 6 compliance policies.", results, isComplete: true }
 
-  it("keeps all three services visible and in display order even if one service could fill the panel", () => {
-    const folders = ["ConfigurationPolicies", "NamedLocations", "DefenderSecureScoreControlStates", "DefenderCustomDetectionRules", "DefenderIdentitySensors", "DefenderRoleDefinitions", "DefenderAttackSimulations"]
+  it("keeps both services visible and in display order even if one service could fill the panel", () => {
+    const folders = ["ConfigurationPolicies", "NamedLocations", "AuthenticationContexts", "TermsOfUseAgreements", "DeviceRegistrationPolicy", "MdmEnrollmentPolicies", "MamEnrollmentPolicies"]
     const types = folders.map(folder => type(folder, { label: folder, saved: 1 }))
     const html = renderToStaticMarkup(createElement(BackupResults, { job: { ...job, results: { types, notices: [] } }, compact: true }))
-    const positions = ["DefenderSecureScoreControlStates", "NamedLocations", "ConfigurationPolicies"].map(label => html.indexOf(label))
+    const positions = ["NamedLocations", "ConfigurationPolicies"].map(label => html.indexOf(label))
     expect(positions.every(position => position >= 0)).toBe(true)
     expect(positions).toEqual([...positions].sort((left, right) => left - right))
     expect(html).toContain("2 more")
@@ -82,10 +84,10 @@ describe("BackupResults", () => {
     expect(html).toContain(">5s<")
     expect(html).toContain("Also saved: 4 Autopilot devices.")
     expect(html).not.toContain(">Autopilot devices<")
-    expect(html.indexOf("Needs attention")).toBeLessThan(html.indexOf("Backed up types"))
-    expect(html).toContain("Could not read apps")
-    expect(html).toContain("1 of 3 settings catalog policies could not be saved")
-    expect(html).toContain("PowerShell scripts left out")
+    expect(html.indexOf("Needs access")).toBeLessThan(html.indexOf("Backed up types"))
+    expect(html).toContain("1 type could not be read.")
+    expect(html).toContain("1 of 3 could not be saved.")
+    expect(html).toContain("PowerShell scripts")
     expect(html).toContain("Retention is paused.")
     expect(html).toContain("1 type had nothing to back up")
     expect(html).toContain("Show raw log")
@@ -101,7 +103,7 @@ describe("BackupResults", () => {
     expect(html).toContain("and 3 more types")
   })
 
-  it("shows a type a cancelled run never finished as stopped, not spinning, and keeps the box amber", () => {
+  it("shows a type a cancelled run never finished as stopped, while a separate read failure stays red", () => {
     const stopped: Results = { types: [type("A", { label: "compliance policies", state: "reading", found: 12, saved: 3 }), type("B", { label: "apps", state: "unreadable", reason: "Graph returned 500" })], notices: [] }
     const html = renderToStaticMarkup(createElement(BackupResults, { job: { ...job, status: "Cancelled", results: stopped } }))
     expect(html).toContain("Stopped")
@@ -109,8 +111,7 @@ describe("BackupResults", () => {
     expect(html).toContain("stopped before it finished")
     expect(html).not.toContain("animate-spin")
     expect(html).not.toContain("in progress")
-    expect(html).toContain("bg-amber-50")
-    expect(html).not.toContain("bg-red-50")
+    expect(html).toContain('data-notice-tone="error"')
     const running = renderToStaticMarkup(createElement(BackupResults, { job: { ...job, status: "Running", isComplete: false, results: stopped } }))
     expect(running).toContain("animate-spin")
   })
@@ -120,14 +121,15 @@ describe("BackupResults", () => {
     expect(summarizeBackupResults(stopped, true).notReached.map((entry) => entry.folder)).toEqual(["B", "C"])
     expect(summarizeBackupResults(stopped).notReached).toEqual([])
     const html = renderToStaticMarkup(createElement(BackupResults, { job: { ...job, status: "Failed", results: stopped } }))
-    expect(html).toContain("2 types were not read before the backup stopped")
-    expect(html).toContain("Apps, Scripts")
-    expect(html).toContain("7 of 10 compliance policies were not saved before the backup stopped")
+    expect(html).toContain("Stopped before finishing 3 types.")
+    expect(html).toContain(">apps<")
+    expect(html).toContain(">scripts<")
+    expect(html).toContain("3 of 10 saved before the backup stopped.")
     expect(html).not.toContain("could not be saved")
     expect(html).toContain("bg-red-50")
     // While the run goes on, a failed item is an ordinary failure, not a stop.
     const running = renderToStaticMarkup(createElement(BackupResults, { job: { ...job, status: "Running", isComplete: false, results: stopped } }))
-    expect(running).toContain("1 of 10 compliance policies could not be saved")
+    expect(running).toContain("1 of 10 could not be saved.")
     expect(running).not.toContain("before the backup stopped")
   })
 
@@ -138,17 +140,16 @@ describe("BackupResults", () => {
       expect(summary.rows.map((entry) => entry.folder)).toEqual(["Autopilot"])
       expect(summary.inventory).toEqual([])
       const html = renderToStaticMarkup(createElement(BackupResults, { job: { ...job, status: "Cancelled", results } }))
-      expect(html).toContain(`${200 - saved} of 200 Windows Autopilot devices were not saved before the backup stopped`)
+      expect(html).toContain(`${saved} of 200 saved before the backup stopped.`)
       expect(html).toContain(`${saved} of 200`)
       expect(html).not.toContain("Also saved")
     }
   })
 
-  it("keeps the box amber for a completed run whose only problem is an unreadable type", () => {
+  it("uses the error tone when a completed run had a read failure", () => {
     const unreadable: Results = { types: [type("A", { found: 1, saved: 1 }), type("B", { state: "unreadable", reason: "Graph returned 500" })], notices: [] }
     const html = renderToStaticMarkup(createElement(BackupResults, { job: { ...job, results: unreadable } }))
-    expect(html).toContain("bg-amber-50")
-    expect(html).not.toContain("bg-red-50")
+    expect(html).toContain('data-notice-tone="error"')
   })
 
   it("announces a type where nothing was saved as none saved", () => {
@@ -156,13 +157,13 @@ describe("BackupResults", () => {
     expect(renderToStaticMarkup(createElement(BackupResults, { job: { ...job, results: none } }))).toContain("none saved, 2 failed")
   })
 
-  it("says that coverage is incomplete, with how many selected types were not read in full", () => {
+  it("separates missing access, read failures and item save failures", () => {
     const html = renderToStaticMarkup(createElement(BackupResults, { job: { ...job, results: { ...results, coverage: "incomplete" as const } } }))
-    // Settings (one object failed), Scripts (left out) and Apps (not read): three of six selected types.
-    expect(html).toContain("Coverage incomplete: 3 of 6 selected types were not read in full")
-    expect(html.indexOf("Coverage incomplete")).toBeLessThan(html.indexOf("Could not read apps"))
+    expect(html).toContain("Needs access for 1 type. 1 type could not be read. 1 item could not be saved.")
     const one: Results = { types: [type("A", { found: 1, saved: 1 }), type("B", { label: "scripts", state: "skipped", reason: "No permission." })], notices: [], coverage: "incomplete" }
-    expect(renderToStaticMarkup(createElement(BackupResults, { job: { ...job, results: one }, compact: true }))).toContain("Coverage incomplete: 1 of 2 selected types was not read in full")
+    const compact = renderToStaticMarkup(createElement(BackupResults, { job: { ...job, results: one }, compact: true }))
+    expect(compact).toContain("Needs access for 1 type.")
+    expect(compact).toContain('data-notice-tone="neutral"')
   })
 
   it("says nothing about coverage while the backup runs, when it is complete, or for results that do not record it", () => {
@@ -172,12 +173,12 @@ describe("BackupResults", () => {
     expect(renderToStaticMarkup(createElement(BackupResults, { job }))).not.toContain("Coverage incomplete")
   })
 
-  it("lists types the tenant never set up apart from problems and from empty types", () => {
+  it("groups types the tenant never set up among the types with nothing to save", () => {
     const unset: Results = { types: [type("A", { found: 1, saved: 1 }), type("B", { label: "federated token validation policy", state: "notConfigured" }), type("C", { label: "access review policy", state: "notConfigured" })], notices: [], coverage: "complete" }
     const html = renderToStaticMarkup(createElement(BackupResults, { job: { ...job, results: unset } }))
-    expect(html).toContain("2 types are not set up in this tenant")
+    expect(html).toContain("2 types had nothing to back up.")
     expect(html).not.toContain("Needs attention")
-    expect(html).not.toContain("had nothing to back up")
+    expect(html).toContain("Not set up in this tenant.")
     const summary = summarizeBackupResults(unset, true)
     expect(summary.notConfigured.map((entry) => entry.folder)).toEqual(["B", "C"])
     expect(summary.coverageGap).toBeUndefined()
@@ -187,7 +188,7 @@ describe("BackupResults", () => {
   it("words a type whose read was refused part way as not read in full, with what it saved", () => {
     const partWay: Results = { types: [type("A", { label: "administrative units", state: "skipped", found: 20, saved: 2, reason: "Microsoft refused the read." })], notices: [], coverage: "incomplete" }
     const html = renderToStaticMarkup(createElement(BackupResults, { job: { ...job, results: partWay } }))
-    expect(html).toContain("Administrative units not read in full, 2 saved")
+    expect(html).toContain("Needs access. 2 saved before access was lost.")
     expect(html).not.toContain("Administrative units left out")
   })
 

@@ -1,6 +1,6 @@
 ---
 title: "What gets backed up"
-description: Backup coverage and exclusions for Defender, Entra ID and Intune.
+description: Backup coverage and exclusions for Entra ID and Intune.
 faq:
   - question: "Which Intune objects does TenuVault back up?"
     answer: "41 Intune object types in nine areas: device configuration, compliance, endpoint security, scripts and remediations, Windows updates, apps, app protection and configuration, enrollment, and tenant administration. Each object is saved as it is in Microsoft Graph (beta for Intune, v1.0 or beta as declared for Entra), with its settings and, where Intune has them, its assignments. Directory snapshots retain only the documented property allowlists."
@@ -14,12 +14,11 @@ faq:
     answer: "TenuVault skips types it is denied access to, for example when the app registration lacks a permission or its admin consent, or when your Intune role excludes the type. A scheduled backup made by the optional Backup Reader also leaves out device categories and device clean-up rules unless the reader has the optional device inventory permission. The backup log and Backup Details say which types were skipped."
 ---
 
-With every service and opt-in area selected, TenuVault backs up 135 types. Open **Settings > Services and permissions** to see which types your tenant can read. In **Backup & Restore**, use **Custom** to choose types within the enabled services.
+With every service and opt-in area selected, TenuVault backs up 54 types. Open **Settings > Services and permissions** to see which types your tenant can read. In **Backup & Restore**, use **Custom** to choose types within the enabled services.
 
 | Service | Available types | Coverage |
 | --- | ---: | --- |
-| Defender | 17 | [Defender configuration](/backups/defender/) covers detection and response, email and collaboration, identity, and posture and access. |
-| Entra ID | 77 | [Entra ID configuration](/backups/entra/) covers 67 configuration types and seven opt-in directory inventories. [Conditional Access](/backups/conditional-access/) adds three types through its own switch. |
+| Entra ID | 13 | [Device, authentication and terms of use settings](/backups/entra/), opt-in groups and devices, and three [Conditional Access](/backups/conditional-access/) types. |
 | Intune | 41 | [Intune configuration](/backups/intune/) covers policies, updates, scripts, apps, enrollment and tenant administration. |
 
 ## Read the coverage count
@@ -35,10 +34,6 @@ With **Start now**, if your sign-in has the Intune configuration read permission
 * **Assignments**: whether the backup holds the object's assignments (the groups and filters it targets). Restoring assignments is a separate choice. See [Restore modes and assignments](/restore/modes/).
 * **Everything except apps**: every type is included in this choice except **Apps**. **Everything** includes every supported type of the services and opt-in areas that are on.
 * Built-in objects that Intune creates itself are skipped. The backup log reports how many were skipped.
-
-## Defender
-
-See [Defender coverage and exclusions](/backups/defender/#coverage) for supported configuration and the products and types excluded from backup.
 
 ## Entra ID
 
@@ -186,4 +181,4 @@ Some backed-up items cannot be restored in full, for example apps that need an i
 
 ## Directory inventories
 
-Seven opt-in Entra ID types cover users, groups, app registrations, enterprise apps, OAuth2 permission grants, devices and organization contacts. They count as inventory rather than policies and stay outside hygiene, live change watching and audit alert suggestions. They support paged backup comparison and drift without loading the full directory. The [individual directory review](/restore/identity/#users-and-groups) supports disabled cloud user creation, user displayName and manager restore; static security group creation, nonempty description restore, user member additions, exact member removals from ordinary security groups and user owner additions; and app registration updates to nonempty displayName and description. Exact member removal is blocked for Conditional Access targeted groups because membership changes can affect policy enforcement; remove those members in Microsoft Entra. Each change needs individual approval and must pass the documented safety checks. Other directory operations remain blocked. See [Entra ID backups](/backups/entra/) and the [property allowlists](/security/data-flows/#directory-property-allowlists).
+The opt-in Entra ID Groups and Devices areas include group and device inventory. These objects are counted separately from policies.

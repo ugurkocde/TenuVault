@@ -413,8 +413,7 @@ describe("a choice of services, areas and access levels", () => {
     ["the onboarding choice of Intune and Entra ID with groups", onboardingPermissions({ intune: { access: "restore" }, entra: { access: "backup", areas: ["groups"] } })],
     ["Entra ID to back up", { entra: { access: "backup" } }],
     ["Intune to back up only", { intune: { access: "backup" } }],
-    ["Defender to restore and Entra ID with groups and applications to back up", { defender: { access: "restore" }, entra: { access: "backup", areas: ["groups", "applications"] } }],
-    ["every service and area to restore", { intune: { access: "restore" }, conditionalAccess: { access: "restore" }, entra: { access: "restore", areas: ["groups", "usersAndDevices", "applications"] }, defender: { access: "restore" } }],
+    ["every service and area to restore", { intune: { access: "restore" }, conditionalAccess: { access: "restore" }, entra: { access: "restore", areas: ["groups", "usersAndDevices"] } }],
   ])("creates the registration with exactly the permissions of the manifest for %s, and consents to exactly those", async (_name, choice) => {
     const f = fixture({ choice })
     expect(await f.run()).toMatchObject({ reused: false, ready: true, missingConsent: [] })
@@ -432,11 +431,9 @@ describe("a choice of services, areas and access levels", () => {
   })
 
   const entraOnly = graphPermissions({ entra: { access: "backup" } }, "delegated").filter(permission => !permission.startsWith("DeviceManagement"))
-  const defenderOnly = graphPermissions({ defender: { access: "backup" } }, "delegated").slice(2)
   it.each([
     ["the Entra ID permissions only", entraOnly.join(" ")],
     ["most of the Entra ID permissions, as an earlier version may have requested them", entraOnly.slice(2, 20).join(" ")],
-    ["the Defender permissions only", defenderOnly.join(" ")],
     // Every setup that includes Intune asks to read the managed devices, also one that only backs up.
     ["the one Intune read permission a default setup asks for", "DeviceManagementManagedDevices.Read.All"],
     ["everything a setup for Conditional Access alone asks for", "User.Read Organization.Read.All Policy.Read.All"],
@@ -459,7 +456,6 @@ describe("a choice of services, areas and access levels", () => {
     ["the Conditional Access permission without the rest of its setup", "User.Read Policy.Read.All Policy.ReadWrite.ConditionalAccess"],
     ["the broad directory reads", "User.Read.All Group.Read.All Directory.Read.All Application.Read.All Device.Read.All Policy.Read.All"],
     ["a few Entra ID permissions", "Policy.Read.All Domain.Read.All RoleManagement.Read.Directory"],
-    ["two Defender permissions", "SecurityEvents.Read.All CustomDetection.Read.All"],
     // Intune permissions a default setup never asks for did not count before services could be chosen either.
     ["an Intune read permission a default setup does not ask for", "User.Read Organization.Read.All DeviceManagementScripts.Read.All DeviceManagementApps.Read.All"],
     ["the write permission for managed devices", "DeviceManagementManagedDevices.ReadWrite.All"],
@@ -481,9 +477,9 @@ describe("a choice of services, areas and access levels", () => {
   // A registration as quick setup makes it for one service to back up, and every choice a later setup may ask for.
   const madeFor = (id: ModuleId) => consent(graphPermissions({ [id]: { access: "backup" } }, "delegated").join(" "))
   const CHOICES: [string, PermissionChoice | undefined][] = [
-    ["no choice", undefined], ["Conditional Access only", { conditionalAccess: { access: "backup" } }], ["Entra ID only", { entra: { access: "backup" } }], ["Defender only", { defender: { access: "backup" } }],
+    ["no choice", undefined], ["Conditional Access only", { conditionalAccess: { access: "backup" } }], ["Entra ID only", { entra: { access: "backup" } }],
   ]
-  describe.each<[string, ModuleId]>([["Conditional Access", "conditionalAccess"], ["Entra ID", "entra"], ["Defender", "defender"]])("a registration made for %s only", (_label, id) => {
+  describe.each<[string, ModuleId]>([["Conditional Access", "conditionalAccess"], ["Entra ID", "entra"]])("a registration made for %s only", (_label, id) => {
     it.each(CHOICES)("is recognised and used as it is when setup asks for %s, on every run", async (_name, choice) => {
       for (let runs = 0; runs < 2; runs++) {
         const f = fixture({ appPrincipal: { id: "app-sp" }, apps: [own], grants: [madeFor(id)], ...(choice ? { choice } : {}) })
@@ -503,7 +499,7 @@ describe("a choice of services, areas and access levels", () => {
 
   it("never writes to a registration it did not create, whatever the choice asks for and whatever Microsoft Graph would allow", async () => {
     // An approved Intune registration, and a choice that needs far more than it has.
-    const choice: PermissionChoice = { intune: { access: "restore" }, entra: { access: "restore", areas: ["groups", "usersAndDevices", "applications"] }, defender: { access: "restore" } }
+    const choice: PermissionChoice = { intune: { access: "restore" }, entra: { access: "restore", areas: ["groups", "usersAndDevices"] } }
     const f = fixture({ ...trusted, apps: [own], choice })
     const result = await f.run()
     expect(result).toMatchObject({ reused: true, clientId: "client" })
@@ -515,7 +511,7 @@ describe("a choice of services, areas and access levels", () => {
   it("prefers the registration whose consent covers more of what the manifest knows, whichever service that is", async () => {
     // The newer one also has an Entra ID permission; before, only Intune and the switches counted.
     const f = fixture({
-      appPrincipal: { id: "app-sp" }, apps: [own, { ...own, id: "other-app", appId: "other", displayName: "TenuVault Desktop (Lab)", createdDateTime: "2025-01-01" }], grants: [consent(`${INTUNE} Domain.Read.All`)],
+      appPrincipal: { id: "app-sp" }, apps: [own, { ...own, id: "other-app", appId: "other", displayName: "TenuVault Desktop (Lab)", createdDateTime: "2025-01-01" }], grants: [consent(`${INTUNE} Agreement.Read.All`)],
       fail: (url) => {
         const filter = url.searchParams.get("$filter")
         if (url.pathname.endsWith("servicePrincipals") && filter === "appId eq 'other'") return Response.json({ value: [{ id: "other-sp" }] })

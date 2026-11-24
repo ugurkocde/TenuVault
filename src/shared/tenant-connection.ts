@@ -54,7 +54,7 @@ export type BackupCoverageIssue = "permission" | "role" | "license" | "unknown"
 
 /** The selected types and the evidence for their coverage. A null readable list means an unverified grant. */
 export interface BackupScopeCoverage {
-  service: "defender" | "entra" | "intune"
+  service: "entra" | "intune"
   folders: readonly string[]
   readable: readonly string[] | null
   issues?: Readonly<Record<string, BackupCoverageIssue>>
@@ -73,6 +73,7 @@ export interface WizardSignInResult {
   id: string
   account: SignedInAccount
   organizationName?: string
+  verifiedScopes?: string[]
   coverage: BackupScopeCoverage[]
   missing?: string[]
 }

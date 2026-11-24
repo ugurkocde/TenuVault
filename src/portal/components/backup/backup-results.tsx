@@ -1,8 +1,10 @@
 "use client"
 
 import { useEffect, useId, useRef, useState } from "react"
-import { AlertTriangle, CircleStop, Check, ChevronDown, ChevronRight, Copy, FileText, LoaderCircle, MinusCircle, XCircle } from "lucide-react"
+import { AlertTriangle, CircleStop, Check, Copy, FileText, LoaderCircle, XCircle } from "lucide-react"
 import { cn } from "~/lib/utils"
+import { NoticeCard } from "@desktop/components/NoticeCard"
+import { BackupTypeDetails } from "@desktop/components/BackupCoverage"
 import { formatBackupDuration, summarizeBackupResults, typeHeading, type BackupJobDisplay } from "~/lib/backup-job-display"
 import { MAX_ITEM_ERRORS, type BackupTypeResult } from "../../../shared/backup-results"
 import { BACKUP_SERVICES, backupServiceForFolder, compareBackupServices } from "../../../shared/services/presentation"
@@ -12,6 +14,7 @@ interface BackupResultsProps {
   /** The floating panel's narrow layout: totals, problems and the first few types only. */
   compact?: boolean
   hideStats?: boolean
+  view?: "notices" | "details"
   /** Shown under the raw log, for support. */
   jobId?: string | null
 }
@@ -31,18 +34,54 @@ function compactRows(rows: BackupTypeResult[]): BackupTypeResult[] {
  * What a backup saved, per type, with problems first and the raw log folded away. Without per type
  * results (a job that has not started or failed before listing anything) only the raw log is offered.
  */
-export function BackupResults({ job, compact = false, jobId, hideStats = false }: BackupResultsProps) {
+export function BackupResults({ job, compact = false, jobId, hideStats = false, view }: BackupResultsProps) {
   const results = job.results
-  if (!results) return job.output ? <RawLog output={job.output} jobId={jobId} live={!job.isComplete} compact={compact} /> : null
+  if (!results) return view !== "notices" && job.output ? <RawLog output={job.output} jobId={jobId} live={!job.isComplete} compact={compact} /> : null
 
   const summary = summarizeBackupResults(results, job.isComplete)
   const duration = formatBackupDuration(job.startTime, job.endTime)
   const rows = compact ? compactRows(summary.rows) : summary.rows
   const hidden = summary.rows.length - rows.length
-  const problems = summary.unreadable.length + summary.skipped.length + summary.partial.length + summary.stopped.length + summary.warnings.length + summary.notReached.length
-  // Red only for a failed run; a run that completed with warnings or that the user cancelled stays amber.
-  const severe = job.isComplete && job.status === "Failed"
+  const skipped = new Set(summary.skipped.map(type => type.folder))
+  const unreadable = new Set(summary.unreadable.map(type => type.folder))
+  const stopped = new Set([...summary.notReached, ...summary.stopped].map(type => type.folder))
+  const partial = new Map(summary.partial.map(type => [type.folder, type.failed]))
+  const failedItems = [...partial.values()].reduce((count, failed) => count + failed, 0)
+  const failedRun = job.isComplete && job.status === "Failed"
+  const problemSummary = [
+    failedRun && "Backup failed.",
+    skipped.size > 0 && `Needs access for ${skipped.size} ${skipped.size === 1 ? "type" : "types"}.`,
+    unreadable.size > 0 && `${unreadable.size} ${unreadable.size === 1 ? "type" : "types"} could not be read.`,
+    failedItems > 0 && `${failedItems} ${failedItems === 1 ? "item" : "items"} could not be saved.`,
+    stopped.size > 0 && `Stopped before finishing ${stopped.size} ${stopped.size === 1 ? "type" : "types"}.`,
+    summary.warnings.length > 0 && `${summary.warnings.length} backup ${summary.warnings.length === 1 ? "warning" : "warnings"}.`,
+  ].filter(Boolean).join(" ")
+  const problems = results.types.filter(type => skipped.has(type.folder) || unreadable.has(type.folder) || stopped.has(type.folder) || partial.has(type.folder)).map(type => ({
+    folder: type.folder,
+    label: type.label,
+    detail: <>
+      {type.reason && <p>{type.reason}</p>}
+      {skipped.has(type.folder) && <p>{type.saved > 0 ? `Needs access. ${type.saved} saved before access was lost.` : "Needs access."}</p>}
+      {unreadable.has(type.folder) && <p>Could not read this type.</p>}
+      {stopped.has(type.folder) && <p>{type.found ? `${type.saved} of ${type.found} saved before the backup stopped.` : "The backup stopped before reading this type."}</p>}
+      {partial.has(type.folder) && <p>{type.failed} of {type.found ?? type.saved + type.failed} could not be saved.</p>}
+      {!!type.errors?.length && <ul className="list-disc pl-4">
+        {type.errors.slice(0, MAX_ITEM_ERRORS).map((error, index) => <li key={index}>{error}</li>)}
+        {type.failed > type.errors.length && <li>See the raw log for the remaining failures.</li>}
+      </ul>}
+    </>,
+  }))
+  const emptyTypes = [...summary.empty, ...summary.notConfigured]
   const extras = summary.inventory.map((entry) => `${entry.count} ${entry.label}`)
+
+  const notice = problemSummary ? <NoticeCard summary={problemSummary}
+    tone={failedRun || unreadable.size || failedItems ? "error" : summary.warnings.length ? "warning" : "neutral"}
+    details={problems.length || summary.warnings.length ? <>
+      <BackupTypeDetails entries={problems} />
+      {[...new Set(summary.warnings)].map(message => <p key={message}>{message}</p>)}
+    </> : undefined}
+  /> : null
+  if (view === "notices") return notice
 
   return (
     <div className="space-y-3">
@@ -60,58 +99,7 @@ export function BackupResults({ job, compact = false, jobId, hideStats = false }
       )}
       {extras.length > 0 && <p className="text-xs text-muted-foreground">Also saved: {extras.join(", ")}.</p>}
 
-      {problems > 0 && (
-        <div className={cn("rounded-2xl px-3.5 py-3", severe ? "bg-red-50" : "bg-amber-50")}>
-          <p className={cn("flex items-center gap-2 text-sm font-medium", severe ? "text-red-700" : "text-amber-800")}>
-            <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden="true" />
-            Needs attention
-          </p>
-          <ul className="mt-2 space-y-1.5 text-xs text-foreground">
-            {summary.coverageGap && (
-              <Problem
-                title={`Coverage incomplete: ${summary.coverageGap.notRead} of ${summary.coverageGap.selected} selected types ${summary.coverageGap.notRead === 1 ? "was" : "were"} not read in full`}
-                detail="This backup does not hold them, or not all of them. The reason for each follows."
-                compact={compact}
-              />
-            )}
-            {summary.unreadable.map((type) => (
-              <Problem key={type.folder} title={`Could not read ${type.label}`} detail={type.reason} compact={compact} />
-            ))}
-            {summary.notReached.length > 0 && (
-              <Problem
-                title={`${summary.notReached.length} type${summary.notReached.length === 1 ? " was" : "s were"} not read before the backup stopped`}
-                detail={summary.notReached.map((type) => typeHeading(type.label)).join(", ")}
-                compact={compact}
-              />
-            )}
-            {summary.stopped.map((type) => (
-              <Problem
-                key={type.folder}
-                title={`${type.found! - type.saved} of ${type.found} ${type.label} were not saved before the backup stopped`}
-                items={type.errors}
-                more={type.failed - (type.errors?.length ?? 0)}
-                compact={compact}
-              />
-            ))}
-            {summary.partial.map((type) => (
-              <Problem
-                key={type.folder}
-                title={`${type.failed} of ${type.found ?? type.saved + type.failed} ${type.label} could not be saved`}
-                items={type.errors}
-                more={type.failed - (type.errors?.length ?? 0)}
-                compact={compact}
-              />
-            ))}
-            {summary.skipped.map((type) => (
-              // A type whose read was refused part way keeps what it saved until then.
-              <Problem key={type.folder} title={type.saved > 0 ? `${typeHeading(type.label)} not read in full, ${type.saved} saved` : `${typeHeading(type.label)} left out`} detail={type.reason} compact={compact} />
-            ))}
-            {summary.warnings.map((message, index) => (
-              <Problem key={index} title={message} />
-            ))}
-          </ul>
-        </div>
-      )}
+      {view !== "details" && notice}
 
       {rows.length > 0 && (
         <ul aria-label="Backed up types" className="divide-y divide-border overflow-hidden rounded-2xl border border-border">
@@ -126,16 +114,14 @@ export function BackupResults({ job, compact = false, jobId, hideStats = false }
         </p>
       )}
 
-      {!compact && job.isComplete && summary.empty.length > 0 && (
-        <Disclosure label={`${summary.empty.length} type${summary.empty.length === 1 ? "" : "s"} had nothing to back up`}>
-          <p className="text-xs text-muted-foreground">{summary.empty.map((type) => typeHeading(type.label)).join(", ")}.</p>
-        </Disclosure>
-      )}
-
-      {!compact && job.isComplete && summary.notConfigured.length > 0 && (
-        <Disclosure label={`${summary.notConfigured.length} type${summary.notConfigured.length === 1 ? " is" : "s are"} not set up in this tenant`}>
-          <p className="text-xs text-muted-foreground">{summary.notConfigured.map((type) => typeHeading(type.label)).join(", ")}. Nothing is missing from the backup: Microsoft answered that there is nothing to save.</p>
-        </Disclosure>
+      {!compact && job.isComplete && emptyTypes.length > 0 && (
+        <NoticeCard summary={`${emptyTypes.length} ${emptyTypes.length === 1 ? "type had" : "types had"} nothing to back up.`}
+          details={<BackupTypeDetails entries={emptyTypes.map(type => ({
+            folder: type.folder,
+            label: type.label,
+            detail: type.state === "notConfigured" ? "Not set up in this tenant." : "No items to save.",
+          }))} />}
+        />
       )}
 
       {!compact && summary.info.length > 0 && (
@@ -185,42 +171,6 @@ function TypeRow({ type, finished }: { type: BackupTypeResult; finished: boolean
       </span>
       <span className="sr-only">{state}</span>
     </li>
-  )
-}
-
-function Problem({ title, detail, items, more = 0, compact = false }: { title: string; detail?: string; items?: string[]; more?: number; compact?: boolean }) {
-  return (
-    <li>
-      <p className="font-medium">{title}</p>
-      {detail && <p className={cn("text-muted-foreground", compact && "line-clamp-2")} title={compact ? detail : undefined}>{detail}</p>}
-      {items && items.length > 0 && !compact && (
-        <ul className="mt-0.5 list-disc space-y-0.5 pl-4 text-muted-foreground">
-          {items.slice(0, MAX_ITEM_ERRORS).map((item, index) => <li key={index} className="break-words">{item}</li>)}
-          {more > 0 && <li>and {more} more, listed in the raw log</li>}
-        </ul>
-      )}
-    </li>
-  )
-}
-
-function Disclosure({ label, children }: { label: string; children: React.ReactNode }) {
-  const [open, setOpen] = useState(false)
-  const id = useId()
-  return (
-    <div className="space-y-1.5">
-      <button
-        type="button"
-        onClick={() => setOpen((value) => !value)}
-        aria-expanded={open}
-        aria-controls={open ? id : undefined}
-        className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
-      >
-        {open ? <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" /> : <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />}
-        <MinusCircle className="h-3.5 w-3.5" aria-hidden="true" />
-        {label}
-      </button>
-      {open && <div id={id} className="pl-5">{children}</div>}
-    </div>
   )
 }
 

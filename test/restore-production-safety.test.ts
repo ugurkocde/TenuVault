@@ -1,3 +1,5 @@
+vi.hoisted(() => vi.stubGlobal("__TV_LAB_EXPANDED_ENTRA__", true))
+
 import { moduleForFolder, type Need } from "../src/shared/services/modules"
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest"
 import { safetyReader } from "../src/main/restore/safety-reader"

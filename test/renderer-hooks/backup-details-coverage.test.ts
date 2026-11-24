@@ -8,7 +8,7 @@ vi.mock("../../src/renderer/components/ServiceBackupNotice", () => ({ ServiceBac
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const state = vi.hoisted(() => ({ backups: [] as unknown[] }))
-vi.mock("react-router-dom", () => ({ useSearchParams: () => [new URLSearchParams("tab=history"), vi.fn()], Link: ({ children }: { children: unknown }) => children }))
+vi.mock("react-router-dom", () => ({ useSearchParams: () => [new URLSearchParams("tab=history"), vi.fn()], Link: ({ children, to }: { children: string; to: string }) => createElement("a", { href: to }, children) }))
 const tenant = vi.hoisted(() => ({ id: 1, name: "Contoso", status: "healthy", credentials: { tenantId: "11111111-1111-1111-1111-111111111111", appId: "app" }, resources: { storageAccountName: "tvlocal-11111111-1111-1111-1111-111111111111" } }))
 vi.mock("~/contexts/TenantContext", () => ({
   useTenants: () => [tenant],
@@ -59,18 +59,38 @@ describe("Backup Details and coverage", () => {
     expect(text).toContain("1 type not compared")
   })
 
-  it("says that coverage is incomplete and names the types, for a backup that is otherwise complete", () => {
+  it("keeps unknown coverage visible and names each type in Details", () => {
     // A scheduled backup as the Backup Reader: nothing failed and nothing was denied, yet two types are not in it.
     const text = details(backup({ coverage: "incomplete", notRead: ["DeviceCategories", "DeviceCleanupRules"] }))
     expect(text).toContain("Backup Details")
-    expect(text).toContain("Coverage incomplete. This backup does not hold every type it was asked to cover. Not read in full: Device categories, Device clean-up rules.")
+    expect(text).toContain("Coverage unknown for 2 types.")
   })
 
-  it("keeps the lines a denied type always had, with coverage above them", () => {
-    const text = details(backup({ coverage: "incomplete", notRead: ["PowerShellScripts"], skippedTypes: ["PowerShellScripts"] }))
-    expect(text).toContain("Not read in full: Windows PowerShell scripts.")
-    expect(text).toContain("Left out because the app registration or your role does not allow reading them: Windows PowerShell scripts.")
-    expect(text.indexOf("Coverage incomplete")).toBeLessThan(text.indexOf("Left out because"))
+  it("deduplicates a missing type, keeps failures visible, and shows one action", () => {
+    const page = renderBackup(backup({
+      coverage: "incomplete", failures: 3, notRead: ["PowerShellScripts", "DeviceCategories"], failedTypes: ["DeviceCategories"],
+      skippedTypes: ["PowerShellScripts", "PowerShellScripts"], notReadCauses: { PowerShellScripts: "permission" },
+    }))
+    const card = page.querySelector('[data-notice-tone="error"]')!
+    expect(card.querySelector('[role="alert"]')?.textContent).toBe("3 items or types could not be read. Needs access for 1 backup type.")
+    const toggle = card.querySelector<HTMLButtonElement>('button[aria-expanded]')!
+    const panel = document.getElementById(toggle.getAttribute("aria-controls")!)!
+    expect(panel.hidden).toBe(true)
+    expect(card.querySelectorAll("a")).toHaveLength(1)
+    expect(card.querySelector('[aria-label^="Dismiss"]')).toBeNull()
+    act(() => toggle.click())
+    expect(panel.hidden).toBe(false)
+    expect(toggle.getAttribute("aria-expanded")).toBe("true")
+    expect(panel.textContent).toContain("Intune (2)")
+    const entries = [...panel.querySelectorAll("li > p")].map(row => row.textContent?.toLowerCase())
+    expect(entries.filter(label => label === "windows powershell scripts")).toHaveLength(1)
+    expect(entries).toContain("device categories")
+  })
+
+  it("reports only recorded omissions for a legacy backup without a selected scope", () => {
+    const text = details(backup({ coverage: null, readableTypes: ["DeviceConfigurations"], skippedTypes: ["PowerShellScripts"] }))
+    expect(text).toContain("Needs access for 1 backup type.")
+    expect(text).not.toContain("Coverage unknown for")
   })
 
   it("shows nothing about coverage for a complete backup, or for one made before coverage was recorded", () => {

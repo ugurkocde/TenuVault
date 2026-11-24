@@ -8,6 +8,9 @@ import { ModuleSettings } from "../src/main/services/settings"
 import { localStorageAccountName } from "../src/shared/constants"
 import type { Item } from "../src/shared/intune/registry"
 
+vi.hoisted(() => vi.stubGlobal("__TV_LAB_EXPANDED_ENTRA__", true))
+vi.hoisted(() => vi.stubGlobal("__TV_LAB_PRIVILEGED_RESTORE__", true))
+
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`
 const tenant = id(1), admin = id(2), appId = id(3), resource = id(10)
 const folders = ["Applications", "Users", "Groups", "ServicePrincipals", "OAuth2PermissionGrants"]

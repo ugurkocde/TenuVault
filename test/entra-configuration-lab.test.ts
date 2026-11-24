@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest"
+vi.hoisted(() => vi.stubGlobal("__TV_LAB_EXPANDED_ENTRA__", true))
+
+import { describe, expect, it, vi } from "vitest"
 import { configurationLab, LAB_8B_TENANT, LAB_8B_APP, LAB_8B_FOLDERS } from "./helpers/entra-configuration-lab"
 import type { Item } from "../src/shared/intune/registry"
 
