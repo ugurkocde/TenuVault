@@ -1,0 +1,45 @@
+# Lab-only macOS preview for the owner. Never published: no release, no updater, unsigned,
+# lab app ID, and licensing pinned to a loopback license server reached through an SSH tunnel.
+name: Lab macOS preview
+
+on:
+  push:
+    branches: [lab/mac-preview]
+
+permissions:
+  contents: read
+
+jobs:
+  lab-mac:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build lab bundle and disk images
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          TENUVAULT_LAB_RUN: ugur-mac
+          TENUVAULT_LAB_LICENSE_ORIGIN: http://127.0.0.1:3816/
+          # Public key of the throwaway local license server. Not a secret.
+          TENUVAULT_LAB_LICENSE_PUBLIC_KEY: |
+            -----BEGIN PUBLIC KEY-----
+            MCowBQYDK2VwAyEAEC4VW6CZPQytEJXUAQ2RyiA1ePg7zQJg4kyf+Er0FJA=
+            -----END PUBLIC KEY-----
+        run: |
+          npm run build:lab
+          npx electron-builder --config electron-builder.lab.config.cjs --mac dmg --arm64 --x64 --publish never
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tenuvault-lab-mac
+          path: dist-lab/*.dmg
+          retention-days: 7
