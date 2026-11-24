@@ -17,6 +17,7 @@ import { fetchNetworkClient } from "./network-client"
 import { loopbackSignIn } from "./loopback-sign-in"
 import { deviceCodeSignIn } from "./device-code-sign-in"
 import { TENUVAULT_CLIENT_ID } from "../../shared/tenant-connection"
+import { tokenIdentity } from "./token-identity"
 import { grantedPermissions } from "../../shared/services/token"
 import { missingPackScopes, resourcePackScopes, resourceScopes, type PermissionPack } from "../../shared/services/permission-packs"
 import { consentIssue } from "./pack-consent"
@@ -36,6 +37,7 @@ export interface AuthHost {
   authorizeInteractive?: (tenantId: string) => void
   sharedScopes?: (tenantId: string, scope: string) => Promise<string[]>
   authorizeConnection?: (tenantId: string, clientId: string, scope: string) => void
+  authorizeIssuedToken?: (tenantId: string, clientId: string, scope: string, token: string) => void
   /** Opens the system browser for the loopback sign-in flow. */
   openBrowser: (url: string) => Promise<void>
   /** Stores which account belongs to which tenant profile. */
@@ -279,6 +281,10 @@ export class AuthManager {
       const result = await this.acquireInteractive(TENUVAULT_CLIENT_ID, tenant, resourceScopes("graph", graphScopes), "select_account", undefined, true, undefined, app)
       const account = result.account
       if (!account || account.tenantId.toLowerCase() !== tenant) throw new ConnectionSwitchError("wrong_tenant", "Sign in with an account from this tenant.")
+      const identity = tokenIdentity(result.accessToken)
+      if (identity.tenantId !== tenant || identity.clientId !== TENUVAULT_CLIENT_ID) {
+        throw new ConnectionSwitchError("switch_failed", "Microsoft returned an access token that could not be verified for this tenant and app. Sign in again.")
+      }
       const permissions = grantedPermissions(result.accessToken)
       if (permissions?.kind !== "delegated" || missingPackScopes(graphScopes, permissions.permissions).length) {
         throw new ConnectionSwitchError("AADSTS65001", "Some selected Microsoft Graph permissions are still missing. Review the packs and check again. (AADSTS65001)")
@@ -381,6 +387,7 @@ export class AuthManager {
     try {
       const result = await app.acquireTokenSilent({ account, scopes, authority: authority(tenantId), forceRefresh })
       if (result) {
+        this.host.authorizeIssuedToken?.(tenantId, clientId, scope, result.accessToken)
         // The request is attributed to the account this token was issued for.
         captureTokenActor({ username: result.account?.username || account.username || stored.username, name: result.account?.name ?? account.name ?? undefined })
         return result

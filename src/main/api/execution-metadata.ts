@@ -4,6 +4,10 @@ import type { RestoreConnection } from "../restore/service"
 import type { AuditBinding } from "./audit-sink"
 
 export interface ExecutionMetadata {
+  /** Tenant client IDs captured when the operation is admitted. */
+  connections?: ReadonlyMap<string, string | undefined>
+  /** Set only around the final write after a fresh deleted-object type check. */
+  directoryRecycle?: { path: string; type: "user" | "group" }
   /** The source and destinations admitted for a cross-tenant backup copy. */
   copyTenants?: { source: string; destinations: string[] }
   directoryActor?: Pick<SignedInAccount, "username" | "name">

@@ -348,6 +348,7 @@ async function bootstrap(): Promise<void> {
       return resourceScopes(resource, scopes)
     },
     authorizeConnection: (tenant, client, scope) => capabilities.requireConnection(tenant, client, scope),
+    authorizeIssuedToken: (tenant, client, scope, token) => capabilities.requireIssuedToken(tenant, client, scope, token),
     openBrowser: (url) => {
       if (!isMicrosoftLoginUrl(url)) {
         console.warn("[auth] Refused to open a sign-in URL that is not on the Microsoft login host.")
@@ -450,7 +451,7 @@ async function bootstrap(): Promise<void> {
     // Azure backups are written as plain JSON; backups sealed by earlier versions open with the device keyring.
     fetch: legacyAzureReader(withNetworkErrors(chromiumFetch), () => backupKeys.keyring()),
     authorizeTenant,
-    authorizeGraphRequest: (url, input, init, tenant) => capabilities.authorizeGraphRequest(url, input, init, tenant),
+    authorizeRequest: (url, input, init, tenant) => capabilities.authorizeRequest(url, input, init, tenant),
     authorizeResource: (tenant, scope) => capabilities.requireResource(tenant, scope),
     handleLocalBlob: (request) => handleLocalBlobRequest(getLocalStore(), request),
     getDelegatedToken: async (tenant, clientId, scope, forceRefresh) => {
@@ -802,6 +803,7 @@ async function bootstrap(): Promise<void> {
     },
   })
   const host: ApiHost = new ApiHost({
+    bindConnections: tenants => capabilities.bindConnections(tenants),
     beforeRoute: captureDownloadAudit,
     saveDownload: response => saveArchiveResponse(response, name => dialog.showSaveDialog(mainWindow!, { title: "Export backup", defaultPath: name, filters: [{ name: "Large backup archive", extensions: ["tar"] }] })),
     routes: { ...routes, ...backupRoutes(engine, (tenantId) => scopes.get(tenantId).scope), ...featureRoutes(featureDeps), ...driftScanRoutes(driftJobs), ...restoreSafetyRoutes(guardedRestoreJournal(), recoveryAccounts, restoreConnection, async tenant => { await restoreConnection(tenant) }, identityRestore) },

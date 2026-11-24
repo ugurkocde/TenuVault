@@ -21,6 +21,7 @@ export interface ApiHostOptions {
   onHandled?: (request: Request, requestBody: string, response: Response, metadata?: ExecutionMetadata) => void
   /** Streams large downloads to a native save destination before IPC can buffer them. */
   saveDownload?: (response: Response) => Promise<Response>
+  bindConnections?: (tenantIds: readonly string[]) => ExecutionMetadata["connections"]
   /** Captures who started a request before its route runs, for audits recorded after a long save. */
   beforeRoute?: (request: Request, body: string, metadata: ExecutionMetadata) => void
   /** Adjusts responses before they reach the caller. */
@@ -67,6 +68,8 @@ export class ApiHost {
       }
     }
 
+    const tenants = isGuid(tenantId) ? [tenantId.toLowerCase(), ...(metadata.copyTenants?.destinations ?? [])] : []
+    metadata.connections = this.options.bindConnections?.(tenants)
     const blocked = await this.options.guard?.(request)
     if (blocked) return blocked
 
@@ -75,10 +78,10 @@ export class ApiHost {
     try { this.options.beforeRoute?.(request, body, metadata) } catch (error) { console.error(`[api] ${request.method} ${url.pathname} could not capture the audit binding:`, error) }
     // The archive stream keeps reading storage during the native save. Hold the route's tenant
     // context and local folder guard until the save settles.
-    const response = await withRouteTenant(tenantId, async () => {
+    const response = await withRouteTenant(tenantId, () => executionMetadata.run(metadata, async () => {
       let response: Response
       try {
-        response = await executionMetadata.run(metadata, () => handler(new NextRequest(request)))
+        response = await handler(new NextRequest(request))
       } catch (error) {
         console.error(`[api] ${request.method} ${url.pathname} failed:`, error)
         response = Response.json(
@@ -97,7 +100,7 @@ export class ApiHost {
         }
       }
       return response
-    }, storageAccountName)
+    }), storageAccountName)
     try {
       this.options.onHandled?.(request, body, response, metadata)
     } catch (error) {

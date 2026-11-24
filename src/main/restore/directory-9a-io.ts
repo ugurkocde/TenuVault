@@ -1,3 +1,4 @@
+import { executionMetadata, type ExecutionMetadata } from "../api/execution-metadata"
 import { rejectProxyAuthResponses } from "../api/network-error"
 import { DIRECTORY_RETRIES, DirectoryReadDeferredError, DirectoryRoleDeferredError, DirectoryThrottledError, directoryThrottleError, directoryRetryAt, retryDirectoryWrite, waitForDirectoryRetry } from "./directory-retry"
 import { typeForFolder, restoreCapability, type Item } from "../../shared/intune/registry"
@@ -13,6 +14,7 @@ import { directoryPayload, directoryReview, disabledUserBody, requireDirectoryAp
 import { isRestorePersistenceError, guardedProtections, restoreFingerprint, type GuardedIO, type GuardedStep } from "./guarded-run"
 
 const root = "https://graph.microsoft.com/v1.0/"
+const deletedItems = "https://graph.microsoft.com/beta/directory/deletedItems/"
 const identity = (id: unknown): string => {
   if (!isGuid(id)) throw new RestoreSafetyError("A directory object ID could not be resolved.")
   return id
@@ -41,14 +43,15 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
   const fetchRequest = rejectProxyAuthResponses(fetchImpl)
   // Preview inventories can retry individual reads. Journalled execution uses raw
   // reads so every throttle reaches its durable entry or restarts the whole writer.
-  const request = async (path: string, method = "GET", body?: Item, validateSend?: () => Promise<void>, beforeSend?: () => void): Promise<Item | null> => {
+  const request = async (path: string, method = "GET", body?: Item, validateSend?: () => Promise<"user" | "group" | undefined>, beforeSend?: () => void): Promise<Item | null> => {
     for (let attempt = 0; ; attempt++) {
       const url = new URL(path.startsWith("https://") ? path : root + path)
       if (method === "GET" && /^(users|groups)\/[0-9a-f-]+$/i.test(path)) url.searchParams.set("$select", path.startsWith("users/") ? "id,displayName,userPrincipalName,mailNickname,userType,accountEnabled,givenName,surname,jobTitle,department,officeLocation,usageLocation,assignedLicenses,onPremisesSyncEnabled,onPremisesImmutableId,onPremisesLastSyncDateTime" : "id,displayName,description,mailNickname,groupTypes,mailEnabled,securityEnabled,isAssignableToRole,membershipRule,membershipRuleProcessingState,onPremisesSyncEnabled")
+      let recycleType: "user" | "group" | undefined
       if (method !== "GET") {
         try {
           signal?.throwIfAborted()
-          await validateSend?.()
+          recycleType = await validateSend?.()
           signal?.throwIfAborted()
         } catch (error) {
           if (isRestorePersistenceError(error)) throw error
@@ -59,7 +62,11 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
       const requestSignal = method === "GET" && signal ? AbortSignal.any([signal, AbortSignal.timeout(60_000)]) : AbortSignal.timeout(60_000)
       beforeSend?.()
       if (method !== "GET" && signal?.aborted) throw new RestoreWriteDeferredError("The directory write was cancelled before sending.")
-      const response = await fetchRequest(url.href, { method, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", ...(method === "GET" && (url.searchParams.has("$count") || url.pathname.includes("/transitiveMemberOf/")) ? { ConsistencyLevel: "eventual" } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}), signal: requestSignal }).catch(error => {
+      const send = () => fetchRequest(url.href, { method, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", ...(method === "GET" && (url.searchParams.has("$count") || url.pathname.includes("/transitiveMemberOf/")) ? { ConsistencyLevel: "eventual" } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}), signal: requestSignal })
+      const recycle: ExecutionMetadata["directoryRecycle"] = recycleType && { path: url.pathname, type: recycleType }
+      const response = await (recycle
+        ? executionMetadata.run({ ...executionMetadata.getStore(), directoryRecycle: recycle }, send)
+        : send()).catch(error => {
         if (isRestorePersistenceError(error)) throw error
         if (method === "GET" && signal?.aborted) throw new RestoreWriteDeferredError("The directory read was cancelled before sending a write.")
         if (method === "GET") throw new DirectoryReadDeferredError()
@@ -194,7 +201,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
     if (intent.action === "recycle") {
       const live = await request(path)
       if (live) return { id: live.id!, restored: true }
-      const deleted = await request(`directory/deletedItems/${identity(step.targetId ?? step.sourceId)}`)
+      const deleted = await request(deletedItems + identity(step.targetId ?? step.sourceId))
       return deleted ? { ...deleted, restored: false } : null
     }
     if (intent.action === "license") {
@@ -348,7 +355,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
           // Only the projected supported properties may reach Graph.
           if (Object.keys(body).some(key => !(key in rebuilt) || JSON.stringify(body[key]) !== JSON.stringify(rebuilt[key]))) throw new RestoreSafetyError("Unsupported directory write property.")
           if (action === "create") { method = "POST"; writePath = folderPath(step); payload = step.folder === "Users" ? disabledUserBody(body) : body }
-        } else if (action === "recycle") { method = "POST"; writePath = `directory/deletedItems/${identity(targetId ?? step.sourceId)}/restore`; payload = {} }
+        } else if (action === "recycle") { method = "POST"; writePath = `${deletedItems}${identity(targetId ?? step.sourceId)}/restore`; payload = {} }
         else if (action === "invite") {
           if (body.sendInvitationMessage !== false || typeof body.invitedUserEmailAddress !== "string" || typeof body.inviteRedirectUrl !== "string") throw new RestoreSafetyError("A guest invitation needs its own reviewed address and redirect, without automatic email.")
           method = "POST"; writePath = "invitations"
@@ -384,6 +391,9 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
           const references = await safety(step, current, body)
           if (step.directory?.principalId) references.principals = [...references.principals, step.directory.principalId]
           guardRestoreItem(actor, step.folder, targetId, references, step.allowRemoval === true, guardedProtections(step))
+          if (action !== "recycle" || current?.restored !== false) return
+          const expected = step.folder === "Users" ? "user" : step.folder === "Groups" ? "group" : undefined
+          if (expected && current["@odata.type"] === `#microsoft.graph.${expected}`) return expected
         }, beforeSend)
         const id = action === "invite" ? (response?.invitedUser as Item | undefined)?.id : response?.id ?? targetId
         return { id: identity(id) }

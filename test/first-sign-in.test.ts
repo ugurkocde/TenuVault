@@ -308,7 +308,7 @@ describe("cancelInteractive", () => {
 describe("TenuVault app token verification", () => {
   const cache = { beforeCacheAccess: async () => undefined, afterCacheAccess: async () => undefined }
   const account = { tenantId: TENANT, username: "example@example.test", homeAccountId: "fixture" }
-  const token = (scopes: string[]) => `header.${Buffer.from(JSON.stringify({ scp: scopes.join(" ") })).toString("base64url")}.signature`
+  const token = (scopes: string[], claims: object = {}) => `header.${Buffer.from(JSON.stringify({ tid: TENANT, appid: TENUVAULT_CLIENT_ID, scp: scopes.join(" "), ...claims })).toString("base64url")}.signature`
 
   it("checks the selected pack with a fresh token and no consent prompt", async () => {
     const [basic] = tenantPermissionPacks({}, { azure: false, audit: false })
@@ -322,6 +322,18 @@ describe("TenuVault app token verification", () => {
     }))
     expect(auth.accounts()).toEqual([])
   })
+
+  it.each([{ tid: CLIENT }, { azp: CLIENT }, { appid: CLIENT }, { tid: undefined }, { appid: undefined }])(
+    "refuses staged Graph token identity %j even when the account and scopes match",
+    async claims => {
+      const packs = tenantPermissionPacks({}, { azure: false, audit: false })
+      msal.interactive.mockResolvedValueOnce({ account, accessToken: token(resourcePackScopes(packs, "graph"), claims) })
+      const auth = manager()
+      await expect(auth.stageTenuVaultSignIn(TENANT, cache, packs)).rejects.toMatchObject({ code: "switch_failed" })
+      expect(auth.accounts()).toEqual([])
+      expect(msal.silent).not.toHaveBeenCalled()
+    },
+  )
 
   it("requires a same-tenant Graph token and separate Azure tokens before staging the switch", async () => {
     const packs = tenantPermissionPacks({ intune: { access: "backup" } }, { azure: true, audit: false })

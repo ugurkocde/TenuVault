@@ -3,6 +3,7 @@ import { PassThrough } from "node:stream"
 import { afterEach, expect, it, vi } from "vitest"
 const spawned = vi.hoisted(() => ({ spawn: vi.fn() }))
 vi.mock("node:child_process", () => ({ spawn: spawned.spawn }))
+import { TENUVAULT_CLIENT_ID } from "../src/shared/tenant-connection"
 import { requestWindowsContent } from "../src/main/app-backup/windows-helper"
 const tenant = "11111111-1111-1111-1111-111111111111", app = "22222222-2222-2222-2222-222222222222", job = "33333333-3333-3333-3333-333333333333"
 const request = { tenantId: tenant, appId: app, jobId: job, accessToken: "private-token" }
@@ -12,6 +13,11 @@ function child() {
   return value
 }
 afterEach(() => vi.clearAllMocks())
+it("keeps TenuVault app tokens out of the helper that makes its own Graph requests", () => {
+  const accessToken = `header.${Buffer.from(JSON.stringify({ tid: tenant, azp: TENUVAULT_CLIENT_ID })).toString("base64url")}.signature`
+  expect(() => requestWindowsContent("helper.exe", { ...request, accessToken }, new AbortController().signal)).toThrow("your own app registration")
+  expect(spawned.spawn).not.toHaveBeenCalled()
+})
 it("passes the request over bounded stdin and never puts secrets in arguments", async () => {
  const process = child(), chunks: Buffer[] = []
  process.stdin.on("data", b => chunks.push(Buffer.from(b)))

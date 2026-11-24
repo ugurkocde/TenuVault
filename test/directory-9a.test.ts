@@ -1,3 +1,7 @@
+import { ConnectionCapabilities } from "../src/main/auth/connection-capabilities"
+import { createBridgedFetch } from "../src/main/api/fetch-bridge"
+import { TENUVAULT_CLIENT_ID } from "../src/shared/tenant-connection"
+import { servicePack } from "../src/shared/services/permission-packs"
 import { graphUserCreateResponse } from "./fixtures/directory-graph-v1"
 import { graphNotFound, unsetUserFields, unsetGroupFields } from "./fixtures/directory-response"
 import { describe, it, expect, vi } from "vitest"
@@ -81,7 +85,7 @@ for (const action of ["create", "update", "recycle", "invite", "member", "owner"
     let writes = 0, live: Item | null = ["create", "invite", "recycle"].includes(action) ? null : { ...base }, deleted = action === "recycle", related = false, licensed = false
     let secret: string | undefined
     const fetcher = vi.fn(async (input: RequestInfo | URL, options?: RequestInit) => {
-      const url = new URL(String(input)), path = url.pathname.replace("/v1.0/", "")
+      const url = new URL(String(input)), path = url.pathname.replace(/^\/(?:v1\.0|beta)\//, "")
       if (options?.method !== "GET") {
         writes++
         if (outcome === "throttled" && writes === 1) return Response.json({ error: { code: "TooManyRequests" } }, { status: 429, headers: { "Retry-After": "1" } })
@@ -120,6 +124,42 @@ for (const action of ["create", "update", "recycle", "invite", "member", "owner"
     if (secret) { expect(secret.length).toBeGreaterThan(60); expect([...saved.values.values()].join()).not.toContain(secret); expect([...saved.values.values()].join()).not.toContain("passwordProfile") }
   }))
 })
+
+it.each([
+  ["Users", "user", true], ["Groups", "group", true], ["Users", "application", false],
+  ["Groups", "servicePrincipal", false], ["Users", undefined, false],
+] as const)("gates a %s recycle restore on the verified directory object type %s", async (folder, objectType, allowed) => admitted(async () => {
+  const step = stepFor("recycle", folder)
+  step.desired = { restored: true }
+  step.properties = ["restored"]
+  const base = folder === "Users" ? user : group
+  const deleted = { ...base, ...(objectType ? { "@odata.type": `#microsoft.graph.${objectType}` } : {}) }
+  const appActor = { ...actor, clientId: TENUVAULT_CLIENT_ID }
+  const pack = servicePack("entra", "restore", ["groups", "usersAndDevices"])
+  const accessToken = `header.${Buffer.from(JSON.stringify({
+    tid: actor.tenantId, oid: actor.userId, appid: TENUVAULT_CLIENT_ID, scp: [...pack.scopes, ...perms].join(" "),
+  })).toString("base64url")}.signature`
+  const caps = new ConnectionCapabilities(() => ({
+    version: 1, clientId: TENUVAULT_CLIENT_ID, method: "tenuvaultApp", origin: "wizard",
+    createdAt: "", updatedAt: "", graphScopes: pack.scopes,
+  }), () => [pack], async () => true)
+  const network = vi.fn<typeof fetch>(async (input, init) => {
+    if (init?.method === "POST") return Response.json({ id: base.id })
+    return String(input).includes("/directory/deletedItems/") ? Response.json(deleted) : graphNotFound()
+  })
+  const fetcher = createBridgedFetch({
+    dispatch: vi.fn(), getDelegatedToken: vi.fn(), fetch: network,
+    authorizeRequest: (url, input, init, tenant) => caps.authorizeRequest(url, input, init, tenant),
+  })
+  const io = directory9aIO(accessToken, appActor, refs, fetcher)
+  step.preview = restoreFingerprint(await io.read(step, step.targetId))
+  const run = { ...runFor(step), actor: appActor }
+  for (const kind of (await io.review(step)).approvals) approveDirectory(step, run, kind)
+  const result = io.write(step, step.desired, step.targetId, vi.fn(), run)
+  if (allowed) await expect(result).resolves.toEqual({ id: base.id })
+  else await expect(result).rejects.toThrow("restore permission pack")
+  expect(network.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(allowed ? 1 : 0)
+}))
 
 it("locates the recycle bin before proposing creation and refuses bypassing it", async () => {
   const fetcher = vi.fn(async (url: RequestInfo | URL) => String(url).includes("deletedItems") ? Response.json(user) : graphNotFound())

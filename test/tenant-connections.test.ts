@@ -7,7 +7,7 @@ import { SecureStore } from "../src/main/storage/secure-store"
 import { ModuleSettings } from "../src/main/services/settings"
 import { TenantConnections, TENANT_LIST_KEY, type StagedSignIn } from "../src/main/auth/tenant-connections"
 import { accountStore, connectionCache, publicAccountKey, stageConnectionCache } from "../src/main/auth/stores"
-import { GRAPH_CLI_CLIENT_ID, TENUVAULT_CLIENT_ID, type SignInMethod } from "../src/shared/tenant-connection"
+import { GRAPH_CLI_CLIENT_ID, TENUVAULT_CLIENT_ID, type SignInMethod, type TenantConnection } from "../src/shared/tenant-connection"
 import { RESOURCE_SCOPES } from "../src/shared/constants"
 import { connectionCoverage } from "../src/main/auth/connection-coverage"
 import { ConnectionCapabilities, READ_ONLY } from "../src/main/auth/connection-capabilities"
@@ -305,18 +305,19 @@ describe("Start now capability", () => {
     const network = vi.fn(async () => new Response("{}"))
     const fetch = createBridgedFetch({
       dispatch: vi.fn(), getDelegatedToken: vi.fn(), fetch: network,
-      authorizeGraphRequest: (url, input, init, tenant) => cap.authorizeGraphRequest(url, input, init, tenant),
+      authorizeRequest: (url, input, init, tenant) => cap.authorizeRequest(url, input, init, tenant),
     })
-    const batch = (method: string, authorization = `Bearer ${jwt({ tid: OTHER })}`) => fetch("https://graph.microsoft.com/beta/$batch", {
+    const batch = (method: string, authorization = `Bearer ${jwt({ tid: OTHER, appid: OWN })}`) => fetch("https://graph.microsoft.com/beta/$batch", {
       method: "POST", headers: { authorization }, body: JSON.stringify({ requests: [{ id: "1", method, url: "/deviceManagement/configurationPolicies" }] }),
     })
-    const host = new ApiHost({ guard: request => cap.guard(request), routes: {
+    const host = new ApiHost({ bindConnections: tenants => cap.bindConnections(tenants), guard: request => cap.guard(request), routes: {
       "/api/restore-backup": { POST: async () => {
         await batch("POST")
         await f.connections.switch(changedTenant, { method: "graphCli" })
-        await expect(batch("POST")).rejects.toThrow(READ_ONLY)
-        await expect(batch("POST", "Bearer opaque")).rejects.toThrow(READ_ONLY)
-        await expect(batch("GET")).resolves.toBeInstanceOf(Response)
+        await expect(batch("POST")).rejects.toThrow(side === "source" ? READ_ONLY : "method changed")
+        await expect(batch("POST", "Bearer opaque")).rejects.toThrow("could not verify")
+        if (side === "source") await expect(batch("GET")).resolves.toBeInstanceOf(Response)
+        else await expect(batch("GET")).rejects.toThrow("method changed")
         return Response.json({ ok: true })
       } },
     } })
@@ -324,7 +325,7 @@ describe("Start now capability", () => {
       method: "POST", body: JSON.stringify({ tenantId: TENANT, targetTenants: [{ tenantId: OTHER, appId: OWN }] }),
     }))
     expect(response.status).toBe(200)
-    expect(network).toHaveBeenCalledTimes(2)
+    expect(network).toHaveBeenCalledTimes(side === "source" ? 2 : 1)
   })
 
   it("blocks writes even with a write token, including copy from or to the tenant", async () => {
@@ -348,10 +349,10 @@ describe("Start now capability", () => {
     const network = vi.fn(async () => new Response("{}"))
     const fetch = createBridgedFetch({
       dispatch: vi.fn(), getDelegatedToken: vi.fn(), fetch: network,
-      authorizeGraphRequest: (url, input, init, tenant) => cap.authorizeGraphRequest(url, input, init, tenant),
+      authorizeRequest: (url, input, init, tenant) => cap.authorizeRequest(url, input, init, tenant),
       authorizeResource: (tenant, scope) => cap.requireResource(tenant, scope),
     })
-    const headers = { Authorization: `Bearer ${token}` }
+    const headers = { Authorization: `Bearer ${jwt({ tid: TENANT, appid: GRAPH_CLI_CLIENT_ID })}` }
     await expect(fetch(graph + "/deviceManagement/configurationPolicies", { method: "POST", headers })).rejects.toThrow(READ_ONLY)
     await expect(withRouteTenant(TENANT, () => fetch(graph + "/$batch", { method: "POST", body: JSON.stringify({ requests: [{ method: "PATCH" }] }) }))).rejects.toThrow(READ_ONLY)
     await expect(fetch(graph + "/$batch", { method: "POST", headers, body: JSON.stringify({ requests: [{ method: "GET" }] }) })).resolves.toBeInstanceOf(Response)
@@ -380,7 +381,7 @@ describe("TenuVault app capabilities", () => {
     const caps = new ConnectionCapabilities(record, () => packs, async () => enabled)
     const send = (claims: object, path = "deviceManagement/configurationPolicies") => {
       const url = new URL("https://graph.microsoft.com/beta/" + path)
-      return caps.authorizeGraphRequest(url, url, { method: "POST", headers: { Authorization: `Bearer ${jwt(claims)}` } }, TENANT)
+      return caps.authorizeRequest(url, url, { method: "POST", headers: { Authorization: `Bearer ${jwt(claims)}` } }, TENANT)
     }
     const broad = { tid: TENANT, azp: TENUVAULT_CLIENT_ID, scp: graphScopes.join(" ") + " DeviceManagementConfiguration.ReadWrite.All Application.ReadWrite.All" }
     await expect(send(broad)).rejects.toThrow("restore permission pack")
@@ -393,9 +394,62 @@ describe("TenuVault app capabilities", () => {
     await expect(send(allowed)).resolves.toBeUndefined()
     await expect(send(allowed, "identity/conditionalAccess/policies")).rejects.toThrow("restore permission pack")
     await expect(send(allowed, "applications")).rejects.toThrow("restore permission pack")
-    await expect(send({ ...allowed, azp: OWN })).rejects.toThrow("restore permission pack")
+    await expect(send({ ...allowed, azp: OWN })).rejects.toThrow("method changed")
     enabled = false
     await expect(send(allowed)).rejects.toThrow("currently unavailable")
+  })
+
+  it("stops already issued tokens across resources when health changes or the tenant switches", async () => {
+    const packs = tenantPermissionPacks({ intune: { access: "restore" } }, { azure: true, audit: false })
+    const graphScopes = resourcePackScopes(packs, "graph")
+    let enabled = true
+    const shared = { version: 1 as const, clientId: TENUVAULT_CLIENT_ID, method: "tenuvaultApp" as const, origin: "wizard" as const, createdAt: NOW, updatedAt: NOW, graphScopes }
+    let record: TenantConnection = shared
+    const cap = new ConnectionCapabilities(id => id === TENANT ? record : null, () => packs, async () => enabled)
+    const network = vi.fn(async () => new Response("{}"))
+    const fetch = createBridgedFetch({
+      dispatch: vi.fn(), getDelegatedToken: vi.fn(), fetch: network,
+      authorizeRequest: (url, input, init, tenant) => cap.authorizeRequest(url, input, init, tenant),
+    })
+    const graph = "https://graph.microsoft.com/beta"
+    const paths: Array<[string, RequestInit?]> = [
+      [graph + "/organization"],
+      [graph + "/organization", { method: "HEAD" }],
+      [graph + "/$batch", { method: "POST", body: JSON.stringify({ requests: [{ method: "GET", url: "/organization" }] }) }],
+      [graph + "/deviceManagement/configurationPolicies", { method: "POST" }],
+      ["https://management.azure.com/subscriptions"],
+      ["https://example.blob.core.windows.net/container", { method: "PUT" }],
+    ]
+    const claims = { tid: TENANT, appid: TENUVAULT_CLIENT_ID, scp: graphScopes.join(" ") }
+    const send = (path: string, init?: RequestInit, accessToken = jwt(claims)) =>
+      fetch(path, { ...init, headers: { authorization: `Bearer ${accessToken}` } })
+    for (const [path, init] of paths) await send(path, init)
+    enabled = false
+    for (const [path, init] of paths) await expect(send(path, init)).rejects.toThrow("currently unavailable")
+    expect(network).toHaveBeenCalledTimes(paths.length)
+
+    enabled = true
+    const write = graph + "/deviceManagement/configurationPolicies"
+    const host = new ApiHost({ bindConnections: tenants => cap.bindConnections(tenants), routes: {
+      "/api/restore-backup": { POST: async () => {
+        record = { ...shared, method: "ownApp", clientId: OWN }
+        await expect(send(write, { method: "POST" })).rejects.toThrow("method changed")
+        await expect(send(write, { method: "POST" }, jwt({ ...claims, appid: OWN }))).rejects.toThrow("method changed")
+        return Response.json({ ok: true })
+      } },
+    } })
+    const response = await host.dispatch(new Request("http://test/api/restore-backup", { method: "POST", body: JSON.stringify({ tenantId: TENANT }) }))
+    expect(response.status).toBe(200)
+    expect(network).toHaveBeenCalledTimes(paths.length)
+  })
+
+  it("refuses opaque and mismatched bearer tokens within a bound tenant operation", async () => {
+    const record = { version: 1 as const, clientId: OWN, method: "ownApp" as const, origin: "wizard" as const, createdAt: NOW, updatedAt: NOW }
+    const cap = new ConnectionCapabilities(id => id === TENANT ? record : null)
+    const url = new URL("https://graph.microsoft.com/beta/organization")
+    for (const bearer of ["opaque", jwt({ tid: OTHER, appid: OWN }), jwt({ tid: TENANT, azp: NEXT })]) {
+      await expect(cap.authorizeRequest(url, url, { headers: { authorization: `Bearer ${bearer}` } }, TENANT)).rejects.toThrow()
+    }
   })
 
   it("keeps the current connection when staged approval is missing and then records verified scopes", async () => {

@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process"
+import { TENUVAULT_CLIENT_ID } from "../../shared/tenant-connection"
+import { tokenIdentity } from "../auth/token-identity"
 import type { DeviceContent } from "./capture-download"
 import { bindCapture } from "./capture-identity"
 import { sourceTenant } from "../app-sources/store"
@@ -10,6 +12,10 @@ export interface AuthorizedDeviceContent extends DeviceContent { appName: string
 export function requestWindowsContent(executable: string, request: CaptureHelperRequest, signal: AbortSignal): Promise<AuthorizedDeviceContent> {
   sourceTenant(request.tenantId); sourceTenant(request.appId); sourceTenant(request.jobId)
   signal.throwIfAborted()
+  // The helper makes its own Graph calls after Windows approval, outside the desktop's live transport guard.
+  if (tokenIdentity(request.accessToken).clientId === TENUVAULT_CLIENT_ID) {
+    throw new Error("Windows installer capture requires your own app registration. Change the tenant's sign-in method to use this preview.")
+  }
   return new Promise((resolve, reject) => {
     const child = spawn(executable, ["broker", String(process.pid)], { stdio: ["pipe", "pipe", "pipe"], windowsHide: true })
     let output = Buffer.alloc(0), settled = false

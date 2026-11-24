@@ -19,7 +19,7 @@ export interface FetchBridgeOptions {
    * local backup store, so no path skips licensing.
    */
   authorizeTenant?: (tenant: string) => unknown
-  authorizeGraphRequest?: (url: URL, input: RequestInfo | URL, init: RequestInit | undefined, tenant: string | null) => Promise<void>
+  authorizeRequest?: (url: URL, input: RequestInfo | URL, init: RequestInit | undefined, tenant: string | null) => Promise<void>
   authorizeResource?: (tenant: string, scope: string) => void
   /** Serves Blob requests for local (`tvlocal-...`) storage accounts from the encrypted store. */
   handleLocalBlob?: (request: Request) => Promise<Response>
@@ -117,7 +117,7 @@ export function createBridgedFetch(options: FetchBridgeOptions): typeof fetch {
         return response
       }
 
-      if (url.origin === "https://graph.microsoft.com") await options.authorizeGraphRequest?.(url, input, init, currentRouteTenant())
+      await options.authorizeRequest?.(url, input, init, currentRouteTenant())
       return realFetch(input, init)
     } catch (error) {
       if (networkAttempted || error instanceof FetchPreconditionError) throw error
