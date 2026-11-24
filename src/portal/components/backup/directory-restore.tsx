@@ -197,7 +197,8 @@ export function DirectoryRestore({ tenant, backupId = "", path = "", active = tr
         {review.more && <div className="space-y-2"><p>{unresolved ? "Resolve or discard this saved page before previewing the next page. Unresolved changes keep their objects locked." : unit ? "More relationships remain to be checked." : "More changes remain. Completed differences are omitted. Blocked rows do not prevent reviewing the next page."}</p><Button size="sm" variant="outline" disabled={busy || unresolved} onClick={() => void send("next")}>Preview next page</Button></div>}
         {review.temporaryAccess && selected && !review.discarded && <div className="space-y-2 rounded-md border bg-card p-3">
           <p className="font-medium">Temporary permission for app metadata restore</p>
-          <p>Microsoft asks for <strong>{review.temporaryAccess.pack.scopes.join(" and ")}</strong> when you start the approved restore.</p>
+          <p>Microsoft asks for <strong>{review.temporaryAccess.pack.scopes.join(" and ")}</strong> only if the required permissions are missing when you start the approved restore.</p>
+          <p>Run only one app metadata restore per tenant at a time, including across devices. Avoid granting permissions to the TenuVault app while the restore runs.</p>
           <label className="flex items-start gap-2"><input type="checkbox" checked={review.temporaryAccess.cleanup.checked} disabled readOnly />Remove permissions added by this restore when it ends (required)</label>
         </div>}
         {!privileged && <div className="flex flex-wrap gap-2"><Button size="sm" disabled={busy || review.discarded || !selected} onClick={() => void send("restore")}>Execute approved changes or resume page</Button>{busy && activeRestore === review.runId && <Button size="sm" variant="outline" onClick={() => void send("cancel")}>Cancel directory restore</Button>}</div>}

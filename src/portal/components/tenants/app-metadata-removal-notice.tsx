@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react"
 import { bridge } from "../../../renderer/lib/bridge"
-import { appMetadataRemovalInstructions, type AppMetadataRemoval } from "../../../shared/app-metadata-removal"
+import { appMetadataRemovalInstructions, missingPriorScopeMessages, type AppMetadataRemoval } from "../../../shared/app-metadata-removal"
 import { Button } from "~/components/ui/button"
 
 export function AppMetadataRemovalNotice({ tenantId, result }: { tenantId: string; result?: AppMetadataRemoval }) {
@@ -46,7 +46,8 @@ export function AppMetadataRemovalNotice({ tenantId, result }: { tenantId: strin
   </div>
   if (removal.status === "verified") return <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-sm text-gray-900" role="status">
     <p className="font-medium">Temporary permission removal verified</p>
-    <p>{removal.scopes.length ? "Microsoft Graph confirmed that the scopes added for this restore are gone." : "This restore added no permission scopes."}</p>
+    <p>{removal.scopes.length ? "Microsoft Graph confirmed that the grants recorded for this restore no longer contain its temporary scopes." : "This restore added no permission scopes."}</p>
+    {missingPriorScopeMessages(removal).map(line => <p className="break-words" key={line}>{line}</p>)}
   </div>
   const instructions = appMetadataRemovalInstructions(removal)
   return <section className="space-y-2 rounded-md border border-blue-200 bg-blue-50 p-3 text-sm text-gray-900" aria-label="Temporary permission removal pending" data-no-select>

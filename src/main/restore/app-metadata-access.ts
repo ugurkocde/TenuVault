@@ -28,6 +28,7 @@ interface Record {
   before: Grant[]
   added?: Addition[]
   remaining?: Addition[]
+  missingPriorScopes?: Addition[]
   askedForConsent: boolean
   consentObserved?: true
   verified?: true
@@ -50,6 +51,14 @@ export function addedAppMetadataScopes(before: Grant[], after: Grant[]): Additio
   return after.flatMap(grant => pack.scopes
     .filter(scope => has(grant.scopes, scope) && !has(before.find(row => slot(row) === slot(grant))?.scopes ?? [], scope))
     .map(scope => ({ id: grant.id, consentType: grant.consentType, principalId: grant.principalId, scope })))
+}
+
+function missingPriorScopes(before: Grant[], current: Grant[]): Addition[] {
+  return before.flatMap(grant => {
+    const scopes = current.find(row => slot(row) === slot(grant))?.scopes ?? []
+    return grant.scopes.filter(scope => !has(scopes, scope))
+      .map(scope => ({ id: grant.id, consentType: grant.consentType, principalId: grant.principalId, scope }))
+  })
 }
 
 export function withTemporaryDirectoryWrite<T>(connection: RestoreConnection, path: string, method: "PATCH" | "DELETE", kind: NonNullable<ExecutionMetadata["directoryTemporaryWrite"]>["kind"], work: () => T): T {
@@ -83,6 +92,7 @@ export class AppMetadataAccess {
       runId: record.runId,
       status: record.verified ? "verified" : this.active.has(restoreTenantKey(tenant)) ? "active" : "pending",
       scopes: scopes.map(({ consentType, principalId, scope, ...grant }) => ({ consentType, principalId, scope, ...("id" in grant ? { grantId: String(grant.id) } : {}) })),
+      ...(record.missingPriorScopes?.length ? { missingPriorScopes: record.missingPriorScopes.map(({ id, ...scope }) => ({ ...scope, grantId: id })) } : {}),
       ...(this.active.get(restoreTenantKey(tenant)) === "removing" ? { removing: true } : {}),
       ...(!record.consentObserved && !record.verified ? { uncertain: true } : {}),
     }
@@ -184,8 +194,8 @@ export class AppMetadataAccess {
       if (!granted()) fail("Microsoft Graph has not confirmed both permissions in the TenuVault app's grants.")
       record.added = askedForConsent ? addedAppMetadataScopes(before, after) : []
       record.consentObserved = true
+      record.missingPriorScopes = missingPriorScopes(before, after)
       this.save(tenant, record)
-      this.requirePriorScopes(before, after)
       elevated = await this.host.token(tenant, pack.scopes, true)
       this.requirePack(elevated, normal, pack.scopes)
       await this.host.verifyOwner(normal)
@@ -198,6 +208,11 @@ export class AppMetadataAccess {
           this.host.changed?.(tenant)
           await this.clean(normal, record, elevated)
         } else if (record) {
+          // There was no consent or cleanup write to verify. Report any prior scopes we can see are missing.
+          try {
+            const current = await this.grants(normal, record.endpoint, record.owner)
+            record.missingPriorScopes = missingPriorScopes(record.before, current)
+          } catch { /* Keep the last successful observation. */ }
           record.verified = true
           this.save(tenant, record)
         }
@@ -220,22 +235,18 @@ export class AppMetadataAccess {
     return this.status(tenant, record.runId)
   }
 
-  private requirePriorScopes(before: Grant[], after: Grant[]) {
-    if (before.some(grant => grant.scopes.some(scope => !has(after.find(row => slot(row) === slot(grant))?.scopes ?? [], scope)))) {
-      fail("Microsoft Graph has not confirmed preservation of the existing permissions.")
-    }
-  }
-
   private async clean(normal: RestoreConnection, record: Record, elevated?: RestoreConnection, retry = false) {
     const tenant = restoreTenantKey(normal.tenantId)
     let current: Grant[] | undefined
-    const remaining = () => record.added?.filter(addition => current?.some(row => slot(row) === slot(addition) && has(row.scopes, addition.scope)))
+    const journaledGrant = (addition: Addition) => current?.find(row => slot(row) === slot(addition) && row.id === addition.id)
+    const remaining = () => record.added?.filter(addition => has(journaledGrant(addition)?.scopes ?? [], addition.scope))
+    const wasObserved = (entry: Addition) => record.added?.some(prior => slot(prior) === slot(entry) && prior.scope === entry.scope)
     try {
       await this.host.verifyOwner(normal)
       current = await this.grants(normal, record.endpoint, record.owner)
       if (!record.consentObserved) {
         const observed = addedAppMetadataScopes(record.before, current)
-        record.added = [...record.added ?? [], ...observed.filter(entry => !record.added?.some(prior => prior.id === entry.id && prior.scope === entry.scope))]
+        record.added = [...record.added ?? [], ...observed.filter(entry => !wasObserved(entry))]
         this.save(tenant, record)
       }
       if (remaining()?.length) {
@@ -245,9 +256,9 @@ export class AppMetadataAccess {
         for (const scope of pack.scopes) {
           for (const addition of (record.added ?? []).filter(entry => entry.scope === scope)) {
             current = await this.grants(normal, record.endpoint, record.owner)
-            const grant = current.find(row => slot(row) === slot(addition))
+            // A replacement or separate grant is outside the recorded cleanup operation.
+            const grant = journaledGrant(addition)
             if (!grant || !has(grant.scopes, scope)) continue
-            if (grant.id !== addition.id) fail("The permission grant changed identity. Review the permission in Microsoft Entra.")
             const keep = grant.scopes.filter(value => !same(value, scope))
             const path = `/beta/oauth2PermissionGrants/${grant.id}`, method = keep.length ? "PATCH" : "DELETE"
             await this.host.verifyOwner(normal)
@@ -255,25 +266,24 @@ export class AppMetadataAccess {
               this.request(writer, "https://graph.microsoft.com" + path, method, keep.length ? { scope: keep.join(" ") } : undefined))
             if (response.status !== 204) fail(`Microsoft Graph returned HTTP ${response.status} while removing temporary permissions.`)
             current = await this.grants(normal, record.endpoint, record.owner)
-            const updated = current.find(row => slot(row) === slot(addition))
-            if (updated?.scopes.some(value => same(value, scope)) || keep.some(value => !has(updated?.scopes ?? [], value))) {
+            if (has(journaledGrant(addition)?.scopes ?? [], scope)) {
               fail("Microsoft Graph has not confirmed the permission removal.")
             }
           }
         }
       }
       current = await this.grants(normal, record.endpoint, record.owner)
-      if (remaining()?.length || addedAppMetadataScopes(record.before, current).some(entry => !record.added?.some(prior => prior.id === entry.id && prior.scope === entry.scope))) {
+      record.missingPriorScopes = missingPriorScopes(record.before, current)
+      if (remaining()?.length || (!record.consentObserved && addedAppMetadataScopes(record.before, current).some(entry => !wasObserved(entry)))) {
         fail("Microsoft Graph has not confirmed the removal of the temporary permissions.")
       }
-      this.requirePriorScopes(record.before, current)
-      if (!record.consentObserved && !retry) return
       record.remaining = []
-      record.verified = true
+      if (record.consentObserved || retry) record.verified = true
       this.save(tenant, record)
     } catch {
       // Re-read before describing a failed or ambiguous response; the write may have succeeded.
       try { current = await this.grants(normal, record.endpoint, record.owner) } catch { current = undefined }
+      if (current) record.missingPriorScopes = missingPriorScopes(record.before, current)
       record.remaining = current ? remaining() : undefined
       delete record.verified
       this.save(tenant, record)

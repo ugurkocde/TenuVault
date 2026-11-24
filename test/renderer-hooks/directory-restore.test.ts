@@ -109,6 +109,19 @@ it("shows directory text properties without quotes and keeps structured property
   expect(document.body.textContent).toContain("descriptionCurrent: NoneRestore: Recovery app")
   expect(document.body.textContent).toContain('metadataCurrent: {"value":"old"}Restore: {"value":"new"}')
 })
+
+it("explains when Microsoft asks for temporary permissions and how to coordinate the restore", async () => {
+  const temporaryAccess = { pack: { scopes: ["Application.ReadWrite.All", "DelegatedPermissionGrant.ReadWrite.All"] }, cleanup: { checked: true } }
+  const review = { ...page.rows[0]!.review, principal: null, privilege: "update", approvals: ["directory-item"], changes: [{ property: "displayName", before: "Edited app", after: "Recovery app" }] }
+  vi.stubGlobal("fetch", vi.fn(async () => Response.json({ ...page, rows: [{ key: "app", review }], more: false, temporaryAccess })))
+  root = createRoot(document.body.appendChild(document.createElement("div")))
+  await act(async () => root.render(createElement(DirectoryRestore, { ...props, path: "backup/Applications/app.json" })))
+  await click("Review directory restore"); await click("Preview directory changes")
+  const approval = document.querySelector<HTMLInputElement>('input[type="checkbox"]')!
+  await act(async () => approval.click())
+  expect(document.body.textContent).toContain("Microsoft asks for Application.ReadWrite.All and DelegatedPermissionGrant.ReadWrite.All only if the required permissions are missing")
+  expect(document.body.textContent).toContain("Run only one app metadata restore per tenant at a time, including across devices. Avoid granting permissions to the TenuVault app while the restore runs.")
+})
 it("invalidates the preview when the per-group exact choice changes", async () => {
   vi.stubGlobal("fetch", vi.fn(async () => Response.json(page)))
   root = createRoot(document.body.appendChild(document.createElement("div")))

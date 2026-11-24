@@ -101,6 +101,7 @@ describe("Tenants page after a backup the user cancelled", () => {
       runId: "directory-page",
       status: "pending",
       scopes: [{ consentType: "AllPrincipals", principalId: null, scope: "DelegatedPermissionGrant.ReadWrite.All" }],
+      missingPriorScopes: [{ consentType: "AllPrincipals", principalId: null, scope: "User.Read" }],
     }
     removalStatus.mockImplementation(async (_tenant, retry) => retry ? { ...pending, status: "verified" } : pending)
     const container = document.body.appendChild(document.createElement("div"))
@@ -109,10 +110,12 @@ describe("Tenants page after a backup the user cancelled", () => {
     await act(async () => root.render(createElement(Harness, null, createElement(MemoryRouter, null, createElement(TenantsPage)))))
     const notice = container.querySelector('[aria-label="Temporary permission removal pending"]')
     expect(notice?.textContent).toContain("DelegatedPermissionGrant.ReadWrite.All")
+    expect(notice?.textContent).toContain("Previously granted User.Read is now missing from admin consent. TenuVault left it revoked.")
     const retry = [...notice!.querySelectorAll("button")].find(button => button.textContent === "Retry removal")
     await act(async () => retry!.click())
     expect(removalStatus).toHaveBeenCalledWith(tenant.credentials!.tenantId, true)
     expect(container.textContent).toContain("Temporary permission removal verified")
+    expect(container.textContent).toContain("Previously granted User.Read is now missing from admin consent. TenuVault left it revoked.")
     expect(container.querySelector('[aria-label="Temporary permission removal pending"]')).toBeNull()
   })
 

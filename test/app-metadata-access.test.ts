@@ -27,6 +27,7 @@ function setup(initial = [row("all", "Directory.Read.All User.Read")]) {
   let deny = false
   const writes: Array<[string, string, string]> = []
   const data = new Map<string, string>()
+  const afterWrite = vi.fn()
   const store = { get: (key: string) => data.get(key) ?? null, set: (key: string, value: string) => { data.set(key, value) }, delete: (key: string) => { data.delete(key) } }
   const after = (rows: typeof initial) => { grants = rows }
   const fetchImpl: typeof fetch = vi.fn(async (input, init) => {
@@ -53,6 +54,7 @@ function setup(initial = [row("all", "Directory.Read.All User.Read")]) {
     writes.push([method, id, scope])
     if (method === "PATCH") old.scope = scope
     else grants = grants.filter(grant => grant.id !== id)
+    afterWrite()
     return new Response(null, { status: 204 })
   })
   const host = {
@@ -64,7 +66,7 @@ function setup(initial = [row("all", "Directory.Read.All User.Read")]) {
     token: vi.fn(async (_tenant: string, scopes: readonly string[]) => connection([...scopes])),
     verifyOwner: vi.fn(async () => {}),
   }
-  return { access: () => new AppMetadataAccess(store, host, fetchImpl), data, after, host, writes, setDeny: (value: boolean) => { deny = value } }
+  return { access: () => new AppMetadataAccess(store, host, fetchImpl), data, after, afterWrite, host, writes, setDeny: (value: boolean) => { deny = value } }
 }
 
 describe("temporary app metadata access", () => {
@@ -104,6 +106,43 @@ describe("temporary app metadata access", () => {
     expect(env.writes.at(-1)).toEqual(["PATCH", "all", "Directory.Read.All User.Read"])
   })
 
+  it("leaves replacement and separate grants outside the recorded cleanup", async () => {
+    const env = setup([row("all", "Directory.Read.All User.Read"), row("principal", "User.Read", userId)])
+    const access = env.access()
+    env.host.consent.mockImplementation(async () => {
+      env.after([row("all", `Directory.Read.All User.Read ${metadata}`), row("principal", `User.Read ${removal}`, userId)])
+      return { status: "received" }
+    })
+    await access.run(normal, runId, new AbortController().signal, async () => {
+      env.after([row("replacement", `Directory.Read.All User.Read ${metadata} ${removal}`), row("principal", `User.Read ${metadata} ${removal}`, userId)])
+    })
+    expect(env.writes).toEqual([["PATCH", "principal", `User.Read ${metadata}`]])
+    expect(access.status(tenantId, runId)?.status).toBe("verified")
+  })
+
+  it("reports prior scopes revoked before the restore and during cleanup without restoring them or blocking later restores", async () => {
+    const env = setup([row("all", "Directory.Read.All User.Read Group.Read.All"), row("principal", "Mail.Read", userId)])
+    const access = env.access(), restore = vi.fn(async () => {})
+    env.host.consent.mockImplementation(async () => {
+      env.after([row("all", `Directory.Read.All Group.Read.All ${metadata} ${removal}`), row("principal", "Mail.Read", userId)])
+      return { status: "received" }
+    })
+    env.afterWrite.mockImplementationOnce(() => env.after([row("all", `Directory.Read.All ${removal}`)]))
+    await access.run(normal, runId, new AbortController().signal, restore)
+    expect(restore).toHaveBeenCalledTimes(1)
+    expect(env.writes).toEqual([["PATCH", "all", `Directory.Read.All Group.Read.All ${removal}`], ["PATCH", "all", "Directory.Read.All"]])
+    const result = access.status(tenantId, runId)!
+    expect(result).toMatchObject({ status: "verified", missingPriorScopes: [
+      { scope: "User.Read", grantId: "all" }, { scope: "Group.Read.All", grantId: "all" }, { scope: "Mail.Read", grantId: "principal", principalId: userId },
+    ] })
+    const instructions = appMetadataRemovalInstructions(result)
+    expect(instructions).toContain("Previously granted User.Read is now missing from admin consent. TenuVault left it revoked.")
+    expect(instructions).toContain(`Previously granted Mail.Read is now missing from user consent for user object ID ${userId}. TenuVault left it revoked.`)
+    expect(access.status(tenantId)).toBeUndefined()
+    await access.run(normal, "later-restore", new AbortController().signal, restore)
+    expect(restore).toHaveBeenCalledTimes(2)
+  })
+
   it("deletes an empty principal grant during cleanup even when restore fails", async () => {
     const env = setup()
     env.host.consent.mockImplementation(async () => {
@@ -139,13 +178,13 @@ describe("temporary app metadata access", () => {
   })
 
   it("does not request consent or remove scopes that were already granted", async () => {
-    const env = setup([row("all", `Directory.Read.All ${metadata} ${removal}`)])
-    const access = env.access(), restore = vi.fn(async () => {})
+    const env = setup([row("all", `Directory.Read.All User.Read ${metadata} ${removal}`)])
+    const access = env.access(), restore = vi.fn(async () => env.after([row("all", `Directory.Read.All ${metadata} ${removal}`)]))
     await access.run(normal, runId, new AbortController().signal, restore)
     expect(env.host.consent).not.toHaveBeenCalled()
     expect(restore).toHaveBeenCalledTimes(1)
     expect(env.writes).toEqual([])
-    expect(access.status(tenantId, runId)).toMatchObject({ status: "verified", scopes: [] })
+    expect(access.status(tenantId, runId)).toMatchObject({ status: "verified", scopes: [], missingPriorScopes: [{ scope: "User.Read" }] })
   })
 
   it("keeps the Graph transport bound to the main-process grant path, action and bearer", async () => {
