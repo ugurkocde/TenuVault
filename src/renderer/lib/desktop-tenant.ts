@@ -36,7 +36,10 @@ export async function fetchTenantDetails(credentials: TenantCredentials): Promis
 
 /** Builds a tenant profile from Microsoft Graph details, without placeholder values. */
 export async function buildTenantProfile(credentials: TenantCredentials, readDetails = true, prefetched?: Promise<TenantDetails>): Promise<Tenant> {
-  const details = prefetched ? await prefetched : readDetails ? await fetchTenantDetails(credentials) : {}
+  const cachedDetails = await prefetched
+  const details = cachedDetails && Object.keys(cachedDetails).length > 0
+    ? cachedDetails
+    : readDetails ? await fetchTenantDetails(credentials) : {}
   const policies = details.statistics?.policies ?? {}
   const deviceConfigurations = known(policies.deviceConfigurations)
   const configurationPolicies = known(policies.configurationPolicies)

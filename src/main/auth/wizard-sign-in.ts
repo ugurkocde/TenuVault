@@ -37,6 +37,7 @@ export class WizardSignIn {
     connected: (tenant: string) => boolean
     enabled: (method: WizardSignInMethod) => Promise<boolean>
     stage: (tenant: string, method: WizardSignInMethod, choice?: PermissionChoice) => Promise<StagedSignIn>
+    fetch: typeof fetch
     startTrial: (staged: StagedSignIn) => Promise<void>
     checkLicense: (staged: StagedSignIn) => Promise<void>
     releaseLicense: (staged: StagedSignIn) => Promise<void>
@@ -46,6 +47,25 @@ export class WizardSignIn {
   private async requireMethod(method: WizardSignInMethod) {
     if (!await this.host.enabled(method)) throw new ConnectionSwitchError("unavailable",
       method === "graphCli" ? GRAPH_CLI_DISABLED : "TenuVault app sign-in is currently unavailable.")
+  }
+
+  private async organizationName(tenant: string, accessToken: string): Promise<string | undefined> {
+    if (!accessToken) return
+    try {
+      const response = await this.host.fetch("https://graph.microsoft.com/beta/organization?$select=id,displayName", {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        redirect: "error",
+        signal: AbortSignal.timeout(5_000),
+      })
+      if (!response.ok) return
+      const { value } = await response.json() as { value?: { id?: unknown; displayName?: unknown }[] }
+      const organization = Array.isArray(value) && value.length === 1 ? value[0] : undefined
+      if (typeof organization?.id === "string" && organization.id.toLowerCase() === tenant && typeof organization.displayName === "string") {
+        return organization.displayName.trim() || undefined
+      }
+    } catch {
+      // The tenant ID remains available when the staged sign-in cannot read the name.
+    }
   }
 
   async stage(tenantId: unknown, method: unknown, services: unknown): Promise<WizardSignInResponse> {
@@ -66,7 +86,10 @@ export class WizardSignIn {
       if (staged.account.clientId.toLowerCase() !== clientId) throw new ConnectionSwitchError("wrong_client", "Microsoft returned a sign-in for a different app.")
       if (!staged.idToken) throw new ConnectionSwitchError("no_account", "Microsoft did not return a sign-in proof for this tenant.")
       if (this.host.connected(actualTenant)) throw new ConnectionSwitchError("conflict", "This tenant is already connected.")
-      if (!staged.missingOnboardingScopes?.length) await this.host.startTrial(staged)
+      const [organizationName] = await Promise.all([
+        this.organizationName(actualTenant, staged.accessToken),
+        staged.missingOnboardingScopes?.length ? undefined : this.host.startTrial(staged),
+      ])
       await this.requireMethod(method)
       if (this.host.connected(actualTenant)) throw new ConnectionSwitchError("conflict", "This tenant is already connected.")
       const id = randomUUID()
@@ -77,7 +100,7 @@ export class WizardSignIn {
       const { homeAccountId: _, ...account } = staged.account
       const scopes = method === "graphCli" ? staged.graphScopes && new Set(staged.graphScopes) : sharedTokenScopes(staged.accessToken, staged.grantedScopes)
       const missing = staged.missingOnboardingScopes ?? (method === "graphCli" && scopes && choice ? missingForChoice(choice, { kind: "delegated", permissions: scopes }) : undefined)
-      return { result: { id, account, coverage: graphCliCoverage(scopes, method === "tenuvaultApp" ? choice : undefined), missing } }
+      return { result: { id, account, coverage: graphCliCoverage(scopes, method === "tenuvaultApp" ? choice : undefined), missing, organizationName } }
     } catch (error) {
       return wizardFailure(error)
     } finally {

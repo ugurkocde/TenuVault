@@ -1714,6 +1714,8 @@ async function bootstrap(): Promise<void> {
     ? releaseWizardLicense(discardedTenant).catch(() => console.warn("[license] Could not clear an unfinished tenant sign-in"))
     : Promise.resolve()
   const wizard = new WizardSignIn({
+    // The bearer is staged in memory, before a connection exists for the normal fetch bridge.
+    fetch: chromiumFetch,
     resolveTenant: input => resolveOnboardingTenant(input, bridgedFetchLater),
     connected: tenant => wizardExistingTenant(tenant) || Boolean(accounts.get(tenant)),
     enabled: method => license.connectMethodEnabled(method, true),

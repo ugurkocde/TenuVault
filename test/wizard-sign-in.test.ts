@@ -18,6 +18,7 @@ function fixture() {
       grantedScopes: ["User.Read", "Organization.Read.All"],
       cacheWrites: () => ({ key: "staged-cache" }),
     })),
+    fetch: vi.fn<typeof fetch>(async () => Response.json({ value: [{ id: TENANT, displayName: "Contoso Ltd" }] })),
     startTrial: vi.fn(async () => undefined),
     checkLicense: vi.fn(async () => undefined),
     releaseLicense: vi.fn(async () => undefined),
@@ -29,6 +30,27 @@ function fixture() {
 afterEach(() => vi.useRealTimers())
 
 describe("staged wizard sign-in", () => {
+  it.each(["graphCli", "tenuvaultApp"] as const)("reads the tenant name using the staged %s bearer", async method => {
+    const { host, wizard } = fixture()
+    const staged = await wizard.stage("", method, CHOICE)
+    expect(staged).toMatchObject({ result: { organizationName: "Contoso Ltd" } })
+    expect(host.fetch).toHaveBeenCalledWith("https://graph.microsoft.com/beta/organization?$select=id,displayName", expect.objectContaining({
+      headers: { Authorization: "Bearer opaque" }, redirect: "error",
+    }))
+    expect(JSON.stringify(staged)).not.toContain("opaque")
+    expect(host.enroll).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    () => new Response(null, { status: 403 }),
+    () => Response.json({ value: [{ id: GRAPH_CLI_CLIENT_ID, displayName: "Another tenant" }] }),
+  ])("falls back to the signed-in tenant ID if its organization name is unavailable", async reply => {
+    const { host, wizard } = fixture()
+    host.fetch.mockImplementationOnce(async () => reply())
+    const staged = await wizard.stage("", "graphCli", CHOICE)
+    expect(staged).toMatchObject({ result: { account: { tenantId: TENANT }, organizationName: undefined } })
+  })
+
   it("previews Start now without publishing a profile, then saves a backup-only choice", async () => {
     const { host, wizard } = fixture()
     const staged = await wizard.stage(TENANT, "graphCli", undefined)

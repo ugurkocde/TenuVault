@@ -72,6 +72,7 @@ export type WizardSignInMethod = Exclude<SignInMethod, "ownApp">
 export interface WizardSignInResult {
   id: string
   account: SignedInAccount
+  organizationName?: string
   coverage: BackupScopeCoverage[]
   missing?: string[]
 }

@@ -851,10 +851,13 @@ export default function OnboardingPage() {
     }
   }
 
+  const organizationName = method === "ownApp"
+    ? (organization?.account === account ? organization?.name : undefined)
+    : (sharedSignIn?.account === account ? sharedSignIn?.organizationName : undefined)
   const connectedTenant = account && <div className="space-y-1 text-sm text-gray-600">
     <p>Signed in as {account.username}</p>
     <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-      <p className="min-w-0 break-words">Tenant{organization?.account === account ? ` ${organization.name}` : ""} <span className="font-mono">{account.tenantId}</span></p>
+      <p className="min-w-0 break-words">Tenant{organizationName ? ` ${organizationName}` : ""} <span className="font-mono">{account.tenantId}</span></p>
       <button type="button" className="underline underline-offset-2" disabled={creating || releasing || publicBusy || Boolean(consentBusy)} onClick={chooseDifferentTenant}>Different tenant?</button>
     </div>
   </div>

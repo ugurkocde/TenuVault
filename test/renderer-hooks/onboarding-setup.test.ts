@@ -849,16 +849,40 @@ it("releases an unfinished own-app sign-in when the admin chooses a different te
   expect(loadOnboardingDraft()).toMatchObject({ step: 0, tenant: "", clientId: "", account: null })
 })
 
+it("retries an aborted tenant details prefetch when enrolling", async () => {
+  const account = { tenantId: TENANT, clientId: CLIENT, username: "admin" }
+  state.store.set(DRAFT_KEY, JSON.stringify({ step: 4, tenant: TENANT, clientId: CLIENT, displayName: "", account, signedInAt: Date.now() }))
+  state.accounts.mockResolvedValueOnce([account])
+  state.storageChoice = { kind: "local" }
+  const prefetch = new AbortController()
+  const request = vi.fn(async (url: string, init?: RequestInit) => {
+    if (url === "/api/backup/start") return Response.json({ jobId: "first" })
+    return init?.signal === prefetch.signal
+      ? new Promise<Response>((_resolve, reject) => prefetch.signal.addEventListener("abort", () => reject(prefetch.signal.reason), { once: true }))
+      : Response.json({ organization: { id: TENANT, displayName: "Contoso Ltd" } })
+  })
+  const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValueOnce(prefetch.signal)
+  vi.stubGlobal("fetch", request)
+  const container = await render(createElement(OnboardingPage), false)
+  timeout.mockRestore()
+  expect(request).toHaveBeenCalledWith("/api/fetch-tenant-details", expect.objectContaining({ signal: prefetch.signal }))
+  await act(async () => prefetch.abort(new DOMException("Timed out", "TimeoutError")))
+  await continueToStorage(container)
+  await act(async () => button(container, "Start first backup")!.click())
+  expect(request.mock.calls.filter(([url]) => url === "/api/fetch-tenant-details")).toHaveLength(2)
+  expect(state.addTenant).toHaveBeenCalledWith(expect.objectContaining({ name: "Contoso Ltd" }))
+})
+
 it("counts each missing permission once, including scopes outside the service breakdown", async () => {
   const account = { tenantId: TENANT, clientId: CLIENT, username: "admin" }
   state.store.set(DRAFT_KEY, JSON.stringify({ step: 4, tenant: TENANT, clientId: CLIENT, displayName: "", account, signedInAt: Date.now(),
     services: { entra: { access: "backup" }, conditionalAccess: { access: "backup" }, intune: { access: "backup" } } }))
   state.accounts.mockResolvedValueOnce([account])
-  state.checkPermissions.mockResolvedValue({ missing: ["Policy.Read.All", "AuthenticationContext.Read.All", "Policy.Read.All"] })
+  state.checkPermissions.mockResolvedValue({ missing: ["Policy.Read.All", "AuthenticationContext.Read.All", "Policy.Read.All", "Sites.Read.All"] })
   const container = await render(createElement(OnboardingPage), false)
   const result = container.querySelector('[aria-label="Permission result"]')!
-  expect(result.textContent).toContain("2 permissions are missing.")
-  expect([...result.querySelectorAll("li")].map(item => item.textContent)).toEqual(["Policy.Read.All", "AuthenticationContext.Read.All"])
+  expect(result.textContent).toContain("3 permissions are missing.")
+  expect([...result.querySelectorAll("li")].map(item => item.textContent)).toEqual(["Policy.Read.All", "AuthenticationContext.Read.All", "Sites.Read.All"])
 })
 
 it.each([false, true])("reveals only an unfinished first backup when leaving, complete: %s", async complete => {
@@ -1646,6 +1670,24 @@ describe("sign-in method wizard", () => {
     expect(container.querySelector('[role="alert"]')?.textContent).toContain("Sign-in was cancelled in the browser.")
     expect(container.querySelector('[role="alert"]')?.textContent).toContain("AADSTS65004")
     expect(button(container, "Try again")).toBeDefined()
+  })
+
+  it("shows the shared tenant name on Check and Storage before enrollment", async () => {
+    state.wizardStage.mockResolvedValue({ result: {
+      ...stageResult,
+      account: { ...stageResult.account, username: "guest@fabrikam.test" },
+      coverage: [{ service: "intune", folders: ["DeviceConfigurations"], readable: ["DeviceConfigurations"] }],
+      organizationName: "Contoso Ltd",
+    } })
+    const container = await publicConnect("Start now", ["intune"])
+    await act(async () => button(container, "Sign in with Microsoft")!.click())
+    expect(container.textContent).toContain("Signed in as guest@fabrikam.test")
+    expect(container.textContent).toContain(`Tenant Contoso Ltd ${TENANT}`)
+    await continueToStorage(container)
+    expect(container.textContent).toContain("Choose where backups are stored")
+    expect(container.textContent).toContain(`Tenant Contoso Ltd ${TENANT}`)
+    expect(state.wizardFinish).not.toHaveBeenCalled()
+    expect(loadOnboardingDraft()?.account).toBeFalsy()
   })
 
   it("uses the guest tenant and lets the admin drop a service before enrollment", async () => {
