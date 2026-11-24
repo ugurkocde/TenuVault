@@ -5,7 +5,7 @@ import { openCheckout } from "../lib/purchase"
 import { TenantTrialNotices, TrialActions, TrialUsage, TrialChanges, trialEndVisible } from "./TenantTrial"
 import { CommunityChoiceBanner } from "./CommunityTenantPicker"
 import { isAppBackupPath, desktopRouteBoundaryKey } from "../lib/app-backup-route"
-import { useEffect, useLayoutEffect, useRef, useState, type ComponentType, type ReactNode, type RefObject } from "react"
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ComponentType, type ReactNode, type RefObject } from "react"
 import { Link, Outlet, useLocation } from "react-router-dom"
 import {
   Activity,
@@ -626,11 +626,14 @@ export function DesktopLayout() {
           <span aria-hidden="true" className="tv-pill" />
           {groups.map((group) => group.label ? (
             <NavFoldGroup key={group.label} label={group.label} open={!folded.has(group.label)} holdsActive={holdsActive(group)} onToggle={() => toggleGroup(group.label!)}>
-              {group.items.map((item) => <div key={item.name}>{renderItem(item)}{item.href === "/portal/backup" && <ServicesNavigation linkClass={linkClass} />}</div>)}
+              {group.items.map((item) => renderItem(item))}
               {group.label === "Baselines" && <><CisBenchmarksNavigation linkClass={(active) => linkClass(active)} /><FrameworkNavigation /></>}
             </NavFoldGroup>
           ) : (
-            <div key="start" className="space-y-px">{group.items.map((item) => renderItem(item))}</div>
+            <Fragment key="start">
+              <div className="space-y-px">{group.items.map((item) => renderItem(item))}</div>
+              <ServicesNavigation linkClass={linkClass} />
+            </Fragment>
           ))}
         </nav>
 

@@ -114,16 +114,16 @@ function sidebarLink(container: HTMLElement, href: string): HTMLAnchorElement {
 }
 
 describe("sidebar plan badges for paid screens", () => {
-  it("places Services after Backup & Restore without changing the other navigation order", async () => {
+  it("places Services between Tenants and Protect without changing the other navigation order", async () => {
     const container = await render(createElement(DesktopLayout))
     const nav = container.querySelector('nav[aria-label="Main navigation"]')!
     const group = nav.querySelector('section[aria-label="Services"]')!
     expect(group.querySelector("h2")?.textContent).toBe("Services")
     expect([...group.querySelectorAll("a")].map(link => link.textContent)).toEqual(["Defender", "Entra ID", "Intune"])
-    expect(group.previousElementSibling?.textContent).toBe("Backup & Restore")
-    expect(group.closest("#nav-items-Protect")).not.toBeNull()
+    expect(group.previousElementSibling?.textContent).toBe("DashboardTenants")
+    expect(group.closest("#nav-items-Protect")).toBeNull()
     for (const link of group.querySelectorAll("a")) expect(link.hasAttribute("data-nav-row")).toBe(true)
-    expect(group.parentElement?.nextElementSibling?.textContent).toContain("App Backup")
+    expect(group.nextElementSibling?.textContent).toContain("ProtectBackup & RestoreApp Backup")
     const filtered = await render(createElement(DesktopLayout), "/portal/backup?service=entra")
     expect(sidebarLink(filtered, "/portal/backup").className).not.toContain("bg-primary")
     const unknown = await render(createElement(DesktopLayout), "/portal/backup?service=unknown")
@@ -448,7 +448,7 @@ describe("sidebar groups and Help", () => {
     const container = await render(createElement(DesktopLayout))
     const headings = [...container.querySelectorAll('nav[aria-label="Main navigation"] button[id^="nav-group-"]')].map((item) => item.textContent)
     expect(headings).toEqual(["Protect", "Baselines", "Oversight"])
-    expect(hrefs(groupOf(container, "Protect"))).toEqual(["/portal/backup", "/portal/backup?service=defender", "/portal/backup?service=entra", "/portal/backup?service=intune", "/portal/app-backup", "/portal/drift", "/portal/sync", "/portal/alerts"])
+    expect(hrefs(groupOf(container, "Protect"))).toEqual(["/portal/backup", "/portal/app-backup", "/portal/drift", "/portal/sync", "/portal/alerts"])
     expect(hrefs(groupOf(container, "Baselines"))).toEqual(expect.arrayContaining(["/portal/oib", "/portal/frameworks/cis-benchmarks", "/portal/frameworks"]))
     expect(hrefs(groupOf(container, "Oversight"))).toEqual(["/portal/reports", "/portal/audit", "/portal/governance", "/portal/changes", "/portal/operations"])
   })
