@@ -280,5 +280,17 @@ export function namedSignInCode(text: string): string | undefined {
   return /AADSTS\d+/.exec(text)?.[0]
 }
 
+/** A fixed code for logs. The sign-in description may include the admin's username. */
+export function signInLogCode(text: string): string | undefined {
+  const code = namedSignInCode(text)
+  if (code && /^AADSTS\d{4,8}$/.test(code)) return code
+  let error: unknown
+  try { error = JSON.parse(text)?.error } catch { return }
+  if (typeof error === "string" && [
+    "access_denied", "consent_required", "interaction_required", "invalid_client", "invalid_grant", "invalid_request",
+    "invalid_scope", "login_required", "server_error", "temporarily_unavailable", "unauthorized_client",
+  ].includes(error)) return error
+}
+
 /** Compatibility export, derived from the one error table. */
 export const HANDOFF_SIGN_IN_CODES: readonly string[] = SIGN_IN_ERRORS.filter(row => row.handoff).map(row => row.code)

@@ -1,3 +1,4 @@
+import { signInLogCode } from "../../../../shared/sign-in-errors"
 import { ownedRemnant, REMNANT_RECOVERY_DAYS, completeHalf, largeRunProblems, matchingCompanions, withRunRecord } from "../../../../shared/backup-companion"
 import { backupStoragePath, isLargeBackup, LARGE_BACKUP_CONTAINER, LARGE_STORAGE_UNAVAILABLE } from "../../../../shared/backup-storage"
 import { backupTypeUse } from "../../../../shared/services/backup-use"
@@ -275,7 +276,7 @@ export async function POST(request: NextRequest) {
 
     if (!tokenResponse.ok) {
       const errorData = await tokenResponse.text()
-      console.error("Azure auth error:", errorData)
+      console.error("Azure auth error:", signInLogCode(errorData) ?? "token_request_failed")
       return NextResponse.json(
         { error: "Failed to authenticate with Azure", details: errorData },
         { status: 401 }

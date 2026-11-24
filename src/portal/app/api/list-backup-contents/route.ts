@@ -1,3 +1,4 @@
+import { signInLogCode } from "../../../../shared/sign-in-errors"
 import { backupStoragePath, isLargeBackup } from "../../../../shared/backup-storage"
 import { largeContents } from "../../../../main/backup/large-page"
 import { readJsonCapped } from "../../../../shared/capped-body"
@@ -69,7 +70,7 @@ export async function POST(request: NextRequest) {
 
     if (!tokenResponse.ok) {
       const errorData = await tokenResponse.text()
-      console.error("Azure auth error:", errorData)
+      console.error("Azure auth error:", signInLogCode(errorData) ?? "token_request_failed")
       return NextResponse.json(
         { error: "Failed to authenticate with Azure", details: errorData },
         { status: 401 }

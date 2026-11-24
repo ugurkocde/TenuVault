@@ -1,3 +1,4 @@
+import { signInLogCode } from "../../../../shared/sign-in-errors"
 import { type NextRequest, NextResponse } from "next/server";
 
 interface GraphApiResponse {
@@ -36,7 +37,7 @@ export async function POST(request: NextRequest) {
 
     if (!tokenResponse.ok) {
       const errorData = await tokenResponse.text();
-      console.error("Graph auth error:", errorData);
+      console.error("Graph auth error:", signInLogCode(errorData) ?? "token_request_failed");
       return NextResponse.json(
         { error: "Failed to authenticate with Microsoft Graph", details: errorData },
         { status: 401 }

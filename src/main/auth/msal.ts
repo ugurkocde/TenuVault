@@ -11,7 +11,7 @@ import { captureTokenActor } from "../api/execution-metadata"
 import { RESOURCE_SCOPES } from "../../shared/constants"
 import { FIRST_SIGN_IN_TIMEOUT_MESSAGE } from "../../shared/app-registration"
 import { ConnectionSwitchError } from "./switch-failure"
-import { namedSignInCode, signInErrorRow } from "../../shared/sign-in-errors"
+import { namedSignInCode, signInLogCode, signInErrorRow } from "../../shared/sign-in-errors"
 import { isMicrosoftLoginUrl, normalizeGuid } from "../../shared/security"
 import { fetchNetworkClient } from "./network-client"
 import { loopbackSignIn } from "./loopback-sign-in"
@@ -583,7 +583,7 @@ export class AuthManager {
         loggerOptions: {
           logLevel: LogLevel.Warning,
           piiLoggingEnabled: false,
-          loggerCallback: (_level, message) => { if (!staged) console.log(`[msal] ${message}`) },
+          loggerCallback: (_level, message) => { if (!staged) console.log("[msal]", signInLogCode(message) ?? "sign_in_warning") },
         },
       },
     })

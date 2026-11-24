@@ -7,7 +7,7 @@ import { accessTokenClaims } from "./token-identity"
 import { isGuid, normalizeGuid } from "../../shared/security"
 import { DEFAULT_SELECTION, MODULES, type ServiceSelection } from "../../shared/services/modules"
 import { READER_ALLOWED_ROLES, readerExcludedFolders, readerRequiredRoles, SCRIPT_SERVICE } from "../../shared/services/manifest"
-import { namedSignInCode, signInErrorRow } from "../../shared/sign-in-errors"
+import { namedSignInCode, signInLogCode, signInErrorRow } from "../../shared/sign-in-errors"
 import { certificateIdentity, createSelfSignedCertificate, type GeneratedCertificate } from "./certificate"
 import { fetchNetworkClient } from "./network-client"
 
@@ -452,7 +452,7 @@ function msalAcquire(fetchImpl?: typeof fetch): AcquireToken {
         },
         system: {
           ...(fetchImpl ? { networkClient: fetchNetworkClient(fetchImpl) } : {}),
-          loggerOptions: { logLevel: LogLevel.Warning, piiLoggingEnabled: false, loggerCallback: (_level, message) => console.log(`[msal reader] ${message}`) },
+          loggerOptions: { logLevel: LogLevel.Warning, piiLoggingEnabled: false, loggerCallback: (_level, message) => console.log("[msal reader]", signInLogCode(message) ?? "sign_in_warning") },
         },
       })
       apps.set(key, app)

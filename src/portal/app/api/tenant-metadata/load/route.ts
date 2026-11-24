@@ -1,3 +1,4 @@
+import { signInLogCode } from "../../../../../shared/sign-in-errors"
 import { isGuid } from "../../../../../shared/security"
 import { type NextRequest, NextResponse } from "next/server"
 import type { TenantMetadata } from "~/types/tenant-metadata"
@@ -43,7 +44,7 @@ export async function POST(request: NextRequest) {
 
     if (!tokenResponse.ok) {
       const errorData = await tokenResponse.text()
-      console.error("Azure auth error:", errorData)
+      console.error("Azure auth error:", signInLogCode(errorData) ?? "token_request_failed")
       return NextResponse.json(
         { error: "Failed to authenticate with Azure" },
         { status: 401 }
