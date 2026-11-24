@@ -54,10 +54,10 @@ it.each([["Overview", OverviewPage], ["Dashboard", DashboardPage], ["Tenant summ
   root = createRoot(container)
   await act(async () => { root.render(createElement(MemoryRouter, null, createElement(Page))) })
   const surface = name === "Dashboard" ? container.querySelector('[aria-label="Next Backup"]')! : container
-  expect(surface.textContent).toContain("Intune is off.")
+  expect(surface.textContent).toContain("Intune is off for new backups.")
   expect(surface.textContent).toContain("New manual and scheduled backups leave out Intune.")
   expect(surface.textContent).toContain("Tomorrow at 02:00")
-  expect(surface.querySelector('a[href="/portal/settings?section=services"]')).not.toBeNull()
+  expect(surface.querySelector('a[href^="/portal/settings?section=services"]')).not.toBeNull()
 })
 
 it("keeps the Intune exclusion visible in tenant summary list view", async () => {
@@ -68,9 +68,9 @@ it("keeps the Intune exclusion visible in tenant summary list view", async () =>
   await act(async () => root.render(createElement(MemoryRouter, null, createElement(TenantsPage))))
   await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="List view"]')!.click())
   const row = container.querySelector('[data-tenant-row="1"]')!
-  expect(row.textContent).toContain("Intune is off.")
+  expect(row.textContent).toContain("Intune is off for new backups.")
   expect(row.textContent).toContain("New manual and scheduled backups leave out Intune.")
-  expect(row.querySelector('a[href="/portal/settings?section=services"]')).not.toBeNull()
+  expect(row.querySelector('a[href^="/portal/settings?section=services"]')).not.toBeNull()
 })
 
 describe("first-run Dashboard", () => {
@@ -108,7 +108,7 @@ describe("first-run Dashboard", () => {
     expect(hero.textContent).toContain("214 policies from Intune and Entra ID")
     expect(hero.querySelector('a[href="/portal/backup?tab=schedule"]')?.textContent).toBe("Turn on daily backups")
     expect(hero.querySelector('a[href="/portal/backup?backup=backup-first"]')?.textContent).toBe("View backup")
-    expect(hero.querySelector('a[href="/portal/settings?section=services"]')?.textContent).toBe("Add more coverage")
+    expect(hero.querySelector('a[href^="/portal/settings?section=services"]')?.textContent).toBe("Add more coverage")
     const backup = container.querySelector('[aria-label="Last backup"]')!
     expect(backup.textContent).toContain("Coverage incomplete")
     expect(backup.textContent).toContain("Tenant Health: Needs access")

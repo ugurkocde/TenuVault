@@ -119,9 +119,9 @@ describe("Tenant backup coverage", () => {
   })
 
   it.each([
-    ["22222222-2222-2222-2222-222222222222", "Repair in Settings", `/portal/settings?section=services&tenant=${TENANT}`],
-    [TENUVAULT_CLIENT_ID, "Add app permissions", `/portal/settings?section=signin&pack=conditionalAccess-backup#sign-in-${TENANT}`],
-    [GRAPH_CLI_CLIENT_ID, "See sign-in upgrade options", `/portal/settings?section=signin#sign-in-${TENANT}`],
+    ["22222222-2222-2222-2222-222222222222", "Add access", `/portal/settings?section=services&tenant=${TENANT}`],
+    [TENUVAULT_CLIENT_ID, "Add access", `/portal/settings?section=signin&pack=conditionalAccess-backup#sign-in-${TENANT}`],
+    [GRAPH_CLI_CLIENT_ID, "Add access", `/portal/settings?section=signin#sign-in-${TENANT}`],
   ])("shows each coverage state and the action for %s", async (clientId, label, href) => {
     state.report.mockResolvedValue({
       ...answer(), clientId,
@@ -133,11 +133,11 @@ describe("Tenant backup coverage", () => {
     })
     const container = mount(createElement(ServiceBackupNotice, { tenantId: TENANT, showCoverage: true }))
     await act(async () => undefined)
-    expect([...container.querySelectorAll("h4")].map(heading => heading.textContent)).toEqual(["Defender", "Entra ID", "Intune"])
-    expect(container.querySelector('[aria-label="Defender backup coverage"]')?.textContent).toBe("Defender1 of 1")
+    expect([...container.querySelectorAll("dt")].map(heading => heading.textContent)).toEqual(["Defender", "Entra ID", "Intune"])
+    expect(container.querySelector('[aria-label="Defender backup coverage"]')?.textContent).toBe("Defender1 of 1 readable")
     expect(container.textContent).toContain("Permission not granted")
     expect(container.textContent).toContain("Your role can't do this")
-    expect(container.querySelector('[aria-label="Intune backup coverage"]')?.textContent).toContain("Unknown")
+    expect(container.textContent).toContain("Coverage unknown for 1.")
     expect([...container.querySelectorAll("a")].find(link => link.textContent === label)?.getAttribute("href")).toBe(href)
   })
 })

@@ -86,6 +86,7 @@ function JobRow({ job, expanded, cancelling, cancelError, onToggleExpanded, onCa
             <FirstBackupNote plan={tenantPlan(tenantLicense(licenseStatus, job.tenantId))} />
           )}
 
+          {job.isComplete && job.results && <div className="mt-1.5"><BackupResults job={job} compact view="notices" /></div>}
           <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs font-medium">
             {active && job.jobId.startsWith("desktop-") && (
               <button
@@ -116,7 +117,7 @@ function JobRow({ job, expanded, cancelling, cancelError, onToggleExpanded, onCa
                   <p className={cn("text-xs", phase === "cancelled" ? "text-gray-700" : "text-red-700")}>{job.exception}</p>
                 </div>
               )}
-              <BackupResults job={job} compact jobId={job.jobId} />
+              <BackupResults job={job} compact jobId={job.jobId} view={job.isComplete ? "details" : undefined} />
               {job.isComplete && portalUrl && (
                 <button
                   type="button"

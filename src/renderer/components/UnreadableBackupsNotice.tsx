@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { FolderOpen, Loader2, Upload } from "lucide-react"
+import { Loader2, Upload } from "lucide-react"
 import { Button } from "~/components/ui/button"
 import type { BackupSettings } from "../../shared/ipc"
 import { bridge } from "../lib/bridge"
@@ -60,26 +60,19 @@ export function UnreadableBackupsNotice({ settings, affected, checking, onChange
 
   return (
     <NoticeCard
-      role="alert"
-      title="This folder has backups this device cannot read"
-      body={
+      summary="This folder has backups this device cannot read"
+      details={
         <p>
           Some backups in <span className="break-all font-mono text-xs">{settings.localFolder}</span> were made with a
           different recovery key, for example by another device or an earlier installation, or are damaged or missing. Your other
           backups still work and new backups are saved, but older backups are not deleted until you import that recovery
           key or choose another folder.
+          <button type="button" className="ml-2 underline" disabled={checking || pending} onClick={() => void chooseFolder()}>Choose another folder</button>
         </p>
       }
-      actions={
-        <>
-          <Button type="button" variant="outline" size="sm" className="bg-white" disabled={checking || pending} onClick={() => setImporting((value) => !value)}>
-            <Upload className="mr-2 h-4 w-4" /> Import recovery key
-          </Button>
-          <Button type="button" variant="outline" size="sm" className="bg-white" disabled={checking || pending} onClick={() => void chooseFolder()}>
-            <FolderOpen className="mr-2 h-4 w-4" /> Choose another folder
-          </Button>
-        </>
-      }
+      action={<Button type="button" variant="outline" size="sm" className="bg-white" disabled={checking || pending} onClick={() => setImporting((value) => !value)}>
+        <Upload className="mr-2 h-4 w-4" /> Import recovery key
+      </Button>}
     >
       {importing && (
         <RecoveryKeyImport

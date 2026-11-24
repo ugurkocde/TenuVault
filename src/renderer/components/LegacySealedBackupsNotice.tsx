@@ -34,10 +34,9 @@ export function LegacySealedBackupsNotice({ count, onImported }: LegacySealedBac
 
   return (
     <NoticeCard
-      role="status"
       className="mb-4"
-      title={plural ? `${count} older Azure backups need a recovery key` : "An older Azure backup needs a recovery key"}
-      body={
+      summary={plural ? `${count} older Azure backups need a recovery key` : "An older Azure backup needs a recovery key"}
+      details={
         <p>
           {plural ? "These backups were" : "This backup was"} encrypted by an earlier TenuVault version, and no recovery key on
           this device opens {plural ? "them" : "it"}. Import the recovery key of the device that made {plural ? "them" : "it"} to
@@ -45,7 +44,7 @@ export function LegacySealedBackupsNotice({ count, onImported }: LegacySealedBac
           tenant's. New backups and your other backups are not affected, and a backup that cannot be read is never deleted.
         </p>
       }
-      actions={
+      action={
         <Button type="button" variant="outline" size="sm" className="bg-white" disabled={pending || refreshing} onClick={() => setImporting((value) => !value)}>
           <Upload className="mr-2 h-4 w-4" /> Import recovery key
         </Button>
