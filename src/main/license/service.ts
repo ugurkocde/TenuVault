@@ -215,6 +215,9 @@ export const FAILURE_COOLDOWN_MS = 60_000
 // keeps its end-to-end activation work inside this budget, and a retry with the same
 // installation reuses an activation the server already created.
 export const LICENSE_REQUEST_TIMEOUT_MS = 45_000
+const LICENSE_HEALTH_TIMEOUT_MS = 10_000
+// A tenant proof can use the legacy payload when capability discovery is slow.
+const TENANT_HASH_HEALTH_WAIT_MS = 250
 
 // The licensing service limits requests per IP address. Several admins behind one corporate
 // NAT, or an MSP activating many tenants, can reach that limit, and the service then answers
@@ -764,7 +767,7 @@ export class LicenseService {
       let data: LicenseHealthResponse | null = null
       try {
         const response = await this.fetchImpl(`${this.options.apiBase}/api/desktop-license/health`, {
-          signal: AbortSignal.timeout(10_000), redirect: "error", cache: "no-store",
+          signal: AbortSignal.timeout(LICENSE_HEALTH_TIMEOUT_MS), redirect: "error", cache: "no-store",
         })
         if (response.ok) data = await response.json()
       } catch { /* Shared sign-in requires positive health discovery. */ }
@@ -781,13 +784,20 @@ export class LicenseService {
     })().finally(() => { this.healthFetch = undefined })
   }
 
-  private async refreshOrganizationHealth(): Promise<void> {
-    if (!this.organizationHealth || Date.now() >= this.organizationHealth.expiresAt) await this.fetchHealth()
+  private async refreshOrganizationHealth(waitMs = LICENSE_HEALTH_TIMEOUT_MS): Promise<void> {
+    if (this.organizationHealth && Date.now() < this.organizationHealth.expiresAt) return
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const deadline = new Promise<void>(resolve => { timer = setTimeout(resolve, waitMs) })
+    try {
+      await Promise.race([this.fetchHealth(), deadline])
+    } finally {
+      clearTimeout(timer)
+    }
   }
 
   private async supportsClientIdSets(): Promise<boolean> {
     await this.refreshOrganizationHealth()
-    return this.organizationHealth?.clientIdSets === true
+    return this.organizationHealth?.clientIdSets === true && Date.now() < this.organizationHealth.expiresAt
   }
 
   private supportsTenantHashes(): boolean {
@@ -1272,7 +1282,7 @@ export class LicenseService {
     const idToken = token ?? (await this.idToken(tenantId))
     this.assertCurrent(current)
     if (!idToken) throw new NoIdToken()
-    await this.refreshOrganizationHealth()
+    await this.refreshOrganizationHealth(TENANT_HASH_HEALTH_WAIT_MS)
     this.assertCurrent(current)
     return this.call("tenant", {
       ...(publicProof ? { publicClientProof: idToken } : { idToken }),
