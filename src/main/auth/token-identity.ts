@@ -1,5 +1,8 @@
+import { createHash } from "node:crypto"
 import { grantedPermissions } from "../../shared/services/token"
 import { isGuid, normalizeGuid } from "../../shared/security"
+
+export const accessTokenDigest = (token: string) => createHash("sha256").update(token).digest("hex")
 
 /** A Microsoft bearer may be opaque. Claims here only describe a decodable JWT. */
 export function accessTokenClaims(token: string | undefined): Record<string, unknown> | undefined {

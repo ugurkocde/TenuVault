@@ -3,6 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { handleOib, migrateLegacyOibRuns, OIB_BACKUP_POLLING, setOibStore } from "../src/main/oib/service"
 import { packFolder, packItems, parsePackFile, resetOibSource } from "../src/main/oib/source"
 import type { OibBackupOptions, OibCatalog, OibComparison, OibProgress, OibRun, UndoResult, ValidationRun } from "../src/shared/oib/types"
+import { ApiHost } from "../src/main/api/host"
+import { createBridgedFetch } from "../src/main/api/fetch-bridge"
+import { planGuard } from "../src/main/api/plan-gates"
+import { ConnectionCapabilities } from "../src/main/auth/connection-capabilities"
+import { POST as oib } from "../src/portal/app/api/oib/route"
 import { memoryStore } from "./helpers"
 import { withoutRestoreCapability } from "./helpers/restore-capability"
 import type { Item, Json } from "../src/shared/intune/registry"
@@ -948,4 +953,48 @@ describe("legacy data", () => {
     migrateLegacyOibRuns({ keys: () => [...legacy.values.keys()], get: legacy.get, set: legacy.set, delete: legacy.delete })
     expect(legacy.get(`quickstart:runs:${tenantId}`)).toBe("{not json")
   })
+})
+
+it("deploys to two own-registration tenants through separate OIB route requests", async () => {
+  const target = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+  const targetApp = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+  const writes: string[] = []
+  const sent: string[] = []
+  const fixture = world({ policies: [] }, writes)
+  const caps = new ConnectionCapabilities(id => ({
+    version: 1, method: "ownApp", origin: "legacy", clientId: id === tenantId ? appId : targetApp,
+    createdAt: "", updatedAt: "",
+  }))
+  const host = new ApiHost({
+    routes: { "/api/oib": { POST: oib } }, bindConnections: ids => caps.bindConnections(ids),
+    guard: planGuard(async () => "msp"),
+  })
+  const fetch = createBridgedFetch({
+    dispatch: request => host.dispatch(request),
+    getDelegatedToken: async (tenant, client, scope) => {
+      expect(client).toBe(tenant === tenantId ? appId : targetApp)
+      const accessToken = `opaque-${tenant}`
+      caps.requireIssuedToken(tenant, client, scope, accessToken)
+      return { accessToken, expiresOn: null }
+    },
+    authorizeRequest: (url, input, init, tenant) => caps.authorizeRequest(url, input, init, tenant),
+    fetch: (input, init) => {
+      if (String(input).startsWith("https://graph.microsoft.com") && init?.method === "POST") {
+        sent.push(new Headers(init.headers).get("authorization")!)
+      }
+      return fixture(input, init)
+    },
+  })
+  vi.stubGlobal("fetch", fetch)
+  await source()
+  for (const [tenant, client, bulk] of [[tenantId, appId, false], [target, targetApp, true]] as const) {
+    const response = await fetch("http://tenuvault.internal/api/oib", {
+      method: "POST", body: JSON.stringify({ ...base, tenantId: tenant, appId: client, bulk, storageAccountName: undefined,
+        action: "oib-deploy", commit, backup: { mode: "none" }, items: [{ source: SC, mode: "create" }] }),
+    })
+    const result = await response.json()
+    expect(response.status, JSON.stringify(result)).toBe(200)
+    expect(result).toMatchObject({ tenantId: tenant, failed: [], created: [{ id: CREATED }] })
+  }
+  expect(sent).toEqual([`Bearer opaque-${tenantId}`, `Bearer opaque-${target}`])
 })

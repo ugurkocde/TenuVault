@@ -1,8 +1,8 @@
-import { createHash } from "node:crypto"
 import { RESOURCE_SCOPES } from "../../shared/constants"
 import { isGuid, normalizeGuid } from "../../shared/security"
+import { admittedDirectoryPermissions } from "../../shared/intune/restore-matrix"
 import { tenantWriteTargets } from "../../shared/tenant-writes"
-import { sharedTokenScopes, tokenIdentity } from "./token-identity"
+import { accessTokenDigest, sharedTokenScopes, tokenIdentity } from "./token-identity"
 import { isPackWriteScope, missingPackScopes, type PermissionPack } from "../../shared/services/permission-packs"
 import { GRAPH_CLI_CLIENT_ID, TENUVAULT_CLIENT_ID } from "../../shared/tenant-connection"
 import type { TenantConnection } from "../../shared/tenant-connection"
@@ -14,7 +14,6 @@ const CONNECTION_CHANGED = "This tenant's sign-in method changed. Reload the ten
 const TOKEN_UNVERIFIED = "TenuVault could not verify the tenant and app in this access token. Sign in again."
 type SharedMethod = "graphCli" | "tenuvaultApp"
 type IssuedToken = { tenantId: string; clientId: string; scope: string; expiresAt: number; scopes?: string[]; reader?: true }
-const tokenKey = (token: string) => createHash("sha256").update(token).digest("hex")
 const sharedMethod = (clientId: string | null): SharedMethod | undefined =>
   clientId && normalizeGuid(clientId) === TENUVAULT_CLIENT_ID ? "tenuvaultApp"
     : clientId && normalizeGuid(clientId) === GRAPH_CLI_CLIENT_ID ? "graphCli" : undefined
@@ -46,7 +45,9 @@ export class ConnectionCapabilities {
       throw new Error(CONNECTION_CHANGED)
     }
     const bound = executionMetadata.getStore()?.connections?.get(normalizeGuid(tenantId))
-    if (bound && normalizeGuid(bound) !== normalizeGuid(clientId)) throw new Error(CONNECTION_CHANGED)
+    if (bound && (sharedMethod(bound) || sharedMethod(clientId)) && normalizeGuid(bound) !== normalizeGuid(clientId)) {
+      throw new Error(CONNECTION_CHANGED)
+    }
     this.requireResource(tenantId, scope)
   }
 
@@ -59,7 +60,9 @@ export class ConnectionCapabilities {
   }
 
   requireIssuedToken(tenantId: string, clientId: string, scope: string, token: string, result?: { expiresOn?: Date | null; scopes?: string[] }): void {
-    this.requireConnection(tenantId, clientId, scope)
+    if (sharedMethod(clientId) || sharedMethod(this.record(tenantId)?.clientId ?? null)) {
+      this.requireConnection(tenantId, clientId, scope)
+    }
     tenantId = normalizeGuid(tenantId)
     clientId = normalizeGuid(clientId)
     if (sharedMethod(clientId)) {
@@ -84,7 +87,7 @@ export class ConnectionCapabilities {
   private rememberToken(token: string, binding: IssuedToken): void {
     const now = Date.now()
     for (const [key, value] of this.issued) if (value.expiresAt <= now) this.issued.delete(key)
-    this.issued.set(tokenKey(token), binding)
+    this.issued.set(accessTokenDigest(token), binding)
   }
 
   async requireAppRestoreWrite(tenantId: string, clientId: string): Promise<void> {
@@ -125,15 +128,27 @@ export class ConnectionCapabilities {
   async authorizeRequest(url: URL, input: RequestInfo | URL, init: RequestInit | undefined, routeTenant: string | null): Promise<void> {
     const authorization = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)).get("authorization")
     const token = /^Bearer\s+(.+)$/i.exec(authorization ?? "")?.[1]
-    const acquisition = token ? this.issued.get(tokenKey(token)) : undefined
+    const digest = token ? accessTokenDigest(token) : undefined
+    const metadata = executionMetadata.getStore()
+    const setup = metadata?.registrationSetup
+    if (setup && url.origin === "https://graph.microsoft.com") {
+      if (setup.clientId !== GRAPH_CLI_CLIENT_ID || !isGuid(setup.tenantId) || setup.tokenDigest !== digest ||
+        (routeTenant && normalizeGuid(routeTenant) !== setup.tenantId)) throw new Error(TOKEN_UNVERIFIED)
+      return
+    }
+    const acquisition = digest ? this.issued.get(digest) : undefined
     const identity = token && !acquisition ? tokenIdentity(token) : undefined
     const tenantId = acquisition?.tenantId ?? identity?.tenantId
     const clientId = acquisition?.clientId ?? identity?.clientId ?? null
     const graph = url.origin === "https://graph.microsoft.com"
-    const metadata = executionMetadata.getStore()
     const copy = metadata?.copyTenants
     const bound = metadata?.connections ?? (isGuid(routeTenant) ? this.bindConnections([routeTenant]) : undefined)
     const shared = sharedMethod(clientId)
+    // Own registrations keep the original transport. Their acquisition context is used
+    // only when a shared connection participates or a tenant switches to one in flight.
+    const sharedParticipant = bound && [...bound].some(([id, admitted]) =>
+      sharedMethod(admitted ?? null) || sharedMethod(this.record(id)?.clientId ?? null))
+    if (!shared && !sharedParticipant && !(tenantId && sharedMethod(this.record(tenantId)?.clientId ?? null))) return
     const resource = graph ? RESOURCE_SCOPES.graph
       : url.hostname === "management.azure.com" ? RESOURCE_SCOPES.management
       : url.hostname.endsWith(".blob.core.windows.net") ? RESOURCE_SCOPES.storage
@@ -152,15 +167,13 @@ export class ConnectionCapabilities {
 
     if (token && (resource || shared || bound?.size) && (!tenantId || !clientId)) throw new Error(TOKEN_UNVERIFIED)
     if (acquisition && (acquisition.expiresAt <= Date.now() || (resource && acquisition.scope !== resource))) throw new Error(TOKEN_UNVERIFIED)
-    // Registration setup uses Graph CLI independently of the tenant's saved sign-in.
-    const setup = !acquisition && metadata?.registrationSetup && shared === "graphCli" && graph
-    if (shared && !setup && tenantId && clientId) await this.requireConnectionEnabled(tenantId, clientId)
+    if (shared && tenantId && clientId) await this.requireConnectionEnabled(tenantId, clientId)
 
     if (tenantId && clientId) {
       const current = this.record(tenantId)
       const admitted = bound?.get(tenantId)
       if (bound?.size && !bound.has(tenantId)) throw new Error(CONNECTION_CHANGED)
-      if (!acquisition?.reader && !setup) {
+      if (!acquisition?.reader) {
         if (admitted && normalizeGuid(admitted) !== clientId) throw new Error(CONNECTION_CHANGED)
         if ((shared || current?.origin === "wizard" || (acquisition && current)) && (!current || normalizeGuid(current.clientId) !== clientId)) {
           throw new Error(CONNECTION_CHANGED)
@@ -168,13 +181,13 @@ export class ConnectionCapabilities {
       }
     }
 
-    if (resource && resource !== RESOURCE_SCOPES.graph && shared === "graphCli" && !setup) throw new Error(GRAPH_ONLY)
+    if (resource && resource !== RESOURCE_SCOPES.graph && shared === "graphCli") throw new Error(GRAPH_ONLY)
     if (!writes.length) return
     const targets = copy
       ? [copy.source, ...(tenantId && copy.destinations.some(id => normalizeGuid(id) === tenantId) ? [tenantId] : copy.destinations)]
       : [tenantId ?? routeTenant].filter((id): id is string => id != null)
     this.requireWrite(targets)
-    if (acquisition?.reader || (shared === "graphCli" && !setup)) throw new Error(READ_ONLY)
+    if (acquisition?.reader || (shared === "graphCli")) throw new Error(READ_ONLY)
     if (shared !== "tenuvaultApp") {
       if (!token && targets.some(id => this.record(id)?.method === "tenuvaultApp")) throw new Error(PACK_REQUIRED)
       return
@@ -187,7 +200,8 @@ export class ConnectionCapabilities {
       const recycle = metadata?.directoryRecycle
       const type = method === "POST" && url.pathname === path && recycle?.path === path && /^\/beta\/directory\/deletedItems\/[0-9a-f-]+\/restore$/i.test(path) ? recycle.type : undefined
       const pack = allowed.find(pack => pack.id === (type ? "entra-restore" : restorePackForPath(path)))
-      const scopes = type ? [type === "user" ? "User.DeleteRestore.All" : "Group.ReadWrite.All"] : []
+      const scopes = type === "user" ? admittedDirectoryPermissions("Users", "recycle") : type === "group" ? ["Group.ReadWrite.All"] : []
+      if (type === "user" && !scopes.length) return true
       return !pack || missingPackScopes([...pack.scopes, ...scopes], permissions).length > 0
     })) throw new Error(PACK_REQUIRED)
   }

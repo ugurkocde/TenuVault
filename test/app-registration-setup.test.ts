@@ -19,6 +19,9 @@ vi.mock("../src/main/auth/loopback-sign-in", async original => {
   return { ...actual, loopbackSignIn: interactiveShim(request => state.interactive(request)) }
 })
 import { AppRegistrationSetup, SETUP_SIGN_IN_TIMEOUT_MS, setupLoginHint, setupSignInError } from "../src/main/auth/app-registration-setup"
+import { ConnectionCapabilities } from "../src/main/auth/connection-capabilities"
+import { createBridgedFetch } from "../src/main/api/fetch-bridge"
+import { executionMetadata } from "../src/main/api/execution-metadata"
 import { suggestsCreatingByHand } from "../src/shared/app-registration"
 const host = () => ({ fetch: vi.fn() as unknown as typeof fetch, openBrowser: vi.fn(async () => undefined), progress: vi.fn() })
 beforeEach(() => { vi.clearAllMocks() })
@@ -393,4 +396,28 @@ it("Try again stops only a setup sign-in that waits for the browser, never the p
   const waiting = setup.create()
   expect(setup.cancelSignIn()).toBe(true)
   await expect(waiting).rejects.toThrow("Sign-in cancelled.")
+})
+
+it("sends the opaque setup bearer through the bridge only during provisioning", async () => {
+  const tenant = "11111111-1111-1111-1111-111111111111"
+  const token = "opaque-setup-bearer"
+  const cap = new ConnectionCapabilities(() => null)
+  const network = vi.fn(async () => Response.json({ value: [] }))
+  const fetch = createBridgedFetch({
+    dispatch: vi.fn(), getDelegatedToken: vi.fn(), fetch: network,
+    authorizeRequest: (url, input, init, tenant) => cap.authorizeRequest(url, input, init, tenant),
+  })
+  const url = "https://graph.microsoft.com/beta/applications"
+  const headers = { authorization: `Bearer ${token}` }
+  state.interactive.mockResolvedValueOnce({ account: { tenantId: tenant, username: "admin" }, accessToken: token })
+  state.provision.mockImplementationOnce(async (input: { fetch: typeof fetch; token: string }) => {
+    const context = executionMetadata.getStore()
+    expect(context?.registrationSetup).toMatchObject({ tenantId: tenant })
+    await expect(input.fetch(url, { headers })).resolves.toBeInstanceOf(Response)
+    await expect(input.fetch(url, { headers: { authorization: "Bearer unrelated" } })).rejects.toThrow("could not verify")
+    return { tenantId: tenant, clientId: "client", username: "admin", reused: true, ready: true, missingConsent: [] }
+  })
+  await expect(new AppRegistrationSetup({ ...host(), fetch }).create()).resolves.toMatchObject({ tenantId: tenant })
+  expect(executionMetadata.getStore()?.registrationSetup).toBeUndefined()
+  expect(network).toHaveBeenCalledExactlyOnceWith(url, { headers })
 })

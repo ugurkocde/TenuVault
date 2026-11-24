@@ -1,3 +1,4 @@
+import { executionMetadata } from "../../api/execution-metadata"
 import type { RouteModule } from "../../api/host"
 import { allows, type Plan } from "../../../shared/plans"
 import type { FeatureDeps } from "../deps"
@@ -94,7 +95,8 @@ async function requireRunTenants(deps: FeatureDeps, tenantId: string, target: St
   const targets = run?.targets.map((entry) => entry.targetTenantId) ?? []
   if (!targets.includes(tenantId)) throw new FeatureError("The copy this target belongs to no longer exists. Plan again.", 409)
   requireNotDiscarded(run!)
-  await requireSyncTenants(deps, target.sourceTenantId, targets)
+  const participants = await requireSyncTenants(deps, target.sourceTenantId, targets)
+  executionMetadata.getStore()?.bindParticipants?.([participants.source, ...participants.targets])
 }
 
 const DISCARDED = "discarded"

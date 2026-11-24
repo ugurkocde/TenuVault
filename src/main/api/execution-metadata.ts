@@ -6,8 +6,10 @@ import type { AuditBinding } from "./audit-sink"
 export interface ExecutionMetadata {
   /** Tenant client IDs captured when the operation is admitted. */
   connections?: ReadonlyMap<string, string | undefined>
-  /** The separate setup flow may use Graph CLI to create an own app registration. */
-  registrationSetup?: true
+  /** Add validated participants loaded from a stored operation. */
+  bindParticipants?: (tenantIds: readonly string[]) => void
+  /** The temporary Graph acquisition used only while provisioning an own registration. */
+  registrationSetup?: { tenantId: string; clientId: string; tokenDigest: string }
   /** Set only around the final write after a fresh deleted-object type check. */
   directoryRecycle?: { path: string; type: "user" | "group" }
   /** The source and destinations admitted for a cross-tenant backup copy. */

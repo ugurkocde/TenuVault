@@ -5,11 +5,18 @@ import { join } from "node:path"
 import { SecureStore } from "../src/main/storage/secure-store"
 import { TenantConnections, TENANT_LIST_KEY } from "../src/main/auth/tenant-connections"
 import { accountStore } from "../src/main/auth/stores"
+import { POST as restoreBackup } from "../src/portal/app/api/restore-backup/route"
+import { POST as detectDrifts } from "../src/portal/app/api/detect-drifts/route"
+import { routes as reportRoutes } from "../src/main/features/reports"
 import { POST as restorePreview } from "../src/portal/app/api/restore-preview/route"
 import { ApiHost, type RouteModule } from "../src/main/api/host"
 import { createBridgedFetch } from "../src/main/api/fetch-bridge"
 import { AuthManager } from "../src/main/auth/msal"
 import { ConnectionCapabilities } from "../src/main/auth/connection-capabilities"
+import { routes as promotionRoutes } from "../src/main/features/promotion"
+import { routes as syncRoutes } from "../src/main/features/sync"
+import { fakeDeps } from "./feature-helpers"
+import { planGuard } from "../src/main/api/plan-gates"
 import { BackupEngine } from "../src/main/backup/engine"
 import { DELEGATED_CLIENT_SECRET, RESOURCE_SCOPES } from "../src/shared/constants"
 import { INTUNE_TYPES } from "../src/shared/intune/registry"
@@ -41,7 +48,7 @@ afterEach(() => {
   dir = undefined
 })
 
-function fixture(mixed = false) {
+function fixture(mixed = false, dispatchInternal: (request: Request) => Promise<Response> = vi.fn()) {
   const clientFor = (tenant: string) => tenant === TENANT ? CLIENT : DESTINATION_CLIENT
   const account = (tenantId: string) => ({ tenantId, clientId: clientFor(tenantId), username: "fixture@example.test", homeAccountId: "account" })
   dir = mkdtempSync(join(tmpdir(), "tv-legacy-connection-"))
@@ -97,7 +104,7 @@ function fixture(mixed = false) {
   })
   const getToken = (tenant: string, client: string, scope: string, fresh?: boolean) => auth.getAccessToken(tenant, client, scope, fresh)
   const fetch = createBridgedFetch({
-    fetch: network, dispatch: vi.fn(), getDelegatedToken: getToken,
+    fetch: network, dispatch: dispatchInternal, getDelegatedToken: getToken,
     authorizeRequest: (url, input, init, tenant) => cap.authorizeRequest(url, input, init, tenant),
     bindOwnClientCredentials: (tenant, client, scope, token, expiresIn) => cap.bindOwnClientCredentials(tenant, client, scope, token, expiresIn),
   })
@@ -186,15 +193,131 @@ it.each([
   expect(f.network).toHaveBeenCalledOnce()
 })
 
-it("uses opaque source Blob and destination Graph tokens for Copy to Tenants", async () => {
+it("copies a backup through the restore route using source Blob and destination Graph tokens", async () => {
   const f = fixture()
-  const response = await f.dispatch("/api/restore-backup", async () => {
-    const storageToken = await f.routeToken(RESOURCE_SCOPES.storage)
-    const targetToken = await f.routeToken(RESOURCE_SCOPES.graph, DESTINATION)
-    await f.fetch(blob + "backup/metadata.json", { headers: headers(storageToken) })
-    await graphCaller(targetToken, f.fetch, { tenant: DESTINATION })("POST", graph + "deviceManagement/configurationPolicies/destination", { name: "fixture" })
-    return Response.json({ ok: true })
-  }, { targetTenants: [{ tenantId: DESTINATION, appId: DESTINATION_CLIENT }] })
+  const backupId = "backup-2026-09-25-120000"
+  f.network.mockImplementation(async (input, init) => {
+    const request = new Request(input, init)
+    const url = new URL(request.url)
+    if (url.hostname.endsWith(".blob.core.windows.net")) {
+      expect(request.headers.get("authorization")).toBe(`Bearer ${tokenFor(TENANT, RESOURCE_SCOPES.storage)}`)
+      if (url.pathname.endsWith("/metadata.json")) return Response.json({ Status: "Success", TenantId: TENANT })
+      if (url.pathname.endsWith("/policy.json")) return Response.json({
+        id: "original", displayName: "Policy", "@odata.type": "#microsoft.graph.windows10CustomConfiguration", omaSettings: [],
+      })
+      return new Response(null, { status: 404 })
+    }
+    expect(url.pathname).toBe("/beta/deviceManagement/deviceConfigurations")
+    expect(request.method).toBe("POST")
+    expect(request.headers.get("authorization")).toBe(`Bearer ${tokenFor(DESTINATION, RESOURCE_SCOPES.graph)}`)
+    return Response.json({ id: "copied" }, { status: 201 })
+  })
+  vi.stubGlobal("fetch", f.fetch)
+  const response = await f.dispatch("/api/restore-backup", restoreBackup, {
+    backupId, storageAccountName: "example", restoreType: "selective", mode: "copy",
+    selectedPolicies: [{ path: `${backupId}/DeviceConfigurations/policy.json` }],
+    targetTenants: [{ tenantId: DESTINATION, appId: DESTINATION_CLIENT }],
+  })
   expect(response.status).toBe(200)
-  expect(f.network).toHaveBeenCalledTimes(2)
+  expect(await response.json()).toMatchObject({ success: true, details: { restoredCount: 1, results: [{ targetTenantId: DESTINATION }] } })
+})
+
+it("passes own-registration bearers through without requiring a known token or route match", async () => {
+  const f = fixture()
+  const response = await f.dispatch("/api/reports", async () => {
+    const dest = tokenFor(DESTINATION, RESOURCE_SCOPES.graph)
+    return f.fetch(graph + "destination", { headers: headers(dest) })
+  })
+  expect(response.status).toBe(200)
+  expect(f.network).toHaveBeenCalledOnce()
+})
+
+it.each([
+  ["/api/promotion", { action: "policies", sourceTenantId: DESTINATION, targetTenants: [{ tenantId: DESTINATION }] }],
+  ["/api/sync", { action: "target-objects", kind: "scopeTag", targetTenantId: DESTINATION }],
+] as const)("admits the validated second tenant in %s", async (path, body) => {
+  const f = fixture()
+  const deps = fakeDeps({ plans: { [TENANT]: "msp", [DESTINATION]: "msp" } })
+  deps.graph = async tenant => {
+    const token = await f.routeToken(RESOURCE_SCOPES.graph, tenant)
+    return async (method, _path, payload) => {
+      const response = await f.fetch(graph + (tenant === DESTINATION ? "destination" : "source"), {
+        method, headers: headers(token), body: payload ? JSON.stringify(payload) : undefined,
+      })
+      return { status: response.status, body: await response.json() }
+    }
+  }
+  const host = new ApiHost({
+    routes: { ...promotionRoutes(deps), ...syncRoutes(deps) },
+    bindConnections: tenants => {
+      expect(tenants).toEqual([TENANT, DESTINATION])
+      return f.cap.bindConnections(tenants)
+    },
+    guard: planGuard(deps.plan),
+  })
+  const response = await host.dispatch(new Request("https://desktop.test" + path, {
+    method: "POST", body: JSON.stringify({ tenantId: TENANT, ...body }),
+  }))
+  expect(response.status).toBe(200)
+  expect(await response.json()).toEqual(path === "/api/promotion" ? { source: [], destination: [] } : { objects: [], readable: true })
+  expect(f.network).toHaveBeenCalledTimes(path === "/api/promotion" ? 2 : 1)
+})
+
+it("checks drift across two tenants and generates a report under each tenant's own sign-in", async () => {
+  const f = fixture(false, request => host.dispatch(request))
+  const tenantIds = [TENANT, DESTINATION]
+  const backups = ["backup-2026-09-24-120000", "backup-2026-09-25-120000"]
+  const storageReads = new Set<string>()
+  const auditReads = new Set<string>()
+  f.network.mockImplementation(async (input, init) => {
+    const request = new Request(input, init)
+    const url = new URL(request.url)
+    const tenant = url.hostname.startsWith("destination") || url.searchParams.get("fixtureTenant") === DESTINATION ? DESTINATION : TENANT
+    if (url.hostname === "graph.microsoft.com") {
+      expect(url.pathname).toBe("/beta/deviceManagement/auditEvents")
+      expect(request.headers.get("authorization")).toBe(`Bearer ${tokenFor(tenant, RESOURCE_SCOPES.graph)}`)
+      auditReads.add(tenant)
+      return Response.json({ value: [] })
+    }
+    expect(request.headers.get("authorization")).toBe(`Bearer ${tokenFor(tenant, RESOURCE_SCOPES.storage)}`)
+    storageReads.add(tenant)
+    if (url.pathname.endsWith("/metadata.json")) return Response.json({ Status: "Success", TenantId: tenant })
+    if (url.searchParams.has("delimiter") && url.pathname === "/intune-backups") {
+      return new Response(backups.map(id => `<BlobPrefix><Name>${id}/</Name></BlobPrefix>`).join(""))
+    }
+    return new Response("<EnumerationResults><Blobs /></EnumerationResults>")
+  })
+  vi.stubGlobal("fetch", f.fetch)
+  const deps = fakeDeps({ plans: { [TENANT]: "msp", [DESTINATION]: "msp" } })
+  const requestBody = (tenantId: string) => ({
+    tenantId, appId: tenantId === TENANT ? CLIENT : DESTINATION_CLIENT, clientSecret: DELEGATED_CLIENT_SECRET,
+    storageAccountName: tenantId === TENANT ? "example" : "destination",
+  })
+  deps.api = (path, tenantId, body) => f.fetch("http://tenuvault.internal" + path, {
+    method: "POST", body: JSON.stringify({ ...requestBody(tenantId), ...body }),
+  })
+  deps.graph = async tenantId => {
+    const token = await f.routeToken(RESOURCE_SCOPES.graph, tenantId)
+    return graphCaller(token, (input, init) => f.fetch(String(input) + "&fixtureTenant=" + tenantId, init))
+  }
+  const host = new ApiHost({
+    routes: { ...reportRoutes(deps), "/api/detect-drifts": { POST: detectDrifts },
+      "/api/revert-metadata": { POST: () => Response.json({ reverts: {} }) } },
+    bindConnections: ids => f.cap.bindConnections(ids), guard: planGuard(deps.plan),
+  })
+  function dispatch(path: string, body: object) {
+    return host.dispatch(new Request("http://tenuvault.internal" + path, { method: "POST", body: JSON.stringify(body) }))
+  }
+  for (const tenantId of tenantIds) {
+    const drift = await dispatch("/api/detect-drifts", {
+      ...requestBody(tenantId), bulk: true, targetTenants: tenantIds.filter(id => id !== tenantId).map(tenantId => ({ tenantId })),
+    })
+    expect(drift.status).toBe(200)
+    expect(await drift.json()).toMatchObject({ backupsAnalyzed: 2 })
+    const report = await dispatch("/api/reports", { tenantId, action: "generate" })
+    expect(report.status).toBe(200)
+    expect(await report.json()).toMatchObject({ report: { audit: "included", unchanged: true } })
+  }
+  expect(storageReads).toEqual(new Set(tenantIds))
+  expect(auditReads).toEqual(new Set(tenantIds))
 })

@@ -1,3 +1,6 @@
+import { executionMetadata } from "../api/execution-metadata"
+import { GRAPH_CLI_CLIENT_ID } from "../../shared/tenant-connection"
+import { accessTokenDigest, tokenIdentity } from "./token-identity"
 import { PublicClientApplication } from "@azure/msal-node"
 import { fetchNetworkClient } from "./network-client"
 import { ERROR_PAGE, firstSignInError, page, SIGN_IN_TIMEOUT_MS, SignInCancelledError, SignInTimeoutError } from "./msal"
@@ -99,7 +102,7 @@ export class AppRegistrationSetup {
     this.controller = controller
     // No cache plugin or logger. This client and its privileged tokens live only for this run.
     const app = new PublicClientApplication({
-      auth: { clientId: "14d82eec-204b-4c2f-b7e8-296a70dab67e", authority: `https://login.microsoftonline.com/${encodeURIComponent(options?.tenant || "organizations")}` },
+      auth: { clientId: GRAPH_CLI_CLIENT_ID, authority: `https://login.microsoftonline.com/${encodeURIComponent(options?.tenant || "organizations")}` },
       system: { networkClient: fetchNetworkClient(this.host.fetch) },
     })
     // The browser wait of this run. Ending it closes the sign-in's own listener, so a browser tab
@@ -148,12 +151,20 @@ export class AppRegistrationSetup {
       this.host.report?.({ name: "setup_signin", props: { result: "ok" } })
       let phase: SetupProgress["phase"] = "registration"
       try {
-        const registration = await provisionRegistration({
+        const tenantId = result.account.tenantId.toLowerCase()
+        const identity = tokenIdentity(result.accessToken)
+        if ((result.tenantId && result.tenantId.toLowerCase() !== tenantId) ||
+          (isGuid(options?.tenant) && options.tenant.toLowerCase() !== tenantId) ||
+          (identity.decoded && (identity.tenantId !== tenantId || identity.clientId !== GRAPH_CLI_CLIENT_ID))) {
+          throw new Error("Microsoft returned a setup sign-in for a different tenant or app. Nothing was changed.")
+        }
+        const registrationSetup = { tenantId, clientId: GRAPH_CLI_CLIENT_ID, tokenDigest: accessTokenDigest(result.accessToken) }
+        const registration = await executionMetadata.run({ registrationSetup }, () => provisionRegistration({
           fetch: this.host.fetch, token: result.accessToken,
-          tenantId: result.account.tenantId.toLowerCase(), username: result.account.username,
+          tenantId, username: result.account!.username,
           progress: (progress) => { phase = progress.phase; this.host.progress(progress) }, signal: controller.signal,
           ...(choice ? { choice } : {}),
-        })
+        }))
         this.host.report?.(registrationEvent({ result: registration }))
         return registration
       } catch (error) {

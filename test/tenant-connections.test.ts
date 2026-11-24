@@ -461,16 +461,16 @@ describe("TenuVault app capabilities", () => {
     expect(await (await fetch(request)).text()).toBe(body)
   })
 
-  it("uses the own app acquisition context for opaque and readable bearer values", async () => {
+  it("retains own-registration dispatch for opaque and readable bearer values", async () => {
     const record = { version: 1 as const, clientId: OWN, method: "ownApp" as const, origin: "wizard" as const, createdAt: NOW, updatedAt: NOW }
     const cap = new ConnectionCapabilities(id => id === TENANT ? record : null)
     const url = new URL("https://graph.microsoft.com/beta/organization")
     for (const bearer of ["opaque", jwt({ tid: OTHER, appid: NEXT })]) {
       expect(() => cap.requireIssuedToken(TENANT, OWN, RESOURCE_SCOPES.graph, bearer)).not.toThrow()
       await expect(cap.authorizeRequest(url, url, { headers: { authorization: `Bearer ${bearer}` } }, TENANT)).resolves.toBeUndefined()
-      await expect(cap.authorizeRequest(url, url, { headers: { authorization: `Bearer ${bearer}` } }, OTHER)).rejects.toThrow("method changed")
+      await expect(cap.authorizeRequest(url, url, { headers: { authorization: `Bearer ${bearer}` } }, OTHER)).resolves.toBeUndefined()
     }
-    expect(() => cap.requireIssuedToken(TENANT, NEXT, RESOURCE_SCOPES.graph, "opaque")).toThrow("method changed")
+    expect(() => cap.requireConnection(TENANT, NEXT, RESOURCE_SCOPES.graph)).toThrow("method changed")
   })
 
   it.each([["tenuvaultApp", TENUVAULT_CLIENT_ID], ["graphCli", GRAPH_CLI_CLIENT_ID]] as const)(
@@ -496,19 +496,22 @@ describe("TenuVault app capabilities", () => {
     },
   )
 
-  it.each([["user", "usersAndDevices", "User.DeleteRestore.All"], ["group", "groups", "Group.ReadWrite.All"]] as const)(
-    "covers %s recycle restore with only the selected pack and a checked deleted-object type",
-    async (type, area, permission) => {
+  it.each([["user", "usersAndDevices"], ["group", "groups"]] as const)(
+    "requires checked deleted-object type and admitted scopes for %s recycle requests",
+    async (type, area) => {
       const packs = tenantPermissionPacks({ entra: { access: "restore", areas: [area] } }, { azure: false, audit: false })
       const scopes = resourcePackScopes(packs, "graph")
-      expect(scopes).toContain(permission)
+      expect(scopes).not.toContain("User.DeleteRestore.All")
+      if (type === "group") expect(scopes).toContain("Group.ReadWrite.All")
       const record = { version: 1 as const, clientId: TENUVAULT_CLIENT_ID, method: "tenuvaultApp" as const, origin: "wizard" as const, createdAt: NOW, updatedAt: NOW, graphScopes: scopes }
       const cap = new ConnectionCapabilities(() => record, () => packs, async () => true)
       const url = new URL(`https://graph.microsoft.com/beta/directory/deletedItems/${OWN}/restore`)
-      const headers = { authorization: `Bearer ${jwt({ tid: TENANT, azp: TENUVAULT_CLIENT_ID, scp: scopes.join(" ") })}` }
+      const headers = { authorization: `Bearer ${jwt({ tid: TENANT, azp: TENUVAULT_CLIENT_ID, scp: [...scopes, "User.DeleteRestore.All"].join(" ") })}` }
       const send = () => cap.authorizeRequest(url, url, { method: "POST", headers }, TENANT)
       await expect(send()).rejects.toThrow("restore permission pack")
-      await expect(executionMetadata.run({ directoryRecycle: { type, path: url.pathname } }, send)).resolves.toBeUndefined()
+      const checked = executionMetadata.run({ directoryRecycle: { type, path: url.pathname } }, send)
+      if (type === "user") await expect(checked).rejects.toThrow("restore permission pack")
+      else await expect(checked).resolves.toBeUndefined()
     },
   )
 

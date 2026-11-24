@@ -70,7 +70,6 @@ import { backupRoutes, surfaceTokenErrors } from "./api/desktop-routes"
 import { createBridgedFetch } from "./api/fetch-bridge"
 import { rejectProxyAuthResponses, withNetworkErrors } from "./api/network-error"
 import { ApiHost } from "./api/host"
-import { executionMetadata } from "./api/execution-metadata"
 import { routes } from "./api/routes"
 import { AuthManager, SignInRequiredError } from "./auth/msal"
 import { TenantConnections } from "./auth/tenant-connections"
@@ -1524,7 +1523,7 @@ async function bootstrap(): Promise<void> {
   let setupSignIn: { tenantId: string; clientId: string; username: string } | null = null
   handleTrusted("setup:createRegistration", async (_event, options?: { tenant?: string; choice?: unknown }) => {
     setupSignIn = null
-    const result = await executionMetadata.run({ registrationSetup: true }, () => registrationSetup.create(options))
+    const result = await registrationSetup.create(options)
     setupSignIn = { tenantId: result.tenantId, clientId: result.clientId, username: result.username }
     return result
   })

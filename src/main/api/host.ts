@@ -4,11 +4,14 @@ import type { ApiRequest, ApiResponse } from "../../shared/ipc"
 import { INTERNAL_API_ORIGIN } from "../../shared/constants"
 import { NextRequest } from "./next-server-shim"
 import { withRouteTenant } from "../storage/blob-emulator"
+import { isFeatureRoute } from "../../shared/feature-routes"
 import { isGuid } from "../../shared/security"
 
 /** Largest request body accepted over IPC, matching the 8 MB policies limit the routes enforce. */
 export const MAX_IPC_BODY_BYTES = 8 * 1024 * 1024
 export { DOWNLOAD_CANCELLED_HEADER } from "../../shared/constants"
+
+const BULK_TENANT_ROUTES = new Set(["/api/restore-backup", "/api/backup/start", "/api/detect-drifts"])
 
 type RouteHandler = (request: NextRequest) => Promise<Response> | Response
 export type RouteModule = Partial<Record<"GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "OPTIONS", RouteHandler>>
@@ -53,13 +56,21 @@ export class ApiHost {
     let tenantId: unknown
     let storageAccountName: unknown
     const metadata: ExecutionMetadata = {}
+    let participants: string[] = []
     if (request.method !== "GET" && request.method !== "HEAD") {
       const input: unknown = await request.clone().json().catch(() => null)
       if (input && typeof input === "object" && "tenantId" in input) tenantId = input.tenantId
-      if (path === "/api/restore-backup" && isGuid(tenantId) && input && typeof input === "object" &&
-        "targetTenants" in input && Array.isArray(input.targetTenants)) {
-        const destinations = input.targetTenants.flatMap(target => isGuid(target?.tenantId) ? [target.tenantId.toLowerCase()] : [])
-        if (destinations.length) metadata.copyTenants = { source: tenantId.toLowerCase(), destinations }
+      if (isGuid(tenantId) && input && typeof input === "object") {
+        const source = tenantId.toLowerCase()
+        const targets = "targetTenants" in input && Array.isArray(input.targetTenants)
+          ? input.targetTenants.flatMap(target => isGuid(target?.tenantId) ? [target.tenantId.toLowerCase()] : [])
+          : []
+        // These routes validate the named tenants before using them. Capture their clients
+        // before awaiting the guards so a mid-request switch cannot move the operation.
+        if (isFeatureRoute(path) || BULK_TENANT_ROUTES.has(path)) participants = targets
+        if (path === "/api/sync" && "action" in input && input.action === "target-objects" &&
+          "targetTenantId" in input && isGuid(input.targetTenantId)) participants = [input.targetTenantId.toLowerCase()]
+        if (path === "/api/restore-backup" && targets.length) metadata.copyTenants = { source, destinations: targets }
       }
       if (input && typeof input === "object" && "storageAccountName" in input) {
         try { assertStorageAccountName(input.storageAccountName) }
@@ -68,8 +79,13 @@ export class ApiHost {
       }
     }
 
-    const tenants = isGuid(tenantId) ? [tenantId.toLowerCase(), ...(metadata.copyTenants?.destinations ?? [])] : []
-    metadata.connections = this.options.bindConnections?.(tenants)
+    const tenants = isGuid(tenantId) ? [...new Set([tenantId.toLowerCase(), ...participants])] : []
+    const bind = this.options.bindConnections
+    metadata.connections = bind?.(tenants)
+    metadata.bindParticipants = bind && (ids => {
+      const added = bind(ids.filter(id => !metadata.connections?.has(id)))
+      if (added?.size) metadata.connections = new Map([...(metadata.connections ?? []), ...added])
+    })
     const blocked = await this.options.guard?.(request)
     if (blocked) return blocked
 
