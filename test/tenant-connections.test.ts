@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { SecureStore } from "../src/main/storage/secure-store"
 import { ModuleSettings } from "../src/main/services/settings"
 import { TenantConnections, TENANT_LIST_KEY, type StagedSignIn } from "../src/main/auth/tenant-connections"
-import { accountStore, connectionCache, stageConnectionCache } from "../src/main/auth/stores"
+import { accountStore, connectionCache, publicAccountKey, stageConnectionCache } from "../src/main/auth/stores"
 import { GRAPH_CLI_CLIENT_ID, TENUVAULT_CLIENT_ID, type SignInMethod } from "../src/shared/tenant-connection"
 import { RESOURCE_SCOPES } from "../src/shared/constants"
 import { connectionCoverage } from "../src/main/auth/connection-coverage"
@@ -27,6 +27,10 @@ const staged = (clientId: string, tenantId = TENANT): StagedSignIn => ({
   accessToken: token,
   cacheWrites: () => ({ ["msal." + clientId]: "fixture-cache" }),
 })
+const currentAccounts = (store: SecureStore, connections: TenantConnections) => accountStore(store, undefined, tenant => {
+  const record = connections.get(tenant)
+  return !!record && record.method !== "ownApp"
+})
 
 let dir: string | undefined
 afterEach(() => { if (dir) rmSync(dir, { recursive: true, force: true }); dir = undefined })
@@ -40,10 +44,21 @@ function fixture() {
   const modules = new ModuleSettings(store)
   const coverage = vi.fn((tenant: string, method: SignInMethod, accessToken: string) => connectionCoverage(modules.get(tenant), method, accessToken))
   const now = vi.fn(() => new Date(NOW))
-  const connections = new TenantConnections({ store, signIn: { ownApp: signIn, graphCli: signIn, tenuvaultApp: signIn }, coverage, now })
+  const tokenFile = join(dir, "token-cache.bin")
+  const legacyCache = new SecureStore(tokenFile, cipher)
+  const connectionHost = { store, legacyCache, signIn: { ownApp: signIn, graphCli: signIn, tenuvaultApp: signIn }, coverage, now }
+  const connections = new TenantConnections(connectionHost)
   const entries = () => Object.fromEntries(store.keys().map(key => [key, store.get(key)]))
   const enroll = () => connections.enroll(TENANT, { method: "ownApp", clientId: OWN }, raw, staged(OWN))
-  return { store, signIn, modules, coverage, now, connections, entries, enroll, file, reopen: () => new SecureStore(file, cipher) }
+  const reopen = () => new SecureStore(file, cipher)
+  const reopenLegacy = () => new SecureStore(tokenFile, cipher)
+  const restart = () => {
+    const store = reopen()
+    const connections = new TenantConnections({ ...connectionHost, store, legacyCache: reopenLegacy() })
+    connections.migrate()
+    return { store, connections, accounts: currentAccounts(store, connections) }
+  }
+  return { store, signIn, modules, coverage, now, connections, entries, enroll, file, reopen, reopenLegacy, legacyCache, restart }
 }
 
 describe("tenant connection migration", () => {
@@ -99,14 +114,80 @@ describe("in-place sign-in change", () => {
     expect(f.coverage).toHaveBeenCalledWith(TENANT, "tenuvaultApp", token)
     expect(switchResult.missing).toContain("Organization.Read.All")
     const store = f.reopen()
-    expect(accountStore(store).get(TENANT)?.clientId).toBe(TENUVAULT_CLIENT_ID)
+    expect(accountStore(store).get(TENANT)).toBeNull()
+    expect(currentAccounts(store, f.connections).get(TENANT)?.clientId).toBe(TENUVAULT_CLIENT_ID)
     expect(store.get(`msal.${TENUVAULT_CLIENT_ID}`)).toBe("fixture-cache")
-    expect(JSON.parse(store.get(TENANT_LIST_KEY)!)[0]).toMatchObject({ id: 1, name: "Fixture", resources: { storageAccountName: storage }, credentials: { tenantId: TENANT, appId: TENUVAULT_CLIENT_ID } })
+    expect(JSON.parse(store.get(TENANT_LIST_KEY)!)[0]).toMatchObject({ id: 1, name: "Fixture", resources: { storageAccountName: storage }, credentials: { tenantId: TENANT, appId: OWN } })
     expect(f.entries()).toMatchObject(preserved)
     f.connections.saveProfiles(raw)
-    expect(JSON.parse(f.store.get(TENANT_LIST_KEY)!)[0].credentials.appId).toBe(TENUVAULT_CLIENT_ID)
+    expect(JSON.parse(f.store.get(TENANT_LIST_KEY)!)[0].credentials.appId).toBe(OWN)
     await expect(f.connections.switch(TENANT, { method: "graphCli" })).resolves.toMatchObject({ connection: { clientId: GRAPH_CLI_CLIENT_ID, ownClientId: OWN } })
     await expect(f.connections.switch(TENANT, { method: "ownApp", clientId: NEXT })).resolves.toMatchObject({ connection: { clientId: NEXT, ownClientId: NEXT } })
+  })
+
+  it.each([
+    ["0.5.3.json", "graphCli", GRAPH_CLI_CLIENT_ID],
+    ["0.5.4-nightly.json", "tenuvaultApp", TENUVAULT_CLIENT_ID],
+  ] as const)("keeps the %s credential slot safe after switching to %s", async (name, method, publicId) => {
+    const f = fixture()
+    const legacySettings = JSON.parse(readFileSync(new URL(`./fixtures/tenant-connections/${name}`, import.meta.url), "utf8"))
+    const legacyProfile = JSON.parse(legacySettings[TENANT_LIST_KEY])[0]
+    legacyProfile.credentials.tenantId = TENANT
+    f.connections.enroll(TENANT, { method: "ownApp", clientId: OWN }, JSON.stringify([legacyProfile]), staged(OWN))
+    await f.connections.switch(TENANT, { method })
+    const oldAppId = () => JSON.parse(f.reopen().get(TENANT_LIST_KEY)!)[0].credentials.appId
+    expect(oldAppId()).toBe(OWN)
+    expect(accountStore(f.reopen()).list()).toEqual([])
+    expect(currentAccounts(f.reopen(), f.connections).list()).toMatchObject([{ clientId: publicId }])
+    const active = f.connections.activeProfiles()!
+    expect(JSON.parse(active)[0].credentials.appId).toBe(publicId)
+    f.connections.saveProfiles(active)
+    expect(oldAppId()).toBe(OWN)
+    // A wizard tenant that only ever used a public registration needs setup in 0.5.x.
+    f.connections.saveProfiles("[]")
+    legacyProfile.credentials.appId = publicId
+    f.connections.enroll(TENANT, { method }, JSON.stringify([legacyProfile]), staged(publicId))
+    expect(oldAppId()).toBe("")
+    expect(JSON.parse(f.connections.activeProfiles()!)[0].credentials.appId).toBe(publicId)
+  })
+
+  it.each(["ownApp", "graphCli"] as const)("requires fresh sign-in after a downgrade reauthenticates a %s connection", async method => {
+    const f = fixture()
+    f.enroll()
+    await f.connections.switch(TENANT, method === "ownApp" ? { method, clientId: NEXT } : { method })
+    const unchanged = f.restart()
+    const active = unchanged.connections.get(TENANT)!
+    expect(unchanged.accounts.get(TENANT)?.clientId).toBe(active.clientId)
+    const oldAppStore = f.reopen()
+    const oldClient = JSON.parse(oldAppStore.get(TENANT_LIST_KEY)!)[0].credentials.appId
+    f.reopenLegacy().set(`msal.${oldClient}`, "0.5.x reauthenticated cache")
+    accountStore(oldAppStore).set(staged(oldClient).account)
+    const upgraded = f.restart()
+    expect(upgraded.connections.get(TENANT)?.clientId).toBe(active.clientId)
+    expect(upgraded.accounts.get(TENANT)).toBeNull()
+    expect(upgraded.store.get(`msal.${active.clientId}`)).toBe("fixture-cache")
+    upgraded.accounts.set(staged(active.clientId).account)
+    expect(f.restart().accounts.get(TENANT)?.clientId).toBe(active.clientId)
+  })
+
+  it("requires a fresh sign-in for a mismatched account even without a legacy cache write", async () => {
+    const f = fixture()
+    f.enroll()
+    await f.connections.switch(TENANT, { method: "tenuvaultApp" })
+    accountStore(f.store).set(staged(OWN).account)
+    expect(f.restart().accounts.get(TENANT)).toBeNull()
+  })
+
+  it("moves a public sign-in and repairs legacy settings written by an earlier 0.6 build", async () => {
+    const f = fixture()
+    f.enroll()
+    await f.connections.switch(TENANT, { method: "graphCli" })
+    f.store.setMany({ [TENANT_LIST_KEY]: f.connections.activeProfiles()! }, [publicAccountKey(TENANT)])
+    accountStore(f.store).set(staged(GRAPH_CLI_CLIENT_ID).account)
+    const migrated = f.restart()
+    expect(migrated.accounts.get(TENANT)?.clientId).toBe(GRAPH_CLI_CLIENT_ID)
+    expect(accountStore(migrated.store).get(TENANT)).toBeNull()
+    expect(JSON.parse(migrated.store.get(TENANT_LIST_KEY)!)[0].credentials.appId).toBe(OWN)
   })
 
   it.each(["sign-in", "wrong tenant", "wrong client", "coverage", "staged cache", "disk"] as const)("preserves all state when %s fails", async phase => {

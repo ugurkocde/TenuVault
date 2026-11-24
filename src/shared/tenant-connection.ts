@@ -18,6 +18,8 @@ export interface TenantConnection {
   updatedAt: string
   /** Keep the tenant's own registration for organization license sharing after a switch. */
   ownClientId?: string
+  /** Detect a 0.5.x sign-in changing token-cache.bin without changing the 0.6 cache. */
+  legacyCacheFingerprint?: string | null
 }
 
 export type ConnectionTarget =

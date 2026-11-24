@@ -1,9 +1,10 @@
+import { createHash } from "node:crypto"
 import type { SignedInAccount } from "../../shared/ipc"
 import { isGuid } from "../../shared/security"
 import { GRAPH_CLI_CLIENT_ID, TENUVAULT_CLIENT_ID, type ConnectionSwitchResult, type SignInMethod, type TenantConnection } from "../../shared/tenant-connection"
 import { DELEGATED_CLIENT_SECRET, LOCAL_STORAGE_PREFIX } from "../../shared/constants"
 import type { SecureStore } from "../storage/secure-store"
-import { storedAccountEntry, storedAccountKey, type StoredAccount } from "./stores"
+import { parseStoredAccount, publicAccountKey, storedAccountKey, type StoredAccount } from "./stores"
 
 const PREFIX = "auth.connection."
 export const TENANT_LIST_KEY = "renderer.tenuvault_tenants"
@@ -53,9 +54,15 @@ export interface StagedSignIn {
 
 interface ConnectionHost {
   store: Pick<SecureStore, "get" | "setMany">
+  legacyCache?: Pick<SecureStore, "get">
   signIn: Partial<Record<SignInMethod, (tenantId: string, clientId: string) => Promise<StagedSignIn>>>
   coverage: (tenantId: string, method: SignInMethod, accessToken: string) => string[]
   now?: () => Date
+}
+
+function legacyClientId(connection: TenantConnection): string {
+  const id = connection.method === "ownApp" ? connection.clientId : connection.ownClientId
+  return isGuid(id) && id.toLowerCase() !== GRAPH_CLI_CLIENT_ID && id.toLowerCase() !== TENUVAULT_CLIENT_ID ? id : ""
 }
 
 export class TenantConnections {
@@ -68,7 +75,47 @@ export class TenantConnections {
 
   /** Add the record to the existing encrypted settings, without rewriting tenant or service settings. */
   migrate(raw = this.host.store.get(TENANT_LIST_KEY)): void {
-    this.host.store.setMany(this.legacyEntries(raw))
+    const entries = this.legacyEntries(raw)
+    const removed: string[] = []
+    for (const profile of savedTenants(raw) ?? []) {
+      const tenant = profileId(profile)
+      if (!tenant) continue
+      const record = this.get(tenant)
+      if (record?.origin !== "wizard") continue
+      const legacyKey = storedAccountKey(tenant)
+      const sharedKey = publicAccountKey(tenant)
+      const legacy = this.host.store.get(legacyKey)
+      const usesPublicClient = record.method !== "ownApp"
+      const shared = usesPublicClient ? this.host.store.get(sharedKey) : null
+      const saved = shared ?? legacy
+      const fingerprint = this.legacyCacheFingerprint(record)
+      const matches = (value: string | null) => {
+        const account = parseStoredAccount(value)
+        return account?.tenantId.toLowerCase() === tenant && account.clientId.toLowerCase() === record.clientId.toLowerCase()
+      }
+      const legacySignInChanged = (record.legacyCacheFingerprint ?? null) !== fingerprint ||
+        (usesPublicClient && legacy !== null && (shared !== null || !matches(legacy)))
+      if (usesPublicClient) {
+        if (legacy !== null) removed.push(legacyKey)
+        if (saved !== null && matches(saved) && !legacySignInChanged) {
+          if (shared === null) entries[sharedKey] = saved
+        } else if (shared !== null) removed.push(sharedKey)
+      } else if (saved !== null && (!matches(saved) || legacySignInChanged)) removed.push(legacyKey)
+      if (this.host.legacyCache && record.legacyCacheFingerprint !== fingerprint) {
+        entries[PREFIX + tenant] = JSON.stringify({ ...record, legacyCacheFingerprint: fingerprint })
+      }
+    }
+    if (raw !== null) {
+      const aligned = this.alignProfiles(raw)
+      if (aligned !== raw) entries[TENANT_LIST_KEY] = aligned
+    }
+    this.host.store.setMany(entries, removed)
+  }
+
+  private legacyCacheFingerprint(record: TenantConnection): string | null {
+    const client = legacyClientId(record)
+    const cache = client ? this.host.legacyCache?.get(`msal.${client}`) : null
+    return cache == null ? null : createHash("sha256").update(cache).digest("hex")
   }
 
   private legacyEntries(raw: string | null): Record<string, string> {
@@ -124,7 +171,7 @@ export class TenantConnections {
     const ids = new Set((next ?? []).flatMap(profile => profileId(profile) ?? []))
     const removed = previous.flatMap(profile => {
       const id = profileId(profile)
-      return id && !ids.has(id) ? [PREFIX + id] : []
+      return id && !ids.has(id) ? [PREFIX + id, publicAccountKey(id)] : []
     })
     if (raw === null) this.host.store.setMany({}, [...removed, TENANT_LIST_KEY])
     else this.host.store.setMany({ ...this.legacyEntries(raw), [TENANT_LIST_KEY]: this.alignProfiles(raw) }, removed)
@@ -134,6 +181,15 @@ export class TenantConnections {
   private alignProfiles(raw: string): string {
     return this.updateProfiles(raw, tenantId => {
       const connection = this.get(tenantId)
+      return connection?.origin === "wizard" ? legacyClientId(connection) : undefined
+    })
+  }
+
+  /** Project the active client for 0.6 callers while keeping disk credentials safe for older apps. */
+  activeProfiles(): string | null {
+    const raw = this.host.store.get(TENANT_LIST_KEY)
+    return raw === null ? null : this.updateProfiles(raw, tenant => {
+      const connection = this.get(tenant)
       return connection?.origin === "wizard" ? connection.clientId : undefined
     })
   }
@@ -150,7 +206,8 @@ export class TenantConnections {
     const signIn = this.host.signIn[selected.method]
     if (!signIn) throw new Error("Sign-in with this method is unavailable in this version.")
     this.validateStorage(profile, selected.method)
-    const originalAccount = this.host.store.get(storedAccountKey(tenant))
+    const accountKey = record.method === "ownApp" ? storedAccountKey(tenant) : publicAccountKey(tenant)
+    const originalAccount = this.host.store.get(accountKey)
     this.switching.add(tenant)
     try {
       const staged = await signIn(tenant, selected.clientId)
@@ -159,7 +216,7 @@ export class TenantConnections {
       const current = this.get(tenant)
       const latest = this.profile(tenant, raw)
       if (!raw || !latest || current?.origin !== "wizard" || current.clientId !== record.clientId || current.updatedAt !== record.updatedAt ||
-        this.host.store.get(storedAccountKey(tenant)) !== originalAccount) {
+        this.host.store.get(accountKey) !== originalAccount) {
         throw new Error("The tenant's connection changed during sign-in. Try again.")
       }
       this.validateStorage(latest, selected.method)
@@ -192,22 +249,27 @@ export class TenantConnections {
   }
 
   private commit(tenant: string, raw: string, record: TenantConnection, signIn: StagedSignIn): void {
+    const legacyKey = storedAccountKey(tenant)
+    const sharedKey = publicAccountKey(tenant)
+    const ownApp = record.method === "ownApp"
     this.host.store.setMany({
       ...signIn.cacheWrites?.(),
-      ...storedAccountEntry({ ...signIn.account, tenantId: tenant, clientId: record.clientId }),
-      [PREFIX + tenant]: JSON.stringify(record),
-      [TENANT_LIST_KEY]: this.updateProfiles(raw, id => id === tenant ? record.clientId : undefined),
-    })
+      [ownApp ? legacyKey : sharedKey]: JSON.stringify({ ...signIn.account, tenantId: tenant, clientId: record.clientId }),
+      [PREFIX + tenant]: JSON.stringify(this.host.legacyCache ? { ...record, legacyCacheFingerprint: this.legacyCacheFingerprint(record) } : record),
+      [TENANT_LIST_KEY]: this.updateProfiles(raw, id => id === tenant ? legacyClientId(record) : undefined),
+    }, [ownApp ? sharedKey : legacyKey])
   }
 
   private updateProfiles(raw: string, clientFor: (tenantId: string) => string | undefined): string {
     let changed = false
-    const clientSecret = Buffer.from(DELEGATED_CLIENT_SECRET).toString("base64")
+    const delegatedSecret = Buffer.from(DELEGATED_CLIENT_SECRET).toString("base64")
     const tenants = (savedTenants(raw) ?? []).map(tenant => {
       const credentials = tenant?.credentials
       if (!isGuid(credentials?.tenantId)) return tenant
       const appId = clientFor(credentials.tenantId.toLowerCase())
-      if (!appId || (credentials.appId === appId && credentials.clientSecret === clientSecret)) return tenant
+      if (appId === undefined) return tenant
+      const clientSecret = appId ? delegatedSecret : ""
+      if (credentials.appId === appId && credentials.clientSecret === clientSecret) return tenant
       changed = true
       return { ...tenant, credentials: { ...credentials, appId, clientSecret } }
     })

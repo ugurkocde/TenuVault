@@ -286,7 +286,6 @@ async function bootstrap(): Promise<void> {
     else health.connectionsChanged(tenantId)
     mainWindow?.webContents.send("auth:accountsChanged", tenantId)
   }
-  const accounts = accountStore(appStore, notifyAccountChange)
   // MSAL token traffic goes through the bridged fetch, which is only created below (it needs
   // the license and token plumbing that auth feeds). AuthManager is handed this late-bound
   // delegate instead: it is first used for a sign-in, long after bootstrap assigns the bridge.
@@ -300,6 +299,7 @@ async function bootstrap(): Promise<void> {
   const cache = connectionCache(appStore, tokenStore)
   const connections = new TenantConnections({
     store: appStore,
+    legacyCache: tokenStore,
     signIn: {
       ownApp: async (tenant, clientId) => {
         const staged = stageConnectionCache(cache, clientId)
@@ -309,6 +309,10 @@ async function bootstrap(): Promise<void> {
     coverage: (tenant, method, accessToken) => connectionCoverage(moduleSettings.get(tenant), method, accessToken),
   })
   connections.migrate()
+  const accounts = accountStore(appStore, notifyAccountChange, tenant => {
+    const record = connections.get(tenant)
+    return !!record && record.method !== "ownApp"
+  })
   const capabilities = new ConnectionCapabilities(tenant => connections.get(tenant))
   const auth: AuthManager = new AuthManager({
     fetch: bridgedFetchLater,
@@ -792,7 +796,7 @@ async function bootstrap(): Promise<void> {
   // Tenant profiles are kept by the renderer; scheduled backups read them from the store.
   const tenantProfile = (tenantId: string) => {
     try {
-      const tenants = JSON.parse(appStore.get(`${RENDERER_STORAGE_PREFIX}tenuvault_tenants`) ?? "[]") as Array<{
+      const tenants = JSON.parse(connections.activeProfiles() ?? "[]") as Array<{
         name?: string
         domain?: string
         credentials?: { tenantId?: string; appId?: string }
@@ -1653,7 +1657,8 @@ async function bootstrap(): Promise<void> {
   ipcMain.on("storage:getSync", (event, key: unknown) => {
     if (!trustedSender(event)) { event.returnValue = null; return }
     try {
-      event.returnValue = appStore.get(RENDERER_STORAGE_PREFIX + rendererStorageKey(key))
+      const name = rendererStorageKey(key)
+      event.returnValue = name === "tenuvault_tenants" ? connections.activeProfiles() : appStore.get(RENDERER_STORAGE_PREFIX + name)
     } catch {
       event.returnValue = null
     }
@@ -1862,7 +1867,7 @@ async function bootstrap(): Promise<void> {
       return id
     },
     signInWithDeviceCode: async (tenant, onCode, signal) => {
-      const client = appBackupClientId(tenant, appStore.get(`${RENDERER_STORAGE_PREFIX}tenuvault_tenants`))
+      const client = appBackupClientId(tenant, connections.activeProfiles())
       await auth.signInWithDeviceCode(tenant, client, onCode, signal)
       pushLicense()
     },
@@ -1926,7 +1931,7 @@ async function bootstrap(): Promise<void> {
     checkDevice: (tenant) => checkRecoveryDevice(tenant, () => readAppBackupAccount(tenant,
       async id => (await auth.getAccessToken(id, signedInClient(id), RESOURCE_SCOPES.graph)).accessToken, bridgedFetch)),
     signIn: async (tenant) => {
-      const clientId = appBackupClientId(tenant, appStore.get(`${RENDERER_STORAGE_PREFIX}tenuvault_tenants`))
+      const clientId = appBackupClientId(tenant, connections.activeProfiles())
       await auth.reauthenticate(tenant, clientId, RESOURCE_SCOPES.graph).finally(returnToApp)
       void health.check(tenant, "signIn").catch(() => undefined)
       pushLicense()

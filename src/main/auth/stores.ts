@@ -20,11 +20,9 @@ export function secureCachePlugin(store: Pick<SecureStore, "get" | "set">, clien
 export type StoredAccount = SignedInAccount & { homeAccountId: string }
 
 const PREFIX = "auth.account."
+const PUBLIC_PREFIX = "auth.sharedClientAccount."
 export const storedAccountKey = (tenantId: string) => PREFIX + tenantId.toLowerCase()
-
-export function storedAccountEntry(account: StoredAccount): Record<string, string> {
-  return { [storedAccountKey(account.tenantId)]: JSON.stringify(account) }
-}
+export const publicAccountKey = (tenantId: string) => PUBLIC_PREFIX + tenantId.toLowerCase()
 
 /** New sign-ins can move one cache into the same encrypted file as the connection. */
 export function connectionCache(appStore: SecureStore, tokenStore: SecureStore): Pick<SecureStore, "get" | "set"> {
@@ -49,7 +47,7 @@ export function stageConnectionCache(store: Pick<SecureStore, "get">, clientId: 
 }
 
 /** A stored account, or null when the stored value is unreadable or legacy-shaped. */
-function parseStoredAccount(raw: string | null): StoredAccount | null {
+export function parseStoredAccount(raw: string | null): StoredAccount | null {
   if (!raw) return null
   let parsed: unknown
   try { parsed = JSON.parse(raw) } catch { return null }
@@ -61,26 +59,31 @@ function parseStoredAccount(raw: string | null): StoredAccount | null {
   return account as StoredAccount
 }
 
-export function accountStore(store: SecureStore, changed?: (tenantId: string) => void): AuthHost["accountStore"] {
+export function accountStore(store: SecureStore, changed?: (tenantId: string) => void, publicConnection?: (tenantId: string) => boolean): AuthHost["accountStore"] {
+  const keyFor = (tenantId: string) => publicConnection?.(tenantId) ? publicAccountKey(tenantId) : storedAccountKey(tenantId)
+  const get = (tenantId: string) => parseStoredAccount(store.get(keyFor(tenantId)))
   return {
-    get: (tenantId) => parseStoredAccount(store.get(storedAccountKey(tenantId))),
+    get,
     set: (account) => {
-      store.set(storedAccountKey(account.tenantId), JSON.stringify(account))
+      store.set(keyFor(account.tenantId), JSON.stringify(account))
       changed?.(account.tenantId)
     },
     delete: (tenantId) => {
-      store.delete(storedAccountKey(tenantId))
+      store.delete(keyFor(tenantId))
       changed?.(tenantId)
     },
-    list: () =>
-      store
-        .keys()
-        .filter((key) => key.startsWith(PREFIX))
-        .flatMap((key) => {
-          const account = parseStoredAccount(store.get(key))
-          if (!account) return []
-          const { homeAccountId: _homeAccountId, ...listed } = account
-          return [listed]
-        }),
+    list: () => {
+      const tenants = new Set(store.keys().flatMap(key => {
+        if (key.startsWith(PREFIX)) return [key.slice(PREFIX.length)]
+        if (key.startsWith(PUBLIC_PREFIX)) return [key.slice(PUBLIC_PREFIX.length)]
+        return []
+      }))
+      return [...tenants].flatMap(tenant => {
+        const account = get(tenant)
+        if (!account) return []
+        const { homeAccountId: _homeAccountId, ...listed } = account
+        return [listed]
+      })
+    },
   }
 }

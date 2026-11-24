@@ -37,13 +37,13 @@ type Profile = { name: string; clientId: string; storageAccountName: string }
 
 function tenantProfileFixture(metadata: { name?: string; domain?: string }) {
   const source = index.slice(index.indexOf("const tenantProfile ="), index.indexOf("const connectedTenantIds ="))
-  const store = { get: () => JSON.stringify([{
+  const connections = { activeProfiles: () => JSON.stringify([{
     ...metadata,
     credentials: { tenantId: tenant.tenantId, appId: "app" },
     resources: { storageAccountName: localStorageAccountName(tenant.tenantId) },
   }]) }
-  return new Function("appStore", "RENDERER_STORAGE_PREFIX", "backupTenantLabel", transformSync(source, { loader: "ts" }).code + "\nreturn tenantProfile;")(
-    store, "", backupTenantLabel,
+  return new Function("connections", "backupTenantLabel", transformSync(source, { loader: "ts" }).code + "\nreturn tenantProfile;")(
+    connections, backupTenantLabel,
   ) as (tenantId: string) => Profile
 }
 

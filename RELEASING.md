@@ -255,6 +255,11 @@ plan records events; Community sees a locked preview on the Audit Log page.
 
 ## Compatibility notes for the next release
 
+- **Tenant sign-in.** After a downgrade to 0.5.x, a tenant connected through the new wizard
+  uses its own app registration if it has one. A tenant that only used a shared sign-in
+  client needs setup in 0.5.x. Signing in again in 0.5.x may require a fresh sign-in when
+  you return to 0.6.
+
 - **Intune policy sets.** Policy sets stay under Apps. Standard Intune setup already includes the Configuration permission. A signed-in backup with neither Configuration permission marks policy sets **Not read**. A Backup Reader without the Configuration read role fails its credential check. The restore preview blocks policy sets that lack the Configuration write scope and names the missing permission.
 - **Upgrade from 0.5.x.** Intune remains on with the previously granted access. Conditional Access keeps its saved setting and is shown under Entra ID. Defender and the other Entra ID areas start off. The update keeps the tenant's existing backup scope, schedule and verified Backup Reader. Check Settings > Services and permissions before enabling another service or requesting additional restore access.
 - **Runs that read nothing.** A run now reports Failed when every selected type was left out by a permission, role, license or sign-in requirement. This includes a run for Defender or Entra ID with every selected type left out, and a custom Intune run in which every selected optional type is denied. The scheduler treats both as failures and retention keeps earlier backups. A successful read that returns an empty list or an unset policy still counts as coverage.
