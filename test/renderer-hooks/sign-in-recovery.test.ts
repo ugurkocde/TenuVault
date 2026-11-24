@@ -243,7 +243,7 @@ describe("recovery panel on the setup sign-in", () => {
       state.setupCancelSignIn.mockImplementationOnce(async () => { reject(new Error("Sign-in cancelled.")); return true })
     }
     waiting()
-    const container = await render(createElement(ConnectTenantSetup, { trials: false, onManual: vi.fn(), onRegistered: vi.fn() }))
+    const container = await render(createElement(ConnectTenantSetup, { onManual: vi.fn(), onRegistered: vi.fn() }))
     await act(async () => { button(container, "Set up with Microsoft sign-in")!.click() })
     await advance(RECOVERY_DELAY_MS - 1)
     expect(container.textContent).not.toContain(PANEL)
@@ -270,7 +270,7 @@ describe("Try again on the setup sign-in after the browser step", () => {
   it("does not stop a setup whose sign-in came back just before", async () => {
     state.createRegistration.mockImplementationOnce(() => new Promise(() => undefined))
     state.setupCancelSignIn.mockResolvedValueOnce(false)
-    const container = await render(createElement(ConnectTenantSetup, { trials: false, onManual: vi.fn(), onRegistered: vi.fn() }))
+    const container = await render(createElement(ConnectTenantSetup, { onManual: vi.fn(), onRegistered: vi.fn() }))
     await act(async () => { button(container, "Set up with Microsoft sign-in")!.click() })
     await advance(RECOVERY_DELAY_MS)
     await act(async () => { button(container, "Try again")!.click() })
@@ -285,7 +285,7 @@ describe("Try again on the setup sign-in after the browser step", () => {
 describe("setup sign-in that Microsoft answered", () => {
   it("hides the panel and shows that the sign-in is being completed during a slow redemption", async () => {
     state.createRegistration.mockImplementationOnce(() => new Promise(() => undefined))
-    const container = await render(createElement(ConnectTenantSetup, { trials: false, onManual: vi.fn(), onRegistered: vi.fn() }))
+    const container = await render(createElement(ConnectTenantSetup, { onManual: vi.fn(), onRegistered: vi.fn() }))
     await act(async () => { button(container, "Set up with Microsoft sign-in")!.click() })
     await advance(RECOVERY_DELAY_MS)
     expect(container.textContent).toContain(PANEL)
@@ -301,13 +301,13 @@ describe("setup sign-in that Microsoft answered", () => {
   it("starts a fresh setup without the completing state", async () => {
     let reject: (error: Error) => void = () => undefined
     state.createRegistration.mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail }))
-    const container = await render(createElement(ConnectTenantSetup, { trials: false, onManual: vi.fn(), onRegistered: vi.fn() }))
+    const container = await render(createElement(ConnectTenantSetup, { onManual: vi.fn(), onRegistered: vi.fn() }))
     await act(async () => { button(container, "Set up with Microsoft sign-in")!.click() })
     act(() => state.progress?.({ phase: "signingIn", completing: true }))
     await act(async () => { reject(new Error("Sign-in cancelled.")) })
     state.createRegistration.mockImplementationOnce(() => new Promise(() => undefined))
     await act(async () => { button(container, "Set up with Microsoft sign-in")!.click() })
     expect(container.textContent).not.toContain("Completing sign-in...")
-    expect(container.textContent).toContain("Choose your admin account in the browser")
+    expect(container.textContent).toContain("Finish signing in in your browser")
   })
 })

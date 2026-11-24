@@ -1,16 +1,15 @@
+import { BrowserSignInWait, OtherTenant } from "./OnboardingConnection"
 import { DEFAULT_SETUP_CHOICE, type PermissionChoice } from "../../shared/services/manifest"
 import { useEffect, useRef, useState } from "react"
-import { AlertCircle, Building2, Check, ChevronDown, Circle, HardDrive, Info, KeyRound, Loader2, Send, ShieldCheck, Sparkles, UserCheck, X } from "lucide-react"
+import { AlertCircle, Building2, Check, ChevronDown, Circle, HardDrive, Info, KeyRound, Loader2, Send, ShieldCheck, UserCheck, X } from "lucide-react"
 import { Alert, AlertDescription } from "~/components/ui/alert"
 import { Button } from "~/components/ui/button"
-import { Input } from "~/components/ui/input"
-import { Label } from "~/components/ui/label"
 import { APP_REGISTRATION_GUIDE_URL, CONSENT_ROLES_TEXT, MANUAL_APP_REGISTRATION_URL, setupHandoffText, suggestsCreatingByHand } from "../../shared/app-registration"
 import type { RegistrationResult, SetupProgress } from "../../shared/ipc"
 import { bridge } from "../lib/bridge"
 import { PermissionList, SetupScriptCard } from "./TenantSignInForm"
 import { SetupCallLink } from "./SetupCallLink"
-import { recordSetup, SetupDiagnosticsReminder } from "./SetupDiagnostics"
+import { recordSetup } from "./SetupDiagnostics"
 import { SignInRecoveryPanel, useWaitedLong } from "./SignInRecovery"
 
 const CANCELLED = "Sign-in cancelled."
@@ -30,12 +29,11 @@ const PHASES: readonly SetupProgress["phase"][] = ["signingIn", "registration", 
  * through Microsoft Graph, with the reasons beside it and the other routes (another administrator,
  * the setup script, an existing app registration) below.
  */
-export function ConnectTenantSetup({ trials, onManual, onRegistered, onRunningChange, choice = DEFAULT_SETUP_CHOICE, expectedTenant }: {
-  /** Whether new tenants start with a Pro trial, announced before the setup starts. */
+export function ConnectTenantSetup({ onManual, onRegistered, onRunningChange, choice = DEFAULT_SETUP_CHOICE, expectedTenant, setupFile }: {
   choice?: PermissionChoice
   expectedTenant?: string
   onRunningChange?: (running: boolean) => void
-  trials: boolean
+  setupFile?: React.ReactNode
   /** Continue with IDs the admin already has, on the Sign in step. */
   onManual: () => void
   /** The app registration exists; the caller signs the admin in to it. */
@@ -165,7 +163,7 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered, onRunningCh
   }
 
   return (
-    <div data-tenant-connect className="grid items-start gap-4 text-sm text-gray-700 @3xl:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
+    <div data-tenant-connect className="space-y-4 text-sm text-gray-700">
       <div className="min-w-0 space-y-2">
         <p className="text-base text-gray-600">TenuVault creates its app registration for your chosen services, then signs you in through it.</p>
 
@@ -184,7 +182,6 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered, onRunningCh
             </AlertDescription>
           </Alert>
         )}
-        {error && <SetupDiagnosticsReminder step="setup" />}
 
         {running ? (
           <div role="status" aria-live="polite" className="space-y-4 rounded-3xl bg-gray-50 p-5">
@@ -207,26 +204,7 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered, onRunningCh
                 Completing sign-in...
               </p>
             ) : phase === "signingIn" ? (
-              <div className="space-y-3 border-t border-gray-200 pt-4">
-                <p>Choose your admin account in the browser and approve the request. Nothing is created before you are signed in.</p>
-                <p className="text-xs text-gray-600">
-                  If Microsoft says that you need admin approval, this account cannot approve the setup. Select Cancel and use
-                  &quot;Someone else is the admin?&quot; below.
-                </p>
-                <p className="text-xs text-gray-600">
-                  If Microsoft says that Microsoft Graph Command Line Tools is blocked, disabled or not assigned to you, or a
-                  Conditional Access policy blocks it, the setup script is blocked too. Select Cancel and{" "}
-                  <button type="button" className="rounded-sm font-medium text-gray-900 underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={openManualGuide}>
-                    create the app registration by hand
-                  </button>
-                  .
-                </p>
-                <p className="text-xs text-gray-600">
-                  If Microsoft reports a device or compliance problem, Conditional Access needs a browser that passes the device
-                  identity, such as Microsoft Edge signed in to your work profile. Make it your default browser, cancel and start
-                  again.
-                </p>
-              </div>
+              <BrowserSignInWait kind="setup" cancel={() => void cancel()} cancelling={cancelling} />
             ) : (
               <p className="border-t border-gray-200 pt-4 text-xs text-gray-600">
                 {phase === "publishing"
@@ -234,10 +212,10 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered, onRunningCh
                   : "This takes a few seconds."}
               </p>
             )}
-            <Button type="button" variant="outline" size="sm" onClick={() => void cancel()} disabled={cancelling}>
+            {(phase !== "signingIn" || completing) && <Button type="button" variant="outline" size="sm" onClick={() => void cancel()} disabled={cancelling}>
               <X className="mr-2 h-4 w-4" aria-hidden="true" />
               {cancelling ? "Cancelling..." : "Cancel"}
-            </Button>
+            </Button>}
             {waitedLong && <SignInRecoveryPanel choice={choice} kind="setup" onTryAgain={() => void tryAgain()} retrying={retrying} />}
           </div>
         ) : (
@@ -258,12 +236,7 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered, onRunningCh
               Sign in as a {CONSENT_ROLES_TEXT}, because the setup creates an app registration and grants admin consent. TenuVault
               connects tenants in Microsoft&apos;s global cloud; GCC High, DoD and 21Vianet tenants are not supported.
             </p>
-            {trials && (
-              <p className="flex items-center gap-2 text-sm text-gray-700">
-                <Sparkles className="h-4 w-4 flex-shrink-0" aria-hidden="true" />
-                New tenants start with a Pro trial. No card and no email needed.
-              </p>
-            )}
+            <OtherTenant tenant={tenant} onChange={setTenant} disabled={running} expectedTenant={expectedTenant} />
           </div>
         )}
 
@@ -274,6 +247,17 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered, onRunningCh
             <ChevronDown className="h-4 w-4 transition-transform group-open/setup:rotate-180" aria-hidden="true" />
           </summary>
           <div className="mt-3 space-y-4">
+      <ul className="space-y-2 rounded-2xl border border-border bg-muted/40 p-4">
+        {REASONS.map(({ icon: Icon, title, text }) => (
+          <li key={title} className="flex gap-3">
+            <span className="flex size-8 flex-shrink-0 items-center justify-center rounded-full bg-card text-gray-900" aria-hidden="true"><Icon className="h-4 w-4" /></span>
+            <div className="min-w-0 space-y-0.5">
+              <p className="font-medium text-gray-900">{title}</p>
+              <p className="text-gray-600">{text}</p>
+            </div>
+          </li>
+        ))}
+      </ul>
             <ol className="list-decimal space-y-1.5 pl-5">
               <li>Your browser opens and you sign in with Microsoft. Microsoft asks you to approve Microsoft Graph Command Line Tools with two permissions: Application.ReadWrite.All and DelegatedPermissionGrant.ReadWrite.All.</li>
               <li>TenuVault creates the app registration &quot;TenuVault Desktop&quot; in your tenant. If the tenant already has one from an earlier setup, it uses that one and changes nothing in it.</li>
@@ -287,24 +271,6 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered, onRunningCh
               Line Tools &gt; Permissions.
             </p>
             <div className="rounded-2xl bg-gray-50"><PermissionList choice={choice} /></div>
-            <div className="space-y-1.5">
-              <Label htmlFor="setup-tenant">Tenant ID or domain (optional)</Label>
-              <Input
-                id="setup-tenant"
-                name="setup-tenant"
-                placeholder="contoso.onmicrosoft.com"
-                value={tenant}
-                readOnly={Boolean(expectedTenant)} onChange={(event) => setTenant(event.target.value)}
-                disabled={running}
-                spellCheck={false}
-                autoComplete="off"
-                aria-describedby="setup-tenant-help"
-              />
-              <p id="setup-tenant-help" className="text-xs text-gray-600">
-                Only for guest and partner admins who set up a tenant other than their own. Leave it empty to use the tenant of the
-                account you sign in with.
-              </p>
-            </div>
             <Button type="button" variant="ghost" size="sm" onClick={() => void bridge.app.openExternal(APP_REGISTRATION_GUIDE_URL)}>
               Setup guide
             </Button>
@@ -312,27 +278,12 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered, onRunningCh
         </details>
 
       </div>
-      <ul className="space-y-2 rounded-2xl border border-border bg-muted/40 p-4">
-        {REASONS.map(({ icon: Icon, title, text }) => (
-          <li key={title} className="flex gap-3">
-            <span className="flex size-8 flex-shrink-0 items-center justify-center rounded-full bg-card text-gray-900" aria-hidden="true"><Icon className="h-4 w-4" /></span>
-            <div className="min-w-0 space-y-0.5">
-              <p className="font-medium text-gray-900">{title}</p>
-              <p className="text-gray-600">{text}</p>
-            </div>
-          </li>
-        ))}
-      </ul>
-      {/* Under both columns, so the three ways sit in one row when there is room. */}
-      <div className="space-y-2 border-t border-gray-100 pt-3 @3xl:col-span-2">
-        <div>
-          <p className="font-medium text-gray-900">Other ways to connect</p>
-          <p className="text-gray-600">Not an administrator with one of these roles? Your administrator approves once, and you do the rest.</p>
-        </div>
+      <details open={manualGuide || script || copied || undefined} className="space-y-3">
+        <summary className="cursor-pointer font-medium underline underline-offset-2">Can&apos;t sign in as an admin here?</summary>
         <div className="flex flex-wrap gap-2">
           <Button type="button" variant="outline" size="sm" disabled={running} onClick={() => void copyHandoff()}>
             {copied ? <Check className="mr-2 h-4 w-4" aria-hidden="true" /> : <Send className="mr-2 h-4 w-4" aria-hidden="true" />}
-            {copied ? "Copied" : "Someone else is the admin? Copy instructions"}
+            {copied ? "Copied" : "Copy instructions for my admin"}
           </Button>
           <Button type="button" variant="ghost" size="sm" disabled={running} onClick={openManualGuide}>Create it by hand</Button>
           <Button type="button" variant="ghost" size="sm" disabled={running} onClick={toggleScript} aria-expanded={script}>
@@ -342,13 +293,13 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered, onRunningCh
             I already have an app registration
           </Button>
         </div>
+        {setupFile}
         {copied && (
           <p role="status" className="text-xs text-gray-600">
             Send the instructions to your Entra administrator by email or chat. TenuVault keeps your place here, so you can close
             it. When they send back the two lines, select &quot;I already have an app registration&quot; and paste them.
           </p>
         )}
-      </div>
       {manualGuide && <section className="space-y-3 rounded-2xl bg-blue-50 p-4 @3xl:col-span-2"><h3 className="font-medium text-gray-900">Create the app registration manually</h3><p>Create a single-tenant public client with a localhost redirect, no secret and no certificate. Add and consent to the delegated permissions for your choice below, then return with the tenant ID and client ID.</p><PermissionList choice={choice} /><Button variant="outline" onClick={() => void bridge.app.openExternal(MANUAL_APP_REGISTRATION_URL)}>Open the manual guide</Button></section>}
       {copied && <details className="rounded-2xl bg-blue-50 p-4 @3xl:col-span-2" open><summary className="font-medium">Instructions for your administrator</summary><pre className="mt-3 whitespace-pre-wrap break-words text-xs">{setupHandoffText(choice)}</pre></details>}
       {script && (
@@ -359,6 +310,7 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered, onRunningCh
           </div>
         </div>
       )}
+      </details>
     </div>
   )
 }

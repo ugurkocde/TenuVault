@@ -117,7 +117,10 @@ it("reads access policies only at the review step", async () => {
   expect(JSON.parse(String(requests()[0]![1]?.body))).toMatchObject({ approvalAction: "detect" })
 })
 
-it("sends an uncertain named-location result to the Entra admin center", async () => {
+it.each([
+  { action: undefined, partial: true, error: "Outcome unknown.", uncertain: true },
+  { action: "skipped", partial: false, error: "Start now is read-only.", uncertain: false },
+])("shows uncertainty only after a possible write ($error)", async ({ action, partial, error, uncertain }) => {
   const path = "backup-1/NamedLocations/corporate.json"
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
@@ -125,7 +128,7 @@ it("sends an uncertain named-location result to the Entra admin center", async (
     if (url.endsWith("/api/list-backup-contents")) return Response.json({ content: { groups: [{ folder: "NamedLocations", label: "named location", area: "Conditional Access", policies: [{ path, displayName: "Corporate networks" }] }] } })
     if (url.endsWith("/api/restore-preview")) return Response.json({ items: [{ path, name: "Corporate networks" }] })
     if (body.approvalAction === "detect") return Response.json({ enabled: false })
-    if (url.endsWith("/api/restore-backup")) return Response.json({ details: { results: [{ path, success: false, partial: true, retryable: false, policyId: "location-id", error: "Outcome unknown." }] } })
+    if (url.endsWith("/api/restore-backup")) return Response.json({ details: { results: [{ path, success: false, action, partial, retryable: false, policyId: uncertain ? "location-id" : undefined, error }] } })
     return Response.json({})
   }))
   const container = document.body.appendChild(document.createElement("div"))
@@ -143,8 +146,10 @@ it("sends an uncertain named-location result to the Entra admin center", async (
     await act(async () => button!.click())
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
   }
-  expect(container.textContent).toContain("Check and repair it in the Microsoft Entra admin center.")
-  expect(container.textContent).toContain("Check this item in the Microsoft Entra admin center before retrying.")
+  expect(container.textContent).toContain(error)
+  expect(container.textContent?.includes("Check and repair it in the Microsoft Entra admin center.")).toBe(uncertain)
+  expect(container.textContent?.includes("A write may already have completed.")).toBe(uncertain)
+  expect(container.textContent?.includes("Outcome unknown")).toBe(uncertain)
 })
 
 describe("restore wizard item selection", () => {

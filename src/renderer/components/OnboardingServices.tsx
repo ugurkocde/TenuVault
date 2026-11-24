@@ -31,10 +31,10 @@ export function OnboardingServices({ choice, onChange, onContinue }: { choice: P
         const selected = Boolean(choice[id])
         return <button key={id} type="button" data-onboarding-service={id} aria-pressed={selected} aria-label={label} aria-describedby={`setup-service-${id}`}
           onClick={() => toggle(id)}
-          className={cn("flex min-w-0 flex-col gap-3 rounded-2xl border bg-background p-4 text-left transition-colors hover:border-blue-300 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary @3xl:min-h-40", selected ? "border-blue-300 bg-blue-50" : "border-border")}>
+          className={cn("flex min-w-0 flex-col gap-3 rounded-2xl border bg-background p-4 text-left transition-colors hover:border-muted-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary @3xl:min-h-40", selected ? "border-muted-foreground bg-secondary/60" : "border-border")}>
           <span className="flex items-center justify-between gap-2">
             <span className="flex size-9 items-center justify-center rounded-lg bg-secondary text-gray-700"><Icon className="size-5" aria-hidden="true" /></span>
-            <span className={cn("flex size-5 items-center justify-center rounded-md border", selected ? "border-primary bg-primary text-primary-foreground" : "border-gray-300")} aria-hidden="true">{selected && <Check className="size-3.5" />}</span>
+            <span className={cn("flex size-5 items-center justify-center rounded-md border", selected ? "border-foreground bg-foreground text-background" : "border-gray-300")} aria-hidden="true">{selected && <Check className="size-3.5" />}</span>
           </span>
           <span>
             <span className="block font-medium text-gray-900">{label}</span>
@@ -43,6 +43,6 @@ export function OnboardingServices({ choice, onChange, onContinue }: { choice: P
         </button>
       })}
     </div>
-    <div className="flex justify-end"><Button disabled={!Object.keys(choice).length} onClick={onContinue}>Continue{Object.keys(choice).length > 0 && ` with ${choiceLabel(choice)}`}</Button></div>
+    <div className="flex justify-end"><Button className="bg-blue-600 hover:bg-blue-700" disabled={!Object.keys(choice).length} onClick={onContinue}>Continue{Object.keys(choice).length > 0 && ` with ${choiceLabel(choice)}`}</Button></div>
   </section>
 }

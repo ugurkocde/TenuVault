@@ -195,16 +195,16 @@ async function waitingSignIn() {
 }
 
 /** A setup sign-in that waits for the browser. */
-async function waitingSetup(trials = false) {
+async function waitingSetup() {
   state.createRegistration.mockImplementationOnce(() => new Promise(() => undefined))
-  const container = await render(createElement(ConnectTenantSetup, { trials, onManual: vi.fn(), onRegistered: vi.fn() }))
+  const container = await render(createElement(ConnectTenantSetup, { onManual: vi.fn(), onRegistered: vi.fn() }))
   await act(async () => { button(container, "Set up with Microsoft sign-in")!.click() })
   return container
 }
 
-async function failedSetup(message: string, trials = false) {
+async function failedSetup(message: string) {
   state.createRegistration.mockRejectedValueOnce(new Error(message))
-  const container = await render(createElement(ConnectTenantSetup, { trials, onManual: vi.fn(), onRegistered: vi.fn() }))
+  const container = await render(createElement(ConnectTenantSetup, { onManual: vi.fn(), onRegistered: vi.fn() }))
   await act(async () => { button(container, "Set up with Microsoft sign-in")!.click() })
   await advance()
   return container
@@ -223,7 +223,7 @@ async function firstBackupStep() {
   state.store.set("tenuvault.onboarding.draft", JSON.stringify({ step: 2, tenant: TENANT, clientId: CLIENT, displayName: "Contoso", account: ACCOUNT, signedInAt: Date.now() }))
   state.accounts.mockResolvedValue([ACCOUNT])
   const container = await render(createElement(OnboardingPage))
-  await act(async () => { button(container, "Continue")!.click() })
+  await act(async () => { button(container, "Start first backup")!.click() })
   await advance()
   expect(container.textContent).toContain("Your first backup")
   return container
@@ -235,7 +235,7 @@ async function refusedAfterContinue() {
   state.accounts.mockResolvedValue([ACCOUNT])
   state.checkNewTenant.mockRejectedValueOnce(new Error("This license does not cover another tenant."))
   const container = await render(createElement(OnboardingPage))
-  await act(async () => { button(container, "Continue")!.click() })
+  await act(async () => { button(container, "Start first backup")!.click() })
   await advance()
   expect(container.textContent).toContain("Sign in to your tenant")
   return container
@@ -299,35 +299,14 @@ describe("the shared setup call component", () => {
 })
 
 describe("welcome screen", () => {
-  it("offers the call between the helper text of Connect your tenant and the setup diagnostics question", async () => {
-    state.license = licenseStatus(null, [])
-    const container = await render(createElement(ActivationScreen, { onSignIn: vi.fn() }))
-    const helper = [...container.querySelectorAll("p")].find((item) => item.textContent?.startsWith("New tenants start with a Pro trial"))!
-    const diagnostics = container.querySelector('section[aria-labelledby="setup-diagnostics-title"]')!
-    const row = link("welcome", container)!
-    expect(helper.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    expect(row.compareDocumentPosition(diagnostics) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    expect(container.textContent).toContain("Rather do it together? Book a free setup call")
-    expect(container.textContent).toContain("30 minutes, free on every plan. You share your screen and we set it up in your tenant.")
-    await expectOpens("welcome", container)
-  })
-
-  it("keeps Connect your tenant as the first action and leaves it working", async () => {
+  it("lets the admin start setup before asking about diagnostics", async () => {
     const onSignIn = vi.fn()
     const container = await render(createElement(ActivationScreen, { onSignIn }))
-    const buttons = [...container.querySelectorAll("button")]
-    expect(buttons[0]!.textContent).toContain("Connect your tenant")
-    expect(buttons.indexOf(link("welcome", container)!)).toBe(1)
-    await act(async () => { buttons[0]!.click() })
-    expect(onSignIn).toHaveBeenCalledTimes(1)
-    expect(state.openExternal).not.toHaveBeenCalled()
-  })
-
-  it("shows the row when the diagnostics question is not asked", async () => {
-    state.diagnostics = "declined"
-    const container = await render(createElement(ActivationScreen, { onSignIn: vi.fn() }))
     expect(container.querySelector('section[aria-labelledby="setup-diagnostics-title"]')).toBeNull()
-    await expectOpens("welcome", container)
+    expect(button(container, "What TenuVault sends")).toBeDefined()
+    expect(links()).toEqual([])
+    await act(async () => { button(container, "Connect your tenant")!.click() })
+    expect(onSignIn).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -389,7 +368,7 @@ describe("setup sign-in and provisioning errors", () => {
   })
 
   it("shows nothing before an error and nothing after a cancelled setup", async () => {
-    const container = await render(createElement(ConnectTenantSetup, { trials: false, onManual: vi.fn(), onRegistered: vi.fn() }))
+    const container = await render(createElement(ConnectTenantSetup, { onManual: vi.fn(), onRegistered: vi.fn() }))
     expect(links()).toEqual([])
     state.createRegistration.mockRejectedValueOnce(new Error("Sign-in cancelled."))
     await act(async () => { button(container, "Set up with Microsoft sign-in")!.click() })
@@ -412,7 +391,7 @@ describe("setup sign-in and provisioning errors", () => {
     expect(links()).toEqual(["setup-error"])
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async () => { throw new Error("The clipboard is blocked.") } } })
     try {
-      await act(async () => { button(container, "Someone else is the admin? Copy instructions")!.click() })
+      await act(async () => { button(container, "Copy instructions for my admin")!.click() })
       await advance()
     } finally {
       Reflect.deleteProperty(navigator, "clipboard")
@@ -425,8 +404,8 @@ describe("setup sign-in and provisioning errors", () => {
     let fail!: (error: Error) => void
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: () => new Promise<void>((_resolve, reject) => { fail = reject }) } })
     try {
-      const container = await render(createElement(ConnectTenantSetup, { trials: false, onManual: vi.fn(), onRegistered: vi.fn() }))
-      await act(async () => { button(container, "Someone else is the admin? Copy instructions")!.click() })
+      const container = await render(createElement(ConnectTenantSetup, { onManual: vi.fn(), onRegistered: vi.fn() }))
+      await act(async () => { button(container, "Copy instructions for my admin")!.click() })
       state.createRegistration.mockRejectedValueOnce(new Error("Microsoft Graph refused to create the app registration."))
       await act(async () => { button(container, "Set up with Microsoft sign-in")!.click() })
       await advance()
@@ -647,7 +626,7 @@ describe("errors the Sign in step shows after a later step sent the admin back",
     state.storageChoice = { kind: "azure", storageAccountName: "contosobackups", subscriptionId: "sub", resourceGroupName: "rg", location: "westeurope" }
     state.checkNewTenant.mockResolvedValueOnce(COMMUNITY)
     const container = await render(createElement(OnboardingPage))
-    await act(async () => { button(container, "Continue")!.click() })
+    await act(async () => { button(container, "Start first backup")!.click() })
     await advance()
     expect(container.textContent).toContain("Choose where backups are stored")
     expect(container.querySelector('[role="alert"]')!.textContent).toBe("This tenant is on Community now, which keeps backups on this device. Choose This device to continue.")
@@ -683,7 +662,7 @@ describe("0.6 setup steps", () => {
 
   it("keeps missing permissions advisory and removes the offer after a successful retry", async () => {
     const container = await permissionProblem({ missing: ["Policy.Read.All"] })
-    expect(links()).toEqual(["signin-error"])
+    expect(links()).toEqual([])
     state.checkPermissions.mockResolvedValue({ missing: [] })
     await act(async () => { button(container, "Check again")!.click() })
     await advance()
@@ -713,17 +692,12 @@ describe("Support dialog", () => {
 
 describe("every placement on every plan", () => {
   const PLACEMENTS: readonly (readonly [string, SetupCallSource, () => Promise<unknown>])[] = [
-    ["welcome screen", "welcome", () => render(createElement(ActivationScreen, { onSignIn: vi.fn() }))],
     ["first-run header", "setup-header", () => render(createElement(DesktopLayout), "/portal/onboarding")],
     ["waiting panel of the first sign-in", "signin-waiting", async () => { await waitingSignIn(); await advance(RECOVERY_DELAY_MS) }],
     ["waiting panel of the setup sign-in", "signin-waiting", async () => { await waitingSetup(); await advance(RECOVERY_DELAY_MS) }],
-    ["waiting panel of the setup sign-in with tenant trials", "signin-waiting", async () => { await waitingSetup(true); await advance(RECOVERY_DELAY_MS) }],
     ["setup error", "setup-error", () => failedSetup("Microsoft Graph refused to create the app registration.")],
-    ["setup error with tenant trials", "setup-error", () => failedSetup("Microsoft Graph refused to create the app registration.", true)],
     ["first sign-in error", "signin-error", () => failedSignIn("Microsoft could not find this application in the tenant. (AADSTS700016)")],
     ["license refusal on the Sign in step", "signin-error", refusedAfterContinue],
-    ["missing chosen permissions", "signin-error", () => permissionProblem({ missing: ["Policy.Read.All"] })],
-    ["failed permission check", "signin-error", () => permissionProblem({ missing: [], error: "Microsoft did not answer." })],
     ["first backup failure", "first-backup-error", () => runFirstBackup(startFails)],
     ["Support dialog", "support", () => render(createElement(SupportDialog, { open: true, onOpenChange: vi.fn() }))],
   ]

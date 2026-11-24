@@ -45,7 +45,7 @@ async function flush(): Promise<void> {
   })
 }
 
-async function renderChooser(initialDraft?: StorageChooserDraft) {
+async function renderChooser(initialDraft?: StorageChooserDraft, onboarding = false) {
   Object.defineProperty(navigator, "clipboard", { configurable: true, value: clipboard })
   vi.stubGlobal("fetch", fetchMock)
   const onChange = vi.fn()
@@ -55,7 +55,7 @@ async function renderChooser(initialDraft?: StorageChooserDraft) {
   containers.push(container)
   const root = createRoot(container)
   roots.push(root)
-  act(() => root.render(createElement(StorageChooser, { tenantId: TENANT, clientId: "client", onChange, onDraftChange, initialDraft })))
+  act(() => root.render(createElement(StorageChooser, { tenantId: TENANT, clientId: "client", onChange, onDraftChange, initialDraft, onboarding })))
   await flush()
   const unmount = () => {
     const index = roots.indexOf(root)
@@ -92,6 +92,23 @@ async function selectAccount(container: HTMLElement, name: string) {
 }
 
 describe("storage chooser Azure path", () => {
+  it("checks an Azure account as soon as it is selected during onboarding", async () => {
+    backups.settings.mockResolvedValue(unsaved)
+    backups.inventoryProblem.mockResolvedValue(null)
+    backups.verifyAzureStorage.mockResolvedValue(undefined)
+    fetchMock.mockResolvedValue(accountResponse([ACCOUNT]))
+
+    const { container, last } = await renderChooser(undefined, true)
+    expect(last()).toEqual({ kind: "local" })
+    await clickText(container, "Use my Azure storage account instead")
+    await selectAccount(container, ACCOUNT.name)
+
+    expect(backups.verifyAzureStorage).toHaveBeenCalledExactlyOnceWith(TENANT, "client", ACCOUNT.name)
+    expect(container.textContent).toContain("Access confirmed")
+    expect(container.querySelector("button[aria-label='Check access']")).toBeNull()
+    expect(last()).toMatchObject({ kind: "azure", storageAccountName: ACCOUNT.name })
+  })
+
   it("completes the Azure choice once access is confirmed, without a recovery key", async () => {
     backups.settings.mockResolvedValue(unsaved)
     backups.inventoryProblem.mockResolvedValue(null)

@@ -507,8 +507,8 @@ export default function DriftDetectionPage() {
   )
 
   const insufficientState = (
-    <EmptyState icon={<Database className="h-6 w-6" />} title="Two complete backups are needed">
-      <p>Drift detection compares two complete backups of this tenant. {failedJob?.code === "INSUFFICIENT_BACKUPS" && failedJob.error ? failedJob.error : "This tenant has fewer than two. Backups that failed, are still running or stopped early are not compared."}</p>
+    <EmptyState icon={<Database className="h-6 w-6" />} title="Drift detection starts after your second complete backup">
+      <p>Then you can compare backups to see what changed in this tenant.</p>
       <div className="mt-4 flex flex-wrap justify-center gap-2">
         {canBackUp && <Button className="h-10 rounded-full bg-coral-600 px-5 text-white hover:bg-coral-700" onClick={() => setBackingUp(true)}>Back up now</Button>}
         <Link to="/portal/backup" className="inline-flex h-10 items-center rounded-full px-5 text-sm font-medium text-gray-700 hover:bg-gray-100">Open Backup & Restore</Link>

@@ -2,13 +2,12 @@ import { useState } from "react"
 import { Button } from "~/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "~/components/ui/dialog"
 import type { PackConsentAction, PackConsentPlan, PackConsentResult } from "../../shared/pack-consent"
-import { GRAPH_CLI_UPGRADE, type ConnectionSwitchResult, type WizardSignInResult } from "../../shared/tenant-connection"
+import { GRAPH_CLI_UPGRADE, type ConnectionSwitchResult } from "../../shared/tenant-connection"
 import type { ModuleId } from "../../shared/services/modules"
-import type { PermissionChoice } from "../../shared/services/manifest"
 import { bridge } from "../lib/bridge"
 import { toast } from "../lib/toast"
 
-export function TenuVaultConsent({ tenantId, plan, active, upgrade, initialPack, onChanged, wizard, restore, onRestoreVerified }: {
+export function TenuVaultConsent({ tenantId, plan, active, upgrade, initialPack, onChanged, restore, onRestoreVerified }: {
   tenantId: string
   plan: PackConsentPlan
   active: boolean
@@ -17,10 +16,9 @@ export function TenuVaultConsent({ tenantId, plan, active, upgrade, initialPack,
   onRestoreVerified?: () => void
   initialPack?: string
   onChanged?: (result: ConnectionSwitchResult) => void
-  wizard?: { choice: PermissionChoice; pack?: string; onSignedIn: (result: WizardSignInResult) => void }
 }) {
   const [currentPlan, setCurrentPlan] = useState(plan)
-  const requestedPack = wizard?.pack ?? plan.packs.find(pack => pack.id === initialPack)?.id
+  const requestedPack = plan.packs.find(pack => pack.id === initialPack)?.id
   const [open, setOpen] = useState(Boolean(requestedPack))
   const [selected, setSelected] = useState(requestedPack ?? "")
   const [busy, setBusy] = useState(false)
@@ -45,7 +43,7 @@ export function TenuVaultConsent({ tenantId, plan, active, upgrade, initialPack,
   const openPlan = async () => {
     setBusy(true)
     try {
-      const fresh = wizard || restore ? plan : await bridge.auth.packConsentPlan(tenantId)
+      const fresh = restore ? plan : await bridge.auth.packConsentPlan(tenantId)
       if (!fresh?.packs.length) {
         toast("TenuVault app sign-in is currently unavailable.", "error")
         return
@@ -67,9 +65,7 @@ export function TenuVaultConsent({ tenantId, plan, active, upgrade, initialPack,
     setBusy(true)
     setError(undefined)
     try {
-      const response = wizard
-        ? await bridge.auth.wizardPackConsent(tenantId, wizard.choice, pack.id, action)
-        : restore ? await bridge.auth.restorePackConsent(tenantId, restore.id, action) : await bridge.auth.packConsent(tenantId, pack.id, action)
+      const response = restore ? await bridge.auth.restorePackConsent(tenantId, restore.id, action) : await bridge.auth.packConsent(tenantId, pack.id, action)
       setResults(previous => ({ ...previous, [pack.id]: response }))
       if (restore && action === "check" && response.status === "verified") {
         setOpen(false)
@@ -87,9 +83,7 @@ export function TenuVaultConsent({ tenantId, plan, active, upgrade, initialPack,
     setError(undefined)
     setSignInNeedsApproval(false)
     try {
-      const outcome = wizard
-        ? await bridge.auth.wizardStage(tenantId, "tenuvaultApp", wizard.choice)
-        : await bridge.auth.switchConnection(tenantId, { method: "tenuvaultApp" })
+      const outcome = await bridge.auth.switchConnection(tenantId, { method: "tenuvaultApp" })
       if ("error" in outcome) {
         const needsApproval = outcome.error.code === "AADSTS90095"
         setSignInNeedsApproval(needsApproval)
@@ -99,8 +93,7 @@ export function TenuVaultConsent({ tenantId, plan, active, upgrade, initialPack,
           : outcome.error.code === "AADSTS65001" ? `Permission not granted. ${outcome.error.message}` : outcome.error.message)
         return
       }
-      if ("id" in outcome.result) wizard?.onSignedIn(outcome.result)
-      else onChanged?.(outcome.result)
+      onChanged?.(outcome.result)
       setOpen(false)
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "TenuVault could not verify the permissions. Try again.")
@@ -111,13 +104,13 @@ export function TenuVaultConsent({ tenantId, plan, active, upgrade, initialPack,
 
   return <>
     <Button variant="outline" size="sm" disabled={busy} onClick={() => void openPlan()}>
-      {restore ? `Allow restore for ${restore.label}` : wizard ? "Review permission packs and sign in" : active ? "Review permission packs" : upgrade ? GRAPH_CLI_UPGRADE : "Use TenuVault app"}
+      {restore ? `Allow restore for ${restore.label}` : active ? "Review permission packs" : upgrade ? GRAPH_CLI_UPGRADE : "Use TenuVault app"}
     </Button>
     <Dialog open={open} onOpenChange={value => { if (!busy) setOpen(value) }}>
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
         <DialogHeader>
-          <DialogTitle>{restore ? `Allow restore for ${restore.label}` : wizard || active ? "TenuVault app permissions" : "Switch to the TenuVault app"}</DialogTitle>
-          <DialogDescription>{restore ? "Approve this service’s restore permissions. If another administrator approves them, send them the consent link." : wizard ? "Review the packs for your chosen services. An administrator can approve each pack in Microsoft Entra." : "Review the permission packs for the services and storage this tenant uses. An administrator can approve each pack in Microsoft Entra."}</DialogDescription>
+          <DialogTitle>{restore ? `Allow restore for ${restore.label}` : active ? "TenuVault app permissions" : "Switch to the TenuVault app"}</DialogTitle>
+          <DialogDescription>{restore ? "Approve this service’s restore permissions. If another administrator approves them, send them the consent link."  : "Review the permission packs for the services and storage this tenant uses. An administrator can approve each pack in Microsoft Entra."}</DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
           <label className="block text-sm font-medium">
