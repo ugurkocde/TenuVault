@@ -1513,6 +1513,17 @@ describe("sign-in method wizard", () => {
     expect(container.textContent).toContain("Backing up Intune and part of Entra ID.")
   })
 
+  it("uses the singular when one backup area needs access", async () => {
+    const permissions = new Set([...graphPermissions(BACKUP_INTUNE_PERMISSIONS, "delegated"), "Policy.Read.All", "AuthenticationContext.Read.All"])
+    state.wizardStage.mockResolvedValue({ result: {
+      ...stageResult, coverage: graphCliCoverage(permissions, ALL_SERVICES), missing: ["Agreement.Read.All"],
+    } })
+    const container = await publicConnect("Start now")
+    await act(async () => button(container, "Sign in with Microsoft")!.click())
+    await act(async () => entraSwitch(container).click())
+    expect(container.querySelector('[data-notice-tone] [role="status"]')?.textContent).toBe("Needs access for 1 backup area.")
+  })
+
   it("offers a different sign-in method when Start now has no readable services", async () => {
     state.wizardStage.mockResolvedValue({ result: { ...stageResult, coverage: graphCliCoverage(new Set(), ALL_SERVICES) } })
     const container = await publicConnect("Start now")

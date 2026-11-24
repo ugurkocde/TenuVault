@@ -754,6 +754,7 @@ export default function OnboardingPage() {
   const unavailable = serviceChecks.filter(service => service.needsAccess)
   const unknownCoverage = serviceChecks.some(service => service.unknown)
   const gaps = serviceChecks.filter(service => service.missing.length > 0)
+  const missingAreaCount = gaps.reduce((count, service) => count + service.missing.length, 0)
   const nothingReadable = unavailable.length > 0 && unavailable.length === serviceChecks.length
   const checkPassed = Boolean(account && !publicError && !checkingResume && !checkingPermissions && readable.length &&
     !unknownCoverage && !gaps.length)
@@ -1054,7 +1055,7 @@ export default function OnboardingPage() {
                 {!nothingReadable && !permissionResult?.error && resumeMessage}
                 {(!checkPassed || missing.length > 0) && <NoticeCard
                   summary={unavailable.length ? needsAccessText(unavailable.map(service => service.label))
-                    : gaps.length ? `Needs access for ${gaps.reduce((count, service) => count + service.missing.length, 0)} backup areas.`
+                    : missingAreaCount ? `Needs access for ${missingAreaCount} backup ${missingAreaCount === 1 ? "area" : "areas"}.`
                     : unknownCoverage ? "Some backup access could not be checked." : "Review backup access."}
                   details={<>
                     {unknownCoverage && <p>You can continue and check backup access later.</p>}
