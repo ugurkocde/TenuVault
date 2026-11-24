@@ -1589,7 +1589,8 @@ async function bootstrap(): Promise<void> {
     })
     diagnostics.record({ name: "signin", props: { result: "ok" } })
     phase("license")
-    await requireForNewTenant(account.tenantId)
+    if (stage) await license.startOnboardingTrial(account.tenantId).catch(() => undefined).finally(pushLicense)
+    else await requireForNewTenant(account.tenantId)
     // A tenant that is signed in to for the first time is not connected yet; its first check comes with its first backup.
     void health.check(account.tenantId, "signIn").catch(() => undefined)
     return account
@@ -1666,6 +1667,15 @@ async function bootstrap(): Promise<void> {
       const staged = stageConnectionCache(cache, TENUVAULT_CLIENT_ID)
       const packs = tenantPermissionPacks(choice!, { azure: false, audit: false })
       return { ...(await auth.stageTenuVaultSignIn(tenant, staged.plugin, packs).finally(returnToApp)), cacheWrites: staged.cacheWrites }
+    },
+    startTrial: async ({ account, idToken }) => {
+      stagedWizardProof.set(account.tenantId, { idToken: idToken!, clientId: account.clientId })
+      try {
+        await license.startOnboardingTrial(account.tenantId).catch(() => undefined)
+      } finally {
+        stagedWizardProof.delete(account.tenantId)
+        pushLicense()
+      }
     },
     checkLicense: async ({ account, idToken }) => {
       appStore.set(WIZARD_LICENSE_KEY, account.tenantId)

@@ -52,6 +52,18 @@ describe("tenant trials", () => {
     expect(calls.some(body => body.action === "activate")).toBe(false)
   })
 
+  it.each([false, true])("checks for a wizard trial without claiming an organization slot (licensed: %s)", async licensed => {
+    if (licensed) response = body => body.action === "start_trial"
+      ? Response.json({ reason: "licensed" }, { status: 403 })
+      : entitlement("tenant")
+    const license = service()
+    await license.startOnboardingTrial(tenant)
+    expect(calls.map(call => call.action)).toEqual(["start_trial"])
+    expect(license.status([tenant]).tenants[0]?.activated).toBe(!licensed)
+    expect(await connect(license)).toBe("pro")
+    expect(calls.map(call => call.action)).toEqual(licensed ? ["start_trial", "activate"] : ["start_trial"])
+  })
+
   it.each([true, false])("starts or joins and keeps canEnd %s", async starter => {
     canEnd = starter
     const license = service()

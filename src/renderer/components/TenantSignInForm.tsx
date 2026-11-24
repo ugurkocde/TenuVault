@@ -452,10 +452,10 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
         ? <p className="flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />Completing sign-in...</p>
         : automatic
         ? <>
-            <p>Your browser opens once more to sign you in through the new app registration. There is nothing to enter this time. TenuVault then checks the license for this tenant.</p>
+            <p>Your browser opens once more to sign you in through the new app registration. There is nothing to enter this time.{!wizard && " TenuVault then checks the license for this tenant."}</p>
             <p className="text-xs text-gray-600">If Microsoft says it cannot find the application, it has not finished publishing the new app registration. Wait a minute, select Cancel sign-in and sign in again.</p>
           </>
-        : <p>Complete the sign-in in your browser. TenuVault then checks the license for this tenant.</p>}
+        : <p>Complete the sign-in in your browser.{!wizard && " TenuVault then checks the license for this tenant."}</p>}
       <p className="text-xs text-gray-600">
         If Microsoft reports a device or compliance problem, Conditional Access needs a browser that passes the device
         identity, such as Microsoft Edge signed in to your work profile. Make it your default browser, cancel and sign in

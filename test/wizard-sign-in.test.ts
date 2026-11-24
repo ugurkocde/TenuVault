@@ -17,6 +17,7 @@ function fixture() {
       grantedScopes: ["User.Read", "Organization.Read.All"],
       cacheWrites: () => ({ key: "staged-cache" }),
     })),
+    startTrial: vi.fn(async () => undefined),
     checkLicense: vi.fn(async () => undefined),
     releaseLicense: vi.fn(async () => undefined),
     enroll: vi.fn(),
@@ -43,6 +44,24 @@ describe("staged wizard sign-in", () => {
     expect(host.enroll).toHaveBeenCalledOnce()
     expect(host.releaseLicense).not.toHaveBeenCalled()
     expect(wizard.trialContactProof(TENANT)).toBeUndefined()
+  })
+
+  it.each(["graphCli", "tenuvaultApp"] as const)("leaves no organization activation after quitting %s before Storage", async method => {
+    const { host, wizard } = fixture()
+    // The service keeps the slot across app restarts, while the staged proof was in process memory.
+    const slots = new Set<string>()
+    host.checkLicense.mockImplementation(async () => { slots.add(TENANT) })
+    const staged = await wizard.stage(TENANT, method, CHOICE)
+    expect(staged).toHaveProperty("result.id")
+    const id = "result" in staged ? staged.result.id : ""
+    const restarted = new WizardSignIn(host)
+    await expect(restarted.finish(id, "profile", CHOICE)).resolves.toMatchObject({ error: { code: "sign_in_required" } })
+    expect(slots.size).toBe(0)
+    expect(host.checkLicense).not.toHaveBeenCalled()
+    const resumed = await restarted.stage(TENANT, method, CHOICE)
+    expect("result" in resumed && await restarted.finish(resumed.result.id, "profile", CHOICE)).toEqual({ result: true })
+    expect(host.checkLicense).toHaveBeenCalledOnce()
+    expect(slots.has(TENANT)).toBe(true)
   })
 
   it("uses exactly the service choices checked at TenuVault app sign-in", async () => {

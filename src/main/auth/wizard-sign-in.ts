@@ -30,12 +30,12 @@ export class WizardSignIn {
   private pending?: PendingSignIn
   private expiry?: ReturnType<typeof setTimeout>
   private busy = false
-  private cleanup = Promise.resolve()
 
   constructor(private readonly host: {
     connected: (tenant: string) => boolean
     enabled: (method: WizardSignInMethod) => Promise<boolean>
     stage: (tenant: string, method: WizardSignInMethod, choice?: PermissionChoice) => Promise<StagedSignIn>
+    startTrial: (staged: StagedSignIn) => Promise<void>
     checkLicense: (staged: StagedSignIn) => Promise<void>
     releaseLicense: (staged: StagedSignIn) => Promise<void>
     enroll: (draft: PendingSignIn, profile: string, choice: PermissionChoice) => void
@@ -62,16 +62,9 @@ export class WizardSignIn {
       if (staged.account.clientId.toLowerCase() !== clientId) throw new ConnectionSwitchError("wrong_client", "Microsoft returned a sign-in for a different app.")
       if (!staged.idToken) throw new ConnectionSwitchError("no_account", "Microsoft did not return a sign-in proof for this tenant.")
       if (this.host.connected(tenant)) throw new ConnectionSwitchError("conflict", "This tenant was connected during sign-in.")
-      if (this.pending && this.pending.staged.account.tenantId !== tenant) await this.discard(this.pending.id)
-      await this.cleanup
-      try {
-        await this.host.checkLicense(staged)
-        await this.requireMethod(method)
-        if (this.host.connected(tenant)) throw new ConnectionSwitchError("conflict", "This tenant was connected during sign-in.")
-      } catch (error) {
-        if (!this.pending) await this.release(staged)
-        throw error
-      }
+      await this.host.startTrial(staged)
+      await this.requireMethod(method)
+      if (this.host.connected(tenant)) throw new ConnectionSwitchError("conflict", "This tenant was connected during sign-in.")
       const id = randomUUID()
       this.clear()
       this.pending = { id, method, staged, choice }
@@ -92,16 +85,8 @@ export class WizardSignIn {
     this.pending = undefined
   }
 
-  private release(staged: StagedSignIn): Promise<void> {
-    this.cleanup = this.cleanup.then(() => this.host.releaseLicense(staged)).catch(() => undefined)
-    return this.cleanup
-  }
-
-  discard(id: unknown): Promise<void> {
-    const pending = this.pending
-    if (!pending || pending.id !== id) return this.cleanup
-    this.clear()
-    return this.release(pending.staged)
+  discard(id: unknown): void {
+    if (this.pending?.id === id) this.clear()
   }
 
   trialContactProof(tenant: string): string | undefined {
@@ -114,11 +99,14 @@ export class WizardSignIn {
     if (!pending || pending.id !== id) return wizardFailure(new ConnectionSwitchError("sign_in_required", EXPIRED))
     if (this.busy || this.host.connected(pending.staged.account.tenantId)) return wizardFailure(new ConnectionSwitchError("conflict", "This tenant is already connected or signing in."))
     this.busy = true
+    let checkedLicense = false
     try {
       if (typeof profile !== "string" || profile.length > 64_000) throw new ConnectionSwitchError("invalid_request", "Choose valid backup storage.")
       const choice = pending.choice ?? wizardChoice(services)
       if (pending.method === "graphCli") for (const service of Object.values(choice)) service.access = "backup"
       await this.requireMethod(pending.method)
+      if (this.pending !== pending) throw new ConnectionSwitchError("sign_in_required", EXPIRED)
+      checkedLicense = true
       await this.host.checkLicense(pending.staged)
       await this.requireMethod(pending.method)
       if (this.pending !== pending) throw new ConnectionSwitchError("sign_in_required", EXPIRED)
@@ -127,6 +115,9 @@ export class WizardSignIn {
       this.clear()
       return { result: true as const }
     } catch (error) {
+      if (checkedLicense && !this.host.connected(pending.staged.account.tenantId)) {
+        await this.host.releaseLicense(pending.staged).catch(() => undefined)
+      }
       return wizardFailure(error)
     } finally {
       this.busy = false

@@ -596,6 +596,19 @@ export class LicenseService {
     return this.trialRecords[tenant]?.refusalReason ?? this.autoTrialSkips.get(tenant)
   }
 
+  /** Allows the Storage step to show the trial without claiming an organization license slot. */
+  async startOnboardingTrial(tenantId: string): Promise<void> {
+    this.load()
+    const tenant = tenantId.toLowerCase()
+    await this.checkTrialHealth()
+    if (!this.trialsEnabled) return
+    await this.mutate([tenant], true, async () => {
+      if (this.trialRecords[tenant]?.stopped || this.options.store.get(COMMUNITY_KEY) === tenant) return
+      // The trial action rejects organization-licensed tenants and reuses an active tenant trial.
+      await this.startTenantTrialCurrent(tenant, "auto")
+    })
+  }
+
   async startTenantTrial(tenantId: string): Promise<void> {
     this.load()
     const tenant = tenantId.toLowerCase()

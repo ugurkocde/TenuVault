@@ -520,7 +520,7 @@ export default function OnboardingPage() {
     } finally { if (mounted.current) setPublicBusy(false) }
   }
 
-  // The license was checked at the sign-in; it is checked again before the tenant is saved. A
+  // The license is checked before the tenant is saved. A
   // tenant the license does not cover is not added and its sign-in is removed in the main
   // process, so the admin signs in again with the same IDs once the license is sorted.
   const createTenant = async () => {
