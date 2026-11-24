@@ -44,8 +44,12 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const tokenData = await tokenResponse.json();
-    const accessToken = tokenData.access_token;
+    const tokenData = await tokenResponse.json().catch(() => null);
+    const accessToken = tokenData?.access_token;
+    if (typeof accessToken !== "string" || !accessToken.trim()) {
+      console.error("Graph auth error:", "token_invalid_response");
+      return NextResponse.json({ error: "Microsoft returned an invalid sign-in response. Try again." }, { status: 502 });
+    }
 
     // Helper function to make Graph API calls
     const callGraphApi = async (endpoint: string, useBeta: boolean = false, logEndpoint = endpoint.split("?")[0]): Promise<GraphApiResponse | null> => {

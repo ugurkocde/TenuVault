@@ -77,8 +77,12 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const tokenData = await tokenResponse.json()
-    const accessToken = tokenData.access_token
+    const tokenData = await tokenResponse.json().catch(() => null)
+    const accessToken = tokenData?.access_token
+    if (typeof accessToken !== "string" || !accessToken.trim()) {
+      console.error("Azure auth error:", "token_invalid_response")
+      return NextResponse.json({ error: "Microsoft returned an invalid sign-in response. Try again." }, { status: 502 })
+    }
 
     const owner = await readOwnedBackup(name => fetch(`https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(name)}`, {
       headers: { "x-ms-version": "2021-12-02", Authorization: `Bearer ${accessToken}` },
