@@ -1,3 +1,4 @@
+import { privilegedRestoreEnabled } from "../intune/directory-review-folders"
 import { admittedDirectoryPermissions } from "../intune/restore-matrix"
 import { area, part, type PermissionArea } from "./areas"
 
@@ -69,7 +70,7 @@ export const ENTRA_AREAS: readonly PermissionArea[] = [
   area({
     id: "roles", label: "Roles and PIM",
     // Review resolves the connected registration and the principal's cloud user state.
-    restoreReview: [["Application.Read.All", "Application.ReadWrite.All", "Directory.Read.All"], ["User.Read.All", "User.ReadWrite.All", "Directory.Read.All"]],
+    ...(privilegedRestoreEnabled && { restoreReview: [["Application.Read.All", "Application.ReadWrite.All", "Directory.Read.All"], ["User.Read.All", "User.ReadWrite.All", "Directory.Read.All"]] }),
   }, [
     part(["EntraRoleDefinitions", "EntraRoleAssignments"], [["RoleManagement.Read.Directory", "RoleManagement.ReadWrite.Directory", "Directory.Read.All", "Directory.ReadWrite.All"]], [["RoleManagement.Read.Directory"]], "unsupported"),
     part(["RoleEligibilitySchedules"], [["RoleManagement.Read.Directory", "RoleEligibilitySchedule.Read.Directory", "RoleEligibilitySchedule.ReadWrite.Directory", "RoleManagement.ReadWrite.Directory"]], [["RoleManagement.Read.Directory"]], "unsupported"),
@@ -108,7 +109,7 @@ export const ENTRA_AREAS: readonly PermissionArea[] = [
     part(["OrgContacts"], [["OrgContact.Read.All", "Directory.Read.All", "Directory.ReadWrite.All"]], [["OrgContact.Read.All"]], "unsupported"),
   ]),
   area({ id: "applications", label: "Applications", optIn: true, personalData: true }, [
-    part(["Applications"], [["Application.Read.All", "Application.ReadWrite.All", "Directory.Read.All", "Directory.ReadWrite.All"]], [["Application.Read.All"]], [["Application.ReadWrite.All"]]),
+    part(["Applications"], [["Application.Read.All", "Application.ReadWrite.All", "Directory.Read.All", "Directory.ReadWrite.All"]], [["Application.Read.All"]], privilegedRestoreEnabled ? [["Application.ReadWrite.All"]] : "unsupported"),
     // Provisioning jobs are read with the synchronization permission. App role assignments are written with AppRoleAssignment.ReadWrite.All.
     part(["ServicePrincipals"], [["Application.Read.All", "Application.ReadWrite.All", "Directory.Read.All", "Directory.ReadWrite.All"], ["Synchronization.Read.All", "Synchronization.ReadWrite.All"]], [["Application.Read.All"], ["Synchronization.Read.All"]], "unsupported"),
     // Microsoft offers no narrower read permission.

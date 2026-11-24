@@ -1,3 +1,4 @@
+import { deferredPrivilegedRestore, DEFERRED_RESTORE_MESSAGE } from "./directory-review-folders"
 /**
  * Every object type TenuVault backs up (Intune, and Entra Conditional Access), and how each one is
  * read and rebuilt.
@@ -1303,6 +1304,13 @@ export const INTUNE_TYPES: IntuneType[] = [
   ...ENTRA_TYPES,
   ...DEFENDER_TYPES,
 ]
+
+for (const type of INTUNE_TYPES) {
+  if (deferredPrivilegedRestore(type.folder)) {
+    delete type.restore
+    type.limitation = DEFERRED_RESTORE_MESSAGE
+  }
+}
 
 export const TYPE_BY_FOLDER = new Map(INTUNE_TYPES.map((type) => [type.folder.toLowerCase(), type]))
 

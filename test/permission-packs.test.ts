@@ -63,13 +63,9 @@ describe("TenuVault app permission packs", () => {
     expect(docs).toContain(permissionPackTable(published))
   })
 
-  it("only plans temporary privileged consent at method B restore execution", () => {
-    expect(privilegedRestoreConsent("graphCli", "EntraRoleAssignments")).toBeNull()
-    expect(privilegedRestoreConsent("ownApp", "Applications")).toBeNull()
-    expect(privilegedRestoreConsent("tenuvaultApp", "Users")).toBeNull()
-    expect(privilegedRestoreConsent("tenuvaultApp", "Applications")).toEqual({
-      pack: { id: "entra-app-metadata", label: "Entra app metadata restore", resource: "graph", scopes: ["Application.ReadWrite.All", "DelegatedPermissionGrant.ReadWrite.All"] },
-      cleanup: { label: "Remove this permission", checked: true, operationScopesOnly: true, required: true },
-    })
+  it("does not plan temporary privileged consent with privileged restore off", () => {
+    for (const folder of ["Applications", "EntraRoleAssignments", "AdministrativeUnits"]) {
+      expect(privilegedRestoreConsent("tenuvaultApp", folder)).toBeNull()
+    }
   })
 })

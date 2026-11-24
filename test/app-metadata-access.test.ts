@@ -8,6 +8,8 @@ import { TENUVAULT_CLIENT_ID } from "../src/shared/tenant-connection"
 import { GRAPH_APP_ID } from "../src/shared/services/manifest"
 import { privilegedRestoreConsent } from "../src/main/restore/privileged-consent"
 
+vi.hoisted(() => vi.stubGlobal("__TV_LAB_PRIVILEGED_RESTORE__", true))
+
 const [metadata, removal] = APPLICATION_METADATA_RESTORE_PACK.scopes as [string, string]
 const tenantId = "11111111-1111-4111-8111-111111111111"
 const userId = "22222222-2222-4222-8222-222222222222"

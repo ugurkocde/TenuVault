@@ -1,3 +1,6 @@
+import { PRIVILEGED_WRITES } from "./privileged-writes"
+export { PRIVILEGED_WRITES } from "./privileged-writes"
+import { privilegedRestoreEnabled } from "../intune/directory-review-folders"
 import { GROUP_READ_PERMISSION } from "../group-access"
 import { BASE_PERMISSIONS, GRAPH_APP_ID, type PermissionChoice } from "./manifest"
 import { MODULE_BY_ID, type AccessLevel, type ModuleId, type Requirement } from "./modules"
@@ -21,12 +24,7 @@ export interface PermissionPack {
 const IDENTITY_SCOPES = ["openid", "profile", "offline_access"]
 const SERVICES = ["defender", "entra", "intune", "conditionalAccess"] as const
 const SERVICE_EXTRAS: Partial<Record<ModuleId, string[]>> = { intune: [GROUP_READ_PERMISSION] }
-const PRIVILEGED_WRITES = [
-  "Application.ReadWrite.All", "AppRoleAssignment.ReadWrite.All", "DelegatedPermissionGrant.ReadWrite.All",
-  "RoleManagement.ReadWrite.Directory", "RoleEligibilitySchedule.ReadWrite.Directory", "RoleAssignmentSchedule.ReadWrite.Directory",
-  "PrivilegedEligibilitySchedule.ReadWrite.AzureADGroup", "PrivilegedAssignmentSchedule.ReadWrite.AzureADGroup",
-  "AdministrativeUnit.ReadWrite.All",
-]
+
 const EXCLUDED = new Set(["Organization.ReadWrite.All", "Directory.ReadWrite.All", ...PRIVILEGED_WRITES])
 export const isPackWriteScope = (scope: string) => /ReadWrite|\.Create\b|\.ReadUpdate\b|\.DeleteRestore\b/.test(scope)
 const unique = (scopes: string[]) => [...new Set(scopes)]
@@ -137,8 +135,7 @@ export function permissionPackTable(published: Readonly<Record<PackResource, Rea
   for (const pack of [
     ...tenantPermissionPacks({ defender: { access: "backup" }, entra: { access: "backup" }, intune: { access: "backup" }, conditionalAccess: { access: "backup" } }, { azure: true, audit: true }),
     ...SERVICES.map(id => servicePack(id, "restore")),
-    APPLICATION_METADATA_RESTORE_PACK,
-    PRIVILEGED_ENTRA_PACK,
+    ...(privilegedRestoreEnabled ? [APPLICATION_METADATA_RESTORE_PACK, PRIVILEGED_ENTRA_PACK] : []),
   ]) row(pack)
   for (const area of MODULE_BY_ID.get("entra")!.areas.filter(area => area.optIn)) {
     for (const access of ["backup", "restore"] as const) {

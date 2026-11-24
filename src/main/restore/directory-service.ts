@@ -3,7 +3,7 @@ import { privilegedRestoreConsent } from "./privileged-consent"
 import type { SignInMethod } from "../../shared/tenant-connection"
 import { guardedRestoreJournal } from "../storage/restore-journal"
 import { mappedReference } from "../../shared/intune/restore-references"
-import { PRIVILEGED_REVIEW_FOLDERS, PRIVILEGED_RESTORE_BLOCKER } from "../../shared/intune/directory-review-folders"
+import { deferredPrivilegedRestore, DEFERRED_RESTORE_MESSAGE, privilegedRestoreEnabled, PRIVILEGED_REVIEW_FOLDERS, PRIVILEGED_RESTORE_BLOCKER } from "../../shared/intune/directory-review-folders"
 import { administrativeUnits, privilegeReview, requirePrivilegeId, requirePrivilegeObject, unitRelationships, type PrivilegeCandidate, type UnitReviewCursor } from "./directory-9c"
 import { DIRECTORY_REPLICATION_WINDOW_MS } from "./directory-relationship-history"
 import { restoreTenantKey } from "./restore-tenant-key"
@@ -100,8 +100,8 @@ export class DirectoryRestoreService {
         return response
       }, { signal })
     }, undefined, undefined, true, onThrottled, connection.authorization)
-    const applicationIO = directory9bIO(connection.token, actor, this.fetchImpl, () => this.protectedAppIds(tenant), () => this.settings?.get(tenant).entra, undefined, onThrottled, connection.authorization)
-    for (const adapter of [io, applicationIO]) {
+    const applicationIO = privilegedRestoreEnabled ? directory9bIO(connection.token, actor, this.fetchImpl, () => this.protectedAppIds(tenant), () => this.settings?.get(tenant).entra, undefined, onThrottled, connection.authorization) : undefined
+    for (const adapter of applicationIO ? [io, applicationIO] : [io]) {
       adapter.recentlyCreated = objectId => this.recentlyCreated(tenant, objectId)
       adapter.now = this.now
       adapter.persistRetry = (_step, journal, coordinator, retryAt) => this.persistRetry(tenant, retryAt, journal, coordinator, pageId)
@@ -133,6 +133,7 @@ export class DirectoryRestoreService {
     if (owner.tenantId.toLowerCase() !== restoreTenantKey(tenant)) fail("The connection belongs to another tenant.")
     const pages: Array<{ runId: string; path: string }> = []
     for (const page of this.savedPages(tenant)) {
+      if (deferredPrivilegedRestore(page.run.source?.path.split("/")[1] ?? "")) continue
       const id = page.run.id
       if (page.run.actor.tenantId.toLowerCase() !== owner.tenantId.toLowerCase() || page.run.actor.userId.toLowerCase() !== owner.userId.toLowerCase() || page.run.actor.clientId.toLowerCase() !== owner.clientId.toLowerCase()) continue
       this.verifyOwner(page, owner)
@@ -159,7 +160,7 @@ export class DirectoryRestoreService {
     return false
   }
   async retryAppMetadataRemoval(tenant: string) {
-    if (!this.appMetadataAccess?.status(tenant)) return
+    if (!privilegedRestoreEnabled || !this.appMetadataAccess?.status(tenant)) return
     return this.appMetadataAccess.retry(await this.connection(tenant))
   }
 
@@ -181,7 +182,7 @@ export class DirectoryRestoreService {
   }
   private requireAccess(tenant: string, folder: string) {
     const setting = this.settings?.get(tenant).entra
-    if (DIRECTORY_9B_FOLDERS.includes(folder)) return requireApplicationRestoreAccess(setting)
+    if (privilegedRestoreEnabled && DIRECTORY_9B_FOLDERS.includes(folder)) return requireApplicationRestoreAccess(setting)
     const area = folder === "Users" ? "usersAndDevices" : "groups"
     if (!setting?.enabled || setting.access !== "restore" || setting.areas[area] !== true) fail(`Enable Entra ID and the ${folder} area with Backup and restore access before restoring.`)
   }
@@ -232,8 +233,11 @@ export class DirectoryRestoreService {
   }
   private async preparePage(tenant: string, request: IdentityRestoreRequest, options: DirectoryOptions, read: (path: string) => Promise<unknown>, onInventory: (discard: () => void) => void) {
     const folder = request.path.split("/")[1]
-    if (PRIVILEGED_REVIEW_FOLDERS.includes(folder ?? "")) return this.preparePrivileges(tenant, request, options)
-    if (DIRECTORY_9B_FOLDERS.includes(folder ?? "")) return this.prepareApplications(tenant, request, options, read, onInventory)
+    if (deferredPrivilegedRestore(folder ?? "")) fail(DEFERRED_RESTORE_MESSAGE)
+    if (privilegedRestoreEnabled) {
+      if (PRIVILEGED_REVIEW_FOLDERS.includes(folder ?? "")) return this.preparePrivileges!(tenant, request, options)
+      if (DIRECTORY_9B_FOLDERS.includes(folder ?? "")) return this.prepareApplications!(tenant, request, options, read, onInventory)
+    }
     if (!["Users", "Groups"].includes(folder ?? "") || request.origin !== "restore") fail("Directory restore requires an owned same-tenant backup.")
     this.requireAccess(tenant, folder!)
     const snapshot = request.snapshot, sourceId = snapshot.id
@@ -343,13 +347,14 @@ export class DirectoryRestoreService {
     this.save(page)
     return this.view(page)
   }
-  private async prepareApplications(tenant: string, request: IdentityRestoreRequest, options: DirectoryOptions, read: (path: string) => Promise<unknown>, onInventory: (discard: () => void) => void) {
+  private prepareApplications = privilegedRestoreEnabled ? async (tenant: string, request: IdentityRestoreRequest, options: DirectoryOptions, read: (path: string) => Promise<unknown>, onInventory: (discard: () => void) => void) => {
     if (request.origin !== "restore") fail("Application access requires an owned same-tenant backup. Imported grants and cross-tenant restores are refused.")
     requireApplicationRestoreAccess(this.settings?.get(tenant).entra)
     const folder = request.path.split("/")[1]!, snapshot = request.snapshot
     const sourceId = request.path.split("/")[2]?.replace(/\.json$/, "")
     if (!directoryObjectId(folder, sourceId) || !directoryObjectId(folder, snapshot.id) || (folder === "OAuth2PermissionGrants" ? sourceId !== snapshot.id : sourceId!.toLowerCase() !== String(snapshot.id).toLowerCase())) fail("The selected backup filename does not match the saved application object ID.")
     const { actor, applicationIO: io } = await this.context(tenant, retryAt => this.recordSourceThrottle(tenant, folder, sourceId!, retryAt))
+    if (!io) return fail(DEFERRED_RESTORE_MESSAGE)
     const readSource = async (sourceFolder: string, id: string): Promise<Item> => {
       if (!["ServicePrincipals", "Applications"].includes(sourceFolder) || !isGuid(id)) fail("Invalid saved app reference.")
       const item = await read(`${request.path.split("/")[0]}/${sourceFolder}/${id}.json`)
@@ -405,8 +410,8 @@ export class DirectoryRestoreService {
     }
     this.save(page)
     return this.view(page)
-  }
-  private async preparePrivileges(tenant: string, request: IdentityRestoreRequest, requested: DirectoryOptions) {
+  } : undefined
+  private preparePrivileges = privilegedRestoreEnabled ? async (tenant: string, request: IdentityRestoreRequest, requested: DirectoryOptions) => {
     if (request.origin !== "restore") fail("Role and PIM review requires an owned same-tenant backup.")
     const [, folder, file] = request.path.split("/") as [string, string, string]
     const snapshot = request.snapshot, sourceId = snapshot.id
@@ -462,7 +467,7 @@ export class DirectoryRestoreService {
     await this.verifyLocalOwner(page)
     this.save(page)
     return this.view(page)
-  }
+  } : undefined
   private retryableLock(page: DirectoryPage) {
     return (owner: string) => {
       if (!page.inventory) return false
@@ -494,7 +499,7 @@ export class DirectoryRestoreService {
   }
   private view(page: DirectoryPage) {
     const runs = this.history(page), entries = runs.flatMap(({ run }) => run.entries)
-    const temporaryAccess = page.run.source?.path.split("/")[1] === "Applications" && this.signInMethod?.(page.run.tenant) === "tenuvaultApp" && this.appMetadataAccess
+    const temporaryAccess = privilegedRestoreEnabled && page.run.source?.path.split("/")[1] === "Applications" && this.signInMethod?.(page.run.tenant) === "tenuvaultApp" && this.appMetadataAccess
       ? privilegedRestoreConsent("tenuvaultApp", "Applications") : null
     return { ...(temporaryAccess ? { temporaryAccess } : {}), outcomes: this.outcomes(page, runs), ...this.pageState(page, entries), canDiscard: this.canDiscard(page, runs), runId: page.run.id, selection: page.selection, fingerprint: restoreFingerprint({ source: page.run.source!, rows: page.rows as unknown as Item["rows"], options: page.options as unknown as Item, ...(page.inventory?.principalMappings ? { principalMappings: page.inventory.principalMappings.fingerprint } : {}) }), rows: page.rows, more: page.more, options: page.options }
   }
@@ -517,8 +522,10 @@ export class DirectoryRestoreService {
     }
     const page = this.load(tenant, request.runId!)
     await this.verifyLocalOwner(page)
+    const folder = page.run.source?.path.split("/")[1] ?? ""
+    if (deferredPrivilegedRestore(folder)) fail(DEFERRED_RESTORE_MESSAGE)
     const connection = await this.pageConnection(page)
-    const privileged = PRIVILEGED_REVIEW_FOLDERS.includes(page.run.source?.path.split("/")[1] ?? "")
+    const privileged = PRIVILEGED_REVIEW_FOLDERS.includes(folder)
     const { actor } = privileged
       ? await this.actorContext(tenant, retryAt => this.recordPageThrottle(page, retryAt), connection, true)
       : await this.context(tenant, retryAt => this.recordPageThrottle(page, retryAt), connection, page.run.id)
@@ -546,6 +553,8 @@ export class DirectoryRestoreService {
     finally { operation.finish() }
   }
   async execute(tenant: string, request: IdentityRestoreRequest, fingerprint: string, approvals: Record<string, string[]>, operationSignal?: AbortSignal): Promise<ReturnType<DirectoryRestoreService["results"]> & { removal?: ReturnType<AppMetadataAccess["status"]> }> {
+    const folder = request.path.split("/")[1] ?? ""
+    if (deferredPrivilegedRestore(folder)) fail(DEFERRED_RESTORE_MESSAGE)
     if (!operationSignal) {
       const operation = await this.register(tenant, request.runId!)
       try { return await this.execute(tenant, request, fingerprint, approvals, operation.signal) }
@@ -554,9 +563,8 @@ export class DirectoryRestoreService {
     const page = this.load(tenant, request.runId!)
     await this.verifyLocalOwner(page)
     if (request.origin !== "restore" || page.run.origin !== request.origin || page.run.source?.path !== request.path || page.run.source.fingerprint !== restoreFingerprint(request.snapshot) || this.view(page).fingerprint !== fingerprint) fail("The backup or preview changed. Preview this object again.")
-    const folder = request.path.split("/")[1] ?? ""
     if (PRIVILEGED_REVIEW_FOLDERS.includes(folder)) fail(PRIVILEGED_RESTORE_BLOCKER)
-    const consent = privilegedRestoreConsent(this.signInMethod?.(tenant), folder)
+    const consent = privilegedRestoreEnabled ? privilegedRestoreConsent(this.signInMethod?.(tenant), folder) : null
     const temporary = folder === "Applications" && consent ? this.appMetadataAccess : undefined
     if (consent && !temporary) fail(`${consent.pack.label} is unavailable with the TenuVault app until temporary access and permission removal can be verified.`)
     const connection = await this.pageConnection(page)
@@ -586,7 +594,7 @@ export class DirectoryRestoreService {
 
   private async executePage(tenant: string, request: IdentityRestoreRequest, fingerprint: string, page: DirectoryPage, connection: RestoreConnection, entries: GuardedRun["entries"], operationSignal: AbortSignal) {
     const context = await this.context(tenant, retryAt => this.recordPageThrottle(page, retryAt), connection, page.run.id), actor = context.actor
-    const rawIO = DIRECTORY_9B_FOLDERS.includes(request.path.split("/")[1]!) ? context.applicationIO : context.io
+    const rawIO = privilegedRestoreEnabled && DIRECTORY_9B_FOLDERS.includes(request.path.split("/")[1]!) ? context.applicationIO! : context.io
     const principalValidation = page.inventory ? new DirectoryPrincipalMappings(this.store, tenant, page.inventory.id) : undefined
     const io = { ...rawIO, write: ((step, body, targetId, beforeSend, run, signal, onUnapplied) => rawIO.write(step, body, targetId, () => {
       this.requireAccess(tenant, step.folder)
@@ -675,7 +683,9 @@ export class DirectoryRestoreService {
         if (!state.discarded()) fail("The discard marker could not be verified. This page remains saved.")
         return this.view(page)
       }
-      if (PRIVILEGED_REVIEW_FOLDERS.includes(page.run.source?.path.split("/")[1] ?? "")) {
+      const folder = page.run.source?.path.split("/")[1] ?? ""
+      if (deferredPrivilegedRestore(folder)) fail(DEFERRED_RESTORE_MESSAGE)
+      if (PRIVILEGED_REVIEW_FOLDERS.includes(folder)) {
         return { ...this.view(page), ...this.results(page, { status: "nothing-sent", batches: 0, failed: 0 }, []) }
       }
       const connection = await this.pageConnection(page)
@@ -708,7 +718,7 @@ export class DirectoryRestoreService {
       const result = await executeDirectoryBatches(this.store, { ...identity, actor: context.actor }, { fingerprint: this.view(page).fingerprint, page: async (cursor, limit) => {
         const start = Number(cursor ?? 0), end = Math.min(entries.length, start + limit)
         return { entries: entries.slice(start, end), next: end < entries.length ? String(end) : null }
-      } }, DIRECTORY_9B_FOLDERS.includes(entries[0]!.step.folder) ? context.applicationIO : context.io, controller.signal, 20, true, this.retryableLock(page))
+      } }, privilegedRestoreEnabled && DIRECTORY_9B_FOLDERS.includes(entries[0]!.step.folder) ? context.applicationIO! : context.io, controller.signal, 20, true, this.retryableLock(page))
       return { ...this.view(page), ...this.results(page, result) }
     } finally { this.running.delete(runningKey) }
   }

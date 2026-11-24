@@ -105,6 +105,24 @@ it("shows all services, Conditional Access separately and the personal data stat
   await toggle("Include Conditional Access in backups")
   expect(mocks.setEnabled).toHaveBeenCalledWith(HEALTH_TENANT, HEALTH_CLIENT, "conditionalAccess", false, undefined)
 })
+it("offers supported Entra restore access and shows deferred areas without repair guidance", async () => {
+  const report = healthScene("entra-backup-types")
+  const entra = report.services.find(service => service.id === "entra")!
+  entra.access = "restore"
+  for (const area of entra.areas.filter(area => ["applications", "roles"].includes(area.id))) {
+    Object.assign(area, { enabled: true, permissions: "present", restore: "missing", missing: [] })
+  }
+  mocks.check.mockResolvedValue(report)
+  await render()
+  const access = container.querySelector('[aria-label="Entra ID access to request"]')
+  expect(access?.textContent).toContain("Backup and restore")
+  for (const id of ["applications", "roles"]) {
+    const text = container.querySelector(`[data-area="${id}"]`)?.textContent
+    expect(text).toContain("Restore: Available in a later version.")
+    expect(text).not.toContain("Restore needs:")
+  }
+})
+
 it("does not turn Intune off before confirmation and leaves it on after Cancel", async () => {
   await render()
   await toggle("Include Intune in backups")

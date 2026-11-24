@@ -6,6 +6,7 @@ import { tmpdir, homedir } from "node:os"
 import { join, resolve } from "node:path"
 import { describe, expect, it } from "vitest"
 import { DESKTOP_APP_PERMISSIONS, parseSetupOutput } from "../src/shared/app-registration"
+import { PRIVILEGED_WRITES } from "../src/shared/services/permission-packs"
 import { graphPermissions, knownPermissions, setupScriptArguments, type PermissionChoice } from "../src/shared/services/manifest"
 
 const override = process.env.TENUVAULT_TEST_POWERSHELL
@@ -231,6 +232,8 @@ describe.runIf(Boolean(powershell))("real setup script over HTTP", () => {
     expect(result.code, result.text).toBe(0)
     const expected = [...graphPermissions(choice, "delegated")]
     expect(requested(result)).toEqual({ declared: expected, consented: expected })
+    const { declared, consented } = requested(result)
+    expect([...declared, ...consented].filter(scope => PRIVILEGED_WRITES.includes(scope))).toEqual([])
     // The Azure APIs are requested as always.
     expect(result.requests.filter(r => r.path.endsWith("/oauth2PermissionGrants") && r.status === 200)).toHaveLength(3)
     // A service that was not chosen brings nothing, and a backup-only choice no write permission.

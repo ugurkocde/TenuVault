@@ -3,12 +3,14 @@ import { randomBytes } from "node:crypto"
 import { isGuid } from "../../shared/security"
 import { TENUVAULT_CLIENT_ID } from "../../shared/tenant-connection"
 import { PACK_CONSENT_ERRORS, type PackConsentCode, type PackConsentIssue, type PackConsentResult } from "../../shared/pack-consent"
-import { resourceScopes, type PermissionPack } from "../../shared/services/permission-packs"
+import { privilegedRestoreEnabled, DEFERRED_RESTORE_MESSAGE } from "../../shared/intune/directory-review-folders"
+import { PRIVILEGED_WRITES, resourceScopes, type PermissionPack } from "../../shared/services/permission-packs"
 import { openLoopback, sameState } from "./loopback-sign-in"
 
 export const HANDOFF_REDIRECT = "https://www.tenuvault.com/connect/consented"
 
 export function buildConsentUrl(tenant: string, pack: PermissionPack, redirect: string, state: string): string {
+  if (!privilegedRestoreEnabled && pack.resource === "graph" && pack.scopes.some(scope => PRIVILEGED_WRITES.includes(scope))) throw new Error(DEFERRED_RESTORE_MESSAGE)
   const port = /^http:\/\/localhost:([1-9]\d{0,4})$/.exec(redirect)?.[1]
   const forNewTenant = tenant === ORGANIZATIONS && pack.id === "onboarding-backup" && pack.resource === "graph"
   if ((!forNewTenant && !isGuid(tenant)) || !/^[\w-]{43}$/.test(state) ||

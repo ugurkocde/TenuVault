@@ -177,7 +177,7 @@ See the dark-mode variants in the [Services screenshot inventory](/images/servic
 
 ## Opt-in directory inventories
 
-All seven types use paged capture and indexes and are available to both backup sign-in modes. Users and Groups have limited restore subsets through the signed-in admin only. App registrations support nonempty displayName and description updates through the [individual application review](/restore/identity/#app-registrations-enterprise-apps-and-consent). The other four types remain backup and comparison only. New and existing tenants leave Groups, Users and devices, and Applications off until an admin enables each area. Settings explains the personal data each area stores. The Backup Reader gets these areas' application permissions only when requested. The existing 67 configuration types retain their read path.
+All seven types use paged capture and indexes and are available to both backup sign-in modes. Users and Groups have limited restore subsets through the signed-in admin only. App registrations, enterprise apps and consent grants remain backup-only in 0.6. See [privileged directory restore](/restore/identity/#app-registrations-enterprise-apps-and-consent).
 
 | Folder | What is stored | Graph path | Version | Sign-in | Excluded or limited |
 | --- | --- | --- | --- | --- | --- |

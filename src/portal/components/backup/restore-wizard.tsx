@@ -2,7 +2,7 @@
 
 import { NoticeCard } from "@desktop/components/NoticeCard"
 import { matchesBackupService, type BackupServiceFilter } from "@desktop/lib/backup-service"
-import { DIRECTORY_REVIEW_FOLDERS } from "../../../shared/intune/directory-review-folders"
+import { deferredPrivilegedRestore, DEFERRED_RESTORE_MESSAGE, DIRECTORY_REVIEW_FOLDERS } from "../../../shared/intune/directory-review-folders"
 import { DirectoryRestore } from "./directory-restore"
 import { ConfigurationRestore } from "./configuration-restore"
 import { INTUNE_TYPES, restoreCapability } from "../../../shared/intune/registry"
@@ -474,8 +474,9 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
     return () => { controller.abort(); setPageLoading(false) }
   }, [backupId, companionId, tenant, largePage, contentsService, accessRevision])
 
-  const accessIssues = access.issuesFor((items ?? []).map(item => item.folder))
+  const accessIssues = access.issuesFor((items ?? []).filter(item => !deferredPrivilegedRestore(item.folder)).map(item => item.folder))
   const selectionBlocker = (item: BackupItem) => {
+    if (deferredPrivilegedRestore(item.folder)) return DEFERRED_RESTORE_MESSAGE
     const issue = access.issueFor(item.folder)
     // Backup access in the source is enough when the selected policies will be copied elsewhere.
     if (issue && (issue.method === "graphCli" || !canCopyToTenants || !copyCandidates.length)) return "Restore access is required."
@@ -487,7 +488,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
   useEffect(() => {
     setSelected((current) => new Set([...current].filter((path) => {
       const item = itemByPath.get(path)
-      return item && !(mode === "replace" && !community && !copying ? item.replaceBlocker : item.blocker)
+      return item && !deferredPrivilegedRestore(item.folder) && !(mode === "replace" && !community && !copying ? item.replaceBlocker : item.blocker)
     })))
   }, [itemByPath, mode, community, copying])
 

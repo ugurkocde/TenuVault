@@ -9,6 +9,8 @@ import { typeForFolder } from "../src/shared/intune/registry"
 import { readObject } from "../src/shared/intune/read"
 import type { IdentityRestoreRequest } from "../src/main/restore/dispatch"
 
+vi.hoisted(() => vi.stubGlobal("__TV_LAB_PRIVILEGED_RESTORE__", true))
+
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`
 const tenant = id(1), client = id(2), admin = id(3), user = id(4), group = id(5), role = id(6), unit = id(7), oldRole = id(8)
 const now = Date.parse("2026-11-23T12:00:00Z")

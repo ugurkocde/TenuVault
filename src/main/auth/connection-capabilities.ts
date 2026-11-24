@@ -2,6 +2,7 @@ import type { TokenGrant } from "./network-client"
 import { graphCliScopes } from "./connection-coverage"
 import { localStorageAccountName, RESOURCE_SCOPES } from "../../shared/constants"
 import { isGuid, normalizeGuid } from "../../shared/security"
+import { privilegedRestoreEnabled, DEFERRED_RESTORE_MESSAGE } from "../../shared/intune/directory-review-folders"
 import { admittedDirectoryPermissions } from "../../shared/intune/restore-matrix"
 import { tenantWriteTargets } from "../../shared/tenant-writes"
 import { accessTokenDigest, observedTokenGrant, sharedTokenScopes, tokenIdentity } from "./token-identity"
@@ -245,6 +246,7 @@ export class ConnectionCapabilities {
 
     const temporary = metadata?.directoryTemporaryWrite
     if (graph && temporary && graphWrite) {
+      if (!privilegedRestoreEnabled) throw new Error(DEFERRED_RESTORE_MESSAGE)
       const scopes = temporary.kind === "metadata" ? APPLICATION_METADATA_RESTORE_PACK.scopes : [GRANT_REMOVAL_SCOPE]
       const pathAllowed = temporary.kind === "metadata"
         ? method === "PATCH" && isGuid(url.pathname.split("/")[3]) && /^\/beta\/applications\/[^/]+$/.test(url.pathname)

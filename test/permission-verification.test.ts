@@ -1,8 +1,10 @@
 import { readFileSync } from "node:fs"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { BASE_PERMISSIONS } from "../src/shared/services/manifest"
 import { MODULES, MODULE_BY_ID, type Need, type SignInMode } from "../src/shared/services/modules"
 import { OPTIONAL_PERMISSIONS } from "../src/shared/services/optional-permissions"
+
+vi.hoisted(() => vi.stubGlobal("__TV_LAB_PRIVILEGED_RESTORE__", true))
 
 /**
  * test/fixtures/permission-verification.json records how every permission in the manifest was

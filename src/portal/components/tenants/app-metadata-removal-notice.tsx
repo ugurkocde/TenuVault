@@ -3,7 +3,11 @@ import { bridge } from "../../../renderer/lib/bridge"
 import { appMetadataRemovalInstructions, missingPriorScopeMessages, type AppMetadataRemoval } from "../../../shared/app-metadata-removal"
 import { Button } from "~/components/ui/button"
 
-export function AppMetadataRemovalNotice({ tenantId, result }: { tenantId: string; result?: AppMetadataRemoval }) {
+import { privilegedRestoreEnabled } from "../../../shared/intune/directory-review-folders"
+
+export const AppMetadataRemovalNotice = privilegedRestoreEnabled ? MetadataRemovalNotice : () => null
+
+function MetadataRemovalNotice({ tenantId, result }: { tenantId: string; result?: AppMetadataRemoval }) {
   const [removal, setRemoval] = useState(result)
   const [message, setMessage] = useState(""), [busy, setBusy] = useState(false)
   const generation = useRef(0), retrying = useRef(false)

@@ -190,7 +190,7 @@ Application restore uses individual review. Only operations with matching docume
 
 ## Saved directory restores
 
-A saved Users, Groups or Applications restore owns the live target across its batches. A newer backup cannot bypass that ownership. Microsoft Graph throttling is deferred until the displayed earliest retry time; cancelling does not erase that deadline. A dispatched request with no confirmed result stays uncertain and is never resent automatically.
+A saved user or group restore owns the live target across its batches. A newer backup cannot bypass that ownership. Microsoft Graph throttling is deferred until the displayed earliest retry time; cancelling does not erase that deadline. A dispatched request with no confirmed result stays uncertain and is never resent automatically.
 
 Use the saved page ID with **Confirm saved page results** for read-only reconciliation, including after backup retention or restore opt-out. Only a unique matching read-back confirms application. Old values or an empty lookup do not establish that an uncertain request failed. Group aliases cannot uniquely identify an unanswered create, so such a create can remain locked.
 
@@ -198,4 +198,4 @@ Use the saved page ID with **Confirm saved page results** for read-only reconcil
 
 The 30 minute directory consistency rule applies only to confirming TenuVault's own uncertain relationship writes, both additions and removals, when its journal has an acknowledged opposite write for the same member and object within that window. Matching reads remain uncertain until the window passes. Acknowledged results survive same-session save retries. Preview reads can still be stale after TenuVault's own write; run a fresh preview when needed.
 
-Role assignments, role eligibility and assignment schedules, PIM for Groups and administrative unit relationships have a separate review. Restoring roles and PIM is not available yet. You can review what would change. Expired schedules and activated instances cannot be replayed. Older administrative unit backups that contain only scoped membership IDs cannot recover a removed scoped role member. Restricted management administrative units are excluded from relationship restore. The restriction itself is fixed at unit creation.
+Restore and individual restore review for role assignments, PIM schedules and administrative units come in a later version.

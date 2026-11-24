@@ -1,4 +1,4 @@
-import { APPLICATION_REVIEW_FOLDERS, DIRECTORY_REVIEW_FOLDERS, PRIVILEGED_REVIEW_FOLDERS } from "../../../../shared/intune/directory-review-folders"
+import { APPLICATION_REVIEW_FOLDERS, deferredPrivilegedRestore, DEFERRED_RESTORE_MESSAGE, DIRECTORY_REVIEW_FOLDERS, PRIVILEGED_REVIEW_FOLDERS } from "../../../../shared/intune/directory-review-folders"
 import { NextResponse, type NextRequest } from "next/server"
 import { backupStoragePath } from "../../../../shared/backup-storage"
 import { typeForFolder, restoreCapability } from "../../../../shared/intune/registry"
@@ -30,6 +30,7 @@ export async function POST(request: NextRequest) {
   }
   if (![tenantId, appId, clientSecret, storageAccountName, backupId, path].every(value => typeof value === "string" && value) || !/^[a-zA-Z0-9_-]+$/.test(backupId) || !validPolicyPath(path, backupId) || !["preview", "restore", "cancel", "resume", "reconcile", "discard"].includes(action) || !["object", "relationships"].includes(body.stage)) return NextResponse.json({ error: "Choose one directory object from this backup." }, { status: 400 })
   const type = typeForFolder(path.split("/")[1] ?? "")
+  if (type && deferredPrivilegedRestore(type.folder)) return NextResponse.json({ error: DEFERRED_RESTORE_MESSAGE }, { status: 409 })
   if (!type || !DIRECTORY_REVIEW_FOLDERS.includes(type.folder) || (!APPLICATION_REVIEW_FOLDERS.includes(type.folder) && !PRIVILEGED_REVIEW_FOLDERS.includes(type.folder) && ["none", "metadata"].includes(restoreCapability(type)))) return NextResponse.json({ error: "This type remains backup-only." }, { status: 409 })
   const perform = async (signal?: AbortSignal) => {
     signal?.throwIfAborted()

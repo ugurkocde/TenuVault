@@ -1,10 +1,12 @@
 import { moduleForFolder } from "../src/shared/services/modules"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { guardedGraphIO } from "../src/main/restore/graph-io"
 import { restoreFingerprint, type GuardedStep } from "../src/main/restore/guarded-run"
 import { RESTORE_MATRIX } from "../src/shared/intune/restore-matrix"
 import { INTUNE_TYPES, typeForFolder, type Item } from "../src/shared/intune/registry"
 import type { RestoreActor } from "../src/shared/intune/restore-guards"
+
+vi.hoisted(() => vi.stubGlobal("__TV_LAB_PRIVILEGED_RESTORE__", true))
 
 const actor: RestoreActor = { tenantId: "tenant", userId: "admin", clientId: "client", applicationObjectId: "app-object", servicePrincipalId: "sp-object", recoveryAccountIds: [] }
 const token = (permissions: string[]) => `header.${Buffer.from(JSON.stringify({ scp: permissions.join(" "), tid: "tenant", oid: "admin", appid: "client" })).toString("base64url")}.signature`

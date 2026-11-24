@@ -1,3 +1,4 @@
+import { privilegedRestoreEnabled } from "../../shared/intune/directory-review-folders"
 import { NoticeCard, noticeActionClass } from "./NoticeCard"
 import { BackupCoverage } from "./BackupCoverage"
 import { backupAreaCoverage, needsBackupAccess } from "../../shared/services/backup-coverage"
@@ -88,7 +89,12 @@ function Verification({ value, readOnly }: { value: AreaHealth["verified"]; read
 }
 
 
+function deferredEntraArea(service: ServiceHealth, area: AreaHealth) {
+  return !privilegedRestoreEnabled && service.id === "entra" && ["applications", "roles"].includes(area.id)
+}
+
 function Area({ area, service, report, busy, run }: { area: AreaHealth; service: ServiceHealth; report: ConnectionHealthReport; busy: boolean; run: (action: () => Promise<ConnectionHealthReport>) => void }) {
+  const deferred = deferredEntraArea(service, area)
   return <div className="space-y-2 border-t border-border py-3" data-area={area.id}>
     <div className="flex flex-wrap items-center justify-between gap-2">
       <h4 className="text-sm font-medium text-gray-900">{area.label} <span className="text-xs font-normal text-gray-500">{area.enabled ? "On" : "Off"}</span></h4>
@@ -96,10 +102,10 @@ function Area({ area, service, report, busy, run }: { area: AreaHealth; service:
     </div>
     {service.id === "entra" && area.id === "externalIdentities" && area.hasTypes && <p className="text-xs text-gray-600">API connectors require the Backup Reader. Their delegated read permission has not been verified.</p>}
     {service.id === "entra" && area.id === "governance" && area.hasTypes && <p className="text-xs text-gray-600">Access packages, review definitions, lifecycle workflows and terms of use. Some features need Entra ID P2 or ID Governance. PDFs, review decisions and workflow history are excluded.</p>}
-    {service.id === "entra" && area.id === "applications" && <ApplicationRestoreDisclosure />}
+    {privilegedRestoreEnabled && service.id === "entra" && area.id === "applications" && <ApplicationRestoreDisclosure />}
     {area.personalData && <p className="text-xs text-gray-600">{PERSONAL_DATA[area.id] ?? "Stores personal data in backup files. Review who can access your backup storage before turning this area on."}</p>}
-    <p className="text-xs text-gray-600">Backup: <PermissionState state={area.permissions} />. Restore: {report.readOnly ? "Unavailable with Start now" : <PermissionState state={area.restore} />}.</p>
-    {!report.readOnly && area.enabled && area.permissions === "present" && area.restore === "missing" && service.access === "restore" && <p className="text-xs text-gray-600">Backup permissions are present. Restore needs: {area.missing.join(", ")}. The Backup and restore access level asks for these permissions. Choose Backup under Areas and access to request only backup permissions.</p>}
+    <p className="text-xs text-gray-600">Backup: <PermissionState state={area.permissions} />. Restore: {deferred ? "Available in a later version" : report.readOnly ? "Unavailable with Start now" : <PermissionState state={area.restore} />}.</p>
+    {!deferred && !report.readOnly && area.enabled && area.permissions === "present" && area.restore === "missing" && service.access === "restore" && <p className="text-xs text-gray-600">Backup permissions are present. Restore needs: {area.missing.join(", ")}. The Backup and restore access level asks for these permissions. Choose Backup under Areas and access to request only backup permissions.</p>}
     {!area.hasTypes ? <p className="text-xs text-gray-500">Not verified: this version has no backup types for this area yet.</p> : area.enabled ? <Verification value={area.verified} readOnly={report.readOnly} /> : <p className="text-xs text-gray-500">Not included in backups.</p>}
     {area.losses.length > 0 && <NoticeCard summary={`Backup access was lost for ${new Set(area.losses.map(loss => loss.folder)).size} types.`}
       details={<ul className="space-y-1">{area.losses.map(loss => <li key={`${loss.mode}/${loss.folder}`}>
@@ -112,7 +118,7 @@ function Area({ area, service, report, busy, run }: { area: AreaHealth; service:
 function Service({ service, conditionalAccess, report, busy, toggle, run }: { service: ServiceHealth; conditionalAccess?: ServiceHealth; report: ConnectionHealthReport; busy: boolean; toggle: (service: ServiceHealth, enabled: boolean) => void; run: (action: () => Promise<ConnectionHealthReport>) => void }) {
   const label = service.id === "conditionalAccess" ? "Conditional Access" : service.label
   const losses = service.areas.flatMap(area => area.losses)
-  const included = service.areas.filter(area => area.enabled)
+  const included = service.areas.filter(area => area.enabled && !deferredEntraArea(service, area))
   const restore = !included.length ? "unknown" : included.every(area => area.restore === "present") ? "present" : included.some(area => area.restore === "missing") ? "missing" : "unknown"
   const coverage = report.coverage?.find(row => row.service === service.id)
   const signInNeedsAccess = needsBackupAccess(coverage) && (service.enabled || conditionalAccess?.enabled)
@@ -158,6 +164,7 @@ function Service({ service, conditionalAccess, report, busy, toggle, run }: { se
           </select>
         </label>
         <p>This choice names the permissions to request. It grants nothing and does not block a restore your sign-in allows.</p>
+        {!privilegedRestoreEnabled && service.id === "entra" && <p>Restore for app registrations, enterprise apps, directory roles, PIM and administrative units comes in a later version.</p>}
       </div>}
       {conditionalAccess && <Service service={conditionalAccess} report={report} busy={busy} toggle={toggle} run={run} />}
       {service.areas.map(area => <Area key={area.id} area={area} service={service} report={report} busy={busy} run={run} />)}
