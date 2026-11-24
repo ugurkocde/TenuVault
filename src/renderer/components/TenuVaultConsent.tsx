@@ -17,11 +17,13 @@ export function TenuVaultConsent({ tenantId, plan, active, onChanged }: {
   const [selected, setSelected] = useState("")
   const [busy, setBusy] = useState(false)
   const [results, setResults] = useState<Record<string, PackConsentResult>>({})
+  const [signInNeedsApproval, setSignInNeedsApproval] = useState(false)
   const [error, setError] = useState<string>()
   const pack = currentPlan.packs.find(pack => pack.id === selected) ?? currentPlan.packs[0]!
   const result = results[pack.id]
   const pending = result?.status === "waiting" || result?.status === "handoff" || result?.status === "received"
-  const requestAvailable = result?.status === "waiting" && result.issue?.code === "AADSTS90095"
+  const requestAvailable = (signInNeedsApproval && result?.status !== "verified") ||
+    (result?.status === "waiting" && result.issue?.code === "AADSTS90095")
 
   const copy = async (value: string, label: string) => {
     try {
@@ -43,6 +45,7 @@ export function TenuVaultConsent({ tenantId, plan, active, onChanged }: {
       setCurrentPlan(fresh)
       setSelected("")
       setResults({})
+      setSignInNeedsApproval(false)
       setError(undefined)
       setOpen(true)
     } catch {
@@ -68,11 +71,14 @@ export function TenuVaultConsent({ tenantId, plan, active, onChanged }: {
   const signIn = async () => {
     setBusy(true)
     setError(undefined)
+    setSignInNeedsApproval(false)
     try {
       const outcome = await bridge.auth.switchConnection(tenantId, { method: "tenuvaultApp" })
       if ("error" in outcome) {
-        setError(outcome.error.code === "AADSTS90095"
-          ? "Choose a permission pack and select Open admin consent to check whether you can request approval for that pack. (AADSTS90095)"
+        const needsApproval = outcome.error.code === "AADSTS90095"
+        setSignInNeedsApproval(needsApproval)
+        setError(needsApproval
+          ? "Choose a permission pack and select Request approval. (AADSTS90095)"
           : outcome.error.message)
         return
       }
