@@ -242,18 +242,20 @@ describe("BackupEngine", () => {
   })
 
   it.each([
-    [{ assignments: null }, "Graph returned an invalid policy collection"],
-    [{ assignments: [{}] }, "Microsoft Graph returned a collection entry without id"],
-    [{ assignments: [], "assignments@odata.nextLink": null }, "Graph returned an invalid continuation link"],
-    [{ assignments: [], "assignments@odata.nextLink": "https://graph.microsoft.com/beta/users?page=2" }, "Invalid Graph continuation link (it moves to another collection)"],
-    [{ assignments: [], "assignments@odata.nextLink": "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations/dc1/assignments?page=2" }, "Graph returned an invalid policy collection"],
-  ])("keeps a personal policy name out of expanded page diagnostics for %j", async (page, message) => {
+    ["invalid expanded collection", { assignments: null }, "Graph returned an invalid policy collection"],
+    ["missing assignment ID", { assignments: [{}] }, "Microsoft Graph returned a collection entry without id"],
+    ["invalid continuation link", { assignments: [], "assignments@odata.nextLink": null }, "Graph returned an invalid continuation link"],
+    ["continuation to another collection", { assignments: [], "assignments@odata.nextLink": "https://graph.microsoft.com/beta/users?page=2" }, "Invalid Graph continuation link (it moves to another collection)"],
+    ["invalid continuation body", { assignments: [], "assignments@odata.nextLink": "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations/dc1/assignments?page=2" }, "Graph returned an invalid policy collection"],
+    ["invalid JSON", {}, "Microsoft Graph returned invalid JSON."],
+    ["continuation HTTP error", { assignments: [], "assignments@odata.nextLink": "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations/dc1/assignments?page=2" }, "Microsoft Graph request failed (HTTP 400)."],
+  ])("keeps a personal policy name out of policy read diagnostics for %s", async (failure, page, message) => {
     const name = "Private Ada Lovelace"
     const configs = "/beta/deviceManagement/deviceConfigurations"
     const { engine, store, account } = setup(fakeGraph({
       [configs]: Response.json({ value: [{ id: "dc1", displayName: name }] }),
-      [`${configs}/dc1?$expand=assignments`]: Response.json({ id: "dc1", displayName: name, ...page }),
-      [`${configs}/dc1/assignments?page=2`]: Response.json({ value: null }),
+      [`${configs}/dc1?$expand=assignments`]: () => failure === "invalid JSON" ? new Response("") : Response.json({ id: "dc1", displayName: name, ...page }),
+      [`${configs}/dc1/assignments?page=2`]: () => failure === "continuation HTTP error" ? new Response(null, { status: 400 }) : Response.json({ value: null }),
     }))
     const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)
     const metadata = JSON.parse((await store.get(account, "intune-backups", `${job.backupFolder}/metadata.json`)).data.toString())
