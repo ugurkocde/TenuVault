@@ -134,17 +134,39 @@ describe("tenant connection migration", () => {
 })
 
 describe("in-place sign-in change", () => {
-  it.each([
-    ["unverifiable", "opaque", ["https://graph.microsoft.com/.default"], "delegated permissions"],
-    ["insufficient", jwt({ tid: TENANT, scp: "User.Read" }), undefined, "missing required permissions"],
-  ] as const)("preserves the current connection when the new registration has %s coverage", async (_reason, accessToken, scopes, message) => {
+  it("preserves the current connection when the new registration has unverifiable coverage", async () => {
     const f = fixture()
     f.enroll()
     const before = f.entries()
-    f.signIn.mockResolvedValueOnce({ ...staged(NEXT), accessToken, grantedScopes: scopes })
-    await expect(f.connections.switch(TENANT, { method: "ownApp", clientId: NEXT })).rejects.toThrow(message)
+    f.signIn.mockResolvedValueOnce({ ...staged(NEXT), accessToken: "opaque", grantedScopes: ["https://graph.microsoft.com/.default"] })
+    await expect(f.connections.switch(TENANT, { method: "ownApp", clientId: NEXT })).rejects.toThrow("delegated permissions")
     expect(f.entries()).toEqual(before)
     expect(f.restart().accounts.get(TENANT)?.clientId).toBe(OWN)
+  })
+
+  it("commits a verified own registration switch and returns missing permissions for Settings", async () => {
+    const f = fixture()
+    f.enroll()
+    const accessToken = jwt({ tid: TENANT, scp: "User.Read" })
+    const expected = connectionCoverage(f.modules.get(TENANT), "ownApp", accessToken)
+    expect(expected).not.toHaveLength(0)
+    f.signIn.mockResolvedValueOnce({ ...staged(NEXT), accessToken })
+    await expect(f.connections.switch(TENANT, { method: "ownApp", clientId: NEXT })).resolves.toMatchObject({
+      connection: { clientId: NEXT, method: "ownApp" }, account: { clientId: NEXT }, missing: expected,
+    })
+    const saved = f.restart()
+    expect(saved.accounts.get(TENANT)?.clientId).toBe(NEXT)
+    expect(saved.store.get(`msal.${NEXT}`)).toBe("fixture-cache")
+  })
+
+  it("matches the base switch contract when the new own registration lacks Policy.Read.All", async () => {
+    const f = fixture()
+    f.enroll()
+    f.modules.setChoice(TENANT, { conditionalAccess: { access: "backup" } })
+    f.signIn.mockResolvedValueOnce({ ...staged(NEXT), accessToken: jwt({ tid: TENANT, scp: "User.Read Organization.Read.All" }) })
+    const result = await f.connections.switch(TENANT, { method: "ownApp", clientId: NEXT })
+    expect(result.missing).toEqual(["Policy.Read.All"])
+    expect(f.restart().connections.get(TENANT)).toMatchObject({ method: "ownApp", clientId: NEXT })
   })
 
   it("swaps client ID and account atomically, keeps tenant state, and recomputes coverage with the new token", async () => {
@@ -536,6 +558,9 @@ describe("TenuVault app capabilities", () => {
     const before = f.entries()
     f.signIn.mockRejectedValueOnce(new Error("missing approval"))
     await expect(f.connections.switch(TENANT, { method: "tenuvaultApp" })).rejects.toThrow("missing approval")
+    expect(f.entries()).toEqual(before)
+    f.signIn.mockResolvedValueOnce({ ...staged(TENUVAULT_CLIENT_ID), graphScopes: ["User.Read", "Policy.Read.All"] })
+    await expect(f.connections.switch(TENANT, { method: "tenuvaultApp" })).rejects.toThrow("missing required permissions (Policy.Read.All)")
     expect(f.entries()).toEqual(before)
     const verified = ["openid", "User.Read"]
     f.signIn.mockResolvedValueOnce({ ...staged(TENUVAULT_CLIENT_ID), graphScopes: verified })
