@@ -16,6 +16,9 @@ import { ConnectionCapabilities } from "../src/main/auth/connection-capabilities
 import { routes as promotionRoutes } from "../src/main/features/promotion"
 import { routes as syncRoutes } from "../src/main/features/sync"
 import { fakeDeps } from "./feature-helpers"
+import { featureRoutes } from "../src/main/features"
+import { DOMAINS } from "../src/main/features/domains"
+import { backupRoutes } from "../src/main/api/desktop-routes"
 import { planGuard } from "../src/main/api/plan-gates"
 import { BackupEngine } from "../src/main/backup/engine"
 import { DELEGATED_CLIENT_SECRET, RESOURCE_SCOPES } from "../src/shared/constants"
@@ -320,4 +323,76 @@ it("checks drift across two tenants and generates a report under each tenant's o
   }
   expect(storageReads).toEqual(new Set(tenantIds))
   expect(auditReads).toEqual(new Set(tenantIds))
+})
+
+it("binds both own registrations for portfolio routes that use saved tenant data", async () => {
+  const f = fixture(false, request => host.dispatch(request))
+  const deps = fakeDeps({ plans: { [TENANT]: "msp", [DESTINATION]: "msp" } })
+  deps.api = async () => Response.json({ history: [], validations: [] })
+  const alert = deps.records.create(DOMAINS.notificationRules, TENANT, {
+    title: "Backup failures", status: "enabled", summary: "Backup failures", enabled: true,
+    eventTypes: ["backup.failed"], channelIds: [], minSeverity: "info",
+  }, { actor: null, reason: "Fixture" })
+  const host = new ApiHost({
+    routes: featureRoutes(deps), guard: planGuard(deps.plan),
+    bindConnections: ids => {
+      expect(ids).toEqual([TENANT, DESTINATION])
+      return f.cap.bindConnections(ids)
+    },
+  })
+  async function portfolio(route: string, action: string, extra?: object) {
+    const response = await f.fetch("http://tenuvault.internal/api/" + route, {
+      method: "POST", body: JSON.stringify({ tenantId: TENANT, action, targetTenants: [{ tenantId: DESTINATION }], ...extra }),
+    })
+    const body = await response.json()
+    expect(response.status, JSON.stringify(body)).toBe(200)
+    return body
+  }
+  for (const [route, action] of [
+    ["scores", "portfolio-summary"], ["hygiene", "portfolio-summary"],
+    ["health-review", "portfolio-status"], ["standards", "portfolio-adoptions"],
+  ] as const) {
+    const result = await portfolio(route, action)
+    expect(result.tenants.map((tenant: { tenantId: string }) => tenant.tenantId)).toEqual([TENANT, DESTINATION])
+  }
+  expect(await portfolio("notifications", "portfolio-copy-rules", { ruleIds: [alert.id] })).toMatchObject({
+    results: [{ tenantId: DESTINATION, created: ["Backup failures"] }],
+  })
+  expect(f.network).not.toHaveBeenCalled()
+})
+
+it("starts one backup per own-registration tenant in a validated bulk run", async () => {
+  const f = fixture(false, request => host.dispatch(request))
+  const destinations = new Set<string>()
+  f.network.mockImplementation(async (input, init) => {
+    const request = new Request(input, init)
+    const url = new URL(request.url)
+    const auth = request.headers.get("authorization")
+    if (url.hostname === "graph.microsoft.com") {
+      expect([TENANT, DESTINATION].map(id => `Bearer ${tokenFor(id, RESOURCE_SCOPES.graph)}`)).toContain(auth)
+      return Response.json({ value: [] })
+    }
+    const tenant = url.hostname.startsWith("destination") ? DESTINATION : TENANT
+    expect(auth).toBe(`Bearer ${tokenFor(tenant, RESOURCE_SCOPES.storage)}`)
+    destinations.add(tenant)
+    return request.method === "PUT" ? new Response(null, { status: 201 }) : new Response(null, { status: 404 })
+  })
+  const engine = new BackupEngine({ fetch: f.fetch, getToken: async (...args) => (await f.getToken(...args)).accessToken })
+  const host = new ApiHost({
+    routes: backupRoutes(engine, () => ({ excluded: INTUNE_TYPES.filter(type => type.folder !== "DeviceConfigurations").map(type => type.folder) })),
+    bindConnections: ids => f.cap.bindConnections(ids), guard: planGuard(async () => "msp"),
+  })
+  for (const [tenantId, appId, other, storageAccountName] of [
+    [TENANT, CLIENT, DESTINATION, "example"], [DESTINATION, DESTINATION_CLIENT, TENANT, "destination"],
+  ]) {
+    const response = await f.fetch("http://tenuvault.internal/api/backup/start", {
+      method: "POST", body: JSON.stringify({ tenantId, appId, storageAccountName, bulk: true, targetTenants: [{ tenantId: other }] }),
+    })
+    expect(response.status).toBe(200)
+    const { jobId } = await response.json()
+    const job = engine.get(jobId)
+    expect(job).toBeDefined()
+    expect((await engine.waitForJob(job!)).status).toBe("Completed")
+  }
+  expect(destinations).toEqual(new Set([TENANT, DESTINATION]))
 })

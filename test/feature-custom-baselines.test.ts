@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest"
+import { ApiHost } from "../src/main/api/host"
+import { createBridgedFetch } from "../src/main/api/fetch-bridge"
+import { planGuard } from "../src/main/api/plan-gates"
+import { ConnectionCapabilities } from "../src/main/auth/connection-capabilities"
 import { routes } from "../src/main/features/custom-baselines"
 import { applyEdits, baselineEvidence, customPolicy, EditError, settingLabel, settingViews, stripForBaseline } from "../src/main/features/custom-baselines/model"
 import type { CustomBaselineSources } from "../src/main/features/custom-baselines/service"
@@ -502,7 +506,21 @@ describe("/api/custom-baselines", () => {
     expect((await context.post({ action: "get", id: baseline.id }, TENANT_B)).status).toBe(404)
     expect((await context.post({ action: "deploy", id: baseline.id }, TENANT_B)).status).toBe(404)
     expect((await context.post({ action: "deploy", id: baseline.id, sourceTenantId: TENANT_A }, TENANT_B)).status).toBe(400)
-    const deployed = await context.post({ action: "deploy", id: baseline.id, sourceTenantId: TENANT_A, targetTenants: [{ tenantId: TENANT_A }] }, TENANT_B)
+    const cap = new ConnectionCapabilities(tenant => ({
+      version: 1, origin: "legacy", method: "ownApp", clientId: tenant === TENANT_A ? TENANT_B : TENANT_C, createdAt: "", updatedAt: "",
+    }))
+    const host = new ApiHost({
+      routes: routes(context.deps, context.sources), guard: planGuard(context.deps.plan),
+      bindConnections: ids => {
+        expect(ids).toEqual([TENANT_B, TENANT_A])
+        return cap.bindConnections(ids)
+      },
+    })
+    const fetch = createBridgedFetch({ dispatch: req => host.dispatch(req), getDelegatedToken: async () => { throw new Error("Unexpected token request") } })
+    const response = await fetch("http://tenuvault.internal" + PATH, {
+      method: "POST", body: JSON.stringify({ tenantId: TENANT_B, action: "deploy", id: baseline.id, sourceTenantId: TENANT_A, targetTenants: [{ tenantId: TENANT_A }] }),
+    })
+    const deployed = { status: response.status, body: await response.json() }
     expect(deployed.status).toBe(200)
     expect(deployed.body.changeSet.targetTenantId).toBe(TENANT_B)
     expect(deployed.body.changeSet.sourceTenantId).toBe(TENANT_A)

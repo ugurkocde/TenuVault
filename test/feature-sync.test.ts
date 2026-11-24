@@ -1435,7 +1435,8 @@ it("binds the source recovered from a saved Sync when preview rereads it", async
     const tenant = new Headers(init?.headers).get("authorization")?.slice("Bearer opaque-".length)
     if (tenant !== TENANT_A && tenant !== TENANT_B) throw new Error("Unexpected tenant token.")
     const graph = await originalGraph(tenant)
-    const response = await graph(init?.method ?? "GET", pathname.replace(/^\/beta\//, "") + search)
+    expect(init?.method).toBe("GET")
+    const response = await graph("GET", pathname.replace(/^\/beta\//, "") + search)
     return Response.json(response.body, { status: response.status })
   })
   const fetch = createBridgedFetch({
