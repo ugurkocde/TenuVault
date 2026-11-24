@@ -583,12 +583,10 @@ export class AuthManager {
     })
     const account = result.account
     if (!account) throw new Error("Microsoft did not return an account for this sign-in.")
-    if (normalizeGuid(account.tenantId) !== normalizeGuid(tenantId)) {
-      throw new Error("You signed in to a different tenant. Sign in with an account from this tenant.")
-    }
+    const actualTenant = signedInTenant(tenantId, result)
     this.host.authorizeInteractive?.(tenantId)
     const signedIn = {
-      tenantId: normalizeGuid(tenantId),
+      tenantId: actualTenant,
       clientId,
       username: account.username,
       name: account.name,
@@ -616,7 +614,7 @@ export class AuthManager {
     const account = result.account!
     this.host.authorizeInteractive?.(tenant)
     this.host.authorizeConnection?.(tenant, clientId, RESOURCE_SCOPES.graph)
-    this.host.accountStore.set({ tenantId: normalizeGuid(tenant), clientId, username: account.username, name: account.name, homeAccountId: account.homeAccountId })
+    this.host.accountStore.set({ tenantId: signedInTenant(tenant, result), clientId, username: account.username, name: account.name, homeAccountId: account.homeAccountId })
   }
 
   /** One interactive prompt per tenant, scope, prompt and account hint at a time; parallel callers share it. */

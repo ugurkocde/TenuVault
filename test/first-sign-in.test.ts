@@ -191,6 +191,14 @@ describe("first sign-in recovery", () => {
     }
   })
 
+  it("refuses a different tenant claim when signing in again", async () => {
+    const auth = manager()
+    const account = { tenantId: TENANT, username: "admin@contoso.com", homeAccountId: "home" }
+    msal.interactive.mockResolvedValueOnce({ account, idTokenClaims: { tid: CLIENT } })
+    await expect(auth.reauthenticate(TENANT, CLIENT)).rejects.toThrow("different tenant")
+    expect(auth.accounts()).toEqual([])
+  })
+
   it("does not time out a sign-in that finished in time", async () => {
     vi.useFakeTimers()
     try {
