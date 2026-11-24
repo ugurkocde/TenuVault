@@ -27,7 +27,7 @@ Select **Connect your tenant**. Defender, Entra ID and Intune start selected. Tu
 
 Choose a sign-in method and sign in with Microsoft. TenuVault uses your signed-in tenant for **Start now**, **TenuVault app** and **Set up with Microsoft sign-in**. If you administer a different tenant as a guest, open **Different tenant?** before signing in. An existing app registration still needs its tenant ID and client ID.
 
-**Check** moves to **Storage** when all selected services have backup access. If only some services can be read, select **Continue with** the services listed. Open **What’s missing and how to add it** to review access and check again.
+**Check** moves to **Storage** when all selected services have backup access. If only some services can be read, select **Continue with** the services listed. Open **Details** to review access and check again.
 
 For the first backup, **This device, encrypted** is selected. If your method and plan support Azure, select **Your Azure storage account**, choose an account and wait for access to be checked. Select **Start first backup**. When it finishes, you can turn on scheduled backups, save the recovery key for on-device backups, and go to the dashboard. You can also choose whether to share anonymous setup results.
 

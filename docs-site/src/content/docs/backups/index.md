@@ -104,7 +104,7 @@ The **Backup Progress** dialog shows:
 
 * a progress bar with the current step, for example "Reading configuration..." or "Backing up" a type, and the result when the backup ends
 * **Policies saved** (**Saved so far** while it runs), **Types backed up** and **Duration**
-* **Needs attention**, when a type could not be read or was left out, or some objects could not be saved. When the backup has ended, the first line says **Coverage incomplete** with how many of the selected types were not read in full (see [Coverage](#coverage)).
+* A short notice counts the types that **Need access** separately from read or save failures. Open **Details** to see the affected types and their reasons grouped by service.
 * each type that was backed up, with its count, the types that had nothing to back up, and the types that are not set up in this tenant
 * the error, if the backup fails
 * **Show raw log**, which opens the technical log with **Copy log** and the job ID
@@ -183,7 +183,7 @@ The result says whether the backup finished and can be used. Coverage says wheth
 | Left out | The sign-in could not read the type. The reason names the cause: a permission or its admin consent is missing, your account has no role that can read it, the tenant has no license for the product or never set it up, or only a signed-in admin can read it and the backup ran as the Backup Reader. | Incomplete |
 | Not read | The type, or some of its objects, could not be read, for example because Microsoft Graph returned an error, did not answer, or asked for a longer pause than a backup waits. | Incomplete |
 
-The Dashboard and Backup History show **Coverage incomplete** separately from the run result. **Backup Progress** and **Backup Details** show the affected types. If the only gaps are types left out for missing access, the backup is **Completed**, counts as successful, and satisfies the scheduled slot without a retry or a failure alert. A refused read on a type with a verified grant, an incomplete capture of a readable type, or a storage failure counts against the success rate. When the backup saved other policies, its result is **Completed with warnings**.
+The Dashboard and Backup History show **Coverage incomplete** separately from the run result. **Backup Progress** and **Backup Details** show separate counts for missing access and failures. Open **Details** to see a list grouped by service. **Add access** opens the tenant’s services in Settings when a saved backup records missing access. If the only gaps are types left out for missing access, the backup is **Completed**, counts as successful, and satisfies the scheduled slot without a retry or a failure alert. A refused read on a type with a verified grant, an incomplete capture of a readable type, or a storage failure counts against the success rate. When the backup saved other policies, its result is **Completed with warnings**.
 
 One case is different: when every selected type was left out, the backup read nothing and holds nothing. It ends as **Failed** with "Backup failed: nothing could be read" and the cause most of the types share, for example a missing permission or a product the tenant has no license for. Scheduled backups retry it, a failure is notified, and older backups are kept. A backup whose types are all empty or not set up in the tenant did read the tenant and stays **Complete**.
 
@@ -216,7 +216,7 @@ Click an entry to open its **Backup Details**:
 | Part | What it shows |
 | --- | --- |
 | Buttons | **View Changes** ([Compare backups](/backups/compare/)), **Download** ([export as ZIP](/backups/storage/#export-a-backup-as-a-zip-file)) and **Restore from this backup** ([Restore supported configuration](/restore/)) |
-| Warnings | Why a backup is incomplete, how many items or types could not be read, and which types were left out for missing permissions. **Coverage incomplete** lists every selected type the backup does not hold in full. Backups made before version 0.6 do not record coverage and show the other lines only. |
+| Warnings | Read failures and missing access have separate counts. Open **Details** to see the types and reasons recorded for each service. Older backups may report an unknown cause. |
 | Totals | **Items**, **Size**, **Duration** and **Changes since the previous backup** |
 | **Contents** | Item counts per area. Expand an area for counts per type, and to see how many of its types the backup did not include. Areas left out entirely show **Not included**. |
 | **About this backup** | **Run status**, **Started** (how it started), **Included**, **Stored** and **Backup ID** |

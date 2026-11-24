@@ -117,7 +117,7 @@ Tenant policies are matched on the `OIBID` in the policy description first, then
 | **Newer than OIB** | The tenant policy has a newer version than the selected OIB version. |
 | **Ambiguous** | More than one tenant policy matches. Review it manually. |
 
-Deprecated OIB policies still deployed, and older OIB versions still deployed next to a newer one, are listed for review and removal. TenuVault does not remove them.
+The comparison counts ambiguous matches, extra copies and deprecated OIB policies still deployed. Open **Details** on each notice to see policy names and IDs, and any replacements. Review extra copies and deprecated policies in Intune before removing them.
 
 Select missing and outdated policies to deploy them. For an outdated policy, choose:
 

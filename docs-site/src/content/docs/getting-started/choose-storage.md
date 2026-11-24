@@ -41,7 +41,7 @@ You can change the plan later on the **License** page.
 2. TenuVault shows the backup folder under the option.
 3. Select **Start first backup**.
 
-TenuVault also reads this tenant's backup inventory in the folder, exactly as a backup would. If the folder already holds this tenant's backups from another installation, or damaged backup files, TenuVault shows **This folder has backups this device cannot read**. You can still select **Start first backup**, but the first backup fails until you fix it. Select **Import recovery key** and paste the recovery key of that installation, or select **Choose another folder** to start with an empty folder. See [A folder with backups this device cannot read](/backups/storage/#a-folder-with-backups-this-device-cannot-read).
+TenuVault also reads this tenant's backup inventory in the folder, exactly as a backup would. If the folder already holds this tenant's backups from another installation, or damaged backup files, TenuVault shows **This folder has backups this device cannot read**. You can still select **Start first backup**, but the first backup fails until you fix it. Select **Import recovery key** and paste the recovery key of that installation, or open **Details** and select **Choose another folder** to start with an empty folder. See [A folder with backups this device cannot read](/backups/storage/#a-folder-with-backups-this-device-cannot-read).
 
 Backups are encrypted with a key protected by your Windows account or macOS Keychain. Nothing leaves this computer. Each backup file is encrypted on its own, and file names reveal nothing about your policies.
 
