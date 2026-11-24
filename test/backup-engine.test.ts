@@ -190,6 +190,22 @@ describe("BackupEngine", () => {
     expect(JSON.stringify({ log: job.log, errors, notReadReasons })).not.toMatch(/admin\+lab@|guest_example\.test#EXT#@/i)
   })
 
+  it("keeps encoded account identifiers from rejected detail continuations out of backup diagnostics", async () => {
+    const accountPath = encodeURIComponent("private-admin+backup@example.test")
+    const graph = fakeGraph({
+      "/beta/deviceManagement/deviceConfigurations/dc1?$expand=assignments": Response.json({
+        id: "dc1", assignments: [],
+        "assignments@odata.nextLink": `https://graph.microsoft.com/beta/users/${accountPath}?page=2`,
+      }),
+    })
+    const { engine, store, account } = setup(graph)
+    const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)
+    const metadata = JSON.parse((await store.get(account, "intune-backups", `${job.backupFolder}/metadata.json`)).data.toString())
+    const errors = job.results?.types.find(type => type.folder === "DeviceConfigurations")?.errors
+    expect(job.log.join("\n")).toContain("Invalid Graph continuation link (it moves to another collection)")
+    expect(JSON.stringify({ log: job.log, errors, outcomes: metadata.Outcomes })).not.toContain(accountPath)
+  })
+
   it("keeps every policy when names and id prefixes repeat", async () => {
     // Intune's default enrollment configurations share a display name and the tenant GUID id prefix.
     const prefix = "7192bb9f-ffa6-4f50-9176-7603cd9450d6"

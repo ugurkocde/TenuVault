@@ -5,7 +5,7 @@ export function graphContinuation(start: string, next: string, seen: Set<string>
   const filtersOf = (url: URL) => [...url.searchParams].filter(([key]) => /^\$?filter$/i.test(key)).map(([, value]) => value)
   const allowed = filter === undefined ? filtersOf(started) : [filter]
   const required = filter ?? (allowed.length === 1 ? allowed[0] : undefined)
-  const refuse = (reason: string) => new Error(`Invalid Graph continuation link (${reason}): ${parsed.origin === "https://graph.microsoft.com" ? parsed.pathname : "an address outside Microsoft Graph"}`)
+  const refuse = (reason: string) => new Error(`Invalid Graph continuation link (${reason})`)
   if (parsed.origin !== "https://graph.microsoft.com" || parsed.username || parsed.password) throw refuse("it leaves Microsoft Graph")
   if (parsed.href.includes("#")) throw refuse("it carries a fragment")
   if (!/^\/(beta|v1\.0)\//.test(started.pathname) || parsed.pathname.toLowerCase() !== started.pathname.toLowerCase()) throw refuse("it moves to another collection")

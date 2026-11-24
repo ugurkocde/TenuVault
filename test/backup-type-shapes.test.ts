@@ -127,8 +127,8 @@ describe("a type read from Microsoft Graph v1.0", () => {
     expect(requests.filter((request) => request.path.includes("roleAssignments")).map((request) => request.path)).toEqual(["/v1.0/roleManagement/directory/roleAssignments"])
     // A list that could not be read in full stores nothing of the type.
     expect((await files(job)).some((name) => name.startsWith("EntraRoleAssignments/"))).toBe(false)
-    expect(outcome(job, "EntraRoleAssignments")).toMatchObject({ outcome: "failed", error: expect.stringMatching(/^Invalid Graph continuation link \(it (leaves Microsoft Graph|moves to another collection)\): /) })
-    // The refusal names the link's path, or that it left Microsoft Graph, and never its query.
+    expect(outcome(job, "EntraRoleAssignments")).toMatchObject({ outcome: "failed", error: expect.stringMatching(/^Invalid Graph continuation link \(it (leaves Microsoft Graph|moves to another collection)\)$/) })
+    // The refusal includes a fixed reason without any part of the link.
     expect(JSON.stringify(outcome(job, "EntraRoleAssignments"))).not.toContain("page=2")
   })
 
@@ -247,7 +247,7 @@ describe("a type whose list needs a filter", () => {
     // Only the first page was requested: the link was not followed, with or without the type's filter added.
     expect(requests.filter((request) => request.path.includes("attackSimulation") || request.path.includes("/users")).map((request) => request.path)).toEqual([first])
     expect((await files(job)).some((name) => name.startsWith("DefenderAttackSimulationPayloads/"))).toBe(false)
-    expect(outcome(job, "DefenderAttackSimulationPayloads")).toMatchObject({ outcome: "failed", error: expect.stringMatching(/^Invalid Graph continuation link \(it (moves to another collection|names another filter|carries a fragment)\): /), saved: 0 })
+    expect(outcome(job, "DefenderAttackSimulationPayloads")).toMatchObject({ outcome: "failed", error: expect.stringMatching(/^Invalid Graph continuation link \(it (moves to another collection|names another filter|carries a fragment)\)$/), saved: 0 })
     expect(await manifest(job)).toMatchObject({ Status: "CompletedWithWarnings", Failures: 1, FailedTypes: ["DefenderAttackSimulationPayloads"], Coverage: "Incomplete" })
   })
 
