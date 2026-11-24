@@ -294,10 +294,10 @@ Assigning a group to an enterprise application requires Microsoft Entra ID P1 or
 
 ## Permissions for a service choice
 
-During setup, choose services before Connect. The permission list in the app and the command under **Use the setup script instead** follow that choice. For example, an Entra ID setup with no restore access uses:
+During setup, choose services before the connection method. The permission list in the app and the command under **Use the setup script instead** both request backup access. For example, choosing Entra ID includes Conditional Access:
 
 ```powershell
-./New-TenuVaultDesktopApp.ps1 -Services Entra -RestoreAccess None
+./New-TenuVaultDesktopApp.ps1 -Services ConditionalAccess,Entra -RestoreAccess None
 ```
 
 Use the permission list shown in TenuVault when following the manual guide. The handoff message also contains this list and the generated command. Do not use the Intune default list for an Entra-only registration. Existing registrations are left unchanged by quick setup; missing chosen permissions are reported after sign-in.
@@ -305,7 +305,7 @@ Use the permission list shown in TenuVault when following the manual guide. The 
 
 ## Add a service, an area or restore access
 
-Open **Settings > Services and permissions** for the tenant. Turn on the service or opt-in area, or choose **Backup and restore** under **Areas and access** where restore is available. These choices describe the permissions to request; they grant no access by themselves.
+When your first restore needs more access, the restore page lists the missing permissions for your registration. You can also open **Settings > Services and permissions** to turn on a service or opt-in area, or choose **Backup and restore** under **Areas and access** where restore is available. These choices describe the permissions to request; they grant no access by themselves.
 
 Expand **Add the missing permissions**. You can use **Add in the app**, **Azure CLI commands**, **Registration in Entra**, or **Text for your administrator**. All routes name the exact missing permissions. The Entra portal's Grant admin consent action can also approve other pending permissions, so review them first.
 

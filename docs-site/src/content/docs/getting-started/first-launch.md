@@ -33,7 +33,7 @@ To buy a license or ask for an invoice, use the **License** page after setup. Se
 
 Select **Connect your tenant**, then select **Defender**, **Entra ID** or **Intune**. You can select more than one. Continue to **How do you want to connect?** and choose **Start now**, **TenuVault app** or **Your own app registration**. Start now and the TenuVault app show an availability message when the license service has disabled them.
 
-Choose at least one of Defender, Entra ID and Intune. All three start off for a new tenant. Select **Also restore** where supported, or use **Back up** only. Conditional Access is under Entra ID. Review the permission coverage in **Results**, then confirm where the backups are stored. Start now uses this device. Find the tenant ID on the **Overview** page in the Microsoft Entra admin center. The Storage step can prefill the signed-in address for optional trial emails. Select the email button only if you want to send it.
+Entra ID includes Conditional Access. Setup requests backup access. You can add restore access when you first need it. Review the permission coverage in **Results**, then confirm where the backups are stored. Start now uses this device. Find the tenant ID on the **Overview** page in the Microsoft Entra admin center. The Storage step can prefill the signed-in address for optional trial emails. Select the email button only if you want to send it.
 
 TenuVault starts the first backup automatically. The next time you add a tenant, you choose its services and sign-in method independently. Tenants already connected before this wizard keep their configuration.
 
