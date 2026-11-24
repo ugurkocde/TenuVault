@@ -1,3 +1,4 @@
+import { BrowserSignInWait } from "./OnboardingConnection"
 import { DEFAULT_SETUP_CHOICE, requestedPermissions, setupScriptArguments, type PermissionChoice } from "../../shared/services/manifest"
 import { trialKeyRefusalText } from "../../shared/trial-notices"
 import { showCommunityLimitError } from "../lib/plan-dialog"
@@ -447,7 +448,11 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
 
   // What to do while the browser is open. The automatic sign-in after the in-app setup shows it
   // first, because there the admin did not press a button on this step.
-  const status = busy && (
+  const waiting = wizard && !afterBrowser
+  const status = busy && (waiting ? <div className="space-y-2">
+    <BrowserSignInWait kind="signin" cancel={() => void cancel()} cancelling={cancelling} />
+    {waitedLong && <SignInRecoveryPanel choice={choice} kind="signin" onTryAgain={() => void tryAgain()} retrying={retrying} />}
+  </div> : (
     <div role="status" className="space-y-3 rounded-2xl bg-gray-50 px-4 py-3 text-sm text-gray-700">
       {afterBrowser === "completing"
         ? <p className="flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />Completing sign-in...</p>
@@ -468,7 +473,13 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
       </Button>
       {waitedLong && <SignInRecoveryPanel choice={choice} kind="signin" onTryAgain={() => void tryAgain()} retrying={retrying} />}
     </div>
-  )
+  ))
+
+  const fields = <>
+      {field("tenant", "Tenant id or domain", tenant, setTenant, "contoso.onmicrosoft.com", errors.tenant, true)}
+      {field("clientId", "Application (client) id", clientId, setClientId, "00000000-0000-0000-0000-000000000000", errors.clientId, true)}
+      {field("displayName", "Display name (optional)", displayName, setDisplayName, "Contoso Production")}
+  </>
 
   return (
     <div className="space-y-4">
@@ -494,9 +505,12 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
           </p>
         </div>
       )}
-      {field("tenant", "Tenant id or domain", tenant, setTenant, "contoso.onmicrosoft.com", errors.tenant, true)}
-      {field("clientId", "Application (client) id", clientId, setClientId, "00000000-0000-0000-0000-000000000000", errors.clientId, true)}
-      {field("displayName", "Display name (optional)", displayName, setDisplayName, "Contoso Production")}
+      {wizard && initial?.tenant && initial.clientId
+        ? <details open={Boolean(errors.tenant || errors.clientId) || undefined} className="space-y-3 text-sm">
+            <summary className="cursor-pointer underline underline-offset-2">Connection details</summary>
+            {fields}
+          </details>
+        : fields}
       {errors.form && (
         <Alert variant="destructive" role="alert">
           <AlertCircle className="h-4 w-4" />
@@ -507,11 +521,11 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
           </AlertDescription>
         </Alert>
       )}
-      {errors.form && <SetupDiagnosticsReminder step="signin" />}
-      <Button onClick={() => void submit()} disabled={busy || !tenant || !clientId} className="w-full bg-blue-600 hover:bg-blue-700">
+      {!wizard && errors.form && <SetupDiagnosticsReminder step="signin" />}
+      {!(wizard && busy) && <Button onClick={() => void submit()} disabled={busy || !tenant || !clientId} className="w-full bg-blue-600 hover:bg-blue-700">
         {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <KeyRound className="mr-2 h-4 w-4" />}
         {busy ? "Waiting for sign-in..." : submitLabel}
-      </Button>
+      </Button>}
       {!automatic && status}
     </div>
   )

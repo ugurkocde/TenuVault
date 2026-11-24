@@ -474,6 +474,7 @@ export interface TenuVaultBridge {
     wizardPackConsent: (tenantId: string, choice: PermissionChoice, packId: string, action: PackConsentAction) => Promise<PackConsentResult>
     packConsentPlan: (tenantId: string) => Promise<PackConsentPlan | null>
     packConsent: (tenantId: string, packId: string, action: PackConsentAction) => Promise<PackConsentResult>
+    restorePackConsent: (tenantId: string, service: import("./services/modules").ModuleId, action: PackConsentAction) => Promise<PackConsentResult>
     switchConnection: (tenantId: string, target: ConnectionTarget) => Promise<ConnectionSwitchResponse>
     onAppMetadataRemovalChanged: (cb: (tenantId: string) => void) => () => void
     appMetadataRemoval: (tenantId: string, retry?: boolean) => Promise<import("./app-metadata-removal").AppMetadataRemoval | undefined>
@@ -500,6 +501,7 @@ export interface TenuVaultBridge {
      * (`setup`) opened to the clipboard. Returns whether there was one; the address itself stays in
      * the main process.
      */
+    reopenSignIn: (kind: "signin" | "setup" | "consent") => Promise<boolean>
     copySignInLink: (kind: "signin" | "setup") => Promise<boolean>
   }
   /** Sign-in for a proxy that requires authentication. */

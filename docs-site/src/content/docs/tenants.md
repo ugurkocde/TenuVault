@@ -13,15 +13,15 @@ A tenant in TenuVault is one Microsoft tenant you have signed in to, together wi
 | **Dashboard** | Sidebar | Backup overview of the selected tenant |
 | **All tenants** | Sidebar, when two or more tenants are connected | Status of every connected tenant at a glance |
 | **Tenants** | Sidebar | The **Tenant Management** page: rename, tag, refresh, back up and remove tenants |
-| **Services** | Below **Backup & Restore** in the sidebar | **Defender**, **Entra ID** and **Intune** shortcuts to filtered backup contents for the selected tenant |
+| **Services** | Below **Tenants** in the sidebar | **Defender**, **Entra ID** and **Intune** shortcuts to filtered backup contents for the selected tenant |
 | **Settings** | Sidebar | Sign in again and change where a tenant's backups are stored |
 | **License** | Sidebar | License state of each tenant and license sharing |
 
-Below **Dashboard** and **Tenants**, the sidebar groups its pages under **Protect** (backups, services, App Backup, drift, Copy to Tenants and alerts), **Baselines** (OpenIntuneBaseline, CIS Benchmarks and frameworks) and **Oversight** (reports, audit log, governance, changes and operations). Select a group's heading to fold it away; TenuVault remembers folded groups on this computer, and a dot next to a folded heading shows that the open page is inside it. The arrow next to **Frameworks** folds its list of frameworks the same way, with the same dot. **Help** at the bottom of the sidebar opens **What's new**, **Share feedback** and **Support**.
+Below **Dashboard** and **Tenants**, the sidebar lists **Services** followed by **Protect** (backups, App Backup, drift, Copy to Tenants and alerts), **Baselines** (OpenIntuneBaseline, CIS Benchmarks and frameworks) and **Oversight** (reports, audit log, governance, changes and operations). Select a group's heading to fold it away; TenuVault remembers folded groups on this computer, and a dot next to a folded heading shows that the open page is inside it. The arrow next to **Frameworks** folds its list of frameworks the same way, with the same dot. **Help** at the bottom of the sidebar opens **What's new**, **Share feedback** and **Support**.
 
-The **Services** list under **Protect**, just below **Backup & Restore**, always lists all three services. A service marked **Off** opens **Settings > Services and permissions**, where you can turn it on. The badges follow the selected tenant and update when a service changes. An enabled service opens **Backup & Restore** with that service selected; its sidebar entry stays highlighted until you choose **All** in the page's **Service** filter.
+The **Services** group below **Dashboard** and **Tenants** lists Defender, Entra ID and Intune. **Protect** follows with Backup & Restore, App Backup, Drift Detection, Copy to Tenants and Alerts. A service marked **Off** opens **Settings > Services and permissions**, where you can turn it on. The badges follow the selected tenant and update when a service changes. An enabled service opens **Backup & Restore** with that service selected; its sidebar entry stays highlighted until you choose **All** in the page's **Service** filter.
 
-![Services navigation beside the backup timeline](/images/sidebar/all-services-on-light.png)
+![Services above Protect, alongside the backup timeline](/images/sidebar/services-group-light.png)
 
 ## Switch between tenants
 

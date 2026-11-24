@@ -43,7 +43,7 @@ function PermissionState({ state }: { state: ServiceHealth["permissions"] }) {
 }
 
 /** These routes change only the exact gaps reported for the selected service or area. */
-export function PermissionRoutes({ report, missing, inApp = false }: { inApp?: boolean; report: Pick<ConnectionHealthReport, "tenantId" | "clientId">; missing: readonly string[] }) {
+export function PermissionRoutes({ report, missing, inApp = false, restoring = false }: { inApp?: boolean; restoring?: boolean; report: Pick<ConnectionHealthReport, "tenantId" | "clientId">; missing: readonly string[] }) {
   const fix = permissionRemediation(report, missing)
   if (!fix.names.length) return null
   if (report.clientId.toLowerCase() === TENUVAULT_CLIENT_ID) return (
@@ -68,7 +68,7 @@ export function PermissionRoutes({ report, missing, inApp = false }: { inApp?: b
         <Button variant="outline" size="sm" onClick={() => void copy(fix.request, "the request for your administrator")}>Copy text for administrator</Button>
       </details>
       {inApp && <AddPermissions tenantId={report.tenantId} clientId={report.clientId} missing={fix.names} />}
-      <p className="text-xs">Then select Check again and run a backup to verify access.</p>
+      <p className="text-xs">{restoring ? "Then select Check again to verify restore access." : "Then select Check again and run a backup to verify access."}</p>
     </div>
   </details>
 }

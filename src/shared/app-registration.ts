@@ -101,3 +101,10 @@ export function setupIdsFromClipboard(text: unknown): { tenantId: string; client
   const { tenantId, clientId } = parseSetupOutput(text)
   return tenantId && clientId ? { tenantId, clientId } : null
 }
+
+
+// These dates match what Entra stores for consent grants. The live lab run verifies both values.
+export const DELEGATED_GRANT_DATES = {
+  startTime: "0001-01-01T00:00:00Z",
+  expiryTime: "9999-12-31T23:59:59Z",
+} as const

@@ -7,7 +7,7 @@ Entra ID backups cover **74 types**, including seven opt-in directory inventorie
 
 ## Enable backups
 
-Select Entra ID during setup or turn on **Entra ID** in **Settings > Services and permissions**. Existing tenants keep Entra ID off after updating, even with an **Everything** backup scope. **Groups** must be enabled separately. The scope picker offers only types of services and opt-in areas that are on. Areas without types in this build say so in Settings and setup.
+Select Entra ID during setup or turn on **Entra ID** in **Settings > Services and permissions**. Existing tenants keep Entra ID off after updating, even with an **Everything** backup scope. **Groups** must be enabled separately. The scope picker offers only types of services and opt-in areas that are on. Settings identifies any areas without types in this build.
 
 Seven configuration types support individually confirmed restore subsets: token lifetime policies, activity-based timeout policies, company branding, authentication flows, the cross-tenant parent policy name, unpublished access-package catalogs and the access-review ownership flag. See [restore safety and limitations](/restore/identity/). Users and Groups also have separately reviewed directory restore subsets described below. Other types remain backup and comparison only. Copy to Tenants, drift revert and cross-tenant copy cannot write these new types. A selected type that cannot be read gives **coverage incomplete**, with its cause in backup results. An empty list is a covered answer, not a missing backup. The federated token validation and continuous access evaluation policies can be **not configured**.
 
@@ -160,9 +160,8 @@ The table above is the complete configuration inventory across all three Entra p
 ## Screenshots
 
 ![Governance coverage in Settings](/images/services/entra-backup-types-light.png)
-![Governance coverage during setup](/images/onboarding/03-choice-governance-light.png)
 
-See the dark-mode variants in the [Services screenshot inventory](/images/services/README.md) and [onboarding screenshot inventory](/images/onboarding/README.md).
+See the dark-mode variants in the [Services screenshot inventory](/images/services/README.md).
 
 ## Graph references
 
@@ -178,7 +177,7 @@ See the dark-mode variants in the [Services screenshot inventory](/images/servic
 
 ## Opt-in directory inventories
 
-All seven types use paged capture and indexes and are available to both backup sign-in modes. Users and Groups have limited restore subsets through the signed-in admin only. App registrations support nonempty displayName and description updates through the [individual application review](/restore/identity/#app-registrations-enterprise-apps-and-consent). The other four types remain backup and comparison only. New and existing tenants leave Groups, Users and devices, and Applications off until an admin enables each area. Settings and onboarding explain the personal data each area stores. The Backup Reader gets these areas' application permissions only when requested. The existing 67 configuration types retain their read path.
+All seven types use paged capture and indexes and are available to both backup sign-in modes. Users and Groups have limited restore subsets through the signed-in admin only. App registrations support nonempty displayName and description updates through the [individual application review](/restore/identity/#app-registrations-enterprise-apps-and-consent). The other four types remain backup and comparison only. New and existing tenants leave Groups, Users and devices, and Applications off until an admin enables each area. Settings explains the personal data each area stores. The Backup Reader gets these areas' application permissions only when requested. The existing 67 configuration types retain their read path.
 
 | Folder | What is stored | Graph path | Version | Sign-in | Excluded or limited |
 | --- | --- | --- | --- | --- | --- |

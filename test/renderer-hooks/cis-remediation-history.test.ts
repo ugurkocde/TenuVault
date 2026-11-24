@@ -5,6 +5,8 @@ import { CisRemediationHistory, deploymentState, deploymentTitle } from "../../s
 import { STATUS_TONE } from "../../src/renderer/features/shared/change-set"
 import type { Tenant } from "../../src/portal/contexts/TenantContext"
 
+vi.mock("@desktop/lib/bridge", () => ({ bridge: {} }))
+
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const TENANT_ID = "11111111-1111-1111-1111-111111111111"

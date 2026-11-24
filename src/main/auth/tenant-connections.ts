@@ -48,6 +48,7 @@ function targetOf(input: unknown): { method: SignInMethod; clientId: string } {
 }
 
 export interface StagedSignIn {
+  missingOnboardingScopes?: string[]
   account: StoredAccount
   accessToken: string
   idToken?: string
@@ -181,6 +182,19 @@ export class TenantConnections {
     this.validateStorage(profile, record.method)
     this.commit(tenant, JSON.stringify([...saved, profile]), record, staged, settings)
     return record
+  }
+
+  /** Publish a restore pack verified for the existing shared connection, together with its setting. */
+  addVerifiedGraphScopes(tenant: string, original: TenantConnection, scopes: readonly string[], settings: Record<string, string>): boolean {
+    const record = this.get(tenant)
+    if (this.switching.has(tenant) || record?.method !== "tenuvaultApp" || JSON.stringify(record) !== JSON.stringify(original)) return false
+    this.host.store.setMany({
+      ...settings,
+      [PREFIX + normalizeGuid(tenant)]: JSON.stringify({
+        ...record, graphScopes: [...new Set([...(record.graphScopes ?? []), ...scopes])], updatedAt: this.now().toISOString(),
+      }),
+    })
+    return true
   }
 
   saveProfiles(raw: string | null): void {

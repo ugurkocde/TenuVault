@@ -17,7 +17,7 @@ vi.mock("@tanstack/react-query", () => ({
       : { data: undefined, refetch: vi.fn() }
   },
 }))
-vi.mock("~/contexts/TenantContext", () => ({ useTenants: () => [] }))
+vi.mock("~/contexts/TenantContext", () => ({ useTenantById: () => undefined, useTenants: () => [] }))
 vi.mock("../../src/renderer/features/promotion/PromotionPlanner", () => ({ PromotionPlanner: () => null }))
 vi.mock("../../src/renderer/features/promotion/api", () => ({
   getPromotion: vi.fn(), listPromotions: vi.fn(), promotionActions: () => ({}), rollbackActions: () => ({}),

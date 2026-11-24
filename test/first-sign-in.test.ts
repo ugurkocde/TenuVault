@@ -191,6 +191,14 @@ describe("first sign-in recovery", () => {
     }
   })
 
+  it("refuses a different tenant claim when signing in again", async () => {
+    const auth = manager()
+    const account = { tenantId: TENANT, username: "admin@contoso.com", homeAccountId: "home" }
+    msal.interactive.mockResolvedValueOnce({ account, idTokenClaims: { tid: CLIENT } })
+    await expect(auth.reauthenticate(TENANT, CLIENT)).rejects.toThrow("different tenant")
+    expect(auth.accounts()).toEqual([])
+  })
+
   it("does not time out a sign-in that finished in time", async () => {
     vi.useFakeTimers()
     try {
@@ -482,6 +490,17 @@ describe("Start now loopback sign-in", () => {
     }))
     expect(auth.accounts()).toEqual([])
     expect(enabled.mock.calls).toEqual([[true], [true]])
+  })
+
+  it("uses the signed-in tenant on organizations and refuses it during another tenant's switch", async () => {
+    const auth = manager(undefined, async () => true)
+    const result = { account, idToken: token({ tid: TENANT }),
+      accessToken: token({ tid: TENANT, appid: GRAPH_CLI_CLIENT_ID, scp: "DeviceManagementConfiguration.Read.All" }) }
+    msal.interactive.mockReset().mockResolvedValue(result)
+    await expect(auth.stageGraphCliSignIn("organizations", cache)).resolves.toMatchObject({ account: { tenantId: TENANT } })
+    expect(msal.interactive).toHaveBeenCalledWith(expect.objectContaining({ authority: "https://login.microsoftonline.com/organizations" }))
+    await expect(auth.stageGraphCliSignIn(CLIENT, cache)).rejects.toMatchObject({ code: "wrong_tenant" })
+    expect(auth.accounts()).toEqual([])
   })
 
   it("keeps an opaque grant unknown and ignores MSAL's request-derived scope field", async () => {

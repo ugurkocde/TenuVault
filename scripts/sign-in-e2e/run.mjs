@@ -159,21 +159,33 @@ async function startSignIn(page) {
   await page.getByRole("button", { name: "Connect your tenant" }).click({ timeout: 30_000 })
   // Older installers start at Services with Intune selected, or go straight to Connect.
   const ownApp = page.getByRole("button", { name: "Choose Your own app registration", exact: true })
+  const card = page.getByRole("button", { name: "Intune", exact: true })
   const services = page.getByRole("button", { name: "Continue with Intune", exact: true })
+  const waiting = page.getByText(/^(Finish signing in in your browser|Waiting for sign-in)/)
+  const check = page.getByRole("heading", { name: /^(Check backup access|Sign-in results|Choose where backups are stored|Review your chosen permissions)$/ })
   const existingRegistration = page.getByRole("button", { name: "I already have an app registration", exact: true })
-  await ownApp.or(services).or(existingRegistration).waitFor()
-  const wizard = await ownApp.isVisible()
-  if (wizard) {
+  await card.or(ownApp).or(services).or(existingRegistration).first().waitFor()
+  if (await card.isVisible()) {
+    for (const name of ["Defender", "Entra ID"]) {
+      const other = page.getByRole("button", { name, exact: true, pressed: true })
+      if (await other.isVisible()) await other.click()
+    }
+    if (await card.getAttribute("aria-pressed") === "false") await card.click()
+    await services.click()
+    await ownApp.click()
+  } else if (await ownApp.isVisible()) {
     await ownApp.click()
     await page.getByRole("checkbox", { name: "Back up Intune", exact: true }).check()
-  }
-  if (wizard || await services.isVisible()) await services.click()
+    await services.click()
+  } else if (await services.isVisible()) await services.click()
+  const alternateRoutes = page.getByText("Can't sign in as an admin here?", { exact: true })
+  if (await alternateRoutes.isVisible()) await alternateRoutes.click()
   await existingRegistration.click()
   await page.getByText("Sign in to your tenant").waitFor()
   await page.locator("#tenant").fill(TENANT_ID)
   await page.locator("#clientId").fill(CLIENT_ID)
   await page.getByRole("button", { name: "Sign in with Microsoft" }).click()
-  await page.getByText("Waiting for sign-in...").waitFor()
+  await waiting.waitFor()
   // What Copy sign-in link does: the main process puts the address on the clipboard.
   let copied = false
   for (let i = 0; i < 40 && !copied; i++) {
@@ -185,8 +197,7 @@ async function startSignIn(page) {
   const url = await page.evaluate(() => navigator.clipboard.readText())
   const parsed = new URL(url)
   assert(parsed.origin === `https://${LOGIN_HOST}` && parsed.pathname === `/${TENANT_ID}/oauth2/v2.0/authorize`, `unexpected sign-in address ${parsed.origin}${parsed.pathname}`)
-  const resultHeading = wizard ? /^Sign-in results$/ : /^(Choose where backups are stored|Review your chosen permissions)$/
-  return { url: parsed, resultHeading }
+  return { url: parsed, check }
 }
 
 /** Whether something still accepts connections on 127.0.0.1:`port`. */
@@ -221,7 +232,7 @@ async function signInWith(engine, standIn) {
   let browser
   try {
     await app.page.getByText("Welcome to TenuVault").waitFor({ timeout: 30_000 })
-    const { url, resultHeading } = await startSignIn(app.page)
+    const { url, check } = await startSignIn(app.page)
     const port = redirectPort(url)
     assert(await listening(port), "the app's listener is not open while the sign-in waits")
     standIn.setMode("code")
@@ -234,7 +245,7 @@ async function signInWith(engine, standIn) {
     await opened.page.screenshot({ path: join(outDir, `${engine.name}-browser.png`) })
     // The stand-in proves sign-in, not delegated Graph access. In 0.6 a valid sign-in
     // can correctly stop at the advisory permission result before storage.
-    await app.page.getByRole("heading", { name: resultHeading }).waitFor({ timeout: 30_000 })
+    await check.waitFor({ timeout: 30_000 })
     await app.page.getByText(`Signed in as ${ACCOUNT.username}`).waitFor()
     assert(standIn.log.slice(logStart).some((line) => line.includes("licensing: tenant route")), "the license check after this sign-in did not reach the local stand-in")
     await app.page.screenshot({ path: join(outDir, `${engine.name}-app.png`) })
@@ -273,7 +284,7 @@ async function refusals(standIn) {
     ])
     assert(refused.status() === 400, "the listener did not refuse an answer with another state")
     await sleep(1000)
-    assert(await app.page.getByText("Waiting for sign-in...").isVisible(), "the sign-in stopped waiting after an answer with another state")
+    assert(await app.page.getByText(/^(Finish signing in in your browser|Waiting for sign-in)/).isVisible(), "the sign-in stopped waiting after an answer with another state")
     assert(!(await app.page.getByText("Signed in as").isVisible()), "an answer with another state signed in")
     assert(await listening(port), "the listener closed after an answer with another state")
 

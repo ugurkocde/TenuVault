@@ -181,8 +181,8 @@ describe("setup sign-in", () => {
 
   it("reports the end of the browser step while a slow setup sign-in is still completed", async () => {
     let release!: () => void
-    msal.acquireTokenByCode.mockImplementationOnce(() => new Promise((resolve) => { release = () => resolve({ account: { tenantId: "tenant", username: "admin" }, accessToken: "ephemeral" }) }))
-    provision.mockResolvedValueOnce({ tenantId: "tenant", clientId: "client", username: "admin", reused: false, ready: true, missingConsent: [] })
+    msal.acquireTokenByCode.mockImplementationOnce(() => new Promise((resolve) => { release = () => resolve({ account: { tenantId: TENANT, username: "admin" }, idTokenClaims: { tid: TENANT }, accessToken: "ephemeral" }) }))
+    provision.mockResolvedValueOnce({ tenantId: TENANT, clientId: "client", username: "admin", reused: false, ready: true, missingConsent: [] })
     const progress = vi.fn()
     const setup = new AppRegistrationSetup({ fetch: vi.fn() as never, openBrowser, progress })
     const browser = browserOpens()
@@ -198,8 +198,8 @@ describe("setup sign-in", () => {
   })
 
   it("provisions after a live setup sign-in, in its own memory client", async () => {
-    msal.acquireTokenByCode.mockResolvedValueOnce({ account: { tenantId: "tenant", username: "admin" }, accessToken: "ephemeral" })
-    provision.mockResolvedValueOnce({ tenantId: "tenant", clientId: "client", username: "admin", reused: false, ready: true, missingConsent: [] })
+    msal.acquireTokenByCode.mockResolvedValueOnce({ account: { tenantId: TENANT, username: "admin" }, idTokenClaims: { tid: TENANT }, accessToken: "ephemeral" })
+    provision.mockResolvedValueOnce({ tenantId: TENANT, clientId: "client", username: "admin", reused: false, ready: true, missingConsent: [] })
     const setup = new AppRegistrationSetup({ fetch: vi.fn() as never, openBrowser, progress: vi.fn() })
     const browser = browserOpens()
     const running = setup.create()

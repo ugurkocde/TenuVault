@@ -1,10 +1,11 @@
+import { ORGANIZATIONS, resolveOnboardingTenant, signedInTenant } from "./onboarding-tenant"
 import { executionMetadata } from "../api/execution-metadata"
 import { GRAPH_CLI_CLIENT_ID } from "../../shared/tenant-connection"
 import { accessTokenDigest, tokenIdentity } from "./token-identity"
 import { PublicClientApplication } from "@azure/msal-node"
 import { fetchNetworkClient } from "./network-client"
 import { ERROR_PAGE, firstSignInError, page, SIGN_IN_TIMEOUT_MS, SignInCancelledError, SignInTimeoutError } from "./msal"
-import { isGuid, isMicrosoftLoginUrl } from "../../shared/security"
+import { isMicrosoftLoginUrl } from "../../shared/security"
 import { CREATE_BY_HAND } from "../../shared/app-registration"
 import { namedSignInCode, signInErrorRow } from "../../shared/sign-in-errors"
 import { provisionRegistration } from "./registration-provisioning"
@@ -95,17 +96,13 @@ export class AppRegistrationSetup {
    */
   async create(options?: { tenant?: string; choice?: unknown }): Promise<RegistrationResult> {
     if (this.running) throw new Error("Setup is already running.")
-    if (options?.tenant !== undefined && (typeof options.tenant !== "string" || options.tenant.length > 253 || options.tenant !== "" && !isGuid(options.tenant) && !/^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(options.tenant))) throw new Error("Enter a valid tenant ID or domain.")
     // Checked before anyone signs in, so a choice the manifest does not know never reaches Microsoft.
     const choice = options?.choice === undefined ? undefined : checkedOnboardingChoice(options.choice)
     this.running = true
     const controller = new AbortController()
     this.controller = controller
     // No cache plugin or logger. This client and its privileged tokens live only for this run.
-    const app = new PublicClientApplication({
-      auth: { clientId: GRAPH_CLI_CLIENT_ID, authority: `https://login.microsoftonline.com/${encodeURIComponent(options?.tenant || "organizations")}` },
-      system: { networkClient: fetchNetworkClient(this.host.fetch) },
-    })
+    let app: PublicClientApplication | undefined
     // The browser wait of this run. Ending it closes the sign-in's own listener, so a browser tab
     // finished later reaches nothing and no code is redeemed.
     const waiting = new AbortController()
@@ -115,6 +112,13 @@ export class AppRegistrationSetup {
     const deadline = setTimeout(() => waiting.abort(new SignInTimeoutError(`The sign-in in the browser was not completed within 15 minutes. If Microsoft said that you need admin approval, use "Someone else is the admin?". If it said that Microsoft Graph Command Line Tools is blocked, disabled or not assigned to you, or a Conditional Access policy blocks it, the setup script is blocked too: ${CREATE_BY_HAND} in the Entra admin center. Nothing was changed.`)), SETUP_SIGN_IN_TIMEOUT_MS)
     try {
       this.host.progress({ phase: "signingIn" })
+      const target = options?.tenant
+      const authority = target === undefined || target === "" ? ORGANIZATIONS : await resolveOnboardingTenant(target, this.host.fetch, controller.signal)
+      controller.signal.throwIfAborted()
+      app = new PublicClientApplication({
+        auth: { clientId: GRAPH_CLI_CLIENT_ID, authority: `https://login.microsoftonline.com/${authority}` },
+        system: { networkClient: fetchNetworkClient(this.host.fetch) },
+      })
       const result = await loopbackSignIn({
         app,
         scopes: ["https://graph.microsoft.com/Application.ReadWrite.All", "https://graph.microsoft.com/DelegatedPermissionGrant.ReadWrite.All"],
@@ -152,11 +156,9 @@ export class AppRegistrationSetup {
       this.host.report?.({ name: "setup_signin", props: { result: "ok" } })
       let phase: SetupProgress["phase"] = "registration"
       try {
-        const tenantId = result.account.tenantId.toLowerCase()
+        const tenantId = signedInTenant(authority, result)
         const identity = tokenIdentity(result.accessToken)
-        if ((result.tenantId && result.tenantId.toLowerCase() !== tenantId) ||
-          (isGuid(options?.tenant) && options.tenant.toLowerCase() !== tenantId) ||
-          (identity.decoded && (identity.tenantId !== tenantId || identity.clientId !== GRAPH_CLI_CLIENT_ID))) {
+        if (identity.decoded && (identity.tenantId !== tenantId || identity.clientId !== GRAPH_CLI_CLIENT_ID)) {
           throw new Error("Microsoft returned a setup sign-in for a different tenant or app. Nothing was changed.")
         }
         this.host.checkNewTenant?.(tenantId)
@@ -179,7 +181,7 @@ export class AppRegistrationSetup {
       this.cancelWaiting = undefined
       this.controller = undefined
       this.running = false
-      await app.clearCache()
+      await app?.clearCache()
     }
   }
 }

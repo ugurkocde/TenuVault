@@ -1,3 +1,4 @@
+import { signedInTenant } from "./onboarding-tenant"
 import {
   InteractionRequiredAuthError,
   LogLevel,
@@ -298,7 +299,7 @@ export class AuthManager {
     if (!account) throw new Error("Microsoft did not return an account for this sign-in.")
 
     const signedIn = {
-      tenantId: normalizeGuid(account.tenantId),
+      tenantId: signedInTenant(tenant, result),
       clientId,
       username: account.username,
       name: account.name,
@@ -329,7 +330,7 @@ export class AuthManager {
     const account = result.account
     if (!account) throw new ConnectionSwitchError("no_account", "Microsoft did not return an account for this sign-in.")
     return {
-      account: { tenantId: normalizeGuid(account.tenantId), clientId, username: account.username, name: account.name, homeAccountId: account.homeAccountId },
+      account: { tenantId: signedInTenant(tenant, result), clientId, username: account.username, name: account.name, homeAccountId: account.homeAccountId },
       accessToken: result.accessToken, grantedScopes: result.grantedScopes,
     }
   }
@@ -343,11 +344,11 @@ export class AuthManager {
   async stageGraphCliSignIn(tenant: string, cache: ICachePlugin): Promise<StagedSignIn> {
     await this.requireGraphCli(true)
     const result = await this.acquireGraphCli(tenant, this.createApp(GRAPH_CLI_CLIENT_ID, cache, true))
-    const { account, accessToken, grantedScopes, idToken } = result
+    const { account, accessToken, grantedScopes, idToken, actualTenant } = result
     const graphScopes = verifyGraphCliGrant(accessToken, grantedScopes)
     await this.requireGraphCli(true)
     return {
-      account: { tenantId: normalizeGuid(account.tenantId), clientId: GRAPH_CLI_CLIENT_ID, username: account.username, name: account.name, homeAccountId: account.homeAccountId },
+      account: { tenantId: actualTenant, clientId: GRAPH_CLI_CLIENT_ID, username: account.username, name: account.name, homeAccountId: account.homeAccountId },
       accessToken, grantedScopes, graphScopes, idToken,
     }
   }
@@ -360,37 +361,36 @@ export class AuthManager {
       const refusal = error as SilentRefusal | null
       throw graphCliSignInFailure(error instanceof Error ? error.message : "", silentRefusalCode(refusal ?? undefined))
     })
-    const account = result.account
-    if (!account || normalizeGuid(account.tenantId) !== normalizeGuid(tenant)) {
-      throw new ConnectionSwitchError("wrong_tenant", "Sign in with an account from this tenant.")
-    }
+    const actualTenant = signedInTenant(tenant, result)
+    const account = result.account!
     const identity = tokenIdentity(result.accessToken)
-    if (identity.decoded && (identity.tenantId !== normalizeGuid(tenant) || identity.clientId !== GRAPH_CLI_CLIENT_ID)) {
+    if (identity.decoded && (identity.tenantId !== actualTenant || identity.clientId !== GRAPH_CLI_CLIENT_ID)) {
       throw new ConnectionSwitchError("wrong_client", "Microsoft returned a token for a different tenant or app.")
     }
-    return { ...result, account }
+    return { ...result, account, actualTenant }
   }
 
   /** Keep the account and cache staged until the selected packs are confirmed for this tenant. */
-  async stageTenuVaultSignIn(tenant: string, cache: ICachePlugin, packs: readonly PermissionPack[]): Promise<Pick<StagedSignIn, "account" | "accessToken" | "graphScopes" | "grantedScopes" | "idToken">> {
+  async stageTenuVaultSignIn(tenant: string, cache: ICachePlugin, packs: readonly PermissionPack[], onboarding = false): Promise<Pick<StagedSignIn, "account" | "accessToken" | "graphScopes" | "grantedScopes" | "idToken" | "missingOnboardingScopes">> {
     const app = this.createApp(TENUVAULT_CLIENT_ID, cache, true)
     const graphScopes = resourcePackScopes(packs, "graph")
     try {
       const result = await this.acquireInteractive(TENUVAULT_CLIENT_ID, tenant, resourceScopes("graph", graphScopes), "select_account", undefined, true, undefined, app)
-      const account = result.account
-      if (!account || normalizeGuid(account.tenantId) !== normalizeGuid(tenant)) throw new ConnectionSwitchError("wrong_tenant", "Sign in with an account from this tenant.")
+      const actualTenant = signedInTenant(tenant, result)
+      const account = result.account!
       const identity = tokenIdentity(result.accessToken)
-      if (identity.decoded && (identity.tenantId !== normalizeGuid(tenant) || identity.clientId !== TENUVAULT_CLIENT_ID)) {
+      if (identity.decoded && (identity.tenantId !== actualTenant || identity.clientId !== TENUVAULT_CLIENT_ID)) {
         throw new ConnectionSwitchError("switch_failed", "Microsoft returned an access token that could not be verified for this tenant and app. Sign in again.")
       }
-      if (missingPackScopes(graphScopes, sharedTokenScopes(result.accessToken, result.grantedScopes)).length) {
+      const missingOnboardingScopes = missingPackScopes(graphScopes, sharedTokenScopes(result.accessToken, result.grantedScopes))
+      if (!onboarding && missingOnboardingScopes.length) {
         throw new ConnectionSwitchError("AADSTS65001", "Some selected Microsoft Graph permissions are still missing. Review the packs and check again. (AADSTS65001)")
       }
       for (const pack of packs.filter(pack => pack.resource !== "graph")) {
         const scopes = resourceScopes(pack.resource, pack.scopes)
         let token: AuthenticationResult | null
         try {
-          token = await app.acquireTokenSilent({ account, scopes, authority: authority(tenant), forceRefresh: true })
+          token = await app.acquireTokenSilent({ account, scopes, authority: authority(actualTenant), forceRefresh: true })
         } catch (error) {
           const issue = consentIssue(error instanceof Error ? error.message : "")
           throw new ConnectionSwitchError((issue?.code as PackConsentCode | undefined) ?? "AADSTS65001",
@@ -398,14 +398,15 @@ export class AuthManager {
         }
         const identity = token && tokenIdentity(token.accessToken)
         if (!token?.accessToken || !matchesSelectedAccount(account, token) ||
-          (identity?.decoded && (identity.tenantId !== normalizeGuid(tenant) || identity.clientId !== TENUVAULT_CLIENT_ID)) ||
+          (identity?.decoded && (identity.tenantId !== actualTenant || identity.clientId !== TENUVAULT_CLIENT_ID)) ||
           missingPackScopes(pack.scopes, sharedTokenScopes(token.accessToken, this.tokenGrants.get(app)?.forResult(token).grantedScopes)).length) {
           throw new ConnectionSwitchError("AADSTS65001", `${pack.label} approval is still needed. Review the pack and check again.`)
         }
       }
       return {
-        account: { tenantId: tenant, clientId: TENUVAULT_CLIENT_ID, username: account.username, name: account.name, homeAccountId: account.homeAccountId },
+        account: { tenantId: actualTenant, clientId: TENUVAULT_CLIENT_ID, username: account.username, name: account.name, homeAccountId: account.homeAccountId },
         accessToken: result.accessToken, graphScopes, grantedScopes: result.grantedScopes, idToken: result.idToken,
+        ...(missingOnboardingScopes.length && { missingOnboardingScopes }),
       }
     } catch (error) {
       throw sharedSignInFailure(error, false)
@@ -582,12 +583,10 @@ export class AuthManager {
     })
     const account = result.account
     if (!account) throw new Error("Microsoft did not return an account for this sign-in.")
-    if (normalizeGuid(account.tenantId) !== normalizeGuid(tenantId)) {
-      throw new Error("You signed in to a different tenant. Sign in with an account from this tenant.")
-    }
+    const actualTenant = signedInTenant(tenantId, result)
     this.host.authorizeInteractive?.(tenantId)
     const signedIn = {
-      tenantId: normalizeGuid(tenantId),
+      tenantId: actualTenant,
       clientId,
       username: account.username,
       name: account.name,
@@ -615,7 +614,7 @@ export class AuthManager {
     const account = result.account!
     this.host.authorizeInteractive?.(tenant)
     this.host.authorizeConnection?.(tenant, clientId, RESOURCE_SCOPES.graph)
-    this.host.accountStore.set({ tenantId: normalizeGuid(tenant), clientId, username: account.username, name: account.name, homeAccountId: account.homeAccountId })
+    this.host.accountStore.set({ tenantId: signedInTenant(tenant, result), clientId, username: account.username, name: account.name, homeAccountId: account.homeAccountId })
   }
 
   /** One interactive prompt per tenant, scope, prompt and account hint at a time; parallel callers share it. */

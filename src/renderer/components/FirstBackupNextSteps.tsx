@@ -16,7 +16,7 @@ export function suggestedSchedule(tenantId: string, plan: Plan | null): Schedule
 
 function NextStep({ icon, title, done, children }: { icon: React.ReactNode; title: string; done: boolean; children: React.ReactNode }) {
   return (
-    <li className="flex gap-4 rounded-3xl bg-gray-50 p-5">
+    <li className="flex gap-4 rounded-2xl bg-gray-50 p-3">
       <span className={done ? "flex size-9 flex-shrink-0 items-center justify-center rounded-full bg-green-100 text-green-700" : "flex size-9 flex-shrink-0 items-center justify-center rounded-full bg-card"} aria-hidden="true">
         {done ? <CheckCircle2 className="h-4 w-4" /> : icon}
       </span>
@@ -89,19 +89,17 @@ export function FirstBackupNextSteps({ tenantId, plan, local }: { tenantId: stri
   return (
     <section aria-labelledby="next-steps-heading" className="space-y-3">
       <h3 id="next-steps-heading" className="text-base font-medium text-gray-900">Next steps</h3>
-      <ul className="space-y-3">
+      <ul className="grid gap-3 @lg:grid-cols-2">
         <NextStep icon={<CalendarClock className="h-4 w-4" />} title="Turn on automatic backups" done={schedule !== null}>
           {schedule ? (
             <p role="status">Automatic backups are on: {schedule}. Change the day and time in Backup &amp; Restore, Schedule.</p>
           ) : (
             <>
               <p>
-                Set up a scheduled backup to keep restore points for future losses. Only items captured in a backup can be restored.
-                TenuVault backs up while it is open or in the tray. A backup missed while the computer was off runs the next
-                time TenuVault starts.
+                TenuVault runs scheduled backups while open or in the tray.
               </p>
               {/* Until the plan is known the suggestion could be weekly for a tenant that gets daily backups. */}
-              <Button type="button" size="sm" onClick={() => void turnOn()} disabled={scheduling || plan === null}>
+              <Button type="button" variant="outline" size="sm" onClick={() => void turnOn()} disabled={scheduling || plan === null}>
                 {scheduling && <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />}
                 {label}
               </Button>
@@ -116,8 +114,7 @@ export function FirstBackupNextSteps({ tenantId, plan, local }: { tenantId: stri
             ) : (
               <>
                 <p>
-                  Backups on this device are encrypted with a key protected by your Windows or macOS account. Without the recovery key, they
-                  cannot be read after a reinstall or on another computer.
+                  Keep this key to read your backups after a reinstall or on another device.
                 </p>
                 <Button type="button" size="sm" variant="outline" onClick={() => void saveKey()} disabled={savingKey}>
                   {savingKey && <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />}

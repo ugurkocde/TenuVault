@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto"
-import { CONSENT_ROLES_TEXT } from "../../shared/app-registration"
+import { CONSENT_ROLES_TEXT, DELEGATED_GRANT_DATES } from "../../shared/app-registration"
 import { DEFAULT_SETUP_CHOICE, GRAPH_APP_ID, knownPermissions, requestedPermissions, showsApproval, type ApiPermissions, type PermissionChoice } from "../../shared/services/manifest"
 import type { RegistrationResult, SetupProgress } from "../../shared/ipc"
 
@@ -219,7 +219,7 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
       if (existing) { missingConsent.push(...lacking.map(scope => resource.appId === GRAPH_APP_ID ? scope : `${scope} (${resource.api})`)); continue }
       resource.permissions.forEach(scope => scopes.add(scope))
       if (grant && lacking.length) await graph("PATCH", `/oauth2PermissionGrants/${encodeURIComponent(grant.id)}`, { scope: [...scopes].join(" ") }, true)
-      if (!grant) await graph("POST", "/oauth2PermissionGrants", { clientId: principal.id, consentType: "AllPrincipals", resourceId: resource.principal!.id, scope: [...scopes].join(" ") }, true)
+      if (!grant) await graph("POST", "/oauth2PermissionGrants", { clientId: principal.id, consentType: "AllPrincipals", resourceId: resource.principal!.id, scope: [...scopes].join(" "), ...DELEGATED_GRANT_DATES }, true)
     }
     checkCancelled()
   } catch (error) {

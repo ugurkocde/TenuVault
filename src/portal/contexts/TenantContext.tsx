@@ -425,6 +425,11 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
 }
 
 // Custom hooks for using the context
+/** Embedded change-set reviews can also be rendered outside the tenant workspace. */
+export function useTenantById(tenantId: string) {
+  return useContext(TenantContext)?.tenants.find(tenant => tenant.credentials?.tenantId.toLowerCase() === tenantId.toLowerCase())
+}
+
 export function useTenants() {
   const context = useContext(TenantContext)
   if (!context) {

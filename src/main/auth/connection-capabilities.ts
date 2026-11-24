@@ -6,7 +6,7 @@ import { admittedDirectoryPermissions } from "../../shared/intune/restore-matrix
 import { tenantWriteTargets } from "../../shared/tenant-writes"
 import { accessTokenDigest, sharedTokenScopes, tokenIdentity } from "./token-identity"
 import { APPLICATION_METADATA_RESTORE_PACK, GRANT_REMOVAL_SCOPE, isPackWriteScope, missingPackScopes, type PermissionPack } from "../../shared/services/permission-packs"
-import { GRAPH_CLI_CLIENT_ID, GRAPH_CLI_DISABLED, GRAPH_CLI_NEXT_STEP, GRAPH_CLI_READ_ONLY, sharedSignInMethod as sharedMethod } from "../../shared/tenant-connection"
+import { CONNECTION_WRITE_REFUSED, GRAPH_CLI_CLIENT_ID, GRAPH_CLI_DISABLED, GRAPH_CLI_NEXT_STEP, GRAPH_CLI_READ_ONLY, sharedSignInMethod as sharedMethod } from "../../shared/tenant-connection"
 import type { TenantConnection } from "../../shared/tenant-connection"
 import { executionMetadata } from "../api/execution-metadata"
 import type { RequestAuthorization } from "../api/fetch-bridge"
@@ -119,7 +119,7 @@ export class ConnectionCapabilities {
     if (!admittedClientId || !currentClientId || normalizeGuid(admittedClientId) !== normalizeGuid(currentClientId)) {
       throw new Error(CONNECTION_CHANGED)
     }
-    await this.requireConnectionEnabled(tenantId, admittedClientId)
+    await this.requireConnectionEnabled(tenantId, admittedClientId, RESOURCE_SCOPES.graph, true)
     this.requireWrite([tenantId])
     if (sharedMethod(admittedClientId) === "tenuvaultApp" && !this.restorePacks(tenantId).some(pack => pack.id === "intune-restore")) {
       throw new Error(PACK_REQUIRED)
@@ -151,7 +151,7 @@ export class ConnectionCapabilities {
     if (path === "/api/restore-backup" && "targetTenants" in body && targets.length &&
       "tenantId" in body && typeof body.tenantId === "string") targets.push(body.tenantId)
     const blocker = this.writeBlocker(targets)
-    return blocker ? Response.json({ error: blocker }, { status: 403 }) : null
+    return blocker ? Response.json({ error: blocker, ...(path === "/api/restore-backup" && { code: CONNECTION_WRITE_REFUSED }) }, { status: 403 }) : null
   }
 
   bindConnections(tenantIds: readonly string[]): ReadonlyMap<string, string | undefined> {
@@ -305,7 +305,7 @@ export class ConnectionCapabilities {
         return !pack || missingPackScopes([...pack.scopes, ...scopes], permissions).length > 0
       })) throw new Error(PACK_REQUIRED)
     }
-    if (shared && tenantId && clientId) await this.requireConnectionEnabled(tenantId, clientId, RESOURCE_SCOPES.graph, shared === "graphCli")
+    if (shared && tenantId && clientId) await this.requireConnectionEnabled(tenantId, clientId, RESOURCE_SCOPES.graph, true)
     // The bridge calls the dispatch check after its last await, in the same turn as fetch.
     if (!checkAtDispatch) check()
     const beforeDispatch = checkAtDispatch ? check : undefined

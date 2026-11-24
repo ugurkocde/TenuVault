@@ -59,16 +59,16 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
-describe("welcome card", () => {
+describe("first backup question", () => {
   it("asks with the exact copy and two equal buttons, nothing preselected", async () => {
     const container = await render(createElement(SetupDiagnosticsCard))
     const text = container.textContent ?? ""
-    expect(text).toContain("Help us make setup work in your environment")
-    expect(text).toContain("TenuVault can tell us which setup steps worked and which Microsoft error codes stopped them, for 30 days after you agree. Never sent: tenant names or IDs, account names, policies or backups. A random ID links the steps. It is deleted from this computer after 30 days, and we delete the events after 180 days.")
+    expect(text).toContain("Share anonymous setup results to help us fix setup problems?")
+    expect(text).toContain("After you agree, TenuVault can share setup events and Microsoft error codes for 30 days. Names, tenant IDs, policies and backups stay private.")
     expect(text).toContain("Change it anytime in Settings")
     expect(text).not.toMatch(/[\u2013\u2014]/)
-    const share = button(container, "Share setup diagnostics")!
-    const decline = button(container, "Don't share")!
+    const share = button(container, "Share")!
+    const decline = button(container, "No thanks")!
     expect(share.className).toBe(decline.className)
     expect(container.querySelector("input")).toBeNull()
     expect(state.consent).not.toHaveBeenCalled()
@@ -82,15 +82,15 @@ describe("welcome card", () => {
   })
 
   it.each([
-    ["Share setup diagnostics", "consent", "Setup diagnostics are on"],
-    ["Don't share", "decline", "Setup diagnostics stay off"],
+    ["Share", "consent", "Setup diagnostics are on"],
+    ["No thanks", "decline", "Setup diagnostics stay off"],
   ] as const)("%s answers and leaves a short confirmation", async (label, call, confirmation) => {
     const container = await render(createElement(SetupDiagnosticsCard))
     await click(button(container, label))
     if (call === "consent") expect(state.consent).toHaveBeenCalledWith("welcome")
     else expect(state.decline).toHaveBeenCalled()
     expect(container.textContent).toContain(confirmation)
-    expect(button(container, "Share setup diagnostics")).toBeUndefined()
+    expect(button(container, "Share")).toBeUndefined()
   })
 
   it.each([

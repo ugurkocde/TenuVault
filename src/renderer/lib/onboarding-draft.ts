@@ -52,6 +52,12 @@ function recentAccount(value: Record<string, unknown>, now = Date.now()): Signed
   return account && signedInAt <= now && now - signedInAt < PENDING_SIGN_IN_MAX_AGE_MS ? account : null
 }
 
+const canonical = (choice: PermissionChoice) => JSON.stringify(Object.keys(choice).sort().map(id => {
+  const picked = choice[id as keyof PermissionChoice]!
+  return [id, picked.access, [...(picked.areas ?? [])].sort()]
+}))
+const sameChoice = (a: PermissionChoice, b: PermissionChoice) => canonical(a) === canonical(b)
+
 /** The saved draft, or null when there is none or it cannot be read. An expired sign-in is left out. */
 export function loadOnboardingDraft(): OnboardingDraft | null {
   try {
@@ -60,16 +66,26 @@ export function loadOnboardingDraft(): OnboardingDraft | null {
     const value = JSON.parse(raw) as Record<string, unknown>
     let step: OnboardingDraft["step"] = value.step === -2 || value.step === -1 || value.step === 1 || value.step === 2 || value.step === 4 ? value.step : 0
     let services = DEFAULT_ONBOARDING_CHOICE
+    let reconfirm = value.reconfirm === true
     if (Object.hasOwn(value, "services")) {
       try { services = checkedOnboardingChoice(value.services) } catch {
         // A broken choice must never silently approve the default write permissions.
         services = {}
-        step = -1
+        reconfirm = true
       }
     }
+    // Older drafts can contain restore access and onboarding opt-ins. Keep only the service choices.
+    const backupOnly: PermissionChoice = {}
+    for (const id of ["defender", "entra", "intune"] as const) {
+      if (services[id] || (id === "entra" && services.conditionalAccess)) backupOnly[id] = { access: "backup" }
+    }
+    if (backupOnly.entra) backupOnly.conditionalAccess = { access: "backup" }
+    // When that changes what the admin picked (restore, opt-in areas or Conditional Access), show the
+    // service cards again so a resumed setup never creates a registration they did not see.
+    if (!reconfirm && Object.hasOwn(value, "services") && sameChoice(services, backupOnly) === false) reconfirm = true
+    services = backupOnly
     // A choice that still has to be confirmed stays on the service step, even after a valid pick was saved.
-    const reconfirm = value.reconfirm === true
-    if (reconfirm) step = -1
+    if (reconfirm || !Object.keys(services).length) step = -1
     const account = recentAccount(value)
     const draft: OnboardingDraft = {
       step: (step === 2 || step === 4) && !account ? 1 : step,
@@ -102,7 +118,7 @@ export function pendingSignInTenant(now = Date.now()): string | null {
 
 /** Whether a draft holds nothing worth resuming: the Connect step with no input. */
 export function isEmptyDraft(draft: OnboardingDraft): boolean {
-  return draft.step === -1 && !draft.services && !draft.tenant && !draft.clientId && !draft.displayName && !draft.account
+  return draft.step === -1 && !draft.reconfirm && (!draft.services || !Object.keys(draft.services).length) && !draft.tenant && !draft.clientId && !draft.displayName && !draft.account
 }
 
 let pending: Promise<void> = Promise.resolve()

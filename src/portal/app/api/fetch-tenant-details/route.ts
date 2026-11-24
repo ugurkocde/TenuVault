@@ -147,7 +147,7 @@ export async function POST(request: NextRequest) {
       compliantDevices,
       userCount,
     ] = await Promise.all([
-      callGraphApi("/organization"),
+      callGraphApi("/organization", true),
       countEndpoint("/deviceManagement/deviceConfigurations", "device configurations"),
       countEndpoint("/deviceManagement/deviceCompliancePolicies", "compliance policies"),
       // Settings Catalog policies need the beta API for full results.
@@ -181,8 +181,8 @@ export async function POST(request: NextRequest) {
     // Prepare tenant details
     const tenantDetails = {
       organization: {
-        id: organization.id || tenantId,
-        displayName: organization.displayName || "Unknown Organization",
+        id: organization.id,
+        displayName: organization.displayName,
         verifiedDomains: organization.verifiedDomains || [],
         primaryDomain: organization.verifiedDomains?.find((d: any) => d.isDefault)?.name || 
                        organization.verifiedDomains?.[0]?.name || 

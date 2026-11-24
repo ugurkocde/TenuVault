@@ -5,7 +5,7 @@ import { openCheckout } from "../lib/purchase"
 import { TenantTrialNotices, TrialActions, TrialUsage, TrialChanges, trialEndVisible } from "./TenantTrial"
 import { CommunityChoiceBanner } from "./CommunityTenantPicker"
 import { isAppBackupPath, desktopRouteBoundaryKey } from "../lib/app-backup-route"
-import { useEffect, useLayoutEffect, useRef, useState, type ComponentType, type ReactNode, type RefObject } from "react"
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ComponentType, type ReactNode, type RefObject } from "react"
 import { Link, Outlet, useLocation } from "react-router-dom"
 import {
   Activity,
@@ -522,10 +522,12 @@ export function DesktopLayout() {
     capturingFeedback.current = false
     setFeedback({ open: true, snapshot })
   }
-  // Until a tenant is connected the guided setup is the only job, so it gets the window to itself.
-  // The page keeps its place in the tree either way, so connecting the first tenant during the
-  // setup only brings in the sidebar and never remounts the setup.
-  const focus = tenants.length === 0 && pathname === "/portal/onboarding"
+  // Keep the first-run layout through backup completion so enrolling the tenant does not move the wizard.
+  const onboarding = pathname === "/portal/onboarding"
+  const firstRun = useRef(false)
+  if (!onboarding) firstRun.current = false
+  else if (!tenants.length) firstRun.current = true
+  const focus = onboarding && firstRun.current
   const hoverPill = useHoverPill(`${pathname}${search}`)
   // Measured on the mounted nav, so a sidebar that appears after the first-run setup is watched too.
   const navOverflowing = useOverflowing(hoverPill.nav)
@@ -626,11 +628,14 @@ export function DesktopLayout() {
           <span aria-hidden="true" className="tv-pill" />
           {groups.map((group) => group.label ? (
             <NavFoldGroup key={group.label} label={group.label} open={!folded.has(group.label)} holdsActive={holdsActive(group)} onToggle={() => toggleGroup(group.label!)}>
-              {group.items.map((item) => <div key={item.name}>{renderItem(item)}{item.href === "/portal/backup" && <ServicesNavigation linkClass={linkClass} />}</div>)}
+              {group.items.map((item) => renderItem(item))}
               {group.label === "Baselines" && <><CisBenchmarksNavigation linkClass={(active) => linkClass(active)} /><FrameworkNavigation /></>}
             </NavFoldGroup>
           ) : (
-            <div key="start" className="space-y-px">{group.items.map((item) => renderItem(item))}</div>
+            <Fragment key="start">
+              <div className="space-y-px">{group.items.map((item) => renderItem(item))}</div>
+              <ServicesNavigation linkClass={linkClass} />
+            </Fragment>
           ))}
         </nav>
 

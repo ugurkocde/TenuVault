@@ -115,7 +115,7 @@ export async function captureDocs({ main, send, evaluate, go, click, assertText,
   await screenshot('restore-review')
   await capture('drift-results', '#/portal/drift', 'WIN - Defender Antivirus - Baseline')
   await capture('audit-log', '#/portal/audit', 'Audit Log')
-  await go('#/portal/onboarding', 'What do you want to back up?')
+  await go('#/portal/onboarding', 'Which services do you want to connect?')
   await click('Continue with Intune')
   await capture('setup-connect', '#/portal/onboarding', 'Connect your tenant')
   await capture('license', '#/license', 'License')

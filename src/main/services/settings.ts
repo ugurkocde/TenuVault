@@ -93,6 +93,11 @@ export class ModuleSettings {
     return this.save(tenantId, module.id, (entry) => ({ ...entry, access }))
   }
 
+  /** Prepared together with the verified scopes so a failed approval cannot change backup access. */
+  restoreAccessEntries(tenantId: string, id: ModuleId): Record<string, string> {
+    return this.changedEntries(tenantId, id, entry => ({ ...entry, access: "restore" }))
+  }
+
   /** Turns an opt-in area of a service on or off for the tenant. */
   setArea(tenantId: string, id: unknown, area: unknown, enabled: unknown): Record<ModuleId, ModuleSetting> {
     const module = typeof id === "string" ? MODULE_BY_ID.get(id as ModuleId) : undefined
@@ -102,13 +107,17 @@ export class ModuleSettings {
   }
 
   private save(tenantId: string, id: ModuleId, change: (entry: Stored) => Stored): Record<ModuleId, ModuleSetting> {
-    const all = this.read()
-    const tenant = tenantEntry(all, tenantId)
-    // Everything else stored for the tenant and the service stays, including what a later version added.
-    all[tenant.key] = { ...tenant.value, [id]: { connection: "default", ...change(record(tenant.value[id]) ?? {}) } }
-    this.store.set(KEY, JSON.stringify(all))
+    this.store.set(KEY, this.changedEntries(tenantId, id, change)[KEY]!)
     this.onChange()
     return this.get(tenantId)
+  }
+
+  private changedEntries(tenantId: string, id: ModuleId, change: (entry: Stored) => Stored): Record<string, string> {
+    const all = this.read()
+    const tenant = tenantEntry(all, tenantId)
+    // Keep the settings for other services and fields that this version does not use.
+    all[tenant.key] = { ...tenant.value, [id]: { connection: "default", ...change(record(tenant.value[id]) ?? {}) } }
+    return { [KEY]: JSON.stringify(all) }
   }
 
   private read(): Stored {

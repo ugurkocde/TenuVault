@@ -1,3 +1,4 @@
+import { settingsHref } from "../lib/settings-section"
 import { organizationLicenseRefusal, trialKeyRefusalText } from "../../shared/trial-notices"
 import { TenantTrialCard, TenantTrialOptions, TrialActions, TrialKeyRefusalActions, trialEndVisible } from "../components/TenantTrial"
 import { CommunityTenantChoiceButton } from "../components/CommunityTenantPicker"
@@ -305,7 +306,7 @@ function TenantRow({
             Let admins who sign in with Start now use this license
           </label>}
           {tenant.shareNeedsSignIn && (
-            <p className="mt-1 text-xs text-orange-700">Sign in to this tenant again to share the license with it.</p>
+            <p className="mt-1 text-xs text-orange-700">Sign in to this tenant again to share the license with it. To share this key for the first time, use your own app registration under <Link to={settingsHref("signin")} className="underline">Sign-in and access</Link>.</p>
           )}
         </div>
       )}
