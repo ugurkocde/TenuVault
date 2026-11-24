@@ -6,6 +6,7 @@ import setupScript from "../../../resources/New-TenuVaultCloudBackup.ps1?raw"
 import runbookScript from "../../../resources/runbooks/Invoke-TenuVaultBackup.ps1?raw"
 import {
   CLOUD_BACKUP_GUIDE_URL,
+  PLAIN_CLOUD_RUNBOOK,
   cloudRunbookNeedsUpgrade,
   cloudSchedulePortalUrl,
   cloudSetupCommand,
@@ -237,12 +238,19 @@ export function CloudBackupSettings({ tenant, community, cloud, scopeVersion = 0
               </p>
             )}
             {cloud.status && cloudRunbookNeedsUpgrade(cloud.status.runbookVersion) && (
-              <p className="rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900">
-                The cloud runner still uses runbook {cloud.status.runbookVersion}, which encrypts backups with the
-                recovery key from Key Vault. Run the setup script again with the same values to update it to plain
-                backups. Delete the old Key Vault only once no TenuVault setup still has a TenuVaultKeyVault variable. Backups made before stay
-                readable here with the recovery key.
-              </p>
+              cloudRunbookNeedsUpgrade(cloud.status.runbookVersion, PLAIN_CLOUD_RUNBOOK) ? (
+                <p className="rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                  The cloud runner still uses runbook {cloud.status.runbookVersion}, which encrypts backups with the
+                  recovery key from Key Vault. Run the setup script again with the same values to update it to plain
+                  backups. Delete the old Key Vault only once no TenuVault setup still has a TenuVaultKeyVault variable. Backups made before stay
+                  readable here with the recovery key.
+                </p>
+              ) : (
+                <p className="rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                  The cloud runner uses runbook {cloud.status.runbookVersion}. Run the setup script again with the same
+                  values to update the runbook and get accurate change reports when a backup cannot read every policy type.
+                </p>
+              )
             )}
             {cloud.status && !cloud.status.auditCapability && <p className="text-sm text-gray-700">Run the cloud setup again to enable audit recording for future runs.</p>}
             {cloud.status?.auditStatusUnavailable && <p role="status" className="text-sm text-gray-700">Audit delivery status is unavailable for this run. Check the Automation job output.</p>}

@@ -64,7 +64,7 @@ param(
     [switch]$ReplayOlderAudit
 )
 
-$script:RunbookVersion = "1.5.0"
+$script:RunbookVersion = "1.6.0"
 $script:GraphBeta = "https://graph.microsoft.com/beta"
 $script:Container = "intune-backups"
 # One status blob per tenant, so status blobs never collide when tenants share tooling.
