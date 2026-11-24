@@ -1887,8 +1887,8 @@ function Get-TvEmptyLike {
 # Every setting of an added or deleted item, as changes from or to "not set".
 function Get-TvDocumentedRows {
     param([AllowNull()][object]$Content, [ValidateSet("added", "deleted")][string]$Change)
-    $redacted = Get-TvReportSafe $Content
-    $empty = Get-TvEmptyLike $redacted
+    $redacted = Get-TvReportSafe (Get-TvRoleAssignmentSnapshot $Content)
+    $empty = Get-TvRoleAssignmentSnapshot (Get-TvEmptyLike $redacted)
     $rows = [System.Collections.Generic.List[object]]::new()
     if ($Change -eq "added") { Compare-TvObjects $empty $redacted "" $null $rows } else { Compare-TvObjects $redacted $empty "" $null $rows }
     return , $rows

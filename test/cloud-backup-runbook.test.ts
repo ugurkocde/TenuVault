@@ -1425,3 +1425,13 @@ describe("azuredeploy.json", () => {
     expect(JSON.stringify((role.properties as { permissions: unknown }).permissions)).not.toContain("delete")
   })
 })
+
+it.runIf(Boolean(pwsh))("documents added and deleted role assignments with the same rows for legacy and current snapshots", () => {
+  const script = fileURLToPath(new URL("./fixtures/cloud-backup/documented-role-rows.ps1", import.meta.url))
+  const results = JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8" }))
+  expect(results.map((result: { change: string }) => result.change)).toEqual(["added", "deleted"])
+  for (const { legacy, current } of results) {
+    expect(legacy.length).toBeGreaterThan(0)
+    expect(legacy).toEqual(current)
+  }
+})
