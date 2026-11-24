@@ -1,5 +1,6 @@
 const { readdirSync, readFileSync } = require("node:fs")
 const { join } = require("node:path")
+const { runInNewContext } = require("node:vm")
 
 const labMarkers = /__TV_LAB_|TENUVAULT_LAB_|TV06-TEST-[a-z0-9-]+-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|com\.tenuvault\.desktop\.lab|TenuVault Lab|Lab build/
 const sourceFile = /\.(?:[cm]?js|json|html|map|css)$/
@@ -17,7 +18,8 @@ function checkReleaseBundle(root) {
     if (!main.includes('const LICENSE_API_BASE = "https://www.tenuvault.com";')) {
       throw new Error("The release bundle must contain the production license origin.")
     }
-    const keys = JSON.parse(main.match(/^const LICENSE_PUBLIC_KEYS = (\[.*\]);$/m)?.[1] ?? "null")
+    const serialized = main.match(/^const LICENSE_PUBLIC_KEYS = JSON\.parse\(("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')\);$/m)?.[1]
+    const keys = serialized ? JSON.parse(runInNewContext(serialized)) : null
     if (!Array.isArray(keys) || keys.length !== ROTATION_LICENSE_PUBLIC_KEYS.length + 1 ||
         ROTATION_LICENSE_PUBLIC_KEYS.some((key, index) => key !== keys[index + 1])) {
       throw new Error("The release bundle must contain the expected license verification keys.")
