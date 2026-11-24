@@ -3,12 +3,14 @@ import { createRoot, type Root } from "react-dom/client"
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { SignedInAccount } from "../../src/shared/ipc"
+import { graphCliCoverage } from "../../src/shared/services/graph-cli-coverage"
+import { graphPermissions, type PermissionChoice } from "../../src/shared/services/manifest"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const state = vi.hoisted(() => ({
   createRegistration: vi.fn(),
-  checkPermissions: vi.fn(async (): Promise<{ missing: string[]; coverage?: import("../../src/shared/tenant-connection").BackupScopeCoverage[] }> => ({ missing: [] })),
+  checkPermissions: vi.fn<(tenantId: string, clientId: string, choice: PermissionChoice) => Promise<{ missing: string[]; coverage?: import("../../src/shared/tenant-connection").BackupScopeCoverage[] }>>(),
   enrollOwnApp: vi.fn(async () => ({ result: true })),
   graphCliAvailable: vi.fn(async () => false),
   tenuvaultAppAvailable: vi.fn(async () => false),
@@ -86,7 +88,12 @@ vi.mock("../../src/renderer/components/StorageChooser", () => ({
   },
 }))
 
-const BACKUP_INTUNE_PERMISSIONS = { intune: { access: "backup" } }
+const BACKUP_INTUNE_PERMISSIONS = { intune: { access: "backup" } } as const
+const ALL_SERVICES = { ...BACKUP_INTUNE_PERMISSIONS, entra: { access: "backup" }, conditionalAccess: { access: "backup" }, defender: { access: "backup" } } as const
+const fullCoverage = async (_tenantId: string, _clientId: string, choice: PermissionChoice) => ({
+  missing: [], coverage: graphCliCoverage(new Set(graphPermissions(choice, "delegated")), choice),
+})
+const noCoverage = (choice: PermissionChoice) => ({ missing: ["Policy.Read.All"], coverage: graphCliCoverage(new Set(), choice) })
 import { Home, LicenseGate } from "../../src/renderer/App"
 import OnboardingPage from "../../src/renderer/pages/OnboardingPage"
 import { setupCommand, TenantSignInForm } from "../../src/renderer/components/TenantSignInForm"
@@ -108,7 +115,7 @@ beforeEach(() => {
   state.accounts.mockReset()
   state.accounts.mockResolvedValue([])
   state.checkPermissions.mockReset()
-  state.checkPermissions.mockResolvedValue({ missing: [] })
+  state.checkPermissions.mockImplementation(fullCoverage)
   state.signIn.mockReset()
   state.createRegistration.mockReset()
   state.clipboardIds.mockReset()
@@ -169,8 +176,11 @@ async function continueDefaultServices(container: HTMLElement) {
   if (button(container, "Continue with Intune")) await act(async () => button(container, "Continue with Intune")!.click())
 }
 
+const checkAction = (container: HTMLElement, label: string) =>
+  [...container.querySelectorAll<HTMLButtonElement>('[aria-label="Check actions"] button')].find(item => item.textContent?.startsWith(label))
+
 async function continueToStorage(container: HTMLElement) {
-  await act(async () => button(container, "Continue to storage")!.click())
+  await act(async () => checkAction(container, "Continue")!.click())
 }
 
 function type(element: HTMLInputElement | HTMLTextAreaElement, value: string) {
@@ -527,7 +537,7 @@ describe("in-app tenant setup", () => {
     expect(state.createRegistration).toHaveBeenCalledWith({ choice: BACKUP_INTUNE_PERMISSIONS })
     expect(state.signIn).toHaveBeenCalledTimes(1)
     expect(state.signIn).toHaveBeenLastCalledWith(TENANT, CLIENT, { loginHint: "admin@contoso.test", wizard: true, expectedTenant: TENANT })
-    expect(container.textContent).toContain("Check backup access")
+    expect(container.querySelector("#setup-step-4")).not.toBeNull()
   })
 
   it.each([1, 2])("names a reused registration and explains selection among %s candidates", async candidateCount => {
@@ -553,7 +563,7 @@ describe("in-app tenant setup", () => {
     const container = await render(createElement(OnboardingPage))
     await act(async () => { button(container, "Set up with Microsoft sign-in")!.click(); await settle() })
     expect(state.signIn).not.toHaveBeenCalled()
-    expect(container.textContent).toContain('It has no tenant-wide admin consent for 2 permissions TenuVault uses by default: DeviceManagementScripts.ReadWrite.All, user_impersonation (Azure Storage). TenuVault did not change it, and what needs these permissions does not work until an administrator grants them under Entra admin center > App registrations > TenuVault Desktop (Lab) > API permissions. To use it, select Sign in with Microsoft.')
+    expect(container.textContent).toContain('It has no tenant-wide admin consent for some permissions TenuVault uses by default: DeviceManagementScripts.ReadWrite.All, user_impersonation (Azure Storage). TenuVault did not change it, and what needs these permissions does not work until an administrator grants them under Entra admin center > App registrations > TenuVault Desktop (Lab) > API permissions. To use it, select Sign in with Microsoft.')
     expect(container.textContent).not.toContain("To use another one")
   })
 
@@ -595,7 +605,7 @@ describe("in-app tenant setup", () => {
     await act(async () => { button(container, "Sign in with Microsoft")!.click(); await settle() })
     expect(state.createRegistration).toHaveBeenCalledTimes(1)
     expect(state.signIn).toHaveBeenLastCalledWith(TENANT, CLIENT, { wizard: true, expectedTenant: TENANT })
-    expect(container.textContent).toContain("Check backup access")
+    expect(container.querySelector("#setup-step-4")).not.toBeNull()
   })
 
 
@@ -675,7 +685,7 @@ describe("in-app tenant setup", () => {
     state.createRegistration.mockResolvedValueOnce(result)
     state.signIn.mockResolvedValueOnce(result)
     await act(async () => { button(container, "Try again")!.click(); await settle() })
-    expect(container.textContent).toContain("Check backup access")
+    expect(container.querySelector("#setup-step-4")).not.toBeNull()
   })
 
   it.each(["signingIn", "registration", "consent", "publishing"] as const)("cancels %s without an error and keeps the other ways open", async phase => {
@@ -712,7 +722,7 @@ describe("in-app tenant setup", () => {
     await act(async () => { button(container, "Set up with Microsoft sign-in")!.click(); await settle() })
     expect(state.releaseTenant).toHaveBeenCalledWith(earlier)
     expect(state.signIn).toHaveBeenLastCalledWith(TENANT, CLIENT, { loginHint: "admin@contoso.test", wizard: true, expectedTenant: TENANT })
-    expect(container.textContent).toContain("Check backup access")
+    expect(container.querySelector("#setup-step-4")).not.toBeNull()
     expect(container.textContent).toContain("Signed in as admin@contoso.test")
     expect(container.textContent).not.toContain("alex@fabrikam.test")
     await flush()
@@ -828,7 +838,7 @@ it("shows the verified tenant on Check and Storage and keeps Check completed dur
     ? { jobId: "first" } : { organization: { id: TENANT, displayName: "Contoso Ltd" } }))
   vi.stubGlobal("fetch", request)
   const container = await render(createElement(OnboardingPage))
-  for (const action of ["Continue to storage", "Start first backup"]) {
+  for (const action of ["Continue", "Start first backup"]) {
     expect(container.textContent).toContain(`Tenant Contoso Ltd ${TENANT}`)
     expect(button(container, "Different tenant?")).toBeDefined()
     await act(async () => button(container, action)!.click())
@@ -873,16 +883,19 @@ it("retries an aborted tenant details prefetch when enrolling", async () => {
   expect(state.addTenant).toHaveBeenCalledWith(expect.objectContaining({ name: "Contoso Ltd" }))
 })
 
-it("counts each missing permission once, including scopes outside the service breakdown", async () => {
+it("keeps permission names in a second disclosure and lists each name once", async () => {
   const account = { tenantId: TENANT, clientId: CLIENT, username: "admin" }
   state.store.set(DRAFT_KEY, JSON.stringify({ step: 4, tenant: TENANT, clientId: CLIENT, displayName: "", account, signedInAt: Date.now(),
-    services: { entra: { access: "backup" }, conditionalAccess: { access: "backup" }, intune: { access: "backup" } } }))
+    services: ALL_SERVICES }))
   state.accounts.mockResolvedValueOnce([account])
-  state.checkPermissions.mockResolvedValue({ missing: ["Policy.Read.All", "AuthenticationContext.Read.All", "Policy.Read.All", "Sites.Read.All"] })
+  state.checkPermissions.mockResolvedValue({ ...noCoverage(ALL_SERVICES), missing: ["Policy.Read.All", "Policy.Read.All", "Sites.Read.All"] })
   const container = await render(createElement(OnboardingPage), false)
-  const result = container.querySelector('[aria-label="Permission result"]')!
-  expect(result.textContent).toContain("3 permissions are missing.")
-  expect([...result.querySelectorAll("li")].map(item => item.textContent)).toEqual(["Policy.Read.All", "AuthenticationContext.Read.All", "Sites.Read.All"])
+  const disclosures = [...container.querySelectorAll("details")]
+  const missing = disclosures.find(item => item.firstElementChild?.textContent === "What's missing and how to add it")!
+  const names = disclosures.find(item => item.firstElementChild?.textContent === "Show permission names")!
+  expect(missing.open).toBe(false)
+  expect(names.open).toBe(false)
+  expect([...names.querySelectorAll("li")].map(item => item.textContent)).toEqual(["Policy.Read.All", "Sites.Read.All"])
 })
 
 it.each([false, true])("reveals only an unfinished first backup when leaving, complete: %s", async complete => {
@@ -1142,12 +1155,11 @@ describe("onboarding service choices", () => {
     expect(state.addTenant).not.toHaveBeenCalled()
     expect(container.textContent).toContain("Checking permissions")
     expect(container.textContent).not.toContain("Storage chooser")
-    await act(async () => answer({ missing: ["Policy.Read.All"] }))
-    expect(container.textContent).toContain("One permission is missing.")
-    expect(container.textContent).toContain("Policy.Read.All")
+    await act(async () => answer(noCoverage(BACKUP_INTUNE_PERMISSIONS)))
+    expect(container.textContent).toContain("TenuVault can't read any of the services you picked with this sign-in.")
     expect(container.textContent).not.toContain("Storage chooser")
-    expect(button(container, "Continue to storage")).toBeUndefined()
-    state.checkPermissions.mockResolvedValue({ missing: [] })
+    expect(checkAction(container, "Continue")).toBeUndefined()
+    state.checkPermissions.mockImplementation(fullCoverage)
     await act(async () => button(container, "Check again")!.click())
     await continueToStorage(container)
     expect(container.textContent).toContain("Storage chooser")
@@ -1171,10 +1183,10 @@ describe("onboarding service choices", () => {
       expect(container.textContent).toContain("Checking permissions")
       expect(button(container, "Continue")).toBeUndefined()
       await act(async () => vi.advanceTimersByTime(1))
-      expect(container.textContent).toContain("Permissions could not be checked")
+      expect(container.textContent).toContain("Some backup access could not be checked.")
       expect(container.textContent).toContain("You can continue")
       expect(container.textContent).not.toContain("Storage chooser")
-      expect(button(container, "Continue to storage")!.disabled).toBe(false)
+      expect(checkAction(container, "Continue")!.disabled).toBe(false)
       await act(async () => answer({ missing: ["Policy.Read.All"] }))
       expect(container.textContent).not.toContain("Permission not granted")
       await continueToStorage(container)
@@ -1249,7 +1261,7 @@ describe("onboarding service choices", () => {
     const account = { tenantId: TENANT, clientId: CLIENT, username: "admin" }
     state.store.set(DRAFT_KEY, JSON.stringify({ step: 4, tenant: TENANT, clientId: CLIENT, account, signedInAt: Date.now() }))
     state.accounts.mockResolvedValueOnce([account])
-    state.checkPermissions.mockResolvedValue({ missing: ["Policy.Read.All"] })
+    state.checkPermissions.mockResolvedValue(noCoverage(ALL_SERVICES))
     state.storageChoice = { kind: "local" }
     const container = await render(createElement(OnboardingPage))
     let answer!: (result: { missing: string[] }) => void
@@ -1259,11 +1271,11 @@ describe("onboarding service choices", () => {
     expect(container.textContent).toContain("Checking permissions")
     expect(container.textContent).not.toContain("Storage chooser")
     expect(state.addTenant).not.toHaveBeenCalled()
-    await act(async () => answer({ missing: ["Policy.Read.All"] }))
-    expect(container.textContent).toContain("One permission is missing.")
+    await act(async () => answer(noCoverage(BACKUP_INTUNE_PERMISSIONS)))
+    expect(container.textContent).toContain("TenuVault can't read any of the services you picked with this sign-in.")
     expect(container.textContent).not.toContain("Storage chooser")
-    expect(button(container, "Continue to storage")).toBeUndefined()
-    state.checkPermissions.mockResolvedValue({ missing: [] })
+    expect(checkAction(container, "Continue")).toBeUndefined()
+    state.checkPermissions.mockImplementation(fullCoverage)
     await act(async () => button(container, "Check again")!.click())
     await continueToStorage(container)
     await act(async () => button(container, "Start first backup")!.click())
@@ -1277,7 +1289,7 @@ describe("onboarding service choices", () => {
     state.checkPermissions.mockRejectedValue(new Error("Microsoft could not be reached."))
     state.storageChoice = { kind: "local" }
     const container = await render(createElement(OnboardingPage))
-    expect(container.textContent).toContain("Permissions could not be checked")
+    expect(container.textContent).toContain("Some backup access could not be checked.")
     expect(container.textContent).toContain("You can continue")
     await continueToStorage(container)
     await act(async () => button(container, "Start first backup")!.click())
@@ -1288,14 +1300,14 @@ describe("onboarding service choices", () => {
     const account = { tenantId: TENANT, clientId: CLIENT, username: "admin" }
     state.store.set(DRAFT_KEY, JSON.stringify({ step: 4, tenant: TENANT, clientId: CLIENT, displayName: "", account, services: { entra: { access: "backup" }, conditionalAccess: { access: "backup" } }, signedInAt: Date.now() }))
     state.accounts.mockResolvedValueOnce([account])
-    state.checkPermissions.mockResolvedValue({ missing: ["Policy.Read.All"] })
+    state.checkPermissions.mockResolvedValue(noCoverage(ALL_SERVICES))
     state.storageChoice = { kind: "local" }
     const container = await render(createElement(OnboardingPage))
-    expect(container.textContent).toContain("One permission is missing.")
+    expect(container.textContent).toContain("TenuVault can't read any of the services you picked with this sign-in.")
     expect(container.textContent).toContain("Azure CLI commands")
-    expect(button(container, "Continue to storage")).toBeUndefined()
-    expect(button(container, "Continue without Entra ID")).toBeDefined()
-    state.checkPermissions.mockResolvedValue({ missing: [] })
+    expect(checkAction(container, "Continue")).toBeUndefined()
+    expect(checkAction(container, "Copy instructions for my admin")).toBeDefined()
+    state.checkPermissions.mockImplementation(fullCoverage)
     await act(async () => button(container, "Check again")!.click())
     await continueToStorage(container)
     await act(async () => button(container, "Start first backup")!.click())
@@ -1429,7 +1441,7 @@ describe("setup from a file", () => {
     await act(async () => { button(container, "Continue with Intune")!.click() })
     await flush()
     expect(state.releaseTenant).not.toHaveBeenCalled()
-    expect(container.textContent).toContain("Check backup access")
+    expect(container.querySelector("#setup-step-4")).not.toBeNull()
   })
 
   it("keeps a sign-in to the file's tenant and app registration and goes on to storage", async () => {
@@ -1438,7 +1450,7 @@ describe("setup from a file", () => {
     state.accounts.mockResolvedValue([account])
     const container = await openWith(filePreview())
     expect(state.releaseTenant).not.toHaveBeenCalled()
-    expect(container.textContent).toContain("Check backup access")
+    expect(container.querySelector("#setup-step-4")).not.toBeNull()
     await continueToStorage(container)
     expect(container.textContent).toContain("The setup file chose This device.")
   })
@@ -1690,41 +1702,56 @@ describe("sign-in method wizard", () => {
     expect(loadOnboardingDraft()?.account).toBeFalsy()
   })
 
-  it("uses the guest tenant and lets the admin drop a service before enrollment", async () => {
+  it("keeps every chosen service when Start now can read Intune and part of Entra ID", async () => {
+    const permissions = new Set([...graphPermissions(BACKUP_INTUNE_PERMISSIONS, "delegated"), "Policy.Read.All"])
     state.wizardStage.mockResolvedValue({ result: {
-      ...stageResult,
-      coverage: [stageResult.coverage[0], { service: "entra", folders: ["NamedLocations"], readable: ["NamedLocations"] }],
+      ...stageResult, coverage: graphCliCoverage(permissions, ALL_SERVICES), missing: ["CustomDetection.Read.All"],
     } })
-    const container = await publicConnect("Start now", ["defender", "entra"])
+    state.storageChoice = { kind: "local" }
+    const container = await publicConnect("Start now", ["defender", "entra", "intune"])
     type(container.querySelector("input")!, "contoso.onmicrosoft.com")
     await act(async () => button(container, "Sign in with Microsoft")!.click())
-    expect(state.wizardStage).toHaveBeenCalledWith("contoso.onmicrosoft.com", "graphCli", {
-      defender: { access: "backup" }, entra: { access: "backup" }, conditionalAccess: { access: "backup" },
-    })
-    expect(container.textContent).toContain("Defender can't be backed up yet.")
-    expect(container.textContent).toContain("Check (needs attention)")
-    await act(async () => button(container, "Continue without Defender")!.click())
-    expect(container.textContent).toContain("Connected. Everything you picked can be backed up.")
-    expect(container.textContent).toContain("1 area")
-    expect(container.textContent).not.toContain("all 1 areas")
-    expect(state.wizardFinish).not.toHaveBeenCalled()
+    expect(state.wizardStage).toHaveBeenCalledWith("contoso.onmicrosoft.com", "graphCli", ALL_SERVICES)
+    expect(container.querySelector("#setup-step-4")?.textContent).toBe("You're ready to back up Intune and Entra ID (3 of 8 areas).")
+    expect(container.textContent).toContain("Defender needs more access. You can add it later from Services.")
+    expect([...container.querySelectorAll('[aria-label="Check actions"] button')].map(item => item.textContent)).toEqual(["Continue with Intune and Entra ID"])
+    expect(container.querySelector("details[open]")).toBeNull()
+    expect(container.querySelector('[aria-label="Areas needing access"]')?.textContent).toContain("Detection and response")
+    expect(state.wizardPackConsent).not.toHaveBeenCalled()
+    await continueToStorage(container)
+    await act(async () => button(container, "Start first backup")!.click())
+    expect(state.wizardFinish).toHaveBeenCalledWith(stageResult.id, expect.any(String), ALL_SERVICES)
+    expect(container.textContent).toContain("Backing up Intune and part of Entra ID.")
+  })
+
+  it("offers a different sign-in method when Start now has no readable services", async () => {
+    state.wizardStage.mockResolvedValue({ result: { ...stageResult, coverage: graphCliCoverage(new Set(), ALL_SERVICES) } })
+    const container = await publicConnect("Start now", ["defender", "entra", "intune"])
+    await act(async () => button(container, "Sign in with Microsoft")!.click())
+    expect(container.querySelector("#setup-step-4")?.textContent).toBe("TenuVault can't read any of the services you picked with this sign-in.")
+    expect(checkAction(container, "Use your own app registration")).toBeDefined()
+    expect(checkAction(container, "Check again")).toBeDefined()
+    expect(checkAction(container, "Continue")).toBeUndefined()
+    await act(async () => checkAction(container, "Use your own app registration")!.click())
+    expect(container.textContent).toContain("Set up with Microsoft sign-in")
+    expect(state.wizardPackConsent).not.toHaveBeenCalled()
   })
 
   it.each([false, true])("keeps Continue available and respects reduced motion (%s)", async reduce => {
     state.wizardStage.mockResolvedValue({ result: {
       ...stageResult,
-      coverage: [{ service: "defender", folders: ["DefenderCustomDetectionRules"], readable: ["DefenderCustomDetectionRules"] }],
+      coverage: graphCliCoverage(new Set(graphPermissions(ALL_SERVICES, "delegated")), ALL_SERVICES),
     } })
     vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: reduce })))
-    const container = await publicConnect("Start now")
+    const container = await publicConnect("Start now", ["defender", "entra", "intune"])
     vi.useFakeTimers()
     try {
       await act(async () => button(container, "Sign in with Microsoft")!.click())
-      expect(container.textContent).toContain("Everything you picked can be backed up.")
-      expect(button(container, "Continue to storage")).toBeDefined()
+      expect(container.querySelector("#setup-step-4")?.textContent).toBe("You're ready to back up Defender, Entra ID and Intune.")
+      expect(checkAction(container, "Continue")).toBeDefined()
       await act(async () => vi.advanceTimersByTime(1800))
       if (reduce) {
-        expect(container.textContent).toContain("Check backup access")
+        expect(container.querySelector("#setup-step-4")).not.toBeNull()
         await continueToStorage(container)
       }
       expect(container.textContent).toContain("Choose where backups are stored")

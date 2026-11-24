@@ -449,6 +449,8 @@ export interface ServiceModuleStatus {
 export interface ServicesStatus {
   tenantId: string
   modules: ServiceModuleStatus[]
+  /** Enabled services whose signed-in token cannot read any selected backup type. */
+  needsAccess?: BackupScopeCoverage["service"][]
   /** Optional delegated permissions and whether the token carries them; absent from older answers. */
   optional?: OptionalPermissionStatus[]
   /** When the token behind the check was issued; consent changes made later show after "Check again". */

@@ -79,7 +79,7 @@ import { routes } from "./api/routes"
 import { isFreshIdToken, AuthManager, isResourceScope, requireOwnReauthenticationClient, SignInRequiredError } from "./auth/msal"
 import { TenantConnections } from "./auth/tenant-connections"
 import { ConnectionCapabilities } from "./auth/connection-capabilities"
-import { connectionChoice, connectionCoverage } from "./auth/connection-coverage"
+import { connectionChoice, connectionCoverage, graphCliScopes } from "./auth/connection-coverage"
 import { BackupEngine, verifyStorageAccess, type BackupJob } from "./backup/engine"
 import { BackupScheduler, notifiedStatus, reportsResult, runUnattended, scheduledResult } from "./backup/scheduler"
 import { runTrayBackups } from "./backup/tray-backup"
@@ -610,6 +610,7 @@ async function bootstrap(): Promise<void> {
     fetch: bridgedFetch,
     getToken: backupAccess.getToken,
     graphCliGrant: token => capabilities.graphCliGrant(token),
+    wizardConnection: tenant => connections.get(tenant)?.origin === "wizard",
     services: (tenantId) => moduleSettings.selection(tenantId),
     unattendedTokens: (request) => {
       const plan = license.plan(request.tenantId)
@@ -1766,7 +1767,7 @@ async function bootstrap(): Promise<void> {
     let tenant: string
     try { tenant = await resolveOnboardingTenant(input, bridgedFetchLater) }
     catch (error) { return { status: "error", issue: wizardFailure(error).error } }
-    // Consent is a browser receipt only. wizardStage still requires the signed-in tenant and all selected permissions.
+    // Consent is a browser receipt only. wizardStage checks the signed-in tenant and the permissions Microsoft returns.
     if (tenant === ORGANIZATIONS && action !== "open" && action !== "handoff") return { status: "error", issue: { code: "invalid_request", message: "Sign in first to check permissions." } }
     return packConsent.act(tenant, pack, action, async id => {
       if (wizardExistingTenant(id) || !await license.tenuvaultAppEnabled(true) || wizardExistingTenant(id)) return null
@@ -2032,7 +2033,11 @@ async function bootstrap(): Promise<void> {
   })
   const servicesFor = (tenantId: unknown, clientId: unknown, refresh: boolean) => {
     if (typeof tenantId !== "string" || typeof clientId !== "string") throw new Error("Choose a tenant.")
-    return servicesStatus(tenantId, moduleSettings, (force) => tokenFor(tenantId, clientId, RESOURCE_SCOPES.graph, force), refresh)
+    return servicesStatus(tenantId, moduleSettings, (force) => tokenFor(tenantId, clientId, RESOURCE_SCOPES.graph, force), refresh,
+      clientId.toLowerCase() === GRAPH_CLI_CLIENT_ID ? token => {
+        const permissions = graphCliScopes(token.accessToken, token.grantedScopes)
+        return permissions && { kind: "delegated", permissions }
+      } : undefined)
   }
   handleTrusted("services:status", (_event, tenantId: unknown, clientId: unknown, refresh: unknown) => servicesFor(tenantId, clientId, refresh === true))
   handleTrusted("services:setEnabled", (_event, tenantId: unknown, clientId: unknown, id: unknown, enabled: unknown, confirmation: unknown) => {

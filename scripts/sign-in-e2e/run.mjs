@@ -162,7 +162,7 @@ async function startSignIn(page) {
   const card = page.getByRole("button", { name: "Intune", exact: true })
   const services = page.getByRole("button", { name: "Continue with Intune", exact: true })
   const waiting = page.getByText(/^(Finish signing in in your browser|Waiting for sign-in)/)
-  const check = page.getByRole("heading", { name: /^(Check backup access|Sign-in results|Choose where backups are stored|Review your chosen permissions)$/ })
+  const check = page.getByRole("heading", { name: /^(Check backup access|You.re ready to back up .+\.|TenuVault can.t read any of the services you picked with this sign-in\.|Sign-in results|Choose where backups are stored|Review your chosen permissions)$/ })
   const existingRegistration = page.getByRole("button", { name: "I already have an app registration", exact: true })
   await card.or(ownApp).or(services).or(existingRegistration).first().waitFor()
   if (await card.isVisible()) {

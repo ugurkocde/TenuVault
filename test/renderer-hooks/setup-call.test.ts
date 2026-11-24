@@ -667,7 +667,7 @@ describe("0.6 setup steps", () => {
     await act(async () => { button(container, "Check again")!.click() })
     await advance()
     expect(links()).toEqual([])
-    await act(async () => { button(container, "Continue to storage")!.click() })
+    await act(async () => { button(container, "Continue")!.click() })
     expect(container.textContent).toContain("Storage chooser")
   })
 })

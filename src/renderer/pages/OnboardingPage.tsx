@@ -9,7 +9,8 @@ import { PermissionRoutes } from "../components/ServicesSettings"
 import { checkedOnboardingChoice, choiceLabel, hasOnboardingBackups } from "../../shared/services/onboarding"
 import { graphPermissions, type PermissionChoice } from "../../shared/services/manifest"
 import { chosenBackupCoverage } from "../../shared/services/graph-cli-coverage"
-import { moduleForFolder } from "../../shared/services/modules"
+import { backupAreaCoverage, needsBackupAccess } from "../../shared/services/backup-coverage"
+import { listNames, needsAccessText, StartNowAccessHelp } from "../components/BackupAccessHelp"
 import { trialKeyRefusalText } from "../../shared/trial-notices"
 import { showCommunityLimitError } from "../lib/plan-dialog"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
@@ -133,6 +134,7 @@ export default function OnboardingPage() {
   const tenantDetails = useRef<{ account: SignedInAccount; result: ReturnType<typeof fetchTenantDetails> } | null>(null)
   const [organization, setOrganization] = useState<{ account: SignedInAccount; name: string } | null>(null)
   const [completedCheck, setCompletedCheck] = useState<{ account: SignedInAccount; services: PermissionChoice } | null>(null)
+  const [firstBackupLabel, setFirstBackupLabel] = useState("")
   const [resumed, setResumed] = useState(Boolean(initial && (initial.step > 0 || initial.account)))
   const [checkingResume, setCheckingResume] = useState(Boolean(initial?.account))
   const [choice, setChoice] = useState<StorageChoice | null>(null)
@@ -370,11 +372,10 @@ export default function OnboardingPage() {
     setAutoSignIn(result.ready && !paused ? { loginHint: result.username } : null)
     const reusedNotice = result.reused ? `This tenant already had a TenuVault app registration, "${result.displayName}", so TenuVault uses that one.` : ""
     const pending = "The app registration is ready, but Microsoft is still making it available for sign-in. Wait a moment, then select Sign in with Microsoft."
-    const one = missing.length === 1
     setSetupNotice([
       reusedNotice || (result.ready ? "The app registration is ready." : ""),
       several ? `It is one of ${result.candidateCount} in this tenant.` : "",
-      missing.length ? `It has no tenant-wide admin consent for ${one ? "one permission" : `${missing.length} permissions`} TenuVault uses by default: ${missing.join(", ")}. TenuVault did not change it, and what needs ${one ? "this permission" : "these permissions"} does not work until an administrator grants ${one ? "it" : "them"} under Entra admin center > App registrations > ${result.displayName} > API permissions.` : "",
+      missing.length ? `It has no tenant-wide admin consent for some permissions TenuVault uses by default: ${missing.join(", ")}. TenuVault did not change it, and what needs these permissions does not work until an administrator grants them under Entra admin center > App registrations > ${result.displayName} > API permissions.` : "",
       result.ready ? (paused ? "To use it, select Sign in with Microsoft." : "") : pending,
       several ? 'To use another one, select Previous, then "I already have an app registration" and enter its client ID.' : "",
     ].filter(Boolean).join(" "))
@@ -601,7 +602,7 @@ export default function OnboardingPage() {
   // tenant the license does not cover is not added and its sign-in is removed in the main
   // process, so the admin signs in again with the same IDs once the license is sorted.
   const createTenant = async () => {
-    if (creatingRef.current || !account || !choice || checkingResume || checkingPermissions || (method !== "ownApp" && !sharedSignIn)) return
+    if (creatingRef.current || !account || !choice || checkingResume || checkingPermissions || nothingReadable || (method !== "ownApp" && !sharedSignIn)) return
     if (connected(account.tenantId)) {
       setAddError({ message: "This tenant is already connected to TenuVault.", license: false, alreadyConnected: true })
       setAccount(null)
@@ -668,7 +669,8 @@ export default function OnboardingPage() {
       setTenantProfileId(tenant.id)
       setTenantName(tenant.name)
       setResumed(false)
-      if (checkPassed) setCompletedCheck({ account, services })
+      if (readable.length) setCompletedCheck({ account, services })
+      setFirstBackupLabel(backupLabel)
       setStep(3)
       // The Storage step showed the trial, so it does not follow the admin into the app as a
       // welcome card to dismiss. Showing it again costs nothing, so a failure is ignored.
@@ -772,33 +774,38 @@ export default function OnboardingPage() {
   const coverage = chosenBackupCoverage(sharedSignIn?.coverage ?? permissionResult?.coverage ?? [], services)
   const selectedScopes = method === "tenuvaultApp" ? appPermissions : graphPermissions(services, "delegated")
   const missing = [...new Set(sharedSignIn?.missing?.filter(scope => selectedScopes.includes(scope)) ?? permissionResult?.missing ?? [])]
-  const reportedScopes = new Set<string>()
-  const serviceChecks = BACKUP_SERVICES.filter(({ id }) => services[id] || (id === "entra" && services.conditionalAccess)).map(({ id, label }) => {
+  const serviceChecks = BACKUP_SERVICES.flatMap(({ id, label }) => {
+    if (!services[id] && !(id === "entra" && services.conditionalAccess)) return []
     const row = coverage.find(item => item.service === id)
-    const selected = { [id]: services[id], ...(id === "entra" ? { conditionalAccess: services.conditionalAccess } : {}) }
-    const required = new Set(graphPermissions(Object.fromEntries(Object.entries(selected).filter(([, value]) => value)), "delegated"))
-    const scopes = missing.filter(scope => required.has(scope) || Object.keys(services).every(key => key === id || (id === "entra" && key === "conditionalAccess")))
-    scopes.forEach(scope => reportedScopes.add(scope))
-    const areaKey = (folder: string) => {
-      const match = moduleForFolder(folder)
-      return match ? `${match.module.id}/${match.area.id}` : folder
-    }
-    const areas = new Set(row?.folders.map(areaKey))
-    const unreadable = new Set(row?.folders.filter(folder => !row.readable?.includes(folder)).map(areaKey))
-    return { id, label, scopes, count: areas.size, complete: areas.size - unreadable.size, unknown: row?.readable === null, gap: Boolean(row?.readable && unreadable.size) }
+    const areas = row ? backupAreaCoverage(row) : { readable: 0, complete: 0, total: 0, missing: [], unknown: true }
+    return [{ label, ...areas, needsAccess: needsBackupAccess(row) }]
   })
-  const otherMissing = missing.filter(scope => !reportedScopes.has(scope))
-  const gaps = serviceChecks.filter(service => service.gap || service.scopes.length > 0)
-  const unknownCoverage = Boolean(permissionResult?.error || serviceChecks.some(service => service.unknown))
-  const checkPassed = Boolean(account && !publicError && !checkingResume && !checkingPermissions && !unknownCoverage && !gaps.length && !otherMissing.length &&
-    (sharedSignIn ? coverage.length : permissionResult))
-  const skippedCheck = Boolean(unknownCoverage || gaps.length || otherMissing.length || publicError)
+  const incomplete = (service: typeof serviceChecks[number]) => service.missing.length > 0 || service.unknown
+  const readable = serviceChecks.filter(service => service.readable > 0)
+    .sort((a, b) => Number(incomplete(a)) - Number(incomplete(b)))
+  const unavailable = serviceChecks.filter(service => service.needsAccess)
+  const unknownCoverage = serviceChecks.some(service => service.unknown)
+  const gaps = serviceChecks.filter(service => service.missing.length > 0)
+  const nothingReadable = unavailable.length > 0 && unavailable.length === serviceChecks.length
+  const checkPassed = Boolean(account && !publicError && !checkingResume && !checkingPermissions && readable.length &&
+    !unknownCoverage && !gaps.length)
+  const skippedCheck = Boolean(unknownCoverage || gaps.length || missing.length || publicError)
+  const names = listNames(readable.map(service => service.label))
+  const readyLabel = listNames(readable.map(service => {
+    if (service.complete > 0 && service.complete < service.total) return `${service.label} (${service.complete} of ${service.total} areas)`
+    return incomplete(service) ? `part of ${service.label}` : service.label
+  }))
+  const backupLabel = listNames(readable.map(service => incomplete(service) ? `part of ${service.label}` : service.label))
+  const checkHeading = readable.length ? `You're ready to back up ${readyLabel}.`
+    : nothingReadable ? "TenuVault can't read any of the services you picked with this sign-in."
+    : "Check backup access"
   const checked = completedCheck?.account === account && completedCheck?.services === services
   const stageComplete = [stageIndex > 0, stageIndex > 1, stageIndex > 2 && (checked || checkPassed), stageIndex > 3, succeeded]
   const continueToStorage = useCallback(() => {
-    setCompletedCheck(checkPassed && account ? { account, services } : null)
+    if (nothingReadable) return
+    setCompletedCheck(names && account ? { account, services } : null)
     setStep(2)
-  }, [account, checkPassed, services])
+  }, [account, names, nothingReadable, services])
   const stageWarning = [
     false,
     stageIndex === 1 && Boolean(addError || publicError),
@@ -813,24 +820,10 @@ export default function OnboardingPage() {
     return () => clearTimeout(timer)
   }, [step, checkPassed, continueToStorage])
 
-  const dropService = (id: typeof BACKUP_SERVICES[number]["id"]) => {
-    const next = { ...services }
-    delete next[id]
-    if (id === "entra") delete next.conditionalAccess
-    setServices(next)
-    if (!confirmedChoice(next)) {
-      if (method !== "ownApp") { discardShared(); setAccount(null); setMethod("ownApp") }
-      reconfirm.current = true
-      setStep(-1)
-    } else if (method === "tenuvaultApp") {
-      // Re-stage only the remaining services so the permission check binds the final choice.
-      setRetryTenant(account?.tenantId)
-      setPublicTenant(account?.tenantId ?? "")
-      discardShared()
-      setAccount(null)
-      setStep(1)
-    }
-  }
+  // A resumed Storage step can pick up newly removed permissions.
+  useEffect(() => {
+    if (step === 2 && nothingReadable) setStep(4)
+  }, [step, nothingReadable])
 
   const checkAgain = () => {
     if (!account) return
@@ -840,9 +833,8 @@ export default function OnboardingPage() {
 
   const copyAdminInstructions = async () => {
     const permissions = missing.length ? ` Missing permissions: ${missing.join(", ")}.` : ""
-    const instructions = method === "ownApp" && account
-      ? `Please review backup access for ${choiceLabel(services)} in TenuVault. Add the missing delegated permissions to app registration ${account.clientId} in tenant ${account.tenantId} and grant consent for those permissions.${permissions} Let me know when I can check access again.`
-      : `Please review backup access for ${choiceLabel(services)} in TenuVault.${permissions} If additional permissions are needed, connect using the TenuVault app.`
+    if (!account || method !== "ownApp") return
+    const instructions = `Please review backup access for ${choiceLabel(services)} in TenuVault. Add the missing delegated permissions to app registration ${account.clientId} in tenant ${account.tenantId} and grant consent for those permissions.${permissions} Let me know when I can check access again.`
     try {
       await navigator.clipboard.writeText(instructions)
       setConsentStatus("Instructions copied.")
@@ -1054,44 +1046,58 @@ export default function OnboardingPage() {
 
         {step === 4 && (
           <section className="space-y-4" aria-labelledby="setup-step-4">
-            <StepHeading id="setup-step-4">Check backup access</StepHeading>
+            <StepHeading id="setup-step-4">{checkingPermissions || checkingResume || publicBusy ? "Check backup access" : checkHeading}</StepHeading>
             {connectedTenant}
             {addError && <p role="alert" className="text-sm text-red-700">{addError.message}</p>}
             {checkingPermissions || checkingResume || publicBusy ? (
               publicBusy ? <BrowserSignInWait kind="signin" cancel={() => void bridge.auth.cancelSignIn()} /> : <p role="status" className="text-sm text-gray-600">Checking permissions for your chosen services…</p>
             ) : <>
               {publicError && <p role="alert" className="text-sm text-red-700">{publicError}</p>}
-              {checkPassed && <p role="status" className="text-sm font-medium text-green-700">Connected. Everything you picked can be backed up.</p>}
-              {serviceChecks.some(service => service.count > 0) && <ul className="space-y-1 text-sm text-gray-700" aria-label="Backup coverage">
-                {serviceChecks.filter(service => service.count > 0).map(service => <li key={service.id}>
-                  <span className="font-medium">{service.label}</span>{": "}
-                  {service.unknown ? "Coverage could not be checked" : service.complete === service.count ? (service.count === 1 ? "1 area" : `all ${service.count} areas`) : `${service.complete} of ${service.count} ${service.count === 1 ? "area" : "areas"}`}
-                  {service.scopes.length > 0 && `, ${service.scopes.length} missing permission${service.scopes.length === 1 ? "" : "s"}`}
-                </li>)}
-              </ul>}
-              {(gaps.length > 0 || missing.length > 0) && <div className="space-y-3 rounded-xl border border-border p-4 text-sm" aria-label="Permission result">
-                {gaps.map(service => <p key={service.id} className="font-medium">{service.label} can&apos;t be backed up yet.{service.scopes.length === 0 && " Some areas need permission."}</p>)}
-                {missing.length > 0 && <div className="space-y-1">
-                  <p className="font-medium">{missing.length === 1 ? "One permission is missing." : `${missing.length} permissions are missing.`}</p>
-                  <ul className="list-disc break-words pl-5">{missing.map(scope => <li key={scope}>{scope}</li>)}</ul>
-                </div>}
-              </div>}
-              {unknownCoverage && <p className="text-sm text-gray-700">Permissions could not be checked. Check again or continue to storage.</p>}
-              {(gaps.length > 0 || otherMissing.length > 0) && <>
-                <div className="flex flex-wrap items-center gap-2">
-                  <Button className="bg-blue-600 hover:bg-blue-700" disabled={Boolean(consentBusy)} onClick={() => void (method === "tenuvaultApp" ? adminConsent("handoff") : copyAdminInstructions())}>Copy instructions for my admin</Button>
+              {readable.length > 0 && unavailable.length > 0 && <p className="text-sm text-gray-600">{needsAccessText(unavailable.map(service => service.label))} You can add it later from Services.</p>}
+              {unknownCoverage && <p className="text-sm text-gray-600">Some backup access could not be checked. You can continue and check access later.</p>}
+              <div className="flex flex-wrap items-center gap-2" aria-label="Check actions">
+                {!nothingReadable && account && <Button className="bg-blue-600 hover:bg-blue-700" onClick={continueToStorage}>{!checkPassed && readable.length ? `Continue with ${names}` : "Continue"}</Button>}
+                {nothingReadable && <>
+                  {method === "graphCli" && <Button className="bg-blue-600 hover:bg-blue-700" onClick={() => void chooseMethod("ownApp")}>Use your own app registration</Button>}
+                  {method === "tenuvaultApp" && <Button className="bg-blue-600 hover:bg-blue-700" disabled={Boolean(consentBusy)} onClick={() => void adminConsent("open")}>Open admin consent</Button>}
+                  {method === "ownApp" && <Button className="bg-blue-600 hover:bg-blue-700" onClick={() => void copyAdminInstructions()}>Copy instructions for my admin</Button>}
                   <Button variant="outline" disabled={Boolean(consentBusy)} onClick={checkAgain}>Check again</Button>
-                  {gaps.map(service => <button type="button" className="px-2 py-2 text-sm underline underline-offset-2" key={service.id} disabled={Boolean(consentBusy)} onClick={() => dropService(service.id)}>Continue without {service.label}</button>)}
+                </>}
+              </div>
+              {nothingReadable && method === "graphCli" && <StartNowAccessHelp />}
+              {nothingReadable && method === "tenuvaultApp" && <p className="text-sm text-gray-600">Ask a Microsoft administrator to approve backup access, then check again.</p>}
+              {nothingReadable && method === "ownApp" && <p className="text-sm text-gray-600">Ask your Microsoft administrator to add backup access to this app registration.</p>}
+              {nothingReadable && method === "graphCli" && available.tenuvaultApp === true && <Button variant="outline" onClick={() => void chooseMethod("tenuvaultApp")}>Use the TenuVault app</Button>}
+              {(!checkPassed || missing.length > 0) && <details className="border-t border-border pt-3 text-sm text-gray-700">
+                <summary className="w-fit cursor-pointer font-medium underline underline-offset-4">What&apos;s missing and how to add it</summary>
+                <div className="mt-3 space-y-3">
+                  {gaps.length > 0 && <ul className="space-y-2" aria-label="Areas needing access">
+                    {gaps.map(service => <li key={service.label}><span className="font-medium">{service.label}</span><p className="text-gray-600">{service.missing.join(", ")}</p></li>)}
+                  </ul>}
+                  {!nothingReadable && method === "graphCli" && <StartNowAccessHelp />}
+                  {!nothingReadable && method === "tenuvaultApp" && <p>Ask a Microsoft administrator to approve backup access, then check again.</p>}
+                  {!nothingReadable && method === "ownApp" && <p>Ask your Microsoft administrator to add access to this app registration.</p>}
+                  <div className="flex flex-wrap gap-2">
+                    {!nothingReadable && method === "graphCli" && <>
+                      <Button variant="outline" size="sm" onClick={() => void chooseMethod("ownApp")}>Use your own app registration</Button>
+                      {available.tenuvaultApp === true && <Button variant="outline" size="sm" onClick={() => void chooseMethod("tenuvaultApp")}>Use the TenuVault app</Button>}
+                    </>}
+                    {!nothingReadable && method === "ownApp" && <Button variant="outline" size="sm" onClick={() => void copyAdminInstructions()}>Copy instructions for my admin</Button>}
+                    {method === "tenuvaultApp" && <>
+                      {!nothingReadable && <Button variant="outline" size="sm" disabled={Boolean(consentBusy)} onClick={() => void adminConsent("open")}>Open admin consent</Button>}
+                      <Button variant="outline" size="sm" disabled={Boolean(consentBusy)} onClick={() => void adminConsent("handoff")}>Copy instructions for my admin</Button>
+                    </>}
+                    {!nothingReadable && <Button variant="outline" size="sm" disabled={Boolean(consentBusy)} onClick={checkAgain}>Check again</Button>}
+                  </div>
+                  {missing.length > 0 && <details>
+                    <summary className="cursor-pointer font-medium">Show permission names</summary>
+                    <ul className="my-2 list-disc break-words pl-5">{missing.map(scope => <li key={scope}>{scope}</li>)}</ul>
+                    {method === "ownApp" && account && <PermissionRoutes compact report={account} missing={missing} />}
+                  </details>}
                 </div>
-                {method === "ownApp" && account && <PermissionRoutes report={account} missing={missing} />}
-                {method === "tenuvaultApp" && <Button variant="outline" disabled={Boolean(consentBusy)} onClick={() => void adminConsent("open")}>Open admin consent</Button>}
-              </>}
+              </details>}
               {consentBusy === "open" && <BrowserSignInWait kind="consent" cancel={() => void bridge.auth.cancelSignIn()} />}
               {consentStatus && <p role="status" className="text-sm text-gray-700">{consentStatus}</p>}
-              {account && (checkPassed || (unknownCoverage && !gaps.length && !otherMissing.length)) && <div className="flex flex-wrap gap-2">
-                {unknownCoverage && <Button variant="outline" disabled={Boolean(consentBusy)} onClick={checkAgain}>Check again</Button>}
-                <Button className="bg-blue-600 hover:bg-blue-700" onClick={continueToStorage}>Continue to storage</Button>
-              </div>}
             </>}
           </section>
         )}
@@ -1123,7 +1129,7 @@ export default function OnboardingPage() {
             </div>
             <div className="flex flex-wrap items-center justify-end gap-3">
               {!choice && storageBlocker && <p role="status" className="text-sm text-gray-600">{storageBlocker}</p>}
-              <Button className="bg-blue-600 hover:bg-blue-700" disabled={!choice || creating || checkingResume || checkingPermissions} onClick={() => void createTenant()}>
+              <Button className="bg-blue-600 hover:bg-blue-700" disabled={!choice || creating || checkingResume || checkingPermissions || nothingReadable} onClick={() => void createTenant()}>
                 {creating && <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />}
                 {creating ? "Checking the license..." : "Start first backup"}
               </Button>
@@ -1137,9 +1143,9 @@ export default function OnboardingPage() {
             {!hasBackupTypes && <p className="text-sm text-gray-700">Your choice of {choiceLabel(services)} is saved. There are no backup types for this choice. You can change services in Settings.</p>}
             {!succeeded && hasBackupTypes && (
               <div className="space-y-2 text-sm text-gray-700">
-                <p>{tenantName ? `${tenantName} is connected.` : "Your tenant is connected."} TenuVault starts a backup of your chosen services automatically.</p>
+                <p>{tenantName ? `${tenantName} is connected.` : "Your tenant is connected."} {firstBackupLabel ? `Backing up ${firstBackupLabel}.` : "TenuVault starts your first backup automatically."}</p>
                 <ul className="list-disc space-y-1 pl-5 text-gray-600">
-                  <li>It reads the available policies and settings for {choiceLabel(services)}, and changes nothing in your tenant.</li>
+                  <li>It reads the available policies and settings without changing your tenant.</li>
                   {services.intune && <li>Apps are left out by default to keep it quick. You can change what is backed up later in the backup scope.</li>}
                   {services.entra && <li>Entra ID backs up the supported types in your selected areas. Areas without backup types are listed in Services and permissions.</li>}
                   <li>It usually takes a few minutes, longer for large tenants.</li>

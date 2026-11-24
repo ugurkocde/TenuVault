@@ -151,6 +151,8 @@ export interface BackupEngineDeps {
    * selected type ended. The same outcomes are in the backup's manifest when the run wrote one.
    */
   onOutcomes?: (outcomes: RunOutcomes, request: BackupRequest) => void
+  /** Whether the tenant enrolled through the onboarding wizard. */
+  wizardConnection?: (tenantId: string) => boolean
   /** Receipt evidence for an opaque Start now token from the shared-client request binding. */
   graphCliGrant?: (token: string) => ReadonlySet<string> | undefined
   /** Permission names of a Graph token the run used, for health only; never changes its outcomes. */
@@ -594,7 +596,13 @@ export class BackupEngine {
     // A type only a signed-in admin can read is left out of a Backup Reader run whatever its token says: no permission changes that.
     const adminOnly = (type: IntuneType) => tokens.mode === "app-only" && signedInOnly(type.folder)
     const applicationOnly = (type: IntuneType) => signIn === "delegated" && type.backupMode === "application"
-    const unpermitted = selectedTypes.filter((type) => !readerExcluded.has(type.folder) && (adminOnly(type) || applicationOnly(type) || ((startNow || permissionChecked(type.folder)) && granted && !canBackUp(type.folder, granted))))
+    // Keep legacy Intune reads when any Intune type can be read. If this mixed backup's
+    // delegated token has no Intune access, skip that service and keep the coverage note.
+    const intuneTypes = selectedTypes.filter(type => moduleForFolder(type.folder)?.module.id === "intune")
+    const skipIntune = this.deps.wizardConnection?.(request.tenantId) && granted?.kind === "delegated" && intuneTypes.length > 0 &&
+      intuneTypes.every(type => !canBackUp(type.folder, granted)) &&
+      selectedTypes.some(type => !intuneTypes.includes(type) && !applicationOnly(type) && canBackUp(type.folder, granted))
+    const unpermitted = selectedTypes.filter((type) => !readerExcluded.has(type.folder) && (adminOnly(type) || applicationOnly(type) || ((startNow || permissionChecked(type.folder) || (skipIntune && intuneTypes.includes(type))) && granted && !canBackUp(type.folder, granted))))
     const types = selectedTypes.filter((type) => !readerExcluded.has(type.folder) && !unpermitted.includes(type))
       .map(type => type.betaReadPath && readVersion(type) === "beta" ? { ...type, path: type.betaReadPath } : type)
     const largeTypes = types.filter(type => type.volume === "large")

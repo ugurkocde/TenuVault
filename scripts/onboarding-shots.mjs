@@ -49,7 +49,11 @@ const MAIN_OVERRIDES = `(() => {
     return json(answers[path.split("?")[0]] ?? { backups: [], data: [], entries: [], records: [], tenants: [], jobs: [], exists: true })
   })
   handle("setup:checkPermissions", (_tenantId, _clientId, choice) => ({
-    missing: choice.entra ? ["Policy.Read.All", "AuthenticationContext.Read.All", "DeviceManagementConfiguration.Read.All"] : [],
+    missing: choice.entra ? ["Policy.Read.All", "AuthenticationContext.Read.All"] : [],
+    coverage: [
+      { service: "intune", folders: ["DeviceConfigurations"], readable: ["DeviceConfigurations"] },
+      ...(choice.entra ? [{ service: "entra", folders: ["AuthorizationPolicy", "NamedLocations"], readable: [] }] : []),
+    ],
   }))
   handle("setup:enrollOwnApp", () => ({ result: true }))
   handle("setup:saveServices", () => undefined)
@@ -162,7 +166,7 @@ const scenes = [
   ["01-services", "Choose Intune, Entra ID or Defender for backup."],
   ["02-connect", "Choose how to connect your tenant."],
   ["03-check", "Review backup access after signing in."],
-  ["04-missing-permissions", "Review missing Entra ID permissions and find the steps to resolve them."],
+  ["04-missing-permissions", "See which Entra ID areas need access and find out how to add it."],
   ["05-storage", "Confirm your tenant and choose where to store backups."],
   ["06-first-backup", "Follow the first backup after saving your storage choice."],
 ]
@@ -224,8 +228,8 @@ try {
         await click("Continue with Intune")
         await click("Choose Start now")
         await click("Sign in with Microsoft")
-        await showing("Connected. Everything you picked can be backed up.")
-        if (state === "05-storage") await click("Continue to storage")
+        await showing("You're ready to back up Intune.")
+        if (state === "05-storage") await click("Continue")
       } else if (!signedIn) {
         await showing("Which services do you want to connect?")
         const action = await evaluate(`(() => {
@@ -240,10 +244,12 @@ try {
             && document.querySelector('[data-sign-in-method="tenuvaultApp"] [role="status"]')?.textContent.includes("Unavailable.")`)
         }
       } else if (missing) {
+        await showing("You're ready to back up Intune.")
+        await evaluate(`[...document.querySelectorAll("summary")].find(item => item.textContent.includes("What's missing"))?.click()`)
         await showing("Copy instructions for my admin")
       } else {
-        await showing("Connected. Everything you picked can be backed up.")
-        if (state.startsWith("05") || state.startsWith("06")) await click("Continue to storage")
+        await showing("You're ready to back up Intune.")
+        if (state.startsWith("05") || state.startsWith("06")) await click("Continue")
         if (state.startsWith("06")) { await click("Start first backup"); await showing("Your first backup") }
       }
       await evaluate(`document.activeElement?.blur?.()`)

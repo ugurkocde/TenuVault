@@ -15,7 +15,7 @@ function fixture() {
       account: account(method === "graphCli" ? GRAPH_CLI_CLIENT_ID : TENUVAULT_CLIENT_ID),
       accessToken: "opaque",
       idToken: "id-proof",
-      grantedScopes: ["User.Read", "Organization.Read.All"],
+      grantedScopes: ["User.Read", "Organization.Read.All", "DeviceManagementConfiguration.Read.All"],
       cacheWrites: () => ({ key: "staged-cache" }),
     })),
     fetch: vi.fn<typeof fetch>(async () => Response.json({ value: [{ id: TENANT, displayName: "Contoso Ltd" }] })),
@@ -128,6 +128,7 @@ describe("staged wizard sign-in", () => {
     const { host, wizard } = fixture()
     host.stage.mockResolvedValueOnce({
       ...(await host.stage(TENANT, "tenuvaultApp")),
+      grantedScopes: ["User.Read", "Organization.Read.All"],
       missingOnboardingScopes: ["DeviceManagementApps.Read.All"],
     })
     const staged = await wizard.stage("", "tenuvaultApp", CHOICE)
@@ -136,6 +137,29 @@ describe("staged wizard sign-in", () => {
     const id = "result" in staged ? staged.result.id : ""
     expect(await wizard.finish(id, "profile", CHOICE)).toMatchObject({ error: { code: "AADSTS65001" } })
     expect(host.enroll).not.toHaveBeenCalled()
+  })
+
+  it("enrolls partial TenuVault app access with all chosen services and only verified token scopes", async () => {
+    const { host, wizard } = fixture()
+    const choice = { intune: { access: "backup" }, defender: { access: "backup" } }
+    const held = "DeviceManagementConfiguration.Read.All"
+    const missing = "CustomDetection.Read.All"
+    host.stage.mockResolvedValueOnce({
+      ...(await host.stage(TENANT, "tenuvaultApp")),
+      graphScopes: [held, missing, "offline_access"],
+      grantedScopes: [held],
+      missingOnboardingScopes: [missing],
+    })
+    const staged = await wizard.stage(TENANT, "tenuvaultApp", choice)
+    expect(staged).toMatchObject({ result: { missing: [missing], coverage: expect.arrayContaining([
+      expect.objectContaining({ service: "defender", readable: [] }),
+      expect.objectContaining({ service: "intune", readable: expect.arrayContaining(["DeviceConfigurations"]) }),
+    ]) } })
+    const id = "result" in staged ? staged.result.id : ""
+    expect(await wizard.finish(id, "profile", { intune: { access: "backup" } })).toEqual({ result: true })
+    expect(host.enroll).toHaveBeenCalledWith(expect.objectContaining({
+      staged: expect.objectContaining({ graphScopes: [held, "offline_access"] }),
+    }), "profile", choice)
   })
 
   it("rechecks the flag at storage and expires staged sign-ins", async () => {

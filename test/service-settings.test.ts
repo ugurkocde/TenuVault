@@ -68,7 +68,7 @@ const storeWith = (value: string | null) => {
 }
 
 /** Runs one backup with everything permitted and reports what it selected and which Graph paths it read. */
-async function backup(settings: ModuleSettings, scope: BackupScope, tenantId = TENANT) {
+async function backup(settings: ModuleSettings, scope: BackupScope, tenantId = TENANT, scheduledScopes?: string) {
   const store = new LocalBlobStore(mkdtempSync(join(tmpdir(), "tv-services-")), [randomBytes(32)])
   const graphPaths: string[] = []
   const entraResponses = Object.assign({}, ...ENTRA_TYPES.map(type => responsesFor(type.folder))) as ReturnType<typeof entraFixtureResponses>
@@ -83,11 +83,12 @@ async function backup(settings: ModuleSettings, scope: BackupScope, tenantId = T
       const answer = entraResponses[url.pathname + url.search] ?? Object.entries(defenderResponses).find(([path]) => decodeURIComponent(path) === decodeURIComponent(url.pathname + url.search))?.[1]
       return answer ? Response.json(answer.body, { status: answer.status, headers: answer.headers }) : emptyIntuneRead(url.pathname)
     }) as typeof fetch,
-    getToken: async () => jwt(MODULES.flatMap(module => module.areas.flatMap(area => area.parts.flatMap(part => part.backup.delegated === "unsupported" ? [] : part.backup.delegated.flat()))).join(" ")),
+    getToken: async () => jwt(scheduledScopes ?? MODULES.flatMap(module => module.areas.flatMap(area => area.parts.flatMap(part => part.backup.delegated === "unsupported" ? [] : part.backup.delegated.flat()))).join(" ")),
     services: (tenant) => settings.selection(tenant),
+    wizardConnection: () => scheduledScopes !== undefined,
     now: () => new Date("2026-11-14T02:00:00Z"),
   })
-  const job = await engine.waitForJob(engine.start({ tenantId, clientId: "22222222-2222-2222-2222-222222222222", storageAccountName: ACCOUNT, scope, trigger: "manual" }))
+  const job = await engine.waitForJob(engine.start({ tenantId, clientId: "22222222-2222-2222-2222-222222222222", storageAccountName: ACCOUNT, scope, trigger: scheduledScopes ? "scheduled" : "manual" }))
   const metadata = JSON.parse((await store.get(ACCOUNT, "intune-backups", `${job.backupFolder}/metadata.json`)).data.toString()) as { Status: string; Scope: { Included: string[] } }
   return { job, included: metadata.Scope.Included, status: metadata.Status, graphPaths }
 }
@@ -162,6 +163,21 @@ describe("Settings stored by the 0.5 release", () => {
       }
     })
   }
+})
+
+it("keeps the selected services enabled and skips wholly unreadable services in a scheduled backup", async () => {
+  const settings = new ModuleSettings(memoryStore())
+  settings.setChoice(TENANT, { intune: { access: "backup" }, conditionalAccess: { access: "backup" }, defender: { access: "backup" } })
+  const token = "Policy.Read.All"
+  const modules = await servicesStatus(TENANT, settings, async () => ({ accessToken: jwt(token) }))
+  expect(modules.needsAccess).toEqual(["defender", "intune"])
+  expect(modules.modules.filter(module => module.enabled).map(module => module.id)).toEqual(["intune", "conditionalAccess", "defender"])
+  const result = await backup(settings, DEFAULT_SCOPE, TENANT, token)
+  expect(result.status).toBe("Success")
+  expect(result.graphPaths.length).toBeGreaterThan(0)
+  expect(result.graphPaths.every(path => path.includes("conditionalAccess"))).toBe(true)
+  expect(result.job.results?.types.find(type => type.folder === "DefenderSecureScoreControlStates")?.state).toBe("skipped")
+  expect(result.job.results?.types.find(type => type.folder === "DeviceConfigurations")?.state).toBe("skipped")
 })
 
 describe("Saving a setting on top of stored settings", () => {

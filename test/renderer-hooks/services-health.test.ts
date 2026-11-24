@@ -308,6 +308,22 @@ it("shows Defender coverage and opt-in directory area switches", async () => {
   expect(directory.querySelector('input[role="switch"]')).not.toBeNull()
 })
 
+it("keeps Defender on with a Needs access badge and the Start now repair link", async () => {
+  const report = healthScene("defender-backup-types")
+  mocks.check.mockResolvedValue({
+    ...report,
+    readOnly: true,
+    coverage: [{ service: "defender", folders: ["DefenderCustomDetectionRules"], readable: [] }],
+  })
+  await render()
+  const defender = container.querySelector('[data-service="defender"]')!
+  expect(defender.textContent).toContain("Needs access")
+  expect(defender.textContent).toContain("Defender needs more access. Your choice is saved.")
+  expect(defender.textContent).toContain("Detection and response")
+  expect(defender.querySelector<HTMLInputElement>('input[role="switch"]')?.checked).toBe(true)
+  expect(defender.querySelector("a")?.getAttribute("href")).toBe(`/portal/settings?section=signin#sign-in-${report.tenantId}`)
+})
+
 it("shows Start now as read-only and omits permission grant instructions", async () => {
   const report = restoreGapFixture()
   mocks.check.mockResolvedValue({ ...report, graph: { ...report.graph, state: "consentMissing" }, readOnly: true })
