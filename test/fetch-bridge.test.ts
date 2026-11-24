@@ -71,6 +71,23 @@ describe("createBridgedFetch", () => {
     expect(realFetch).not.toHaveBeenCalled()
   })
 
+  it("logs only the fixed token-refusal event and normalized code", async () => {
+    const logger = vi.spyOn(console, "error").mockImplementation(() => {})
+    const getDelegatedToken = vi.fn().mockRejectedValueOnce(Object.assign(
+      new Error("Session for admin@example.test (AADSTS50076)", { cause: new Error("private MSAL response") }),
+      { errorNo: 50076, errorCode: "interaction_required" },
+    )).mockRejectedValueOnce(Object.assign(new Error("admin@example.test"), { errorCode: "raw private text" }))
+    const bridge = createBridgedFetch({ dispatch: vi.fn(), getDelegatedToken, fetch: vi.fn() })
+    try {
+      expect((await routeTokenRequest(bridge, DELEGATED_CLIENT_SECRET)).status).toBe(401)
+      expect((await routeTokenRequest(bridge, DELEGATED_CLIENT_SECRET)).status).toBe(401)
+      expect(logger.mock.calls).toEqual([
+        ["[auth] Delegated token request refused", "AADSTS50076"],
+        ["[auth] Delegated token request refused", "interaction_required"],
+      ])
+    } finally { logger.mockRestore() }
+  })
+
   it("passes real client secrets through to Microsoft untouched", async () => {
     const realFetch = vi.fn<typeof fetch>(async () => Response.json({ access_token: "app-token" }))
     const getDelegatedToken = vi.fn()

@@ -1,3 +1,4 @@
+import { namedSignInCode } from "../../shared/sign-in-errors"
 import { registerStorageToken } from "../storage/azure-seal"
 import { FetchPreconditionError } from "./network-error"
 import { DELEGATED_CLIENT_SECRET, INTERNAL_API_ORIGIN, LOCAL_STORAGE_PREFIX } from "../../shared/constants"
@@ -156,7 +157,10 @@ async function delegatedTokenResponse(
       ext_expires_in: expiresIn,
     })
   } catch (error) {
-    console.error(`[auth] Delegated token for ${tenant} (${scope}) failed:`, error)
+    const code = error && typeof error === "object" && "errorNo" in error ? error.errorNo : undefined
+    const normalized = typeof code === "string" || typeof code === "number" ? `AADSTS${code}`
+      : error instanceof Error ? namedSignInCode(error.message) : undefined
+    console.error("[auth] Delegated token request refused", normalized && /^AADSTS\d{4,8}$/.test(normalized) ? normalized : "interaction_required")
     return tokenError(401, "interaction_required", error)
   }
 }
