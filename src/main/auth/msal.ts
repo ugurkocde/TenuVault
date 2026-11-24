@@ -12,12 +12,12 @@ import { RESOURCE_SCOPES } from "../../shared/constants"
 import { FIRST_SIGN_IN_TIMEOUT_MESSAGE } from "../../shared/app-registration"
 import { ConnectionSwitchError } from "./switch-failure"
 import { namedSignInCode, signInLogCode, signInErrorRow } from "../../shared/sign-in-errors"
-import { isMicrosoftLoginUrl, normalizeGuid } from "../../shared/security"
-import { fetchNetworkClient } from "./network-client"
+import { isGuid, isMicrosoftLoginUrl, normalizeGuid } from "../../shared/security"
+import { fetchNetworkClient, msalTokenGrants, type TokenGrant } from "./network-client"
 import { loopbackSignIn } from "./loopback-sign-in"
 import { deviceCodeSignIn } from "./device-code-sign-in"
 import { TENUVAULT_CLIENT_ID } from "../../shared/tenant-connection"
-import { sharedTokenScopes, tokenIdentity } from "./token-identity"
+import { accessTokenClaims, sharedTokenScopes, tokenIdentity } from "./token-identity"
 import { missingPackScopes, resourcePackScopes, resourceScopes, type PermissionPack } from "../../shared/services/permission-packs"
 import { consentIssue } from "./pack-consent"
 import type { PackConsentCode } from "../../shared/pack-consent"
@@ -37,7 +37,7 @@ export interface AuthHost {
   sharedScopes?: (tenantId: string, scope: string, freshHealth: boolean) => Promise<string[]>
   authorizeConnection?: (tenantId: string, clientId: string, scope: string) => void
   authorizeSilentToken?: (tenantId: string, clientId: string, scope: string) => Promise<void>
-  authorizeIssuedToken?: (tenantId: string, clientId: string, scope: string, result: AuthenticationResult) => void
+  authorizeIssuedToken?: (tenantId: string, clientId: string, scope: string, result: AuthenticationResult & TokenGrant) => void
   /** Opens the system browser for the loopback sign-in flow. */
   openBrowser: (url: string) => Promise<void>
   /** Stores which account belongs to which tenant profile. */
@@ -49,9 +49,10 @@ export interface AuthHost {
   }
 }
 
-export type SilentTokenResult = AuthenticationResult & {
+type AcquiredToken = AuthenticationResult & TokenGrant
+
+export type SilentTokenResult = AcquiredToken & {
   cachedAccount: Pick<AccountInfo, "homeAccountId" | "tenantId" | "localAccountId" | "username" | "name" | "idTokenClaims"> | null
-  requestedScopes: readonly string[]
 }
 
 function accountForTenant(account: AccountInfo, tenantId: string) {
@@ -227,7 +228,8 @@ export class AuthManager {
   private link: { url: string; owner: object } | null = null
   /** Rejects the first sign-ins (signIn) waiting for the browser, for cancelInteractive. */
   private readonly cancels = new Map<(error: Error) => void, string>()
-  private readonly interactive = new Map<string, Promise<AuthenticationResult>>()
+  private readonly interactive = new Map<string, Promise<AcquiredToken>>()
+  private readonly tokenGrants = new WeakMap<PublicClientApplication, ReturnType<typeof msalTokenGrants>>()
   private readonly interactiveControls = new Map<object, { tenant: string; controller: AbortController }>()
 
   constructor(private readonly host: AuthHost) {}
@@ -281,7 +283,7 @@ export class AuthManager {
     if (!account) throw new ConnectionSwitchError("no_account", "Microsoft did not return an account for this sign-in.")
     return {
       account: { tenantId: normalizeGuid(account.tenantId), clientId, username: account.username, name: account.name, homeAccountId: account.homeAccountId },
-      accessToken: result.accessToken, grantedScopes: [...sharedTokenScopes(result.accessToken, result.scopes)],
+      accessToken: result.accessToken, grantedScopes: result.grantedScopes,
     }
   }
 
@@ -297,8 +299,7 @@ export class AuthManager {
       if (identity.decoded && (identity.tenantId !== normalizeGuid(tenant) || identity.clientId !== TENUVAULT_CLIENT_ID)) {
         throw new ConnectionSwitchError("switch_failed", "Microsoft returned an access token that could not be verified for this tenant and app. Sign in again.")
       }
-      const grantedScopes = sharedTokenScopes(result.accessToken, result.scopes)
-      if (missingPackScopes(graphScopes, grantedScopes).length) {
+      if (missingPackScopes(graphScopes, sharedTokenScopes(result.accessToken, result.grantedScopes)).length) {
         throw new ConnectionSwitchError("AADSTS65001", "Some selected Microsoft Graph permissions are still missing. Review the packs and check again. (AADSTS65001)")
       }
       for (const pack of packs.filter(pack => pack.resource !== "graph")) {
@@ -312,15 +313,15 @@ export class AuthManager {
             `${pack.label}: ${issue?.message ?? "Check the approved permissions for this resource and try again."}`)
         }
         const identity = token && tokenIdentity(token.accessToken)
-        if (!token?.account || normalizeGuid(token.account.tenantId) !== normalizeGuid(tenant) ||
+        if (!token?.accessToken || !matchesSelectedAccount(account, token) ||
           (identity?.decoded && (identity.tenantId !== normalizeGuid(tenant) || identity.clientId !== TENUVAULT_CLIENT_ID)) ||
-          missingPackScopes(pack.scopes, sharedTokenScopes(token.accessToken, token.scopes)).length) {
+          missingPackScopes(pack.scopes, sharedTokenScopes(token.accessToken, this.tokenGrants.get(app)?.forResult(token).grantedScopes)).length) {
           throw new ConnectionSwitchError("AADSTS65001", `${pack.label} approval is still needed. Review the pack and check again.`)
         }
       }
       return {
         account: { tenantId: tenant, clientId: TENUVAULT_CLIENT_ID, username: account.username, name: account.name, homeAccountId: account.homeAccountId },
-        accessToken: result.accessToken, graphScopes, grantedScopes: [...grantedScopes],
+        accessToken: result.accessToken, graphScopes, grantedScopes: result.grantedScopes,
       }
     } catch (error) {
       throw sharedSignInFailure(error, false)
@@ -338,7 +339,7 @@ export class AuthManager {
       if (identity.decoded && (identity.tenantId !== normalizeGuid(tenant) || identity.clientId !== TENUVAULT_CLIENT_ID)) {
         throw new ConnectionSwitchError("switch_failed", "Microsoft returned an access token that could not be verified for this tenant and app. Sign in again.")
       }
-      const scopes = sharedTokenScopes(result.accessToken, result.scopes)
+      const scopes = sharedTokenScopes(result.accessToken, result.grantedScopes)
       if (missingPackScopes(pack.scopes, scopes).length) throw new ConnectionSwitchError("AADSTS65001", `${pack.label} approval is still needed. (AADSTS65001)`)
     } catch (error) {
       throw sharedSignInFailure(error, checkOnly)
@@ -407,10 +408,11 @@ export class AuthManager {
     try {
       const result = await app.acquireTokenSilent({ account, scopes, authority: authority(tenantId), forceRefresh })
       if (result) {
-        this.host.authorizeIssuedToken?.(tenantId, clientId, scope, result)
+        const acquisition = { ...result, ...this.tokenGrants.get(app)?.forResult(result) }
+        this.host.authorizeIssuedToken?.(tenantId, clientId, scope, acquisition)
         // The request is attributed to the account this token was issued for.
         captureTokenActor({ username: result.account?.username || account.username || stored.username, name: result.account?.name ?? account.name ?? undefined })
-        return { ...result, cachedAccount, requestedScopes: scopes }
+        return { ...acquisition, cachedAccount }
       }
     } catch (error) {
       if (error instanceof InteractionRequiredAuthError) {
@@ -512,7 +514,7 @@ export class AuthManager {
     cancellable = false,
     onBrowserDone?: () => void,
     stagedApp?: PublicClientApplication,
-  ): Promise<AuthenticationResult> {
+  ): Promise<AcquiredToken> {
     const key = `${clientId}|${normalizeGuid(tenant)}|${scope}|${prompt ?? ""}|${loginHint ?? ""}|${stagedApp ? "staged" : "normal"}`
     const pending = this.interactive.get(key)
     if (pending) return pending
@@ -533,8 +535,9 @@ export class AuthManager {
     if (cancellable) this.cancels.set(cancel, key)
     // The first sign-in stops waiting after a while, like the setup sign-in.
     const deadline = cancellable ? setTimeout(() => cancel(new SignInTimeoutError(FIRST_SIGN_IN_TIMEOUT_MESSAGE)), SIGN_IN_TIMEOUT_MS) : undefined
+    const app = stagedApp ?? this.app(clientId)
     const promise = loopbackSignIn({
-      app: stagedApp ?? this.app(clientId),
+      app,
       scopes: typeof scope === "string" ? [scope] : scope,
       authority: authority(tenant),
       ...(prompt ? { prompt } : {}),
@@ -552,7 +555,7 @@ export class AuthManager {
         ended()
         onBrowserDone?.()
       },
-    }).finally(() => {
+    }).then(result => ({ ...result, ...this.tokenGrants.get(app)?.forResult(result) })).finally(() => {
       ended()
       if (this.interactive.get(key) === promise) this.interactive.delete(key)
     })
@@ -590,11 +593,12 @@ export class AuthManager {
   }
 
   private createApp(clientId: string, cache: ICachePlugin, staged = false): PublicClientApplication {
-    return new PublicClientApplication({
+    const grants = msalTokenGrants()
+    const app = new PublicClientApplication({
       auth: { clientId, authority: authority("organizations") },
       cache: { cachePlugin: cache },
       system: {
-        networkClient: fetchNetworkClient(this.host.fetch),
+        networkClient: fetchNetworkClient(this.host.fetch, grants.observe),
         loggerOptions: {
           logLevel: LogLevel.Warning,
           piiLoggingEnabled: false,
@@ -602,7 +606,28 @@ export class AuthManager {
         },
       },
     })
+    this.tokenGrants.set(app, grants)
+    return app
   }
+}
+
+/** Refreshes can omit identity fields. Compare the ones Microsoft supplied to the selected account. */
+function matchesSelectedAccount(account: AccountInfo, result: AuthenticationResult): boolean {
+  const matches = (value: unknown, expected: string | undefined) =>
+    value === undefined || value === "" || value === expected ||
+    (isGuid(value) && isGuid(expected) && normalizeGuid(value) === normalizeGuid(expected))
+  const tenant = account.tenantId
+  const oid = account.localAccountId || account.idTokenClaims?.oid
+  const sub = account.idTokenClaims?.sub
+  const returned = result.account
+  if (returned && (returned.homeAccountId !== account.homeAccountId || !matches(returned.tenantId, tenant) ||
+    !matches(returned.localAccountId, oid))) return false
+  if (!matches(result.tenantId, tenant) || (!matches(result.uniqueId, oid) && !matches(result.uniqueId, sub))) return false
+  for (const claims of [result.idTokenClaims as AccountInfo["idTokenClaims"], returned?.idTokenClaims]) {
+    if (!matches(claims?.tid, tenant) || !matches(claims?.oid, oid) || !matches(claims?.sub, sub) ||
+      !matches(claims?.aud, TENUVAULT_CLIENT_ID)) return false
+  }
+  return matches(accessTokenClaims(result.accessToken)?.oid, oid)
 }
 
 function authority(tenant: string): string {

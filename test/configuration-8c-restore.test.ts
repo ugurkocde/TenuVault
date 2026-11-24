@@ -151,8 +151,7 @@ for (const [folder, operations] of Object.entries(STAGED_8C_OPERATIONS)) for (co
       const { restoreSignIn } = await import("../src/main/restore/restore-actor")
       const homeAccountId = "admin.home"
       return restoreSignIn(identity.tenantId, { ...identity, homeAccountId }, {
-        accessToken: token, tenantId: identity.tenantId, scopes: [...scopes].map(scope => "https://graph.microsoft.com/" + scope),
-        requestedScopes: ["https://graph.microsoft.com/.default"],
+        accessToken: token, tenantId: identity.tenantId, grantedScopes: [...scopes].map(scope => "https://graph.microsoft.com/" + scope),
         cachedAccount: { homeAccountId, tenantId: identity.tenantId, localAccountId: identity.userId, username: "admin@example.test" },
       })
     }

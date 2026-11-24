@@ -59,7 +59,7 @@ export function requireRestoreActor(token: string, actor: ActorIdentity, authori
   if (granted?.kind !== "delegated" || !granted.permissions.size) throw new Error(adminRequired)
 }
 
-export function restoreSignIn(tenantId: string, stored: { clientId: string; homeAccountId: string }, result: Pick<SilentTokenResult, "cachedAccount" | "accessToken" | "tenantId" | "scopes" | "requestedScopes">) {
+export function restoreSignIn(tenantId: string, stored: { clientId: string; homeAccountId: string }, result: Pick<SilentTokenResult, "cachedAccount" | "accessToken" | "tenantId" | "grantedScopes">) {
   const { cachedAccount: account, accessToken: token } = result
   if (!account || !account.homeAccountId || account.homeAccountId !== stored.homeAccountId ||
     normalizeGuid(account.tenantId) !== normalizeGuid(tenantId)) throw new Error(adminRequired)
@@ -69,12 +69,7 @@ export function restoreSignIn(tenantId: string, stored: { clientId: string; home
   const authorization: RestoreAuthorization = { tenantId: normalizeGuid(tenantId), clientId: normalizeGuid(stored.clientId), userId: normalizeGuid(userId) }
   if (!claims) {
     if (result.tenantId && normalizeGuid(result.tenantId) !== authorization.tenantId) throw new Error(adminRequired)
-    // MSAL fills an omitted scope response with the scopes we requested.
-    const scopes = namedScopes(result.scopes)
-    const requested = namedScopes(result.requestedScopes)
-    if (scopes.size && (scopes.size !== requested.size || [...scopes].some(scope => !requested.has(scope)))) {
-      authorization.scopes = [...scopes]
-    }
+    if (result.grantedScopes) authorization.scopes = [...namedScopes(result.grantedScopes)]
   }
   const identity = { tenantId: authorization.tenantId, clientId: authorization.clientId, userId: tokenActor(claims)?.userId ?? authorization.userId }
   requireRestoreActor(token, identity, authorization)

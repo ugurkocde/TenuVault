@@ -255,6 +255,10 @@ export class TenantConnections {
       }
       this.validateStorage(latest, selected.method)
       const missing = this.host.coverage(tenant, selected.method, staged.accessToken, staged.graphScopes, staged.grantedScopes)
+      if (missing.length) {
+        const next = selected.method === "graphCli" ? "Choose another sign-in method." : "Grant the permissions and sign in again."
+        throw new ConnectionSwitchError("switch_failed", `The new sign-in is missing required permissions (${missing.join(", ")}). ${next}`)
+      }
       const connection = {
         ...record, ...selected, graphScopes: staged.graphScopes, updatedAt: this.now().toISOString(),
         ...(selected.method === "ownApp" ? { ownClientId: selected.clientId } : {}),

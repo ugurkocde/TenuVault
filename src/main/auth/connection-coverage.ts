@@ -1,15 +1,16 @@
 import { missingForChoice, type PermissionChoice } from "../../shared/services/manifest"
 import { missingPackScopes } from "../../shared/services/permission-packs"
-import { grantedPermissions } from "../../shared/services/token"
+import { sharedTokenScopes } from "./token-identity"
+import { ConnectionSwitchError } from "./switch-failure"
 import type { ModuleId } from "../../shared/services/modules"
 import type { SignInMethod } from "../../shared/tenant-connection"
 import type { ModuleSetting } from "../services/settings"
 
 export function connectionCoverage(settings: Record<ModuleId, ModuleSetting>, method: SignInMethod, token: string, graphScopes?: string[], grantedScopes?: readonly string[]): string[] {
-  const granted = grantedScopes === undefined ? grantedPermissions(token) : { kind: "delegated" as const, permissions: new Set(grantedScopes) }
-  if (granted?.kind !== "delegated" || !granted.permissions.size) throw new Error("Microsoft did not return delegated permissions. Sign in again to check coverage.")
-  if (method === "tenuvaultApp" && graphScopes) return missingPackScopes(graphScopes, granted.permissions)
-  return missingForChoice(connectionChoice(settings, method), granted)
+  const permissions = sharedTokenScopes(token, grantedScopes)
+  if (!permissions.size) throw new ConnectionSwitchError("switch_failed", "Microsoft did not return verifiable delegated permissions. Sign in again to check coverage.")
+  if (method === "tenuvaultApp" && graphScopes) return missingPackScopes(graphScopes, permissions)
+  return missingForChoice(connectionChoice(settings, method), { kind: "delegated", permissions })
 }
 
 export function connectionChoice(settings: Record<ModuleId, ModuleSetting>, method?: SignInMethod): PermissionChoice {

@@ -25,9 +25,11 @@ export function tokenIdentity(token: string): { tenantId: string | null; clientI
   return { decoded: true, tenantId: guid(tid), clientId: azp && appid && guid(appid) !== clientId ? null : clientId }
 }
 
-/** MSAL supplies the granted scopes when a shared-client access token is opaque. */
-export function sharedTokenScopes(token: string, acquiredScopes: readonly string[] = []): ReadonlySet<string> {
-  if (!tokenIdentity(token).decoded) return new Set(acquiredScopes.map(scope => scope.split("/").at(-1)!))
+/** Read claims when available, or use explicit token response scopes for an opaque bearer. */
+export function sharedTokenScopes(token: string, grantedScopes?: readonly string[]): ReadonlySet<string> {
   const granted = grantedPermissions(token)
-  return granted?.kind === "delegated" ? granted.permissions : new Set()
+  if (granted?.kind === "delegated") return granted.permissions
+  if (granted || accessTokenClaims(token) || !grantedScopes) return new Set()
+  return new Set(grantedScopes.map(scope => scope.split("/").at(-1)!)
+    .filter(scope => /^[a-zA-Z][\w.-]*$/.test(scope) && !["openid", "profile", "offline_access"].includes(scope)))
 }

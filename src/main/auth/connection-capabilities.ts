@@ -1,3 +1,4 @@
+import type { TokenGrant } from "./network-client"
 import { RESOURCE_SCOPES } from "../../shared/constants"
 import { isGuid, normalizeGuid } from "../../shared/security"
 import { admittedDirectoryPermissions } from "../../shared/intune/restore-matrix"
@@ -13,7 +14,7 @@ const PACK_REQUIRED = "Approve the restore permission pack for this service in S
 const CONNECTION_CHANGED = "This tenant's sign-in method changed. Reload the tenant and try again."
 const TOKEN_UNVERIFIED = "TenuVault could not verify the tenant and app in this access token. Sign in again."
 type SharedMethod = NonNullable<ReturnType<typeof sharedMethod>>
-type IssuedToken = { tenantId: string; clientId: string; scope: string; expiresAt: number; scopes?: string[]; reader?: true }
+type IssuedToken = TokenGrant & { tenantId: string; clientId: string; scope: string; expiresAt: number; reader?: true }
 const GRAPH_ONLY = "Start now only connects to Microsoft Graph. Change sign-in method to access other Microsoft services."
 
 export class ConnectionCapabilities {
@@ -55,7 +56,7 @@ export class ConnectionCapabilities {
     this.requireConnection(tenantId, clientId, scope)
   }
 
-  requireIssuedToken(tenantId: string, clientId: string, scope: string, token: string, result?: { expiresOn?: Date | null; scopes?: string[] }): void {
+  requireIssuedToken(tenantId: string, clientId: string, scope: string, token: string, result?: TokenGrant & { expiresOn?: Date | null }): void {
     if (sharedMethod(clientId) || sharedMethod(this.record(tenantId)?.clientId ?? null)) {
       this.requireConnection(tenantId, clientId, scope)
     }
@@ -65,7 +66,7 @@ export class ConnectionCapabilities {
       const identity = tokenIdentity(token)
       if (identity.decoded && (identity.tenantId !== tenantId || identity.clientId !== clientId)) throw new Error(TOKEN_UNVERIFIED)
     }
-    this.rememberToken(token, { tenantId, clientId, scope, expiresAt: result?.expiresOn?.getTime() ?? Date.now() + 3600_000, scopes: result?.scopes })
+    this.rememberToken(token, { tenantId, clientId, scope, expiresAt: result?.expiresOn?.getTime() ?? Date.now() + 3600_000, grantedScopes: result?.grantedScopes })
   }
 
   bindOwnClientCredentials(tenantId: string, clientId: string, scope: string, token: string, expiresIn?: number): void {
@@ -198,7 +199,7 @@ export class ConnectionCapabilities {
     }
 
     if (!token || !tenantId) throw new Error(PACK_REQUIRED)
-    const permissions = sharedTokenScopes(token, acquisition?.scopes)
+    const permissions = sharedTokenScopes(token, acquisition?.grantedScopes)
     const allowed = this.restorePacks(tenantId)
     if (writes.some(path => {
       const recycle = metadata?.directoryRecycle

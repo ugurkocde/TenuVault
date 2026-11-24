@@ -1,3 +1,4 @@
+import { graphPermissions } from "../src/shared/services/manifest"
 import { resourcePackScopes, tenantPermissionPacks } from "../src/shared/services/permission-packs"
 import { mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -9,7 +10,7 @@ import { TenantConnections, TENANT_LIST_KEY, type StagedSignIn } from "../src/ma
 import { accountStore, connectionCache, publicAccountKey, stageConnectionCache } from "../src/main/auth/stores"
 import { GRAPH_CLI_CLIENT_ID, TENUVAULT_CLIENT_ID, type SignInMethod, type TenantConnection } from "../src/shared/tenant-connection"
 import { RESOURCE_SCOPES } from "../src/shared/constants"
-import { connectionCoverage } from "../src/main/auth/connection-coverage"
+import { connectionChoice, connectionCoverage } from "../src/main/auth/connection-coverage"
 import { ConnectionCapabilities, READ_ONLY } from "../src/main/auth/connection-capabilities"
 import { createBridgedFetch } from "../src/main/api/fetch-bridge"
 import { executionMetadata } from "../src/main/api/execution-metadata"
@@ -24,7 +25,8 @@ const NOW = "2026-11-24T12:00:00.000Z"
 const storage = `tvlocal-${TENANT}`
 const raw = JSON.stringify([{ id: 1, name: "Fixture", resources: { storageAccountName: storage }, credentials: { tenantId: TENANT, appId: OWN, clientSecret: "fixture" } }])
 const jwt = (claims: object) => `x.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.x`
-const token = jwt({ tid: TENANT, scp: "User.Read DeviceManagementConfiguration.ReadWrite.All" })
+const defaultSettings = new ModuleSettings({ get: () => null, set: () => undefined, delete: () => undefined }).get(TENANT)
+const token = jwt({ tid: TENANT, scp: graphPermissions(connectionChoice(defaultSettings), "delegated").join(" ") })
 const staged = (clientId: string, tenantId = TENANT): StagedSignIn => ({
   account: { tenantId, clientId, username: "fixture@example.test", homeAccountId: "fixture" },
   accessToken: token,
@@ -45,7 +47,7 @@ function fixture() {
   const store = new SecureStore(file, cipher)
   const signIn = vi.fn(async (_tenant: string, clientId: string) => staged(clientId))
   const modules = new ModuleSettings(store)
-  const coverage = vi.fn((tenant: string, method: SignInMethod, accessToken: string) => connectionCoverage(modules.get(tenant), method, accessToken))
+  const coverage = vi.fn((tenant: string, method: SignInMethod, accessToken: string, graphScopes?: string[], grantedScopes?: readonly string[]) => connectionCoverage(modules.get(tenant), method, accessToken, graphScopes, grantedScopes))
   const now = vi.fn(() => new Date(NOW))
   const tokenFile = join(dir, "token-cache.bin")
   const legacyCache = new SecureStore(tokenFile, cipher)
@@ -132,6 +134,19 @@ describe("tenant connection migration", () => {
 })
 
 describe("in-place sign-in change", () => {
+  it.each([
+    ["unverifiable", "opaque", ["https://graph.microsoft.com/.default"], "delegated permissions"],
+    ["insufficient", jwt({ tid: TENANT, scp: "User.Read" }), undefined, "missing required permissions"],
+  ] as const)("preserves the current connection when the new registration has %s coverage", async (_reason, accessToken, scopes, message) => {
+    const f = fixture()
+    f.enroll()
+    const before = f.entries()
+    f.signIn.mockResolvedValueOnce({ ...staged(NEXT), accessToken, grantedScopes: scopes })
+    await expect(f.connections.switch(TENANT, { method: "ownApp", clientId: NEXT })).rejects.toThrow(message)
+    expect(f.entries()).toEqual(before)
+    expect(f.restart().accounts.get(TENANT)?.clientId).toBe(OWN)
+  })
+
   it("swaps client ID and account atomically, keeps tenant state, and recomputes coverage with the new token", async () => {
     const f = fixture(); f.enroll()
     f.now.mockReturnValue(new Date("2026-11-25T12:00:00Z"))
@@ -140,7 +155,7 @@ describe("in-place sign-in change", () => {
     const switchResult = await f.connections.switch(TENANT.toUpperCase(), { method: "tenuvaultApp" })
     expect(switchResult.connection).toMatchObject({ clientId: TENUVAULT_CLIENT_ID, method: "tenuvaultApp", ownClientId: OWN, createdAt: NOW, updatedAt: "2026-11-25T12:00:00.000Z" })
     expect(f.coverage).toHaveBeenCalledWith(TENANT, "tenuvaultApp", token, undefined, undefined)
-    expect(switchResult.missing).toContain("Organization.Read.All")
+    expect(switchResult.missing).toEqual([])
     const store = f.reopen()
     expect(accountStore(store).get(TENANT)).toBeNull()
     expect(currentAccounts(store, f.connections).get(TENANT)?.clientId).toBe(TENUVAULT_CLIENT_ID)
@@ -485,7 +500,7 @@ describe("TenuVault app capabilities", () => {
       const headers = { authorization: "Bearer opaque-shared-token" }
       await expect(cap.authorizeRequest(url, url, { headers }, TENANT)).rejects.toThrow("could not verify")
       expect(() => cap.requireIssuedToken(TENANT, clientId, RESOURCE_SCOPES.graph, jwt({ tid: OTHER, azp: clientId }))).toThrow("could not verify")
-      cap.requireIssuedToken(TENANT, clientId, RESOURCE_SCOPES.graph, "opaque-shared-token", { scopes })
+      cap.requireIssuedToken(TENANT, clientId, RESOURCE_SCOPES.graph, "opaque-shared-token", { grantedScopes: scopes })
       await expect(cap.authorizeRequest(url, url, { headers }, TENANT)).resolves.toBeUndefined()
       const write = cap.authorizeRequest(url, url, { method: "POST", headers }, TENANT)
       if (method === "graphCli") await expect(write).rejects.toThrow(READ_ONLY)

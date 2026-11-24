@@ -35,10 +35,10 @@ const CLIENT = "33333333-3333-3333-3333-333333333333"
 
 const openBrowser = vi.fn(async () => undefined)
 
-function manager() {
+function manager(fetchToken: typeof fetch = async () => new Response("{}")) {
   const store = new Map()
   return new AuthManager({
-    fetch: async () => new Response("{}"),
+    fetch: fetchToken,
     cachePlugin: () => ({ beforeCacheAccess: async () => undefined, afterCacheAccess: async () => undefined }),
     openBrowser,
     accountStore: {
@@ -308,6 +308,12 @@ describe("cancelInteractive", () => {
 })
 
 
+async function tokenResponse(accessToken: string, scopes: string[], account: unknown) {
+  const correlationId = crypto.randomUUID()
+  await msal.client?.system?.networkClient?.sendPostRequestAsync("https://login.microsoftonline.com/token", { correlationId })
+  return { account, accessToken, scopes, correlationId }
+}
+
 describe("TenuVault app token verification", () => {
   const cache = { beforeCacheAccess: async () => undefined, afterCacheAccess: async () => undefined }
   const account = { tenantId: TENANT, username: "example@example.test", homeAccountId: "fixture" }
@@ -327,10 +333,16 @@ describe("TenuVault app token verification", () => {
         for (const [key, value] of Object.entries(values)) entries.set(key, value)
       },
     }
-    const auth = manager()
     const settings = new ModuleSettings(store)
     const packs = tenantPermissionPacks({ intune: { access: "backup" } }, { azure: true, audit: false })
     const graphScopes = resourcePackScopes(packs, "graph")
+    const graphGrant = graphScopes.map(scope => "https://graph.microsoft.com/" + scope)
+    const rawTokens = [
+      { access_token: "opaque-graph", scope: graphGrant.join(" ") },
+      { access_token: "opaque-arm", scope: "user_impersonation" },
+      { access_token: "opaque-storage", scope: "user_impersonation" },
+    ]
+    const auth = manager(async () => Response.json(rawTokens.shift()))
     const connections = new TenantConnections({
       store,
       signIn: { tenuvaultApp: tenant => auth.stageTenuVaultSignIn(tenant, cache, packs) },
@@ -339,12 +351,42 @@ describe("TenuVault app token verification", () => {
     const profile = JSON.stringify([{ credentials: { tenantId: TENANT, appId: CLIENT }, resources: { storageAccountName: "fixture" } }])
     connections.enroll(TENANT, { method: "ownApp", clientId: CLIENT }, profile, { accessToken: "previous", account: { ...account, clientId: CLIENT } })
     const before = store.get(TENANT_LIST_KEY)
-    msal.interactive.mockResolvedValueOnce({ account, accessToken: "opaque-graph", scopes: graphScopes.map(scope => "https://graph.microsoft.com/" + scope) })
-    msal.silent.mockResolvedValueOnce({ account, accessToken: "opaque-arm", scopes: ["user_impersonation"] })
-      .mockResolvedValueOnce({ account, accessToken: "opaque-storage", scopes: ["user_impersonation"] })
+    msal.interactive.mockImplementationOnce(() => tokenResponse("opaque-graph", graphGrant, account))
+    msal.silent.mockImplementationOnce(() => tokenResponse("opaque-arm", ["user_impersonation"], null))
+      .mockImplementationOnce(() => tokenResponse("opaque-storage", ["user_impersonation"], null))
     await expect(connections.switch(TENANT, { method: "tenuvaultApp" })).resolves.toMatchObject({ missing: [], connection: { method: "tenuvaultApp", graphScopes } })
     expect(connections.get(TENANT)?.clientId).toBe(TENUVAULT_CLIENT_ID)
     expect(store.get(TENANT_LIST_KEY)).toBe(before)
+  })
+
+  it("does not stage MSAL's requested .default scope as a grant for an opaque bearer", async () => {
+    const auth = manager(async () => Response.json({ access_token: "opaque-own" }))
+    msal.interactive.mockImplementationOnce(() => tokenResponse("opaque-own", ["https://graph.microsoft.com/.default"], account))
+    const staged = await auth.stageSignIn(TENANT, CLIENT, cache)
+    expect(staged.accessToken).toBe("opaque-own")
+    expect(staged.grantedScopes).toBeUndefined()
+  })
+
+  it("uses the selected Graph account when Azure refreshes omit identity metadata", async () => {
+    const packs = tenantPermissionPacks({}, { azure: true, audit: false })
+    const graphScopes = resourcePackScopes(packs, "graph")
+    msal.interactive.mockResolvedValueOnce({ account, accessToken: token(graphScopes) })
+    msal.silent.mockResolvedValueOnce({ accessToken: token(["user_impersonation"]) })
+      .mockResolvedValueOnce({ accessToken: token(["user_impersonation"]) })
+    await expect(manager().stageTenuVaultSignIn(TENANT, cache, packs)).resolves.toMatchObject({ account: { homeAccountId: account.homeAccountId } })
+    expect(msal.silent).toHaveBeenLastCalledWith(expect.objectContaining({ account, forceRefresh: true }))
+  })
+
+  it.each([
+    ["account", { account: { ...account, homeAccountId: "different" } }],
+    ["tenant", { tenantId: CLIENT }],
+    ["ID token", { idTokenClaims: { oid: CLIENT } }],
+    ["bearer", { accessToken: token(["user_impersonation"], { oid: CLIENT }) }],
+  ] as const)("rejects Azure refresh %s metadata that disagrees with the selected account", async (_field, metadata) => {
+    const packs = tenantPermissionPacks({}, { azure: true, audit: false })
+    msal.interactive.mockResolvedValueOnce({ account: { ...account, localAccountId: TENANT }, accessToken: token(resourcePackScopes(packs, "graph")) })
+    msal.silent.mockResolvedValueOnce({ accessToken: token(["user_impersonation"]), ...metadata })
+    await expect(manager().stageTenuVaultSignIn(TENANT, cache, packs)).rejects.toMatchObject({ message: expect.stringContaining("Azure Service Management") })
   })
 
   it("checks the selected pack with a fresh token and no consent prompt", async () => {
@@ -379,10 +421,10 @@ describe("TenuVault app token verification", () => {
     msal.interactive.mockResolvedValueOnce({ account: { ...account, tenantId: CLIENT }, accessToken: token(graphScopes) })
     await expect(auth.stageTenuVaultSignIn(TENANT, cache, packs)).rejects.toMatchObject({ code: "wrong_tenant" })
     msal.interactive.mockResolvedValueOnce({ account, accessToken: token(graphScopes) })
-    msal.silent.mockResolvedValueOnce({ account, scopes: ["user_impersonation"] }).mockResolvedValueOnce({ account, scopes: [] })
+    msal.silent.mockResolvedValueOnce({ account, accessToken: token(["user_impersonation"]) }).mockResolvedValueOnce({ account, scopes: [] })
     await expect(auth.stageTenuVaultSignIn(TENANT, cache, packs)).rejects.toMatchObject({ code: "AADSTS65001", message: expect.stringContaining("Azure Storage") })
     msal.interactive.mockResolvedValueOnce({ account, accessToken: token(graphScopes) })
-    msal.silent.mockResolvedValueOnce({ account, scopes: ["user_impersonation"] }).mockResolvedValueOnce({ account, scopes: ["user_impersonation"] })
+    msal.silent.mockResolvedValueOnce({ account, accessToken: token(["user_impersonation"]) }).mockResolvedValueOnce({ account, accessToken: token(["user_impersonation"]) })
     await expect(auth.stageTenuVaultSignIn(TENANT, cache, packs)).resolves.toMatchObject({
       account: { clientId: TENUVAULT_CLIENT_ID, tenantId: TENANT }, graphScopes,
     })
