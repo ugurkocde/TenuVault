@@ -527,7 +527,7 @@ export default function OnboardingPage() {
       if ("error" in outcome) {
         const declined = method === "graphCli" && (outcome.error.code === "AADSTS65004" || outcome.error.code === "cancelled")
         setPublicCode(outcome.error.code)
-        setPublicError(declined ? "Sign-in was cancelled in the browser." : outcome.error.message.replace(/permission packs?/gi, "permissions").replace(" in Sign-in and access.", "."))
+        setPublicError(declined ? "Sign-in was cancelled in the browser." : outcome.error.message.replace(/(?:permission )?\bpacks?\b/gi, "permissions").replace(" in Sign-in and access.", "."))
       } else signedInShared(outcome.result)
     } catch {
       if (mounted.current && startedIn === currentAttempt.current) setPublicError("Could not finish signing in. Try again.")
@@ -789,8 +789,12 @@ export default function OnboardingPage() {
   }
 
   const copyAdminInstructions = async () => {
+    const permissions = missing.length ? ` Missing permissions: ${missing.join(", ")}.` : ""
+    const instructions = method === "ownApp" && account
+      ? `Please review backup access for ${choiceLabel(services)} in TenuVault. Add the missing delegated permissions to app registration ${account.clientId} in tenant ${account.tenantId} and grant consent for those permissions.${permissions} Let me know when I can check access again.`
+      : `Please review backup access for ${choiceLabel(services)} in TenuVault.${permissions} If additional permissions are needed, connect using the TenuVault app.`
     try {
-      await navigator.clipboard.writeText(`Please review backup access for ${choiceLabel(services)} in TenuVault.${missing.length ? ` Required permissions: ${missing.join(", ")}.` : ""}${method === "graphCli" ? " If additional permissions are needed, connect using the TenuVault app." : " After approval, let me know so I can check access again."}`)
+      await navigator.clipboard.writeText(instructions)
       setConsentStatus("Instructions copied.")
     } catch {
       setConsentStatus("Could not copy the instructions.")
@@ -1038,7 +1042,7 @@ export default function OnboardingPage() {
             </p>
             {checkingPermissions && <p role="status" className="text-sm text-gray-600">Checking permissions for your chosen services…</p>}
             {method === "graphCli" && <p className="text-sm text-gray-600">Start now signs in to Microsoft Graph only, so backups stay on this device.</p>}
-            {method === "tenuvaultApp" && <p className="text-sm text-gray-600">Azure storage access for the TenuVault app can be set up after the first backup.</p>}
+            {method === "tenuvaultApp" && <p className="text-sm text-gray-600">TenuVault app setup signs in to Microsoft Graph only. Add Azure storage access in Settings after the first backup.</p>}
             {addError && <p role="alert" className="text-sm text-red-700">{addError.message}</p>}
             {setup?.connection.storage && setup.connection.tenantId === account.tenantId.toLowerCase() && (
               <p className="text-sm text-gray-600">The setup file chose {setup.connection.storage.kind === "local" ? "This device" : `the storage account ${setup.connection.storage.storageAccountName}`}. {setup.connection.storage.kind === "azure" ? "TenuVault checks access automatically." : ""}</p>
