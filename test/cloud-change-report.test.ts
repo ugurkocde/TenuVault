@@ -8,7 +8,8 @@ import { NextRequest } from "../src/main/api/next-server-shim"
 import { POST as detectDrifts } from "../src/portal/app/api/detect-drifts/route"
 import { clearSettingNames } from "../src/portal/lib/drift/setting-names"
 import { mapAuditEvent, type AuditEventRaw } from "../src/shared/notifications/audit"
-import { buildChangeReport, changeReportMarkdown, reportFileName } from "../src/shared/reports/change-report"
+import { compareBackups } from "../src/shared/intune/backup-changes"
+import { buildChangeReport, changeReportMarkdown, reportFileName, summaryLine } from "../src/shared/reports/change-report"
 import { buildChangeReportDocument } from "../src/shared/reports/change-report-html"
 import { reportEmail } from "../src/main/features/reports"
 import { MAX_BACKUP_ARCHIVE_BYTES } from "../src/shared/constants"
@@ -28,14 +29,14 @@ type Run = { output: string[]; methods: string[]; reads: string[]; writes: Array
 const runReport = (scenario = "default", level = "full") => JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", runScript, "-FixturePath", fixturePath, "-Level", level, "-Scenario", scenario], { encoding: "utf8", maxBuffer: 100_000_000 })) as Run
 const manifestReads = (run: Run) => run.reads.filter((uri) => uri.endsWith("/metadata.json")).map((uri) => uri.split("/")[4])
 
-type Backup = { name: string; metadata: unknown; files: Record<string, unknown> }
+type Backup = { name: string; metadata: Omit<typeof fixture.older.metadata, "Items"> & { Items: Record<string, { file: string; hash: string }> }; files: Record<string, unknown> }
 const backups: Backup[] = [fixture.older as Backup, fixture.newer as Backup]
 const definitions = fixture.definitions as Record<string, unknown>
 
 afterEach(() => vi.unstubAllGlobals())
 
 /** The desktop app's report of the fixture: the drift route over storage and Graph fakes, then the report code. */
-async function desktopReport(options: { values: boolean; actors: boolean; auditError?: string; trigger?: "manual" | "scheduled" }) {
+async function desktopReport(options: { values: boolean; actors: boolean; auditError?: string; trigger?: "manual" | "scheduled" }, pair = backups) {
   clearSettingNames()
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input))
@@ -48,30 +49,91 @@ async function desktopReport(options: { values: boolean; actors: boolean; auditE
         return Object.hasOwn(definitions, id) && definitions[id] !== null ? { id: request.id, status: 200, body: definitions[id] } : { id: request.id, status: 404 }
       }) })
     }
-    if (url.searchParams.get("delimiter")) return new Response(backups.map((backup) => `<BlobPrefix><Name>${backup.name}/</Name></BlobPrefix>`).join(""))
+    if (url.searchParams.get("delimiter")) return new Response(pair.map((backup) => `<BlobPrefix><Name>${backup.name}/</Name></BlobPrefix>`).join(""))
     const prefix = url.searchParams.get("prefix")
     if (prefix) {
-      const backup = backups.find((entry) => prefix === `${entry.name}/`)!
+      const backup = pair.find((entry) => prefix === `${entry.name}/`)!
       return new Response(Object.keys(backup.files).map((file) => `<Blob><Name>${backup.name}/${file.replace(/&/g, "&amp;")}</Name></Blob>`).join(""))
     }
     const path = decodeURIComponent(url.pathname.split("/").slice(2).join("/"))
-    const backup = backups.find((entry) => path.startsWith(`${entry.name}/`))!
+    const backup = pair.find((entry) => path.startsWith(`${entry.name}/`))!
     const rest = path.slice(backup.name.length + 1)
     if (rest === "metadata.json") return Response.json(backup.metadata)
     return Object.hasOwn(backup.files, rest) ? Response.json(backup.files[rest]) : new Response("", { status: 404 })
   }))
-  const response = await detectDrifts(new NextRequest("http://tenuvault.internal/api/detect-drifts", { method: "POST", body: JSON.stringify({ tenantId: fixture.tenantId, appId: "app", clientSecret: "test", storageAccountName: "store", documentItems: true }) }))
+  const response = await detectDrifts(new NextRequest("http://tenuvault.internal/api/detect-drifts", { method: "POST", body: JSON.stringify({ tenantId: fixture.tenantId, appId: "app", clientSecret: "test", storageAccountName: "store", baseline: pair[0]!.name, comparison: pair[1]!.name, documentItems: true }) }))
   const drift = (await response.json()) as DriftResult
   expect(response.status, JSON.stringify(drift)).toBe(200)
   const changes = fixture.audit.flatMap((raw) => { const change = mapAuditEvent(raw as AuditEventRaw); return change ? [{ ...change, source: "Intune" }] : [] })
   const report = buildChangeReport(drift, options.auditError ? { error: options.auditError } : { changes, note: null }, { tenantId: fixture.tenantId, tenantName: fixture.tenantName, generatedAt: fixture.generatedAt, trigger: options.trigger ?? "scheduled", cloud: true, includeValues: options.values, includeActors: options.actors })
-  return { report, markdown: changeReportMarkdown(report), html: buildChangeReportDocument(report).html, email: reportEmail({ report }, null, "azure-watcher"), fileName: reportFileName(report) }
+  return { drift, report, markdown: changeReportMarkdown(report), html: buildChangeReportDocument(report).html, email: reportEmail({ report }, null, "azure-watcher"), fileName: reportFileName(report) }
 }
 
-function cloudReport(options: { values: boolean; actors: boolean; auditError?: string; trigger?: "manual" | "scheduled" }) {
-  const output = execFileSync(pwsh!, ["-NoProfile", "-File", script, "-FixturePath", fixturePath, "-Level", options.values ? "full" : "names", "-Actors", String(options.actors), ...(options.auditError ? ["-AuditError", options.auditError] : []), ...(options.trigger ? ["-Trigger", options.trigger] : [])], { encoding: "utf8", maxBuffer: 20_000_000 })
+function cloudReport(options: { values: boolean; actors: boolean; auditError?: string; trigger?: "manual" | "scheduled" }, path = fixturePath) {
+  const output = execFileSync(pwsh!, ["-NoProfile", "-File", script, "-FixturePath", path, "-Level", options.values ? "full" : "names", "-Actors", String(options.actors), ...(options.auditError ? ["-AuditError", options.auditError] : []), ...(options.trigger ? ["-Trigger", options.trigger] : [])], { encoding: "utf8", maxBuffer: 20_000_000 })
   return JSON.parse(output) as { report: unknown; markdown: string; html: string; email: Record<string, unknown>; fileName: string }
 }
+
+const coveragePairs = ["clean", "unassigned", "typed", "mixed"] as const
+
+function comparisonFixture(scenario: typeof coveragePairs[number]) {
+  const [older, newer] = structuredClone(backups) as [Backup, Backup]
+  // Fields and warning syntax written by the 0.5.3 desktop engine.
+  const scope = { Included: ["DeviceConfigurations", "ConfigurationPolicies", "CompliancePolicies"], Excluded: ["Apps"] }
+  const legacy = { Source: "TenuVault Desktop", RunbookVersion: "desktop", AuthMode: "delegated", Scope: scope, Failures: 0, FailedTypes: [], SkippedTypes: [] }
+  const before = { ...older.metadata, ...legacy }
+  const after = {
+    ...newer.metadata, ...legacy,
+    ...(scenario === "unassigned" ? { Status: "CompletedWithWarnings", Failures: 1, Warnings: ['Could not back up "Workstation policy": Backup request timed out after 90 seconds. Check your connection and retry.'] } : {}),
+    ...(scenario === "typed" ? { Status: "CompletedWithWarnings", Failures: 1, FailedTypes: ["DeviceConfigurations"] } : {}),
+    ...(scenario === "mixed" ? {
+      Coverage: "Incomplete",
+      Outcomes: [
+        { Folder: "DeviceConfigurations", Outcome: "skipped", Cause: "permission", Reason: "Access was denied." },
+        { Folder: "ConfigurationPolicies", Outcome: "saved", Saved: 5 },
+        { Folder: "CompliancePolicies", Outcome: "saved", Saved: 0 },
+      ],
+    } : {}),
+  }
+  const compliance = "CompliancePolicies/c-win"
+  const deletedFile = after.Items[compliance]!.file
+  const items: Record<string, { file: string; hash: string }> = { ...after.Items }
+  delete items[compliance]
+  delete newer.files[`CompliancePolicies/${deletedFile}`]
+  return [{ ...older, metadata: before }, { ...newer, metadata: { ...after, Items: items } }] as [Backup, Backup]
+}
+
+describe("Desktop comparison coverage for 0.5.3 manifests", () => {
+  it.each(coveragePairs)("compares a %s pair without discarding real compliance deletions", async scenario => {
+    const pair = comparisonFixture(scenario)
+    const { drift, report } = await desktopReport({ values: true, actors: false }, pair)
+    const changes = compareBackups(pair[0].metadata, pair[1].metadata)
+    expect(changes).toContainEqual(expect.objectContaining({ folder: "CompliancePolicies", id: "c-win", change: "removed" }))
+    expect(report.items).toContainEqual(expect.objectContaining({ id: "c-win", change: "deleted" }))
+    expect(drift.unknownTypes ?? []).toEqual(scenario === "typed" || scenario === "mixed" ? ["DeviceConfigurations"] : [])
+    expect(drift.legacyReadFailure ?? false).toBe(scenario === "unassigned")
+  })
+})
+
+describe.runIf(Boolean(pwsh))("Desktop and Azure comparison coverage", () => {
+  it.each(coveragePairs)("agree on added, modified, deleted and not-compared types for a %s pair", async scenario => {
+    const [older, newer] = comparisonFixture(scenario)
+    const dir = mkdtempSync(join(tmpdir(), "tv-report-coverage-"))
+    try {
+      const path = join(dir, "backups.json")
+      writeFileSync(path, JSON.stringify({ ...fixture, older, newer }))
+      const options = { values: true, actors: false }
+      const desktop = await desktopReport(options, [older, newer])
+      const cloud = cloudReport(options, path)
+      expect(cloud.report).toEqual(JSON.parse(JSON.stringify(desktop.report)))
+      expect(cloud.markdown).toBe(desktop.markdown)
+      expect(cloud.html).toBe(desktop.html)
+      expect(cloud.email.summary).toBe(summaryLine(desktop.report, { reason: true }))
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
 
 describe.runIf(Boolean(pwsh))("cloud change reports match the desktop app", () => {
   // A raw Graph error as the audit note: both clean it the same way before it is shown or sent.

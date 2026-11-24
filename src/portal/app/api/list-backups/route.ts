@@ -5,7 +5,7 @@ import { backupStoragePath, isLargeBackup, LARGE_BACKUP_CONTAINER, LARGE_STORAGE
 import { backupTypeUse } from "../../../../shared/services/backup-use"
 import { BlobListError, decodeXml, listBlobPages, listLargeBackupPages } from "~/lib/storage/list"
 import { typeForFolder } from "../../../../shared/intune/registry"
-import { backupReadCoverage } from "../../../../shared/intune/backup-read-coverage"
+import { backupReadCoverage, comparisonCoverage, recordedBackupTypes } from "../../../../shared/intune/backup-read-coverage"
 import { describeScope } from "../../../../shared/intune/scope"
 import { comparable, compareBackups, summarize, type BackupFingerprint, type ChangeSummary } from "../../../../shared/intune/backup-changes"
 import { BACKUP_OWNER_FILE, BACKUP_RUN_RECORD_FILE, LOCAL_STORAGE_PREFIX, MAX_BACKUP_ARCHIVE_BYTES } from "../../../../shared/constants"
@@ -178,7 +178,7 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
   // Inventory such as Autopilot devices is an item of the backup but not a policy.
   const policyCount = Object.entries(counts).reduce((sum, [folder, value]) => (typeForFolder(folder) && !backupTypeUse(typeForFolder(folder)!).policyCount ? sum : sum + value), 0)
   const excluded: string[] = Array.isArray(metadata?.Scope?.Excluded) ? metadata.Scope.Excluded : []
-  const included = recordedInclusion(metadata)
+  const included = recordedBackupTypes(metadata)
 
   return {
     id: name,
@@ -220,6 +220,7 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
     duration: typeof metadata?.DurationSeconds === 'number' ? metadata.DurationSeconds : metadata?.Duration ?? metadata?.duration ?? null,
     changes: null as ChangeSummary | null,
     comparedWith: null as string | null,
+    legacyReadFailure: undefined as boolean | undefined,
     fingerprint: metadata as BackupFingerprint | null | undefined,
     claim,
     loadClaim,
@@ -235,11 +236,6 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
     // Sealed by an earlier version and not opened on this device: its manifest, or its ownership marker.
     sealed: Boolean(metadataResult.sealed) || (foreignMarker && isLegacySealedError(markerFailure)),
   }
-}
-
-function recordedInclusion(metadata: { Scope?: { Included?: unknown } } | null | undefined): string[] | undefined {
-  const value = metadata?.Scope?.Included
-  return Array.isArray(value) ? value.filter((folder): folder is string => typeof folder === "string") : undefined
 }
 
 export async function POST(request: NextRequest) {
@@ -533,11 +529,13 @@ export async function POST(request: NextRequest) {
       const largeProblems = largeRunProblems(metadata, cause, matches ? other : null)
       backup.largeProblems = largeProblems
       if (backup.scope?.included) {
-        const companionTypes = matches ? recordedInclusion(other) : undefined
+        const companionTypes = matches ? recordedBackupTypes(other) : undefined
         backup.scope.included = [...new Set([...backup.scope.included, ...(companionTypes ?? []), ...largeProblems.map(problem => problem.folder).filter(folder => typeForFolder(folder))])]
       }
       if (matches) {
-        const { emptyTypes, notReadCauses } = manifestCoverage(other)
+        const { emptyTypes, notRead, notReadCauses, notReadReasons } = manifestCoverage(other)
+        backup.notRead = [...new Set([...backup.notRead, ...notRead])]
+        if (notReadReasons) backup.notReadReasons = { ...backup.notReadReasons, ...notReadReasons }
         if (notReadCauses) backup.notReadCauses = { ...backup.notReadCauses, ...notReadCauses }
         backup.readableTypes = [...new Set([...backup.readableTypes, ...backupReadCoverage(other).readable])]
         if (emptyTypes?.length) backup.emptyTypes = [...(backup.emptyTypes ?? []), ...emptyTypes]
@@ -599,6 +597,7 @@ export async function POST(request: NextRequest) {
       if (!previous) continue
       current.changes = summarize(compareBackups(previous.fingerprint, current.fingerprint))
       current.comparedWith = previous.id
+      if (comparisonCoverage(previous.fingerprint ?? null, current.fingerprint).legacyReadFailure) current.legacyReadFailure = true
     }
     for (const backup of backups) {
       delete backup.ownSize

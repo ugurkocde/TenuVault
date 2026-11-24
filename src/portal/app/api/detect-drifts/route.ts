@@ -302,6 +302,7 @@ export async function POST(request: NextRequest) {
       comparison: backupRef(newerBackup),
       warnings,
       ...(coverage.unknown.length ? { unknownTypes: coverage.unknown } : {}),
+      ...(coverage.legacyReadFailure ? { legacyReadFailure: true } : {}),
       stats,
       ...(settingNames ? { settingNames } : {}),
     }

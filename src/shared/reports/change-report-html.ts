@@ -1,7 +1,7 @@
 import { redactText } from "../compliance/export"
 import { escapeHtml, type OibPrintOptions } from "../oib/report-html"
 import { luminance, resolveBrandTheme, themeCssVariables, type PdfBranding } from "../pdf/theme"
-import { activityLine, changeLabel, publicAuditNote, reportTime, reportTitle, exportSummaryLine, inventoryLines, type ChangeReport, type ReportChange, type ReportItem } from "./change-report"
+import { activityLine, changeLabel, publicAuditNote, reportTime, reportTitle, exportSummaryLine, hasExportCoverage, inventoryLines, type ChangeReport, type ReportChange, type ReportItem } from "./change-report"
 
 /**
  * A change report as a standalone HTML document that the main process prints to PDF with
@@ -127,7 +127,7 @@ export function buildChangeReportDocument(report: ChangeReport, options: { brand
     if (!items.length) return ""
     return `<section><h2>${text(changeLabel(change))} (${items.length})</h2>${items.map((item) => itemHtml(item, report)).join("")}</section>`
   }).join("")
-  const empty = report.comparison?.inventory.length
+  const empty = hasExportCoverage(report)
     ? `<section><h2>Comparison coverage</h2><ul class="activity">${inventoryLines(report).map(line => `<li>${text(line)}</li>`).join("")}</ul></section>`
     : report.items.length ? "" : `<p class="none">No items were added, changed or deleted between the two backups.</p>`
 

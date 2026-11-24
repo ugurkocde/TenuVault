@@ -255,6 +255,8 @@ plan records events; Community sees a locked preview on the Audit Log page.
 
 ## Compatibility notes for the next release
 
+- Comparisons of pre-0.6 backups continue to show deletions for types with no recorded failure. An older backup with an unassigned read failure adds a warning about those deletions. Backups that record per-type outcomes need a complete read for each compared type.
+
 - **Tenant sign-in.** After a downgrade to 0.5.x, a tenant connected through the new wizard
   uses its own app registration if it has one. Signing in again in 0.5.x may require a fresh
   sign-in when you return to 0.6.

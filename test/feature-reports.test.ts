@@ -293,6 +293,16 @@ describe("reports after scheduled backups", () => {
     expect(w.graphCalls.some((entry) => entry.path === "me/sendMail")).toBe(false)
   })
 
+  it("sends an incomplete scheduled comparison even if it found zero changes", async () => {
+    const w = world({ drift: { ...driftResult(), drifts: [], unknownTypes: ["CompliancePolicies"] } })
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "save-settings", afterScheduledBackup: true, recipients, skipEmpty: true, attachment: "markdown" })
+    await afterScheduledBackup(w.deps, TENANT_A, "backup-2026-11-06-020000")
+    const status = await call(w.routes, PATH, { tenantId: TENANT_A, action: "get-status" })
+    expect(status.body.settings.lastAutomatic.outcome).toBe("sent")
+    expect(status.body.reports[0]).toMatchObject({ unchanged: false, summary: expect.stringContaining("Types not compared: Compliance Policies.") })
+    expect(w.graphCalls.some(entry => entry.path === "me/sendMail")).toBe(true)
+  })
+
   it("never throws when the outcome itself cannot be recorded", async () => {
     const w = world({ drift: { status: 500, error: "Storage unreachable" } })
     await call(w.routes, PATH, { tenantId: TENANT_A, action: "save-settings", afterScheduledBackup: true, recipients })

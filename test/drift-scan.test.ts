@@ -462,15 +462,21 @@ describe('Drift item matching', () => {
     expect(reads.filter(file => [excluded, refused, unresolved].some(folder => file.includes(`/${folder}/`)))).toEqual([])
   })
 
-  it('keeps legacy failures with no identified type out of comparisons', async () => {
+  it('preserves legacy changes and warns when a read failure did not name a type', async () => {
     const backups = twoBackups(true)
     backups[NEW]!.metadata!.Failures = 1
     backups[NEW]!.metadata!.Status = 'CompletedWithWarnings'
     fakeStorage(backups)
-    expect(compareBackups(backups[OLD]!.metadata!, backups[NEW]!.metadata!)).toEqual([])
+    const changes = summarize(compareBackups(backups[OLD]!.metadata!, backups[NEW]!.metadata!))
+    expect(changes).toEqual({ added: 1, modified: 1, removed: 1 })
+    const body = { appId: 'app', backupId: NEW }
+    const changed = await (await backupChanges(request(body))).json()
+    expect(changed).toMatchObject({ legacyReadFailure: true, changes: expect.arrayContaining([expect.objectContaining({ change: 'removed', id: 'd' })]) })
+    const listed = await (await listBackups(request({ subscriptionId: 'local', resourceGroupName: 'local' }))).json()
+    expect(listed.backups[0]).toMatchObject({ legacyReadFailure: true, changes })
     const result = await (await drift(request({ baseline: OLD, comparison: NEW }))).json()
-    expect(result.unknownTypes).toContain('DeviceConfigurations')
-    expect(result.drifts).toEqual([])
+    expect(result).toMatchObject({ legacyReadFailure: true, summary: { added: 1, modified: 1, deleted: 1 } })
+    expect(result.unknownTypes).toBeUndefined()
   })
 
   it('agrees with the backup list counts for the same pair', async () => {

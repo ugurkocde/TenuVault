@@ -58,8 +58,8 @@ Click a changed item to expand it. TenuVault lists each changed setting with its
 ## How the comparison works
 
 * **Which backup it compares with.** Each backup is compared with the newest older backup that finished and records fingerprints. Failed backups and incomplete backups are skipped. Backups that completed with warnings are included.
-* **Only shared types.** Both backups must have read a type in full. An excluded type or an unconfirmed read appears under **Unknown coverage** and is left out of all change counts.
-* **What does not count as a change.** Values Intune changes on every read or write, such as modification times, version counters and the reference IDs of encrypted values, are ignored. Earlier versions saved Settings Catalog policies (including endpoint security and Settings Catalog compliance policies) without their assignments, so against a backup from such a version their assignments are not compared.
+* **Only shared types.** An excluded type or unconfirmed read appears under **Types not compared** and is left out of all change counts.
+* **What does not count as a change.** Values the service changes on every read or write, such as modification times, version counters and the reference IDs of encrypted values, are ignored. Earlier versions saved Settings Catalog policies (including endpoint security and Settings Catalog compliance policies) without their assignments, so against a backup from such a version their assignments are not compared.
 * **Setting details.** The setting-by-setting view is shown for the first 100 changed items, with up to 50 settings each. Long values are shortened. Some properties, such as the description, are not listed in the setting details, so an item can show as **Changed** without a list of settings.
 
 :::note
@@ -67,6 +67,8 @@ To compare the tenant as it is right now with your last backup, run a new backup
 :::
 
 ### Examples by service
+
+For backups that record per-type outcomes, only complete reads are compared. For older backups, TenuVault uses the recorded scope and excludes types with known failures. If an older backup recorded a read failure without naming the type, the comparison still shows deletions and warns that some may be policies the backup failed to read.
 
 | Service | Example of coverage shown as unknown |
 | --- | --- |

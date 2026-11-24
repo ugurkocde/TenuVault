@@ -38,6 +38,15 @@ function auditEvent(id: string, at: string, resourceId: string | null, name: str
   return { ...mapAuditEvent({ id, activityDateTime: at, activity: `${operation} DeviceManagementConfigurationPolicy`, activityOperationType: operation, activityResult: "Success", category: "DeviceConfiguration", actor: { userPrincipalName: upn }, resources: [{ displayName: name, resourceId, type: "DeviceManagementConfigurationPolicy" }] })!, source: "Intune" }
 }
 
+it("includes unread types in the report summary and every export when no changes were found", () => {
+  const report = buildChangeReport({ ...result([]), unknownTypes: ["CompliancePolicies"] }, { changes: [], note: null }, options)
+  const notice = "Types not compared: Compliance Policies."
+  expect(summaryLine(report)).toBe(notice)
+  expect(changeReportMarkdown(report)).toContain(notice)
+  expect(buildChangeReportDocument(report).html).toContain(notice)
+  expect(JSON.parse(changeReportJson(report)).comparison.unknownTypes).toEqual(["CompliancePolicies"])
+})
+
 describe("change report model", () => {
   const drifts = [
     drift({ configId: "p-1", configName: "Defender", changes: [{ field: "settings[device_vendor_msft_policy_config_defender_allowcloudprotection].settingInstance.choiceSettingValue.value", oldValue: "device_vendor_msft_policy_config_defender_allowcloudprotection_0", newValue: "device_vendor_msft_policy_config_defender_allowcloudprotection_1" }] }),

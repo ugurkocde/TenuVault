@@ -1,3 +1,4 @@
+import { LEGACY_COMPARISON_NOTICE } from "../intune/backup-read-coverage"
 import type { AuditChange, AuditChangeType } from "../notifications/audit"
 import type { Drift, DriftBackupRef, DriftChange, DriftResult, SettingNames } from "../intune/drift"
 import { formatValue, settingLabel } from "../intune/drift-format"
@@ -97,7 +98,7 @@ export interface ChangeReport {
   from: DriftBackupRef
   to: DriftBackupRef
   summary: ReportSummary
-  comparison?: { ordinary: "complete" | "incomplete"; inventory: ReportInventory[] }
+  comparison?: { ordinary: "complete" | "incomplete"; inventory: ReportInventory[]; unknownTypes?: string[]; legacyReadFailure?: boolean }
   items: ReportItem[]
   /** Audit events in the window that matched no backed-up item, such as changes made and undone between the backups. */
   otherActivity: ReportActivity[]
@@ -191,6 +192,8 @@ export function buildChangeReport(drift: DriftResult, audit: ReportAudit, option
     },
     comparison: {
       ordinary: drift.warnings.length ? "incomplete" : "complete",
+      ...(drift.unknownTypes?.length ? { unknownTypes: drift.unknownTypes } : {}),
+      ...(drift.legacyReadFailure ? { legacyReadFailure: true } : {}),
       inventory: (drift.largeFolders ?? []).map(folder => inventory.find(entry => entry.folder === folder) ?? { folder, status: "not-performed", added: 0, modified: 0, deleted: 0, unchanged: 0, examined: 0 }),
     },
     items,
@@ -324,7 +327,7 @@ export function summaryLine(report: Pick<ChangeReport, "summary" | "audit" | "it
   const inventoryChanges = inventory.reduce((sum, entry) => sum + entry.added + entry.modified + entry.deleted, 0)
   const coverage = !report.comparison ? "Comparison coverage was not recorded." : report.comparison.ordinary !== "complete" ? "The ordinary comparison was incomplete." : ""
   const missing = inventory.filter(entry => entry.status !== "complete")
-  const notes = [inventoryChanges ? `${inventoryChanges} inventory changes.` : "", coverage, ...missing.map(entry => `${entry.folder}: inventory comparison ${entry.status === "not-performed" ? "was not performed" : "was incomplete"}.`)].filter(Boolean).join(" ")
+  const notes = [inventoryChanges ? `${inventoryChanges} inventory changes.` : "", coverage, ...readCoverageLines(report), ...missing.map(entry => `${entry.folder}: inventory comparison ${entry.status === "not-performed" ? "was not performed" : "was incomplete"}.`)].filter(Boolean).join(" ")
   if (total === 0) return reportHasNoChanges(report) ? "No changes between the two backups." : notes || "No ordinary changes found."
   const suffix = notes ? ` ${notes}` : ""
   const parts = [modified && `${modified} changed`, added && `${added} added`, deleted && `${deleted} deleted`].filter(Boolean).join(", ")
@@ -337,7 +340,7 @@ export function summaryLine(report: Pick<ChangeReport, "summary" | "audit" | "it
 
 /** Ordinary exports retain their original wording; delivery still uses the recorded coverage. */
 export function exportSummaryLine(report: ChangeReport): string {
-  return summaryLine(report.comparison && !report.comparison.inventory.length
+  return summaryLine(report.comparison && !hasExportCoverage(report)
     ? { ...report, comparison: { ordinary: "complete", inventory: [] } }
     : report)
 }
@@ -345,14 +348,32 @@ export function exportSummaryLine(report: ChangeReport): string {
 /** Only a completed comparison of both kinds can establish that nothing changed. */
 export function reportHasNoChanges(report: Pick<ChangeReport, "items" | "comparison">): boolean {
   return report.items.length === 0 && report.comparison?.ordinary === "complete"
+    && !report.comparison.unknownTypes?.length && !report.comparison.legacyReadFailure
     && report.comparison.inventory.every(entry => entry.status === "complete" && entry.added + entry.modified + entry.deleted === 0)
+}
+
+function comparisonTypeName(folder: string): string {
+  return folder.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/([A-Z])([A-Z][a-z])/g, "$1 $2")
+}
+
+function readCoverageLines({ comparison }: Pick<ChangeReport, "comparison">): string[] {
+  const folders = comparison?.unknownTypes
+  return [
+    ...(folders?.length ? [`Types not compared: ${folders.map(comparisonTypeName).join(", ")}.`] : []),
+    ...(comparison?.legacyReadFailure ? [LEGACY_COMPARISON_NOTICE] : []),
+  ]
+}
+
+export function hasExportCoverage({ comparison }: Pick<ChangeReport, "comparison">): boolean {
+  return Boolean(comparison?.inventory.length || comparison?.unknownTypes?.length || comparison?.legacyReadFailure)
 }
 
 /** Shared by Markdown, PDF and the report page; counts come from index fingerprints only. */
 export function inventoryLines(report: Pick<ChangeReport, "comparison">): string[] {
   if (!report.comparison) return ["Comparison coverage was not recorded."]
   return [
-    `Ordinary comparison: ${report.comparison.ordinary}.`,
+    ...(report.comparison.unknownTypes?.length && report.comparison.ordinary === "complete" ? [] : [`Ordinary comparison: ${report.comparison.ordinary}.`]),
+    ...readCoverageLines(report),
     ...report.comparison.inventory.map(entry => `${entry.folder} inventory: ${entry.status === "not-performed" ? "comparison was not performed" : entry.status === "incomplete" ? "comparison was incomplete" : "comparison complete"}; ${entry.added} added, ${entry.modified} changed, ${entry.deleted} deleted, ${entry.unchanged} unchanged (${entry.examined} examined).`),
   ]
 }
@@ -386,7 +407,7 @@ export function changeReportMarkdown(report: ChangeReport): string {
   if (auditNote) lines.push(`- Audit log: ${md(auditNote)}`)
   if (!report.values) lines.push("- Setting values are left out of this report.")
   lines.push("")
-  if (report.comparison?.inventory.length) lines.push("## Comparison coverage", "", ...inventoryLines(report).map(line => `- ${md(line)}`), "")
+  if (hasExportCoverage(report)) lines.push("## Comparison coverage", "", ...inventoryLines(report).map(line => `- ${md(line)}`), "")
   else if (report.items.length === 0) lines.push("No items were added, changed or deleted between the two backups.", "")
   for (const change of ["deleted", "modified", "added"] as const) {
     const items = report.items.filter((item) => item.change === change)
@@ -440,6 +461,6 @@ export function activityLine(event: ReportActivity): string {
 export function changeReportJson(report: ChangeReport): string {
   // Keep the original export schema for ordinary backups; runtime coverage still controls delivery.
   const { comparison, ...ordinary } = report
-  const exported = comparison?.inventory.length ? report : ordinary
+  const exported = hasExportCoverage({ comparison }) ? report : ordinary
   return JSON.stringify({ ...exported, audit: { ...report.audit, note: publicAuditNote(report.audit.note, report.cloud) } }, null, 2)
 }

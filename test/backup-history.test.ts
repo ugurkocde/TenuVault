@@ -99,6 +99,29 @@ describe("backup history", () => {
     expect(backups[1]).toMatchObject({ id: newer, coverage: null, notRead: [] })
   })
 
+  it("includes preflight permission skips when listing a backup with a saved type", async () => {
+    storage({
+      [`${newer}/metadata.json`]: {
+        BackupFolder: newer, Status: "Success", RunbookVersion: "desktop", Trigger: "manual",
+        ItemCounts: { CompliancePolicies: 1, TotalPolicies: 1 },
+        Scope: { Included: ["CompliancePolicies"], Excluded: [] },
+        Failures: 0, SkippedTypes: [], FailedTypes: [], Coverage: "Incomplete",
+        Outcomes: [
+          { Folder: "CompliancePolicies", Outcome: "saved", Saved: 1 },
+          { Folder: "DeviceConfigurations", Outcome: "skipped", Cause: "permission", Reason: "The app lacks permission." },
+        ],
+        Items: fingerprint({ "CompliancePolicies/1": ["A.json", "a"] }),
+      },
+      [`${newer}/CompliancePolicies/A.json`]: { id: "1", displayName: "A" },
+    })
+    const { backups } = await (await listBackups(request({}))).json()
+    expect(backups[0]).toMatchObject({
+      scope: { included: ["CompliancePolicies", "DeviceConfigurations"] },
+      readableTypes: ["CompliancePolicies"], notRead: ["DeviceConfigurations"],
+      notReadCauses: { DeviceConfigurations: "permission" },
+    })
+  })
+
   it("reports real duration, trigger, scope, counts and item changes for the types both backups hold", async () => {
     storage(blobs)
     const { backups } = await (await listBackups(request({}))).json()

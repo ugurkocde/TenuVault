@@ -41,6 +41,7 @@ const show = (value: unknown) => {
 export function BackupChangesDialog({ open, onOpenChange, tenant, backup, previous }: BackupChangesDialogProps) {
   const [items, setItems] = useState<ChangedItem[] | null>(null)
   const [unknownTypes, setUnknownTypes] = useState<string[]>()
+  const [legacyReadFailure, setLegacyReadFailure] = useState(false)
   const [error, setError] = useState("")
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
 
@@ -48,6 +49,7 @@ export function BackupChangesDialog({ open, onOpenChange, tenant, backup, previo
     if (!open) return
     setItems(null)
     setUnknownTypes(undefined)
+    setLegacyReadFailure(false)
     setError("")
     const controller = new AbortController()
     void fetch("/api/backup-changes", {
@@ -62,6 +64,7 @@ export function BackupChangesDialog({ open, onOpenChange, tenant, backup, previo
         if (controller.signal.aborted) return
         setItems(data.changes)
         setUnknownTypes(data.unknownTypes)
+        setLegacyReadFailure(data.legacyReadFailure === true)
       })
       .catch((failure: unknown) => {
         if (failure instanceof DOMException && failure.name === "AbortError") return
@@ -84,7 +87,7 @@ export function BackupChangesDialog({ open, onOpenChange, tenant, backup, previo
         <DialogHeader>
           <DialogTitle>Changes in this backup</DialogTitle>
           <DialogDescription>
-            {formatDate(backup.timestamp)} compared with {previous ? formatDate(previous.timestamp) : "the previous backup"}. Only types both backups read in full are compared.
+            {formatDate(backup.timestamp)} compared with {previous ? formatDate(previous.timestamp) : "the previous backup"}.
           </DialogDescription>
         </DialogHeader>
 
@@ -94,8 +97,8 @@ export function BackupChangesDialog({ open, onOpenChange, tenant, backup, previo
             <Loader2 className="h-4 w-4 animate-spin" /> Comparing backups...
           </div>
         )}
-        <UnknownComparisonTypes folders={unknownTypes} />
-        {items && items.length === 0 && <p className="py-6 text-sm text-gray-600">{unknownTypes?.length ? "No changes found in the types compared." : "Nothing changed between these backups."}</p>}
+        <UnknownComparisonTypes folders={unknownTypes} legacyReadFailure={legacyReadFailure} />
+        {items && items.length === 0 && <p className="py-6 text-sm text-gray-600">{(unknownTypes?.length || legacyReadFailure) ? "No changes found in the types compared." : "Nothing changed between these backups."}</p>}
         {items && items.length > 0 && (
           <ul className="divide-y divide-gray-100">
             {items.map((item) => {

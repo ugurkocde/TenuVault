@@ -2162,17 +2162,51 @@ $script:LegacyFolders = @(
 $script:LegacyLabels = @{ DeviceConfigurations = "Device Configuration"; CompliancePolicies = "Compliance Policy"; DeviceCompliancePolicies = "Compliance Policy"; ConfigurationPolicies = "Configuration Policy" }
 $script:ConditionalAccessLabels = @("Conditional Access policies", "Named locations", "Authentication strengths")
 
-function Get-TvCoveredFolders {
-    param([AllowNull()][object]$Metadata, [Parameter(Mandatory)][string[]]$Known)
+# Mirror backupReadCoverage. Keep the 0.5.3 scope rule when the manifest only has a failure count.
+function Get-TvBackupReadCoverage {
+    param([Parameter(Mandatory)][object]$Metadata, [Parameter(Mandatory)][string[]]$Known)
     $scope = Get-TvProp $Metadata "Scope"
-    $recorded = Get-TvProp $scope "Included"
+    $recorded = Get-TvMember $scope "Included"
+    $outcomes = Get-TvMember $Metadata "Outcomes"
     $attempted = if (Test-TvJsArray $recorded) { @($recorded | Where-Object { $_ -is [string] }) } else { $script:LegacyFolders }
-    $missing = @()
-    foreach ($field in @("Excluded", "SkippedTypes", "FailedTypes", "AppOnlyExcludedTypes")) {
-        $source = if ($field -eq "Excluded") { Get-TvProp $scope "Excluded" } else { Get-TvProp $Metadata $field }
+    $excluded = Get-TvMember $scope "Excluded"
+    $excluded = if (Test-TvJsArray $excluded) { @($excluded | Where-Object { $_ -is [string] }) } else { @() }
+    $byFolder = [System.Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
+    if (Test-TvJsArray $outcomes) {
+        foreach ($outcome in $outcomes) {
+            $folder = Get-TvProp $outcome "Folder"
+            if ($folder -isnot [string]) { continue }
+            $byFolder[$folder] = if ($byFolder.ContainsKey($folder)) { $null } else { Get-TvProp $outcome "Outcome" }
+        }
+    }
+    $selectedSources = if ((Test-TvJsArray $outcomes) -and -not (Test-TvJsArray $recorded)) { @($byFolder.Keys) } else { @($attempted) + @($byFolder.Keys) }
+    $selected = @($selectedSources | Where-Object { $excluded -cnotcontains $_ } | Select-Object -Unique)
+    $status = Get-TvProp $Metadata "Status"
+    if ($null -eq $status) { $status = Get-TvProp $Metadata "status" }
+    $needsOutcomes = -not (Test-TvUndef $outcomes) -or (Get-TvProp $Metadata "Coverage") -ceq "Incomplete"
+    $failed = Get-TvMember $Metadata "FailedTypes"
+    $failed = if (Test-TvJsArray $failed) { @($failed | Where-Object { $_ -is [string] }) } else { @() }
+    $failures = Get-TvProp $Metadata "Failures"
+    $assigned = @($failed | Where-Object { $selected -ccontains $_ } | Select-Object -Unique).Count
+    $legacyReadFailure = -not $needsOutcomes -and (Test-TvJsNumber $failures) -and $failures -gt $assigned
+    $missing = @($excluded) + @($failed)
+    foreach ($field in @("SkippedTypes", "AppOnlyExcludedTypes")) {
+        $source = Get-TvMember $Metadata $field
         if (Test-TvJsArray $source) { $missing += @($source | Where-Object { $_ -is [string] }) }
     }
-    return , @($Known | Where-Object { $attempted -ccontains $_ -and $missing -cnotcontains $_ })
+    $indexes = Get-TvMember $Metadata "LargeItems"
+    $readable = @()
+    if ([string]$status -notmatch 'fail|^\s*cancelled\s*$') {
+        $readable = @($Known | Where-Object {
+            $index = Get-TvProp $indexes $_
+            $selected -ccontains $_ -and $missing -cnotcontains $_ -and
+                (-not $needsOutcomes -or $byFolder[$_] -cin @("saved", "notConfigured")) -and
+                ($null -eq $index -or ($index.complete -is [bool] -and $index.complete))
+        })
+    }
+    # Match desktop registry order for known types and retain the declarations from other services.
+    $ordered = @($Known | Where-Object { $selected -ccontains $_ }) + @($selected | Where-Object { $Known -cnotcontains $_ })
+    return @{ Selected = $ordered; Readable = $readable; LegacyReadFailure = $legacyReadFailure }
 }
 
 function Test-TvSameItem {
@@ -2217,14 +2251,17 @@ function Get-TvBackupDrifts {
     foreach ($type in $Types) { $byFolder[$type.Folder] = $type }
     $before = Get-TvProp $Older.Metadata "Items"
     $after = Get-TvProp $Newer.Metadata "Items"
-    $olderCovered = Get-TvCoveredFolders $Older.Metadata $known
-    $shared = @((Get-TvCoveredFolders $Newer.Metadata $known) | Where-Object { $olderCovered -ccontains $_ })
+    $beforeCoverage = Get-TvBackupReadCoverage $Older.Metadata $known
+    $afterCoverage = Get-TvBackupReadCoverage $Newer.Metadata $known
+    $shared = @($afterCoverage.Readable | Where-Object { $beforeCoverage.Readable -ccontains $_ })
+    $unknown = @($beforeCoverage.Selected + $afterCoverage.Selected | Where-Object { $shared -cnotcontains $_ } | Select-Object -Unique)
+    $ordinary = @($shared | Where-Object { $null -eq (Get-TvProp (Get-TvProp $Older.Metadata "LargeItems") $_) -and $null -eq (Get-TvProp (Get-TvProp $Newer.Metadata "LargeItems") $_) })
     $drifts = [System.Collections.Generic.List[object]]::new()
     $warnings = [System.Collections.Generic.List[string]]::new()
     $tasks = [System.Collections.Generic.List[object]]::new()
     foreach ($key in (Get-TvKeys $after)) {
         $folder = $key.Substring(0, $key.IndexOf("/"))
-        if ($shared -cnotcontains $folder) { continue }
+        if ($ordinary -cnotcontains $folder) { continue }
         $item = $after[$key]
         $previous = Get-TvProp $before $key
         if ($null -eq $previous) { $tasks.Add(@{ Change = "added"; Folder = $folder; Newer = $item }) }
@@ -2232,7 +2269,7 @@ function Get-TvBackupDrifts {
     }
     foreach ($key in (Get-TvKeys $before)) {
         $folder = $key.Substring(0, $key.IndexOf("/"))
-        if ($shared -ccontains $folder -and $null -eq (Get-TvProp $after $key)) { $tasks.Add(@{ Change = "deleted"; Folder = $folder; Older = $before[$key] }) }
+        if ($ordinary -ccontains $folder -and $null -eq (Get-TvProp $after $key)) { $tasks.Add(@{ Change = "deleted"; Folder = $folder; Older = $before[$key] }) }
     }
     foreach ($task in $tasks) {
         $type = $byFolder[$task.Folder]
@@ -2283,7 +2320,7 @@ function Get-TvBackupDrifts {
         }
         $drifts.Add($entry)
     }
-    return @{ Drifts = $drifts; Warnings = $warnings }
+    return @{ Drifts = $drifts; Warnings = $warnings; UnknownTypes = $unknown; LegacyReadFailure = $beforeCoverage.LegacyReadFailure -or $afterCoverage.LegacyReadFailure }
 }
 
 # ---------------------------------------------------------------------------
@@ -2333,6 +2370,20 @@ function Get-TvReportTitle {
     return "Changes in $($Report.tenantName), $range"
 }
 
+function Get-TvReadCoverageLines {
+    param([Parameter(Mandatory)][object]$Report)
+    if ($Report.comparison.unknownTypes.Count) {
+        $names = $Report.comparison.unknownTypes | ForEach-Object { $_ -creplace '([a-z0-9])([A-Z])', '$1 $2' -creplace '([A-Z])([A-Z][a-z])', '$1 $2' }
+        "Types not compared: $($names -join ', ')."
+    }
+    if ($Report.comparison.legacyReadFailure) { "An older backup recorded a read failure without identifying the type. Some reported deletions may be policies that failed to read." }
+}
+
+function Test-TvExportCoverage {
+    param([Parameter(Mandatory)][object]$Report)
+    return [bool]($Report.comparison.inventory.Count -or $Report.comparison.unknownTypes.Count -or $Report.comparison.legacyReadFailure)
+}
+
 function Get-TvSummaryLine {
     param([Parameter(Mandatory)][object]$Report, [switch]$Reason, [switch]$Export)
     $s = $Report.summary
@@ -2340,10 +2391,11 @@ function Get-TvSummaryLine {
     $notes = @()
     if (-not $Report.comparison) { $notes += "Comparison coverage was not recorded." }
     elseif ($Report.comparison.ordinary -ne "complete") { $notes += "The ordinary comparison was incomplete." }
+    $notes += @(Get-TvReadCoverageLines $Report)
     foreach ($entry in @($Report.comparison.inventory | Where-Object { $_ })) {
         if ($entry.status -ne "complete") { $notes += "$($entry.folder): inventory comparison was not performed." }
     }
-    if ($Export -and $Report.comparison -and -not @($Report.comparison.inventory).Count) { $notes = @() }
+    if ($Export -and $Report.comparison -and -not (Test-TvExportCoverage $Report)) { $notes = @() }
     $suffix = if ($notes.Count) { " " + ($notes -join " ") } else { "" }
     if ($total -eq 0) { if ($notes.Count) { return $notes -join " " }; return "No changes between the two backups." }
     $parts = @()
@@ -2362,7 +2414,8 @@ function Get-TvSummaryLine {
 function Get-TvInventoryLines {
     param([Parameter(Mandatory)][object]$Report)
     if (-not $Report.comparison) { return ,@("Comparison coverage was not recorded.") }
-    $lines = @("Ordinary comparison: $($Report.comparison.ordinary).")
+    $lines = @(if (-not $Report.comparison.unknownTypes.Count -or $Report.comparison.ordinary -ne "complete") { "Ordinary comparison: $($Report.comparison.ordinary)." })
+    $lines += @(Get-TvReadCoverageLines $Report)
     foreach ($entry in @($Report.comparison.inventory | Where-Object { $_ })) {
         $lines += "$($entry.folder) inventory: comparison was not performed; 0 added, 0 changed, 0 deleted, 0 unchanged (0 examined)."
     }
@@ -2500,6 +2553,8 @@ function New-TvChangeReport {
         values = [bool]$Options.IncludeValues
         warnings = @($Drift.warnings | Select-Object -First 50)
     }
+    if ($Drift.unknownTypes.Count) { $report.comparison.unknownTypes = @($Drift.unknownTypes) }
+    if ($Drift.legacyReadFailure) { $report.comparison.legacyReadFailure = $true }
     return $report
 }
 
@@ -2534,7 +2589,7 @@ function ConvertTo-TvReportMarkdown {
     if ($auditNote) { $lines.Add("- Audit log: $(& $md $auditNote)") }
     if (-not $Report.values) { $lines.Add("- Setting values are left out of this report.") }
     $lines.Add("")
-    if (@($Report.comparison.inventory).Count) {
+    if (Test-TvExportCoverage $Report) {
         $lines.Add("## Comparison coverage"); $lines.Add(""); foreach ($line in (Get-TvInventoryLines $Report)) { $lines.Add("- $(Get-TvMarkdownText $line)") }; $lines.Add("")
     } elseif (-not @($Report.items).Count) { $lines.Add("No items were added, changed or deleted between the two backups."); $lines.Add("") }
     foreach ($change in @("deleted", "modified", "added")) {
@@ -2739,7 +2794,7 @@ function ConvertTo-TvReportHtml {
         if (-not $items.Count) { continue }
         $sections += "<section><h2>$(Get-TvHtmlText $script:ChangeLabels[$change]) ($($items.Count))</h2>" + (($items | ForEach-Object { ConvertTo-TvReportItemHtml $_ $Report }) -join "") + "</section>"
     }
-    $empty = if (@($Report.comparison.inventory).Count) { '<section><h2>Comparison coverage</h2><ul class="activity">' + (((Get-TvInventoryLines $Report) | ForEach-Object { "<li>$(Get-TvHtmlText $_)</li>" }) -join "") + '</ul></section>' } elseif (@($Report.items).Count) { "" } else { '<p class="none">No items were added, changed or deleted between the two backups.</p>' }
+    $empty = if (Test-TvExportCoverage $Report) { '<section><h2>Comparison coverage</h2><ul class="activity">' + (((Get-TvInventoryLines $Report) | ForEach-Object { "<li>$(Get-TvHtmlText $_)</li>" }) -join "") + '</ul></section>' } elseif (@($Report.items).Count) { "" } else { '<p class="none">No items were added, changed or deleted between the two backups.</p>' }
     $other = ""
     if (@($Report.otherActivity).Count) {
         $rows = (@($Report.otherActivity) | ForEach-Object {
@@ -3139,7 +3194,7 @@ function Invoke-TvChangeReport {
         $baseline = Get-TvBackupRef $older.Name $older.Metadata
         $comparison = Get-TvBackupRef $newer.Name $newer.Metadata
         $audit = Read-TvReportAudit $baseline.timestamp $comparison.timestamp $GraphToken
-        $drift = @{ drifts = $compared.Drifts; warnings = $compared.Warnings; settingNames = $names; baseline = $baseline; comparison = $comparison; largeFolders = (Get-TvReportLargeFolders @($older.Metadata, $newer.Metadata)) }
+        $drift = @{ drifts = $compared.Drifts; warnings = $compared.Warnings; unknownTypes = $compared.UnknownTypes; legacyReadFailure = $compared.LegacyReadFailure; settingNames = $names; baseline = $baseline; comparison = $comparison; largeFolders = (Get-TvReportLargeFolders @($older.Metadata, $newer.Metadata)) }
         $tenantName = Get-TvAutomationVariable "TenuVaultTenantName"
         $options = @{
             TenantId = $Context.TenantId; TenantName = $(if ($tenantName) { [string]$tenantName } else { $Context.TenantId })
@@ -3420,7 +3475,7 @@ function Invoke-TvBackup {
         # items a backup with warnings could not read would show up as deleted.
         # The report is optional: nothing it does may change the backup's result.
         if ($status -eq "Success") {
-            try { Invoke-TvChangeReport -Context $context -BackupFolder $backupFolder -Metadata $metadata -Types $types -GraphToken $graphToken -RunId $runId -RunTrigger $runTrigger }
+            try { Invoke-TvChangeReport -Context $context -BackupFolder $backupFolder -Metadata $metadata -Types $allTypes -GraphToken $graphToken -RunId $runId -RunTrigger $runTrigger }
             catch { Write-Output "No change report was made: $(Get-TvSafeError $_.Exception.Message)" }
         } else {
             try { if ((Get-TvChangeReportLevel) -ne "off") { Write-Output "No change report: the backup completed with warnings." } } catch { }

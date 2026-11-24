@@ -115,7 +115,7 @@ Like the scheduled backups themselves, this runs only while TenuVault is running
 * [Drift detection](/drift/): act on recent changes, with revert and restore
 * [Notifications](/notifications/): alerts and Intune change digests in Teams, email or webhooks
 
-Scheduled reports skip unchanged backups only when both the ordinary and inventory comparisons completed and found no changes. Inventory changes, unreadable index pages and comparisons that were not performed still produce a report. Older saved reports without recorded coverage cannot establish that nothing changed.
+Scheduled reports skip unchanged backups only when both the ordinary and inventory comparisons completed and found no changes. Preview, email and exports list the types that could not be compared. Unread types, inventory changes, unreadable index pages and comparisons that were not performed still produce a report. Older saved reports without recorded coverage cannot establish that nothing changed.
 
 ### Inventory in cloud reports
 
