@@ -1,5 +1,4 @@
 import { contextBridge, ipcRenderer } from "electron"
-import type { ConnectionSwitchResponse } from "../shared/tenant-connection"
 import type { BackupSchedule, LicenseStatus, ProxySignInPrompt, SignInRequiredEvent, TenuVaultPreloadBridge, UpdateStatus } from "../shared/ipc"
 
 /** Strips Electron's "Error invoking remote method 'x': Error: " prefix from IPC errors. */
@@ -52,11 +51,7 @@ const bridge: TenuVaultPreloadBridge = {
     connection: tenantId => invoke("auth:connection", tenantId),
     packConsentPlan: tenantId => invoke("auth:packConsentPlan", tenantId),
     packConsent: (tenantId, packId, action) => invoke("auth:packConsent", tenantId, packId, action),
-    switchConnection: async (tenantId, target) => {
-      const outcome = await invoke<ConnectionSwitchResponse>("auth:switchConnection", tenantId, target)
-      if ("error" in outcome) throw Object.assign(new Error(outcome.error.message), { code: outcome.error.code })
-      return outcome.result
-    },
+    switchConnection: (tenantId, target) => invoke("auth:switchConnection", tenantId, target),
     savedDirectoryRestores: (tenantId) => invoke("auth:savedDirectoryRestores", tenantId),
     onAccountsChanged: (listener) => subscribe<string>("auth:accountsChanged", listener),
     reauthenticate: (tenantId, clientId, scope) => invoke("auth:reauthenticate", tenantId, clientId, scope),

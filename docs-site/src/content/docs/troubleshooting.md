@@ -85,7 +85,7 @@ When this connection method is enabled, use **Sign-in and access** to review the
 | `AADSTS65001` | Ask a tenant administrator to approve the missing permission pack. |
 | `AADSTS65004` | Consent was declined. Try again or send the pack to your administrator. |
 | `AADSTS90094` | An administrator must approve this pack. Use Send to my admin. |
-| `AADSTS90095` | Use Request approval to open Microsoft's admin consent workflow, if your tenant enables it. |
+| `AADSTS90095` | Choose the permission pack and select **Open admin consent**. If Microsoft offers your tenant's approval workflow for the pack, select **Request approval**. |
 | `AADSTS50105` | Ask your Entra administrator to assign your account to the TenuVault enterprise app. |
 | `AADSTS53000` | Use a device that meets your tenant's compliance requirements. |
 | `AADSTS53001` | Use a device joined to the domain required by your tenant. |

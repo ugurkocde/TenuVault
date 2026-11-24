@@ -42,7 +42,12 @@ export function TenantConnectionSettings({ tenantId, clientId, onChanged }: {
     setBusy(true)
     setError(undefined)
     try {
-      const result = await bridge.auth.switchConnection(tenantId, { method: "ownApp", clientId: nextClientId.trim() })
+      const outcome = await bridge.auth.switchConnection(tenantId, { method: "ownApp", clientId: nextClientId.trim() })
+      if ("error" in outcome) {
+        setError(outcome.error.message)
+        return
+      }
+      const { result } = outcome
       setConnection(result.connection)
       onChanged(result.connection.clientId)
       setOpen(false)

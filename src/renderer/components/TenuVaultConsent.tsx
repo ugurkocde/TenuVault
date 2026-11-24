@@ -17,11 +17,11 @@ export function TenuVaultConsent({ tenantId, plan, active, onChanged }: {
   const [selected, setSelected] = useState("")
   const [busy, setBusy] = useState(false)
   const [results, setResults] = useState<Record<string, PackConsentResult>>({})
-  const [error, setError] = useState<{ code?: string; message: string }>()
+  const [error, setError] = useState<string>()
   const pack = currentPlan.packs.find(pack => pack.id === selected) ?? currentPlan.packs[0]!
   const result = results[pack.id]
   const pending = result?.status === "waiting" || result?.status === "handoff" || result?.status === "received"
-  const requestAvailable = (result?.status === "waiting" && result.issue?.code === "AADSTS90095") || error?.code === "AADSTS90095"
+  const requestAvailable = result?.status === "waiting" && result.issue?.code === "AADSTS90095"
 
   const copy = async (value: string, label: string) => {
     try {
@@ -69,12 +69,17 @@ export function TenuVaultConsent({ tenantId, plan, active, onChanged }: {
     setBusy(true)
     setError(undefined)
     try {
-      const connection = await bridge.auth.switchConnection(tenantId, { method: "tenuvaultApp" })
-      onChanged(connection)
+      const outcome = await bridge.auth.switchConnection(tenantId, { method: "tenuvaultApp" })
+      if ("error" in outcome) {
+        setError(outcome.error.code === "AADSTS90095"
+          ? "Choose a permission pack and select Open admin consent to check whether you can request approval for that pack. (AADSTS90095)"
+          : outcome.error.message)
+        return
+      }
+      onChanged(outcome.result)
       setOpen(false)
     } catch (failure) {
-      const code = failure instanceof Error && "code" in failure && typeof failure.code === "string" ? failure.code : undefined
-      setError({ code, message: failure instanceof Error ? failure.message : "TenuVault could not verify the permissions. Try again." })
+      setError(failure instanceof Error ? failure.message : "TenuVault could not verify the permissions. Try again.")
     } finally {
       setBusy(false)
     }
@@ -117,7 +122,7 @@ export function TenuVaultConsent({ tenantId, plan, active, onChanged }: {
           {result?.status === "verified" && <p role="status" className="text-sm text-gray-600">Permissions verified for {pack.label}.</p>}
           {result?.status === "received" && <p role="status" className="text-sm text-gray-600">Microsoft returned a consent confirmation. Select Check again to verify the permissions.</p>}
           {result?.status === "error" && <p role="alert" className="text-sm text-destructive">{result.issue.message}</p>}
-          {error && <p role="alert" className="text-sm text-destructive">{error.message}</p>}
+          {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => {

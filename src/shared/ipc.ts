@@ -1,5 +1,5 @@
 import type { PackConsentAction, PackConsentPlan, PackConsentResult } from "./pack-consent"
-import type { ConnectionSwitchResult, ConnectionTarget, TenantConnection } from "./tenant-connection"
+import type { ConnectionSwitchResponse, ConnectionTarget, TenantConnection } from "./tenant-connection"
 import type { PermissionAdditionPreview, PermissionAdditionResult } from "./registration-additions"
 import type { AppSourcesBridge } from "./app-sources/types"
 import type { OptionalPermissionStatus } from "./services/optional-permissions"
@@ -467,7 +467,7 @@ export interface TenuVaultBridge {
     connection: (tenantId: string) => Promise<TenantConnection | null>
     packConsentPlan: (tenantId: string) => Promise<PackConsentPlan | null>
     packConsent: (tenantId: string, packId: string, action: PackConsentAction) => Promise<PackConsentResult>
-    switchConnection: (tenantId: string, target: ConnectionTarget) => Promise<ConnectionSwitchResult>
+    switchConnection: (tenantId: string, target: ConnectionTarget) => Promise<ConnectionSwitchResponse>
     savedDirectoryRestores: (tenantId: string) => Promise<{ owner: string; pages: Array<{ runId: string; path: string }> }>
     /** Called after an account is saved or removed, before any old verification is reused. */
     onAccountsChanged: (listener: (tenantId: string) => void) => () => void

@@ -16,8 +16,8 @@ it.each(["LicenseDenied: This tenant already has an organization license.", "Err
   await expect(state.bridge!.license.setKey("TENU-TRIAL-KEY-0001")).rejects.toMatchObject({ message: message.replace(/^(?:Error|LicenseDenied): /, "") })
 })
 
-it("rejects a registration switch in the renderer with the safe message from main", async () => {
+it("passes a registration switch refusal to the renderer as structured data", async () => {
   const message = "The app registration could not be changed. Try again."
   state.invoke.mockResolvedValue({ error: { code: "switch_failed", message } })
-  await expect(state.bridge!.auth.switchConnection("tenant", { method: "ownApp", clientId: "client" })).rejects.toMatchObject({ message })
+  await expect(state.bridge!.auth.switchConnection("tenant", { method: "ownApp", clientId: "client" })).resolves.toEqual({ error: { code: "switch_failed", message } })
 })
