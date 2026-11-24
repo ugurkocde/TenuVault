@@ -1,8 +1,13 @@
 import { describe, expect, it, vi } from "vitest"
 import { routes } from "../src/main/features/notifications"
 import { DOMAINS } from "../src/main/features/domains"
-import { advanceWatcherDeploy, markInterruptedWatcherDeploys, resumePendingWatcherHandovers, resumeWatcherDeploy } from "../src/main/features/notifications/watcher-deploy/engine"
-import type { ArmRequest, ArmResponse } from "../src/main/azure/arm"
+import { advanceWatcherDeploy, markInterruptedWatcherDeploys, resumePendingWatcherHandovers, resumeWatcherDeploy, watcherDeployOf } from "../src/main/features/notifications/watcher-deploy/engine"
+import { createArmCaller, type ArmRequest, type ArmResponse } from "../src/main/azure/arm"
+import { ConnectionCapabilities, READ_ONLY } from "../src/main/auth/connection-capabilities"
+import { createBridgedFetch } from "../src/main/api/fetch-bridge"
+import { executionMetadata } from "../src/main/api/execution-metadata"
+import { RESOURCE_SCOPES } from "../src/shared/constants"
+import { GRAPH_CLI_CLIENT_ID, type TenantConnection } from "../src/shared/tenant-connection"
 import { watcherAlertsHash } from "../src/shared/notifications/alerts"
 import { auditWatchOf } from "../src/main/features/notifications/service"
 import { call, fakeDeps, TENANT_A } from "./feature-helpers"
@@ -284,6 +289,61 @@ describe("watcher deployment preflight", () => {
 })
 
 describe("watcher deployment engine", () => {
+  it.each(["graphCli", "ownApp"] as const)("keeps the runner's connection when a deployment step waits and switches to %s", async method => {
+    const w = await world({ accountExists: false })
+    const own: TenantConnection = {
+      version: 1, method: "ownApp", origin: "wizard", clientId: "99999999-9999-9999-9999-999999999999",
+      createdAt: NOW.toISOString(), updatedAt: NOW.toISOString(),
+    }
+    let current = own
+    const caps = new ConnectionCapabilities(tenant => tenant === TENANT_A ? current : null)
+    const authorizedWrites: Array<string | undefined> = []
+    const fetch = createBridgedFetch({
+      dispatch: vi.fn(), getDelegatedToken: vi.fn(),
+      authorizeRequest: (...args) => {
+        authorizedWrites.push(executionMetadata.getStore()?.connections?.get(TENANT_A))
+        return caps.authorizeRequest(...args)
+      },
+      fetch: async (input, init) => {
+        const url = new URL(String(input))
+        const { status, body } = await w.arm.call(TENANT_A, { method: init?.method as ArmRequest["method"], path: url.pathname + url.search })
+        return Response.json(body, { status })
+      },
+    })
+    const token = "watcher-arm-fixture"
+    caps.requireIssuedToken(TENANT_A, own.clientId, RESOURCE_SCOPES.management, token)
+    const arm = createArmCaller({ fetch, getToken: async () => token })
+    // Let discovery finish from its fixture so the test reaches the write guard.
+    w.deps.arm = (tenant, request) => request.method === "GET" ? w.arm.call(tenant, request) : arm(request)
+    w.deps.withTenantConnection = (tenant, run) => caps.withTenantConnection(tenant, run)
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
+    try {
+      const started = await startDeploy(w, { destinationConfirmed: false, copyDestinationKinds: ["teams"], grantRoles: false, rolesConfirmed: false })
+      expect(started.status).toBe(200)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(watcherDeployOf(w.deps, TENANT_A)).toMatchObject({ state: "running", phase: "deploy" })
+      expect(w.arm.calls.every(call => call.method === "GET")).toBe(true)
+      current = { ...own, method, clientId: method === "graphCli" ? GRAPH_CLI_CLIENT_ID : SUBSCRIPTION }
+      await vi.advanceTimersByTimeAsync(2000)
+
+      const writes = w.arm.calls.filter(call => call.method !== "GET")
+      if (method === "graphCli") {
+        expect(writes).toEqual([])
+        expect(watcherDeployOf(w.deps, TENANT_A)).toMatchObject({ state: "failed", error: READ_ONLY })
+      } else {
+        expect(writes.map(call => call.method)).toEqual(["POST", "PUT"])
+        expect(w.arm.deploymentPuts).toBe(1)
+      }
+      // The next step can bind on its own. The runner must keep the ID from startup.
+      expect(authorizedWrites).toEqual(method === "graphCli" ? [own.clientId] : [own.clientId, own.clientId])
+    } finally {
+      markInterruptedWatcherDeploys(w.deps)
+      await vi.advanceTimersByTimeAsync(2000)
+      vi.useRealTimers()
+    }
+  })
+
   it("adopts after alerts, one test job and a clean heartbeat; never deploys over an existing watcher", async () => {
     const w = await world()
     const preflight = (await call(w.api, PATH, { tenantId: TENANT_A, action: "watcher-preflight", ...planBody })).body

@@ -1,7 +1,12 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { routes } from "../src/main/features/notifications"
 import { DOMAINS } from "../src/main/features/domains"
-import { checkWatcher, outboxOf, saveAuditWatch } from "../src/main/features/notifications/service"
+import { checkWatcher, outboxOf, saveAuditWatch, syncWatcherAlerts } from "../src/main/features/notifications/service"
+import { ConnectionCapabilities, READ_ONLY } from "../src/main/auth/connection-capabilities"
+import { createBridgedFetch } from "../src/main/api/fetch-bridge"
+import { executionMetadata } from "../src/main/api/execution-metadata"
+import { RESOURCE_SCOPES } from "../src/shared/constants"
+import { GRAPH_CLI_CLIENT_ID, type TenantConnection } from "../src/shared/tenant-connection"
 import { watcherAlertsHash } from "../src/shared/notifications/alerts"
 import type { OutboxRecord, RuleRecord } from "../src/main/features/notifications/model"
 import { call, fakeDeps, TENANT_A, TENANT_B, TENANT_C } from "./feature-helpers"
@@ -134,6 +139,60 @@ describe("the Azure watcher runs which alerts", () => {
 })
 
 describe("updating the Azure watcher's alerts from the app", () => {
+  it.each(["graphCli", "ownApp"] as const)("keeps the queued alert sync's connection after switching to %s", async method => {
+    const w = world()
+    const channelId = await webhook(w)
+    await call(w.api, PATH, { tenantId: TENANT_A, action: "add-rule", title: "Changes", eventTypes: ["intune.change"], channelIds: [channelId] })
+    saveAuditWatch(w.deps, TENANT_A, { externalWatcher: true, watcherAlertsSync: { auto: true, pushedAt: null, pushedHash: null, error: null, errorAt: null } }, { actor: null, reason: "test" })
+    const own: TenantConnection = {
+      version: 1, method: "ownApp", origin: "wizard", clientId: "99999999-9999-9999-9999-999999999999",
+      createdAt: NOW.toISOString(), updatedAt: NOW.toISOString(),
+    }
+    let current = own
+    const caps = new ConnectionCapabilities(tenant => tenant === TENANT_A ? current : null)
+    w.deps.withTenantConnection = (tenant, run) => caps.withTenantConnection(tenant, run)
+    let signalFirstWrite: () => void
+    const firstWrite = new Promise<void>(resolve => { signalFirstWrite = resolve })
+    let finishFirstWrite!: () => void
+    const firstResponse = new Promise<void>(resolve => { finishFirstWrite = resolve })
+    const network = vi.fn<typeof fetch>(async () => {
+      signalFirstWrite()
+      await firstResponse
+      return new Response(null, { status: 201 })
+    })
+    const authorizedWrites: Array<string | undefined> = []
+    const fetch = createBridgedFetch({
+      dispatch: vi.fn(), getDelegatedToken: vi.fn(), fetch: network,
+      authorizeRequest: (...args) => {
+        authorizedWrites.push(executionMetadata.getStore()?.connections?.get(TENANT_A))
+        return caps.authorizeRequest(...args)
+      },
+    })
+    const token = "watcher-blob-fixture"
+    caps.requireIssuedToken(TENANT_A, own.clientId, RESOURCE_SCOPES.storage, token)
+    const url = "https://backupfixture.blob.core.windows.net/tenuvault-notification-state/alerts.json"
+    w.deps.watcherAlertsWrite = async (_tenant, text) => {
+      await fetch(url, { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: text })
+      return { status: "ok" }
+    }
+
+    const first = syncWatcherAlerts(w.deps, TENANT_A, null, true)
+    await firstWrite
+    const queued = syncWatcherAlerts(w.deps, TENANT_A, null, true)
+    current = { ...own, method, clientId: method === "graphCli" ? GRAPH_CLI_CLIENT_ID : TENANT_B }
+    finishFirstWrite()
+    const [inFlight, afterSwitch] = await Promise.all([first, queued])
+    expect(inFlight).toMatchObject({ ok: true })
+    if (method === "graphCli") {
+      expect(afterSwitch).toMatchObject({ ok: false, error: READ_ONLY })
+      expect(network).toHaveBeenCalledExactlyOnceWith(url, expect.objectContaining({ method: "PUT" }))
+    } else {
+      expect(afterSwitch).toMatchObject({ ok: true })
+      expect(network).toHaveBeenCalledTimes(2)
+    }
+    expect(authorizedWrites).toEqual([own.clientId, own.clientId])
+  })
+
   function watched(w: ReturnType<typeof world>, write: (text: string) => { status: "ok" } | { status: "error"; message: string } = () => ({ status: "ok" })) {
     const writes: string[] = []
     w.deps.watcherAlertsWrite = async (_tenant, text) => { writes.push(text); return write(text) }
