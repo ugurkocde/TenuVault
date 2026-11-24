@@ -1023,6 +1023,17 @@ describe("onboarding service choices", () => {
     })
   })
 
+  it("sends a resumed draft back to the service cards when migration changed the choice", () => {
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 1, tenant: "t", services: { intune: { access: "restore" } } }))
+    expect(loadOnboardingDraft()).toMatchObject({ step: -1, reconfirm: true, services: { intune: { access: "backup" } } })
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 1, tenant: "t", services: { entra: { access: "backup" } } }))
+    expect(loadOnboardingDraft()).toMatchObject({ step: -1, reconfirm: true })
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 1, tenant: "t", services: { intune: { access: "backup" } } }))
+    const unchanged = loadOnboardingDraft()
+    expect(unchanged?.step).toBe(1)
+    expect(unchanged?.reconfirm).toBeUndefined()
+  })
+
   it("keeps an Entra-only choice through restart and follows it in every connect route", async () => {
     let container = await render(createElement(OnboardingPage), false)
     await selectServices(container, ["entra"])
@@ -1208,7 +1219,7 @@ describe("onboarding service choices", () => {
 
   it("keeps the Entra-only choice pending until the permission repair is verified", async () => {
     const account = { tenantId: TENANT, clientId: CLIENT, username: "admin" }
-    state.store.set(DRAFT_KEY, JSON.stringify({ step: 4, tenant: TENANT, clientId: CLIENT, displayName: "", account, services: { entra: { access: "backup" } }, signedInAt: Date.now() }))
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 4, tenant: TENANT, clientId: CLIENT, displayName: "", account, services: { entra: { access: "backup" }, conditionalAccess: { access: "backup" } }, signedInAt: Date.now() }))
     state.accounts.mockResolvedValueOnce([account])
     state.checkPermissions.mockResolvedValue({ missing: ["Policy.Read.All"] })
     state.storageChoice = { kind: "local" }

@@ -52,6 +52,12 @@ function recentAccount(value: Record<string, unknown>, now = Date.now()): Signed
   return account && signedInAt <= now && now - signedInAt < PENDING_SIGN_IN_MAX_AGE_MS ? account : null
 }
 
+const canonical = (choice: PermissionChoice) => JSON.stringify(Object.keys(choice).sort().map(id => {
+  const picked = choice[id as keyof PermissionChoice]!
+  return [id, picked.access, [...(picked.areas ?? [])].sort()]
+}))
+const sameChoice = (a: PermissionChoice, b: PermissionChoice) => canonical(a) === canonical(b)
+
 /** The saved draft, or null when there is none or it cannot be read. An expired sign-in is left out. */
 export function loadOnboardingDraft(): OnboardingDraft | null {
   try {
@@ -74,6 +80,9 @@ export function loadOnboardingDraft(): OnboardingDraft | null {
       if (services[id] || (id === "entra" && services.conditionalAccess)) backupOnly[id] = { access: "backup" }
     }
     if (backupOnly.entra) backupOnly.conditionalAccess = { access: "backup" }
+    // When that changes what the admin picked (restore, opt-in areas or Conditional Access), show the
+    // service cards again so a resumed setup never creates a registration they did not see.
+    if (!reconfirm && Object.hasOwn(value, "services") && sameChoice(services, backupOnly) === false) reconfirm = true
     services = backupOnly
     // A choice that still has to be confirmed stays on the service step, even after a valid pick was saved.
     if (reconfirm || !Object.keys(services).length) step = -1
