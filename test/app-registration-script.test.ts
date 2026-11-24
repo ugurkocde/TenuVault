@@ -190,6 +190,8 @@ describe.runIf(Boolean(powershell))("real setup script over HTTP", () => {
       consentType: "AllPrincipals",
       resourceId: spId(API_IDS[api]!),
       scope: scopesOf(api).join(" "),
+      startTime: "0001-01-01T00:00:00Z",
+      expiryTime: "9999-12-31T23:59:59Z",
     })))
 
     if (scenario === "group") {

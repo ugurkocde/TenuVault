@@ -60,7 +60,7 @@ describe("registration provisioning", () => {
     const app = f.calls.find(c => c.url.pathname === "/beta/applications" && c.method === "POST")!
     expect(app.body).toEqual({ displayName: "TenuVault Desktop", signInAudience: "AzureADMyOrg", notes: "Used by the TenuVault desktop app. Delegated permissions only, no credentials.", publicClient: { redirectUris: ["http://localhost"] }, requiredResourceAccess: DESKTOP_APP_PERMISSIONS.map(r => ({ resourceAppId: r.appId, resourceAccess: r.permissions.map((_, i) => ({ id: `${r.api}-${i}`, type: "Scope" })) })) })
     expect(f.calls.find(c => c.body?.appId === "client")?.body?.tags).toEqual(["HideApp", "WindowsAzureActiveDirectoryIntegratedApp"])
-    expect(f.calls.filter(c => c.url.pathname === "/beta/oauth2PermissionGrants" && c.method === "POST").map(c => c.body)).toEqual(DESKTOP_APP_PERMISSIONS.map(r => ({ clientId: "app-sp", consentType: "AllPrincipals", resourceId: r.api, scope: r.permissions.join(" ") })))
+    expect(f.calls.filter(c => c.url.pathname === "/beta/oauth2PermissionGrants" && c.method === "POST").map(c => c.body)).toEqual(DESKTOP_APP_PERMISSIONS.map(r => ({ clientId: "app-sp", consentType: "AllPrincipals", resourceId: r.api, scope: r.permissions.join(" "), startTime: "0001-01-01T00:00:00Z", expiryTime: "9999-12-31T23:59:59Z" })))
   })
   it("creates the compiled lab fixture even when a trusted registration exists", async () => {
     vi.stubGlobal("__TV_LAB_BUILD__", true)

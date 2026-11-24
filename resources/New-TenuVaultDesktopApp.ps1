@@ -493,7 +493,16 @@ try {
     Write-Host "Granting admin consent for these delegated permissions..."
     foreach ($resource in $resources) {
         Write-Host "  $($resource.Name): $($resource.Scopes -join ', ')"
-        Invoke-Graph POST '/oauth2PermissionGrants' @{ clientId = $appSp.id; consentType = 'AllPrincipals'; resourceId = $resource.ServicePrincipalId; scope = ($resource.Scopes -join ' ') } -ReplicationRetry | Out-Null
+        # Graph beta requires these legacy dates on create and ignores them. Match Entra's minimum
+        # start date and use a future expiry placeholder for consent that lasts until revoked.
+        Invoke-Graph POST '/oauth2PermissionGrants' @{
+            clientId = $appSp.id
+            consentType = 'AllPrincipals'
+            resourceId = $resource.ServicePrincipalId
+            scope = ($resource.Scopes -join ' ')
+            startTime = '0001-01-01T00:00:00Z'
+            expiryTime = '9999-12-31T23:59:59Z'
+        } -ReplicationRetry | Out-Null
     }
     if ($AllowedGroupId) {
         Write-Host "Limiting sign-in to members of group $AllowedGroupId..."

@@ -1,3 +1,4 @@
+import { DELEGATED_GRANT_DATES } from "../../shared/app-registration"
 import type { ConnectionHealthReport, HealthCause, HealthChange, ReaderHealthState, SignInHealthState, VerifiedHealth } from "../../shared/connection-health/model"
 import { knownPermissions } from "../../shared/services/manifest"
 import { MODULE_BY_ID } from "../../shared/services/modules"
@@ -120,12 +121,12 @@ export function permissionRemediation(report: Pick<ConnectionHealthReport, "tena
     `scopes=$(printf '%s\\n' "$existingScopes" ${quote(names.join(" "))} | tr ' \\t' '\\n' | LC_ALL=C sort -u | sed '/^$/d' | paste -sd ' ' -)`,
     'if [ -n "$existingGrantId" ]; then',
     `  body=$(printf '{"scope":"%s"}' "$scopes") || exit 1`,
-    `  az rest --method PATCH --url "https://graph.microsoft.com/v1.0/oauth2PermissionGrants/$existingGrantId" --headers 'Content-Type=application/json' --body "$body" || { echo ${quote(consentFailure)} >&2; exit 1; }`,
+    `  az rest --method PATCH --url "https://graph.microsoft.com/beta/oauth2PermissionGrants/$existingGrantId" --headers 'Content-Type=application/json' --body "$body" || { echo ${quote(consentFailure)} >&2; exit 1; }`,
     'else',
     `  clientObjectId=$(az ad sp show --id ${quote(report.clientId)} --query id -o tsv) || exit 1`,
     '  [ -n "$clientObjectId" ] || exit 1',
-    `  body=$(printf '{"clientId":"%s","consentType":"AllPrincipals","resourceId":"%s","scope":"%s"}' "$clientObjectId" "$graphId" "$scopes") || exit 1`,
-    `  az rest --method POST --url https://graph.microsoft.com/v1.0/oauth2PermissionGrants --headers 'Content-Type=application/json' --body "$body" || { echo ${quote(consentFailure)} >&2; exit 1; }`,
+    `  body=$(printf '{"clientId":"%s","consentType":"AllPrincipals","resourceId":"%s","scope":"%s","startTime":"${DELEGATED_GRANT_DATES.startTime}","expiryTime":"${DELEGATED_GRANT_DATES.expiryTime}"}' "$clientObjectId" "$graphId" "$scopes") || exit 1`,
+    `  az rest --method POST --url https://graph.microsoft.com/beta/oauth2PermissionGrants --headers 'Content-Type=application/json' --body "$body" || { echo ${quote(consentFailure)} >&2; exit 1; }`,
     'fi',
     ")",
   ].join("\n")

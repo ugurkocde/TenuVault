@@ -13,6 +13,7 @@ const consentFailure = "Consent may have changed because the request may have be
 const graphId = "33333333-3333-3333-3333-333333333333"
 const clientObjectId = "44444444-4444-4444-4444-444444444444"
 const grant = { id: "existing-grant", clientId: clientObjectId, resourceId: graphId, consentType: "AllPrincipals", scope: "User.Read Policy.Read.All" }
+const newGrantDates = { startTime: "0001-01-01T00:00:00Z", expiryTime: "9999-12-31T23:59:59Z" }
 const unrelated = { ...grant, id: "other-api-grant", resourceId: "other-api", scope: "Other.Read" }
 const folders: string[] = []
 afterEach(() => folders.splice(0).forEach(folder => rmSync(folder, { recursive: true, force: true })))
@@ -103,7 +104,7 @@ it.each(["bash", "zsh"])("%s updates existing consent in place with the union an
   expect(result.status, result.stderr).toBe(0)
   expect(state.grants).toEqual([unrelated, { ...grant, scope: "Group.Read.All Policy.Read.All User.Read" }])
   const writes = calls.filter(args => args[0] === "rest")
-  expect(writes).toEqual([["rest", "--method", "PATCH", "--url", `https://graph.microsoft.com/v1.0/oauth2PermissionGrants/${grant.id}`, "--headers", "Content-Type=application/json", "--body", JSON.stringify({ scope: "Group.Read.All Policy.Read.All User.Read" })]])
+  expect(writes).toEqual([["rest", "--method", "PATCH", "--url", `https://graph.microsoft.com/beta/oauth2PermissionGrants/${grant.id}`, "--headers", "Content-Type=application/json", "--body", JSON.stringify({ scope: "Group.Read.All Policy.Read.All User.Read" })]])
   expect(calls.filter(args => args.includes("add"))).toEqual(permissionIds.map(id => ["ad", "app", "permission", "add", "--id", clientId, "--api", "00000003-0000-0000-c000-000000000000", "--api-permissions", `${id}=Scope`]))
   expect(calls.findIndex(args => args[0] === "rest")).toBeGreaterThan(calls.findLastIndex(args => args.includes("add")))
   expect(calls.some(args => args.includes("grant") || args.includes("admin-consent"))).toBe(false)
@@ -126,8 +127,8 @@ it.each(["bash", "zsh"])("%s stops for review before changing individual grants"
 it.each(["bash", "zsh"])("%s creates one grant using service principal object IDs when no tenant-wide grant exists", shellName => {
   const { result, calls, state } = shell(shellName, "", false, false)
   expect(result.status, result.stderr).toBe(0)
-  const body = { clientId: clientObjectId, consentType: "AllPrincipals", resourceId: graphId, scope: "Group.Read.All Policy.Read.All" }
-  expect(calls.filter(args => args[0] === "rest")).toEqual([["rest", "--method", "POST", "--url", "https://graph.microsoft.com/v1.0/oauth2PermissionGrants", "--headers", "Content-Type=application/json", "--body", JSON.stringify(body)]])
+  const body = { clientId: clientObjectId, consentType: "AllPrincipals", resourceId: graphId, scope: "Group.Read.All Policy.Read.All", ...newGrantDates }
+  expect(calls.filter(args => args[0] === "rest")).toEqual([["rest", "--method", "POST", "--url", "https://graph.microsoft.com/beta/oauth2PermissionGrants", "--headers", "Content-Type=application/json", "--body", JSON.stringify(body)]])
   expect(state.grants).toEqual([unrelated, { id: "new-grant", ...body }])
   expect(calls.some(args => args.includes("grant") || args.includes("admin-consent"))).toBe(false)
 }, 30_000)
@@ -173,7 +174,7 @@ it.each(["bash", "zsh"])("%s skips a scope already declared on the registration 
     { ...initial.requiredResourceAccess[1], resourceAccess: [...initial.requiredResourceAccess[1]!.resourceAccess, { id: permissionIds[1], type: "Scope" }] },
   ])
   expect(calls.filter(args => args[0] === "rest").map(args => args[2])).toEqual(["POST", "PATCH"])
-  expect(state.grants).toEqual([unrelated, { ...grant, id: "new-grant", scope: "Group.Read.All Policy.Read.All" }])
+  expect(state.grants).toEqual([unrelated, { ...grant, id: "new-grant", scope: "Group.Read.All Policy.Read.All", ...newGrantDates }])
 }, 30_000)
 it.each(["bash", "zsh"])("%s treats a declared scope ID in other letter case as already declared", shellName => {
   const { results, calls } = shell(shellName, "", false, true, { declaredScopes: [permissionIds[0]!.toUpperCase()], runs: 2 })
@@ -186,7 +187,7 @@ it.each(["bash", "zsh"])("%s warns to check Entra when a consent write is applie
     expect(result.status).not.toBe(0)
     expect(result.stderr).toContain("Request timed out")
     expect(result.stderr).toContain(consentFailure)
-    expect(state.grants).toEqual([unrelated, { ...grant, id: existing ? grant.id : "new-grant", scope: existing ? "Group.Read.All Policy.Read.All User.Read" : "Group.Read.All Policy.Read.All" }])
+    expect(state.grants).toEqual([unrelated, { ...grant, id: existing ? grant.id : "new-grant", scope: existing ? "Group.Read.All Policy.Read.All User.Read" : "Group.Read.All Policy.Read.All", ...(existing ? {} : newGrantDates) }])
     expect(state.requiredResourceAccess[0]).toEqual(initial.requiredResourceAccess[0])
     expect(calls.filter(args => args[0] === "rest")).toHaveLength(1)
     expect(calls.at(-1)).toContain(existing ? "PATCH" : "POST")
