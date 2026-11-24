@@ -30,7 +30,7 @@ import { downloadCapturedContent } from "./app-backup/capture-download"
 import { AppSourceService } from "./app-sources/service"
 import { checkRecoveryDevice } from "./app-backup/device-check"
 import { readAppBackupAccount } from "./app-backup/account"
-import { appBackupClientId } from "./app-backup/sign-in"
+import { appBackupClientId, appRestoreToken } from "./app-backup/sign-in"
 import { readAppBackupDetails } from "./app-backup/app-details"
 import { printAppDetails } from "./app-backup/print"
 import { downloadAppScript } from "./app-backup/script-download"
@@ -1944,11 +1944,7 @@ async function bootstrap(): Promise<void> {
       const admittedClient = connections.get(target)?.clientId ?? null
       const authorizeRestore = () => capabilities.requireAppRestoreWrite(target, admittedClient)
       return disclaimer.run([target], () => restoreAppWithAudit(store, source, snapshot, target, name, {
-        getGraphToken: async () => {
-          const client = signedInClient(target)
-          await authorizeRestore()
-          return (await auth.getAccessToken(target, client, RESOURCE_SCOPES.graph)).accessToken
-        },
+        getGraphToken: () => appRestoreToken(auth, target, signedInClient(target), authorizeRestore),
         authorizeUpload: authorizeRestore,
         fetch: bridgedFetch, signal, progress, operationId,
       }))

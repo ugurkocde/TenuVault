@@ -25,13 +25,19 @@ import { DELEGATED_CLIENT_SECRET, RESOURCE_SCOPES } from "../src/shared/constant
 import { INTUNE_TYPES } from "../src/shared/intune/registry"
 import { graphCaller } from "../src/portal/lib/policies/graph-restore"
 import { POST as listAzureResources } from "../src/portal/app/api/list-azure-resources/route"
+import { appRestoreToken } from "../src/main/app-backup/sign-in"
+import type { TenantConnection } from "../src/shared/tenant-connection"
 
 const msal = vi.hoisted(() => ({ acquire: vi.fn() }))
 vi.mock("@azure/msal-node", async importOriginal => ({
   ...await importOriginal<typeof import("@azure/msal-node")>(),
   PublicClientApplication: class {
     acquireTokenSilent = msal.acquire
-    getAllAccounts = async () => [{ homeAccountId: "account", username: "fixture@example.test" }]
+    constructor(private readonly config: { auth: { clientId: string } }) {}
+    getAllAccounts = async () => [
+      { homeAccountId: "account", username: "fixture@example.test" },
+      { homeAccountId: this.config.auth.clientId, username: "registered@example.test" },
+    ]
   },
 }))
 
@@ -43,6 +49,41 @@ const graph = "https://graph.microsoft.com/beta/"
 const blob = "https://example.blob.core.windows.net/intune-backups/"
 const tokenFor = (tenant: string, scope: string) => `opaque-${tenant}-${new URL(scope).hostname}`
 const headers = (token: string) => ({ authorization: `Bearer ${token}` })
+
+it.each(["silent token", "installer restore"])("keeps the original registration and account across %s authorization", async path => {
+  const profile = (clientId: string) => ({ tenantId: TENANT, clientId, homeAccountId: clientId, username: "registered@example.test" })
+  let stored = profile(CLIENT)
+  let connection: TenantConnection = { version: 1, method: "ownApp", clientId: CLIENT, origin: "wizard", createdAt: "", updatedAt: "" }
+  const cap = new ConnectionCapabilities(() => connection)
+  const switchRegistration = async () => {
+    await Promise.resolve()
+    stored = profile(DESTINATION_CLIENT)
+    connection = { ...connection, clientId: DESTINATION_CLIENT }
+  }
+  msal.acquire.mockReset().mockImplementation(async ({ account }) => ({ accessToken: `token-for-${account.homeAccountId}` }))
+  const cachePlugin = vi.fn(() => ({ beforeCacheAccess: vi.fn(), afterCacheAccess: vi.fn() }))
+  const auth = new AuthManager({
+    fetch: vi.fn(), openBrowser: async () => {}, cachePlugin,
+    accountStore: { get: () => stored, list: () => [stored], set: vi.fn(), delete: vi.fn() },
+    authorizeConnection: (tenant, client, scope) => cap.requireConnection(tenant, client, scope),
+    authorizeSilentToken: async (tenant, client, scope) => {
+      await cap.requireConnectionEnabled(tenant, client, scope)
+      if (path === "silent token") await switchRegistration()
+    },
+    authorizeIssuedToken: (tenant, client, scope, result) => cap.requireIssuedToken(tenant, client, scope, result.accessToken, result),
+  })
+  const authorizeRestore = async () => {
+    await cap.requireAppRestoreWrite(TENANT, CLIENT)
+    await switchRegistration()
+  }
+  const token = path === "installer restore"
+    ? await appRestoreToken(auth, TENANT, stored.clientId, authorizeRestore)
+    : (await auth.getAccessToken(TENANT, stored.clientId, RESOURCE_SCOPES.graph)).accessToken
+  expect(stored.clientId).toBe(DESTINATION_CLIENT)
+  expect(token).toBe(`token-for-${CLIENT}`)
+  expect(cachePlugin).toHaveBeenCalledExactlyOnceWith(CLIENT)
+  expect(msal.acquire).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ account: expect.objectContaining({ homeAccountId: CLIENT }) }))
+})
 
 let dir: string | undefined
 afterEach(() => {

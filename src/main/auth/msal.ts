@@ -388,16 +388,18 @@ export class AuthManager {
    * Returns an access token for `scope` in `tenantId` from the cache or with the refresh
    * token. Throws SignInRequiredError when the admin has to sign in again.
    */
-  async getAccessToken(tenantId: string, clientId: string, scope: string, forceRefresh = false): Promise<SilentTokenResult> {
+  async getAccessToken(tenantId: string, clientId: string, scope: string, forceRefresh = false, authorize?: () => Promise<void>): Promise<SilentTokenResult> {
     this.host.authorizeConnection?.(tenantId, clientId, scope)
-    if (this.host.authorizeSilentToken) await this.host.authorizeSilentToken(tenantId, clientId, scope)
+    // A registration switch during authorization must not change the account for this acquisition.
     const stored = this.host.accountStore.get(normalizeGuid(tenantId))
     if (!stored || normalizeGuid(stored.clientId) !== normalizeGuid(clientId)) {
       throw new SignInRequiredError(tenantId, clientId, "You are not signed in to this tenant. Sign in to continue.", scope)
     }
 
-    const scopes = await this.connectionScopes(tenantId, clientId, scope)
     const app = this.app(stored.clientId)
+    if (this.host.authorizeSilentToken) await this.host.authorizeSilentToken(tenantId, clientId, scope)
+    if (authorize) await authorize()
+    const scopes = await this.connectionScopes(tenantId, clientId, scope)
     const account = await this.findAccount(app, stored.homeAccountId)
     if (!account) {
       throw new SignInRequiredError(tenantId, clientId, `Your session for ${stored.username} has ended. Sign in again to continue.`, scope)
