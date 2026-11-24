@@ -1,3 +1,5 @@
+import { moduleForFolder } from "../../../shared/services/modules"
+import type { ModuleId } from "../../../shared/services/modules"
 import { normalizeBackupStatus, backupHealth, backupSummary, latestComplete, type LiveBackupRun } from "~/lib/backup-health"
 import { useLicense, tenantLicense, tenantPlan } from "@desktop/lib/license"
 import { allows } from "../../../shared/plans"
@@ -28,7 +30,7 @@ export interface PolicyBreakdown {
 }
 
 /** `runId` is the backup job that wrote the folder, when the folder records it. */
-export type DashboardBackup = BackupHistoryItem & { policies?: PolicyBreakdown; runId?: string | null }
+export type DashboardBackup = BackupHistoryItem & { policies?: PolicyBreakdown; runId?: string | null; capturedServices?: ModuleId[]; coverageIncomplete?: boolean; needsAccess?: boolean }
 
 /** A failed backup attempt, recorded by the app on this device. */
 export interface FailedAttemptItem {
@@ -109,6 +111,12 @@ async function fetchBackupHistory(tenant: any): Promise<BackupHistoryResult> {
       size: backup.size || backup.properties?.contentLength || 0,
       error: backup.error || backup.errorMessage || backup.properties?.errorMessage,
       policies: backup.policies,
+      capturedServices: [...new Set<ModuleId>(Object.entries(backup.counts ?? {}).flatMap(([folder, count]) => {
+        const module = moduleForFolder(folder)?.module.id
+        return module && typeof count === "number" && count > 0 ? [module === "conditionalAccess" ? "entra" : module] : []
+      }))],
+      coverageIncomplete: backup.coverage === "incomplete",
+      needsAccess: Object.values(backup.notReadCauses ?? {}).some(cause => cause === "permission" || cause === "role"),
       runId: typeof backup.runId === "string" ? backup.runId : null,
     })).sort((a: BackupHistoryItem, b: BackupHistoryItem) => 
       b.timestamp.getTime() - a.timestamp.getTime() // Sort by newest first

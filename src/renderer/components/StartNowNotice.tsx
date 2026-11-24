@@ -1,19 +1,11 @@
 import { useEffect, useState } from "react"
 import { Link } from "react-router-dom"
-import { useSelectedTenant } from "~/contexts/TenantContext"
 import { GRAPH_CLI_CLIENT_ID, GRAPH_CLI_UPGRADE, OWN_APP_UPGRADE } from "../../shared/tenant-connection"
 import { bridge } from "../lib/bridge"
 import { settingsHref } from "../lib/settings-section"
 
 export function startNowTenantId(credentials?: { appId: string; tenantId: string }): string | null {
   return credentials?.appId?.toLowerCase() === GRAPH_CLI_CLIENT_ID ? credentials.tenantId.toLowerCase() : null
-}
-
-export function StartNowNotice() {
-  const { selectedTenant } = useSelectedTenant()
-  const tenantId = startNowTenantId(selectedTenant?.credentials)
-  if (!tenantId) return null
-  return <StartNowUpgradeLinks tenantId={tenantId} />
 }
 
 export function StartNowUpgradeLinks({ tenantId, message = "Start now provides read-only backups on this device." }: { tenantId: string; message?: string }) {

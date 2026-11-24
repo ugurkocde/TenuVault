@@ -59,6 +59,18 @@ describe("Backup Details", () => {
     return { container, button, render }
   }
 
+  it("opens the exact backup requested from the Dashboard", () => {
+    const { container, render } = renderBackup()
+    downloadState.search = "backup=backup-2020-01-01-000000"
+    downloadState.rows = [
+      { ...downloadState.rows[0]!, id: "backup-2020-01-02-000000", timestamp: "2020-01-02T00:00:00Z", scope: { excluded: [], description: "Newer run" } },
+      { ...downloadState.rows[0]!, scope: { excluded: [], description: "Requested run" } },
+    ]
+    render()
+    const selected = container.querySelector("button.border-primary")
+    expect(selected?.textContent).toContain("Requested run")
+  })
+
   it("shows an Intune-only backup as excluded when opened through the Defender filter", () => {
     downloadState.search = "service=defender"
     const { container } = renderBackup({ scope: { included: ["ConfigurationPolicies"], excluded: [], description: "Everything" } })
@@ -81,7 +93,7 @@ describe("Backup Details", () => {
     expect(row.textContent).not.toContain("None in the tenant")
   })
 
-  it("labels the result Finished in the list and Run status when coverage is incomplete", () => {
+  it("labels the result Completed and shows coverage separately in history", () => {
     const { container } = renderBackup({
       coverage: "incomplete",
       scope: { included: ["CompliancePolicies", "DeviceConfigurations"], excluded: [], description: "Custom" },
@@ -89,9 +101,10 @@ describe("Backup Details", () => {
       notRead: ["DeviceConfigurations"],
       notReadCauses: { DeviceConfigurations: "permission" },
     })
-    expect([...container.querySelectorAll("button span")].map(node => node.textContent)).toContain("Finished")
+    expect([...container.querySelectorAll("button span")].map(node => node.textContent)).toContain("Completed")
+    expect([...container.querySelectorAll("button span")].map(node => node.textContent)).toContain("Coverage incomplete")
     const status = [...container.querySelectorAll("dt")].find(node => node.textContent === "Run status")
-    expect(status?.nextElementSibling?.textContent).toBe("Finished")
+    expect(status?.nextElementSibling?.textContent).toBe("Completed")
     expect(container.querySelector('[aria-label="Intune backup coverage"]')?.textContent).toContain("1 of 2")
     expect(container.querySelector('[aria-label="Intune backup coverage"]')?.textContent).toContain("Permission not granted")
   })

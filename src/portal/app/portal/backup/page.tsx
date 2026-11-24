@@ -110,6 +110,7 @@ export default function BackupRestorePage() {
   const changeStorage = (tenant: Tenant, choice: StorageChoice) => {
     updateTenant(tenant.id, changeTenantStorage(tenant, choice))
   }
+  const requestedBackup = searchParams.get("backup")
   const requestedTenant = searchParams.get("tenant")?.toLowerCase()
   // Notification links select the affected tenant and keep the requested tab.
   useEffect(() => {
@@ -182,6 +183,20 @@ export default function BackupRestorePage() {
   useEffect(() => {
     setSelectedId((current) => (current && backups.some((backup) => backup.id === current) ? current : backups[0]?.id ?? null))
   }, [backups])
+
+  // A Dashboard link selects its exact backup once the tenant's list has loaded.
+  useEffect(() => {
+    if (!requestedBackup || requestedTenant || backupList.backups === null) return
+    if (backups.some(backup => backup.id === requestedBackup)) {
+      setSelectedId(requestedBackup)
+      requestAnimationFrame(() => detailRef.current?.scrollIntoView({ block: "start" }))
+    }
+    setSearchParams(current => {
+      const next = new URLSearchParams(current)
+      next.delete("backup")
+      return next
+    }, { replace: true })
+  }, [requestedBackup, requestedTenant, backupList.backups, backups, setSearchParams])
 
   const fetchBackups = () => backupList.refresh({ force: true })
 
@@ -453,6 +468,7 @@ export default function BackupRestorePage() {
                           <div className="flex flex-wrap justify-end gap-2">
                             {backup.type && <span className={cn("rounded-full px-2.5 py-1 text-xs font-medium", backup.type === "scheduled" ? "bg-blue-50 text-blue-700" : "bg-muted text-gray-700")}>{TRIGGER_LABEL[backup.type]}</span>}
                             {(kind !== "success" || backup.coverage === "incomplete") && <span className={cn("rounded-full px-2.5 py-1 text-xs font-medium", style.badge)}>{statusLabel(backup.status, backup.coverage)}</span>}
+                            {backup.coverage === "incomplete" && <span className="rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-gray-700">Coverage incomplete</span>}
                           </div>
                         </div>
                         <div className="mt-3 grid grid-cols-2 gap-4 text-sm xl:grid-cols-4">

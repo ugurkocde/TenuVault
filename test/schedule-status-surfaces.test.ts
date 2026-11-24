@@ -239,12 +239,12 @@ describe("Dashboard backup counts", () => {
 
   it("counts a cancelled backup in storage only and shows Cancelled in a neutral chip", () => {
     const cancelled = storedBackup("cancelled", hoursAgo(1))
-    state.stats = { ...emptyStats, periodStart: hoursAgo(24), latestBackup: cancelled, backupHistory: [cancelled, storedBackup("success", hoursAgo(2)), storedBackup("failed", hoursAgo(3))] }
+    state.stats = { ...emptyStats, periodStart: hoursAgo(24), latestBackup: cancelled, backupHistory: [cancelled, storedBackup("success", hoursAgo(2)), storedBackup("failed", hoursAgo(3)), storedBackup("success", hoursAgo(8 * 24))] }
     const markup = renderDashboard()
     const tile = markup.slice(markup.indexOf('aria-label="Last backup"'), markup.indexOf(">Last backup<"))
     expect(tile).toMatch(/class="[^"]*bg-gray-100 text-gray-700[^"]*"><span[^>]*bg-gray-400[^>]*><\/span>Cancelled<\/span>/)
     expect(chip(markup)).toBeNull()
-    expect(markup).toContain("3 backups in storage")
+    expect(markup).toContain("4 backups in storage")
     expect(failed(markup)).toBe("1")
     expect(markup).toContain("50.0%")
     expect(markup).toContain("Target 95%, 1 of 2 backups succeeded")
@@ -294,7 +294,7 @@ describe("Dashboard backup counts", () => {
   })
 
   it("shows No data when no backup finished in the period", () => {
-    state.stats = { ...emptyStats, periodStart: hoursAgo(24), backupHistory: [storedBackup("success", hoursAgo(48))] }
+    state.stats = { ...emptyStats, periodStart: hoursAgo(24), backupHistory: [storedBackup("success", hoursAgo(8 * 24))] }
     const markup = renderDashboard()
     expect(markup).toContain("1 backup in storage")
     expect(markup).toContain("No data")
