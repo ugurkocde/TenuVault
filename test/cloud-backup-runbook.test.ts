@@ -133,6 +133,7 @@ describe("Cloud audit contract", () => {
     page429: RestartRun
     page503: RestartRun
     pageCancelled: RestartRun
+    privateList: RestartRun
     auditWriteDenied: RestartRun
     identity: { token: string; calls: number }
     transport: { budgeted: number; unbudgeted: number }
@@ -387,6 +388,15 @@ describe("Cloud audit contract", () => {
     expect(run.error).toBe("HTTP 401")
     expect(JSON.parse(auditFiles(run)[0]![1]).entries[0].job).toMatchObject({ status: "failed", reason: "GRAPH_LIST_FAILED" })
     expect(run.calls.some(call => call.uri.includes(".tenuvault-owner.json"))).toBe(false)
+  }, 60_000)
+
+  it.runIf(Boolean(pwsh))("keeps personal identifiers out of cloud list failure output and outcomes", () => {
+    const run = restartCases().privateList
+    const manifest = JSON.parse(manifestFiles(run)[0]![1])
+    const outcome = manifest.Outcomes.find((entry: { Folder: string }) => entry.Folder === "DeviceCategories")
+    expect.soft(outcome).toMatchObject({ Outcome: "failed", Status: 400, Error: "HTTP 400" })
+    expect.soft(run.output).toContain("Could not read device categories: HTTP 400")
+    expect(JSON.stringify({ output: run.output, outcome })).not.toContain("Private Ada")
   }, 60_000)
 
   it.runIf(Boolean(pwsh)).each([["page429", 429], ["page503", 503], ["pageCancelled", 0]] as const)(

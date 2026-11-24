@@ -1198,6 +1198,12 @@ function Invoke-TvGraphGet {
     return ,(ConvertFrom-TvJson $result.Text)
 }
 
+function Get-TvGraphReadError {
+    param([Exception]$Exception)
+    if ($Exception -is [TvHttpError] -and $Exception.Status) { return "HTTP $($Exception.Status)" }
+    return Get-TvSafeError $Exception.Message
+}
+
 function Test-TvGraphListPage {
     param([object]$Page, [uri]$Start, [System.Collections.Generic.HashSet[string]]$Seen)
     if ($Page -isnot [System.Collections.IDictionary] -or $Page.psbase.Keys -cnotcontains "value" -or $Page["value"] -isnot [array]) {
@@ -3439,7 +3445,8 @@ function Invoke-TvBackup {
             $consecutiveAuth = 0
         } catch [TvHttpError] {
             $status = $_.Exception.Status
-            if ($status -eq 401) { throw }
+            $reason = Get-TvGraphReadError $_.Exception
+            if ($status -eq 401) { throw [TvHttpError]::new($status, $reason) }
             if ($status -in @(401, 403)) {
                 if (++$consecutiveAuth -ge 5) { throw "Backup stopped: Microsoft Graph refused five reads in a row ($status). Check the managed identity's Graph application roles." }
             } else { $consecutiveAuth = 0 }
@@ -3451,7 +3458,6 @@ function Invoke-TvBackup {
             } else {
                 $failures++
                 $failedTypes.Add([string]$type.Folder)
-                $reason = Get-TvSafeError $_.Exception.Message
                 $outcomes[$type.Folder] = [ordered]@{ Folder = $type.Folder; Outcome = "failed"; Saved = 0; Error = $reason; Status = $status }
                 Write-Output "Could not read $($type.Label): $reason"
             }
@@ -3517,9 +3523,7 @@ function Invoke-TvBackup {
                     $counts[$type.Folder]++
                 } catch {
                     $failures++
-                    $reason = if ($_.Exception -is [TvHttpError] -and $_.Exception.Status) {
-                        "HTTP $($_.Exception.Status)"
-                    } else { Get-TvSafeError $_.Exception.Message }
+                    $reason = Get-TvGraphReadError $_.Exception
                     if (-not $failedTypes.Contains([string]$type.Folder)) {
                         $failedTypes.Add([string]$type.Folder)
                         $outcomes[$type.Folder].Error = $reason

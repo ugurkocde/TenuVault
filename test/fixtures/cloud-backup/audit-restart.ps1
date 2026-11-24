@@ -76,7 +76,13 @@ $script:HttpClient | Add-Member ScriptMethod SendAsync {
     if ($script:scenario -eq "startDenied" -and $uri.EndsWith("/start.json")) { return New-Response 403 "Start denied" }
     if ($script:scenario -eq "terminalReadDenied" -and $uri.EndsWith("/terminal.json") -and $method -eq "Get") { return New-Response 403 "Terminal read denied" }
     if ($uri -like "https://graph.microsoft.com/*") {
-        if ($script:scenario -eq "graph401" -or ($script:scenario -eq "failedWatcher" -and $uri -like "*/deviceManagement/deviceCategories/*")) {
+        if ($script:scenario -eq "privateList" -and $uri.EndsWith("/deviceManagement/deviceCategories")) {
+            return New-Response 400 '{"error":{"code":"BadRequest","message":"Listing failed for Private Ada"}}'
+        }
+        if ($script:scenario -eq "graph401") {
+            return New-Response 401 '{"error":{"code":"Unauthorized","message":"Listing failed for Private Ada"}}'
+        }
+        if ($script:scenario -eq "failedWatcher" -and $uri -like "*/deviceManagement/deviceCategories/*") {
             return New-Response 401 "Graph denied"
         }
         if ($script:scenario -in @("page429", "page503", "pageCancelled")) {
@@ -211,7 +217,7 @@ if (-not $ParityOnly) {
     try { [void](Invoke-TvHttp -Uri "https://stcontoso.blob.core.windows.net/audit-logs/test.json" -Token "token") } catch { }
     $results.transport = @{ budgeted = $budgetedCalls; unbudgeted = ($script:calls.Count - $budgetedCalls) }
 
-    foreach ($name in @("page429", "page503", "pageCancelled")) {
+    foreach ($name in @("page429", "page503", "pageCancelled", "privateList")) {
         $script:blobs.Clear()
         $results[$name] = Invoke-Probe $name
     }
