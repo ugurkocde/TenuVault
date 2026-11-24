@@ -186,6 +186,25 @@ describe("Entra backup integration", () => {
     expect(setup.requests.map(request => request.path)).toEqual(["/beta/settings"])
   })
 
+  it("saves a populated Directory Settings detail from beta with Start now", async () => {
+    const setting = {
+      id: "setting-1", displayName: "Group.Unified", templateId: "template-1",
+      values: [{ name: "EnableGroupCreation", value: "false" }],
+    }
+    const setup = fixture(scriptedGraph({
+      "/beta/settings": { value: [{ id: setting.id, displayName: setting.displayName }] },
+      "/beta/settings/setting-1": { "@odata.context": "https://graph.microsoft.com/beta/$metadata#settings/$entity", ...setting },
+    }), {
+      services: () => ({ services: ["entra"] }),
+      graphCliGrant: () => new Set(["GroupSettings.Read.All"]),
+    })
+    const job = await setup.run({ clientId: GRAPH_CLI_CLIENT_ID, scope: only("DirectorySettings") })
+    expect(job.outcomes?.types).toEqual([{ folder: "DirectorySettings", service: "entra", outcome: "saved", saved: 1 }])
+    expect(job.coverage).toBe("complete")
+    expect(setup.requests.map(request => request.path)).toEqual(["/beta/settings", "/beta/settings/setting-1"])
+    expect(await setup.file(job, "DirectorySettings/Group.Unified.json")).toEqual(setting)
+  })
+
   it("keeps a pre-update everything tenant's exact folder set and sends no Entra request", async () => {
     const settings = new ModuleSettings({ get: () => null, set: () => undefined, delete: () => undefined })
     const selection = settings.selection("old-tenant")
