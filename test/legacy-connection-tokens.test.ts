@@ -1,5 +1,12 @@
 import { afterEach, expect, it, vi } from "vitest"
-import { ApiHost } from "../src/main/api/host"
+import { mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { SecureStore } from "../src/main/storage/secure-store"
+import { TenantConnections, TENANT_LIST_KEY } from "../src/main/auth/tenant-connections"
+import { accountStore } from "../src/main/auth/stores"
+import { POST as restorePreview } from "../src/portal/app/api/restore-preview/route"
+import { ApiHost, type RouteModule } from "../src/main/api/host"
 import { createBridgedFetch } from "../src/main/api/fetch-bridge"
 import { AuthManager } from "../src/main/auth/msal"
 import { ConnectionCapabilities } from "../src/main/auth/connection-capabilities"
@@ -18,30 +25,50 @@ vi.mock("@azure/msal-node", async importOriginal => ({
   },
 }))
 
-const TENANT = "11111111-1111-1111-1111-111111111111"
+const TENANT = "a1111111-1111-1111-1111-11111111111b"
 const DESTINATION = "22222222-2222-2222-2222-222222222222"
-const CLIENT = "33333333-3333-3333-3333-333333333333"
+const CLIENT = "c3333333-3333-3333-3333-33333333333d"
 const DESTINATION_CLIENT = "44444444-4444-4444-4444-444444444444"
 const graph = "https://graph.microsoft.com/beta/"
 const blob = "https://example.blob.core.windows.net/intune-backups/"
 const tokenFor = (tenant: string, scope: string) => `opaque-${tenant}-${new URL(scope).hostname}`
 const headers = (token: string) => ({ authorization: `Bearer ${token}` })
 
-afterEach(() => vi.unstubAllGlobals())
+let dir: string | undefined
+afterEach(() => {
+  vi.unstubAllGlobals()
+  if (dir) rmSync(dir, { recursive: true, force: true })
+  dir = undefined
+})
 
-function fixture() {
+function fixture(mixed = false) {
   const clientFor = (tenant: string) => tenant === TENANT ? CLIENT : DESTINATION_CLIENT
   const account = (tenantId: string) => ({ tenantId, clientId: clientFor(tenantId), username: "fixture@example.test", homeAccountId: "account" })
-  const cap = new ConnectionCapabilities(tenant => ({
-    version: 1, origin: "legacy", method: "ownApp", clientId: clientFor(tenant), createdAt: "", updatedAt: "",
-  }))
+  dir = mkdtempSync(join(tmpdir(), "tv-legacy-connection-"))
+  const file = join(dir, "settings")
+  const cipher = { encrypt: (value: string) => Buffer.from(value), decrypt: (value: Buffer) => value.toString() }
+  const original = new SecureStore(file, cipher)
+  const tenantId = mixed ? TENANT.replace("a", "A") : TENANT
+  const clientId = mixed ? CLIENT.replace("c", "C") : CLIENT
+  original.set(TENANT_LIST_KEY, JSON.stringify([
+    { credentials: { tenantId, appId: clientId } },
+    { credentials: { tenantId: DESTINATION, appId: DESTINATION_CLIENT } },
+  ]))
+  const accounts = accountStore(original)
+  accounts.set({ ...account(TENANT), tenantId, clientId })
+  accounts.set(account(DESTINATION))
+  const saved = new SecureStore(file, cipher)
+  const connections = new TenantConnections({ store: saved, coverage: () => [], signIn: {} })
+  connections.migrate()
+  expect(connections.get(TENANT)?.clientId).toBe(clientId)
+  const cap = new ConnectionCapabilities(tenant => connections.get(tenant))
   msal.acquire.mockReset().mockImplementation(async ({ authority, scopes }) => ({
-    accessToken: tokenFor(authority.split("/").at(-1)!, scopes[0]),
+    accessToken: tokenFor(authority.split("/").at(-1)!.toLowerCase(), scopes[0]),
     scopes, expiresOn: new Date(Date.now() + 60_000),
   }))
   const auth = new AuthManager({
     fetch: vi.fn(),
-    accountStore: { get: account, set: vi.fn(), list: vi.fn(), delete: vi.fn() },
+    accountStore: accountStore(saved),
     cachePlugin: () => ({ beforeCacheAccess: vi.fn(), afterCacheAccess: vi.fn() }),
     openBrowser: async () => {},
     authorizeConnection: (tenant, client, scope) => cap.requireConnection(tenant, client, scope),
@@ -64,6 +91,8 @@ function fixture() {
     }
     if (request.method === "PUT") return new Response(null, { status: 201 })
     if (url.pathname.includes("/metadata.json")) return Response.json({ TenantId: TENANT })
+    if (url.pathname.endsWith("/policy.json") || url.pathname.endsWith("/result")) return Response.json({ id: "result", displayName: "Policy" })
+    if (url.hostname.endsWith(".blob.core.windows.net")) return new Response(null, { status: 404 })
     return Response.json({ value: [], id: "result" })
   })
   const getToken = (tenant: string, client: string, scope: string, fresh?: boolean) => auth.getAccessToken(tenant, client, scope, fresh)
@@ -79,21 +108,21 @@ function fixture() {
     expect(response.ok).toBe(true)
     return (await response.json()).access_token as string
   }
-  const dispatch = (path: string, handler: () => Promise<Response>, extra: object = {}) => {
+  const dispatch = (path: string, handler: NonNullable<RouteModule["POST"]>, extra: object = {}) => {
     const host = new ApiHost({ bindConnections: ids => cap.bindConnections(ids), routes: { [path]: { POST: handler } } })
     return host.dispatch(new Request("https://desktop.test" + path, {
       method: "POST", body: JSON.stringify({ tenantId: TENANT, appId: CLIENT, clientSecret: DELEGATED_CLIENT_SECRET, ...extra }),
     }))
   }
-  return { cap, getToken, fetch, routeToken, dispatch, network }
+  return { cap, getToken, fetch, routeToken, dispatch, network, clientId, tenantId }
 }
 
 it.each(["scheduled", "tray"] as const)("completes a %s backup with opaque Graph and Azure Blob tokens", async trigger => {
-  const f = fixture()
+  const f = fixture(trigger === "scheduled")
   const engine = new BackupEngine({
     fetch: f.fetch, getToken: async (...args) => (await f.getToken(...args)).accessToken,
   })
-  const job = engine.start({ tenantId: TENANT, clientId: CLIENT, trigger, storageAccountName: "example",
+  const job = engine.start({ tenantId: f.tenantId, clientId: f.clientId, trigger, storageAccountName: "example",
     scope: { excluded: INTUNE_TYPES.filter(type => type.folder !== "DeviceConfigurations").map(type => type.folder) } })
   expect((await engine.waitForJob(job)).status).toBe("Completed")
   expect(f.network.mock.calls.some(([url]) => String(url).startsWith(graph))).toBe(true)
@@ -116,15 +145,27 @@ it("binds an opaque Blob token from an older client credential profile", async (
   expect(msal.acquire).not.toHaveBeenCalled()
 })
 
-it("discovers ARM subscriptions through the Azure resource route", async () => {
-  const f = fixture()
+it("discovers ARM subscriptions with a persisted mixed-case legacy profile", async () => {
+  const f = fixture(true)
   vi.stubGlobal("fetch", f.fetch)
   const host = new ApiHost({ bindConnections: ids => f.cap.bindConnections(ids), routes: { "/api/list-azure-resources": { POST: listAzureResources } } })
   const response = await host.dispatch(new Request("https://desktop.test/api/list-azure-resources", {
-    method: "POST", body: JSON.stringify({ tenantId: TENANT, appId: CLIENT, clientSecret: DELEGATED_CLIENT_SECRET }),
+    method: "POST", body: JSON.stringify({ tenantId: f.tenantId, appId: CLIENT, clientSecret: DELEGATED_CLIENT_SECRET }),
   }))
   expect(response.status).toBe(200)
   expect(await response.json()).toMatchObject({ subscriptions: [{ id: TENANT }] })
+})
+
+
+it("previews a live restore with a persisted mixed-case legacy profile", async () => {
+  const f = fixture(true)
+  vi.stubGlobal("fetch", f.fetch)
+  const path = "backup/DeviceConfigurations/policy.json"
+  const response = await f.dispatch("/api/restore-preview", restorePreview, {
+    tenantId: f.tenantId, appId: f.clientId, storageAccountName: "example", backupId: "backup", paths: [path], live: true,
+  })
+  expect(response.status).toBe(200)
+  expect(await response.json()).toMatchObject({ items: [{ path, name: "Policy", live: "same" }] })
 })
 
 it.each([

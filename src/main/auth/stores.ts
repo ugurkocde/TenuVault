@@ -1,3 +1,4 @@
+import { normalizeGuid } from "../../shared/security"
 import type { ICachePlugin } from "@azure/msal-node"
 import type { SignedInAccount } from "../../shared/ipc"
 import type { SecureStore } from "../storage/secure-store"
@@ -21,8 +22,8 @@ export type StoredAccount = SignedInAccount & { homeAccountId: string }
 
 const PREFIX = "auth.account."
 const PUBLIC_PREFIX = "auth.sharedClientAccount."
-export const storedAccountKey = (tenantId: string) => PREFIX + tenantId.toLowerCase()
-export const publicAccountKey = (tenantId: string) => PUBLIC_PREFIX + tenantId.toLowerCase()
+export const storedAccountKey = (tenantId: string) => PREFIX + normalizeGuid(tenantId)
+export const publicAccountKey = (tenantId: string) => PUBLIC_PREFIX + normalizeGuid(tenantId)
 
 /** New sign-ins can move one cache into the same encrypted file as the connection. */
 export function connectionCache(appStore: SecureStore, tokenStore: SecureStore): Pick<SecureStore, "get" | "set"> {

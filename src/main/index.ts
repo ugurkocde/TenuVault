@@ -324,7 +324,7 @@ async function bootstrap(): Promise<void> {
         return { ...(await auth.stageSignIn(tenant, clientId, staged.plugin)), cacheWrites: staged.cacheWrites }
       },
     },
-    coverage: (tenant, method, accessToken, graphScopes) => connectionCoverage(moduleSettings.get(tenant), method, accessToken, graphScopes),
+    coverage: (tenant, method, accessToken, graphScopes, grantedScopes) => connectionCoverage(moduleSettings.get(tenant), method, accessToken, graphScopes, grantedScopes),
     beforeSwitch: (tenant, clientId) => license.rememberOrganizationClient(tenant, clientId),
   })
   connections.migrate()

@@ -310,6 +310,40 @@ describe("TenuVault app token verification", () => {
   const account = { tenantId: TENANT, username: "example@example.test", homeAccountId: "fixture" }
   const token = (scopes: string[], claims: object = {}) => `header.${Buffer.from(JSON.stringify({ tid: TENANT, appid: TENUVAULT_CLIENT_ID, scp: scopes.join(" "), ...claims })).toString("base64url")}.signature`
 
+  it("switches to the shared app with opaque Graph and Azure tokens", async () => {
+    const { TenantConnections, TENANT_LIST_KEY } = await import("../src/main/auth/tenant-connections")
+    const { connectionCoverage } = await import("../src/main/auth/connection-coverage")
+    const { ModuleSettings } = await import("../src/main/services/settings")
+    const entries = new Map<string, string>()
+    const store = {
+      get: (key: string) => entries.get(key) ?? null,
+      set: (key: string, value: string) => { entries.set(key, value) },
+      delete: (key: string) => { entries.delete(key) },
+      setMany: (values: Record<string, string>, removed: string[] = []) => {
+        for (const key of removed) entries.delete(key)
+        for (const [key, value] of Object.entries(values)) entries.set(key, value)
+      },
+    }
+    const auth = manager()
+    const settings = new ModuleSettings(store)
+    const packs = tenantPermissionPacks({ intune: { access: "backup" } }, { azure: true, audit: false })
+    const graphScopes = resourcePackScopes(packs, "graph")
+    const connections = new TenantConnections({
+      store,
+      signIn: { tenuvaultApp: tenant => auth.stageTenuVaultSignIn(tenant, cache, packs) },
+      coverage: (tenant, method, bearer, requested, granted) => connectionCoverage(settings.get(tenant), method, bearer, requested, granted),
+    })
+    const profile = JSON.stringify([{ credentials: { tenantId: TENANT, appId: CLIENT }, resources: { storageAccountName: "fixture" } }])
+    connections.enroll(TENANT, { method: "ownApp", clientId: CLIENT }, profile, { accessToken: "previous", account: { ...account, clientId: CLIENT } })
+    const before = store.get(TENANT_LIST_KEY)
+    msal.interactive.mockResolvedValueOnce({ account, accessToken: "opaque-graph", scopes: graphScopes.map(scope => "https://graph.microsoft.com/" + scope) })
+    msal.silent.mockResolvedValueOnce({ account, accessToken: "opaque-arm", scopes: ["user_impersonation"] })
+      .mockResolvedValueOnce({ account, accessToken: "opaque-storage", scopes: ["user_impersonation"] })
+    await expect(connections.switch(TENANT, { method: "tenuvaultApp" })).resolves.toMatchObject({ missing: [], connection: { method: "tenuvaultApp", graphScopes } })
+    expect(connections.get(TENANT)?.clientId).toBe(TENUVAULT_CLIENT_ID)
+    expect(store.get(TENANT_LIST_KEY)).toBe(before)
+  })
+
   it("checks the selected pack with a fresh token and no consent prompt", async () => {
     const [basic] = tenantPermissionPacks({}, { azure: false, audit: false })
     const auth = manager()

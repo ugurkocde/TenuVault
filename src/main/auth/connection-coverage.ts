@@ -5,8 +5,8 @@ import type { ModuleId } from "../../shared/services/modules"
 import type { SignInMethod } from "../../shared/tenant-connection"
 import type { ModuleSetting } from "../services/settings"
 
-export function connectionCoverage(settings: Record<ModuleId, ModuleSetting>, method: SignInMethod, token: string, graphScopes?: string[]): string[] {
-  const granted = grantedPermissions(token)
+export function connectionCoverage(settings: Record<ModuleId, ModuleSetting>, method: SignInMethod, token: string, graphScopes?: string[], grantedScopes?: readonly string[]): string[] {
+  const granted = grantedScopes === undefined ? grantedPermissions(token) : { kind: "delegated" as const, permissions: new Set(grantedScopes) }
   if (granted?.kind !== "delegated" || !granted.permissions.size) throw new Error("Microsoft did not return delegated permissions. Sign in again to check coverage.")
   if (method === "tenuvaultApp" && graphScopes) return missingPackScopes(graphScopes, granted.permissions)
   return missingForChoice(connectionChoice(settings, method), granted)

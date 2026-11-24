@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto"
 import { RESOURCE_SCOPES } from "../../shared/constants"
-import { isGuid } from "../../shared/security"
+import { isGuid, normalizeGuid } from "../../shared/security"
 import { tenantWriteTargets } from "../../shared/tenant-writes"
 import { sharedTokenScopes, tokenIdentity } from "./token-identity"
 import { isPackWriteScope, missingPackScopes, type PermissionPack } from "../../shared/services/permission-packs"
@@ -16,7 +16,8 @@ type SharedMethod = "graphCli" | "tenuvaultApp"
 type IssuedToken = { tenantId: string; clientId: string; scope: string; expiresAt: number; scopes?: string[]; reader?: true }
 const tokenKey = (token: string) => createHash("sha256").update(token).digest("hex")
 const sharedMethod = (clientId: string | null): SharedMethod | undefined =>
-  clientId === TENUVAULT_CLIENT_ID ? "tenuvaultApp" : clientId === GRAPH_CLI_CLIENT_ID ? "graphCli" : undefined
+  clientId && normalizeGuid(clientId) === TENUVAULT_CLIENT_ID ? "tenuvaultApp"
+    : clientId && normalizeGuid(clientId) === GRAPH_CLI_CLIENT_ID ? "graphCli" : undefined
 
 const GRAPH_ONLY = "Start now only connects to Microsoft Graph. Change sign-in method to access other Microsoft services."
 
@@ -40,17 +41,17 @@ export class ConnectionCapabilities {
   }
 
   requireConnection(tenantId: string, clientId: string, scope: string): void {
-    const record = isGuid(tenantId) ? this.connection(tenantId) : null
-    if (record?.origin === "wizard" && record.clientId !== clientId.toLowerCase()) {
+    const record = this.record(tenantId)
+    if (record?.origin === "wizard" && normalizeGuid(record.clientId) !== normalizeGuid(clientId)) {
       throw new Error(CONNECTION_CHANGED)
     }
-    const bound = executionMetadata.getStore()?.connections?.get(tenantId.toLowerCase())
-    if (bound && bound !== clientId.toLowerCase()) throw new Error(CONNECTION_CHANGED)
+    const bound = executionMetadata.getStore()?.connections?.get(normalizeGuid(tenantId))
+    if (bound && normalizeGuid(bound) !== normalizeGuid(clientId)) throw new Error(CONNECTION_CHANGED)
     this.requireResource(tenantId, scope)
   }
 
   async requireConnectionEnabled(tenantId: string, clientId: string, scope: string = RESOURCE_SCOPES.graph): Promise<void> {
-    const method = sharedMethod(clientId.toLowerCase())
+    const method = sharedMethod(clientId)
     if (method && !await this.sharedEnabled(method)) {
       throw new Error(method === "graphCli" ? "Start now sign-in is currently unavailable." : "TenuVault app sign-in is currently unavailable.")
     }
@@ -59,8 +60,8 @@ export class ConnectionCapabilities {
 
   requireIssuedToken(tenantId: string, clientId: string, scope: string, token: string, result?: { expiresOn?: Date | null; scopes?: string[] }): void {
     this.requireConnection(tenantId, clientId, scope)
-    tenantId = tenantId.toLowerCase()
-    clientId = clientId.toLowerCase()
+    tenantId = normalizeGuid(tenantId)
+    clientId = normalizeGuid(clientId)
     if (sharedMethod(clientId)) {
       const identity = tokenIdentity(token)
       if (identity.decoded && (identity.tenantId !== tenantId || identity.clientId !== clientId)) throw new Error(TOKEN_UNVERIFIED)
@@ -69,15 +70,15 @@ export class ConnectionCapabilities {
   }
 
   bindOwnClientCredentials(tenantId: string, clientId: string, scope: string, token: string, expiresIn?: number): void {
-    if (!isGuid(tenantId) || !isGuid(clientId) || sharedMethod(clientId.toLowerCase())) return
+    if (!isGuid(tenantId) || !isGuid(clientId) || sharedMethod(clientId)) return
     this.requireIssuedToken(tenantId, clientId, scope, token, {
       expiresOn: new Date(Date.now() + (expiresIn ?? 3600) * 1000),
     })
   }
 
   /** Called by the Backup Reader only after its credential and resource checks passed. */
-  bindReaderToken(tenantId: string, clientId: string, scope: string, token: string): void {
-    this.rememberToken(token, { tenantId, clientId, scope, expiresAt: Date.now() + 3600_000, reader: true })
+  bindReaderToken(tenantId: string, clientId: string, scope: string, token: string, expiresOn?: Date | null): void {
+    this.rememberToken(token, { tenantId: normalizeGuid(tenantId), clientId: normalizeGuid(clientId), scope, expiresAt: expiresOn?.getTime() ?? Date.now() + 3600_000, reader: true })
   }
 
   private rememberToken(token: string, binding: IssuedToken): void {
@@ -93,7 +94,7 @@ export class ConnectionCapabilities {
   }
 
   requireInteractive(tenantId: string): void {
-    const method = isGuid(tenantId) ? this.connection(tenantId)?.method : undefined
+    const method = this.record(tenantId)?.method
     if (method === "graphCli") throw new Error("Interactive sign-in with this method is unavailable in this version.")
   }
 
@@ -114,7 +115,8 @@ export class ConnectionCapabilities {
 
   bindConnections(tenantIds: readonly string[]): ReadonlyMap<string, string | undefined> {
     const parent = executionMetadata.getStore()?.connections
-    return new Map(tenantIds.map(id => {
+    return new Map(tenantIds.map(tenant => {
+      const id = normalizeGuid(tenant)
       const record = this.record(id)
       return [id, parent?.has(id) ? parent.get(id) : record?.clientId]
     }))
@@ -130,7 +132,7 @@ export class ConnectionCapabilities {
     const graph = url.origin === "https://graph.microsoft.com"
     const metadata = executionMetadata.getStore()
     const copy = metadata?.copyTenants
-    const bound = metadata?.connections ?? (isGuid(routeTenant) ? this.bindConnections([routeTenant.toLowerCase()]) : undefined)
+    const bound = metadata?.connections ?? (isGuid(routeTenant) ? this.bindConnections([routeTenant]) : undefined)
     const shared = sharedMethod(clientId)
     const resource = graph ? RESOURCE_SCOPES.graph
       : url.hostname === "management.azure.com" ? RESOURCE_SCOPES.management
@@ -159,8 +161,8 @@ export class ConnectionCapabilities {
       const admitted = bound?.get(tenantId)
       if (bound?.size && !bound.has(tenantId)) throw new Error(CONNECTION_CHANGED)
       if (!acquisition?.reader && !setup) {
-        if (admitted && admitted !== clientId) throw new Error(CONNECTION_CHANGED)
-        if ((shared || current?.origin === "wizard" || (acquisition && current)) && current?.clientId !== clientId) {
+        if (admitted && normalizeGuid(admitted) !== clientId) throw new Error(CONNECTION_CHANGED)
+        if ((shared || current?.origin === "wizard" || (acquisition && current)) && (!current || normalizeGuid(current.clientId) !== clientId)) {
           throw new Error(CONNECTION_CHANGED)
         }
       }
@@ -169,7 +171,7 @@ export class ConnectionCapabilities {
     if (resource && resource !== RESOURCE_SCOPES.graph && shared === "graphCli" && !setup) throw new Error(GRAPH_ONLY)
     if (!writes.length) return
     const targets = copy
-      ? [copy.source, ...(tenantId && copy.destinations.includes(tenantId) ? [tenantId] : copy.destinations)]
+      ? [copy.source, ...(tenantId && copy.destinations.some(id => normalizeGuid(id) === tenantId) ? [tenantId] : copy.destinations)]
       : [tenantId ?? routeTenant].filter((id): id is string => id != null)
     this.requireWrite(targets)
     if (acquisition?.reader || (shared === "graphCli" && !setup)) throw new Error(READ_ONLY)
@@ -191,7 +193,7 @@ export class ConnectionCapabilities {
   }
 
   private record(tenant: string) {
-    return isGuid(tenant) ? this.connection(tenant) : null
+    return isGuid(tenant) ? this.connection(normalizeGuid(tenant)) : null
   }
 
   private restorePacks(tenant: string): PermissionPack[] {
@@ -206,7 +208,7 @@ export class ConnectionCapabilities {
   }
 
   isGraphOnly(tenantId: string): boolean {
-    return isGuid(tenantId) && this.connection(tenantId)?.method === "graphCli"
+    return this.record(tenantId)?.method === "graphCli"
   }
 }
 

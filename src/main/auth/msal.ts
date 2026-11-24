@@ -12,7 +12,7 @@ import { RESOURCE_SCOPES } from "../../shared/constants"
 import { FIRST_SIGN_IN_TIMEOUT_MESSAGE } from "../../shared/app-registration"
 import { ConnectionSwitchError } from "./switch-failure"
 import { namedSignInCode, signInErrorRow } from "../../shared/sign-in-errors"
-import { isMicrosoftLoginUrl } from "../../shared/security"
+import { isMicrosoftLoginUrl, normalizeGuid } from "../../shared/security"
 import { fetchNetworkClient } from "./network-client"
 import { loopbackSignIn } from "./loopback-sign-in"
 import { deviceCodeSignIn } from "./device-code-sign-in"
@@ -229,7 +229,7 @@ export class AuthManager {
     /** Called when the browser has answered and the code is being redeemed: the browser step is over. */
     onBrowserDone?: () => void
   }): Promise<SignedInAccount> {
-    if (clientId.toLowerCase() === TENUVAULT_CLIENT_ID) throw new Error("Choose TenuVault app in the sign-in method settings.")
+    if (normalizeGuid(clientId) === TENUVAULT_CLIENT_ID) throw new Error("Choose TenuVault app in the sign-in method settings.")
     this.host.authorizeInteractive?.(tenant)
     const result = await this.acquireInteractive(clientId, tenant, RESOURCE_SCOPES.graph, options?.loginHint ? undefined : "select_account", options?.loginHint, true, options?.onBrowserDone).catch((error: unknown) => {
       throw firstSignInError(error)
@@ -238,7 +238,7 @@ export class AuthManager {
     if (!account) throw new Error("Microsoft did not return an account for this sign-in.")
 
     const signedIn = {
-      tenantId: account.tenantId.toLowerCase(),
+      tenantId: normalizeGuid(account.tenantId),
       clientId,
       username: account.username,
       name: account.name,
@@ -251,7 +251,7 @@ export class AuthManager {
   }
 
   /** Sign in without publishing either the profile or the token cache. */
-  async stageSignIn(tenant: string, clientId: string, cache: ICachePlugin): Promise<Pick<StagedSignIn, "account" | "accessToken">> {
+  async stageSignIn(tenant: string, clientId: string, cache: ICachePlugin): Promise<Pick<StagedSignIn, "account" | "accessToken" | "grantedScopes">> {
     const result = await this.acquireInteractive(clientId, tenant, RESOURCE_SCOPES.graph, "select_account", undefined, true, undefined, this.createApp(clientId, cache, true)).catch((error: unknown) => {
       const description = error instanceof Error ? error.message : ""
       const known = signInErrorRow(namedSignInCode(description))
@@ -268,24 +268,25 @@ export class AuthManager {
     const account = result.account
     if (!account) throw new ConnectionSwitchError("no_account", "Microsoft did not return an account for this sign-in.")
     return {
-      account: { tenantId: account.tenantId.toLowerCase(), clientId, username: account.username, name: account.name, homeAccountId: account.homeAccountId },
-      accessToken: result.accessToken,
+      account: { tenantId: normalizeGuid(account.tenantId), clientId, username: account.username, name: account.name, homeAccountId: account.homeAccountId },
+      accessToken: result.accessToken, grantedScopes: [...sharedTokenScopes(result.accessToken, result.scopes)],
     }
   }
 
   /** Keep the account and cache staged until the selected packs are confirmed for this tenant. */
-  async stageTenuVaultSignIn(tenant: string, cache: ICachePlugin, packs: readonly PermissionPack[]): Promise<Pick<StagedSignIn, "account" | "accessToken" | "graphScopes">> {
+  async stageTenuVaultSignIn(tenant: string, cache: ICachePlugin, packs: readonly PermissionPack[]): Promise<Pick<StagedSignIn, "account" | "accessToken" | "graphScopes" | "grantedScopes">> {
     const app = this.createApp(TENUVAULT_CLIENT_ID, cache, true)
     const graphScopes = resourcePackScopes(packs, "graph")
     try {
       const result = await this.acquireInteractive(TENUVAULT_CLIENT_ID, tenant, resourceScopes("graph", graphScopes), "select_account", undefined, true, undefined, app)
       const account = result.account
-      if (!account || account.tenantId.toLowerCase() !== tenant) throw new ConnectionSwitchError("wrong_tenant", "Sign in with an account from this tenant.")
+      if (!account || normalizeGuid(account.tenantId) !== normalizeGuid(tenant)) throw new ConnectionSwitchError("wrong_tenant", "Sign in with an account from this tenant.")
       const identity = tokenIdentity(result.accessToken)
-      if (identity.decoded && (identity.tenantId !== tenant || identity.clientId !== TENUVAULT_CLIENT_ID)) {
+      if (identity.decoded && (identity.tenantId !== normalizeGuid(tenant) || identity.clientId !== TENUVAULT_CLIENT_ID)) {
         throw new ConnectionSwitchError("switch_failed", "Microsoft returned an access token that could not be verified for this tenant and app. Sign in again.")
       }
-      if (missingPackScopes(graphScopes, sharedTokenScopes(result.accessToken, result.scopes)).length) {
+      const grantedScopes = sharedTokenScopes(result.accessToken, result.scopes)
+      if (missingPackScopes(graphScopes, grantedScopes).length) {
         throw new ConnectionSwitchError("AADSTS65001", "Some selected Microsoft Graph permissions are still missing. Review the packs and check again. (AADSTS65001)")
       }
       for (const pack of packs.filter(pack => pack.resource !== "graph")) {
@@ -299,15 +300,15 @@ export class AuthManager {
             `${pack.label}: ${issue?.message ?? "Check the approved permissions for this resource and try again."}`)
         }
         const identity = token && tokenIdentity(token.accessToken)
-        if (token?.account?.tenantId.toLowerCase() !== tenant ||
-          (identity?.decoded && (identity.tenantId !== tenant || identity.clientId !== TENUVAULT_CLIENT_ID)) ||
+        if (!token?.account || normalizeGuid(token.account.tenantId) !== normalizeGuid(tenant) ||
+          (identity?.decoded && (identity.tenantId !== normalizeGuid(tenant) || identity.clientId !== TENUVAULT_CLIENT_ID)) ||
           missingPackScopes(pack.scopes, sharedTokenScopes(token.accessToken, token.scopes)).length) {
           throw new ConnectionSwitchError("AADSTS65001", `${pack.label} approval is still needed. Review the pack and check again.`)
         }
       }
       return {
         account: { tenantId: tenant, clientId: TENUVAULT_CLIENT_ID, username: account.username, name: account.name, homeAccountId: account.homeAccountId },
-        accessToken: result.accessToken, graphScopes,
+        accessToken: result.accessToken, graphScopes, grantedScopes: [...grantedScopes],
       }
     } catch (error) {
       throw sharedSignInFailure(error, false)
@@ -320,9 +321,9 @@ export class AuthManager {
     try {
       const result = await this.acquireInteractive(TENUVAULT_CLIENT_ID, tenant, resourceScopes(pack.resource, pack.scopes),
         checkOnly ? "none" : "select_account", undefined, true, undefined, app)
-      if (result.account?.tenantId.toLowerCase() !== tenant) throw new ConnectionSwitchError("wrong_tenant", "Sign in with an account from this tenant.")
+      if (!result.account || normalizeGuid(result.account.tenantId) !== normalizeGuid(tenant)) throw new ConnectionSwitchError("wrong_tenant", "Sign in with an account from this tenant.")
       const identity = tokenIdentity(result.accessToken)
-      if (identity.decoded && (identity.tenantId !== tenant || identity.clientId !== TENUVAULT_CLIENT_ID)) {
+      if (identity.decoded && (identity.tenantId !== normalizeGuid(tenant) || identity.clientId !== TENUVAULT_CLIENT_ID)) {
         throw new ConnectionSwitchError("switch_failed", "Microsoft returned an access token that could not be verified for this tenant and app. Sign in again.")
       }
       const scopes = sharedTokenScopes(result.accessToken, result.scopes)
@@ -333,7 +334,7 @@ export class AuthManager {
   }
 
   private async connectionScopes(tenant: string, clientId: string, scope: string): Promise<string[]> {
-    if (clientId.toLowerCase() === TENUVAULT_CLIENT_ID) {
+    if (normalizeGuid(clientId) === TENUVAULT_CLIENT_ID) {
       if (!this.host.sharedScopes) throw new Error("TenuVault app sign-in is unavailable.")
       return this.host.sharedScopes(tenant, scope)
     }
@@ -349,7 +350,7 @@ export class AuthManager {
     // uses the same account and app registration; the removed tenant has no profile left to use it.
     const shared = this.host.accountStore.list().some((other) => {
       const profile = this.host.accountStore.get(other.tenantId)
-      return profile?.clientId === stored.clientId && profile.homeAccountId === stored.homeAccountId
+      return profile && normalizeGuid(profile.clientId) === normalizeGuid(stored.clientId) && profile.homeAccountId === stored.homeAccountId
     })
     if (shared) return
     const app = this.app(stored.clientId)
@@ -363,10 +364,10 @@ export class AuthManager {
 
   /** Reads the signed-in tenant identity from the same local MSAL account used for tokens. */
   async cachedAccountIdentity(tenantId: string): Promise<{ tenantId: string; clientId: string; userId: string }> {
-    const tenant = tenantId.toLowerCase(), stored = this.host.accountStore.get(tenant)
+    const tenant = normalizeGuid(tenantId), stored = this.host.accountStore.get(tenant)
     const account = stored ? await this.findAccount(this.app(stored.clientId), stored.homeAccountId) : null
-    const profile = account?.tenantId.toLowerCase() === tenant ? account : [...(account?.tenantProfiles?.values() ?? [])].find(profile => profile.tenantId.toLowerCase() === tenant)
-    if (!stored || stored.tenantId.toLowerCase() !== tenant || !profile?.localAccountId) throw new SignInRequiredError(tenantId, stored?.clientId ?? "", "Sign in to this tenant before managing saved directory restores.")
+    const profile = account && normalizeGuid(account.tenantId) === tenant ? account : [...(account?.tenantProfiles?.values() ?? [])].find(profile => normalizeGuid(profile.tenantId) === tenant)
+    if (!stored || normalizeGuid(stored.tenantId) !== tenant || !profile?.localAccountId) throw new SignInRequiredError(tenantId, stored?.clientId ?? "", "Sign in to this tenant before managing saved directory restores.")
     return { tenantId: profile.tenantId, clientId: stored.clientId, userId: profile.localAccountId }
   }
 
@@ -377,13 +378,13 @@ export class AuthManager {
   async getAccessToken(tenantId: string, clientId: string, scope: string, forceRefresh = false): Promise<AuthenticationResult> {
     this.host.authorizeConnection?.(tenantId, clientId, scope)
     if (this.host.authorizeSilentToken) await this.host.authorizeSilentToken(tenantId, clientId, scope)
-    const stored = this.host.accountStore.get(tenantId.toLowerCase())
-    if (!stored || stored.clientId !== clientId) {
+    const stored = this.host.accountStore.get(normalizeGuid(tenantId))
+    if (!stored || normalizeGuid(stored.clientId) !== normalizeGuid(clientId)) {
       throw new SignInRequiredError(tenantId, clientId, "You are not signed in to this tenant. Sign in to continue.", scope)
     }
 
     const scopes = await this.connectionScopes(tenantId, clientId, scope)
-    const app = this.app(clientId)
+    const app = this.app(stored.clientId)
     const account = await this.findAccount(app, stored.homeAccountId)
     if (!account) {
       throw new SignInRequiredError(tenantId, clientId, `Your session for ${stored.username} has ended. Sign in again to continue.`, scope)
@@ -411,7 +412,7 @@ export class AuthManager {
    * the tenant's app registration.
    */
   async getIdToken(tenantId: string): Promise<string | null> {
-    const stored = this.host.accountStore.get(tenantId.toLowerCase())
+    const stored = this.host.accountStore.get(normalizeGuid(tenantId))
     if (!stored) return null
     const app = this.app(stored.clientId)
     const account = await this.findAccount(app, stored.homeAccountId).catch(() => null)
@@ -443,20 +444,20 @@ export class AuthManager {
     this.host.authorizeInteractive?.(tenantId)
     if (!isResourceScope(scope)) throw new Error("Unknown sign-in scope.")
     this.host.authorizeConnection?.(tenantId, clientId, scope)
-    const stored = this.host.accountStore.get(tenantId.toLowerCase())
-    const scopes = clientId.toLowerCase() === TENUVAULT_CLIENT_ID ? await this.connectionScopes(tenantId, clientId, scope) : [scope]
+    const stored = this.host.accountStore.get(normalizeGuid(tenantId))
+    const scopes = normalizeGuid(clientId) === TENUVAULT_CLIENT_ID ? await this.connectionScopes(tenantId, clientId, scope) : [scope]
     const result = await this.acquireInteractive(clientId, tenantId, scopes, undefined, stored?.username).catch((error: unknown) => {
-      if (clientId.toLowerCase() === TENUVAULT_CLIENT_ID) throw sharedSignInFailure(error, false)
+      if (normalizeGuid(clientId) === TENUVAULT_CLIENT_ID) throw sharedSignInFailure(error, false)
       throw missingPermissionError(scope, error) ?? error
     })
     const account = result.account
     if (!account) throw new Error("Microsoft did not return an account for this sign-in.")
-    if (account.tenantId.toLowerCase() !== tenantId.toLowerCase()) {
+    if (normalizeGuid(account.tenantId) !== normalizeGuid(tenantId)) {
       throw new Error("You signed in to a different tenant. Sign in with an account from this tenant.")
     }
     this.host.authorizeInteractive?.(tenantId)
     const signedIn = {
-      tenantId: tenantId.toLowerCase(),
+      tenantId: normalizeGuid(tenantId),
       clientId,
       username: account.username,
       name: account.name,
@@ -475,15 +476,15 @@ export class AuthManager {
   async signInWithDeviceCode(tenant: string, clientId: string, onCode: (code: AppDeviceCode) => void, signal: AbortSignal): Promise<void> {
     this.host.authorizeInteractive?.(tenant)
     this.host.authorizeConnection?.(tenant, clientId, RESOURCE_SCOPES.graph)
-    if (clientId.toLowerCase() === TENUVAULT_CLIENT_ID) throw new Error("Sign in to the TenuVault app in the system browser.")
+    if (normalizeGuid(clientId) === TENUVAULT_CLIENT_ID) throw new Error("Sign in to the TenuVault app in the system browser.")
     // End this tenant's waiting browser attempts.
-    for (const entry of this.interactiveControls.values()) if (entry.tenant.toLowerCase() === tenant.toLowerCase()) entry.controller.abort(new SignInCancelledError())
+    for (const entry of this.interactiveControls.values()) if (normalizeGuid(entry.tenant) === normalizeGuid(tenant)) entry.controller.abort(new SignInCancelledError())
     const result = await deviceCodeSignIn(tenant, request => this.app(clientId).acquireTokenByDeviceCode(request), onCode, signal)
     signal.throwIfAborted()
     const account = result.account!
     this.host.authorizeInteractive?.(tenant)
     this.host.authorizeConnection?.(tenant, clientId, RESOURCE_SCOPES.graph)
-    this.host.accountStore.set({ tenantId: tenant.toLowerCase(), clientId, username: account.username, name: account.name, homeAccountId: account.homeAccountId })
+    this.host.accountStore.set({ tenantId: normalizeGuid(tenant), clientId, username: account.username, name: account.name, homeAccountId: account.homeAccountId })
   }
 
   /** One interactive prompt per tenant, scope, prompt and account hint at a time; parallel callers share it. */
@@ -497,7 +498,7 @@ export class AuthManager {
     onBrowserDone?: () => void,
     stagedApp?: PublicClientApplication,
   ): Promise<AuthenticationResult> {
-    const key = `${clientId}|${tenant.toLowerCase()}|${scope}|${prompt ?? ""}|${loginHint ?? ""}|${stagedApp ? "staged" : "normal"}`
+    const key = `${clientId}|${normalizeGuid(tenant)}|${scope}|${prompt ?? ""}|${loginHint ?? ""}|${stagedApp ? "staged" : "normal"}`
     const pending = this.interactive.get(key)
     if (pending) return pending
 

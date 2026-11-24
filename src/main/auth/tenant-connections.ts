@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto"
 import type { SignedInAccount } from "../../shared/ipc"
-import { isGuid } from "../../shared/security"
+import { isGuid, normalizeGuid } from "../../shared/security"
 import { GRAPH_CLI_CLIENT_ID, TENUVAULT_CLIENT_ID, type ConnectionSwitchResult, type SignInMethod, type TenantConnection } from "../../shared/tenant-connection"
 import { DELEGATED_CLIENT_SECRET, LOCAL_STORAGE_PREFIX } from "../../shared/constants"
 import type { SecureStore } from "../storage/secure-store"
@@ -27,7 +27,7 @@ function savedTenants(raw: string | null): SavedTenant[] | null {
 
 function profileId(tenant: SavedTenant): string | undefined {
   const id = tenant?.credentials?.tenantId
-  return isGuid(id) ? id.toLowerCase() : undefined
+  return isGuid(id) ? normalizeGuid(id) : undefined
 }
 
 function validTime(value: unknown): value is string {
@@ -41,7 +41,7 @@ function targetOf(input: unknown): { method: SignInMethod; clientId: string } {
     return { method: input.method, clientId: input.method === "graphCli" ? GRAPH_CLI_CLIENT_ID : TENUVAULT_CLIENT_ID }
   }
   if (input.method !== "ownApp" || !("clientId" in input) || !isGuid(input.clientId)) throw new ConnectionSwitchError("invalid_request", "Enter the application (client) ID of your app registration.")
-  const clientId = input.clientId.toLowerCase()
+  const clientId = normalizeGuid(input.clientId)
   if (clientId === GRAPH_CLI_CLIENT_ID || clientId === TENUVAULT_CLIENT_ID) throw new ConnectionSwitchError("invalid_request", "Choose the sign-in method that uses this client ID.")
   return { method: "ownApp", clientId }
 }
@@ -50,6 +50,7 @@ export interface StagedSignIn {
   account: StoredAccount
   accessToken: string
   graphScopes?: string[]
+  grantedScopes?: readonly string[]
   /** The staged cache is committed with the account, only if its original cache is still current. */
   cacheWrites?: () => Record<string, string>
 }
@@ -58,14 +59,14 @@ interface ConnectionHost {
   store: Pick<SecureStore, "get" | "setMany">
   legacyCache?: Pick<SecureStore, "get">
   signIn: Partial<Record<SignInMethod, (tenantId: string, clientId: string) => Promise<StagedSignIn>>>
-  coverage: (tenantId: string, method: SignInMethod, accessToken: string, graphScopes?: string[]) => string[]
+  coverage: (tenantId: string, method: SignInMethod, accessToken: string, graphScopes?: string[], grantedScopes?: readonly string[]) => string[]
   now?: () => Date
   beforeSwitch?: (tenantId: string, currentClientId: string) => void
 }
 
 function legacyClientId(connection: TenantConnection): string {
   const id = connection.method === "ownApp" ? connection.clientId : connection.ownClientId
-  return isGuid(id) && id.toLowerCase() !== GRAPH_CLI_CLIENT_ID && id.toLowerCase() !== TENUVAULT_CLIENT_ID ? id : ""
+  return isGuid(id) && normalizeGuid(id) !== GRAPH_CLI_CLIENT_ID && normalizeGuid(id) !== TENUVAULT_CLIENT_ID ? id : ""
 }
 
 export class TenantConnections {
@@ -94,7 +95,7 @@ export class TenantConnections {
         ? record.profileCreatedAt !== createdAt
         : createdAt !== null && Date.parse(createdAt) > Date.parse(record.updatedAt)
       if (isGuid(profileClient) && (creationChanged ||
-        (profileClient.toLowerCase() !== legacyClientId(record).toLowerCase() && profileClient.toLowerCase() !== record.clientId.toLowerCase()))) {
+        (normalizeGuid(profileClient) !== normalizeGuid(legacyClientId(record)) && normalizeGuid(profileClient) !== normalizeGuid(record.clientId)))) {
         entries[PREFIX + tenant] = this.legacyRecord(profileClient, createdAt)
         readded.add(tenant)
         removed.push(sharedKey)
@@ -107,7 +108,7 @@ export class TenantConnections {
       const fingerprint = this.legacyCacheFingerprint(record)
       const matches = (value: string | null) => {
         const account = parseStoredAccount(value)
-        return account?.tenantId.toLowerCase() === tenant && account.clientId.toLowerCase() === record.clientId.toLowerCase()
+        return account && normalizeGuid(account.tenantId) === tenant && normalizeGuid(account.clientId) === normalizeGuid(record.clientId)
       }
       const legacySignInChanged = (record.legacyCacheFingerprint ?? null) !== fingerprint ||
         (usesPublicClient && legacy !== null && (shared !== null || !matches(legacy)))
@@ -139,7 +140,7 @@ export class TenantConnections {
     for (const tenant of savedTenants(raw) ?? []) {
       const credentials = tenant?.credentials
       if (!isGuid(credentials?.tenantId) || !isGuid(credentials.appId)) continue
-      const key = PREFIX + credentials.tenantId.toLowerCase()
+      const key = PREFIX + normalizeGuid(credentials.tenantId)
       if (this.host.store.get(key) !== null || Object.hasOwn(entries, key)) continue
       entries[key] = this.legacyRecord(credentials.appId, validTime(tenant.createdAt) ? tenant.createdAt : null)
     }
@@ -155,7 +156,7 @@ export class TenantConnections {
   }
 
   get(tenantId: string): TenantConnection | null {
-    const raw = this.host.store.get(PREFIX + tenantId.toLowerCase())
+    const raw = this.host.store.get(PREFIX + normalizeGuid(tenantId))
     if (!raw) return null
     const record = JSON.parse(raw) as TenantConnection
     if (record?.version !== 1) throw new Error("Update TenuVault to read this tenant's connection.")
@@ -165,7 +166,7 @@ export class TenantConnections {
   /** Main-process entry point for the wizard to publish its new profile and staged sign-in together. */
   enroll(tenantId: string, target: unknown, raw: string, staged: StagedSignIn): TenantConnection {
     if (!isGuid(tenantId)) throw new Error("Choose a tenant.")
-    const tenant = tenantId.toLowerCase()
+    const tenant = normalizeGuid(tenantId)
     const saved = savedTenants(this.host.store.get(TENANT_LIST_KEY))
     if (!saved) throw new Error("The saved tenant list could not be read.")
     if (this.get(tenant) || saved.some(profile => profileId(profile) === tenant)) throw new Error("This tenant is already connected.")
@@ -229,13 +230,13 @@ export class TenantConnections {
 
   async switch(tenantId: unknown, input: unknown): Promise<ConnectionSwitchResult & { account: SignedInAccount }> {
     if (!isGuid(tenantId)) throw new ConnectionSwitchError("invalid_request", "Choose a connected tenant.")
-    const tenant = tenantId.toLowerCase()
+    const tenant = normalizeGuid(tenantId)
     const selected = targetOf(input)
     if (this.switching.has(tenant)) throw new ConnectionSwitchError("conflict", "A sign-in method change is already in progress for this tenant.")
     const record = this.get(tenant)
     const profile = this.profile(tenant, this.host.store.get(TENANT_LIST_KEY))
     if (!profile || record?.origin !== "wizard") throw new ConnectionSwitchError("unavailable", "Only tenants connected through the new wizard can change sign-in method.")
-    if (selected.method !== "tenuvaultApp" && selected.method === record.method && selected.clientId === record.clientId) throw new ConnectionSwitchError("invalid_request", "Choose a different sign-in method or app registration.")
+    if (selected.method !== "tenuvaultApp" && selected.method === record.method && selected.clientId === normalizeGuid(record.clientId)) throw new ConnectionSwitchError("invalid_request", "Choose a different sign-in method or app registration.")
     const signIn = this.host.signIn[selected.method]
     if (!signIn) throw new ConnectionSwitchError("unavailable", "Sign-in with this method is unavailable in this version.")
     this.validateStorage(profile, selected.method)
@@ -248,14 +249,12 @@ export class TenantConnections {
       const raw = this.host.store.get(TENANT_LIST_KEY)
       const current = this.get(tenant)
       const latest = this.profile(tenant, raw)
-      if (!raw || !latest || current?.origin !== "wizard" || current.clientId !== record.clientId || current.updatedAt !== record.updatedAt ||
+      if (!raw || !latest || current?.origin !== "wizard" || normalizeGuid(current.clientId) !== normalizeGuid(record.clientId) || current.updatedAt !== record.updatedAt ||
         this.host.store.get(accountKey) !== originalAccount) {
         throw new ConnectionSwitchError("conflict", "The tenant's connection changed during sign-in. Try again.")
       }
       this.validateStorage(latest, selected.method)
-      const missing = staged.graphScopes
-        ? this.host.coverage(tenant, selected.method, staged.accessToken, staged.graphScopes)
-        : this.host.coverage(tenant, selected.method, staged.accessToken)
+      const missing = this.host.coverage(tenant, selected.method, staged.accessToken, staged.graphScopes, staged.grantedScopes)
       const connection = {
         ...record, ...selected, graphScopes: staged.graphScopes, updatedAt: this.now().toISOString(),
         ...(selected.method === "ownApp" ? { ownClientId: selected.clientId } : {}),
@@ -270,8 +269,8 @@ export class TenantConnections {
   }
 
   private validateAccount(tenant: string, clientId: string, account: StoredAccount): void {
-    if (account.tenantId.toLowerCase() !== tenant) throw new ConnectionSwitchError("wrong_tenant", "You signed in to a different tenant. Sign in with an account from this tenant.")
-    if (account.clientId.toLowerCase() !== clientId) throw new ConnectionSwitchError("wrong_client", "Microsoft returned a sign-in for a different app registration.")
+    if (normalizeGuid(account.tenantId) !== normalizeGuid(tenant)) throw new ConnectionSwitchError("wrong_tenant", "You signed in to a different tenant. Sign in with an account from this tenant.")
+    if (normalizeGuid(account.clientId) !== normalizeGuid(clientId)) throw new ConnectionSwitchError("wrong_client", "Microsoft returned a sign-in for a different app registration.")
   }
 
   private validateStorage(profile: SavedTenant, method: SignInMethod): void {
@@ -302,7 +301,7 @@ export class TenantConnections {
     const tenants = (savedTenants(raw) ?? []).map(tenant => {
       const credentials = tenant?.credentials
       if (!isGuid(credentials?.tenantId)) return tenant
-      const appId = clientFor(credentials.tenantId.toLowerCase())
+      const appId = clientFor(normalizeGuid(credentials.tenantId))
       if (appId === undefined) return tenant
       const clientSecret = appId ? delegatedSecret : ""
       if (credentials.appId === appId && credentials.clientSecret === clientSecret) return tenant

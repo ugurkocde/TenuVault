@@ -139,7 +139,7 @@ describe("in-place sign-in change", () => {
     f.store.setMany(preserved)
     const switchResult = await f.connections.switch(TENANT.toUpperCase(), { method: "tenuvaultApp" })
     expect(switchResult.connection).toMatchObject({ clientId: TENUVAULT_CLIENT_ID, method: "tenuvaultApp", ownClientId: OWN, createdAt: NOW, updatedAt: "2026-11-25T12:00:00.000Z" })
-    expect(f.coverage).toHaveBeenCalledWith(TENANT, "tenuvaultApp", token)
+    expect(f.coverage).toHaveBeenCalledWith(TENANT, "tenuvaultApp", token, undefined, undefined)
     expect(switchResult.missing).toContain("Organization.Read.All")
     const store = f.reopen()
     expect(accountStore(store).get(TENANT)).toBeNull()

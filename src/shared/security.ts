@@ -35,6 +35,11 @@ export function isGuid(value: unknown): value is string {
   return typeof value === 'string' && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(value)
 }
 
+/** GUIDs are case-insensitive. Preserve their original spelling in persisted profiles and cache keys. */
+export function normalizeGuid(value: string): string {
+  return value.toLowerCase()
+}
+
 /**
  * Intune object IDs as Graph returns them: GUIDs, GUID_suffix forms such as `<guid>_DefaultLimit`,
  * prefixed app protection IDs such as `T_<guid>`, and numeric scope tag IDs. Excludes every character
