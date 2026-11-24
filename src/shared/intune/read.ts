@@ -173,20 +173,6 @@ function storedSnapshot(type: IntuneType, snapshot: Item): Item {
   return orderedSnapshot(type, withoutNeverStored(type, type.normalizeSnapshot ? type.normalizeSnapshot(snapshot) : snapshot))
 }
 
-/** Validate the collection envelope and the identity of every entry on a Graph page. */
-export function validateCollectionEntries(page: unknown, idKey = "id"): { value: Item[]; "@odata.nextLink"?: unknown } {
-  if (!page || typeof page !== "object" || Array.isArray(page) || !("value" in page) || !Array.isArray(page.value)) {
-    throw new Error("Graph returned an invalid policy collection")
-  }
-  for (const entry of page.value) {
-    const id = entry?.[idKey]
-    if (!entry || typeof entry !== "object" || Array.isArray(entry) || typeof id !== "string" || !id.trim()) {
-      throw new Error(`Microsoft Graph returned a collection entry without ${idKey}`)
-    }
-  }
-  return page as { value: Item[]; "@odata.nextLink"?: unknown }
-}
-
 /** Read every expanded page, including terminal and nested pages, before storing it. */
 async function completeExpanded(value: Json, graph: GraphReader, path: string, collections: readonly string[] = []): Promise<void> {
   if (!value || typeof value !== "object") return
@@ -198,7 +184,7 @@ async function completeExpanded(value: Json, graph: GraphReader, path: string, c
     return
   }
   const continuation = "@odata.nextLink"
-  const expanded = new Set(collections.filter(property => Object.hasOwn(value, property)))
+  const expanded = new Set(graph.completeList ? collections.filter(property => Object.hasOwn(value, property)) : [])
   for (const key of Object.keys(value)) {
     if (key.endsWith(continuation)) expanded.add(key.slice(0, -continuation.length))
   }
@@ -206,16 +192,14 @@ async function completeExpanded(value: Json, graph: GraphReader, path: string, c
   for (const property of expanded) {
     const key = `${property}${continuation}`
     const nextLink = value[key]
-    const page = { value: value[property], ...(Object.hasOwn(value, key) && { [continuation]: nextLink }) }
-    if (graph.completeList && path) {
+    if (graph.completeList) {
+      if (!path) throw new Error(`Invalid expanded collection ${property}`)
+      const page = { value: value[property], ...(Object.hasOwn(value, key) && { [continuation]: nextLink }) }
       value[property] = await graph.completeList(`${path}/${property}`, page)
     } else {
-      if (graph.completeList) throw new Error(`Invalid expanded collection ${property}`)
-      const { value: entries } = validateCollectionEntries(page)
-      if (Object.hasOwn(page, continuation)) {
-        if (typeof nextLink !== "string" || !nextLink.trim()) throw new Error("Graph returned an invalid continuation link")
-        value[property] = [...entries, ...await graph.list(nextLink)]
-      }
+      if (typeof nextLink !== "string") continue
+      if (!Array.isArray(value[property])) throw new Error(`Invalid expanded collection ${property}`)
+      value[property] = [...value[property] as Json[], ...await graph.list(nextLink)]
     }
     delete value[key]
   }

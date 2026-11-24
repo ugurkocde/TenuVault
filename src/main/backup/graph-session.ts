@@ -4,7 +4,6 @@ import { FetchApplicationError } from "../api/network-error"
 import { signInRefused } from "../../shared/backup-outcomes"
 import type { GrantedPermissions } from "../../shared/services/modules"
 import type { Item } from "../../shared/intune/registry"
-import { validateCollectionEntries } from "../../shared/intune/read"
 import type { NetworkCircuit } from "./engine"
 import { MAX_LIST_PAGES, REQUEST_ATTEMPTS, GraphError, GraphPauseError, GraphUnansweredError, RequestTimeoutError, TokenError, graphFailure, requestFailure, withRequestTimeout } from "./request"
 
@@ -194,14 +193,22 @@ export class GraphSession {
   }
 }
 
-function validateListPage(raw: unknown, url: string, seen: Set<string>, options: ListOptions): { items: Item[]; next?: string } {
-  const page = validateCollectionEntries(raw, options.idKey)
-  const items = page.value
-  if (!("@odata.nextLink" in page)) return { items }
+function validateListPage(page: unknown, url: string, seen: Set<string>, options: ListOptions): { items: Item[]; next?: string } {
+  if (!page || typeof page !== "object" || Array.isArray(page) || !("value" in page) || !Array.isArray(page.value)) {
+    throw new Error("Graph returned an invalid policy collection")
+  }
+  const idKey = options.idKey ?? "id"
+  for (const entry of page.value) {
+    const id = entry?.[idKey]
+    if (!entry || typeof entry !== "object" || Array.isArray(entry) || typeof id !== "string" || !id.trim()) {
+      throw new Error(`Microsoft Graph returned a collection entry without ${idKey}`)
+    }
+  }
+  if (!("@odata.nextLink" in page)) return { items: page.value }
   if (options.singlePage) throw new Error("Microsoft Graph returned a list that continues on another page where one tenant-wide object was expected")
   const next = page["@odata.nextLink"]
   if (typeof next !== "string" || !/^https?:\/\/[^/]/i.test(next) || next !== next.trim() || /[\s\\]/u.test(next.split("?")[0]!) || /[\t\r\n\\]/u.test(next) || !URL.canParse(next)) {
     throw new Error("Graph returned an invalid continuation link")
   }
-  return { items, next: graphContinuation(url, next, seen, options.filter) }
+  return { items: page.value, next: graphContinuation(url, next, seen, options.filter) }
 }
