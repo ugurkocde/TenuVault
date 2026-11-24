@@ -1,4 +1,5 @@
-import { OnboardingSignIn, WizardCoverage, type MethodAvailability } from "../components/OnboardingSignIn"
+import { BackupCoverage } from "../components/BackupCoverage"
+import { OnboardingSignIn, type MethodAvailability } from "../components/OnboardingSignIn"
 import { TenuVaultConsent } from "../components/TenuVaultConsent"
 import { GRAPH_CLI_CONSENT_WARNING, GRAPH_CLI_UPGRADE, OWN_APP_UPGRADE, SIGN_IN_METHODS, type BackupScopeCoverage, type SignInMethod, type WizardSignInResult } from "../../shared/tenant-connection"
 import { DISPLAY_MODULE_ORDER } from "../../shared/services/presentation"
@@ -12,7 +13,6 @@ import { checkedOnboardingChoice, choiceLabel, hasOnboardingBackups } from "../.
 import { areaPermissions, type PermissionChoice } from "../../shared/services/manifest"
 import { chosenBackupCoverage } from "../../shared/services/graph-cli-coverage"
 import { MODULE_BY_ID, moduleForFolder } from "../../shared/services/modules"
-import { typeForFolder } from "../../shared/intune/registry"
 import { trialKeyRefusalText } from "../../shared/trial-notices"
 import { showCommunityLimitError } from "../lib/plan-dialog"
 import { useEffect, useMemo, useRef, useState } from "react"
@@ -907,17 +907,9 @@ export default function OnboardingPage() {
             {publicError && <p role="alert" className="text-sm text-red-700">{publicError}</p>}
             {account && <p className="text-sm text-gray-600">Signed in as {account.username}</p>}
             {checkingPermissions || checkingResume ? <p role="status" className="text-sm text-gray-600">Checking permissions for your chosen services…</p> : <>
-              <WizardCoverage coverage={coverage} />
+              <BackupCoverage coverage={coverage} />
               <p className="text-sm text-gray-600">Coverage shows what your permissions allow. If your role can't do this, the first backup reports the refusal separately from missing permissions.</p>
               {(hasScopeGaps || missing.length > 0) && <p className="text-sm text-gray-700">Permission not granted for some of your chosen backup or restore types.</p>}
-              {hasScopeGaps && (
-                <details className="rounded-xl border p-3 text-sm text-gray-700">
-                  <summary className="cursor-pointer font-medium">Backup types missing permissions ({unreadable.length})</summary>
-                  <ul className="mt-2 list-disc space-y-1 pl-5">
-                    {unreadable.map(folder => <li key={folder}>{typeForFolder(folder)?.label ?? folder}</li>)}
-                  </ul>
-                </details>
-              )}
               {unknownCoverage && account && <p className="text-sm text-gray-700">Some coverage is unknown.</p>}
               {method === "ownApp" && permissionResult && (missing.length > 0 || permissionResult.error) && <div className="space-y-2 rounded-xl border p-3 text-sm text-gray-700">
                 {permissionResult.error && <p>Permissions could not be checked. You can continue to storage or check again.</p>}

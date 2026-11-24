@@ -1,5 +1,7 @@
 "use client"
 
+import { BackupCoverage } from "@desktop/components/BackupCoverage"
+import { COVERAGE_ISSUE_TEXT, groupBackupCoverage } from "../../../../shared/services/backup-coverage"
 import { LargeContents } from "~/components/backup/large-inventory"
 import { ServiceBackupNotice } from "../../../../renderer/components/ServiceBackupNotice"
 
@@ -613,18 +615,21 @@ function BackupDetails({ credentials, service, backup, first, storageAccountName
   const unavailable = backup.status === "unavailable"
   const counts = backup.counts ?? {}
   const excluded = new Set(backup.scope?.excluded ?? [])
-  const included = new Set(backup.scope?.included ?? LEGACY_FOLDERS)
+  const included = new Set(backup.scope?.included ?? [...LEGACY_FOLDERS, ...Object.keys(counts)])
   const empty = new Set(backup.emptyTypes ?? [])
   const unread = new Set([...(backup.notRead ?? []), ...(backup.skippedTypes ?? []), ...(backup.failedTypes ?? [])])
   const largeReasons = new Map(backup.largeProblems?.map(problem => [problem.folder, problem.reason]))
+  const readable = backup.readableTypes && new Set(backup.readableTypes)
+  const isReadable = (folder: string) => !unavailable && !largeReasons.has(folder) && !unread.has(folder)
+    && (readable?.has(folder) ?? (empty.has(folder) || backup.coverage === "complete" || (backup.scope != null && !backup.scope.included && kind === "success" && backup.coverage == null)))
+  const selected = [...included].filter(folder => !excluded.has(folder))
+  const coverage = groupBackupCoverage(selected, folder => isReadable(folder) ? "readable" : backup.notReadCauses?.[folder] ?? "unknown")
   const statusFor = (folder: string, count: number) => {
-    if (excluded.has(folder)) return "Not included in this backup"
+    if (excluded.has(folder) || (backup.scope && !included.has(folder))) return "Not included in this backup"
+    if (isReadable(folder)) return count > 0 ? null : "None in the tenant"
     const reason = largeReasons.get(folder) ?? backup.notReadReasons?.[folder]
-    if (reason || unread.has(folder)) return `Not read: ${reason ?? "See the backup log for details."}`
-    if (count > 0) return null
-    if (backup.scope && !included.has(folder)) return "Not included in this backup"
-    if (empty.has(folder) || backup.coverage === "complete" || (backup.scope && !backup.scope.included && kind === "success" && backup.coverage == null)) return "None in the tenant"
-    return "Coverage not recorded"
+    const cause = backup.notReadCauses?.[folder] ?? "unknown"
+    return reason || unread.has(folder) ? `${COVERAGE_ISSUE_TEXT[cause]}. Not read: ${reason ?? "See the backup log for details."}` : "Coverage unknown"
   }
   const groups = BACKUP_SERVICE_AREAS.filter(group => service === "all" || service === group.id).map(group => ({
     ...group,
@@ -708,6 +713,10 @@ function BackupDetails({ credentials, service, backup, first, storageAccountName
           </div>
         </div>
       </div>
+
+      {backup.scope && <div className="mb-6">
+        <BackupCoverage coverage={coverage.filter(row => service === "all" || service === row.service)} emptyLabel="Not included" />
+      </div>}
 
       {(backup.largeInventory || backup.companionId) && <LargeContents key={`${String(credentials.tenantId)}/${String(credentials.storageAccountName)}/${backup.companionId ?? backup.id}`} credentials={credentials} backupId={backup.companionId ?? backup.id} service={service} />}
       <div className="grid grid-cols-1 gap-8 md:grid-cols-2">

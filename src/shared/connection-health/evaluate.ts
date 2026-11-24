@@ -11,6 +11,9 @@
  * or whether a product was set up: those show when a backup reads a type, or is refused.
  */
 
+import { groupBackupCoverage } from "../services/backup-coverage"
+import { chosenFolder, DELEGATED_BACKUP_FOLDERS } from "../services/graph-cli-coverage"
+import type { PermissionChoice } from "../services/manifest"
 import { carryChanges, folderValue } from "./observe"
 import { INTUNE_TYPES } from "../intune/registry"
 import { areaPermissions, missingForChoice } from "../services/manifest"
@@ -363,6 +366,19 @@ export function evaluateHealth(input: HealthInput, now: Date): HealthEvaluation 
   const readerToken = readerEvidence(input.reader, reader?.graph, now)
   const readerGranted: GrantedPermissions | undefined = readerToken?.permissions && !readerToken.failure && recent(readerToken.at, TOKEN_MAX_AGE_MS, now) ? { kind: "application", permissions: new Set(readerToken.permissions) } : undefined
   const evidence = evidenceOf([delegated, reader], now)
+  const ownEvidence = evidenceOf([delegated], now)
+  const choice: PermissionChoice = Object.fromEntries(Object.entries(input.settings).flatMap(([id, setting]) =>
+    setting.enabled ? [[id, { access: setting.access, areas: Object.keys(setting.areas).filter(area => setting.areas[area]) }]] : []))
+  const coverage = groupBackupCoverage(DELEGATED_BACKUP_FOLDERS.filter(folder => chosenFolder(folder, choice)), folder => {
+    if (granted && !canBackUp(folder, granted)) return "permission"
+    const verdict = verdictOf(folder, ownEvidence.get(folder), { delegated: granted })
+    if (verdict) {
+      if (verdict.read) return "readable"
+      if (verdict.cause === "permission" || verdict.cause === "role" || verdict.cause === "license") return verdict.cause
+      return "unknown"
+    }
+    return granted ? "readable" : "unknown"
+  })
   const lostBy = [lostFolders(delegated, now), lostFolders(reader, now)]
   const evaluated = MODULES.map((module) => evaluateService(module, input.settings[module.id], granted, evidence, lostBy, readerGranted))
   const lost = new Map(evaluated.flatMap((entry) => [...entry.lost]))
@@ -461,6 +477,7 @@ export function evaluateHealth(input: HealthInput, now: Date): HealthEvaluation 
       reader: readerHealth(input.reader, reader, now),
       storage: input.storage === "local" ? { state: "local", checkedAt: null } : signInHealth(delegated?.storage, now),
       services: evaluated.map((entry) => entry.service),
+      coverage,
       changes,
       since: baseline?.at ?? null,
       granted: granted ? sorted(granted.permissions) : null,

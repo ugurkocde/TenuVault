@@ -11,6 +11,7 @@
  */
 
 import type { ModuleId, AccessLevel } from "../services/modules"
+import type { BackupScopeCoverage } from "../tenant-connection"
 import type { SignInErrorClass, SignInErrorState } from "../sign-in-errors"
 
 export type ConnectionMode = "delegated" | "app-only"
@@ -333,6 +334,7 @@ export interface ConnectionHealthReport {
   reader: ReaderHealth
   storage: SignInHealth
   services: ServiceHealth[]
+  coverage?: BackupScopeCoverage[]
   /** What changed since `since`. Empty for the first snapshot. */
   changes: HealthChange[]
   /** When the state last agreed with what the changes are compared to; null before the first snapshot. */

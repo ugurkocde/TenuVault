@@ -84,7 +84,7 @@ function TenantsPageContent() {
   const portfolioPlan: Plan | null = !licenseStatus ? null
     : licenseStatus.tenants.some((t) => t.entitled && t.plan === "msp") ? "msp"
     : licenseStatus.tenants.some((t) => t.entitled && t.plan === "pro") ? "pro" : "community"
-  const [driftByTenant, setDriftByTenant] = useState<Record<string, { total: number; critical: number } | { error: string }>>({})
+  const [driftByTenant, setDriftByTenant] = useState<Record<string, { total: number; critical: number; unknown: number } | { error: string }>>({})
   const [checkingDrift, setCheckingDrift] = useState(false)
   const searchParams = useSearchParams()
   const [searchQuery, setSearchQuery] = useState("")
@@ -376,7 +376,7 @@ function TenantsPageContent() {
           }
           setDriftByTenant((current) => ({
             ...current,
-            [tenantId]: response.ok ? { total: data.summary?.total ?? 0, critical: data.summary?.critical ?? 0 } : { error: data.error ?? "Drift check failed" },
+            [tenantId]: response.ok ? { total: data.summary?.total ?? 0, critical: data.summary?.critical ?? 0, unknown: data.unknownTypes?.length ?? 0 } : { error: data.error ?? "Drift check failed" },
           }))
         } catch (error) {
           setDriftByTenant((current) => ({ ...current, [tenantId]: { error: error instanceof Error ? error.message : "Drift check failed" } }))
@@ -1094,7 +1094,7 @@ function TenantsPageContent() {
                 </div>
               )}
 
-              {tenant.credentials && <ServiceBackupNotice tenantId={tenant.credentials.tenantId} />}
+              {tenant.credentials && <ServiceBackupNotice key={tenant.credentials.appId} tenantId={tenant.credentials.tenantId} showCoverage />}
 
               {/* Sync Status */}
               <div className="flex items-center justify-between rounded-2xl bg-gray-50 px-4 py-3 mb-4">
@@ -1318,7 +1318,7 @@ function TenantsPageContent() {
                           <div className="text-sm text-gray-500">{tenant.domain}</div>
                         </div>
                       </div>
-                      {tenant.credentials && <div className="mt-3 w-64 space-y-2 whitespace-normal"><TenantBackupLinks tenant={tenant} /><ServiceBackupNotice tenantId={tenant.credentials.tenantId} /></div>}
+                      {tenant.credentials && <div className="mt-3 w-64 space-y-2 whitespace-normal"><TenantBackupLinks tenant={tenant} /><ServiceBackupNotice key={tenant.credentials.appId} tenantId={tenant.credentials.tenantId} showCoverage /></div>}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <span className={cn(
@@ -1391,7 +1391,7 @@ function TenantsPageContent() {
                         const drift = driftByTenant[tenant.credentials?.tenantId?.toLowerCase() ?? ""]
                         if (!drift) return <span className="text-gray-400">Not checked</span>
                         if ("error" in drift) return <span className="text-amber-700" title={drift.error}>Not available</span>
-                        if (drift.total === 0) return <span className="text-green-700">No drift</span>
+                        if (drift.total === 0) return drift.unknown > 0 ? <span className="text-amber-700">Coverage unknown for some types</span> : <span className="text-green-700">No drift</span>
                         return <span className={drift.critical > 0 ? "text-red-700" : "text-amber-800"}>{drift.total} change{drift.total === 1 ? "" : "s"}{drift.critical > 0 ? `, ${drift.critical} critical` : ""}</span>
                       })()}
                     </td>

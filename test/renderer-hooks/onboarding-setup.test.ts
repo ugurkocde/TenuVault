@@ -1590,7 +1590,7 @@ describe("sign-in method wizard", () => {
 
   it("shows coverage only for the one service confirmed after Start now", async () => {
     const container = await startNow()
-    expect([...container.querySelectorAll('[aria-label="Backup coverage"] dt')].map(dt => dt.textContent)).toEqual(["Defender"])
+    expect([...container.querySelectorAll('[aria-label="Backup coverage"] h4')].map(dt => dt.textContent)).toEqual(["Defender"])
     expect(container.textContent).not.toContain("Some coverage is unknown.")
     expect(container.textContent).toContain("Backup types missing permissions (1)")
   })

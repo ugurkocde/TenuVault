@@ -10,6 +10,7 @@ import { LARGE_STORAGE_UNAVAILABLE } from "./backup-storage"
  */
 
 import type { AnswerPattern } from "./intune/registry"
+import type { BackupCoverageIssue } from "./tenant-connection"
 import type { ModuleId } from "./services/modules"
 
 /**
@@ -100,24 +101,27 @@ export function manifestOutcomes(types: readonly TypeOutcome[]): Array<Record<st
  * What a backup's manifest says about its coverage: null for a backup of a version that did not
  * record it, and the folders of the selected types that were not read in full.
  */
-export function manifestCoverage(metadata: { Coverage?: unknown; Outcomes?: unknown } | null | undefined): { coverage: Coverage | null; notRead: string[]; notReadReasons?: Record<string, string>; emptyTypes?: string[] } {
+export function manifestCoverage(metadata: { Coverage?: unknown; Outcomes?: unknown } | null | undefined): { coverage: Coverage | null; notRead: string[]; notReadReasons?: Record<string, string>; notReadCauses?: Record<string, BackupCoverageIssue>; emptyTypes?: string[] } {
   const coverage = metadata?.Coverage === "Complete" ? "complete" : metadata?.Coverage === "Incomplete" ? "incomplete" : null
   const entries = Array.isArray(metadata?.Outcomes) ? metadata.Outcomes : []
   const notRead: string[] = []
   const reasons: Array<[string, string]> = []
+  const causes: Array<[string, BackupCoverageIssue]> = []
   const emptyTypes: string[] = []
   for (const entry of entries) {
-    const { Folder, Outcome, Saved, Reason, Error } = entry && typeof entry === "object" ? (entry as { Folder?: unknown; Outcome?: unknown; Saved?: unknown; Reason?: unknown; Error?: unknown }) : {}
+    const { Folder, Outcome, Saved, Reason, Error, Cause } = entry && typeof entry === "object" ? (entry as { Folder?: unknown; Outcome?: unknown; Saved?: unknown; Reason?: unknown; Error?: unknown; Cause?: unknown }) : {}
     if (typeof Folder !== "string") continue
     if (Outcome === "notConfigured" || (Outcome === "saved" && Saved === 0)) emptyTypes.push(Folder)
     if (Outcome !== "skipped" && Outcome !== "failed") continue
     notRead.push(Folder)
+    if (Outcome === "skipped" && (Cause === "permission" || Cause === "role" || Cause === "license")) causes.push([Folder, Cause])
     const reason = Outcome === "skipped" ? Reason : Error
     if (typeof reason === "string" && reason.trim()) reasons.push([Folder, reason])
   }
   return {
     coverage, notRead,
     ...(reasons.length ? { notReadReasons: Object.fromEntries(reasons) } : {}),
+    ...(causes.length ? { notReadCauses: Object.fromEntries(causes) } : {}),
     ...(emptyTypes.length ? { emptyTypes } : {}),
   }
 }

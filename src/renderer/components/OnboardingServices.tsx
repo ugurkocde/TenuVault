@@ -3,7 +3,7 @@ import { INTUNE_TYPES } from "../../shared/intune/registry"
 import { Button } from "~/components/ui/button"
 import { MODULE_BY_ID, type ModuleId } from "../../shared/services/modules"
 import { areaPermissions, BASE_PERMISSIONS, type PermissionChoice } from "../../shared/services/manifest"
-import { WizardCoverage } from "./OnboardingSignIn"
+import { BackupCoverage } from "./BackupCoverage"
 import type { BackupScopeCoverage, SignInMethod } from "../../shared/tenant-connection"
 import { canRequestRestore, choiceLabel, PERSONAL_DATA } from "../../shared/services/onboarding"
 
@@ -50,7 +50,7 @@ export function OnboardingServices({ choice, onChange, onContinue, coverage, met
   return <div className="space-y-4">
     <div><h2 id="setup-step--1" tabIndex={-1} className="text-2xl font-medium tracking-tight text-gray-900 outline-none">What do you want to back up?</h2>
       <p className="mt-2 text-sm text-gray-600">Choose at least one service for this tenant.</p></div>
-    {coverage && <div className="space-y-2"><p className="text-sm text-gray-600">Start now uses the backup permissions your sign-in already has. Restore is unavailable.</p><WizardCoverage coverage={coverage} /></div>}
+    {coverage && <div className="space-y-2"><p className="text-sm text-gray-600">Start now uses the backup permissions your sign-in already has. Restore is unavailable.</p><BackupCoverage coverage={coverage} /></div>}
     <div className="grid gap-3 @3xl:grid-cols-3">
       {BACKUP_SERVICES.map(({ id }) => {
         const module = MODULE_BY_ID.get(id)!

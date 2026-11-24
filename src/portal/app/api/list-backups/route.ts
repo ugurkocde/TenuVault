@@ -5,6 +5,7 @@ import { backupStoragePath, isLargeBackup, LARGE_BACKUP_CONTAINER, LARGE_STORAGE
 import { backupTypeUse } from "../../../../shared/services/backup-use"
 import { BlobListError, decodeXml, listBlobPages, listLargeBackupPages } from "~/lib/storage/list"
 import { typeForFolder } from "../../../../shared/intune/registry"
+import { backupReadCoverage } from "../../../../shared/intune/backup-read-coverage"
 import { describeScope } from "../../../../shared/intune/scope"
 import { comparable, compareBackups, summarize, type BackupFingerprint, type ChangeSummary } from "../../../../shared/intune/backup-changes"
 import { BACKUP_OWNER_FILE, BACKUP_RUN_RECORD_FILE, LOCAL_STORAGE_PREFIX, MAX_BACKUP_ARCHIVE_BYTES } from "../../../../shared/constants"
@@ -211,6 +212,7 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
     failedTypes: Array.isArray(metadata?.FailedTypes) ? metadata.FailedTypes : [],
     // Whether the backup holds every type it was asked to cover; null for backups made before this was recorded.
     ...manifestCoverage(metadata),
+    readableTypes: [...backupReadCoverage(metadata).readable],
     size,
     ownSize: size,
     remnant: false,
@@ -535,7 +537,9 @@ export async function POST(request: NextRequest) {
         backup.scope.included = [...new Set([...backup.scope.included, ...(companionTypes ?? []), ...largeProblems.map(problem => problem.folder).filter(folder => typeForFolder(folder))])]
       }
       if (matches) {
-        const { emptyTypes } = manifestCoverage(other)
+        const { emptyTypes, notReadCauses } = manifestCoverage(other)
+        if (notReadCauses) backup.notReadCauses = { ...backup.notReadCauses, ...notReadCauses }
+        backup.readableTypes = [...new Set([...backup.readableTypes, ...backupReadCoverage(other).readable])]
         if (emptyTypes?.length) backup.emptyTypes = [...(backup.emptyTypes ?? []), ...emptyTypes]
       }
       // An unread record or an unresolved companion can still belong to a complete run.

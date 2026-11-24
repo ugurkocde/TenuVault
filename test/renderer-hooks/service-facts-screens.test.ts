@@ -3,6 +3,8 @@ import { createRoot, type Root } from "react-dom/client"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { MemoryRouter } from "react-router-dom"
+import { ServiceBackupNotice } from "../../src/renderer/components/ServiceBackupNotice"
+import { GRAPH_CLI_CLIENT_ID, TENUVAULT_CLIENT_ID } from "../../src/shared/tenant-connection"
 import { healthFixture } from "../fixtures/services-health"
 import { MODULE_BY_ID, MODULES, type ModuleId, type ServiceModule } from "../../src/shared/services/modules"
 
@@ -16,7 +18,7 @@ vi.mock("../../src/portal/contexts/TenantContext", () => ({
 }))
 vi.mock("~/components/ConfirmDialog", () => ({ useConfirm: () => ({ confirm: async () => true, confirmDialog: null }) }))
 vi.mock("../../src/renderer/lib/toast", () => ({ toast: () => undefined }))
-vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { health: { check: state.check, report: state.report }, services: { setEnabled: state.setEnabled } } }))
+vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { health: { check: state.check, report: state.report, onChanged: () => () => undefined }, services: { setEnabled: state.setEnabled } } }))
 
 import { BackupScopePicker } from "../../src/renderer/components/BackupScopePicker"
 import { ServicesSettings } from "../../src/renderer/components/ServicesSettings"
@@ -101,5 +103,30 @@ describe("The scope picker follows the tenant's selection", () => {
     withFacts("intune", { defaultOn: false })
     expect(picker(["intune"]).textContent).toContain("Intune: Device configuration")
     expect(picker(["intune"]).textContent).not.toContain("Entra ID: Conditional Access")
+  })
+})
+
+describe("Tenant backup coverage", () => {
+  it.each([
+    ["22222222-2222-2222-2222-222222222222", "Repair in Settings", `/portal/settings?section=services&tenant=${TENANT}`],
+    [TENUVAULT_CLIENT_ID, "Add app permissions", `/portal/settings?section=signin&pack=conditionalAccess-backup#sign-in-${TENANT}`],
+    [GRAPH_CLI_CLIENT_ID, "See sign-in upgrade options", `/portal/settings?section=signin#sign-in-${TENANT}`],
+  ])("shows each coverage state and the action for %s", async (clientId, label, href) => {
+    state.report.mockResolvedValue({
+      ...answer(), clientId,
+      coverage: [
+        { service: "intune", folders: ["Apps"], readable: [], issues: { Apps: "unknown" } },
+        { service: "entra", folders: ["NamedLocations", "ConditionalAccessPolicies"], readable: [], issues: { NamedLocations: "role", ConditionalAccessPolicies: "permission" } },
+        { service: "defender", folders: ["DefenderAttackSimulations"], readable: ["DefenderAttackSimulations"] },
+      ],
+    })
+    const container = mount(createElement(ServiceBackupNotice, { tenantId: TENANT, showCoverage: true }))
+    await act(async () => undefined)
+    expect([...container.querySelectorAll("h4")].map(heading => heading.textContent)).toEqual(["Defender", "Entra ID", "Intune"])
+    expect(container.querySelector('[aria-label="Defender backup coverage"]')?.textContent).toBe("Defender1 of 1")
+    expect(container.textContent).toContain("Permission not granted")
+    expect(container.textContent).toContain("Your role can't do this")
+    expect(container.querySelector('[aria-label="Intune backup coverage"]')?.textContent).toContain("Unknown")
+    expect([...container.querySelectorAll("a")].find(link => link.textContent === label)?.getAttribute("href")).toBe(href)
   })
 })

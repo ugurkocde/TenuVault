@@ -1,3 +1,5 @@
+import type { BackupCoverageIssue } from "../../../shared/tenant-connection"
+
 /** A backup as /api/list-backups describes it. */
 export interface BackupSummary {
   id: string
@@ -25,6 +27,8 @@ export interface BackupSummary {
   /** Folders of the selected types that were not read in full. */
   notRead?: string[]
   notReadReasons?: Record<string, string>
+  notReadCauses?: Record<string, BackupCoverageIssue>
+  readableTypes?: string[]
   emptyTypes?: string[]
   size: number
   /** Seconds, or a preformatted string from older backups; null when unknown. */

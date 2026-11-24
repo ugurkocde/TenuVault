@@ -413,6 +413,8 @@ export function ProxySignInSettings() {
 }
 
 function TenantSettings({ active }: { active: boolean }) {
+  const { hash } = useLocation()
+  const [params] = useSearchParams()
   const { confirm, confirmDialog } = useConfirm()
   const tenants = useTenants()
   const { updateTenant } = useTenantOperations()
@@ -469,7 +471,7 @@ function TenantSettings({ active }: { active: boolean }) {
               const tenantId = tenant.credentials?.tenantId ?? ""
               const account = accounts.find((a) => a.tenantId === tenantId.toLowerCase())
               return (
-                <div key={tenant.id} className="flex items-center gap-3 py-4 first:pt-1 last:pb-0">
+                <div key={tenant.id} id={`sign-in-${tenantId.toLowerCase()}`} className="flex scroll-mt-4 items-center gap-3 py-4 first:pt-1 last:pb-0">
                   <div className="min-w-0 flex-1">
                     <p className="truncate font-medium text-gray-900">{tenant.name}</p>
                     <p className="truncate text-xs text-gray-500">
@@ -479,6 +481,7 @@ function TenantSettings({ active }: { active: boolean }) {
                       key={tenantId}
                       tenantId={tenantId}
                       clientId={tenant.credentials.appId}
+                      initialPack={active && hash === `#sign-in-${tenantId.toLowerCase()}` ? params.get("pack") ?? undefined : undefined}
                       onChanged={appId => {
                         updateTenant(tenant.id, { credentials: { ...tenant.credentials!, appId } })
                         refresh()

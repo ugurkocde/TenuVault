@@ -7,17 +7,19 @@ import type { PermissionChoice } from "../../shared/services/manifest"
 import { bridge } from "../lib/bridge"
 import { toast } from "../lib/toast"
 
-export function TenuVaultConsent({ tenantId, plan, active, upgrade, onChanged, wizard }: {
+export function TenuVaultConsent({ tenantId, plan, active, upgrade, initialPack, onChanged, wizard }: {
   tenantId: string
   plan: PackConsentPlan
   active: boolean
   upgrade?: boolean
+  initialPack?: string
   onChanged?: (result: ConnectionSwitchResult) => void
   wizard?: { choice: PermissionChoice; pack?: string; onSignedIn: (result: WizardSignInResult) => void }
 }) {
   const [currentPlan, setCurrentPlan] = useState(plan)
-  const [open, setOpen] = useState(Boolean(wizard?.pack))
-  const [selected, setSelected] = useState(wizard?.pack ?? "")
+  const requestedPack = wizard?.pack ?? plan.packs.find(pack => pack.id === initialPack)?.id
+  const [open, setOpen] = useState(Boolean(requestedPack))
+  const [selected, setSelected] = useState(requestedPack ?? "")
   const [busy, setBusy] = useState(false)
   const [results, setResults] = useState<Record<string, PackConsentResult>>({})
   const [signInNeedsApproval, setSignInNeedsApproval] = useState(false)

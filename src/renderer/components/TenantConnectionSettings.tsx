@@ -9,9 +9,10 @@ import { bridge } from "../lib/bridge"
 import { useLicense } from "../lib/license"
 import { toast } from "../lib/toast"
 
-export function TenantConnectionSettings({ tenantId, clientId, onChanged }: {
+export function TenantConnectionSettings({ tenantId, clientId, initialPack, onChanged }: {
   tenantId: string
   clientId: string
+  initialPack?: string
   onChanged: (clientId: string) => void
 }) {
   const [connection, setConnection] = useState<TenantConnection | null>(null)
@@ -96,14 +97,14 @@ export function TenantConnectionSettings({ tenantId, clientId, onChanged }: {
   if (connection?.origin !== "wizard") return null
   const upgrade = connection.method === "graphCli" || Boolean(graphError)
   return (
-    <div id={`sign-in-${tenantId.toLowerCase()}`} className="mt-2 flex scroll-mt-4 flex-wrap items-center gap-2">
+    <div className="mt-2 flex scroll-mt-4 flex-wrap items-center gap-2">
       <p className="text-xs text-gray-500">Sign-in method: {SIGN_IN_METHODS[connection.method]}</p>
       <Button variant="outline" size="sm" onClick={() => { setNextClientId(""); setError(undefined); setOpen(true) }}>
         {upgrade ? OWN_APP_UPGRADE : "Change app registration"}
       </Button>
       {graphCli && connection.method !== "graphCli" && <Button variant="outline" size="sm" onClick={() => { setGraphError(undefined); setGraphOpen(true) }}>Use Start now</Button>}
       {graphError && <p role="alert" className="basis-full text-sm text-destructive">{graphError}</p>}
-      {consent && <TenuVaultConsent key={tenantId} tenantId={tenantId} plan={consent} active={connection.method === "tenuvaultApp"} upgrade={upgrade} onChanged={result => {
+      {consent && <TenuVaultConsent key={`${tenantId}/${initialPack ?? ""}`} tenantId={tenantId} plan={consent} initialPack={initialPack} active={connection.method === "tenuvaultApp"} upgrade={upgrade} onChanged={result => {
         setGraphError(undefined)
         setConnection(result.connection)
         onChanged(result.connection.clientId)

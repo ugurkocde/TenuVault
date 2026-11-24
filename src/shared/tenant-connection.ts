@@ -48,11 +48,14 @@ export type ConnectionTarget =
   | { method: "tenuvaultApp" }
   | { method: "ownApp"; clientId: string }
 
-/** Token scope coverage. A null readable list means the grant could not be verified. */
+export type BackupCoverageIssue = "permission" | "role" | "license" | "unknown"
+
+/** The selected types and the evidence for their coverage. A null readable list means an unverified grant. */
 export interface BackupScopeCoverage {
   service: "defender" | "entra" | "intune"
   folders: readonly string[]
   readable: readonly string[] | null
+  issues?: Readonly<Record<string, BackupCoverageIssue>>
 }
 
 export interface ConnectionSwitchResult {

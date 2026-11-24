@@ -880,3 +880,41 @@ describe("changes since the snapshot", () => {
     expect(current).toMatchObject({ permissions: snapshot.permissions, ready: { "intune/apps": true } })
   })
 })
+
+describe("tenant backup coverage", () => {
+  const all = settings({ defender: choice(true), entra: choice(true), conditionalAccess: choice(true) })
+  const permissions = [...graphPermissions({ defender: { access: "backup" }, entra: { access: "backup" }, conditionalAccess: { access: "backup" }, intune: { access: "restore" } }, "delegated")]
+
+  it("shows full coverage on an existing own-registration tenant and keeps its service and restore settings", () => {
+    const { report } = evaluate([delegated({ graph: healthy(permissions) })], { settings: all })
+    expect(report.clientId).toBe(CLIENT)
+    expect(report.coverage?.map(row => row.service)).toEqual(["defender", "entra", "intune"])
+    for (const row of report.coverage!) {
+      expect(row.folders.length).toBeGreaterThan(0)
+      expect(row.readable).toEqual(row.folders)
+      expect(row.issues).toEqual({})
+    }
+    expect(report.services.map(service => [service.id, service.enabled, service.access])).toEqual(
+      MODULES.map(module => [module.id, all[module.id].enabled, all[module.id].access]),
+    )
+    expect(report.changes).toEqual([])
+  })
+
+  it("reports a scope gap, role refusal and unknown read separately, using evidence from the active sign-in only", () => {
+    const graph = healthy(permissions.filter(permission => !permission.startsWith("AttackSimulation.")))
+    const current = run("newer", 1, {
+      refused: [refusal("NamedLocations", "role", true)],
+      unread: ["DeviceConfigurations"],
+    })
+    const previous = run("previous", 2, { read: ["NamedLocations", "DeviceConfigurations"] })
+    const { report } = evaluate([delegated({ graph, runs: [previous, current] }), readerConnection({
+      runs: [readerRun("reader", 0, { read: ["NamedLocations", "DeviceConfigurations"] })],
+    })], { settings: all, readerClientId: READER })
+    expect(report.coverage?.map(row => row.issues)).toMatchObject([
+      { DefenderAttackSimulations: "permission" },
+      { NamedLocations: "role" },
+      { DeviceConfigurations: "unknown" },
+    ])
+    expect(report.coverage?.flatMap(row => row.readable ?? [])).not.toContain("DeviceConfigurations")
+  })
+})

@@ -5,7 +5,7 @@ import { AddPermissions } from "./AddPermissions"
 import { useEffect, useId, useRef, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { AlertCircle, CheckCircle2, ExternalLink, Loader2, MinusCircle, RefreshCw } from "lucide-react"
-import { Link } from "react-router-dom"
+import { Link, useSearchParams } from "react-router-dom"
 import { Button } from "~/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "~/components/ui/card"
 import { useConfirm } from "~/components/ConfirmDialog"
@@ -275,7 +275,10 @@ function TenantServices({ tenantId, clientId, name, active }: { tenantId: string
 
 export function ServicesSettings({ active = true }: { active?: boolean }) {
   const tenants = useTenants().filter(tenant => tenant.credentials?.tenantId)
-  const [selected, setSelected] = useState(tenants[0]?.credentials?.tenantId ?? "")
+  const [params] = useSearchParams()
+  const requestedTenant = params.get("tenant")
+  const [selected, setSelected] = useState(requestedTenant ?? tenants[0]?.credentials?.tenantId ?? "")
+  useEffect(() => { if (requestedTenant) setSelected(requestedTenant) }, [requestedTenant])
   const id = useId()
   const current = tenants.find(tenant => tenant.credentials?.tenantId === selected) ?? tenants[0]
   return <Card id="services">

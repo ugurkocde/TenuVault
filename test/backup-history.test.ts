@@ -91,6 +91,8 @@ describe("backup history", () => {
     expect(backups[0]).toMatchObject({
       scope: { included },
       emptyTypes: ["CompliancePolicies"],
+      readableTypes: ["DeviceConfigurations", "CompliancePolicies"],
+      notReadCauses: { PowerShellScripts: "permission", DeviceCategories: "permission" },
       notReadReasons: { PowerShellScripts: "Access was denied.", DeviceCategories: "The Backup Reader has no permission for this type.", Apps: "Timed out" },
     })
     // Backups made before coverage was recorded: not known, which is never shown as incomplete.

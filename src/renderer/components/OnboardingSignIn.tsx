@@ -1,7 +1,6 @@
 import { Cloud, KeyRound, Zap } from "lucide-react"
 import { Button } from "~/components/ui/button"
-import { SIGN_IN_METHODS, type BackupScopeCoverage, type SignInMethod } from "../../shared/tenant-connection"
-import { BACKUP_SERVICES } from "../../shared/services/presentation"
+import { SIGN_IN_METHODS, type SignInMethod } from "../../shared/tenant-connection"
 
 const CARDS = [
   {
@@ -58,14 +57,4 @@ export function OnboardingSignIn({ available, onChoose }: { available: MethodAva
       })}
     </div>
   </section>
-}
-
-export function WizardCoverage({ coverage }: { coverage: BackupScopeCoverage[] }) {
-  if (!coverage.length) return null
-  return <dl className="grid grid-cols-3 gap-2" aria-label="Backup coverage">
-    {coverage.map(row => <div key={row.service} className="rounded-xl border border-border px-3 py-2">
-      <dt className="text-xs font-medium text-gray-700">{BACKUP_SERVICES.find(({ id }) => id === row.service)?.label}</dt>
-      <dd className="text-base font-medium text-gray-900">{row.readable === null ? "Unknown" : `${row.readable.length} of ${row.folders.length}`}</dd>
-    </div>)}
-  </dl>
 }

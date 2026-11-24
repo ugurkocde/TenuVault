@@ -92,6 +92,25 @@ describe("Backup Details", () => {
     expect(row.textContent).toContain("None in the tenant")
   })
 
+  it("keeps partial counts separate from confirmed empty and unknown coverage", () => {
+    const { container } = renderBackup({
+      scope: { included: ["ConfigurationPolicies", "CompliancePolicies", "DeviceConfigurations"], excluded: [], description: "Custom" },
+      counts: { DeviceConfigurations: 3 },
+      readableTypes: ["CompliancePolicies"],
+      notRead: ["DeviceConfigurations"],
+      notReadCauses: { DeviceConfigurations: "role" },
+      emptyTypes: ["CompliancePolicies"],
+    })
+    const coverage = container.querySelector('[aria-label="Intune backup coverage"]')!
+    expect(coverage.textContent).toContain("1 of 3")
+    expect(coverage.textContent).toContain("1 unknown")
+    expect(coverage.textContent).toContain("Your role can't do this")
+    const row = [...container.querySelectorAll("details li")].find(node => node.textContent?.includes("Not read:"))!
+    expect(row.textContent).toContain("3")
+    expect(row.textContent).toContain("Your role can't do this")
+    expect(container.textContent).toContain("None in the tenant")
+  })
+
   it("keeps full Download enabled beside Download ordinary only when the companion is temporarily unreadable", async () => {
     const fetch = vi.fn().mockImplementation(async () => Response.json({ saved: true }))
     vi.stubGlobal("fetch", fetch)
