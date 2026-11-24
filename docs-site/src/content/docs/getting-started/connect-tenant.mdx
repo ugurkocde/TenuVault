@@ -33,7 +33,7 @@ For a new connection, the admin consent link opens Microsoft using the organizat
 
 For an existing tenant, use **Settings > Sign-in and access**. Switching requires an account from the same tenant and keeps the existing connection until the new permissions are verified. See [the permissions reference](/security/permissions/#tenuvault-app-permission-packs) and [consent troubleshooting](/troubleshooting/#tenuvault-app-consent).
 
-After signing in with any method, confirm the tenant ID on **Check backup access** or **Storage** before starting your first backup. TenuVault also shows the organization name when the sign-in can read it. If Microsoft signed you into another tenant, select **Different tenant?** and sign in to the intended tenant.
+After signing in with any method, confirm the tenant ID on **Check** or **Storage** before starting your first backup. TenuVault also shows the organization name when the sign-in can read it. If Microsoft signed you into another tenant, select **Different tenant?** and sign in to the intended tenant.
 
 ## Open the guided setup
 
@@ -144,7 +144,7 @@ You can use a separate admin account. It does not have to be the account you are
 
 Device-based Conditional Access, such as requiring a compliant or Entra-joined device, is checked in the browser. While TenuVault waits for the sign-in, it notes that Conditional Access needs a browser that passes the device identity, such as Microsoft Edge signed in to your work profile: make it your default browser, cancel and sign in again. On Windows it works in Microsoft Edge when you are signed in to the browser profile, in Chrome with the Microsoft Single Sign On extension or the `CloudAPAuthEnabled` policy, and in Firefox with Windows single sign-on turned on. On macOS it needs the Microsoft Enterprise SSO extension on the device, and Chrome there also needs the Microsoft Single Sign On extension, unless it is Chrome 135 or later on a Mac that stores the device key in the Secure Enclave.
 
-4. After a successful sign-in, TenuVault shows **Check** with permission coverage for the services you chose. TenuVault continues to **Storage** when access is complete. If permissions are missing, copy instructions for your administrator, select **Check again**, or continue without an affected service. TenuVault checks the license when you finish setting up the tenant.
+4. After a successful sign-in, TenuVault shows **Check** with permission coverage for the services you chose. TenuVault continues to **Storage** when access is complete. When only some services or areas are readable, select **Continue with** the services listed. Your full choice stays saved. TenuVault checks the license when you finish setting up the tenant.
 
 ### Signed in, but not saved yet
 
@@ -210,7 +210,7 @@ When you sign in again with **Start now**, TenuVault checks availability and sho
 
 ## Follow your service choice
 
-Setup asks for backup access only. You can add restore permissions when you first need them. Manage optional areas and access levels later under **Settings > Services and permissions**. Start now shows coverage for the selected services on **Sign-in results**.
+Setup asks for backup access only. You can add restore permissions when you first need them. Manage optional areas and access levels later under **Settings > Services and permissions**. Start now shows what the current sign-in can back up on **Check**.
 
 Your own app registration routes use the same permissions for the chosen services:
 
@@ -220,10 +220,12 @@ Your own app registration routes use the same permissions for the chosen service
 * **Copy instructions for my admin** includes the same chosen command and permission list in the message for your administrator.
 * **I already have an app registration** opens the ID form. After sign-in TenuVault checks the chosen permissions in the Microsoft Graph token, without reading or changing the registration.
 
-## Review results and choose storage
+## Check access and choose storage
 
-**Sign-in results** shows permission coverage by service. A count such as **6 of 9** means the sign-in carries permissions for six supported backup types. **Unknown** means TenuVault could not verify the grant. A missing permission is different from a role refusal. Your role and service license can still affect reads during the backup.
+**Check** names the services you can back up and shows how many areas are readable when a service has partial access. Select **Continue** or **Continue with** the services listed. The first backup reads the available policies and settings, including accessible areas of partly readable services. Your role and service license can still affect what the backup reads.
 
-For Start now, upgrade using **Upgrade to the TenuVault app** when available or **Use your own app registration**. When the TenuVault app is available, **Send to my admin** opens the relevant pack so you can copy a request for the administrator. Own registration users can check missing permissions again or continue and fix them later.
+Expand **What's missing and how to add it** for area names, instructions for your sign-in method, and **Check again**. Permission names are under **Show permission names**. If none of your chosen services can be read, follow the access instructions on **Check** before continuing.
+
+Your chosen services stay enabled. A service with no readable areas shows **Needs access** in the sidebar and under **Settings > Services and permissions**. Backups skip settings the current sign-in cannot read and include them in the coverage report. With Start now, switch to your own app registration or to the TenuVault app where available to add access.
 
 Continue to **Storage**. Start now keeps backups on this device. The TenuVault app wizard also starts with local storage. With your own app registration, eligible plans can choose [Azure storage](/getting-started/choose-storage/). If this tenant has a new trial, you can opt in to email tips and an end-of-trial reminder. The address is sent only when you select the email button. Confirm storage to start your first backup automatically.

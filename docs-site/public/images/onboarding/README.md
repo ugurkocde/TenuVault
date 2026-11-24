@@ -5,6 +5,6 @@ Built desktop app using fictional Contoso data and local IPC fixtures. Generated
 * 01-services-light.png, 01-services-dark.png. Choose Intune, Entra ID or Defender for backup.
 * 02-connect-light.png, 02-connect-dark.png. Choose how to connect your tenant.
 * 03-check-light.png, 03-check-dark.png. Review backup access after signing in.
-* 04-missing-permissions-light.png, 04-missing-permissions-dark.png. Review missing Entra ID permissions and find the steps to resolve them.
+* 04-missing-permissions-light.png, 04-missing-permissions-dark.png. See which Entra ID areas need access and find out how to add it.
 * 05-storage-light.png, 05-storage-dark.png. Confirm your tenant and choose where to store backups.
 * 06-first-backup-light.png, 06-first-backup-dark.png. Follow the first backup after saving your storage choice.

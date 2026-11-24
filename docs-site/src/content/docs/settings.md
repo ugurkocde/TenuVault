@@ -51,9 +51,9 @@ To add or remove tenants, use **Tenants**. See [Manage tenants](/tenants/).
 
 Choose a tenant to see three independent connections: **Microsoft Graph sign-in**, **Backup Reader** and **Backup storage**. Opening Settings checks the connection with a fresh token request (or reuses a check from the last minute). It never opens a sign-in window and never blocks a backup. **Check again** asks Microsoft again, including for the Backup Reader.
 
-![Services and permissions with independent connection states and all three services](/images/services/healthy-light.png)
+The sidebar also lists **Defender**, **Entra ID** and **Intune** in a **Services** group below **Backup & Restore**. An enabled service with access opens backup contents filtered to that service. **Needs access** opens this Settings section for a service you chose that the current sign-in cannot read. It stays enabled, and the card explains how to add access for your sign-in method. **Off** also opens this Settings section. Badges follow the selected tenant. While service status is loading or unavailable, links open filtered backup contents without a badge. The backup page's **Service** filter only changes the view; use the switches here to change future backup coverage.
 
-The sidebar also lists **Defender**, **Entra ID** and **Intune** in a **Services** group below **Backup & Restore**. An enabled service opens backup contents filtered to that service. A service marked **Off** opens this Settings section. The badges follow the selected tenant and update when you turn a service on or off. While service status is loading or unavailable, each link opens filtered backup contents without an **Off** badge. Only a confirmed off service opens Settings. The backup page's **Service** filter only changes the view; use the switches here to change future backup coverage.
+![Services and permissions with independent connection states and all three services](/images/services/healthy-light.png)
 
 ![Defender marked Off in the Services sidebar group](/images/sidebar/defender-off-light.png)
 
