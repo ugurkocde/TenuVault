@@ -94,7 +94,7 @@ If the account already restricts networks under **Networking**, the computers th
 
 ## Cost and redundancy
 
-Backups are Intune configuration as JSON files, so most tenants store a modest amount of data and pay mainly for the retained backup size and the write transactions of each run. Locally redundant Hot storage is the low cost default. Choose geo-redundant storage when the storage account holds the only copy of your backups. TenuVault retention deletes older backups automatically, and you choose the period in Settings; see [Retention](/backups/storage/#retention).
+Backups store tenant configuration as JSON files, so most tenants store a modest amount of data and pay mainly for the retained backup size and the write transactions of each run. Locally redundant Hot storage is the low cost default. Choose geo-redundant storage when the storage account holds the only copy of your backups. TenuVault retention deletes older backups automatically, and you choose the period in Settings; see [Retention](/backups/storage/#retention).
 
 ## Settings that conflict with TenuVault
 

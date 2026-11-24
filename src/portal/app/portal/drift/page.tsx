@@ -203,7 +203,7 @@ export default function DriftDetectionPage() {
     isComplete: boolean
     isSuccess: boolean
     newPolicyId?: string
-    policyType?: string
+    folder?: string
   }>({
     isOpen: false,
     action: "revert",
@@ -276,7 +276,7 @@ export default function DriftDetectionPage() {
   // The loaded list decides, so a backup made after a scan found too few lifts the notice.
   const insufficient = !running && !result && (backupsLoaded ? completeBackups.length < 2 : failedJob?.code === "INSUFFICIENT_BACKUPS")
   const showResult = !!result && !!selectedTenant
-  const noDriftText = result?.largeFolders?.length ? "No policy drift. Compare inventory in pages below." : result?.unknownTypes?.length ? "No drift found in the types compared." : result ? `No drift between ${formatDate(result.baseline.timestamp)} and ${formatDate(result.comparison.timestamp)}` : ""
+  const noDriftText = result?.largeFolders?.length ? "No policy drift. Compare inventory in pages below." : (result?.unknownTypes?.length || result?.legacyReadFailure) ? "No drift found in the types compared." : result ? `No drift between ${formatDate(result.baseline.timestamp)} and ${formatDate(result.comparison.timestamp)}` : ""
   const counts = {
     added: drifts.filter(d => d.changeType === "added").length,
     modified: drifts.filter(d => d.changeType === "modified").length,
@@ -350,7 +350,7 @@ export default function DriftDetectionPage() {
       error: null,
       isComplete: false,
       isSuccess: false,
-      policyType: drift.type
+      folder: drift.backupFile?.split("/")[0]
     })
 
     try {
@@ -367,7 +367,7 @@ export default function DriftDetectionPage() {
       setProgressModal(prev => ({ ...prev, currentStep: 1 }))
       await new Promise(resolve => setTimeout(resolve, 500)) // Small delay for visual feedback
 
-      // Step 3: Applying changes to Intune
+      // Step 3: Applying changes to the tenant
       setProgressModal(prev => ({ ...prev, currentStep: 2 }))
 
       const response = await fetch("/api/revert-policy", {
@@ -397,11 +397,11 @@ export default function DriftDetectionPage() {
       const result = await response.json()
 
       // Step 4: Updating metadata
-      setProgressModal(prev => ({ ...prev, currentStep: 3, newPolicyId: result.policyId }))
+      setProgressModal(prev => ({ ...prev, currentStep: 3, newPolicyId: result.policyId ?? drift.configId }))
       await new Promise(resolve => setTimeout(resolve, 500))
 
       // Step 5: Refreshing drift detection
-      setProgressModal(prev => ({ ...prev, currentStep: 4, newPolicyId: result.policyId }))
+      setProgressModal(prev => ({ ...prev, currentStep: 4, newPolicyId: result.policyId ?? drift.configId }))
 
       // Clear any existing errors
       setError("")
@@ -519,7 +519,7 @@ export default function DriftDetectionPage() {
           title={driftRunHeading(job.phase, finishing)}
           subtitle={result
             ? "Your previous result is kept if this scan does not finish. The scan keeps running if you open another page."
-            : "TenuVault only reads your saved backups. Nothing in Intune is changed. The scan keeps running if you open another page."}
+            : "TenuVault only reads your saved backups. Nothing in the tenant is changed. The scan keeps running if you open another page."}
           percent={finishing ? 100 : job.percent}
           progressLabel="Drift scan progress"
           detail={finishing ? "Loading the result" : job.detail}
@@ -608,7 +608,7 @@ export default function DriftDetectionPage() {
         isComplete={progressModal.isComplete}
         isSuccess={progressModal.isSuccess}
         newPolicyId={progressModal.newPolicyId}
-        policyType={progressModal.policyType}
+        folder={progressModal.folder}
         onComplete={() => {
           setProgressModal(prev => ({ ...prev, isOpen: false }))
           // Reset the progress modal state
@@ -644,7 +644,7 @@ export default function DriftDetectionPage() {
       <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <h1 className="text-4xl font-medium tracking-tight text-gray-900">Drift Detection</h1>
-          <p className="mt-2 text-base text-gray-500">See what changed in Intune between two backups</p>
+          <p className="mt-2 text-base text-gray-500">See what changed between two backups</p>
         </div>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
@@ -765,7 +765,7 @@ export default function DriftDetectionPage() {
           )}
 
           {!!result.largeFolders?.length && selectedTenant && <LargeComparison key={`${tenantId}/${storageAccountName}/${result.baseline.id}/${result.comparison.id}`} credentials={{ ...selectedTenant.credentials, storageAccountName }} baseline={result.baseline.id} backupId={result.comparison.id} folders={result.largeFolders} />}
-          <UnknownComparisonTypes folders={result.unknownTypes} />
+          <UnknownComparisonTypes folders={result.unknownTypes} legacyReadFailure={result.legacyReadFailure} />
           {result.warnings.length > 0 && (
             <Alert className="rounded-3xl border-transparent bg-amber-50 p-5 [&>svg]:left-5 [&>svg]:top-5">
               <AlertTriangle className="h-4 w-4 text-amber-700" />
@@ -985,7 +985,7 @@ export default function DriftDetectionPage() {
                   })}
                 </section>
               ))}
-              <p className="px-1 text-xs text-gray-500">Added items named "[Restored] ..." are marked as likely restored copies, because a policy created in Intune can carry the same prefix.</p>
+              <p className="px-1 text-xs text-gray-500">Added items named "[Restored] ..." are marked as likely restored copies, because a policy created outside TenuVault can carry the same prefix.</p>
             </div>
           )}
         </>

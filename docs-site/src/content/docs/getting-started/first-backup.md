@@ -9,12 +9,12 @@ The last setup step takes a first backup, so you know sign-in, permissions and s
 
 The **First backup** step is headed **Take a first backup** and shows **&lt;tenant&gt; is connected.** It explains what the backup does:
 
-* It reads your Intune policies, scripts and settings, and changes nothing in your tenant.
+* It reads the Defender, Entra ID and Intune configuration you selected, and changes nothing in your tenant.
 * Apps are left out by default to keep it quick. You can change what is backed up later in the backup scope.
 * It usually takes a few minutes, longer for large tenants.
 
 1. Select **Run first backup**.
-2. Watch the progress bar and the results. TenuVault first lists every Intune type (**Reading Intune configuration...**), then saves each object (**Backing up &lt;type&gt;**). Each type appears in the results list as it is backed up, with its count. Select **Cancel backup** to stop it.
+2. Watch the progress bar and the results. TenuVault first lists the selected types (**Reading configuration...**), then saves each object (**Backing up &lt;type&gt;**). Each type appears in the results list as it is backed up, with its count. Select **Cancel backup** to stop it.
 3. When the backup succeeds, the step shows **Your first backup is done** and **Next steps**, described below.
 4. Select **Go to dashboard**.
 
@@ -89,7 +89,7 @@ TenuVault is set up. Next:
 
 * [Schedule backups](/backups/schedules/), if you did not turn on automatic backups in **Next steps**. Community tenants can back up weekly; Pro and MSP can also back up daily.
 * Keep TenuVault running in the menu bar on macOS or the tray on Windows so schedules run. See [Settings reference](/settings/#background-runner).
-* Learn how to [restore Intune policies](/restore/) and [detect drift](/drift/).
+* Learn how to [restore supported configuration](/restore/) and [detect drift](/drift/).
 
 Once you have a successful backup, [practice an Intune restore](https://www.tenuvault.com/guides/intune-restore-drill) before you need one in an incident.
 

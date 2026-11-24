@@ -95,7 +95,7 @@ After the first backup to this device, setup offers **Save recovery key** among 
 3. Choose where to save the file. By default it is `Documents/TenuVault recovery key <fingerprint>.txt`.
 4. Move the key into your password manager or another safe place, then delete the file.
 
-Anyone with the recovery key and your backup files on this device can read your Intune configuration. Store it like a password. For how the key works, see [Encryption and recovery key](/security/encryption/).
+Anyone with the recovery key and your backup files on this device can read your backed-up configuration. Store it like a password. For how the key works, see [Encryption and recovery key](/security/encryption/).
 
 ## Continue
 

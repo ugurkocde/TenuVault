@@ -30,7 +30,7 @@ At the top of the page, choose:
 * **Baseline (older)**: the backup to compare from
 * **Comparison (newer)**: the backup to compare with
 
-Each list offers only the backups that can be compared, with their date and time and, when it was recorded, how they started (**Manual**, **Scheduled** or **From tray**). Backups that completed with warnings are offered and marked. Only types read completely in both backups can establish an addition or deletion. Backups that did not finish or whose summary could not be read are not listed; a line under the lists says how many there are and links to **Backup & Restore**, where they are shown. Choosing a backup keeps the older of the two as the baseline: choosing the backup that is already chosen on the other side, or a baseline newer than the comparison, puts them in order. The swap button between the lists exchanges them as they are. The baseline must be older than the comparison.
+Each list offers only the backups that can be compared, with their date and time and, when it was recorded, how they started (**Manual**, **Scheduled** or **From tray**). Backups that completed with warnings are offered and marked. Backups that did not finish or whose summary could not be read are not listed; a line under the lists says how many there are and links to **Backup & Restore**, where they are shown. Choosing a backup keeps the older of the two as the baseline: choosing the backup that is already chosen on the other side, or a baseline newer than the comparison, puts them in order. The swap button between the lists exchanges them as they are. The baseline must be older than the comparison.
 
 When only two backups can be compared, they are already chosen, and the page says so and offers **Back up now**. A backup started there is added to the lists when it finishes, even if you open another page meanwhile, so you can compare it with an older one.
 
@@ -98,7 +98,7 @@ A change marked **Reverted** was already reverted with TenuVault. A change marke
 
 ## What drift detection compares
 
-* Types read in full by both backups. When either backup excluded a type or did not confirm a complete read, the results list it under **Unknown coverage** and leave it out of added, modified and deleted totals. See [What gets backed up](/backups/coverage/).
+* Types read in full by both backups. When either backup excluded a type or did not confirm a complete read, the results list it under **Types not compared** and leave it out of added, modified and deleted totals. See [What gets backed up](/backups/coverage/).
 * Changes to IDs, version numbers, creation and modification times, the description and the reference IDs of encrypted values are ignored.
 * Items whose fingerprint (recorded in each backup) is the same in both backups are unchanged and are not read again, so comparisons of large tenants finish faster. Backups made by earlier versions without fingerprints are compared file by file.
 * Lists of settings are matched by the setting itself, so an added, removed or reordered setting is reported as that setting, not as a change to every setting after it.
@@ -106,6 +106,8 @@ A change marked **Reverted** was already reverted with TenuVault. A change marke
 * New policies whose name starts with **[Restored]** are reported as added and marked **Likely restored copy**. TenuVault creates copies with this prefix when you restore, and a policy created in Intune can carry the same prefix, so the result stays visible.
 
 ### Examples by service
+
+For backups that record per-type outcomes, only complete reads are compared. For older backups, TenuVault uses the recorded scope and excludes types with known failures. If an older backup recorded a read failure without naming the type, the comparison still shows deletions and warns that some may be policies the backup failed to read.
 
 | Service | Example of coverage shown as unknown |
 | --- | --- |
@@ -142,7 +144,7 @@ To run an action:
 2. Read the confirmation, which names the item and what will happen.
 3. Click the confirming button to go ahead, or **Cancel**. It names the action: **Revert policy** or **Recreate policy** (shown in red, since they change the live policy), or **Create copy**.
 
-A progress dialog shows each step: **Fetching policy from backup**, **Preparing policy data**, **Applying changes to Intune** (or **Creating new policy in Intune**), **Updating metadata** and **Refreshing drift detection**, which compares the same two backups again in the background. It cannot be cancelled once started. When it finishes, click **Done**, or **View in Intune** to open the Intune admin center. If a step fails, the dialog shows **Operation Failed** with the reason.
+A progress dialog shows each step: **Fetching policy from backup**, **Preparing policy data**, **Applying changes to the tenant** (or **Creating a policy in the tenant**), **Updating metadata** and **Refreshing drift detection**, which compares the same two backups again in the background. It cannot be cancelled once started. When it finishes, click **Done**, or the link to open the relevant admin center. If a step fails, the dialog shows **Operation Failed** with the reason.
 
 TenuVault records every revert and restore in the tenant's backup storage, so the change is marked **Reverted** and its history shows in later results. Each action is also recorded in the [audit log](/audit-log/).
 
@@ -154,7 +156,7 @@ An action that Intune cannot run is greyed out and shows its reason under the bu
 When TenuVault picks the two backups to compare, it skips backups it cannot open, such as older encrypted ones without their key. A backup you choose yourself that cannot be opened says why.
 :::
 
-For restoring several policies, choosing assignments or restoring into another tenant, use the restore wizard instead. See [Restore Intune policies](/restore/).
+For restoring several policies, choosing assignments or restoring into another tenant, use the restore wizard instead. See [Restore supported configuration](/restore/).
 
 ## Export a drift report
 

@@ -102,7 +102,7 @@ A backup that leaves out types never ages out the only copy of those types. See 
 
 The **Backup Progress** dialog shows:
 
-* a progress bar with the current step, for example "Reading Intune configuration..." or "Backing up" a type, and the result when the backup ends
+* a progress bar with the current step, for example "Reading configuration..." or "Backing up" a type, and the result when the backup ends
 * **Policies saved** (**Saved so far** while it runs), **Types backed up** and **Duration**
 * **Needs attention**, when a type could not be read or was left out, or some objects could not be saved. When the backup has ended, the first line says **Coverage incomplete** with how many of the selected types were not read in full (see [Coverage](#coverage)).
 * each type that was backed up, with its count, the types that had nothing to back up, and the types that are not set up in this tenant
@@ -152,7 +152,8 @@ A backup ends with one of these results:
 | Result | Meaning |
 | --- | --- |
 | **Complete** | Every item of every included type was saved |
-| **Completed with warnings** | Some items or types could not be read. The rest was saved. The log and **Backup Details** list what is missing. |
+| **Completed with warnings** | The run recorded warnings, for example when it could not clean up older backups. See the log and **Backup Details** for details. |
+| **Finished** | The run ended with incomplete coverage or was made before coverage was recorded. Check Backup Details for what was read. |
 | **Failed** | No item could be saved, every selected type was left out so nothing could be read, or the backup stopped after it started saving, for example because the sign-in expired, Microsoft Graph stopped responding or the 30 minute deadline passed. It holds only the policies it saved and is never used as a complete backup. The timeline shows how it started, and retention removes it like any other backup once it is older than the retention period. |
 | **Cancelled** | You cancelled the backup after it started saving. It is shown in a neutral tone, because you stopped it on purpose. Like a failed backup, it holds only the policies it saved, is never used as a complete backup, and retention removes it once it is older than the retention period. On the Dashboard it counts in the backups in storage, but not as successful or failed and not in **Success Rate**, and it does not change **Tenant Health**. Backups cancelled with an earlier version, which recorded them as failed, are shown as cancelled too. |
 | **Incomplete** | The backup stopped and could not record its result, for example because TenuVault was closed or the storage could not be reached. It holds only part of the tenant. |
@@ -212,11 +213,11 @@ Click an entry to open its **Backup Details**:
 
 | Part | What it shows |
 | --- | --- |
-| Buttons | **View Changes** ([Compare backups](/backups/compare/)), **Download** ([export as ZIP](/backups/storage/#export-a-backup-as-a-zip-file)) and **Restore from this backup** ([Restore Intune policies](/restore/)) |
+| Buttons | **View Changes** ([Compare backups](/backups/compare/)), **Download** ([export as ZIP](/backups/storage/#export-a-backup-as-a-zip-file)) and **Restore from this backup** ([Restore supported configuration](/restore/)) |
 | Warnings | Why a backup is incomplete, how many items or types could not be read, and which types were left out for missing permissions. **Coverage incomplete** lists every selected type the backup does not hold in full. Backups made before version 0.6 do not record coverage and show the other lines only. |
 | Totals | **Items**, **Size**, **Duration** and **Changes since the previous backup** |
 | **Contents** | Item counts per area. Expand an area for counts per type, and to see how many of its types the backup did not include. Areas left out entirely show **Not included**. |
-| **About this backup** | **Status**, **Started** (how it started), **Included**, **Stored** and **Backup ID** |
+| **About this backup** | **Run status**, **Started** (how it started), **Included**, **Stored** and **Backup ID** |
 
 **Restore from this backup** is unavailable while a backup is running or when it holds no items.
 
@@ -250,4 +251,4 @@ If a tenant's plan does not include an action, TenuVault shows which plan does a
 * [Manual Intune exports or scheduled backups](https://www.tenuvault.com/compare/manual-intune-exports-vs-scheduled-backups): when exporting by hand is enough, on the product site
 * [What gets backed up](/backups/coverage/)
 * [Schedule backups](/backups/schedules/)
-* [Restore Intune policies](/restore/)
+* [Restore supported configuration](/restore/)

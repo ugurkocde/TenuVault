@@ -704,7 +704,7 @@ export class BackupEngine {
     }
 
     // List everything first so progress reflects the real amount of work.
-    job.progressMessage = types.some((type) => moduleForFolder(type.folder)?.module.id === "intune") ? "Reading Intune configuration..." : "Reading configuration..."
+    job.progressMessage = "Reading configuration..."
     const counts: Record<string, number> = Object.fromEntries(types.map((type) => [type.folder, 0]))
     const lists: Array<{ type: IntuneType; items: GraphItem[] } | null> = Array.from({ length: types.length }, () => null)
     // Types left out for a missing permission count as skipped, like a type whose read was denied.

@@ -379,7 +379,7 @@ describe("Any combination of services for a tenant", () => {
     settings.set(TENANT, "conditionalAccess", true)
     await run()
     // The first requests list the types; later ones save objects under their own step.
-    expect(seen[0]).toBe("Reading Intune configuration...")
+    expect(seen[0]).toBe("Reading configuration...")
     seen.length = 0
     settings.set(TENANT, "intune", false)
     await run()
