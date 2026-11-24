@@ -417,7 +417,7 @@ describe("Entra 5b review regressions", () => {
     const answer = refusal(403, "AADB2C", "requires feature: 'EnableMsGraphAuthenticationEventListener'")
     for (const [path, routes, expected] of [
       [type.path, { [`/v1.0/${type.path}`]: answer }, "license"],
-      [type.path, { [`/v1.0/${type.path}`]: { value: [{ id: "a" }] }, [`/v1.0/${type.path}/a`]: answer }, "permission"],
+      [type.path, { [`/v1.0/${type.path}`]: { value: [{ id: "a" }] }, [`/v1.0/${type.path}/a`]: answer }, "failed"],
       [typeOf(folders[0]!).path, { ["/v1.0/" + decodeURIComponent(typeOf(folders[0]!).listSource!.path)]: answer }, "permission"],
       [type.path, { [`/v1.0/${type.path}`]: refusal(403, "Forbidden", "requires feature: 'EnableMsGraphAuthenticationEventListener'") }, "permission"],
       [type.path, { [`/v1.0/${type.path}`]: refusal(403, "AADB2C", "Access denied") }, "permission"],
@@ -425,7 +425,7 @@ describe("Entra 5b review regressions", () => {
       const folder = TYPES.find(type => type.path === path)!.folder
       const setup = fixture(scriptedGraph(routes))
       const job = await setup.run({ scope: only(folder) })
-      expect(job.outcomes?.types[0]).toMatchObject({ outcome: "skipped", cause: expected })
+      expect(job.outcomes?.types[0]).toMatchObject(expected === "failed" ? { outcome: "failed", status: 403 } : { outcome: "skipped", cause: expected })
     }
   })
 })

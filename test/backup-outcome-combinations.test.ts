@@ -122,9 +122,9 @@ const ROWS: Row[] = [
     manifest: { Status: "Success", Failures: 0, SkippedTypes: [], FailedTypes: [], Coverage: "Complete" }, outcome: ["FederatedTokenValidationPolicy", "notConfigured"], oldBackup: "removed", scheduler: "Completed", notification: "Success", importHere: true, importRelease: true },
   { name: "new service: a type left out for a permission (401 HTML page)", services: ALL, routes: { "/beta/policies/tokenLifetimePolicies": () => new Response("<html>401</html>", { status: 401 }) },
     manifest: { Status: "Success", Failures: 0, SkippedTypes: ["TokenLifetimePolicies"], FailedTypes: [], Coverage: "Incomplete" }, outcome: ["TokenLifetimePolicies", "skipped", "permission"], oldBackup: "kept", scheduler: "Completed", notification: "Success", importHere: true, importRelease: true },
-  { name: "new service: a type left out for the account's role", services: ALL, routes: { "/beta/policies/tokenLifetimePolicies": refusal(403, "Authorization_RequestDenied", "Insufficient privileges to complete the operation.") },
+  { name: "new service: a granted type refused for the account's role", services: ALL, routes: { "/beta/policies/tokenLifetimePolicies": refusal(403, "Authorization_RequestDenied", "Insufficient privileges to complete the operation.") },
     deps: { getToken: async () => jwt({ scp: "DeviceManagementConfiguration.Read.All DeviceManagementScripts.Read.All Policy.Read.All SecurityIdentitiesSensors.Read.All" }) },
-    manifest: { Status: "Success", Failures: 0, SkippedTypes: ["TokenLifetimePolicies"], FailedTypes: [], Coverage: "Incomplete" }, outcome: ["TokenLifetimePolicies", "skipped", "role"], oldBackup: "kept", scheduler: "Completed", notification: "Success", importHere: true, importRelease: true },
+    manifest: { Status: "CompletedWithWarnings", Failures: 1, SkippedTypes: [], FailedTypes: ["TokenLifetimePolicies"], Coverage: "Incomplete" }, outcome: ["TokenLifetimePolicies", "failed"], oldBackup: "kept", scheduler: "Failed", notification: "CompletedWithWarnings", importHere: INCOMPLETE, importRelease: INCOMPLETE },
   { name: "new service: a type left out because the token lacks its permission", services: ALL, deps: { getToken: async () => jwt({ scp: "DeviceManagementConfiguration.Read.All Policy.Read.All" }) },
     manifest: { Status: "Success", Failures: 0, SkippedTypes: ["DefenderIdentitySensors"], FailedTypes: [], Coverage: "Incomplete" }, outcome: ["DefenderIdentitySensors", "skipped", "permission"], oldBackup: "kept", scheduler: "Completed", notification: "Success", importHere: true, importRelease: true },
   { name: "new service: a type left out for a missing license or onboarding", services: ALL, routes: { "/beta/security/identities/sensors": refusal(403, "Forbidden", "Tenant is not onboarded to Microsoft Defender for Identity.") },
@@ -255,7 +255,7 @@ describe("every outcome combination against what reads a backup's result", () =>
 
   it("names every outcome and every cause at least once", () => {
     const seen = new Set(ROWS.flatMap((row) => (row.outcome ? [row.outcome[1], ...(row.outcome[2] ? [row.outcome[2]] : [])] : [])))
-    expect([...seen].sort()).toEqual(["failed", "license", "notConfigured", "permission", "role", "saved", "signedIn", "skipped"])
+    expect([...seen].sort()).toEqual(["failed", "license", "notConfigured", "permission", "saved", "signedIn", "skipped"])
     expect(new Set(ROWS.map((row) => row.manifest.Status))).toEqual(new Set(["Success", "CompletedWithWarnings", "Failed"]))
   })
 })
@@ -278,11 +278,12 @@ describe("a backup that read nothing", () => {
     expect(notifiedStatus(job)).toBe("Failed")
   })
 
-  it("names the Backup Reader when its run was left out of everything it selected", async () => {
+  it("fails a run when the Backup Reader is refused on its only granted type", async () => {
     const setup = fixture(tenant({ "/beta/security/identities/sensors": refusal(403, "Forbidden", "Missing application roles. API required roles: SecurityIdentitiesSensors.Read.All.") }), { services: () => ({ services: ["defender"] }), ...reader(["SecurityIdentitiesSensors.Read.All"]) })
     const job = await setup.run({ trigger: "scheduled" })
     expect(job.status).toBe("Failed")
-    expect(job.exception).toBe("Nothing could be read. The selected type was left out because the Backup Reader may lack the permission or its admin consent. Services and permissions in Settings shows what is missing.")
+    expect(job.outcomes?.types).toMatchObject([{ outcome: "failed", status: 403 }])
+    expect(job.progressMessage).toBe("Backup failed: no policies could be saved")
     // Not a problem with the reader's certificate, which a retry could not fix.
     expect(job.credentialError).toBeUndefined()
   })
@@ -317,9 +318,9 @@ describe("Intune policy set coverage", () => {
     }), { services: () => ({ services: INTUNE }) })
     const job = await setup.run()
     expect(job.status).toBe("Completed")
-    expect(job.outcomes?.types.find((entry) => entry.folder === "PolicySets")).toMatchObject({ outcome: "skipped", cause: "permission", status: 403 })
+    expect(job.outcomes?.types.find((entry) => entry.folder === "PolicySets")).toMatchObject({ outcome: "failed", status: 403 })
     const { notReadReasons } = manifestCoverage(await setup.manifest(job))
-    expect(notReadReasons?.PolicySets).toContain("may lack DeviceManagementConfiguration.Read.All or DeviceManagementConfiguration.ReadWrite.All, or admin consent for one of them")
+    expect(notReadReasons?.PolicySets).toContain("HTTP 403")
     expect(notReadReasons?.PolicySets).not.toContain("Insufficient privileges to complete the operation")
   })
 

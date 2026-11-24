@@ -425,9 +425,9 @@ describe("a type the tenant never set up", () => {
     }), { concurrency: 1 })
     const job = await run()
     expect(await files(job)).toContain("HomeRealmDiscoveryPolicies/First.json")
-    expect(outcome(job, "HomeRealmDiscoveryPolicies")).toMatchObject({ outcome: "skipped", cause: "permission", saved: 1 })
-    expect(job.results!.types.find((type) => type.folder === "HomeRealmDiscoveryPolicies")).toMatchObject({ state: "skipped", saved: 1 })
-    expect(await manifest(job)).toMatchObject({ SkippedTypes: ["HomeRealmDiscoveryPolicies"], Coverage: "Incomplete" })
+    expect(outcome(job, "HomeRealmDiscoveryPolicies")).toMatchObject({ outcome: "failed", saved: 1 })
+    expect(job.results!.types.find((type) => type.folder === "HomeRealmDiscoveryPolicies")).toMatchObject({ state: "unreadable", saved: 1 })
+    expect(await manifest(job)).toMatchObject({ FailedTypes: ["HomeRealmDiscoveryPolicies"], Coverage: "Incomplete" })
     // The list answering that way is the type's own answer.
     const unset = fixture(graph({ "/beta/policies/homeRealmDiscoveryPolicies": refusal(403, "Forbidden", "The feature is not enabled.") }))
     expect(outcome(await unset.run(), "HomeRealmDiscoveryPolicies")).toMatchObject({ outcome: "notConfigured" })

@@ -633,7 +633,8 @@ export class BackupEngine {
         const known = settled.get(entry.folder)
         const base = { folder: entry.folder, service: moduleForFolder(entry.folder)?.module.id ?? null }
         // A failed object takes precedence over an optional sub-read refusal on another object.
-        if (entry.failed > 0) return { ...base, outcome: "failed", error: `${entry.failed} of ${entry.found ?? entry.saved + entry.failed} could not be saved. ${entry.errors?.[0] ?? ""}`.trim(), saved: entry.saved }
+        if (entry.failed > 0) return { ...base, outcome: "failed",
+          ...(known?.outcome === "failed" ? { status: known.status, code: known.code } : {}), error: `${entry.failed} of ${entry.found ?? entry.saved + entry.failed} could not be saved. ${entry.errors?.[0] ?? ""}`.trim(), saved: entry.saved }
         // Objects saved before the type ended stay in the backup, so the outcome names how many.
         if (known?.outcome === "failed") return { ...known, saved: entry.saved }
         if (known?.outcome === "skipped") return entry.saved ? { ...known, saved: entry.saved } : known
@@ -700,7 +701,7 @@ export class BackupEngine {
       const module = moduleForFolder(type.folder)?.module
       const id = module?.id ?? "intune"
       let session = sessions.get(id)
-      if (!session) sessions.set(id, (session = new GraphSession(fetchImpl, graphToken, network, { service: id, isolated: module?.isolated, grantForToken: startNow ? readGrant : undefined })))
+      if (!session) sessions.set(id, (session = new GraphSession(fetchImpl, graphToken, network, { service: id, isolated: module?.isolated, grantForToken: readGrant, requireGrantEvidence: startNow })))
       return { id, module, isolated: module?.isolated === true, session }
     }
     const typeBudgets = new Map<string, ReturnType<typeof typeReadBudget>>()
@@ -753,37 +754,30 @@ export class BackupEngine {
      */
     const notSetUp = (type: IntuneType, error: unknown) =>
       error instanceof GraphError && !error.continuationPage && !!type.notConfigured && classifyAnswer({ status: error.status, ...error.answer }, { notConfigured: type.notConfigured, mode: tokens.mode }).outcome === "notConfigured"
-    const coveredIntuneDenied = (type: IntuneType, error: unknown) =>
-      !startNow && checkIntune(type.folder) && granted?.kind === "delegated" && canBackUp(type.folder, granted) &&
-      error instanceof GraphError && error.status === 403
-    // A denial with a known Intune grant is a failure. Preserve the fallback when the grant is unknown.
+    const grantForRead = (error: GraphError) => error.grant ?? (startNow ? undefined : granted)
+    const grantedReadDenied = (type: IntuneType, error: unknown) => {
+      if (!(error instanceof GraphError) || error.status !== 403) return false
+      const grant = grantForRead(error)
+      return !!grant && canBackUp(type.folder, grant)
+    }
     const checkedReadDenied = (type: IntuneType, error: unknown) =>
-      !coveredIntuneDenied(type, error) && error instanceof GraphError && ((error.status === 403 && (startNow || moduleForFolder(type.folder)?.part.backupPrecheck === true)) || (startNow && error.status === 400))
-    /**
-     * Ends a type of a service that isolates its failures, by what the failed read means: the sign-in
-     * may not read it, or it could not be read. The backup goes on with the other types. A read that
-     * fails after an earlier one ended the type changes nothing.
-     */
+      error instanceof GraphError && ((error.status === 403 && (startNow || grantedReadDenied(type, error) || moduleForFolder(type.folder)?.part.backupPrecheck === true)) || (startNow && error.status === 400))
     const scopeEvidence = (error: unknown) => ({ mode: tokens.mode, grantUnknown: startNow && !(error instanceof GraphError && error.grant) })
-    const endType = (type: IntuneType, error: unknown, ownList = false): void => {
+    // An access refusal can explain why a type was left out. Once its read has started,
+    // or the request used a known grant, an incomplete capture must count as a failure.
+    const maySkipRead = (type: IntuneType, error: unknown, beforeCapture: boolean) =>
+      beforeCapture && !(error instanceof GraphError && error.continuationPage) && !grantedReadDenied(type, error)
+    const endType = (type: IntuneType, error: unknown, beforeCapture = false, ownList = beforeCapture): void => {
       if (endedTypes.has(type.folder)) return
       endedTypes.add(type.folder)
       const { module } = serviceOf(type)
       const answer = error instanceof GraphError ? { status: error.status, ...error.answer } : null
-      const refusedGrant = startNow && error instanceof GraphError ? error.grant : granted
+      const refusedGrant = error instanceof GraphError ? grantForRead(error) : granted
       const verdict = answer ? classifyAnswer(answer, { ...scopeEvidence(error), held: refusedGrant ? canBackUp(type.folder, refusedGrant) : undefined, ...(type.unavailable !== undefined ? { unavailable: ownList ? type.unavailable : [] } : {}) }) : { outcome: "failed" as const }
       const code = providerErrorCode(answer?.code)
       const evidence = answer ? { status: answer.status, ...(code ? { code } : {}) } : {}
       const entry = result(type.folder)
-      if (error instanceof LargeStorageError) {
-        const reason = error.message
-        skippedTypes.push(type.folder)
-        Object.assign(entry, { state: "skipped", reason })
-        settle(type.folder, { outcome: "skipped", cause: "storage", reason, ...(error.status ? { status: error.status } : {}) })
-        this.write(job, `Skipped ${type.label}: ${reason}`, "warning")
-        return
-      }
-      if (verdict.outcome === "skipped") {
+      if (verdict.outcome === "skipped" && maySkipRead(type, error, beforeCapture)) {
         const needed = type.folder === "PolicySets" && !refusedGrant ? backupNeed(type.folder, signIn) : undefined
         const permission = needed && needed !== "unsupported" ? describeRequirement(needed) : undefined
         const reason = startNow && verdict.cause === "permission"
@@ -799,10 +793,12 @@ export class BackupEngine {
       recordFailure(outcome, error)
       failures++
       failedTypes.push(type.folder)
-      const reason = error instanceof Error ? error.message : String(error)
+      const reason = verdict.outcome === "skipped" && verdict.cause === "role"
+        ? `${error instanceof Error ? error.message : String(error)} ${skipReason("role", { service: module?.label ?? "this service", roles: module?.roles, mode: tokens.mode, settingsPage: SERVICES_PAGE })}`
+        : error instanceof Error ? error.message : String(error)
       Object.assign(entry, { state: "unreadable", reason })
       settle(type.folder, { outcome: "failed", error: reason, ...evidence })
-      this.write(job, `Could not read ${type.label}: ${reason}`)
+      this.write(job, `Could not read ${type.label}${answer ? ` (${providerStatus(answer.status, code)})` : ""}: ${reason}`)
     }
     const discoveries = new Map<string, Promise<Item[]>>()
     await pool(types.map((type, index) => ({ type, index })).filter(({ type }) => type.volume !== "large"), concurrency, async ({ type, index }) => {
@@ -854,7 +850,7 @@ export class BackupEngine {
         }
         // A sign-in that failed fails every read of the run, and a run that was stopped is over: both still end the backup.
         if ((service.isolated || checkedReadDenied(type, error)) && !signInEnded(error) && !network.signal.aborted) {
-          endType(type, error, !resolverFailed)
+          endType(type, error, true, !resolverFailed)
           return
         }
         if (service.isolated) {
@@ -866,7 +862,7 @@ export class BackupEngine {
         // Access denied: the app registration lacks the permission or its admin consent (for example
         // one created before the type was supported), or the admin's Intune role does not cover the
         // type. It is left out and reported, without marking the backup incomplete for the rest.
-        const denied = error instanceof GraphError && error.status === 403 && !ORIGINAL_FOLDERS.has(type.folder) && !coveredIntuneDenied(type, error)
+        const denied = error instanceof GraphError && error.status === 403 && !ORIGINAL_FOLDERS.has(type.folder) && !error.continuationPage && !grantedReadDenied(type, error)
         // Counted before any rethrow, so the job sees this cause whichever failure ends it.
         if (!denied) recordFailure(outcome, error)
         network.signal.throwIfAborted()
@@ -1036,18 +1032,12 @@ export class BackupEngine {
           const code = providerErrorCode(answer?.code)
           const detail = answer ? ` (${providerStatus(answer.status, code)})` : ""
           const reason = `${type.label}${detail}: ${property} could not be read; the parent configuration was kept.`
-          const verdict = answer && !coveredIntuneDenied(type, error) ? classifyAnswer(answer, scopeEvidence(error)) : { outcome: "failed" as const }
-          if (verdict.outcome === "skipped") {
-            if (!skippedTypes.includes(type.folder)) skippedTypes.push(type.folder)
-            settle(type.folder, { outcome: "skipped", cause: verdict.cause, reason, status: answer?.status, ...(code ? { code } : {}) })
-            Object.assign(result(type.folder), { state: "skipped", reason })
-          } else {
-            recordFailure(outcome, error)
-            failures++
-            const entry = result(type.folder)
-            entry.failed++
-            if ((entry.errors ??= []).length < MAX_ITEM_ERRORS) entry.errors.push(reason)
-          }
+          recordFailure(outcome, error)
+          failures++
+          const entry = result(type.folder)
+          entry.failed++
+          settle(type.folder, { outcome: "failed", error: reason, status: answer?.status, code })
+          if ((entry.errors ??= []).length < MAX_ITEM_ERRORS) entry.errors.push(reason)
           this.write(job, reason, "warning")
         }
       } catch (caught) {
@@ -1055,9 +1045,8 @@ export class BackupEngine {
         const error = recoveryFailed || caught instanceof OrganizationResolutionError || caught instanceof ScopeDiscoveryError ? caught.cause : caught
         // A delegated profile detail or sub-read can fail after listing and reading other profiles.
         // Keep trying their details when the token has the read scope, and report any missing item.
-        const profileDenied = startNow && type.folder === "DeviceConfigurations" && error instanceof GraphError &&
-          error.status === 403 && error.grant && canBackUp(type.folder, error.grant)
-        if (!profileDenied && (service.isolated || checkedReadDenied(type, error)) && !signInEnded(error) && !network.signal.aborted) {
+        const readDenied = grantedReadDenied(type, error)
+        if (!readDenied && (service.isolated || checkedReadDenied(type, error)) && !signInEnded(error) && !network.signal.aborted) {
           // A refusal, a pause longer than the bound or a request without an answer holds for every object of the type: the type ends, the backup goes on.
           const refused = error instanceof GraphError && classifyAnswer({ status: error.status, ...error.answer }, scopeEvidence(error)).outcome === "skipped"
           if (refused || error instanceof ReadBudgetError || error instanceof RetryDelayError || error instanceof GraphUnansweredError || endedTypes.has(type.folder)) {
@@ -1069,7 +1058,7 @@ export class BackupEngine {
         // Counted before any rethrow, so the job sees this cause whichever failure ends it.
         recordFailure(outcome, error)
         network.signal.throwIfAborted()
-        if (!profileDenied && !service.isolated) countAuthFailure(error, service.id)
+        if (!(startNow && readDenied) && !service.isolated) countAuthFailure(error, service.id)
         // An expired sign-in fails every remaining item the same way, so it stops the backup once.
         if (signInEnded(error) || (!service.isolated && error instanceof GraphError && error.status === 401)) throw error
         failures++
@@ -1183,7 +1172,7 @@ export class BackupEngine {
           : error instanceof GraphError ? new GraphError("The directory collection could not be read in full.", error.status, {}, error.grant)
           : new Error("The directory collection could not be read in full.")
         // Even a refused continuation is incomplete, never a saved prefix of the collection.
-        endType(type, safeError)
+        endType(type, safeError, entry.saved === 0 && error instanceof GraphError && !error.continuationPage)
       } finally { clearTimeout(typeTimer) }
     }
 
@@ -1200,16 +1189,11 @@ export class BackupEngine {
         // Without their inventory the uploaded snapshots cannot be opened, so none of them counts as saved,
         // in the run's totals or in each type's own result.
         for (const type of largeTypes) { counts[type.folder] = 0; result(type.folder).saved = 0 }
-        // Storage that refuses the large container (403 or 404) needs provisioning: like a refused claim,
-        // the large types are skipped with that guidance and the ordinary backup stands.
-        if (error instanceof LargeStorageError && (error.status === 403 || error.status === 404)) {
-          for (const type of largeTypes) if (settled.get(type.folder)?.outcome !== "failed") endType(type, error)
-        }
-        // Any other failure, such as a server error or an unanswered commit, leaves snapshots whose
-        // inventory may not exist. That is a failure of each type that was read, so the run and its
-        // audit report warnings, never success.
+        // The snapshots are unusable without their committed inventory, including when
+        // storage refuses the write or the large container is missing.
         const signInRequired = error instanceof TokenError && causedBy(error, "SignInRequiredError")
-        const reason = signInRequired ? error.message : "The directory inventory could not be saved to large backup storage."
+        const storageRefused = error instanceof LargeStorageError && (error.status === 403 || error.status === 404)
+        const reason = signInRequired || storageRefused ? error.message : "The directory inventory could not be saved to large backup storage."
         for (const type of largeTypes) {
           if (endedTypes.has(type.folder) || settled.get(type.folder)?.outcome === "failed") continue
           endedTypes.add(type.folder)

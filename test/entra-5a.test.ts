@@ -253,7 +253,7 @@ describe("Entra backup integration", () => {
     expect(job.outcomes?.coverage).toBe("incomplete")
     const evidence = "HTTP 403, Authorization_RequestDenied"
     expect(job.log.join("\n")).toContain(`Domains (${evidence}): federationConfiguration could not be read; the parent configuration was kept.`)
-    expect(job.outcomes?.types).toEqual([expect.objectContaining({ folder: "Domains", outcome: "skipped", cause: "permission", saved: 2, status: 403, code: "Authorization_RequestDenied" })])
+    expect(job.outcomes?.types).toEqual([expect.objectContaining({ folder: "Domains", outcome: "failed", saved: 2, status: 403, code: "Authorization_RequestDenied" })])
     const objects = (await setup.files(job)).filter(file => file.startsWith("Domains/"))
     expect(objects).toHaveLength(2)
     for (const file of objects) {
@@ -262,8 +262,8 @@ describe("Entra backup integration", () => {
       expect(saved).not.toHaveProperty("federationConfiguration")
     }
     const manifest = await setup.manifest(job)
-    expect(manifest.SkippedTypes).toContain("Domains")
-    expect(manifest.Outcomes[0]).toMatchObject({ Status: 403, Code: "Authorization_RequestDenied", Reason: expect.stringContaining(evidence) })
+    expect(manifest.Failures).toBe(2)
+    expect(manifest.Outcomes[0]).toMatchObject({ Status: 403, Code: "Authorization_RequestDenied", Error: expect.stringContaining(evidence) })
   })
 
   for (const authenticationType of ["Managed", "Federated", undefined]) it(`treats a federation 404 as empty only for a managed domain (${authenticationType ?? "unknown"})`, async () => {
@@ -343,7 +343,7 @@ describe("Entra backup integration", () => {
       "/v1.0/organization/example/certificateBasedAuthConfiguration": { value: [{ id: "certificate-config" }] },
     }))
     const job = await setup.run({ scope: only("CertificateBasedAuthConfigurations") })
-    expect(job.outcomes).toMatchObject({ coverage: "incomplete", types: [{ outcome: "skipped", cause: "permission" }] })
+    expect(job.outcomes).toMatchObject({ coverage: "incomplete", types: [{ outcome: "failed", status: 403 }] })
     expect(setup.requests.map(request => request.path)).not.toContain("/v1.0/organization/example/certificateBasedAuthConfiguration/certificate-config")
   })
 

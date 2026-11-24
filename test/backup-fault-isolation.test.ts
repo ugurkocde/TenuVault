@@ -1,3 +1,4 @@
+import { notifiedStatus, scheduledResult } from "../src/main/backup/scheduler"
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest"
 import { CONSECUTIVE_AUTH_FAILURE_LIMIT, NetworkCircuit } from "../src/main/backup/engine"
 import { GraphSession } from "../src/main/backup/graph-session"
@@ -119,9 +120,9 @@ describe("a failing Entra ID or Defender endpoint", () => {
     const subReads = requests.filter((request) => request.path.includes("/members")).length
     expect(subReads).toBeGreaterThan(0)
     expect(subReads).toBeLessThanOrEqual(8)
-    expect(outcomeOf(job, "AdministrativeUnits")).toMatchObject({ outcome: "skipped", cause: "permission", status: 403, code: "Authorization_RequestDenied" })
-    expect(job.results!.types.find((type) => type.folder === "AdministrativeUnits")).toMatchObject({ state: "skipped", saved: 0, failed: 0 })
-    expect(await manifest(job)).toMatchObject({ Status: "Success", Failures: 0, SkippedTypes: ["AdministrativeUnits"], Coverage: "Incomplete" })
+    expect(outcomeOf(job, "AdministrativeUnits")).toMatchObject({ outcome: "failed", status: 403, code: "Authorization_RequestDenied" })
+    expect(job.results!.types.find((type) => type.folder === "AdministrativeUnits")).toMatchObject({ state: "unreadable", saved: 0 })
+    expect(await manifest(job)).toMatchObject({ Status: "CompletedWithWarnings", Failures: 1, FailedTypes: ["AdministrativeUnits"], Coverage: "Incomplete" })
   })
 
   it("ends its type on a 429 with a ten minute Retry-After, without waiting and without stopping the service's other types", async () => {
@@ -154,12 +155,12 @@ describe("a failing Entra ID or Defender endpoint", () => {
     const { run, files, manifest } = fixture(tenant({ "/beta/directory/administrativeUnits/au3/members?$select=id": refusal(403, "Forbidden", "Access denied.") }), { concurrency: 1 })
     const job = await run()
     expect((await files(job)).filter((name) => name.startsWith("AdministrativeUnits/")).sort()).toEqual(["AdministrativeUnits/Unit 1.json", "AdministrativeUnits/Unit 2.json"])
-    expect(outcomeOf(job, "AdministrativeUnits")).toMatchObject({ outcome: "skipped", saved: 2 })
+    expect(outcomeOf(job, "AdministrativeUnits")).toMatchObject({ outcome: "failed", saved: 2 })
     const metadata = await manifest(job)
     // The manifest lists what is stored, and marks the folder as not covered.
     expect(metadata.ItemCounts.AdministrativeUnits).toBe(2)
-    expect(metadata.SkippedTypes).toEqual(["AdministrativeUnits"])
-    expect(metadata.Outcomes.find((entry: { Folder: string }) => entry.Folder === "AdministrativeUnits")).toMatchObject({ Outcome: "skipped", Saved: 2 })
+    expect(metadata.FailedTypes).toEqual(["AdministrativeUnits"])
+    expect(metadata.Outcomes.find((entry: { Folder: string }) => entry.Folder === "AdministrativeUnits")).toMatchObject({ Outcome: "failed", Saved: 2 })
   })
 
   it("counts an object that could not be read for another reason as a failure, and goes on with the type", async () => {
@@ -192,7 +193,7 @@ describe("a failing Entra ID or Defender endpoint", () => {
     const job = await run()
     const metadata = await manifest(job)
     expect(JSON.stringify({ job, metadata })).not.toContain(account)
-    expect(outcomeOf(job, "DefenderCustomDetectionRules")).toMatchObject({ outcome: "skipped", cause: "role", status: 403, code: "Forbidden" })
+    expect(outcomeOf(job, "DefenderCustomDetectionRules")).toMatchObject({ outcome: "failed", status: 403, code: "Forbidden" })
     expect(job.results!.types.find((type) => type.folder === "DefenderCustomDetectionRules")!.reason).toContain("Your account may not have a role that can read Defender")
     expect(job.log.join("\n")).toContain("HTTP 403, Forbidden")
   })
@@ -444,7 +445,7 @@ describe("a sign-in that ended during a backup", () => {
       ["/beta/directory/administrativeUnits/au1/members?$select=id", "Bearer fresh"],
     ])
     expect(asked.filter(Boolean)).toHaveLength(1)
-    expect(outcomeOf(job, "AdministrativeUnits")).toMatchObject({ outcome: "skipped", cause: "permission", status: 401 })
+    expect(outcomeOf(job, "AdministrativeUnits")).toMatchObject({ outcome: "failed", status: 401 })
     await intuneSaved(await files(job))
   })
 
@@ -584,6 +585,16 @@ describe("auth failure and throttle state per service", () => {
 describe("Start now backup evidence", () => {
   const clientId = GRAPH_CLI_CLIENT_ID
 
+  it("reports an access-only skip as success in the manifest, schedule and outcome notification", async () => {
+    const f = fixture(tenant(), { graphCliGrant: () => new Set(["DeviceManagementConfiguration.Read.All"]) })
+    const job = await f.run({ clientId, trigger: "scheduled" })
+    expect(f.requests.some(request => request.path.startsWith("/beta/security/"))).toBe(false)
+    expect(outcomeOf(job, "DefenderCustomDetectionRules")).toMatchObject({ outcome: "skipped", cause: "permission" })
+    expect(await f.manifest(job)).toMatchObject({ Status: "Success", Failures: 0, Coverage: "Incomplete" })
+    expect(scheduledResult(job).status).toBe("Completed")
+    expect(notifiedStatus(job)).toBe("Success")
+  })
+
   it("continues reading device profiles after a detail is refused with the read scope", async () => {
     const path = "/beta/deviceManagement/deviceConfigurations"
     const f = fixture(tenant({
@@ -634,14 +645,16 @@ describe("Start now backup evidence", () => {
   })
 
   it.each([
-    [403, "Insufficient privileges", "role"],
-    [400, "Intune is not licensed", "license"],
-  ])("records Intune HTTP %s as a %s refusal with a verified scope", async (status, detail, cause) => {
+    [403, "Insufficient privileges", { outcome: "failed" }],
+    [400, "Intune is not licensed", { outcome: "skipped", cause: "license" }],
+  ])("classifies Intune HTTP %s with a verified scope", async (status, detail, expected) => {
     const f = fixture(tenant({ "/beta/deviceManagement/deviceCompliancePolicies": refusal(status, "Forbidden", detail) }), {
       graphCliGrant: () => new Set(["DeviceManagementConfiguration.ReadWrite.All"]),
     })
     const job = await f.run({ clientId })
-    expect(outcomeOf(job, "CompliancePolicies")).toMatchObject({ outcome: "skipped", status, cause })
+    expect(outcomeOf(job, "CompliancePolicies")).toMatchObject({ ...expected, status })
+    expect(scheduledResult(job).status).toBe(status === 403 ? "Failed" : "Completed")
+    expect(notifiedStatus(job)).toBe(status === 403 ? "CompletedWithWarnings" : "Success")
     expect(job.coverage).toBe("incomplete")
   })
 

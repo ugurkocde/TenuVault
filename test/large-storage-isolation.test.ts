@@ -1,3 +1,4 @@
+import { notifiedStatus, scheduledResult } from "../src/main/backup/scheduler"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -69,7 +70,7 @@ for (const azure of [false, true]) describe(azure ? "Azure emulator isolation" :
   if (azure) it.each([
     [403, "AuthenticationFailed", "Sign in again to this tenant."],
     [404, "BlobNotFound", "Check the configured container or backup location."],
-  ])("preserves HTTP %i %s guidance when large storage is skipped", async (status, code, guidance) => {
+  ])("preserves HTTP %i %s guidance when large storage fails", async (status, code, guidance) => {
     undo = registerTestTypes([largeType])
     const f = await setup()
     f.refuse(status, "all", code)
@@ -78,7 +79,7 @@ for (const azure of [false, true]) describe(azure ? "Azure emulator isolation" :
     expect(job.status, job.exception).toBe("Completed")
     expect(job.log.join("\n")).toContain(`HTTP ${status}, ${code}`)
     expect(job.log.join("\n")).toContain(guidance)
-    expect(await f.read(job.backupFolder!)).toMatchObject({ Status: "Success", LargeBackupOutcomes: [{ Outcome: "skipped", Reason: expect.stringContaining(guidance) }] })
+    expect(await f.read(job.backupFolder!)).toMatchObject({ Status: "Success", RunStatus: "CompletedWithWarnings", LargeBackupOutcomes: [{ Outcome: "failed", Error: expect.stringContaining(guidance) }] })
   })
   if (azure) it.each(["large storage", "directory read"])("keeps sign-in guidance when delegated sign-in ends during %s", async phase => {
     undo = registerTestTypes([largeType])
@@ -151,8 +152,11 @@ for (const azure of [false, true]) describe(azure ? "Azure emulator isolation" :
     const metadata = await f.read(job.backupFolder!)
     expect(metadata).toMatchObject({ Status: "Success", Coverage: "Complete", ItemCounts: { DeviceCategories: 2, TotalPolicies: 2 }, Scope: { Included: ["DeviceCategories"] } })
     expect(metadata).not.toHaveProperty("LargeItems")
-    expect(metadata.LargeBackupOutcomes).toMatchObject([{ Folder: "AuthorizationPolicy", Outcome: "skipped", Cause: "storage", Reason: expect.stringContaining("Storage not provisioned for large backups") }])
-    expect(job.outcomes?.types.find(type => type.folder === "AuthorizationPolicy")).toMatchObject({ outcome: "skipped", cause: "storage", reason: expect.stringContaining("New-TenuVaultStorage.ps1 -BackupReaderAppId") })
+    expect(metadata.RunStatus).toBe("CompletedWithWarnings")
+    expect(scheduledResult(job).status).toBe("Failed")
+    expect(notifiedStatus(job)).toBe("CompletedWithWarnings")
+    expect(metadata.LargeBackupOutcomes).toMatchObject([{ Folder: "AuthorizationPolicy", Outcome: "failed", Error: expect.stringContaining("Storage not provisioned for large backups") }])
+    expect(job.outcomes?.types.find(type => type.folder === "AuthorizationPolicy")).toMatchObject({ outcome: "failed", error: expect.stringContaining("New-TenuVaultStorage.ps1 -BackupReaderAppId") })
     expect(job.log.join("\n")).not.toContain("Storage Blob Data Contributor")
     expect(runObservation(job.outcomes!).refused.some(type => type.folder === "AuthorizationPolicy")).toBe(false)
     expect((await contents(f.request({ backupId: job.backupFolder }))).status).toBe(200)

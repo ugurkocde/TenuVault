@@ -22,6 +22,7 @@ export interface GraphSessionOptions {
    * and unanswered requests count toward the job's circuit, as they always have.
    */
   isolated?: boolean
+  requireGrantEvidence?: boolean
   grantForToken?: (token: string) => GrantedPermissions | undefined
 }
 
@@ -130,7 +131,7 @@ export class GraphSession {
             /^\/beta\/security\/threatSubmission\/emailThreatSubmissionPolicies(?:\/[^/]+)?$/.test(new URL(url).pathname) &&
             /text\/html/i.test(response.headers.get("content-type") ?? "") &&
             /Access is denied due to invalid credentials/i.test(await response.clone().text())
-          throw await graphFailure(response, grant, this.options.grantForToken !== undefined && !grant)
+          throw await graphFailure(response, grant, this.options.requireGrantEvidence === true && !grant)
         }, signal)
       } catch (error) {
         signal.throwIfAborted()

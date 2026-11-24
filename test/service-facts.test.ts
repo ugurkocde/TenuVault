@@ -200,17 +200,18 @@ describe("The backup engine reads precheck", () => {
     expect(metadata.SkippedTypes).toEqual(["PolicySets", "NamedLocations", "AuthenticationStrengths", "ConditionalAccessPolicies"])
   })
 
-  it("words a refused read by the same fact: the Intune role, or the roles of a pre-checked service", async () => {
+  it("fails a granted refusal regardless of whether the service prechecks its scopes", async () => {
     const denied = ["/beta/deviceAppManagement/mobileApps", "/beta/identity/conditionalAccess/policies"]
-    const real = await backup({ scopes: `Policy.Read.All ${INTUNE_WRITE}`, denied })
-    expect(real.reason("Apps")).toBe("Access was denied. The app registration may lack the permission or admin consent, or your Intune role may not allow it.")
-    expect(real.reason("ConditionalAccessPolicies")).toBe("Access was denied. The app registration may lack the permission or admin consent, or your account may not have a role that can read Entra Conditional Access (Security Reader or Global Reader to back up).")
-
+    const options = { scopes: `Policy.Read.All ${INTUNE_WRITE}`, denied }
+    const real = await backup(options)
     withFacts("intune", { precheck: true })
     withFacts("conditionalAccess", { precheck: false })
-    const flipped = await backup({ scopes: `Policy.Read.All ${INTUNE_WRITE}`, denied })
-    expect(flipped.reason("Apps")).toBe("Access was denied. The app registration may lack the permission or admin consent, or your account may not have a role that can read Intune (Intune Administrator, or an Intune role that covers the policies you back up and restore.).")
-    expect(flipped.reason("ConditionalAccessPolicies")).toBe("Access was denied. The app registration may lack the permission or admin consent, or your Entra Conditional Access role may not allow it.")
+    const flipped = await backup(options)
+    for (const result of [real, flipped]) {
+      expect(result.job.outcomes?.types).toEqual(expect.arrayContaining(
+        ["Apps", "ConditionalAccessPolicies"].map(folder => expect.objectContaining({ folder, outcome: "failed", status: 403 })),
+      ))
+    }
   })
 })
 
