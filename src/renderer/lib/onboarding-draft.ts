@@ -9,8 +9,8 @@ import { bridge } from "./bridge"
  * another administrator. Only identifiers are kept, never a token.
  */
 export interface OnboardingDraft {
-  /** -1 Services, 0 Connect, 1 Sign in, 2 Storage. The first backup step is never resumed. */
-  step: -1 | 0 | 1 | 2
+  /** The first backup and staged public sign-ins are never resumed. */
+  step: -2 | -1 | 0 | 1 | 2 | 4
   services?: PermissionChoice
   tenant: string
   clientId: string
@@ -58,7 +58,7 @@ export function loadOnboardingDraft(): OnboardingDraft | null {
     const raw = bridge.storage.getItemSync(KEY)
     if (!raw) return null
     const value = JSON.parse(raw) as Record<string, unknown>
-    let step: OnboardingDraft["step"] = value.step === -1 || value.step === 1 || value.step === 2 ? value.step : 0
+    let step: OnboardingDraft["step"] = value.step === -2 || value.step === -1 || value.step === 1 || value.step === 2 || value.step === 4 ? value.step : 0
     let services = DEFAULT_ONBOARDING_CHOICE
     if (Object.hasOwn(value, "services")) {
       try { services = checkedOnboardingChoice(value.services) } catch {
@@ -72,7 +72,7 @@ export function loadOnboardingDraft(): OnboardingDraft | null {
     if (reconfirm) step = -1
     const account = recentAccount(value)
     const draft: OnboardingDraft = {
-      step: step === 2 && !account ? 1 : step,
+      step: (step === 2 || step === 4) && !account ? 1 : step,
       tenant: text(value.tenant),
       clientId: text(value.clientId),
       displayName: text(value.displayName),

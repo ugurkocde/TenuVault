@@ -30,9 +30,10 @@ const PHASES: readonly SetupProgress["phase"][] = ["signingIn", "registration", 
  * through Microsoft Graph, with the reasons beside it and the other routes (another administrator,
  * the setup script, an existing app registration) below.
  */
-export function ConnectTenantSetup({ trials, onManual, onRegistered, onRunningChange, choice = DEFAULT_SETUP_CHOICE }: {
+export function ConnectTenantSetup({ trials, onManual, onRegistered, onRunningChange, choice = DEFAULT_SETUP_CHOICE, expectedTenant }: {
   /** Whether new tenants start with a Pro trial, announced before the setup starts. */
   choice?: PermissionChoice
+  expectedTenant?: string
   onRunningChange?: (running: boolean) => void
   trials: boolean
   /** Continue with IDs the admin already has, on the Sign in step. */
@@ -40,7 +41,7 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered, onRunningCh
   /** The app registration exists; the caller signs the admin in to it. */
   onRegistered: (result: RegistrationResult) => void
 }) {
-  const [tenant, setTenant] = useState("")
+  const [tenant, setTenant] = useState(expectedTenant ?? "")
   const [running, setRunning] = useState(false)
   const [phase, setPhase] = useState<SetupProgress["phase"]>("signingIn")
   const [reused, setReused] = useState(false)
@@ -293,7 +294,7 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered, onRunningCh
                 name="setup-tenant"
                 placeholder="contoso.onmicrosoft.com"
                 value={tenant}
-                onChange={(event) => setTenant(event.target.value)}
+                readOnly={Boolean(expectedTenant)} onChange={(event) => setTenant(event.target.value)}
                 disabled={running}
                 spellCheck={false}
                 autoComplete="off"

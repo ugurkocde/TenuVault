@@ -7,7 +7,7 @@ import { HashRouter, Navigate, Outlet, Route, Routes, useLocation } from "react-
 import { BackupProgressProvider } from "~/contexts/BackupProgressContext"
 import { TenantProvider } from "~/contexts/TenantContext"
 import { queryClient } from "~/lib/query-client"
-import { useTenants } from "~/contexts/TenantContext"
+import { useTenants, useTenantsLoaded } from "~/contexts/TenantContext"
 import { Button } from "~/components/ui/button"
 import { DesktopLayout } from "./components/DesktopLayout"
 import { ErrorBoundary, ErrorPanel } from "./components/ErrorBoundary"
@@ -49,8 +49,10 @@ function Spinner() {
 }
 
 /** Start page: the guided setup until a tenant is connected, then the all-tenants overview or the dashboard. */
-function Home() {
+export function Home() {
   const tenants = useTenants()
+  const loaded = useTenantsLoaded()
+  if (!loaded) return <Spinner />
   if (tenants.length === 0) return <Navigate to="/portal/onboarding" replace />
   return <Navigate to={tenants.length > 1 ? "/portal/overview" : "/portal/dashboard"} replace />
 }

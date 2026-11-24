@@ -1,10 +1,18 @@
+import { OnboardingSignIn, WizardCoverage, type MethodAvailability } from "../components/OnboardingSignIn"
+import { TenuVaultConsent } from "../components/TenuVaultConsent"
+import { GRAPH_CLI_CONSENT_WARNING, GRAPH_CLI_UPGRADE, OWN_APP_UPGRADE, SIGN_IN_METHODS, type BackupScopeCoverage, type SignInMethod, type WizardSignInResult } from "../../shared/tenant-connection"
+import { BACKUP_SERVICES } from "../../shared/services/presentation"
+import { tenantPermissionPacks } from "../../shared/services/permission-packs"
+import { isGuid } from "../../shared/security"
+import { serializeTenants } from "~/lib/tenant-state"
+import { Input } from "~/components/ui/input"
 import { OnboardingServices } from "../components/OnboardingServices"
 import { PermissionRoutes } from "../components/ServicesSettings"
-import { DEFAULT_ONBOARDING_CHOICE, checkedOnboardingChoice, choiceLabel, hasOnboardingBackups, onboardingPermissions } from "../../shared/services/onboarding"
+import { checkedOnboardingChoice, choiceLabel, hasOnboardingBackups } from "../../shared/services/onboarding"
 import type { PermissionChoice } from "../../shared/services/manifest"
 import { trialKeyRefusalText } from "../../shared/trial-notices"
 import { showCommunityLimitError } from "../lib/plan-dialog"
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { Link, useNavigate, useSearchParams } from "react-router-dom"
 import { AlertTriangle, ArrowLeft, ArrowRight, Ban, CheckCircle2, Database, FileUp, HardDriveDownload, KeyRound, Loader2, Play, RotateCcw, ShieldCheck, XCircle } from "lucide-react"
 import { useSelectedTenant, useTenantOperations, useTenants } from "~/contexts/TenantContext"
@@ -55,14 +63,18 @@ function currentAppearance(): AppearanceSetting {
 }
 
 const STEPS = [
-  { title: "Connect", icon: ShieldCheck },
   { title: "Sign in", icon: KeyRound },
+  { title: "Services", icon: ShieldCheck },
+  { title: "Results", icon: CheckCircle2 },
   { title: "Storage", icon: Database },
   { title: "First backup", icon: HardDriveDownload },
 ]
 
 type JobStatus = BackupJobDisplay
-type Step = -1 | 0 | 1 | 2 | 3
+type Step = -2 | -1 | 0 | 1 | 2 | 3 | 4
+type PermissionResult = { missing: string[]; error?: string; coverage?: BackupScopeCoverage[] }
+
+const EMPTY_METHODS: MethodAvailability = { graphCli: null, tenuvaultApp: null }
 
 /** The first backup's state: running, completed, cancelled by the user (grey) or failed. */
 export function JobStateIcon({ job }: { job: Pick<JobStatus, "isComplete" | "isSuccessful" | "status" | "progressMessage" | "results"> }) {
@@ -77,7 +89,7 @@ function StepHeading({ id, children }: { id: string; children: React.ReactNode }
 }
 
 /**
- * First-run setup: connect a tenant with the admin's own app registration, choose where backups
+ * Set up a new tenant, choose where backups
  * go and take a first backup. No Azure resources are required. Progress is saved, so setup can
  * continue after a restart, for example once another administrator created the app registration.
  */
@@ -88,18 +100,29 @@ export default function OnboardingPage() {
   const { addTenant, updateTenant } = useTenantOperations()
   const { setSelectedTenantId } = useSelectedTenant()
   const [initial] = useState(loadOnboardingDraft)
-  const [step, setStep] = useState<Step>(initial?.step ?? -1)
-  const [services, setServices] = useState<PermissionChoice>(initial?.services ?? DEFAULT_ONBOARDING_CHOICE)
+  const [step, setStep] = useState<Step>(initial?.step ?? -2)
+  const [services, setServices] = useState<PermissionChoice>(initial?.services ?? {})
   // A saved choice that could not be read must be confirmed with Continue on the service step; picking a
   // service there is not enough, so a setup file that arrives meanwhile waits for that Continue.
-  const reconfirm = useRef(initial?.reconfirm === true || !confirmedChoice(initial?.services ?? DEFAULT_ONBOARDING_CHOICE))
-  const [permissionAccepted, setPermissionAccepted] = useState(false)
-  const [permissionCheck, setPermissionCheck] = useState<{ account: SignedInAccount; services: PermissionChoice; step: Step; result: { missing: string[]; error?: string } } | null>(null)
+  const reconfirm = useRef(initial?.reconfirm === true || !confirmedChoice(initial?.services ?? {}))
+  const [permissionCheck, setPermissionCheck] = useState<{ account: SignedInAccount; services: PermissionChoice; result: PermissionResult } | null>(null)
+  const [method, setMethod] = useState<SignInMethod>("ownApp")
+  const [available, setAvailable] = useState(EMPTY_METHODS)
+  const [publicTenant, setPublicTenant] = useState("")
+  const [publicBusy, setPublicBusy] = useState(false)
+  const [publicError, setPublicError] = useState("")
+  const [sharedSignIn, setSharedSignIn] = useState<WizardSignInResult | null>(null)
+  const [upgradeTenant, setUpgradeTenant] = useState<string>()
+  const [handoffPack, setHandoffPack] = useState<string>()
+  const sharedDraft = useRef<string | undefined>(undefined)
+  const packPlan = useMemo(() => ({ packs: method === "tenuvaultApp" && confirmedChoice(services)
+    ? tenantPermissionPacks(services, { azure: false, audit: false }) : [] }), [method, services])
   const permissionGeneration = useRef(0)
   const [fields, setFields] = useState<SignInFields>({ tenant: initial?.tenant ?? "", clientId: initial?.clientId ?? "", displayName: initial?.displayName ?? "" })
   const [account, setAccount] = useState<SignedInAccount | null>(initial?.account ?? null)
-  const permissionResult = permissionCheck?.account === account && permissionCheck?.services === services && permissionCheck?.step === step ? permissionCheck.result : null
-  const checkingPermissions = Boolean(account && (step === 1 || step === 2) && !permissionResult)
+  const permissionResult = permissionCheck?.account === account && permissionCheck?.services === services ? permissionCheck.result : null
+  const reviewPermissions = step === 4 || step === 2
+  const checkingPermissions = Boolean(account && method === "ownApp" && reviewPermissions && !permissionResult)
   const [resumed, setResumed] = useState(Boolean(initial && (initial.step > 0 || initial.account)))
   const [checkingResume, setCheckingResume] = useState(Boolean(initial?.account))
   const [choice, setChoice] = useState<StorageChoice | null>(null)
@@ -110,6 +133,7 @@ export default function OnboardingPage() {
   const [tenantName, setTenantName] = useState("")
   const [setupRunning, setSetupRunning] = useState(false)
   const [creating, setCreating] = useState(false)
+  const creatingRef = useRef(false)
   const [releasing, setReleasing] = useState(false)
   const [job, setJob] = useState<JobStatus | null>(null)
   const [jobError, setJobError] = useState("")
@@ -150,10 +174,24 @@ export default function OnboardingPage() {
     mounted.current = true
     return () => {
       mounted.current = false
+      if (sharedDraft.current) void bridge.auth.wizardDiscard(sharedDraft.current).catch(() => undefined)
       const { runningJobId, displayJob, updateJob } = leavingBackup.current
       if (runningJobId && !displayJob?.isComplete) updateJob(runningJobId, { isHidden: false })
     }
   }, [])
+
+  useEffect(() => {
+    if (step !== -2 && step !== 4) return
+    let current = true
+    const check = (key: keyof MethodAvailability, read?: () => Promise<boolean>) => {
+      void (read?.() ?? Promise.resolve(false)).catch(() => false).then(enabled => {
+        if (current) setAvailable(previous => ({ ...previous, [key]: enabled }))
+      })
+    }
+    check("graphCli", bridge.auth.graphCliAvailable)
+    check("tenuvaultApp", bridge.auth.tenuvaultAppAvailable)
+    return () => { current = false }
+  }, [step])
 
   // A resumed sign-in counts only while it is still signed in on this computer. The check no longer
   // applies once the admin switched accounts, ran the setup again or signed in anew.
@@ -162,6 +200,16 @@ export default function OnboardingPage() {
     if (!initial?.account) return
     let active = true
     const saved = initial.account
+    if (tenants.some(tenant => tenant.credentials?.tenantId?.toLowerCase() === saved.tenantId.toLowerCase())) {
+      setAccount(null)
+      setFields({ tenant: "", clientId: "", displayName: "" })
+      setServices({})
+      setResumed(false)
+      setStep(-2)
+      setCheckingResume(false)
+      clearOnboardingDraft()
+      return
+    }
     void bridge.auth.accounts().then((accounts) => {
       if (!active || !resumeCheck.current) return
       const signedIn = accounts.find((item) => item.tenantId === saved.tenantId && item.clientId === saved.clientId)
@@ -179,27 +227,26 @@ export default function OnboardingPage() {
 
   useEffect(() => {
     if (step === 3) clearOnboardingDraft()
-    else saveOnboardingDraft({ step, ...fields, account, services, ...(reconfirm.current ? { reconfirm: true } : {}) })
-  }, [step, fields, account, services])
+    else if (method === "ownApp" && step !== -2) saveOnboardingDraft({ step, ...fields, account, services, ...(reconfirm.current ? { reconfirm: true } : {}) })
+  }, [step, fields, account, services, method])
 
   useEffect(() => {
     const sent = ++permissionGeneration.current
     setPermissionCheck(null)
-    setPermissionAccepted(false)
-    if (!account || (step !== 1 && step !== 2)) return
+    if (!account || method !== "ownApp" || !reviewPermissions) return
     // Bound the wait so an unavailable check stays advisory. Drop answers after timeout or retry.
-    const finish = (result: { missing: string[]; error?: string }) => {
+    const finish = (result: PermissionResult) => {
       if (!mounted.current || sent !== permissionGeneration.current) return
       permissionGeneration.current++
       clearTimeout(timer)
-      setPermissionCheck({ account, services, step, result })
+      setPermissionCheck({ account, services, result })
     }
     const timer = setTimeout(() => finish({ missing: [], error: "The permission check did not finish within 20 seconds." }), 20_000)
     void bridge.setup.checkPermissions(account.tenantId, account.clientId, services).then(finish).catch(error => {
       finish({ missing: [], error: error instanceof Error ? error.message : String(error) })
     })
     return () => { permissionGeneration.current++; clearTimeout(timer) }
-  }, [account, services, step])
+  }, [account, services, method, reviewPermissions])
 
   // Each step starts at its heading, for keyboard and screen reader users too.
   useEffect(() => {
@@ -307,6 +354,7 @@ export default function OnboardingPage() {
    * tenant or account", which then fills in the file's IDs.
    */
   const continueWithSetup = (importId: string, connection: SetupConnection) => {
+    setMethod("ownApp")
     currentAttempt.current += 1
     setAttempt(currentAttempt.current)
     resumeCheck.current = false
@@ -332,7 +380,7 @@ export default function OnboardingPage() {
     if (account && !releasingAccount.current) {
       if (sameRegistration(account, connection)) {
         setFields((current) => ({ tenant: connection.tenantId, clientId: connection.clientId, displayName: current.displayName || connection.name }))
-        setStep(2)
+        setStep(4)
       } else setStep(1)
       return
     }
@@ -345,7 +393,7 @@ export default function OnboardingPage() {
   // The Connect step shows what a setup file could not do. A service choice that has to be confirmed
   // again comes first: its step shows the error, and its Continue then opens Connect.
   const showConnect = () => {
-    if (!reconfirm.current && confirmedChoice(latest.current.services)) setStep((current) => (current === -1 ? 0 : current))
+    setStep(current => current === -1 && !reconfirm.current && confirmedChoice(latest.current.services) ? 0 : current)
   }
 
   /** The tenants of a settings file that can be connected from it: with connection details and not connected yet. */
@@ -407,11 +455,76 @@ export default function OnboardingPage() {
     })
   }, [requestedSetup, requestedTenant, checkingResume])
 
+  const discardShared = () => {
+    if (sharedDraft.current) void bridge.auth.wizardDiscard(sharedDraft.current).catch(() => undefined)
+    sharedDraft.current = undefined
+    setSharedSignIn(null)
+  }
+
+  const chooseMethod = async (next: SignInMethod, forTenant?: string, pack?: string) => {
+    if (releasing || (next !== "ownApp" && available[next] !== true)) return
+    setPublicError("")
+    if (account && method === "ownApp" && !connected(account.tenantId)) {
+      setReleasing(true)
+      try { await bridge.license.releaseTenant(account.tenantId) }
+      catch {
+        if (mounted.current) setPublicError("Could not release the unfinished sign-in. Try again.")
+        return
+      } finally { if (mounted.current) setReleasing(false) }
+      if (!mounted.current) return
+    }
+    if (forTenant && sharedSignIn?.account.tenantId === forTenant) setSharedSignIn(null)
+    else discardShared()
+    setAccount(null)
+    setChoice(null)
+    setPublicError("")
+    setAddError(null)
+    setMethod(next)
+    setUpgradeTenant(forTenant)
+    setHandoffPack(pack)
+    setPublicTenant(forTenant ?? "")
+    setFields({ tenant: forTenant ?? "", clientId: "", displayName: "" })
+    setSetup(null)
+    setHeldSetup(null)
+    setSetupNotice("")
+    setAutoSignIn(null)
+    clearOnboardingDraft()
+    setStep(next === "graphCli" ? 1 : forTenant && confirmedChoice(services) ? (next === "ownApp" ? 0 : 1) : -1)
+  }
+
+  const signedInShared = (result: WizardSignInResult) => {
+    if (!mounted.current) {
+      void bridge.auth.wizardDiscard(result.id).catch(() => undefined)
+      return
+    }
+    sharedDraft.current = result.id
+    setSharedSignIn(result)
+    setAccount(result.account)
+    setStep(method === "graphCli" ? -1 : 4)
+  }
+
+  const signInStartNow = async () => {
+    if (publicBusy || !isGuid(publicTenant.trim())) return
+    setPublicBusy(true)
+    setPublicError("")
+    try {
+      const outcome = await bridge.auth.wizardStage(publicTenant.trim(), "graphCli")
+      if ("error" in outcome) {
+        if (mounted.current) {
+          setPublicError(outcome.error.message.replace(" in Sign-in and access.", "."))
+          setStep(4)
+        }
+      } else signedInShared(outcome.result)
+    } catch {
+      if (mounted.current) setPublicError("Could not sign in with Start now. Try again or choose another method.")
+    } finally { if (mounted.current) setPublicBusy(false) }
+  }
+
   // The license was checked at the sign-in; it is checked again before the tenant is saved. A
   // tenant the license does not cover is not added and its sign-in is removed in the main
   // process, so the admin signs in again with the same IDs once the license is sorted.
   const createTenant = async () => {
-    if (!account || !choice || !permissionResult || checkingPermissions || (permissionResult.missing.length > 0 && !permissionAccepted)) return
+    if (creatingRef.current || !account || !choice || checkingResume || checkingPermissions || (method !== "ownApp" && !sharedSignIn)) return
     if (connected(account.tenantId)) {
       setAddError({ message: "This tenant is already connected to TenuVault.", license: false, alreadyConnected: true })
       setAccount(null)
@@ -420,6 +533,7 @@ export default function OnboardingPage() {
       setStep(1)
       return
     }
+    creatingRef.current = true
     setCreating(true)
     setAddError(null)
     // The trial as the Storage step showed it. A trial that only starts during the check below
@@ -427,8 +541,10 @@ export default function OnboardingPage() {
     const shown = tenantLicense(status, account.tenantId)
     let community = false
     try {
-      const status = await bridge.license.checkNewTenant(account.tenantId)
-      community = tenantPlan(tenantLicense(status, account.tenantId)) === "community"
+      if (method === "ownApp") {
+        const status = await bridge.license.checkNewTenant(account.tenantId)
+        community = tenantPlan(tenantLicense(status, account.tenantId)) === "community"
+      }
     } catch (error) {
       if (!showCommunityLimitError(error)) {
         const message = error instanceof Error ? error.message : String(error)
@@ -436,6 +552,7 @@ export default function OnboardingPage() {
       }
       setAccount(null)
       setChoice(null)
+      creatingRef.current = false
       setCreating(false)
       setStep(1)
       return
@@ -444,14 +561,30 @@ export default function OnboardingPage() {
     if (community && choice.kind === "azure") {
       setAddError({ message: "This tenant is on Community now, which keeps backups on this device. Choose This device to continue.", license: false })
       setChoice(null)
+      creatingRef.current = false
       setCreating(false)
       return
     }
     try {
       const creds = desktopTenantCredentials(account, fields.displayName, choice)
-      const tenant = await buildTenantProfile(creds)
+      const tenant = { ...(await buildTenantProfile(creds, method === "ownApp")), createdAt: new Date().toISOString() }
+      if (!mounted.current) return
+      const profile = serializeTenants([tenant])
+      const outcome = sharedSignIn
+        ? await bridge.auth.wizardFinish(sharedSignIn.id, profile, services)
+        : await bridge.setup.enrollOwnApp(account.tenantId, account.clientId, profile, services)
+      if ("error" in outcome) {
+        if (outcome.error.code === "sign_in_required") {
+          discardShared()
+          setAccount(null)
+          setChoice(null)
+          setStep(1)
+        }
+        setAddError({ message: outcome.error.message, license: false })
+        return
+      }
+      sharedDraft.current = undefined
       recordSetup({ name: "storage", props: { kind: choice.kind } })
-      await bridge.setup.saveServices(account.tenantId, account.clientId, services)
       addTenant(tenant)
       setSelectedTenantId(tenant.id)
       setCredentials(creds)
@@ -465,6 +598,7 @@ export default function OnboardingPage() {
     } catch (error) {
       if (!showCommunityLimitError(error)) setAddError({ message: error instanceof Error ? error.message : String(error), license: false })
     } finally {
+      creatingRef.current = false
       setCreating(false)
     }
   }
@@ -539,6 +673,15 @@ export default function OnboardingPage() {
 
   const finished = Boolean(displayJob?.isComplete)
   const hasBackupTypes = hasOnboardingBackups(services)
+  const automaticBackup = useRef(false)
+  const startFirstBackup = useRef(runBackup)
+  startFirstBackup.current = runBackup
+  useEffect(() => {
+    if (step !== 3 || !credentials || !hasBackupTypes || automaticBackup.current) return
+    automaticBackup.current = true
+    void startFirstBackup.current()
+  }, [step, credentials, hasBackupTypes])
+
   const succeeded = Boolean(displayJob?.isComplete && displayJob.isSuccessful)
   // A backup that could not start or ended with an error. Cancelling is the admin's own choice, and
   // an error next to a backup that is on screen is a failed cancel, not a failed backup.
@@ -547,9 +690,36 @@ export default function OnboardingPage() {
   // tenant that is already connected has its own way on, and a message of the Storage step that
   // is still set after Previous is not an error of this step.
   const signInStuck = Boolean(addError?.license)
+  const stageIndex = step === 3 ? 4 : step === 2 ? 3 : step === 4 ? 2 : step === -1 || step === 0 ? 1 : 0
+  const coverage = sharedSignIn?.coverage ?? permissionResult?.coverage ?? []
+  const hasScopeGaps = coverage.some(row => (services[row.service] || (row.service === "entra" && services.conditionalAccess)) &&
+    row.readable && row.readable.length < row.folders.length)
+  const unknownCoverage = !coverage.length || coverage.some(row => row.readable === null)
+  const targetTenant = account?.tenantId ?? publicTenant.trim()
+  const canUpgrade = method === "graphCli"
+  const needsPack = BACKUP_SERVICES.find(({ id }) => {
+    const row = coverage.find(item => item.service === id)
+    return services[id] && (!row?.readable || row.readable.length < row.folders.length)
+  })?.id
+  const missingPack = needsPack ? `${needsPack}-${services[needsPack]?.access ?? "backup"}` : "basics"
+  const openSetupAction = <div className="space-y-2 rounded-2xl bg-secondary/60 px-4 py-3 text-sm text-gray-700">
+    <div className="flex flex-wrap items-center justify-between gap-3">
+      <p>Another admin sent you a setup file?</p>
+      <Button type="button" variant="outline" size="sm" disabled={openingSetup || releasing || checkingResume} onClick={() => void openSetupFile()}>
+        {openingSetup ? <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" /> : <FileUp className="mr-2 h-4 w-4" aria-hidden="true" />}Set up from a file
+      </Button>
+    </div>
+    {setupError && <p role="alert" className="text-red-700">{setupError}</p>}
+    {setupChoices && <div className="space-y-2">
+      <p className="font-medium text-gray-900">Which tenant do you want to connect?</p>
+      <ul className="space-y-2">{setupChoices.connections.map(connection => <li key={connection.tenantId}>
+        <Button type="button" variant="outline" size="sm" onClick={() => continueWithSetup(setupChoices.importId, connection)}>{connection.name} <span className="ml-2 font-mono text-xs text-gray-500">{connection.tenantId}</span></Button>
+      </li>)}</ul>
+    </div>}
+  </div>
 
   return (
-    <div className={cn("@container mx-auto space-y-4 p-5 lg:p-6", step <= 0 ? "max-w-[96rem]" : "max-w-3xl")}>
+    <div className={cn("@container mx-auto space-y-4 p-5 lg:p-6", step <= 0 || step === 4 ? "max-w-[96rem]" : step === 2 ? "max-w-6xl" : "max-w-3xl")}>
       {tenants.length > 0 && (
         <Link to="/portal/dashboard" className="group inline-flex items-center gap-3 rounded-full text-sm font-medium text-gray-600 hover:text-gray-900">
           <span className="flex size-10 items-center justify-center rounded-full bg-card transition-colors group-hover:bg-secondary" aria-hidden="true"><ArrowLeft className="h-4 w-4" /></span> Back to dashboard
@@ -557,89 +727,85 @@ export default function OnboardingPage() {
       )}
       <div className="grid items-start gap-2 @3xl:grid-cols-[1fr_auto]">
       <div className="contents">
-        <h1 className="text-4xl font-medium tracking-tight text-gray-900">Set up TenuVault</h1>
-        <p className="text-base text-gray-500 @3xl:order-3 @3xl:col-span-2">
-          Connect a tenant and take your first backup, in a few minutes. Everything runs on this computer as you; no Azure
-          resources are required.
-        </p>
+        <h1 className="whitespace-nowrap text-3xl font-medium tracking-tight text-gray-900 @5xl:text-4xl">Set up TenuVault</h1>
+
       </div>
 
-      <ol className="grid grid-cols-4 gap-2 @3xl:pt-1" aria-label="Setup steps">
+      <ol className="grid grid-cols-5 gap-1 @3xl:pt-1" aria-label="Setup steps">
         {STEPS.map((s, i) => (
           <li
             key={s.title}
-            aria-current={i === Math.max(0, step) ? "step" : undefined}
+            aria-current={i === stageIndex ? "step" : undefined}
             className={cn(
-              "flex items-center gap-2 rounded-full py-1.5 pl-1.5 pr-4 text-sm font-medium",
-              i === Math.max(0, step) ? "bg-primary text-primary-foreground" : i < Math.max(0, step) ? "bg-green-50 text-green-700" : "bg-card text-muted-foreground",
+              "flex items-center gap-2 rounded-full py-1.5 pl-1.5 pr-2.5 text-sm font-medium @5xl:pr-4",
+              i === stageIndex ? "bg-primary text-primary-foreground" : i < stageIndex ? "bg-green-50 text-green-700" : "bg-card text-muted-foreground",
             )}
           >
-            <span className={cn("flex size-7 flex-shrink-0 items-center justify-center rounded-full", i === Math.max(0, step) ? "bg-coral-500 text-white" : "bg-secondary")} aria-hidden="true">
-              {i < Math.max(0, step) ? <CheckCircle2 className="h-4 w-4" /> : <s.icon className="h-4 w-4" />}
+            <span className={cn("flex size-7 flex-shrink-0 items-center justify-center rounded-full", i === stageIndex ? "bg-coral-500 text-white" : "bg-secondary")} aria-hidden="true">
+              {i < stageIndex ? <CheckCircle2 className="h-4 w-4" /> : <s.icon className="h-4 w-4" />}
             </span>
             <span className="truncate">{s.title}</span>
-            <span className="sr-only">{i < Math.max(0, step) ? " (done)" : i === Math.max(0, step) ? ` (step ${i + 1} of ${STEPS.length})` : ""}</span>
+            <span className="sr-only">{i < stageIndex ? " (done)" : i === stageIndex ? ` (step ${i + 1} of ${STEPS.length})` : ""}</span>
           </li>
         ))}
       </ol>
       </div>
 
-      {resumed && step < 3 && (
+      {resumed && step !== 3 && (
         <p role="status" className="rounded-2xl bg-blue-50/60 px-4 py-3 text-sm text-gray-700">
           Welcome back. You can continue where you left off{account ? `, signed in as ${account.username}` : ""}.
         </p>
       )}
 
       <div className="@container rounded-3xl bg-card p-5 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
-        {step === -1 && <OnboardingServices choice={services} onChange={setServices} onContinue={() => {
+        {step === -2 && <div className="space-y-4"><OnboardingSignIn available={available} onChoose={chooseMethod} />{openSetupAction}</div>}
+        {step === -1 && <OnboardingServices method={method} choice={services} coverage={method === "graphCli" ? sharedSignIn?.coverage : undefined} onChange={setServices} onContinue={() => {
           reconfirm.current = false
           if (heldSetup) continueWithSetup(heldSetup.importId, heldSetup.connection)
-          else setStep(setup ? 1 : 0)
+          else setStep(method === "graphCli" ? 4 : method === "tenuvaultApp" || setup ? 1 : 0)
         }} />}
         {/* A file handed over from Settings can fail on any step, for example after its review expired. */}
-        {step !== 0 && setupError && (
+        {step !== 0 && step !== -2 && setupError && (
           <p role="alert" className="rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700">
             {setupError} Open the file again in Settings, under Import and export, or with Set up from a file on the Connect step.
           </p>
         )}
-        {step === 0 && (
+        {step === 0 && method === "ownApp" && (
           <div className="space-y-4">
             <StepHeading id="setup-step-0">Connect your tenant</StepHeading>
             <ConnectTenantSetup
-              choice={onboardingPermissions(services)}
+              choice={services}
+              expectedTenant={upgradeTenant}
               onRunningChange={setSetupRunning}
               trials={Boolean(status?.tenantTrialsEnabled)}
               onManual={() => { setSetupNotice(""); setAutoSignIn(null); setStep(1) }}
               onRegistered={(result) => { if (attempt === currentAttempt.current) void registered(result, attempt) }}
             />
-            <div className="space-y-3 rounded-2xl bg-secondary/60 px-4 py-3 text-sm text-gray-700">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <p>Another admin sent you a setup file? It fills in the tenant, the app registration and the storage.</p>
-                <Button type="button" variant="outline" size="sm" disabled={openingSetup || releasing || checkingResume} onClick={() => void openSetupFile()}>
-                  {openingSetup ? <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" /> : <FileUp className="mr-2 h-4 w-4" aria-hidden="true" />}
-                  Set up from a file
-                </Button>
-              </div>
-              {setupError && <p role="alert" className="text-red-700">{setupError}</p>}
-              {setupChoices && (
-                <div className="space-y-2">
-                  <p className="font-medium text-gray-900">Which tenant do you want to connect?</p>
-                  <ul className="space-y-2">
-                    {setupChoices.connections.map((connection) => (
-                      <li key={connection.tenantId}>
-                        <Button type="button" variant="outline" size="sm" onClick={() => continueWithSetup(setupChoices.importId, connection)}>
-                          {connection.name} <span className="ml-2 font-mono text-xs text-gray-500">{connection.tenantId}</span>
-                        </Button>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
+            {openSetupAction}
+          </div>
+        )}
+
+        {step === 1 && method !== "ownApp" && (
+          <div className="space-y-4">
+            <StepHeading id="setup-step-1">{SIGN_IN_METHODS[method]}</StepHeading>
+            {method === "graphCli" && <p className="rounded-xl bg-blue-50 p-3 text-sm text-gray-700">{GRAPH_CLI_CONSENT_WARNING}</p>}
+            {method === "tenuvaultApp" && <p className="text-sm text-gray-600">Review the permission packs for your chosen services, then sign in.</p>}
+            <label className="block space-y-1 text-sm font-medium">Tenant ID
+              <Input value={publicTenant} disabled={publicBusy || Boolean(upgradeTenant)} onChange={event => setPublicTenant(event.target.value)} placeholder="Directory (tenant) ID" />
+            </label>
+            {publicError && <p role="alert" className="text-sm text-red-700">{publicError}</p>}
+            {addError && <p role="alert" className="text-sm text-red-700">{addError.message}</p>}
+            <div className="flex flex-wrap gap-2">
+              {method === "graphCli" ? <>
+                <Button onClick={() => void signInStartNow()} disabled={publicBusy || !isGuid(publicTenant.trim())}>{publicBusy ? "Waiting for Microsoft" : "Sign in with Start now"}</Button>
+                {publicBusy && <Button variant="outline" onClick={() => void bridge.auth.cancelSignIn()}>Cancel sign-in</Button>}
+              </> : packPlan.packs.length > 0 && isGuid(publicTenant.trim()) &&
+                <TenuVaultConsent key={publicTenant.trim()} tenantId={publicTenant.trim()} plan={packPlan} active={false} wizard={{ choice: services, pack: handoffPack, onSignedIn: signedInShared }} />}
             </div>
           </div>
         )}
 
-        {step === 1 && (
+        {step === 1 && method === "ownApp" && (
           <div className="space-y-4">
             <StepHeading id="setup-step-1">Sign in to your tenant</StepHeading>
             {status?.tenantTrialsEnabled && <p className="text-sm text-gray-600">New tenants start with a Pro trial. No card and no email needed.</p>}
@@ -677,7 +843,7 @@ export default function OnboardingPage() {
                     {releasing && <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />}
                     Use a different tenant or account
                   </Button>
-                  <Button className="bg-blue-600 hover:bg-blue-700" onClick={() => setStep(2)} disabled={releasing}>
+                  <Button className="bg-blue-600 hover:bg-blue-700" onClick={() => setStep(4)} disabled={releasing}>
                     Continue <ArrowRight className="ml-2 h-4 w-4" aria-hidden="true" />
                   </Button>
                 </div>
@@ -686,7 +852,9 @@ export default function OnboardingPage() {
               // The error above already offers the setup call, so an error of the form does not repeat it.
               <SetupCallHintShown.Provider value={signInStuck}>
                 <TenantSignInForm
-                  choice={onboardingPermissions(services)}
+                  choice={services}
+                  wizard
+                  expectedTenant={upgradeTenant}
                   // The form keeps its own fields once mounted; a setup file that arrives later starts it again with the file's IDs.
                   key={setup ? `setup:${setup.importId}:${setup.connection.tenantId}` : "manual"}
                   initial={fields}
@@ -700,13 +868,19 @@ export default function OnboardingPage() {
                       setAddError({ message: "This tenant is already connected to TenuVault.", license: false, alreadyConnected: true })
                       return
                     }
+                    if (upgradeTenant && signedIn.tenantId.toLowerCase() !== upgradeTenant.toLowerCase()) {
+                      void bridge.license.releaseTenant(signedIn.tenantId).catch(() => undefined)
+                      setAutoSignIn(null)
+                      setAddError({ message: "You signed in to a different tenant. Sign in with an account from this tenant.", license: false })
+                      return
+                    }
                     setAddError(null)
                     // The automatic sign-in is for this one registration; a later sign-in asks again.
                     setAutoSignIn(null)
                     setSetupNotice("")
                     setAccount(signedIn)
                     setFields((current) => ({ ...current, displayName }))
-                    setStep(2)
+                    setStep(4)
                   }}
                 />
               </SetupCallHintShown.Provider>
@@ -714,60 +888,81 @@ export default function OnboardingPage() {
           </div>
         )}
 
+        {step === 4 && (
+          <section className="space-y-4" aria-labelledby="setup-step-4">
+            <StepHeading id="setup-step-4">Sign-in results</StepHeading>
+            {publicError && <p role="alert" className="text-sm text-red-700">{publicError}</p>}
+            {account && <p className="text-sm text-gray-600">Signed in as {account.username}</p>}
+            {checkingPermissions || checkingResume ? <p role="status" className="text-sm text-gray-600">Checking permissions for your chosen services…</p> : <>
+              <WizardCoverage coverage={coverage} />
+              <p className="text-sm text-gray-600">Coverage shows what your permissions allow. If your role can't do this, the first backup reports the refusal separately from missing permissions.</p>
+              {(hasScopeGaps || Boolean(permissionResult?.missing.length)) && <p className="text-sm text-gray-700">Permission not granted for some of your chosen backup or restore types.</p>}
+              {unknownCoverage && account && <p className="text-sm text-gray-700">Some coverage is unknown.</p>}
+              {method === "ownApp" && permissionResult && (permissionResult.missing.length > 0 || permissionResult.error) && <div className="space-y-2 rounded-xl border p-3 text-sm text-gray-700">
+                {permissionResult.error && <p>Permissions could not be checked. You can continue to storage or check again.</p>}
+                <SetupCallLink source="signin-error" variant="hint" />
+                <PermissionRoutes report={account!} missing={permissionResult.missing} />
+                <Button variant="outline" onClick={() => { if (account) setAccount({ ...account }) }}>Check again</Button>
+              </div>}
+              <div className="flex flex-wrap gap-2">
+                {method !== "tenuvaultApp" && available.tenuvaultApp === true && isGuid(targetTenant) && (canUpgrade || hasScopeGaps || Boolean(permissionResult?.missing.length)) &&
+                  <Button variant="outline" disabled={releasing} onClick={() => void chooseMethod("tenuvaultApp", targetTenant)}>{GRAPH_CLI_UPGRADE}</Button>}
+                {method !== "ownApp" && <Button variant="outline" disabled={releasing} onClick={() => void chooseMethod("ownApp", isGuid(targetTenant) ? targetTenant : undefined)}>{OWN_APP_UPGRADE}</Button>}
+                {available.tenuvaultApp === true && method !== "tenuvaultApp" && isGuid(targetTenant) && confirmedChoice(services) && (hasScopeGaps || unknownCoverage || Boolean(permissionResult?.missing.length)) &&
+                  <Button variant="outline" disabled={releasing} onClick={() => void chooseMethod("tenuvaultApp", targetTenant, missingPack)}>Send to my admin</Button>}
+                {account && <Button className="ml-auto" disabled={releasing} onClick={() => setStep(2)}>Continue to storage</Button>}
+              </div>
+            </>}
+          </section>
+        )}
+
         {step === 2 && account && (
-          <div className="space-y-5">
-            <StepHeading id="setup-step-2">{checkingPermissions ? "Checking permissions" : permissionResult?.missing.length && !permissionAccepted ? "Review your chosen permissions" : "Choose where backups are stored"}</StepHeading>
+          <div className="space-y-4">
+            <StepHeading id="setup-step-2">Choose where backups are stored</StepHeading>
             <p className="flex items-center gap-2 text-sm text-gray-600">
               <CheckCircle2 className="h-4 w-4 text-green-700" aria-hidden="true" /> Signed in as {account.username}
             </p>
-            {checkingPermissions && <p role="status" className="text-sm text-gray-600">Checking permissions for your chosen services...</p>}
-            {permissionResult && (permissionResult.missing.length > 0 || permissionResult.error) && <section aria-label="Permission result" className="space-y-3 rounded-2xl bg-blue-50 p-4 text-sm text-gray-700">
-              <h3 className="font-medium text-gray-900">{permissionResult.missing.length ? "Some chosen permissions are missing" : "Permissions could not be checked"}</h3>
-              <p>{permissionResult.error ?? "Your sign-in works. The registration does not allow everything you chose yet. You can fix it now or continue and add permissions later in Settings > Services and permissions."}</p>
-              {permissionResult.error && <p>You can continue and check permissions later in Settings &gt; Services and permissions.</p>}
-              <SetupCallLink source="signin-error" variant="hint" />
-              <PermissionRoutes report={account} missing={permissionResult.missing} />
-              <div className="flex flex-wrap gap-2"><Button variant="outline" onClick={() => { setAccount({ ...account }) }}>Check again</Button>
-              {permissionResult.missing.length > 0 && !permissionAccepted && <Button onClick={() => setPermissionAccepted(true)}>Continue to storage</Button>}</div>
-            </section>}
-            {permissionResult && !checkingPermissions && (!permissionResult.missing.length || permissionAccepted) && <>
-            <PlanContext tenantId={account.tenantId} username={account.username} />
+            {checkingPermissions && <p role="status" className="text-sm text-gray-600">Checking permissions for your chosen services…</p>}
+            {method === "graphCli" && <p className="text-sm text-gray-600">Start now keeps backups on this device.</p>}
+            {method === "tenuvaultApp" && <p className="text-sm text-gray-600">The first backup is stored on this device.</p>}
             {addError && <p role="alert" className="text-sm text-red-700">{addError.message}</p>}
             {setup?.connection.storage && setup.connection.tenantId === account.tenantId.toLowerCase() && (
               <p className="text-sm text-gray-600">The setup file chose {setup.connection.storage.kind === "local" ? "This device" : `the storage account ${setup.connection.storage.storageAccountName}`}. {setup.connection.storage.kind === "azure" ? "Select Check access to confirm you can use it." : ""}</p>
             )}
-            <StorageChooser
-              // A setup file opened while this step shows starts the chooser again with the file's storage.
-              key={setup ? `setup:${setup.importId}` : "manual"}
-              tenantId={account.tenantId}
-              clientId={account.clientId}
-              initial={setup && setup.connection.tenantId === account.tenantId.toLowerCase() ? setup.connection.storage : undefined}
-              onChange={setChoice}
-              onBlockerChange={setStorageBlocker}
-            />
+            <div className="grid items-start gap-4 @3xl:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]">
+              <StorageChooser
+                // A setup file opened while this step shows starts the chooser again with the file's storage.
+                key={setup ? `setup:${setup.importId}` : "manual"}
+                tenantId={account.tenantId}
+                clientId={account.clientId}
+                localOnly={method !== "ownApp"}
+                initial={setup && setup.connection.tenantId === account.tenantId.toLowerCase() ? setup.connection.storage : undefined}
+                onChange={setChoice}
+                onBlockerChange={setStorageBlocker}
+              />
+              <PlanContext tenantId={account.tenantId} username={account.username} />
+            </div>
             <div className="flex flex-wrap items-center justify-end gap-3">
               {!choice && storageBlocker && <p role="status" className="text-sm text-gray-600">{storageBlocker}</p>}
-              <Button className="bg-blue-600 hover:bg-blue-700" disabled={!choice || creating || checkingResume} onClick={() => void createTenant()}>
+              <Button className="bg-blue-600 hover:bg-blue-700" disabled={!choice || creating || checkingResume || checkingPermissions} onClick={() => void createTenant()}>
                 {creating && <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />}
                 {creating ? "Checking the license..." : "Continue"}
               </Button>
             </div>
-            </>}
           </div>
         )}
 
         {step === 3 && (
           <div className="space-y-5">
-            <StepHeading id="setup-step-3">{succeeded ? "Your first backup is done" : hasBackupTypes ? "Take a first backup" : "Your tenant is connected"}</StepHeading>
-            {!hasBackupTypes && <p className="text-sm text-gray-700">Your choice of {choiceLabel(services)} is saved. This version sets up its permissions; backups arrive in a later update. There are no backup types to run for this choice yet. Continue to the dashboard, or turn on Intune or Conditional Access in Services and permissions.</p>}
+            <StepHeading id="setup-step-3">{succeeded ? "Your first backup is done" : hasBackupTypes ? "Your first backup" : "Your tenant is connected"}</StepHeading>
+            {!hasBackupTypes && <p className="text-sm text-gray-700">Your choice of {choiceLabel(services)} is saved. There are no backup types for this choice. You can change services in Settings.</p>}
             {!succeeded && hasBackupTypes && (
               <div className="space-y-2 text-sm text-gray-700">
-                <p>{tenantName ? `${tenantName} is connected.` : "Your tenant is connected."} Take a first backup to check that everything works.</p>
+                <p>{tenantName ? `${tenantName} is connected.` : "Your tenant is connected."} TenuVault starts a backup of your chosen services automatically.</p>
                 <ul className="list-disc space-y-1 pl-5 text-gray-600">
                   <li>It reads the available policies and settings for {choiceLabel(services)}, and changes nothing in your tenant.</li>
                   {services.intune && <li>Apps are left out by default to keep it quick. You can change what is backed up later in the backup scope.</li>}
                   {services.entra && <li>Entra ID backs up the supported types in your selected areas. Areas without backup types are listed in Services and permissions.</li>}
-                  {services.defender && <li>This version prepares Defender permissions only. Defender backups arrive in a later update.</li>}
                   <li>It usually takes a few minutes, longer for large tenants.</li>
                   <li>A restore needs a backup from before the change, so this first backup cannot bring back a policy already lost. It protects what you back up from now on.</li>
                 </ul>
@@ -775,7 +970,7 @@ export default function OnboardingPage() {
             )}
             {setup && credentials && setup.connection.tenantId === credentials.tenantId.toLowerCase() && (
               <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-secondary/60 px-4 py-3 text-sm text-gray-700">
-                <p>The setup file holds more settings, such as services and what is backed up. Review them before the first backup, so it already uses them.</p>
+                <p>The setup file holds more settings, such as services and what is backed up. Review them to apply them to future backups.</p>
                 <Button type="button" variant="outline" size="sm" onClick={() => void navigate(`/portal/settings?section=transfer&import=${encodeURIComponent(setup.importId)}`)}>
                   Review settings from the file
                 </Button>
@@ -824,12 +1019,12 @@ export default function OnboardingPage() {
                     <RotateCcw className="mr-2 h-4 w-4" aria-hidden="true" /> Try again
                   </Button>
                 </>
-              ) : (
+              ) : !displayJob && (
                 <>
-                  <Button variant="outline" onClick={() => void navigate("/portal/dashboard")} disabled={Boolean(displayJob)}>
+                  <Button variant="outline" onClick={() => void navigate("/portal/dashboard")}>
                     Skip for now
                   </Button>
-                  {hasBackupTypes && <Button className="bg-blue-600 hover:bg-blue-700" onClick={() => void runBackup()} disabled={Boolean(displayJob)}>
+                  {hasBackupTypes && <Button className="bg-blue-600 hover:bg-blue-700" onClick={() => void runBackup()}>
                     <Play className="mr-2 h-4 w-4" /> Run first backup
                   </Button>}
                 </>
@@ -838,9 +1033,19 @@ export default function OnboardingPage() {
           </div>
         )}
 
-        {step >= 0 && step < 3 && (
+        {step !== -2 && step !== 3 && (
           <div className="mt-6 border-t border-gray-100 pt-4">
-            <Button variant="ghost" onClick={() => setStep((step - 1) as Step)} disabled={creating || releasing || setupRunning}>
+            <Button variant="ghost" onClick={() => {
+              if (step === 2) setStep(4)
+              else if (step === 4 && method === "graphCli" && account) setStep(-1)
+              else if (step === 4) setStep(1)
+              else if (step === 1 && method !== "graphCli") setStep(method === "ownApp" ? 0 : -1)
+              else if (step === 0) setStep(-1)
+              else {
+                if (method === "graphCli") { discardShared(); setAccount(null) }
+                setStep(-2)
+              }
+            }} disabled={creating || releasing || setupRunning || publicBusy}>
               <ArrowLeft className="mr-2 h-4 w-4" aria-hidden="true" />Previous
             </Button>
           </div>

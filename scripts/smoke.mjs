@@ -506,9 +506,9 @@ await check("hung license checks time out and ignore late responses after retry"
     assert(await evaluate(`window.__licenseTimeout.calls === 4 && ${body}.innerText.includes("Welcome to TenuVault")`), "background check did not keep the loaded status")
     await evaluate(`window.__licenseTimeout.onChanged({ ...window.__licenseTimeout.status, hasKey: true })`)
     // With a key and no tenant the app opens the guided setup, which has the window to itself.
-    assert(await waitForCondition(`${body}.innerText.includes("What do you want to back up?")`), "license change was not delivered during the pending check")
+    assert(await waitForCondition(`${body}.innerText.includes("Let's sign in")`), "license change was not delivered during the pending check")
     assert(await waitForCondition(`window.__licenseTimeout.expired === 2 && window.__licenseTimeout.timers.size === 0`), "hung background check did not time out")
-    assert(await evaluate(`${body}.innerText.includes("What do you want to back up?") && !${body}.querySelector('[role="alert"]')`), "background timeout discarded the loaded status")
+    assert(await evaluate(`${body}.innerText.includes("Let's sign in") && !${body}.querySelector('[role="alert"]')`), "background timeout discarded the loaded status")
     await evaluate(`window.__licenseTimeout.refresh()`)
     assert(await waitForCondition(`window.__licenseTimeout.calls === 5 && ${body}.innerText.includes("Welcome to TenuVault")`), "background timeout left the refresh guard locked")
     await evaluate(`window.__licenseTimeout.resolveBackground()`)
@@ -536,18 +536,28 @@ await check("malformed license keys are rejected", async () => {
 await check("Community users can reach the tenant sign-in without a key", async () => {
   await evaluate(`[...document.querySelectorAll("button")].find(b => b.innerText.trim() === "Connect your tenant").click()`)
   assert(await waitForText("Set up TenuVault", 15000), "tenant sign-in did not open")
-  assert(await waitForText("What do you want to back up?"), "service choice missing")
-  await evaluate(`[...document.querySelectorAll("button")].find(b => b.innerText.trim() === "Continue with Intune").click()`)
-  assert(await waitForText("Set up with Microsoft sign-in"), "setup checklist missing")
+  assert(await waitForText("Let's sign in"), "method choice missing")
+  assert(await evaluate(`[...document.querySelectorAll("[data-sign-in-method]")].map(card => card.querySelector("h3").textContent).join("|") === "Start now|TenuVault app|Your own app registration"`), "sign-in method order is wrong")
   // Until a tenant is connected the guided setup has the window to itself.
   assert(!(await evaluate(`Boolean(document.querySelector('nav[aria-label="Main navigation"]'))`)), "sidebar shown during the first setup")
   assert(await evaluate(`[...document.querySelectorAll('nav[aria-label="Help"] > *')].map(item => item.textContent).join("|") === "Free setup call|License|Share feedback|Support"`), "first-run header does not list Free setup call, License, Share feedback and Support")
   await send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false })
   await sleep(300)
-  const overflow = await evaluate(`({ height: innerHeight, scroll: document.scrollingElement.scrollHeight, inner: [...document.querySelectorAll('*')].filter(e => ['auto', 'scroll'].includes(getComputedStyle(e).overflowY) && e.scrollHeight > e.clientHeight + 1).map(e => ({ tag: e.tagName, scroll: e.scrollHeight, client: e.clientHeight })) })`)
-  assert(overflow.scroll <= overflow.height && overflow.inner.length === 0, `Connect step scrolls: ${JSON.stringify(overflow)}`)
+  const assertFit = async name => {
+    const overflow = await evaluate(`({ height: innerHeight, scroll: document.scrollingElement.scrollHeight, inner: [...document.querySelectorAll('*')].filter(e => ['auto', 'scroll'].includes(getComputedStyle(e).overflowY) && e.scrollHeight > e.clientHeight + 1).map(e => ({ tag: e.tagName, scroll: e.scrollHeight, client: e.clientHeight })) })`)
+    assert(overflow.scroll <= overflow.height && overflow.inner.length === 0, `${name} scrolls: ${JSON.stringify(overflow)}`)
+  }
+  await assertFit("Sign-in method cards")
   await screenshot("00b-setup-connect")
+  // Leave a real recoverable own-registration draft for the reload check below.
+  await evaluate(`document.querySelector('[data-sign-in-method="ownApp"] button').click()`)
+  assert(await waitForText("What do you want to back up?"), "service choice missing")
+  await evaluate(`document.querySelector('[aria-label="Back up Intune"]').click()`)
+  await evaluate(`[...document.querySelectorAll("button")].find(b => b.innerText.trim() === "Continue with Intune").click()`)
+  assert(await waitForText("Set up with Microsoft sign-in"), "own registration setup missing")
+  await assertFit("Own registration Connect step")
   await send("Emulation.clearDeviceMetricsOverride")
+  assert(await waitForCondition(`window.tenuvault.storage.getItemSync("tenuvault.onboarding.draft")?.includes('"step":0')`), "setup draft did not save")
 })
 
 await check("dashboard renders in the desktop shell", async () => {
@@ -741,6 +751,8 @@ await check("the first tenant without a license works as Community", async () =>
 })
 
 await check("tenants page offers delegated sign-in", async () => {
+  // This is a separate new tenant, so it must start with no fields from the recovery fixture.
+  await evaluate(`window.tenuvault.storage.removeItem("tenuvault.onboarding.draft")`)
   await go("#/portal/tenants", "Tenants")
   await sleep(500)
   const opened = await evaluate(`(() => {
@@ -751,7 +763,12 @@ await check("tenants page offers delegated sign-in", async () => {
   assert(opened, "Connect tenant button not found")
   // Connect tenant opens the guided setup, the one way to connect a tenant on the desktop.
   assert(await waitForCondition(`location.hash === "#/portal/onboarding"`), "Connect tenant did not open the guided setup")
-  await evaluate(`[...document.querySelectorAll("button")].find(b => b.innerText.trim() === "Continue with Intune")?.click()`)
+  assert(await waitForText("Let's sign in"), "adding a tenant did not open the sign-in wizard")
+  await evaluate(`document.querySelector('[data-sign-in-method="ownApp"] button').click()`)
+  assert(await waitForText("What do you want to back up?"), "service choice missing")
+  assert(await evaluate(`[...document.querySelectorAll('[aria-label^="Back up "]')].every(input => !input.checked) && [...document.querySelectorAll("button")].find(b => b.innerText.trim() === "Continue with a service").disabled`), "a new tenant already has a service")
+  await evaluate(`document.querySelector('[aria-label="Back up Intune"]').click()`)
+  await evaluate(`[...document.querySelectorAll("button")].find(b => b.innerText.trim() === "Continue with Intune").click()`)
   assert(await waitForText("Set up with Microsoft sign-in"), "connect step did not open")
   assert(!(await evaluate(`document.body.innerText.includes("Client Secret")`)), "setup still asks for a client secret")
   await screenshot("03-add-tenant")

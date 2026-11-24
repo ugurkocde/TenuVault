@@ -146,7 +146,7 @@ export async function checkBackupCancel({ check, evaluate, waitForCondition, scr
           frame.contentWindow.tenuvault = {
             ...window.tenuvault,
             storage: { ...window.tenuvault.storage, setItem: async () => {}, removeItem: async () => {} },
-            setup: { ...window.tenuvault.setup, checkPermissions: async () => ({ missing: [] }), saveServices: async () => {} },
+            setup: { ...window.tenuvault.setup, checkPermissions: async () => ({ missing: [] }), enrollOwnApp: async () => ({ result: true }) },
             auth: { ...window.tenuvault.auth, signIn: async () => ({ tenantId: '99999999-9999-9999-9999-999999999999', clientId: '22222222-2222-2222-2222-222222222222', username: 'smoke@example.test', name: 'Smoke' }) },
             license: { ...window.tenuvault.license, checkNewTenant: async () => window.tenuvault.license.status() },
             backups: { ...window.tenuvault.backups, cancel: async id => {
@@ -195,10 +195,11 @@ export async function checkBackupCancel({ check, evaluate, waitForCondition, scr
           })()`)
           assert(await waitForCondition(`${button("Sign in with Microsoft")}?.disabled === false`), "fixture sign-in was not ready")
           await evaluate(`${button("Sign in with Microsoft")}.click()`)
+          assert(await waitForCondition(`${button("Continue to storage")}?.disabled === false`), "sign-in results did not load")
+          await evaluate(`${button("Continue to storage")}.click()`)
           assert(await waitForCondition(`${button("Continue")}?.disabled === false`), "local storage choice did not load")
           await evaluate(`${button("Continue")}.click()`)
-          assert(await waitForCondition(`Boolean(${button("Run first backup")})`), "first backup did not load")
-          await evaluate(`${button("Run first backup")}.click()`)
+          assert(await waitForCondition(`Boolean(${button("Cancel backup")})`), "first backup did not start automatically")
         } else {
           assert(await waitForCondition(`Boolean(${button("Run Backup")})`), "backup page did not load")
           await evaluate(`${button("Run Backup")}.click()`)

@@ -227,6 +227,8 @@ export interface SignInFields {
 }
 
 interface TenantSignInFormProps {
+  expectedTenant?: string
+  wizard?: boolean
   choice?: PermissionChoice
   onSignedIn: (account: SignedInAccount, displayName: string) => void
   /** Called with every change to the fields, so a caller can keep them. */
@@ -243,7 +245,7 @@ interface TenantSignInFormProps {
 }
 
 /** Tenant, client id and optional display name, then interactive Microsoft sign-in. */
-export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Sign in with Microsoft", initial, autoSignIn, hidePaste = false, choice }: TenantSignInFormProps) {
+export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Sign in with Microsoft", initial, autoSignIn, hidePaste = false, choice, wizard, expectedTenant }: TenantSignInFormProps) {
   const [tenant, setTenant] = useState(initial?.tenant ?? "")
   const [clientId, setClientId] = useState(initial?.clientId ?? "")
   const [displayName, setDisplayName] = useState(initial?.displayName ?? "")
@@ -356,7 +358,8 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
     setAttempt((value) => value + 1)
     let again = false
     try {
-      const account = await (loginHint ? bridge.auth.signIn(tenant.trim(), clientId.trim(), { loginHint }) : bridge.auth.signIn(tenant.trim(), clientId.trim()))
+      const options = { ...(loginHint ? { loginHint } : {}), ...(wizard ? { wizard, expectedTenant } : {}) }
+      const account = await (loginHint || wizard ? bridge.auth.signIn(tenant.trim(), clientId.trim(), options) : bridge.auth.signIn(tenant.trim(), clientId.trim()))
       if (active.current) onSignedIn(account, displayName.trim())
     } catch (error) {
       if (!active.current) return

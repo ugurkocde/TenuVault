@@ -20,9 +20,9 @@ interface TenantDetails {
 const known = (value: number | null | undefined): number | null => (typeof value === "number" ? value : null)
 
 /** Builds a tenant profile from Microsoft Graph details, without placeholder values. */
-export async function buildTenantProfile(credentials: TenantCredentials): Promise<Tenant> {
+export async function buildTenantProfile(credentials: TenantCredentials, readDetails = true): Promise<Tenant> {
   let details: TenantDetails = {}
-  try {
+  if (readDetails) try {
     const response = await fetch("/api/fetch-tenant-details", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
