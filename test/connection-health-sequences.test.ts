@@ -51,7 +51,7 @@ function harness() {
     tenant: () => connected ? { clientId: client, storage: "azure", storageId: storage } : null,
     account: () => account,
     reader: () => reader,
-    settings: () => ({ intune: { enabled: true, access: "backup", areas: {} }, conditionalAccess: { enabled: false, access: "backup", areas: {} }, entra: { enabled: false, access: "backup", areas: {} }, defender: { enabled: false, access: "backup", areas: {} } }),
+    settings: () => ({ intune: { enabled: true, access: "backup", areas: {} }, conditionalAccess: { enabled: false, access: "backup", areas: {} }, entra: { enabled: false, access: "backup", areas: {} } }),
     token: (_tenant, _client, resource) => new Promise((resolve, reject) => pending.push({ lane: resource === "graph" ? "admin" : "storage", epoch: epochs[resource === "graph" ? "admin" : "storage"], process, resolve, reject })),
     readerToken: () => new Promise((resolve, reject) => pending.push({ lane: "reader", epoch: epochs.reader, process, resolve, reject })),
   }
