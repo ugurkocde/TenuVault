@@ -1,4 +1,4 @@
-import { moduleForFolder } from "../src/shared/services/modules"
+import { moduleForFolder, restoreAccessGuidance } from "../src/shared/services/modules"
 import { createHash } from "node:crypto"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { NextRequest } from "../src/main/api/next-server-shim"
@@ -8,6 +8,7 @@ import { SUPPORTED_OPERATIONS, unsupportedReason, type OperationAction } from ".
 import { FeatureError } from "../src/main/features/route"
 import { PROMOTION_FOLDERS } from "../src/main/features/promotion/engine"
 import { CREATED_FOLDER } from "../src/main/frameworks/service"
+import { directoryPermissionBlocker } from "../src/main/restore/directory-permissions"
 import { restoreApprovals, saveRestoreApproval, setRestoreApprovalStore } from "../src/main/storage/restore-approvals"
 import { setRestoreJournalStore } from "../src/main/storage/restore-journal"
 import { POST as listBackupContents } from "../src/portal/app/api/list-backup-contents/route"
@@ -227,6 +228,24 @@ describe("Intune policy set restore permission", () => {
     expect(items[0].replaceBlocker).toBeUndefined()
     expect(await restore(type, { mode: "copy", assignments: false })).toMatchObject({ success: true, action: "created" })
     expect(writes(seen)).toEqual([`POST /beta/${endpoint}`])
+  })
+})
+
+describe("restore permission guidance", () => {
+  it("explains Start now without a prior permission check", () => {
+    expect(restoreAccessGuidance(GRAPH_CLI_CLIENT_ID)).toBe(GRAPH_CLI_READ_ONLY)
+  })
+
+  it("gives general permission guidance when the client ID is missing", () => {
+    expect(restoreAccessGuidance()).toBe("Review the restore permissions for this service. Services and permissions shows how to add them.")
+  })
+
+  it.each([
+    ["Start now", GRAPH_CLI_CLIENT_ID, GRAPH_CLI_READ_ONLY],
+    ["TenuVault app", TENUVAULT_CLIENT_ID, "This restore needs Group.ReadWrite.All. Review the restore permission pack for this service in Sign-in and access."],
+    ["your own app registration", credentials.appId, "This restore needs Group.ReadWrite.All. Add it to your app registration. Services and permissions shows how to add it."],
+  ])("explains the directory restore blocker for %s", (_method, clientId, blocker) => {
+    expect(directoryPermissionBlocker("opaque-token", ["Group.ReadWrite.All"], clientId, ["Group.Read.All"])).toBe(blocker)
   })
 })
 

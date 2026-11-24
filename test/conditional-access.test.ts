@@ -186,7 +186,7 @@ describe("Conditional Access module permissions", () => {
   })
 
   it("explains how to add the restore permission, and leads to the card that fixes it", () => {
-    expect(restorePermissionBlocker("ConditionalAccessPolicies", delegated("Policy.Read.All"))).toMatch(/Policy.ReadWrite.ConditionalAccess.*Services and permissions shows how to add it/)
+    expect(restorePermissionBlocker("ConditionalAccessPolicies", delegated("Policy.Read.All"))).toMatch(/Policy.ReadWrite.ConditionalAccess.*Services and permissions shows how to add them/)
     expect(restorePermissionBlocker("ConditionalAccessPolicies", delegated("Policy.Read.All", "Policy.ReadWrite.ConditionalAccess"))).toBeUndefined()
   })
 

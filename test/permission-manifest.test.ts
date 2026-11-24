@@ -270,12 +270,12 @@ describe("Permissions per folder and sign-in mode", () => {
   })
 
   it("stops a restore up front for a service with a token pre-check, with the folder's own permission or the reason it cannot be restored", () => {
-    expect(restorePermissionBlocker("TokenLifetimePolicies", delegated("Policy.Read.All"))).toBe("Restoring Entra ID tenant settings needs the Policy.ReadWrite.ApplicationConfiguration and Application.Read.All or Application.ReadWrite.All permission. Add it to your app registration. Services and permissions shows how to add it.")
+    expect(restorePermissionBlocker("TokenLifetimePolicies", delegated("Policy.Read.All"))).toBe("Restoring Entra ID tenant settings needs the Policy.ReadWrite.ApplicationConfiguration and Application.Read.All or Application.ReadWrite.All permission. Review the restore permissions for this service. Services and permissions shows how to add them.")
     expect(restorePermissionBlocker("TokenLifetimePolicies", delegated("Policy.ReadWrite.ApplicationConfiguration", "Application.Read.All"))).toBeUndefined()
     expect(restorePermissionBlocker("HardwareOathDevices", delegated("Policy.ReadWrite.AuthenticationMethod"))).toBe("Entra ID authentication cannot be restored through Microsoft Graph.")
     expect(restorePermissionBlocker("DefenderCustomDetectionRules", application("CustomDetection.Read.All"))).toBe("Defender detection and response can only be restored by a signed-in admin.")
     // Conditional Access as before, and Intune never.
-    expect(restorePermissionBlocker("ConditionalAccessPolicies", delegated("Policy.Read.All"))).toBe("Restoring Entra Conditional Access policies needs the Policy.ReadWrite.ConditionalAccess permission. Add it to your app registration. Services and permissions shows how to add it.")
+    expect(restorePermissionBlocker("ConditionalAccessPolicies", delegated("Policy.Read.All"))).toBe("Restoring Entra Conditional Access policies needs the Policy.ReadWrite.ConditionalAccess permission. Review the restore permissions for this service. Services and permissions shows how to add them.")
     expect(restorePermissionBlocker("DeviceCategories", delegated())).toBeUndefined()
   })
 
