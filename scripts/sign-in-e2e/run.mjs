@@ -33,7 +33,8 @@ import { connect } from "node:net"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { chromium, firefox, webkit } from "playwright"
-import { LOGIN_HOST, startStandIn } from "./stand-in.mjs"
+import { startStandInProxy } from "./proxy.mjs"
+import { AUTHORIZE_FORM_HEADER, LOGIN_HOST, startStandIn } from "./stand-in.mjs"
 import { cleanup, forgetAppSecret, install, makeCertificates } from "./runner.mjs"
 
 // The app checkout is the current directory: the release workflow runs a harness from another
@@ -66,6 +67,7 @@ let failures = 0
 const results = []
 
 let standIn
+let standInProxy
 
 /** Writes what is known so far, so a step that times out still leaves its diagnostics. */
 function flush() {
@@ -100,7 +102,8 @@ function assert(condition, message) {
 async function launchApp(label) {
   const port = 9800 + Math.floor(Math.random() * 1000)
   const profile = mkdtempSync(join(tmpdir(), "tenuvault-sign-in-e2e-"))
-  const args = [...(packagedApp ? [] : [desktopDir]), `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`]
+  // The app's HTTPS requests use Electron's network stack and still verify the OS trust chain.
+  const args = [...(packagedApp ? [] : [desktopDir]), `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, `--proxy-server=${standInProxy.url}`]
   // The unpacked Linux package has no setuid sandbox helper. Its secrets go to the keyring the
   // workflow starts; naming the store spares Chromium the guess from the desktop environment.
   if (process.platform === "linux") args.push("--no-sandbox", "--password-store=gnome-libsecret")
@@ -197,13 +200,23 @@ function listening(port) {
 const redirectPort = (url) => Number(new URL(url.searchParams.get("redirect_uri")).port)
 
 async function openBrowser(engine, standIn) {
-  const browser = await engine.type.launch(engine.channel ? { channel: engine.channel } : {})
+  // The browser must send the form directly to the app's listener after loading it via the proxy.
+  const browser = await engine.type.launch({
+    channel: engine.channel,
+    proxy: { server: standInProxy.url, bypass: "localhost" },
+  })
   // The stand-in's root is in the operating system's trust store for the app. Every browser
   // context here skips its own certificate check (Firefox and WebKit keep trust stores of their
   // own); the app's certificate checks stay real and are the ones under test.
   const context = await browser.newContext({ ignoreHTTPSErrors: true })
   await context.addCookies([standIn.cookie])
   return { browser, context, page: await context.newPage() }
+}
+
+async function visitAuthorize(page, url) {
+  // Inspect the authorize response as soon as it arrives, before the form posts on load.
+  const response = await page.goto(url.href, { waitUntil: "commit" })
+  assert(response?.ok() && response.headers()[AUTHORIZE_FORM_HEADER] === "1", `the authorize request did not receive a form from the local stand-in (HTTP ${response?.status() ?? "no response"})`)
 }
 
 async function signInWith(engine, standIn) {
@@ -219,7 +232,7 @@ async function signInWith(engine, standIn) {
     standIn.setMode("code")
     const opened = await openBrowser(engine, standIn)
     browser = opened.browser
-    await opened.page.goto(url.href)
+    await visitAuthorize(opened.page, url)
     // The stand-in's form posts to http://localhost:<port>; the app answers with its own page.
     await opened.page.waitForURL(`http://localhost:${port}/`, { timeout: 20_000 })
     await opened.page.getByText("Go back to TenuVault").waitFor({ timeout: 10_000 })
@@ -259,11 +272,11 @@ async function refusals(standIn) {
 
     // An answer with a state that is not this attempt's is refused and leaves the sign-in waiting.
     standIn.setMode("wrong-state")
-    const refused = new Promise((resolveRefused) => opened.page.on("response", (response) => {
-      if (response.url().startsWith(`http://localhost:${port}`)) resolveRefused(response.status())
-    }))
-    await opened.page.goto(url.href)
-    assert(await Promise.race([refused, sleep(15_000).then(() => "none")]) === 400, "the listener did not refuse an answer with another state")
+    const [refused] = await Promise.all([
+      opened.page.waitForResponse(`http://localhost:${port}/`, { timeout: 15_000 }),
+      visitAuthorize(opened.page, url),
+    ])
+    assert(refused.status() === 400, "the listener did not refuse an answer with another state")
     await sleep(1000)
     assert(await app.page.getByText("Waiting for sign-in...").isVisible(), "the sign-in stopped waiting after an answer with another state")
     assert(!(await app.page.getByText("Signed in as").isVisible()), "an answer with another state signed in")
@@ -271,7 +284,7 @@ async function refusals(standIn) {
 
     // Microsoft's refusal, with the right state, ends the attempt with the app's own explanation.
     standIn.setMode("deny")
-    await opened.page.goto(url.href)
+    await visitAuthorize(opened.page, url)
     await opened.page.getByText("Sign-in failed").waitFor({ timeout: 20_000 })
     await app.page.getByRole("alert").filter({ hasText: "The consent was declined in the browser." }).waitFor({ timeout: 20_000 })
     await app.page.screenshot({ path: join(outDir, "refusals-app.png") })
@@ -317,6 +330,7 @@ try {
   const certificates = makeCertificates()
   install(certificates.ca)
   standIn = await startStandIn({ key: certificates.key, cert: certificates.cert, tenantId: TENANT_ID, clientId: CLIENT_ID, account: ACCOUNT })
+  standInProxy = await startStandInProxy(standIn.server.address().port)
   for (const engine of ENGINES) await check(`first sign-in completes in ${engine.name}`, () => signInWith(engine, standIn))
   await check("a wrong state is refused and a refusal shows the app's error", () => refusals(standIn))
 } catch (error) {
@@ -325,6 +339,7 @@ try {
   console.log(results.at(-1))
 } finally {
   flush()
+  await standInProxy?.close()
   await standIn?.close()
   undo()
   flush()

@@ -1,8 +1,8 @@
 /**
  * The changes the sign-in test makes to the CI runner, the way an administrator of the machine
- * could, without telling the app: hosts file entries that send login.microsoftonline.com and
- * the licensing host to the local stand-in, and a throwaway root certificate in the operating
- * system's trust store that the stand-in's certificate chains to. The app keeps its own
+ * could: hosts file entries for the system browser the app opens, and a throwaway root
+ * certificate in the operating system's trust store that the stand-in's certificate chains to.
+ * The harness proxy routes HTTPS for the tested app and browsers. The app keeps its own
  * authority, redirect, browser opener and certificate checks.
  *
  * - Linux: /etc/hosts, the NSS database in ~/.pki/nssdb (what Chromium on Linux trusts) and the
