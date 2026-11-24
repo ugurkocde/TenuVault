@@ -1,15 +1,18 @@
 import { resourcePackScopes, tenantPermissionPacks } from "../src/shared/services/permission-packs"
 import { TENUVAULT_CLIENT_ID } from "../src/shared/tenant-connection"
+import { LogLevel, type Configuration } from "@azure/msal-node"
 import { describe, expect, it, vi } from "vitest"
 
 const msal = vi.hoisted(() => ({
   interactive: vi.fn<(request: unknown) => Promise<unknown>>(),
   silent: vi.fn<(request: unknown) => Promise<unknown>>(),
+  client: null as Configuration | null,
 }))
 
 vi.mock("@azure/msal-node", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@azure/msal-node")>()
   class PublicClientApplication {
+    constructor(configuration: Configuration) { msal.client = configuration }
     getAllAccounts = async () => []
     acquireTokenInteractive = msal.interactive
     acquireTokenSilent = msal.silent
@@ -387,4 +390,19 @@ describe("TenuVault app token verification", () => {
     expect(msal.silent).toHaveBeenLastCalledWith(expect.objectContaining({ forceRefresh: true, scopes: ["https://storage.azure.com/user_impersonation"] }))
     expect(auth.accounts()).toEqual([])
   })
+})
+
+it("logs only fixed codes from the delegated MSAL logger", async () => {
+  msal.interactive.mockResolvedValueOnce({ account: { tenantId: TENANT, username: "admin@example.test", homeAccountId: "account" } })
+  await manager().signIn(TENANT, CLIENT)
+  const log = vi.spyOn(console, "log").mockImplementation(() => undefined)
+  try {
+    const logger = msal.client?.system?.loggerOptions
+    expect(logger?.piiLoggingEnabled).toBe(false)
+    logger!.loggerCallback!(LogLevel.Warning, "AADSTS65001 for admin@example.test with private context", true)
+    logger!.loggerCallback!(LogLevel.Warning, "private warning for admin@example.test", false)
+    expect(log.mock.calls).toEqual([["[msal]", "AADSTS65001"], ["[msal]", "sign_in_warning"]])
+  } finally {
+    log.mockRestore()
+  }
 })

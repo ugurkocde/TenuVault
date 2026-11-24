@@ -2,6 +2,7 @@ import { mkdtempSync, readFileSync } from "node:fs"
 import { X509Certificate, createPrivateKey } from "node:crypto"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { LogLevel, type Configuration } from "@azure/msal-node"
 import { describe, expect, it, vi } from "vitest"
 import { BackupReaderError, BackupReaderService, checkReaderToken, readerConfidenceRead, type AcquireToken } from "../src/main/auth/backup-reader"
 import { certificateIdentity, createSelfSignedCertificate } from "../src/main/auth/certificate"
@@ -711,4 +712,33 @@ describe("Backup Reader per service", () => {
     reader.prepare(TENANT, "LAPTOP-1")
     expect((await reader.verify(TENANT, READER)).excludedTypes).toEqual([])
   })
+})
+
+const certificateMsal = vi.hoisted(() => ({
+  configuration: null as Configuration | null,
+  acquire: vi.fn(),
+}))
+vi.mock("@azure/msal-node", async importOriginal => ({
+  ...await importOriginal<typeof import("@azure/msal-node")>(),
+  ConfidentialClientApplication: class {
+    constructor(configuration: Configuration) { certificateMsal.configuration = configuration }
+    acquireTokenByClientCredential = certificateMsal.acquire
+  },
+}))
+
+it("logs only fixed codes from the Backup Reader MSAL logger", async () => {
+  const reader = new BackupReaderService(store(), { services: () => CLASSIC })
+  reader.prepare(TENANT, "Fixture")
+  certificateMsal.acquire.mockResolvedValueOnce({ accessToken: graphToken({ roles: readerRoles({ intune: { access: "backup" }, conditionalAccess: { access: "backup" } }) }) })
+  await reader.verify(TENANT, READER)
+  const log = vi.spyOn(console, "log").mockImplementation(() => undefined)
+  try {
+    const logger = certificateMsal.configuration?.system?.loggerOptions
+    expect(logger?.piiLoggingEnabled).toBe(false)
+    logger!.loggerCallback!(LogLevel.Warning, "AADSTS700016 for admin@example.test with private context", true)
+    logger!.loggerCallback!(LogLevel.Warning, "private warning for admin@example.test", false)
+    expect(log.mock.calls).toEqual([["[msal reader]", "AADSTS700016"], ["[msal reader]", "sign_in_warning"]])
+  } finally {
+    log.mockRestore()
+  }
 })
