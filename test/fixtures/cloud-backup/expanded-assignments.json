@@ -5,7 +5,7 @@
   ],
   "cases": [
     { "name": "detail collection envelope", "detail": { "value": [] }, "unread": true },
-    { "name": "detail collection envelope with a matching ID", "detail": { "id": "cfg-1", "value": [], "assignments": [] }, "unread": true },
+    { "name": "detail collection envelope with a matching ID", "detail": { "id": "cfg-1", "value": [], "@odata.count": 0, "assignments": [] }, "unread": true },
     { "name": "detail missing the policy ID", "detail": { "assignments": [] }, "unread": true },
     { "name": "detail for a different policy", "detail": { "id": "cfg-2", "assignments": [] }, "unread": true },
     { "name": "detail root array", "detail": [{ "id": "cfg-1", "assignments": [] }], "unread": true },

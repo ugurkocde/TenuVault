@@ -104,7 +104,7 @@ function validateDetail(read: Json, expected?: { key: string; id: string }, enve
   // A bare entity can have a value property of its own. A declared wrapper with its own identity still has to match.
   const innerHasIdentity = expected && inner && typeof inner === "object" && !Array.isArray(inner) && Object.hasOwn(inner, expected.key)
   if (inner !== undefined && (!matchesIdentity || innerHasIdentity)) return validateDetail(inner, expected)
-  if (Array.isArray(value) && !matchesIdentity) {
+  if (Array.isArray(value) && (!matchesIdentity || Object.hasOwn(read, "@odata.count"))) {
     throw new GraphResponseValidationError("Microsoft Graph did not return a single policy object")
   }
   if (expected && !matchesIdentity) {

@@ -1210,7 +1210,8 @@ function Invoke-TvGraphDetail {
         $detail = $value
         $matchesId = $Id -and $detail.psbase.Keys -ccontains "id" -and $detail["id"] -is [string] -and $detail["id"] -ceq $Id
     }
-    if ($detail.psbase.Keys -ccontains "@odata.nextLink" -or ($detail["value"] -is [array] -and -not $matchesId)) {
+    if ($detail.psbase.Keys -ccontains "@odata.nextLink" -or
+        ($detail["value"] -is [array] -and (-not $matchesId -or $detail.psbase.Keys -ccontains "@odata.count"))) {
         throw "Microsoft Graph did not return a single policy object"
     }
     if ($Id -and -not $matchesId) {
