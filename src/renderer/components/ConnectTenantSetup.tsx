@@ -165,7 +165,7 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered, onRunningCh
   }
 
   return (
-    <div data-tenant-connect className="grid items-start gap-5 text-sm text-gray-700 @3xl:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
+    <div data-tenant-connect className="grid items-start gap-4 text-sm text-gray-700 @3xl:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
       <div className="min-w-0 space-y-2">
         <p className="text-base text-gray-600">TenuVault creates its app registration for your chosen services, then signs you in through it.</p>
 
@@ -312,7 +312,7 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered, onRunningCh
         </details>
 
       </div>
-      <ul className="space-y-4 rounded-2xl border border-border bg-muted/40 p-5">
+      <ul className="space-y-2 rounded-2xl border border-border bg-muted/40 p-4">
         {REASONS.map(({ icon: Icon, title, text }) => (
           <li key={title} className="flex gap-3">
             <span className="flex size-8 flex-shrink-0 items-center justify-center rounded-full bg-card text-gray-900" aria-hidden="true"><Icon className="h-4 w-4" /></span>

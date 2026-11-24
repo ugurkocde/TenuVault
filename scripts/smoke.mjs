@@ -772,6 +772,16 @@ await check("tenants page offers delegated sign-in", async () => {
   assert(await waitForText("Set up with Microsoft sign-in"), "connect step did not open")
   assert(!(await evaluate(`document.body.innerText.includes("Client Secret")`)), "setup still asks for a client secret")
   await screenshot("03-add-tenant")
+  await send("Emulation.setDeviceMetricsOverride", { width: 1024, height: 900, deviceScaleFactor: 1, mobile: false })
+  try {
+    const size = await evaluate(`(() => {
+      const viewport = document.scrollingElement
+      return { width: viewport.scrollWidth, height: viewport.scrollHeight }
+    })()`)
+    assert(size.width <= 1024 && size.height <= 901, `Connect overflows at 1024x900: ${size.width}x${size.height}`)
+  } finally {
+    await send("Emulation.clearDeviceMetricsOverride")
+  }
 })
 
 await check("onboarding is the desktop wizard, without client secrets", async () => {
