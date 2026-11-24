@@ -276,7 +276,8 @@ export default function DriftDetectionPage() {
   // The loaded list decides, so a backup made after a scan found too few lifts the notice.
   const insufficient = !running && !result && (backupsLoaded ? completeBackups.length < 2 : failedJob?.code === "INSUFFICIENT_BACKUPS")
   const showResult = !!result && !!selectedTenant
-  const noDriftText = result?.largeFolders?.length ? "No policy drift. Compare inventory in pages below." : (result?.unknownTypes?.length || result?.legacyReadFailure) ? "No drift found in the types compared." : result ? `No drift between ${formatDate(result.baseline.timestamp)} and ${formatDate(result.comparison.timestamp)}` : ""
+  const hasCoverageNotice = Boolean(result?.unknownTypes?.length || result?.legacyReadFailure || result?.largeFolders?.length)
+  const noDriftText = result?.largeFolders?.length ? "No policy drift. Compare inventory in pages below." : hasCoverageNotice ? "No drift found in the types compared." : result ? `No drift between ${formatDate(result.baseline.timestamp)} and ${formatDate(result.comparison.timestamp)}` : ""
   const counts = {
     added: drifts.filter(d => d.changeType === "added").length,
     modified: drifts.filter(d => d.changeType === "modified").length,
@@ -648,7 +649,7 @@ export default function DriftDetectionPage() {
         </div>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="outline" size="lg" disabled={!result || shownDrifts.length === 0}>
+            <Button variant="outline" size="lg" disabled={!result || (shownDrifts.length === 0 && !hasCoverageNotice)}>
               <Download className="h-4 w-4 mr-2" />
               Export
               <ChevronDown className="h-4 w-4 ml-1" />
@@ -791,7 +792,7 @@ export default function DriftDetectionPage() {
 
           {drifts.length === 0 && (
             <EmptyState icon={<Check className="h-6 w-6" />} title={noDriftText}>
-              <p>Every item both backups include is the same in each. Choose other backups above to compare a different period.</p>
+              <p>Choose other backups above to compare a different period.</p>
             </EmptyState>
           )}
 

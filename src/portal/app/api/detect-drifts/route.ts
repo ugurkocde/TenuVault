@@ -268,27 +268,43 @@ export async function POST(request: NextRequest) {
     }
     signal?.throwIfAborted()
 
-    // Reports include the inventory half of mixed runs without changing interactive drift scans.
+    // Split inventory is separate from the policy scan. A report can resolve both companions
+    // and compare them, while the interactive result must account for what it left unchecked.
     let inventoryBackups: DriftResult["inventoryBackups"]
-    if (documentItems && !isLargeBackup(olderBackup.name) && !isLargeBackup(newerBackup.name)) {
-      const halves = await Promise.all([olderBackup, newerBackup].map(async backup => {
-        const metadata = backup.metadata as Record<string, any>
-        for (const outcome of metadata.LargeBackupOutcomes ?? []) if (typeof outcome.Folder === "string" && !largeFolders.includes(outcome.Folder)) largeFolders.push(outcome.Folder)
-        const id = metadata.CompanionBackup
-        if (typeof id !== "string" || !isBackupName(id) || !isLargeBackup(id)) return null
-        try {
-          const other = await loadMetadata(id)
-          if (!matchingCompanions(backup.name, metadata, id, other) || !other) return null
-          for (const folder of Object.keys(largeIndexes(other))) if (!largeFolders.includes(folder)) largeFolders.push(folder)
-          return completeHalf(other) ? id : null
-        } catch {
-          signal?.throwIfAborted()
-          return null
-        }
-      }))
-      if (halves[0] && halves[1]) inventoryBackups = { baseline: halves[0], comparison: halves[1] }
-      // Even a lost companion with no readable folder declarations cannot certify an unchanged run.
-      if (!inventoryBackups && [olderBackup, newerBackup].some(backup => (backup.metadata as any).CompanionBackup) && !largeFolders.length) largeFolders.push("Large inventory")
+    const unknownTypes = new Set(coverage.unknown)
+    if (!isLargeBackup(olderBackup.name) && !isLargeBackup(newerBackup.name)) {
+      const backups = [olderBackup, newerBackup]
+      const declared = new Set<string>()
+      for (const { metadata } of backups) {
+        const outcomes = (metadata as Record<string, unknown>).LargeBackupOutcomes
+        if (!Array.isArray(outcomes)) continue
+        for (const outcome of outcomes) if (typeof outcome?.Folder === "string") declared.add(outcome.Folder)
+      }
+      if (documentItems) {
+        const halves = await Promise.all(backups.map(async backup => {
+          const metadata = backup.metadata as Record<string, any>
+          const id = metadata.CompanionBackup
+          if (typeof id !== "string" || !isBackupName(id) || !isLargeBackup(id)) return null
+          try {
+            const other = await loadMetadata(id)
+            if (!other || !matchingCompanions(backup.name, metadata, id, other)) return null
+            for (const folder of Object.keys(largeIndexes(other))) declared.add(folder)
+            return completeHalf(other) ? id : null
+          } catch {
+            signal?.throwIfAborted()
+            return null
+          }
+        }))
+        if (halves[0] && halves[1]) inventoryBackups = { baseline: halves[0], comparison: halves[1] }
+      }
+      if (!declared.size && !largeFolders.length && !inventoryBackups && backups.some(backup => (backup.metadata as Record<string, unknown>).CompanionBackup)) {
+        declared.add("Large inventory")
+      }
+      if (documentItems) {
+        for (const folder of declared) if (!largeFolders.includes(folder)) largeFolders.push(folder)
+      } else {
+        for (const folder of declared) unknownTypes.add(folder)
+      }
     }
 
     const result: DriftResult = {
@@ -301,7 +317,7 @@ export async function POST(request: NextRequest) {
       baseline: backupRef(olderBackup),
       comparison: backupRef(newerBackup),
       warnings,
-      ...(coverage.unknown.length ? { unknownTypes: coverage.unknown } : {}),
+      ...(unknownTypes.size ? { unknownTypes: [...unknownTypes] } : {}),
       ...(coverage.legacyReadFailure ? { legacyReadFailure: true } : {}),
       stats,
       ...(settingNames ? { settingNames } : {}),

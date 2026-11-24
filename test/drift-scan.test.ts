@@ -177,6 +177,19 @@ const request = (body: Record<string, unknown> = {}) => new NextRequest('http://
 const comparable = (drifts: any[]) => drifts.map(({ id: _id, detectedAt: _at, ...rest }) => rest).sort((a, b) => a.backupFile.localeCompare(b.backupFile))
 
 describe('Drift scan', () => {
+  it('reports unread Users declared on the ordinary manifest in an interactive comparison', async () => {
+    const files = { 'DeviceConfigurations/A.json': policy('a', 'A') }
+    const ordinary = { TenantId: TENANT_A, Scope: { Included: ['DeviceConfigurations'] }, Outcomes: [{ Folder: 'DeviceConfigurations', Outcome: 'saved', Saved: 1 }] }
+    fakeStorage({
+      [OLD]: { metadata: { ...ordinary, Status: 'Success' }, files },
+      [NEW]: { metadata: { ...ordinary, Status: 'Success',
+        LargeBackupOutcomes: [{ Folder: 'Users', Outcome: 'failed', Saved: 0, Error: 'Could not read Users.' }] }, files },
+    })
+    const response = await drift(request({ baseline: OLD, comparison: NEW }))
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ drifts: [], unknownTypes: ['Users'], summary: { deleted: 0 } })
+  })
+
   it.each([OLD, NEW])('keeps legacy compliance deletions when %s carries large inventory', async largeBackup => {
     const backups: Record<string, FakeBackup> = {
       [OLD]: { metadata: { TenantId: TENANT_A, Status: 'Success', Scope: { Included: ['CompliancePolicies', 'DeviceConfigurations'] } }, files: {
