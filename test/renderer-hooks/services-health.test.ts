@@ -324,6 +324,39 @@ it("keeps Defender on with a Needs access badge and the Start now repair link", 
   expect(defender.querySelector("a")?.getAttribute("href")).toBe(`/portal/settings?section=signin#sign-in-${report.tenantId}`)
 })
 
+it("shows the plain status when the Backup Reader covers a service and notes when the sign-in lacks access", async () => {
+  const report = healthScene("defender-backup-types")
+  const folder = "DefenderSecureScoreControlStates"
+  mocks.check.mockResolvedValue({
+    ...report,
+    readerReadableServices: ["defender", "intune"],
+    coverage: [
+      { service: "defender", folders: [folder], readable: [] },
+      { service: "intune", folders: ["DeviceConfigurations"], readable: ["DeviceConfigurations"] },
+    ],
+  })
+  await render()
+  const defender = container.querySelector('[data-service="defender"]')!
+  const intune = container.querySelector('[data-service="intune"]')!
+  expect(defender.textContent).not.toContain("Needs access")
+  expect(defender.textContent).toContain("Scheduled backups can read this service with the Backup Reader. Your sign-in can't read it.")
+  expect(intune.textContent).not.toContain("Needs access")
+  expect(intune.textContent).not.toContain("Your sign-in can't read it.")
+})
+
+it("clears Needs access from Settings after permissions are added and checked again", async () => {
+  const report = healthScene("defender-backup-types")
+  const folder = "DefenderSecureScoreControlStates"
+  mocks.check.mockResolvedValue({ ...report, coverage: [{ service: "defender", folders: [folder], readable: [] }] })
+  await render()
+  const defender = container.querySelector('[data-service="defender"]')!
+  expect(defender.textContent).toContain("Needs access")
+  mocks.check.mockResolvedValue({ ...report, coverage: [{ service: "defender", folders: [folder], readable: [folder] }] })
+  await click("Check again")
+  expect(mocks.check).toHaveBeenLastCalledWith(HEALTH_TENANT, true)
+  expect(defender.textContent).not.toContain("Needs access")
+})
+
 it("shows Start now as read-only and omits permission grant instructions", async () => {
   const report = restoreGapFixture()
   mocks.check.mockResolvedValue({ ...report, graph: { ...report.graph, state: "consentMissing" }, readOnly: true })

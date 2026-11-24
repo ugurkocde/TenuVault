@@ -4,7 +4,7 @@ import { localStorageAccountName, RESOURCE_SCOPES } from "../../shared/constants
 import { isGuid, normalizeGuid } from "../../shared/security"
 import { admittedDirectoryPermissions } from "../../shared/intune/restore-matrix"
 import { tenantWriteTargets } from "../../shared/tenant-writes"
-import { accessTokenDigest, sharedTokenScopes, tokenIdentity } from "./token-identity"
+import { accessTokenDigest, observedTokenGrant, sharedTokenScopes, tokenIdentity } from "./token-identity"
 import { APPLICATION_METADATA_RESTORE_PACK, GRANT_REMOVAL_SCOPE, isPackWriteScope, missingPackScopes, type PermissionPack } from "../../shared/services/permission-packs"
 import { CONNECTION_WRITE_REFUSED, GRAPH_CLI_CLIENT_ID, GRAPH_CLI_DISABLED, GRAPH_CLI_NEXT_STEP, GRAPH_CLI_READ_ONLY, sharedSignInMethod as sharedMethod } from "../../shared/tenant-connection"
 import type { TenantConnection } from "../../shared/tenant-connection"
@@ -174,6 +174,13 @@ export class ConnectionCapabilities {
     const acquisition = this.issued.get(accessTokenDigest(token))
     const explicit = acquisition?.clientId === GRAPH_CLI_CLIENT_ID && acquisition.expiresAt > Date.now() ? acquisition.grantedScopes : undefined
     return graphCliScopes(token, explicit)
+  }
+
+  graphGrant(token: string): ReturnType<typeof observedTokenGrant> {
+    const acquisition = this.issued.get(accessTokenDigest(token))
+    const scopes = acquisition?.scope === RESOURCE_SCOPES.graph && !acquisition.reader && acquisition.expiresAt > Date.now()
+      ? acquisition.grantedScopes : undefined
+    return observedTokenGrant(token, scopes)
   }
 
   async authorizeRequest(url: URL, input: RequestInfo | URL, init: RequestInit | undefined, routeTenant: string | null): Promise<void | RequestAuthorization> {

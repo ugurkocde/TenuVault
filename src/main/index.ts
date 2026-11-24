@@ -572,6 +572,10 @@ async function bootstrap(): Promise<void> {
     connectionChanged: (tenantId) => health.connectionsChanged(tenantId),
     bindToken: (tenant, client, scope, token, expiresOn) => capabilities.bindReaderToken(tenant, client, scope, token, expiresOn),
   })
+  const readerScheduled = (tenantId: string) => {
+    const plan = license.plan(tenantId)
+    return Boolean(plan && allows(plan, "backupReader") && !capabilities.isGraphOnly(tenantId))
+  }
   // Connection health: what the token checks and the backup runs of each tenant observed, and what
   // that adds up to. A check asks Microsoft for a new token without any window, so it goes straight
   // to the sign-in and not through tokenFor: a check that fails must never ask the window for a sign-in.
@@ -589,12 +593,12 @@ async function bootstrap(): Promise<void> {
       const reader = backupReader.status(tenantId)
       return reader && { clientId: reader.clientId, credential: backupReader.connectionIdentity(tenantId)!, facts: { state: reader.state, notAfter: reader.notAfter, verifiedAt: reader.verifiedAt, verifiedRoles: reader.verifiedRoles, roleChange: reader.roleChange } }
     },
+    readerScheduled,
     // A new token of the Backup Reader, asked for the way a scheduled backup does: only on a plan
     // that includes the reader, and after the license check. A tenant without either is not asked.
     readerToken: async (tenantId) => {
       const profile = tenantProfile(tenantId)
-      const plan = license.plan(tenantId)
-      if (!profile || !plan || !allows(plan, "backupReader") || capabilities.isGraphOnly(tenantId)) return null
+      if (!profile || !readerScheduled(tenantId)) return null
       const reader = backupReader.tokens({ tenantId, clientId: profile.clientId, storageAccountName: profile.storageAccountName, trigger: "scheduled" })
       if (!reader || !(await license.requireEntitlement(tenantId).then(() => true, () => false))) return null
       return reader.graph({ fresh: true })
@@ -609,12 +613,12 @@ async function bootstrap(): Promise<void> {
   const engine = new BackupEngine({
     fetch: bridgedFetch,
     getToken: backupAccess.getToken,
+    graphGrant: token => capabilities.graphGrant(token),
     graphCliGrant: token => capabilities.graphCliGrant(token),
     wizardConnection: tenant => connections.get(tenant)?.origin === "wizard",
     services: (tenantId) => moduleSettings.selection(tenantId),
     unattendedTokens: (request) => {
-      const plan = license.plan(request.tenantId)
-      if (!plan || !allows(plan, "backupReader") || capabilities.isGraphOnly(request.tenantId)) return null
+      if (!readerScheduled(request.tenantId)) return null
       const reader = backupReader.tokens(request)
       if (!reader) return null
       return {
@@ -2037,7 +2041,12 @@ async function bootstrap(): Promise<void> {
       clientId.toLowerCase() === GRAPH_CLI_CLIENT_ID ? token => {
         const permissions = graphCliScopes(token.accessToken, token.grantedScopes)
         return permissions && { kind: "delegated", permissions }
-      } : undefined)
+      } : undefined,
+      () => {
+        if (!readerScheduled(tenantId)) return undefined
+        const report = health.report(tenantId)
+        return report.clientId.toLowerCase() === clientId.toLowerCase() ? report.readerReadableServices : undefined
+      })
   }
   handleTrusted("services:status", (_event, tenantId: unknown, clientId: unknown, refresh: unknown) => servicesFor(tenantId, clientId, refresh === true))
   handleTrusted("services:setEnabled", (_event, tenantId: unknown, clientId: unknown, id: unknown, enabled: unknown, confirmation: unknown) => {

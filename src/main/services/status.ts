@@ -1,10 +1,11 @@
 import { needsBackupAccess } from "../../shared/services/backup-coverage"
 import { graphCliCoverage } from "../../shared/services/graph-cli-coverage"
 import type { PermissionChoice } from "../../shared/services/manifest"
+import type { ConnectionHealthReport } from "../../shared/connection-health/model"
 import type { ServicesStatus } from "../../shared/ipc"
 import { INTUNE_TYPES } from "../../shared/intune/registry"
 import { checkModules, moduleForFolder, MODULES } from "../../shared/services/modules"
-import { grantedPermissions } from "../../shared/services/token"
+import { observedTokenGrant } from "../auth/token-identity"
 import { optionalPermissionStatus, type OptionalPermissionStatus } from "../../shared/services/optional-permissions"
 import type { ModuleSettings } from "./settings"
 
@@ -24,7 +25,8 @@ export async function servicesStatus(
   settings: ModuleSettings,
   graphToken: (forceRefresh: boolean) => Promise<{ accessToken: string; expiresOn?: Date | null; grantedScopes?: readonly string[] }>,
   refresh = false,
-  readGrant: (token: Awaited<ReturnType<typeof graphToken>>) => ReturnType<typeof grantedPermissions> = token => grantedPermissions(token.accessToken),
+  readGrant: (token: Awaited<ReturnType<typeof graphToken>>) => ReturnType<typeof observedTokenGrant> = token => observedTokenGrant(token.accessToken, token.grantedScopes),
+  readerReadableServices?: () => ConnectionHealthReport["readerReadableServices"],
 ): Promise<ServicesStatus> {
   const enabled = settings.get(tenantId)
   const listed = MODULES.filter((module) => WITH_TYPES.has(module.id))
@@ -43,7 +45,10 @@ export async function servicesStatus(
           const { access, areas } = enabled[module.id]
           return [module.id, { access, areas: Object.keys(areas).filter(area => areas[area]) }]
         }))
-        needsAccess = graphCliCoverage(granted.permissions, choice).filter(needsBackupAccess).map(row => row.service)
+        const readerServices = readerReadableServices?.()
+        needsAccess = graphCliCoverage(granted.permissions, choice)
+          .filter(row => needsBackupAccess(row) && !readerServices?.includes(row.service))
+          .map(row => row.service)
       }
       optional = optionalPermissionStatus(granted)
       checkedAt = issuedAt(token.accessToken) ?? new Date().toISOString()

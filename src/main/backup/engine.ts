@@ -153,6 +153,8 @@ export interface BackupEngineDeps {
   onOutcomes?: (outcomes: RunOutcomes, request: BackupRequest) => void
   /** Whether the tenant enrolled through the onboarding wizard. */
   wizardConnection?: (tenantId: string) => boolean
+  /** Permission claims or explicit response scopes for the Graph token. */
+  graphGrant?: (token: string) => ReturnType<typeof grantedPermissions>
   /** Receipt evidence for an opaque Start now token from the shared-client request binding. */
   graphCliGrant?: (token: string) => ReadonlySet<string> | undefined
   /** Permission names of a Graph token the run used, for health only; never changes its outcomes. */
@@ -535,7 +537,7 @@ export class BackupEngine {
     const startNow = request.clientId.toLowerCase() === GRAPH_CLI_CLIENT_ID
     const readVersion = (type: IntuneType) => startNow ? "beta" as const : graphVersion(type)
     const readGrant = (token: string): ReturnType<typeof grantedPermissions> => {
-      if (!startNow) return grantedPermissions(token)
+      if (!startNow) return this.deps.graphGrant ? this.deps.graphGrant(token) : grantedPermissions(token)
       const permissions = this.deps.graphCliGrant ? this.deps.graphCliGrant(token) : graphCliScopes(token)
       return permissions === undefined ? undefined : { kind: "delegated", permissions }
     }
@@ -586,9 +588,12 @@ export class BackupEngine {
     const moduleOff = new Set(disabledFolders(selection))
     const selectedTypes = includedTypes(scope).filter((type) => !moduleOff.has(type.folder))
     const notReadable = selectedTypes.filter((type) => readerExcluded.has(type.folder)).map((type) => type.folder)
+    // Wizard connections can enroll with partial consent for Intune.
+    const wizardDelegated = tokens.mode === "delegated" && this.deps.wizardConnection?.(request.tenantId)
+    const checkIntune = (folder: string) => wizardDelegated && moduleForFolder(folder)?.module.id === "intune"
     const permissionChecked = (folder: string) => {
       const entry = moduleForFolder(folder)
-      return entry?.module.precheck || entry?.part.backupPrecheck
+      return entry?.module.precheck || entry?.part.backupPrecheck || checkIntune(folder)
     }
     const granted = await moduleGrants(tokens, startNow || selectedTypes.some((type) => permissionChecked(type.folder)), network.signal, readGrant)
     if (granted) observeToken(granted)
@@ -596,13 +601,7 @@ export class BackupEngine {
     // A type only a signed-in admin can read is left out of a Backup Reader run whatever its token says: no permission changes that.
     const adminOnly = (type: IntuneType) => tokens.mode === "app-only" && signedInOnly(type.folder)
     const applicationOnly = (type: IntuneType) => signIn === "delegated" && type.backupMode === "application"
-    // Keep legacy Intune reads when any Intune type can be read. If this mixed backup's
-    // delegated token has no Intune access, skip that service and keep the coverage note.
-    const intuneTypes = selectedTypes.filter(type => moduleForFolder(type.folder)?.module.id === "intune")
-    const skipIntune = this.deps.wizardConnection?.(request.tenantId) && granted?.kind === "delegated" && intuneTypes.length > 0 &&
-      intuneTypes.every(type => !canBackUp(type.folder, granted)) &&
-      selectedTypes.some(type => !intuneTypes.includes(type) && !applicationOnly(type) && canBackUp(type.folder, granted))
-    const unpermitted = selectedTypes.filter((type) => !readerExcluded.has(type.folder) && (adminOnly(type) || applicationOnly(type) || ((startNow || permissionChecked(type.folder) || (skipIntune && intuneTypes.includes(type))) && granted && !canBackUp(type.folder, granted))))
+    const unpermitted = selectedTypes.filter((type) => !readerExcluded.has(type.folder) && (adminOnly(type) || applicationOnly(type) || ((startNow || permissionChecked(type.folder)) && granted && !canBackUp(type.folder, granted))))
     const types = selectedTypes.filter((type) => !readerExcluded.has(type.folder) && !unpermitted.includes(type))
       .map(type => type.betaReadPath && readVersion(type) === "beta" ? { ...type, path: type.betaReadPath } : type)
     const largeTypes = types.filter(type => type.volume === "large")
@@ -754,9 +753,12 @@ export class BackupEngine {
      */
     const notSetUp = (type: IntuneType, error: unknown) =>
       error instanceof GraphError && !error.continuationPage && !!type.notConfigured && classifyAnswer({ status: error.status, ...error.answer }, { notConfigured: type.notConfigured, mode: tokens.mode }).outcome === "notConfigured"
-    // Graph still enforces access when the token claims are unavailable or the account's role is narrower.
+    const coveredIntuneDenied = (type: IntuneType, error: unknown) =>
+      !startNow && checkIntune(type.folder) && granted?.kind === "delegated" && canBackUp(type.folder, granted) &&
+      error instanceof GraphError && error.status === 403
+    // A denial with a known Intune grant is a failure. Preserve the fallback when the grant is unknown.
     const checkedReadDenied = (type: IntuneType, error: unknown) =>
-      error instanceof GraphError && ((error.status === 403 && (startNow || moduleForFolder(type.folder)?.part.backupPrecheck === true)) || (startNow && error.status === 400))
+      !coveredIntuneDenied(type, error) && error instanceof GraphError && ((error.status === 403 && (startNow || moduleForFolder(type.folder)?.part.backupPrecheck === true)) || (startNow && error.status === 400))
     /**
      * Ends a type of a service that isolates its failures, by what the failed read means: the sign-in
      * may not read it, or it could not be read. The backup goes on with the other types. A read that
@@ -864,7 +866,7 @@ export class BackupEngine {
         // Access denied: the app registration lacks the permission or its admin consent (for example
         // one created before the type was supported), or the admin's Intune role does not cover the
         // type. It is left out and reported, without marking the backup incomplete for the rest.
-        const denied = error instanceof GraphError && error.status === 403 && !ORIGINAL_FOLDERS.has(type.folder)
+        const denied = error instanceof GraphError && error.status === 403 && !ORIGINAL_FOLDERS.has(type.folder) && !coveredIntuneDenied(type, error)
         // Counted before any rethrow, so the job sees this cause whichever failure ends it.
         if (!denied) recordFailure(outcome, error)
         network.signal.throwIfAborted()
@@ -1034,7 +1036,7 @@ export class BackupEngine {
           const code = providerErrorCode(answer?.code)
           const detail = answer ? ` (${providerStatus(answer.status, code)})` : ""
           const reason = `${type.label}${detail}: ${property} could not be read; the parent configuration was kept.`
-          const verdict = answer ? classifyAnswer(answer, scopeEvidence(error)) : { outcome: "failed" as const }
+          const verdict = answer && !coveredIntuneDenied(type, error) ? classifyAnswer(answer, scopeEvidence(error)) : { outcome: "failed" as const }
           if (verdict.outcome === "skipped") {
             if (!skippedTypes.includes(type.folder)) skippedTypes.push(type.folder)
             settle(type.folder, { outcome: "skipped", cause: verdict.cause, reason, status: answer?.status, ...(code ? { code } : {}) })

@@ -63,6 +63,30 @@ const readerFacts = (parts: Partial<ReaderObservation> = {}): ReaderObservation 
 const evaluate = (connections: ConnectionRecord[], input: Partial<HealthInput> = {}, now = NOW) =>
   evaluateHealth({ tenantId: TENANT, clientId: CLIENT, reader: null, storage: "local", settings: settings(), connections, ...input }, now)
 
+it("uses only the scheduled Backup Reader's effective coverage alongside delegated evidence", () => {
+  const roles = ["SecurityEvents.Read.All", "DeviceManagementConfiguration.Read.All"]
+  const connections = [delegated({ graph: healthy(["DeviceManagementConfiguration.Read.All"]) })]
+  const input = {
+    readerClientId: READER,
+    readerScheduled: true,
+    reader: readerFacts({ verifiedAt: ago(MINUTE), verifiedRoles: roles }),
+    settings: settings({ defender: choice(true), conditionalAccess: choice(true) }),
+  }
+  const { report } = evaluate(connections, input)
+  expect(report.readerReadableServices).toEqual(expect.arrayContaining(["defender", "intune"]))
+  expect(report.readerReadableServices).not.toContain("entra")
+  expect(report.coverage?.find(row => row.service === "defender")?.readable).toEqual([])
+  expect(report.coverage?.find(row => row.service === "intune")?.readable).toContain("DeviceConfigurations")
+
+  const changed = evaluate(connections, { ...input, reader: {
+    ...input.reader, roleChange: { added: [], removed: ["SecurityEvents.Read.All"], at: ago(0) },
+  } })
+  expect(changed.report.readerReadableServices).toEqual(["intune"])
+  expect(evaluate(connections, { ...input, readerScheduled: false }).report.readerReadableServices).toBeUndefined()
+  expect(evaluate(connections, { ...input, reader: { ...input.reader, notAfter: ago(MINUTE) } }).report.readerReadableServices).toBeUndefined()
+})
+
+
 const service = (report: ReturnType<typeof evaluate>["report"], id: ModuleId) => report.services.find((entry) => entry.id === id)!
 const area = (report: ReturnType<typeof evaluate>["report"], id: ModuleId, areaId: string) => service(report, id).areas.find((entry) => entry.id === areaId)!
 

@@ -335,6 +335,8 @@ export interface ConnectionHealthReport {
   storage: SignInHealth
   services: ServiceHealth[]
   coverage?: BackupScopeCoverage[]
+  /** Selected services the Backup Reader can read in scheduled backups. */
+  readerReadableServices?: BackupScopeCoverage["service"][]
   /** What changed since `since`. Empty for the first snapshot. */
   changes: HealthChange[]
   /** When the state last agreed with what the changes are compared to; null before the first snapshot. */

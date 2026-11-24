@@ -22,6 +22,8 @@ import { randomBytes } from "node:crypto"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
+import { TENUVAULT_CLIENT_ID } from "../src/shared/tenant-connection"
+import { BackupScheduler, notifiedStatus, scheduledResult } from "../src/main/backup/scheduler"
 import { BackupEngine } from "../src/main/backup/engine"
 import { requireServiceAccess } from "../src/main/services/access"
 import { ModuleSettings } from "../src/main/services/settings"
@@ -29,10 +31,11 @@ import { servicesStatus } from "../src/main/services/status"
 import { handleLocalBlobRequest, localAccountFromUrl } from "../src/main/storage/blob-emulator"
 import { LocalBlobStore } from "../src/main/storage/local-blob-store"
 import { Restorer, type GraphCall } from "../src/portal/lib/policies/graph-restore"
-import { localStorageAccountName } from "../src/shared/constants"
+import { ConnectionCapabilities } from "../src/main/auth/connection-capabilities"
+import { localStorageAccountName, RESOURCE_SCOPES } from "../src/shared/constants"
 import { INTUNE_TYPES, type Item } from "../src/shared/intune/registry"
 import { DEFAULT_SCOPE, EVERYTHING, LEGACY_FOLDERS, type BackupScope } from "../src/shared/intune/scope"
-import { disabledFolders, moduleForFolder, MODULES, restorePermissionBlocker, type GrantedPermissions, type ModuleId } from "../src/shared/services/modules"
+import { canBackUp, disabledFolders, moduleForFolder, MODULES, restorePermissionBlocker, type GrantedPermissions, type ModuleId } from "../src/shared/services/modules"
 import { emptyIntuneRead, memoryStore } from "./helpers"
 
 const KEY = "services.modules"
@@ -67,30 +70,43 @@ const storeWith = (value: string | null) => {
   return store
 }
 
-/** Runs one backup with everything permitted and reports what it selected and which Graph paths it read. */
-async function backup(settings: ModuleSettings, scope: BackupScope, tenantId = TENANT, scheduledScopes?: string) {
+/** Runs a backup against recorded fixtures and reports what it selected and read. */
+async function backup(settings: ModuleSettings, scope: BackupScope, tenantId = TENANT, options?: {
+  scopes: string
+  trigger?: "manual" | "scheduled"
+  clientId?: string
+  denied?: string[]
+}) {
   const store = new LocalBlobStore(mkdtempSync(join(tmpdir(), "tv-services-")), [randomBytes(32)])
   const graphPaths: string[] = []
   const entraResponses = Object.assign({}, ...ENTRA_TYPES.map(type => responsesFor(type.folder))) as ReturnType<typeof entraFixtureResponses>
+  const capabilities = new ConnectionCapabilities(() => null)
+  const opaqueToken = "opaque-graph-token"
+  if (options?.clientId === TENUVAULT_CLIENT_ID) {
+    capabilities.requireIssuedToken(tenantId, options.clientId, RESOURCE_SCOPES.graph, opaqueToken, { grantedScopes: options.scopes.split(" ") })
+  }
   const engine = new BackupEngine({
     fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
       const request = new Request(input, init)
       const url = new URL(request.url)
       if (localAccountFromUrl(url)) return handleLocalBlobRequest(store, request)
-      graphPaths.push(decodeURIComponent(url.pathname))
+      const path = decodeURIComponent(url.pathname)
+      graphPaths.push(path)
+      if (options?.denied?.includes(path)) return Response.json({ error: { code: "Forbidden", message: "Access denied" } }, { status: 403 })
       const defenderType = DEFENDER_TYPES.find(type => url.pathname.startsWith(`/${type.apiVersion}/${type.path}`))
       const defenderResponses = defenderType ? defenderRecorded(defenderType.folder, true).responses : {}
       const answer = entraResponses[url.pathname + url.search] ?? Object.entries(defenderResponses).find(([path]) => decodeURIComponent(path) === decodeURIComponent(url.pathname + url.search))?.[1]
       return answer ? Response.json(answer.body, { status: answer.status, headers: answer.headers }) : emptyIntuneRead(url.pathname)
     }) as typeof fetch,
-    getToken: async () => jwt(scheduledScopes ?? MODULES.flatMap(module => module.areas.flatMap(area => area.parts.flatMap(part => part.backup.delegated === "unsupported" ? [] : part.backup.delegated.flat()))).join(" ")),
+    graphGrant: token => capabilities.graphGrant(token),
+    getToken: async () => options?.clientId === TENUVAULT_CLIENT_ID ? opaqueToken : jwt(options?.scopes ?? MODULES.flatMap(module => module.areas.flatMap(area => area.parts.flatMap(part => part.backup.delegated === "unsupported" ? [] : part.backup.delegated.flat()))).join(" ")),
     services: (tenant) => settings.selection(tenant),
-    wizardConnection: () => scheduledScopes !== undefined,
+    wizardConnection: () => options !== undefined,
     now: () => new Date("2026-11-14T02:00:00Z"),
   })
-  const job = await engine.waitForJob(engine.start({ tenantId, clientId: "22222222-2222-2222-2222-222222222222", storageAccountName: ACCOUNT, scope, trigger: scheduledScopes ? "scheduled" : "manual" }))
-  const metadata = JSON.parse((await store.get(ACCOUNT, "intune-backups", `${job.backupFolder}/metadata.json`)).data.toString()) as { Status: string; Scope: { Included: string[] } }
-  return { job, included: metadata.Scope.Included, status: metadata.Status, graphPaths }
+  const job = await engine.waitForJob(engine.start({ tenantId, clientId: options?.clientId ?? "22222222-2222-2222-2222-222222222222", storageAccountName: ACCOUNT, scope, trigger: options?.trigger ?? "manual" }))
+  const metadata = JSON.parse((await store.get(ACCOUNT, "intune-backups", `${job.backupFolder}/metadata.json`)).data.toString()) as { Status: string; Coverage: string; Scope: { Included: string[] } }
+  return { job, included: metadata.Scope.Included, status: metadata.Status, coverage: metadata.Coverage, graphPaths }
 }
 
 const intuneRead = (paths: string[]) => paths.filter((path) => path.startsWith("/beta/deviceManagement") || path.startsWith("/beta/deviceAppManagement"))
@@ -172,12 +188,77 @@ it("keeps the selected services enabled and skips wholly unreadable services in 
   const modules = await servicesStatus(TENANT, settings, async () => ({ accessToken: jwt(token) }))
   expect(modules.needsAccess).toEqual(["defender", "intune"])
   expect(modules.modules.filter(module => module.enabled).map(module => module.id)).toEqual(["intune", "conditionalAccess", "defender"])
-  const result = await backup(settings, DEFAULT_SCOPE, TENANT, token)
+  const result = await backup(settings, DEFAULT_SCOPE, TENANT, { scopes: token, trigger: "scheduled" })
   expect(result.status).toBe("Success")
   expect(result.graphPaths.length).toBeGreaterThan(0)
   expect(result.graphPaths.every(path => path.includes("conditionalAccess"))).toBe(true)
   expect(result.job.results?.types.find(type => type.folder === "DefenderSecureScoreControlStates")?.state).toBe("skipped")
   expect(result.job.results?.types.find(type => type.folder === "DeviceConfigurations")?.state).toBe("skipped")
+})
+
+const partialIntuneScopes = [
+  "DeviceManagementApps.Read.All", "DeviceManagementServiceConfig.Read.All", "DeviceManagementScripts.Read.All",
+  "DeviceManagementRBAC.Read.All", "DeviceManagementManagedDevices.Read.All",
+].join(" ")
+const configurationPaths = INTUNE_TYPES.filter(type => moduleForFolder(type.folder)?.module.id === "intune" &&
+  !canBackUp(type.folder, { kind: "delegated", permissions: new Set(partialIntuneScopes.split(" ")) }))
+  .map(type => `/${graphVersion(type)}/${listPath(type)}`)
+
+it.each([["own registration", undefined], ["TenuVault app", TENUVAULT_CLIENT_ID]] as const)(
+  "backs up readable Intune types with the %s and excludes permission skips from the manifest scope",
+  async (_method, clientId) => {
+    const settings = new ModuleSettings(memoryStore())
+    settings.setChoice(TENANT, { intune: { access: "backup" } })
+    const result = await backup(settings, EVERYTHING, TENANT, { clientId, scopes: partialIntuneScopes, denied: configurationPaths })
+    expect(result.status).toBe("Success")
+    expect(result.coverage).toBe("Incomplete")
+    expect(result.included).toContain("ScopeTags")
+    expect(result.included).not.toContain("DeviceConfigurations")
+    expect(result.graphPaths.some(path => configurationPaths.includes(path))).toBe(false)
+    expect(result.job.outcomes?.types).toContainEqual(expect.objectContaining({
+      folder: "DeviceConfigurations", outcome: "skipped", cause: "permission",
+    }))
+    expect(result.job.failedTypes).toEqual([])
+  },
+)
+
+it("keeps the scheduled slot successful when some Intune types lack consent", async () => {
+  const settings = new ModuleSettings(memoryStore())
+  let now = new Date(2026, 10, 13, 1)
+  let notification: string | undefined
+  const scheduler = new BackupScheduler(memoryStore(), async tenant => {
+    const { job } = await backup(settings, DEFAULT_SCOPE, tenant, {
+      trigger: "scheduled", scopes: partialIntuneScopes, denied: configurationPaths,
+    })
+    notification = notifiedStatus(job)
+    return scheduledResult(job)
+  }, () => undefined, () => now)
+  scheduler.set({ tenantId: TENANT, enabled: true, frequency: "daily", time: "02:00" })
+  now = new Date(2026, 10, 13, 2)
+  await scheduler.tick()
+  expect(scheduler.list()[0]).toMatchObject({ lastStatus: "Completed", attempts: 0 })
+  expect(notification).toBe("Success")
+})
+
+it("records a denied Intune read as a failure when the grant covers that type", async () => {
+  const settings = new ModuleSettings(memoryStore())
+  const type = INTUNE_TYPES.find(type => type.folder === "PolicySets")!
+  const scope = { excluded: INTUNE_TYPES.filter(entry => entry !== type).map(entry => entry.folder) }
+  const { job } = await backup(settings, scope, TENANT, {
+    scopes: "DeviceManagementConfiguration.Read.All", denied: [`/${graphVersion(type)}/${listPath(type)}`],
+  })
+  expect(job.failures).toBe(1)
+  expect(job.outcomes?.types).toMatchObject([{ folder: "PolicySets", outcome: "failed", status: 403 }])
+})
+
+it("shows Needs access only for services neither connection can read", async () => {
+  const settings = new ModuleSettings(memoryStore())
+  settings.setChoice(TENANT, { conditionalAccess: { access: "backup" }, intune: { access: "backup" }, defender: { access: "backup" } })
+  const status = await servicesStatus(TENANT, settings, async () => ({
+    accessToken: jwt("DeviceManagementConfiguration.Read.All"),
+  }), false, undefined, () => ["defender", "intune"])
+  expect(status.needsAccess).toEqual(["entra"])
+  expect(status.modules.filter(module => module.enabled).map(module => module.id)).toEqual(["intune", "conditionalAccess", "defender"])
 })
 
 describe("Saving a setting on top of stored settings", () => {

@@ -113,7 +113,9 @@ function Service({ service, conditionalAccess, report, busy, toggle, run }: { se
   const included = service.areas.filter(area => area.enabled)
   const restore = !included.length ? "unknown" : included.every(area => area.restore === "present") ? "present" : included.some(area => area.restore === "missing") ? "missing" : "unknown"
   const coverage = report.coverage?.find(row => row.service === service.id)
-  const needsAccess = needsBackupAccess(coverage) && (service.enabled || conditionalAccess?.enabled)
+  const signInNeedsAccess = needsBackupAccess(coverage) && (service.enabled || conditionalAccess?.enabled)
+  const readerOnly = signInNeedsAccess && coverage && report.readerReadableServices?.includes(coverage.service)
+  const needsAccess = signInNeedsAccess && !readerOnly
   const signInSettings = settingsHref("signin", `sign-in-${report.tenantId}`)
   return <section id={`service-${service.id}`} className="scroll-mt-4 rounded-2xl border border-border p-4" data-service={service.id}>
     <div className="flex items-center justify-between gap-3">
@@ -123,6 +125,7 @@ function Service({ service, conditionalAccess, report, busy, toggle, run }: { se
       </div>
       {MODULE_BY_ID.get(service.id)?.switchable && <Switch checked={service.enabled} disabled={busy} label={`Include ${label} in backups`} onChange={enabled => toggle(service, enabled)} />}
     </div>
+    {readerOnly && <p className="mt-3 text-sm text-gray-700">Scheduled backups can read this service with the Backup Reader. Your sign-in can't read it.</p>}
     {needsAccess && coverage && <div className="mt-3 space-y-2 text-sm text-gray-700">
       <p>{needsAccessText([label])} Your choice is saved. Backups skip this service until it can be read.</p>
       {report.readOnly ? <>
