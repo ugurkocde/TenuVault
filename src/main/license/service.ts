@@ -344,8 +344,8 @@ export class LicenseService {
   private healthCheck: Promise<void> | null = null
   private healthRetryAt = 0
   private healthFailures = 0
-  private tenuvaultAppHealth?: { expiresAt: number; enabled: boolean }
-  private tenuvaultAppCheck?: Promise<boolean>
+  private connectMethodsHealth?: { expiresAt: number; enabled: Record<"graphCli" | "tenuvaultApp", boolean> }
+  private connectMethodsCheck?: Promise<Record<"graphCli" | "tenuvaultApp", boolean>>
   private sharingCapability?: { expiresAt: number; supported: boolean }
   private sharingCheck?: Promise<boolean>
   private trialRecords: Record<string, StoredTenantTrial> = {}
@@ -720,17 +720,26 @@ export class LicenseService {
     return entry.source === "tenant" && Boolean(clientId && entry.organizationClientId && clientId.toLowerCase() !== entry.organizationClientId)
   }
 
-  async tenuvaultAppEnabled(): Promise<boolean> {
-    if (this.tenuvaultAppHealth && Date.now() < this.tenuvaultAppHealth.expiresAt) return this.tenuvaultAppHealth.enabled
-    return this.tenuvaultAppCheck ??= (async () => {
-      let enabled = false
+  tenuvaultAppEnabled(): Promise<boolean> {
+    return this.connectMethodEnabled("tenuvaultApp")
+  }
+
+  async connectMethodEnabled(method: "graphCli" | "tenuvaultApp"): Promise<boolean> {
+    if (this.connectMethodsHealth && Date.now() < this.connectMethodsHealth.expiresAt) return this.connectMethodsHealth.enabled[method]
+    const enabled = await (this.connectMethodsCheck ??= (async () => {
+      const enabled = { graphCli: false, tenuvaultApp: false }
       try {
         const response = await this.fetchImpl(`${this.options.apiBase}/api/desktop-license/health`, { signal: AbortSignal.timeout(10_000), redirect: "error" })
-        if (response.ok) enabled = (await response.json())?.connectMethods?.tenuvaultApp === true
+        if (response.ok) {
+          const methods = (await response.json())?.connectMethods
+          enabled.graphCli = methods?.graphCli === true
+          enabled.tenuvaultApp = methods?.tenuvaultApp === true
+        }
       } catch { /* Shared sign-in requires positive health discovery. */ }
-      this.tenuvaultAppHealth = { expiresAt: Date.now() + 2 * 60_000, enabled }
+      this.connectMethodsHealth = { expiresAt: Date.now() + 2 * 60_000, enabled }
       return enabled
-    })().finally(() => { this.tenuvaultAppCheck = undefined })
+    })().finally(() => { this.connectMethodsCheck = undefined }))
+    return enabled[method]
   }
 
   private async supportsClientIdSets(): Promise<boolean> {

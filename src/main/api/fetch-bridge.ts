@@ -22,6 +22,7 @@ export interface FetchBridgeOptions {
   authorizeTenant?: (tenant: string) => unknown
   authorizeRequest?: (url: URL, input: RequestInfo | URL, init: RequestInit | undefined, tenant: string | null) => Promise<void>
   authorizeResource?: (tenant: string, scope: string) => void
+  bindOwnClientCredentials?: (tenant: string, clientId: string, scope: string, token: string, expiresIn?: number) => void
   /** Serves Blob requests for local (`tvlocal-...`) storage accounts from the encrypted store. */
   handleLocalBlob?: (request: Request) => Promise<Response>
   fetch?: typeof fetch
@@ -84,9 +85,9 @@ export function createBridgedFetch(options: FetchBridgeOptions): typeof fetch {
           return Response.json({ error: "invalid_request", error_description: "The tenant in the token URL is not a plain tenant ID." }, { status: 400 })
         }
         const request = new Request(input, init)
-        if (request.method === "POST") {
+        const form = request.method === "POST" ? new URLSearchParams(await request.clone().text()) : null
+        if (form) {
           const tenant = decodeURIComponent(tokenPath[1])
-          const form = new URLSearchParams(await request.clone().text())
           if (form.get("grant_type") === "client_credentials") {
             try {
               await options.authorizeTenant?.(tenant)
@@ -103,16 +104,23 @@ export function createBridgedFetch(options: FetchBridgeOptions): typeof fetch {
             }
           }
         }
-        const requestForm = request.method === "POST" ? await request.clone().text() : ""
         const response = await realFetch(request)
-        if (request.method === "POST" && response.ok) {
-          const form = new URLSearchParams(requestForm)
-          if (form.get("scope")?.includes("storage.azure.com")) {
-            // Registered so backups sealed by earlier versions open for this tenant (storage/azure-seal.ts).
-            // A body that is not a token (for example a captive portal page) still goes to MSAL, which
-            // reports it as a response it could not parse. Rejecting here would look like no response at all.
-            const token = await response.clone().json().catch(() => null) as { access_token?: unknown } | null
-            if (typeof token?.access_token === "string") registerStorageToken(token.access_token, decodeURIComponent(tokenPath[1]))
+        if (form && response.ok) {
+          const scope = form.get("scope")
+          const client = form.get("client_id")
+          const storage = scope?.includes("storage.azure.com")
+          const ownCredentials = client && scope && form.get("grant_type") === "client_credentials" && form.has("client_secret")
+          if (storage || ownCredentials) {
+            // A captive portal response still goes to MSAL, which reports a response it could not parse.
+            const token = await response.clone().json().catch(() => null) as { access_token?: unknown; expires_in?: unknown } | null
+            if (typeof token?.access_token === "string") {
+              const tenant = decodeURIComponent(tokenPath[1])
+              if (storage) registerStorageToken(token.access_token, tenant)
+              if (ownCredentials) {
+                options.bindOwnClientCredentials?.(tenant, client, scope, token.access_token,
+                  typeof token.expires_in === "number" && Number.isFinite(token.expires_in) ? token.expires_in : undefined)
+              }
+            }
           }
         }
         return response

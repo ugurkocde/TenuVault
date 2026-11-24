@@ -18,6 +18,11 @@ const CONDITIONAL_ACCESS_ROLE = "Policy.Read.All"
 const CONDITIONAL_ACCESS_TYPES = ["NamedLocations", "AuthenticationStrengths", "ConditionalAccessPolicies"]
 /** A tenant that backs up Intune and Conditional Access, the two services that existed before. */
 const CLASSIC: ServiceSelection = { services: ["intune", "conditionalAccess"] }
+import { ConnectionCapabilities } from "../src/main/auth/connection-capabilities"
+import { createBridgedFetch } from "../src/main/api/fetch-bridge"
+import { executionMetadata } from "../src/main/api/execution-metadata"
+import { RESOURCE_SCOPES } from "../src/shared/constants"
+import { TENUVAULT_CLIENT_ID } from "../src/shared/tenant-connection"
 import { BackupEngine } from "../src/main/backup/engine"
 import { scheduledResult } from "../src/main/backup/scheduler"
 import { INTUNE_TYPES } from "../src/shared/intune/registry"
@@ -90,6 +95,36 @@ describe("checkReaderToken", () => {
   it("refuses an unreadable token", () => {
     expect(() => checkReaderToken("not-a-jwt", app, "graph")).toThrow(/cannot read/)
   })
+})
+
+it("dispatches roleless Storage tokens from the verified reader after a switch, including audit delivery", async () => {
+  const cap = new ConnectionCapabilities(() => ({
+    version: 1, origin: "wizard", method: "tenuvaultApp", clientId: TENUVAULT_CLIENT_ID, createdAt: "", updatedAt: "",
+  }))
+  const reader = new BackupReaderService(store(), {
+    acquire: async (_app, scope) => ({ accessToken: scope === RESOURCE_SCOPES.storage ? storageToken() : graphToken() }),
+    now: () => new Date("2026-10-26T12:00:00Z"),
+    bindToken: (tenant, client, scope, token) => cap.bindReaderToken(tenant, client, scope, token),
+  })
+  reader.prepare(TENANT, "fixture")
+  await reader.verify(TENANT, READER)
+  const network = vi.fn<typeof fetch>(async () => new Response(null, { status: 201 }))
+  const fetchBlob = createBridgedFetch({
+    dispatch: vi.fn(), getDelegatedToken: vi.fn(), fetch: network,
+    authorizeRequest: (url, input, init, tenant) => cap.authorizeRequest(url, input, init, tenant),
+  })
+  const put = async (container: string) => fetchBlob(`https://contoso.blob.core.windows.net/${container}/example.json`, {
+    method: "PUT", headers: { authorization: `Bearer ${await reader.tokens(scheduled)!.storage()}` },
+  })
+  await expect(executionMetadata.run({ connections: cap.bindConnections([TENANT]) }, () => put("intune-backups"))).resolves.toMatchObject({ status: 201 })
+  await expect(put("intune-audit-logs")).resolves.toMatchObject({ status: 201 })
+  const other = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+  await expect(executionMetadata.run({ connections: cap.bindConnections([other]) }, () => put("intune-backups"))).rejects.toThrow("method changed")
+  const foreign = storageToken({ appid: scheduled.clientId, roles: ["Some.Role"] })
+  await expect(fetchBlob("https://contoso.blob.core.windows.net/intune-backups/example.json", {
+    headers: { authorization: `Bearer ${foreign}` },
+  })).rejects.toThrow("method changed")
+  expect(network).toHaveBeenCalledTimes(2)
 })
 
 describe("BackupReaderService", () => {

@@ -12,6 +12,7 @@ import { RESOURCE_SCOPES } from "../src/shared/constants"
 import { connectionCoverage } from "../src/main/auth/connection-coverage"
 import { ConnectionCapabilities, READ_ONLY } from "../src/main/auth/connection-capabilities"
 import { createBridgedFetch } from "../src/main/api/fetch-bridge"
+import { executionMetadata } from "../src/main/api/execution-metadata"
 import { ApiHost } from "../src/main/api/host"
 import { withRouteTenant } from "../src/main/storage/blob-emulator"
 
@@ -307,7 +308,8 @@ describe("Start now capability", () => {
       dispatch: vi.fn(), getDelegatedToken: vi.fn(), fetch: network,
       authorizeRequest: (url, input, init, tenant) => cap.authorizeRequest(url, input, init, tenant),
     })
-    const batch = (method: string, authorization = `Bearer ${jwt({ tid: OTHER, appid: OWN })}`) => fetch("https://graph.microsoft.com/beta/$batch", {
+    cap.requireIssuedToken(OTHER, OWN, RESOURCE_SCOPES.graph, "opaque-destination")
+    const batch = (method: string, authorization = "Bearer opaque-destination") => fetch("https://graph.microsoft.com/beta/$batch", {
       method: "POST", headers: { authorization }, body: JSON.stringify({ requests: [{ id: "1", method, url: "/deviceManagement/configurationPolicies" }] }),
     })
     const host = new ApiHost({ bindConnections: tenants => cap.bindConnections(tenants), guard: request => cap.guard(request), routes: {
@@ -330,7 +332,7 @@ describe("Start now capability", () => {
 
   it("blocks writes even with a write token, including copy from or to the tenant", async () => {
     const f = fixture()
-    const cap = new ConnectionCapabilities(id => f.connections.get(id))
+    const cap = new ConnectionCapabilities(id => f.connections.get(id), undefined, async () => true)
     f.enroll()
     await f.connections.switch(TENANT, { method: "graphCli" })
     for (const [path, input] of [
@@ -459,14 +461,56 @@ describe("TenuVault app capabilities", () => {
     expect(await (await fetch(request)).text()).toBe(body)
   })
 
-  it("refuses opaque and mismatched bearer tokens within a bound tenant operation", async () => {
+  it("uses the own app acquisition context for opaque and readable bearer values", async () => {
     const record = { version: 1 as const, clientId: OWN, method: "ownApp" as const, origin: "wizard" as const, createdAt: NOW, updatedAt: NOW }
     const cap = new ConnectionCapabilities(id => id === TENANT ? record : null)
     const url = new URL("https://graph.microsoft.com/beta/organization")
-    for (const bearer of ["opaque", jwt({ tid: OTHER, appid: OWN }), jwt({ tid: TENANT, azp: NEXT })]) {
-      await expect(cap.authorizeRequest(url, url, { headers: { authorization: `Bearer ${bearer}` } }, TENANT)).rejects.toThrow()
+    for (const bearer of ["opaque", jwt({ tid: OTHER, appid: NEXT })]) {
+      expect(() => cap.requireIssuedToken(TENANT, OWN, RESOURCE_SCOPES.graph, bearer)).not.toThrow()
+      await expect(cap.authorizeRequest(url, url, { headers: { authorization: `Bearer ${bearer}` } }, TENANT)).resolves.toBeUndefined()
+      await expect(cap.authorizeRequest(url, url, { headers: { authorization: `Bearer ${bearer}` } }, OTHER)).rejects.toThrow("method changed")
     }
+    expect(() => cap.requireIssuedToken(TENANT, NEXT, RESOURCE_SCOPES.graph, "opaque")).toThrow("method changed")
   })
+
+  it.each([["tenuvaultApp", TENUVAULT_CLIENT_ID], ["graphCli", GRAPH_CLI_CLIENT_ID]] as const)(
+    "uses trusted acquisition for an opaque %s token and still checks the switch",
+    async (method, clientId) => {
+      const packs = tenantPermissionPacks({ intune: { access: "restore" } }, { azure: true, audit: false })
+      const scopes = resourcePackScopes(packs, "graph")
+      const record = { version: 1 as const, clientId, method, origin: "wizard" as const, createdAt: NOW, updatedAt: NOW, graphScopes: scopes }
+      let enabled = true
+      const cap = new ConnectionCapabilities(() => record, () => packs, async () => enabled)
+      const url = new URL("https://graph.microsoft.com/beta/deviceManagement/configurationPolicies")
+      const headers = { authorization: "Bearer opaque-shared-token" }
+      await expect(cap.authorizeRequest(url, url, { headers }, TENANT)).rejects.toThrow("could not verify")
+      expect(() => cap.requireIssuedToken(TENANT, clientId, RESOURCE_SCOPES.graph, jwt({ tid: OTHER, azp: clientId }))).toThrow("could not verify")
+      cap.requireIssuedToken(TENANT, clientId, RESOURCE_SCOPES.graph, "opaque-shared-token", { scopes })
+      await expect(cap.authorizeRequest(url, url, { headers }, TENANT)).resolves.toBeUndefined()
+      const write = cap.authorizeRequest(url, url, { method: "POST", headers }, TENANT)
+      if (method === "graphCli") await expect(write).rejects.toThrow(READ_ONLY)
+      else await expect(write).resolves.toBeUndefined()
+      enabled = false
+      await expect(cap.authorizeRequest(url, url, { headers }, TENANT)).rejects.toThrow("currently unavailable")
+      await expect(cap.requireConnectionEnabled(TENANT, clientId)).rejects.toThrow("currently unavailable")
+    },
+  )
+
+  it.each([["user", "usersAndDevices", "User.DeleteRestore.All"], ["group", "groups", "Group.ReadWrite.All"]] as const)(
+    "covers %s recycle restore with only the selected pack and a checked deleted-object type",
+    async (type, area, permission) => {
+      const packs = tenantPermissionPacks({ entra: { access: "restore", areas: [area] } }, { azure: false, audit: false })
+      const scopes = resourcePackScopes(packs, "graph")
+      expect(scopes).toContain(permission)
+      const record = { version: 1 as const, clientId: TENUVAULT_CLIENT_ID, method: "tenuvaultApp" as const, origin: "wizard" as const, createdAt: NOW, updatedAt: NOW, graphScopes: scopes }
+      const cap = new ConnectionCapabilities(() => record, () => packs, async () => true)
+      const url = new URL(`https://graph.microsoft.com/beta/directory/deletedItems/${OWN}/restore`)
+      const headers = { authorization: `Bearer ${jwt({ tid: TENANT, azp: TENUVAULT_CLIENT_ID, scp: scopes.join(" ") })}` }
+      const send = () => cap.authorizeRequest(url, url, { method: "POST", headers }, TENANT)
+      await expect(send()).rejects.toThrow("restore permission pack")
+      await expect(executionMetadata.run({ directoryRecycle: { type, path: url.pathname } }, send)).resolves.toBeUndefined()
+    },
+  )
 
   it("keeps the current connection when staged approval is missing and then records verified scopes", async () => {
     const f = fixture()

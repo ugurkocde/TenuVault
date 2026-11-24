@@ -69,6 +69,7 @@ import { backupRoutes, surfaceTokenErrors } from "./api/desktop-routes"
 import { createBridgedFetch } from "./api/fetch-bridge"
 import { rejectProxyAuthResponses, withNetworkErrors } from "./api/network-error"
 import { ApiHost } from "./api/host"
+import { executionMetadata } from "./api/execution-metadata"
 import { routes } from "./api/routes"
 import { AuthManager, SignInRequiredError } from "./auth/msal"
 import { TenantConnections } from "./auth/tenant-connections"
@@ -331,7 +332,7 @@ async function bootstrap(): Promise<void> {
     const record = connections.get(tenant)
     return !!record && record.method !== "ownApp"
   })
-  const capabilities = new ConnectionCapabilities(tenant => connections.get(tenant), tenant => currentPacks(tenant), () => license.tenuvaultAppEnabled())
+  const capabilities = new ConnectionCapabilities(tenant => connections.get(tenant), tenant => currentPacks(tenant), method => license.connectMethodEnabled(method))
   const auth: AuthManager = new AuthManager({
     fetch: bridgedFetchLater,
     cachePlugin: (clientId) => secureCachePlugin(cache, clientId),
@@ -347,8 +348,8 @@ async function bootstrap(): Promise<void> {
       if (!scopes.length) throw new Error("Review the permission packs in Sign-in and access.")
       return resourceScopes(resource, scopes)
     },
-    authorizeConnection: (tenant, client, scope) => capabilities.requireConnection(tenant, client, scope),
-    authorizeIssuedToken: (tenant, client, scope, token) => capabilities.requireIssuedToken(tenant, client, scope, token),
+    authorizeConnection: (tenant, client, scope) => capabilities.requireConnectionEnabled(tenant, client, scope),
+    authorizeIssuedToken: (tenant, client, scope, result) => capabilities.requireIssuedToken(tenant, client, scope, result.accessToken, result),
     openBrowser: (url) => {
       if (!isMicrosoftLoginUrl(url)) {
         console.warn("[auth] Refused to open a sign-in URL that is not on the Microsoft login host.")
@@ -453,6 +454,7 @@ async function bootstrap(): Promise<void> {
     authorizeTenant,
     authorizeRequest: (url, input, init, tenant) => capabilities.authorizeRequest(url, input, init, tenant),
     authorizeResource: (tenant, scope) => capabilities.requireResource(tenant, scope),
+    bindOwnClientCredentials: (tenant, client, scope, token, expiresIn) => capabilities.bindOwnClientCredentials(tenant, client, scope, token, expiresIn),
     handleLocalBlob: (request) => handleLocalBlobRequest(getLocalStore(), request),
     getDelegatedToken: async (tenant, clientId, scope, forceRefresh) => {
       const result = await tokenFor(tenant, clientId, scope, forceRefresh)
@@ -539,9 +541,12 @@ async function bootstrap(): Promise<void> {
   const records = new TenantRecords(workspaceStore)
   // Backups that failed before saving anything, counted on the Dashboard on every plan.
   const failedAttempts = new FailedAttemptLog(appStore)
-  // The Backup Reader's tokens reach only the backup engine: never the fetch bridge, tokenFor or a
-  // portal route, so no restore, revert or other change can ever run with them.
-  const backupReader = new BackupReaderService(tokenStore, { fetch: bridgedFetch, services: (tenantId) => moduleSettings.selection(tenantId), connectionChanged: (tenantId) => health.connectionsChanged(tenantId) })
+  // Reader credentials stay in the backup engine and its audit delivery, outside delegated sign-in.
+  const backupReader = new BackupReaderService(tokenStore, {
+    fetch: bridgedFetch, services: tenantId => moduleSettings.selection(tenantId),
+    connectionChanged: tenantId => health.connectionsChanged(tenantId),
+    bindToken: (tenant, client, scope, token) => capabilities.bindReaderToken(tenant, client, scope, token),
+  })
   // Connection health: what the token checks and the backup runs of each tenant observed, and what
   // that adds up to. A check asks Microsoft for a new token without any window, so it goes straight
   // to the sign-in and not through tokenFor: a check that fails must never ask the window for a sign-in.
@@ -1519,7 +1524,7 @@ async function bootstrap(): Promise<void> {
   let setupSignIn: { tenantId: string; clientId: string; username: string } | null = null
   handleTrusted("setup:createRegistration", async (_event, options?: { tenant?: string; choice?: unknown }) => {
     setupSignIn = null
-    const result = await registrationSetup.create(options)
+    const result = await executionMetadata.run({ registrationSetup: true }, () => registrationSetup.create(options))
     setupSignIn = { tenantId: result.tenantId, clientId: result.clientId, username: result.username }
     return result
   })

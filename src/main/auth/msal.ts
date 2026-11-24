@@ -17,8 +17,7 @@ import { fetchNetworkClient } from "./network-client"
 import { loopbackSignIn } from "./loopback-sign-in"
 import { deviceCodeSignIn } from "./device-code-sign-in"
 import { TENUVAULT_CLIENT_ID } from "../../shared/tenant-connection"
-import { tokenIdentity } from "./token-identity"
-import { grantedPermissions } from "../../shared/services/token"
+import { sharedTokenScopes, tokenIdentity } from "./token-identity"
 import { missingPackScopes, resourcePackScopes, resourceScopes, type PermissionPack } from "../../shared/services/permission-packs"
 import { consentIssue } from "./pack-consent"
 import type { PackConsentCode } from "../../shared/pack-consent"
@@ -36,8 +35,8 @@ export interface AuthHost {
   cachePlugin: (clientId: string) => ICachePlugin
   authorizeInteractive?: (tenantId: string) => void
   sharedScopes?: (tenantId: string, scope: string) => Promise<string[]>
-  authorizeConnection?: (tenantId: string, clientId: string, scope: string) => void
-  authorizeIssuedToken?: (tenantId: string, clientId: string, scope: string, token: string) => void
+  authorizeConnection?: (tenantId: string, clientId: string, scope: string) => Promise<void> | void
+  authorizeIssuedToken?: (tenantId: string, clientId: string, scope: string, result: AuthenticationResult) => void
   /** Opens the system browser for the loopback sign-in flow. */
   openBrowser: (url: string) => Promise<void>
   /** Stores which account belongs to which tenant profile. */
@@ -245,7 +244,7 @@ export class AuthManager {
       homeAccountId: account.homeAccountId,
     }
     this.host.authorizeInteractive?.(signedIn.tenantId)
-    this.host.authorizeConnection?.(signedIn.tenantId, clientId, RESOURCE_SCOPES.graph)
+    await this.host.authorizeConnection?.(signedIn.tenantId, clientId, RESOURCE_SCOPES.graph)
     this.host.accountStore.set(signedIn)
     return { tenantId: signedIn.tenantId, clientId, username: signedIn.username, name: signedIn.name }
   }
@@ -282,11 +281,10 @@ export class AuthManager {
       const account = result.account
       if (!account || account.tenantId.toLowerCase() !== tenant) throw new ConnectionSwitchError("wrong_tenant", "Sign in with an account from this tenant.")
       const identity = tokenIdentity(result.accessToken)
-      if (identity.tenantId !== tenant || identity.clientId !== TENUVAULT_CLIENT_ID) {
+      if (identity.decoded && (identity.tenantId !== tenant || identity.clientId !== TENUVAULT_CLIENT_ID)) {
         throw new ConnectionSwitchError("switch_failed", "Microsoft returned an access token that could not be verified for this tenant and app. Sign in again.")
       }
-      const permissions = grantedPermissions(result.accessToken)
-      if (permissions?.kind !== "delegated" || missingPackScopes(graphScopes, permissions.permissions).length) {
+      if (missingPackScopes(graphScopes, sharedTokenScopes(result.accessToken, result.scopes)).length) {
         throw new ConnectionSwitchError("AADSTS65001", "Some selected Microsoft Graph permissions are still missing. Review the packs and check again. (AADSTS65001)")
       }
       for (const pack of packs.filter(pack => pack.resource !== "graph")) {
@@ -299,7 +297,10 @@ export class AuthManager {
           throw new ConnectionSwitchError((issue?.code as PackConsentCode | undefined) ?? "AADSTS65001",
             `${pack.label}: ${issue?.message ?? "Check the approved permissions for this resource and try again."}`)
         }
-        if (token?.account?.tenantId.toLowerCase() !== tenant || missingPackScopes(pack.scopes, new Set(token.scopes.map(scope => scope.split("/").at(-1)!))).length) {
+        const identity = token && tokenIdentity(token.accessToken)
+        if (token?.account?.tenantId.toLowerCase() !== tenant ||
+          (identity?.decoded && (identity.tenantId !== tenant || identity.clientId !== TENUVAULT_CLIENT_ID)) ||
+          missingPackScopes(pack.scopes, sharedTokenScopes(token.accessToken, token.scopes)).length) {
           throw new ConnectionSwitchError("AADSTS65001", `${pack.label} approval is still needed. Review the pack and check again.`)
         }
       }
@@ -319,10 +320,11 @@ export class AuthManager {
       const result = await this.acquireInteractive(TENUVAULT_CLIENT_ID, tenant, resourceScopes(pack.resource, pack.scopes),
         checkOnly ? "none" : "select_account", undefined, true, undefined, app)
       if (result.account?.tenantId.toLowerCase() !== tenant) throw new ConnectionSwitchError("wrong_tenant", "Sign in with an account from this tenant.")
-      const permissions = pack.resource === "graph" ? grantedPermissions(result.accessToken) : undefined
-      const scopes = pack.resource === "graph"
-        ? permissions?.kind === "delegated" ? permissions.permissions : new Set<string>()
-        : new Set(result.scopes.map(scope => scope.split("/").at(-1)!))
+      const identity = tokenIdentity(result.accessToken)
+      if (identity.decoded && (identity.tenantId !== tenant || identity.clientId !== TENUVAULT_CLIENT_ID)) {
+        throw new ConnectionSwitchError("switch_failed", "Microsoft returned an access token that could not be verified for this tenant and app. Sign in again.")
+      }
+      const scopes = sharedTokenScopes(result.accessToken, result.scopes)
       if (missingPackScopes(pack.scopes, scopes).length) throw new ConnectionSwitchError("AADSTS65001", `${pack.label} approval is still needed. (AADSTS65001)`)
     } catch (error) {
       throw sharedSignInFailure(error, checkOnly)
@@ -372,7 +374,7 @@ export class AuthManager {
    * token. Throws SignInRequiredError when the admin has to sign in again.
    */
   async getAccessToken(tenantId: string, clientId: string, scope: string, forceRefresh = false): Promise<AuthenticationResult> {
-    this.host.authorizeConnection?.(tenantId, clientId, scope)
+    await this.host.authorizeConnection?.(tenantId, clientId, scope)
     const stored = this.host.accountStore.get(tenantId.toLowerCase())
     if (!stored || stored.clientId !== clientId) {
       throw new SignInRequiredError(tenantId, clientId, "You are not signed in to this tenant. Sign in to continue.", scope)
@@ -387,7 +389,7 @@ export class AuthManager {
     try {
       const result = await app.acquireTokenSilent({ account, scopes, authority: authority(tenantId), forceRefresh })
       if (result) {
-        this.host.authorizeIssuedToken?.(tenantId, clientId, scope, result.accessToken)
+        this.host.authorizeIssuedToken?.(tenantId, clientId, scope, result)
         // The request is attributed to the account this token was issued for.
         captureTokenActor({ username: result.account?.username || account.username || stored.username, name: result.account?.name ?? account.name ?? undefined })
         return result
@@ -438,7 +440,7 @@ export class AuthManager {
   async reauthenticate(tenantId: string, clientId: string, scope: string = RESOURCE_SCOPES.graph): Promise<SignedInAccount> {
     this.host.authorizeInteractive?.(tenantId)
     if (!isResourceScope(scope)) throw new Error("Unknown sign-in scope.")
-    this.host.authorizeConnection?.(tenantId, clientId, scope)
+    await this.host.authorizeConnection?.(tenantId, clientId, scope)
     const stored = this.host.accountStore.get(tenantId.toLowerCase())
     const scopes = clientId.toLowerCase() === TENUVAULT_CLIENT_ID ? await this.connectionScopes(tenantId, clientId, scope) : [scope]
     const result = await this.acquireInteractive(clientId, tenantId, scopes, undefined, stored?.username).catch((error: unknown) => {
@@ -458,7 +460,7 @@ export class AuthManager {
       name: account.name,
       homeAccountId: account.homeAccountId,
     }
-    this.host.authorizeConnection?.(tenantId, clientId, scope)
+    await this.host.authorizeConnection?.(tenantId, clientId, scope)
     this.host.accountStore.set(signedIn)
     return { tenantId: signedIn.tenantId, clientId, username: signedIn.username, name: signedIn.name }
   }
@@ -470,7 +472,7 @@ export class AuthManager {
 
   async signInWithDeviceCode(tenant: string, clientId: string, onCode: (code: AppDeviceCode) => void, signal: AbortSignal): Promise<void> {
     this.host.authorizeInteractive?.(tenant)
-    this.host.authorizeConnection?.(tenant, clientId, RESOURCE_SCOPES.graph)
+    await this.host.authorizeConnection?.(tenant, clientId, RESOURCE_SCOPES.graph)
     if (clientId.toLowerCase() === TENUVAULT_CLIENT_ID) throw new Error("Sign in to the TenuVault app in the system browser.")
     // End this tenant's waiting browser attempts.
     for (const entry of this.interactiveControls.values()) if (entry.tenant.toLowerCase() === tenant.toLowerCase()) entry.controller.abort(new SignInCancelledError())
@@ -478,7 +480,7 @@ export class AuthManager {
     signal.throwIfAborted()
     const account = result.account!
     this.host.authorizeInteractive?.(tenant)
-    this.host.authorizeConnection?.(tenant, clientId, RESOURCE_SCOPES.graph)
+    await this.host.authorizeConnection?.(tenant, clientId, RESOURCE_SCOPES.graph)
     this.host.accountStore.set({ tenantId: tenant.toLowerCase(), clientId, username: account.username, name: account.name, homeAccountId: account.homeAccountId })
   }
 

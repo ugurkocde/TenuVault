@@ -79,6 +79,7 @@ export type AcquireToken = (credential: { tenantId: string; clientId: string; ce
 const KEY = "backupReader."
 
 export class BackupReaderService {
+  private readonly bindToken?: (tenantId: string, clientId: string, scope: string, token: string) => void
   private readonly connectionChanged?: (tenantId: string) => void
   private readonly now: () => Date
   private readonly acquire: AcquireToken
@@ -90,8 +91,9 @@ export class BackupReaderService {
     // requests through the bridge are also license-checked there, so this must stay the bridge.
     // services: what the tenant backs up, which decides the roles its reader needs. When left out,
     // the services that are on by default.
-    options: { now?: () => Date; acquire?: AcquireToken; fetch?: typeof fetch; services?: (tenantId: string) => ServiceSelection; connectionChanged?: (tenantId: string) => void } = {},
+    options: { now?: () => Date; acquire?: AcquireToken; fetch?: typeof fetch; services?: (tenantId: string) => ServiceSelection; connectionChanged?: (tenantId: string) => void; bindToken?: BackupReaderService["bindToken"] } = {},
   ) {
+    this.bindToken = options.bindToken
     this.connectionChanged = options.connectionChanged
     this.now = options.now ?? (() => new Date())
     this.acquire = options.acquire ?? msalAcquire(options.fetch)
@@ -264,6 +266,7 @@ export class BackupReaderService {
         // Remembered only once the checks passed, so a refused reader is refused on every request of the run.
         seen = roles.join(" ")
       }
+      this.bindToken?.(app.tenantId, app.clientId, RESOURCE_SCOPES[resource], acquired.accessToken)
       return acquired.accessToken
     }
     return {
