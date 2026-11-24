@@ -1,8 +1,13 @@
-import { createHmac } from "node:crypto"
+import { createCipheriv, createDecipheriv, createHmac, randomBytes } from "node:crypto"
+import { mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { describe, expect, it, vi } from "vitest"
 import { routes } from "../src/main/features/notifications"
-import { GRAPH_CLI_CLIENT_ID, GRAPH_CLI_NEXT_STEP } from "../src/shared/tenant-connection"
+import { GRAPH_CLI_CLIENT_ID, GRAPH_CLI_NEXT_STEP, TENUVAULT_CLIENT_ID } from "../src/shared/tenant-connection"
 import { DOMAINS } from "../src/main/features/domains"
+import { TenantRecords, type Stored } from "../src/main/features/records"
+import { SecureStore } from "../src/main/storage/secure-store"
 import { channelsOf, checkWatcher, flushOutbox, outboxOf, pollAuditWatch, saveAuditWatch, signBody, tick } from "../src/main/features/notifications/service"
 import { emitBackupOutcome, emitCredentialExpiring, emitLateBackup } from "../src/main/features/notifications/producers"
 import type { ChannelRecord } from "../src/main/features/notifications/model"
@@ -42,7 +47,97 @@ async function addRule(w: ReturnType<typeof world>, channelIds: string[], extra:
   return created.body.rule
 }
 
+function encryptedWorkspace() {
+  const directory = mkdtempSync(join(tmpdir(), "tv-alert-revisions-"))
+  const file = join(directory, "workspace.bin")
+  const key = randomBytes(32)
+  const cipher = {
+    encrypt: (text: string) => {
+      const nonce = randomBytes(12)
+      const aes = createCipheriv("aes-256-gcm", key, nonce)
+      const body = Buffer.concat([aes.update(text), aes.final()])
+      return Buffer.concat([nonce, aes.getAuthTag(), body])
+    },
+    decrypt: (data: Buffer) => {
+      const aes = createDecipheriv("aes-256-gcm", key, data.subarray(0, 12))
+      aes.setAuthTag(data.subarray(12, 28))
+      return Buffer.concat([aes.update(data.subarray(28)), aes.final()]).toString()
+    },
+  }
+  return {
+    store: new SecureStore(file, cipher),
+    encrypted: () => readFileSync(file),
+    decrypt: (domain: string): Stored<ChannelRecord>[] =>
+      JSON.parse(JSON.parse(cipher.decrypt(readFileSync(file)))[`records.v1.${domain}.${TENANT_A}`]),
+    remove: () => rmSync(directory, { recursive: true, force: true }),
+  }
+}
+
 describe("notification channels and rules", () => {
+  it.each([
+    ["own registration", "99999999-9999-4999-8999-999999999999"],
+    ["Start now", GRAPH_CLI_CLIENT_ID],
+    ["TenuVault app", TENUVAULT_CLIENT_ID],
+  ])("keeps destination credentials out of encrypted revisions for %s", async (_, clientId) => {
+    const workspace = encryptedWorkspace()
+    try {
+      const records = new TenantRecords(workspace.store, () => NOW)
+      const w = world()
+      w.deps.records = records
+      const profile = w.deps.tenant(TENANT_A)!
+      w.deps.tenant = () => ({ ...profile, clientId })
+      const channel = await addWebhook(w, { url: "https://hooks.example.test/private-path?sig=first-token", headerName: "X-Key", headerValue: "first-key", signRequests: true })
+      const updated = await call(w.routes, PATH, {
+        tenantId: TENANT_A, action: "update-channel", channelId: channel.id,
+        headerValue: "second-key", url: "https://hooks.example.test/second-token",
+      })
+      expect(updated.status).toBe(200)
+      const current = records.get<ChannelRecord>(DOMAINS.notificationChannels, TENANT_A, channel.id)!
+      expect(current.headerValue).toBe("second-key")
+      expect(current.url).toContain("second-token")
+      const secrets = ["private-path", "first-token", "second-token", "first-key", "second-key"]
+      for (const secret of secrets) {
+        expect(JSON.stringify(current.history.map(revision => revision.snapshot))).not.toContain(secret)
+        expect(workspace.encrypted().includes(Buffer.from(secret))).toBe(false)
+      }
+      const [stored] = workspace.decrypt(DOMAINS.notificationChannels)
+      expect(stored!.history).toEqual(current.history)
+      for (const secret of secrets) expect(JSON.stringify(stored!.history)).not.toContain(secret)
+      expect(stored!.history[0]).toMatchObject({ actor: "Admin", snapshot: { hasSecret: true, hasUrl: true, signRequests: true } })
+      expect(stored!.history[1]).toMatchObject({ actor: "Admin", reason: "Channel URL replaced, secret replaced" })
+    } finally {
+      workspace.remove()
+    }
+  })
+
+  it("removes destination credentials from existing encrypted channel and endpoint history on open", () => {
+    const workspace = encryptedWorkspace()
+    try {
+      const domains = [DOMAINS.notificationChannels, DOMAINS.notificationEndpoints]
+      for (const domain of domains) {
+        const original = { url: "https://hooks.example.test/old-url-token", headerValue: "old-key" }
+        const current = { url: "https://hooks.example.test/current-url-token", headerValue: "current-key" }
+        workspace.store.set(`records.v1.${domain}.${TENANT_A}`, JSON.stringify([{
+          ...current, history: [
+            { actor: "Admin", reason: "Added", snapshot: original },
+            { actor: "Admin", reason: "Secret replaced", snapshot: current, partial: true },
+          ],
+        }]))
+      }
+      new TenantRecords(workspace.store)
+      for (const domain of domains) {
+        const [stored] = workspace.decrypt(domain)
+        expect(stored).toMatchObject({ headerValue: "current-key", url: "https://hooks.example.test/current-url-token" })
+        expect(stored!.history).toEqual([
+          { actor: "Admin", reason: "Added", snapshot: { hasSecret: true, hasUrl: true } },
+          { actor: "Admin", reason: "Secret replaced", snapshot: { hasSecret: true, hasUrl: true }, partial: true },
+        ])
+      }
+    } finally {
+      workspace.remove()
+    }
+  })
+
   it("rejects private webhook URLs and hides secrets and URL paths", async () => {
     const w = world()
     const rejected = await call(w.routes, PATH, { tenantId: TENANT_A, action: "add-channel", kind: "webhook", url: "https://169.254.169.254/hook" })

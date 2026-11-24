@@ -1,6 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks"
 import { randomUUID } from "node:crypto"
+import { isGuid } from "../../shared/security"
 import type { KeyValueStore } from "../storage/secure-store"
+import { DOMAINS } from "./domains"
 
 /** One entry of a record's append-only history. */
 export interface RecordRevision<T> {
@@ -46,6 +48,29 @@ function delta(before: Record<string, unknown>, after: Record<string, unknown>):
   return { changes, removed }
 }
 
+const notificationHistoryDomains = new Set<string>([DOMAINS.notificationChannels, DOMAINS.notificationEndpoints])
+const secretPresenceFields: ReadonlyMap<string, string> = new Map([["url", "hasUrl"], ["headerValue", "hasSecret"]])
+
+function notificationSnapshot<T extends object>(snapshot: Partial<T>): Partial<T> {
+  if (!Object.hasOwn(snapshot, "url") && !Object.hasOwn(snapshot, "headerValue")) return snapshot
+  // A URL can carry credentials in its path or query. The header value can also be a signing key.
+  const { url, headerValue, ...rest } = snapshot as Partial<T> & { url?: string | null; headerValue?: string | null }
+  return {
+    ...rest,
+    ...(url !== undefined ? { hasUrl: Boolean(url) } : {}),
+    ...(headerValue !== undefined ? { hasSecret: Boolean(headerValue) } : {}),
+  } as Partial<T>
+}
+
+function redactNotificationRevision<T extends object>(revision: RecordRevision<T>): RecordRevision<T> {
+  const snapshot = notificationSnapshot(revision.snapshot)
+  const removed = revision.removed
+  if (removed?.some(key => secretPresenceFields.has(key))) {
+    return { ...revision, snapshot, removed: removed.map(key => secretPresenceFields.get(key) ?? key) }
+  }
+  return snapshot === revision.snapshot ? revision : { ...revision, snapshot }
+}
+
 export interface StoredRecord {
   id: string
   tenantId: string
@@ -82,9 +107,29 @@ export class TenantRecords {
   private staged: Map<string, Stored<unknown>[]> | null = null
   private readonly batchContext = new AsyncLocalStorage<{ active: boolean }>()
   constructor(
-    private readonly store: KeyValueStore,
+    private readonly store: KeyValueStore & { keys?: () => string[] },
     private readonly now: () => Date = () => new Date(),
-  ) {}
+  ) {
+    const migrated: Record<string, string> = {}
+    for (const key of store.keys?.() ?? []) {
+      const match = /^records\.v1\.([a-z-]+)\.([0-9a-f-]+)$/.exec(key)
+      if (!match || !notificationHistoryDomains.has(match[1]!) || !isGuid(match[2])) continue
+      const records = this.readRecords<object>(match[1]!, match[2]!)
+      let changed = false
+      for (const record of records) {
+        if (!Array.isArray(record?.history)) continue
+        record.history = record.history.map(revision => {
+          if (!revision?.snapshot || typeof revision.snapshot !== "object") return revision
+          const safe = redactNotificationRevision(revision)
+          changed ||= safe !== revision
+          return safe
+        })
+      }
+      if (changed) migrated[key] = JSON.stringify(records)
+    }
+    if (store.setMany) store.setMany(migrated)
+    else for (const [key, value] of Object.entries(migrated)) store.set(key, value)
+  }
 
   list<T>(domain: string, tenantId: string): Stored<T>[] {
     return structuredClone(this.readRecords<T>(domain, tenantId))
@@ -126,7 +171,8 @@ export class TenantRecords {
     if (records.length >= MAX_RECORDS) throw new Error("This tenant has too many stored records of this kind. Close or export older ones first.")
     const at = this.now().toISOString()
     const base = { ...structuredClone(value), id: randomUUID(), tenantId: tenantId.toLowerCase(), createdAt: at, updatedAt: at } as T & StoredRecord
-    const record: Stored<T> = { ...base, history: [{ at, actor: meta.actor, reason: meta.reason, snapshot: structuredClone(base) }] }
+    const snapshot = notificationHistoryDomains.has(domain) ? notificationSnapshot<T & StoredRecord>(base) : base
+    const record: Stored<T> = { ...base, history: [{ at, actor: meta.actor, reason: meta.reason, snapshot: structuredClone(snapshot) }] }
     this.save(domain, tenantId, [...records, record])
     return structuredClone(record)
   }
@@ -152,7 +198,8 @@ export class TenantRecords {
     const { history: _nested, ...changed } = change(structuredClone(plain) as T & StoredRecord) as T & { history?: unknown }
     const next = { ...structuredClone(changed), id: current.id, tenantId: current.tenantId, createdAt: current.createdAt, updatedAt: at } as T & StoredRecord
     const { changes, removed } = delta(plain as Record<string, unknown>, next as Record<string, unknown>)
-    let revisions: RecordRevision<T & StoredRecord>[] = [...history, { at, actor: meta.actor, reason: meta.reason, snapshot: structuredClone(changes) as Partial<T & StoredRecord>, partial: true, ...(removed.length ? { removed } : {}) }]
+    const revision: RecordRevision<T & StoredRecord> = { at, actor: meta.actor, reason: meta.reason, snapshot: structuredClone(changes) as Partial<T & StoredRecord>, partial: true, ...(removed.length ? { removed } : {}) }
+    let revisions = [...history, notificationHistoryDomains.has(domain) ? redactNotificationRevision(revision) : revision]
     if (revisions.length > MAX_REVISIONS) {
       // The oldest kept revision becomes complete again, so the kept history still resolves.
       const first = resolveHistory(revisions)[revisions.length - MAX_REVISIONS]!
