@@ -1,5 +1,7 @@
 "use client"
 
+import { LEGACY_COMPARISON_NOTICE } from "../../../../shared/intune/backup-read-coverage"
+
 import { BackupCoverage } from "@desktop/components/BackupCoverage"
 import { COVERAGE_ISSUE_TEXT, groupBackupCoverage } from "../../../../shared/services/backup-coverage"
 import { LargeContents } from "~/components/backup/large-inventory"
@@ -435,7 +437,7 @@ export default function BackupRestorePage() {
                           </div>
                           <div className="flex flex-wrap justify-end gap-2">
                             {backup.type && <span className={cn("rounded-full px-2.5 py-1 text-xs font-medium", backup.type === "scheduled" ? "bg-blue-50 text-blue-700" : "bg-muted text-gray-700")}>{TRIGGER_LABEL[backup.type]}</span>}
-                            {kind !== "success" && <span className={cn("rounded-full px-2.5 py-1 text-xs font-medium", style.badge)}>{statusLabel(backup.status)}</span>}
+                            {(kind !== "success" || backup.coverage === "incomplete") && <span className={cn("rounded-full px-2.5 py-1 text-xs font-medium", style.badge)}>{statusLabel(backup.status, backup.coverage)}</span>}
                           </div>
                         </div>
                         <div className="mt-3 grid grid-cols-2 gap-4 text-sm xl:grid-cols-4">
@@ -677,6 +679,7 @@ function BackupDetails({ credentials, service, backup, first, storageAccountName
         </div>
       </div>
 
+      {backup.legacyReadFailure && <p className="mb-4 rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-900">{LEGACY_COMPARISON_NOTICE}</p>}
       {(backup.warning || kind === "warning" || kind === "failed" || kind === "cancelled" || (backup.skippedTypes?.length ?? 0) > 0 || backup.coverage === "incomplete") && (
         <div className={cn("mb-6 flex gap-3 rounded-2xl px-4 py-3 text-sm", kind === "failed" ? "bg-red-50 text-red-800" : kind === "cancelled" ? "bg-gray-100 text-gray-800" : "bg-amber-50 text-amber-900")}>
           <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
@@ -770,7 +773,7 @@ function BackupDetails({ credentials, service, backup, first, storageAccountName
           <h3 className="mb-3 text-xs font-medium text-gray-500">About this backup</h3>
           <dl className="divide-y divide-gray-100 text-sm">
             {[
-              ["Status", statusLabel(backup.status)],
+              ["Run status", statusLabel(backup.status, backup.coverage)],
               ["Started", backup.type ? TRIGGER_LABEL[backup.type] : "Not recorded"],
               ["Included", backup.scope?.included ? `${backup.scope.included.length} types` : backup.scope?.description ?? "Not recorded"],
               ["Stored", storageLabel(storageAccountName)],

@@ -107,6 +107,17 @@ describe("The scope picker follows the tenant's selection", () => {
 })
 
 describe("Tenant backup coverage", () => {
+  it("shows license and setup guidance for Start now without a sign-in upgrade link", async () => {
+    state.report.mockResolvedValue({
+      ...answer(), clientId: GRAPH_CLI_CLIENT_ID,
+      coverage: [{ service: "defender", folders: ["DefenderAttackSimulations"], readable: [], issues: { DefenderAttackSimulations: "license" } }],
+    })
+    const container = mount(createElement(ServiceBackupNotice, { tenantId: TENANT, showCoverage: true }))
+    await act(async () => undefined)
+    expect(container.textContent).toContain("Check the service license and setup in Microsoft 365.")
+    expect(container.querySelector("a")).toBeNull()
+  })
+
   it.each([
     ["22222222-2222-2222-2222-222222222222", "Repair in Settings", `/portal/settings?section=services&tenant=${TENANT}`],
     [TENUVAULT_CLIENT_ID, "Add app permissions", `/portal/settings?section=signin&pack=conditionalAccess-backup#sign-in-${TENANT}`],

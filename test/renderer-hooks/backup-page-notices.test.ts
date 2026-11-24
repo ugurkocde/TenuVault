@@ -81,6 +81,21 @@ describe("Backup Details", () => {
     expect(row.textContent).not.toContain("None in the tenant")
   })
 
+  it("labels the result Finished in the list and Run status when coverage is incomplete", () => {
+    const { container } = renderBackup({
+      coverage: "incomplete",
+      scope: { included: ["CompliancePolicies", "DeviceConfigurations"], excluded: [], description: "Custom" },
+      readableTypes: ["CompliancePolicies"],
+      notRead: ["DeviceConfigurations"],
+      notReadCauses: { DeviceConfigurations: "permission" },
+    })
+    expect([...container.querySelectorAll("button span")].map(node => node.textContent)).toContain("Finished")
+    const status = [...container.querySelectorAll("dt")].find(node => node.textContent === "Run status")
+    expect(status?.nextElementSibling?.textContent).toBe("Finished")
+    expect(container.querySelector('[aria-label="Intune backup coverage"]')?.textContent).toContain("1 of 2")
+    expect(container.querySelector('[aria-label="Intune backup coverage"]')?.textContent).toContain("Permission not granted")
+  })
+
   it("shows a type read successfully with zero results as empty even when other reads failed", () => {
     const { container } = renderBackup({
       status: "CompletedWithWarnings",

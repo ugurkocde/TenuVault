@@ -26,7 +26,7 @@ With every service and opt-in area selected, TenuVault backs up 135 types. Open 
 
 **Sign-in results** and **Tenants** show how many of the selected types your sign-in can back up, for each service. The sign-in count uses verified permissions and, on **Tenants**, recent backup outcomes for your current sign-in. A backup may still find a role refusal or a service that needs a license. Types that require a Backup Reader are tracked separately in **Settings > Services and permissions**.
 
-**Backup Details** counts the selected types that were read in full in that backup. An empty list or an unset configuration counts as read. A partial read can still show how many policies were saved. **Not included** means the backup scope left the type out. **Unknown** means the read or coverage could not be confirmed. Expand **Coverage details** to see the affected types and any known reason.
+**Backup Details** counts the selected types that were read in full in that backup, including permission skips in the total selected. **Run status** shows **Finished** when the run ended with incomplete coverage and **Complete** when full coverage is recorded. An empty list or an unset configuration counts as read. A partial read can still show how many policies were saved. **Not included** means the backup scope left the type out. **Unknown** means the read or coverage could not be confirmed. Expand **Coverage details** to see the affected types and any known reason.
 
 ## How to read the tables
 

@@ -1094,8 +1094,6 @@ function TenantsPageContent() {
                 </div>
               )}
 
-              {tenant.credentials && <ServiceBackupNotice key={tenant.credentials.appId} tenantId={tenant.credentials.tenantId} showCoverage />}
-
               {/* Sync Status */}
               <div className="flex items-center justify-between rounded-2xl bg-gray-50 px-4 py-3 mb-4">
                 <div className="flex items-center gap-2">
@@ -1162,6 +1160,7 @@ function TenantsPageContent() {
                   )}
                 </Button>
               </div>
+              {tenant.credentials && <div className="mt-3"><ServiceBackupNotice key={tenant.credentials.appId} tenantId={tenant.credentials.tenantId} showCoverage /></div>}
             </div>
           </div>
         ))}

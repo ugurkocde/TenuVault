@@ -31,11 +31,11 @@ export function ServiceBackupNotice({ tenantId, showCoverage = false }: { tenant
   const signIn = settingsHref("signin", `sign-in-${tenantId.toLowerCase()}`)
   const services = `${settingsHref("services")}&tenant=${encodeURIComponent(tenantId)}`
   return <>
-    {showCoverage && report.coverage && <div className="mb-3" data-no-select>
-      <BackupCoverage coverage={report.coverage} emptyLabel="Off" action={row => {
+    {showCoverage && report.coverage && <div data-no-select>
+      <BackupCoverage compact coverage={report.coverage} emptyLabel="Off" action={row => {
         const issues = row.folders.map(folder => coverageIssue(row, folder))
         const permissions = issues.includes("permission")
-        if (method === "graphCli" && issues.some(Boolean)) return <Link className="text-xs font-medium text-blue-700 underline" to={signIn}>See sign-in upgrade options</Link>
+        if (method === "graphCli" && permissions) return <Link className="text-xs font-medium text-blue-700 underline" to={signIn}>See sign-in upgrade options</Link>
         if (permissions && method === "tenuvaultApp") {
           const folder = row.folders.find(folder => coverageIssue(row, folder) === "permission")!
           const module = moduleForFolder(folder)?.module.id
@@ -45,6 +45,7 @@ export function ServiceBackupNotice({ tenantId, showCoverage = false }: { tenant
         }
         if (permissions) return <Link className="text-xs font-medium text-blue-700 underline" to={services}>Repair in Settings</Link>
         if (issues.includes("role")) return <p className="text-xs text-gray-600">Ask your administrator to review your role.</p>
+        if (issues.includes("license")) return <p className="text-xs text-gray-600">Check the service license and setup in Microsoft 365.</p>
         if (issues.includes("unknown")) return <Link className="text-xs font-medium text-blue-700 underline" to={services}>Check coverage in Settings</Link>
         return null
       }} />

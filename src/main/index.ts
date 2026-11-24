@@ -1044,6 +1044,7 @@ async function bootstrap(): Promise<void> {
     if (job.status === "Cancelled") return false
     const result = await emitBackupOutcome(featureDeps, job.tenantId, {
       status: notifiedStatus(job),
+      coverage: job.coverage,
       backupFolder: job.backupFolder ?? null,
       naturalKey: key ?? job.backupFolder ?? `job:${job.id}`,
       finishedAt: job.endTime ?? new Date().toISOString(),

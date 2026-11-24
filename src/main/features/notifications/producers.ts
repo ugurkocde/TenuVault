@@ -1,4 +1,5 @@
 import { backupEvent, credentialExpiringEvent, driftEvent, lateBackupEvent, restoreEvent } from "../../../shared/notifications/envelope"
+import type { Coverage } from "../../../shared/backup-outcomes"
 import { allows } from "../../../shared/plans"
 import type { FeatureDeps } from "../deps"
 import { channelsOf, emit, emitDetailed, type NotificationOptions } from "./service"
@@ -11,6 +12,7 @@ import { channelsOf, emit, emitDetailed, type NotificationOptions } from "./serv
 
 export interface BackupOutcome {
   status: "Success" | "CompletedWithWarnings" | "Failed"
+  coverage?: Coverage
   backupFolder: string | null
   /** Delivery identity; see BackupEventInput.naturalKey. */
   naturalKey?: string | null
@@ -50,6 +52,7 @@ export async function emitBackupOutcome(deps: FeatureDeps, tenantId: string, out
     tenantId,
     tenantName: deps.tenant(tenantId)?.name ?? null,
     status: outcome.status,
+    coverage: outcome.coverage,
     backupFolder: outcome.backupFolder,
     naturalKey: outcome.naturalKey,
     occurredAt: outcome.finishedAt,

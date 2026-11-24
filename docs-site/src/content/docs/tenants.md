@@ -62,7 +62,7 @@ Each tenant shows **X of Z** backup types for the services it has enabled. Expan
 | Entra ID | Shows the count for selected Entra ID configuration types, including Conditional Access when enabled. |
 | Intune | Shows the count for selected Intune configuration types. |
 
-* **Start now** opens sign-in settings with upgrade options.
+* **Start now** opens sign-in upgrade options for missing permissions. If the service needs a license or setup, check the service in Microsoft 365.
 * **TenuVault app** opens sign-in settings so you can add the relevant permission pack or send it to your administrator.
 * **Your own app registration** opens **Services and permissions** for that tenant to review and repair missing permissions.
 
