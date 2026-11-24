@@ -1,3 +1,5 @@
+import { privilegedRestoreConsent } from "./privileged-consent"
+import type { SignInMethod } from "../../shared/tenant-connection"
 import { guardedRestoreJournal } from "../storage/restore-journal"
 import { mappedReference } from "../../shared/intune/restore-references"
 import { PRIVILEGED_REVIEW_FOLDERS, PRIVILEGED_RESTORE_BLOCKER } from "../../shared/intune/directory-review-folders"
@@ -58,7 +60,7 @@ export class DirectoryRestoreService {
   private readonly unpublishedCleanup = new Set<() => void>()
   private readonly running = new Map<string, AbortController>()
   private readonly store: PartitionedRestoreStore
-  constructor(store: PartitionedRestoreStore, private readonly recovery: RecoveryAccounts, private readonly connection: (tenant: string) => Promise<RestoreConnection>, private readonly localOwner: (tenant: string) => Promise<Pick<RestoreConnection, "tenantId" | "userId" | "clientId">>, private readonly fetchImpl: typeof fetch = fetch, private readonly protectedAppIds: (tenant: string) => readonly string[] = () => [], private readonly settings?: Pick<ModuleSettings, "get">, private readonly now: () => number = () => Date.now()) {
+  constructor(store: PartitionedRestoreStore, private readonly recovery: RecoveryAccounts, private readonly connection: (tenant: string) => Promise<RestoreConnection>, private readonly localOwner: (tenant: string) => Promise<Pick<RestoreConnection, "tenantId" | "userId" | "clientId">>, private readonly fetchImpl: typeof fetch = fetch, private readonly protectedAppIds: (tenant: string) => readonly string[] = () => [], private readonly settings?: Pick<ModuleSettings, "get">, private readonly now: () => number = () => Date.now(), private readonly signInMethod?: (tenant: string) => SignInMethod | undefined) {
     this.store = { partitioned: store.partitioned, get: name => restorePersistence(() => store.get(name)), set: (name, value) => restorePersistence(() => store.set(name, value)), delete: name => restorePersistence(() => store.delete(name)) }
   }
   private async actorContext(tenant: string, onThrottled?: (retryAt: number) => void, validatedConnection?: RestoreConnection, version = "v1.0") {
@@ -542,7 +544,10 @@ export class DirectoryRestoreService {
     const page = this.load(tenant, request.runId!)
     await this.verifyLocalOwner(page)
     if (request.origin !== "restore" || page.run.origin !== request.origin || page.run.source?.path !== request.path || page.run.source.fingerprint !== restoreFingerprint(request.snapshot) || this.view(page).fingerprint !== fingerprint) fail("The backup or preview changed. Preview this object again.")
-    if (PRIVILEGED_REVIEW_FOLDERS.includes(request.path.split("/")[1] ?? "")) fail(PRIVILEGED_RESTORE_BLOCKER)
+    const folder = request.path.split("/")[1] ?? ""
+    if (PRIVILEGED_REVIEW_FOLDERS.includes(folder)) fail(PRIVILEGED_RESTORE_BLOCKER)
+    const consent = privilegedRestoreConsent(this.signInMethod?.(tenant), folder)
+    if (consent) fail(`${consent.pack.label} is unavailable with the TenuVault app until temporary access and permission removal can be verified.`)
     const connection = await this.pageConnection(page)
     const selection = page.rows.filter(row => !row.review.blocker && row.review.approvals.every(kind => approvals[row.key]?.includes(kind))).map(row => row.key)
     if (!selection.length || (page.selection && JSON.stringify(page.selection) !== JSON.stringify(selection))) fail("Approve each selected row separately. A resumed page must keep its original selection.")

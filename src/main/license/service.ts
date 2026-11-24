@@ -344,6 +344,8 @@ export class LicenseService {
   private healthCheck: Promise<void> | null = null
   private healthRetryAt = 0
   private healthFailures = 0
+  private tenuvaultAppHealth?: { expiresAt: number; enabled: boolean }
+  private tenuvaultAppCheck?: Promise<boolean>
   private sharingCapability?: { expiresAt: number; supported: boolean }
   private sharingCheck?: Promise<boolean>
   private trialRecords: Record<string, StoredTenantTrial> = {}
@@ -716,6 +718,19 @@ export class LicenseService {
 
   private organizationClientChanged(entry: StoredActivation, clientId: string | null): boolean {
     return entry.source === "tenant" && Boolean(clientId && entry.organizationClientId && clientId.toLowerCase() !== entry.organizationClientId)
+  }
+
+  async tenuvaultAppEnabled(): Promise<boolean> {
+    if (this.tenuvaultAppHealth && Date.now() < this.tenuvaultAppHealth.expiresAt) return this.tenuvaultAppHealth.enabled
+    return this.tenuvaultAppCheck ??= (async () => {
+      let enabled = false
+      try {
+        const response = await this.fetchImpl(`${this.options.apiBase}/api/desktop-license/health`, { signal: AbortSignal.timeout(10_000), redirect: "error" })
+        if (response.ok) enabled = (await response.json())?.connectMethods?.tenuvaultApp === true
+      } catch { /* Shared sign-in requires positive health discovery. */ }
+      this.tenuvaultAppHealth = { expiresAt: Date.now() + 2 * 60_000, enabled }
+      return enabled
+    })().finally(() => { this.tenuvaultAppCheck = undefined })
   }
 
   private async supportsClientIdSets(): Promise<boolean> {

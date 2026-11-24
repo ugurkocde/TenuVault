@@ -50,9 +50,11 @@ const bridge: TenuVaultPreloadBridge = {
     signOut: (tenantId) => invoke("auth:signOut", tenantId),
     accounts: () => invoke("auth:accounts"),
     connection: tenantId => invoke("auth:connection", tenantId),
+    packConsentPlan: tenantId => invoke("auth:packConsentPlan", tenantId),
+    packConsent: (tenantId, packId, action) => invoke("auth:packConsent", tenantId, packId, action),
     switchConnection: async (tenantId, target) => {
       const outcome = await invoke<ConnectionSwitchResponse>("auth:switchConnection", tenantId, target)
-      if ("error" in outcome) throw new Error(outcome.error.message)
+      if ("error" in outcome) throw Object.assign(new Error(outcome.error.message), { code: outcome.error.code })
       return outcome.result
     },
     savedDirectoryRestores: (tenantId) => invoke("auth:savedDirectoryRestores", tenantId),

@@ -20,7 +20,7 @@ function fixture() {
 }
 function token(claims: object) { return `header.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.signature` }
 // Execute the actual host wiring so tests cover both token acquisition boundaries in index.ts.
-function connectedFlow(original: { accessToken: string; scopes: string[] }, refreshed = original) {
+function connectedFlow(original: { accessToken: string; scopes: string[] }, refreshed = original, method = "ownApp") {
   const fake = additionGraph()
   const main = readFileSync(new URL("../src/main/index.ts", import.meta.url), "utf8")
   const source = main.slice(main.indexOf("  const permissionAdditions = new AddPermissionsFlow("), main.indexOf('  handleTrusted("services:previewAddition"'))
@@ -28,13 +28,21 @@ function connectedFlow(original: { accessToken: string; scopes: string[] }, refr
   const auth = { getAccessToken: vi.fn(async (_tenant: string, _client: string, _scope: string, force?: boolean) => force ? refreshed : original) }
   const signIn = vi.fn(async () => "ephemeral")
   const context = { AddPermissionsFlow, permissionAdditionScopes, verifyPermissionAdditionToken, chromiumFetch: fake.request,
-    capabilities: { requireWrite: () => undefined }, connectedTenant: () => tenant, accounts: new Map([[tenant, additionConnection]]), tenantProfile: () => additionConnection,
+    connections: { get: () => ({ method }) }, capabilities: { requireWrite: () => undefined }, connectedTenant: () => tenant, accounts: new Map([[tenant, additionConnection]]), tenantProfile: () => additionConnection,
     moduleSettings: { get: () => ({}) }, additionPermissions: () => additionConnection.allowed, auth,
     RESOURCE_SCOPES: { graph: "https://graph.microsoft.com/.default" }, signInForPermissionAddition: signIn, shell: {}, health }
   const flow: AddPermissionsFlow = new Function(...Object.keys(context), `${transformSync(source, { loader: "ts" }).code}\nreturn permissionAdditions`)(...Object.values(context))
   controllers.push(flow)
   return { flow, auth, health, signIn, ...fake }
 }
+it("directs shared sign-in to its own consent flow before acquiring any setup token", async () => {
+  const { flow, writes, auth, signIn } = connectedFlow({ accessToken: token({ scp: "User.Read" }), scopes: [] }, undefined, "tenuvaultApp")
+  await expect(flow.preview(tenant, ["Policy.Read.All"])).rejects.toThrow("Review the TenuVault app packs")
+  expect(auth.getAccessToken).not.toHaveBeenCalled()
+  expect(signIn).not.toHaveBeenCalled()
+  expect(writes).toEqual([])
+})
+
 it.each([{ scopes: ["https://graph.microsoft.com/User.Read"] }, { scopes: ["https://graph.microsoft.com/.default", "openid", "profile"] }])("reads connected and refreshed delegated claims instead of MSAL response scopes $scopes", async ({ scopes }) => {
   const { flow, writes, auth, health } = connectedFlow(
     { accessToken: token({ scp: "user.read" }), scopes },

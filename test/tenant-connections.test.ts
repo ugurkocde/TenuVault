@@ -1,3 +1,4 @@
+import { resourcePackScopes, tenantPermissionPacks } from "../src/shared/services/permission-packs"
 import { mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -363,5 +364,51 @@ describe("Start now capability", () => {
     }
     expect(() => cap.requireResource(TENANT, RESOURCE_SCOPES.graph)).not.toThrow()
     expect(() => cap.requireConnection(TENANT, OWN, RESOURCE_SCOPES.graph)).toThrow("method changed")
+  })
+})
+
+
+describe("TenuVault app capabilities", () => {
+  it("requires the chosen, verified service restore pack and its scopes in the delegated token", async () => {
+    let packs = tenantPermissionPacks({ intune: { access: "backup" } }, { azure: false, audit: false })
+    let graphScopes = resourcePackScopes(packs, "graph")
+    let enabled = true
+    const record = () => ({
+      version: 1 as const, clientId: TENUVAULT_CLIENT_ID, method: "tenuvaultApp" as const, origin: "wizard" as const,
+      createdAt: NOW, updatedAt: NOW, graphScopes,
+    })
+    const caps = new ConnectionCapabilities(record, () => packs, async () => enabled)
+    const send = (claims: object, path = "deviceManagement/configurationPolicies") => {
+      const url = new URL("https://graph.microsoft.com/beta/" + path)
+      return caps.authorizeGraphRequest(url, url, { method: "POST", headers: { Authorization: `Bearer ${jwt(claims)}` } }, TENANT)
+    }
+    const broad = { tid: TENANT, azp: TENUVAULT_CLIENT_ID, scp: graphScopes.join(" ") + " DeviceManagementConfiguration.ReadWrite.All Application.ReadWrite.All" }
+    await expect(send(broad)).rejects.toThrow("restore permission pack")
+
+    packs = tenantPermissionPacks({ intune: { access: "restore" } }, { azure: false, audit: false })
+    await expect(send(broad)).rejects.toThrow("restore permission pack")
+    graphScopes = resourcePackScopes(packs, "graph")
+    await expect(send(broad)).rejects.toThrow("restore permission pack")
+    const allowed = { ...broad, scp: graphScopes.join(" ") }
+    await expect(send(allowed)).resolves.toBeUndefined()
+    await expect(send(allowed, "identity/conditionalAccess/policies")).rejects.toThrow("restore permission pack")
+    await expect(send(allowed, "applications")).rejects.toThrow("restore permission pack")
+    await expect(send({ ...allowed, azp: OWN })).rejects.toThrow("restore permission pack")
+    enabled = false
+    await expect(send(allowed)).rejects.toThrow("currently unavailable")
+  })
+
+  it("keeps the current connection when staged approval is missing and then records verified scopes", async () => {
+    const f = fixture()
+    f.enroll()
+    const before = f.entries()
+    f.signIn.mockRejectedValueOnce(new Error("missing approval"))
+    await expect(f.connections.switch(TENANT, { method: "tenuvaultApp" })).rejects.toThrow("missing approval")
+    expect(f.entries()).toEqual(before)
+    const verified = ["openid", "User.Read"]
+    f.signIn.mockResolvedValueOnce({ ...staged(TENUVAULT_CLIENT_ID), graphScopes: verified })
+    const result = await f.connections.switch(TENANT, { method: "tenuvaultApp" })
+    expect(result.connection).toMatchObject({ method: "tenuvaultApp", clientId: TENUVAULT_CLIENT_ID, graphScopes: verified })
+    expect(f.restart().connections.get(TENANT)?.graphScopes).toEqual(verified)
   })
 })

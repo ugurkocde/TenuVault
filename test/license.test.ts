@@ -2520,3 +2520,35 @@ it("does not apply a refused candidate key's cooldown to the saved key after rol
     expect(calls.at(-1)?.body.key).toBe("PREVIOUS-TRIAL-KEY")
   } finally { vi.useRealTimers() }
 })
+
+describe("TenuVault app availability", () => {
+  it.each([{}, { connectMethods: {} }, { connectMethods: { tenuvaultApp: "true" } }, { connectMethods: { tenuvaultApp: false } }])(
+    "keeps the shared sign-in disabled for health response %j", async health => {
+      const fetch = vi.fn(async () => Response.json(health))
+      expect(await service({ fetch }).tenuvaultAppEnabled()).toBe(false)
+      expect(fetch).toHaveBeenCalledWith(expect.stringMatching(/\/api\/desktop-license\/health$/), expect.objectContaining({ redirect: "error" }))
+    },
+  )
+
+  it("refreshes a positive result and disables sign-in when health turns it off", async () => {
+    const now = vi.spyOn(Date, "now")
+    const start = Date.now()
+    now.mockReturnValue(start)
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(Response.json({ connectMethods: { tenuvaultApp: true } }))
+      .mockResolvedValueOnce(Response.json({ connectMethods: { tenuvaultApp: false } }))
+      .mockRejectedValueOnce(new Error("network unavailable"))
+    try {
+      const licensing = service({ fetch })
+      expect(await Promise.all([licensing.tenuvaultAppEnabled(), licensing.tenuvaultAppEnabled()])).toEqual([true, true])
+      expect(fetch).toHaveBeenCalledTimes(1)
+      now.mockReturnValue(start + 120_001)
+      expect(await licensing.tenuvaultAppEnabled()).toBe(false)
+      now.mockReturnValue(start + 240_002)
+      expect(await licensing.tenuvaultAppEnabled()).toBe(false)
+      expect(fetch).toHaveBeenCalledTimes(3)
+    } finally {
+      now.mockRestore()
+    }
+  })
+})

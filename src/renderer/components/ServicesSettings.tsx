@@ -1,3 +1,4 @@
+import { TENUVAULT_CLIENT_ID } from "../../shared/tenant-connection"
 import { servicesStatusKey } from "../features/notifications/optional-permissions"
 import { ApplicationRestoreDisclosure } from "./ApplicationRestoreDisclosure"
 import { AddPermissions } from "./AddPermissions"
@@ -43,6 +44,9 @@ function PermissionState({ state }: { state: ServiceHealth["permissions"] }) {
 export function PermissionRoutes({ report, missing, inApp = false }: { inApp?: boolean; report: Pick<ConnectionHealthReport, "tenantId" | "clientId">; missing: readonly string[] }) {
   const fix = permissionRemediation(report, missing)
   if (!fix.names.length) return null
+  if (report.clientId.toLowerCase() === TENUVAULT_CLIENT_ID) return (
+    <Link className="block text-sm text-blue-800 underline" to={settingsHref("signin")}>Review TenuVault app permission packs</Link>
+  )
   return <details data-permission-routes data-no-select className="rounded-xl bg-blue-50 p-3 text-sm text-gray-700">
     <summary className="cursor-pointer font-medium text-blue-800">Add the missing permissions ({fix.names.length})</summary>
     <div className="mt-3 space-y-3">
@@ -273,27 +277,31 @@ export function ServicesSettings({ active = true }: { active?: boolean }) {
  * Delegated permissions used by specific features.
  */
 function OptionalPermissions({ entries, clientId, tenantId, checking }: { entries: OptionalPermissionStatus[]; clientId: string; tenantId: string; checking: boolean }) {
+  const shared = clientId.toLowerCase() === TENUVAULT_CLIENT_ID
+  const displayed = shared ? entries.filter(entry => entry.id === "conditionalAccessWatching" || entry.id === "groupRead") : entries
   return (
     <section aria-labelledby="optional-permissions-heading" className="space-y-2 border-t border-gray-100 pt-4 dark:border-gray-800">
       <h3 id="optional-permissions-heading" className="text-sm font-medium text-gray-900">Feature permissions</h3>
       {/* The text switches to "Checking" while Check again runs, so every finished check is announced, also when the result is unchanged. */}
       <p role="status" aria-live="polite" className="sr-only">
-        {checking ? "Checking feature permissions." : entries.some((entry) => entry.granted === null) ? "Feature permissions could not be checked." : `${entries.filter((entry) => entry.granted).length} of ${entries.length} feature permissions granted.`}
+        {checking ? "Checking feature permissions." : displayed.some((entry) => entry.granted === null) ? "Feature permissions could not be checked." : `${displayed.filter((entry) => entry.granted).length} of ${displayed.length} feature permissions granted.`}
       </p>
-      <p className="text-xs text-gray-500">
+      {shared ? (
+        <p className="text-xs text-gray-500">The Intune packs include group read. Turn on Conditional Access change watching to include the audit log pack. <Link className="font-medium text-blue-800 underline" to={settingsHref("signin")}>Review TenuVault app permission packs</Link></p>
+      ) : <p className="text-xs text-gray-500">
         For feature permissions with a setup switch, use that switch when creating a new app registration. You can also add the delegated permission in Entra, grant admin consent, then check again.
         {" "}<span className="font-mono">-IncludeNotifications</span> adds <span className="font-mono">Mail.Send</span> and <span className="font-mono">User.Read.All</span>.
-      </p>
+      </p>}
       <ul className="divide-y divide-gray-100 dark:divide-gray-800">
-        {entries.map((entry) => (
+        {displayed.map((entry) => (
           <li key={entry.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5 text-sm">
             {entry.granted === true ? <CheckCircle2 className="h-4 w-4 text-green-600" aria-hidden="true" /> : entry.granted === false ? <MinusCircle className="h-4 w-4 text-gray-400" aria-hidden="true" /> : <AlertCircle className="h-4 w-4 text-gray-400" aria-hidden="true" />}
             <span className="font-medium text-gray-900">{entry.label}</span>
             <span className="font-mono text-xs text-gray-600">{entry.permissions.join(", ")}</span>
             <span className="text-xs text-gray-500">{entry.granted === true ? "Granted" : entry.granted === false ? `Not granted: ${entry.missing.join(", ")}` : "Could not be checked"}</span>
             {entry.id === "groupRecipients" && <span className="text-xs text-gray-500">Also needs Group read.</span>}
-            {entry.id === "groupRead" && <span className="basis-full text-xs text-gray-500">Included in new app registrations. For an older registration, add the delegated GroupMember.Read.All permission in Entra and grant admin consent, then select Check again.</span>}
-            {entry.granted === false && (
+            {!shared && entry.id === "groupRead" && <span className="basis-full text-xs text-gray-500">Included in new app registrations. For an older registration, add the delegated GroupMember.Read.All permission in Entra and grant admin consent, then select Check again.</span>}
+            {!shared && entry.granted === false && (
               <span className="ml-auto flex flex-wrap items-center gap-2 text-xs text-gray-500">
                 {entry.setupSwitch && <span>New app registration: <span className="font-mono">{entry.setupSwitch}</span></span>}
                 <a href={entraApiPermissionsUrl(clientId, tenantId)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 underline underline-offset-2">Open in Entra<ExternalLink className="h-3 w-3" aria-hidden="true" /></a>

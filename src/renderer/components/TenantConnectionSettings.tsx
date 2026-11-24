@@ -1,3 +1,5 @@
+import { TenuVaultConsent } from "./TenuVaultConsent"
+import type { PackConsentPlan } from "../../shared/pack-consent"
 import { useEffect, useState } from "react"
 import { Button } from "~/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "~/components/ui/dialog"
@@ -13,6 +15,7 @@ export function TenantConnectionSettings({ tenantId, clientId, onChanged }: {
   onChanged: (clientId: string) => void
 }) {
   const [connection, setConnection] = useState<TenantConnection | null>(null)
+  const [consent, setConsent] = useState<PackConsentPlan | null>(null)
   const { status } = useLicense()
   const [open, setOpen] = useState(false)
   const [nextClientId, setNextClientId] = useState("")
@@ -21,7 +24,15 @@ export function TenantConnectionSettings({ tenantId, clientId, onChanged }: {
 
   useEffect(() => {
     let current = true
-    void bridge.auth.connection(tenantId).then(value => { if (current) setConnection(value) }).catch(() => undefined)
+    setConsent(null)
+    void bridge.auth.connection(tenantId).then(async value => {
+      if (!current) return
+      setConnection(value)
+      if (value?.origin === "wizard") {
+        const plan = await bridge.auth.packConsentPlan(tenantId)
+        if (current) setConsent(plan)
+      }
+    }).catch(() => undefined)
     return () => { current = false }
   }, [tenantId, clientId])
 
@@ -52,6 +63,11 @@ export function TenantConnectionSettings({ tenantId, clientId, onChanged }: {
       <Button variant="outline" size="sm" onClick={() => { setNextClientId(""); setError(undefined); setOpen(true) }}>
         Change app registration
       </Button>
+      {consent && <TenuVaultConsent key={tenantId} tenantId={tenantId} plan={consent} active={connection.method === "tenuvaultApp"} onChanged={result => {
+        setConnection(result.connection)
+        onChanged(result.connection.clientId)
+        toast("TenuVault app permissions verified.", "success")
+      }} />}
       {tenantLicense?.organizationRenewalPending && <p role="status" className="basis-full text-sm text-gray-600">{ORGANIZATION_RENEWAL_NOTICE}</p>}
       <Dialog open={open} onOpenChange={value => { if (!busy) setOpen(value) }}>
         <DialogContent>

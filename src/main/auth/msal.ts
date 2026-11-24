@@ -16,6 +16,11 @@ import { isMicrosoftLoginUrl } from "../../shared/security"
 import { fetchNetworkClient } from "./network-client"
 import { loopbackSignIn } from "./loopback-sign-in"
 import { deviceCodeSignIn } from "./device-code-sign-in"
+import { TENUVAULT_CLIENT_ID } from "../../shared/tenant-connection"
+import { grantedPermissions } from "../../shared/services/token"
+import { missingPackScopes, resourcePackScopes, resourceScopes, type PermissionPack } from "../../shared/services/permission-packs"
+import { consentIssue } from "./pack-consent"
+import type { PackConsentCode } from "../../shared/pack-consent"
 import type { StagedSignIn } from "./tenant-connections"
 import type { AppDeviceCode } from "../../shared/app-sources/types"
 
@@ -29,6 +34,7 @@ export interface AuthHost {
   /** Encrypted per-client MSAL cache persistence. */
   cachePlugin: (clientId: string) => ICachePlugin
   authorizeInteractive?: (tenantId: string) => void
+  sharedScopes?: (tenantId: string, scope: string) => Promise<string[]>
   authorizeConnection?: (tenantId: string, clientId: string, scope: string) => void
   /** Opens the system browser for the loopback sign-in flow. */
   openBrowser: (url: string) => Promise<void>
@@ -221,6 +227,7 @@ export class AuthManager {
     /** Called when the browser has answered and the code is being redeemed: the browser step is over. */
     onBrowserDone?: () => void
   }): Promise<SignedInAccount> {
+    if (clientId.toLowerCase() === TENUVAULT_CLIENT_ID) throw new Error("Choose TenuVault app in the sign-in method settings.")
     this.host.authorizeInteractive?.(tenant)
     const result = await this.acquireInteractive(clientId, tenant, RESOURCE_SCOPES.graph, options?.loginHint ? undefined : "select_account", options?.loginHint, true, options?.onBrowserDone).catch((error: unknown) => {
       throw firstSignInError(error)
@@ -264,6 +271,66 @@ export class AuthManager {
     }
   }
 
+  /** Keep the account and cache staged until the selected packs are confirmed for this tenant. */
+  async stageTenuVaultSignIn(tenant: string, cache: ICachePlugin, packs: readonly PermissionPack[]): Promise<Pick<StagedSignIn, "account" | "accessToken" | "graphScopes">> {
+    const app = this.createApp(TENUVAULT_CLIENT_ID, cache, true)
+    const graphScopes = resourcePackScopes(packs, "graph")
+    try {
+      const result = await this.acquireInteractive(TENUVAULT_CLIENT_ID, tenant, resourceScopes("graph", graphScopes), "select_account", undefined, true, undefined, app)
+      const account = result.account
+      if (!account || account.tenantId.toLowerCase() !== tenant) throw new ConnectionSwitchError("wrong_tenant", "Sign in with an account from this tenant.")
+      const permissions = grantedPermissions(result.accessToken)
+      if (permissions?.kind !== "delegated" || missingPackScopes(graphScopes, permissions.permissions).length) {
+        throw new ConnectionSwitchError("AADSTS65001", "Some selected Microsoft Graph permissions are still missing. Review the packs and check again. (AADSTS65001)")
+      }
+      for (const pack of packs.filter(pack => pack.resource !== "graph")) {
+        const scopes = resourceScopes(pack.resource, pack.scopes)
+        let token: AuthenticationResult | null
+        try {
+          token = await app.acquireTokenSilent({ account, scopes, authority: authority(tenant), forceRefresh: true })
+        } catch (error) {
+          const issue = consentIssue(error instanceof Error ? error.message : "")
+          throw new ConnectionSwitchError((issue?.code as PackConsentCode | undefined) ?? "AADSTS65001",
+            `${pack.label}: ${issue?.message ?? "Check the approved permissions for this resource and try again."}`)
+        }
+        if (token?.account?.tenantId.toLowerCase() !== tenant || missingPackScopes(pack.scopes, new Set(token.scopes.map(scope => scope.split("/").at(-1)!))).length) {
+          throw new ConnectionSwitchError("AADSTS65001", `${pack.label} approval is still needed. Review the pack and check again.`)
+        }
+      }
+      return {
+        account: { tenantId: tenant, clientId: TENUVAULT_CLIENT_ID, username: account.username, name: account.name, homeAccountId: account.homeAccountId },
+        accessToken: result.accessToken, graphScopes,
+      }
+    } catch (error) {
+      throw sharedSignInFailure(error, false)
+    }
+  }
+
+  /** Check a fresh delegated token for just the selected pack, without saving the account. */
+  async signInForPack(tenant: string, cache: ICachePlugin, pack: PermissionPack, checkOnly: boolean): Promise<void> {
+    const app = this.createApp(TENUVAULT_CLIENT_ID, cache, true)
+    try {
+      const result = await this.acquireInteractive(TENUVAULT_CLIENT_ID, tenant, resourceScopes(pack.resource, pack.scopes),
+        checkOnly ? "none" : "select_account", undefined, true, undefined, app)
+      if (result.account?.tenantId.toLowerCase() !== tenant) throw new ConnectionSwitchError("wrong_tenant", "Sign in with an account from this tenant.")
+      const permissions = pack.resource === "graph" ? grantedPermissions(result.accessToken) : undefined
+      const scopes = pack.resource === "graph"
+        ? permissions?.kind === "delegated" ? permissions.permissions : new Set<string>()
+        : new Set(result.scopes.map(scope => scope.split("/").at(-1)!))
+      if (missingPackScopes(pack.scopes, scopes).length) throw new ConnectionSwitchError("AADSTS65001", `${pack.label} approval is still needed. (AADSTS65001)`)
+    } catch (error) {
+      throw sharedSignInFailure(error, checkOnly)
+    }
+  }
+
+  private async connectionScopes(tenant: string, clientId: string, scope: string): Promise<string[]> {
+    if (clientId.toLowerCase() === TENUVAULT_CLIENT_ID) {
+      if (!this.host.sharedScopes) throw new Error("TenuVault app sign-in is unavailable.")
+      return this.host.sharedScopes(tenant, scope)
+    }
+    return [scope]
+  }
+
   async signOut(tenantId: string): Promise<void> {
     const stored = this.host.accountStore.get(tenantId)
     this.host.accountStore.delete(tenantId)
@@ -305,13 +372,14 @@ export class AuthManager {
       throw new SignInRequiredError(tenantId, clientId, "You are not signed in to this tenant. Sign in to continue.", scope)
     }
 
+    const scopes = await this.connectionScopes(tenantId, clientId, scope)
     const app = this.app(clientId)
     const account = await this.findAccount(app, stored.homeAccountId)
     if (!account) {
       throw new SignInRequiredError(tenantId, clientId, `Your session for ${stored.username} has ended. Sign in again to continue.`, scope)
     }
     try {
-      const result = await app.acquireTokenSilent({ account, scopes: [scope], authority: authority(tenantId), forceRefresh })
+      const result = await app.acquireTokenSilent({ account, scopes, authority: authority(tenantId), forceRefresh })
       if (result) {
         // The request is attributed to the account this token was issued for.
         captureTokenActor({ username: result.account?.username || account.username || stored.username, name: result.account?.name ?? account.name ?? undefined })
@@ -341,7 +409,7 @@ export class AuthManager {
       try {
         const result = await app.acquireTokenSilent({
           account,
-          scopes: [RESOURCE_SCOPES.graph],
+          scopes: await this.connectionScopes(tenantId, stored.clientId, RESOURCE_SCOPES.graph),
           authority: authority(tenantId),
           forceRefresh,
         })
@@ -365,7 +433,9 @@ export class AuthManager {
     if (!isResourceScope(scope)) throw new Error("Unknown sign-in scope.")
     this.host.authorizeConnection?.(tenantId, clientId, scope)
     const stored = this.host.accountStore.get(tenantId.toLowerCase())
-    const result = await this.acquireInteractive(clientId, tenantId, scope, undefined, stored?.username).catch((error: unknown) => {
+    const scopes = clientId.toLowerCase() === TENUVAULT_CLIENT_ID ? await this.connectionScopes(tenantId, clientId, scope) : [scope]
+    const result = await this.acquireInteractive(clientId, tenantId, scopes, undefined, stored?.username).catch((error: unknown) => {
+      if (clientId.toLowerCase() === TENUVAULT_CLIENT_ID) throw sharedSignInFailure(error, false)
       throw missingPermissionError(scope, error) ?? error
     })
     const account = result.account
@@ -394,6 +464,7 @@ export class AuthManager {
   async signInWithDeviceCode(tenant: string, clientId: string, onCode: (code: AppDeviceCode) => void, signal: AbortSignal): Promise<void> {
     this.host.authorizeInteractive?.(tenant)
     this.host.authorizeConnection?.(tenant, clientId, RESOURCE_SCOPES.graph)
+    if (clientId.toLowerCase() === TENUVAULT_CLIENT_ID) throw new Error("Sign in to the TenuVault app in the system browser.")
     // End this tenant's waiting browser attempts.
     for (const entry of this.interactiveControls.values()) if (entry.tenant.toLowerCase() === tenant.toLowerCase()) entry.controller.abort(new SignInCancelledError())
     const result = await deviceCodeSignIn(tenant, request => this.app(clientId).acquireTokenByDeviceCode(request), onCode, signal)
@@ -408,7 +479,7 @@ export class AuthManager {
   private acquireInteractive(
     clientId: string,
     tenant: string,
-    scope: string,
+    scope: string | string[],
     prompt?: string,
     loginHint?: string,
     cancellable = false,
@@ -437,7 +508,7 @@ export class AuthManager {
     const deadline = cancellable ? setTimeout(() => cancel(new SignInTimeoutError(FIRST_SIGN_IN_TIMEOUT_MESSAGE)), SIGN_IN_TIMEOUT_MS) : undefined
     const promise = loopbackSignIn({
       app: stagedApp ?? this.app(clientId),
-      scopes: [scope],
+      scopes: typeof scope === "string" ? [scope] : scope,
       authority: authority(tenant),
       ...(prompt ? { prompt } : {}),
       ...(loginHint ? { loginHint } : {}),
@@ -509,4 +580,17 @@ export class AuthManager {
 
 function authority(tenant: string): string {
   return `https://login.microsoftonline.com/${encodeURIComponent(tenant)}`
+}
+
+function sharedSignInFailure(error: unknown, checkOnly: boolean): ConnectionSwitchError {
+  if (error instanceof ConnectionSwitchError) return error
+  if (error instanceof SignInCancelledError) return new ConnectionSwitchError("cancelled", "Sign-in cancelled. Sign in again to continue.")
+  if (error instanceof SignInTimeoutError) return new ConnectionSwitchError("timeout", FIRST_SIGN_IN_TIMEOUT_MESSAGE)
+  const detail = error instanceof Error ? error.message : ""
+  const issue = consentIssue(detail)
+  if (issue) return new ConnectionSwitchError(issue.code as PackConsentCode, `${issue.message} (${issue.code})`)
+  if (checkOnly && (error instanceof InteractionRequiredAuthError || /login_required|interaction_required|AADSTS50058/i.test(detail))) {
+    return new ConnectionSwitchError("sign_in_required", "Microsoft needs you to sign in. Select Sign in to continue.")
+  }
+  return new ConnectionSwitchError("switch_failed", "The TenuVault app sign-in could not be completed. Try again.")
 }

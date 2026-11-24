@@ -71,7 +71,7 @@ export function validAnswer(params: URLSearchParams, state: string): boolean {
  * content type, a body over MAX_ANSWER_BYTES, a missing, wrong or repeated state, and requests it
  * cannot parse.
  */
-export async function openLoopback(pages: { successPage: string; errorPage: string }, state: string): Promise<{ port: number; answer: Promise<Answer>; close: () => void }> {
+export async function openLoopback(pages: { successPage: string; errorPage: string }, state: string, consent?: (query: URLSearchParams) => { status: "received" | "error"; issue?: { code: string } }): Promise<{ port: number; answer: Promise<Answer>; close: () => void }> {
   let settle: (answer: Answer) => void = () => undefined
   const answer = new Promise<Answer>((resolve) => { settle = resolve })
   let accepted: Socket | null = null
@@ -85,6 +85,17 @@ export async function openLoopback(pages: { successPage: string; errorPage: stri
     const target = request.url ?? ""
     const path = target.split("?", 1)[0]
     if (accepted || path !== "/") return reply(response, 404)
+    if (consent) {
+      if (request.method !== "GET") return reply(response, 405)
+      if (target.length > MAX_ANSWER_BYTES) return reply(response, 413)
+      const query = new URLSearchParams(target.slice(path.length + 1))
+      const result = consent(query)
+      if (result.issue?.code === "invalid_callback" || result.issue?.code === "wrong_tenant") return reply(response, 400)
+      accepted = request.socket
+      response.writeHead(200, HEADERS).end(result.status === "error" ? pages.errorPage : pages.successPage, () => close())
+      settle(query)
+      return
+    }
     if (request.method !== "POST") return reply(response, 405)
     if (request.headers["content-type"]?.split(";", 1)[0]?.trim().toLowerCase() !== "application/x-www-form-urlencoded") return reply(response, 415)
     if (Number(request.headers["content-length"] ?? 0) > MAX_ANSWER_BYTES) {

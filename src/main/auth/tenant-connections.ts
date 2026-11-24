@@ -49,6 +49,7 @@ function targetOf(input: unknown): { method: SignInMethod; clientId: string } {
 export interface StagedSignIn {
   account: StoredAccount
   accessToken: string
+  graphScopes?: string[]
   /** The staged cache is committed with the account, only if its original cache is still current. */
   cacheWrites?: () => Record<string, string>
 }
@@ -57,7 +58,7 @@ interface ConnectionHost {
   store: Pick<SecureStore, "get" | "setMany">
   legacyCache?: Pick<SecureStore, "get">
   signIn: Partial<Record<SignInMethod, (tenantId: string, clientId: string) => Promise<StagedSignIn>>>
-  coverage: (tenantId: string, method: SignInMethod, accessToken: string) => string[]
+  coverage: (tenantId: string, method: SignInMethod, accessToken: string, graphScopes?: string[]) => string[]
   now?: () => Date
   beforeSwitch?: (tenantId: string, currentClientId: string) => void
 }
@@ -172,7 +173,7 @@ export class TenantConnections {
     const profile = this.profile(tenant, raw)
     if (!profile) throw new Error("Save the tenant profile with its connection.")
     const at = this.now().toISOString()
-    const record: TenantConnection = { version: 1, ...selected, origin: "wizard", createdAt: at, updatedAt: at, profileCreatedAt: validTime(profile.createdAt) ? profile.createdAt : null, ...(selected.method === "ownApp" ? { ownClientId: selected.clientId } : {}) }
+    const record: TenantConnection = { version: 1, ...selected, ...(staged.graphScopes ? { graphScopes: staged.graphScopes } : {}), origin: "wizard", createdAt: at, updatedAt: at, profileCreatedAt: validTime(profile.createdAt) ? profile.createdAt : null, ...(selected.method === "ownApp" ? { ownClientId: selected.clientId } : {}) }
     this.validateAccount(tenant, record.clientId, staged.account)
     this.validateStorage(profile, record.method)
     this.commit(tenant, JSON.stringify([...saved, profile]), record, staged)
@@ -234,7 +235,7 @@ export class TenantConnections {
     const record = this.get(tenant)
     const profile = this.profile(tenant, this.host.store.get(TENANT_LIST_KEY))
     if (!profile || record?.origin !== "wizard") throw new ConnectionSwitchError("unavailable", "Only tenants connected through the new wizard can change sign-in method.")
-    if (selected.method === record.method && selected.clientId === record.clientId) throw new ConnectionSwitchError("invalid_request", "Choose a different sign-in method or app registration.")
+    if (selected.method !== "tenuvaultApp" && selected.method === record.method && selected.clientId === record.clientId) throw new ConnectionSwitchError("invalid_request", "Choose a different sign-in method or app registration.")
     const signIn = this.host.signIn[selected.method]
     if (!signIn) throw new ConnectionSwitchError("unavailable", "Sign-in with this method is unavailable in this version.")
     this.validateStorage(profile, selected.method)
@@ -252,9 +253,11 @@ export class TenantConnections {
         throw new ConnectionSwitchError("conflict", "The tenant's connection changed during sign-in. Try again.")
       }
       this.validateStorage(latest, selected.method)
-      const missing = this.host.coverage(tenant, selected.method, staged.accessToken)
+      const missing = staged.graphScopes
+        ? this.host.coverage(tenant, selected.method, staged.accessToken, staged.graphScopes)
+        : this.host.coverage(tenant, selected.method, staged.accessToken)
       const connection = {
-        ...record, ...selected, updatedAt: this.now().toISOString(),
+        ...record, ...selected, graphScopes: staged.graphScopes, updatedAt: this.now().toISOString(),
         ...(selected.method === "ownApp" ? { ownClientId: selected.clientId } : {}),
       }
       this.host.beforeSwitch?.(tenant, record.clientId)

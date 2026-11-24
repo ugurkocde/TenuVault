@@ -1,7 +1,10 @@
+import { resourcePackScopes, tenantPermissionPacks } from "../src/shared/services/permission-packs"
+import { TENUVAULT_CLIENT_ID } from "../src/shared/tenant-connection"
 import { describe, expect, it, vi } from "vitest"
 
 const msal = vi.hoisted(() => ({
   interactive: vi.fn<(request: unknown) => Promise<unknown>>(),
+  silent: vi.fn<(request: unknown) => Promise<unknown>>(),
 }))
 
 vi.mock("@azure/msal-node", async (importOriginal) => {
@@ -9,6 +12,7 @@ vi.mock("@azure/msal-node", async (importOriginal) => {
   class PublicClientApplication {
     getAllAccounts = async () => []
     acquireTokenInteractive = msal.interactive
+    acquireTokenSilent = msal.silent
   }
   return { ...actual, PublicClientApplication }
 })
@@ -297,5 +301,44 @@ describe("cancelInteractive", () => {
     const auth = manager()
     await expect(auth.signIn(TENANT, CLIENT)).resolves.toMatchObject({ tenantId: TENANT })
     expect(auth.cancelInteractive()).toBe(false)
+  })
+})
+
+
+describe("TenuVault app token verification", () => {
+  const cache = { beforeCacheAccess: async () => undefined, afterCacheAccess: async () => undefined }
+  const account = { tenantId: TENANT, username: "example@example.test", homeAccountId: "fixture" }
+  const token = (scopes: string[]) => `header.${Buffer.from(JSON.stringify({ scp: scopes.join(" ") })).toString("base64url")}.signature`
+
+  it("checks the selected pack with a fresh token and no consent prompt", async () => {
+    const [basic] = tenantPermissionPacks({}, { azure: false, audit: false })
+    const auth = manager()
+    msal.interactive.mockResolvedValueOnce({ account, accessToken: token(["User.Read"]) })
+    await expect(auth.signInForPack(TENANT, cache, basic!, true)).rejects.toMatchObject({ code: "AADSTS65001" })
+    msal.interactive.mockResolvedValueOnce({ account, accessToken: token(["User.Read", "Organization.Read.All"]) })
+    await expect(auth.signInForPack(TENANT, cache, basic!, true)).resolves.toBeUndefined()
+    expect(msal.interactive).toHaveBeenLastCalledWith(expect.objectContaining({
+      prompt: "none", scopes: ["openid", "profile", "offline_access", "https://graph.microsoft.com/User.Read", "https://graph.microsoft.com/Organization.Read.All"],
+    }))
+    expect(auth.accounts()).toEqual([])
+  })
+
+  it("requires a same-tenant Graph token and separate Azure tokens before staging the switch", async () => {
+    const packs = tenantPermissionPacks({ intune: { access: "backup" } }, { azure: true, audit: false })
+    const graphScopes = resourcePackScopes(packs, "graph")
+    const auth = manager()
+    msal.interactive.mockResolvedValueOnce({ account: { ...account, tenantId: CLIENT }, accessToken: token(graphScopes) })
+    await expect(auth.stageTenuVaultSignIn(TENANT, cache, packs)).rejects.toMatchObject({ code: "wrong_tenant" })
+    msal.interactive.mockResolvedValueOnce({ account, accessToken: token(graphScopes) })
+    msal.silent.mockResolvedValueOnce({ account, scopes: ["user_impersonation"] }).mockResolvedValueOnce({ account, scopes: [] })
+    await expect(auth.stageTenuVaultSignIn(TENANT, cache, packs)).rejects.toMatchObject({ code: "AADSTS65001", message: expect.stringContaining("Azure Storage") })
+    msal.interactive.mockResolvedValueOnce({ account, accessToken: token(graphScopes) })
+    msal.silent.mockResolvedValueOnce({ account, scopes: ["user_impersonation"] }).mockResolvedValueOnce({ account, scopes: ["user_impersonation"] })
+    await expect(auth.stageTenuVaultSignIn(TENANT, cache, packs)).resolves.toMatchObject({
+      account: { clientId: TENUVAULT_CLIENT_ID, tenantId: TENANT }, graphScopes,
+    })
+    expect(msal.silent).toHaveBeenCalledWith(expect.objectContaining({ forceRefresh: true, scopes: ["https://management.azure.com//user_impersonation"] }))
+    expect(msal.silent).toHaveBeenLastCalledWith(expect.objectContaining({ forceRefresh: true, scopes: ["https://storage.azure.com/user_impersonation"] }))
+    expect(auth.accounts()).toEqual([])
   })
 })

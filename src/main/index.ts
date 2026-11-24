@@ -1,3 +1,9 @@
+import { TENUVAULT_CLIENT_ID } from "../shared/tenant-connection"
+import { PackConsentFlow } from "./auth/pack-consent"
+import { ConnectionSwitchError } from "./auth/switch-failure"
+import { tenantPermissionPacks, resourcePackScopes, resourceScopes } from "../shared/services/permission-packs"
+import type { AuditWatchRecord } from "./features/notifications/model"
+import { DOMAINS } from "./features/domains"
 import { backupStoragePath } from "../shared/backup-storage"
 import { DirectoryRestoreStore } from "./storage/directory-restore-store"
 import { DirectoryRestoreService } from "./restore/directory-service"
@@ -56,7 +62,7 @@ import { createChromiumFetch } from "./chromium-fetch"
 import { ProxyAuth, ProxyPrompts, type ProxyAuthAttempt, type ProxyChallenge } from "./proxy-auth"
 import { basename, dirname, join } from "node:path"
 import type { ApiRequest, AppPreferences, ScheduleInput } from "../shared/ipc"
-import { BACKUP_RUN_RECORD_FILE, INTERNAL_API_ORIGIN, RESOURCE_SCOPES, localStorageAccountName } from "../shared/constants"
+import { BACKUP_RUN_RECORD_FILE, INTERNAL_API_ORIGIN, LOCAL_STORAGE_PREFIX, RESOURCE_SCOPES, localStorageAccountName } from "../shared/constants"
 import { captureDownloadAudit, createAuditRecorder } from "./api/audit"
 import { setAuditOutboxStore } from "../portal/lib/audit/outbox"
 import { backupRoutes, surfaceTokenErrors } from "./api/desktop-routes"
@@ -67,7 +73,7 @@ import { routes } from "./api/routes"
 import { AuthManager, SignInRequiredError } from "./auth/msal"
 import { TenantConnections } from "./auth/tenant-connections"
 import { ConnectionCapabilities } from "./auth/connection-capabilities"
-import { connectionCoverage } from "./auth/connection-coverage"
+import { connectionChoice, connectionCoverage } from "./auth/connection-coverage"
 import { BackupEngine, verifyStorageAccess, type BackupJob } from "./backup/engine"
 import { BackupScheduler, notifiedStatus, reportsResult, runUnattended, scheduledResult } from "./backup/scheduler"
 import { runTrayBackups } from "./backup/tray-backup"
@@ -301,12 +307,23 @@ async function bootstrap(): Promise<void> {
     store: appStore,
     legacyCache: tokenStore,
     signIn: {
+      tenuvaultApp: async (tenant, clientId) => {
+        const packs = await consentPlan(tenant)
+        if (!packs) throw new ConnectionSwitchError("unavailable", "TenuVault app sign-in is currently unavailable.")
+        const signature = JSON.stringify(packs)
+        const staged = stageConnectionCache(cache, clientId)
+        const account = await auth.stageTenuVaultSignIn(tenant, staged.plugin, packs)
+        if (JSON.stringify(await consentPlan(tenant)) !== signature) {
+          throw new ConnectionSwitchError("conflict", "The permission packs changed during sign-in. Review them and try again.")
+        }
+        return { ...account, cacheWrites: staged.cacheWrites }
+      },
       ownApp: async (tenant, clientId) => {
         const staged = stageConnectionCache(cache, clientId)
         return { ...(await auth.stageSignIn(tenant, clientId, staged.plugin)), cacheWrites: staged.cacheWrites }
       },
     },
-    coverage: (tenant, method, accessToken) => connectionCoverage(moduleSettings.get(tenant), method, accessToken),
+    coverage: (tenant, method, accessToken, graphScopes) => connectionCoverage(moduleSettings.get(tenant), method, accessToken, graphScopes),
     beforeSwitch: (tenant, clientId) => license.rememberOrganizationClient(tenant, clientId),
   })
   connections.migrate()
@@ -314,11 +331,22 @@ async function bootstrap(): Promise<void> {
     const record = connections.get(tenant)
     return !!record && record.method !== "ownApp"
   })
-  const capabilities = new ConnectionCapabilities(tenant => connections.get(tenant))
+  const capabilities = new ConnectionCapabilities(tenant => connections.get(tenant), tenant => currentPacks(tenant), () => license.tenuvaultAppEnabled())
   const auth: AuthManager = new AuthManager({
     fetch: bridgedFetchLater,
     cachePlugin: (clientId) => secureCachePlugin(cache, clientId),
     authorizeInteractive: tenant => capabilities.requireInteractive(tenant),
+    sharedScopes: async (tenant, scope) => {
+      if (!await license.tenuvaultAppEnabled()) throw new Error("TenuVault app sign-in is currently unavailable.")
+      const connection = connections.get(tenant)
+      if (connection?.method !== "tenuvaultApp") throw new Error("Choose TenuVault app for this tenant first.")
+      const resource = scope === RESOURCE_SCOPES.graph ? "graph" : scope === RESOURCE_SCOPES.storage ? "storage" : scope === RESOURCE_SCOPES.management ? "management" : null
+      if (!resource) throw new Error("This Microsoft resource has no TenuVault permission pack.")
+      const selected = resourcePackScopes(currentPacks(tenant), resource)
+      const scopes = resource === "graph" ? selected.filter(scope => connection.graphScopes?.includes(scope)) : selected
+      if (!scopes.length) throw new Error("Review the permission packs in Sign-in and access.")
+      return resourceScopes(resource, scopes)
+    },
     authorizeConnection: (tenant, client, scope) => capabilities.requireConnection(tenant, client, scope),
     openBrowser: (url) => {
       if (!isMicrosoftLoginUrl(url)) {
@@ -467,7 +495,7 @@ async function bootstrap(): Promise<void> {
   setDirectoryRestoreService(new DirectoryRestoreService(new DirectoryRestoreStore(join(userData, "directory-restore"), cipher), recoveryAccounts, restoreConnection, tenant => auth.cachedAccountIdentity(tenant), bridgedFetch, tenant => {
     const id = backupReader.status(tenant)?.clientId
     return id ? [id] : []
-  }, moduleSettings))
+  }, moduleSettings, undefined, tenant => connections.get(tenant)?.method))
   setIdentityRestorePreviews(identityRestore)
   setIdentityRestoreDispatch((tenant, request) => identityRestore.restore(tenant, request))
 
@@ -829,6 +857,27 @@ async function bootstrap(): Promise<void> {
       return []
     }
   }
+
+  const currentPacks = (tenant: string) => {
+    const profile = tenantProfile(tenant)
+    const watch = records.list<AuditWatchRecord>(DOMAINS.notificationAuditWatch, tenant)[0]
+    return tenantPermissionPacks(connectionChoice(moduleSettings.get(tenant)), {
+      azure: Boolean(profile?.storageAccountName && !profile.storageAccountName.startsWith(LOCAL_STORAGE_PREFIX)),
+      audit: Boolean(watch?.conditionalAccess?.enabled && !watch.externalWatcher),
+    })
+  }
+  const consentPlan = async (tenant: string) => {
+    if (!isGuid(tenant) || !tenantProfile(tenant) || connections.get(tenant)?.origin !== "wizard" || !await license.tenuvaultAppEnabled()) return null
+    return currentPacks(tenant)
+  }
+  const packConsent = new PackConsentFlow({
+    plan: consentPlan,
+    openBrowser: url => shell.openExternal(url),
+    signInForPack: (tenant, pack, checkOnly) => {
+      const staged = stageConnectionCache(cache, TENUVAULT_CLIENT_ID)
+      return auth.signInForPack(tenant, staged.plugin, pack, checkOnly)
+    },
+  })
 
   const missingReaderAuditContainers = new Set<string>()
   const readerAuditKey = (tenantId: string, account: string) => `${tenantId.toLowerCase()}:${account}`
@@ -1530,6 +1579,13 @@ async function bootstrap(): Promise<void> {
     if (!isGuid(tenantId) || !tenantProfile(tenantId)) return null
     return connections.get(tenantId)
   })
+  handleTrusted("auth:packConsentPlan", async (_event, tenant: unknown) => {
+    const packs = typeof tenant === "string" ? await consentPlan(tenant.toLowerCase()) : null
+    return packs ? { packs } : null
+  })
+  handleTrusted("auth:packConsent", async (_event, tenant: unknown, pack: unknown, action: unknown) => {
+    return packConsent.act(typeof tenant === "string" ? tenant.toLowerCase() : "", pack, action).finally(returnToApp)
+  })
   handleTrusted("auth:switchConnection", async (_event, tenantId: unknown, target: unknown) => {
     const outcome = await connections.switchForIpc(tenantId, target, returnToApp)
     if ("error" in outcome) return outcome
@@ -1544,7 +1600,7 @@ async function bootstrap(): Promise<void> {
     return directoryRestoreUnfinished(tenantId)
   })
   // Stops waiting for a sign-in the admin abandoned in the browser.
-  handleTrusted("auth:cancelSignIn", () => auth.cancelInteractive())
+  handleTrusted("auth:cancelSignIn", () => { const consent = packConsent.cancel(); return auth.cancelInteractive() || consent })
   // Copies the sign-in address a waiting sign-in opened, for another browser. Only whether it was
   // copied goes back; the address goes from here to the clipboard.
   handleTrusted("auth:copySignInLink", (_event, kind: unknown) => copySignInLink(kind, { signin: () => auth.signInLink(), setup: () => registrationSetup.signInLink() }, (text) => clipboard.writeText(text)))
@@ -1748,6 +1804,7 @@ async function bootstrap(): Promise<void> {
     fetch: chromiumFetch,
     connection: async tenantId => {
       connectedTenant(tenantId)
+      if (connections.get(tenantId)?.method === "tenuvaultApp") throw new Error("Review the TenuVault app packs in Sign-in and access.")
       capabilities.requireWrite([tenantId])
       const account = accounts.get(tenantId.toLowerCase())
       const profile = tenantProfile(tenantId)
