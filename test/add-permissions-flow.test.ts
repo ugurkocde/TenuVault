@@ -7,6 +7,8 @@ const mock = vi.hoisted(() => ({ signIn: vi.fn(), clear: vi.fn(), config: null a
 vi.mock("@azure/msal-node", () => ({ PublicClientApplication: class { constructor(config: Configuration) { mock.config = config }; clearCache = mock.clear } }))
 vi.mock("../src/main/auth/loopback-sign-in", () => ({ loopbackSignIn: mock.signIn }))
 import { AddPermissionsFlow, permissionAdditionScopes, signInForPermissionAddition, verifyPermissionAdditionToken } from "../src/main/auth/add-permissions-flow"
+import { createBridgedFetch } from "../src/main/api/fetch-bridge"
+import { ConnectionCapabilities } from "../src/main/auth/connection-capabilities"
 import { additionConnection, additionGraph } from "./fixtures/registration-additions"
 const tenant = additionConnection.tenantId
 const controllers: AddPermissionsFlow[] = []
@@ -27,7 +29,12 @@ function connectedFlow(original: { accessToken: string; scopes: string[] }, refr
   const health = { check: vi.fn(async () => {}) }
   const auth = { getAccessToken: vi.fn(async (_tenant: string, _client: string, _scope: string, force?: boolean) => force ? refreshed : original) }
   const signIn = vi.fn(async () => "ephemeral")
-  const context = { AddPermissionsFlow, permissionAdditionScopes, verifyPermissionAdditionToken, chromiumFetch: fake.request,
+  const caps = new ConnectionCapabilities(() => ({ version: 1, origin: "wizard", method: "ownApp", clientId: additionConnection.clientId, createdAt: "", updatedAt: "" }))
+  const bridgedFetch = createBridgedFetch({
+    dispatch: vi.fn(), getDelegatedToken: vi.fn(), fetch: fake.request,
+    authorizeRequest: (url, input, init, tenant) => caps.authorizeRequest(url, input, init, tenant),
+  })
+  const context = { AddPermissionsFlow, permissionAdditionScopes, verifyPermissionAdditionToken, bridgedFetch, chromiumFetch: vi.fn(),
     connections: { get: () => ({ method }) }, capabilities: { requireWrite: () => undefined }, connectedTenant: () => tenant, accounts: new Map([[tenant, additionConnection]]), tenantProfile: () => additionConnection,
     moduleSettings: { get: () => ({}) }, additionPermissions: () => additionConnection.allowed, auth,
     RESOURCE_SCOPES: { graph: "https://graph.microsoft.com/.default" }, signInForPermissionAddition: signIn, shell: {}, health }
