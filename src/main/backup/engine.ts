@@ -336,6 +336,13 @@ export class BackupEngine {
     return active ? [active.job.id] : []
   }
 
+  /** Includes jobs still writing a terminal manifest after releasing the tenant's running slot. */
+  isRunActive(tenantId: string, storageAccountName: string, id: string): boolean {
+    const job = this.jobs.get(id)
+    return this.executions.has(id) && job?.tenantId.toLowerCase() === tenantId.toLowerCase()
+      && job.storageAccountName.toLowerCase() === storageAccountName.toLowerCase()
+  }
+
   /** Whether a backup to storage on this device is queued, running or still writing its manifest. */
   hasLocalWork(): boolean {
     return [...this.executions.keys()].some((id) => isLocalAccount(this.jobs.get(id)?.storageAccountName))

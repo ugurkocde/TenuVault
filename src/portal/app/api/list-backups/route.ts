@@ -56,6 +56,7 @@ const ownerCache = new MetadataCache<OwnershipFile>(result => result.kind === 'f
 const RUN_RECORD_READS = 8
 const RUN_RECORD_TIMEOUT_MS = 10_000
 const RUN_RECORD_BUDGET_MS = 15_000
+type RunStatus = (tenantId: string, storageAccountName: string, runId: string) => "running" | "incomplete" | undefined
 
 /** One backup folder, described from metadata and either a folder listing or the summary inventory. */
 async function describeBackup(storageAccountName: string, name: string, accessToken: string, tenantId: string, inventory?: { text: string; cacheKey: string; version: string; owner: string }) {
@@ -239,7 +240,7 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
   }
 }
 
-export async function POST(request: NextRequest) {
+export async function POST(request: NextRequest, runStatus?: RunStatus) {
   try {
     const body = await request.json()
     const { 
@@ -407,6 +408,12 @@ export async function POST(request: NextRequest) {
     // A folder whose marker could not be read may be another tenant's, so it is left out too and
     // counted as unresolved; its run, if it failed, counts once through its attempt record.
     const described = await mapLimit(backupFolders, 6, (name) => describeBackup(storageAccountName, name, accessToken, String(tenantId), inventories.get(name)))
+    const statusOf = (runId: string | null) => runId === null ? undefined : runStatus?.(String(tenantId), storageAccountName, runId)
+    for (const backup of described) {
+      if (backup.ownerKind === "owned" && !backup.fingerprint && !backup.error && (backup.status === "running" || backup.status === "incomplete")) {
+        backup.status = statusOf(backup.runId) ?? backup.status
+      }
+    }
     const omittedLarge = described.filter(backup => isLargeBackup(backup.id) && (backup.unresolved || backup.error) && !backup.foreign && backup.status !== "unavailable")
     if (omittedLarge.length) {
       const warning = local ? localLargeStorageWarning : LARGE_STORAGE_UNAVAILABLE
@@ -558,7 +565,7 @@ export async function POST(request: NextRequest) {
       backup.ordinaryOnlyExport = !unreadRecords.has(backup.id) && !backup.ordinaryOnlyAvailable && (backup.largeProblems.length > 0 || !matches || !completeHalf(metadata) || !completeHalf(other))
       if (backup.largeProblems.length || backup.ordinaryOnlyExport || backup.ordinaryOnlyAvailable) {
         backup.coverage = "incomplete"
-        backup.status = "incomplete"
+        backup.status = typeof metadata.RunStatus !== "string" && statusOf(backup.runId) === "running" ? "running" : "incomplete"
         backup.notRead = [...new Set([...backup.notRead, ...backup.largeProblems.map((problem: { folder: string }) => problem.folder)])]
         backup.warning = backup.largeProblems.map((problem: { folder: string; reason: string }) => `${problem.folder}: ${problem.reason}`).join(" ") || cause
       }
@@ -570,6 +577,10 @@ export async function POST(request: NextRequest) {
     }
     for (const backup of backups) {
       if (isLargeBackup(backup.id) && (backup.fingerprint?.CompanionBackup || backup.claim?.CompanionBackup || mismatched.has(backup.id)) && !hidden.has(backup.id)) {
+        if (backup.ownerKind === "owned" && statusOf(backup.runId) === "running") {
+          backup.status = "running"
+          continue
+        }
         backup.runId = null
         backup.status = "incomplete"
         backup.coverage = "incomplete"

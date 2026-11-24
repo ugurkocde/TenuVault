@@ -569,6 +569,7 @@ export interface TenuVaultBridge {
     failedAttempts: (tenantId: string) => Promise<FailedBackupAttempt[]>
     /** Run ids of the tenant's backups still running in this app, manual, scheduled or from the tray. */
     liveRuns: (tenantId: string) => Promise<string[]>
+    onFinished: (listener: (run: { tenantId: string; storageAccountName: string }) => void) => () => void
   }
   services: {
     previewAddition: (tenantId: string, missing: readonly string[]) => Promise<PermissionAdditionPreview>

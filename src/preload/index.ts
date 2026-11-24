@@ -106,6 +106,7 @@ const bridge: TenuVaultPreloadBridge = {
     setScope: (tenantId, scope) => invoke("backups:setScope", tenantId, scope),
     failedAttempts: (tenantId) => invoke("backups:failedAttempts", tenantId),
     liveRuns: (tenantId) => invoke("backups:liveRuns", tenantId),
+    onFinished: (listener) => subscribe("backups:finished", listener),
   },
   services: {
     previewAddition: (tenantId, missing) => invoke("services:previewAddition", tenantId, missing),

@@ -20,6 +20,8 @@ import { AddPermissionsFlow, permissionAdditionScopes, signInForPermissionAdditi
 import { additionPermissions } from "./services/addition-permissions"
 import { checkOnboardingPermissions, saveOnboardingServices } from "./services/onboarding"
 import { checkpointBackupAudit, reconcileBackupAudit, recordBackupAudit } from "./backup/audit"
+import { BackupRunHistory } from "./backup/run-history"
+import { POST as listBackups } from "../portal/app/api/list-backups/route"
 import { auditUserFromToken, AuditSink, setMainAuditSink } from "./api/audit-sink"
 import { AuditContainerMissingError, AuditStorageService } from "../portal/lib/audit/storage"
 import { requestWindowsContent } from "./app-backup/windows-helper"
@@ -561,6 +563,7 @@ async function bootstrap(): Promise<void> {
   const records = new TenantRecords(workspaceStore)
   // Backups that failed before saving anything, counted on the Dashboard on every plan.
   const failedAttempts = new FailedAttemptLog(appStore)
+  const runHistory = new BackupRunHistory(appStore)
   // Reader credentials stay in the backup engine and its audit delivery, outside delegated sign-in.
   const backupReader = new BackupReaderService(tokenStore, {
     fetch: bridgedFetch, services: tenantId => moduleSettings.selection(tenantId),
@@ -641,11 +644,13 @@ async function bootstrap(): Promise<void> {
       void health.check(request.tenantId, "beforeBackup", { reader: job.authMode === "app-only" }).catch(() => undefined)
     },
     onStarted: (job, request, tokens) => {
+      runHistory.remember([job])
       checkpointBackupAudit(auditSink, job, request, tokens, backupAuditActor(job.tenantId), app.getVersion())
     },
     onOutcomes: (outcomes, request) => health.recordRun(outcomes, request),
     onToken: (runId, granted) => health.runToken(runId, granted),
     onFinished: (job, request, tokens) => {
+      mainWindow?.webContents.send("backups:finished", { tenantId: job.tenantId, storageAccountName: job.storageAccountName })
       if (tokens) {
         void recordBackupAudit(auditSink, job, request, tokens, backupAuditActor(job.tenantId), app.getVersion())
           .catch(() => console.warn("[audit] Backup audit delivery requires attention"))
@@ -838,7 +843,17 @@ async function bootstrap(): Promise<void> {
     bindConnections: tenants => capabilities.bindConnections(tenants),
     beforeRoute: captureDownloadAudit,
     saveDownload: response => saveArchiveResponse(response, name => dialog.showSaveDialog(mainWindow!, { title: "Export backup", defaultPath: name, filters: [{ name: "Large backup archive", extensions: ["tar"] }] })),
-    routes: { ...routes, ...backupRoutes(engine, (tenantId) => scopes.get(tenantId).scope), ...featureRoutes(featureDeps), ...driftScanRoutes(driftJobs), ...restoreSafetyRoutes(guardedRestoreJournal(), recoveryAccounts, restoreConnection, async tenant => { await restoreConnection(tenant) }, identityRestore) },
+    routes: {
+      ...routes,
+      "/api/list-backups": { POST: request => listBackups(request, (tenant, account, runId) => {
+        if (engine.isRunActive(tenant, account, runId)) return "running"
+        if (runHistory.owns(tenant, account, runId)) return "incomplete"
+      }) },
+      ...backupRoutes(engine, (tenantId) => scopes.get(tenantId).scope),
+      ...featureRoutes(featureDeps),
+      ...driftScanRoutes(driftJobs),
+      ...restoreSafetyRoutes(guardedRestoreJournal(), recoveryAccounts, restoreConnection, async tenant => { await restoreConnection(tenant) }, identityRestore),
+    },
     transform: surfaceTokenErrors,
     // Disabled CIS routes refuse before any licensing work. The plan comes next, so the
     // disclaimer is never accepted for a change the plan refuses anyway.
@@ -988,6 +1003,8 @@ async function bootstrap(): Promise<void> {
     },
   })
   setMainAuditSink(auditSink)
+  // The window and the hidden runner share Electron's profile lock. A prior holder's run cannot still be active.
+  runHistory.remember(auditSink.backupCheckpoints())
   auditSink.recover()
   const recoverBackupAudits = () => auditSink.recoverBackups((binding, entry) => {
     const read = (folder: string) => readBackupAuditManifest(binding, entry, folder)

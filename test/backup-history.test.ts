@@ -6,6 +6,8 @@ import { POST as backupChanges } from "../src/portal/app/api/backup-changes/rout
 import { POST as restorePreview } from "../src/portal/app/api/restore-preview/route"
 import { BACKUP_OWNER_FILE } from "../src/shared/constants"
 import { endlessBody } from "./helpers"
+import { BackupEngine } from "../src/main/backup/engine"
+import { BackupRunHistory } from "../src/main/backup/run-history"
 
 const args = { tenantId: "tenant", appId: "app", clientSecret: "test", storageAccountName: "store", subscriptionId: "local", resourceGroupName: "local" }
 const request = (body: object) => new NextRequest("http://tenuvault.internal/api/test", { method: "POST", body: JSON.stringify({ ...args, ...body }) })
@@ -307,6 +309,59 @@ describe("backups the list cannot place", () => {
       expect(backups.find((backup: { id: string }) => backup.id === newer)).toMatchObject({ status: "Cancelled" })
       expect(backups.find((backup: { id: string }) => backup.id === older)).toMatchObject({ status: "Success" })
     }
+  })
+})
+
+describe("desktop run ownership in Backup History", () => {
+  it.each([false, true])("lists an interrupted run after restart and keeps the background runner's live run (summary=%s)", async (summary) => {
+    const state = new Map<string, string>()
+    const store = { get: (key: string) => state.get(key) ?? null, set: (key: string, value: string) => { state.set(key, value) }, delete: (key: string) => { state.delete(key) } }
+    const backupName = (at: Date) => `backup-${at.toISOString().slice(0, 19).replace("T", "-").replaceAll(":", "")}`
+    const now = new Date()
+    const stoppedAt = new Date(now.getTime() - 3 * 60_000)
+    const unknownAt = new Date(now.getTime() - 2 * 60_000)
+    const newerAt = new Date(now.getTime() - 60_000)
+    const interrupted = { id: "desktop-interrupted", tenantId: args.tenantId, storageAccountName: args.storageAccountName, startTime: stoppedAt.toISOString() }
+    new BackupRunHistory(store).remember([interrupted])
+    const history = new BackupRunHistory(store)
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const engine = new BackupEngine({
+      fetch: async () => new Response(null, { status: 404 }),
+      getToken: async () => { throw new Error("Must use the background runner's credentials") },
+      unattendedTokens: () => ({
+        mode: "app-only",
+        graph: async () => { await gate; throw new Error("Stopped by the test") },
+        storage: async () => "token",
+      }),
+      now: () => now,
+      onStarted: job => history.remember([job]),
+    })
+    const live = engine.start({ tenantId: args.tenantId, clientId: args.appId, storageAccountName: args.storageAccountName, trigger: "scheduled" })
+    const marker = (RunId: string) => ({ Source: "TenuVault Desktop", TenantId: args.tenantId, RunId })
+    const saved: Record<string, unknown> = {
+      [`${backupName(stoppedAt)}/${BACKUP_OWNER_FILE}`]: marker(interrupted.id),
+      [`${backupName(unknownAt)}/${BACKUP_OWNER_FILE}`]: marker("desktop-another-installation"),
+      [`${live.backupFolder}/${BACKUP_OWNER_FILE}`]: marker(live.id),
+    }
+    storage(saved)
+    const list = async () => {
+      const response = await listBackups(request({ summary }), (tenant, account, id) =>
+        engine.isRunActive(tenant, account, id) ? "running" : history.owns(tenant, account, id) ? "incomplete" : undefined)
+      expect(response.status).toBe(200)
+      const { backups } = await response.json()
+      return Object.fromEntries(backups.map((row: { runId: string; status: string }) => [row.runId, row.status]))
+    }
+    try {
+      expect(live.authMode).toBe("app-only")
+      expect(await list()).toEqual({ [interrupted.id]: "incomplete", "desktop-another-installation": "running", [live.id]: "running" })
+      saved[`${backupName(newerAt)}/metadata.json`] = { TenantId: args.tenantId, RunId: "desktop-newer", Status: "Success" }
+      expect(await list()).toMatchObject({ [interrupted.id]: "incomplete", "desktop-newer": "Success", [live.id]: "running" })
+    } finally {
+      release()
+      await engine.waitForJob(live)
+    }
+    expect(await list()).toMatchObject({ [live.id]: "incomplete" })
   })
 })
 

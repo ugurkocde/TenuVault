@@ -199,6 +199,8 @@ A run can finish when an individual type is denied. If every selected type is le
 
 The **Backup History** tab of **Backup & Restore** shows the **Backup Timeline**: every backup in the tenant's storage, newest first. Click **Refresh** to reload it.
 
+If TenuVault closes before a backup finishes, its next launch shows the interrupted run as **Incomplete** when this installation can identify the run. Backups still running in the background continue to show as **Running**.
+
 Each entry shows:
 
 * the date and time

@@ -128,7 +128,11 @@ export function useBackupList(tenant: Tenant | null | undefined): BackupList & {
   const credentials = credentialsOf(tenant)
   const list = useSyncExternalStore(subscribe, () => backupListOf(key))
   useEffect(() => {
-    if (tenant && key) void refreshBackupList(tenant)
+    if (!tenant || !key) return
+    void refreshBackupList(tenant)
+    return window.tenuvault?.backups?.onFinished?.(({ tenantId, storageAccountName }) => {
+      if (key === `${tenantId.toLowerCase()}/${storageAccountName.toLowerCase()}`) void refreshBackupList(tenant, { force: true })
+    })
   }, [key, credentials])
   return { ...list, refresh: (options) => (tenant ? refreshBackupList(tenant, options) : Promise.resolve("failed")) }
 }

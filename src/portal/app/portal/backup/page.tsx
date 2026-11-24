@@ -212,7 +212,6 @@ export default function BackupRestorePage() {
       if (job.tenant.credentials) setCompletedBackup({ jobId: job.id, tenantId: job.tenant.credentials.tenantId.toLowerCase() })
       // Show the new backup, the newest in the list.
       setSelectedId(null)
-      void fetchBackups()
     }
   }
 
