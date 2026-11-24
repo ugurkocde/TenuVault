@@ -55,22 +55,23 @@ describe("identity restore admission", () => {
   it("uses the signed-in MSAL account for opaque tokens and fails closed without Graph scopes or the matching account", () => {
     const stored = { clientId: actor.clientId, homeAccountId: "admin.home" }
     const account = { ...stored, tenantId: actor.tenantId, localAccountId: actor.userId, username: "admin@example.test", environment: "login.microsoftonline.com" }
-    const result = { account, accessToken: "opaque", scopes: ["Policy.ReadWrite.Authorization"], tenantId: actor.tenantId }
+    const result = { cachedAccount: account, accessToken: "opaque", scopes: ["Policy.ReadWrite.Authorization"], requestedScopes: ["https://graph.microsoft.com/.default"], tenantId: actor.tenantId }
     const connection = restoreSignIn(actor.tenantId, stored, result)
     expect(connection).toMatchObject({ token: "opaque", userId: actor.userId })
     requireRestoreActor(connection.token, actor, connection.authorization)
     expect(() => requireRestoreActor(connection.token, { ...actor, userId: "another-user" }, connection.authorization)).toThrow("signed-in admin")
     for (const patches of [
-      { account: null }, { account: { ...account, homeAccountId: "other.home" } },
-      { account: { ...account, tenantId: "wrong-tenant" } }, { tenantId: "wrong-tenant" },
-      { scopes: [] }, { scopes: ["openid", "https://storage.azure.com/user_impersonation"] },
+      { cachedAccount: null }, { cachedAccount: { ...account, homeAccountId: "other.home" } },
+      { cachedAccount: { ...account, tenantId: "wrong-tenant" } }, { tenantId: "wrong-tenant" },
+      { scopes: [] }, { scopes: ["openid", "https://storage.azure.com/user_impersonation"] }, { scopes: result.requestedScopes },
+      { requestedScopes: ["openid", "https://graph.microsoft.com/Policy.ReadWrite.Authorization"] },
     ]) expect(() => restoreSignIn(actor.tenantId, stored, { ...result, ...patches })).toThrow("signed-in admin")
-    expect(() => restoreSignIn(actor.tenantId, stored, { ...result, account: null, accessToken: delegated })).toThrow("signed-in admin")
-    expect(() => restoreSignIn(actor.tenantId, stored, { ...result, account: { ...account, localAccountId: "" }, accessToken: delegated })).toThrow("signed-in admin")
+    expect(() => restoreSignIn(actor.tenantId, stored, { ...result, cachedAccount: null, accessToken: delegated })).toThrow("signed-in admin")
+    expect(() => restoreSignIn(actor.tenantId, stored, { ...result, cachedAccount: { ...account, localAccountId: "" }, accessToken: delegated })).toThrow("signed-in admin")
     const idClaims = { ...account, localAccountId: "", idTokenClaims: { oid: actor.userId } }
-    expect(restoreSignIn(actor.tenantId, stored, { ...result, account: idClaims }).userId).toBe(actor.userId)
-    expect(() => restoreSignIn(actor.tenantId, stored, { ...result, account: { ...idClaims, idTokenClaims: { oid: "different-admin" } }, accessToken: delegated })).toThrow("signed-in admin")
-    expect(() => restoreSignIn(actor.tenantId, stored, { ...result, account: null, accessToken: token({ scp: "Policy.ReadWrite.Authorization", oid: "admin", tid: "tenant", appid: "other" }) })).toThrow("signed-in admin")
+    expect(restoreSignIn(actor.tenantId, stored, { ...result, cachedAccount: idClaims }).userId).toBe(actor.userId)
+    expect(() => restoreSignIn(actor.tenantId, stored, { ...result, cachedAccount: { ...idClaims, idTokenClaims: { oid: "different-admin" } }, accessToken: delegated })).toThrow("signed-in admin")
+    expect(() => restoreSignIn(actor.tenantId, stored, { ...result, accessToken: token({ scp: "Policy.ReadWrite.Authorization", oid: "admin", tid: "tenant", appid: "other" }) })).toThrow("signed-in admin")
   })
   it.each([
     ["another actor", { oid: "other", scp: "Policy.ReadWrite.Authorization" }],
@@ -79,13 +80,13 @@ describe("identity restore admission", () => {
     const authorization = { ...actor, scopes: ["Policy.ReadWrite.Authorization"] }
     expect(() => requireRestoreActor(token({ tid: actor.tenantId, appid: actor.clientId, ...claims }), actor, authorization)).toThrow("signed-in admin")
   })
-  it("uses only permissions present in both the readable bearer and MSAL evidence", () => {
+  it("uses the readable bearer's permissions independently of MSAL scope metadata", () => {
     const authorization = { ...actor, scopes: ["Policy.ReadWrite.Authorization", "Policy.Read.All"] }
     const claims = { tid: actor.tenantId, appid: actor.clientId, oid: actor.userId }
     const readOnly = token({ ...claims, scp: "Policy.Read.All" })
     requireRestoreActor(readOnly, actor, authorization)
     expect(restorePermissions(readOnly, authorization.scopes)?.permissions).toEqual(new Set(["Policy.Read.All"]))
-    expect(restorePermissions(delegated, ["Policy.Read.All"])?.permissions.has("Policy.ReadWrite.Authorization")).toBe(false)
+    expect(restorePermissions(delegated, ["Policy.Read.All"])?.permissions).toEqual(new Set(["Policy.ReadWrite.Authorization"]))
   })
   it("refuses protected users, roles, methods, applications and unresolved safety evidence", () => {
     for (const principal of ["ADMIN", "recovery", "sp"]) expect(() => guardRestoreItem(actor, "EntraRoleAssignments", undefined, { ...references, principals: [principal] }, false)).toThrow("protected")

@@ -152,7 +152,8 @@ for (const [folder, operations] of Object.entries(STAGED_8C_OPERATIONS)) for (co
       const homeAccountId = "admin.home"
       return restoreSignIn(identity.tenantId, { ...identity, homeAccountId }, {
         accessToken: token, tenantId: identity.tenantId, scopes: [...scopes].map(scope => "https://graph.microsoft.com/" + scope),
-        account: { homeAccountId, tenantId: identity.tenantId, localAccountId: identity.userId, username: "admin@example.test", environment: "login.microsoftonline.com" },
+        requestedScopes: ["https://graph.microsoft.com/.default"],
+        cachedAccount: { homeAccountId, tenantId: identity.tenantId, localAccountId: identity.userId, username: "admin@example.test" },
       })
     }
     let live: Item | null = operation === "create" ? null : { ...fixture, id: source, ...(folder === "AccessPackageCatalogs" ? { catalogType: "userManaged" } : {}), ...(folder === "UserFlowAttributes" ? { userFlowAttributeType: "custom" } : {}) }, writes = 0

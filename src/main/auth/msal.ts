@@ -49,6 +49,18 @@ export interface AuthHost {
   }
 }
 
+export type SilentTokenResult = AuthenticationResult & {
+  cachedAccount: Pick<AccountInfo, "homeAccountId" | "tenantId" | "localAccountId" | "username" | "name" | "idTokenClaims"> | null
+  requestedScopes: readonly string[]
+}
+
+function accountForTenant(account: AccountInfo, tenantId: string) {
+  const tenant = normalizeGuid(tenantId)
+  if (typeof account.tenantId === "string" && normalizeGuid(account.tenantId) === tenant) return account
+  const profile = [...(account.tenantProfiles?.values() ?? [])].find(profile => normalizeGuid(profile.tenantId) === tenant)
+  return profile ? { ...profile, homeAccountId: account.homeAccountId } : null
+}
+
 /**
  * The admin must sign in again (no cached account, expired session, or Conditional
  * Access asks for step-up). Background API calls never open a sign-in window; the UI
@@ -366,7 +378,7 @@ export class AuthManager {
   async cachedAccountIdentity(tenantId: string): Promise<{ tenantId: string; clientId: string; userId: string }> {
     const tenant = normalizeGuid(tenantId), stored = this.host.accountStore.get(tenant)
     const account = stored ? await this.findAccount(this.app(stored.clientId), stored.homeAccountId) : null
-    const profile = account && normalizeGuid(account.tenantId) === tenant ? account : [...(account?.tenantProfiles?.values() ?? [])].find(profile => normalizeGuid(profile.tenantId) === tenant)
+    const profile = account && accountForTenant(account, tenant)
     if (!stored || normalizeGuid(stored.tenantId) !== tenant || !profile?.localAccountId) throw new SignInRequiredError(tenantId, stored?.clientId ?? "", "Sign in to this tenant before managing saved directory restores.")
     return { tenantId: profile.tenantId, clientId: stored.clientId, userId: profile.localAccountId }
   }
@@ -375,7 +387,7 @@ export class AuthManager {
    * Returns an access token for `scope` in `tenantId` from the cache or with the refresh
    * token. Throws SignInRequiredError when the admin has to sign in again.
    */
-  async getAccessToken(tenantId: string, clientId: string, scope: string, forceRefresh = false): Promise<AuthenticationResult> {
+  async getAccessToken(tenantId: string, clientId: string, scope: string, forceRefresh = false): Promise<SilentTokenResult> {
     this.host.authorizeConnection?.(tenantId, clientId, scope)
     if (this.host.authorizeSilentToken) await this.host.authorizeSilentToken(tenantId, clientId, scope)
     const stored = this.host.accountStore.get(normalizeGuid(tenantId))
@@ -389,13 +401,16 @@ export class AuthManager {
     if (!account) {
       throw new SignInRequiredError(tenantId, clientId, `Your session for ${stored.username} has ended. Sign in again to continue.`, scope)
     }
+    // A refresh can return a bearer without returning an ID token or an account.
+    const profile = accountForTenant(account, tenantId)
+    const cachedAccount = profile ? { ...profile } : null
     try {
       const result = await app.acquireTokenSilent({ account, scopes, authority: authority(tenantId), forceRefresh })
       if (result) {
         this.host.authorizeIssuedToken?.(tenantId, clientId, scope, result)
         // The request is attributed to the account this token was issued for.
         captureTokenActor({ username: result.account?.username || account.username || stored.username, name: result.account?.name ?? account.name ?? undefined })
-        return result
+        return { ...result, cachedAccount, requestedScopes: scopes }
       }
     } catch (error) {
       if (error instanceof InteractionRequiredAuthError) {

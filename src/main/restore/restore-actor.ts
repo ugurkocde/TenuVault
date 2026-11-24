@@ -1,4 +1,4 @@
-import type { AuthenticationResult } from "@azure/msal-node"
+import type { SilentTokenResult } from "../auth/msal"
 import type { RestoreActor } from "../../shared/intune/restore-guards"
 import { normalizeGuid } from "../../shared/security"
 import { grantedPermissions } from "../../shared/services/token"
@@ -22,24 +22,23 @@ function restoreTokenClaims(token: string): Record<string, unknown> | undefined 
 function tokenActor(claims: Record<string, unknown> | undefined): ActorIdentity | undefined {
   if (!claims) return
   const { scp, oid, tid, appid, azp, idtyp } = claims
-  const clientId = azp ?? appid
+  const clientId = String(azp ?? appid ?? "")
   if (idtyp !== "app" && typeof scp === "string" && scp.trim() && typeof oid === "string" && oid &&
-    typeof tid === "string" && tid && typeof clientId === "string" && clientId) {
+    typeof tid === "string" && tid && clientId) {
     return { userId: oid, tenantId: tid, clientId }
   }
 }
 
-export function restorePermissions(token: string, scopes?: readonly string[]) {
-  const claims = grantedPermissions(token)
-  if (scopes === undefined) return claims
-  const permissions = scopes.flatMap(scope => {
+function namedScopes(scopes: readonly string[]) {
+  return new Set(scopes.flatMap(scope => {
     const name = scope.replace(/^https:\/\/graph\.microsoft\.com\//i, "")
     return /^[a-zA-Z][\w.-]*$/.test(name) && !["openid", "profile", "offline_access"].includes(name) ? [name] : []
-  })
-  if (!restoreTokenClaims(token)) return { kind: "delegated" as const, permissions: new Set(permissions) }
-  if (claims?.kind !== "delegated") return claims
-  // A readable bearer must carry every scope the restore relies on.
-  return { kind: "delegated" as const, permissions: new Set(permissions.filter(scope => claims.permissions.has(scope))) }
+  }))
+}
+
+export function restorePermissions(token: string, scopes?: readonly string[]) {
+  if (scopes === undefined || restoreTokenClaims(token)) return grantedPermissions(token)
+  return { kind: "delegated" as const, permissions: namedScopes(scopes) }
 }
 
 function sameActor(identity: ActorIdentity, actor: ActorIdentity): boolean {
@@ -60,15 +59,24 @@ export function requireRestoreActor(token: string, actor: ActorIdentity, authori
   if (granted?.kind !== "delegated" || !granted.permissions.size) throw new Error(adminRequired)
 }
 
-export function restoreSignIn(tenantId: string, stored: { clientId: string; homeAccountId: string }, result: Pick<AuthenticationResult, "account" | "accessToken" | "tenantId" | "scopes">) {
-  const { account, accessToken: token } = result
+export function restoreSignIn(tenantId: string, stored: { clientId: string; homeAccountId: string }, result: Pick<SilentTokenResult, "cachedAccount" | "accessToken" | "tenantId" | "scopes" | "requestedScopes">) {
+  const { cachedAccount: account, accessToken: token } = result
   if (!account || !account.homeAccountId || account.homeAccountId !== stored.homeAccountId ||
     normalizeGuid(account.tenantId) !== normalizeGuid(tenantId)) throw new Error(adminRequired)
-  if (result.tenantId && normalizeGuid(result.tenantId) !== normalizeGuid(tenantId)) throw new Error(adminRequired)
   const userId = account.localAccountId || account.idTokenClaims?.oid
   if (typeof userId !== "string" || !userId) throw new Error(adminRequired)
-  const identity = { tenantId: normalizeGuid(tenantId), clientId: normalizeGuid(stored.clientId), userId: normalizeGuid(userId) }
-  const authorization = { ...identity, scopes: result.scopes }
+  const claims = restoreTokenClaims(token)
+  const authorization: RestoreAuthorization = { tenantId: normalizeGuid(tenantId), clientId: normalizeGuid(stored.clientId), userId: normalizeGuid(userId) }
+  if (!claims) {
+    if (result.tenantId && normalizeGuid(result.tenantId) !== authorization.tenantId) throw new Error(adminRequired)
+    // MSAL fills an omitted scope response with the scopes we requested.
+    const scopes = namedScopes(result.scopes)
+    const requested = namedScopes(result.requestedScopes)
+    if (scopes.size && (scopes.size !== requested.size || [...scopes].some(scope => !requested.has(scope)))) {
+      authorization.scopes = [...scopes]
+    }
+  }
+  const identity = { tenantId: authorization.tenantId, clientId: authorization.clientId, userId: tokenActor(claims)?.userId ?? authorization.userId }
   requireRestoreActor(token, identity, authorization)
-  return { ...identity, token, authorization, auditActor: { username: account.username || userId, name: account.name } }
+  return { ...identity, token, authorization, auditActor: { username: account.username || identity.userId, name: account.name } }
 }
