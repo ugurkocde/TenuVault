@@ -328,6 +328,28 @@ describe("BackupReaderService", () => {
     } finally { save.mockRestore(); warn.mockRestore() }
   })
 
+  it("fails the scheduled Backup Reader credential check when the Intune Configuration role is removed", async () => {
+    const { reader, setGraph } = service({ selection: { services: ["intune"] } })
+    reader.prepare(TENANT, "LAPTOP-1")
+    await reader.verify(TENANT, READER)
+    setGraph(() => graphToken({ roles: READER_REQUIRED_ROLES.filter(role => role !== "DeviceManagementConfiguration.Read.All") }))
+    const fetch = vi.fn<typeof globalThis.fetch>()
+    const engine = new BackupEngine({
+      fetch,
+      getToken: async () => { throw new Error("No administrator session") },
+      unattendedTokens: job => reader.tokens(job),
+    })
+    const job = await engine.waitForJob(engine.start(scheduled))
+    expect(job).toMatchObject({
+      authMode: "app-only",
+      status: "Failed",
+      credentialError: true,
+      exception: expect.stringContaining("The Backup Reader is missing permissions or their admin consent: DeviceManagementConfiguration.Read.All."),
+    })
+    expect(job.outcomes).toBeUndefined()
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
   it("records Failed on the Reader card and Schedule tab when a scheduled Reader backup saves only part of its scope", async () => {
     const { reader } = service()
     reader.prepare(TENANT, "LAPTOP-1")

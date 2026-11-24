@@ -30,6 +30,8 @@ export interface FolderPermissions {
   restore: ModeNeeds
   /** Check this part before reading even if the service has no blanket permission check. */
   backupPrecheck?: true
+  /** Check this part before restoring even if the service has no blanket permission check. */
+  restorePrecheck?: true
   /**
    * The restore permission is declared, so a missing one is named, but setup never asks for it: it
    * reaches far beyond these folders, so an admin who wants to restore them adds it by hand.
@@ -67,6 +69,6 @@ export function area(definition: Omit<PermissionArea, "folders" | "parts">, part
  * Folders with what they need: `backup` and `restore` as the signed-in admin, `reader` to back them
  * up app-only as the Backup Reader. Nothing is ever restored app-only.
  */
-export function part(folders: readonly string[], backup: Requirement, reader: Need, restore: Need, options: Pick<FolderPermissions, "backupPrecheck" | "restoreNotRequested"> = {}): FolderPermissions {
+export function part(folders: readonly string[], backup: Requirement, reader: Need, restore: Need, options: Pick<FolderPermissions, "backupPrecheck" | "restorePrecheck" | "restoreNotRequested"> = {}): FolderPermissions {
   return { folders, backup: { delegated: backup, application: reader }, restore: { delegated: restore, application: "unsupported" }, ...options }
 }

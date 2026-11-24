@@ -201,6 +201,8 @@ export interface ReasonContext {
   mode: "delegated" | "app-only"
   /** The name of the Settings card that shows permissions. */
   settingsPage: string
+  /** The relevant read permission when a refusal leaves the token's permissions uncertain. */
+  permission?: string
 }
 
 /** In the order a tie is settled: the cause an admin can fix first. */
@@ -241,6 +243,6 @@ export function skipReason(cause: SkipCause, context: ReasonContext, message?: s
     case "role":
       return `Microsoft refused the read although the permission is granted${quoted(message)}. Your account may not have a role that can read ${context.service}${context.roles ? ` (${context.roles.split(";")[0]})` : ""}.`
     case "permission":
-      return `Microsoft refused the read${quoted(message)}. The ${who} may lack the permission or admin consent for it. ${context.settingsPage} in Settings shows what is missing.`
+      return `Microsoft refused the read${quoted(message)}. The ${who} may lack ${context.permission ? `${context.permission}, or admin consent for one of them` : "the permission or admin consent for it"}. ${context.settingsPage} in Settings shows what is missing.`
   }
 }

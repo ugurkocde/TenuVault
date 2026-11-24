@@ -19,7 +19,7 @@ Before you add it, check whether a policy change is simpler: see [Conditional Ac
 | | Backup Reader |
 | --- | --- |
 | Read Intune configuration | Yes, all of it in the tenant, including script contents. Intune role scope tags do not limit it. |
-| Change Intune | No. TenuVault refuses a reader with any permission beyond the read lists below. It uses only the permissions you verified: when they change, scheduled backups keep running with the verified permissions the reader still has, and the card names the change, lists the policies that are left out and asks you to verify again. |
+| Change Intune | No. TenuVault refuses a reader with any permission beyond the read lists below. When optional permissions change, the Backup Reader card names the change, lists the affected policies and asks you to verify again. |
 | Write backups to Azure Storage | Yes, into the backup containers only. |
 | Delete backups | No, provided it has only the **TenuVault Backup Writer** role (see [Permissions](#permissions)). That role has no delete permission, and if the reader overwrites a blob, blob versioning keeps the previous version for 30 days (`-VersionRetentionDays`), long enough to notice and recover it. A broader storage role assigned to the reader by hand would override this; the storage script warns about such roles and step 3 below includes the IAM check. |
 | Read encrypted OMA-URI values in plain text | Yes. Microsoft documents `DeviceManagementConfiguration.Read.All` as enough to read them, so the certificate gives access to those secret values too. If Microsoft refuses the read, the scheduled backup stores the value masked (`****`) and marks the profile as not restorable from that backup. A manual backup with your sign-in captures it when Microsoft returns the value; if Microsoft refuses that read too, the manual backup fails for that profile. |
@@ -34,15 +34,15 @@ Microsoft Graph application permissions, read-only:
 
 | Permission | Used for |
 | --- | --- |
-| `DeviceManagementConfiguration.Read.All` | Configuration profiles, Settings Catalog, endpoint security, compliance and update policies, assignment filters. |
-| `DeviceManagementApps.Read.All` | Apps, app configuration and app protection policies, policy sets. |
+| `DeviceManagementConfiguration.Read.All` | Configuration profiles, Settings Catalog, endpoint security, compliance and update policies, assignment filters, policy sets. |
+| `DeviceManagementApps.Read.All` | Apps, app configuration and app protection policies. |
 | `DeviceManagementServiceConfig.Read.All` | Enrollment configurations, Autopilot and Apple enrollment profiles, Autopilot devices (serial numbers, group tags and assigned users), terms and conditions, branding. |
 | `DeviceManagementScripts.Read.All` | PowerShell and shell scripts, custom attributes, remediations, compliance scripts. |
 | `DeviceManagementRBAC.Read.All` | Intune roles, role assignments, scope tags, multi admin approval policies. |
 | `DeviceManagementManagedDevices.Read.All` (optional) | Device categories and device clean-up rules. Off by default, because it also exposes the managed device inventory (device names, serial numbers, primary users). Add it with `-IncludeDeviceCategories`. |
 | `Policy.Read.All` (optional) | Entra Conditional Access policies, named locations and authentication strengths, when the [Conditional Access service](/backups/conditional-access/) is on for the tenant. Off by default, because it reads every policy of the organization. Add it with `-IncludeConditionalAccess`. The reader never gets permission to change Conditional Access. |
 
-These are the permissions for Intune, which the script grants when you name no service. The reader needs them as long as the tenant backs up Intune.
+The script grants the required Intune permissions when you name no service. The reader needs them as long as the tenant backs up Intune. If the `DeviceManagementConfiguration.Read.All` role is missing, verification fails. A scheduled backup also fails its credential check before reading any policies if the role was removed after verification. When this is the only missing role, TenuVault reports “The Backup Reader is missing permissions or their admin consent: DeviceManagementConfiguration.Read.All. Run the setup script again or grant admin consent.”
 
 #### Defender and Entra ID
 

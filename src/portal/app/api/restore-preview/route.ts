@@ -8,7 +8,7 @@ import { itemName, typeForFolder, type Item, type ReviewChange } from "../../../
 import { restoreCapabilities } from "../../../../shared/intune/restore-plan"
 import { sameSnapshot } from "../../../../shared/intune/compare"
 import { assignmentsUnread } from "../../../../shared/intune/read"
-import { moduleForFolder, restorePermissionBlocker } from "../../../../shared/services/modules"
+import { checksRestorePermission, restorePermissionBlocker } from "../../../../shared/services/modules"
 import { grantedPermissions } from "../../../../shared/services/token"
 import { isLegacySealedError } from "../../../../shared/legacy-sealed"
 
@@ -64,11 +64,10 @@ export async function POST(request: NextRequest) {
   try {
     const [storageToken, graphToken] = await Promise.all([
       token(tenantId, appId, clientSecret, "https://storage.azure.com/.default"),
-      // Items of a service with a token pre-check are checked against the app registration's permissions, so a restore
-      // that would be refused shows as not restorable here instead of failing when it starts.
+      // Check the app registration's permissions for these folders even without a live comparison.
       live === true
         ? token(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default")
-        : paths.some((path) => moduleForFolder(String(path).split("/")[1] ?? "")?.module.precheck)
+        : paths.some((path) => checksRestorePermission(String(path).split("/")[1] ?? ""))
           // Without the token the restore still checks the permission before its first write.
           ? token(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default").catch(() => "")
           : Promise.resolve(""),
@@ -137,7 +136,7 @@ export async function POST(request: NextRequest) {
   }
 }
 
-/** Marks an item not restorable when the app registration lacks the write permission of its pre-checked service. */
+/** Marks an item not restorable when the app registration lacks the required write permission. */
 function withPermission(item: PreviewItem, granted: ReturnType<typeof grantedPermissions>): PreviewItem {
   const blocker = restorePermissionBlocker(item.folder, granted)
   return blocker ? { ...item, blocker: item.blocker ?? blocker, replaceBlocker: item.replaceBlocker ?? blocker } : item

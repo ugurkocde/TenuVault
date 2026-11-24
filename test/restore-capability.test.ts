@@ -53,7 +53,7 @@ interface World {
 }
 
 /** The token endpoint, a storage account that holds one backup of `type`, and a tenant that still has the object. */
-function world(type: IntuneType, metadata: Record<string, unknown> = {}): World {
+function world(type: IntuneType, metadata: Record<string, unknown> = {}, graphToken = "token"): World {
   const snapshot = snapshotOf(type)
   const blobs: Record<string, unknown> = {
     [`${BACKUP}/metadata.json`]: { TenantId: TENANT, Status: "Success", Failures: 0, SkippedTypes: [], FailedTypes: [], Scope: { Excluded: [], Included: INTUNE_TYPES.map((entry) => entry.folder) }, Items: { [`${type.folder}/${snapshot.id}`]: { file: "Example.json", hash: hash(snapshot) } }, ...metadata },
@@ -63,7 +63,10 @@ function world(type: IntuneType, metadata: Record<string, unknown> = {}): World 
   const seen: World = { graph: [] }
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input))
-    if (url.hostname === "login.microsoftonline.com") return Response.json({ access_token: "token" })
+    if (url.hostname === "login.microsoftonline.com") {
+      const scope = new URLSearchParams(init?.body as URLSearchParams).get("scope")
+      return Response.json({ access_token: scope?.includes("graph.microsoft.com") ? graphToken : "token" })
+    }
     if (url.hostname === "graph.microsoft.com") {
       seen.graph.push(`${init?.method ?? "GET"} ${url.pathname}`)
       return Response.json({ ...snapshot, displayName: "Changed in the tenant", value: [] })
@@ -166,6 +169,42 @@ beforeEach(() => {
   setRestoreJournalStore(store)
 })
 afterEach(() => vi.unstubAllGlobals())
+
+describe("Intune policy set restore permission", () => {
+  const policySets = typeForFolder("PolicySets")!
+  const permission = "DeviceManagementConfiguration.ReadWrite.All"
+  const tokenWith = (scp: string) => `e30.${Buffer.from(JSON.stringify({ scp })).toString("base64url")}.sig`
+  const readOnly = tokenWith("DeviceManagementConfiguration.Read.All DeviceManagementApps.ReadWrite.All")
+
+  it.each([false, true])("shows the missing write scope in the preview with live=%s", async (live) => {
+    const seen = world(policySets, {}, readOnly)
+    const preview = await restorePreview(post("restore-preview", { ...credentials, backupId: BACKUP, paths: [fileOf(policySets)], live }))
+    expect(preview.status).toBe(200)
+    const blocker = expect.stringContaining(permission)
+    expect(await preview.json()).toMatchObject({ items: [{ blocker, replaceBlocker: blocker }] })
+    expect(writes(seen)).toEqual([])
+  })
+
+  it.each(["copy", "replace"])("skips a policy set before sending any Graph writes in %s mode", async (mode) => {
+    const seen = world(policySets, {}, readOnly)
+    expect(await restore(policySets, { mode, assignments: false })).toMatchObject({ success: false, action: "skipped", error: expect.stringContaining(permission) })
+    expect(writes(seen)).toEqual([])
+  })
+
+  it.each([
+    ["PolicySets", tokenWith(permission), "deviceAppManagement/policySets"],
+    ["DeviceConfigurations", readOnly, "deviceManagement/deviceConfigurations"],
+  ])("restores %s when the policy-set check permits it or does not apply", async (folder, token, endpoint) => {
+    const type = typeForFolder(folder)!
+    const seen = world(type, {}, token)
+    const preview = await restorePreview(post("restore-preview", { ...credentials, backupId: BACKUP, paths: [fileOf(type)] }))
+    const { items } = await preview.json()
+    expect(items[0].blocker).toBeUndefined()
+    expect(items[0].replaceBlocker).toBeUndefined()
+    expect(await restore(type, { mode: "copy", assignments: false })).toMatchObject({ success: true, action: "created" })
+    expect(writes(seen)).toEqual([`POST /beta/${endpoint}`])
+  })
+})
 
 describe("the restore capability of every registry type", () => {
   it("follows the restore kind each type had: nothing gained or lost a capability", () => {

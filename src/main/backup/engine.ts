@@ -23,7 +23,7 @@ import { readEntries, ScopeDiscoveryError, OrganizationResolutionError, organiza
 import { comparableSnapshot } from "../../shared/intune/compare"
 import type { BackupItems } from "../../shared/intune/backup-changes"
 import { EVERYTHING, includedTypes, normalizeScope, restorableFolders, type BackupScope } from "../../shared/intune/scope"
-import { canBackUp, DEFAULT_SELECTION, describeRequirement, disabledFolders, MODULES, moduleForFolder, SERVICES_PAGE, signedInOnly, type Requirement, type ServiceSelection, type SignInMode } from "../../shared/services/modules"
+import { backupNeed, canBackUp, DEFAULT_SELECTION, describeRequirement, disabledFolders, MODULES, moduleForFolder, SERVICES_PAGE, signedInOnly, type Requirement, type ServiceSelection, type SignInMode } from "../../shared/services/modules"
 import { grantedPermissions } from "../../shared/services/token"
 import { MAX_ITEM_ERRORS, type BackupNotice, type BackupResults, type BackupTypeResult } from "../../shared/backup-results"
 import { classifyAnswer, coverageOf, manifestOutcomes, nothingRead, nothingReadReason, signInRefused, skipReason, type Coverage, type RunOutcomes, type SkipCause, type TypeOutcome } from "../../shared/backup-outcomes"
@@ -731,7 +731,9 @@ export class BackupEngine {
         return
       }
       if (verdict.outcome === "skipped") {
-        const reason = skipReason(verdict.cause, { service: module?.label ?? "this service", roles: module?.roles, mode: tokens.mode, settingsPage: SERVICES_PAGE }, checkedReadDenied(type, error) ? undefined : answer?.message)
+        const needed = type.folder === "PolicySets" && !granted ? backupNeed(type.folder, signIn) : undefined
+        const permission = needed && needed !== "unsupported" ? describeRequirement(needed) : undefined
+        const reason = skipReason(verdict.cause, { service: module?.label ?? "this service", roles: module?.roles, mode: tokens.mode, settingsPage: SERVICES_PAGE, permission }, checkedReadDenied(type, error) ? undefined : answer?.message)
         skippedTypes.push(type.folder)
         Object.assign(entry, { state: "skipped", reason })
         settle(type.folder, { outcome: "skipped", cause: verdict.cause, reason, ...evidence })

@@ -296,13 +296,10 @@ describe("a backup that read nothing", () => {
 })
 
 describe("Intune policy set coverage", () => {
-  it.each(["delegated", "app-only"] as const)("records policy sets as not read when the %s token has only the Apps permission", async (mode) => {
+  it("records policy sets as not read when the delegated token has only the Apps permission", async () => {
     const path = "/beta/deviceAppManagement/policySets"
-    const deps = mode === "app-only"
-      ? reader(["DeviceManagementApps.Read.All"], ["PolicySets"])
-      : { getToken: async () => jwt({ scp: "DeviceManagementApps.Read.All" }) }
-    const setup = fixture(tenant(), { services: () => ({ services: INTUNE }), ...deps })
-    const job = await setup.run({ trigger: mode === "app-only" ? "scheduled" : "manual" })
+    const setup = fixture(tenant(), { services: () => ({ services: INTUNE }), getToken: async () => jwt({ scp: "DeviceManagementApps.Read.All" }) })
+    const job = await setup.run()
     expect(setup.requests.some((request) => request.path === path)).toBe(false)
     expect(job.status).toBe("Completed")
     const outcome = job.outcomes?.types.find((entry) => entry.folder === "PolicySets")
@@ -322,7 +319,7 @@ describe("Intune policy set coverage", () => {
     expect(job.status).toBe("Completed")
     expect(job.outcomes?.types.find((entry) => entry.folder === "PolicySets")).toMatchObject({ outcome: "skipped", cause: "permission", status: 403 })
     const { notReadReasons } = manifestCoverage(await setup.manifest(job))
-    expect(notReadReasons?.PolicySets).toContain("may lack the permission or admin consent")
+    expect(notReadReasons?.PolicySets).toContain("may lack DeviceManagementConfiguration.Read.All or DeviceManagementConfiguration.ReadWrite.All, or admin consent for one of them")
     expect(notReadReasons?.PolicySets).not.toContain("Insufficient privileges to complete the operation")
   })
 

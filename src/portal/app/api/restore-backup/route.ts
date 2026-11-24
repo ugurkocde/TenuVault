@@ -369,7 +369,7 @@ async function approvalAction(body: any): Promise<Response> {
   let completionDispatched = false
   let completionProgress: RestoreOutcome | undefined
   const restorer = new Restorer(graph, {
-    mode: "copy", assignments: false, approvalContext: context, operationId: record.operationId ?? record.id,
+    mode: "copy", assignments: false, approvalContext: context, granted: grantedPermissions(token), operationId: record.operationId ?? record.id,
     auditApprovalDispatched: () => {
       completionDispatched = true
       audit?.started(0)

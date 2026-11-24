@@ -46,7 +46,7 @@ export interface ServiceModule {
   /**
    * The permissions in the token are checked before a folder of the service is read or written, so a
    * missing permission is named up front. Intune has no service-wide pre-check. Individual parts
-   * can opt into a backup check, and Intune restores rely on Microsoft Graph to refuse a write.
+   * can opt into their own checks.
    */
   precheck: boolean
   /**
@@ -85,7 +85,7 @@ export interface ServiceModule {
  * Folders of Intune that one permission family covers: Read.All or ReadWrite.All backs them up,
  * ReadWrite.All restores them, and the Backup Reader gets Read.All.
  */
-const intune = (family: string, folders: readonly string[], options: Pick<FolderPermissions, "backupPrecheck" | "restoreNotRequested"> = {}) =>
+const intune = (family: string, folders: readonly string[], options: Parameters<typeof part>[4] = {}) =>
   part(folders, [[`${family}.Read.All`, `${family}.ReadWrite.All`]], [[`${family}.Read.All`]], [[`${family}.ReadWrite.All`]], options)
 
 export const MODULES: readonly ServiceModule[] = [
@@ -112,7 +112,7 @@ export const MODULES: readonly ServiceModule[] = [
       ]),
       area({ id: "apps", label: "Apps and app protection" }, [
         intune("DeviceManagementApps", ["AppCategories", "Apps", "AppConfigurationPolicies", "ManagedAppConfigurations", "AppProtectionIOS", "AppProtectionAndroid", "AppProtectionWindows"]),
-        intune("DeviceManagementConfiguration", ["PolicySets"], { backupPrecheck: true }),
+        intune("DeviceManagementConfiguration", ["PolicySets"], { backupPrecheck: true, restorePrecheck: true }),
       ]),
       area({ id: "enrollment", label: "Enrollment and branding" }, [
         intune("DeviceManagementServiceConfig", ["EnrollmentConfigurations", "AutopilotProfiles", "AutopilotDevices", "AppleEnrollmentProfiles", "AppleAutomatedEnrollment", "AndroidEnrollmentProfiles", "TermsAndConditions", "Branding"]),
@@ -285,19 +285,21 @@ export function checkModules(granted: GrantedPermissions, modules: readonly Serv
   })
 }
 
-/**
- * Why the granted permissions cannot write this folder, or undefined when they can. Restore asks before
- * the first write, so a missing permission is reported up front instead of as a refusal halfway through.
- *
- * Only services with a token pre-check are gated. Intune restores keep relying on Graph to refuse a
- * write, so a folder mapped to the wrong permission here can never block a restore that works; for
- * Intune the mapping only informs the permission check in Settings.
- */
-export function restorePermissionBlocker(folder: string, granted: GrantedPermissions | undefined): string | undefined {
+function restorePermissionEntry(folder: string) {
   const entry = moduleForFolder(folder)
-  if (!entry || !granted || !entry.module.precheck) return undefined
+  return entry?.module.precheck || entry?.part.restorePrecheck ? entry : undefined
+}
+
+export function checksRestorePermission(folder: string): boolean {
+  return restorePermissionEntry(folder) !== undefined
+}
+
+/** Why the current permissions cannot restore a folder that checks its token before writing. */
+export function restorePermissionBlocker(folder: string, granted: GrantedPermissions | undefined): string | undefined {
+  const entry = restorePermissionEntry(folder)
+  if (!entry || !granted) return undefined
   const needed = entry.part.restore[granted.kind]
-  const what = `${entry.module.label} ${entry.area.label.toLowerCase()}`
+  const what = folder === "PolicySets" ? "Intune policy sets" : `${entry.module.label} ${entry.area.label.toLowerCase()}`
   if (needed === "unsupported") return `${what} ${granted.kind === "application" ? "can only be restored by a signed-in admin" : "cannot be restored through Microsoft Graph"}.`
   if (satisfied(needed, granted.permissions)) return undefined
   return `Restoring ${what} needs the ${describeRequirement(needed, granted.permissions)} permission, which the TenuVault app registration does not have. ${SERVICES_PAGE} shows how to add it.`

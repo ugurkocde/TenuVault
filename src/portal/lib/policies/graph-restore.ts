@@ -821,7 +821,7 @@ export class Restorer {
    * fresh plan, a repair, or an approval that was waiting.
    */
   private write(type: IntuneType, operation: WriteOperation, method: "POST" | "PATCH" | "PUT" | "DELETE", path: string, body?: Item, options?: GraphCallOptions): ReturnType<GraphCall> {
-    const blocked = writeBlocker(type, operation)
+    const blocked = writeBlocker(type, operation) ?? (type.folder === "PolicySets" ? restorePermissionBlocker(type.folder, this.options.granted) : undefined)
     if (blocked) throw new NotRestorableError(blocked)
     return this.graph(method, path, body, options)
   }
