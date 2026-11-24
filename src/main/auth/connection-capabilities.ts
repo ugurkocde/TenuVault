@@ -1,21 +1,22 @@
 import type { TokenGrant } from "./network-client"
-import { RESOURCE_SCOPES } from "../../shared/constants"
+import { graphCliScopes } from "./connection-coverage"
+import { localStorageAccountName, RESOURCE_SCOPES } from "../../shared/constants"
 import { isGuid, normalizeGuid } from "../../shared/security"
 import { admittedDirectoryPermissions } from "../../shared/intune/restore-matrix"
 import { tenantWriteTargets } from "../../shared/tenant-writes"
 import { accessTokenDigest, sharedTokenScopes, tokenIdentity } from "./token-identity"
 import { isPackWriteScope, missingPackScopes, type PermissionPack } from "../../shared/services/permission-packs"
-import { GRAPH_CLI_CLIENT_ID, sharedSignInMethod as sharedMethod } from "../../shared/tenant-connection"
+import { GRAPH_CLI_CLIENT_ID, GRAPH_CLI_DISABLED, GRAPH_CLI_NEXT_STEP, sharedSignInMethod as sharedMethod } from "../../shared/tenant-connection"
 import type { TenantConnection } from "../../shared/tenant-connection"
 import { executionMetadata } from "../api/execution-metadata"
 
-export const READ_ONLY = "Start now is read-only. Change sign-in method to restore, revert, deploy or copy policies."
+export const READ_ONLY = `Start now is read-only. ${GRAPH_CLI_NEXT_STEP}`
 const PACK_REQUIRED = "Approve the restore permission pack for this service in Sign-in and access."
 const CONNECTION_CHANGED = "This tenant's sign-in method changed. Reload the tenant and try again."
 const TOKEN_UNVERIFIED = "TenuVault could not verify the tenant and app in this access token. Sign in again."
 type SharedMethod = NonNullable<ReturnType<typeof sharedMethod>>
 type IssuedToken = TokenGrant & { tenantId: string; clientId: string; scope: string; expiresAt: number; reader?: true }
-const GRAPH_ONLY = "Start now only connects to Microsoft Graph. Change sign-in method to access other Microsoft services."
+const GRAPH_ONLY = `Start now only connects to Microsoft Graph and uses local backup storage. ${GRAPH_CLI_NEXT_STEP}`
 
 export class ConnectionCapabilities {
   // Retain the acquisition context in memory, keyed by a digest so opaque bearers stay untouched.
@@ -24,7 +25,7 @@ export class ConnectionCapabilities {
   constructor(
     private readonly connection: (tenantId: string) => TenantConnection | null,
     private readonly packs: (tenantId: string) => readonly PermissionPack[] = () => [],
-    private readonly sharedEnabled: (method: SharedMethod) => Promise<boolean> = async () => false,
+    private readonly sharedEnabled: (method: SharedMethod, fresh?: boolean) => Promise<boolean> = async () => false,
   ) {}
 
   requireWrite(tenantIds: string[]): void {
@@ -48,10 +49,10 @@ export class ConnectionCapabilities {
     this.requireResource(tenantId, scope)
   }
 
-  async requireConnectionEnabled(tenantId: string, clientId: string, scope: string = RESOURCE_SCOPES.graph): Promise<void> {
+  async requireConnectionEnabled(tenantId: string, clientId: string, scope: string = RESOURCE_SCOPES.graph, fresh = false): Promise<void> {
     const method = sharedMethod(clientId)
-    if (method && !await this.sharedEnabled(method)) {
-      throw new Error(method === "graphCli" ? "Start now sign-in is currently unavailable." : "TenuVault app sign-in is currently unavailable.")
+    if (method && !await this.sharedEnabled(method, fresh)) {
+      throw new Error(method === "graphCli" ? `${GRAPH_CLI_DISABLED} ${GRAPH_CLI_NEXT_STEP}` : "TenuVault app sign-in is currently unavailable.")
     }
     this.requireConnection(tenantId, clientId, scope)
   }
@@ -103,7 +104,11 @@ export class ConnectionCapabilities {
 
   requireInteractive(tenantId: string): void {
     const method = this.record(tenantId)?.method
-    if (method === "graphCli") throw new Error("Interactive sign-in with this method is unavailable in this version.")
+    if (method === "graphCli") throw new Error(GRAPH_CLI_NEXT_STEP)
+  }
+
+  requireNonGraphCli(tenantId: string): void {
+    if (this.isGraphOnly(tenantId)) throw new Error(READ_ONLY)
   }
 
   async guard(request: Request): Promise<Response | null> {
@@ -112,6 +117,10 @@ export class ConnectionCapabilities {
     if (!body || typeof body !== "object" || Array.isArray(body)) return null
     const path = new URL(request.url).pathname.replace(/\/$/, "")
     const input = body as Record<string, unknown>
+    if (path === "/api/backup/start" && typeof input.tenantId === "string" && this.isGraphOnly(input.tenantId) &&
+      input.storageAccountName !== localStorageAccountName(input.tenantId)) {
+      return Response.json({ error: GRAPH_ONLY }, { status: 403 })
+    }
     const targets = tenantWriteTargets(path, input)
     if (path === "/api/restore-directory" && input.action === "resume" && typeof input.tenantId === "string") targets.push(input.tenantId)
     // A read-only tenant also cannot initiate Copy to Tenants using its backup as the source.
@@ -130,7 +139,13 @@ export class ConnectionCapabilities {
     }))
   }
 
-  async authorizeRequest(url: URL, input: RequestInfo | URL, init: RequestInit | undefined, routeTenant: string | null): Promise<void> {
+  graphCliGrant(token: string): ReadonlySet<string> | undefined {
+    const acquisition = this.issued.get(accessTokenDigest(token))
+    const explicit = acquisition?.clientId === GRAPH_CLI_CLIENT_ID && acquisition.expiresAt > Date.now() ? acquisition.grantedScopes : undefined
+    return graphCliScopes(token, explicit)
+  }
+
+  async authorizeRequest(url: URL, input: RequestInfo | URL, init: RequestInit | undefined, routeTenant: string | null): Promise<void | URL> {
     const authorization = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)).get("authorization")
     const token = /^Bearer\s+(.+)$/i.exec(authorization ?? "")?.[1]
     const digest = token ? accessTokenDigest(token) : undefined
@@ -158,6 +173,8 @@ export class ConnectionCapabilities {
       : url.hostname === "management.azure.com" ? RESOURCE_SCOPES.management
       : url.hostname.endsWith(".blob.core.windows.net") ? RESOURCE_SCOPES.storage
       : url.hostname === "api.securitycenter.microsoft.com" ? "https://api.securitycenter.microsoft.com/.default" : undefined
+    if (!graph && (shared === "graphCli" || (resource && bound && [...bound.keys()].some(id => this.isGraphOnly(id))))) throw new Error(GRAPH_ONLY)
+    if (acquisition?.reader && tenantId && this.isGraphOnly(tenantId)) throw new Error(READ_ONLY)
     const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase()
     let writes = graph && method !== "GET" && method !== "HEAD" ? [url.pathname] : []
     if (graph && method === "POST" && /^\/(?:beta|v1\.0)\/\$batch$/i.test(url.pathname)) {
@@ -172,7 +189,7 @@ export class ConnectionCapabilities {
 
     if (token && (resource || shared || bound?.size) && (!tenantId || !clientId)) throw new Error(TOKEN_UNVERIFIED)
     if (acquisition && (acquisition.expiresAt <= Date.now() || (resource && acquisition.scope !== resource))) throw new Error(TOKEN_UNVERIFIED)
-    if (shared && tenantId && clientId) await this.requireConnectionEnabled(tenantId, clientId)
+    if (shared && tenantId && clientId) await this.requireConnectionEnabled(tenantId, clientId, RESOURCE_SCOPES.graph, shared === "graphCli")
 
     if (tenantId && clientId) {
       const current = this.record(tenantId)
@@ -186,8 +203,15 @@ export class ConnectionCapabilities {
       }
     }
 
-    if (resource && resource !== RESOURCE_SCOPES.graph && shared === "graphCli") throw new Error(GRAPH_ONLY)
-    if (!writes.length) return
+    if (!writes.length) {
+      if (shared !== "graphCli") return
+      // Some shared readers still construct a versioned URL for an own registration.
+      const path = url.pathname.replace(/^\/v1\.0(?=\/)/i, "/beta")
+      if (!path.startsWith("/beta/")) throw new Error(GRAPH_ONLY)
+      const beta = new URL(url)
+      beta.pathname = path
+      return beta
+    }
     const targets = copy
       ? [copy.source, ...(tenantId && copy.destinations.some(id => normalizeGuid(id) === tenantId) ? [tenantId] : copy.destinations)]
       : [tenantId ?? routeTenant].filter((id): id is string => id != null)

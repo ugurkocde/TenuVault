@@ -54,6 +54,7 @@ interface StoredActivation {
   // Key activations: whether the service last confirmed the license as shared with the
   // tenant's other admins.
   shared?: boolean
+  graphCliShared?: boolean
   // Key activations: the service could not share the license because the request lacked
   // a fresh sign-in to the tenant.
   shareNeedsSignIn?: true
@@ -1123,6 +1124,11 @@ export class LicenseService {
         : previous?.source === undefined
           ? previous?.shared
           : undefined
+    const graphCliShared = shared === true
+      ? !shareNeedsSignIn && Array.isArray(data.allowedClientIds)
+        ? data.allowedClientIds.includes(GRAPH_CLI_CLIENT_ID)
+        : previous?.graphCliShared
+      : undefined
     this.state.activations[tenantId] = {
       activationId: data.activationId,
       token: data.token,
@@ -1137,6 +1143,7 @@ export class LicenseService {
           }
         : {
             ...(shared !== undefined ? { shared } : {}),
+            ...(graphCliShared !== undefined ? { graphCliShared } : {}),
             ...(shareNeedsSignIn ? { shareNeedsSignIn: true as const } : {}),
           }),
     }
@@ -1238,7 +1245,12 @@ export class LicenseService {
     const idToken = await this.idToken(tenantId)
     this.assertCurrent(() => current() && this.clientId(tenantId) === clientId)
     if (!idToken) throw new NoIdToken()
-    const data = await this.tenantCall(tenantId, "activate", current, undefined, idToken)
+    const graphCli = clientId?.toLowerCase() === GRAPH_CLI_CLIENT_ID
+    if (graphCli && !await this.supportsClientIdSets()) {
+      throw new LicenseDenied("Start now organization licensing is unavailable.", "tenant_not_licensed")
+    }
+    this.assertCurrent(() => current() && this.clientId(tenantId) === clientId)
+    const data = await this.tenantCall(tenantId, "activate", current, undefined, idToken, {}, graphCli)
     this.assertCurrent(current)
     this.accept(tenantId, data, "tenant", true, clientId)
   }
@@ -1393,7 +1405,7 @@ export class LicenseService {
     const tenant = tenantId.toLowerCase()
     return this.mutate([tenant], true, async () => {
       const entry = this.state?.activations[tenant]
-      if (!this.state?.key || !entry || entry.source === "tenant") {
+      if (!this.state?.key || !entry || entry.source === "tenant" || (allowGraphCli !== undefined && entry.source === "trial")) {
         throw new Error("Only the machine that holds the license key can change sharing.")
       }
       await this.refreshCurrent(tenant, share, allowGraphCli)
@@ -2164,6 +2176,7 @@ export class LicenseService {
         trialCanResume: resumeUntil !== null,
         trialResumeUntil: resumeUntil !== null ? new Date(resumeUntil).toISOString() : undefined,
         shared: source === "key" ? (entry?.shared ?? null) : null,
+        ...(source === "key" && entry?.graphCliShared !== undefined ? { graphCliShared: entry.graphCliShared } : {}),
         shareNeedsSignIn: source === "key" && Boolean(entry?.shareNeedsSignIn),
         displayKey: source === "tenant" ? (entry?.displayKey ?? null) : null,
         ...(this.organizationRenewalPending(tenantId) ? { organizationRenewalPending: true } : {}),

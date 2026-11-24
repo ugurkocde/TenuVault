@@ -1,5 +1,6 @@
 import { generateKeyPairSync, sign } from "node:crypto"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { GRAPH_CLI_CLIENT_ID } from "../src/shared/tenant-connection"
 import { LicenseService } from "../src/main/license/service"
 import { memoryStore } from "./helpers"
 const { publicKey, privateKey } = generateKeyPairSync("ed25519")
@@ -20,8 +21,8 @@ function entitlement(source = "trial", tenantId = tenant) {
   const body = Buffer.from(JSON.stringify(payload)).toString("base64url")
   return Response.json({ token: `${body}.${sign(null, Buffer.from(body), privateKey).toString("base64url")}`, activationId: payload.act, source, trial: source === "trial", keyExp: end / 1000, canEnd })
 }
-function service(existing: string[] = []) {
-  return new LicenseService({ store, persist: true, publicKey: publicKey.export({ type: "spki", format: "pem" }).toString(), apiBase: "https://www.tenuvault.com", appVersion: "0.5.0", initialTenantIds: store.get("license.tenantTrials") ? [...new Set([tenant, ...existing])] : existing, connectedTenantIds: () => [tenant], idToken: async () => "signed.id.token", fetch: (async (_url, init) => {
+function service(existing: string[] = [], clientId?: string) {
+  return new LicenseService({ store, persist: true, publicKey: publicKey.export({ type: "spki", format: "pem" }).toString(), apiBase: "https://www.tenuvault.com", appVersion: "0.5.0", initialTenantIds: store.get("license.tenantTrials") ? [...new Set([tenant, ...existing])] : existing, connectedTenantIds: () => [tenant], clientId: () => clientId ?? null, idToken: async () => "signed.id.token", fetch: (async (_url, init) => {
     requests++
     if (!init?.body) return Response.json({ tenantTrials: { enabled, ok: true, ...healthFields } })
     const body = JSON.parse(String(init.body)) as Record<string, unknown>
@@ -39,6 +40,18 @@ async function connect(license: LicenseService) {
 beforeEach(() => { vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(start); store = memoryStore(); store.set("license.installId", install); calls = []; requests = 0; healthFields = {}; enabled = true; canEnd = true; end = start + 14 * day; response = undefined; vi.spyOn(console, "warn").mockImplementation(() => {}) })
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 describe("tenant trials", () => {
+  it("starts and refreshes a Start now trial with the existing trial proof contract", async () => {
+    const license = service([], GRAPH_CLI_CLIENT_ID)
+    await expect(connect(license)).resolves.toBe("pro")
+    await license.refreshAll()
+    for (const action of ["start_trial", "refresh"]) {
+      const call = calls.find(body => body.action === action)
+      expect(call).toMatchObject({ idToken: "signed.id.token" })
+      expect(call).not.toHaveProperty("publicClientProof")
+    }
+    expect(calls.some(body => body.action === "activate")).toBe(false)
+  })
+
   it.each([true, false])("starts or joins and keeps canEnd %s", async starter => {
     canEnd = starter
     const license = service()

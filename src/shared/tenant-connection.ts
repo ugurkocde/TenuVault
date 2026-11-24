@@ -1,6 +1,13 @@
 export const GRAPH_CLI_CLIENT_ID = "14d82eec-204b-4c2f-b7e8-296a70dab67e"
 export const TENUVAULT_CLIENT_ID = "61eff188-672b-4be4-acac-2d254a6f9e05"
 
+export const GRAPH_CLI_CONSENT_WARNING = "If Microsoft asks you to approve permissions, cancel and choose another sign-in method."
+export const GRAPH_CLI_UNAVAILABLE = "Start now is not available in this tenant."
+export const GRAPH_CLI_DISABLED = "Start now sign-in is currently unavailable."
+export const GRAPH_CLI_UPGRADE = "Upgrade to the TenuVault app"
+export const OWN_APP_UPGRADE = "Use your own app registration"
+export const GRAPH_CLI_NEXT_STEP = "Choose the TenuVault app or use your own app registration in Sign-in and access."
+
 export const ORGANIZATION_RENEWAL_NOTICE = "Ask the license key holder to share the license using the new app registration. Your current license coverage lasts until its existing expiry unless it is renewed sooner."
 
 export const SIGN_IN_METHODS = {
@@ -39,9 +46,17 @@ export type ConnectionTarget =
   | { method: "tenuvaultApp" }
   | { method: "ownApp"; clientId: string }
 
+/** Token scope coverage. A null readable list means the grant could not be verified. */
+export interface BackupScopeCoverage {
+  service: "defender" | "entra" | "intune"
+  folders: readonly string[]
+  readable: readonly string[] | null
+}
+
 export interface ConnectionSwitchResult {
   connection: TenantConnection
   missing: string[]
+  coverage?: BackupScopeCoverage[]
 }
 
 export type ConnectionSwitchResponse = { result: ConnectionSwitchResult } | { error: { code: string; message: string } }

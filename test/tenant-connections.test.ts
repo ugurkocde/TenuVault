@@ -9,8 +9,9 @@ import { ModuleSettings } from "../src/main/services/settings"
 import { TenantConnections, TENANT_LIST_KEY, type StagedSignIn } from "../src/main/auth/tenant-connections"
 import { accountStore, connectionCache, publicAccountKey, stageConnectionCache } from "../src/main/auth/stores"
 import { GRAPH_CLI_CLIENT_ID, TENUVAULT_CLIENT_ID, type SignInMethod, type TenantConnection } from "../src/shared/tenant-connection"
+import { graphCliCoverage } from "../src/shared/services/graph-cli-coverage"
 import { RESOURCE_SCOPES } from "../src/shared/constants"
-import { connectionChoice, connectionCoverage } from "../src/main/auth/connection-coverage"
+import { connectionChoice, connectionCoverage, verifyGraphCliGrant } from "../src/main/auth/connection-coverage"
 import { ConnectionCapabilities, READ_ONLY } from "../src/main/auth/connection-capabilities"
 import { createBridgedFetch } from "../src/main/api/fetch-bridge"
 import { executionMetadata } from "../src/main/api/execution-metadata"
@@ -374,6 +375,7 @@ describe("Start now capability", () => {
     await f.connections.switch(TENANT, { method: "graphCli" })
     for (const [path, input] of [
       ["restore-backup", {}], ["revert-policy", { action: "revert" }], ["oib", { action: "oib-deploy" }],
+      ["oib", { action: "oib-assign" }], ["cis-remediation", { action: "apply" }], ["promotion", { action: "apply" }],
       ["restore-directory", { action: "restore" }], ["restore-directory", { action: "resume" }],
       ["restore-backup", { targetTenants: [{ tenantId: OTHER }] }],
       ["restore-backup", { tenantId: OTHER, targetTenants: [{ tenantId: TENANT }] }],
@@ -382,6 +384,11 @@ describe("Start now capability", () => {
       expect(response?.status).toBe(403)
       expect(await response?.json()).toEqual({ error: READ_ONLY })
     }
+    const startBackup = (storageAccountName: string) => cap.guard(new Request("http://test/api/backup/start", {
+      method: "POST", body: JSON.stringify({ tenantId: TENANT, storageAccountName }),
+    }))
+    expect((await startBackup("exampleazure"))?.status).toBe(403)
+    expect(await startBackup(storage)).toBeNull()
     expect(() => cap.requireWrite([TENANT])).toThrow(READ_ONLY)
     expect(() => cap.requireWrite([OTHER])).not.toThrow()
     const graph = "https://graph.microsoft.com/beta"
@@ -391,12 +398,14 @@ describe("Start now capability", () => {
       authorizeRequest: (url, input, init, tenant) => cap.authorizeRequest(url, input, init, tenant),
       authorizeResource: (tenant, scope) => cap.requireResource(tenant, scope),
     })
-    const headers = { Authorization: `Bearer ${jwt({ tid: TENANT, appid: GRAPH_CLI_CLIENT_ID })}` }
+    const headers = { Authorization: `Bearer ${jwt({ tid: TENANT, appid: GRAPH_CLI_CLIENT_ID, scp: "DeviceManagementConfiguration.ReadWrite.All" })}` }
     await expect(fetch(graph + "/deviceManagement/configurationPolicies", { method: "POST", headers })).rejects.toThrow(READ_ONLY)
     await expect(withRouteTenant(TENANT, () => fetch(graph + "/$batch", { method: "POST", body: JSON.stringify({ requests: [{ method: "PATCH" }] }) }))).rejects.toThrow(READ_ONLY)
     await expect(fetch(graph + "/$batch", { method: "POST", headers, body: JSON.stringify({ requests: [{ method: "GET" }] }) })).resolves.toBeInstanceOf(Response)
     await expect(fetch(graph + "/organization", { headers })).resolves.toBeInstanceOf(Response)
-    expect(network).toHaveBeenCalledTimes(2)
+    await expect(fetch("https://graph.microsoft.com/v1.0/organization?$select=id", { headers })).resolves.toBeInstanceOf(Response)
+    expect(network).toHaveBeenCalledTimes(3)
+    expect(network).toHaveBeenLastCalledWith(expect.objectContaining({ url: graph + "/organization?$select=id", redirect: "error" }), undefined)
     for (const scope of [RESOURCE_SCOPES.management, RESOURCE_SCOPES.storage, "https://api.securitycenter.microsoft.com/.default"]) {
       expect(() => cap.requireResource(TENANT, scope)).toThrow("only connects to Microsoft Graph")
       const response = await fetch(`https://login.microsoftonline.com/${TENANT}/oauth2/v2.0/token`, { method: "POST", body: new URLSearchParams({ grant_type: "client_credentials", client_id: OWN, scope }) })
@@ -523,7 +532,9 @@ describe("TenuVault app capabilities", () => {
       await expect(cap.authorizeRequest(url, url, { headers }, TENANT)).rejects.toThrow("could not verify")
       expect(() => cap.requireIssuedToken(TENANT, clientId, RESOURCE_SCOPES.graph, jwt({ tid: OTHER, azp: clientId }))).toThrow("could not verify")
       cap.requireIssuedToken(TENANT, clientId, RESOURCE_SCOPES.graph, "opaque-shared-token", { grantedScopes: scopes })
-      await expect(cap.authorizeRequest(url, url, { headers }, TENANT)).resolves.toBeUndefined()
+      const read = cap.authorizeRequest(url, url, { headers }, TENANT)
+      if (method === "graphCli") await expect(read).resolves.toMatchObject({ href: url.href })
+      else await expect(read).resolves.toBeUndefined()
       const write = cap.authorizeRequest(url, url, { method: "POST", headers }, TENANT)
       if (method === "graphCli") await expect(write).rejects.toThrow(READ_ONLY)
       else await expect(write).resolves.toBeUndefined()
@@ -567,5 +578,62 @@ describe("TenuVault app capabilities", () => {
     const result = await f.connections.switch(TENANT, { method: "tenuvaultApp" })
     expect(result.connection).toMatchObject({ method: "tenuvaultApp", clientId: TENUVAULT_CLIENT_ID, graphScopes: verified })
     expect(f.restart().connections.get(TENANT)?.graphScopes).toEqual(verified)
+  })
+})
+
+describe("Start now enrollment and coverage", () => {
+  it("enrolls a wizard tenant in local storage with known partial coverage and prevents a later Azure change", async () => {
+    const f = fixture()
+    const accessToken = jwt({ tid: TENANT, azp: GRAPH_CLI_CLIENT_ID, scp: "DeviceManagementConfiguration.ReadWrite.All" })
+    const graphScopes = verifyGraphCliGrant(accessToken, ["Directory.ReadWrite.All"])
+    const settings = f.modules.choiceEntries(TENANT, { intune: { access: "backup" } })
+    f.connections.enroll(TENANT, { method: "graphCli" }, raw, { ...staged(GRAPH_CLI_CLIENT_ID), accessToken, graphScopes }, settings)
+    const saved = f.restart()
+    expect(saved.connections.get(TENANT)).toMatchObject({ origin: "wizard", method: "graphCli", graphScopes: ["DeviceManagementConfiguration.ReadWrite.All"] })
+    expect(saved.accounts.get(TENANT)?.clientId).toBe(GRAPH_CLI_CLIENT_ID)
+    expect(f.modules.get(TENANT).intune).toMatchObject({ enabled: true, access: "backup" })
+    expect(f.modules.get(TENANT).entra.enabled).toBe(false)
+    const byService = graphCliCoverage(new Set(graphScopes))
+    expect(byService.map(entry => entry.service)).toEqual(["defender", "entra", "intune"])
+    expect(byService[1]?.readable).toEqual([])
+    expect(byService[2]?.readable?.length).toBeGreaterThan(0)
+    expect(byService[2]?.readable?.length).toBeLessThan(byService[2]!.folders.length)
+    expect(() => f.connections.saveProfiles(raw.replace(storage, "exampleazure"))).toThrow("Choose local storage")
+    expect(f.restart().connections.activeProfiles()).toContain(storage)
+  })
+
+  it.each(["opaque", "explicit"] as const)("switches with %s delegated coverage and retains the customer's configuration", async evidence => {
+    const f = fixture()
+    f.enroll()
+    const grantedScopes = evidence === "explicit" ? ["DeviceManagementConfiguration.Read.All"] : undefined
+    const graphScopes = verifyGraphCliGrant("opaque", grantedScopes)
+    f.signIn.mockResolvedValueOnce({ ...staged(GRAPH_CLI_CLIENT_ID), accessToken: "opaque", graphScopes, grantedScopes })
+    const result = await f.connections.switch(TENANT, { method: "graphCli" })
+    expect(result.connection.ownClientId).toBe(OWN)
+    expect(result.coverage?.[2]?.readable === null).toBe(evidence === "opaque")
+    if (evidence === "opaque") expect(result.missing).toEqual([])
+    else expect(result.missing.length).toBeGreaterThan(0)
+    expect(f.modules.get(TENANT)).toEqual(defaultSettings)
+  })
+
+  it("stops issued tokens on the next request and cannot send one outside Graph", async () => {
+    const f = fixture()
+    f.enroll()
+    await f.connections.switch(TENANT, { method: "graphCli" })
+    let enabled = true
+    const health = vi.fn(async () => enabled)
+    const cap = new ConnectionCapabilities(id => f.connections.get(id), undefined, health)
+    cap.requireIssuedToken(TENANT, GRAPH_CLI_CLIENT_ID, RESOURCE_SCOPES.graph, "opaque")
+    const headers = { authorization: "Bearer opaque" }
+    const request = (url: string) => cap.authorizeRequest(new URL(url), url, { headers }, TENANT)
+    await expect(request("https://graph.microsoft.com/beta/organization")).resolves.toMatchObject({ pathname: "/beta/organization" })
+    expect(health).toHaveBeenLastCalledWith("graphCli", true)
+    for (const host of ["management.azure.com", "fixture.blob.core.windows.net", "api.securitycenter.microsoft.com", "api.security.microsoft.com", "outlook.office365.com"]) {
+      await expect(request(`https://${host}/test`)).rejects.toThrow("only connects to Microsoft Graph")
+    }
+    expect(() => cap.requireNonGraphCli(TENANT)).toThrow(READ_ONLY)
+    enabled = false
+    await expect(request("https://graph.microsoft.com/beta/organization")).rejects.toThrow("currently unavailable")
+    expect(() => cap.requireNonGraphCli(OTHER)).not.toThrow()
   })
 })

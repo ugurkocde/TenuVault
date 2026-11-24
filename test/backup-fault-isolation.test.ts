@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest"
 import { CONSECUTIVE_AUTH_FAILURE_LIMIT, NetworkCircuit } from "../src/main/backup/engine"
 import { GraphSession } from "../src/main/backup/graph-session"
+import { GRAPH_CLI_CLIENT_ID } from "../src/shared/tenant-connection"
 import { MODULES, type ModuleId, type ServiceModule } from "../src/shared/services/modules"
 import { fixture, refusal, registerTestTypes, scriptedGraph, testType, type GraphRoute } from "./helpers/backup-fixture"
 import { GRAPH_ANSWERS } from "./fixtures/graph-answers"
@@ -576,5 +577,48 @@ describe("auth failure and throttle state per service", () => {
     await expect(shared.get("https://graph.microsoft.com/beta/a")).rejects.toThrow("longer than 5 minutes")
     await expect(shared.get("https://graph.microsoft.com/beta/b")).rejects.toThrow("longer than 5 minutes")
     expect(sent).toBe(1)
+  })
+})
+
+describe("Start now backup evidence", () => {
+  const clientId = GRAPH_CLI_CLIENT_ID
+
+  it("uses beta continuation links for a type otherwise read on the stable endpoint", async () => {
+    const stable = testType("TokenLifetimePolicies", "policies/tokenLifetimePolicies", { apiVersion: "v1.0", listOnly: true })
+    const remove = registerTestTypes([stable])
+    try {
+      const path = "/beta/policies/tokenLifetimePolicies"
+      const nextLink = `https://graph.microsoft.com${path}?$skiptoken=fixture`
+      const graph = scriptedGraph({
+        [path]: { value: [{ id: "first", displayName: "First" }], "@odata.nextLink": nextLink },
+        [path + "?$skiptoken=fixture"]: { value: [{ id: "next", displayName: "Next" }] },
+      })
+      const f = fixture(graph, { services: () => ({ services: ["entra"] }), graphCliGrant: () => new Set(["Policy.Read.All"]) })
+      const job = await f.run({ clientId, scope: { excluded: [] } })
+      expect(f.requests.map(request => request.path)).toEqual([path, path + "?$skiptoken=fixture"])
+      expect(outcomeOf(job, stable.folder)).toMatchObject({ outcome: "saved", saved: 2 })
+    } finally { remove() }
+  })
+
+  it.each([
+    [403, "Insufficient privileges", "role"],
+    [400, "Intune is not licensed", "license"],
+  ])("records Intune HTTP %s as a %s refusal with a verified scope", async (status, detail, cause) => {
+    const f = fixture(tenant({ "/beta/deviceManagement/deviceCompliancePolicies": refusal(status, "Forbidden", detail) }), {
+      graphCliGrant: () => new Set(["DeviceManagementConfiguration.ReadWrite.All"]),
+    })
+    const job = await f.run({ clientId })
+    expect(outcomeOf(job, "CompliancePolicies")).toMatchObject({ outcome: "skipped", status, cause })
+    expect(job.coverage).toBe("incomplete")
+  })
+
+  it("records an opaque grant's 403 as unread and keeps account details out of history", async () => {
+    const f = fixture(tenant({ "/beta/security/rules/detectionRules": refusal(403, "Authorization_RequestDenied", "private-admin@example.test") }), {
+      graphCliGrant: () => undefined,
+    })
+    const job = await f.run({ clientId })
+    expect(outcomeOf(job, "DefenderCustomDetectionRules")).toMatchObject({ outcome: "failed", status: 403 })
+    expect(JSON.stringify(await f.manifest(job))).not.toContain("private-admin@example.test")
+    expect(job.coverage).toBe("incomplete")
   })
 })

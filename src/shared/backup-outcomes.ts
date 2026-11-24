@@ -138,6 +138,7 @@ export interface AnswerContext {
   unavailable?: readonly AnswerPattern[]
   /** Whether the sign-in's token holds the permission the type needs; undefined when the token could not be read. */
   held?: boolean
+  grantUnknown?: boolean
   mode: "delegated" | "app-only"
 }
 
@@ -175,10 +176,11 @@ export function classifyAnswer(answer: RefusedAnswer, context: AnswerContext): V
   if (answer.status === 401) {
     if (/app-only/i.test(said)) return { outcome: "skipped", cause: "signedIn" }
     // Some endpoints answer a missing permission with 401, one of them with an HTML page.
-    return signInRefused(answer) ? { outcome: "failed" } : { outcome: "skipped", cause: "permission" }
+    return signInRefused(answer) || context.grantUnknown ? { outcome: "failed" } : { outcome: "skipped", cause: "permission" }
   }
   if ((answer.status === 403 || answer.status === 400) && NOT_AVAILABLE.test(said)) return context.unavailable === undefined ? { outcome: "skipped", cause: "license" } : { outcome: "failed" }
   if (answer.status !== 403) return { outcome: "failed" }
+  if (context.grantUnknown) return { outcome: "failed" }
   if (NAMES_PERMISSION.test(said)) return { outcome: "skipped", cause: "permission" }
   // Refused although the token holds the permission: for a signed-in admin that is the account's role.
   return { outcome: "skipped", cause: context.held && context.mode === "delegated" ? "role" : "permission" }

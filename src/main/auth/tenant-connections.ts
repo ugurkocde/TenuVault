@@ -2,9 +2,10 @@ import { createHash } from "node:crypto"
 import type { SignedInAccount } from "../../shared/ipc"
 import { isGuid, normalizeGuid } from "../../shared/security"
 import { GRAPH_CLI_CLIENT_ID, TENUVAULT_CLIENT_ID, type ConnectionSwitchResult, type SignInMethod, type TenantConnection } from "../../shared/tenant-connection"
-import { DELEGATED_CLIENT_SECRET, LOCAL_STORAGE_PREFIX } from "../../shared/constants"
+import { DELEGATED_CLIENT_SECRET, localStorageAccountName } from "../../shared/constants"
 import type { SecureStore } from "../storage/secure-store"
 import { parseStoredAccount, publicAccountKey, storedAccountKey, type StoredAccount } from "./stores"
+import { graphCliCoverage } from "../../shared/services/graph-cli-coverage"
 import { ConnectionSwitchError } from "./switch-failure"
 
 const PREFIX = "auth.connection."
@@ -49,6 +50,7 @@ function targetOf(input: unknown): { method: SignInMethod; clientId: string } {
 export interface StagedSignIn {
   account: StoredAccount
   accessToken: string
+  idToken?: string
   graphScopes?: string[]
   grantedScopes?: readonly string[]
   /** The staged cache is committed with the account, only if its original cache is still current. */
@@ -164,7 +166,7 @@ export class TenantConnections {
   }
 
   /** Main-process entry point for the wizard to publish its new profile and staged sign-in together. */
-  enroll(tenantId: string, target: unknown, raw: string, staged: StagedSignIn): TenantConnection {
+  enroll(tenantId: string, target: unknown, raw: string, staged: StagedSignIn, settings?: Record<string, string>): TenantConnection {
     if (!isGuid(tenantId)) throw new Error("Choose a tenant.")
     const tenant = normalizeGuid(tenantId)
     const saved = savedTenants(this.host.store.get(TENANT_LIST_KEY))
@@ -177,13 +179,17 @@ export class TenantConnections {
     const record: TenantConnection = { version: 1, ...selected, ...(staged.graphScopes ? { graphScopes: staged.graphScopes } : {}), origin: "wizard", createdAt: at, updatedAt: at, profileCreatedAt: validTime(profile.createdAt) ? profile.createdAt : null, ...(selected.method === "ownApp" ? { ownClientId: selected.clientId } : {}) }
     this.validateAccount(tenant, record.clientId, staged.account)
     this.validateStorage(profile, record.method)
-    this.commit(tenant, JSON.stringify([...saved, profile]), record, staged)
+    this.commit(tenant, JSON.stringify([...saved, profile]), record, staged, settings)
     return record
   }
 
   saveProfiles(raw: string | null): void {
     const previous = savedTenants(this.host.store.get(TENANT_LIST_KEY)) ?? []
     const next = savedTenants(raw)
+    for (const profile of next ?? []) {
+      const tenant = profileId(profile)
+      if (tenant && this.get(tenant)?.method === "graphCli") this.validateStorage(profile, "graphCli")
+    }
     // Keep the connection records if the renderer list needs recovery.
     if (!next && raw !== null) {
       this.host.store.setMany({ [TENANT_LIST_KEY]: raw })
@@ -236,7 +242,7 @@ export class TenantConnections {
     const record = this.get(tenant)
     const profile = this.profile(tenant, this.host.store.get(TENANT_LIST_KEY))
     if (!profile || record?.origin !== "wizard") throw new ConnectionSwitchError("unavailable", "Only tenants connected through the new wizard can change sign-in method.")
-    if (selected.method !== "tenuvaultApp" && selected.method === record.method && selected.clientId === normalizeGuid(record.clientId)) throw new ConnectionSwitchError("invalid_request", "Choose a different sign-in method or app registration.")
+    if (selected.method === "ownApp" && selected.method === record.method && selected.clientId === normalizeGuid(record.clientId)) throw new ConnectionSwitchError("invalid_request", "Choose a different sign-in method or app registration.")
     const signIn = this.host.signIn[selected.method]
     if (!signIn) throw new ConnectionSwitchError("unavailable", "Sign-in with this method is unavailable in this version.")
     this.validateStorage(profile, selected.method)
@@ -256,9 +262,8 @@ export class TenantConnections {
       this.validateStorage(latest, selected.method)
       const missing = this.host.coverage(tenant, selected.method, staged.accessToken, staged.graphScopes, staged.grantedScopes)
       const changesOwnRegistration = record.method === "ownApp" && selected.method === "ownApp"
-      if (missing.length && !changesOwnRegistration) {
-        const next = selected.method === "graphCli" ? "Choose another sign-in method." : "Grant the permissions and sign in again."
-        throw new ConnectionSwitchError("switch_failed", `The new sign-in is missing required permissions (${missing.join(", ")}). ${next}`)
+      if (missing.length && !changesOwnRegistration && selected.method !== "graphCli") {
+        throw new ConnectionSwitchError("switch_failed", `The new sign-in is missing required permissions (${missing.join(", ")}). Grant the permissions and sign in again.`)
       }
       const connection = {
         ...record, ...selected, graphScopes: staged.graphScopes, updatedAt: this.now().toISOString(),
@@ -267,7 +272,8 @@ export class TenantConnections {
       this.host.beforeSwitch?.(tenant, record.clientId)
       this.commit(tenant, raw, connection, staged)
       const { homeAccountId: _homeAccountId, ...account } = staged.account
-      return { connection, missing, account }
+      const coverage = selected.method === "graphCli" ? graphCliCoverage(staged.graphScopes && new Set(staged.graphScopes)) : undefined
+      return { connection, missing, account, ...(coverage ? { coverage } : {}) }
     } finally {
       this.switching.delete(tenant)
     }
@@ -278,8 +284,14 @@ export class TenantConnections {
     if (normalizeGuid(account.clientId) !== normalizeGuid(clientId)) throw new ConnectionSwitchError("wrong_client", "Microsoft returned a sign-in for a different app registration.")
   }
 
+  validateGraphCliProfile(tenant: string, raw: string): void {
+    const profile = this.profile(tenant, raw)
+    if (!profile) throw new ConnectionSwitchError("invalid_request", "Save the tenant profile with its connection.")
+    this.validateStorage(profile, "graphCli")
+  }
+
   private validateStorage(profile: SavedTenant, method: SignInMethod): void {
-    if (method === "graphCli" && !profile.resources?.storageAccountName?.startsWith(LOCAL_STORAGE_PREFIX)) {
+    if (method === "graphCli" && profile.resources?.storageAccountName !== localStorageAccountName(profile.credentials!.tenantId!)) {
       throw new ConnectionSwitchError("unavailable", "Start now uses backups on this device. Choose local storage before switching.")
     }
   }
@@ -288,11 +300,12 @@ export class TenantConnections {
     return savedTenants(raw)?.find(entry => profileId(entry) === tenant)
   }
 
-  private commit(tenant: string, raw: string, record: TenantConnection, signIn: StagedSignIn): void {
+  private commit(tenant: string, raw: string, record: TenantConnection, signIn: StagedSignIn, settings?: Record<string, string>): void {
     const legacyKey = storedAccountKey(tenant)
     const sharedKey = publicAccountKey(tenant)
     const ownApp = record.method === "ownApp"
     this.host.store.setMany({
+      ...settings,
       ...signIn.cacheWrites?.(),
       [ownApp ? legacyKey : sharedKey]: JSON.stringify({ ...signIn.account, tenantId: tenant, clientId: record.clientId }),
       [PREFIX + tenant]: JSON.stringify(this.host.legacyCache ? { ...record, legacyCacheFingerprint: this.legacyCacheFingerprint(record) } : record),

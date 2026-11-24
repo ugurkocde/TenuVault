@@ -64,6 +64,11 @@ export class ModuleSettings {
 
   /** A first setup writes the full choice atomically, before any backup can start. */
   setChoice(tenantId: string, choice: PermissionChoice): void {
+    this.store.set(KEY, this.choiceEntries(tenantId, choice)[KEY]!)
+    this.onChange()
+  }
+
+  choiceEntries(tenantId: string, choice: PermissionChoice): Record<string, string> {
     const all = this.read()
     const tenant = tenantEntry(all, tenantId)
     all[tenant.key] = { ...tenant.value, ...Object.fromEntries(MODULES.map(module => [module.id, {
@@ -71,8 +76,7 @@ export class ModuleSettings {
       access: choice[module.id]?.access ?? module.defaultAccess,
       areas: Object.fromEntries(module.areas.filter(area => area.optIn).map(area => [area.id, choice[module.id]?.areas?.includes(area.id) === true])),
     }])) }
-    this.store.set(KEY, JSON.stringify(all))
-    this.onChange()
+    return { [KEY]: JSON.stringify(all) }
   }
 
   /** Turns a service on or off for the tenant. */

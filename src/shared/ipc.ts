@@ -171,6 +171,7 @@ export interface TenantLicenseStatus {
   trial?: boolean
   /** Key licenses: whether other admins in the tenant may use it, as last confirmed by the licensing service. */
   shared: boolean | null
+  graphCliShared?: boolean
   /** Key licenses: sharing could not be confirmed without a fresh sign-in. */
   shareNeedsSignIn: boolean
   /** Organization licenses: the masked key, such as ****ABCDEF. */
@@ -465,6 +466,8 @@ export interface TenuVaultBridge {
     signOut: (tenantId: string) => Promise<void>
     accounts: () => Promise<SignedInAccount[]>
     connection: (tenantId: string) => Promise<TenantConnection | null>
+    graphCliAvailable: () => Promise<boolean>
+    enrollGraphCli: (tenantId: string, profile: string, choice: unknown) => Promise<ConnectionSwitchResponse>
     packConsentPlan: (tenantId: string) => Promise<PackConsentPlan | null>
     packConsent: (tenantId: string, packId: string, action: PackConsentAction) => Promise<PackConsentResult>
     switchConnection: (tenantId: string, target: ConnectionTarget) => Promise<ConnectionSwitchResponse>

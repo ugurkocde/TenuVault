@@ -1,5 +1,5 @@
 import { resourcePackScopes, tenantPermissionPacks } from "../src/shared/services/permission-packs"
-import { TENUVAULT_CLIENT_ID } from "../src/shared/tenant-connection"
+import { GRAPH_CLI_CLIENT_ID, GRAPH_CLI_NEXT_STEP, TENUVAULT_CLIENT_ID } from "../src/shared/tenant-connection"
 import { LogLevel, type Configuration } from "@azure/msal-node"
 import { describe, expect, it, vi } from "vitest"
 
@@ -35,10 +35,11 @@ const CLIENT = "33333333-3333-3333-3333-333333333333"
 
 const openBrowser = vi.fn(async () => undefined)
 
-function manager(fetchToken: typeof fetch = async () => new Response("{}")) {
+function manager(fetchToken: typeof fetch = async () => new Response("{}"), graphCliEnabled?: (fresh: boolean) => Promise<boolean>) {
   const store = new Map()
   return new AuthManager({
     fetch: fetchToken,
+    graphCliEnabled,
     cachePlugin: () => ({ beforeCacheAccess: async () => undefined, afterCacheAccess: async () => undefined }),
     openBrowser,
     accountStore: {
@@ -447,4 +448,60 @@ it("logs only fixed codes from the delegated MSAL logger", async () => {
   } finally {
     log.mockRestore()
   }
+})
+
+describe("Start now loopback sign-in", () => {
+  const cache = { beforeCacheAccess: async () => undefined, afterCacheAccess: async () => undefined }
+  const account = { tenantId: TENANT, username: "private-admin@example.test", homeAccountId: "account" }
+  const token = (claims: object) => `x.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.x`
+
+  it("uses the fixed public client, tenant authority and existing grants, even with write scopes", async () => {
+    const enabled = vi.fn(async () => true)
+    const auth = manager(undefined, enabled)
+    const scp = "DeviceManagementConfiguration.ReadWrite.All User.Read"
+    msal.interactive.mockReset().mockResolvedValue({ account, idToken: "fixture", accessToken: token({ tid: TENANT, azp: GRAPH_CLI_CLIENT_ID, scp }) })
+    await expect(auth.stageGraphCliSignIn(TENANT, cache)).resolves.toMatchObject({
+      account: { tenantId: TENANT, clientId: GRAPH_CLI_CLIENT_ID }, graphScopes: scp.split(" "),
+    })
+    expect(msal.client?.auth.clientId).toBe(GRAPH_CLI_CLIENT_ID)
+    expect(msal.interactive).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      authority: `https://login.microsoftonline.com/${TENANT}`, scopes: ["https://graph.microsoft.com/.default"], prompt: "select_account",
+    }))
+    expect(auth.accounts()).toEqual([])
+    expect(enabled.mock.calls).toEqual([[true], [true]])
+  })
+
+  it("keeps an opaque grant unknown and ignores MSAL's request-derived scope field", async () => {
+    msal.interactive.mockReset().mockResolvedValue({ account, accessToken: "opaque", scopes: ["DeviceManagementConfiguration.Read.All"] })
+    const staged = await manager(undefined, async () => true).stageGraphCliSignIn(TENANT, cache)
+    expect(staged.graphScopes).toBeUndefined()
+    expect(staged.grantedScopes).toBeUndefined()
+  })
+
+  it("rejects readable tokens with no relevant scopes and tokens issued to another app", async () => {
+    const auth = manager(undefined, async () => true)
+    msal.interactive.mockReset()
+      .mockResolvedValueOnce({ account, accessToken: token({ tid: TENANT, appid: GRAPH_CLI_CLIENT_ID, scp: "User.Read Mail.Read" }) })
+      .mockResolvedValueOnce({ account, accessToken: token({ tid: TENANT, appid: CLIENT, scp: "DeviceManagementConfiguration.Read.All" }) })
+    await expect(auth.stageGraphCliSignIn(TENANT, cache)).rejects.toMatchObject({ code: "unavailable" })
+    await expect(auth.stageGraphCliSignIn(TENANT, cache)).rejects.toMatchObject({ code: "wrong_client" })
+    expect(auth.accounts()).toEqual([])
+  })
+
+  it("does not open the browser when disabled and discards a sign-in disabled while it was waiting", async () => {
+    msal.interactive.mockReset()
+    await expect(manager().stageGraphCliSignIn(TENANT, cache)).rejects.toMatchObject({ code: "unavailable" })
+    expect(msal.interactive).not.toHaveBeenCalled()
+    const enabled = vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false)
+    msal.interactive.mockResolvedValueOnce({ account, accessToken: "opaque" })
+    await expect(manager(undefined, enabled).stageGraphCliSignIn(TENANT, cache)).rejects.toMatchObject({ code: "unavailable" })
+  })
+
+  it.each([65001, 65004, 90094, 90095, 50105, 53000, 53001, 53003, 50076, 50079, 700016, 500011,
+    7000218, 50020, 90072, 7000112, 7000229])("offers another method for AADSTS%s and strips the provider text", async number => {
+    msal.interactive.mockReset().mockRejectedValue(new Error(`AADSTS${number}: private-admin@example.test`))
+    const result = await manager(undefined, async () => true).stageGraphCliSignIn(TENANT, cache).catch(error => error)
+    expect(result).toMatchObject({ code: `AADSTS${number}`, message: expect.stringContaining(GRAPH_CLI_NEXT_STEP) })
+    expect(result.message).not.toMatch(/private-admin|grant admin consent|approve (the|this)/i)
+  })
 })

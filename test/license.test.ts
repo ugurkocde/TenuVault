@@ -1235,6 +1235,29 @@ describe("LicenseService organization licenses", () => {
     expect(calls.at(-1)!.body.shareWithTenant).toBe(true)
   })
 
+  it.each([false, true])("uses public Graph CLI proof for organization activation only when the key holder allows it (%s)", async allowed => {
+    answer = ({ action, body }) => {
+      if (action === "health") return Response.json({ organizationLicenses: { clientIdSets: true }, connectMethods: { graphCli: true } })
+      expect(body).toMatchObject({ action: "activate", publicClientProof: "id.token.value" })
+      expect(body).not.toHaveProperty("idToken")
+      expect(body).not.toHaveProperty("allowGraphCli")
+      return allowed ? granted("act-org", { source: "tenant" }) : denied("tenant_not_licensed")
+    }
+    const license = service({ clientId: () => GRAPH_CLI_CLIENT_ID })
+    await expect(license.requireEntitlement(TENANT)).resolves.toBe(allowed ? "pro" : "community")
+    expect(license.status([TENANT]).tenants[0]?.source).toBe(allowed ? "tenant" : null)
+  })
+
+  it("does not pass the Graph CLI proof to legacy organization activation", async () => {
+    answer = ({ action }) => {
+      expect(action).toBe("health")
+      return Response.json({ connectMethods: { graphCli: true } })
+    }
+    const license = service({ clientId: () => GRAPH_CLI_CLIENT_ID })
+    await expect(license.requireEntitlement(TENANT)).resolves.toBe("community")
+    expect(calls.map(call => call.action)).toEqual(["health"])
+  })
+
   it("sends the tenant's client ID set and requires explicit key-holder authorization for Start now", async () => {
     answer = ({ action, body }) => {
       if (action === "health") return Response.json({ organizationLicenses: { clientIdSets: true } })
@@ -1248,10 +1271,12 @@ describe("LicenseService organization licenses", () => {
     expect(calls.at(-1)?.body).not.toHaveProperty("idToken")
     await license.setShared(TENANT, true, true)
     expect(calls.at(-1)?.body).toMatchObject({ allowGraphCli: true, allowedClientIds: [APP_ID, TENUVAULT_CLIENT_ID, GRAPH_CLI_CLIENT_ID] })
+    expect(license.status([TENANT]).tenants[0]?.graphCliShared).toBe(true)
     await license.refreshAll()
     expect(calls.findLast(call => call.action === "refresh")?.body).not.toHaveProperty("allowGraphCli")
     await license.setShared(TENANT, true, false)
     expect(calls.at(-1)?.body).toMatchObject({ allowGraphCli: false, allowedClientIds: [APP_ID, TENUVAULT_CLIENT_ID] })
+    expect(license.status([TENANT]).tenants[0]?.graphCliShared).toBe(false)
     answer = () => granted("act-key", { shared: true })
     await expect(license.setShared(TENANT, true, true)).rejects.toThrow("did not confirm")
   })

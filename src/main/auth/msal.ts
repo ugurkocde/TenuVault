@@ -17,9 +17,11 @@ import { isGuid, isMicrosoftLoginUrl, normalizeGuid } from "../../shared/securit
 import { fetchNetworkClient, msalTokenGrants, type TokenGrant } from "./network-client"
 import { loopbackSignIn } from "./loopback-sign-in"
 import { deviceCodeSignIn } from "./device-code-sign-in"
-import { TENUVAULT_CLIENT_ID } from "../../shared/tenant-connection"
+import { GRAPH_CLI_CLIENT_ID, GRAPH_CLI_DISABLED, GRAPH_CLI_NEXT_STEP, TENUVAULT_CLIENT_ID } from "../../shared/tenant-connection"
 import { accessTokenClaims, sharedTokenScopes, tokenIdentity } from "./token-identity"
 import { missingPackScopes, resourcePackScopes, resourceScopes, type PermissionPack } from "../../shared/services/permission-packs"
+import { graphCliSignInFailure } from "./graph-cli-failure"
+import { verifyGraphCliGrant } from "./connection-coverage"
 import { consentIssue } from "./pack-consent"
 import type { PackConsentCode } from "../../shared/pack-consent"
 import type { StagedSignIn } from "./tenant-connections"
@@ -35,6 +37,7 @@ export interface AuthHost {
   /** Encrypted per-client MSAL cache persistence. */
   cachePlugin: (clientId: string) => ICachePlugin
   authorizeInteractive?: (tenantId: string) => void
+  graphCliEnabled?: (fresh: boolean) => Promise<boolean>
   sharedScopes?: (tenantId: string, scope: string, freshHealth: boolean) => Promise<string[]>
   authorizeConnection?: (tenantId: string, clientId: string, scope: string) => void
   authorizeSilentToken?: (tenantId: string, clientId: string, scope: string) => Promise<void>
@@ -193,6 +196,8 @@ export function firstSignInError(error: unknown): unknown {
   return error
 }
 
+const GRAPH_CLI_CONSENT_CANCELLED = `Start now sign-in did not complete. ${GRAPH_CLI_NEXT_STEP}`
+
 // The licensing service accepts ID tokens issued within the last 15 minutes. Entra
 // backdates iat by five minutes, so an older cached token is renewed.
 const ID_TOKEN_MAX_AGE_MS = 10 * 60_000
@@ -269,6 +274,7 @@ export class AuthManager {
     /** Called when the browser has answered and the code is being redeemed: the browser step is over. */
     onBrowserDone?: () => void
   }): Promise<SignedInAccount> {
+    if (normalizeGuid(clientId) === GRAPH_CLI_CLIENT_ID) throw new Error("Choose Start now in the sign-in method settings.")
     if (normalizeGuid(clientId) === TENUVAULT_CLIENT_ID) throw new Error("Choose TenuVault app in the sign-in method settings.")
     this.host.authorizeInteractive?.(tenant)
     const result = await this.acquireInteractive(clientId, tenant, RESOURCE_SCOPES.graph, options?.loginHint ? undefined : "select_account", options?.loginHint, true, options?.onBrowserDone).catch((error: unknown) => {
@@ -311,6 +317,43 @@ export class AuthManager {
       account: { tenantId: normalizeGuid(account.tenantId), clientId, username: account.username, name: account.name, homeAccountId: account.homeAccountId },
       accessToken: result.accessToken, grantedScopes: result.grantedScopes,
     }
+  }
+
+  private async requireGraphCli(fresh: boolean): Promise<void> {
+    if (!await this.host.graphCliEnabled?.(fresh)) {
+      throw new ConnectionSwitchError("unavailable", `${GRAPH_CLI_DISABLED} ${GRAPH_CLI_NEXT_STEP}`)
+    }
+  }
+
+  async stageGraphCliSignIn(tenant: string, cache: ICachePlugin): Promise<StagedSignIn> {
+    await this.requireGraphCli(true)
+    const result = await this.acquireGraphCli(tenant, this.createApp(GRAPH_CLI_CLIENT_ID, cache, true))
+    const { account, accessToken, grantedScopes, idToken } = result
+    const graphScopes = verifyGraphCliGrant(accessToken, grantedScopes)
+    await this.requireGraphCli(true)
+    return {
+      account: { tenantId: normalizeGuid(account.tenantId), clientId: GRAPH_CLI_CLIENT_ID, username: account.username, name: account.name, homeAccountId: account.homeAccountId },
+      accessToken, grantedScopes, graphScopes, idToken,
+    }
+  }
+
+  private async acquireGraphCli(tenant: string, staged: PublicClientApplication) {
+    const result = await this.acquireInteractive(GRAPH_CLI_CLIENT_ID, tenant, RESOURCE_SCOPES.graph,
+      "select_account", undefined, true, undefined, staged).catch((error: unknown) => {
+      if (error instanceof SignInCancelledError) throw new ConnectionSwitchError("cancelled", GRAPH_CLI_CONSENT_CANCELLED)
+      if (error instanceof SignInTimeoutError) throw new ConnectionSwitchError("timeout", `${GRAPH_CLI_CONSENT_CANCELLED} ${FIRST_SIGN_IN_TIMEOUT_MESSAGE}`)
+      const refusal = error as SilentRefusal | null
+      throw graphCliSignInFailure(error instanceof Error ? error.message : "", silentRefusalCode(refusal ?? undefined))
+    })
+    const account = result.account
+    if (!account || normalizeGuid(account.tenantId) !== normalizeGuid(tenant)) {
+      throw new ConnectionSwitchError("wrong_tenant", "Sign in with an account from this tenant.")
+    }
+    const identity = tokenIdentity(result.accessToken)
+    if (identity.decoded && (identity.tenantId !== normalizeGuid(tenant) || identity.clientId !== GRAPH_CLI_CLIENT_ID)) {
+      throw new ConnectionSwitchError("wrong_client", "Microsoft returned a token for a different tenant or app.")
+    }
+    return { ...result, account }
   }
 
   /** Keep the account and cache staged until the selected packs are confirmed for this tenant. */
@@ -373,6 +416,10 @@ export class AuthManager {
   }
 
   private async connectionScopes(tenant: string, clientId: string, scope: string, freshHealth = false): Promise<string[]> {
+    if (normalizeGuid(clientId) === GRAPH_CLI_CLIENT_ID) {
+      if (scope !== RESOURCE_SCOPES.graph) throw new Error(GRAPH_CLI_NEXT_STEP)
+      await this.requireGraphCli(freshHealth)
+    }
     if (normalizeGuid(clientId) === TENUVAULT_CLIENT_ID) {
       if (!this.host.sharedScopes) throw new Error("TenuVault app sign-in is unavailable.")
       return this.host.sharedScopes(tenant, scope, freshHealth)
@@ -439,7 +486,7 @@ export class AuthManager {
         const acquisition = { ...result, ...this.tokenGrants.get(app)?.forResult(result) }
         this.host.authorizeIssuedToken?.(tenantId, clientId, scope, acquisition)
         // The request is attributed to the account this token was issued for.
-        captureTokenActor({ username: result.account?.username || account.username || stored.username, name: result.account?.name ?? account.name ?? undefined })
+        if (normalizeGuid(clientId) !== GRAPH_CLI_CLIENT_ID) captureTokenActor({ username: result.account?.username || account.username || stored.username, name: result.account?.name ?? account.name ?? undefined })
         return { ...acquisition, cachedAccount }
       }
     } catch (error) {
@@ -450,7 +497,9 @@ export class AuthManager {
         // MSAL includes the provider's description, which can identify the account.
         const code = silentRefusalCode(error)
         const oauth = oauthSignInCode(error.errorCode) ?? "token_request_failed"
-        const guidance = signInErrorRow(code)?.firstSignIn ?? "Try again."
+        const guidance = normalizeGuid(clientId) === GRAPH_CLI_CLIENT_ID
+          ? graphCliSignInFailure("", code).message
+          : signInErrorRow(code)?.firstSignIn ?? "Try again."
         throw new ServerError(oauth, "", `${resourceName(scope)} token request failed${code ? ` (${code})` : ""}. ${guidance}`, undefined, code?.slice("AADSTS".length), error.status)
       }
       throw error
@@ -528,6 +577,7 @@ export class AuthManager {
   async signInWithDeviceCode(tenant: string, clientId: string, onCode: (code: AppDeviceCode) => void, signal: AbortSignal): Promise<void> {
     this.host.authorizeInteractive?.(tenant)
     this.host.authorizeConnection?.(tenant, clientId, RESOURCE_SCOPES.graph)
+    if (normalizeGuid(clientId) === GRAPH_CLI_CLIENT_ID) throw new Error("Sign in to Start now in the system browser.")
     if (normalizeGuid(clientId) === TENUVAULT_CLIENT_ID) throw new Error("Sign in to the TenuVault app in the system browser.")
     // End this tenant's waiting browser attempts.
     for (const entry of this.interactiveControls.values()) if (normalizeGuid(entry.tenant) === normalizeGuid(tenant)) entry.controller.abort(new SignInCancelledError())

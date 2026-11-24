@@ -20,7 +20,7 @@ export interface FetchBridgeOptions {
    * local backup store, so no path skips licensing.
    */
   authorizeTenant?: (tenant: string) => unknown
-  authorizeRequest?: (url: URL, input: RequestInfo | URL, init: RequestInit | undefined, tenant: string | null) => Promise<void>
+  authorizeRequest?: (url: URL, input: RequestInfo | URL, init: RequestInit | undefined, tenant: string | null) => Promise<void | URL>
   authorizeResource?: (tenant: string, scope: string) => void
   bindOwnClientCredentials?: (tenant: string, clientId: string, scope: string, token: string, expiresIn?: number) => void
   /** Serves Blob requests for local (`tvlocal-...`) storage accounts from the encrypted store. */
@@ -126,7 +126,12 @@ export function createBridgedFetch(options: FetchBridgeOptions): typeof fetch {
         return response
       }
 
-      await options.authorizeRequest?.(url, input, init, currentRouteTenant())
+      const graphCliUrl = await options.authorizeRequest?.(url, input, init, currentRouteTenant())
+      if (graphCliUrl) {
+        // Keep a Start now read inside Graph, including when Graph returns a redirect.
+        const request = new Request(input, { ...init, redirect: "error" })
+        return realFetch(graphCliUrl.href === url.href ? request : new Request(graphCliUrl, request))
+      }
       return realFetch(input, init)
     } catch (error) {
       if (networkAttempted || error instanceof FetchPreconditionError) throw error

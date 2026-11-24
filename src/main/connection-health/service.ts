@@ -1,3 +1,4 @@
+import { graphCliScopes } from "../auth/connection-coverage"
 import { createHash } from "node:crypto"
 import type { RunOutcomes } from "../../shared/backup-outcomes"
 import { evaluateHealth, type HealthEvaluation, type ServiceChoice } from "../../shared/connection-health/evaluate"
@@ -68,7 +69,7 @@ export interface HealthHost {
    * Asks Microsoft for a new token of the signed-in admin, without any window. `fromCache` has to
    * be false for the answer to count: a token from the cache says nothing about now.
    */
-  token: (tenantId: string, clientId: string, resource: "graph" | "storage") => Promise<{ accessToken: string; fromCache?: boolean }>
+  token: (tenantId: string, clientId: string, resource: "graph" | "storage") => Promise<{ accessToken: string; fromCache?: boolean; grantedScopes?: readonly string[] }>
   /** What this device knows about the tenant's Backup Reader; null when it has none. */
   reader: (tenantId: string) => { clientId: string; credential: string; facts: Omit<ReaderObservation, "at"> } | null
   /** Asks Microsoft for a new token of the Backup Reader; null when the reader may not be used now. */
@@ -319,7 +320,10 @@ export class ConnectionHealth {
       } else {
         const token = await answered(this.host.token(tenant, key.clientId, kind === "admin" ? "graph" : "storage"))
         if (token.fromCache !== false) return
-        observation = this.issued(token.accessToken)
+        if (kind === "admin" && this.host.readOnly?.(tenant)) {
+          const scopes = graphCliScopes(token.accessToken, token.grantedScopes)
+          observation = { at: this.now().toISOString(), ...(scopes ? { permissions: [...scopes].sort() } : {}) }
+        } else observation = this.issued(token.accessToken)
       }
     } catch (error) {
       observation = { at: this.now().toISOString(), failure: signInFailure(error) }
