@@ -23,6 +23,7 @@ const read = (file: string) => readFileSync(file, "utf8")
 const desktopScript = read("resources/New-TenuVaultDesktopApp.ps1")
 const readerScript = read("resources/New-TenuVaultBackupReader.ps1")
 const permissionsPage = read("docs-site/src/content/docs/security/permissions.md")
+const coveragePage = read("docs-site/src/content/docs/backups/coverage.md")
 const registrationPage = read("docs-site/src/content/docs/getting-started/app-registration.md")
 const readerPage = read("docs-site/src/content/docs/backups/backup-reader.md")
 
@@ -45,6 +46,19 @@ const named = (cell: string) => /`([^`]+)`/.exec(cell)![1]!
 const optional = (cell: string) => cell.includes("(optional")
 
 describe("Copies written from the manifest", () => {
+  it("lists the Apps area requirements in the setup scripts and explains policy set access in the docs", () => {
+    const area = MODULE_BY_ID.get("intune")!.areas.find((entry) => entry.id === "apps")!
+    const read = "DeviceManagementConfiguration.Read.All"
+    const write = "DeviceManagementConfiguration.ReadWrite.All"
+    const appsRow = (script: string) => script.split("\n").find((line) => line.includes("Service = 'Intune'; Area = 'Apps'"))!
+    expect(appsRow(desktopScript)).toContain(`Backup = @('DeviceManagementApps.Read.All', '${read}'); Restore = @('DeviceManagementApps.ReadWrite.All', '${write}')`)
+    expect(appsRow(readerScript)).toContain(`Roles = @('DeviceManagementApps.Read.All', '${read}')`)
+    expect(areaNeed(area, "backup", "delegated")).toContainEqual([read, write])
+    expect(areaNeed(area, "restore", "delegated")).toContainEqual([write])
+    expect(permissionsPage).toContain(`Policy sets in **Apps and app protection** use \`${read}\` for backup and \`${write}\` for restore.`)
+    expect(coveragePage.split("\n").find((line) => line.startsWith("| Policy sets |"))).toContain(`\`${read}\``)
+  })
+
   it.each(ARTIFACTS.map((artifact) => [`${artifact.file} ${artifact.begin}`, artifact] as const))("%s is the manifest's text", (_name, artifact) => {
     if (process.env.UPDATE_PERMISSION_ARTIFACTS) writeArtifact(artifact)
     expect(currentBody(artifact)).toBe(artifact.body)

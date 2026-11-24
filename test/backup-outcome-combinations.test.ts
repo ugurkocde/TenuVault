@@ -295,6 +295,49 @@ describe("a backup that read nothing", () => {
   })
 })
 
+describe("Intune policy set coverage", () => {
+  it.each(["delegated", "app-only"] as const)("records policy sets as not read when the %s token has only the Apps permission", async (mode) => {
+    const path = "/beta/deviceAppManagement/policySets"
+    const deps = mode === "app-only"
+      ? reader(["DeviceManagementApps.Read.All"], ["PolicySets"])
+      : { getToken: async () => jwt({ scp: "DeviceManagementApps.Read.All" }) }
+    const setup = fixture(tenant(), { services: () => ({ services: INTUNE }), ...deps })
+    const job = await setup.run({ trigger: mode === "app-only" ? "scheduled" : "manual" })
+    expect(setup.requests.some((request) => request.path === path)).toBe(false)
+    expect(job.status).toBe("Completed")
+    const outcome = job.outcomes?.types.find((entry) => entry.folder === "PolicySets")
+    expect(outcome).toMatchObject({ outcome: "skipped", cause: "permission", reason: expect.stringContaining("DeviceManagementConfiguration.Read.All") })
+    const coverage = manifestCoverage(await setup.manifest(job))
+    expect(coverage).toMatchObject({ coverage: "incomplete", notRead: ["PolicySets"], notReadReasons: { PolicySets: expect.stringContaining("DeviceManagementConfiguration.Read.All") } })
+    expect(coverage.emptyTypes).not.toContain("PolicySets")
+  })
+
+  it("records a refused detail read as a coverage gap when token claims are unavailable", async () => {
+    const path = "/beta/deviceAppManagement/policySets"
+    const setup = fixture(tenant({
+      [path]: { value: [{ id: "set", displayName: "Policy set" }] },
+      [`${path}/set?$expand=items,assignments`]: refusal(403, "Forbidden", "Insufficient privileges to complete the operation."),
+    }), { services: () => ({ services: INTUNE }) })
+    const job = await setup.run()
+    expect(job.status).toBe("Completed")
+    expect(job.outcomes?.types.find((entry) => entry.folder === "PolicySets")).toMatchObject({ outcome: "skipped", cause: "permission", status: 403 })
+    const { notReadReasons } = manifestCoverage(await setup.manifest(job))
+    expect(notReadReasons?.PolicySets).toContain("may lack the permission or admin consent")
+    expect(notReadReasons?.PolicySets).not.toContain("Insufficient privileges to complete the operation")
+  })
+
+  it("reads policy sets with the Configuration write permission alone", async () => {
+    const path = "/beta/deviceAppManagement/policySets"
+    const setup = fixture(tenant({
+      [path]: { value: [{ id: "set", displayName: "Policy set" }] },
+      [`${path}/set?$expand=items,assignments`]: { id: "set", displayName: "Policy set", items: [], assignments: [] },
+    }), { services: () => ({ services: INTUNE }), getToken: async () => jwt({ scp: "DeviceManagementConfiguration.ReadWrite.All" }) })
+    const job = await setup.run()
+    expect(job.outcomes?.types.find((entry) => entry.folder === "PolicySets")).toMatchObject({ outcome: "saved", saved: 1 })
+    expect(await setup.files(job)).toContain("PolicySets/Policy set.json")
+  })
+})
+
 describe("a run that stops before it finished", () => {
   it("records the outcomes in the manifest it leaves behind, with every unfinished type as not read, and hands them over once", async () => {
     const handed: RunOutcomes[] = []

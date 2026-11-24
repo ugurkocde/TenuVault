@@ -145,7 +145,7 @@ Token lifetime restore also requests the read permission [Application.Read.All](
 
 The connection check requests a fresh token without opening a sign-in window. **Permissions present** describes the token, not the admin's role, license or whether the service is onboarded. **Verified by the last backup** names the date and sign-in that read the selected types. After granting permissions, select **Check again**, then run a backup to verify access.
 
-Intune policy sets currently appear under **Apps and app protection** in the permission preview. Microsoft documents `DeviceManagementConfiguration.Read.All` for [listing policy sets](https://learn.microsoft.com/en-us/graph/api/intune-policyset-policyset-list?view=graph-rest-beta) and `DeviceManagementConfiguration.ReadWrite.All` for [updating policy set contents and assignments](https://learn.microsoft.com/en-us/graph/api/intune-policyset-policyset-update?view=graph-rest-beta).
+Policy sets in **Apps and app protection** use `DeviceManagementConfiguration.Read.All` for backup and `DeviceManagementConfiguration.ReadWrite.All` for restore. The write permission also covers backup. The standard Intune setup already requests the appropriate Configuration permission for the selected access level. If an existing registration lacks it, **Services and permissions** shows the gap. [List policy sets](https://learn.microsoft.com/en-us/graph/api/intune-policyset-policyset-list?view=graph-rest-beta), [Update policy set contents and assignments](https://learn.microsoft.com/en-us/graph/api/intune-policyset-policyset-update?view=graph-rest-beta).
 
 For missing permissions, expand **Add the missing permissions**. The four routes name exactly the missing manifest permissions for the selected access level:
 

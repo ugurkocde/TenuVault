@@ -101,7 +101,7 @@ Update rings are device configuration profiles and are backed up with **Device c
 | --- | --- | --- |
 | App categories | No | Built-in categories are skipped |
 | Apps | Yes | App details, assignments, categories, and dependency and supersedence links. Installer files are never downloaded. Left out of **Everything except apps**. |
-| Policy sets | Yes | With the items each set contains |
+| Policy sets | Yes | Includes the policies and apps in each set and the set's assignments. Backups need `DeviceManagementConfiguration.Read.All` or `DeviceManagementConfiguration.ReadWrite.All`. If the permission is missing, Backup Details shows **Not read** and names the missing permission. |
 
 Apps are the slowest type to include in a configuration backup. This backup does not download installer files, so its metadata alone cannot recreate Win32 and line-of-business apps; store, web and Microsoft 365 apps can be recreated. Use [App Backup](/apps/app-backup/) separately to capture and restore supported Win32 installers. See [What cannot be restored](/restore/limitations/).
 

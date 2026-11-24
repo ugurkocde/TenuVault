@@ -3,7 +3,7 @@ import {
   areaPermissions, checkedChoice, DEFAULT_READER_CHOICE, DEFAULT_SETUP_CHOICE, graphPermissions, knownPermissions, missingForChoice, READER_ALLOWED_ROLES, readerChoice,
   readerExcludedFolders, readerRequiredRoles, readerRoles, readerScriptArguments, readerSetupArguments, requestedPermissions, setupScriptArguments, showsApproval, type PermissionChoice,
 } from "../src/shared/services/manifest"
-import { areaNeed, backupNeed, canBackUp, checkModules, DEFAULT_SELECTION, MODULES, MODULE_BY_ID, restorePermissionBlocker, type AccessLevel, type GrantedPermissions, type ModuleId } from "../src/shared/services/modules"
+import { areaNeed, backupNeed, canBackUp, checkModules, DEFAULT_SELECTION, MODULES, MODULE_BY_ID, moduleForFolder, restorePermissionBlocker, type AccessLevel, type GrantedPermissions, type ModuleId } from "../src/shared/services/modules"
 import { OPTIONAL_PERMISSIONS } from "../src/shared/services/optional-permissions"
 
 const delegated = (...scopes: string[]): GrantedPermissions => ({ kind: "delegated", permissions: new Set(scopes) })
@@ -56,6 +56,18 @@ describe("What a setup asks for by default", () => {
 })
 
 describe("What a choice of services, areas and access levels asks for", () => {
+  it("keeps policy sets in Apps and uses the Configuration permission for each access tier", () => {
+    const { area, part } = moduleForFolder("PolicySets")!
+    const read = "DeviceManagementConfiguration.Read.All"
+    const write = "DeviceManagementConfiguration.ReadWrite.All"
+    expect(area.id).toBe("apps")
+    expect(backupNeed("PolicySets", "delegated")).toEqual([[read, write]])
+    expect(backupNeed("PolicySets", "application")).toEqual([[read]])
+    expect(part.restore.delegated).toEqual([[write]])
+    expect(canBackUp("PolicySets", delegated("DeviceManagementApps.ReadWrite.All"))).toBe(false)
+    expect(canBackUp("PolicySets", delegated(write))).toBe(true)
+  })
+
   it("never asks for a write permission to back up, whatever is chosen", () => {
     for (const choice of choices().filter((candidate) => Object.values(candidate).every((picked) => picked.access === "backup"))) {
       for (const mode of ["delegated", "application"] as const) expect(graphPermissions(choice, mode).filter((permission) => WRITE.test(permission)), JSON.stringify(choice)).toEqual([])

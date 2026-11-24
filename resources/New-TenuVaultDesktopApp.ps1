@@ -141,7 +141,7 @@ $permissionTable = @(
     @{ Service = 'ConditionalAccess'; Area = 'AuthenticationStrengths'; OptIn = $false; Backup = @('Policy.Read.All'); Restore = @('Policy.ReadWrite.ConditionalAccess') }
     @{ Service = 'ConditionalAccess'; Area = 'Policies'; OptIn = $false; Backup = @('Policy.Read.All'); Restore = @('Policy.Read.All', 'Policy.ReadWrite.ConditionalAccess') }
     @{ Service = 'Intune'; Area = 'Configuration'; OptIn = $false; Backup = @('DeviceManagementConfiguration.Read.All'); Restore = @('DeviceManagementConfiguration.ReadWrite.All') }
-    @{ Service = 'Intune'; Area = 'Apps'; OptIn = $false; Backup = @('DeviceManagementApps.Read.All'); Restore = @('DeviceManagementApps.ReadWrite.All') }
+    @{ Service = 'Intune'; Area = 'Apps'; OptIn = $false; Backup = @('DeviceManagementApps.Read.All', 'DeviceManagementConfiguration.Read.All'); Restore = @('DeviceManagementApps.ReadWrite.All', 'DeviceManagementConfiguration.ReadWrite.All') }
     @{ Service = 'Intune'; Area = 'Enrollment'; OptIn = $false; Backup = @('DeviceManagementServiceConfig.Read.All'); Restore = @('DeviceManagementServiceConfig.ReadWrite.All') }
     @{ Service = 'Intune'; Area = 'Scripts'; OptIn = $false; Backup = @('DeviceManagementScripts.Read.All'); Restore = @('DeviceManagementScripts.ReadWrite.All') }
     @{ Service = 'Intune'; Area = 'Roles'; OptIn = $false; Backup = @('DeviceManagementRBAC.Read.All'); Restore = @('DeviceManagementRBAC.ReadWrite.All') }

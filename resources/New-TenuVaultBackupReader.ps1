@@ -133,7 +133,7 @@ $permissionTable = @(
     @{ Service = 'ConditionalAccess'; Area = 'AuthenticationStrengths'; OptIn = $false; Roles = @('Policy.Read.All') }
     @{ Service = 'ConditionalAccess'; Area = 'Policies'; OptIn = $false; Roles = @('Policy.Read.All') }
     @{ Service = 'Intune'; Area = 'Configuration'; OptIn = $false; Roles = @('DeviceManagementConfiguration.Read.All') }
-    @{ Service = 'Intune'; Area = 'Apps'; OptIn = $false; Roles = @('DeviceManagementApps.Read.All') }
+    @{ Service = 'Intune'; Area = 'Apps'; OptIn = $false; Roles = @('DeviceManagementApps.Read.All', 'DeviceManagementConfiguration.Read.All') }
     @{ Service = 'Intune'; Area = 'Enrollment'; OptIn = $false; Roles = @('DeviceManagementServiceConfig.Read.All') }
     @{ Service = 'Intune'; Area = 'Scripts'; OptIn = $false; Roles = @('DeviceManagementScripts.Read.All') }
     @{ Service = 'Intune'; Area = 'Roles'; OptIn = $false; Roles = @('DeviceManagementRBAC.Read.All') }

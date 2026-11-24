@@ -14,7 +14,7 @@ import { resolveBackupOwnership, type OwnershipFile } from "../../shared/backup-
 import { BlobWriter } from "./blob-writer"
 import { GraphSession, type GraphItem, type ReadControl } from "./graph-session"
 import { ReadBudgetError, typeReadBudget, withReadBudget } from "./read-budget"
-import { GRAPH, BlobClaimError, ImmutableBlobError, GraphError, GraphUnansweredError, InventoryDamagedError, ProtectedBlobError, RequestTimeoutError, StorageError, LargeStorageError, TokenError, isUnreachable, withAbort } from "./request"
+import { GRAPH, BlobClaimError, ImmutableBlobError, GraphError, GraphUnansweredError, InventoryDamagedError, ProtectedBlobError, RequestTimeoutError, StorageError, LargeStorageError, TokenError, isUnreachable, withAbort, withRequestTimeout } from "./request"
 import { RetryDelayError } from "../graph-retry"
 import { isLocalAccount } from "../storage/blob-emulator"
 import { FetchApplicationError } from "../api/network-error"
@@ -23,7 +23,7 @@ import { readEntries, ScopeDiscoveryError, OrganizationResolutionError, organiza
 import { comparableSnapshot } from "../../shared/intune/compare"
 import type { BackupItems } from "../../shared/intune/backup-changes"
 import { EVERYTHING, includedTypes, normalizeScope, restorableFolders, type BackupScope } from "../../shared/intune/scope"
-import { canBackUp, DEFAULT_SELECTION, describeRequirement, disabledFolders, MODULES, moduleForFolder, SERVICES_PAGE, signedInOnly, type ServiceSelection, type SignInMode } from "../../shared/services/modules"
+import { canBackUp, DEFAULT_SELECTION, describeRequirement, disabledFolders, MODULES, moduleForFolder, SERVICES_PAGE, signedInOnly, type Requirement, type ServiceSelection, type SignInMode } from "../../shared/services/modules"
 import { grantedPermissions } from "../../shared/services/token"
 import { MAX_ITEM_ERRORS, type BackupNotice, type BackupResults, type BackupTypeResult } from "../../shared/backup-results"
 import { classifyAnswer, coverageOf, manifestOutcomes, nothingRead, nothingReadReason, signInRefused, skipReason, type Coverage, type RunOutcomes, type SkipCause, type TypeOutcome } from "../../shared/backup-outcomes"
@@ -554,17 +554,20 @@ export class BackupEngine {
     const readerExcluded = new Set(tokens.excludedTypes ? await tokenOrStop(tokens.excludedTypes, outcome) : [])
     const selection = this.deps.services?.(request.tenantId) ?? DEFAULT_SELECTION
     const moduleOff = new Set(disabledFolders(selection))
-    const notReadable = includedTypes(scope).filter((type) => readerExcluded.has(type.folder) && !moduleOff.has(type.folder)).map((type) => type.folder)
-    // A service with a token pre-check that is on but whose read permission the token lacks is left out up front with
-    // the missing permission named, instead of failing on a refused read. Intune keeps its long-standing per-type handling.
-    const granted = await moduleGrants(tokens, includedTypes(scope).some((type) => !moduleOff.has(type.folder) && moduleForFolder(type.folder)?.module.precheck))
+    const selectedTypes = includedTypes(scope).filter((type) => !moduleOff.has(type.folder))
+    const notReadable = selectedTypes.filter((type) => readerExcluded.has(type.folder)).map((type) => type.folder)
+    const permissionChecked = (folder: string) => {
+      const entry = moduleForFolder(folder)
+      return entry?.module.precheck || entry?.part.backupPrecheck
+    }
+    const granted = await moduleGrants(tokens, selectedTypes.some((type) => permissionChecked(type.folder)), network.signal)
     if (granted) observeToken(granted)
     const signIn: SignInMode = tokens.mode === "app-only" ? "application" : "delegated"
     // A type only a signed-in admin can read is left out of a Backup Reader run whatever its token says: no permission changes that.
     const adminOnly = (type: IntuneType) => tokens.mode === "app-only" && signedInOnly(type.folder)
     const applicationOnly = (type: IntuneType) => signIn === "delegated" && type.backupMode === "application"
-    const unpermitted = includedTypes(scope).filter((type) => !moduleOff.has(type.folder) && !readerExcluded.has(type.folder) && (adminOnly(type) || applicationOnly(type) || (moduleForFolder(type.folder)?.module.precheck && granted && !canBackUp(type.folder, granted))))
-    const types = includedTypes(scope).filter((type) => !readerExcluded.has(type.folder) && !moduleOff.has(type.folder) && !unpermitted.includes(type))
+    const unpermitted = selectedTypes.filter((type) => !readerExcluded.has(type.folder) && (adminOnly(type) || applicationOnly(type) || (permissionChecked(type.folder) && granted && !canBackUp(type.folder, granted))))
+    const types = selectedTypes.filter((type) => !readerExcluded.has(type.folder) && !unpermitted.includes(type))
     const largeTypes = types.filter(type => type.volume === "large")
     const mixed = largeTypes.length > 0 && types.some(type => type.volume !== "large")
     const ordinaryFolder = backupFolder
@@ -577,8 +580,7 @@ export class BackupEngine {
     if (streaming) this.write(job, `Backup folder: ${backupFolder}`)
     // Results list every type this run covers or leaves out for a permission, in registry order.
     const results: BackupResults = {
-      types: includedTypes(scope)
-        .filter((type) => !moduleOff.has(type.folder))
+      types: selectedTypes
         .map((type): BackupTypeResult => ({ folder: type.folder, label: type.label, area: type.area, ...(type.inventory ? { inventory: true } : {}), state: "reading", saved: 0, failed: 0 })),
       notices: [],
     }
@@ -618,13 +620,15 @@ export class BackupEngine {
       }
     }
     stopped.outcomes = (status) => outcomesNow(status, this.now(), true)
+    const missingReadPermission = (needed: Requirement, service: string) =>
+      `The ${tokens.mode === "app-only" ? "Backup Reader" : "TenuVault app registration"} has no ${describeRequirement(needed, granted?.permissions)} permission for ${service}. ${SERVICES_PAGE} in Settings shows how to add it.`
     for (const type of unpermitted) {
       const entry = moduleForFolder(type.folder)!
       const needed = entry.part.backup[granted?.kind ?? signIn]
       const reason = applicationOnly(type) ? skipReason("appOnly", { service: entry.module.label, mode: tokens.mode, settingsPage: SERVICES_PAGE }) : needed === "unsupported"
         // No permission lets this sign-in read the type, so there is nothing to add.
         ? skipReason("signedIn", { service: entry.module.label, mode: tokens.mode, settingsPage: SERVICES_PAGE })
-        : `The ${tokens.mode === "app-only" ? "Backup Reader" : "TenuVault app registration"} has no ${describeRequirement(needed, granted?.permissions)} permission for ${entry.module.label}. ${SERVICES_PAGE} in Settings shows how to add it.`
+        : missingReadPermission(needed, entry.module.label)
       Object.assign(result(type.folder), { state: "skipped", reason })
       settle(type.folder, { outcome: "skipped", cause: applicationOnly(type) ? "appOnly" : needed === "unsupported" ? "signedIn" : "permission", reason })
       this.write(job, `Leaving out ${type.label}: ${reason.charAt(0).toLowerCase()}${reason.slice(1)}`)
@@ -641,7 +645,11 @@ export class BackupEngine {
     }
     for (const folder of notReadable) {
       const cause: SkipCause = signedInOnly(folder) ? "signedIn" : "permission"
-      const reason = cause === "signedIn" ? skipReason("signedIn", { service: "", mode: tokens.mode, settingsPage: SERVICES_PAGE }) : "The Backup Reader has no permission for this type. Manual backups include it."
+      const checked = moduleForFolder(folder)
+      const needed = checked?.part.backup.application
+      const reason = cause === "signedIn" ? skipReason("signedIn", { service: "", mode: tokens.mode, settingsPage: SERVICES_PAGE })
+        : checked?.part.backupPrecheck && needed && needed !== "unsupported" ? missingReadPermission(needed, checked.module.label)
+          : "The Backup Reader has no permission for this type. Manual backups include it."
       Object.assign(result(folder), { state: "skipped", reason })
       settle(folder, { outcome: "skipped", cause, reason, reader: true })
     }
@@ -698,6 +706,9 @@ export class BackupEngine {
      */
     const notSetUp = (type: IntuneType, error: unknown) =>
       error instanceof GraphError && !!type.notConfigured && classifyAnswer({ status: error.status, ...error.answer }, { notConfigured: type.notConfigured, mode: tokens.mode }).outcome === "notConfigured"
+    // Graph still enforces access when the token claims are unavailable or the account's role is narrower.
+    const checkedReadDenied = (type: IntuneType, error: unknown) =>
+      error instanceof GraphError && error.status === 403 && moduleForFolder(type.folder)?.part.backupPrecheck === true
     /**
      * Ends a type of a service that isolates its failures, by what the failed read means: the sign-in
      * may not read it, or it could not be read. The backup goes on with the other types. A read that
@@ -720,7 +731,7 @@ export class BackupEngine {
         return
       }
       if (verdict.outcome === "skipped") {
-        const reason = skipReason(verdict.cause, { service: module?.label ?? "this service", roles: module?.roles, mode: tokens.mode, settingsPage: SERVICES_PAGE }, answer?.message)
+        const reason = skipReason(verdict.cause, { service: module?.label ?? "this service", roles: module?.roles, mode: tokens.mode, settingsPage: SERVICES_PAGE }, checkedReadDenied(type, error) ? undefined : answer?.message)
         skippedTypes.push(type.folder)
         Object.assign(entry, { state: "skipped", reason })
         settle(type.folder, { outcome: "skipped", cause: verdict.cause, reason, ...evidence })
@@ -784,7 +795,7 @@ export class BackupEngine {
           return
         }
         // A sign-in that failed fails every read of the run, and a run that was stopped is over: both still end the backup.
-        if (service.isolated && !signInEnded(error) && !network.signal.aborted) {
+        if ((service.isolated || checkedReadDenied(type, error)) && !signInEnded(error) && !network.signal.aborted) {
           endType(type, error, !resolverFailed)
           return
         }
@@ -975,7 +986,7 @@ export class BackupEngine {
         }
       } catch (caught) {
         const error = caught instanceof OrganizationResolutionError || caught instanceof ScopeDiscoveryError ? caught.cause : caught
-        if (service.isolated && !signInEnded(error) && !network.signal.aborted) {
+        if ((service.isolated || checkedReadDenied(type, error)) && !signInEnded(error) && !network.signal.aborted) {
           // A refusal, a pause longer than the bound or a request without an answer holds for every object of the type: the type ends, the backup goes on.
           const refused = error instanceof GraphError && classifyAnswer({ status: error.status, ...error.answer }, { mode: tokens.mode }).outcome === "skipped"
           if (refused || error instanceof ReadBudgetError || error instanceof RetryDelayError || error instanceof GraphUnansweredError || endedTypes.has(type.folder)) {
@@ -1622,12 +1633,13 @@ export function indexedFolders(metadata: Record<string, unknown>, folders: Itera
   return new Set([...folders].filter(folder => typeForFolder(folder)?.volume === "large" ? large[folder]?.complete === true : large[folder] === undefined || large[folder]!.complete === true))
 }
 
-/** The permissions in the run's Graph token, read only when a service with a token pre-check needs checking. */
-async function moduleGrants(tokens: RunTokens, needed: boolean) {
+/** The permissions in the run's Graph token, read only when a selected type needs checking. */
+async function moduleGrants(tokens: RunTokens, needed: boolean, signal: AbortSignal) {
   if (!needed) return undefined
   try {
-    return grantedPermissions(await tokens.graph())
+    return grantedPermissions(await withRequestTimeout(() => tokens.graph(), signal))
   } catch {
+    signal.throwIfAborted()
     // A token that cannot be acquired fails the run on the first read with the usual sign-in handling.
     return undefined
   }

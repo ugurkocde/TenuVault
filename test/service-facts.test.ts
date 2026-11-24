@@ -172,12 +172,12 @@ describe("The backup engine reads precheck", () => {
   const intuneRead = (paths: string[]) => paths.some((path) => path.startsWith("/beta/deviceManagement/") || path.startsWith("/beta/deviceAppManagement/"))
   const conditionalAccessRead = (paths: string[]) => paths.some((path) => path.startsWith("/beta/identity/conditionalAccess/"))
 
-  it("reads Intune without looking at the token, and leaves Conditional Access out up front when its permission is missing", async () => {
+  it("reads the other Intune types and leaves out policy sets and Conditional Access when their permissions are missing", async () => {
     const { metadata, graphPaths, reason } = await backup({ scopes: "User.Read" })
     expect(intuneRead(graphPaths)).toBe(true)
     expect(metadata.Scope.Included).toContain("DeviceConfigurations")
     expect(conditionalAccessRead(graphPaths)).toBe(false)
-    expect(metadata.SkippedTypes).toEqual(["NamedLocations", "AuthenticationStrengths", "ConditionalAccessPolicies"])
+    expect(metadata.SkippedTypes).toEqual(["PolicySets", "NamedLocations", "AuthenticationStrengths", "ConditionalAccessPolicies"])
     expect(reason("ConditionalAccessPolicies")).toBe("The TenuVault app registration has no Policy.Read.All permission for Entra Conditional Access. Services and permissions in Settings shows how to add it.")
   })
 
@@ -197,7 +197,7 @@ describe("The backup engine reads precheck", () => {
     const { metadata, graphPaths } = await backup({ scopes: "User.Read" })
     expect(intuneRead(graphPaths)).toBe(true)
     expect(conditionalAccessRead(graphPaths)).toBe(false)
-    expect(metadata.SkippedTypes).toEqual(["NamedLocations", "AuthenticationStrengths", "ConditionalAccessPolicies"])
+    expect(metadata.SkippedTypes).toEqual(["PolicySets", "NamedLocations", "AuthenticationStrengths", "ConditionalAccessPolicies"])
   })
 
   it("words a refused read by the same fact: the Intune role, or the roles of a pre-checked service", async () => {

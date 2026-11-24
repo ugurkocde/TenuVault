@@ -45,9 +45,8 @@ export interface ServiceModule {
   defaultOn: boolean
   /**
    * The permissions in the token are checked before a folder of the service is read or written, so a
-   * missing permission is named up front. Off for Intune: its backups and restores keep relying on
-   * Microsoft Graph to refuse a request, so a folder mapped to the wrong permission here can never
-   * block a restore that works.
+   * missing permission is named up front. Intune has no service-wide pre-check. Individual parts
+   * can opt into a backup check, and Intune restores rely on Microsoft Graph to refuse a write.
    */
   precheck: boolean
   /**
@@ -86,7 +85,7 @@ export interface ServiceModule {
  * Folders of Intune that one permission family covers: Read.All or ReadWrite.All backs them up,
  * ReadWrite.All restores them, and the Backup Reader gets Read.All.
  */
-const intune = (family: string, folders: readonly string[], options: Pick<FolderPermissions, "restoreNotRequested"> = {}) =>
+const intune = (family: string, folders: readonly string[], options: Pick<FolderPermissions, "backupPrecheck" | "restoreNotRequested"> = {}) =>
   part(folders, [[`${family}.Read.All`, `${family}.ReadWrite.All`]], [[`${family}.Read.All`]], [[`${family}.ReadWrite.All`]], options)
 
 export const MODULES: readonly ServiceModule[] = [
@@ -112,7 +111,8 @@ export const MODULES: readonly ServiceModule[] = [
         ]),
       ]),
       area({ id: "apps", label: "Apps and app protection" }, [
-        intune("DeviceManagementApps", ["AppCategories", "Apps", "AppConfigurationPolicies", "ManagedAppConfigurations", "AppProtectionIOS", "AppProtectionAndroid", "AppProtectionWindows", "PolicySets"]),
+        intune("DeviceManagementApps", ["AppCategories", "Apps", "AppConfigurationPolicies", "ManagedAppConfigurations", "AppProtectionIOS", "AppProtectionAndroid", "AppProtectionWindows"]),
+        intune("DeviceManagementConfiguration", ["PolicySets"], { backupPrecheck: true }),
       ]),
       area({ id: "enrollment", label: "Enrollment and branding" }, [
         intune("DeviceManagementServiceConfig", ["EnrollmentConfigurations", "AutopilotProfiles", "AutopilotDevices", "AppleEnrollmentProfiles", "AppleAutomatedEnrollment", "AndroidEnrollmentProfiles", "TermsAndConditions", "Branding"]),
