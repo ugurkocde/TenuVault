@@ -4,16 +4,18 @@ const { runInNewContext } = require("node:vm")
 
 const labMarkers = /__TV_LAB_|TENUVAULT_LAB_|com\.tenuvault\.desktop\.lab|TenuVault Lab|Lab build/
 const labFixture = /TV06-TEST-[a-z0-9-]+-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i
+const labVersion = /\b\d+\.\d+\.\d+-lab\b/i
 const sourceFile = /\.(?:[cm]?js|json|html|map|css)$/
 
-function checkReleaseBundle(root) {
+function checkReleaseBundle(root, version = require("../package.json").version) {
+  if (labVersion.test(version)) throw new Error("A lab version cannot be used for a release build.")
   const main = readFileSync(join(root, "main/index.js"), "utf8")
   for (const required of ["preload/index.cjs", "renderer/index.html"]) readFileSync(join(root, required))
   for (const entry of readdirSync(root, { recursive: true, withFileTypes: true })) {
     if (!entry.isFile() || !sourceFile.test(entry.name)) continue
     const path = join(entry.parentPath, entry.name)
     const contents = readFileSync(path, "utf8")
-    if (labMarkers.test(contents) || labFixture.test(contents)) throw new Error(`Lab build content found in release bundle: ${path}`)
+    if (labMarkers.test(contents) || labFixture.test(contents) || labVersion.test(contents)) throw new Error(`Lab build content found in release bundle: ${path}`)
   }
   if (process.env.TENUVAULT_RELEASE_BUILD === "1") {
     const { checkLicensePublicKey, ROTATION_LICENSE_PUBLIC_KEYS } = require("./license-public-key.ts")

@@ -1,5 +1,9 @@
 const { readFileSync } = require("node:fs")
 const release = require("./electron-builder.config.cjs")
+const version = JSON.parse(readFileSync("out-lab/main/version.json", "utf8"))
+if (typeof version !== "string" || !/^\d+\.\d+\.\d+-lab\.\d{12}$/.test(version)) {
+  throw new Error("Lab packaging requires a version from the dedicated lab build.")
+}
 
 // Keep lab artifacts unpacked and unsigned. The lab has no publish configuration.
 module.exports = {
@@ -8,7 +12,7 @@ module.exports = {
   productName: "TenuVault Lab",
   directories: { ...release.directories, output: "dist-lab" },
   files: ["out-lab/**/*", "package.json", "resources/tray*.png"],
-  extraMetadata: { main: "out-lab/main/index.js" },
+  extraMetadata: { main: "out-lab/main/index.js", version },
   extraResources: release.extraResources,
   asarUnpack: release.asarUnpack,
   electronFuses: release.electronFuses,

@@ -51,6 +51,8 @@ export default defineConfig(({ command, mode }) => {
   }
   const run = labBuild ? process.env.TENUVAULT_LAB_RUN ?? "local" : ""
   if (labBuild && !/^[A-Za-z0-9-]{1,40}$/.test(run)) throw new Error("The lab run name must contain 1 to 40 letters, digits or hyphens.")
+  // The trial service accepts a prerelease whose numeric version is above its minimum.
+  const labVersion = labBuild ? `0.6.0-lab.${new Date().toISOString().slice(0, 16).replace(/\D/g, "")}` : undefined
   const license = {
     // The canonical host. The apex redirects to it, and CIS content requests refuse redirects so the
     // entitlement bearer never follows one, so the apex would break CIS delivery.
@@ -90,6 +92,12 @@ export default defineConfig(({ command, mode }) => {
 
   return {
     main: {
+      plugins: labVersion ? [{
+        name: "tenuvault-lab-version",
+        generateBundle() {
+          this.emitFile({ type: "asset", fileName: "version.json", source: JSON.stringify(labVersion) })
+        },
+      }] : [],
       resolve: {
         alias: [
           { find: /^next\/server$/, replacement: resolve(desktopRoot, "src/main/api/next-server-shim.ts") },
