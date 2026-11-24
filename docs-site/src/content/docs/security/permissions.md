@@ -7,6 +7,16 @@ This page covers the app registration that you create in your own tenant and the
 
 For the step-by-step setup, see [Create the app registration](/getting-started/app-registration/).
 
+## Start now permissions
+
+Start now uses Microsoft Graph Command Line Tools and requests the Microsoft Graph `.default` scope. TenuVault uses the delegated scopes in the access token to show which Defender, Entra ID and Intune backup types those scopes cover. For an opaque token, an explicit grant in the token response can provide the evidence. Without that evidence coverage is unknown. The scopes requested during sign-in do not establish coverage.
+
+Use another sign-in method if Microsoft asks for consent or approval. Start now permits Graph reads and uses encrypted backups on this device. Microsoft Graph write calls are blocked even when the granted scopes include write access. Azure Storage, Azure Resource Manager, the Defender for Endpoint API and Win32 installer capture require a different sign-in method.
+
+Organization license sharing requires the key holder to allow Start now sign-ins explicitly. The normal tenant trial flow uses the Microsoft ID token for the tenant.
+
+[Microsoft identity platform scope reference](https://learn.microsoft.com/en-us/entra/identity-platform/scopes-oidc#the-default-scope)
+
 ## TenuVault app permission packs
 
 This catalog describes the requests configured in the desktop client. Availability of the shared app depends on tenant validation and the license service. Service restore packs include the read access needed for backup. A read/write scope stands in for its read alternative where the manifest permits it.

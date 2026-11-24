@@ -3,7 +3,17 @@ title: "Sign in to your tenant"
 description: Connect your tenant with one Microsoft sign-in, using your own admin account.
 ---
 
-You connect a tenant by signing in with your own admin account. TenuVault creates the app registration it signs in through in your tenant, and never asks for a password or a client secret.
+You connect a tenant by signing in with your own admin account. The guided setup creates an app registration in your tenant. Microsoft handles your password, and TenuVault uses public-client sign-in.
+
+## Start now
+
+**Start now** is a read-only connection method for tenants connected through the new sign-in wizard, when the license service enables it. It signs in with Microsoft Graph Command Line Tools and uses the Microsoft Graph permissions already available to that sign-in.
+
+1. For an eligible tenant, open **Settings > Sign-in and access**, then select **Use Start now**. Switch to backup storage on this device first if you use Azure storage.
+2. Read the warning before continuing to Microsoft. If Microsoft asks you to approve permissions or request administrator approval, cancel and choose another sign-in method.
+3. Sign in with an account in the same tenant. Open **Services and permissions** to see which backup types the granted scopes cover for Defender, Entra ID and Intune. If TenuVault cannot read the grant, it shows coverage as unknown. Your Microsoft role and service licenses also affect which reads succeed.
+
+The tenant keeps its schedules, settings and backup history when you switch. Start now supports local policy backups. For restore, deployment, Copy to Tenants, remediation, installer capture or Azure storage, select **Upgrade to the TenuVault app** when available, or **Use your own app registration**. See [Start now troubleshooting](/troubleshooting/#start-now-sign-in).
 
 ## TenuVault app sign-in
 

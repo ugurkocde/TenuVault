@@ -76,7 +76,27 @@ If the browser shows `AADSTS50011` (redirect URI mismatch), the app registration
 | `AADSTS65001` or `AADSTS650057` | Check the registration's permissions and consent for the resource named in the error. |
 | `AADSTS70044` | Sign in again. If scheduled desktop backups repeatedly stop when your session ends, review the [Backup Reader](/backups/backup-reader/) option. |
 
-### TenuVault app consent
+### Start now sign-in
+
+If Microsoft asks for consent or administrator approval, cancel in the browser and in TenuVault. In **Settings > Sign-in and access**, select **Upgrade to the TenuVault app** when available, or **Use your own app registration**.
+
+| What you see | What to do |
+| --- | --- |
+| `AADSTS65001`, `AADSTS65004`, `AADSTS90094`, `AADSTS90095` | Microsoft needs a grant or approval, or the consent prompt was declined. Cancel and choose another sign-in method. |
+| `AADSTS50105` | Your account lacks an assignment to Microsoft Graph Command Line Tools. Choose a sign-in method your organization allows. |
+| `AADSTS53000`, `AADSTS53001`, `AADSTS53003` | Conditional Access requires a compliant or joined device, or blocked the sign-in. Ask your Entra administrator which device and sign-in method the policy allows. |
+| `AADSTS50076`, `AADSTS50079` | Complete or set up multifactor authentication for your admin account. Choose another method if Start now remains unavailable. |
+| `AADSTS700016`, `AADSTS500011`, `AADSTS7000112`, `AADSTS7000229` | Microsoft Graph Command Line Tools or its resource is unavailable in this tenant. Choose another sign-in method. |
+| `AADSTS7000218` | Microsoft rejected public-client sign-in. Choose another sign-in method. |
+| `AADSTS50020`, `AADSTS90072` | Use an admin account that belongs to the target tenant, or choose another method. |
+| Graph HTTP 403 | Check **Services and permissions** for the affected backup types. If the scope is present, ask your administrator to check your role. If the scope is missing, choose another sign-in method. |
+| Intune is not licensed | Check whether the tenant has an Intune license. An unavailable service has no verified backup coverage. |
+
+Microsoft can show a refusal on its own page without returning to TenuVault. Cancel the waiting sign-in and select another method. If Start now is disabled by the license service, the other permitted sign-in methods remain available.
+
+[Microsoft Entra sign-in error reference](https://learn.microsoft.com/en-us/entra/identity-platform/reference-error-codes)
+
+## TenuVault app consent
 
 When this connection method is enabled, use **Sign-in and access** to review the pack returned by Microsoft. **Check again** requests a fresh token and checks the pack's scopes. A browser returning to TenuVault after admin consent only confirms that Microsoft returned a response.
 
