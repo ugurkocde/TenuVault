@@ -33,8 +33,9 @@ import { connect } from "node:net"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { chromium, firefox, webkit } from "playwright"
+import { visitAuthorize } from "./authorize.mjs"
 import { startStandInProxy } from "./proxy.mjs"
-import { AUTHORIZE_FORM_HEADER, LOGIN_HOST, startStandIn } from "./stand-in.mjs"
+import { LOGIN_HOST, startStandIn } from "./stand-in.mjs"
 import { cleanup, forgetAppSecret, install, makeCertificates } from "./runner.mjs"
 
 // The app checkout is the current directory: the release workflow runs a harness from another
@@ -211,12 +212,6 @@ async function openBrowser(engine, standIn) {
   const context = await browser.newContext({ ignoreHTTPSErrors: true })
   await context.addCookies([standIn.cookie])
   return { browser, context, page: await context.newPage() }
-}
-
-async function visitAuthorize(page, url) {
-  // Inspect the authorize response as soon as it arrives, before the form posts on load.
-  const response = await page.goto(url.href, { waitUntil: "commit" })
-  assert(response?.ok() && response.headers()[AUTHORIZE_FORM_HEADER] === "1", `the authorize request did not receive a form from the local stand-in (HTTP ${response?.status() ?? "no response"})`)
 }
 
 async function signInWith(engine, standIn) {
