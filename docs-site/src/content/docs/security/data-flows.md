@@ -25,7 +25,7 @@ All connections use HTTPS on TCP port 443. TenuVault opens no inbound ports. Dur
 | `api.github.com`, `raw.githubusercontent.com` | OpenIntuneBaseline content for the OpenIntuneBaseline section and My baselines | No |
 | A webhook URL you configure (optional) | Health review notifications | Counts, severities, finding keys and timestamps only |
 
-TenuVault contains no analytics or crash reporting. Apart from the destinations above, it sends nothing. Feedback goes to tenuvault.com only when you click **Send feedback**. Setup diagnostics are sent only when a new install chooses **Share setup diagnostics**, and only for 30 days after that.
+TenuVault contains no analytics or crash reporting. Apart from the destinations above, it sends nothing. Feedback goes to tenuvault.com only when you click **Send feedback**. Setup diagnostics are sent only when a new install chooses **Share** after the first backup or enables sharing in Settings, and only for 30 days after that.
 
 ## Microsoft
 
@@ -156,11 +156,10 @@ A new install asks once, on the welcome screen, whether it may tell TenuVault wh
 **When it is asked**
 
 * Only on a new install: the first launch of a version with setup diagnostics, with no saved TenuVault data on the device. Installs that existed before are never asked and send nothing.
-* On the welcome screen, below **Connect your tenant**, with two equal buttons: **Share setup diagnostics** and **Don't share**. Nothing is preselected and the setup works without an answer.
-* If you have not answered, the app may ask next to a setup error, at most once each time the app runs, and never again after you answer. This covers the setup sign-in, the app registration, an app registration without the admin consent TenuVault needs, and the first sign-in to your tenant, not a sign-in you cancelled. **Share** there sends that error and the steps after it, nothing from before.
-* **Don't share** is final: you are not asked again. You can still turn it on, or off, in **Settings** > **About** > **Share setup diagnostics**.
+* After the first backup, choose **Share** or **No thanks**. Both options leave the dashboard available.
+* **No thanks** dismisses the question. You can still turn sharing on or off in **Settings** > **About** > **Share setup diagnostics**.
 
-**Nothing before you agree.** Until you choose **Share setup diagnostics**, TenuVault stores only whether you answered. It stores no date and no ID, keeps no queue of events and sends nothing. While you have not answered, the last setup error is held in memory only, so the reminder next to it can offer to send it; it is never written to disk and is dropped when you answer or quit. The 30 days start when you agree.
+**Nothing before you agree.** Until you enable sharing, TenuVault stores only whether you answered. It stores no date or ID, keeps no queue of events and sends nothing. The 30 days start when you agree.
 
 **Sent to** `POST https://www.tenuvault.com/api/desktop-events`, in batches of up to 50 events, a few seconds after a step and at start. Every request carries:
 

@@ -261,7 +261,9 @@ plan records events; Community sees a locked preview on the Audit Log page.
 
 - **Tenant sign-in.** After a downgrade to 0.5.x, a tenant connected through the new wizard
   uses its own app registration if it has one. Signing in again in 0.5.x may require a fresh
-  sign-in when you return to 0.6.
+  sign-in when you return to 0.6. New Start now, TenuVault app and in-app registration
+  setups use the tenant from Microsoft sign-in by default. Use the tenant ID or domain
+  option for a guest tenant. Existing app registrations still require their IDs.
 
   Before downgrading to 0.5.x, switch to your own app registration in 0.6 if the tenant has
   only used Start now or the TenuVault app. If you already downgraded, return to 0.6 to

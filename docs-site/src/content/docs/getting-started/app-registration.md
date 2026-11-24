@@ -64,7 +64,7 @@ If your tenant does not list Azure Service Management or Azure Storage among its
 
 ### If something goes wrong
 
-* If your account cannot approve the setup, Microsoft says so in the browser, for example **Need admin approval**, and nothing comes back to TenuVault. Select **Cancel** on the Connect step and use one of the **Other ways to connect**: **Someone else is the admin? Copy instructions** for your Entra administrator, or **I already have an app registration**. If you decline Microsoft's request instead, TenuVault says that you declined it and offers **Try again** or **Someone else is the admin? Copy instructions**. If Microsoft refuses your approval, TenuVault names the roles that can give it. Nothing is created in any of these cases, and TenuVault stops waiting by itself after 15 minutes. After 3 minutes without an answer, TenuVault shows **Still waiting for Microsoft?** with **Try again**, **Copy sign-in link**, **Copy instructions for your admin** and **Book a free setup call**; see [Still waiting for Microsoft?](/getting-started/connect-tenant/#still-waiting-for-microsoft).
+* If your account cannot approve the setup, Microsoft says so in the browser, for example **Need admin approval**, and nothing comes back to TenuVault. Select **Cancel** on the Connect step and use one of the **Can’t sign in as an admin here?**: **Copy instructions for my admin** for your Entra administrator, or **I already have an app registration**. If you decline Microsoft's request instead, TenuVault says that you declined it and offers **Try again** or **Copy instructions for my admin**. If Microsoft refuses your approval, TenuVault names the roles that can give it. Nothing is created in any of these cases, and TenuVault stops waiting by itself after 15 minutes. After 3 minutes without an answer, TenuVault shows **Still waiting for Microsoft?** with **Try again**, **Copy sign-in link**, **Copy instructions for your admin** and **Book a free setup call**; see [Still waiting for Microsoft?](/getting-started/connect-tenant/#still-waiting-for-microsoft).
 * If the tenant blocks **Microsoft Graph Command Line Tools** for your account, for example by turning its sign-in off, limiting it to assigned users or with a Conditional Access policy, the setup cannot sign in. The setup script signs in through the same app, so it is blocked too. TenuVault says so and offers **Create it by hand**: [create the app registration manually](#create-the-app-registration-manually), then select **I already have an app registration** and enter its two IDs. When Microsoft shows its own error page instead, nothing comes back to TenuVault; select **Cancel** and take the same route.
 * If your account may sign in but lacks a role that can create app registrations or grant admin consent, the setup stops with a message that names the roles. If it had already created the app registration, it removes it again first.
 * If a step fails after TenuVault created the app registration, TenuVault removes it again and tells you why. If it cannot remove it, it names the app registration to delete in the Microsoft Entra admin center. An app registration that existed before is never deleted.
@@ -144,7 +144,7 @@ Before you run it:
 * A browser on the same computer, which the script opens for the sign-in. In a remote shell without a browser, use `-UseDeviceCode` instead; Conditional Access often blocks device code flow.
 * Optional: the object ID of a security group, if only its members should be able to sign in.
 
-On the **Connect** step, under **Other ways to connect**, select **Use the setup script instead**. The card **Create the app registration** is a numbered checklist:
+On the **Connect** step, under **Can’t sign in as an admin here?**, select **Use the setup script instead**. The card **Create the app registration** is a numbered checklist:
 
 1. **Save the setup script.** Select **Save setup script** and choose a folder in the save dialog. By default it is saved to your Documents folder as `New-TenuVaultDesktopApp.ps1`. TenuVault saves the copy of the script it ships with. **Copy script** copies it instead; paste it into a text editor and save it as `New-TenuVaultDesktopApp.ps1`.
 2. **Run it in PowerShell.** The card shows the exact command, with a copy button. After you saved the script, the command first changes to the folder you chose (`cd`) and then runs the script. If PowerShell refuses to run it, the card suggests `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` first; see [Execution policy](#execution-policy).
@@ -157,7 +157,7 @@ The buttons under the checklist:
 
 | Button | What it does |
 | --- | --- |
-| **Someone else is the admin? Copy instructions** | Copies a ready-to-send message for your Entra administrator: what TenuVault is, who can run the script, the script download link, the command, the `-AllowedGroupId` option, the permissions it grants and the two values to send back. TenuVault keeps your place, so you can close it and continue when they reply. |
+| **Copy instructions for my admin** | Copies a ready-to-send message for your Entra administrator: what TenuVault is, who can run the script, the script download link, the command, the `-AllowedGroupId` option, the permissions it grants and the two values to send back. TenuVault keeps your place, so you can close it and continue when they reply. |
 | **Create it by hand instead** | Opens [Create the app registration manually](#create-the-app-registration-manually) on this page. |
 | **Setup guide** | Opens this page. |
 
@@ -165,7 +165,7 @@ Select **Next: sign in** under the card when you have the two values. If the app
 
 ## Get the script without TenuVault
 
-[Download `New-TenuVaultDesktopApp.ps1`](/downloads/New-TenuVaultDesktopApp.ps1) and save it to a folder of your choice. If someone else creates the app registration for you, send them this link, or use **Someone else is the admin? Copy instructions** in TenuVault.
+[Download `New-TenuVaultDesktopApp.ps1`](/downloads/New-TenuVaultDesktopApp.ps1) and save it to a folder of your choice. If someone else creates the app registration for you, send them this link, or use **Copy instructions for my admin** in TenuVault.
 
 ## Run the script
 
@@ -291,6 +291,8 @@ Assigning a group to an enterprise application requires Microsoft Entra ID P1 or
 ## Next step
 
 [Sign in to your tenant](/getting-started/connect-tenant/) with the two values the script printed.
+
+The browser opens for the tenant of your Microsoft account. To set up another tenant as a guest administrator, select **Setting up a different tenant? Enter its ID or domain** and enter the tenant GUID or a verified domain before starting.
 
 ## Permissions for a service choice
 
