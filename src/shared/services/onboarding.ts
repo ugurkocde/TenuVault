@@ -4,7 +4,7 @@ import { MODULES, moduleForFolder, type ModuleId } from "./modules"
 
 import { BACKUP_SERVICES } from "./presentation"
 
-export const DEFAULT_ONBOARDING_CHOICE: PermissionChoice = { intune: { access: "restore" } }
+export const DEFAULT_ONBOARDING_CHOICE: PermissionChoice = { intune: { access: "backup" } }
 
 /** Keep the read permission included by every earlier Intune setup, without enabling its backups. */
 export function onboardingPermissions(choice: PermissionChoice): PermissionChoice {

@@ -3,6 +3,7 @@ import { Button } from "~/components/ui/button"
 import type { PermissionChoice } from "../../shared/services/manifest"
 import { OnboardingHeading, onboardingPrimary } from "./OnboardingCard"
 import { BACKUP_SERVICES } from "../../shared/services/presentation"
+import { choiceLabel } from "../../shared/services/onboarding"
 import { cn } from "~/lib/utils"
 
 const CARDS = {
@@ -43,6 +44,6 @@ export function OnboardingServices({ choice, onChange, onContinue }: { choice: P
         </button>
       })}
     </div>
-    <div className="flex justify-center"><Button className={onboardingPrimary} disabled={!Object.keys(choice).length} onClick={onContinue}>Continue</Button></div>
+    <div className="flex justify-center"><Button className={onboardingPrimary} disabled={!Object.keys(choice).length} onClick={onContinue}>{Object.keys(choice).length ? `Continue with ${choiceLabel(choice)}` : "Continue"}</Button></div>
   </section>
 }

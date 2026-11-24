@@ -1031,7 +1031,7 @@ describe("onboarding service choices", () => {
     expect(container.textContent).toContain("Welcome to TenuVault")
     await act(async () => button(container, "Connect your tenant")!.click())
     expect(container.textContent).toContain("Which services do you want to connect?")
-    expect([...container.querySelectorAll("[data-onboarding-service]")].every(card => card.getAttribute("aria-pressed") === "true")).toBe(true)
+    expect([...container.querySelectorAll<HTMLElement>('[data-onboarding-service][aria-pressed="true"]')].map(card => card.dataset.onboardingService)).toEqual(["intune"])
     await continueDefaultServices(container)
     await chooseOwnServices(container)
     state.createRegistration.mockImplementationOnce(() => new Promise(() => {}))
@@ -1101,6 +1101,13 @@ describe("onboarding service choices", () => {
     expect(loadOnboardingDraft()?.services).toEqual({
       intune: { access: "backup" }, entra: { access: "backup" }, conditionalAccess: { access: "backup" },
     })
+  })
+
+  it("preserves a saved all-service draft when the default changes to Intune", () => {
+    const services = { defender: { access: "backup" }, entra: { access: "backup" }, conditionalAccess: { access: "backup" }, intune: { access: "backup" } }
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 1, services }))
+    expect(loadOnboardingDraft()).toMatchObject({ step: 1, services })
+    expect(loadOnboardingDraft()?.reconfirm).toBeUndefined()
   })
 
   it("sends a resumed draft back to the service cards when migration changed the choice", () => {
@@ -1645,14 +1652,15 @@ describe("sign-in method wizard", () => {
     expect(state.enrollOwnApp).not.toHaveBeenCalled()
   })
 
-  it("preselects all three services when adding a tenant on an existing install", async () => {
+  it("preselects only Intune when adding a tenant on an existing install", async () => {
     const legacy = { credentials: { tenantId: TENANT, appId: CLIENT }, services: { intune: { access: "restore" } } }
     state.tenants = [legacy]
     const container = await render(createElement(OnboardingPage), false)
     expect(container.textContent).toContain("Back to dashboard")
     const cards = [...container.querySelectorAll<HTMLButtonElement>("[data-onboarding-service]")]
     expect(cards.map(card => card.getAttribute("aria-label"))).toEqual(["Defender", "Entra ID", "Intune"])
-    expect(cards.map(card => card.getAttribute("aria-pressed"))).toEqual(["true", "true", "true"])
+    expect(cards.map(card => card.getAttribute("aria-pressed"))).toEqual(["false", "false", "true"])
+    expect(button(container, "Continue with Intune")?.disabled).toBe(false)
     await selectServices(container, [])
     expect(button(container, "Continue")?.disabled).toBe(true)
     expect(state.tenants).toEqual([legacy])

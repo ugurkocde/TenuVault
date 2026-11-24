@@ -23,7 +23,7 @@ To buy a license or ask for an invoice, use the **License** page after setup. Se
 
 ## Connect your tenant
 
-Select **Connect your tenant**. Defender, Entra ID and Intune start selected. Turn off any you do not want to connect. Entra ID includes Conditional Access.
+Select **Connect your tenant**. Intune starts selected. Select any additional service you want to connect. Entra ID includes Conditional Access.
 
 Choose a sign-in method and sign in with Microsoft. TenuVault uses your signed-in tenant for **Start now**, **TenuVault app** and **Set up with Microsoft sign-in**. If you administer a different tenant as a guest, open **Different tenant?** before signing in. An existing app registration still needs its tenant ID and client ID.
 

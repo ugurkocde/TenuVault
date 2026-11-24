@@ -8,7 +8,7 @@ import { tenantPermissionPacks } from "../../shared/services/permission-packs"
 import { serializeTenants } from "~/lib/tenant-state"
 import { OnboardingServices } from "../components/OnboardingServices"
 import { PermissionRoutes } from "../components/ServicesSettings"
-import { checkedOnboardingChoice, choiceLabel, hasOnboardingBackups } from "../../shared/services/onboarding"
+import { checkedOnboardingChoice, choiceLabel, DEFAULT_ONBOARDING_CHOICE, hasOnboardingBackups } from "../../shared/services/onboarding"
 import { graphPermissions, type PermissionChoice } from "../../shared/services/manifest"
 import { chosenBackupCoverage } from "../../shared/services/graph-cli-coverage"
 import { backupAreaCoverage, needsBackupAccess } from "../../shared/services/backup-coverage"
@@ -70,10 +70,6 @@ type JobStatus = BackupJobDisplay
 type Step = -2 | -1 | 0 | 1 | 2 | 3 | 4
 type PermissionResult = { missing: string[]; error?: string; coverage?: BackupScopeCoverage[] }
 
-const DEFAULT_SERVICES: PermissionChoice = {
-  defender: { access: "backup" }, entra: { access: "backup" }, conditionalAccess: { access: "backup" }, intune: { access: "backup" },
-}
-
 const EMPTY_METHODS: MethodAvailability = { graphCli: null, tenuvaultApp: null }
 
 /** The first backup's state: running, completed, cancelled by the user (grey) or failed. */
@@ -98,7 +94,7 @@ export default function OnboardingPage() {
   const { setSelectedTenantId } = useSelectedTenant()
   const [initial] = useState(loadOnboardingDraft)
   const [step, setStep] = useState<Step>(initial?.step ?? -1)
-  const [services, setServices] = useState<PermissionChoice>(initial?.services ?? DEFAULT_SERVICES)
+  const [services, setServices] = useState<PermissionChoice>(initial?.services ?? DEFAULT_ONBOARDING_CHOICE)
   // A saved choice that could not be read must be confirmed with Continue on the service step; picking a
   // service there is not enough, so a setup file that arrives meanwhile waits for that Continue.
   const reconfirm = useRef(initial?.reconfirm === true || !confirmedChoice(initial?.services ?? {}))

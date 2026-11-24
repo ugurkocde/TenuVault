@@ -277,7 +277,7 @@ try {
         intune: { access: "backup" },
       }
       const draft = { step: resume ? 4 : -1, tenant: resume ? TENANTS[0].guid : "", clientId: resume ? CLIENT_ID : "", displayName: "", signedInAt: Date.now(), account: resume ? MOCK.accounts[0] : null, services }
-      await main.evaluate(`fixtureScene(${JSON.stringify(state)}, ${welcome ? "null" : JSON.stringify(JSON.stringify(draft))})`)
+      await main.evaluate(`fixtureScene(${JSON.stringify(state)}, ${welcome || state === "01-services" ? "null" : JSON.stringify(JSON.stringify(draft))})`)
       const tenants = restore || sidebar ? MOCK.tenants.map(tenant => ({ ...tenant, credentials: { ...tenant.credentials, appId: restoreAppId } })) : []
       await evaluate(`Promise.all([
         window.tenuvault.storage.setItem("tenuvault_tenants", ${JSON.stringify(JSON.stringify(tenants))}),
@@ -322,7 +322,7 @@ try {
       } else {
         await showing("Which services do you want to connect?")
         if (state !== "01-services" && state !== "22-help") {
-          await click(baseline ? "Continue with Defender, Entra ID and Intune" : "Continue")
+          await click("Continue with Defender, Entra ID and Intune")
           await showing("How do you want to connect?")
         }
         if (state === "28-setup-file") {

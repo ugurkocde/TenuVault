@@ -504,8 +504,7 @@ await check("Community users can reach the tenant sign-in without a key", async 
     assert(overflow.scroll <= overflow.height && overflow.inner.length === 0, `${name} scrolls: ${JSON.stringify(overflow)}`)
   }
   await assertFit("Service cards")
-  for (const id of ["defender", "entra"]) await evaluate(`document.querySelector('[data-onboarding-service="${id}"][aria-pressed="true"]')?.click()`)
-  await evaluate(`[...document.querySelectorAll("button")].find(b => b.innerText.trim() === "Continue").click()`)
+  await evaluate(`[...document.querySelectorAll("button")].find(b => b.innerText.trim() === "Continue with Intune").click()`)
   assert(await waitForText("How do you want to connect?"), "method choice missing")
   assert(await evaluate(`[...document.querySelectorAll("[data-sign-in-method]")].map(card => card.getAttribute("aria-label").replace("Choose ", "")).join("|") === "Start now|TenuVault app|Your own app registration"`), "sign-in method order is wrong")
   await assertFit("Sign-in method cards")
@@ -721,9 +720,8 @@ await check("tenants page offers delegated sign-in", async () => {
   // Connect tenant opens the guided setup, the one way to connect a tenant on the desktop.
   assert(await waitForCondition(`location.hash === "#/portal/onboarding"`), "Connect tenant did not open the guided setup")
   assert(await waitForText("Which services do you want to connect?"), "adding a tenant did not open the sign-in wizard")
-  assert(await evaluate(`[...document.querySelectorAll('[data-onboarding-service]')].every(card => card.getAttribute("aria-pressed") === "true")`), "all three services should be selected for a new tenant")
-  for (const id of ["defender", "entra"]) await evaluate(`document.querySelector('[data-onboarding-service="${id}"][aria-pressed="true"]')?.click()`)
-  await evaluate(`[...document.querySelectorAll("button")].find(b => b.innerText.trim() === "Continue").click()`)
+  assert(await evaluate(`[...document.querySelectorAll('[data-onboarding-service][aria-pressed="true"]')].map(card => card.dataset.onboardingService).join() === "intune"`), "only Intune should be selected for a new tenant")
+  await evaluate(`[...document.querySelectorAll("button")].find(b => b.innerText.trim() === "Continue with Intune").click()`)
   await evaluate(`document.querySelector('[data-sign-in-method="ownApp"]').click()`)
   assert(await waitForText("Set up with Microsoft sign-in"), "connect step did not open")
   assert(!(await evaluate(`document.body.innerText.includes("Client Secret")`)), "setup still asks for a client secret")
