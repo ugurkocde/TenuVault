@@ -7,6 +7,7 @@ import type { SignInRequiredEvent } from "../../src/shared/ipc"
 
 const state = vi.hoisted(() => ({
   listener: null as ((event: SignInRequiredEvent) => void) | null,
+  accountChanged: null as ((tenantId: string) => void) | null,
   reauthenticate: vi.fn(async () => ({ username: "admin@contoso.com" })),
 }))
 
@@ -16,6 +17,10 @@ vi.mock("../../src/renderer/lib/bridge", () => ({
       onSignInRequired: (listener: (event: SignInRequiredEvent) => void) => {
         state.listener = listener
         return () => { state.listener = null }
+      },
+      onAccountsChanged: (listener: (tenantId: string) => void) => {
+        state.accountChanged = listener
+        return () => { state.accountChanged = null }
       },
       reauthenticate: state.reauthenticate,
     },
@@ -80,6 +85,19 @@ describe("Sign-in banner", () => {
     expect(container.textContent).not.toContain("more sign-in")
     act(() => container.querySelector<HTMLButtonElement>('[aria-label="Dismiss"]')!.click())
     expect(container.textContent).toBe("")
+  })
+
+  it("clears stale prompts for the account that signed in and keeps other tenants queued", () => {
+    const container = mount()
+    act(() => {
+      state.listener!(event("tenant-a"))
+      state.listener!({ ...event("tenant-a"), scope: "storage" })
+      state.listener!(event("tenant-b"))
+      state.accountChanged?.("TENANT-A")
+    })
+    expect(container.textContent).toContain("Fabrikam")
+    expect(container.textContent).not.toContain("more sign-in")
+    expect(container.textContent).not.toContain("Contoso")
   })
 
   it("keeps later prompts after signing in to the first tenant", async () => {

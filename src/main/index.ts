@@ -1720,6 +1720,7 @@ async function bootstrap(): Promise<void> {
       if (typeof profile !== "string" || profile.length > 64_000) throw new ConnectionSwitchError("invalid_request", "Choose valid backup storage.")
       const choice = wizardChoice(value)
       connections.enroll(signedIn.tenantId, { method: "ownApp", clientId }, profile, { account: signedIn, accessToken: "" }, moduleSettings.choiceEntries(signedIn.tenantId, choice))
+      try { notifyAccountChange(signedIn.tenantId) } catch { console.warn("[auth] Could not notify the window of the sign-in change") }
       return { result: true }
     } catch (error) { return wizardFailure(error) }
   })
