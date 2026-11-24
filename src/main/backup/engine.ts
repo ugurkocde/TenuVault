@@ -1036,7 +1036,11 @@ export class BackupEngine {
       } catch (caught) {
         const recoveryFailed = caught instanceof ExpansionRecoveryError
         const error = recoveryFailed || caught instanceof OrganizationResolutionError || caught instanceof ScopeDiscoveryError ? caught.cause : caught
-        if ((service.isolated || checkedReadDenied(type, error)) && !signInEnded(error) && !network.signal.aborted) {
+        // A delegated profile detail or sub-read can fail after listing and reading other profiles.
+        // Keep trying their details when the token has the read scope, and report any missing item.
+        const profileDenied = startNow && type.folder === "DeviceConfigurations" && error instanceof GraphError &&
+          error.status === 403 && error.grant && canBackUp(type.folder, error.grant)
+        if (!profileDenied && (service.isolated || checkedReadDenied(type, error)) && !signInEnded(error) && !network.signal.aborted) {
           // A refusal, a pause longer than the bound or a request without an answer holds for every object of the type: the type ends, the backup goes on.
           const refused = error instanceof GraphError && classifyAnswer({ status: error.status, ...error.answer }, scopeEvidence(error)).outcome === "skipped"
           if (refused || error instanceof ReadBudgetError || error instanceof RetryDelayError || error instanceof GraphUnansweredError || endedTypes.has(type.folder)) {

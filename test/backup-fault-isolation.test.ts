@@ -583,6 +583,19 @@ describe("auth failure and throttle state per service", () => {
 describe("Start now backup evidence", () => {
   const clientId = GRAPH_CLI_CLIENT_ID
 
+  it("continues reading device profiles after a detail is refused with the read scope", async () => {
+    const path = "/beta/deviceManagement/deviceConfigurations"
+    const f = fixture(tenant({
+      [path]: { value: [{ id: "denied", displayName: "Restricted" }, { id: "readable", displayName: "Readable" }] },
+      [path + "/denied?$expand=assignments"]: refusal(403, "Forbidden", "Access denied"),
+      [path + "/readable?$expand=assignments"]: { id: "readable", displayName: "Readable", assignments: [] },
+    }), { concurrency: 1, graphCliGrant: () => new Set(["DeviceManagementConfiguration.Read.All"]) })
+    const job = await f.run({ clientId })
+    expect(await f.files(job)).toContain("DeviceConfigurations/Readable.json")
+    expect(outcomeOf(job, "DeviceConfigurations")).toMatchObject({ outcome: "failed", error: expect.stringContaining("HTTP 403"), saved: 1 })
+    expect(job.coverage).toBe("incomplete")
+  })
+
   it("uses beta continuation links for a type otherwise read on the stable endpoint", async () => {
     const stable = testType("TokenLifetimePolicies", "policies/tokenLifetimePolicies", { apiVersion: "v1.0", listOnly: true })
     const remove = registerTestTypes([stable])
