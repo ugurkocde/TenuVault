@@ -71,6 +71,14 @@ it("offers the TenuVault app pack before confirmation and enables restore only a
   const container = await renderItems(false, TENUVAULT_CLIENT_ID)
   expect(itemBoxes(container).every(box => box.disabled)).toBe(true)
   expect(buttonNamed(container, "Next")?.disabled).toBe(true)
+  const method = container.querySelector<HTMLSelectElement>("select")!
+  expect(method.value).toBe("copy")
+  await act(async () => {
+    method.value = "replace"
+    method.dispatchEvent(new Event("change", { bubbles: true }))
+  })
+  expect(itemBoxes(container).every(box => box.disabled)).toBe(true)
+  expect(buttonNamed(container, "Next")?.disabled).toBe(true)
   await act(async () => buttonNamed(container, "Allow restore for Intune")!.click())
   const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!
   expect([...dialog.querySelectorAll("option")].map(option => option.value)).toEqual(["intune-restore"])
