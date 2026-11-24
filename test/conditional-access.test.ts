@@ -1,3 +1,4 @@
+import { emptyIntuneRead } from "./helpers"
 import { mkdtempSync } from "node:fs"
 import { randomBytes } from "node:crypto"
 import { tmpdir } from "node:os"
@@ -335,7 +336,7 @@ describe("Backing up Conditional Access", () => {
         if (graphPath === "/beta/identity/conditionalAccess/policies") return Response.json({ value: [{ id: "p1", displayName: "Require MFA" }] })
         if (graphPath === "/beta/identity/conditionalAccess/policies/p1") return Response.json(policy({ id: "p1", displayName: "Require MFA" }))
         if (graphPath === "/beta/identity/conditionalAccess/authenticationStrength/policies") return Response.json({ value: [strength({ id: "00000000-0000-0000-0000-000000000002", policyType: "builtIn" })] })
-        if (graphPath.startsWith("/beta/")) return Response.json({ value: [] })
+        if (graphPath.startsWith("/beta/")) return emptyIntuneRead(graphPath)
         throw new Error(`unexpected ${url}`)
       }) as typeof fetch,
       getToken: async () => jwt(options.scopes),

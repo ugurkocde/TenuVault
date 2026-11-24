@@ -1,3 +1,4 @@
+import { emptyIntuneRead } from "./helpers"
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import { randomBytes } from "node:crypto"
 import { tmpdir } from "node:os"
@@ -257,7 +258,7 @@ describe("damaged local backup files", () => {
     await backup(store, OLD)
     await backup(store, NEW)
     damage(dir, await fileOf(store, `${NEW}/CompliancePolicies/a.json`), true)
-    const graph = (url: URL) => Response.json(url.pathname.endsWith("/assignments") ? { value: [] } : { value: [] })
+    const graph = (url: URL) => emptyIntuneRead(url.pathname)
     const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const request = new Request(input, init)
       const url = new URL(request.url)

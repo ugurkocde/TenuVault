@@ -10,7 +10,7 @@ import { CommunityLimitError } from "../src/shared/plan-errors"
 import type { Finding } from "../src/shared/frameworks/policies"
 import { COMPLETE_BACKUP_METADATA, FakeTenant, setting } from "./feature-change-sets-fakes"
 import { fakeDeps, TENANT_A, TENANT_B, TENANT_C } from "./feature-helpers"
-import { memoryStore } from "./helpers"
+import { emptyIntuneRead, memoryStore } from "./helpers"
 import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -204,7 +204,7 @@ describe("CIS rollback after an MSP license expired", () => {
 
 describe("the recovery backup in the real backup engine and API host", () => {
   const OLD_BACKUP = "backup-2026-08-01-020000"
-  const graph = (url: URL) => (INTUNE_TYPES.some((type) => url.pathname === `/beta/${type.path}`) || url.pathname.endsWith("/assignments") ? Response.json({ value: [] }) : Response.json({}))
+  const graph = (url: URL) => (INTUNE_TYPES.some((type) => url.pathname === `/beta/${type.path}`) || url.pathname.endsWith("/assignments") ? emptyIntuneRead(url.pathname) : Response.json({}))
 
   /**
    * The backup engine, its routes and the API host's plan guard as src/main/index.ts builds them

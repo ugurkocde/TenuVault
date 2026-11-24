@@ -1,3 +1,4 @@
+import { emptyIntuneRead } from "./helpers"
 import { mkdtempSync, readFileSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { tmpdir } from 'node:os'
@@ -258,7 +259,7 @@ describe('pagination guards', () => {
         return handleLocalBlobRequest(store, request)
       }
       if (graph) return graph(url)
-      return Response.json(url.pathname.split('/').length <= 4 ? { value: [] } : { id: 'x' })
+      return url.pathname.split('/').length <= 4 ? emptyIntuneRead(url.pathname) : Response.json({ id: 'x' })
     }) as typeof fetch
     const engine = new BackupEngine({ fetch: fetchImpl, getToken: async () => 'token', retentionDays: () => 30, now: () => new Date('2026-09-24T12:00:00Z') })
     const { id } = engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account })
@@ -282,7 +283,7 @@ describe('pagination guards', () => {
     const { job, requested } = await backupWithListing(() => '<EnumerationResults><Blobs></Blobs></EnumerationResults>', (url) => {
       if (url.pathname === '/beta/deviceManagement/configurationPolicies') return Response.json({ value: [{ id: 'sc1', name: 'A' }] })
       if (url.pathname === '/beta/deviceManagement/configurationPolicies/sc1') return Response.json({ id: 'sc1', name: 'A', settings: [], 'settings@odata.nextLink': 'https://graph.microsoft.com.evil.test/beta/x' })
-      return Response.json(url.pathname.split('/').length <= 4 ? { value: [] } : { id: 'x' })
+      return url.pathname.split('/').length <= 4 ? emptyIntuneRead(url.pathname) : Response.json({ id: 'x' })
     })
     expect(job.log.join('\n')).toContain('Invalid Graph continuation link')
     expect(requested.some((url) => url.includes('evil.test'))).toBe(false)

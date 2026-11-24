@@ -12,7 +12,7 @@ import { INTUNE_TYPES } from "../src/shared/intune/registry"
 import { coveredFolders, DEFAULT_SCOPE, describeScope, EVERYTHING, includedTypes, LEGACY_FOLDERS, normalizeScope, presetOf } from "../src/shared/intune/scope"
 import { compareBackups, summarize } from "../src/shared/intune/backup-changes"
 import { comparableSnapshot, sameSnapshot } from "../src/shared/intune/compare"
-import { memoryStore } from "./helpers"
+import { emptyIntuneRead, memoryStore } from "./helpers"
 
 const TENANT = "11111111-1111-1111-1111-111111111111"
 const CLIENT = "22222222-2222-2222-2222-222222222222"
@@ -124,7 +124,7 @@ function graphWith(...lists: Array<{ path: string; items: Array<Record<string, u
   return (url: URL) => {
     const list = lists.find((entry) => entry.path === url.pathname)
     if (list && !url.search) return Response.json({ value: list.items })
-    if (INTUNE_TYPES.some((type) => url.pathname === `/beta/${type.path}`)) return Response.json({ value: [] })
+    if (INTUNE_TYPES.some((type) => url.pathname === `/beta/${type.path}`)) return emptyIntuneRead(url.pathname)
     const id = url.pathname.split("/").pop()
     return Response.json({ id, detail: true, ...(url.searchParams.get("$expand") === "assignments" && { assignments: [] }), lastModifiedDateTime: String(Math.random()) })
   }
@@ -185,7 +185,7 @@ describe("BackupEngine with a scope", () => {
     const items = Array.from({ length: 12 }, (_, index) => ({ id: `dc${index}`, displayName: `P${index}` }))
     const { engine, account } = engineSetup((url) => {
       if (url.pathname === "/beta/deviceManagement/deviceConfigurations" && !url.search) return Response.json({ value: items })
-      if (INTUNE_TYPES.some((type) => url.pathname === `/beta/${type.path}`)) return Response.json({ value: [] })
+      if (INTUNE_TYPES.some((type) => url.pathname === `/beta/${type.path}`)) return emptyIntuneRead(url.pathname)
       if (url.pathname.endsWith("/dc3") && !throttledAt) {
         throttledAt = Date.now()
         return new Response("", { status: 429, headers: { "retry-after": "0.3" } })
@@ -203,7 +203,7 @@ describe("BackupEngine with a scope", () => {
     const items = Array.from({ length: 20 }, (_, index) => ({ id: `dc${index}`, displayName: `P${index}` }))
     const { engine, account } = engineSetup((url) => {
       if (url.pathname === "/beta/deviceManagement/deviceConfigurations" && !url.search) return Response.json({ value: items })
-      if (INTUNE_TYPES.some((type) => url.pathname === `/beta/${type.path}`)) return Response.json({ value: [] })
+      if (INTUNE_TYPES.some((type) => url.pathname === `/beta/${type.path}`)) return emptyIntuneRead(url.pathname)
       return Response.json({ error: { message: "Lifetime validation failed, the token is expired." } }, { status: 401 })
     })
     const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account, scope: EVERYTHING }).id)

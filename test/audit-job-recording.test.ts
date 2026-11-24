@@ -16,7 +16,7 @@ import { auditChanges } from "../src/portal/lib/audit/restore-changes"
 import { recordRestorePreparationFailure, restoreAuditItem } from "../src/portal/lib/audit/restore"
 import { clearSettingNames, readSettingNames } from "../src/portal/lib/drift/setting-names"
 import { typeForFolder } from "../src/shared/intune/registry"
-import { memoryStore } from "./helpers"
+import { emptyIntuneRead, memoryStore } from "./helpers"
 
 const tenantId = "11111111-1111-1111-1111-111111111111"
 const registration = "22222222-2222-2222-2222-222222222222"
@@ -432,8 +432,8 @@ it("still captures and records the Reader terminal result when the encrypted che
   const remote = storage()
   const sink = new AuditSink({ store: local, bind: () => binding, transport: async () => remote.service })
   const terminal: Promise<void>[] = []
-  const fetcher = vi.fn<typeof fetch>(async (_url, init) =>
-    init?.method === "PUT" ? new Response(null, { status: 201 }) : Response.json({ value: [] }))
+  const fetcher = vi.fn<typeof fetch>(async (input, init) =>
+    init?.method === "PUT" ? new Response(null, { status: 201 }) : emptyIntuneRead(new URL(String(input)).pathname))
   const engine = new BackupEngine({
     fetch: fetcher,
     getToken: async () => { throw new Error("No admin session") },
@@ -514,7 +514,8 @@ it.each([
         return new Response(null, { status: 201 })
       }
       if (url.pathname === "/beta/deviceManagement/deviceConfigurations") return Response.json({ value: [{ id: "first", displayName: "Example" }] })
-      return Response.json({ id: "first", value: [] })
+      if (url.pathname.endsWith("/first")) return Response.json({ id: "first", assignments: [] })
+      return emptyIntuneRead(url.pathname)
     }),
     onStarted: (active, request, tokens) => checkpointBackupAudit(first, active, request, tokens, binding.user, "1.2.3"),
   })
@@ -572,7 +573,7 @@ it("reconciles a lost manifest acknowledgement in audit after the Reader job fai
         manifest = String(init.body)
         throw new TypeError("Manifest acknowledgement lost")
       }
-      return init?.method === "PUT" ? new Response(null, { status: 201 }) : Response.json({ value: [] })
+      return init?.method === "PUT" ? new Response(null, { status: 201 }) : emptyIntuneRead(new URL(String(input)).pathname)
     },
     onStarted: (active, request, tokens) => checkpointBackupAudit(sink, active, request, tokens, binding.user, "1.2.3"),
     onFinished: (active, request, tokens) => {

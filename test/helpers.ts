@@ -28,3 +28,13 @@ export function endlessBody(chunks = 40, first: Uint8Array = new Uint8Array(0)):
   })
   return { body, pulled: () => pulled }
 }
+
+/** Answer an otherwise empty Intune tenant, including its tenant-wide compliance settings. */
+export function emptyIntuneRead(pathname: string): Response {
+  return Response.json(pathname === "/beta/deviceManagement/settings" ? {
+    deviceComplianceCheckinThresholdDays: 0,
+    isScheduledActionEnabled: true,
+    secureByDefault: false,
+    enhancedJailBreak: false,
+  } : { value: [] })
+}

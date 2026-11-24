@@ -1,3 +1,4 @@
+import { emptyIntuneRead } from "./helpers"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { BackupEngine, verifyStorageAccess } from "../src/main/backup/engine"
 import { INTUNE_TYPES } from "../src/shared/intune/registry"
@@ -23,7 +24,7 @@ function requestTimers() {
 function setup(override: (url: URL, init?: RequestInit) => Response | Promise<Response> | undefined, concurrency?: number) {
   const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input))
-    return override(url, init) ?? (url.hostname === "graph.microsoft.com" ? Response.json({ value: [] }) : new Response(null, { status: 201 }))
+    return override(url, init) ?? (url.hostname === "graph.microsoft.com" ? emptyIntuneRead(url.pathname) : new Response(null, { status: 201 }))
   })
   const engine = new BackupEngine({ fetch: fetchImpl, getToken: async () => "token", concurrency })
   return { engine, fetchImpl }
@@ -343,7 +344,7 @@ describe("backup request recovery", () => {
     const networkFetch = vi.fn(async (input: RequestInfo | URL) => {
       const sent = input as Request
       const url = new URL(sent.url)
-      if (url.hostname === "graph.microsoft.com") return Response.json({ value: [] })
+      if (url.hostname === "graph.microsoft.com") return emptyIntuneRead(url.pathname)
       if (url.search) {
         if (sent.method === "PUT") return new Response(null, { status: 201 })
         return new Response(`<EnumerationResults><Blobs>${prefixes.map(prefix => `<BlobPrefix><Name>${prefix}</Name></BlobPrefix>`).join("")}</Blobs></EnumerationResults>`)
@@ -396,7 +397,7 @@ describe("backup request recovery", () => {
     const networkFetch = vi.fn(async (input: RequestInfo | URL) => {
       const sent = input as Request
       const url = new URL(sent.url)
-      if (url.hostname === "graph.microsoft.com") return Response.json({ value: [] })
+      if (url.hostname === "graph.microsoft.com") return emptyIntuneRead(url.pathname)
       if (url.search) {
         if (sent.method === "PUT") return new Response(null, { status: 201 })
         const params = url.searchParams
@@ -449,7 +450,7 @@ describe("backup request recovery", () => {
     const networkFetch = vi.fn(async (input: RequestInfo | URL) => {
       const sent = input as Request
       const url = new URL(sent.url)
-      if (url.hostname === "graph.microsoft.com") return Response.json({ value: [] })
+      if (url.hostname === "graph.microsoft.com") return emptyIntuneRead(url.pathname)
       if (url.search) {
         if (sent.method === "PUT") return new Response(null, { status: 201 })
         const params = url.searchParams

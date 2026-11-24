@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest"
 import { BackupEngine } from "../src/main/backup/engine"
 import { BackupScheduler, scheduledResult, type ScheduledRunResult } from "../src/main/backup/scheduler"
 import { handleLocalBlobRequest, localAccountFromUrl } from "../src/main/storage/blob-emulator"
-import { memoryStore } from "./helpers"
+import { emptyIntuneRead, memoryStore } from "./helpers"
 import { LocalBlobStore } from "../src/main/storage/local-blob-store"
 import { localStorageAccountName } from "../src/shared/constants"
 import { INTUNE_TYPES } from "../src/shared/intune/registry"
@@ -39,7 +39,7 @@ async function finished(engine: BackupEngine, id: string) {
 }
 
 function emptyGraph(url: URL) {
-  if (INTUNE_TYPES.some((type) => url.pathname === `/beta/${type.path}`)) return Response.json({ value: [] })
+  if (INTUNE_TYPES.some((type) => url.pathname === `/beta/${type.path}`)) return emptyIntuneRead(url.pathname)
   return Response.json({ id: url.pathname.split("/").pop() })
 }
 
@@ -92,7 +92,7 @@ describe("scheduled outcome of a partial backup", () => {
       if (url.pathname === "/beta/deviceManagement/deviceConfigurations" && !url.search) {
         return Response.json({ value: [{ id: "dc1", displayName: "Good" }, { id: "dc2", displayName: "Bad" }] })
       }
-      if (INTUNE_TYPES.some((type) => url.pathname === `/beta/${type.path}`)) return Response.json({ value: [] })
+      if (INTUNE_TYPES.some((type) => url.pathname === `/beta/${type.path}`)) return emptyIntuneRead(url.pathname)
       if (url.pathname.endsWith("/dc2")) return Response.json({ error: { message: "Forbidden" } }, { status: 403 })
       return Response.json({ id: url.pathname.split("/").pop(), assignments: [] })
     }

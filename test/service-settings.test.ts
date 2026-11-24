@@ -33,7 +33,7 @@ import { localStorageAccountName } from "../src/shared/constants"
 import { INTUNE_TYPES, type Item } from "../src/shared/intune/registry"
 import { DEFAULT_SCOPE, EVERYTHING, LEGACY_FOLDERS, type BackupScope } from "../src/shared/intune/scope"
 import { disabledFolders, moduleForFolder, MODULES, restorePermissionBlocker, type GrantedPermissions, type ModuleId } from "../src/shared/services/modules"
-import { memoryStore } from "./helpers"
+import { emptyIntuneRead, memoryStore } from "./helpers"
 
 const KEY = "services.modules"
 /** A tenant ID with letters, so its case matters. */
@@ -81,7 +81,7 @@ async function backup(settings: ModuleSettings, scope: BackupScope, tenantId = T
       const defenderType = DEFENDER_TYPES.find(type => url.pathname.startsWith(`/${type.apiVersion}/${type.path}`))
       const defenderResponses = defenderType ? defenderRecorded(defenderType.folder, true).responses : {}
       const answer = entraResponses[url.pathname + url.search] ?? Object.entries(defenderResponses).find(([path]) => decodeURIComponent(path) === decodeURIComponent(url.pathname + url.search))?.[1]
-      return answer ? Response.json(answer.body, { status: answer.status, headers: answer.headers }) : Response.json({ value: [] })
+      return answer ? Response.json(answer.body, { status: answer.status, headers: answer.headers }) : emptyIntuneRead(url.pathname)
     }) as typeof fetch,
     getToken: async () => jwt(MODULES.flatMap(module => module.areas.flatMap(area => area.parts.flatMap(part => part.backup.delegated === "unsupported" ? [] : part.backup.delegated.flat()))).join(" ")),
     services: (tenant) => settings.selection(tenant),
@@ -368,7 +368,7 @@ describe("Any combination of services for a tenant", () => {
           const request = new Request(input, init)
           if (localAccountFromUrl(new URL(request.url))) return handleLocalBlobRequest(store, request)
           if (job) seen.push(job.progressMessage)
-          return Response.json({ value: [] })
+          return emptyIntuneRead(new URL(request.url).pathname)
         }) as typeof fetch,
         getToken: async () => jwt("Policy.Read.All"),
         services: (tenant) => settings.selection(tenant),

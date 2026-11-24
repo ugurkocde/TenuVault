@@ -1,3 +1,4 @@
+import { emptyIntuneRead } from "./helpers"
 import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs"
 import { createCipheriv, createDecipheriv, createHmac, hkdfSync, randomBytes } from "node:crypto"
 import { tmpdir } from "node:os"
@@ -258,7 +259,7 @@ describe("local blob emulator tenant binding", () => {
 })
 
 function fakeGraph(url: URL): Response {
-  if (INTUNE_TYPES.some((type) => url.pathname === `/beta/${type.path}`)) return Response.json({ value: [] })
+  if (INTUNE_TYPES.some((type) => url.pathname === `/beta/${type.path}`)) return emptyIntuneRead(url.pathname)
   return Response.json({ id: url.pathname.split("/").pop() })
 }
 
