@@ -119,7 +119,7 @@ export class ConnectionCapabilities {
     if (!admittedClientId || !currentClientId || normalizeGuid(admittedClientId) !== normalizeGuid(currentClientId)) {
       throw new Error(CONNECTION_CHANGED)
     }
-    await this.requireConnectionEnabled(tenantId, admittedClientId)
+    await this.requireConnectionEnabled(tenantId, admittedClientId, RESOURCE_SCOPES.graph, true)
     this.requireWrite([tenantId])
     if (sharedMethod(admittedClientId) === "tenuvaultApp" && !this.restorePacks(tenantId).some(pack => pack.id === "intune-restore")) {
       throw new Error(PACK_REQUIRED)
@@ -305,7 +305,7 @@ export class ConnectionCapabilities {
         return !pack || missingPackScopes([...pack.scopes, ...scopes], permissions).length > 0
       })) throw new Error(PACK_REQUIRED)
     }
-    if (shared && tenantId && clientId) await this.requireConnectionEnabled(tenantId, clientId, RESOURCE_SCOPES.graph, shared === "graphCli")
+    if (shared && tenantId && clientId) await this.requireConnectionEnabled(tenantId, clientId, RESOURCE_SCOPES.graph, true)
     // The bridge calls the dispatch check after its last await, in the same turn as fetch.
     if (!checkAtDispatch) check()
     const beforeDispatch = checkAtDispatch ? check : undefined

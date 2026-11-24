@@ -747,8 +747,7 @@ export class LicenseService {
   }
 
   async connectMethodEnabled(method: ConnectMethod, fresh = false): Promise<boolean> {
-    if (typeof __TV_LAB_BUILD__ !== "undefined" && __TV_LAB_BUILD__) return true
-    if (method === "tenuvaultApp") return false
+    if (method === "tenuvaultApp" && !(typeof __TV_LAB_BUILD__ !== "undefined" && __TV_LAB_BUILD__)) return false
     if (!fresh && this.connectMethodsHealth && Date.now() < this.connectMethodsHealth.expiresAt) {
       return this.connectMethodsHealth.enabled[method]
     }
@@ -758,8 +757,8 @@ export class LicenseService {
 
   /** Use the latest known availability immediately before dispatching a shared-client request. */
   connectMethodEnabledNow(method: ConnectMethod): boolean {
-    if (typeof __TV_LAB_BUILD__ !== "undefined" && __TV_LAB_BUILD__) return true
-    return method === "graphCli" && this.connectMethodsHealth?.enabled[method] === true
+    if (method === "tenuvaultApp" && !(typeof __TV_LAB_BUILD__ !== "undefined" && __TV_LAB_BUILD__)) return false
+    return this.connectMethodsHealth?.enabled[method] === true
   }
 
   private fetchHealth(): Promise<LicenseHealthResponse | null> {
@@ -1467,6 +1466,9 @@ export class LicenseService {
       }
       await this.refreshCurrent(tenant, share, allowGraphCli)
       if (share && this.state?.activations[tenant]?.shareNeedsSignIn) {
+        if (isPublicClient(this.clientId(tenant))) {
+          throw new Error("To start sharing, sign in with your own app registration in Settings, under Sign-in and access. If this key already shares with the tenant, sign in again and retry.")
+        }
         throw new Error("Sign in to this tenant again to share the license with it.")
       }
       if (this.state?.activations[tenant]?.shared !== share) {

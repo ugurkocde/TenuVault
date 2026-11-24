@@ -1,3 +1,4 @@
+import { ConnectionCapabilities } from "../src/main/auth/connection-capabilities"
 import { GRAPH_CLI_CLIENT_ID, TENUVAULT_CLIENT_ID } from "../src/shared/tenant-connection"
 import { prepareScheduledCoverage } from "../src/main/backup/schedule-prepare"
 import { BackupScheduler } from "../src/main/backup/scheduler"
@@ -1396,6 +1397,17 @@ describe("LicenseService organization licenses", () => {
     expect(entitled(license)).toBe(true)
   })
 
+  it("explains the own-registration requirement when public proof cannot establish sharing", async () => {
+    answer = ({ action }) => action === "health"
+      ? Response.json({ organizationLicenses: { clientIdSets: true } })
+      : granted("act-key", { shared: false, sharedReason: "sign_in_required" })
+    const license = service({ clientId: () => TENUVAULT_CLIENT_ID, ownClientId: () => APP_ID })
+    await license.setKey("TEST-LICENSE-KEY", [TENANT])
+    await expect(license.setShared(TENANT, true)).rejects.toThrow("To start sharing, sign in with your own app registration")
+    expect(calls.at(-1)?.body).toMatchObject({ publicClientProof: "id.token.value", shareWithTenant: true })
+    expect(license.status([TENANT]).tenants[0]).toMatchObject({ entitled: true, shareNeedsSignIn: true })
+  })
+
   it("reports a sharing change the service could not store", async () => {
     answer = ({ action }) => (action === "activate" ? granted("act-key", { shared: true }) : granted("act-key"))
     const license = service()
@@ -2559,15 +2571,40 @@ describe("Desktop build sign-in availability", () => {
     expect(licensing.connectMethodEnabledNow("tenuvaultApp")).toBe(false)
   })
 
-  it("enables both methods from the compile-time lab capability without contacting health", async () => {
-    vi.stubGlobal("__TV_LAB_BUILD__", true)
-    const fetch = vi.fn()
-    const licensing = service({ fetch })
-    for (const method of ["graphCli", "tenuvaultApp"] as const) {
-      expect(await licensing.connectMethodEnabled(method, true)).toBe(true)
-      expect(licensing.connectMethodEnabledNow(method)).toBe(true)
+  it.each([false, true])("checks health even with a signed-in profile (lab build: %s)", async lab => {
+    vi.stubGlobal("__TV_LAB_BUILD__", lab)
+    let enabled = false
+    const fetch = vi.fn(async () => Response.json({ connectMethods: { graphCli: enabled, tenuvaultApp: enabled } }))
+    for (const [method, clientId] of [["graphCli", GRAPH_CLI_CLIENT_ID], ["tenuvaultApp", TENUVAULT_CLIENT_ID]] as const) {
+      enabled = false
+      const licensing = service({ fetch, clientId: () => clientId })
+      const gate = new ConnectionCapabilities(
+        () => ({ version: 1, method, clientId, origin: "wizard", createdAt: "", updatedAt: "" }),
+        () => [],
+        (method, fresh) => licensing.connectMethodEnabled(method, fresh),
+        method => licensing.connectMethodEnabledNow(method),
+      )
+      expect(await licensing.connectMethodEnabled(method)).toBe(false)
+      await expect(gate.requireConnectionEnabled(TENANT, clientId)).rejects.toThrow("currently unavailable")
+      enabled = true
+      const allowed = method === "graphCli" || lab
+      expect(await licensing.connectMethodEnabled(method, true)).toBe(allowed)
+      if (allowed) {
+        await expect(gate.requireConnectionEnabled(TENANT, clientId)).resolves.toBeUndefined()
+        const url = new URL("https://graph.microsoft.com/beta/me")
+        gate.requireIssuedToken(TENANT, clientId, "https://graph.microsoft.com/.default", "fixture-token")
+        const request = await gate.authorizeRequest(url, url, { headers: { Authorization: "Bearer fixture-token" } }, TENANT)
+        expect(request?.beforeDispatch).toBeTypeOf("function")
+        expect(() => request?.beforeDispatch?.()).not.toThrow()
+        enabled = false
+        await expect(gate.authorizeRequest(url, url, { headers: { Authorization: "Bearer fixture-token" } }, TENANT))
+          .rejects.toThrow("currently unavailable")
+        expect(() => request?.beforeDispatch?.()).toThrow("currently unavailable")
+      } else {
+        await expect(gate.requireConnectionEnabled(TENANT, clientId)).rejects.toThrow("currently unavailable")
+        expect(licensing.connectMethodEnabledNow(method)).toBe(false)
+      }
     }
-    expect(fetch).not.toHaveBeenCalled()
   })
 })
 
