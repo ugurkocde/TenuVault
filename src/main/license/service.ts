@@ -739,6 +739,11 @@ export class LicenseService {
     return data?.connectMethods?.[method] === true
   }
 
+  /** Use the latest known availability immediately before dispatching a shared-client write. */
+  connectMethodEnabledNow(method: ConnectMethod): boolean {
+    return this.connectMethodsHealth?.enabled[method] === true
+  }
+
   private fetchHealth(): Promise<LicenseHealthResponse | null> {
     return this.healthFetch ??= (async () => {
       let data: LicenseHealthResponse | null = null

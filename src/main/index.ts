@@ -340,7 +340,10 @@ async function bootstrap(): Promise<void> {
     const record = connections.get(tenant)
     return !!record && record.method !== "ownApp"
   })
-  const capabilities = new ConnectionCapabilities(tenant => connections.get(tenant), tenant => currentPacks(tenant), (method, fresh) => license.connectMethodEnabled(method, fresh))
+  const capabilities = new ConnectionCapabilities(
+    tenant => connections.get(tenant), tenant => currentPacks(tenant),
+    (method, fresh) => license.connectMethodEnabled(method, fresh), method => license.connectMethodEnabledNow(method),
+  )
   const auth: AuthManager = new AuthManager({
     fetch: bridgedFetchLater,
     cachePlugin: (clientId) => secureCachePlugin(cache, clientId),
@@ -1879,7 +1882,7 @@ async function bootstrap(): Promise<void> {
     return tenantId
   }
   const permissionAdditions = new AddPermissionsFlow({
-    fetch: chromiumFetch,
+    fetch: bridgedFetch,
     connection: async tenantId => {
       connectedTenant(tenantId)
       if (connections.get(tenantId)?.method === "tenuvaultApp") throw new Error("Review the TenuVault app packs in Sign-in and access.")

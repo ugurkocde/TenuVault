@@ -1,4 +1,7 @@
-import { isGuid } from "../../shared/security"
+import { isGuid, normalizeGuid } from "../../shared/security"
+import { executionMetadata } from "../api/execution-metadata"
+import { FetchPreconditionError } from "../api/network-error"
+import { accessTokenDigest } from "./token-identity"
 import { randomUUID } from "node:crypto"
 import { GRAPH_APP_ID } from "../../shared/services/manifest"
 import { ADD_PERMISSION_ROLES, type PermissionAdditionPreview, type PermissionAdditionResult } from "../../shared/registration-additions"
@@ -9,13 +12,14 @@ interface Application {
   publicClient: { redirectUris: string[] }; web: { redirectUris: string[] }; spa: { redirectUris: string[] }
   passwordCredentials: unknown[]; keyCredentials: unknown[]; requiredResourceAccess: ResourceAccess[]
 }
-interface Principal { id: string; appId: string; accountEnabled: boolean; passwordCredentials: unknown[]; keyCredentials: unknown[]; oauth2PermissionScopes: { id: string; value: string; isEnabled: boolean }[] }
+interface Principal { id: string; appId: string; accountEnabled: boolean; passwordCredentials: unknown[]; keyCredentials: unknown[]; publishedPermissionScopes: { id: string; value: string; isEnabled: boolean }[] }
 interface Grant { id: string; clientId: string; resourceId: string; consentType: string; principalId: string | null; scope: string }
 interface Snapshot { app: Application; client: Principal; resource: Principal; grants: Grant[] }
 // Scopes come only from the connected access token's delegated claims, never MSAL's response scopes.
 export interface AdditionConnection { tenantId: string; clientId: string; username: string; homeAccountId: string; scopes: string[]; allowed: readonly string[] }
 export interface AdditionOptions { fetch: typeof fetch; token: string; connection: AdditionConnection; additions: readonly string[]; sleep?: (ms: number) => Promise<void> }
-const ROOT = "https://graph.microsoft.com/v1.0"
+const ROOT = "https://graph.microsoft.com/beta"
+const GRANT_FIELDS = "id,clientId,resourceId,consentType,principalId,scope"
 const APP_FIELDS = "id,appId,displayName,signInAudience,publicClient,web,spa,passwordCredentials,keyCredentials,requiredResourceAccess"
 const eq = (a: string, b: string) => a.toLowerCase() === b.toLowerCase()
 const scopes = (value: string) => value.split(/\s+/).filter(Boolean)
@@ -47,7 +51,7 @@ function canonical(value: unknown): string {
   return JSON.stringify(value)
 }
 function signature(s: Snapshot): string {
-  const principal = (p: Principal) => ({ ...p, id: p.id.toLowerCase(), appId: p.appId.toLowerCase(), oauth2PermissionScopes: p.oauth2PermissionScopes.map(scope => ({ ...scope, id: scope.id.toLowerCase() })) })
+  const principal = (p: Principal) => ({ ...p, id: p.id.toLowerCase(), appId: p.appId.toLowerCase(), publishedPermissionScopes: p.publishedPermissionScopes.map(scope => ({ ...scope, id: scope.id.toLowerCase() })) })
   return canonical({ app: { ...s.app, id: s.app.id.toLowerCase(), appId: s.app.appId.toLowerCase(), requiredResourceAccess: s.app.requiredResourceAccess.map(r => ({ ...r, resourceAppId: r.resourceAppId.toLowerCase(), resourceAccess: r.resourceAccess.map(a => ({ ...a, id: a.id.toLowerCase() })) })) }, client: principal(s.client), resource: principal(s.resource), grants: s.grants.map(g => ({ ...g, clientId: g.clientId.toLowerCase(), resourceId: g.resourceId.toLowerCase(), scope: [...scopeSet(scopes(g.scope))].sort() })) })
 }
 
@@ -67,7 +71,7 @@ export class RegistrationAdditions {
     run.snapshot = await run.read()
     run.guard(run.snapshot)
     for (const name of run.options.additions) {
-      const permission = run.snapshot.resource.oauth2PermissionScopes.find(p => eq(p.value, name) && p.isEnabled)
+      const permission = run.snapshot.resource.publishedPermissionScopes.find(p => eq(p.value, name) && p.isEnabled)
       if (!permission) throw new Error(`Microsoft Graph does not publish the enabled delegated permission ${name}. Nothing was changed.`)
       run.ids.set(name, permission.id)
     }
@@ -75,11 +79,13 @@ export class RegistrationAdditions {
     return run
   }
   private async graph<T>(method: string, path: string, body?: object): Promise<T> {
-    const response = await this.options.fetch(`${ROOT}${path}`, {
+    const { tenantId, clientId } = this.options.connection
+    const registrationAddition = { tenantId: normalizeGuid(tenantId), clientId: normalizeGuid(clientId), tokenDigest: accessTokenDigest(this.options.token) }
+    const response = await executionMetadata.run({ registrationAddition }, () => this.options.fetch(`${ROOT}${path}`, {
       method, redirect: "error", signal: AbortSignal.timeout(30_000),
       headers: { Authorization: `Bearer ${this.options.token}`, "Content-Type": "application/json" },
       ...(body ? { body: JSON.stringify(body) } : {}),
-    })
+    }))
     if (!response.ok) {
       if (response.status === 403) throw new Error(`The account lacks permission or an administrator role for this action. Use an ${ADD_PERMISSION_ROLES}. Azure CLI, Entra and the text for your administrator remain available.`)
       throw new Error(`Microsoft Graph refused ${method} (HTTP ${response.status}).`)
@@ -100,7 +106,7 @@ export class RegistrationAdditions {
       next = undefined
       if (page["@odata.nextLink"]) {
         const url = new URL(page["@odata.nextLink"]!)
-        if (url.origin !== "https://graph.microsoft.com" || url.username || url.password || url.hash || url.pathname !== `/v1.0${collection}`) throw new Error("Microsoft Graph returned unexpected paging.")
+        if (url.origin !== "https://graph.microsoft.com" || url.username || url.password || url.hash || url.pathname !== `/beta${collection}`) throw new Error("Microsoft Graph returned unexpected paging.")
         next = `${url.pathname.slice(5)}${url.search}`
       }
     }
@@ -111,13 +117,13 @@ export class RegistrationAdditions {
     const federated = await this.list<{ id: string }>(`/applications/${encodeURIComponent(app.id)}/federatedIdentityCredentials?$select=id`)
     if (federated.length) throw new Error("This registration has federated credentials. Use the other permission routes. Nothing was changed by this check.")
     const principal = async (appId: string) => {
-      const found = await this.list<Principal>(`/servicePrincipals?$filter=${encodeURIComponent(`appId eq '${appId}'`)}&$select=id,appId,accountEnabled,passwordCredentials,keyCredentials,oauth2PermissionScopes`)
+      const found = await this.list<Principal>(`/servicePrincipals?$filter=${encodeURIComponent(`appId eq '${appId}'`)}&$select=id,appId,accountEnabled,passwordCredentials,keyCredentials,publishedPermissionScopes`)
       if (found.length !== 1 || !eq(found[0]!.appId, appId)) throw new Error("The exact enterprise application could not be identified. Nothing was changed by this check.")
       return found[0]!
     }
     const client = await principal(this.options.connection.clientId)
     const resource = await principal(GRAPH_APP_ID)
-    const grants = (await this.list<Grant>(`/oauth2PermissionGrants?$filter=${encodeURIComponent(`clientId eq '${client.id}'`)}`)).filter(g => eq(g.resourceId, resource.id))
+    const grants = (await this.list<Grant>(`/oauth2PermissionGrants?$filter=${encodeURIComponent(`clientId eq '${client.id}'`)}&$select=${GRANT_FIELDS}`)).filter(g => eq(g.resourceId, resource.id))
     return { app, client, resource, grants }
   }
   private guard(s: Snapshot): void {
@@ -191,9 +197,12 @@ export class RegistrationAdditions {
             let resource = requiredResourceAccess.find(r => eq(r.resourceAppId, GRAPH_APP_ID))
             if (!resource) requiredResourceAccess.push(resource = { resourceAppId: GRAPH_APP_ID, resourceAccess: [] })
             resource.resourceAccess.push(...this.preview.declare.map(n => ({ id: this.ids.get(n)!, type: "Scope" })))
-            wroteDeclarations = true
             try { await this.graph("PATCH", `/applications/${encodeURIComponent(before.app.id)}`, { requiredResourceAccess }) }
-            catch (error) { uncertain = true; issue = error instanceof Error ? error.message : String(error) }
+            catch (error) {
+              if (error instanceof FetchPreconditionError) throw error
+              uncertain = true; issue = error instanceof Error ? error.message : String(error)
+            }
+            wroteDeclarations = true
             const preserved = (s: Snapshot) => this.preserved(before, s, this.preview.declare, [])
             latest = await this.verify(declarationDone, preserved)
             if (!preserved(latest)) throw new Error(concurrent)
@@ -208,7 +217,7 @@ export class RegistrationAdditions {
           if (!stopIfChanged()) {
             this.guard(latest)
             // Read the exact approved tenant-wide grant last, not a value from the earlier list.
-            const grant = await this.graph<Grant>("GET", `/oauth2PermissionGrants/${encodeURIComponent(latest.grants[0]!.id)}`)
+            const grant = await this.graph<Grant>("GET", `/oauth2PermissionGrants/${encodeURIComponent(latest.grants[0]!.id)}?$select=${GRANT_FIELDS}`)
             latest = { ...latest, grants: [grant] }
             if (!stopIfChanged()) {
               this.guard(latest)
@@ -217,7 +226,10 @@ export class RegistrationAdditions {
               try {
                 // Existing tenant-wide consent is a prerequisite. No grant is created or deleted.
                 await this.graph("PATCH", `/oauth2PermissionGrants/${encodeURIComponent(grant.id)}`, { scope })
-              } catch (error) { uncertain = true; issue = error instanceof Error ? error.message : String(error) }
+              } catch (error) {
+                if (error instanceof FetchPreconditionError) throw error
+                uncertain = true; issue = error instanceof Error ? error.message : String(error)
+              }
               const preserved = (s: Snapshot) => this.preserved(before, s, [], this.preview.consent)
               latest = await this.verify(s => declarationDone(s) && consentDone(s), preserved)
               if (!preserved(latest)) throw new Error(concurrent)

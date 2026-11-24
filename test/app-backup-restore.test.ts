@@ -21,6 +21,7 @@ import { ingestContent, type ContentEncryption } from "../src/main/app-backup/co
 import { appRestoreAuditItem, restoreAppWithAudit, restoreCapturedApp, type AppRestoreAuditObservation } from "../src/main/app-backup/restore"
 import { restoreGraph, putRestoreBlock, type RestoreGraph } from "../src/main/app-backup/restore-graph"
 import { assertRestoredSettings, readRestoreSnapshot, restoreBody, snapshotHash, type AppRestoreSnapshot } from "../src/main/app-backup/restore-snapshot"
+import { executionMetadata } from "../src/main/api/execution-metadata"
 import { createBridgedFetch } from "../src/main/api/fetch-bridge"
 import { RESOURCE_SCOPES } from "../src/shared/constants"
 import { ConnectionCapabilities, READ_ONLY } from "../src/main/auth/connection-capabilities"
@@ -218,6 +219,46 @@ it.each(["during preflight", "during token acquisition", "during bridge availabi
     await expect(service.restore(tenant, randomUUID(), f.source.id, target, "Restored", snapshotHash(snapshot))).resolves.toMatchObject({ sourceId: f.source.id })
   } else {
     if (boundary !== "between uploads") expect(network).not.toHaveBeenCalled()
+    expect(d.calls.some(([method, path]) => method === "PATCH" || path.endsWith("/commit"))).toBe(false)
+  }
+})
+
+it.each(["block", "blocklist"])("checks both installer participants before the bridge dispatches the %s upload", async upload => {
+  for (const reason of ["switch", "availability"] as const) {
+    const f = await fixture(), d = destination()
+    const own: TenantConnection = { version: 1, method: "ownApp", clientId: appId, origin: "wizard", createdAt: "", updatedAt: "" }
+    let source: TenantConnection = { ...own, method: "tenuvaultApp", clientId: TENUVAULT_CLIENT_ID }
+    let enabled = true
+    let attempted = false
+    const caps = new ConnectionCapabilities(id => id === tenant ? source : own, undefined, async () => true, () => enabled)
+    caps.requireIssuedToken(target, own.clientId, RESOURCE_SCOPES.graph, "fixture-token")
+    const fetch = createBridgedFetch({
+      dispatch: vi.fn(), getDelegatedToken: vi.fn(),
+      fetch: async (input, init) => {
+        const url = new URL(String(input))
+        if (url.hostname.endsWith(".blob.core.windows.net")) return d.fetcher(input, init)
+        return Response.json(await d.graph(init?.method as "GET" | "POST" | "PATCH", url.href, init?.body ? JSON.parse(String(init.body)) : undefined))
+      },
+      authorizeRequest: (url, input, init, tenant) => {
+        const authorization = caps.authorizeRequest(url, input, init, tenant)
+        if (url.searchParams.get("comp") === upload) {
+          attempted = true
+          queueMicrotask(() => {
+            if (reason === "switch") source = { ...own, method: "graphCli", clientId: GRAPH_CLI_CLIENT_ID }
+            else enabled = false
+          })
+        }
+        return authorization
+      },
+    })
+    const authorization = caps.appRestoreAuthorization(tenant, target)
+    await expect(executionMetadata.run({ connections: authorization.connections, appRestoreDestination: target }, () =>
+      restoreAppWithAudit(f.store, f.source, snapshot, target, "Restored", {
+        getGraphToken: async () => "fixture-token", fetch, signal: new AbortController().signal, operationId: randomUUID(), progress: vi.fn(),
+        authorizeDispatch: authorization.authorize, authorizeUpload: authorization.authorize,
+      })), reason).rejects.toThrow(reason === "switch" ? READ_ONLY : "currently unavailable")
+    expect(attempted).toBe(true)
+    expect(d.fetcher.mock.calls.map(([input]) => new URL(String(input)).searchParams.get("comp"))).toEqual(upload === "blocklist" ? ["block"] : [])
     expect(d.calls.some(([method, path]) => method === "PATCH" || path.endsWith("/commit"))).toBe(false)
   }
 })

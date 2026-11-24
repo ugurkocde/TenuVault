@@ -1,4 +1,8 @@
 import { expect, it, vi } from "vitest"
+import { AddPermissionsFlow } from "../src/main/auth/add-permissions-flow"
+import { createBridgedFetch } from "../src/main/api/fetch-bridge"
+import { ConnectionCapabilities, READ_ONLY } from "../src/main/auth/connection-capabilities"
+import { GRAPH_CLI_CLIENT_ID, type TenantConnection } from "../src/shared/tenant-connection"
 import { RegistrationAdditions, sameAdditionConnection } from "../src/main/auth/registration-additions"
 import { additionConnection, additionGraph } from "./fixtures/registration-additions"
 
@@ -50,13 +54,13 @@ it.each(["audience", "redirect", "web", "spa", "secret", "certificate", "princip
   if (refusal === "individual") fake.state.grants[0]!.consentType = "Principal"
   if (refusal === "duplicates") fake.state.grants.push({ ...fake.state.grants[0]!, id: "duplicate" })
   if (refusal === "disabled") fake.state.client.accountEnabled = false
-  if (refusal === "scopeUnavailable") fake.state.resource.oauth2PermissionScopes[0]!.isEnabled = false
+  if (refusal === "scopeUnavailable") fake.state.resource.publishedPermissionScopes[0]!.isEnabled = false
   await expect(prepare(fake)).rejects.toThrow()
   expect(fake.writes).toEqual([])
 })
 it.each(["declaration", "consent"])("reports a %s refusal as partial and preserves existing consent", async phase => {
   const fake = additionGraph()
-  fake.state.failure = phase === "declaration" ? "/v1.0/applications/app-object" : "/v1.0/oauth2PermissionGrants/grant-id"
+  fake.state.failure = phase === "declaration" ? "/beta/applications/app-object" : "/beta/oauth2PermissionGrants/grant-id"
   const { run } = await prepare(fake)
   const result = await run.apply()
   expect(result.state).toBe("partial")
@@ -68,7 +72,7 @@ it.each(["declaration", "consent"])("reports a %s refusal as partial and preserv
 })
 it.each(["declaration", "consent", "readAfter"])("reads back an unanswered %s write without resending it", async phase => {
   const fake = additionGraph()
-  fake.state.throwAfter = phase === "declaration" ? "/v1.0/applications/app-object" : "/v1.0/oauth2PermissionGrants/grant-id"
+  fake.state.throwAfter = phase === "declaration" ? "/beta/applications/app-object" : "/beta/oauth2PermissionGrants/grant-id"
   if (phase === "readAfter") fake.state.failure = "readAfter"
   const { run } = await prepare(fake)
   const result = await run.apply()
@@ -160,7 +164,7 @@ it.each(["displayName", "unknownIdentity", "unknownDeclaration", "grantId"])("st
 it.each([{ additions: [] }, { additions: ["Directory.ReadWrite.All"] }])("rejects an invalid permission choice $additions", async ({ additions }) => {
   await expect(prepare(additionGraph(), additions)).rejects.toThrow("Choose permissions")
 })
-it.each(["https://evil.test/v1.0/oauth2PermissionGrants", "https://graph.microsoft.com/v1.0/users", "https://graph.microsoft.com/v1.0/oauth2PermissionGrants?$skiptoken=same"])("rejects unsafe or repeated paging %s", async page => {
+it.each(["https://evil.test/beta/oauth2PermissionGrants", "https://graph.microsoft.com/beta/users", "https://graph.microsoft.com/beta/oauth2PermissionGrants?$skiptoken=same"])("rejects unsafe or repeated paging %s", async page => {
   const fake = additionGraph(); fake.state.badPage = page
   await expect(prepare(fake)).rejects.toThrow("paging")
   expect(fake.writes).toEqual([])
@@ -259,8 +263,8 @@ it("compares the exact grant's data without mistaking its response context for a
   const implementation = request.getMockImplementation()!
   request.mockImplementation(async (input, init) => {
     const answer = await implementation(input, init)
-    if (init?.method === "GET" && String(input).endsWith("/oauth2PermissionGrants/grant-id")) {
-      return Response.json({ ...await answer.json(), "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#oauth2PermissionGrants/$entity" })
+    if (init?.method === "GET" && new URL(String(input)).pathname.endsWith("/oauth2PermissionGrants/grant-id")) {
+      return Response.json({ ...await answer.json(), "@odata.context": "https://graph.microsoft.com/beta/$metadata#oauth2PermissionGrants/$entity" })
     }
     return answer
   })
@@ -278,7 +282,7 @@ it.each(["declaration", "consent"])("finishes all awaited checks before the exac
     return implementation(input, init)
   })
   expect((await run.apply(async () => { events.push("connection check") })).state).toBe("complete")
-  const target = phase === "declaration" ? "/v1.0/applications/app-object" : "/v1.0/oauth2PermissionGrants/grant-id"
+  const target = phase === "declaration" ? "/beta/applications/app-object" : "/beta/oauth2PermissionGrants/grant-id"
   const patch = events.indexOf(`PATCH ${target}`)
   expect(events[patch - 1]).toBe(`GET ${target}`)
   expect(events.slice(0, patch)).toContain("connection check")
@@ -290,7 +294,7 @@ it.each(["declaration", "consent"])("stops on a change returned by the final exa
   const implementation = request.getMockImplementation()!
   let injected = false
   request.mockImplementation(async (input, init) => {
-    const target = phase === "declaration" ? "/v1.0/applications/app-object" : "/v1.0/oauth2PermissionGrants/grant-id"
+    const target = phase === "declaration" ? "/beta/applications/app-object" : "/beta/oauth2PermissionGrants/grant-id"
     if (init?.method === "GET" && new URL(String(input)).pathname === target) {
       injected = true
       if (phase === "declaration") fake.state.app.publicClient.redirectUris = ["https://remote.test"]
@@ -303,6 +307,38 @@ it.each(["declaration", "consent"])("stops on a change returned by the final exa
   expect(result.state).toBe("changed")
   expect(fake.writes).toHaveLength(phase === "declaration" ? 0 : 1)
 })
+it.each(["declaration", "consent"])("stops the permission %s write when the tenant switches during exact read-back", async phase => {
+  const fake = additionGraph()
+  const own: TenantConnection = { version: 1, method: "ownApp", clientId: additionConnection.clientId, origin: "wizard", createdAt: "", updatedAt: "" }
+  let record = own
+  const caps = new ConnectionCapabilities(() => record)
+  const target = phase === "declaration" ? "/applications/app-object" : "/oauth2PermissionGrants/grant-id"
+  let switched = false
+  const network: typeof fetch = async (input, init) => {
+    const response = await fake.request(input, init)
+    if (init?.method === "GET" && new URL(String(input)).pathname.endsWith(target)) {
+      record = { ...own, method: "graphCli", clientId: GRAPH_CLI_CLIENT_ID }
+      switched = true
+    }
+    return response
+  }
+  const fetch = createBridgedFetch({
+    dispatch: vi.fn(), getDelegatedToken: vi.fn(), fetch: network,
+    authorizeRequest: (url, input, init, tenant) => caps.authorizeRequest(url, input, init, tenant),
+  })
+  const flow = new AddPermissionsFlow({
+    fetch, connection: async () => { caps.requireWrite([additionConnection.tenantId]); return additionConnection },
+    signIn: async () => "ephemeral", refresh: vi.fn(),
+  })
+  const preview = await flow.preview(additionConnection.tenantId, ["Policy.Read.All"])
+  const result = await flow.confirm(additionConnection.tenantId, preview.id)
+  expect(switched).toBe(true)
+  expect(fake.writes.map(write => write.path.replace(/^\/(?:beta|v1\.0)/, ""))).toEqual(phase === "declaration" ? [] : ["/applications/app-object"])
+  expect(result).toMatchObject({ state: "partial", missingConsent: ["Policy.Read.All"] })
+  expect(result.message).toContain(READ_ONLY)
+  expect(result.message).not.toContain("may have been applied")
+})
+
 it("preserves other APIs when introducing the first Graph declaration", async () => {
   const fake = additionGraph()
   fake.state.app.requiredResourceAccess.splice(1)

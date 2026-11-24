@@ -354,8 +354,8 @@ describe("Start now capability", () => {
       "/api/restore-backup": { POST: async () => {
         await batch("POST")
         await f.connections.switch(changedTenant, { method: "graphCli" })
-        await expect(batch("POST")).rejects.toThrow(side === "source" ? READ_ONLY : "method changed")
-        await expect(batch("POST", "Bearer opaque")).rejects.toThrow("could not verify")
+        await expect(batch("POST")).rejects.toThrow(READ_ONLY)
+        await expect(batch("POST", "Bearer opaque")).rejects.toThrow(READ_ONLY)
         if (side === "source") await expect(batch("GET")).resolves.toBeInstanceOf(Response)
         else await expect(batch("GET")).rejects.toThrow("method changed")
         return Response.json({ ok: true })
@@ -395,6 +395,43 @@ describe("Start now capability", () => {
     }))
     expect(network).not.toHaveBeenCalled()
     expect(response.status).toBe(200)
+  })
+
+  it.each(["POST", "PATCH", "PUT", "DELETE", "batch"])("stops a single-tenant restore %s in the bridge's last turn", async method => {
+    const own: TenantConnection = { version: 1, method: "ownApp", clientId: OWN, origin: "wizard", createdAt: NOW, updatedAt: NOW }
+    let record = own
+    let nextConnection = { ...own, clientId: NEXT }
+    const cap = new ConnectionCapabilities(() => record)
+    cap.requireIssuedToken(TENANT, OWN, RESOURCE_SCOPES.graph, "opaque-restore")
+    const network = vi.fn(async () => new Response("{}"))
+    const fetch = createBridgedFetch({
+      dispatch: vi.fn(), getDelegatedToken: vi.fn(), fetch: network,
+      authorizeRequest: (url, input, init, tenant) => {
+        const authorization = cap.authorizeRequest(url, input, init, tenant)
+        queueMicrotask(() => { record = nextConnection })
+        return authorization
+      },
+    })
+    const host = new ApiHost({ bindConnections: ids => cap.bindConnections(ids), guard: request => cap.guard(request), routes: {
+      "/api/restore-backup": { POST: async () => {
+        const path = "/deviceManagement/configurationPolicies"
+        const batch = method === "batch"
+        const response = await fetch(`https://graph.microsoft.com/beta${batch ? "/$batch" : path}`, {
+          method: batch ? "POST" : method, headers: { authorization: "Bearer opaque-restore" },
+          ...(batch ? { body: JSON.stringify({ requests: [{ id: "1", method: "PATCH", url: path }] }) } : {}),
+        })
+        return Response.json({ ok: response.ok })
+      } },
+    } })
+    const restore = () => host.dispatch(new Request("http://test/api/restore-backup", {
+      method: "POST", body: JSON.stringify({ tenantId: TENANT }),
+    }))
+    expect(await (await restore()).json()).toEqual({ ok: true })
+    expect(network).toHaveBeenCalledOnce()
+    record = own
+    nextConnection = { ...own, method: "graphCli", clientId: GRAPH_CLI_CLIENT_ID }
+    expect(await (await restore()).json()).toEqual({ error: READ_ONLY })
+    expect(network).toHaveBeenCalledOnce()
   })
 
   it("blocks writes even with a write token, including copy from or to the tenant", async () => {
@@ -456,9 +493,10 @@ describe("TenuVault app capabilities", () => {
       createdAt: NOW, updatedAt: NOW, graphScopes,
     })
     const caps = new ConnectionCapabilities(record, () => packs, async () => enabled)
-    const send = (claims: object, path = "deviceManagement/configurationPolicies") => {
+    const send = async (claims: object, path = "deviceManagement/configurationPolicies") => {
       const url = new URL("https://graph.microsoft.com/beta/" + path)
-      return caps.authorizeRequest(url, url, { method: "POST", headers: { Authorization: `Bearer ${jwt(claims)}` } }, TENANT)
+      const authorization = await caps.authorizeRequest(url, url, { method: "POST", headers: { Authorization: `Bearer ${jwt(claims)}` } }, TENANT)
+      authorization?.beforeDispatch?.()
     }
     const broad = { tid: TENANT, azp: TENUVAULT_CLIENT_ID, scp: graphScopes.join(" ") + " DeviceManagementConfiguration.ReadWrite.All Application.ReadWrite.All" }
     await expect(send(broad)).rejects.toThrow("restore permission pack")
@@ -565,6 +603,7 @@ describe("TenuVault app capabilities", () => {
       if (method === "graphCli") await expect(read).resolves.toMatchObject({ url: { href: url.href } })
       else await expect(read).resolves.toBeUndefined()
       const write = cap.authorizeRequest(url, url, { method: "POST", headers }, TENANT)
+        .then(authorization => authorization?.beforeDispatch?.())
       if (method === "graphCli") await expect(write).rejects.toThrow(READ_ONLY)
       else await expect(write).resolves.toBeUndefined()
       enabled = false
@@ -585,6 +624,7 @@ describe("TenuVault app capabilities", () => {
       const url = new URL(`https://graph.microsoft.com/beta/directory/deletedItems/${OWN}/restore`)
       const headers = { authorization: `Bearer ${jwt({ tid: TENANT, azp: TENUVAULT_CLIENT_ID, scp: [...scopes, "User.DeleteRestore.All"].join(" ") })}` }
       const send = () => cap.authorizeRequest(url, url, { method: "POST", headers }, TENANT)
+        .then(authorization => authorization?.beforeDispatch?.())
       await expect(send()).rejects.toThrow("restore permission pack")
       const checked = executionMetadata.run({ directoryRecycle: { type, path: url.pathname } }, send)
       if (type === "user") await expect(checked).rejects.toThrow("restore permission pack")

@@ -1,3 +1,4 @@
+import type { GraphCall } from "../src/portal/lib/policies/graph-restore"
 import { describe, expect, it, vi } from "vitest"
 import { routes as syncRoutes } from "../src/main/features/sync"
 import { routes as promotionRoutes } from "../src/main/features/promotion"
@@ -10,9 +11,10 @@ import type { SyncRunRecord, SyncSkip } from "../src/main/features/sync/engine"
 import { recordSyncLinks, syncLinks, type SyncLink, type SyncLinksRecord } from "../src/main/features/sync/links"
 import { ApiHost } from "../src/main/api/host"
 import { createBridgedFetch } from "../src/main/api/fetch-bridge"
-import { ConnectionCapabilities } from "../src/main/auth/connection-capabilities"
+import { ConnectionCapabilities, READ_ONLY } from "../src/main/auth/connection-capabilities"
 import { executionMetadata } from "../src/main/api/execution-metadata"
 import { RESOURCE_SCOPES } from "../src/shared/constants"
+import { GRAPH_CLI_CLIENT_ID, TENUVAULT_CLIENT_ID, type TenantConnection } from "../src/shared/tenant-connection"
 import { planGuard, requiredFeatures } from "../src/main/api/plan-gates"
 import { upgradeMessage, type Plan } from "../src/shared/plans"
 import { call, fakeDeps, TENANT_A, TENANT_B, TENANT_C } from "./feature-helpers"
@@ -1459,4 +1461,71 @@ it("binds the source recovered from a saved Sync when preview rereads it", async
   expect(response.status).toBe(200)
   expect(await response.json()).toMatchObject({ sourceChanges: [] })
   expect(network.mock.calls.map(([, init]) => new Headers(init?.headers).get("authorization"))).toContain(`Bearer opaque-${TENANT_A}`)
+})
+
+it.each(["Promotion", "Sync"] as const)("stops %s writes in the bridge when the source switches or loses availability", async feature => {
+  for (const reason of ["switch", "availability"] as const) {
+    const context = setup()
+    const isSync = feature === "Sync"
+    const post = isSync ? context.post : context.promote
+    const sourceFields = isSync ? {} : { sourceTenantId: TENANT_A, targetTenants: named([TENANT_A]) }
+    const plan = isSync ? (await planned(context)).targets[0]!.promotion! :
+      (await context.promote({ action: "plan", tenantId: TENANT_B, ...sourceFields, title: "Promote", items: [{ sourceId: context.policy.id }] })).body.promotion
+    const preview = await post({ action: "preview", tenantId: TENANT_B, id: plan.id, ...sourceFields })
+    expect(preview.status).toBe(200)
+    const { contentHash, targetFingerprint } = preview.body.changeSet
+    const approval = await post({ action: "approve", tenantId: TENANT_B, id: plan.id, contentHash, targetFingerprint, ...sourceFields, ...(isSync ? { backup: "new" } : {}) })
+    expect(approval.status).toBe(200)
+
+    const own: TenantConnection = { version: 1, origin: "wizard", method: "ownApp", clientId: TENANT_D, createdAt: "", updatedAt: "" }
+    let source: TenantConnection = { ...own, method: "tenuvaultApp", clientId: TENUVAULT_CLIENT_ID }
+    let enabled = true
+    let attempted = false
+    const caps = new ConnectionCapabilities(id => id === TENANT_A ? source : own, undefined, async () => true, () => enabled)
+    const originalGraph = context.deps.graph
+    const fetch = createBridgedFetch({
+      dispatch: vi.fn(), getDelegatedToken: vi.fn(),
+      fetch: async (input, init) => {
+        const url = new URL(String(input))
+        const tenant = new Headers(init?.headers).get("authorization")?.slice("Bearer opaque-".length)
+        if (tenant !== TENANT_A && tenant !== TENANT_B) throw new Error("Unexpected tenant token.")
+        const graph = await originalGraph(tenant)
+        const response = await graph((init?.method ?? "GET") as Parameters<GraphCall>[0], url.pathname.slice("/beta/".length) + url.search,
+          init?.body ? JSON.parse(String(init.body)) : undefined)
+        return response.status === 204 ? new Response(null, { status: 204 }) : Response.json(response.body, { status: response.status })
+      },
+      authorizeRequest: (url, input, init, tenant) => {
+        const authorization = caps.authorizeRequest(url, input, init, tenant)
+        if (!attempted && init?.method !== "GET") {
+          attempted = true
+          queueMicrotask(() => {
+            if (reason === "switch") source = { ...own, method: "graphCli", clientId: GRAPH_CLI_CLIENT_ID }
+            else enabled = false
+          })
+        }
+        return authorization
+      },
+    })
+    context.deps.graph = async tenant => {
+      const accessToken = `opaque-${tenant}`
+      caps.requireIssuedToken(tenant, tenant === TENANT_A ? source.clientId : own.clientId, RESOURCE_SCOPES.graph, accessToken)
+      return async (method, path, body) => {
+        const response = await fetch("https://graph.microsoft.com/beta/" + path, {
+          method, headers: { authorization: `Bearer ${accessToken}` }, ...(body ? { body: JSON.stringify(body) } : {}),
+        })
+        return { status: response.status, body: response.status === 204 ? {} : await response.json() }
+      }
+    }
+    const route = isSync ? PATH : "/api/promotion"
+    const host = new ApiHost({
+      routes: (isSync ? syncRoutes : promotionRoutes)(context.deps), guard: request => caps.guard(request),
+      bindConnections: ids => caps.bindConnections(ids),
+    })
+    const response = await host.dispatch(new Request("http://tenuvault.internal" + route, {
+      method: "POST", body: JSON.stringify({ action: "apply", tenantId: TENANT_B, id: plan.id, ...sourceFields, contentHash, confirm: true }),
+    }))
+    expect(attempted).toBe(true)
+    expect(context.targets[TENANT_B]!.writeCount(), `${feature}: ${reason}`).toBe(0)
+    expect(await response.text()).toContain(reason === "switch" ? READ_ONLY : "currently unavailable")
+  }
 })

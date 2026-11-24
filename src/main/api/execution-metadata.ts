@@ -10,6 +10,8 @@ export interface ExecutionMetadata {
   bindParticipants?: (tenantIds: readonly string[]) => void
   /** The temporary Graph acquisition used only while provisioning an own registration. */
   registrationSetup?: { tenantId: string; clientId: string; tokenDigest: string }
+  /** Temporary consent bearer bound to the approved own registration. */
+  registrationAddition?: { tenantId: string; clientId: string; tokenDigest: string }
   /** Set only around the final write after a fresh deleted-object type check. */
   directoryRecycle?: { path: string; type: "user" | "group" }
   /** Installer restore also binds its source for metadata reads and content uploads. */

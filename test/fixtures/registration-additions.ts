@@ -12,8 +12,8 @@ export function additionGraph() {
     { resourceAppId: "other-api", resourceAccess: [{ id: "unknown", type: "Role", extra: "keep" } as { id: string; type: string; extra?: string }] },
     { resourceAppId: GRAPH_APP_ID.toUpperCase(), resourceAccess: [{ id: "pending-id", type: "Scope" }, { id: "role-id", type: "Role" }] },
   ] }
-  const client = { id: "client-object", appId: additionConnection.clientId, accountEnabled: true, passwordCredentials: [] as unknown[], keyCredentials: [] as unknown[], oauth2PermissionScopes: [] }
-  const resource = { id: "graph-object", appId: GRAPH_APP_ID, accountEnabled: true, passwordCredentials: [], keyCredentials: [], oauth2PermissionScopes: [{ id: "policy-id", value: "Policy.Read.All", isEnabled: true }, { id: "group-id", value: "Group.Read.All", isEnabled: true }] }
+  const client = { id: "client-object", appId: additionConnection.clientId, accountEnabled: true, passwordCredentials: [] as unknown[], keyCredentials: [] as unknown[], publishedPermissionScopes: [] }
+  const resource = { id: "graph-object", appId: GRAPH_APP_ID, accountEnabled: true, passwordCredentials: [], keyCredentials: [], publishedPermissionScopes: [{ id: "policy-id", value: "Policy.Read.All", isEnabled: true }, { id: "group-id", value: "Group.Read.All", isEnabled: true }] }
   const grants = [{ id: "grant-id", clientId: client.id, resourceId: resource.id, consentType: "AllPrincipals", principalId: null as string | null, scope: "User.Read Unknown.Read" }, { id: "other-grant", clientId: client.id, resourceId: "other-resource", consentType: "AllPrincipals", principalId: null as string | null, scope: "Other.Read" }]
   const state = { app, client, resource, grants, federated: [] as { id: string }[], failure: "", throwAfter: "", stale: false, badPage: "", readFailure: false }
   const writes: { method: string; path: string; body: unknown }[] = []
@@ -33,8 +33,8 @@ export function additionGraph() {
     }
     if (state.readFailure) return new Response("", { status: 503 })
     const value = url.pathname.includes("federatedIdentityCredentials") ? { value: state.federated }
-      : (url.pathname.includes("/applications(") || url.pathname.toLowerCase() === `/v1.0/applications/${state.app.id.toLowerCase()}`) ? state.app
-      : url.pathname === "/v1.0/oauth2PermissionGrants/grant-id" ? state.grants[0]
+      : (url.pathname.includes("/applications(") || url.pathname.toLowerCase() === `/beta/applications/${state.app.id.toLowerCase()}`) ? state.app
+      : url.pathname === "/beta/oauth2PermissionGrants/grant-id" ? state.grants[0]
       : url.pathname.endsWith("servicePrincipals") ? { value: [url.searchParams.get("$filter")?.toLowerCase().includes(state.client.appId.toLowerCase()) ? state.client : state.resource] }
       : { value: state.grants, ...(state.badPage ? { "@odata.nextLink": state.badPage } : {}) }
     return Response.json(value)

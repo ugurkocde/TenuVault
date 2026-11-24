@@ -15,6 +15,8 @@ You connect a tenant by signing in with your own admin account. The guided setup
 
 The tenant keeps its schedules, settings and backup history when you switch. Start now supports local policy backups. For restore, deployment, Copy to Tenants, remediation, installer capture or Azure storage, select **Upgrade to the TenuVault app** when available, or **Use your own app registration**. See [Start now troubleshooting](/troubleshooting/#start-now-sign-in).
 
+If you switch a tenant to Start now while a change is running, TenuVault stops sending further changes for that operation. This applies to every tenant involved in a Promotion, Sync or installer restore. Any changes already accepted by Microsoft stay in place.
+
 ## TenuVault app sign-in
 
 The shared TenuVault app is a gated connection method for tenants connected through the new sign-in wizard. Availability depends on the license service and tenant validation. For an eligible tenant, open **Settings > Sign-in and access** and select **Use TenuVault app**. The packs reflect the tenant's selected services, access levels and storage.
