@@ -85,11 +85,11 @@ export class PackConsentFlow {
     signInForPack: (tenant: string, pack: PermissionPack, checkOnly: boolean) => Promise<void>
   }) {}
 
-  async act(tenant: string, packId: unknown, action: unknown): Promise<PackConsentResult> {
+  async act(tenant: string, packId: unknown, action: unknown, plan = this.host.plan): Promise<PackConsentResult> {
     if (typeof packId !== "string" || (action !== "open" && action !== "handoff" && action !== "request" && action !== "check")) {
       return { status: "error", issue: { code: "invalid_request", message: "Choose a permission pack." } }
     }
-    const pack = (await this.host.plan(tenant))?.find(pack => pack.id === packId)
+    const pack = (await plan(tenant))?.find(pack => pack.id === packId)
     if (!pack) return { status: "error", issue: { code: "unavailable", message: "That permission pack is unavailable. Review your sign-in method and service choices." } }
     if (action === "handoff") return handoffPack(tenant, pack)
     if (this.pending.has(tenant)) return { status: "error", issue: { code: "conflict", message: "Finish the permission request already open for this tenant." } }

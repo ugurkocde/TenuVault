@@ -278,11 +278,13 @@ export class AuthManager {
     loginHint?: string
     /** Called when the browser has answered and the code is being redeemed: the browser step is over. */
     onBrowserDone?: () => void
+    staged?: { cache: ICachePlugin; beforeSave: (tenantId: string) => void }
   }): Promise<SignedInAccount> {
     if (normalizeGuid(clientId) === GRAPH_CLI_CLIENT_ID) throw new Error("Choose Start now in the sign-in method settings.")
     if (normalizeGuid(clientId) === TENUVAULT_CLIENT_ID) throw new Error("Choose TenuVault app in the sign-in method settings.")
     this.host.authorizeInteractive?.(tenant)
-    const result = await this.acquireInteractive(clientId, tenant, RESOURCE_SCOPES.graph, options?.loginHint ? undefined : "select_account", options?.loginHint, true, options?.onBrowserDone).catch((error: unknown) => {
+    const stagedApp = options?.staged && this.createApp(clientId, options.staged.cache, true)
+    const result = await this.acquireInteractive(clientId, tenant, RESOURCE_SCOPES.graph, options?.loginHint ? undefined : "select_account", options?.loginHint, true, options?.onBrowserDone, stagedApp).catch((error: unknown) => {
       throw firstSignInError(error)
     })
     const account = result.account
@@ -297,6 +299,7 @@ export class AuthManager {
     }
     this.host.authorizeInteractive?.(signedIn.tenantId)
     this.host.authorizeConnection?.(signedIn.tenantId, clientId, RESOURCE_SCOPES.graph)
+    options?.staged?.beforeSave(signedIn.tenantId)
     this.host.accountStore.set(signedIn)
     return { tenantId: signedIn.tenantId, clientId, username: signedIn.username, name: signedIn.name }
   }
@@ -362,7 +365,7 @@ export class AuthManager {
   }
 
   /** Keep the account and cache staged until the selected packs are confirmed for this tenant. */
-  async stageTenuVaultSignIn(tenant: string, cache: ICachePlugin, packs: readonly PermissionPack[]): Promise<Pick<StagedSignIn, "account" | "accessToken" | "graphScopes" | "grantedScopes">> {
+  async stageTenuVaultSignIn(tenant: string, cache: ICachePlugin, packs: readonly PermissionPack[]): Promise<Pick<StagedSignIn, "account" | "accessToken" | "graphScopes" | "grantedScopes" | "idToken">> {
     const app = this.createApp(TENUVAULT_CLIENT_ID, cache, true)
     const graphScopes = resourcePackScopes(packs, "graph")
     try {
@@ -395,7 +398,7 @@ export class AuthManager {
       }
       return {
         account: { tenantId: tenant, clientId: TENUVAULT_CLIENT_ID, username: account.username, name: account.name, homeAccountId: account.homeAccountId },
-        accessToken: result.accessToken, graphScopes, grantedScopes: result.grantedScopes,
+        accessToken: result.accessToken, graphScopes, grantedScopes: result.grantedScopes, idToken: result.idToken,
       }
     } catch (error) {
       throw sharedSignInFailure(error, false)

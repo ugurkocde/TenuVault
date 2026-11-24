@@ -1,3 +1,5 @@
+import type { SignedInAccount } from "./ipc"
+
 export const GRAPH_CLI_CLIENT_ID = "14d82eec-204b-4c2f-b7e8-296a70dab67e"
 export const TENUVAULT_CLIENT_ID = "61eff188-672b-4be4-acac-2d254a6f9e05"
 
@@ -60,3 +62,12 @@ export interface ConnectionSwitchResult {
 }
 
 export type ConnectionSwitchResponse = { result: ConnectionSwitchResult } | { error: { code: string; message: string } }
+
+export type WizardSignInMethod = Exclude<SignInMethod, "ownApp">
+export interface WizardSignInResult {
+  id: string
+  account: SignedInAccount
+  coverage: BackupScopeCoverage[]
+}
+export type WizardSignInResponse = { result: WizardSignInResult } | { error: { code: string; message: string } }
+export type WizardFinishResponse = { result: true } | { error: { code: string; message: string } }

@@ -71,6 +71,7 @@ export class AppRegistrationSetup {
     progress: (progress: SetupProgress) => void
     /** How the setup sign-in and the provisioning ended, for setup diagnostics. */
     report?: (event: SetupEventInput) => void
+    checkNewTenant?: (tenantId: string) => void
   }) {}
 
   cancel(): void { this.controller?.abort(); this.cancelWaiting?.() }
@@ -158,6 +159,7 @@ export class AppRegistrationSetup {
           (identity.decoded && (identity.tenantId !== tenantId || identity.clientId !== GRAPH_CLI_CLIENT_ID))) {
           throw new Error("Microsoft returned a setup sign-in for a different tenant or app. Nothing was changed.")
         }
+        this.host.checkNewTenant?.(tenantId)
         const registrationSetup = { tenantId, clientId: GRAPH_CLI_CLIENT_ID, tokenDigest: accessTokenDigest(result.accessToken) }
         const registration = await executionMetadata.run({ registrationSetup }, () => provisionRegistration({
           fetch: this.host.fetch, token: result.accessToken,

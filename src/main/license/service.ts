@@ -641,7 +641,7 @@ export class LicenseService {
     }
   }
 
-  async tenantTrialAction(tenantId: string, action: "extend_trial" | "end_trial" | "resume_trial" | "trial_contact" | "acknowledge", email?: string): Promise<void> {
+  async tenantTrialAction(tenantId: string, action: "extend_trial" | "end_trial" | "resume_trial" | "trial_contact" | "acknowledge", email?: string, contactProof?: string): Promise<void> {
     this.load()
     const tenant = tenantId.toLowerCase()
     return this.mutate([tenant], true, async () => {
@@ -653,7 +653,7 @@ export class LicenseService {
       if (action === "resume_trial" && this.trialResumeUntil(tenant) === null) throw new Error(TRIAL_RESUME_OVER)
       const current = this.requestGuard(tenant)
       try {
-        const data = await this.tenantCall(tenant, action, current, { activationId: record.activationId }, undefined, email === undefined ? {} : { email })
+        const data = await this.tenantCall(tenant, action, current, { activationId: record.activationId }, action === "trial_contact" ? contactProof : undefined, email === undefined ? {} : { email })
         if (action === "extend_trial") {
           this.accept(tenant, data, "trial")
           this.rememberTrial(tenant, data)

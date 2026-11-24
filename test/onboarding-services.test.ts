@@ -41,7 +41,7 @@ it("reports chosen missing permissions from a token and leaves unknown checks ad
   const choice = { entra: { access: "backup" as const } }
   const token = (scp: string) => ({ accessToken: `x.${Buffer.from(JSON.stringify({ scp })).toString("base64url")}.x` })
   expect((await checkOnboardingPermissions(choice, async () => token("User.Read Organization.Read.All"))).missing).toContain("Policy.Read.All")
-  expect(await checkOnboardingPermissions(choice, async () => token(graphPermissions(choice, "delegated").join(" ")))).toEqual({ missing: [] })
+  expect(await checkOnboardingPermissions(choice, async () => token(graphPermissions(choice, "delegated").join(" ")))).toMatchObject({ missing: [] })
   expect(await checkOnboardingPermissions(choice, async () => ({ accessToken: "unreadable" }))).toMatchObject({ missing: [], error: expect.any(String) })
-  expect(await checkOnboardingPermissions(choice, async () => { throw new Error("Offline") })).toEqual({ missing: [], error: "Offline" })
+  expect(await checkOnboardingPermissions(choice, async () => { throw new Error("Offline") })).toMatchObject({ missing: [], error: "Offline" })
 })

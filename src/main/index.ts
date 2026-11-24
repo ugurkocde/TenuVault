@@ -1,4 +1,5 @@
 import { GRAPH_CLI_CLIENT_ID, GRAPH_CLI_CONSENT_WARNING, GRAPH_CLI_DISABLED, GRAPH_CLI_NEXT_STEP, TENUVAULT_CLIENT_ID } from "../shared/tenant-connection"
+import { WizardSignIn, wizardChoice, wizardFailure } from "./auth/wizard-sign-in"
 import { PackConsentFlow } from "./auth/pack-consent"
 import { ConnectionSwitchError } from "./auth/switch-failure"
 import { tenantPermissionPacks, resourcePackScopes, resourceScopes } from "../shared/services/permission-packs"
@@ -74,7 +75,6 @@ import { routes } from "./api/routes"
 import { AuthManager, isResourceScope, requireOwnReauthenticationClient, SignInRequiredError } from "./auth/msal"
 import { TenantConnections } from "./auth/tenant-connections"
 import { ConnectionCapabilities } from "./auth/connection-capabilities"
-import { graphCliCoverage } from "../shared/services/graph-cli-coverage"
 import { connectionChoice, connectionCoverage } from "./auth/connection-coverage"
 import { BackupEngine, verifyStorageAccess, type BackupJob } from "./backup/engine"
 import { BackupScheduler, notifiedStatus, reportsResult, runUnattended, scheduledResult } from "./backup/scheduler"
@@ -93,7 +93,7 @@ import { folderToOpen, localInventoryProblem } from "./backup/local-inventory"
 import { legacyAzureReader, registerStorageToken } from "./storage/azure-seal"
 import { createArmCaller } from "./azure/arm"
 import { BackupReaderService, readerConfidenceRead } from "./auth/backup-reader"
-import { checkedChoice, readerSetupArguments } from "../shared/services/manifest"
+import { readerSetupArguments } from "../shared/services/manifest"
 // The same setup script the docs site downloads and the card copies, bundled so Save writes it exactly.
 import readerSetupScript from "../../resources/New-TenuVaultBackupReader.ps1?raw"
 import desktopSetupScript from "../../resources/New-TenuVaultDesktopApp.ps1?raw"
@@ -309,8 +309,7 @@ async function bootstrap(): Promise<void> {
     const staged = stageConnectionCache(cache, GRAPH_CLI_CLIENT_ID)
     return { ...(await auth.stageGraphCliSignIn(tenant, staged.plugin)), cacheWrites: staged.cacheWrites }
   }
-  const stagedGraphCliProof = new Map<string, string>()
-  const enrollingGraphCli = new Set<string>()
+  const stagedWizardProof = new Map<string, { idToken: string; clientId: string }>()
   const connections = new TenantConnections({
     store: appStore,
     legacyCache: tokenStore,
@@ -396,8 +395,8 @@ async function bootstrap(): Promise<void> {
     appVersion: app.getVersion(),
     // The ID token proves the tenant for organization license sharing; its audience is
     // the app registration the tenant is signed in with.
-    idToken: async (tenantId) => stagedGraphCliProof.get(tenantId) ?? auth.getIdToken(tenantId),
-    clientId: (tenantId) => stagedGraphCliProof.has(tenantId) ? GRAPH_CLI_CLIENT_ID : accounts.get(tenantId)?.clientId ?? null,
+    idToken: async (tenantId) => stagedWizardProof.get(tenantId)?.idToken ?? auth.getIdToken(tenantId),
+    clientId: (tenantId) => stagedWizardProof.get(tenantId)?.clientId ?? accounts.get(tenantId)?.clientId ?? null,
     ownClientId: (tenantId) => {
       const connection = connections.get(tenantId)
       return connection ? connection.ownClientId ?? null : accounts.get(tenantId)?.clientId ?? null
@@ -1524,7 +1523,12 @@ async function bootstrap(): Promise<void> {
       pushLicense()
     }
   }
+  const wizardExistingTenant = (tenant: string) => Boolean(connections.get(tenant) || tenantProfile(tenant))
+  const checkWizardTenant = (tenant: string) => {
+    if (wizardExistingTenant(tenant)) throw new Error("This tenant is already connected to TenuVault.")
+  }
   const registrationSetup = new AppRegistrationSetup({
+    checkNewTenant: checkWizardTenant,
     fetch: bridgedFetchLater,
     openBrowser: url => shell.openExternal(url),
     progress: progress => {
@@ -1560,14 +1564,23 @@ async function bootstrap(): Promise<void> {
   handleTrusted("setup:cancelCreateRegistration", () => registrationSetup.cancel())
   // Try again on the setup sign-in: stops only a sign-in that still waits for the browser.
   handleTrusted("setup:cancelSignIn", () => registrationSetup.cancelSignIn())
-  handleTrusted("auth:signIn", (event, tenant: string, clientId: string, options?: { loginHint?: unknown }) => withPlanError(async () => {
+  handleTrusted("auth:signIn", (event, tenant: string, clientId: string, options?: { loginHint?: unknown; wizard?: boolean; expectedTenant?: string }) => withPlanError(async () => {
     const expected = setupSignIn
     setupSignIn = null
     const loginHint = setupLoginHint(expected, tenant, clientId, options?.loginHint)
     // The window hears when the browser step ends, as soon as Microsoft has answered, and again
     // when the license check starts, so it stops offering ways to recover a browser sign-in.
     const phase = (value: "completing" | "license") => { if (!event.sender.isDestroyed()) event.sender.send("auth:signInPhase", value) }
-    const account = await auth.signIn(tenant, clientId, { ...(loginHint ? { loginHint } : {}), onBrowserDone: () => phase("completing") }).finally(returnToApp).catch((error: unknown) => {
+    const pending = options?.wizard === true ? stageConnectionCache(cache, clientId) : undefined
+    const staged = pending && {
+      cache: pending.plugin,
+      beforeSave: (signedInTenant: string) => {
+        checkWizardTenant(signedInTenant)
+        if (options?.expectedTenant && options.expectedTenant.toLowerCase() !== signedInTenant) throw new Error("You signed in to a different tenant. Sign in with an account from this tenant.")
+        for (const [key, value] of Object.entries(pending.cacheWrites())) cache.set(key, value)
+      },
+    }
+    const account = await auth.signIn(tenant, clientId, { ...(loginHint ? { loginHint } : {}), onBrowserDone: () => phase("completing"), staged }).finally(returnToApp).catch((error: unknown) => {
       const event = signInEvent(error)
       diagnostics.record(event, isSetupError(event) ? "signin" : undefined)
       throw error
@@ -1624,45 +1637,79 @@ async function bootstrap(): Promise<void> {
     return connections.get(tenantId)
   })
   handleTrusted("auth:graphCliAvailable", () => license.connectMethodEnabled("graphCli", true))
-  // The new wizard supplies the local profile and service choice.
-  // Keep the sign-in proof in memory until the normal tenant license check and atomic enrollment finish.
-  handleTrusted("auth:enrollGraphCli", async (_event, tenantId: unknown, profile: unknown, choice: unknown) => {
-    if (!isGuid(tenantId) || typeof profile !== "string" || profile.length > 64_000) {
-      return { error: { code: "invalid_request", message: "Choose a tenant and local backup storage." } }
-    }
-    const tenant = tenantId.toLowerCase()
-    if (enrollingGraphCli.has(tenant) || connections.get(tenant) || accounts.get(tenant)) {
-      return { error: { code: "conflict", message: "This tenant is already connected or signing in." } }
-    }
-    enrollingGraphCli.add(tenant)
-    try {
-      const selected = checkedChoice(choice)
-      for (const service of Object.values(selected)) service.access = "backup"
-      connections.validateGraphCliProfile(tenant, profile)
-      if (!await license.connectMethodEnabled("graphCli", true)) throw new ConnectionSwitchError("unavailable", `${GRAPH_CLI_DISABLED} ${GRAPH_CLI_NEXT_STEP}`)
-      const response = await dialog.showMessageBox(mainWindow!, {
-        title: "Sign in with Start now", message: GRAPH_CLI_CONSENT_WARNING,
-        buttons: ["Cancel", "Continue to Microsoft"], defaultId: 0, cancelId: 0,
-      })
-      if (response.response !== 1) throw new ConnectionSwitchError("cancelled", "Sign-in cancelled.")
-      const staged = await stageGraphCli(tenant).finally(returnToApp)
-      if (!staged.idToken) throw new ConnectionSwitchError("no_account", "Microsoft did not return a sign-in proof for this tenant.")
-      if (connections.get(tenant) || accounts.get(tenant)) throw new ConnectionSwitchError("conflict", "The tenant was connected during sign-in.")
-      stagedGraphCliProof.set(tenant, staged.idToken)
-      await license.checkNewTenant(tenant)
-      if (!await license.connectMethodEnabled("graphCli", true)) throw new ConnectionSwitchError("unavailable", `${GRAPH_CLI_DISABLED} ${GRAPH_CLI_NEXT_STEP}`)
-      if (accounts.get(tenant)) throw new ConnectionSwitchError("conflict", "The tenant was connected during sign-in.")
-      const connection = connections.enroll(tenant, { method: "graphCli" }, profile, staged, moduleSettings.choiceEntries(tenant, selected))
-      try { notifyAccountChange(tenant); pushLicense() } catch { console.warn("[auth] Could not notify the window of the sign-in change") }
+  handleTrusted("auth:tenuvaultAppAvailable", () => license.tenuvaultAppEnabled(true))
+  const WIZARD_LICENSE_KEY = "auth.wizardLicenseTenant"
+  const releaseWizardLicense = async (tenant: string) => {
+    if (!wizardExistingTenant(tenant) && !accounts.get(tenant)) await license.releaseTenant(tenant)
+    if (appStore.get(WIZARD_LICENSE_KEY) === tenant) appStore.delete(WIZARD_LICENSE_KEY)
+    pushLicense()
+  }
+  const discardedTenant = appStore.get(WIZARD_LICENSE_KEY)
+  const cleanupWizard = isGuid(discardedTenant)
+    ? releaseWizardLicense(discardedTenant).catch(() => console.warn("[license] Could not clear an unfinished tenant sign-in"))
+    : Promise.resolve()
+  const wizard = new WizardSignIn({
+    connected: tenant => wizardExistingTenant(tenant) || Boolean(accounts.get(tenant)),
+    enabled: method => license.connectMethodEnabled(method, true),
+    stage: async (tenant, method, choice) => {
+      await cleanupWizard
+      if (method === "graphCli") {
+        const response = await dialog.showMessageBox(mainWindow!, {
+          title: "Sign in with Start now", message: GRAPH_CLI_CONSENT_WARNING,
+          buttons: ["Cancel", "Continue to Microsoft"], defaultId: 0, cancelId: 0,
+        })
+        if (response.response !== 1) throw new ConnectionSwitchError("cancelled", "Sign-in cancelled.")
+        return stageGraphCli(tenant).finally(returnToApp)
+      }
+      const staged = stageConnectionCache(cache, TENUVAULT_CLIENT_ID)
+      const packs = tenantPermissionPacks(choice!, { azure: false, audit: false })
+      return { ...(await auth.stageTenuVaultSignIn(tenant, staged.plugin, packs).finally(returnToApp)), cacheWrites: staged.cacheWrites }
+    },
+    checkLicense: async ({ account, idToken }) => {
+      appStore.set(WIZARD_LICENSE_KEY, account.tenantId)
+      stagedWizardProof.set(account.tenantId, { idToken: idToken!, clientId: account.clientId })
+      try {
+        await license.checkNewTenant(account.tenantId)
+      } finally {
+        stagedWizardProof.delete(account.tenantId)
+        pushLicense()
+      }
+    },
+    releaseLicense: async ({ account, idToken }) => {
+      stagedWizardProof.set(account.tenantId, { idToken: idToken!, clientId: account.clientId })
+      try { await releaseWizardLicense(account.tenantId) }
+      finally { stagedWizardProof.delete(account.tenantId) }
+    },
+    enroll: ({ method, staged }, profile, choice) => {
+      const tenant = staged.account.tenantId
+      connections.enroll(tenant, { method }, profile, staged, moduleSettings.choiceEntries(tenant, choice))
+      try { appStore.delete(WIZARD_LICENSE_KEY); notifyAccountChange(tenant); pushLicense() } catch { console.warn("[auth] Could not notify the window of the sign-in change") }
       void health.check(tenant, "signIn").catch(() => undefined)
-      return { result: { connection, missing: [], coverage: graphCliCoverage(staged.graphScopes && new Set(staged.graphScopes)) } }
-    } catch (error) {
-      const failure = error instanceof ConnectionSwitchError ? error : new ConnectionSwitchError("switch_failed", "This tenant could not be connected. Check your local backup storage, services and license, then try again.")
-      return { error: { code: failure.code, message: failure.message } }
-    } finally {
-      stagedGraphCliProof.delete(tenant)
-      enrollingGraphCli.delete(tenant)
+    },
+  })
+  handleTrusted("auth:wizardStage", (_event, tenant, method, choice) => wizard.stage(tenant, method, choice))
+  handleTrusted("auth:wizardFinish", (_event, id, profile, choice) => wizard.finish(id, profile, choice))
+  handleTrusted("auth:wizardDiscard", (_event, id) => wizard.discard(id))
+  handleTrusted("auth:wizardPackConsent", (_event, tenant, value, pack, action) => {
+    if (!isGuid(tenant)) return { status: "error", issue: { code: "invalid_request", message: "Enter a valid tenant ID." } }
+    const selected = () => {
+      try { return wizardChoice(value) } catch { return null }
     }
+    return packConsent.act(tenant.toLowerCase(), pack, action, async id => {
+      const choice = selected()
+      if (!choice || wizardExistingTenant(id) || !await license.tenuvaultAppEnabled(true) || wizardExistingTenant(id)) return null
+      return tenantPermissionPacks(choice, { azure: false, audit: false })
+    }).finally(returnToApp)
+  })
+  handleTrusted("setup:enrollOwnApp", (_event, tenant, clientId, profile, value) => {
+    try {
+      const signedIn = isGuid(tenant) && isGuid(clientId) ? accounts.get(tenant.toLowerCase()) : null
+      if (!signedIn || signedIn.clientId.toLowerCase() !== clientId.toLowerCase()) throw new ConnectionSwitchError("sign_in_required", "Sign in to this tenant first.")
+      if (typeof profile !== "string" || profile.length > 64_000) throw new ConnectionSwitchError("invalid_request", "Choose valid backup storage.")
+      const choice = wizardChoice(value)
+      connections.enroll(signedIn.tenantId, { method: "ownApp", clientId }, profile, { account: signedIn, accessToken: "" }, moduleSettings.choiceEntries(signedIn.tenantId, choice))
+      return { result: true }
+    } catch (error) { return wizardFailure(error) }
   })
   handleTrusted("auth:packConsentPlan", async (_event, tenant: unknown) => {
     const packs = typeof tenant === "string" ? await consentPlan(tenant.toLowerCase()) : null
@@ -1728,7 +1775,12 @@ async function bootstrap(): Promise<void> {
     if (!isTenantId(tenant)) throw new Error("Unknown tenant.")
     if (action !== "extend_trial" && action !== "end_trial" && action !== "resume_trial" && action !== "trial_contact" && action !== "acknowledge") throw new Error("Unknown trial action.")
     if (email !== undefined && (typeof email !== "string" || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) throw new Error("Enter a valid email address.")
-    return withStatus(() => license.tenantTrialAction(tenant, action, email as string | undefined))
+    const proof = action === "trial_contact" ? wizard.trialContactProof(tenant) : undefined
+    if (!proof) return withStatus(() => license.tenantTrialAction(tenant, action, email as string | undefined))
+    return withStatus(async () => {
+      try { await license.tenantTrialAction(tenant, action, email as string | undefined, proof) }
+      catch { throw new Error("Could not save the trial contact. Check your sign-in and try again.") }
+    })
   })
   const trialUsage = cachedTrialUsage(appStore, workspaceStore)
   handleTrusted("license:trialWorkflowsConfigured", (_event, tenant: unknown) => isTenantId(tenant) && trialWorkflowsConfigured(workspaceStore, tenant.toLowerCase()))

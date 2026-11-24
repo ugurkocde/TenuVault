@@ -1,5 +1,5 @@
 import type { PackConsentAction, PackConsentPlan, PackConsentResult } from "./pack-consent"
-import type { ConnectionSwitchResponse, ConnectionTarget, TenantConnection } from "./tenant-connection"
+import type { ConnectionSwitchResponse, ConnectionTarget, TenantConnection, BackupScopeCoverage, WizardSignInMethod, WizardSignInResponse, WizardFinishResponse } from "./tenant-connection"
 import type { PermissionAdditionPreview, PermissionAdditionResult } from "./registration-additions"
 import type { AppSourcesBridge } from "./app-sources/types"
 import type { OptionalPermissionStatus } from "./services/optional-permissions"
@@ -462,12 +462,16 @@ export interface TenuVaultBridge {
   appSources: AppSourcesBridge
   api: (request: ApiRequest) => Promise<ApiResponse>
   auth: {
-    signIn: (tenant: string, clientId: string, options?: { loginHint?: string }) => Promise<SignedInAccount>
+    signIn: (tenant: string, clientId: string, options?: { loginHint?: string; wizard?: boolean; expectedTenant?: string }) => Promise<SignedInAccount>
     signOut: (tenantId: string) => Promise<void>
     accounts: () => Promise<SignedInAccount[]>
     connection: (tenantId: string) => Promise<TenantConnection | null>
     graphCliAvailable: () => Promise<boolean>
-    enrollGraphCli: (tenantId: string, profile: string, choice: unknown) => Promise<ConnectionSwitchResponse>
+    tenuvaultAppAvailable: () => Promise<boolean>
+    wizardStage: (tenantId: string, method: WizardSignInMethod, choice?: PermissionChoice) => Promise<WizardSignInResponse>
+    wizardFinish: (id: string, profile: string, choice: PermissionChoice) => Promise<WizardFinishResponse>
+    wizardDiscard: (id: string) => Promise<void>
+    wizardPackConsent: (tenantId: string, choice: PermissionChoice, packId: string, action: PackConsentAction) => Promise<PackConsentResult>
     packConsentPlan: (tenantId: string) => Promise<PackConsentPlan | null>
     packConsent: (tenantId: string, packId: string, action: PackConsentAction) => Promise<PackConsentResult>
     switchConnection: (tenantId: string, target: ConnectionTarget) => Promise<ConnectionSwitchResponse>
@@ -518,7 +522,8 @@ export interface TenuVaultBridge {
      * stays in the main process, in memory only. `tenant` is for guest and partner admins.
      */
     /** `choice` names the services, areas and access levels to ask permissions for; without it, what a setup always asked for. */
-    checkPermissions: (tenantId: string, clientId: string, choice: PermissionChoice) => Promise<{ missing: string[]; error?: string }>
+    checkPermissions: (tenantId: string, clientId: string, choice: PermissionChoice) => Promise<{ missing: string[]; error?: string; coverage?: BackupScopeCoverage[] }>
+    enrollOwnApp: (tenantId: string, clientId: string, profile: string, choice: PermissionChoice) => Promise<WizardFinishResponse>
     saveServices: (tenantId: string, clientId: string, choice: PermissionChoice) => Promise<void>
     createRegistration: (options?: { tenant?: string; choice?: PermissionChoice }) => Promise<RegistrationResult>
     /** Stops waiting for the setup sign-in in the browser. */
@@ -775,7 +780,7 @@ export type TenuVaultPreloadBridge = Omit<TenuVaultBridge, "auth" | "license" | 
     set: (branding: PdfBranding) => Promise<PdfBrandingState | PlanIpcError>
   }
   auth: Omit<TenuVaultBridge["auth"], "signIn"> & {
-    signIn: (tenant: string, clientId: string, options?: { loginHint?: string }) => Promise<SignedInAccount | PlanIpcError>
+    signIn: (tenant: string, clientId: string, options?: { loginHint?: string; wizard?: boolean; expectedTenant?: string }) => Promise<SignedInAccount | PlanIpcError>
   }
   license: Omit<TenuVaultBridge["license"], "checkNewTenant"> & {
     checkNewTenant: (tenantId: string) => Promise<LicenseStatus | PlanIpcError>
