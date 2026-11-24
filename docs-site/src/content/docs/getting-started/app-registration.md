@@ -3,11 +3,17 @@ title: "Create the app registration"
 description: Create the app registration TenuVault signs in with.
 ---
 
-TenuVault signs in through an app registration that lives in your own tenant. TenuVault creates it for you: in **Set up TenuVault**, the **Connect** step has one button, **Set up with Microsoft sign-in**. You sign in once in your browser, and TenuVault creates the app registration, grants admin consent and signs you in. There is no script to run and no ID to copy.
+This setup uses an app registration that lives in your own tenant. TenuVault creates it for you: in **Set up TenuVault**, the **Connect** step has one button, **Set up with Microsoft sign-in**. You sign in once in your browser, and TenuVault creates the app registration, grants admin consent and signs you in. There is no script to run and no ID to copy.
 
 You do this once per tenant. Every admin who uses TenuVault in that tenant signs in through the same app registration.
 
 If someone else is the administrator who can grant consent, or you prefer to read a script first, a [PowerShell setup script](#use-the-setup-script-instead) does the same.
+
+## Shared TenuVault app
+
+The gated **TenuVault app** method uses the multitenant public client `61eff188-672b-4be4-acac-2d254a6f9e05`. An administrator reviews delegated access per pack in Microsoft Entra. The shared client is designed to leave an enterprise app in the connected tenant. It uses no client credentials. Your tenant's sign-in policy, user assignment and service roles still apply.
+
+TenuVault requests each Azure API separately, and only for tenants configured to use Azure storage. Set up Azure storage before switching an existing connection to the shared app. Application and role recovery using temporary privileged consent remains unavailable with this method. See [permission packs](/security/permissions/#tenuvault-app-permission-packs) and [when you can change the method](/getting-started/connect-tenant/#tenuvault-app-sign-in).
 
 ## Set up with Microsoft sign-in
 
