@@ -39,6 +39,20 @@ it.each(routes)("logs a fixed code for malformed successful token responses (%#)
   expect(fetch).toHaveBeenCalledTimes(1)
 })
 
+it.each(routes)("rejects an invalid bearer in a JSON token response before building headers (%#)", async (route, label) => {
+  const log = vi.spyOn(console, "error").mockImplementation(() => {})
+  const fetch = vi.fn<typeof globalThis.fetch>(async (_input, init) => {
+    if (init?.headers) new Headers(init.headers)
+    return Response.json({ access_token: "invalid\nadmin@example.test" })
+  })
+  vi.stubGlobal("fetch", fetch)
+  const response = await route(new Request("https://desktop.test/api", { method: "POST", body: JSON.stringify(requestBody) }) as never)
+  expect(response.status).toBe(502)
+  expect(await response.text()).not.toContain("admin@example.test")
+  expect(log.mock.calls).toEqual([[`${label} auth error:`, "token_invalid_response"]])
+  expect(fetch).toHaveBeenCalledTimes(1)
+})
+
 it.each([
   [403, '{"error":{"message":"Refused for admin@example.test"}}', "graph_request_failed"],
   [200, '{invalid JSON with admin@example.test', "graph_invalid_response"],

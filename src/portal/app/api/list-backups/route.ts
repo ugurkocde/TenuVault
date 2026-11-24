@@ -1,3 +1,4 @@
+import { isBearerToken } from "../../../../shared/security"
 import { signInLogCode } from "../../../../shared/sign-in-errors"
 import { ownedRemnant, REMNANT_RECOVERY_DAYS, completeHalf, largeRunProblems, matchingCompanions, withRunRecord } from "../../../../shared/backup-companion"
 import { backupStoragePath, isLargeBackup, LARGE_BACKUP_CONTAINER, LARGE_STORAGE_UNAVAILABLE } from "../../../../shared/backup-storage"
@@ -285,7 +286,7 @@ export async function POST(request: NextRequest) {
 
     const tokenData = await tokenResponse.json().catch(() => null)
     const accessToken = tokenData?.access_token
-    if (typeof accessToken !== "string" || !accessToken.trim()) {
+    if (!isBearerToken(accessToken)) {
       console.error("Azure auth error:", "token_invalid_response")
       return NextResponse.json({ error: "Microsoft returned an invalid sign-in response. Try again." }, { status: 502 })
     }

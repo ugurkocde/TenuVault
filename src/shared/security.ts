@@ -31,6 +31,11 @@ export function isMicrosoftLoginUrl(url: string): boolean {
   } catch { return false }
 }
 
+/** RFC 6750 bearer credentials allow base64 characters and trailing padding. */
+export function isBearerToken(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9._~+/-]+=*$/.test(value)
+}
+
 export function isGuid(value: unknown): value is string {
   return typeof value === 'string' && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(value)
 }

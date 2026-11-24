@@ -1,3 +1,4 @@
+import { isBearerToken } from "../../../../../shared/security"
 import { signInLogCode } from "../../../../../shared/sign-in-errors"
 import { isGuid } from "../../../../../shared/security"
 import { type NextRequest, NextResponse } from "next/server"
@@ -54,7 +55,7 @@ export async function POST(request: NextRequest) {
 
     const tokenData = await tokenResponse.json().catch(() => null)
     const accessToken = tokenData?.access_token
-    if (typeof accessToken !== "string" || !accessToken.trim()) {
+    if (!isBearerToken(accessToken)) {
       console.error("Azure auth error:", "token_invalid_response")
       return NextResponse.json({ error: "Microsoft returned an invalid sign-in response. Try again." }, { status: 502 })
     }
