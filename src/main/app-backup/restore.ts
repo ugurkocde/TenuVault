@@ -37,7 +37,7 @@ export interface AppRestoreAuditObservation {
 }
 
 export async function restoreAppWithAudit(store: AppSourceStore, source: CapturedAppSource, snapshot: AppRestoreSnapshot, target: string, name: string, options: {
-  getGraphToken: () => Promise<string>; authorizeUpload: () => Promise<void>; fetch: typeof fetch; signal: AbortSignal; progress: RestoreOptions["progress"]; operationId: string
+  getGraphToken: () => Promise<string>; authorizeDispatch?: () => Promise<void>; authorizeUpload: () => Promise<void>; fetch: typeof fetch; signal: AbortSignal; progress: RestoreOptions["progress"]; operationId: string
 }): Promise<AppRestoreResult> {
   const { getGraphToken, fetch, signal, progress, operationId } = options
   const preparation = { destination: target, sourceTenantId: source.receipt.tenantId, sourceBackupId: source.id, operationId,
@@ -55,7 +55,7 @@ export async function restoreAppWithAudit(store: AppSourceStore, source: Capture
     audit = beginRestoreAudit({ ...preparation, operationId: observed?.operationId ?? operationId, graphToken, items: [original] })
     audit?.started(0)
     return graphToken
-  }, fetch, signal)
+  }, fetch, signal, options.authorizeDispatch)
   try {
     return await restoreCapturedApp(store, source, snapshot, target, name, {
       graph, fetch, signal, progress, authorizeUpload: options.authorizeUpload,

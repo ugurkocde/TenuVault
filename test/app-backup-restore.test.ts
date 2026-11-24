@@ -155,6 +155,47 @@ it.each([
   }
 })
 
+it.each(["during preflight", "during token acquisition", "between uploads"] as const)("stops an installer restore when its source switches to Start now %s", async boundary => {
+  const f = await fixture(snapshot, boundary === "between uploads"), d = destination()
+  const own: TenantConnection = { version: 1, method: "ownApp", clientId: appId, origin: "wizard", createdAt: "", updatedAt: "", graphScopes: [] }
+  let sourceConnection = own
+  const switchSource = () => { sourceConnection = { ...own, method: "graphCli", clientId: GRAPH_CLI_CLIENT_ID } }
+  const caps = new ConnectionCapabilities(id => id === tenant ? sourceConnection : own)
+  const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+    const url = new URL(String(input))
+    if (url.hostname.endsWith(".blob.core.windows.net")) {
+      const response = await d.fetcher(input, init)
+      if (boundary === "between uploads" && d.fetcher.mock.calls.length === 1) switchSource()
+      return response
+    }
+    return Response.json(await d.graph(init?.method as "GET" | "POST" | "PATCH", url.href, init?.body ? JSON.parse(String(init.body)) : undefined))
+  })
+  const service = new AppSourceService({
+    restoreAuthorization: (source, destination) => caps.appRestoreAuthorization(source, destination),
+    restorePlan: async () => {
+      if (boundary === "during preflight") switchSource()
+      return "pro"
+    },
+    restore: (store, source, settings, destination, name, signal, progress, operationId, authorizeRestore) =>
+      restoreAppWithAudit(store, source, settings, destination, name, {
+        getGraphToken: async () => {
+          if (boundary === "during token acquisition") switchSource()
+          return "fixture-token"
+        },
+        authorizeDispatch: authorizeRestore,
+        authorizeUpload: authorizeRestore ?? (() => caps.requireAppRestoreWrite(destination, own.clientId)),
+        fetch, signal, progress, operationId,
+      }),
+    knownTenant: id => [tenant, target].includes(id), folder: () => f.root, keys: () => [f.master], setFolder: vi.fn(),
+    pickFolder: vi.fn(), pickExport: vi.fn(), openFolder: vi.fn(), confirmNewStore: vi.fn(), checkDevice: vi.fn(),
+    signIn: vi.fn(), details: vi.fn(), apps: vi.fn(), printDetails: vi.fn(), downloadScript: vi.fn(),
+  })
+  await expect(service.restore(tenant, randomUUID(), f.source.id, target, "Restored", snapshotHash(snapshot))).rejects.toThrow(READ_ONLY)
+  expect(d.fetcher).toHaveBeenCalledTimes(boundary === "between uploads" ? 1 : 0)
+  if (boundary !== "between uploads") expect(fetch).not.toHaveBeenCalled()
+  expect(d.calls.some(([method, path]) => method === "PATCH" || path.endsWith("/commit"))).toBe(false)
+})
+
 describe("app restore snapshots", () => {
   it("retains full scripts encrypted, survives key rotation and rejects cross-tenant reads and tampering", async () => {
     const f = await fixture(), retained = new AppSourceStore(f.root, () => [randomBytes(32), f.master])

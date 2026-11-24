@@ -11,7 +11,8 @@ import { recordRestorePreparationFailure } from "../../portal/lib/audit/restore"
 export interface AppSourceHost {
   restoreOwner?: () => string
   signInWithDeviceCode?: (tenant: string, onCode: (code: AppDeviceCode) => void, signal: AbortSignal) => Promise<void>
-  restore?: (store: AppSourceStore, source: CapturedAppSource, snapshot: AppRestoreSnapshot, target: string, name: string, signal: AbortSignal, progress: (value: AppRestoreProgress) => void, operationId: string) => Promise<AppRestoreResult | AcknowledgementRequired>
+  restoreAuthorization?: (source: string, destination: string) => () => Promise<void>
+  restore?: (store: AppSourceStore, source: CapturedAppSource, snapshot: AppRestoreSnapshot, target: string, name: string, signal: AbortSignal, progress: (value: AppRestoreProgress) => void, operationId: string, authorizeRestore: (() => Promise<void>) | undefined) => Promise<AppRestoreResult | AcknowledgementRequired>
   loadRestoreSettings?: (tenant: string, appId: string) => Promise<AppRestoreSnapshot>
   /** The plan of a restore destination that is not the installer's source tenant, or null when it has none. */
   restorePlan?: (tenant: string) => Promise<Plan | null>
@@ -154,6 +155,7 @@ export class AppSourceService {
     if (typeof name !== "string" || typeof settingsHash !== "string" || !/^[a-f0-9]{64}$/.test(settingsHash)) return Promise.reject(new Error("Review the app settings and destination before restoring."))
     return this.job(raw, operation, async (tenant, signal) => {
       try {
+        const authorizeRestore = this.host.restoreAuthorization?.(tenant, destination)
         const store = this.store(tenant), captured = await store.capturedSource(tenant, sourceId), snapshot = await store.configuration(tenant, sourceId)
         if (!snapshot || snapshotHash(snapshot) !== settingsHash) throw new Error("The app settings changed. Review them before restoring.")
         if (!this.host.restore) throw new Error("App restore is unavailable in this build.")
@@ -164,7 +166,7 @@ export class AppSourceService {
         return this.host.restore(store, captured, snapshot, destination, name, signal, value => {
           const job = this.jobs.get(operationId)
           if (job?.tenant === tenant) job.restoreProgress = value
-        }, operationId)
+        }, operationId, authorizeRestore)
       } catch (error) {
         void recordRestorePreparationFailure({ destination, sourceTenantId: tenant, sourceBackupId: sourceId, operationId, runId: randomUUID(), action: "Restore app backup" })
           .catch(() => console.warn("[audit] App restore preparation failure could not be recorded"))

@@ -2,7 +2,7 @@ const BASE = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps"
 export type RestoreGraph = (method: "GET" | "POST" | "PATCH", path: string, body?: Record<string, unknown>) => Promise<Record<string, unknown>>
 
 /** Main-only, target-token-bound Graph transport. Error bodies may contain secrets and are never surfaced. */
-export function restoreGraph(token: () => Promise<string>, fetchImpl: typeof fetch, signal: AbortSignal): RestoreGraph {
+export function restoreGraph(token: () => Promise<string>, fetchImpl: typeof fetch, signal: AbortSignal, authorizeDispatch?: () => Promise<void>): RestoreGraph {
   return async (method, path, body) => {
     const url = new URL(path, BASE)
     if (url.origin !== "https://graph.microsoft.com" || !(url.pathname === "/beta/deviceAppManagement/mobileApps" || url.pathname.startsWith("/beta/deviceAppManagement/mobileApps/")) || url.username || url.password || url.hash) throw new Error("Invalid restore metadata request.")
@@ -10,9 +10,15 @@ export function restoreGraph(token: () => Promise<string>, fetchImpl: typeof fet
     // Their result is verified by subsequent file/app reads in the restore engine.
     const voidResponse = method === "PATCH" || (method === "POST" && /\/contentVersions\/\d+\/files\/[a-f0-9-]{36}\/(?:renewUpload|commit)$/.test(url.pathname))
     signal.throwIfAborted()
+    let bearer: string
+    try {
+      bearer = await token()
+    } catch { signal.throwIfAborted(); throw new Error("The destination request was interrupted. Retry to reconcile the existing restore; a second app will not be created automatically.") }
+    await authorizeDispatch?.()
+    signal.throwIfAborted()
     let response: Response
     try {
-      response = await fetchImpl(url.href, { method, redirect: "error", credentials: "omit", headers: { authorization: `Bearer ${await token()}`, "content-type": "application/json" }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.any([signal, AbortSignal.timeout(60000)]) })
+      response = await fetchImpl(url.href, { method, redirect: "error", credentials: "omit", headers: { authorization: `Bearer ${bearer}`, "content-type": "application/json" }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.any([signal, AbortSignal.timeout(60000)]) })
     } catch { signal.throwIfAborted(); throw new Error("The destination request was interrupted. Retry to reconcile the existing restore; a second app will not be created automatically.") }
     if (![200, 201, 204].includes(response.status)) { await response.body?.cancel(); throw new Error(`The destination tenant refused the restore request (HTTP ${response.status}). Check Microsoft sign-in, Intune permissions and service availability.`) }
     if (response.status === 204) { await response.body?.cancel(); if (voidResponse) return {}; throw new Error("The destination returned no metadata.") }

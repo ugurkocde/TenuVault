@@ -2012,12 +2012,13 @@ async function bootstrap(): Promise<void> {
       pushLicense()
     },
     loadRestoreSettings: async (tenant, appId) => readRestoreSnapshot(tenant, appId, (await auth.getAccessToken(tenant, signedInClient(tenant), RESOURCE_SCOPES.graph)).accessToken, bridgedFetch, "current-settings"),
-    restore: (store, source, snapshot, target, name, signal, progress, operationId) => {
+    restoreAuthorization: (source, target) => capabilities.appRestoreAuthorization(source, target),
+    restore: (store, source, snapshot, target, name, signal, progress, operationId, authorizeRestore) => {
+      if (!authorizeRestore) throw new Error("App restore is unavailable in this build.")
       capabilities.requireWrite([target])
-      const admittedClient = connections.get(target)?.clientId ?? null
-      const authorizeRestore = () => capabilities.requireAppRestoreWrite(target, admittedClient)
       return disclaimer.run([target], () => restoreAppWithAudit(store, source, snapshot, target, name, {
         getGraphToken: () => appRestoreToken(auth, target, signedInClient(target), authorizeRestore),
+        authorizeDispatch: authorizeRestore,
         authorizeUpload: authorizeRestore,
         fetch: bridgedFetch, signal, progress, operationId,
       }))

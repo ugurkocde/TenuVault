@@ -88,6 +88,22 @@ export class ConnectionCapabilities {
     this.issued.set(accessTokenDigest(token), binding)
   }
 
+  appRestoreAuthorization(source: string, destination: string): () => Promise<void> {
+    const sourceClient = this.record(source)?.clientId ?? null
+    const destinationClient = this.record(destination)?.clientId ?? null
+    this.requireNonGraphCli(source)
+    this.requireNonGraphCli(destination)
+    return async () => {
+      this.requireNonGraphCli(source)
+      await this.requireAppRestoreWrite(destination, destinationClient)
+      this.requireNonGraphCli(source)
+      const currentSourceClient = this.record(source)?.clientId ?? null
+      if (sourceClient !== currentSourceClient && (sharedMethod(sourceClient) || sharedMethod(currentSourceClient))) {
+        throw new Error(CONNECTION_CHANGED)
+      }
+    }
+  }
+
   async requireAppRestoreWrite(tenantId: string, admittedClientId: string | null): Promise<void> {
     this.requireWrite([tenantId])
     const currentClientId = this.record(tenantId)?.clientId ?? null
