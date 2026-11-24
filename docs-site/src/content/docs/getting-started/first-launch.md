@@ -26,7 +26,7 @@ To buy a license or ask for an invoice, use the **License** page after setup. Se
 
 1. Select **Connect your tenant**.
 2. Choose services on **What do you want to back up?** Intune is preselected. The cards appear in the order Defender, Entra ID and Intune. Review coverage, choose your services and continue.
-3. On **Connect**, review the setup-only access before signing in. Continue with [Create the app registration](/getting-started/app-registration/).
+3. On **Connect**, review the setup-only access before signing in. Continue with [Choose a sign-in method](/getting-started/connect-tenant/).
 
 The first tenant you sign in to without a key starts its 14 day Pro trial, unless that tenant already had one. If your organization shares a TenuVault license with that tenant, TenuVault picks it up when you sign in, and the tenant uses that plan instead. You can also start the trial or enter a key later, on the **Storage** step of the setup or on the **License** page.
 
@@ -47,7 +47,7 @@ There is nothing to start: connecting a new tenant starts its 14 day Pro trial a
 2. Paste the key from your email into **License key**.
 3. Select **Save key**.
 
-The key is saved on this device and activated for your tenant when you sign in. TenuVault then opens **Set up TenuVault**; see [Create the app registration](/getting-started/app-registration/).
+The key is saved on this device and activated for your tenant when you sign in. TenuVault then opens **Set up TenuVault**; see [Choose a sign-in method](/getting-started/connect-tenant/).
 
 If the key is rejected, TenuVault shows the reason under the field. For activation details and error messages, see [Activate and manage your license](/licensing/manage/).
 
@@ -68,18 +68,12 @@ Backups on this device become unreadable unless you exported their [recovery key
 
 ## Next step
 
-[Create the app registration](/getting-started/app-registration/).
+[Choose a sign-in method](/getting-started/connect-tenant/).
 
-## Choose services
+## Connect your tenant
 
-![Service choice with Intune preselected](/images/onboarding/02-choice-default-light.png)
+Select **Connect your tenant** to open **Let's sign in**. Choose **Start now**, **TenuVault app**, or **Your own app registration**. Start now and the TenuVault app show an explanation when the license service has disabled them.
 
-Expand **Coverage and permissions** on a card to see the areas it covers, read and write permission counts, and coverage limits. Details scroll inside the card so Continue stays in view. Select **Show the exact permissions** below the cards for the full delegated permission names, grouped by area and marked Read or Write. Entra ID contains a separate Conditional Access switch. Groups, Users and devices, and Applications are opt-in and off initially. Areas with personal data explain what is stored before you turn them on.
+Choose at least one of Defender, Entra ID and Intune. All three start off for a new tenant. Select **Also restore** where supported, or use **Back up** only. Conditional Access is under Entra ID. Review the permission coverage in **Results**, then confirm where the backups are stored. Start now uses this device. The Storage step can prefill the signed-in address for optional trial emails. Select the email button only if you want to send it.
 
-**Customize access** offers Backup only, or Backup and restore where this version has a restore capability. Intune keeps its earlier default, including read access to Conditional Access without enabling those backups. [Defender](/backups/defender/) and [Entra ID](/backups/entra/) start with backup permissions only. Enable the Entra ID directory areas separately when you need them. Conditional Access backups work when selected.
-
-Your service choice and setup progress survive a restart in encrypted app settings. Connecting another tenant uses the same flow with a choice for that tenant.
-
-If a saved service choice cannot be read, setup returns to the service cards with no service selected. Choose the services again and confirm before continuing. Drafts saved before service choices were introduced keep the Intune default.
-
-Links from background jobs select the requested tenant before checking whether Intune is on. Governance keeps its tabs visible when Intune is off, so Accepted deviations and Customizations remain reachable.
+TenuVault starts the first backup automatically. The next time you add a tenant, you choose its sign-in method and services independently. Tenants already connected before this wizard keep their configuration.
