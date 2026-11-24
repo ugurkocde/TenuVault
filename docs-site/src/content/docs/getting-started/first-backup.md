@@ -7,16 +7,16 @@ The last setup step takes a first backup, so you know sign-in, permissions and s
 
 ## Run it from the guided setup
 
-The **First backup** step is headed **Take a first backup** and shows **&lt;tenant&gt; is connected.** It explains what the backup does:
+Select **Start first backup** on **Where should backups go?**. The backup starts automatically and the progress bar shows what TenuVault is saving. Select **Cancel backup** to stop it.
 
-* It reads the Defender, Entra ID and Intune configuration you selected, and changes nothing in your tenant.
-* Apps are left out by default to keep it quick. You can change what is backed up later in the backup scope.
-* It usually takes a few minutes, longer for large tenants.
+When **Your first backup is done** appears, you can review the counts and duration, expand **See backup details**, or set up the options below. Select **Go to dashboard** when you are ready to leave setup. The diagnostics question below the card is optional.
 
-1. Select **Run first backup**.
-2. Watch the progress bar and the results. TenuVault first lists the selected types (**Reading configuration...**), then saves each object (**Backing up &lt;type&gt;**). Each type appears in the results list as it is backed up, with its count. Select **Cancel backup** to stop it.
-3. When the backup succeeds, the step shows **Your first backup is done** and **Next steps**, described below.
-4. Select **Go to dashboard**.
+<figure class="docs-screenshot">
+  <a href="/images/screenshots/setup-first-backup.webp" aria-label="Open the first backup screenshot">
+    <img src="/images/screenshots/setup-first-backup.webp" alt="First backup completion card with counts, duration and a Go to dashboard button" width="1440" height="900" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>Review the backup and choose when to open the dashboard.</figcaption>
+</figure>
 
 The first backup uses the default scope, **Everything except apps**: policies, scripts, updates, enrollment and tenant settings. To include apps, run a manual backup with **Everything** from **Backup & Restore**, described below. See [What gets backed up](/backups/coverage/).
 
@@ -28,8 +28,8 @@ If the first backup fails or you cancel it, select **Try again** to run it again
 
 After a successful first backup, the step offers two things:
 
-* **Turn on automatic backups.** One button turns on a schedule for this tenant: **Back up every Sunday at 02:00** on Community, or **Back up daily at 02:00** on Pro and MSP. TenuVault backs up while it is open or in the tray. A backup missed while the computer was off runs the next time TenuVault starts. Change the day and time later in **Backup & Restore**, **Schedule**. See [Schedule backups](/backups/schedules/).
-* **Save your recovery key**, for backups on this device, if you have not saved it yet. Select **Save recovery key** and keep the file somewhere safe, such as your password manager. Without the recovery key, backups on this device cannot be read after a reinstall or on another computer. See [Save your recovery key](/getting-started/choose-storage/#save-your-recovery-key). For a tenant with Azure storage this step is left out, because Azure backups do not need the key.
+* **Turn on weekly backups** schedules backups on Sundays at 02:00 on Community. **Turn on daily backups** schedules backups at 02:00 on Pro and MSP. TenuVault backs up while it is open or in the tray. A backup missed while the computer was off runs the next time TenuVault starts. Change the day and time later in **Backup & Restore**, **Schedule**. See [Schedule backups](/backups/schedules/).
+* **Save your recovery key**, for backups on this device, if you have not saved it yet. Keep the file somewhere safe, such as your password manager. Without the recovery key, backups on this device cannot be read after a reinstall or on another computer. See [Save your recovery key](/getting-started/choose-storage/#save-your-recovery-key). For a tenant with Azure storage this step is left out, because Azure backups do not need the key.
 
 When a schedule is already on or the key is already saved, the step says so instead.
 
@@ -99,4 +99,4 @@ Once you have a successful backup, [practice an Intune restore](https://www.tenu
 
 ## Your chosen services
 
-The first backup step names the services selected during setup. **Run first backup** covers the selected areas for [Defender](/backups/defender/), [Entra ID](/backups/entra/) or [Intune](/backups/intune/). Conditional Access is included when its switch is on under Entra ID. The default scope leaves out Intune app details.
+The first backup step names the services selected during setup. The first backup covers the selected areas for [Defender](/backups/defender/), [Entra ID](/backups/entra/) or [Intune](/backups/intune/). Conditional Access is included when its switch is on under Entra ID. The default scope leaves out Intune app details.

@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react"
-import { CalendarClock, CheckCircle2, KeyRound, Loader2 } from "lucide-react"
-import { Button } from "~/components/ui/button"
+import { onboardingLink } from "./OnboardingCard"
 import type { Plan } from "../../shared/plans"
 import type { ScheduleInput } from "../../shared/ipc"
 import { bridge } from "../lib/bridge"
@@ -12,20 +11,6 @@ export function suggestedSchedule(tenantId: string, plan: Plan | null): Schedule
   return plan && plan !== "community"
     ? { tenantId, enabled: true, frequency: "daily", time: "02:00" }
     : { tenantId, enabled: true, frequency: "weekly", time: "02:00", weekday: 0 }
-}
-
-function NextStep({ icon, title, done, children }: { icon: React.ReactNode; title: string; done: boolean; children: React.ReactNode }) {
-  return (
-    <li className="flex gap-4 rounded-2xl bg-gray-50 p-3">
-      <span className={done ? "flex size-9 flex-shrink-0 items-center justify-center rounded-full bg-green-100 text-green-700" : "flex size-9 flex-shrink-0 items-center justify-center rounded-full bg-card"} aria-hidden="true">
-        {done ? <CheckCircle2 className="h-4 w-4" /> : icon}
-      </span>
-      <div className="min-w-0 flex-1 space-y-2 text-sm text-gray-700">
-        <p className="font-medium text-gray-900">{title}</p>
-        {children}
-      </div>
-    </li>
-  )
 }
 
 /**
@@ -84,48 +69,22 @@ export function FirstBackupNextSteps({ tenantId, plan, local }: { tenantId: stri
     }
   }
 
-  const label = suggestion.frequency === "daily" ? "Back up daily at 02:00" : "Back up every Sunday at 02:00"
-
   return (
-    <section aria-labelledby="next-steps-heading" className="space-y-3">
-      <h3 id="next-steps-heading" className="text-base font-medium text-gray-900">Next steps</h3>
-      <ul className="grid gap-3 @lg:grid-cols-2">
-        <NextStep icon={<CalendarClock className="h-4 w-4" />} title="Turn on automatic backups" done={schedule !== null}>
-          {schedule ? (
-            <p role="status">Automatic backups are on: {schedule}. Change the day and time in Backup &amp; Restore, Schedule.</p>
-          ) : (
-            <>
-              <p>
-                TenuVault runs scheduled backups while open or in the tray.
-              </p>
-              {/* Until the plan is known the suggestion could be weekly for a tenant that gets daily backups. */}
-              <Button type="button" variant="outline" size="sm" onClick={() => void turnOn()} disabled={scheduling || plan === null}>
-                {scheduling && <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />}
-                {label}
-              </Button>
-            </>
-          )}
-          {scheduleError && <p role="alert" className="text-red-700">{scheduleError}</p>}
-        </NextStep>
-        {local && recoverySaved !== null && (
-          <NextStep icon={<KeyRound className="h-4 w-4" />} title="Save your recovery key" done={recoverySaved}>
-            {recoverySaved ? (
-              <p role="status">Your recovery key is saved. Keep it somewhere safe, such as your password manager.</p>
-            ) : (
-              <>
-                <p>
-                  Keep this key to read your backups after a reinstall or on another device.
-                </p>
-                <Button type="button" size="sm" variant="outline" onClick={() => void saveKey()} disabled={savingKey}>
-                  {savingKey && <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />}
-                  Save recovery key
-                </Button>
-              </>
-            )}
-            {keyError && <p role="alert" className="text-red-700">{keyError}</p>}
-          </NextStep>
-        )}
-      </ul>
+    <section aria-label="Next steps" className="space-y-2">
+      <div className="flex flex-wrap justify-center gap-x-5 gap-y-2">
+        {schedule
+          ? <p role="status" className="text-xs text-green-700 dark:text-green-400">Automatic backups are on. {schedule}.</p>
+          : <button type="button" className={onboardingLink} onClick={() => void turnOn()} disabled={scheduling || plan === null}>
+              {scheduling ? "Turning on backups…" : suggestion.frequency === "daily" ? "Turn on daily backups" : "Turn on weekly backups"}
+            </button>}
+        {local && recoverySaved !== null && (recoverySaved
+          ? <p role="status" className="text-xs text-green-700 dark:text-green-400">Your recovery key is saved.</p>
+          : <button type="button" className={onboardingLink} onClick={() => void saveKey()} disabled={savingKey}>
+              {savingKey ? "Saving recovery key…" : "Save your recovery key"}
+            </button>)}
+      </div>
+      {scheduleError && <p role="alert" className="text-sm text-red-700">{scheduleError}</p>}
+      {keyError && <p role="alert" className="text-sm text-red-700">{keyError}</p>}
     </section>
   )
 }

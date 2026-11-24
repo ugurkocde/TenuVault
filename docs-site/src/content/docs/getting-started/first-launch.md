@@ -25,15 +25,15 @@ To buy a license or ask for an invoice, use the **License** page after setup. Se
 
 Select **Connect your tenant**. Defender, Entra ID and Intune start selected. Turn off any you do not want to connect. Entra ID includes Conditional Access.
 
-Choose a sign-in method and sign in with Microsoft. TenuVault uses your signed-in tenant for **Start now**, **TenuVault app** and **Set up with Microsoft sign-in**. If you administer a different tenant as a guest, open **Setting up a different tenant? Enter its ID or domain** before signing in. An existing app registration still needs its tenant ID and client ID.
+Choose a sign-in method and sign in with Microsoft. TenuVault uses your signed-in tenant for **Start now**, **TenuVault app** and **Set up with Microsoft sign-in**. If you administer a different tenant as a guest, open **Different tenant?** before signing in. An existing app registration still needs its tenant ID and client ID.
 
-**Check** moves to **Storage** when all selected services have backup access. If access is missing, you can copy instructions for your administrator, check again, or continue without an affected service.
+**Check** moves to **Storage** when all selected services have backup access. If only some services can be read, select **Continue with** the services listed. Open **What’s missing and how to add it** to review access and check again.
 
-For the first backup, **This device, encrypted** is selected. If your method and plan support Azure, select **Use my Azure storage account instead**, choose an account and wait for access to be checked. Select **Start first backup**. When it finishes, you can turn on scheduled backups, save the recovery key for on-device backups, and go to the dashboard. You can also choose whether to share anonymous setup results.
+For the first backup, **This device, encrypted** is selected. If your method and plan support Azure, select **Your Azure storage account**, choose an account and wait for access to be checked. Select **Start first backup**. When it finishes, you can turn on scheduled backups, save the recovery key for on-device backups, and go to the dashboard. You can also choose whether to share anonymous setup results.
 
 ## Start a trial
 
-There is nothing to start: connecting a new tenant starts its 14 day Pro trial automatically, with no card and no email. When the trial starts during sign-in, the **Storage** step shows its end date. If your organization shares a TenuVault license with your tenant, TenuVault checks it when you finish setting up the tenant. The trial ends without a charge, can be extended once, and afterwards one tenant continues on Community. See [Free trial, no card needed](/licensing/#free-trial-no-card-needed).
+There is nothing to start: connecting a new tenant starts its 14 day Pro trial automatically, with no card and no email. When the trial starts during sign-in, open **Plan details** on **Storage** to see its end date. If your organization shares a TenuVault license with your tenant, TenuVault checks it when you finish setting up the tenant. The trial ends without a charge, can be extended once, and afterwards one tenant continues on Community. See [Free trial, no card needed](/licensing/#free-trial-no-card-needed).
 
 ## Enter a license key
 

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react"
 import { Link, useLocation } from "react-router-dom"
 import { Fingerprint, Monitor, ShieldCheck } from "lucide-react"
 import { useSelectedTenant } from "~/contexts/TenantContext"
+import { cn } from "~/lib/utils"
 import type { ServicesStatus } from "../../shared/ipc"
 import { bridge } from "../lib/bridge"
 import { BACKUP_SERVICES, parseBackupService } from "../lib/backup-service"
@@ -40,12 +41,13 @@ export function ServicesNavigation({ linkClass }: { linkClass: (active: boolean)
           ? true
           : status?.modules.find(module => module.id === service.id)?.enabled
         const off = enabled === false
-        const active = enabled === true && pathname === "/portal/backup" && filter === service.id
+        const needsAccess = enabled === true && status?.needsAccess?.includes(service.id)
+        const active = !needsAccess && enabled === true && pathname === "/portal/backup" && filter === service.id
         const Icon = ICONS[service.id]
-        return <Link key={service.id} to={off ? settingsHref("services") : `/portal/backup?service=${service.id}`} aria-current={active ? "page" : undefined} data-nav-row="" title={off ? `Open ${service.label} in Services and permissions` : `View ${service.label} backup contents`} className={linkClass(active)}>
+        return <Link key={service.id} to={needsAccess ? `${settingsHref("services")}&tenant=${encodeURIComponent(tenantId!)}#service-${service.id}` : off ? settingsHref("services") : `/portal/backup?service=${service.id}`} aria-current={active ? "page" : undefined} data-nav-row="" title={off || needsAccess ? `Open ${service.label} in Services and permissions` : `View ${service.label} backup contents`} className={cn(linkClass(active), "gap-2")}>
           <Icon className="h-[18px] w-[18px] shrink-0" aria-hidden="true" />
-          <span className="truncate">{service.label}</span>
-          {off && <span className="ml-auto inline-flex shrink-0 items-center rounded-full bg-secondary px-2 py-0.5 text-[11px] font-medium leading-4 text-gray-700">Off</span>}
+          <span className="shrink-0 whitespace-nowrap">{service.label}</span>
+          {(off || needsAccess) && <span className="ml-auto inline-flex shrink-0 items-center rounded-full bg-secondary px-1.5 py-0.5 text-[11px] font-medium leading-4 text-gray-700">{needsAccess ? "Needs access" : "Off"}</span>}
         </Link>
       })}
     </div>

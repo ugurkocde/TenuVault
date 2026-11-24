@@ -23,6 +23,8 @@ Organization license sharing requires the key holder to allow Start now sign-ins
 
 ## TenuVault app permission packs
 
+The TenuVault app registration declares only the sign-in basics: `openid`, `profile`, `offline_access`, `User.Read` and `Organization.Read.All`. TenuVault requests each pack below by name when an administrator approves it, so backup access starts read-only and restore access is added per service later. Approve packs from TenuVault. The **Grant admin consent** button for the TenuVault enterprise app in the Entra admin center covers only the sign-in basics, not backups or restores.
+
 This catalog describes the requests configured in the desktop client. Availability of the shared app depends on tenant validation and the license service. Service restore packs include the read access needed for backup. A read/write scope stands in for its read alternative where the manifest permits it.
 
 Installer restores with the TenuVault app require the verified Intune restore pack throughout the upload. If you change Intune to backup-only during a restore, TenuVault stops the upload at the next block or when it tries to finalize the block list.

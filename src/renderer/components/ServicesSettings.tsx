@@ -1,3 +1,5 @@
+import { backupAreaCoverage, needsBackupAccess } from "../../shared/services/backup-coverage"
+import { needsAccessText, StartNowAccessHelp } from "./BackupAccessHelp"
 import { TENUVAULT_CLIENT_ID } from "../../shared/tenant-connection"
 import { servicesStatusKey } from "../features/notifications/optional-permissions"
 import { ApplicationRestoreDisclosure } from "./ApplicationRestoreDisclosure"
@@ -5,7 +7,7 @@ import { AddPermissions } from "./AddPermissions"
 import { useEffect, useId, useRef, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { AlertCircle, CheckCircle2, ExternalLink, Loader2, MinusCircle, RefreshCw } from "lucide-react"
-import { Link, useSearchParams } from "react-router-dom"
+import { Link, useLocation, useSearchParams } from "react-router-dom"
 import { Button } from "~/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "~/components/ui/card"
 import { useConfirm } from "~/components/ConfirmDialog"
@@ -43,14 +45,14 @@ function PermissionState({ state }: { state: ServiceHealth["permissions"] }) {
 }
 
 /** These routes change only the exact gaps reported for the selected service or area. */
-export function PermissionRoutes({ report, missing, inApp = false, restoring = false }: { inApp?: boolean; restoring?: boolean; report: Pick<ConnectionHealthReport, "tenantId" | "clientId">; missing: readonly string[] }) {
+export function PermissionRoutes({ report, missing, inApp = false, restoring = false, compact = false }: { compact?: boolean; inApp?: boolean; restoring?: boolean; report: Pick<ConnectionHealthReport, "tenantId" | "clientId">; missing: readonly string[] }) {
   const fix = permissionRemediation(report, missing)
   if (!fix.names.length) return null
   if (report.clientId.toLowerCase() === TENUVAULT_CLIENT_ID) return (
     <Link className="block text-sm text-blue-800 underline" to={settingsHref("signin")}>Review TenuVault app permission packs</Link>
   )
   return <details data-permission-routes data-no-select className="rounded-xl bg-blue-50 p-3 text-sm text-gray-700">
-    <summary className="cursor-pointer font-medium text-blue-800">Add the missing permissions ({fix.names.length})</summary>
+    <summary className="cursor-pointer font-medium text-blue-800">Add the missing permissions{!compact && ` (${fix.names.length})`}</summary>
     <div className="mt-3 space-y-3">
       <p className="break-words">{fix.names.join(", ")}</p>
       <p>Add these as delegated Microsoft Graph permissions. The CLI grants tenant-wide consent for only these scopes, preserves existing tenant-wide scopes and stops if individual consent needs separate review. Other pending permissions are not consented.</p>
@@ -110,11 +112,33 @@ function Service({ service, conditionalAccess, report, busy, toggle, run }: { se
   const losses = service.areas.flatMap(area => area.losses)
   const included = service.areas.filter(area => area.enabled)
   const restore = !included.length ? "unknown" : included.every(area => area.restore === "present") ? "present" : included.some(area => area.restore === "missing") ? "missing" : "unknown"
-  return <section className="rounded-2xl border border-border p-4" data-service={service.id}>
+  const coverage = report.coverage?.find(row => row.service === service.id)
+  const signInNeedsAccess = needsBackupAccess(coverage) && (service.enabled || conditionalAccess?.enabled)
+  const readerOnly = signInNeedsAccess && coverage && report.readerReadableServices?.includes(coverage.service)
+  const needsAccess = signInNeedsAccess && !readerOnly
+  const signInSettings = settingsHref("signin", `sign-in-${report.tenantId}`)
+  return <section id={`service-${service.id}`} className="scroll-mt-4 rounded-2xl border border-border p-4" data-service={service.id}>
     <div className="flex items-center justify-between gap-3">
-      <h3 className="font-medium text-gray-900">{label}</h3>
+      <div className="flex flex-wrap items-center gap-2">
+        <h3 className="font-medium text-gray-900">{label}</h3>
+        {needsAccess && <span className="rounded-full bg-secondary px-2 py-0.5 text-xs font-medium text-gray-700">Needs access</span>}
+      </div>
       {MODULE_BY_ID.get(service.id)?.switchable && <Switch checked={service.enabled} disabled={busy} label={`Include ${label} in backups`} onChange={enabled => toggle(service, enabled)} />}
     </div>
+    {readerOnly && <p className="mt-3 text-sm text-gray-700">Scheduled backups can read this service with the Backup Reader. Your sign-in can't read it.</p>}
+    {needsAccess && coverage && <div className="mt-3 space-y-2 text-sm text-gray-700">
+      <p>{needsAccessText([label])} Your choice is saved. Backups skip this service until it can be read.</p>
+      {report.readOnly ? <>
+        <StartNowAccessHelp />
+        <Link className="inline-block font-medium text-blue-800 underline" to={signInSettings}>Open sign-in settings</Link>
+      </> : report.clientId.toLowerCase() === TENUVAULT_CLIENT_ID
+        ? <p>Ask a Microsoft administrator to approve backup access in <Link className="font-medium text-blue-800 underline" to={signInSettings}>Sign-in and access</Link>.</p>
+        : <p>Ask your Microsoft administrator to add backup access to this app registration.</p>}
+      <details>
+        <summary className="cursor-pointer font-medium">Areas needing access</summary>
+        <p className="mt-1">{backupAreaCoverage(coverage).missing.join(", ")}</p>
+      </details>
+    </div>}
     <p className="mt-1 text-xs text-gray-500">{MODULE_BY_ID.get(service.id)?.description}</p>
     {service.id === "defender" && <p className="mt-2 text-xs text-gray-600">Backs up 17 Microsoft Graph configuration types, including tenant attack simulation content. Anti-phishing, Safe Links, Safe Attachments, anti-spam, anti-malware and quarantine policies, the Tenant Allow/Block List and Defender for Endpoint settings are not covered. Restore is not available yet.</p>}
     <div className="mt-3 space-y-1">
@@ -155,6 +179,7 @@ function SignInState({ label, state, storage = false, readOnly }: { label: strin
 
 /** Each mounted tenant owns every request, error and receipt, so late answers cannot cross tenants. */
 function TenantServices({ tenantId, clientId, name, active }: { tenantId: string; clientId: string; name: string; active: boolean }) {
+  const { hash } = useLocation()
   const [report, setReport] = useState<ConnectionHealthReport | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -217,6 +242,13 @@ function TenantServices({ tenantId, clientId, name, active }: { tenantId: string
     })
     return () => cancelAnimationFrame(frame)
   }, [report, tenantId, active])
+
+  const hasReport = Boolean(report)
+  useEffect(() => {
+    if (!active || !hasReport || !BACKUP_SERVICES.some(service => hash === `#service-${service.id}`)) return
+    const frame = requestAnimationFrame(() => document.getElementById(hash.slice(1))?.scrollIntoView({ block: "nearest" }))
+    return () => cancelAnimationFrame(frame)
+  }, [active, hasReport, hash])
 
   const toggle = async (service: ServiceHealth, enabled: boolean) => {
     const sent = generation.current

@@ -670,8 +670,9 @@ describe("sidebar groups and Help", () => {
     let go: (path: string) => void = () => undefined
     function Navigator() { go = useNavigate(); return null }
     const container = await render(createElement("div", null, createElement(Navigator), createElement(DesktopLayout)), "/portal/onboarding")
-    const header = [...container.querySelectorAll<HTMLButtonElement>('nav[aria-label="Help"] button')].find((button) => button.textContent === "Share feedback")!
-    await act(async () => header.click())
+    const header = container.querySelector('nav[aria-label="Help"] button')!
+    await act(async () => header.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })))
+    await act(async () => menuItem("Share feedback")!.click())
     // The capture starts once the page has painted.
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, LAUNCH_MS)) })
     expect(feedbackCapture).toHaveBeenCalledTimes(1)
@@ -716,9 +717,9 @@ describe("sidebar groups and Help", () => {
     expect(container.querySelector("aside")).toBeNull()
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, LAUNCH_MS)) })
     expect(whatsNewDialog.mock.lastCall?.[0].open).toBe(true)
-    // With no sidebar, focus goes back to the guided setup's Support button when the dialog closes.
+    // With no sidebar, focus goes back to the guided setup's Help button when the dialog closes.
     const props = whatsNewDialog.mock.lastCall?.[0] as { returnFocus?: { current: HTMLElement | null } }
-    expect(props.returnFocus?.current?.textContent).toBe("Support")
+    expect(props.returnFocus?.current?.textContent?.trim()).toBe("Help")
     expect(props.returnFocus?.current?.closest('nav[aria-label="Help"]')).not.toBeNull()
   })
 

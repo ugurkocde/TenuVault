@@ -5,7 +5,7 @@ import { evaluateHealth, type HealthEvaluation, type ServiceChoice } from "../..
 import type { ConnectionHealthReport, ConnectionMode, ReaderObservation, Snapshot, TokenObservation } from "../../shared/connection-health/model"
 import { runObservation } from "../../shared/connection-health/observe"
 import { canBackUp, MODULES, type GrantedPermissions, type ModuleId } from "../../shared/services/modules"
-import { grantedPermissions } from "../../shared/services/token"
+import { observedTokenGrant } from "../auth/token-identity"
 import type { KeyValueStore } from "../storage/secure-store"
 import { signInFailure } from "./failure"
 import { HealthStore, type ConnectionKey } from "./store"
@@ -74,6 +74,7 @@ export interface HealthHost {
   reader: (tenantId: string) => { clientId: string; credential: string; facts: Omit<ReaderObservation, "at"> } | null
   /** Asks Microsoft for a new token of the Backup Reader; null when the reader may not be used now. */
   readerToken: (tenantId: string) => Promise<string | null>
+  readerScheduled?: (tenantId: string) => boolean
   /** Called when what is known about a tenant changed. */
   changed?: (tenantId: string, connection?: ConnectionKind) => void
 }
@@ -323,7 +324,7 @@ export class ConnectionHealth {
         if (kind === "admin" && this.host.readOnly?.(tenant)) {
           const scopes = graphCliScopes(token.accessToken, token.grantedScopes)
           observation = { at: this.now().toISOString(), ...(scopes ? { permissions: [...scopes].sort() } : {}) }
-        } else observation = this.issued(token.accessToken)
+        } else observation = this.issued(token.accessToken, kind === "admin" ? token.grantedScopes : undefined)
       }
     } catch (error) {
       observation = { at: this.now().toISOString(), failure: signInFailure(error) }
@@ -333,8 +334,8 @@ export class ConnectionHealth {
   }
 
   /** What a token Microsoft issued for a check shows: its permissions, as of now. */
-  private issued(accessToken: string): TokenObservation {
-    const granted = grantedPermissions(accessToken)
+  private issued(accessToken: string, grantedScopes?: readonly string[]): TokenObservation {
+    const granted = observedTokenGrant(accessToken, grantedScopes)
     return { at: this.now().toISOString(), ...(granted ? { permissions: [...granted.permissions].sort() } : {}) }
   }
 
@@ -355,6 +356,7 @@ export class ConnectionHealth {
         ...(reader?.clientId ? { readerClientId: reader.clientId } : {}),
         // Read from this device at the moment of the report, so a renewed or removed reader shows without a check.
         reader: reader ? { ...reader.facts, at: now.toISOString() } : null,
+        readerScheduled: reader ? this.host.readerScheduled?.(tenant) : false,
         storage: connected?.storage ?? "local",
         settings: this.host.settings(tenant),
         connections,

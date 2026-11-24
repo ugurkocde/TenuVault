@@ -93,6 +93,29 @@ it("keeps an off service visible with a muted badge and opens the Settings card"
   expect(container.textContent).toContain("Services and permissions")
 })
 
+it("links an enabled service that needs access to its tenant's Services card and clears the badge after repair", async () => {
+  mocks.status.mockResolvedValueOnce({ ...status(), needsAccess: ["defender"] })
+  const router = await render("/portal/backup?service=defender")
+  const link = links()[0]!
+  expect(link.textContent).toBe("DefenderNeeds access")
+  expect(active()).toBeUndefined()
+  await act(async () => link.click())
+  expect(router.state.location.search).toBe("?section=services&tenant=tenant-1")
+  expect(router.state.location.hash).toBe("#service-defender")
+  await act(async () => mocks.changed!("tenant-1"))
+  expect(links()[0]!.textContent).toBe("Defender")
+})
+
+it("keeps each service name intact beside its Needs access badge", async () => {
+  mocks.status.mockResolvedValue({ ...status(), needsAccess: ["defender", "entra", "intune"] })
+  await render()
+  expect(links().map(link => link.firstElementChild?.nextElementSibling?.textContent)).toEqual(["Defender", "Entra ID", "Intune"])
+  for (const link of links()) {
+    expect(link.querySelector("span")?.classList.contains("shrink-0")).toBe(true)
+    expect(link.querySelector("span")?.classList.contains("truncate")).toBe(false)
+  }
+})
+
 it.each([true, false])("opens backup contents while pending, then follows an explicit enabled=%s result", async enabled => {
   let finish!: (result: ServicesStatus) => void
   mocks.status.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))

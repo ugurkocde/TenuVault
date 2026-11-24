@@ -160,9 +160,9 @@ async function startSignIn(page) {
   // Older installers start at Services with Intune selected, or go straight to Connect.
   const ownApp = page.getByRole("button", { name: "Choose Your own app registration", exact: true })
   const card = page.getByRole("button", { name: "Intune", exact: true })
-  const services = page.getByRole("button", { name: "Continue with Intune", exact: true })
+  const services = page.getByRole("button", { name: /^(Continue|Continue with Intune)$/ })
   const waiting = page.getByText(/^(Finish signing in in your browser|Waiting for sign-in)/)
-  const check = page.getByRole("heading", { name: /^(Check backup access|Sign-in results|Choose where backups are stored|Review your chosen permissions)$/ })
+  const check = page.getByRole("heading", { name: /^(Check backup access|You.re ready to back up .+\.|TenuVault can.t read any of the services you picked with this sign-in\.|Sign-in results|Where should backups go\?|Choose where backups are stored|Review your chosen permissions)$/ })
   const existingRegistration = page.getByRole("button", { name: "I already have an app registration", exact: true })
   await card.or(ownApp).or(services).or(existingRegistration).first().waitFor()
   if (await card.isVisible()) {
@@ -246,7 +246,10 @@ async function signInWith(engine, standIn) {
     // The stand-in proves sign-in, not delegated Graph access. In 0.6 a valid sign-in
     // can correctly stop at the advisory permission result before storage.
     await check.waitFor({ timeout: 30_000 })
-    await app.page.getByText(`Signed in as ${ACCOUNT.username}`).waitFor()
+    const identity = app.page.getByText(`Signed in as ${ACCOUNT.username}`)
+    const tenantDetails = app.page.locator("details").filter({ has: identity }).locator("summary")
+    if (await tenantDetails.isVisible() && !await identity.isVisible()) await tenantDetails.click()
+    await identity.waitFor()
     assert(standIn.log.slice(logStart).some((line) => line.includes("licensing: tenant route")), "the license check after this sign-in did not reach the local stand-in")
     await app.page.screenshot({ path: join(outDir, `${engine.name}-app.png`) })
     // The listener takes one answer and closes.

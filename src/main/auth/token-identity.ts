@@ -33,3 +33,10 @@ export function sharedTokenScopes(token: string, grantedScopes?: readonly string
   return new Set(grantedScopes.map(scope => scope.split("/").at(-1)!)
     .filter(scope => /^[a-zA-Z][\w.-]*$/.test(scope) && !["openid", "profile", "offline_access"].includes(scope)))
 }
+
+/** The observed grant, preserving unknown coverage when an opaque bearer has no response scopes. */
+export function observedTokenGrant(token: string, grantedScopes?: readonly string[]): ReturnType<typeof grantedPermissions> {
+  const grant = grantedPermissions(token)
+  if (grant || grantedScopes === undefined || accessTokenClaims(token)) return grant
+  return { kind: "delegated", permissions: sharedTokenScopes(token, grantedScopes) }
+}

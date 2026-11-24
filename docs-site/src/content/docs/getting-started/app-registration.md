@@ -19,17 +19,17 @@ TenuVault requests each Azure API separately, and only for tenants configured to
 
 You need an account with **Global Administrator**, **Cloud Application Administrator** or **Application Administrator**, because the setup creates an app registration and grants tenant-wide admin consent. A Privileged Role Administrator can grant the consent, but can create the app registration only when users in the tenant may register applications, so the setup does not count on that role. TenuVault connects tenants in Microsoft's global cloud only; tenants in GCC High, DoD or Microsoft Azure operated by 21Vianet are not supported.
 
-1. On the **Connect** step, **Connect your tenant**, select **Set up with Microsoft sign-in**.
+1. On the **Connect** step, **Create your TenuVault app registration**, select **Set up with Microsoft sign-in**.
 2. Your browser opens. Choose your admin account. Microsoft asks you to approve **Microsoft Graph Command Line Tools** with two permissions, `Application.ReadWrite.All` and `DelegatedPermissionGrant.ReadWrite.All`. This is Microsoft's own sign-in app, the one Microsoft Graph PowerShell also signs in through. TenuVault uses it once, to create the app registration and grant consent. These two permissions are not permissions of the TenuVault app registration. If Microsoft also shows **Consent on behalf of your organization**, leave it unticked; the setup does not need it.
-3. TenuVault shows what it is doing under **Setting up your tenant**:
-   * **Create the app registration**: the app registration **TenuVault Desktop**, as described in [What the setup creates](#what-the-setup-creates). If the tenant already has a TenuVault app registration from an earlier setup, TenuVault uses that one and the list says **Use the app registration this tenant already has**, followed by **Check its admin consent**.
+3. The setup card shows the current action.
+   * **Create the app registration**: the app registration **TenuVault Desktop**, as described in [What the setup creates](#what-the-setup-creates). If the tenant already has a TenuVault app registration from an earlier setup, TenuVault uses that one and the card says **Use the app registration this tenant already has**, followed by **Check its admin consent**.
    * **Grant admin consent**: tenant-wide consent for the [delegated permissions](#delegated-permissions) below, and nothing else.
-   * **Wait until Microsoft accepts sign-ins to it**: Microsoft needs a few seconds before a new app registration can be used.
+   * **Microsoft may take up to 90 seconds before your browser opens again.** The registration needs time before it can be used.
 4. When Microsoft accepts sign-ins to the app registration, your browser opens once more and signs you in to TenuVault through it. There is nothing to enter this time. TenuVault continues with the **Storage** step: [Choose where backups are stored](/getting-started/choose-storage/).
 
 **Cancel** works in every phase of the setup. Nothing is created before you are signed in. If you cancel while TenuVault creates the app registration or grants consent, it removes the app registration it created. If you cancel while it waits for Microsoft to accept sign-ins, the app registration is complete and stays in your tenant: TenuVault says so, and the next setup uses it.
 
-Expand **What the setup does** on the Connect step to read these steps and the permissions before you start. It also has the optional field **Tenant ID or domain (optional)**, for guest and partner admins who set up a tenant other than their own. Leave it empty to use the tenant of the account you sign in with.
+Expand **What the setup does** to read the steps and permissions. Open **Different tenant?** to enter a tenant ID or domain when setting up a tenant other than your own. Leave it empty to use the tenant of the account you sign in with.
 
 ### What TenuVault does with the setup sign-in
 
@@ -54,7 +54,7 @@ The last point is what TenuVault relies on. A name and a note can be set by anyo
 
 TenuVault changes nothing in an app registration it did not create: it adds no permission, grants no consent and removes nothing. It gives consent only to the one it creates. The **Sign in** step names the app registration it uses. If that one has no tenant-wide admin consent for some of the [default permissions](#delegated-permissions), the step lists them and waits for you instead of signing in by itself. What needs those permissions does not work until an administrator adds them and grants consent under **Entra admin center** > **App registrations** > the app registration > **API permissions**. You can sign in without them.
 
-If several match, TenuVault uses the one whose tenant-wide admin consent covers the most of TenuVault's permissions, and among equals the oldest. One whose enterprise application has sign-in turned off is passed over while another one matches. The **Sign in** step then says how many there are and waits for you as well. Select **Sign in with Microsoft** to use the one it names. To use a different one, select **Previous**, then **I already have an app registration**, and enter its client ID.
+If several match, TenuVault uses the one whose tenant-wide admin consent covers the most of TenuVault's permissions, and among equals the oldest. One whose enterprise application has sign-in turned off is passed over while another one matches. The **Sign in** step then says how many there are and waits for you as well. Select **Sign in with Microsoft** to use the one it names. To use a different one, select **Back**, then **I already have an app registration**, and enter its client ID.
 
 This matters for licensing: an organization license is tied to the app registration it was shared from, so signing in through a second app registration would leave the tenant on Community. See [Manage your license](/licensing/manage/#community-although-the-tenant-has-an-organization-license).
 
@@ -83,7 +83,7 @@ Delete **TenuVault Desktop** under **Entra admin center** > **App registrations*
 
 <figure class="docs-screenshot">
   <a href="/images/screenshots/setup-connect.webp" aria-label="Open full-size screenshot: setup connect">
-    <img src="/images/screenshots/setup-connect.webp" alt="The built-in connection screen explains the app registration before you start Microsoft sign-in" width="2880" height="2000" loading="lazy" decoding="async" />
+    <img src="/images/screenshots/setup-connect.webp" alt="The built-in connection screen explains the app registration before you start Microsoft sign-in" width="1440" height="900" loading="lazy" decoding="async" />
   </a>
   <figcaption>The built-in connection screen explains the app registration before you start Microsoft sign-in. Example tenant data. Select the image to view it full size.</figcaption>
 </figure>
@@ -292,7 +292,7 @@ Assigning a group to an enterprise application requires Microsoft Entra ID P1 or
 
 [Sign in to your tenant](/getting-started/connect-tenant/) with the two values the script printed.
 
-The browser opens for the tenant of your Microsoft account. To set up another tenant as a guest administrator, select **Setting up a different tenant? Enter its ID or domain** and enter the tenant GUID or a verified domain before starting.
+The browser opens for the tenant of your Microsoft account. To set up another tenant as a guest administrator, select **Different tenant?** and enter the tenant GUID or a verified domain before starting.
 
 ## Permissions for a service choice
 

@@ -11,6 +11,7 @@ interface BackupResultsProps {
   job: Pick<BackupJobDisplay, "status" | "startTime" | "endTime" | "output" | "results" | "isComplete">
   /** The floating panel's narrow layout: totals, problems and the first few types only. */
   compact?: boolean
+  hideStats?: boolean
   /** Shown under the raw log, for support. */
   jobId?: string | null
 }
@@ -30,7 +31,7 @@ function compactRows(rows: BackupTypeResult[]): BackupTypeResult[] {
  * What a backup saved, per type, with problems first and the raw log folded away. Without per type
  * results (a job that has not started or failed before listing anything) only the raw log is offered.
  */
-export function BackupResults({ job, compact = false, jobId }: BackupResultsProps) {
+export function BackupResults({ job, compact = false, jobId, hideStats = false }: BackupResultsProps) {
   const results = job.results
   if (!results) return job.output ? <RawLog output={job.output} jobId={jobId} live={!job.isComplete} compact={compact} /> : null
 
@@ -50,7 +51,7 @@ export function BackupResults({ job, compact = false, jobId }: BackupResultsProp
           <span className="font-semibold tabular-nums">{summary.policies}</span> {summary.policies === 1 ? "policy" : "policies"} {job.isComplete ? "saved" : "saved so far"}
           <span className="text-muted-foreground"> across {summary.typesBackedUp} type{summary.typesBackedUp === 1 ? "" : "s"}{duration ? `, ${duration}` : ""}</span>
         </p>
-      ) : (
+      ) : !hideStats && (
         <dl className="grid grid-cols-3 gap-2">
           <Stat label={job.isComplete ? "Policies saved" : "Saved so far"} value={String(summary.policies)} />
           <Stat label="Types backed up" value={String(summary.typesBackedUp)} />

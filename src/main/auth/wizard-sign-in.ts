@@ -2,9 +2,11 @@ import { ORGANIZATIONS, resolveOnboardingTenant } from "./onboarding-tenant"
 import { randomUUID } from "node:crypto"
 import { checkedOnboardingChoice } from "../../shared/services/onboarding"
 import { missingForChoice, type PermissionChoice } from "../../shared/services/manifest"
-import { graphCliCoverage } from "../../shared/services/graph-cli-coverage"
+import { chosenBackupCoverage, graphCliCoverage } from "../../shared/services/graph-cli-coverage"
+import { missingPackScopes } from "../../shared/services/permission-packs"
+import { needsBackupAccess } from "../../shared/services/backup-coverage"
 import { isGuid } from "../../shared/security"
-import { GRAPH_CLI_DISABLED, TENUVAULT_CLIENT_ID, GRAPH_CLI_CLIENT_ID, type WizardSignInMethod, type WizardSignInResponse } from "../../shared/tenant-connection"
+import { GRAPH_CLI_DISABLED, TENUVAULT_CLIENT_ID, GRAPH_CLI_CLIENT_ID, type BackupScopeCoverage, type WizardSignInMethod, type WizardSignInResponse } from "../../shared/tenant-connection"
 import { sharedTokenScopes } from "./token-identity"
 import type { StagedSignIn } from "./tenant-connections"
 import { ConnectionSwitchError } from "./switch-failure"
@@ -20,11 +22,18 @@ export function wizardFailure(error: unknown) {
   return { error: { code: failure.code, message: failure.message } }
 }
 
+function canFinishWithCoverage(coverage: BackupScopeCoverage[]): boolean {
+  const selected = coverage.filter(row => row.folders.length)
+  return selected.length === 0 || !selected.every(needsBackupAccess)
+}
+
 interface PendingSignIn {
   id: string
   method: WizardSignInMethod
   staged: StagedSignIn
   choice?: PermissionChoice
+  coverage: BackupScopeCoverage[]
+  trialEligible: boolean
 }
 
 export class WizardSignIn {
@@ -86,21 +95,26 @@ export class WizardSignIn {
       if (staged.account.clientId.toLowerCase() !== clientId) throw new ConnectionSwitchError("wrong_client", "Microsoft returned a sign-in for a different app.")
       if (!staged.idToken) throw new ConnectionSwitchError("no_account", "Microsoft did not return a sign-in proof for this tenant.")
       if (this.host.connected(actualTenant)) throw new ConnectionSwitchError("conflict", "This tenant is already connected.")
+      const scopes = method === "graphCli" ? staged.graphScopes && new Set(staged.graphScopes) : sharedTokenScopes(staged.accessToken, staged.grantedScopes)
+      // Keep the approved subset for later silent requests. The tenant's saved choice still
+      // describes everything the admin wants to protect once access is added.
+      const verified = method === "tenuvaultApp" && scopes && staged.graphScopes?.filter(scope => missingPackScopes([scope], scopes).length === 0)
+      const coverage = graphCliCoverage(verified ? new Set(verified) : scopes, method === "tenuvaultApp" ? choice : undefined)
+      const trialEligible = method === "graphCli" || canFinishWithCoverage(coverage)
       const [organizationName] = await Promise.all([
         this.organizationName(actualTenant, staged.accessToken),
-        staged.missingOnboardingScopes?.length ? undefined : this.host.startTrial(staged),
+        trialEligible ? this.host.startTrial(staged) : undefined,
       ])
       await this.requireMethod(method)
       if (this.host.connected(actualTenant)) throw new ConnectionSwitchError("conflict", "This tenant is already connected.")
       const id = randomUUID()
       this.clear()
-      this.pending = { id, method, staged, choice: method === "tenuvaultApp" ? choice : undefined }
       this.expiry = setTimeout(() => { void this.discard(id) }, 15 * 60_000)
       this.expiry.unref()
       const { homeAccountId: _, ...account } = staged.account
-      const scopes = method === "graphCli" ? staged.graphScopes && new Set(staged.graphScopes) : sharedTokenScopes(staged.accessToken, staged.grantedScopes)
+      this.pending = { id, method, staged: verified ? { ...staged, graphScopes: verified } : staged, choice: method === "tenuvaultApp" ? choice : undefined, coverage, trialEligible }
       const missing = staged.missingOnboardingScopes ?? (method === "graphCli" && scopes && choice ? missingForChoice(choice, { kind: "delegated", permissions: scopes }) : undefined)
-      return { result: { id, account, coverage: graphCliCoverage(scopes, method === "tenuvaultApp" ? choice : undefined), missing, organizationName } }
+      return { result: { id, account, coverage, missing, organizationName } }
     } catch (error) {
       return wizardFailure(error)
     } finally {
@@ -118,8 +132,8 @@ export class WizardSignIn {
   }
 
   trialContactProof(tenant: string): string | undefined {
-    const staged = this.pending?.staged
-    return staged?.account.tenantId === tenant.toLowerCase() && !staged.missingOnboardingScopes?.length && !this.host.connected(tenant) ? staged.idToken : undefined
+    const pending = this.pending
+    return pending?.trialEligible && pending.staged.account.tenantId === tenant.toLowerCase() && !this.host.connected(tenant) ? pending.staged.idToken : undefined
   }
 
   async finish(id: unknown, profile: unknown, services: unknown) {
@@ -130,8 +144,11 @@ export class WizardSignIn {
     let checkedLicense = false
     try {
       if (typeof profile !== "string" || profile.length > 64_000) throw new ConnectionSwitchError("invalid_request", "Choose valid backup storage.")
-      if (pending.staged.missingOnboardingScopes?.length) throw new ConnectionSwitchError("AADSTS65001", "Check the selected permissions again before continuing.")
       const choice = pending.method === "tenuvaultApp" ? pending.choice! : wizardChoice(services)
+      const coverage = chosenBackupCoverage(pending.coverage, choice)
+      if (!canFinishWithCoverage(coverage)) {
+        throw new ConnectionSwitchError("AADSTS65001", "Check backup access before continuing.")
+      }
       if (pending.method === "graphCli") for (const service of Object.values(choice)) service.access = "backup"
       await this.requireMethod(pending.method)
       if (this.pending !== pending) throw new ConnectionSwitchError("sign_in_required", EXPIRED)

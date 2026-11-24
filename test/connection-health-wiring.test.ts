@@ -30,7 +30,10 @@ describe("connection health wiring", () => {
 
   it("checks the license before it asks the Backup Reader for a token, as a scheduled backup does", () => {
     const reader = host.match(/readerToken: async \(tenantId\) => \{([\s\S]*?)\n    \},/)?.[1] ?? ""
-    expect(reader).toContain('allows(plan, "backupReader")')
+    const eligibility = main.match(/const readerScheduled = \(tenantId: string\) => \{([\s\S]*?)\n  \}/)?.[1] ?? ""
+    expect(eligibility).toContain('allows(plan, "backupReader")')
+    expect(reader).toContain("!readerScheduled(tenantId)")
+    expect(main).toContain("!readerScheduled(request.tenantId)")
     const license = reader.indexOf("license.requireEntitlement(tenantId)")
     expect(license).toBeGreaterThanOrEqual(0)
     expect(reader.indexOf("reader.graph({ fresh: true })")).toBeGreaterThan(license)

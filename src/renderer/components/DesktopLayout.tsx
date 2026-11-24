@@ -50,7 +50,7 @@ import { CisJobNotifier } from "../lib/cis-jobs"
 import { BackgroundTasksPanel } from "./BackgroundTasksPanel"
 import { useScoreInvalidation } from "../features/scores/invalidate"
 import { DriftScanIndicator, DriftScanNotifier } from "../lib/drift-jobs"
-import { SetupCallLink } from "./SetupCallLink"
+import { setupCallUrl } from "../../shared/setup-call"
 import { StartNowNotice } from "./StartNowNotice"
 import { SignInBanner } from "./SignInBanner"
 import { SupportDialog } from "./SupportDialog"
@@ -486,8 +486,7 @@ export function DesktopLayout() {
   const capturingFeedback = useRef(false)
   const helpLaunching = useRef(false)
   const helpTrigger = useRef<HTMLButtonElement>(null)
-  // During the guided setup there is no sidebar: dialogs fall back to the header's Support button.
-  const headerSupport = useRef<HTMLButtonElement>(null)
+  const [setupHelpOpen, setSetupHelpOpen] = useState(false)
   // Dialogs opened from Help or the first-run header hand focus back to the control that opened them.
   const supportReturn = useRef<HTMLElement | null>(null)
   const feedbackReturn = useRef<HTMLElement | null>(null)
@@ -522,12 +521,8 @@ export function DesktopLayout() {
     capturingFeedback.current = false
     setFeedback({ open: true, snapshot })
   }
-  // Keep the first-run layout through backup completion so enrolling the tenant does not move the wizard.
-  const onboarding = pathname === "/portal/onboarding"
-  const firstRun = useRef(false)
-  if (!onboarding) firstRun.current = false
-  else if (!tenants.length) firstRun.current = true
-  const focus = onboarding && firstRun.current
+  const focus = pathname === "/portal/onboarding"
+  useEffect(() => { if (!focus) setSetupHelpOpen(false) }, [focus])
   const hoverPill = useHoverPill(`${pathname}${search}`)
   // Measured on the mounted nav, so a sidebar that appears after the first-run setup is watched too.
   const navOverflowing = useOverflowing(hoverPill.nav)
@@ -604,11 +599,20 @@ export function DesktopLayout() {
             <BrandMark className="size-9" />
             <div className="text-base font-semibold tracking-tight text-foreground">TenuVault</div>
           </div>
-          <nav aria-label="Help" className="flex items-center gap-1">
-            <SetupCallLink source="setup-header" variant="nav" className={quiet} />
-            <Link to="/license" className={quiet}>License</Link>
-            <button type="button" onClick={(event) => void openFeedback(event.currentTarget)} className={quiet}>Share feedback</button>
-            <button ref={headerSupport} type="button" onClick={(event) => openSupport(event.currentTarget)} className={quiet}>Support</button>
+          <nav aria-label="Help">
+            <DropdownMenu open={setupHelpOpen} onOpenChange={(open) => {
+              if (!open || (!helpLaunching.current && !capturingFeedback.current)) setSetupHelpOpen(open)
+            }}>
+              <DropdownMenuTrigger ref={helpTrigger} className={cn(quiet, "inline-flex items-center gap-2")}>
+                Help <ChevronDown className="size-4" aria-hidden="true" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="min-w-44 animate-none">
+                <DropdownMenuItem data-setup-call="setup-header" onSelect={() => void bridge.app.openExternal(setupCallUrl("setup-header")).catch(() => undefined)}>Free setup call</DropdownMenuItem>
+                <DropdownMenuItem asChild><Link to="/license">License</Link></DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => void openFeedback(helpTrigger.current)}>Share feedback</DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => openSupport(helpTrigger.current)}>Support</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </nav>
         </header>
       ) : (
@@ -678,13 +682,13 @@ export function DesktopLayout() {
       <FrameworkJobNotifier />
       <CisJobNotifier />
       <DriftScanNotifier />
-      <WhatsNewDialog open={whatsNewOpen} onOpenChange={setWhatsNewOpen} returnFocus={firstConnected(whatsNewReturn, helpTrigger, headerSupport)} />
-      <SupportDialog open={supportOpen} onOpenChange={setSupportOpen} returnFocus={firstConnected(supportReturn, helpTrigger, headerSupport)} />
+      <WhatsNewDialog open={whatsNewOpen} onOpenChange={setWhatsNewOpen} returnFocus={firstConnected(whatsNewReturn, helpTrigger)} />
+      <SupportDialog open={supportOpen} onOpenChange={setSupportOpen} returnFocus={firstConnected(supportReturn, helpTrigger)} />
       <FeedbackDialog
         open={feedback.open}
         onOpenChange={(open) => setFeedback((current) => ({ open, snapshot: open ? current.snapshot : null }))}
         snapshot={feedback.snapshot}
-        returnFocus={firstConnected(feedbackReturn, helpTrigger, headerSupport)}
+        returnFocus={firstConnected(feedbackReturn, helpTrigger)}
         // Support opened from the feedback dialog returns to where feedback was opened from.
         onOpenSupport={() => { supportReturn.current = feedbackReturn.current; setSupportOpen(true) }}
       />

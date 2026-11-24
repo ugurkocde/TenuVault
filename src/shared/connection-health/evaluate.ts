@@ -11,9 +11,11 @@
  * or whether a product was set up: those show when a backup reads a type, or is refused.
  */
 
+import type { BackupScopeCoverage } from "../tenant-connection"
 import { groupBackupCoverage } from "../services/backup-coverage"
 import { chosenFolder, DELEGATED_BACKUP_FOLDERS } from "../services/graph-cli-coverage"
 import type { PermissionChoice } from "../services/manifest"
+import { backupServiceForFolder } from "../services/presentation"
 import { carryChanges, folderValue } from "./observe"
 import { INTUNE_TYPES } from "../intune/registry"
 import { areaPermissions, missingForChoice } from "../services/manifest"
@@ -61,6 +63,8 @@ export interface HealthInput {
   clientId: string
   /** The application ID of the tenant's Backup Reader, once it has one. */
   readerClientId?: string
+  /** Whether scheduled backups can use this tenant's Backup Reader. */
+  readerScheduled?: boolean
   /** What this device knows about the Backup Reader now; null when the tenant has none. */
   reader: ReaderObservation | null
   /** Where the tenant's backups go: this device, or an Azure storage account the admin signs in to. */
@@ -379,6 +383,18 @@ export function evaluateHealth(input: HealthInput, now: Date): HealthEvaluation 
     }
     return granted ? "readable" : "unknown"
   })
+  const scheduledRoles = input.reader?.verifiedRoles?.filter(role => readerGranted?.permissions.has(role) && !input.reader?.roleChange?.removed.includes(role))
+  const readerReadableServices = new Set<BackupScopeCoverage["service"]>()
+  if (input.readerScheduled && input.reader?.state === "verified" && Date.parse(input.reader.notAfter) > now.getTime() && scheduledRoles?.length) {
+    const scheduledGrant: GrantedPermissions = { kind: "application", permissions: new Set(scheduledRoles) }
+    const readerReads = evidenceOf([reader], now)
+    for (const { folder } of INTUNE_TYPES) {
+      const service = backupServiceForFolder(folder)
+      if (!service || !chosenFolder(folder, choice) || !canBackUp(folder, scheduledGrant)) continue
+      const verdict = verdictOf(folder, readerReads.get(folder)?.filter(entry => entry.kind !== "excluded"), { "app-only": scheduledGrant })
+      if (!verdict || verdict.read) readerReadableServices.add(service)
+    }
+  }
   const lostBy = [lostFolders(delegated, now), lostFolders(reader, now)]
   const evaluated = MODULES.map((module) => evaluateService(module, input.settings[module.id], granted, evidence, lostBy, readerGranted))
   const lost = new Map(evaluated.flatMap((entry) => [...entry.lost]))
@@ -478,6 +494,7 @@ export function evaluateHealth(input: HealthInput, now: Date): HealthEvaluation 
       storage: input.storage === "local" ? { state: "local", checkedAt: null } : signInHealth(delegated?.storage, now),
       services: evaluated.map((entry) => entry.service),
       coverage,
+      ...(readerReadableServices.size ? { readerReadableServices: [...readerReadableServices] } : {}),
       changes,
       since: baseline?.at ?? null,
       granted: granted ? sorted(granted.permissions) : null,
