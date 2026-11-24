@@ -490,14 +490,14 @@ describe("LicenseService key activations", () => {
     await license.setKey("TEST-LICENSE-KEY", [TENANT])
     calls = []
     await expect(license.requireEntitlement(TENANT_B)).rejects.toThrow("maximum number of tenants")
-    expect(calls.map((c) => c.action)).toEqual(["activate", "tenant"])
+    expect(calls.map((c) => c.action)).toEqual(["activate", "health", "tenant"])
     // Bursts of token requests do not call the service again.
     await expect(license.requireEntitlement(TENANT_B)).rejects.toThrow("maximum number of tenants")
-    expect(calls).toHaveLength(2)
+    expect(calls).toHaveLength(3)
     expect(license.status([TENANT_B]).tenants[0]).toMatchObject({ entitled: false, message: expect.stringMatching(/maximum/) })
     // An action the admin started asks again.
     await expect(license.requireEntitlement(TENANT_B, { retry: true })).rejects.toThrow("maximum number of tenants")
-    expect(calls).toHaveLength(4)
+    expect(calls).toHaveLength(5)
     expect(FAILURE_COOLDOWN_MS).toBeGreaterThan(0)
   })
 
@@ -1149,12 +1149,13 @@ describe("LicenseService organization licenses", () => {
     const license = service()
     await license.requireEntitlement(TENANT)
     expect(calls).toEqual([
+      { action: "health", body: {} },
       {
         action: "tenant",
         body: expect.objectContaining({ idToken: "id.token.value", installId: INSTALL, action: "activate" }),
       },
     ])
-    expect(calls[0]!.body).not.toHaveProperty("key")
+    expect(calls[1]!.body).not.toHaveProperty("key")
     const status = service().status([TENANT])
     expect(status).toMatchObject({ hasKey: false, keyHint: null, plan: null })
     expect(status.tenants[0]).toMatchObject({ entitled: true, source: "tenant", displayKey: "****ABCDEF", shared: null })
@@ -1177,6 +1178,7 @@ describe("LicenseService organization licenses", () => {
 
     await service().refreshAll()
     expect(calls).toEqual([
+      { action: "health", body: {} },
       { action: "tenant", body: expect.objectContaining({ action: "refresh", activationId: "act-org" }) },
     ])
 
@@ -1368,7 +1370,7 @@ describe("LicenseService organization licenses", () => {
     await expect(license.requireEntitlement(TENANT)).resolves.toBe("pro")
     clientId = GRAPH_CLI_CLIENT_ID
     await license.refreshAll()
-    expect(calls.map(call => call.action)).toEqual(["tenant", "health"])
+    expect(calls.map(call => call.action)).toEqual(["health", "tenant"])
     expect(license.status([TENANT]).tenants[0]).toMatchObject({ entitled: true, source: "tenant" })
     capable = true
     vi.setSystemTime(Date.now() + 120_000)
@@ -1428,7 +1430,7 @@ describe("LicenseService organization licenses", () => {
     const license = service()
     await license.setKey("TEST-LICENSE-KEY", [])
     await license.requireEntitlement(TENANT)
-    expect(calls.map((call) => call.action)).toEqual(["activate", "tenant"])
+    expect(calls.map((call) => call.action)).toEqual(["activate", "health", "tenant"])
     expect(license.status([TENANT])).toMatchObject({ hasKey: true, plan: null })
     expect(license.status([TENANT]).tenants[0]).toMatchObject({ entitled: true, source: "tenant" })
   })
@@ -2607,5 +2609,37 @@ describe("tenant hashes on the license wire", () => {
     expect(calls.find(call => call.action === "tenant")?.body).toMatchObject({
       tenantIdHash: digest, publicClientProof: "fresh.signed.token", action: "activate",
     })
+  })
+
+  it("loads organization health before sending the TenuVault app's first tenant proof", async () => {
+    answer = ({ action }) => action === "health"
+      ? Response.json({ organizationLicenses: { clientIdSets: true, tenantIdHashes: true } })
+      : granted("act-1")
+    const licensing = service({ clientId: () => TENUVAULT_CLIENT_ID, idTokenValue: "fresh.signed.token" })
+    await expect(licensing.requireEntitlement(TENANT)).resolves.toBe("pro")
+    expect(calls.find(call => call.action === "tenant")?.body).toMatchObject({
+      tenantIdHash: digest, idToken: "fresh.signed.token", action: "activate",
+    })
+  })
+
+  it("refreshes expired organization health before sending a tenant refresh", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] })
+    vi.setSystemTime(T0)
+    try {
+      let tenantIdHashes = false
+      answer = ({ action }) => action === "health"
+        ? Response.json({ organizationLicenses: { clientIdSets: true, tenantIdHashes } })
+        : granted("act-1")
+      const licensing = service({ clientId: () => APP_ID, idTokenValue: "fresh.signed.token" })
+      await expect(licensing.requireEntitlement(TENANT)).resolves.toBe("pro")
+      expect(calls.find(call => call.action === "tenant")?.body).not.toHaveProperty("tenantIdHash")
+      tenantIdHashes = true
+      vi.setSystemTime(T0 + 121_000)
+      await licensing.refreshAll()
+      expect(calls.filter(call => call.action === "health")).toHaveLength(2)
+      expect(calls.filter(call => call.action === "tenant").at(-1)?.body).toMatchObject({
+        tenantIdHash: digest, idToken: "fresh.signed.token", action: "refresh",
+      })
+    } finally { vi.useRealTimers() }
   })
 })

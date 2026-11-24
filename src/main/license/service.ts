@@ -781,8 +781,12 @@ export class LicenseService {
     })().finally(() => { this.healthFetch = undefined })
   }
 
-  private async supportsClientIdSets(): Promise<boolean> {
+  private async refreshOrganizationHealth(): Promise<void> {
     if (!this.organizationHealth || Date.now() >= this.organizationHealth.expiresAt) await this.fetchHealth()
+  }
+
+  private async supportsClientIdSets(): Promise<boolean> {
+    await this.refreshOrganizationHealth()
     return this.organizationHealth?.clientIdSets === true
   }
 
@@ -1268,6 +1272,8 @@ export class LicenseService {
     const idToken = token ?? (await this.idToken(tenantId))
     this.assertCurrent(current)
     if (!idToken) throw new NoIdToken()
+    await this.refreshOrganizationHealth()
+    this.assertCurrent(current)
     return this.call("tenant", {
       ...(publicProof ? { publicClientProof: idToken } : { idToken }),
       ...this.tenantHashFields(tenantId, idToken),
