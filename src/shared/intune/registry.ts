@@ -45,6 +45,8 @@ export interface Extra {
   property: string
   /** Receives IDs already encoded as URL path segments. */
   path: (id: string) => string
+  /** Expanded collection paths relative to each returned entry. */
+  expandedCollections?: readonly string[]
   /** The path returns one object; its `property` is stored instead of a collection. */
   single?: boolean
   /** Stores the complete singleton response of a sub-resource. */
@@ -137,6 +139,8 @@ export interface IntuneType {
   volume?: "large"
   /** $expand for the detail GET. */
   expand?: string
+  /** Collection paths for a detail $expand with nested expansions or options. Simple lists of names are inferred. */
+  expandedCollections?: readonly string[]
   /** $select for the detail GET, for types that leave properties out by default. */
   select?: string
   /**
@@ -537,6 +541,7 @@ export const INTUNE_TYPES: IntuneType[] = [
     path: "deviceManagement/deviceCompliancePolicies",
     nameKey: "displayName",
     expand: "scheduledActionsForRule($expand=scheduledActionConfigurations),assignments",
+    expandedCollections: ["scheduledActionsForRule", "scheduledActionsForRule.scheduledActionConfigurations", "assignments"],
     restore: "create",
     assign: { key: "assignments" },
     prepare: (payload) => {
@@ -573,6 +578,7 @@ export const INTUNE_TYPES: IntuneType[] = [
       {
         property: "scheduledActionsForRule",
         path: (id) => `deviceManagement/compliancePolicies/${id}/scheduledActionsForRule?$expand=scheduledActionConfigurations`,
+        expandedCollections: ["scheduledActionConfigurations"],
       },
       { property: "assignments", path: (id) => `deviceManagement/compliancePolicies/${id}/assignments` },
     ],

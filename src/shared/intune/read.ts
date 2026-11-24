@@ -90,7 +90,7 @@ export async function readObject(type: IntuneType, id: string, graph: GraphReade
   let detail = type.singleton ? singletonObject(type.singleton, read) : read
   if (type.staticIds) detail = { ...detail, id }
   detail = withIdentity(type, detail)
-  await completeExpanded(detail, graph, path.split("?")[0]!)
+  await completeExpanded(detail, graph, path.split("?")[0]!, type.expandedCollections ?? type.expand?.split(","))
   // A type that keeps only some properties keeps them of the object itself; what its extras read is stored next to them.
   if (type.keep) detail = keptSnapshot(type.keep, detail)
   // Extra paths are built from Graph-returned IDs, so each ID is encoded as one path segment.
@@ -122,7 +122,7 @@ export async function readObject(type: IntuneType, id: string, graph: GraphReade
           }
         }
       }
-      await completeExpanded(entries, graph, collection.split("?")[0]!)
+      await completeExpanded(entries, graph, collection.split("?")[0]!, extra.expandedCollections)
       detail[extra.property] = entries
     } catch (error) {
       const answer = error as { continuationPage?: true; status?: number; answer?: { code?: string; message?: string } }
@@ -173,31 +173,57 @@ function storedSnapshot(type: IntuneType, snapshot: Item): Item {
   return orderedSnapshot(type, withoutNeverStored(type, type.normalizeSnapshot ? type.normalizeSnapshot(snapshot) : snapshot))
 }
 
-/** Read every expanded page, including nested resource roles and scopes, before storing it. */
-async function completeExpanded(value: Json, graph: GraphReader, path: string): Promise<void> {
+/** Validate the collection envelope and the identity of every entry on a Graph page. */
+export function validateCollectionEntries(page: unknown, idKey = "id"): { value: Item[]; "@odata.nextLink"?: unknown } {
+  if (!page || typeof page !== "object" || Array.isArray(page) || !("value" in page) || !Array.isArray(page.value)) {
+    throw new Error("Graph returned an invalid policy collection")
+  }
+  for (const entry of page.value) {
+    const id = entry?.[idKey]
+    if (!entry || typeof entry !== "object" || Array.isArray(entry) || typeof id !== "string" || !id.trim()) {
+      throw new Error(`Microsoft Graph returned a collection entry without ${idKey}`)
+    }
+  }
+  return page as { value: Item[]; "@odata.nextLink"?: unknown }
+}
+
+/** Read every expanded page, including terminal and nested pages, before storing it. */
+async function completeExpanded(value: Json, graph: GraphReader, path: string, collections: readonly string[] = []): Promise<void> {
   if (!value || typeof value !== "object") return
   if (Array.isArray(value)) {
     for (const entry of value) {
       const id = entry && typeof entry === "object" && !Array.isArray(entry) ? entry.id : undefined
-      await completeExpanded(entry, graph, path && typeof id === "string" && id ? `${path}/${encodeURIComponent(id)}` : "")
+      await completeExpanded(entry, graph, path && typeof id === "string" && id ? `${path}/${encodeURIComponent(id)}` : "", collections)
     }
     return
   }
+  const continuation = "@odata.nextLink"
+  const expanded = new Set(collections.filter(property => Object.hasOwn(value, property)))
   for (const key of Object.keys(value)) {
-    if (!key.endsWith("@odata.nextLink")) continue
-    const property = key.slice(0, -"@odata.nextLink".length)
+    if (key.endsWith(continuation)) expanded.add(key.slice(0, -continuation.length))
+  }
+  // Every collection requested through $expand in the registry returns entities keyed by id.
+  for (const property of expanded) {
+    const key = `${property}${continuation}`
     const nextLink = value[key]
+    const page = { value: value[property], ...(Object.hasOwn(value, key) && { [continuation]: nextLink }) }
     if (graph.completeList && path) {
-      value[property] = await graph.completeList(`${path}/${property}`, { value: value[property], "@odata.nextLink": nextLink })
+      value[property] = await graph.completeList(`${path}/${property}`, page)
     } else {
       if (graph.completeList) throw new Error(`Invalid expanded collection ${property}`)
-      if (typeof nextLink !== "string") continue
-      if (!Array.isArray(value[property])) throw new Error(`Invalid expanded collection ${property}`)
-      value[property] = [...value[property] as Json[], ...await graph.list(nextLink)]
+      const { value: entries } = validateCollectionEntries(page)
+      if (Object.hasOwn(page, continuation)) {
+        if (typeof nextLink !== "string" || !nextLink.trim()) throw new Error("Graph returned an invalid continuation link")
+        value[property] = [...entries, ...await graph.list(nextLink)]
+      }
     }
     delete value[key]
   }
-  for (const [key, child] of Object.entries(value)) await completeExpanded(child, graph, path ? `${path}/${key}` : "")
+  for (const [key, child] of Object.entries(value)) {
+    const prefix = `${key}.`
+    const nested = collections.filter(property => property.startsWith(prefix)).map(property => property.slice(prefix.length))
+    await completeExpanded(child, graph, path ? `${path}/${key}` : "", nested)
+  }
 }
 
 /** Sort declared unordered collections at any depth; ordered settings keep their response order. */

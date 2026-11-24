@@ -99,6 +99,7 @@ A change marked **Reverted** was already reverted with TenuVault. A change marke
 ## What drift detection compares
 
 * Types read in full by both backups. When either backup excluded a type or did not confirm a complete read, the results list it under **Types not compared** and leave it out of added, modified and deleted totals. See [What gets backed up](/backups/coverage/).
+* Policy assignments are compared only when the policy type was read in full. An assignment entry with a missing ID makes the type unread. A valid empty assignment list can show assignments that were removed.
 * Changes to IDs, version numbers, creation and modification times, the description and the reference IDs of encrypted values are ignored.
 * Items whose fingerprint (recorded in each backup) is the same in both backups are unchanged and are not read again, so comparisons of large tenants finish faster. Backups made by earlier versions without fingerprints are compared file by file.
 * Lists of settings are matched by the setting itself, so an added, removed or reordered setting is reported as that setting, not as a change to every setting after it.

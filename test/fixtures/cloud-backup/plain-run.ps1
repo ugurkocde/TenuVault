@@ -29,6 +29,8 @@ $script:failReportList = $false
 $script:failCompliance = $false
 $script:maskOma = $false
 $script:failAuditReceipt = $false
+$expansions = Get-Content (Join-Path $PSScriptRoot "expanded-assignments.json") -Raw | ConvertFrom-Json -AsHashtable
+$script:baselineAssignments = ConvertTo-Json -InputObject $expansions.assignments -Compress -Depth 5
 
 function Get-TvManagedIdentityToken {
     param([string]$Resource)
@@ -76,7 +78,7 @@ function Invoke-TvHttp {
         if ($script:privateDetail) { throw [TvHttpError]::new(400, "HTTP 400 for Private Ada guest_example.test#EXT#@tenant.onmicrosoft.com") }
         if ($script:timeoutDetail) { throw [TimeoutException]::new("Detail call timed out for admin+lab@example.test") }
         if ($script:failDetail) { throw [TvHttpError]::new(401, "HTTP 401") }
-        $text = '{"@odata.context":"x","id":"cfg-1","displayName":"Baseline Wi-Fi","lastModifiedDateTime":"2026-11-01T10:00:00Z","assignments":[]}'
+        $text = '{"@odata.context":"x","id":"cfg-1","displayName":"Baseline Wi-Fi","lastModifiedDateTime":"2026-11-01T10:00:00Z","assignments":' + $script:baselineAssignments + '}'
         if ($script:maskOma -and $Uri -match "/cfg-1(?:\?|$)") {
             $text = '{"id":"cfg-1","displayName":"Baseline Wi-Fi","omaSettings":[{"@odata.type":"#microsoft.graph.omaSettingString","isEncrypted":true,"value":"****","secretReferenceValueId":"sample"}],"assignments":[]}'
         }
@@ -177,6 +179,18 @@ $scenarios = @(foreach ($page in @($null, '{}', '{"value":null}', '{"value":{"id
 $parity = Get-Content (Join-Path $PSScriptRoot "list-pages.json") -Raw | ConvertFrom-Json -AsHashtable
 $scenarios += @($parity | ForEach-Object { @{ Responses = $_.responses } })
 $scenarios += @{ PrivateDetail = $true; Responses = @{} }
+$scenarios += @(foreach ($case in $expansions.cases) {
+    $responses = @{}
+    if ($case.Contains("list")) {
+        $responses["/beta/deviceManagement/deviceConfigurations"] = @{ value = $case.list }
+    }
+    if ($case.Contains("assignments")) {
+        $responses['/beta/deviceManagement/deviceConfigurations/cfg-1?$expand=assignments'] = @{
+            id = "cfg-1"; displayName = "Baseline Wi-Fi"; assignments = $case.assignments
+        }
+    }
+    @{ Responses = $responses }
+})
 foreach ($scenario in $scenarios) {
     $script:calls.Clear()
     $script:OutcomeSent = $false

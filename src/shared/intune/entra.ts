@@ -209,7 +209,7 @@ const lifecycleUnavailable = [{ status: 403, code: "Access denied", message: "In
 export const ENTRA_5C_TYPES: IntuneType[] = [
   {
     ...governance("AccessPackageCatalogs", "Access package catalogs", `${entitlement}/catalogs`),
-    extras: [{ property: "resources", path: id => `${entitlement}/catalogs/${id}/resources?$expand=roles,scopes` }],
+    extras: [{ property: "resources", path: id => `${entitlement}/catalogs/${id}/resources?$expand=roles,scopes`, expandedCollections: ["roles", "scopes"] }],
     unorderedCollections: { resources: "id", "resources.roles": "id", "resources.scopes": "id", "resources.attributes": "name", "resources.attributes.source.question.localizations": "languageCode", "resources.attributes.source.question.choices.localizations": "languageCode" },
     requiredCollections: ["resources.roles", "resources.scopes"],
     neverStored: ["resources.isPendingOnboarding"],
@@ -217,10 +217,12 @@ export const ENTRA_5C_TYPES: IntuneType[] = [
   {
     ...governance("AccessPackages", "Access packages", `${entitlement}/accessPackages`),
     expand: "catalog($select=id),resourceRoleScopes($expand=role,scope)",
+    expandedCollections: ["resourceRoleScopes"],
     extras: ["incompatibleAccessPackages", "incompatibleGroups"].map(property => ({ property, path: id => `${entitlement}/accessPackages/${id}/${property}?$select=id`, ids: true })),
     unorderedCollections: { resourceRoleScopes: "id" }, requiredCollections: ["resourceRoleScopes"],
   },
   { ...governance("AccessPackageAssignmentPolicies", "Access package assignment policies", `${entitlement}/assignmentPolicies`), expand: "accessPackage($select=id),questions,customExtensionStageSettings($expand=customExtension)",
+    expandedCollections: ["questions", "customExtensionStageSettings"],
     requiredCollections: ["questions", "customExtensionStageSettings"],
     unorderedCollections: { questions: "id", "questions.localizations": "languageCode", "questions.choices.localizations": "languageCode", customExtensionStageSettings: "id", specificAllowedTargets: "$content", "requestorSettings.onBehalfRequestors": "$content", "requestApprovalSettings.stages.primaryApprovers": "$content", "requestApprovalSettings.stages.fallbackPrimaryApprovers": "$content", "requestApprovalSettings.stages.escalationApprovers": "$content", "requestApprovalSettings.stages.fallbackEscalationApprovers": "$content", "reviewSettings.primaryReviewers": "$content", "reviewSettings.fallbackReviewers": "$content" },
   },
@@ -243,6 +245,7 @@ export const ENTRA_5C_TYPES: IntuneType[] = [
   { ...governance("LifecycleWorkflowSettings", "Lifecycle workflow settings", `${workflows}/settings`), unavailable: lifecycleUnavailable, singleton: { id: "LifecycleWorkflowSettings", name: "Lifecycle workflow settings" } },
   {
     ...governance("TermsOfUseAgreements", "Terms of use agreements", agreements), expand: "files($select=id,displayName,fileName,language,isDefault,isMajorVersion,createdDateTime)",
+    expandedCollections: ["files"],
     unorderedCollections: { files: "id" }, requiredCollections: ["files"], maxSnapshotBytes: 1024 * 1024,
     // PDFs may be returned inline as fileData, even though their transport is JSON.
     neverStoredKeys: [...neverStored, "fileData"], neverStored: ["acceptances"],

@@ -8,6 +8,8 @@ import { auditExportJSON } from "../src/portal/lib/audit/export"
 import { createHash } from "node:crypto"
 import { fixture, scriptedGraph } from "./helpers/backup-fixture"
 import listPages from "./fixtures/cloud-backup/list-pages.json"
+import expandedAssignments from "./fixtures/cloud-backup/expanded-assignments.json"
+import { compareObjects } from "../src/portal/app/api/detect-drifts/route"
 import { moduleForFolder } from "../src/shared/services/modules"
 import { INTUNE_TYPES, typeForFolder } from "../src/shared/intune/registry"
 import { listSnapshot } from "../src/shared/intune/read"
@@ -31,7 +33,8 @@ function runAuditSetup(shell: (file: string, args: string[], options: { encoding
   return shell(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8", timeout: auditSetupTimeout })
 }
 type RunCall = { condition?: string; uri: string; method: string; contentType: string | null; ifNoneMatch: string | null; body: string | null }
-type Run = { calls: RunCall[]; error?: string | null; output?: string[]; compared?: { Drifts: Array<{ configId: string }>; UnknownTypes: string[] } }
+type DriftRow = { field: string; oldValue?: { id?: string } | null; newValue?: { id?: string } | null }
+type Run = { calls: RunCall[]; error?: string | null; output?: string[]; compared?: { Drifts: Array<{ configId: string; changes?: DriftRow[] }>; UnknownTypes: string[] } }
 let plainRuns: Run[] | undefined
 /** The scenarios of the plain-run fixture, in the order printed by the PowerShell harness. */
 function runPlainFixture(): Run[] {
@@ -776,7 +779,7 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
     const baseline = {
       [configs]: { value: [{ id: "cfg-1", displayName: "Baseline Wi-Fi" }] },
       [autopilot]: { value: [{ id: "ap-1", serialNumber: "SN-0001" }] },
-      [`${configs}/cfg-1?$expand=assignments`]: { id: "cfg-1", displayName: "Baseline Wi-Fi", assignments: [] },
+      [`${configs}/cfg-1?$expand=assignments`]: { id: "cfg-1", displayName: "Baseline Wi-Fi", assignments: expandedAssignments.assignments },
       [`${configs}/cfg-2?$expand=assignments`]: { id: "cfg-2", displayName: "Second policy", assignments: [] },
     }
     const folders = ["DeviceConfigurations", "AutopilotDevices", "CompliancePolicySettings"]
@@ -812,6 +815,49 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
         expect(result.Outcomes).toContainEqual({ Folder: "DeviceConfigurations", Outcome: "saved", Saved: 2 })
         expect(Object.keys(result.Items)).toEqual(expect.arrayContaining(["DeviceConfigurations/cfg-1", "DeviceConfigurations/cfg-2"]))
       }
+    }
+  }, 60_000)
+
+  it.each(["desktop", ...(pwsh ? ["runbook"] : [])])("keeps assignments out of drift when the %s backup cannot validate the policy", async engine => {
+    const configs = "/beta/deviceManagement/deviceConfigurations"
+    const detail = `${configs}/cfg-1?$expand=assignments`
+    const snapshot = { id: "cfg-1", displayName: "Baseline Wi-Fi", assignments: expandedAssignments.assignments }
+    const file = "DeviceConfigurations/Baseline Wi-Fi.json"
+    const folders = ["DeviceConfigurations", "CompliancePolicySettings"]
+    const scope = { excluded: INTUNE_TYPES.filter(type => !folders.includes(type.folder)).map(type => type.folder) }
+    const capture = async (list: unknown, assignments: unknown) => {
+      const desktop = fixture(scriptedGraph({ [configs]: { value: list }, [detail]: { ...snapshot, assignments } }))
+      const job = await desktop.run({ scope })
+      return { manifest: await desktop.manifest(job), policy: await desktop.file(job, file) }
+    }
+    const cloud = (index: number) => {
+      const run = runPlainFixture()[index]!
+      const blobs = writtenBlobs(run)
+      const folder = folderOf(blobs)
+      const policy = blobs.get(`${folder}/${file}`)
+      return { manifest: JSON.parse(blobs.get(`${folder}/metadata.json`)!), policy: policy ? JSON.parse(policy) : undefined, compared: run.compared }
+    }
+    const before = engine === "desktop" ? await capture([snapshot], snapshot.assignments) : cloud(0)
+    for (const [index, scenario] of expandedAssignments.cases.entries()) {
+      const after = engine === "desktop"
+        ? await capture(scenario.list ?? [snapshot], scenario.assignments ?? snapshot.assignments)
+        : cloud(16 + listPages.length + index)
+      const removed = scenario.removed ?? []
+      const unknown = scenario.unread ? ["DeviceConfigurations"] : []
+      const changes = compareBackups(before.manifest, after.manifest)
+      expect.soft(after.manifest.Coverage, scenario.name).toBe(scenario.unread ? "Incomplete" : "Complete")
+      expect.soft(comparisonCoverage(before.manifest, after.manifest).unknown, scenario.name).toEqual(unknown)
+      expect.soft(changes.map(change => change.change), scenario.name).toEqual(removed.length ? ["modified"] : [])
+      expect.soft(after.policy?.assignments, scenario.name).toEqual(scenario.unread ? undefined : scenario.assignments ?? snapshot.assignments)
+      let rows: DriftRow[]
+      if ("compared" in after) {
+        expect.soft(after.compared, scenario.name).toMatchObject({ UnknownTypes: unknown })
+        expect.soft(after.compared?.Drifts.map(drift => drift.configId), scenario.name).toEqual(removed.length ? ["cfg-1"] : [])
+        rows = after.compared?.Drifts.flatMap(drift => drift.changes ?? []) ?? []
+      } else {
+        rows = changes.length && after.policy ? compareObjects(before.policy, after.policy) : []
+      }
+      expect.soft(rows.filter(row => row.field.startsWith("assignments[") && row.oldValue?.id && !row.newValue?.id).map(row => row.oldValue?.id), scenario.name).toEqual(removed)
     }
   }, 60_000)
 

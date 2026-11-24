@@ -1242,27 +1242,41 @@ function Invoke-TvGraphList {
 }
 
 function Complete-TvGraphExpansion {
-    param([object]$Value, [string]$Path, [string]$Token)
+    param([object]$Value, [string]$Path, [string]$Token, [string[]]$Collections)
     if ($Value -is [array]) {
         foreach ($entry in $Value) {
             $id = Get-TvProp $entry "id"
             $entryPath = if ($Path -and $id -is [string] -and $id) { "$Path/$([uri]::EscapeDataString($id))" } else { "" }
-            Complete-TvGraphExpansion $entry $entryPath $Token
+            Complete-TvGraphExpansion $entry $entryPath $Token $Collections
         }
         return
     }
     if ($Value -isnot [System.Collections.IDictionary]) { return }
-    foreach ($key in @(Get-TvKeys $Value)) {
-        if (-not $key.EndsWith("@odata.nextLink", [StringComparison]::Ordinal)) { continue }
+    $suffix = "@odata.nextLink"
+    $keys = @(Get-TvKeys $Value)
+    $expanded = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($property in $Collections) {
+        if ($keys -ccontains $property) { [void]$expanded.Add($property) }
+    }
+    foreach ($key in $keys) {
+        if ($key.EndsWith($suffix, [StringComparison]::Ordinal)) { [void]$expanded.Add($key.Substring(0, $key.Length - $suffix.Length)) }
+    }
+    # Every collection requested through Expand in the registry returns entities keyed by id.
+    foreach ($property in $expanded) {
         if (-not $Path) { throw "Graph returned an invalid expanded collection" }
-        $property = $key.Substring(0, $key.Length - "@odata.nextLink".Length)
-        $page = [ordered]@{ value = $Value[$property]; "@odata.nextLink" = $Value[$key] }
+        $key = "$property$suffix"
+        $page = [ordered]@{ value = $Value[$property] }
+        if ($keys -ccontains $key) { $page[$suffix] = $Value[$key] }
         $Value[$property] = @(Invoke-TvGraphList "$Path/$property" $Token -ExpandedPage $page)
         $Value.Remove($key)
     }
     foreach ($key in @(Get-TvKeys $Value)) {
         $childPath = if ($Path) { "$Path/$key" } else { "" }
-        Complete-TvGraphExpansion $Value[$key] $childPath $Token
+        $prefix = "$key."
+        $nested = @(foreach ($property in $Collections) {
+            if ($property.StartsWith($prefix, [StringComparison]::Ordinal)) { $property.Substring($prefix.Length) }
+        })
+        Complete-TvGraphExpansion $Value[$key] $childPath $Token $nested
     }
 }
 
@@ -1327,7 +1341,8 @@ function Read-TvObject {
         }
         return $snapshot
     }
-    Complete-TvGraphExpansion $detail ($path -split '\?', 2)[0] $Token
+    $collections = if ($Type.ExpandedCollections) { $Type.ExpandedCollections } elseif ($Type.Expand) { $Type.Expand -split ',' }
+    Complete-TvGraphExpansion $detail ($path -split '\?', 2)[0] $Token $collections
     $encodedId = [uri]::EscapeDataString($Id)
     foreach ($extra in $Type.Extras) {
         $extraPath = ([string]$extra.Template).Replace("{id}", $encodedId)
@@ -1337,7 +1352,7 @@ function Read-TvObject {
             continue
         }
         $entries = @(Invoke-TvGraphList $extraPath $Token)
-        Complete-TvGraphExpansion $entries ($extraPath -split '\?', 2)[0] $Token
+        Complete-TvGraphExpansion $entries ($extraPath -split '\?', 2)[0] $Token $extra.ExpandedCollections
         if ($extra.Each) {
             foreach ($entry in $entries) {
                 $entryPath = ([string]$extra.Each.Template).Replace("{id}", $encodedId).Replace("{entryId}", [uri]::EscapeDataString([string](Get-TvProp $entry "id")))
@@ -1418,8 +1433,8 @@ function Get-TvTypes {
     @{ Folder = 'GroupPolicyConfigurations'; Label = 'administrative templates'; Path = 'deviceManagement/groupPolicyConfigurations'; NameKey = 'displayName'; Expand = 'assignments'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @(@{ Property = 'definitionValues'; Single = $false; Template = 'deviceManagement/groupPolicyConfigurations/{id}/definitionValues?$expand=definition($select=id,displayName,classType,categoryPath)'; Each = @{ Property = 'presentationValues'; Template = 'deviceManagement/groupPolicyConfigurations/{id}/definitionValues/{entryId}/presentationValues?$expand=presentation($select=id,label)' } }) }
     @{ Folder = 'ReusablePolicySettings'; Label = 'reusable settings'; Path = 'deviceManagement/reusablePolicySettings'; NameKey = 'displayName'; Expand = $null; Select = 'id,displayName,description,settingDefinitionId,settingInstance,createdDateTime,lastModifiedDateTime,version,referencingConfigurationPolicyCount'; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
     @{ Folder = 'HardwareConfigurations'; Label = 'BIOS configurations'; Path = 'deviceManagement/hardwareConfigurations'; NameKey = 'displayName'; Expand = 'assignments'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
-    @{ Folder = 'CompliancePolicies'; Label = 'compliance policies'; Path = 'deviceManagement/deviceCompliancePolicies'; NameKey = 'displayName'; Expand = 'scheduledActionsForRule($expand=scheduledActionConfigurations),assignments'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
-    @{ Folder = 'ComplianceSettingsPolicies'; Label = 'settings catalog compliance policies'; Path = 'deviceManagement/compliancePolicies'; NameKey = 'name'; Expand = 'settings'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $true; HasSecrets = $false; Singleton = $null; Extras = @(@{ Property = 'scheduledActionsForRule'; Single = $false; Template = 'deviceManagement/compliancePolicies/{id}/scheduledActionsForRule?$expand=scheduledActionConfigurations'; Each = $null }; @{ Property = 'assignments'; Single = $false; Template = 'deviceManagement/compliancePolicies/{id}/assignments'; Each = $null }) }
+    @{ Folder = 'CompliancePolicies'; Label = 'compliance policies'; Path = 'deviceManagement/deviceCompliancePolicies'; NameKey = 'displayName'; Expand = 'scheduledActionsForRule($expand=scheduledActionConfigurations),assignments'; ExpandedCollections = @('scheduledActionsForRule','scheduledActionsForRule.scheduledActionConfigurations','assignments'); Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
+    @{ Folder = 'ComplianceSettingsPolicies'; Label = 'settings catalog compliance policies'; Path = 'deviceManagement/compliancePolicies'; NameKey = 'name'; Expand = 'settings'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $true; HasSecrets = $false; Singleton = $null; Extras = @(@{ Property = 'scheduledActionsForRule'; Single = $false; Template = 'deviceManagement/compliancePolicies/{id}/scheduledActionsForRule?$expand=scheduledActionConfigurations'; ExpandedCollections = @('scheduledActionConfigurations'); Each = $null }; @{ Property = 'assignments'; Single = $false; Template = 'deviceManagement/compliancePolicies/{id}/assignments'; Each = $null }) }
     @{ Folder = 'ComplianceScripts'; Label = 'compliance scripts'; Path = 'deviceManagement/deviceComplianceScripts'; NameKey = 'displayName'; Expand = 'assignments'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
     @{ Folder = 'CompliancePolicySettings'; Label = 'compliance policy settings'; Path = 'deviceManagement/settings'; NameKey = 'displayName'; Expand = $null; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = @{ Id = 'CompliancePolicySettings'; Name = 'Compliance policy settings'; Properties = @('secureByDefault','deviceComplianceCheckinThresholdDays','isScheduledActionEnabled','enhancedJailBreak') }; Extras = @() }
     @{ Folder = 'EndpointSecurityIntents'; Label = 'security baselines and template profiles'; Path = 'deviceManagement/intents'; NameKey = 'displayName'; Expand = $null; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @(@{ Property = 'settings'; Single = $false; Template = 'deviceManagement/intents/{id}/settings'; Each = $null }; @{ Property = 'assignments'; Single = $false; Template = 'deviceManagement/intents/{id}/assignments'; Each = $null }) }
