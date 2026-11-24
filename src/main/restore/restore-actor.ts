@@ -62,14 +62,13 @@ export function requireRestoreActor(token: string, actor: ActorIdentity, authori
 
 export function restoreSignIn(tenantId: string, stored: { clientId: string; homeAccountId: string }, result: Pick<AuthenticationResult, "account" | "accessToken" | "tenantId" | "scopes">) {
   const { account, accessToken: token } = result
-  if (account && (!account.homeAccountId || account.homeAccountId !== stored.homeAccountId ||
-    normalizeGuid(account.tenantId) !== normalizeGuid(tenantId))) throw new Error(adminRequired)
+  if (!account || !account.homeAccountId || account.homeAccountId !== stored.homeAccountId ||
+    normalizeGuid(account.tenantId) !== normalizeGuid(tenantId)) throw new Error(adminRequired)
   if (result.tenantId && normalizeGuid(result.tenantId) !== normalizeGuid(tenantId)) throw new Error(adminRequired)
-  const fallback = account?.localAccountId ? undefined : tokenActor(restoreTokenClaims(token))
-  const userId = account?.localAccountId || fallback?.userId
-  if (!userId) throw new Error(adminRequired)
+  const userId = account.localAccountId || account.idTokenClaims?.oid
+  if (typeof userId !== "string" || !userId) throw new Error(adminRequired)
   const identity = { tenantId: normalizeGuid(tenantId), clientId: normalizeGuid(stored.clientId), userId: normalizeGuid(userId) }
-  const authorization = { ...(fallback ?? identity), scopes: result.scopes }
+  const authorization = { ...identity, scopes: result.scopes }
   requireRestoreActor(token, identity, authorization)
-  return { ...identity, token, authorization, auditActor: { username: account?.username || userId, name: account?.name } }
+  return { ...identity, token, authorization, auditActor: { username: account.username || userId, name: account.name } }
 }

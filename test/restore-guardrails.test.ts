@@ -65,7 +65,11 @@ describe("identity restore admission", () => {
       { account: { ...account, tenantId: "wrong-tenant" } }, { tenantId: "wrong-tenant" },
       { scopes: [] }, { scopes: ["openid", "https://storage.azure.com/user_impersonation"] },
     ]) expect(() => restoreSignIn(actor.tenantId, stored, { ...result, ...patches })).toThrow("signed-in admin")
-    expect(restoreSignIn(actor.tenantId, stored, { ...result, account: null, accessToken: delegated }).userId).toBe(actor.userId)
+    expect(() => restoreSignIn(actor.tenantId, stored, { ...result, account: null, accessToken: delegated })).toThrow("signed-in admin")
+    expect(() => restoreSignIn(actor.tenantId, stored, { ...result, account: { ...account, localAccountId: "" }, accessToken: delegated })).toThrow("signed-in admin")
+    const idClaims = { ...account, localAccountId: "", idTokenClaims: { oid: actor.userId } }
+    expect(restoreSignIn(actor.tenantId, stored, { ...result, account: idClaims }).userId).toBe(actor.userId)
+    expect(() => restoreSignIn(actor.tenantId, stored, { ...result, account: { ...idClaims, idTokenClaims: { oid: "different-admin" } }, accessToken: delegated })).toThrow("signed-in admin")
     expect(() => restoreSignIn(actor.tenantId, stored, { ...result, account: null, accessToken: token({ scp: "Policy.ReadWrite.Authorization", oid: "admin", tid: "tenant", appid: "other" }) })).toThrow("signed-in admin")
   })
   it.each([
