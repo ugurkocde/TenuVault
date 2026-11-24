@@ -24,6 +24,7 @@ export interface StorageChooserDraft {
 interface StorageChooserProps {
   tenantId: string
   clientId: string
+  localOnly?: boolean
   initial?: StorageChoice
   savedAzure?: Extract<StorageChoice, { kind: "azure" }>
   /** A draft captured from an earlier mount of this chooser; wins over initial. */
@@ -57,7 +58,7 @@ export function azureStorageBlocker(state: {
  * Azure choice is complete once access is confirmed: Azure encrypts the backups at rest and the
  * account's role assignments decide who reads them, so no recovery key is involved.
  */
-export function StorageChooser({ tenantId, clientId, initial, savedAzure, initialDraft, onChange, onDraftChange, onBlockerChange }: StorageChooserProps) {
+export function StorageChooser({ tenantId, clientId, localOnly, initial, savedAzure, initialDraft, onChange, onDraftChange, onBlockerChange }: StorageChooserProps) {
   const [kind, setKind] = useState<StorageChoice["kind"]>(initialDraft?.kind ?? initial?.kind ?? "local")
   const [settings, setSettings] = useBackupSettings()
   const [accounts, setAccounts] = useState<AzureStorageAccount[] | null>(null)
@@ -215,7 +216,7 @@ export function StorageChooser({ tenantId, clientId, initial, savedAzure, initia
         </div>
       )}
 
-      {option(
+      {!localOnly && option(
         "azure",
         <Cloud className="h-5 w-5" />,
         "Your Azure storage account",
@@ -225,7 +226,7 @@ export function StorageChooser({ tenantId, clientId, initial, savedAzure, initia
       {kind === "azure" && savedSelected && <p className="ml-14 text-sm text-gray-600">Using saved Azure storage: {savedAzure?.storageAccountName}. Existing backups can be listed and restored. {community && "New backups are paused until Pro is active."}</p>}
       {kind === "azure" && !savedSelected && savedAzure && <Button variant="outline" onClick={() => setSelected(savedAzure.storageAccountName)}>Use saved Azure storage</Button>}
       {kind === "azure" && savedSelected && !community && <Button variant="outline" onClick={() => setSelected("")}>Choose another Azure account</Button>}
-      {community && <UpgradeNote feature="azureStorage" />}
+      {!localOnly && community && <UpgradeNote feature="azureStorage" />}
       {kind === "azure" && !community && !savedSelected && (
         <div className="ml-14 space-y-3">
           {!accounts && !loadError && (

@@ -2,14 +2,15 @@ import { useState } from "react"
 import { Button } from "~/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "~/components/ui/dialog"
 import type { PackConsentAction, PackConsentPlan, PackConsentResult } from "../../shared/pack-consent"
-import type { ConnectionSwitchResult } from "../../shared/tenant-connection"
+import { GRAPH_CLI_UPGRADE, type ConnectionSwitchResult } from "../../shared/tenant-connection"
 import { bridge } from "../lib/bridge"
 import { toast } from "../lib/toast"
 
-export function TenuVaultConsent({ tenantId, plan, active, onChanged }: {
+export function TenuVaultConsent({ tenantId, plan, active, upgrade, onChanged }: {
   tenantId: string
   plan: PackConsentPlan
   active: boolean
+  upgrade?: boolean
   onChanged: (result: ConnectionSwitchResult) => void
 }) {
   const [currentPlan, setCurrentPlan] = useState(plan)
@@ -93,7 +94,7 @@ export function TenuVaultConsent({ tenantId, plan, active, onChanged }: {
 
   return <>
     <Button variant="outline" size="sm" disabled={busy} onClick={() => void openPlan()}>
-      {active ? "Review permission packs" : "Use TenuVault app"}
+      {active ? "Review permission packs" : upgrade ? GRAPH_CLI_UPGRADE : "Use TenuVault app"}
     </Button>
     <Dialog open={open} onOpenChange={value => { if (!busy) setOpen(value) }}>
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">

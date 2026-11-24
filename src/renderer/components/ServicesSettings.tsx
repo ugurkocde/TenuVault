@@ -13,6 +13,7 @@ import { useTenants } from "~/contexts/TenantContext"
 import type { ServicesStatus } from "../../shared/ipc"
 import type { AreaHealth, ConnectionHealthReport, ServiceHealth, SignInHealth } from "../../shared/connection-health/model"
 import { PERSONAL_DATA } from "../../shared/services/onboarding"
+import { graphCliCoverage } from "../../shared/services/graph-cli-coverage"
 import { BACKUP_SERVICES } from "../../shared/services/presentation"
 import { MODULE_BY_ID, entraApiPermissionsUrl } from "../../shared/services/modules"
 import { optionalPermissionStatus, type OptionalPermissionStatus } from "../../shared/services/optional-permissions"
@@ -236,6 +237,15 @@ function TenantServices({ tenantId, clientId, name, active }: { tenantId: string
     {busy && <p role="status" className="flex items-center gap-2 text-sm text-gray-600"><Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />Checking connection health...</p>}
     {error && <p role="alert" className="text-sm text-red-700">Connection health could not be checked: {error} Select Check again.</p>}
     {report && active && <>
+      {report.readOnly && <section className="space-y-2" aria-label="Start now backup coverage">
+        <h3 className="text-sm font-medium">Backup coverage from granted scopes</h3>
+        {graphCliCoverage(report.granted ? new Set(report.granted) : undefined).map((service, index) =>
+          <details key={service.service} className="rounded-md border px-3 py-2 text-sm">
+            <summary className="cursor-pointer">{BACKUP_SERVICES[index]!.label} {service.readable ? `${service.readable.length} of ${service.folders.length}` : "coverage unknown"}</summary>
+            {service.readable && <ul className="ml-4 list-disc text-xs text-gray-600">{service.readable.map(folder => <li key={folder}>{folder}</li>)}</ul>}
+          </details>)}
+        <p className="text-xs text-gray-600">Your Microsoft role and service licenses can limit what a backup reads.</p>
+      </section>}
       <div className="grid gap-2 sm:grid-cols-3">
         <SignInState label="Microsoft Graph sign-in" state={report.graph} readOnly={report.readOnly} />
         <div className="min-w-0 rounded-xl bg-muted p-3"><h3 className="text-sm font-medium text-gray-900">Backup Reader</h3>

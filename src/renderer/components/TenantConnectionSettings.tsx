@@ -3,7 +3,7 @@ import type { PackConsentPlan } from "../../shared/pack-consent"
 import { useEffect, useState } from "react"
 import { Button } from "~/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "~/components/ui/dialog"
-import { ORGANIZATION_RENEWAL_NOTICE, SIGN_IN_METHODS, type TenantConnection } from "../../shared/tenant-connection"
+import { GRAPH_CLI_CONSENT_WARNING, GRAPH_CLI_UNAVAILABLE, OWN_APP_UPGRADE, ORGANIZATION_RENEWAL_NOTICE, SIGN_IN_METHODS, type TenantConnection } from "../../shared/tenant-connection"
 import { isGuid } from "../../shared/security"
 import { bridge } from "../lib/bridge"
 import { useLicense } from "../lib/license"
@@ -18,6 +18,9 @@ export function TenantConnectionSettings({ tenantId, clientId, onChanged }: {
   const [consent, setConsent] = useState<PackConsentPlan | null>(null)
   const { status } = useLicense()
   const [open, setOpen] = useState(false)
+  const [graphCli, setGraphCli] = useState(false)
+  const [graphOpen, setGraphOpen] = useState(false)
+  const [graphError, setGraphError] = useState<string>()
   const [nextClientId, setNextClientId] = useState("")
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string>()
@@ -29,8 +32,14 @@ export function TenantConnectionSettings({ tenantId, clientId, onChanged }: {
       if (!current) return
       setConnection(value)
       if (value?.origin === "wizard") {
-        const plan = await bridge.auth.packConsentPlan(tenantId)
-        if (current) setConsent(plan)
+        const [plan, available] = await Promise.all([
+          bridge.auth.packConsentPlan?.(tenantId),
+          bridge.auth.graphCliAvailable?.(),
+        ])
+        if (current) {
+          setConsent(plan ?? null)
+          setGraphCli(available === true)
+        }
       }
     }).catch(() => undefined)
     return () => { current = false }
@@ -48,6 +57,7 @@ export function TenantConnectionSettings({ tenantId, clientId, onChanged }: {
         return
       }
       const { result } = outcome
+      setGraphError(undefined)
       setConnection(result.connection)
       onChanged(result.connection.clientId)
       setOpen(false)
@@ -61,19 +71,61 @@ export function TenantConnectionSettings({ tenantId, clientId, onChanged }: {
     }
   }
 
+  const startNow = async () => {
+    setBusy(true)
+    setGraphError(undefined)
+    try {
+      const outcome = await bridge.auth.switchConnection(tenantId, { method: "graphCli" })
+      if ("error" in outcome) {
+        setGraphError(outcome.error.message)
+        const fresh = await bridge.auth.packConsentPlan(tenantId).catch(() => null)
+        setConsent(fresh)
+      } else {
+        setConnection(outcome.result.connection)
+        onChanged(outcome.result.connection.clientId)
+        toast("Signed in with Start now. Review backup coverage in Services and permissions.", "success")
+      }
+    } catch {
+      setGraphError(GRAPH_CLI_UNAVAILABLE)
+    } finally {
+      setBusy(false)
+      setGraphOpen(false)
+    }
+  }
+
   if (connection?.origin !== "wizard") return null
+  const upgrade = connection.method === "graphCli" || Boolean(graphError)
   return (
-    <div className="mt-2 flex flex-wrap items-center gap-2">
+    <div id={`sign-in-${tenantId.toLowerCase()}`} className="mt-2 flex scroll-mt-4 flex-wrap items-center gap-2">
       <p className="text-xs text-gray-500">Sign-in method: {SIGN_IN_METHODS[connection.method]}</p>
       <Button variant="outline" size="sm" onClick={() => { setNextClientId(""); setError(undefined); setOpen(true) }}>
-        Change app registration
+        {upgrade ? OWN_APP_UPGRADE : "Change app registration"}
       </Button>
-      {consent && <TenuVaultConsent key={tenantId} tenantId={tenantId} plan={consent} active={connection.method === "tenuvaultApp"} onChanged={result => {
+      {graphCli && connection.method !== "graphCli" && <Button variant="outline" size="sm" onClick={() => { setGraphError(undefined); setGraphOpen(true) }}>Use Start now</Button>}
+      {graphError && <p role="alert" className="basis-full text-sm text-destructive">{graphError}</p>}
+      {consent && <TenuVaultConsent key={tenantId} tenantId={tenantId} plan={consent} active={connection.method === "tenuvaultApp"} upgrade={upgrade} onChanged={result => {
+        setGraphError(undefined)
         setConnection(result.connection)
         onChanged(result.connection.clientId)
         toast("TenuVault app permissions verified.", "success")
       }} />}
       {tenantLicense?.organizationRenewalPending && <p role="status" className="basis-full text-sm text-gray-600">{ORGANIZATION_RENEWAL_NOTICE}</p>}
+      <Dialog open={graphOpen} onOpenChange={value => { if (!busy) setGraphOpen(value) }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Sign in with Start now</DialogTitle>
+            <DialogDescription>Start now uses the permissions already granted to Microsoft Graph Command Line Tools. It supports read-only backups on this device.</DialogDescription>
+          </DialogHeader>
+          <p className="rounded-md border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800">{GRAPH_CLI_CONSENT_WARNING}</p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => {
+              if (busy) void bridge.auth.cancelSignIn()
+              else setGraphOpen(false)
+            }}>Cancel</Button>
+            <Button disabled={busy} onClick={() => void startNow()}>{busy ? "Waiting for sign-in" : "Continue to Microsoft"}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <Dialog open={open} onOpenChange={value => { if (!busy) setOpen(value) }}>
         <DialogContent>
           <DialogHeader>

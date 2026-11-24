@@ -243,7 +243,7 @@ function TenantRow({
   name: string | undefined
   busy: Busy
   onRetry: () => void
-  onShare: (shared: boolean) => void
+  onShare: (shared: boolean, allowGraphCli?: boolean) => void
   choicePending: boolean
 }) {
   const organization = tenant.entitled && tenant.source === "tenant"
@@ -300,6 +300,10 @@ function TenantRow({
             Anyone who signs in to this tenant with the same TenuVault app registration is licensed automatically. The key
             stays on this machine.
           </p>
+          {tenant.shared === true && tenant.graphCliShared !== undefined && <label className="mt-3 flex items-center gap-2 text-sm text-gray-900">
+            <Checkbox checked={tenant.graphCliShared} disabled={busy !== null} onCheckedChange={checked => onShare(true, checked === true)} />
+            Let admins who sign in with Start now use this license
+          </label>}
           {tenant.shareNeedsSignIn && (
             <p className="mt-1 text-xs text-orange-700">Sign in to this tenant again to share the license with it.</p>
           )}
@@ -423,9 +427,9 @@ export default function LicensePage() {
     void run(`retry:${tenantId}`, () => bridge.license.retry(tenantId), (result) =>
       result?.tenants.find((t) => t.tenantId === tenantId)?.entitled ? "License activated for this tenant." : null,
     )
-  const share = (tenantId: string, shared: boolean) =>
-    void run(`share:${tenantId}`, () => bridge.license.setShared(tenantId, shared), () =>
-      shared
+  const share = (tenantId: string, shared: boolean, allowGraphCli?: boolean) =>
+    void run(`share:${tenantId}`, () => allowGraphCli === undefined ? bridge.license.setShared(tenantId, shared) : bridge.license.setShared(tenantId, shared, allowGraphCli), () =>
+      allowGraphCli !== undefined ? "Start now sharing updated." : shared
         ? "Other admins in this tenant can now use this license after signing in."
         : "Other admins in this tenant can no longer use this license.",
     )
@@ -643,7 +647,7 @@ export default function LicensePage() {
                   name={nameOf(tenant.tenantId)}
                   busy={busy}
                   onRetry={() => retry(tenant.tenantId)}
-                  onShare={(shared) => share(tenant.tenantId, shared)}
+                  onShare={(shared, allowGraphCli) => share(tenant.tenantId, shared, allowGraphCli)}
                 />
               ))}
             </div>

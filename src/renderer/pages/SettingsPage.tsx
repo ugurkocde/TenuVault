@@ -1,4 +1,5 @@
 import { TenantConnectionSettings } from "../components/TenantConnectionSettings"
+import { GRAPH_CLI_CLIENT_ID } from "../../shared/tenant-connection"
 import { IdentityRestoreSafety } from "../components/IdentityRestoreSafety"
 import type { WriteRecord } from "../../main/storage/restore-journal"
 import { getAppearance, setAppearance, type Appearance } from "../lib/appearance"
@@ -511,6 +512,7 @@ function TenantSettings({ active }: { active: boolean }) {
             <StorageChooser
               tenantId={editing.credentials.tenantId}
               clientId={editing.credentials.appId}
+              localOnly={editing.credentials.appId.toLowerCase() === GRAPH_CLI_CLIENT_ID}
               initial={currentChoice(editing)}
               savedAzure={savedAzureStorage(editing)}
               initialDraft={storageDraft ?? undefined}
@@ -920,6 +922,10 @@ export default function SettingsPage() {
   // loaded state survive switching sections. Start each section at the top,
   // except when a deep link targets a control inside the storage section.
   useEffect(() => {
+    if (hash.startsWith("#sign-in-") && isGuid(hash.slice("#sign-in-".length))) {
+      const frame = requestAnimationFrame(() => document.getElementById(hash.slice(1))?.scrollIntoView({ block: "nearest" }))
+      return () => cancelAnimationFrame(frame)
+    }
     if (hash !== "#recovery-key") window.scrollTo({ top: 0 })
   }, [section, hash])
 
