@@ -1,5 +1,5 @@
 import { privilegedRestoreConsent } from "./privileged-consent"
-import type { SignInMethod } from "../../shared/tenant-connection"
+import { sharedSignInMethod, type SignInMethod } from "../../shared/tenant-connection"
 import { guardedRestoreJournal } from "../storage/restore-journal"
 import { mappedReference } from "../../shared/intune/restore-references"
 import { PRIVILEGED_REVIEW_FOLDERS, PRIVILEGED_RESTORE_BLOCKER } from "../../shared/intune/directory-review-folders"
@@ -77,7 +77,7 @@ export class DirectoryRestoreService {
       try { await directoryWriteAuthorization(response, true) } catch (error) { if (error instanceof DirectoryAuthenticationDeferredError) throw error }
       return response
     }
-    const reader = safetyReader(connection.token, actorFetch, version)
+    const reader = safetyReader(connection.token, actorFetch, sharedSignInMethod(connection.clientId) ? "beta" : version)
     const actor = await resolveRestoreActor(reader, connection, this.recovery.get(tenant), ["identity-references"], version === "beta")
     return { actor, connection, reader }
   }

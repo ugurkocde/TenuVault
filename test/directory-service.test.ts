@@ -1,3 +1,4 @@
+import { GRAPH_CLI_CLIENT_ID, TENUVAULT_CLIENT_ID } from "../src/shared/tenant-connection"
 import { graphWorkloadPolicy, graphUserCreateResponse } from "./fixtures/directory-graph-v1"
 import { graphNotFound, unsetUserFields, unsetGroupFields } from "./fixtures/directory-response"
 import { rejectProxyAuthResponses, withNetworkErrors } from "../src/main/api/network-error"
@@ -5,7 +6,7 @@ import { planGuard } from "../src/main/api/plan-gates"
 import { DirectoryPendingPublications } from "../src/main/restore/directory-pending-publications"
 import { setDirectoryRestoreService } from "../src/main/restore/directory-dispatch"
 import { POST as restoreDirectory } from "../src/portal/app/api/restore-directory/route"
-import { RestoreSafetyError, RestoreWriteDeferredError } from "../src/shared/intune/restore-guards"
+import { guardRestoreItem, RestoreSafetyError, RestoreWriteDeferredError } from "../src/shared/intune/restore-guards"
 import { DirectoryReadDeferredError, DirectoryRetryPersistenceError } from "../src/main/restore/directory-retry"
 import { INTUNE_TYPES } from "../src/shared/intune/registry"
 import { backupNeed } from "../src/shared/services/modules"
@@ -19,7 +20,7 @@ import { createHash } from "node:crypto"
 import { expect, it, vi } from "vitest"
 import { DirectoryRestoreService, directoryExistingObjectBlocker } from "../src/main/restore/directory-service"
 import { ModuleSettings } from "../src/main/services/settings"
-import { RecoveryAccounts } from "../src/main/restore/safety-resolvers"
+import { RecoveryAccounts, resolveRestoreActor } from "../src/main/restore/safety-resolvers"
 import { directoryMappedId } from "../src/main/restore/directory-9a-batches"
 import { directoryObjectState, directoryPagePrefix, directoryMappingKey } from "../src/main/restore/directory-object-state"
 import { DIRECTORY_REPLICATION_WINDOW_MS } from "../src/main/restore/directory-relationship-history"
@@ -30,8 +31,8 @@ import type { IdentityRestoreRequest } from "../src/main/restore/dispatch"
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`
 const tenant = id(1), app = id(2), admin = id(3), resource = id(10)
 const options = { stage: "object" as const, exactMembers: false, exactOwners: false }
-function world(count = 0, missing = false, now: () => number = () => Date.now(), fixtureTenant = tenant) {
-  const tenant = fixtureTenant
+function world(count = 0, missing = false, now: () => number = () => Date.now(), fixtureTenant = tenant, clientId = app) {
+  const tenant = fixtureTenant, app = clientId
   let target = missing ? "" : resource
   const data = new Map<string, string>(), members = new Set<string>(), writes: string[] = []
   const store = { partitioned: true as const, keys: () => [...data.keys()], get: (key: string) => data.get(key) ?? null, set: (key: string, value: string) => { data.set(key, value) }, delete: (key: string) => { data.delete(key) } }
@@ -52,6 +53,12 @@ function world(count = 0, missing = false, now: () => number = () => Date.now(),
       else if (path === `groups/${resource}`) Object.assign(group, JSON.parse(String(init?.body)))
       return new Response(null, { status: 204 })
     }
+    if (app === TENUVAULT_CLIENT_ID) {
+      if (path === "applications") return Response.json({ value: [] })
+      if (url.pathname === `/beta/servicePrincipals(appId='${app}')` && url.searchParams.get("$select") === "id,appId") {
+        return Response.json({ id: id(5), appId: app })
+      }
+    }
     if (path === "applications" || path === "servicePrincipals") return Response.json({ value: [{ id: id(path === "applications" ? 4 : 5), appId: app }] })
     if (path.endsWith("/memberOf")) return Response.json({ value: [] })
     if (path.startsWith("identity/conditionalAccess/")) return Response.json({ value: [] })
@@ -71,6 +78,35 @@ function world(count = 0, missing = false, now: () => number = () => Date.now(),
   const read = async (name: string) => { const part = Number(name.match(/(\d+)\.json$/)?.[1] ?? 0); return saved.slice(part * LARGE_SHARD_ITEMS, (part + 1) * LARGE_SHARD_ITEMS) }
   return { service, settings, store, connection, request, group, saved, read, data, writes, members, fetcher }
 }
+it.each(["Users", "Groups"])("previews a %s restore with only the TenuVault enterprise app in the tenant", async folder => {
+  const env = world(0, false, Date.now, tenant, TENUVAULT_CLIENT_ID)
+  const request: IdentityRestoreRequest = folder === "Users"
+    ? { ...env.request, path: `backup/Users/${resource}.json`, snapshot: { id: resource, displayName: "Saved user" } }
+    : { ...env.request, snapshot: { ...env.request.snapshot, description: "Saved group description" } }
+  const preview = await env.service().prepare(tenant, request, options, env.read)
+  expect(preview.rows[0]?.review.changes).toContainEqual(expect.objectContaining({ property: folder === "Users" ? "displayName" : "description" }))
+  expect(preview.rows[0]?.review.blocker).toBeUndefined()
+  expect(env.fetcher.mock.calls.map(([url]) => String(url))).not.toContainEqual(expect.stringMatching(/\/applications(?:[?(]|$)/))
+  expect(env.writes).toEqual([])
+})
+
+it.each([TENUVAULT_CLIENT_ID, GRAPH_CLI_CLIENT_ID])("protects a shared app ID and its tenant service principal (%s)", async clientId => {
+  const identity = { tenantId: tenant, clientId, userId: admin }
+  const reader = {
+    get: vi.fn(async () => ({ appId: clientId, id: id(5) })),
+    list: vi.fn(async (path: string) => path.startsWith("applications") ? [] : [{ appId: clientId, id: id(5) }]),
+  }
+  const actor = await resolveRestoreActor(reader, identity, [], ["identity-references"])
+  expect(actor).toMatchObject({ ...identity, servicePrincipalId: id(5) })
+  expect(actor.applicationObjectId).toBeUndefined()
+  expect(reader.get).toHaveBeenCalledWith(`servicePrincipals(appId='${clientId}')?$select=id,appId`)
+  const references = { complete: true, principals: [], applications: [] }
+  expect(() => guardRestoreItem(actor, "Applications", clientId, references, false)).toThrow("protected")
+  expect(() => guardRestoreItem(actor, "ServicePrincipals", id(5), references, false)).toThrow("protected")
+  reader.get.mockResolvedValueOnce({ appId: app, id: id(5) })
+  await expect(resolveRestoreActor(reader, identity, [], ["identity-references"])).rejects.toThrow("could not be resolved")
+})
+
 it("executes a real 50-row relationship preview in bounded batches and resumes without duplicates", async () => {
   const env = world(65), service = env.service()
   const page = await service.prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read)

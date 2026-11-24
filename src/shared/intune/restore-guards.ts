@@ -1,3 +1,4 @@
+import { sharedSignInMethod } from "../tenant-connection"
 import type { RestoreProtection } from "./restore-matrix"
 import type { Item, Json } from "./registry"
 
@@ -39,7 +40,9 @@ export function restoreOriginBlocker(folder: string, origin: RestoreOrigin): str
 
 /** Unresolved protection evidence is a refusal, never permission to proceed. */
 export function guardRestoreItem(actor: RestoreActor, folder: string, id: string | undefined, references: SafetyReferences, removes: boolean, protections: readonly RestoreProtection[] = ["identity-references", "remaining-administrators"]): void {
-  if (!actor.tenantId || !actor.userId || !actor.clientId || (protections.length > 0 && (!actor.applicationObjectId || !actor.servicePrincipalId)) || !Array.isArray(actor.recoveryAccountIds) || !references.complete) throw new RestoreSafetyError("A safety reference could not be resolved. This item was blocked.")
+  const missingConnection = protections.length > 0 &&
+    (!actor.servicePrincipalId || (!actor.applicationObjectId && !sharedSignInMethod(actor.clientId)))
+  if (!actor.tenantId || !actor.userId || !actor.clientId || missingConnection || !Array.isArray(actor.recoveryAccountIds) || !references.complete) throw new RestoreSafetyError("A safety reference could not be resolved. This item was blocked.")
   const protectedPrincipals = [actor.userId, actor.servicePrincipalId, ...actor.recoveryAccountIds].filter((id): id is string => !!id)
   const targets = [...references.principals, ...(id && ["Users", "ServicePrincipals"].includes(folder) ? [id] : [])]
   if (targets.some(target => protectedPrincipals.some(protectedId => !!protectedId && same(target, protectedId)))) throw new RestoreSafetyError("The signed-in admin, TenuVault connection and recovery accounts are protected, including their roles and authentication methods.")

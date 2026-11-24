@@ -2,7 +2,8 @@ import { ALL_RESTORE_PROTECTIONS, operationProtections, type RestoreProtection }
 import type { KeyValueStore } from "../storage/secure-store"
 import type { GraphReader } from "../../shared/intune/read"
 import type { Item } from "../../shared/intune/registry"
-import { isGuid } from "../../shared/security"
+import { sharedSignInMethod } from "../../shared/tenant-connection"
+import { isGuid, normalizeGuid } from "../../shared/security"
 import { RestoreSafetyError, type RestoreActor, type SafetyReferences } from "../../shared/intune/restore-guards"
 import type { GuardedStep } from "./guarded-run"
 
@@ -39,11 +40,25 @@ export async function resolveRestoreActor(reader: GraphReader, connection: { ten
   if (!protections.length) return { tenantId: connection.tenantId, clientId: connection.clientId, userId: connection.userId, recoveryAccountIds: [] }
   const filter = encodeURIComponent(`appId eq '${connection.clientId}'`)
   const appKey = `(appId='${connection.clientId}')?$select=id,appId`
-  const apps = readByAppId ? [await reader.get("applications" + appKey)] : await reader.list(`applications?$filter=${filter}&$select=id,appId`)
-  const principals = readByAppId ? [await reader.get("servicePrincipals" + appKey)] : await reader.list(`servicePrincipals?$filter=${filter}&$select=id,appId`)
-  if (apps.length !== 1 || principals.length !== 1 || apps[0]!.appId !== connection.clientId || principals[0]!.appId !== connection.clientId) throw new RestoreSafetyError("The connected registration and enterprise app could not both be resolved.")
+  const shared = sharedSignInMethod(connection.clientId)
+  let applicationObjectId: string | undefined
+  let servicePrincipalId: string
+  if (shared) {
+    // A customer tenant can have the shared enterprise app without a local registration.
+    const principal = await reader.get("servicePrincipals" + appKey)
+    if (typeof principal.appId !== "string" || normalizeGuid(principal.appId) !== normalizeGuid(connection.clientId)) {
+      throw new RestoreSafetyError("The connected enterprise app could not be resolved.")
+    }
+    servicePrincipalId = idOf(principal)
+  } else {
+    const apps = readByAppId ? [await reader.get("applications" + appKey)] : await reader.list(`applications?$filter=${filter}&$select=id,appId`)
+    const principals = readByAppId ? [await reader.get("servicePrincipals" + appKey)] : await reader.list(`servicePrincipals?$filter=${filter}&$select=id,appId`)
+    if (apps.length !== 1 || principals.length !== 1 || apps[0]!.appId !== connection.clientId || principals[0]!.appId !== connection.clientId) throw new RestoreSafetyError("The connected registration and enterprise app could not both be resolved.")
+    applicationObjectId = idOf(apps[0]!)
+    servicePrincipalId = idOf(principals[0]!)
+  }
   for (const id of recoveryAccountIds) if (idOf(await reader.get(`users/${encodeURIComponent(id)}?$select=id`)) !== id) throw new RestoreSafetyError("A recovery account could not be resolved.")
-  return { tenantId: connection.tenantId, clientId: connection.clientId, userId: connection.userId, applicationObjectId: idOf(apps[0]!), servicePrincipalId: idOf(principals[0]!), recoveryAccountIds }
+  return { tenantId: connection.tenantId, clientId: connection.clientId, userId: connection.userId, ...(applicationObjectId && { applicationObjectId }), servicePrincipalId, recoveryAccountIds }
 }
 
 /** Fresh resolution per item. Missing permissions, limited objects and incomplete pages block the item. */
