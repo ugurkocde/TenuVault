@@ -1,4 +1,4 @@
-import { GRAPH_CLI_CLIENT_ID } from "../../shared/tenant-connection"
+import { GRAPH_CLI_CLIENT_ID, TENUVAULT_CLIENT_ID } from "../../shared/tenant-connection"
 import { organizationClientIds } from "./client-ids"
 import { readTenantTrials, TENANT_TRIAL_STATE_KEY, type StoredTenantTrial, type TrialTally } from "./tenant-trial-state"
 import { CommunityChoicePendingError, CommunityLimitError } from "../../shared/plan-errors"
@@ -235,6 +235,11 @@ const LEGACY_KEYS = ["license.key", "license.trialStartedAt", "license.lastSeenA
 
 const guidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
+function isPublicClient(clientId: string | null | undefined): boolean {
+  const id = clientId?.toLowerCase()
+  return id === GRAPH_CLI_CLIENT_ID || id === TENUVAULT_CLIENT_ID
+}
+
 // Time and status checks for a token whose signature already verified.
 export function entitlementCurrent(
   payload: Pick<Entitlement, "exp" | "status"> & Partial<Pick<Entitlement, "v" | "keyExp" | "trial">>,
@@ -337,6 +342,8 @@ export class LicenseService {
   private healthCheck: Promise<void> | null = null
   private healthRetryAt = 0
   private healthFailures = 0
+  private sharingCapability?: { expiresAt: number; supported: boolean }
+  private sharingCheck?: Promise<boolean>
   private trialRecords: Record<string, StoredTenantTrial> = {}
   private keyMutation: Promise<void> | null = null
   private readonly tenantMutations = new Map<string, Promise<void>>()
@@ -688,17 +695,38 @@ export class LicenseService {
     return this.options.platform ?? process.platform
   }
 
-  // The proof of the tenant the service needs to share the license with it: the app
-  // registration and a fresh sign-in to it. Not needed to stop sharing. Without it the
-  // service still licenses this machine but leaves the sharing unchanged.
-  private async sharingFields(tenantId: string, share?: boolean, allowGraphCli?: boolean) {
+  private async supportsClientIdSets(): Promise<boolean> {
+    if (this.sharingCapability && Date.now() < this.sharingCapability.expiresAt) return this.sharingCapability.supported
+    return this.sharingCheck ??= (async () => {
+      let supported = false
+      try {
+        const response = await this.fetchImpl(`${this.options.apiBase}/api/desktop-license/health`, { signal: AbortSignal.timeout(10_000), redirect: "error" })
+        if (response.ok) supported = (await response.json())?.organizationLicenses?.clientIdSets === true
+      } catch { /* Keep using the legacy contract while discovery is unavailable. */ }
+      this.sharingCapability = { supported, expiresAt: Date.now() + 2 * 60_000 }
+      return supported
+    })().finally(() => { this.sharingCheck = undefined })
+  }
+
+  private async sharingFields(tenantId: string, share?: boolean, allowGraphCli?: boolean): Promise<Record<string, unknown>> {
+    if (share === false) return { shareWithTenant: false }
     const clientId = this.clientId(tenantId)?.toLowerCase()
-    if (share === false || !clientId || !guidPattern.test(clientId)) return {}
+    const publicClient = isPublicClient(clientId)
+    const supported = (publicClient || this.options.ownClientId || allowGraphCli !== undefined) && await this.supportsClientIdSets()
+    if (allowGraphCli !== undefined && !supported) throw new Error("The license service does not support Start now sharing yet.")
+    // The legacy server preserves the mapping when sharing is requested without proof.
+    // Explicit true also avoids the MSP default of removing an existing mapping.
+    const choice = publicClient ? { shareWithTenant: true } : share === undefined ? {} : { shareWithTenant: share }
+    if (!clientId || !guidPattern.test(clientId) || (publicClient && !supported)) return choice
     const idToken = await this.idToken(tenantId)
-    if (!idToken) return { clientId }
+    if (!idToken || this.clientId(tenantId)?.toLowerCase() !== clientId) return { ...choice, clientId }
+    if (!supported) return { ...choice, clientId, idToken }
     const ownClientId = this.options.ownClientId ? this.options.ownClientId(tenantId) : clientId
     return {
-      clientId, idToken,
+      ...choice,
+      clientId,
+      // A legacy handler strips this field even if a capable server rolls back between requests.
+      ...(publicClient ? { publicClientProof: idToken } : { idToken }),
       allowedClientIds: organizationClientIds(ownClientId, allowGraphCli),
       ...(allowGraphCli === undefined ? {} : { allowGraphCli }),
     }
@@ -1129,12 +1157,13 @@ export class LicenseService {
     entry?: Pick<StoredActivation, "activationId" | "licenseKeyId">,
     token?: string,
     extra: Record<string, unknown> = {},
+    publicProof = false,
   ): Promise<Record<string, unknown>> {
     const idToken = token ?? (await this.idToken(tenantId))
     this.assertCurrent(current)
     if (!idToken) throw new NoIdToken()
     return this.call("tenant", {
-      idToken,
+      ...(publicProof ? { publicClientProof: idToken } : { idToken }),
       installId: this.installId,
       os: this.platform,
       appVersion: this.options.appVersion,
@@ -1206,15 +1235,19 @@ export class LicenseService {
     try {
       if (entry.source === "trial" && await this.replaceTrialWithKey(tenantId)) return
       if (entry.source === "tenant" || entry.source === "trial") {
+        const clientId = this.clientId(tenantId)
+        const publicProof = entry.source === "tenant" && isPublicClient(clientId)
+        if (publicProof && !await this.supportsClientIdSets()) return
         const idToken = await this.idToken(tenantId)
         this.assertCurrent(current)
-        if (!idToken) return
+        if (!idToken || (entry.source === "tenant" && this.clientId(tenantId) !== clientId)) return
         if (entry.source === "trial") {
           try { await this.activateTenant(tenantId); return } catch (error) {
             if (error instanceof StaleLicenseRequest) throw error
           }
         }
-        const data = await this.tenantCall(tenantId, "refresh", current, entry, idToken)
+        // An old handler rejects publicClientProof before looking up or releasing the activation.
+        const data = await this.tenantCall(tenantId, "refresh", current, entry, idToken, {}, publicProof)
         this.assertCurrent(current)
         this.accept(tenantId, data, entry.source)
         if (entry.source === "trial") this.rememberTrial(tenantId, data)
@@ -1230,7 +1263,6 @@ export class LicenseService {
         // Lets the service send version 2 tokens to apps that read them.
         appVersion: this.options.appVersion,
         ...(await this.sharingFields(tenantId, shareWithTenant, allowGraphCli)),
-        ...(shareWithTenant === undefined ? {} : { shareWithTenant }),
       }, current)
       this.assertCurrent(current)
       this.accept(tenantId, data, "key")

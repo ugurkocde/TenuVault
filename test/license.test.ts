@@ -65,7 +65,7 @@ let answer: (call: Call) => Response | Promise<Response>
 const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
   const call = {
     action: String(url).split("/").pop() ?? "",
-    body: JSON.parse(init?.body as string) as Record<string, unknown>,
+    body: init?.body === undefined ? {} : JSON.parse(init.body as string) as Record<string, unknown>,
   }
   calls.push(call)
   fetchInits.push(init)
@@ -1235,12 +1235,16 @@ describe("LicenseService organization licenses", () => {
   })
 
   it("sends the tenant's client ID set and requires explicit key-holder authorization for Start now", async () => {
-    answer = ({ action, body }) => action === "activate"
-      ? granted("act-key", { shared: false })
-      : granted("act-key", { shared: body.shareWithTenant, allowedClientIds: body.allowedClientIds })
+    answer = ({ action, body }) => {
+      if (action === "health") return Response.json({ organizationLicenses: { clientIdSets: true } })
+      if (action === "activate") return granted("act-key", { shared: false })
+      return granted("act-key", { shared: body.shareWithTenant, allowedClientIds: body.allowedClientIds })
+    }
     const license = service({ clientId: () => TENUVAULT_CLIENT_ID, ownClientId: () => APP_ID.toUpperCase() })
     await license.setKey("TEST-LICENSE-KEY", [TENANT])
-    expect(calls.at(-1)?.body).toMatchObject({ clientId: TENUVAULT_CLIENT_ID, allowedClientIds: [APP_ID, TENUVAULT_CLIENT_ID] })
+    expect(calls.map(call => call.action)).toEqual(["health", "activate"])
+    expect(calls.at(-1)?.body).toMatchObject({ clientId: TENUVAULT_CLIENT_ID, publicClientProof: "id.token.value", allowedClientIds: [APP_ID, TENUVAULT_CLIENT_ID] })
+    expect(calls.at(-1)?.body).not.toHaveProperty("idToken")
     await license.setShared(TENANT, true, true)
     expect(calls.at(-1)?.body).toMatchObject({ allowGraphCli: true, allowedClientIds: [APP_ID, TENUVAULT_CLIENT_ID, GRAPH_CLI_CLIENT_ID] })
     await license.refreshAll()
@@ -1249,6 +1253,72 @@ describe("LicenseService organization licenses", () => {
     expect(calls.at(-1)?.body).toMatchObject({ allowGraphCli: false, allowedClientIds: [APP_ID, TENUVAULT_CLIENT_ID] })
     answer = () => granted("act-key", { shared: true })
     await expect(license.setShared(TENANT, true, true)).rejects.toThrow("did not confirm")
+  })
+
+  it.each([GRAPH_CLI_CLIENT_ID, TENUVAULT_CLIENT_ID])("uses the legacy contract without replacing an own registration after changing to %s", async publicClient => {
+    let registeredClient: unknown
+    let clientId = APP_ID
+    answer = ({ action, body }) => {
+      if (action === "health") return Response.json({ organizationLicenses: { ok: true } })
+      if (["allowedClientIds", "allowGraphCli", "publicClientProof"].some(field => field in body)) return Response.json({ error: "Unknown field" }, { status: 400 })
+      if (body.idToken) {
+        registeredClient = body.clientId
+        return granted("act-key", { shared: true })
+      }
+      return granted("act-key", { shared: false, sharedReason: "sign_in_required" })
+    }
+    const license = service({ clientId: () => clientId, ownClientId: () => APP_ID })
+    await license.setKey("TEST-LICENSE-KEY", [TENANT])
+    expect(calls.at(-1)?.body).toMatchObject({ clientId: APP_ID, idToken: "id.token.value" })
+    clientId = publicClient
+    await license.refreshAll()
+    expect(calls.at(-1)?.body).toMatchObject({ shareWithTenant: true })
+    expect(calls.at(-1)?.body).not.toHaveProperty("idToken")
+    expect(calls.at(-1)?.body).not.toHaveProperty("clientId")
+    expect(registeredClient).toBe(APP_ID)
+    expect(license.status([TENANT]).tenants[0]).toMatchObject({ entitled: true, shared: true })
+    const count = calls.length
+    await expect(license.setShared(TENANT, true, true)).rejects.toThrow("does not support Start now sharing")
+    expect(calls).toHaveLength(count)
+  })
+
+  it("keeps a cached organization entitlement when the old server cannot renew it for the current client", async () => {
+    let clientId = APP_ID
+    let capable = false
+    answer = ({ action, body }) => {
+      if (action === "health") return Response.json({ organizationLicenses: { clientIdSets: capable } })
+      if (action === "tenant" && body.action === "activate") return granted("act-tenant")
+      if (action === "tenant" && body.action === "refresh" && capable) return granted("act-tenant")
+      return denied("tenant_not_licensed")
+    }
+    const license = service({ clientId: () => clientId, ownClientId: () => APP_ID })
+    await expect(license.requireEntitlement(TENANT)).resolves.toBe("pro")
+    clientId = GRAPH_CLI_CLIENT_ID
+    await license.refreshAll()
+    expect(calls.map(call => call.action)).toEqual(["tenant", "health"])
+    expect(license.status([TENANT]).tenants[0]).toMatchObject({ entitled: true, source: "tenant" })
+    capable = true
+    vi.setSystemTime(Date.now() + 120_000)
+    await license.refreshAll()
+    expect(calls.at(-1)).toMatchObject({ action: "tenant", body: { action: "refresh", publicClientProof: "id.token.value" } })
+    expect(calls.at(-1)?.body).not.toHaveProperty("idToken")
+    capable = false
+    answer = ({ body }) => body.idToken ? denied("tenant_not_licensed") : Response.json({ error: "Invalid request" }, { status: 400 })
+    await license.refreshAll()
+    expect(license.status([TENANT]).tenants[0]).toMatchObject({ entitled: true, source: "tenant" })
+  })
+
+  it("protects the existing mapping if a legacy server strips fields after positive discovery", async () => {
+    let registeredClient: unknown = APP_ID
+    answer = ({ action, body }) => {
+      if (action === "health") return Response.json({ organizationLicenses: { clientIdSets: true } })
+      if (body.idToken) registeredClient = body.clientId
+      return granted("act-key", { shared: false, sharedReason: "sign_in_required" })
+    }
+    const license = service({ clientId: () => TENUVAULT_CLIENT_ID, ownClientId: () => APP_ID })
+    await license.setKey("TEST-LICENSE-KEY", [TENANT])
+    expect(registeredClient).toBe(APP_ID)
+    expect(entitled(license)).toBe(true)
   })
 
   it("reports a sharing change the service could not store", async () => {
@@ -1398,7 +1468,7 @@ describe("LicenseService Community plan", () => {
     await expect(license.requireEntitlement(TENANT)).rejects.toThrow("license state changed")
     expect(store.get("license.communityTenant")).toBeNull()
     await expect(license.requireEntitlement(TENANT, { retry: true })).resolves.toBe("community")
-    expect(calls).toHaveLength(0)
+    expect(calls.filter(call => call.action !== "health")).toHaveLength(0)
     expect(service({ idTokenValue: null }).status([TENANT])).toMatchObject({ communityTenantId: TENANT, tenants: [{ plan: "community" }] })
   })
 

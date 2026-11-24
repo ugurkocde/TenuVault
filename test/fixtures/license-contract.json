@@ -283,6 +283,7 @@
         "idToken",
         "shareWithTenant",
         "allowedClientIds",
+        "publicClientProof",
         "allowGraphCli"
       ]
     },
@@ -299,6 +300,7 @@
         "idToken",
         "shareWithTenant",
         "allowedClientIds",
+        "publicClientProof",
         "allowGraphCli"
       ]
     },
@@ -308,6 +310,19 @@
         "activationId"
       ],
       "optional": []
+    },
+    "tenantPublicClientRefresh": {
+      "required": [
+        "publicClientProof",
+        "installId",
+        "os",
+        "appVersion",
+        "action",
+        "activationId"
+      ],
+      "optional": [
+        "licenseKeyId"
+      ]
     },
     "tenant": {
       "required": [
@@ -337,6 +352,7 @@
       "optional": [
         "shared",
         "sharedReason",
+        "allowedClientIds",
         "displayKey",
         "licenseKeyId"
       ]
