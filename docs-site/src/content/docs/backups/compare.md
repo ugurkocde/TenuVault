@@ -68,7 +68,7 @@ To compare the tenant as it is right now with your last backup, run a new backup
 
 ### Examples by service
 
-For backups that record per-type outcomes, only complete reads are compared. For older backups, TenuVault uses the recorded scope and excludes types with known failures. If an older backup recorded a read failure without naming the type, the comparison shows a coverage warning. Some reported additions or deletions may be policies that backup failed to read.
+For backups that record per-type outcomes, only complete reads are compared. TenuVault needs every page of a policy list to confirm what was present. A complete list with zero policies can confirm a deletion. For older backups, TenuVault uses the recorded scope and excludes types with known failures. If an older backup recorded a read failure without naming the type, the comparison shows a coverage warning. Some reported additions or deletions may be policies that backup failed to read.
 
 | Service | Example of coverage shown as unknown |
 | --- | --- |

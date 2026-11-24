@@ -3,6 +3,7 @@ import { retryDelay, retryableStatus, sleep } from "../graph-retry"
 import { FetchApplicationError } from "../api/network-error"
 import { signInRefused } from "../../shared/backup-outcomes"
 import type { GrantedPermissions } from "../../shared/services/modules"
+import type { Item } from "../../shared/intune/registry"
 import type { NetworkCircuit } from "./engine"
 import { MAX_LIST_PAGES, REQUEST_ATTEMPTS, GraphError, GraphPauseError, GraphUnansweredError, RequestTimeoutError, TokenError, graphFailure, requestFailure, withRequestTimeout } from "./request"
 
@@ -35,6 +36,10 @@ export interface ListOptions extends ReadControl {
   headers?: Readonly<Record<string, string>>
   /** The type's mandatory $filter. A continuation link that left it out gets it back; one with another filter is refused. */
   filter?: string
+  idKey?: string
+  singlePage?: boolean
+  /** The page already included in a detail response through $expand. */
+  expandedPage?: unknown
 }
 
 /**
@@ -56,24 +61,31 @@ export class GraphSession {
     private readonly options: GraphSessionOptions = {},
   ) {}
 
-  async list(url: string, options: ListOptions = {}): Promise<GraphItem[]> {
-    const items: GraphItem[] = []
+  async list(url: string, options: ListOptions = {}): Promise<Item[]> {
+    const items: Item[] = []
     for await (const page of this.pages(url, options)) items.push(...page)
     return items
   }
 
-  /** Yields only a complete page; a refused continuation always throws. */
-  async *pages(url: string, options: ListOptions = {}): AsyncGenerator<GraphItem[]> {
-    let next: string | undefined = url
+  /** Every page is validated before a buffered or streamed reader can use it. */
+  async *pages(url: string, options: ListOptions = {}): AsyncGenerator<Item[]> {
     const seen = new Set<string>()
-    while (next) {
-      if (seen.size >= MAX_LIST_PAGES) throw new Error(`Graph listing did not finish after ${MAX_LIST_PAGES} pages`)
-      const request = graphContinuation(url, next, seen, options.filter)
-      const page = await this.get<{ value?: GraphItem[]; "@odata.nextLink"?: string } | null>(request, options.headers, options)
-      if (!Array.isArray(page?.value)) throw new Error("Graph returned an invalid policy collection")
-      next = page["@odata.nextLink"]
-      if (next !== undefined && (typeof next !== "string" || !next.trim())) throw new Error("Graph returned an invalid continuation link")
-      yield page.value
+    const request = graphContinuation(url, url, seen, options.filter)
+    let page = "expandedPage" in options ? options.expandedPage : await this.get(request, options.headers, options)
+    for (;;) {
+      this.network.signal.throwIfAborted()
+      options.signal?.throwIfAborted()
+      const validated = validateListPage(page, url, seen, options)
+      yield validated.items
+      if (!validated.next) return
+      if (seen.size > MAX_LIST_PAGES) throw new Error(`Graph listing did not finish after ${MAX_LIST_PAGES} pages`)
+      try {
+        page = await this.get(validated.next, options.headers, options)
+      } catch (error) {
+        // A later refusal cannot establish that a collection was never configured.
+        if (error instanceof GraphError) error.continuationPage = true
+        throw error
+      }
     }
   }
 
@@ -179,4 +191,24 @@ export class GraphSession {
     this.stopped ??= new GraphUnansweredError(`Microsoft Graph did not respond for ${this.unanswered} consecutive requests of this service, so the rest of the service was not read.`, { cause: error })
     throw this.stopped
   }
+}
+
+function validateListPage(page: unknown, url: string, seen: Set<string>, options: ListOptions): { items: Item[]; next?: string } {
+  if (!page || typeof page !== "object" || Array.isArray(page) || !("value" in page) || !Array.isArray(page.value)) {
+    throw new Error("Graph returned an invalid policy collection")
+  }
+  const idKey = options.idKey ?? "id"
+  for (const entry of page.value) {
+    const id = entry?.[idKey]
+    if (!entry || typeof entry !== "object" || Array.isArray(entry) || typeof id !== "string" || !id.trim()) {
+      throw new Error(`Microsoft Graph returned a collection entry without ${idKey}`)
+    }
+  }
+  if (!("@odata.nextLink" in page)) return { items: page.value }
+  if (options.singlePage) throw new Error("Microsoft Graph returned a list that continues on another page where one tenant-wide object was expected")
+  const next = page["@odata.nextLink"]
+  if (typeof next !== "string" || !/^https?:\/\/[^/]/i.test(next) || next !== next.trim() || /[\s\\]/u.test(next.split("?")[0]!) || /[\t\r\n\\]/u.test(next) || !URL.canParse(next)) {
+    throw new Error("Graph returned an invalid continuation link")
+  }
+  return { items: page.value, next: graphContinuation(url, next, seen, options.filter) }
 }

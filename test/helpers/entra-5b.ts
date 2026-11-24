@@ -42,5 +42,5 @@ export function replay(data: ReadFixture, type: IntuneType): GraphReader {
     return Response.json(answer.body, { status: answer.status, headers: answer.headers })
   }) as typeof fetch, async () => "fixture", new NetworkCircuit(10), { service: "entra", isolated: true })
   const url = (path: string) => path.startsWith("https://") ? path : `https://graph.microsoft.com/${graphVersion(type)}/${path}`
-  return { get: path => session.get(url(path), type.headers), list: path => session.list(url(path), { headers: type.headers }) as Promise<Item[]> }
+  return { get: path => session.get(url(path), type.headers), list: (path, idKey) => session.list(url(path), { headers: type.headers, idKey }) as Promise<Item[]> }
 }

@@ -23,7 +23,7 @@ import { RetryDelayError } from "../graph-retry"
 import { isLocalAccount } from "../storage/blob-emulator"
 import { FetchApplicationError } from "../api/network-error"
 import { INTUNE_TYPES, itemName, typeForFolder, type GraphVersion, type IntuneType, type Item } from "../../shared/intune/registry"
-import { readEntries, ScopeDiscoveryError, OrganizationResolutionError, organizationReader, graphVersion, listPath, listSnapshot, readObject, withMaskedSecrets, type GraphReader } from "../../shared/intune/read"
+import { readEntries, ScopeDiscoveryError, OrganizationResolutionError, organizationReader, graphVersion, detailPath, listPath, listSnapshot, readObject, withMaskedSecrets, type GraphReader } from "../../shared/intune/read"
 import { comparableSnapshot } from "../../shared/intune/compare"
 import type { BackupItems } from "../../shared/intune/backup-changes"
 import { EVERYTHING, includedTypes, normalizeScope, restorableFolders, type BackupScope } from "../../shared/intune/scope"
@@ -696,10 +696,16 @@ export class BackupEngine {
         budget = typeReadBudget(network.signal, type.readBudget)
         typeBudgets.set(type.folder, budget)
       }
+      const singletonPath = type.singleton?.collection ? detailPath(type, type.singleton.id) : undefined
       const read = <T>(operation: (control: ReadControl) => Promise<T>) => budget ? budget(operation) : operation(control)
       return organizationReader({
-        get: (path: string) => read(control => session.get<Item>(graphUrl(version, path, type.additionalReadVersions), type.headers, control)),
-        list: (path: string) => read(control => session.list(graphUrl(version, path, type.additionalReadVersions), { ...control, headers: type.headers, ...(path === listPath(type) ? { filter: type.filter } : {}) }) as Promise<Item[]>),
+        get: (path: string) => read(async control => {
+          const url = graphUrl(version, path, type.additionalReadVersions)
+          if (path === singletonPath) return { value: await session.list(url, { ...control, headers: type.headers, singlePage: true }) }
+          return session.get<Item>(url, type.headers, control)
+        }),
+        list: (path: string, idKey?: string) => read(control => session.list(graphUrl(version, path, type.additionalReadVersions), { ...control, headers: type.headers, idKey, ...(path === listPath(type) ? { filter: type.filter } : {}) })),
+        completeList: (path, expandedPage) => read(control => session.list(graphUrl(version, path, type.additionalReadVersions), { ...control, headers: type.headers, expandedPage })),
       })
     }
 
@@ -726,7 +732,7 @@ export class BackupEngine {
      * others were saved is a failed read.
      */
     const notSetUp = (type: IntuneType, error: unknown) =>
-      error instanceof GraphError && !!type.notConfigured && classifyAnswer({ status: error.status, ...error.answer }, { notConfigured: type.notConfigured, mode: tokens.mode }).outcome === "notConfigured"
+      error instanceof GraphError && !error.continuationPage && !!type.notConfigured && classifyAnswer({ status: error.status, ...error.answer }, { notConfigured: type.notConfigured, mode: tokens.mode }).outcome === "notConfigured"
     // Graph still enforces access when the token claims are unavailable or the account's role is narrower.
     const checkedReadDenied = (type: IntuneType, error: unknown) =>
       error instanceof GraphError && ((error.status === 403 && (startNow || moduleForFolder(type.folder)?.part.backupPrecheck === true)) || (startNow && error.status === 400))
@@ -1106,7 +1112,7 @@ export class BackupEngine {
               return iterator.next()
             })
             if (next.done) break
-            yield next.value as Item[]
+            yield next.value
           }
         } finally { await iterator.return(undefined) }
       }

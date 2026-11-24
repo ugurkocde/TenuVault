@@ -149,6 +149,31 @@ describe("BackupEngine", () => {
     })
   })
 
+  it.each([429, 503])("marks a later page unread after HTTP %i retries run out", async (status) => {
+    const retry = vi.fn(() => new Response("", { status, headers: { "retry-after": "0.001" } }))
+    const { engine, store, account } = setup(fakeGraph({ "/beta/deviceManagement/deviceConfigurations?page=2": retry }))
+    const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)
+    const metadata = JSON.parse((await store.get(account, "intune-backups", `${job.backupFolder}/metadata.json`)).data.toString())
+    expect(retry).toHaveBeenCalledTimes(3)
+    expect(metadata).toMatchObject({ Coverage: "Incomplete", FailedTypes: ["DeviceConfigurations"] })
+    expect(metadata.Outcomes).toContainEqual(expect.objectContaining({ Folder: "DeviceConfigurations", Outcome: "failed", Saved: 0, Status: status }))
+  })
+
+  it("leaves the type unread when a later page is cancelled", async () => {
+    let job!: ReturnType<BackupEngine["start"]>
+    const { engine, account } = setup(fakeGraph({
+      "/beta/deviceManagement/deviceConfigurations?page=2": () => {
+        engine.cancel(job.id)
+        return Response.json({ value: [] })
+      },
+    }))
+    job = engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account })
+    await engine.waitForJob(job)
+    expect(job.status).toBe("Cancelled")
+    expect(job.outcomes).toMatchObject({ coverage: "incomplete" })
+    expect(job.outcomes?.types).toContainEqual(expect.objectContaining({ folder: "DeviceConfigurations", outcome: "failed", saved: 0 }))
+  })
+
   it("keeps policy names recognizable while masking account identifiers in item failures", async () => {
     const { engine, store, account } = setup(fakeGraph({
       "/beta/deviceManagement/deviceConfigurations": Response.json({ value: [{ id: "dc1", displayName: "BitLocker (admin+lab@example.test, guest_example.test#EXT#@tenant.onmicrosoft.com)" }] }),

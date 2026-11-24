@@ -42,6 +42,8 @@ export interface GraphAnswer {
  * `answer` keeps what Graph said, for telling a missing permission from a missing license or a setting that was never made.
  */
 export class GraphError extends Error {
+  continuationPage?: true
+
   constructor(message: string, readonly status: number, readonly answer: GraphAnswer = {}, readonly grant?: GrantedPermissions) {
     super(message)
   }

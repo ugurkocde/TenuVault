@@ -11,7 +11,9 @@ import type { GraphVersion, IntuneType, Item, Json } from "./registry"
 export interface GraphReader {
   get: (path: string) => Promise<Item>
   /** Follows @odata.nextLink; accepts a relative path or an absolute nextLink. */
-  list: (path: string) => Promise<Item[]>
+  list: (path: string, idKey?: string) => Promise<Item[]>
+  /** Completes an expanded page against its collection path when the reader validates list pages. */
+  completeList?: (path: string, page: unknown) => Promise<Item[]>
 }
 
 /** The Microsoft Graph version a type's paths are relative to. */
@@ -47,7 +49,7 @@ export async function readEntries(type: IntuneType, graph: GraphReader, discover
       const filter = type.listSource.filter(scope.id)
       entries.push(...await graph.list(`${type.path}?$filter=${encodeURIComponent(filter)}`))
     }
-  } else entries = await graph.list(listPath(type))
+  } else entries = await graph.list(listPath(type), type.idKey)
   return entries.map(entry => withIdentity(type, entry))
 }
 
@@ -83,11 +85,12 @@ export function detailPath(type: IntuneType, id: string): string {
 }
 
 export async function readObject(type: IntuneType, id: string, graph: GraphReader, options: ReadOptions = {}): Promise<Item> {
-  const read = await graph.get(detailPath(type, id))
+  const path = detailPath(type, id)
+  const read = await graph.get(path)
   let detail = type.singleton ? singletonObject(type.singleton, read) : read
   if (type.staticIds) detail = { ...detail, id }
   detail = withIdentity(type, detail)
-  await completeExpanded(detail, graph)
+  await completeExpanded(detail, graph, path.split("?")[0]!)
   // A type that keeps only some properties keeps them of the object itself; what its extras read is stored next to them.
   if (type.keep) detail = keptSnapshot(type.keep, detail)
   // Extra paths are built from Graph-returned IDs, so each ID is encoded as one path segment.
@@ -103,7 +106,8 @@ export async function readObject(type: IntuneType, id: string, graph: GraphReade
         detail[extra.property] = (await graph.get(extra.path(encodedId)))[extra.property] ?? null
         continue
       }
-      const entries = await graph.list(extra.path(encodedId))
+      const collection = extra.path(encodedId)
+      const entries = await graph.list(collection)
       if (extra.ids) {
         detail[extra.property] = sortedIds(entries, extra.property)
         continue
@@ -118,12 +122,12 @@ export async function readObject(type: IntuneType, id: string, graph: GraphReade
           }
         }
       }
-      for (const entry of entries) await completeExpanded(entry, graph)
+      await completeExpanded(entries, graph, collection.split("?")[0]!)
       detail[extra.property] = entries
     } catch (error) {
-      const answer = error as { status?: number; answer?: { code?: string; message?: string } }
+      const answer = error as { continuationPage?: true; status?: number; answer?: { code?: string; message?: string } }
       const matches = (pattern: NonNullable<IntuneType["notConfigured"]>[number]) => pattern.status === answer.status && (!pattern.code || pattern.code.toLowerCase() === answer.answer?.code?.toLowerCase()) && (!pattern.message || answer.answer?.message?.toLowerCase().includes(pattern.message.toLowerCase()))
-      if (extra.notConfigured?.some(matches) && (!extra.notConfiguredWhen || extra.notConfiguredWhen(detail))) { detail[extra.property] = []; continue }
+      if (!answer.continuationPage && extra.notConfigured?.some(matches) && (!extra.notConfiguredWhen || extra.notConfiguredWhen(detail))) { detail[extra.property] = []; continue }
       if (!options.onUnreadExtra || !extra.optional?.some(matches)) throw error
       // An absent property means unread, never an empty collection that could mean not configured.
       delete detail[extra.property]
@@ -170,17 +174,30 @@ function storedSnapshot(type: IntuneType, snapshot: Item): Item {
 }
 
 /** Read every expanded page, including nested resource roles and scopes, before storing it. */
-async function completeExpanded(value: Json, graph: GraphReader): Promise<void> {
+async function completeExpanded(value: Json, graph: GraphReader, path: string): Promise<void> {
   if (!value || typeof value !== "object") return
-  if (Array.isArray(value)) { for (const entry of value) await completeExpanded(entry, graph); return }
-  for (const [key, next] of Object.entries(value)) {
-    if (!key.endsWith("@odata.nextLink") || typeof next !== "string") continue
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const id = entry && typeof entry === "object" && !Array.isArray(entry) ? entry.id : undefined
+      await completeExpanded(entry, graph, path && typeof id === "string" && id ? `${path}/${encodeURIComponent(id)}` : "")
+    }
+    return
+  }
+  for (const key of Object.keys(value)) {
+    if (!key.endsWith("@odata.nextLink")) continue
     const property = key.slice(0, -"@odata.nextLink".length)
-    if (!Array.isArray(value[property])) throw new Error(`Invalid expanded collection ${property}`)
-    value[property] = [...value[property] as Json[], ...await graph.list(next)]
+    const nextLink = value[key]
+    if (graph.completeList && path) {
+      value[property] = await graph.completeList(`${path}/${property}`, { value: value[property], "@odata.nextLink": nextLink })
+    } else {
+      if (graph.completeList) throw new Error(`Invalid expanded collection ${property}`)
+      if (typeof nextLink !== "string") continue
+      if (!Array.isArray(value[property])) throw new Error(`Invalid expanded collection ${property}`)
+      value[property] = [...value[property] as Json[], ...await graph.list(nextLink)]
+    }
     delete value[key]
   }
-  for (const child of Object.values(value)) await completeExpanded(child, graph)
+  for (const [key, child] of Object.entries(value)) await completeExpanded(child, graph, path ? `${path}/${key}` : "")
 }
 
 /** Sort declared unordered collections at any depth; ordered settings keep their response order. */
@@ -366,5 +383,9 @@ export function organizationReader(graph: GraphReader): GraphReader {
     }).catch(error => { throw new OrganizationResolutionError(error) })
     return path.replaceAll("{organizationId}", await organization)
   }
-  return { get: async path => graph.get(await resolve(path)), list: async path => graph.list(await resolve(path)) }
+  return {
+    get: async path => graph.get(await resolve(path)),
+    list: async (path, idKey) => graph.list(await resolve(path), idKey),
+    ...(graph.completeList && { completeList: async (path: string, page: unknown) => graph.completeList!(await resolve(path), page) }),
+  }
 }
