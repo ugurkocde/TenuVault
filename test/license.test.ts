@@ -1,4 +1,3 @@
-import { ConnectionCapabilities } from "../src/main/auth/connection-capabilities"
 import { GRAPH_CLI_CLIENT_ID, TENUVAULT_CLIENT_ID } from "../src/shared/tenant-connection"
 import { prepareScheduledCoverage } from "../src/main/backup/schedule-prepare"
 import { BackupScheduler } from "../src/main/backup/scheduler"
@@ -2547,57 +2546,25 @@ it("does not apply a refused candidate key's cooldown to the saved key after rol
   } finally { vi.useRealTimers() }
 })
 
-describe("TenuVault app availability", () => {
-  it.each([{}, { connectMethods: {} }, { connectMethods: { tenuvaultApp: "true" } }, { connectMethods: { tenuvaultApp: false } }])(
-    "keeps the shared sign-in disabled for health response %j", async health => {
-      const fetch = vi.fn(async () => Response.json(health))
-      expect(await service({ fetch }).tenuvaultAppEnabled()).toBe(false)
-      expect(fetch).toHaveBeenCalledWith(expect.stringMatching(/\/api\/desktop-license\/health$/), expect.objectContaining({ redirect: "error", cache: "no-store" }))
-    },
-  )
+describe("Desktop build sign-in availability", () => {
+  afterEach(() => vi.unstubAllGlobals())
 
-  it.each(["trial health", "unreachable health", "new sign-in"])("stops the next request in an active operation after %s", async check => {
-    const health = vi.fn()
-      .mockResolvedValueOnce(Response.json({ connectMethods: { tenuvaultApp: true } }))
-      .mockImplementationOnce(async () => {
-        if (check === "unreachable health") throw new Error("network unavailable")
-        return Response.json({ tenantTrials: { ok: true, enabled: false }, connectMethods: { tenuvaultApp: false } })
-      })
-    const license = service({ fetch: health })
-    const capabilities = new ConnectionCapabilities(() => ({
-      version: 1, origin: "wizard", method: "tenuvaultApp", clientId: TENUVAULT_CLIENT_ID, createdAt: "", updatedAt: "",
-    }), undefined, method => license.connectMethodEnabled(method), method => license.connectMethodEnabledNow(method))
-    const url = new URL("https://graph.microsoft.com/beta/organization")
-    const bearer = "opaque-shared-token"
-    capabilities.requireIssuedToken(TENANT, TENUVAULT_CLIENT_ID, "https://graph.microsoft.com/.default", bearer)
-    const request = () => capabilities.authorizeRequest(url, url, { headers: { Authorization: `Bearer ${bearer}` } }, TENANT)
-      .then(authorization => authorization?.beforeDispatch?.())
-    await expect(request()).resolves.toBeUndefined()
-    if (check === "new sign-in") expect(await license.tenuvaultAppEnabled(true)).toBe(false)
-    else await license.checkTrialHealth()
-    await expect(request()).rejects.toThrow("currently unavailable")
-    expect(health).toHaveBeenCalledTimes(2)
+  it("keeps the TenuVault app disabled even when health enables it", async () => {
+    const fetch = vi.fn(async () => Response.json({ connectMethods: { graphCli: true, tenuvaultApp: true } }))
+    const licensing = service({ fetch })
+    expect(await licensing.connectMethodEnabled("graphCli")).toBe(true)
+    expect(await licensing.tenuvaultAppEnabled(true)).toBe(false)
+    expect(licensing.connectMethodEnabledNow("tenuvaultApp")).toBe(false)
   })
 
-  it("refreshes a positive result and disables sign-in when health turns it off", async () => {
-    const now = vi.spyOn(Date, "now")
-    const start = Date.now()
-    now.mockReturnValue(start)
+  it("enables both methods from the compile-time lab capability without contacting health", async () => {
+    vi.stubGlobal("__TV_LAB_BUILD__", true)
     const fetch = vi.fn()
-      .mockResolvedValueOnce(Response.json({ connectMethods: { tenuvaultApp: true } }))
-      .mockResolvedValueOnce(Response.json({ connectMethods: { tenuvaultApp: false } }))
-      .mockRejectedValueOnce(new Error("network unavailable"))
-    try {
-      const licensing = service({ fetch })
-      expect(await Promise.all([licensing.tenuvaultAppEnabled(), licensing.tenuvaultAppEnabled()])).toEqual([true, true])
-      expect(fetch).toHaveBeenCalledTimes(1)
-      now.mockReturnValue(start + 120_001)
-      expect(await licensing.tenuvaultAppEnabled()).toBe(false)
-      now.mockReturnValue(start + 240_002)
-      expect(await licensing.tenuvaultAppEnabled()).toBe(false)
-      expect(fetch).toHaveBeenCalledTimes(3)
-    } finally {
-      now.mockRestore()
+    const licensing = service({ fetch })
+    for (const method of ["graphCli", "tenuvaultApp"] as const) {
+      expect(await licensing.connectMethodEnabled(method, true)).toBe(true)
+      expect(licensing.connectMethodEnabledNow(method)).toBe(true)
     }
+    expect(fetch).not.toHaveBeenCalled()
   })
 })

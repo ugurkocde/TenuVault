@@ -157,6 +157,13 @@ import { ConnectionHealth, selectedTenant } from "./connection-health/service"
 const RENDERER_STORAGE_PREFIX = "renderer."
 const LOCAL_FOLDER_KEY = "backup.localFolder"
 
+if (__TV_LAB_BUILD__) {
+  app.setName("TenuVault Lab")
+  app.setAppUserModelId("com.tenuvault.desktop.lab")
+  app.setPath("userData", join(app.getPath("appData"), "TenuVault Lab"))
+  app.setPath("sessionData", app.getPath("userData"))
+}
+
 // A second instance would share the encrypted stores and overwrite the first one's changes.
 const isPrimaryInstance = app.requestSingleInstanceLock()
 if (!isPrimaryInstance) app.exit(0)
@@ -1177,7 +1184,7 @@ async function bootstrap(): Promise<void> {
   app.on("before-quit", stopFeatures)
 
   const updates = new Updates((status) => mainWindow?.webContents.send("updates:changed", status))
-  updates.onLogin((authInfo, callback) => answerProxyLogin("updates", authInfo, callback))
+  if (!__TV_LAB_BUILD__) updates.onLogin((authInfo, callback) => answerProxyLogin("updates", authInfo, callback))
   // The MSI is deployed and updated by the organization; updating it would add a per-user copy.
   const autoUpdateManaged = (app.isPackaged && !installedBySetup(process.execPath)) || (await updatesDisabledByPolicy())
   handleTrusted("diagnostics:status", () => diagnostics.status())
@@ -1186,10 +1193,10 @@ async function bootstrap(): Promise<void> {
   handleTrusted("diagnostics:reminderShown", () => diagnostics.reminderShown())
   handleTrusted("diagnostics:record", (_event, name: unknown, props: unknown) => diagnostics.record(rendererEvent(name, props, () => isNetworkFolder(localFolder()))))
   const applyPreferences = (prefs: ReturnType<Preferences["get"]>) => {
-    if (app.isPackaged) {
+    if (!__TV_LAB_BUILD__ && app.isPackaged) {
       app.setLoginItemSettings({ openAtLogin: prefs.startAtLogin, args: ["--hidden"] })
     }
-    updates.configure(prefs.autoUpdate && !autoUpdateManaged, prefs.nightlyUpdates)
+    if (!__TV_LAB_BUILD__) updates.configure(prefs.autoUpdate && !autoUpdateManaged, prefs.nightlyUpdates)
   }
   applyPreferences(preferences.get())
   const currentPreferences = (): AppPreferences => ({
@@ -1199,7 +1206,7 @@ async function bootstrap(): Promise<void> {
   })
   keepInTray = () => preferences.get().keepRunningInTray
 
-  const backgroundLaunch = new BackgroundLaunch({ platform: process.platform, packaged: app.isPackaged, executable: process.execPath, home: app.getPath("home"), data: app.getPath("userData"), uid: process.getuid?.(), systemRoot: process.env.SystemRoot })
+  const backgroundLaunch = new BackgroundLaunch({ platform: process.platform, packaged: !__TV_LAB_BUILD__ && app.isPackaged, executable: process.execPath, home: app.getPath("home"), data: app.getPath("userData"), uid: process.getuid?.(), systemRoot: process.env.SystemRoot })
   // Status checks and changes share the Windows script path.
   let backgroundLaunchPending: Promise<unknown> = Promise.resolve()
   const updateBackgroundLaunch = (action: () => ReturnType<BackgroundLaunch["status"]>) => {

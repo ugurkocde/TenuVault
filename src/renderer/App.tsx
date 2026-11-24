@@ -99,6 +99,8 @@ function BillingDialogs() {
 export function App() {
   return (
     <QueryClientProvider client={queryClient}>
+      {typeof __TV_LAB_BUILD__ !== "undefined" && __TV_LAB_BUILD__ &&
+        <div className="pointer-events-none fixed bottom-3 right-3 z-[100] rounded-md border bg-card px-3 py-1 text-xs font-medium text-foreground shadow-sm">Lab build</div>}
       <ProxySignInHost />
       <LicenseProvider>
         <WhatsNewProvider>

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto"
 import { CONSENT_ROLES_TEXT } from "../../shared/app-registration"
 import { DEFAULT_SETUP_CHOICE, GRAPH_APP_ID, knownPermissions, requestedPermissions, showsApproval, type ApiPermissions, type PermissionChoice } from "../../shared/services/manifest"
 import type { RegistrationResult, SetupProgress } from "../../shared/ipc"
@@ -34,8 +35,7 @@ export interface ProvisioningOptions {
   /** The services, areas and access levels to ask permissions for. When left out, what a setup has always asked for. */
   choice?: PermissionChoice
 }
-// The stable Graph version, as the setup script uses it. The first real setups ran against it.
-const ROOT = "https://graph.microsoft.com/v1.0"
+const ROOT = "https://graph.microsoft.com/beta"
 const NOTES = "Used by the TenuVault desktop app. Delegated permissions only, no credentials."
 const APPLICATION_FIELDS = "id,appId,displayName,notes,signInAudience,publicClient,web,spa,passwordCredentials,keyCredentials,createdDateTime"
 
@@ -77,7 +77,7 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
   // failed, so a stalled connection cannot keep the setup, and the token it holds, alive.
   async function graph<T>(method: string, path: string, body?: object, replication = false, cleanup = false): Promise<T> {
     const url = new URL(path.startsWith("https:") ? path : `${ROOT}${path}`)
-    if (url.origin !== "https://graph.microsoft.com" || url.username || url.password || url.hash || !url.pathname.startsWith("/v1.0/")) throw new Error("Unexpected Graph paging address.")
+    if (url.origin !== "https://graph.microsoft.com" || url.username || url.password || url.hash || !url.pathname.startsWith("/beta/")) throw new Error("Unexpected Graph paging address.")
     const attempts = replication ? 12 : 4
     // A write that may have been carried out is never sent twice: only a throttled request (which
     // was not carried out) and a replication delay repeat a POST.
@@ -134,7 +134,7 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
   // made. Checking it here would start licensing for a tenant that is not signed in yet.
   checkCancelled()
   progress({ phase: "registration" })
-  const principalFields = "$select=id,appId,accountEnabled,oauth2PermissionScopes"
+  const principalFields = "$select=id,appId,accountEnabled,publishedPermissionScopes"
   // Microsoft's own enterprise applications for the APIs TenuVault uses. One the tenant has not
   // used yet is only added when a registration is created: while an existing one is used, the
   // setup writes nothing at all.
@@ -160,7 +160,8 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
     return principal ? [[principal.id, new Set(api.permissions)] as const] : []
   }))
   const candidates = []
-  for (const candidate of (await list<Application>(`/applications?$filter=${encodeURIComponent("startswith(displayName,'TenuVault')")}&$select=${APPLICATION_FIELDS}`)).filter(looksLikeTenuVault)) {
+  const fixtureName = typeof __TV_LAB_BUILD__ !== "undefined" && __TV_LAB_BUILD__ ? `${__TV_LAB_REGISTRATION__}-${randomUUID()}` : ""
+  for (const candidate of fixtureName ? [] : (await list<Application>(`/applications?$filter=${encodeURIComponent("startswith(displayName,'TenuVault')")}&$select=${APPLICATION_FIELDS}`)).filter(looksLikeTenuVault)) {
     const principal = (await list<Principal>(`/servicePrincipals?$filter=${encodeURIComponent(`appId eq '${candidate.appId}'`)}&${principalFields}`))[0]
     if (!principal) continue
     const grants = await list<Grant>(`/oauth2PermissionGrants?$filter=${encodeURIComponent(`clientId eq '${principal.id}'`)}`)
@@ -191,8 +192,8 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
         // A Microsoft API the tenant has not used yet is added to it, as the setup script does.
         // These are Microsoft's own enterprise applications and stay when a later step fails.
         resource.principal ??= await graph<Principal>("POST", "/servicePrincipals", { appId: resource.appId }, true)
-        // Graph v1.0 calls them oauth2PermissionScopes; the beta name is accepted as well.
-        const scopes = resource.principal.oauth2PermissionScopes ?? resource.principal.publishedPermissionScopes ?? []
+        // Beta calls these publishedPermissionScopes. Accept the alternate field when Graph includes it.
+        const scopes = resource.principal.publishedPermissionScopes ?? resource.principal.oauth2PermissionScopes ?? []
         requiredResourceAccess.push({ resourceAppId: resource.appId, resourceAccess: resource.permissions.map(value => {
           const scope = scopes.find(scope => scope.value === value && scope.isEnabled !== false)
           if (!scope) throw new Error(`Delegated permission ${value} was not found on ${resource.api}.`)
@@ -200,7 +201,7 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
         }) })
       }
       created = await graph<Application>("POST", "/applications", {
-        displayName: "TenuVault Desktop", signInAudience: "AzureADMyOrg", notes: NOTES,
+        displayName: fixtureName || "TenuVault Desktop", signInAudience: "AzureADMyOrg", notes: NOTES,
         publicClient: { redirectUris: ["http://localhost"] }, requiredResourceAccess,
       })
       app = created
@@ -225,10 +226,10 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
     if (!created) throw error
     let removed = false
     try { await graph("DELETE", `/applications/${created.id}`, undefined, true, true); removed = true } catch { /* Best effort cleanup. */ }
-    throw new Error(`Setup did not finish. ${removed ? "The half-created app registration was removed again." : `Cleanup failed. Delete app registration TenuVault Desktop (client id ${created.appId}) in the Entra admin center.`} ${error instanceof Error ? error.message : String(error)}`, { cause: error })
+    throw new Error(`Setup did not finish. ${removed ? "The half-created app registration was removed again." : `Cleanup failed. Delete app registration ${created.displayName} (client id ${created.appId}) in the Entra admin center.`} ${error instanceof Error ? error.message : String(error)}`, { cause: error })
   }
   // From here on the registration is complete. A cancel keeps it, and says so when this run made it.
-  const kept = () => new Error(existing ? "Sign-in cancelled." : `Setup was cancelled. The app registration "${app!.displayName}" (client id ${app!.appId}) stays in your tenant, and the next setup uses it.`)
+  const kept = () => new Error(existing ? "Sign-in cancelled." : `Setup was cancelled. The app registration "${app!.displayName}" (client id ${app!.appId}) stays in your tenant${fixtureName ? "" : ", and the next setup uses it"}.`)
   const checkKept = () => { if (signal?.aborted) throw kept() }
   checkKept()
   progress({ phase: "publishing", reused: Boolean(existing) })

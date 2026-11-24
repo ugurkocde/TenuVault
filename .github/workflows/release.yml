@@ -274,7 +274,7 @@ jobs:
             export CSC_NAME="$identity"
             unset CSC_LINK CSC_KEY_PASSWORD
           fi
-          npx electron-vite build
+          npm run build
           npx electron-builder --config electron-builder.config.cjs ${{ matrix.target }} --publish never
 
       - name: Verify Windows app and capture helper signatures

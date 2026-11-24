@@ -14,3 +14,5 @@ tasks/proxy-harness/
 # Docs site (docs-site/) build output
 .astro/
 .vercel
+/out-lab/
+/dist-lab/

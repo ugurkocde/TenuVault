@@ -21,6 +21,7 @@ const azureSignOptions = env.AZURE_TRUSTED_SIGNING_ENDPOINT
   : undefined
 
 module.exports = {
+  beforePack: () => require("./scripts/check-release-bundle.cjs").checkReleaseBundle("out"),
   afterPack: require("./scripts/sign-capture-helper.cjs"),
   electronFuses: {
     runAsNode: false,

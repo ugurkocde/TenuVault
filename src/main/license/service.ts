@@ -745,6 +745,8 @@ export class LicenseService {
   }
 
   async connectMethodEnabled(method: ConnectMethod, fresh = false): Promise<boolean> {
+    if (typeof __TV_LAB_BUILD__ !== "undefined" && __TV_LAB_BUILD__) return true
+    if (method === "tenuvaultApp") return false
     if (!fresh && this.connectMethodsHealth && Date.now() < this.connectMethodsHealth.expiresAt) {
       return this.connectMethodsHealth.enabled[method]
     }
@@ -754,7 +756,8 @@ export class LicenseService {
 
   /** Use the latest known availability immediately before dispatching a shared-client request. */
   connectMethodEnabledNow(method: ConnectMethod): boolean {
-    return this.connectMethodsHealth?.enabled[method] === true
+    if (typeof __TV_LAB_BUILD__ !== "undefined" && __TV_LAB_BUILD__) return true
+    return method === "graphCli" && this.connectMethodsHealth?.enabled[method] === true
   }
 
   private fetchHealth(): Promise<LicenseHealthResponse | null> {

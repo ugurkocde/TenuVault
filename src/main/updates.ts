@@ -140,6 +140,10 @@ export class Updates {
   }
 
   constructor(private readonly notify: (status: UpdateStatus) => void) {
+    if (typeof __TV_LAB_BUILD__ !== "undefined" && __TV_LAB_BUILD__) {
+      this.status = { state: "disabled" }
+      return
+    }
     // Downloads start from update-available, only for a check of the current channel.
     autoUpdater.autoDownload = false
     // Only install the selected channel's ready update. On macOS this also keeps Squirrel
