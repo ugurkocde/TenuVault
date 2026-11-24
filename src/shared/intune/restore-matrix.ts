@@ -46,3 +46,10 @@ export const RESTORE_MATRIX = rows as RestoreMatrixRow[]
 export const restoreMatrixRow = (folder: string): RestoreMatrixRow | undefined => RESTORE_MATRIX.find(row => row.folder === folder)
 
 export const verifiedWriteContract = (write: WriteContract): boolean => write.index === "matched" || (write.index === "not-matched" && write.liveVerification?.result === "round-trip-matched" && !!write.documentation && !!write.permissionDocumentation?.length)
+
+/** Only admitted directory operations contribute their delegated scopes to consent. */
+export function admittedDirectoryPermissions(folder: string, action: string): string[] {
+  const restore = restoreMatrixRow(folder)?.directoryRestore
+  if (restore?.phase !== "enabled" || restore.evidence?.[action]?.result !== "round-trip-matched") return []
+  return restore.contracts?.find(contract => contract.action === action)?.delegated ?? []
+}

@@ -11,7 +11,7 @@ it("requests restore permissions only for enabled types, with exactly their leas
     AccessReviewPolicy: "Policy.ReadWrite.AccessReview", CrossTenantAccessPolicy: "Policy.ReadWrite.CrossTenantAccess", AccessPackageCatalogs: "EntitlementManagement.ReadWrite.All",
     EntraCompanyBranding: "OrganizationalBranding.ReadWrite.All", AuthenticationFlowsPolicy: "Policy.ReadWrite.AuthenticationFlows",
   }
-  const directory: Record<string, string[][]> = { Applications: [["Application.ReadWrite.All"]], Users: [["User.Create"], ["User.ReadUpdate.All"], ["User.ReadWrite.All"], ["User.DeleteRestore.All"], ["Application.Read.All"]], Groups: [["Group.ReadWrite.All"], ["GroupMember.ReadWrite.All"], ["User.Read.All"], ["Application.Read.All"], ["Policy.Read.All"], ["RoleManagement.Read.Directory"]] }
+  const directory: Record<string, string[][]> = { Applications: [["Application.ReadWrite.All"]], Users: [["User.Create"], ["User.ReadUpdate.All"], ["User.ReadWrite.All"], ["Application.Read.All"]], Groups: [["Group.ReadWrite.All"], ["GroupMember.ReadWrite.All"], ["User.Read.All"], ["Application.Read.All"], ["Policy.Read.All"], ["RoleManagement.Read.Directory"]] }
   const found: string[] = []
   for (const module of MODULES.filter(module => ["entra", "defender"].includes(module.id))) for (const area of module.areas) for (const part of area.parts) {
     for (const folder of part.folders) {
