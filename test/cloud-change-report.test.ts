@@ -241,6 +241,31 @@ describe.runIf(Boolean(pwsh))("cloud change reports match the desktop app", () =
     }
   }, 60_000)
 
+  it("carries a legacy notice and named read gap into the Azure report and watcher email", () => {
+    const run = runReport("legacy-coverage")
+    const note = JSON.parse(run.writes[0]!.body)
+    const legacy = "An older backup recorded a read failure without identifying the type."
+    expect(note.email.details).toEqual(expect.arrayContaining([
+      { label: "Comparison coverage", value: expect.stringContaining(legacy) },
+      { label: "Types not compared", value: "Device Configurations" },
+    ]))
+    for (const file of note.files) {
+      expect(file.content).toContain(legacy)
+      expect(file.content).toContain("Types not compared: Device Configurations.")
+    }
+    expect(note.files.map((file: { contentType: string }) => file.contentType)).toEqual(["text/html", "text/markdown"])
+    const dir = mkdtempSync(join(tmpdir(), "tv-report-mail-"))
+    try {
+      const path = join(dir, "note.json")
+      writeFileSync(path, JSON.stringify(note))
+      const mail = JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", mailScript, "-NotePath", path, "-TenantId", fixture.tenantId], { encoding: "utf8" }))
+      expect(JSON.stringify(mail)).toContain(legacy)
+      expect(JSON.stringify(mail)).toContain("Device Configurations")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }, 60_000)
+
   it("leaves the report next to the result notes after a backup, compared with the previous complete plain backup", () => {
     const run = runReport()
     // Storage and Graph are only read (GET), and the report is the one write.

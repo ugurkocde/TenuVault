@@ -1,4 +1,4 @@
-import { LEGACY_COMPARISON_NOTICE } from "../intune/backup-read-coverage"
+import { comparisonReadNotices } from "../intune/backup-read-coverage"
 import type { AuditChange, AuditChangeType } from "../notifications/audit"
 import type { Drift, DriftBackupRef, DriftChange, DriftResult, SettingNames } from "../intune/drift"
 import { formatValue, settingLabel } from "../intune/drift-format"
@@ -352,16 +352,8 @@ export function reportHasNoChanges(report: Pick<ChangeReport, "items" | "compari
     && report.comparison.inventory.every(entry => entry.status === "complete" && entry.added + entry.modified + entry.deleted === 0)
 }
 
-function comparisonTypeName(folder: string): string {
-  return folder.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/([A-Z])([A-Z][a-z])/g, "$1 $2")
-}
-
 function readCoverageLines({ comparison }: Pick<ChangeReport, "comparison">): string[] {
-  const folders = comparison?.unknownTypes
-  return [
-    ...(folders?.length ? [`Types not compared: ${folders.map(comparisonTypeName).join(", ")}.`] : []),
-    ...(comparison?.legacyReadFailure ? [LEGACY_COMPARISON_NOTICE] : []),
-  ]
+  return comparisonReadNotices(comparison ?? {})
 }
 
 export function hasExportCoverage({ comparison }: Pick<ChangeReport, "comparison">): boolean {

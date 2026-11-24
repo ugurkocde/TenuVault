@@ -138,6 +138,7 @@ import { firstLaunchProps, isNetworkFolder, rendererEvent } from "./setup-diagno
 import { firstBackupEvent, isSetupError, licenseEvent, licenseFailureEvent, signInEvent } from "./setup-diagnostics/hooks"
 import { WhatsNew } from "./whats-new"
 import { featureRoutes, startFeatures } from "./features"
+import { comparisonReadNotices } from "../shared/intune/backup-read-coverage"
 import { emitBackupOutcome, emitCredentialExpiring, emitDriftOutcome, emitLateBackup, emitRestoreOutcome } from "./features/notifications/producers"
 
 /** A scheduled slot that starts this long after its time was missed, not merely delayed by a queue. */
@@ -790,17 +791,21 @@ async function bootstrap(): Promise<void> {
     notify: (job) => {
       void (async () => {
         let localNotified = false
+        const saved = job.status === "completed" ? driftJobs.result(job.tenantId) : null
+        const scan = saved?.jobId === job.jobId ? saved : null
+        const coverage = {
+          unknownTypes: [...new Set([...scan?.unknownTypes ?? [], ...scan?.largeFolders ?? []])],
+          legacyReadFailure: scan?.legacyReadFailure,
+        }
         if (job.status === "completed" && job.summary) {
-          const saved = driftJobs.result(job.tenantId)
-          const items = saved && saved.jobId === job.jobId
-            ? saved.drifts.slice(0, 20).map((drift) => ({ title: `${drift.changeType}: ${drift.configName}`, detail: drift.type }))
-            : undefined
+          const items = scan?.drifts.slice(0, 20).map((drift) => ({ title: `${drift.changeType}: ${drift.configName}`, detail: drift.type }))
           const result = await emitDriftOutcome(featureDeps, job.tenantId, {
             jobId: job.jobId,
             finishedAt: job.finishedAt ?? new Date().toISOString(),
             added: job.summary.added,
             modified: job.summary.modified,
             deleted: job.summary.deleted,
+            ...coverage,
             items,
           }).catch(() => ({ created: 0, localCreated: false }))
           localNotified = result.localCreated
@@ -810,7 +815,7 @@ async function bootstrap(): Promise<void> {
         const tenant = tenantProfile(job.tenantId)?.name ?? "your tenant"
         const notification = new Notification({
           title: job.status === "completed" ? "Drift scan ready" : "Drift scan failed",
-          body: job.status === "completed" ? `The backups of ${tenant} were compared. Click to review the drift.` : job.error ?? "Open TenuVault for details.",
+          body: job.status === "completed" ? [`The backups of ${tenant} were compared. Click to review the drift.`, ...comparisonReadNotices(coverage)].join(" ") : job.error ?? "Open TenuVault for details.",
         })
         notification.on("click", () => {
           showWindow()

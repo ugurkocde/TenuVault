@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { afterScheduledBackup, MAX_AUDIT_EVENTS, MAX_REPORTS, readAudit, retentionStart, routes } from "../src/main/features/reports"
 import { DOMAINS } from "../src/main/features/domains"
 import type { Drift, DriftResult } from "../src/shared/intune/drift"
@@ -169,6 +169,28 @@ describe("change reports route", () => {
     expect(markdown.body.data).toContain("# Changes in Tenant 1111")
     const json = await call(w.routes, PATH, { tenantId: TENANT_A, action: "get-export", reportId: report.id, format: "json" })
     expect(JSON.parse(json.body.data).schemaVersion).toBe(1)
+  })
+
+  it("keeps legacy and named read coverage in the email, PDF input, Markdown and JSON report", async () => {
+    const w = world({ drift: { ...driftResult(), legacyReadFailure: true, unknownTypes: ["CompliancePolicies"] } })
+    const print = vi.fn(async (_html: string) => new Uint8Array(PDF))
+    w.deps.printPdf = print
+    const report = await generate(w)
+    const exportReport = (format: string) => call(w.routes, PATH, { tenantId: TENANT_A, action: "get-export", reportId: report.id, format })
+    expect((await exportReport("pdf")).status).toBe(200)
+    const legacy = "An older backup recorded a read failure without identifying the type."
+    const named = "Types not compared: Compliance Policies."
+    const markdown = (await exportReport("markdown")).body.data
+    for (const output of [print.mock.calls[0]?.[0], markdown]) {
+      expect(output).toContain(legacy)
+      expect(output).toContain(named)
+    }
+    expect(JSON.parse((await exportReport("json")).body.data).comparison).toMatchObject({ unknownTypes: ["CompliancePolicies"], legacyReadFailure: true })
+    const sent = await call(w.routes, PATH, { tenantId: TENANT_A, action: "send", reportId: report.id, recipients: [{ type: "address", address: "ops@contoso.test" }] })
+    expect(sent.status).toBe(200)
+    const mail = w.graphCalls.find(entry => entry.path === "me/sendMail")
+    expect(mail?.body.message.body.content).toContain(legacy)
+    expect(mail?.body.message.body.content).toMatch(/<b[^>]*>Types not compared<\/b>|<[^>]*>Types not compared<\//)
   })
 
   it("sends the report with the PDF attached and records the send", async () => {

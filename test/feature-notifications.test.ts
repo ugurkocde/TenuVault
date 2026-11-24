@@ -9,7 +9,7 @@ import { DOMAINS } from "../src/main/features/domains"
 import { TenantRecords, type Stored } from "../src/main/features/records"
 import { SecureStore } from "../src/main/storage/secure-store"
 import { channelsOf, checkWatcher, flushOutbox, outboxOf, pollAuditWatch, saveAuditWatch, signBody, tick } from "../src/main/features/notifications/service"
-import { emitBackupOutcome, emitCredentialExpiring, emitLateBackup } from "../src/main/features/notifications/producers"
+import { emitBackupOutcome, emitCredentialExpiring, emitDriftOutcome, emitLateBackup } from "../src/main/features/notifications/producers"
 import type { ChannelRecord } from "../src/main/features/notifications/model"
 import { call, fakeDeps, TENANT_A, TENANT_B } from "./feature-helpers"
 import fixture from "./fixtures/notifications/audit-digest.json"
@@ -179,6 +179,38 @@ describe("notification channels and rules", () => {
     expect(headers["x-tenuvault-signature"]).toBe(signBody("signing-secret", timestamp, body))
     expect(headers["x-tenuvault-signature"]).toBe(createHmac("sha256", "signing-secret").update(`${timestamp}.${body}`).digest("hex"))
     expect(outboxOf(w.deps, TENANT_A)[0]?.state).toBe("sent")
+  })
+
+  it("includes unread coverage in local, Teams, webhook and email drift alerts", async () => {
+    const graph = vi.fn(async (_method: string, _path: string, _body?: unknown) => ({ status: 202, body: {} }))
+    const w = world({ graph: () => graph })
+    const notifyLocal = vi.fn()
+    w.deps.notify = notifyLocal
+    const webhook = await addWebhook(w)
+    const channels = await Promise.all([
+      { kind: "local" },
+      { kind: "teams", url: "https://prod-00.westus.logic.azure.com/workflows/abc" },
+      { kind: "email", recipients: [{ type: "address", address: "ops@contoso.test" }] },
+    ].map(channel => call(w.routes, PATH, { tenantId: TENANT_A, action: "add-channel", ...channel })))
+    for (const channel of channels) expect(channel.status).toBe(200)
+    await addRule(w, [webhook.id, ...channels.map(channel => channel.body.channel.id)])
+    const layout = await call(w.routes, PATH, { tenantId: TENANT_A, action: "save-card-layout", layout: { base: { hidden: ["summary", "details"] } } })
+    expect(layout.status).toBe(200)
+    const outcome = {
+      jobId: "incomplete", finishedAt: NOW.toISOString(), added: 0, modified: 0, deleted: 1,
+      unknownTypes: ["DeviceConfigurations", "Users"], legacyReadFailure: true,
+    }
+    expect(await emitDriftOutcome(w.deps, TENANT_A, outcome)).toEqual({ created: 4, localCreated: true })
+    const mail = graph.mock.calls.find(([, path]) => path === "me/sendMail")
+    const payloads = [JSON.stringify(notifyLocal.mock.calls), ...w.posts.map(post => String(post.init.body)), JSON.stringify(mail)]
+    expect(payloads).toHaveLength(4)
+    expect(JSON.parse(String(w.posts.find(post => post.url.includes("hooks.example.test"))?.init.body)).summary).toContain("1 deleted")
+    for (const payload of payloads) {
+      expect(payload).toContain("An older backup recorded a read failure without identifying the type")
+      expect(payload).toContain("Device Configurations")
+      expect(payload).toContain("Users")
+    }
+    expect(await emitDriftOutcome(w.deps, TENANT_A, { ...outcome, jobId: "coverage-only", deleted: 0 })).toEqual({ created: 4, localCreated: true })
   })
 
   it("dedupes the same event and retries failures from the outbox", async () => {

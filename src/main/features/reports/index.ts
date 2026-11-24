@@ -1,3 +1,4 @@
+import { comparisonReadDetails } from "../../../shared/intune/backup-read-coverage"
 import type { RouteModule } from "../../api/host"
 import { allows } from "../../../shared/plans"
 import { AuditEventType } from "../../../portal/lib/audit/types"
@@ -463,6 +464,13 @@ export function reportEmail(record: Pick<ReportRecord, "report">, attachmentNote
       { label: "Changed", value: String(report.summary.modified) },
       { label: "Added", value: String(report.summary.added) },
       { label: "Deleted", value: String(report.summary.deleted) },
+      ...comparisonReadDetails({
+        legacyReadFailure: report.comparison?.legacyReadFailure,
+        unknownTypes: [...new Set([
+          ...report.comparison?.unknownTypes ?? [],
+          ...report.comparison?.inventory.filter(entry => entry.status !== "complete").map(entry => entry.folder) ?? [],
+        ])],
+      }),
     ],
     items: report.items.slice(0, 20).map((item) => ({
       title: `${verbs[item.change]}: ${item.name}`,

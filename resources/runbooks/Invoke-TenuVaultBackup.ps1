@@ -2372,11 +2372,11 @@ function Get-TvReportTitle {
 
 function Get-TvReadCoverageLines {
     param([Parameter(Mandatory)][object]$Report)
+    if ($Report.comparison.legacyReadFailure) { "An older backup recorded a read failure without identifying the type. Some reported deletions may be policies that failed to read." }
     if ($Report.comparison.unknownTypes.Count) {
         $names = $Report.comparison.unknownTypes | ForEach-Object { $_ -creplace '([a-z0-9])([A-Z])', '$1 $2' -creplace '([A-Z])([A-Z][a-z])', '$1 $2' }
         "Types not compared: $($names -join ', ')."
     }
-    if ($Report.comparison.legacyReadFailure) { "An older backup recorded a read failure without identifying the type. Some reported deletions may be policies that failed to read." }
 }
 
 function Test-TvExportCoverage {
@@ -2845,6 +2845,23 @@ function Get-TvReportEmail {
         if ($first) { $entry.at = $first.at }
         $entry
     })
+    # The summary is capped by the watcher. Keep coverage in bounded facts as well.
+    $coverage = @(
+        if ($Report.comparison.legacyReadFailure) {
+            [ordered]@{ label = "Comparison coverage"; value = @(Get-TvReadCoverageLines $Report)[0] }
+        }
+        $folders = @($Report.comparison.unknownTypes) + @($Report.comparison.inventory | Where-Object { $_.status -ne "complete" } | ForEach-Object { $_.folder })
+        $line = ""
+        foreach ($folder in @($folders | Where-Object { $_ } | Select-Object -Unique)) {
+            $name = $folder -creplace '([a-z0-9])([A-Z])', '$1 $2' -creplace '([A-Z])([A-Z][a-z])', '$1 $2'
+            if ($line -and ($line.Length + $name.Length + 2) -gt 500) {
+                [ordered]@{ label = "Types not compared"; value = $line }
+                $line = ""
+            }
+            $line = if ($line) { "$line, $name" } else { $name }
+        }
+        if ($line) { [ordered]@{ label = "Types not compared"; value = $line } }
+    )
     return [ordered]@{
         severity = if ($s.deleted -gt 0 -or $s.critical -gt 0) { "warning" } else { "info" }
         title = Get-TvEmailText (Get-TvReportTitle $Report) 400
@@ -2858,7 +2875,7 @@ function Get-TvReportEmail {
             [ordered]@{ label = "Changed"; value = [string]$s.modified },
             [ordered]@{ label = "Added"; value = [string]$s.added },
             [ordered]@{ label = "Deleted"; value = [string]$s.deleted }
-        )
+        ) + $coverage
         items = $items
         moreCount = [Math]::Max(0, @($Report.items).Count - 20)
     }

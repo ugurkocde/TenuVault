@@ -23,6 +23,11 @@ if ($Scenario -like "inventory-*") {
     }
     if ($Scenario -eq "inventory-inline") { $fixture.older.metadata["LargeItems"] = @{ Groups = @{ complete = $true } } }
 }
+if ($Scenario -eq "legacy-coverage") {
+    $fixture.newer.metadata["Failures"] = 2
+    $fixture.newer.metadata["FailedTypes"] = @("DeviceConfigurations")
+    $fixture.newer.metadata["Status"] = "CompletedWithWarnings"
+}
 $tenant = [string]$fixture.tenantId
 $other = "11111111-1111-1111-1111-111111111111"
 $account = "tvteststore"

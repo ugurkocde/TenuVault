@@ -1,3 +1,4 @@
+import type { ComparisonCoverageNotice } from "../../../shared/intune/backup-read-coverage"
 import { backupEvent, credentialExpiringEvent, driftEvent, lateBackupEvent, restoreEvent } from "../../../shared/notifications/envelope"
 import type { Coverage } from "../../../shared/backup-outcomes"
 import { allows } from "../../../shared/plans"
@@ -67,7 +68,7 @@ export async function emitBackupOutcome(deps: FeatureDeps, tenantId: string, out
   return { created: detailed.created, localCreated: localCreated(deps, tenantId, detailed.coveredChannelIds) }
 }
 
-export interface DriftOutcome {
+export interface DriftOutcome extends ComparisonCoverageNotice {
   jobId: string
   finishedAt: string
   added: number
@@ -76,19 +77,15 @@ export interface DriftOutcome {
   items?: Array<{ title: string; detail?: string }>
 }
 
-/** Emits drift.detected, except when nothing changed: silence is the correct signal then. */
+/** A scan with neither changes nor coverage gaps stays quiet. */
 export async function emitDriftOutcome(deps: FeatureDeps, tenantId: string, outcome: DriftOutcome, options: NotificationOptions = {}): Promise<ProducerResult> {
-  if (outcome.added + outcome.modified + outcome.deleted === 0) return { created: 0, localCreated: false }
+  if (outcome.added + outcome.modified + outcome.deleted === 0 && !outcome.legacyReadFailure && !outcome.unknownTypes?.length) return { created: 0, localCreated: false }
   if (!(await licensed(deps, tenantId))) return { created: 0, localCreated: false }
   const envelope = driftEvent({
     tenantId,
     tenantName: deps.tenant(tenantId)?.name ?? null,
     occurredAt: outcome.finishedAt,
-    jobId: outcome.jobId,
-    added: outcome.added,
-    modified: outcome.modified,
-    deleted: outcome.deleted,
-    items: outcome.items,
+    ...outcome,
     source: "desktop",
   })
   const detailed = await emitDetailed(deps, tenantId, envelope, options)

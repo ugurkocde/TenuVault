@@ -1,3 +1,5 @@
+import { comparisonReadDetails, type ComparisonCoverageNotice } from "../intune/backup-read-coverage"
+
 /**
  * The one notification event model shared by the desktop app and the Azure watcher
  * runbook. Producers build envelopes; channels only render them. The PowerShell watcher
@@ -233,7 +235,7 @@ export function missedBackupEvent(input: { tenantId: string; tenantName?: string
   })
 }
 
-export interface DriftEventInput {
+export interface DriftEventInput extends ComparisonCoverageNotice {
   tenantId: string
   tenantName?: string | null
   occurredAt: string
@@ -248,19 +250,21 @@ export interface DriftEventInput {
 export function driftEvent(input: DriftEventInput): NotificationEnvelope {
   const total = input.added + input.modified + input.deleted
   const tenantLabel = input.tenantName ?? "your tenant"
+  const coverage = comparisonReadDetails(input)
   return buildEnvelope({
     type: "drift.detected",
-    severity: input.deleted > 0 ? "warning" : "info",
+    severity: input.deleted > 0 || coverage.length ? "warning" : "info",
     tenantId: input.tenantId,
     tenantName: input.tenantName,
     occurredAt: input.occurredAt,
     naturalKey: input.jobId,
-    title: `Drift detected: ${tenantLabel}`,
+    title: total === 0 && coverage.length ? `Incomplete drift comparison: ${tenantLabel}` : `Drift detected: ${tenantLabel}`,
     summary: `${total} ${total === 1 ? "change" : "changes"} between the compared backups (${input.added} added, ${input.modified} modified, ${input.deleted} deleted).`,
     details: [
       { label: "Added", value: String(input.added) },
       { label: "Modified", value: String(input.modified) },
       { label: "Deleted", value: String(input.deleted) },
+      ...coverage,
     ],
     items: input.items,
     moreCount: Math.max(0, total - (input.items?.length ?? 0)),

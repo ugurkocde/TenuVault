@@ -14,6 +14,41 @@ export interface BackupReadMetadata extends ScopeMetadata {
 
 export const LEGACY_COMPARISON_NOTICE = "An older backup recorded a read failure without identifying the type. Some reported deletions may be policies that failed to read."
 
+export interface ComparisonCoverageNotice {
+  unknownTypes?: string[]
+  legacyReadFailure?: boolean
+}
+
+export function comparisonTypeName(folder: string): string {
+  return folder.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/([A-Z])([A-Z][a-z])/g, "$1 $2")
+}
+
+export function comparisonReadNotices(coverage: ComparisonCoverageNotice): string[] {
+  return [
+    ...(coverage.legacyReadFailure ? [LEGACY_COMPARISON_NOTICE] : []),
+    ...(coverage.unknownTypes?.length ? [`Types not compared: ${coverage.unknownTypes.map(comparisonTypeName).join(", ")}.`] : []),
+  ]
+}
+
+export const COMPARISON_COVERAGE_DETAIL = "Comparison coverage"
+
+/** Keep full type names within the notification envelope's detail limit. */
+export function comparisonReadDetails(coverage: ComparisonCoverageNotice): Array<{ label: string; value: string }> {
+  const details = coverage.legacyReadFailure ? [{ label: COMPARISON_COVERAGE_DETAIL, value: LEGACY_COMPARISON_NOTICE }] : []
+  const label = "Types not compared"
+  let value = ""
+  for (const folder of coverage.unknownTypes ?? []) {
+    const name = comparisonTypeName(folder)
+    if (value && value.length + name.length + 2 > 500) {
+      details.push({ label, value })
+      value = ""
+    }
+    value = value ? `${value}, ${name}` : name
+  }
+  if (value) details.push({ label, value })
+  return details
+}
+
 /** Attempted folders plus types skipped before the engine made its read list. */
 export function recordedBackupTypes(metadata: BackupReadMetadata | null | undefined): string[] | undefined {
   const included = metadata?.Scope?.Included
