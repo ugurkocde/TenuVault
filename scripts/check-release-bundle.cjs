@@ -23,6 +23,7 @@ function checkReleaseBundle(root, version = require("../package.json").version) 
     const path = join(entry.parentPath, entry.name)
     const contents = readFileSync(path, "utf8")
     checkPrivilegedRestoreOff(contents, path)
+    // Dispatch checks and the stable pack snapshot in test/final-scope.test.ts enforce the stable scope.
     if (contents.includes("expanded-entra-lab-scope")) throw new Error(`Expanded Entra scope found in release bundle: ${path}`)
     if (labMarkers.test(contents) || labFixture.test(contents) || labVersion.test(contents)) throw new Error(`Lab build content found in release bundle: ${path}`)
   }
