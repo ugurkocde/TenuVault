@@ -1,6 +1,7 @@
 import { createHmac } from "node:crypto"
 import { describe, expect, it } from "vitest"
 import { routes } from "../src/main/features/notifications"
+import { GRAPH_CLI_CLIENT_ID } from "../src/shared/tenant-connection"
 import { DOMAINS } from "../src/main/features/domains"
 import { channelsOf, checkWatcher, flushOutbox, outboxOf, pollAuditWatch, saveAuditWatch, signBody, tick } from "../src/main/features/notifications/service"
 import { emitBackupOutcome, emitCredentialExpiring, emitLateBackup } from "../src/main/features/notifications/producers"
@@ -154,6 +155,28 @@ describe("notification channels and rules", () => {
     await addRule(w, [channel.id], { minSeverity: "critical" })
     expect((await emitBackupOutcome(w.deps, TENANT_A, { status: "Success", backupFolder: "backup-ok", finishedAt: NOW.toISOString(), trigger: "manual" })).created).toBe(0)
     expect(w.posts).toHaveLength(0)
+  })
+
+  it.each([
+    ["an own registration", "99999999-9999-4999-8999-999999999999", "Test administrator"],
+    ["Start now", GRAPH_CLI_CLIENT_ID, "Test administrator"],
+    ["Start now without a display name", GRAPH_CLI_CLIENT_ID, "tester@example.test"],
+  ])("keeps test attribution in channel history with %s", async (_method, clientId, name) => {
+    const w = world()
+    const originalProfile = w.deps.tenant(TENANT_A)!
+    w.deps.tenant = () => ({ ...originalProfile, clientId })
+    w.deps.actor = () => ({ id: "tester@example.test", name })
+    const channel = await addWebhook(w)
+    const rule = await addRule(w, [channel.id])
+    const tested = await call(w.routes, PATH, { tenantId: TENANT_A, action: "test-channel", channelId: channel.id })
+    expect(tested.body.channel.history.at(-1)).toMatchObject({ actor: name, reason: "Test delivery succeeded" })
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "test-rule", ruleId: rule.id })
+    expect(channelsOf(w.deps, TENANT_A)[0]!.history.at(-1)).toMatchObject({ actor: name, reason: expect.stringContaining("delivered") })
+    expect(w.posts).toHaveLength(2)
+    for (const post of w.posts) expect(String(post.init.body)).not.toContain(name)
+    const exported = await call(w.routes, PATH, { tenantId: TENANT_A, action: "export-watcher-alerts" })
+    expect(exported.body.document.alerts).toHaveLength(1)
+    expect(exported.body.json).not.toContain(name)
   })
 
   it("test send delivers once and records the result", async () => {

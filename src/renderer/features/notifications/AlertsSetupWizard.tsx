@@ -12,7 +12,8 @@ import { bridge } from "../../lib/bridge"
 import { settingsHref } from "../../lib/settings-section"
 import { toast } from "../../lib/toast"
 import { CHANNEL_KIND_LABELS, notificationsApi, type NotificationsStatus, type WatcherDeployView, type WatcherPreflight } from "./api"
-import { useOptionalPermission } from "./optional-permissions"
+import { startNowTenantId, StartNowUpgradeLinks } from "../../components/StartNowNotice"
+import { START_NOW_EMAIL_NOTICE, useOptionalPermission } from "./optional-permissions"
 import { WatcherDeployProgress } from "./WatcherDeployProgress"
 
 type Destination = "existing" | "local" | "teams" | "email"
@@ -140,6 +141,7 @@ function OptionCard({ name, selected, disabled, onSelect, icon, title, descripti
 
 /** The guided first setup. Advanced options stay in the tabs; this only makes the calls they make, in order. */
 export function SetupWizard({ tenant, data, onClose, onChanged }: { tenant: Tenant; data: NotificationsStatus; onClose: () => void; onChanged: () => void }) {
+  const startNow = startNowTenantId(tenant.credentials)
   const enabledChannels = data.channels.filter((channel) => channel.enabled)
   const activeDeploy = data.watcherDeploy && data.watcherDeploy.state !== "complete" && data.watcherDeploy.state !== "cancelled" ? data.watcherDeploy : null
   const [step, setStep] = useState(activeDeploy ? 4 : 0)
@@ -477,7 +479,8 @@ export function SetupWizard({ tenant, data, onClose, onChanged }: { tenant: Tena
                   Send to
                   <Input className="mt-1" type="email" autoComplete="email" spellCheck={false} disabled={destinationLocked} placeholder="name@contoso.com" value={email} onChange={(event) => setEmail(event.target.value)} />
                 </label>
-                {mailPermission?.granted === false && (
+                {startNow && <StartNowUpgradeLinks tenantId={startNow} message={START_NOW_EMAIL_NOTICE} />}
+                {!startNow && mailPermission?.granted === false && (
                   <p className="flex gap-2 text-sm text-amber-800 dark:text-amber-200" role="status">
                     <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
                     <span>Your sign-in does not carry {mailPermission.missing.join(", ")} yet, so mail would fail. You can finish the setup now and fix this after: add the permission to the app registration in Entra, grant admin consent and sign in again.</span>

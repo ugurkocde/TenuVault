@@ -27,3 +27,5 @@ export function useOptionalPermission(tenant: Tenant | PermissionTenant | null, 
   const query = useQuery(servicesStatusOptions(credentials))
   return query.data?.optional?.find(entry => entry.id === id) ?? null
 }
+
+export const START_NOW_EMAIL_NOTICE = "Start now cannot send email alerts. Choose another sign-in method to send email."

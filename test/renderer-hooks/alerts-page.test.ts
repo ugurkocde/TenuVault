@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import type { Tenant } from "../../src/portal/contexts/TenantContext"
 import type { NotificationRule, NotificationsStatus, PublicChannel, WatcherDeployView } from "../../src/renderer/features/notifications/api"
+import { GRAPH_CLI_CLIENT_ID, GRAPH_CLI_UPGRADE, OWN_APP_UPGRADE } from "../../src/shared/tenant-connection"
 import { optionalPermissionStatus, type OptionalPermissionId } from "../../src/shared/services/optional-permissions"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -57,8 +58,9 @@ vi.mock("../../src/renderer/features/notifications/api", async (original) => ({
 }))
 vi.mock("../../src/portal/contexts/TenantContext", () => ({ useTenants: () => [] }))
 vi.mock("../../src/renderer/lib/toast", () => ({ toast: () => undefined }))
-vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { license: { open: vi.fn() }, app: { openExternal: async (url: string) => { opened.push(url) } } } }))
-vi.mock("../../src/renderer/features/notifications/optional-permissions", () => ({
+vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { auth: { packConsentPlan: async () => ({ packs: [] }) }, license: { open: vi.fn() }, app: { openExternal: async (url: string) => { opened.push(url) } } } }))
+vi.mock("../../src/renderer/features/notifications/optional-permissions", async (original) => ({
+  ...(await original<typeof import("../../src/renderer/features/notifications/optional-permissions")>()),
   useOptionalPermission: (_tenant: Tenant, id: OptionalPermissionId) => permissionState.scopes
     ? optionalPermissionStatus({ kind: "delegated", permissions: new Set(permissionState.scopes) }).find((entry) => entry.id === id)
     : null,
@@ -95,6 +97,21 @@ describe("the Alerts page", () => {
     const hub = HUBS.find((entry) => entry.id === "alerts")!
     expect(hub.tabs.map((tab) => tab.id)).toEqual(["alerts", "channels", "watching", "deliveries"])
     expect(new Set(hub.tabs.map((tab) => tab.feature))).toEqual(new Set(["notifications"]))
+  })
+
+  it.each([
+    ["Alerts", AlertsTab], ["Channels", ChannelsTab], ["Change watching", WatchingTab],
+  ] as const)("offers sign-in upgrades on %s for Start now", async (_label, tab) => {
+    permissionState.scopes = ["Policy.Read.All"]
+    state.status = { ...empty, channels: [{ ...teams, kind: "email", recipients: [{ type: "address", address: "ops@example.test" }] }] }
+    const startNow = { ...tenant, credentials: { ...tenant.credentials!, appId: GRAPH_CLI_CLIENT_ID } }
+    const container = await render(tab, true, "/portal/alerts", startNow)
+    for (let attempt = 0; attempt < 20 && !container.textContent?.includes(GRAPH_CLI_UPGRADE); attempt++) {
+      await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+    }
+    expect(container.textContent).toContain(GRAPH_CLI_UPGRADE)
+    expect(container.textContent).toContain(OWN_APP_UPGRADE)
+    expect(container.textContent).not.toContain("grant admin consent")
   })
 
   it("lets a first alert start without a channel: the dialog adds one", async () => {

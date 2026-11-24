@@ -24,7 +24,8 @@ import { bridge } from "../../lib/bridge"
 import type { FeatureTabProps } from "../types"
 import { TeamsCardTile } from "./CardLayoutEditor"
 import { SetupStatusCard, SetupWizardButton } from "./AlertsSetupWizard"
-import { useOptionalPermission } from "./optional-permissions"
+import { startNowTenantId, StartNowUpgradeLinks } from "../../components/StartNowNotice"
+import { START_NOW_EMAIL_NOTICE, useOptionalPermission } from "./optional-permissions"
 import type { OptionalPermissionStatus } from "../../../shared/services/optional-permissions"
 import {
   categoryLabel,
@@ -111,6 +112,8 @@ function DocsLink({ section, children }: { section: AlertsDocsSection; children:
 
 export function AlertsTab({ tenant, plan, allowed }: FeatureTabProps) {
   // "Alert me about this policy" elsewhere in the app opens this tab with a prefilled alert.
+  const startNow = startNowTenantId(tenant.credentials)
+  const auditLog = useOptionalPermission(tenant, "conditionalAccessWatching")
   const [params, setParams] = useSearchParams()
   const alertFor = params.get("alertFor")
   const prefill: AlertDraft | null = alertFor
@@ -129,6 +132,11 @@ export function AlertsTab({ tenant, plan, allowed }: FeatureTabProps) {
         <div className="space-y-4">
           <SetupStatusCard tenant={tenant} data={data} onChanged={refresh} />
           <p className="text-sm text-gray-700" role="note">{data.runtimeNote} <DocsLink section="alerts-while-this-computer-is-off-the-azure-watcher">Set up the Azure watcher</DocsLink></p>
+          {startNow && data.channels.some(channel => channel.kind === "email" && channel.enabled)
+            ? <StartNowUpgradeLinks tenantId={startNow} message={START_NOW_EMAIL_NOTICE} />
+            : startNow && auditLog?.granted === false && data.auditWatch?.conditionalAccess?.enabled
+              ? <StartNowUpgradeLinks tenantId={startNow} message="This Start now sign-in lacks the permission for Conditional Access change watching." />
+              : null}
           <WatcherSyncCard tenant={tenant} data={data} onChanged={refresh} />
           <RulesTile tenant={tenant} data={data} plan={plan} prefill={prefill} onPrefillUsed={() => setParams({}, { replace: true })} onChanged={refresh} />
         </div>
@@ -345,7 +353,8 @@ function ChannelRow({ tenant, channel, licensed, ruleCount, onChanged, onEdit, o
   // Called for every row (hooks cannot be conditional); only email rows use the answer.
   const mailPermission = useOptionalPermission(tenant, "notificationEmail")
   const groupWarning = useGroupRecipientPermissionWarning(tenant)
-  const mailWarning = channel.kind !== "email"
+  const startNow = startNowTenantId(tenant.credentials)
+  const mailWarning = channel.kind !== "email" || startNow
     ? null
     : mailPermission?.granted === false
       ? `Your sign-in does not carry ${mailPermission.missing.join(", ")} yet, so mail from this channel, including a test, fails. Add it to the app registration in Entra, grant admin consent and sign in again.`
@@ -366,6 +375,7 @@ function ChannelRow({ tenant, channel, licensed, ruleCount, onChanged, onEdit, o
       <p className={last && !last.ok ? "text-sm text-red-700" : "text-sm text-gray-600"} role={last && !last.ok ? "status" : undefined}>
         {last ? `${last.ok ? "Last delivery succeeded" : `Last delivery failed after ${last.attempts} attempts: ${last.error ?? "unknown error"}`} (${formatTime(last.at)}${last.test ? ", test" : ""})` : "Nothing delivered yet."}
       </p>
+      {startNow && channel.kind === "email" && <StartNowUpgradeLinks tenantId={startNow} message={START_NOW_EMAIL_NOTICE} />}
       {mailWarning && <p className="text-xs text-amber-700" role="status">{mailWarning}</p>}
       <div className="flex flex-wrap gap-2">
         <Button type="button" size="sm" variant="outline" onClick={() => update.mutate(!channel.enabled)} disabled={update.isPending || (!licensed && !channel.enabled)}>{channel.enabled ? "Turn off" : "Turn on"}</Button>
@@ -485,6 +495,7 @@ function useGroupRecipientPermissionWarning(tenant: Tenant): string | null {
 function ChannelDialog({ tenant, channel, open, onClose, onSaved }: { tenant: Tenant; channel?: PublicChannel; open: boolean; onClose: () => void; onSaved: (channel?: PublicChannel) => void }) {
   const mailPermission = useOptionalPermission(tenant, "notificationEmail")
   const groupWarning = useGroupRecipientPermissionWarning(tenant)
+  const startNow = startNowTenantId(tenant.credentials)
   const editing = Boolean(channel)
   const [kind, setKind] = useState<ChannelKind>(channel?.kind ?? "teams")
   const [title, setTitle] = useState(channel?.title ?? "")
@@ -613,8 +624,9 @@ function ChannelDialog({ tenant, channel, open, onClose, onSaved }: { tenant: Te
             <>
               <RecipientRows tenant={tenant} rows={rows} onChange={setRows} />
               <p className="text-xs text-gray-500">Mail is sent through Microsoft Graph as the account you are signed in with for this tenant, and is not kept in Sent Items.</p>
-              {mailPermission?.granted === false && <p className="text-xs text-amber-700" role="status">Your sign-in does not carry {mailPermission.missing.join(", ")} yet, so mail would fail. Add it to the app registration in Entra (setup switch {mailPermission.setupSwitch} for a new one), grant admin consent and sign in again.</p>}
-              {groupWarning && rows.some((row) => row.type === "group") && <p className="text-xs text-amber-700" role="status">{groupWarning}</p>}
+              {startNow && <StartNowUpgradeLinks tenantId={startNow} message={START_NOW_EMAIL_NOTICE} />}
+              {!startNow && mailPermission?.granted === false && <p className="text-xs text-amber-700" role="status">Your sign-in does not carry {mailPermission.missing.join(", ")} yet, so mail would fail. Add it to the app registration in Entra (setup switch {mailPermission.setupSwitch} for a new one), grant admin consent and sign in again.</p>}
+              {!startNow && groupWarning && rows.some((row) => row.type === "group") && <p className="text-xs text-amber-700" role="status">{groupWarning}</p>}
             </>
           )}
           <div className="flex flex-wrap justify-end gap-2">
@@ -641,6 +653,7 @@ interface AlertBlocker {
  */
 function useAlertBlockers(tenant: Tenant, data: NotificationsStatus, onChanged: () => void): (rule: Pick<NotificationRule, "enabled" | "eventTypes">) => AlertBlocker[] {
   const auditLog = useOptionalPermission(tenant, "conditionalAccessWatching")
+  const startNow = startNowTenantId(tenant.credentials)
   const watch = data.auditWatch
   const turnOn = (body: { enabled?: boolean; conditionalAccessEnabled?: boolean }, what: string) => async () => {
     try {
@@ -659,7 +672,9 @@ function useAlertBlockers(tenant: Tenant, data: NotificationsStatus, onChanged: 
     if (intune && !watch?.enabled) blockers.push({ message: "Intune change watching is off, so this alert gets no Intune changes.", fix: { label: "Turn on Intune watching", run: turnOn({ enabled: true }, "Intune") } })
     else if (intune && watch?.lastError) blockers.push({ message: `The last Intune check failed: ${watch.lastError}`, href: { label: "Open Change watching", to: ALERTS_TAB_HREF.watching } })
     if (ca && !watch?.conditionalAccess?.enabled) blockers.push({ message: "Conditional Access change watching is off, so this alert gets no Conditional Access changes.", fix: { label: "Turn on Conditional Access watching", run: turnOn({ conditionalAccessEnabled: true }, "Conditional Access") } })
-    else if (ca && auditLog?.granted === false) blockers.push({ message: `Your sign-in does not carry ${auditLog.missing.join(", ")}, which Conditional Access watching needs. Add it to the app registration in Entra, grant admin consent and sign in again.` })
+    else if (ca && auditLog?.granted === false) blockers.push(startNow
+      ? { message: "This Start now sign-in cannot read the Conditional Access audit log.", href: { label: "Open Change watching", to: ALERTS_TAB_HREF.watching } }
+      : { message: `Your sign-in does not carry ${auditLog.missing.join(", ")}, which Conditional Access watching needs. Add it to the app registration in Entra, grant admin consent and sign in again.` })
     else if (ca && watch?.conditionalAccess?.lastError) blockers.push({ message: `The last Conditional Access check failed: ${watch.conditionalAccess.lastError}`, href: { label: "Open Change watching", to: ALERTS_TAB_HREF.watching } })
     if ((intune || ca) && data.signedIn === false) blockers.push({ message: "This computer is signed out of the tenant, so change watching waits until you sign in.", href: { label: "Open sign-in", to: settingsHref("signin") } })
     return blockers
@@ -1358,6 +1373,7 @@ function AuditWatchTile({ tenant, auditWatch, licensed, onChanged }: { tenant: T
   }, [stored])
 
   const auditLogPermission = useOptionalPermission(tenant, "conditionalAccessWatching")
+  const startNow = startNowTenantId(tenant.credentials)
   const savedOn = Boolean(auditWatch?.enabled || auditWatch?.conditionalAccess?.enabled)
   // Without entitlement the only save allowed is turning watching off, through the free revoke action.
   const turningOff = !licensed && savedOn && !enabled && !caEnabled
@@ -1422,8 +1438,10 @@ function AuditWatchTile({ tenant, auditWatch, licensed, onChanged }: { tenant: T
             <ServiceCard
               title="Conditional Access"
               description="Policies, named locations and authentication strengths, from the Entra audit log."
-              requirement="Needs the delegated AuditLog.Read.All permission (setup switch -IncludeAuditLog) and a role that can read audit logs, such as Security Reader."
-              permission={auditLogPermission}
+              requirement={startNow
+                ? "Needs AuditLog.Read.All and a role that can read audit logs, such as Security Reader."
+                : "Needs the delegated AuditLog.Read.All permission (setup switch -IncludeAuditLog) and a role that can read audit logs, such as Security Reader."}
+              permission={startNow && auditLogPermission?.granted === false ? null : auditLogPermission}
               checked={caEnabled}
               disabled={!licensed && !auditWatch?.conditionalAccess?.enabled}
               onChange={setCaEnabled}
@@ -1431,6 +1449,7 @@ function AuditWatchTile({ tenant, auditWatch, licensed, onChanged }: { tenant: T
               lastError={auditWatch?.conditionalAccess?.enabled ? auditWatch.conditionalAccess.lastError : null}
             />
           </div>
+          {startNow && auditLogPermission?.granted === false && <StartNowUpgradeLinks tenantId={startNow} message="This Start now sign-in lacks the permission for Conditional Access change watching." />}
         </fieldset>
         {!licensed && savedOn && <p className="text-xs text-gray-500" role="note">This tenant no longer includes notifications. You can still turn change watching off here; turning it back on needs the plan.</p>}
         <div className="space-y-1">

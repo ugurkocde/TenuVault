@@ -13,6 +13,10 @@ Start now uses Microsoft Graph Command Line Tools and requests the Microsoft Gra
 
 Use another sign-in method if Microsoft asks for consent or approval. Start now permits Graph reads and uses encrypted backups on this device. Microsoft Graph write calls are blocked even when the granted scopes include write access. Azure Storage, Azure Resource Manager, the Defender for Endpoint API and Win32 installer capture require a different sign-in method.
 
+Start now allows outbound alerts to Teams Workflows and webhook URLs configured by the admin, while email alerts require a different sign-in method because sending through Microsoft Graph is a write.
+
+If Start now lacks access for Conditional Access change watching, the Alerts and Change watching tabs show the available sign-in options.
+
 Organization license sharing requires the key holder to allow Start now sign-ins explicitly. The normal tenant trial flow uses the Microsoft ID token for the tenant.
 
 [Microsoft identity platform scope reference](https://learn.microsoft.com/en-us/entra/identity-platform/scopes-oidc#the-default-scope)
