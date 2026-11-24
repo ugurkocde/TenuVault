@@ -6,7 +6,7 @@ import { admittedDirectoryPermissions } from "../../shared/intune/restore-matrix
 import { tenantWriteTargets } from "../../shared/tenant-writes"
 import { accessTokenDigest, sharedTokenScopes, tokenIdentity } from "./token-identity"
 import { APPLICATION_METADATA_RESTORE_PACK, GRANT_REMOVAL_SCOPE, isPackWriteScope, missingPackScopes, type PermissionPack } from "../../shared/services/permission-packs"
-import { GRAPH_CLI_CLIENT_ID, GRAPH_CLI_DISABLED, GRAPH_CLI_NEXT_STEP, GRAPH_CLI_READ_ONLY, sharedSignInMethod as sharedMethod } from "../../shared/tenant-connection"
+import { CONNECTION_WRITE_REFUSED, GRAPH_CLI_CLIENT_ID, GRAPH_CLI_DISABLED, GRAPH_CLI_NEXT_STEP, GRAPH_CLI_READ_ONLY, sharedSignInMethod as sharedMethod } from "../../shared/tenant-connection"
 import type { TenantConnection } from "../../shared/tenant-connection"
 import { executionMetadata } from "../api/execution-metadata"
 import type { RequestAuthorization } from "../api/fetch-bridge"
@@ -151,7 +151,7 @@ export class ConnectionCapabilities {
     if (path === "/api/restore-backup" && "targetTenants" in body && targets.length &&
       "tenantId" in body && typeof body.tenantId === "string") targets.push(body.tenantId)
     const blocker = this.writeBlocker(targets)
-    return blocker ? Response.json({ error: blocker }, { status: 403 }) : null
+    return blocker ? Response.json({ error: blocker, ...(path === "/api/restore-backup" && { code: CONNECTION_WRITE_REFUSED }) }, { status: 403 }) : null
   }
 
   bindConnections(tenantIds: readonly string[]): ReadonlyMap<string, string | undefined> {

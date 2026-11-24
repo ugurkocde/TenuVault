@@ -14,6 +14,7 @@ import { restoreAdminCenter } from "../../../shared/services/presentation"
 import { compareBackupServices } from "../../../shared/services/presentation"
 import { inTenant, type AdminLink } from "../../../shared/intune/admin-links"
 import { passwordResetWarning } from "../../../shared/intune/restore-plan"
+import { CONNECTION_WRITE_REFUSED } from "../../../shared/tenant-connection"
 import { ACKNOWLEDGEMENT_REQUIRED } from "../../../shared/disclaimer"
 
 import { useEffect, useMemo, useRef, useState } from "react"
@@ -238,11 +239,13 @@ function confirmText(plans: Array<{ plan: Plan }>, tenantName: string, assignmen
 
 /** The admin cancelled the disclaimer: the request was refused before anything was written. */
 class NotAccepted extends Error {}
+class ConnectionWriteRefused extends Error {}
 
 async function post<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
   const response = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal })
   const data = await response.json().catch(() => ({}))
   if (response.status === ACKNOWLEDGEMENT_REQUIRED) throw new NotAccepted(data.error ?? "No changes were made.")
+  if (response.status === 403 && data.code === CONNECTION_WRITE_REFUSED) throw new ConnectionWriteRefused(data.error ?? "The connection refused the restore before any changes were made.")
   if (!response.ok) throw new FeatureApiError(data.error ?? `Request failed (${response.status})`, response.status, data.upgrade)
   return data as T
 }
@@ -701,9 +704,12 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
         return targets.flatMap((targetTenantId) => batch.paths.filter((path) => !completed.some((item) => item.path === path && item.targetTenantId?.toLowerCase() === targetTenantId?.toLowerCase()))
           .map((path) => ({ ...outcome, path, targetTenantId })))
       }
-      // A refused disclaimer wrote nothing, so the batch it stopped stays open for another try.
-      const refused = error instanceof NotAccepted ? attempted.pop() : undefined
-      const notStarted = refused ? missing(refused, { success: false, retryable: true, error: "Not started: the disclaimer was not accepted." }) : []
+      // The connection guard and disclaimer can refuse a batch before a route runs.
+      const readOnly = error instanceof ConnectionWriteRefused
+      const refused = readOnly || error instanceof NotAccepted ? attempted.pop() : undefined
+      const notStarted = refused ? missing(refused, readOnly
+        ? { success: false, action: "skipped", retryable: false, error: error.message }
+        : { success: false, retryable: true, error: "Not started: the disclaimer was not accepted." }) : []
       // A lost response leaves the write outcome unknown. Keep completed results and
       // block blind repetition of every attempted item whose result is missing.
       const known = mergeOutcomes(previous, completed)

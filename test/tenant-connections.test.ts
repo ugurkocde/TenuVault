@@ -8,7 +8,7 @@ import { SecureStore } from "../src/main/storage/secure-store"
 import { ModuleSettings } from "../src/main/services/settings"
 import { TenantConnections, TENANT_LIST_KEY, type StagedSignIn } from "../src/main/auth/tenant-connections"
 import { accountStore, connectionCache, publicAccountKey, stageConnectionCache } from "../src/main/auth/stores"
-import { GRAPH_CLI_CLIENT_ID, TENUVAULT_CLIENT_ID, type SignInMethod, type TenantConnection } from "../src/shared/tenant-connection"
+import { CONNECTION_WRITE_REFUSED, GRAPH_CLI_CLIENT_ID, TENUVAULT_CLIENT_ID, type SignInMethod, type TenantConnection } from "../src/shared/tenant-connection"
 import { graphCliCoverage } from "../src/shared/services/graph-cli-coverage"
 import { RESOURCE_SCOPES } from "../src/shared/constants"
 import { connectionChoice, connectionCoverage, verifyGraphCliGrant } from "../src/main/auth/connection-coverage"
@@ -449,7 +449,7 @@ describe("Start now capability", () => {
     ] as const) {
       const response = await cap.guard(new Request(`http://test/api/${path}`, { method: "POST", body: JSON.stringify({ tenantId: TENANT, ...input }) }))
       expect(response?.status).toBe(403)
-      expect(await response?.json()).toEqual({ error: READ_ONLY })
+      expect(await response?.json()).toEqual(path === "restore-backup" ? { error: READ_ONLY, code: CONNECTION_WRITE_REFUSED } : { error: READ_ONLY })
     }
     const startBackup = (storageAccountName: string) => cap.guard(new Request("http://test/api/backup/start", {
       method: "POST", body: JSON.stringify({ tenantId: TENANT, storageAccountName }),

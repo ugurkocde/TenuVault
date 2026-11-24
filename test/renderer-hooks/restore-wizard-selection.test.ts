@@ -14,7 +14,7 @@ vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: {
 } }))
 vi.mock("@desktop/lib/plan-dialog", () => ({ showFeaturePlanError: vi.fn() }))
 
-import { GRAPH_CLI_CLIENT_ID, TENUVAULT_CLIENT_ID } from "../../src/shared/tenant-connection"
+import { CONNECTION_WRITE_REFUSED, GRAPH_CLI_CLIENT_ID, TENUVAULT_CLIENT_ID } from "../../src/shared/tenant-connection"
 import { servicePack } from "../../src/shared/services/permission-packs"
 import { COMPANION_DEADLINE_MS, RestoreWizard } from "../../src/portal/components/backup/restore-wizard"
 
@@ -118,9 +118,10 @@ it("reads access policies only at the review step", async () => {
 })
 
 it.each([
-  { action: undefined, partial: true, error: "Outcome unknown.", uncertain: true },
-  { action: "skipped", partial: false, error: "Start now is read-only.", uncertain: false },
-])("shows uncertainty only after a possible write ($error)", async ({ action, partial, error, uncertain }) => {
+  { action: undefined, partial: true, error: "Outcome unknown.", uncertain: true, blocked: false },
+  { action: "skipped", partial: false, error: "Start now is read-only.", uncertain: false, blocked: false },
+  { action: undefined, partial: false, error: "Start now is read-only.", uncertain: false, blocked: true },
+])("shows uncertainty only after a possible write ($error, blocked at dispatch: $blocked)", async ({ action, partial, error, uncertain, blocked }) => {
   const path = "backup-1/NamedLocations/corporate.json"
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
@@ -128,7 +129,10 @@ it.each([
     if (url.endsWith("/api/list-backup-contents")) return Response.json({ content: { groups: [{ folder: "NamedLocations", label: "named location", area: "Conditional Access", policies: [{ path, displayName: "Corporate networks" }] }] } })
     if (url.endsWith("/api/restore-preview")) return Response.json({ items: [{ path, name: "Corporate networks" }] })
     if (body.approvalAction === "detect") return Response.json({ enabled: false })
-    if (url.endsWith("/api/restore-backup")) return Response.json({ details: { results: [{ path, success: false, action, partial, retryable: false, policyId: uncertain ? "location-id" : undefined, error }] } })
+    if (url.endsWith("/api/restore-backup")) {
+      if (blocked) return Response.json({ error, code: CONNECTION_WRITE_REFUSED }, { status: 403 })
+      return Response.json({ details: { results: [{ path, success: false, action, partial, retryable: false, policyId: uncertain ? "location-id" : undefined, error }] } })
+    }
     return Response.json({})
   }))
   const container = document.body.appendChild(document.createElement("div"))
