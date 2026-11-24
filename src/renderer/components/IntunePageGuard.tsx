@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react"
 import { Link } from "react-router-dom"
 import { useSelectedTenant } from "~/contexts/TenantContext"
-import { Button } from "~/components/ui/button"
+import { NoticeCard, noticeActionClass } from "./NoticeCard"
 import { bridge } from "../lib/bridge"
 import { settingsHref } from "../lib/settings-section"
 import { RequestedTenant } from "./RequestedTenant"
@@ -33,11 +33,12 @@ function IntuneContent({ children }: { children: ReactNode }) {
   }, [tenantId, clientId, attempt])
   if (!tenantId) return children
   if (state?.tenantId !== tenantId) return <p role="status" className="p-6 text-sm text-gray-600">Checking this tenant's services...</p>
-  if (state.error) return <div className="space-y-3 p-6 text-sm text-gray-700"><p role="alert">Services could not be checked: {state.error}</p><Button variant="outline" onClick={() => setAttempt(value => value + 1)}>Try again</Button></div>
+  if (state.error) return <NoticeCard className="m-6" tone="error" summary="Services could not be checked."
+    details={state.error} action={<button className={noticeActionClass} type="button" onClick={() => setAttempt(value => value + 1)}>Try again</button>} />
   if (state.enabled) return children
-  return <section className="mx-auto mt-8 max-w-2xl space-y-4 rounded-3xl bg-card p-6" data-intune-required>
-    <h1 className="text-2xl font-medium text-gray-900">This page needs Intune</h1>
-    <p className="text-sm text-gray-600">Intune is off for {selectedTenant?.name}. Turn it on in Services and permissions to use this workflow. Your other chosen services and existing backups stay available.</p>
-    <Link to={settingsHref("services")} className="inline-flex rounded-full bg-primary px-4 py-2 text-sm font-medium text-primary-foreground">Turn on Intune in Settings</Link>
+  return <section className="mx-auto mt-8 max-w-2xl p-6" data-intune-required>
+    <NoticeCard summary="This page needs Intune."
+      details={`Intune is off for ${selectedTenant?.name}. Your other chosen services and existing backups stay available.`}
+      action={<Link to={settingsHref("services")} className={noticeActionClass}>Turn on Intune in Settings</Link>} />
   </section>
 }

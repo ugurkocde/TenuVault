@@ -1,3 +1,4 @@
+import { NoticeCard } from "../components/NoticeCard"
 import { useEffect, useState } from "react"
 import { Link, useNavigate, useParams } from "react-router-dom"
 import { ArrowLeft, ArrowRight, ExternalLink, Package, PencilRuler, RotateCcw, Search, ShieldCheck, Users } from "lucide-react"
@@ -80,10 +81,10 @@ export default function OibPage() {
           {active ? "Change them in the first step of the workflow." : !picking && <button type="button" className="underline" onClick={() => setPicking(true)}>Change versions</button>}
         </p> : error ? !active && <p role="alert" className="text-red-800">{error} {retryButton()}</p> : <p role="status">Checking the OpenIntuneBaseline releases…</p>}
         {/* Retrying inside a workflow could change the versions and restart it, so only the overview offers it. */}
-        {versions?.warning && <p role="status" className="mt-2 text-amber-900">{versions.warning}{!active && <> {retryButton()}</>}</p>}
+        {versions?.warning && <NoticeCard className="mt-2" summary="Showing previously loaded OpenIntuneBaseline versions." tone="warning" details={versions.warning} action={!active && retryButton()} />}
         {/* Workflows show these notes for their platforms next to Change versions. */}
         {!active && notes?.info && <p className="mt-2">{notes.info}</p>}
-        {!active && notes?.warning && <p role="status" className="mt-2 text-amber-900">{notes.warning}</p>}
+        {!active && notes?.warning && <NoticeCard className="mt-2" tone="warning" summary="Test the selected baseline versions in a pilot tenant." details={notes.warning} />}
         <p className="mt-2">Content: SkipToTheEndpoint and contributors, <a href={`https://github.com/${OIB_REPO}/blob/main/LICENSE`} target="_blank" rel="noreferrer" className="underline">GPL-3.0</a>.</p>
       </div>
       {picking && !active && versions && selections && <VersionsPanel className="mt-4 rounded-3xl border-0 p-7 shadow-[0_1px_2px_rgba(22,21,20,0.04)]" versions={versions} selections={selections} allowPrerelease={allowPrerelease} onAllowPrereleaseChange={setAllowPrerelease} onCancel={() => setPicking(false)} onDone={value => { choose(value); setPicking(false) }} />}
@@ -107,7 +108,7 @@ export default function OibPage() {
       <Link to="/portal/oib" className="mb-4 inline-flex items-center gap-1 text-sm text-blue-700 hover:underline"><ArrowLeft className="h-4 w-4" aria-hidden="true" />All OpenIntuneBaseline workflows</Link>
       {!selections ? error
         ? <section className={card} aria-labelledby="versions-error"><h2 id="versions-error" className="text-lg font-medium text-gray-900">The OpenIntuneBaseline versions could not be loaded</h2>
-          <p role="alert" className="mt-3 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-800">{error}</p>
+          <NoticeCard className="mt-3" tone="error" summary="OpenIntuneBaseline versions could not be loaded." details={error} />
           <p className="mt-3 text-sm text-gray-600">The workflow needs the list of published releases from GitHub to continue.</p>
           <button type="button" className={`${button} mt-5`} disabled={checking} aria-busy={checking} onClick={() => loadVersions(true)}><RotateCcw className={checking ? "h-4 w-4 animate-spin" : "h-4 w-4"} aria-hidden="true" />{checking ? "Retrying…" : "Retry"}</button>
         </section>

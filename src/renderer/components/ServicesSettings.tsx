@@ -1,3 +1,5 @@
+import { NoticeCard, noticeActionClass } from "./NoticeCard"
+import { BackupCoverage } from "./BackupCoverage"
 import { backupAreaCoverage, needsBackupAccess } from "../../shared/services/backup-coverage"
 import { needsAccessText, StartNowAccessHelp } from "./BackupAccessHelp"
 import { TENUVAULT_CLIENT_ID } from "../../shared/tenant-connection"
@@ -15,7 +17,6 @@ import { useTenants } from "~/contexts/TenantContext"
 import type { ServicesStatus } from "../../shared/ipc"
 import type { AreaHealth, ConnectionHealthReport, ServiceHealth, SignInHealth } from "../../shared/connection-health/model"
 import { PERSONAL_DATA } from "../../shared/services/onboarding"
-import { typeForFolder } from "../../shared/intune/registry"
 import { graphCliCoverage } from "../../shared/services/graph-cli-coverage"
 import { BACKUP_SERVICES } from "../../shared/services/presentation"
 import { MODULE_BY_ID, entraApiPermissionsUrl } from "../../shared/services/modules"
@@ -51,9 +52,9 @@ export function PermissionRoutes({ report, missing, inApp = false, restoring = f
   if (report.clientId.toLowerCase() === TENUVAULT_CLIENT_ID) return (
     <Link className="block text-sm text-blue-800 underline" to={settingsHref("signin")}>Review TenuVault app permission packs</Link>
   )
-  return <details data-permission-routes data-no-select className="rounded-xl bg-blue-50 p-3 text-sm text-gray-700">
-    <summary className="cursor-pointer font-medium text-blue-800">Add the missing permissions{!compact && ` (${fix.names.length})`}</summary>
-    <div className="mt-3 space-y-3">
+  return <div data-permission-routes>
+    <NoticeCard summary={compact ? "Review missing permissions." : `Needs ${fix.names.length} more ${fix.names.length === 1 ? "permission" : "permissions"}.`}
+      details={<div className="space-y-3">
       <p className="break-words">{fix.names.join(", ")}</p>
       <p>Add these as delegated Microsoft Graph permissions. The CLI grants tenant-wide consent for only these scopes, preserves existing tenant-wide scopes and stops if individual consent needs separate review. Other pending permissions are not consented.</p>
       <details><summary className="cursor-pointer font-medium">Azure CLI commands</summary>
@@ -71,8 +72,8 @@ export function PermissionRoutes({ report, missing, inApp = false, restoring = f
       </details>
       {inApp && <AddPermissions tenantId={report.tenantId} clientId={report.clientId} missing={fix.names} />}
       <p className="text-xs">{restoring ? "Then select Check again to verify restore access." : "Then select Check again and run a backup to verify access."}</p>
-    </div>
-  </details>
+      </div>} />
+  </div>
 }
 
 function causeText(cause: keyof typeof HEALTH_CAUSE_TEXT, readOnly?: boolean): string {
@@ -100,9 +101,10 @@ function Area({ area, service, report, busy, run }: { area: AreaHealth; service:
     <p className="text-xs text-gray-600">Backup: <PermissionState state={area.permissions} />. Restore: {report.readOnly ? "Unavailable with Start now" : <PermissionState state={area.restore} />}.</p>
     {!report.readOnly && area.enabled && area.permissions === "present" && area.restore === "missing" && service.access === "restore" && <p className="text-xs text-gray-600">Backup permissions are present. Restore needs: {area.missing.join(", ")}. The Backup and restore access level asks for these permissions. Choose Backup under Areas and access to request only backup permissions.</p>}
     {!area.hasTypes ? <p className="text-xs text-gray-500">Not verified: this version has no backup types for this area yet.</p> : area.enabled ? <Verification value={area.verified} readOnly={report.readOnly} /> : <p className="text-xs text-gray-500">Not included in backups.</p>}
-    {area.losses.map(loss => <p key={`${loss.mode}/${loss.folder}`} className="break-words text-xs text-amber-800">
-      {loss.mode === "app-only" ? "Scheduled backups with the Backup Reader cannot read" : "Backups with your sign-in cannot read"} {loss.folder}, since {healthDate(loss.since)}. {causeText(loss.cause, report.readOnly && loss.mode === "delegated")}
-    </p>)}
+    {area.losses.length > 0 && <NoticeCard summary={`Backup access was lost for ${new Set(area.losses.map(loss => loss.folder)).size} types.`}
+      details={<ul className="space-y-1">{area.losses.map(loss => <li key={`${loss.mode}/${loss.folder}`}>
+        {loss.mode === "app-only" ? "Scheduled backups with the Backup Reader cannot read" : "Backups with your sign-in cannot read"} {loss.folder}, since {healthDate(loss.since)}. {causeText(loss.cause, report.readOnly && loss.mode === "delegated")}
+      </li>)}</ul>} />}
     {!report.readOnly && area.enabled && area.missing.length > 0 && <PermissionRoutes inApp report={report} missing={area.missing} />}
   </div>
 }
@@ -125,20 +127,17 @@ function Service({ service, conditionalAccess, report, busy, toggle, run }: { se
       </div>
       {MODULE_BY_ID.get(service.id)?.switchable && <Switch checked={service.enabled} disabled={busy} label={`Include ${label} in backups`} onChange={enabled => toggle(service, enabled)} />}
     </div>
-    {readerOnly && <p className="mt-3 text-sm text-gray-700">Scheduled backups can read this service with the Backup Reader. Your sign-in can't read it.</p>}
-    {needsAccess && coverage && <div className="mt-3 space-y-2 text-sm text-gray-700">
-      <p>{needsAccessText([label])} Your choice is saved. Backups skip this service until it can be read.</p>
-      {report.readOnly ? <>
-        <StartNowAccessHelp />
-        <Link className="inline-block font-medium text-blue-800 underline" to={signInSettings}>Open sign-in settings</Link>
-      </> : report.clientId.toLowerCase() === TENUVAULT_CLIENT_ID
-        ? <p>Ask a Microsoft administrator to approve backup access in <Link className="font-medium text-blue-800 underline" to={signInSettings}>Sign-in and access</Link>.</p>
-        : <p>Ask your Microsoft administrator to add backup access to this app registration.</p>}
-      <details>
-        <summary className="cursor-pointer font-medium">Areas needing access</summary>
-        <p className="mt-1">{backupAreaCoverage(coverage).missing.join(", ")}</p>
-      </details>
-    </div>}
+    {readerOnly && <NoticeCard className="mt-3" summary="Only the Backup Reader can back up this service."
+      details="Scheduled backups can read this service with the Backup Reader. Your sign-in can't read it." />}
+    {needsAccess && coverage && <NoticeCard className="mt-3" summary={needsAccessText([label])}
+      action={(report.readOnly || report.clientId.toLowerCase() === TENUVAULT_CLIENT_ID) &&
+        <Link className={noticeActionClass} to={signInSettings}>Review sign-in options</Link>}
+      details={<>
+        <p>Your choice is saved. Backups skip this service until it can be read.</p>
+        {report.readOnly ? <StartNowAccessHelp /> : <p>Ask a Microsoft administrator to approve backup access.</p>}
+        <p className="font-medium">Areas needing access</p>
+        <ul className="list-disc pl-4">{backupAreaCoverage(coverage).missing.map(area => <li key={area}>{area}</li>)}</ul>
+      </>} />}
     <p className="mt-1 text-xs text-gray-500">{MODULE_BY_ID.get(service.id)?.description}</p>
     {service.id === "defender" && <p className="mt-2 text-xs text-gray-600">Backs up 17 Microsoft Graph configuration types, including tenant attack simulation content. Anti-phishing, Safe Links, Safe Attachments, anti-spam, anti-malware and quarantine policies, the Tenant Allow/Block List and Defender for Endpoint settings are not covered. Restore is not available yet.</p>}
     <div className="mt-3 space-y-1">
@@ -272,11 +271,7 @@ function TenantServices({ tenantId, clientId, name, active }: { tenantId: string
     {report && active && <>
       {report.readOnly && <section className="space-y-2" aria-label="Start now backup coverage">
         <h3 className="text-sm font-medium">Backup coverage from granted scopes</h3>
-        {graphCliCoverage(report.granted ? new Set(report.granted) : undefined).map((service, index) =>
-          <details key={service.service} className="rounded-md border px-3 py-2 text-sm">
-            <summary className="cursor-pointer">{BACKUP_SERVICES[index]!.label} {service.readable ? `${service.readable.length} of ${service.folders.length}` : "coverage unknown"}</summary>
-            {service.readable && <ul className="ml-4 list-disc text-xs text-gray-600">{service.readable.map(folder => <li key={folder}>{typeForFolder(folder)?.label ?? folder}</li>)}</ul>}
-          </details>)}
+        <BackupCoverage coverage={graphCliCoverage(report.granted ? new Set(report.granted) : undefined)} />
         <p className="text-xs text-gray-600">Your Microsoft role and service licenses can limit what a backup reads.</p>
       </section>}
       <div className="grid gap-2 sm:grid-cols-3">
@@ -292,10 +287,9 @@ function TenantServices({ tenantId, clientId, name, active }: { tenantId: string
         </div>
         <SignInState label="Backup storage" state={report.storage} storage />
       </div>
-      {report.changes.length > 0 && <section aria-label="Changes since the last check" className="space-y-2 rounded-xl bg-blue-50 p-4 text-sm text-gray-700">
-        <h3 className="font-medium text-blue-800">Changes since the last check</h3>
-        <ul className="list-disc space-y-2 pl-4">{report.changes.map((change, index) => <li key={index} className="break-words">{changeText(change, report.since)}</li>)}</ul>
-      </section>}
+      {report.changes.length > 0 && <NoticeCard
+        summary={`Connection health found ${report.changes.length} ${report.changes.length === 1 ? "change" : "changes"}.`}
+        details={<ul className="list-disc space-y-2 pl-4">{report.changes.map((change, index) => <li key={index}>{changeText(change, report.since)}</li>)}</ul>} />}
       {BACKUP_SERVICES.map(({ id }) => {
         const service = report.services.find(entry => entry.id === id)
         return service && <Service key={service.id} service={service} conditionalAccess={service.id === "entra" ? report.services.find(entry => entry.id === "conditionalAccess") : undefined} report={report} busy={busy} toggle={(service, enabled) => void toggle(service, enabled)} run={action => void run(action)} />

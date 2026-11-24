@@ -1,5 +1,7 @@
 "use client"
 
+import { NoticeCard } from "@desktop/components/NoticeCard"
+
 import { RestoreAccess, useRestoreAccess } from "@desktop/components/RestoreAccess"
 
 import { UnknownComparisonTypes } from "~/components/backup/unknown-comparison-types"
@@ -774,29 +776,9 @@ export default function DriftDetectionPage() {
           )}
 
           {!!result.largeFolders?.length && selectedTenant && <LargeComparison key={`${tenantId}/${storageAccountName}/${result.baseline.id}/${result.comparison.id}`} credentials={{ ...selectedTenant.credentials, storageAccountName }} baseline={result.baseline.id} backupId={result.comparison.id} folders={result.largeFolders} />}
-          <UnknownComparisonTypes folders={result.unknownTypes} legacyReadFailure={result.legacyReadFailure} />
-          {result.warnings.length > 0 && (
-            <Alert className="rounded-3xl border-transparent bg-amber-50 p-5 [&>svg]:left-5 [&>svg]:top-5">
-              <AlertTriangle className="h-4 w-4 text-amber-700" />
-              <AlertDescription className="text-amber-900">
-                <strong>{result.warnings.length} {result.warnings.length === 1 ? "file was" : "files were"} not compared</strong> because {result.warnings.length === 1 ? "it" : "they"} could not be read. Changes to {result.warnings.length === 1 ? "this item" : "these items"} are not shown.
-                <ul className="mt-2 space-y-0.5 text-xs">
-                  {result.warnings.slice(0, 10).map((warning) => <li key={`${warning.backup}/${warning.file}`}><span className="font-mono">{warning.backup}/{warning.file}</span>: {warning.message}</li>)}
-                  {result.warnings.length > 10 && <li>and {result.warnings.length - 10} more</li>}
-                </ul>
-              </AlertDescription>
-            </Alert>
-          )}
-
-          {counts.added > 50 && (
-            <Alert className="rounded-3xl border-transparent bg-white p-5 [&>svg]:left-5 [&>svg]:top-5">
-              <Info className="h-4 w-4" />
-              <AlertDescription>
-                <strong>High number of new policies detected.</strong> This typically happens when comparing against older backups without a proper baseline.
-                Compare two consecutive backups for a more accurate picture.
-              </AlertDescription>
-            </Alert>
-          )}
+          <UnknownComparisonTypes folders={result.unknownTypes} legacyReadFailure={result.legacyReadFailure} warnings={result.warnings} />
+          {counts.added > 50 && <NoticeCard summary="This comparison found many new policies."
+            details="Older backups may not provide a full baseline. Compare two consecutive backups for a more accurate picture." />}
 
           {drifts.length === 0 && (
             <EmptyState icon={<Check className="h-6 w-6" />} title={noDriftText}>

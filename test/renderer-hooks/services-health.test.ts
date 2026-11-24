@@ -318,7 +318,7 @@ it("keeps Defender on with a Needs access badge and the Start now repair link", 
   await render()
   const defender = container.querySelector('[data-service="defender"]')!
   expect(defender.textContent).toContain("Needs access")
-  expect(defender.textContent).toContain("Defender needs more access. Your choice is saved.")
+  expect(defender.textContent).toContain("Defender needs more access.")
   expect(defender.textContent).toContain("Detection and response")
   expect(defender.querySelector<HTMLInputElement>('input[role="switch"]')?.checked).toBe(true)
   expect(defender.querySelector("a")?.getAttribute("href")).toBe(`/portal/settings?section=signin#sign-in-${report.tenantId}`)

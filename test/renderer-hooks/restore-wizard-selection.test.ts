@@ -106,7 +106,7 @@ it("shows missing permissions and repairs the existing registration before check
 
 it("offers Start now upgrades and keeps the restore items disabled", async () => {
   const container = await renderItems(false, GRAPH_CLI_CLIENT_ID)
-  const notice = container.querySelector('aside[aria-label="Start now sign-in"]')
+  const notice = [...container.querySelectorAll("[data-notice-tone]")].find(card => card.textContent?.includes("Start now is read-only"))
   expect(notice?.textContent).toContain("Start now is read-only")
   expect(notice?.querySelector("a")?.getAttribute("href")).toContain("section=signin")
   expect(itemBoxes(container).every(box => box.disabled)).toBe(true)
@@ -312,7 +312,7 @@ it("keeps the ordinary items restorable when the linked large backup cannot be r
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
   expect(container.textContent).toContain("Configuration profile")
   expect(container.textContent).toContain("The linked large backup with this run's directory objects could not be read")
-  expect(container.querySelector('[role="alert"]')).toBeNull()
+  expect(container.querySelector('[role="alert"]')?.textContent).toBe("Linked backup items could not be loaded.")
 })
 
 it("keeps the ordinary items when the linked large backup lists but cannot be previewed", async () => {
@@ -335,7 +335,7 @@ it("keeps the ordinary items when the linked large backup lists but cannot be pr
   expect(container.textContent).toContain("Configuration profile")
   expect(container.textContent).not.toContain("Team")
   expect(container.textContent).toContain("The linked large backup with this run's directory objects could not be read")
-  expect(container.querySelector('[role="alert"]')).toBeNull()
+  expect(container.querySelector('[role="alert"]')?.textContent).toBe("Linked backup items could not be loaded.")
 })
 
 it("shows no inventory paging for a companion whose items the service filter hides", async () => {

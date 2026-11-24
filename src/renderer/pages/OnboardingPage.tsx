@@ -1,3 +1,4 @@
+import { NoticeCard } from "../components/NoticeCard"
 import { OnboardingHeading, onboardingCard, onboardingLink, onboardingPrimary } from "../components/OnboardingCard"
 import { OnboardingSignIn, type MethodAvailability } from "../components/OnboardingSignIn"
 import { BrowserSignInWait, OtherTenant } from "../components/OnboardingConnection"
@@ -1064,24 +1065,22 @@ export default function OnboardingPage() {
                   </>}
                 </div>
                 {!nothingReadable && !permissionResult?.error && resumeMessage}
-                {nothingReadable && method === "graphCli" && <StartNowAccessHelp />}
-                {readable.length > 0 && unavailable.length > 0 && <p className="text-sm text-gray-600">{needsAccessText(unavailable.map(service => service.label))} You can add it later from Services.</p>}
-                {unknownCoverage && <p className="text-sm text-gray-600">Some backup access could not be checked. You can continue and check access later.</p>}
-                {nothingReadable && method === "tenuvaultApp" && <p className="text-sm text-gray-600">Ask a Microsoft administrator to approve backup access, then check again.</p>}
-                {nothingReadable && method === "ownApp" && <p className="text-sm text-gray-600">Ask your Microsoft administrator to add backup access to this app registration.</p>}
-                {nothingReadable && method === "graphCli" && available.tenuvaultApp === true && <button type="button" className={onboardingLink} onClick={() => void chooseMethod("tenuvaultApp")}>Use the TenuVault app</button>}
-                {(!checkPassed || missing.length > 0) && <details className="text-sm text-muted-foreground">
-                  <summary className={cn("cursor-pointer", onboardingLink)}>What&apos;s missing and how to add it</summary>
-                  <div className="mt-3 space-y-3 rounded-2xl bg-secondary/60 p-4 text-left">
+                {(!checkPassed || missing.length > 0) && <NoticeCard
+                  summary={unavailable.length ? needsAccessText(unavailable.map(service => service.label))
+                    : gaps.length ? `Needs access for ${gaps.reduce((count, service) => count + service.missing.length, 0)} backup areas.`
+                    : unknownCoverage ? "Some backup access could not be checked." : "Review backup access."}
+                  details={<>
+                    {unknownCoverage && <p>You can continue and check backup access later.</p>}
+                    {!nothingReadable && unavailable.length > 0 && <p>You can add access later from Services.</p>}
                     {gaps.length > 0 && <ul className="space-y-2" aria-label="Areas needing access">
-                      {gaps.map(service => <li key={service.label}><span className="font-medium">{service.label}</span><p className="text-gray-600">{service.missing.join(", ")}</p></li>)}
+                      {gaps.map(service => <li key={service.label}><span className="font-medium">{service.label} ({service.missing.length})</span><p>{service.missing.join(", ")}</p></li>)}
                     </ul>}
-                    {!nothingReadable && method === "graphCli" && <StartNowAccessHelp />}
-                    {!nothingReadable && method === "tenuvaultApp" && <p>Ask a Microsoft administrator to approve backup access, then check again.</p>}
-                    {!nothingReadable && method === "ownApp" && <p>Ask your Microsoft administrator to add access to this app registration.</p>}
+                    {method === "graphCli" && <StartNowAccessHelp />}
+                    {method === "tenuvaultApp" && <p>Ask a Microsoft administrator to approve backup access, then check again.</p>}
+                    {method === "ownApp" && <p>Ask your Microsoft administrator to add access to this app registration.</p>}
                     <div className="flex flex-wrap gap-x-4 gap-y-2">
-                      {!nothingReadable && method === "graphCli" && <>
-                        <button type="button" className={onboardingLink} onClick={() => void chooseMethod("ownApp")}>Use your own app registration</button>
+                      {method === "graphCli" && <>
+                        {!nothingReadable && <button type="button" className={onboardingLink} onClick={() => void chooseMethod("ownApp")}>Use your own app registration</button>}
                         {available.tenuvaultApp === true && <button type="button" className={onboardingLink} onClick={() => void chooseMethod("tenuvaultApp")}>Use the TenuVault app</button>}
                       </>}
                       {!nothingReadable && method === "ownApp" && <button type="button" className={onboardingLink} onClick={() => void copyAdminInstructions()}>Copy instructions for my admin</button>}
@@ -1096,8 +1095,8 @@ export default function OnboardingPage() {
                       <ul className="my-2 list-disc break-words pl-5">{missing.map(scope => <li key={scope}>{scope}</li>)}</ul>
                       {method === "ownApp" && account && <PermissionRoutes compact report={account} missing={missing} />}
                     </details>}
-                  </div>
-                </details>}
+                  </>}
+                />}
                 {consentBusy === "open" && <BrowserSignInWait kind="consent" cancel={() => void bridge.auth.cancelSignIn()} />}
                 {consentStatus && <p role="status" className="text-sm text-gray-700">{consentStatus}</p>}
               </>}
@@ -1162,7 +1161,9 @@ export default function OnboardingPage() {
                 </div>)}
               </dl>}
               {succeeded && displayJob && <span role="status" className="sr-only">{displayJob.progressMessage}</span>}
-              {succeeded && displayJob && completedWithWarnings(displayJob) && <p role="status" className="text-sm text-amber-700 dark:text-amber-300">Some policies could not be backed up. See backup details.</p>}
+              {succeeded && displayJob && (displayJob.results
+                ? <BackupResults job={displayJob} view="notices" />
+                : completedWithWarnings(displayJob) && <NoticeCard summary="The first backup completed with warnings." tone="warning" />)}
               {setup && credentials && setup.connection.tenantId === credentials.tenantId.toLowerCase() && (
                 <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-secondary/60 px-4 py-3 text-sm text-gray-700">
                   <p>The setup file holds more settings, such as services and what is backed up. Review them to apply them to future backups.</p>
@@ -1226,7 +1227,7 @@ export default function OnboardingPage() {
               {succeeded && displayJob && (displayJob.results || displayJob.output) && <details>
                 <summary className={cn("cursor-pointer", onboardingLink)}>See backup details</summary>
                 <div role="region" aria-label="First backup results" tabIndex={0} className="mt-3 max-h-56 overflow-y-auto text-left">
-                  <BackupResults job={displayJob} jobId={runningJobId} hideStats />
+                  <BackupResults job={displayJob} jobId={runningJobId} hideStats view="details" />
                 </div>
               </details>}
               {displayJob && !finished && <div className="space-y-1 text-xs text-muted-foreground">

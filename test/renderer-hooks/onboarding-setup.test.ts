@@ -891,9 +891,9 @@ it("keeps permission names in a second disclosure and lists each name once", asy
   state.checkPermissions.mockResolvedValue({ ...noCoverage(ALL_SERVICES), missing: ["Policy.Read.All", "Policy.Read.All", "Sites.Read.All"] })
   const container = await render(createElement(OnboardingPage), false)
   const disclosures = [...container.querySelectorAll("details")]
-  const missing = disclosures.find(item => item.firstElementChild?.textContent === "What's missing and how to add it")!
+  const missing = container.querySelector('button[aria-label^="Details:"]')!
   const names = disclosures.find(item => item.firstElementChild?.textContent === "Show permission names")!
-  expect(missing.open).toBe(false)
+  expect(missing.getAttribute("aria-expanded")).toBe("false")
   expect(names.open).toBe(false)
   expect([...names.querySelectorAll("li")].map(item => item.textContent)).toEqual(["Policy.Read.All", "Sites.Read.All"])
 })
@@ -1709,7 +1709,8 @@ describe("sign-in method wizard", () => {
     await act(async () => button(container, "Sign in with Microsoft")!.click())
     expect(state.wizardStage).toHaveBeenCalledWith("contoso.onmicrosoft.com", "graphCli", ALL_SERVICES)
     expect(container.querySelector("#setup-step-4")?.textContent).toBe("You're ready to back up Intune and Entra ID (3 of 8 areas).")
-    expect(container.textContent).toContain("Defender needs more access. You can add it later from Services.")
+    expect(container.textContent).toContain("Defender needs more access.")
+    expect(container.textContent).toContain("You can add access later from Services.")
     expect([...container.querySelectorAll('[aria-label="Check actions"] button')].map(item => item.textContent)).toEqual(["Continue with Intune and Entra ID"])
     expect(container.querySelector("details[open]")).toBeNull()
     expect(container.querySelector('[aria-label="Areas needing access"]')?.textContent).toContain("Detection and response")

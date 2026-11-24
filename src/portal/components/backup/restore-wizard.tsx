@@ -1,5 +1,6 @@
 "use client"
 
+import { NoticeCard } from "@desktop/components/NoticeCard"
 import { matchesBackupService, type BackupServiceFilter } from "@desktop/lib/backup-service"
 import { DIRECTORY_REVIEW_FOLDERS } from "../../../shared/intune/directory-review-folders"
 import { DirectoryRestore } from "./directory-restore"
@@ -851,40 +852,24 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
             </label>
           )}
 
-          {statusKind(backup.status) === "cancelled" ? (
-            <p className="mt-4 flex gap-2 rounded-2xl bg-gray-100 px-4 py-3 text-sm text-gray-800">
-              <Ban className="mt-0.5 h-4 w-4 flex-shrink-0" />
-              Cancelled: this backup was cancelled before it finished, so some items may be missing from it.
-            </p>
-          ) : statusKind(backup.status) !== "success" && (
-            <p className="mt-4 flex gap-2 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900">
-              <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
-              {backup.status === "unknown" ? `${backup.error ?? "This backup's details could not be read."} Whether it completed is not known, so some items may be missing from it.` : "This backup did not complete fully, so some items may be missing from it."}
-            </p>
-          )}
-          {itemsError && <p className="mt-4 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{itemsError}</p>}
-          {companionError && <p className="mt-4 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900" role="status">{companionError}</p>}
+          {statusKind(backup.status) !== "success" && <NoticeCard className="mt-4"
+            tone={statusKind(backup.status) === "failed" ? "error" : "neutral"}
+            summary={statusKind(backup.status) === "cancelled" ? "The backup was cancelled. Some items may be missing."
+              : backup.status === "unknown" ? "Backup status is unknown. Some items may be missing."
+              : "The backup did not finish. Some items may be missing."}
+            details={backup.error} />}
+          {itemsError && <NoticeCard className="mt-4" tone="error" summary="Backup items could not be loaded." details={itemsError} />}
+          {companionError && <NoticeCard className="mt-4" tone="error" summary="Linked backup items could not be loaded." details={companionError} />}
           {catalogCheck?.state === "checking" && (
             <p className="mt-4 flex items-center gap-2 text-sm text-gray-500">
               <Loader2 className="h-4 w-4 animate-spin" /> Checking the current Settings Catalog for deprecated settings...
             </p>
           )}
-          {catalogCheck?.state === "unavailable" && (
-            <p className="mt-4 flex gap-2 rounded-2xl bg-gray-100 px-4 py-3 text-sm text-gray-800">
-              <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
-              Deprecated settings not checked: {catalogCheck.reason}
-            </p>
-          )}
-          {catalogCheck?.state === "checked" && deprecatedByPath.size > 0 && (
-            <p className="mt-4 flex gap-2 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900">
-              <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
-              <span>
-                Deprecated settings: {deprecatedByPath.size} of {catalogPolicyCount} Settings Catalog {catalogPolicyCount === 1 ? "policy" : "policies"} in this backup {deprecatedByPath.size === 1 ? "contains" : "contain"} settings Microsoft lists as deprecated
-                (Settings Catalog checked {formatDate(catalogCheck.checkedAt ?? "")}, {catalogCheck.total} definitions). They restore exactly as backed up and may be ignored by current versions.
-                {deprecatedSelected.length > 0 && ` ${deprecatedSelected.length} of them ${deprecatedSelected.length === 1 ? "is" : "are"} selected.`}
-              </span>
-            </p>
-          )}
+          {catalogCheck?.state === "unavailable" && <NoticeCard className="mt-4"
+            summary="Deprecated settings could not be checked." details={catalogCheck.reason} />}
+          {catalogCheck?.state === "checked" && deprecatedByPath.size > 0 && <NoticeCard className="mt-4" tone="warning"
+            summary={`${deprecatedByPath.size} policies contain deprecated settings.${deprecatedSelected.length ? ` ${deprecatedSelected.length} selected.` : ""}`}
+            details={<p>Checked {catalogPolicyCount} policies and {catalogCheck.total} definitions on {formatDate(catalogCheck.checkedAt ?? "")}. These settings restore as backed up and may be ignored by current versions.</p>} />}
           {!items && !itemsError && (
             <div className="flex items-center gap-2 py-10 text-sm text-gray-500">
               <Loader2 className="h-4 w-4 animate-spin" /> Reading the backup...
@@ -1241,19 +1226,16 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
                     </li>
                   ))}
                 </ul>
-                {validation.items.filter((item) => !item.ok).length > 0 && (
-                  <ul className="mt-3 space-y-2">
-                    {validation.items.filter((item) => !item.ok).map((item) => (
-                      <li key={item.path} className="rounded-2xl bg-red-50 px-4 py-3 text-red-800">
-                        <span className="block font-medium">{item.name}</span>
-                        <span className="block text-xs">{item.path}</span>
-                        {item.checks.filter((entry) => !entry.ok).map((entry) => (
-                          <span key={entry.id} className="block text-xs">{entry.label}: {entry.detail}</span>
-                        ))}
-                      </li>
-                    ))}
-                  </ul>
-                )}
+                {validation.items.some(item => !item.ok) && <NoticeCard className="mt-3" tone="error"
+                  summary={`${validation.items.filter(item => !item.ok).length} items failed restore validation.`}
+                  details={<ul className="space-y-2">{validation.items.filter(item => !item.ok).map(item => (
+                    <li key={item.path}>
+                      <p className="font-medium">{item.name}</p>
+                      <p>{item.path}</p>
+                      {item.checks.filter(entry => !entry.ok).map(entry => <p key={entry.id}>{entry.label}: {entry.detail}</p>)}
+                    </li>
+                  ))}</ul>} />}
+
               </div>
             )}
           </div>

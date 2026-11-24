@@ -1,7 +1,6 @@
-import { useEffect, useState } from "react"
 import { Link } from "react-router-dom"
-import { GRAPH_CLI_CLIENT_ID, GRAPH_CLI_UPGRADE, OWN_APP_UPGRADE } from "../../shared/tenant-connection"
-import { bridge } from "../lib/bridge"
+import { GRAPH_CLI_CLIENT_ID } from "../../shared/tenant-connection"
+import { NoticeCard, noticeActionClass } from "./NoticeCard"
 import { settingsHref } from "../lib/settings-section"
 
 export function startNowTenantId(credentials?: { appId: string; tenantId: string }): string | null {
@@ -9,23 +8,6 @@ export function startNowTenantId(credentials?: { appId: string; tenantId: string
 }
 
 export function StartNowUpgradeLinks({ tenantId, message = "Start now provides read-only backups on this device." }: { tenantId: string; message?: string }) {
-  const [upgradeTenant, setUpgradeTenant] = useState<string | null>(null)
-
-  useEffect(() => {
-    let current = true
-    setUpgradeTenant(null)
-    void bridge.auth.packConsentPlan(tenantId).then(plan => {
-      if (current && plan) setUpgradeTenant(tenantId)
-    }).catch(() => undefined)
-    return () => { current = false }
-  }, [tenantId])
-
   const target = settingsHref("signin", `sign-in-${tenantId}`)
-  return (
-    <aside aria-label="Start now sign-in" className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-blue-200 bg-blue-50 px-6 py-2 text-sm text-blue-800">
-      <span>{message}</span>
-      {upgradeTenant === tenantId && <Link className="font-medium underline" to={target}>{GRAPH_CLI_UPGRADE}</Link>}
-      <Link className="font-medium underline" to={target}>{OWN_APP_UPGRADE}</Link>
-    </aside>
-  )
+  return <NoticeCard summary={message} action={<Link className={noticeActionClass} to={target}>Review sign-in options</Link>} />
 }
