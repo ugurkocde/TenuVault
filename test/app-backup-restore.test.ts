@@ -80,9 +80,10 @@ function destination() {
 }
 const options = (d: ReturnType<typeof destination>, signal = new AbortController().signal) => ({ graph: d.graph, fetch: d.fetcher as typeof fetch, signal, progress: vi.fn(), wait: async () => {} })
 
-it.each(["before block", "before block list", "read-only switch"])("checks the admitted connection %s", async boundary => {
+it.each(["before block", "before block list", "read-only switch", "Intune downgrade before block", "Intune downgrade before block list"])("checks the admitted connection %s", async boundary => {
   const f = await fixture(), d = destination()
-  const packs = tenantPermissionPacks({ intune: { access: "restore" } }, { azure: false, audit: false })
+  const packOptions = { azure: false, audit: false }
+  let packs = tenantPermissionPacks({ intune: { access: "restore" }, entra: { access: "restore" } }, packOptions)
   let enabled = true
   let connection: TenantConnection = {
     version: 1, method: "tenuvaultApp", clientId: TENUVAULT_CLIENT_ID, origin: "wizard", createdAt: "", updatedAt: "",
@@ -93,6 +94,9 @@ it.each(["before block", "before block list", "read-only switch"])("checks the a
     if (value.phase !== "uploading") return
     if (boundary === "before block" || (boundary === "before block list" && value.uploadedBytes > 0)) enabled = false
     if (boundary === "read-only switch") connection = { ...connection, method: "graphCli", clientId: GRAPH_CLI_CLIENT_ID }
+    if (boundary === "Intune downgrade before block" || (boundary === "Intune downgrade before block list" && value.uploadedBytes > 0)) {
+      packs = tenantPermissionPacks({ intune: { access: "backup" }, entra: { access: "restore" } }, packOptions)
+    }
   })
   const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
     const url = new URL(String(input))
@@ -102,8 +106,8 @@ it.each(["before block", "before block list", "read-only switch"])("checks the a
   await expect(restoreAppWithAudit(f.store, f.source, snapshot, target, "Restored", {
     getGraphToken: async () => "fixture-token", fetch, signal: new AbortController().signal, progress, operationId: randomUUID(),
     authorizeUpload: () => caps.requireAppRestoreWrite(target, TENUVAULT_CLIENT_ID),
-  })).rejects.toThrow(boundary === "read-only switch" ? READ_ONLY : "currently unavailable")
-  expect(d.fetcher).toHaveBeenCalledTimes(boundary === "before block list" ? 1 : 0)
+  })).rejects.toThrow(boundary === "read-only switch" ? READ_ONLY : boundary.startsWith("Intune") ? "Approve the restore permission pack" : "currently unavailable")
+  expect(d.fetcher).toHaveBeenCalledTimes(boundary.endsWith("before block list") ? 1 : 0)
 })
 
 it.each([

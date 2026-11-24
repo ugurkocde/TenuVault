@@ -11,6 +11,8 @@ For the step-by-step setup, see [Create the app registration](/getting-started/a
 
 This catalog describes the requests configured in the desktop client. Availability of the shared app depends on tenant validation and the license service. Service restore packs include the read access needed for backup. A read/write scope stands in for its read alternative where the manifest permits it.
 
+Installer restores with the TenuVault app require the verified Intune restore pack throughout the upload. If you change Intune to backup-only during a restore, TenuVault stops the upload at the next block or when it tries to finalize the block list.
+
 Conditional Access writes have a separate selection. The Entra audit log pack appears when desktop Conditional Access change watching is enabled. Azure storage uses separate Azure Service Management and Azure Storage requests because their tokens have different audiences. Local storage uses neither. Defender has no admitted Graph restore operation in this version, so its restore selection adds no write scopes.
 
 | Pack | Resource | Delegated scopes and IDs |

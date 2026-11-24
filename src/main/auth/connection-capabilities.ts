@@ -95,6 +95,9 @@ export class ConnectionCapabilities {
     }
     await this.requireConnectionEnabled(tenantId, admittedClientId)
     this.requireWrite([tenantId])
+    if (sharedMethod(admittedClientId) === "tenuvaultApp" && !this.restorePacks(tenantId).some(pack => pack.id === "intune-restore")) {
+      throw new Error(PACK_REQUIRED)
+    }
   }
 
   requireInteractive(tenantId: string): void {
