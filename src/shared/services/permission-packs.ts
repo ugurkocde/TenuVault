@@ -87,6 +87,10 @@ export const PRIVILEGED_ENTRA_PACK: PermissionPack = {
   id: "entra-privileged", label: "Privileged Entra restore", resource: "graph", scopes: PRIVILEGED_WRITES,
 }
 
+export const APPLICATION_METADATA_RESTORE_PACK: PermissionPack = {
+  id: "entra-app-metadata", label: "Entra app metadata restore", resource: "graph", scopes: ["Application.ReadWrite.All"],
+}
+
 export function tenantPermissionPacks(choice: PermissionChoice, features: { azure: boolean; audit: boolean }): PermissionPack[] {
   return [
     { id: "basics", label: "Basics", resource: "graph", scopes: [...IDENTITY_SCOPES, ...BASE_PERMISSIONS] },
@@ -131,6 +135,7 @@ export function permissionPackTable(published: Readonly<Record<PackResource, Rea
   for (const pack of [
     ...tenantPermissionPacks({ defender: { access: "backup" }, entra: { access: "backup" }, intune: { access: "backup" }, conditionalAccess: { access: "backup" } }, { azure: true, audit: true }),
     ...SERVICES.map(id => servicePack(id, "restore")),
+    APPLICATION_METADATA_RESTORE_PACK,
     PRIVILEGED_ENTRA_PACK,
   ]) row(pack)
   for (const area of MODULE_BY_ID.get("entra")!.areas.filter(area => area.optIn)) {
