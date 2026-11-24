@@ -73,7 +73,7 @@ Eligible nonprofits can use Pro at no cost. Email [support@tenuvault.com](mailto
 | Policy conflict and hygiene explorer | | Yes | Yes |
 | Baseline upgrades that keep your customizations | | Yes | Yes |
 | Dev to Prod settings promotion | | Yes | Yes |
-| [Copy to Tenants](/copy-to-tenants/): copy settings to other tenants | | Yes (the two tenants of your license, or two tenants on a Pro trial) | Yes |
+| [Copy to Tenants](/copy-to-tenants/): copy settings to other tenants | | Yes, one target per run | Yes |
 | Scheduled health review and notifications | | Yes | Yes |
 | [Change reports](/reports/): what changed and who changed it, as PDF, Markdown or JSON, and by email after every scheduled backup | | Yes | Yes |
 | Organization baseline customizations | | Yes | Yes |
@@ -96,7 +96,7 @@ Actions across several tenants need the MSP plan on every tenant they touch.
 
 ## What Pro adds
 
-Pro covers two tenants and includes daily scheduled backups, the optional [Backup Reader](/backups/backup-reader/) for scheduled backups under strict Conditional Access, custom backup history, your own Azure storage, restoring several items at once, replacing items in place, restoring assignments, reverting drifted policies and the audit log. It also includes dashboard baseline scores, the policy conflict and hygiene explorer, baseline upgrades that keep your customizations, Dev to Prod settings promotion, [Copy to Tenants](/copy-to-tenants/) between the two tenants of your license or two tenants on a Pro trial, scheduled health reviews, organization customizations, custom baselines and full white-label PDF reports with your logo and colors. It includes [CIS Benchmarks](/baselines/cis-benchmarks/): assessments, remediation and reports against benchmark packs delivered to licensed installations. Community keeps its existing backup, restore, drift, OpenIntuneBaseline and non-CIS framework features.
+Pro covers two tenants and includes daily scheduled backups, the optional [Backup Reader](/backups/backup-reader/) for scheduled backups under strict Conditional Access, custom backup history, your own Azure storage, restoring several items at once, replacing items in place, restoring assignments, reverting drifted policies and the audit log. It also includes dashboard baseline scores, the policy conflict and hygiene explorer, baseline upgrades that keep your customizations, Dev to Prod settings promotion, [Copy to Tenants](/copy-to-tenants/) for one target per run, scheduled health reviews, organization customizations, custom baselines and full white-label PDF reports with your logo and colors. For Dev to Prod and single-target Copy to Tenants, each connected tenant needs Pro, a Pro trial or MSP. It includes [CIS Benchmarks](/baselines/cis-benchmarks/): assessments, remediation and reports against benchmark packs delivered to licensed installations. Community keeps its existing backup, restore, drift, OpenIntuneBaseline and non-CIS framework features.
 
 ## How tenants are counted
 

@@ -19,9 +19,9 @@ const TENANT_D = "44444444-4444-4444-4444-444444444444"
 const MSP: Record<string, Plan> = { [TENANT_A]: "msp", [TENANT_B]: "msp", [TENANT_C]: "msp", [TENANT_D]: "msp" }
 
 /** TENANT_A is the source; TENANT_B, TENANT_C and TENANT_D are targets. */
-function setup(options: { plans?: Record<string, Plan>; sameLicense?: boolean } = {}) {
-  let sameLicense = options.sameLicense ?? true
-  const deps = fakeDeps({ plans: options.plans ?? { [TENANT_A]: "pro", [TENANT_B]: "pro" }, sameLicense: () => sameLicense })
+function setup(options: { plans?: Record<string, Plan>; proPair?: boolean } = {}) {
+  let proPair = options.proPair ?? true
+  const deps = fakeDeps({ plans: options.plans ?? { [TENANT_A]: "pro", [TENANT_B]: "pro" }, proPair: () => proPair })
   const source = new FakeTenant(TENANT_A)
   const targets: Record<string, FakeTenant> = { [TENANT_B]: new FakeTenant(TENANT_B), [TENANT_C]: new FakeTenant(TENANT_C), [TENANT_D]: new FakeTenant(TENANT_D) }
   const wired = wire(deps, [source, ...Object.values(targets)])
@@ -39,8 +39,8 @@ function setup(options: { plans?: Record<string, Plan>; sameLicense?: boolean } 
   const promotion = promotionRoutes(deps)
   const post = (body: Record<string, unknown>) => call(sync, PATH, body)
   const promote = (body: Record<string, unknown>) => call(promotion, "/api/promotion", body)
-  const setSameLicense = (value: boolean) => { sameLicense = value }
-  return { deps, source, targets, policy, post, promote, audit, setSameLicense, ...wired }
+  const setProPair = (value: boolean) => { proPair = value }
+  return { deps, source, targets, policy, post, promote, audit, setProPair, ...wired }
 }
 
 type Context = ReturnType<typeof setup>
@@ -176,7 +176,7 @@ describe("/api/sync plans", () => {
     expect(changeSets(context, TENANT_B)[0]!.review).toMatchObject({ reviewer: "Admin", note: null })
   })
 
-  it("A3: needs MSP for two targets or a target outside the Pro license, in the guard and the handler", async () => {
+  it("A3: needs MSP for two targets in the guard and handler, and rechecks single-target entitlement", async () => {
     const two = setup({ plans: { [TENANT_A]: "pro", [TENANT_B]: "pro", [TENANT_C]: "pro" } })
     const refused = await plan(two, [TENANT_B, TENANT_C])
     expect(refused.status).toBe(402)
@@ -191,19 +191,19 @@ describe("/api/sync plans", () => {
     expect(await planGuard(async () => "pro")(guardRequest({ ...body, targetTenants: named([TENANT_B]) }))).toBeNull()
     expect((await status(two, [TENANT_B, TENANT_C])).status).toBe(402)
 
-    const outside = setup({ sameLicense: false })
-    const response = await plan(outside)
+    const unentitled = setup({ proPair: false })
+    const response = await plan(unentitled)
     expect(response.status).toBe(402)
-    expect(response.body.upgrade).toBe("bulkActions")
-    expect(outside.deps.records.list(DOMAINS.syncRuns, TENANT_A)).toHaveLength(0)
-    // A target planned inside the license is refused once the pair no longer shares it.
+    expect(response.body.upgrade).toBe("sync")
+    expect(unentitled.deps.records.list(DOMAINS.syncRuns, TENANT_A)).toHaveLength(0)
+    // Losing entitlement blocks actions on a previously planned target.
     const later = setup()
     const { targets } = await planned(later)
-    later.setSameLicense(false)
+    later.setProPair(false)
     const preview = await later.post({ tenantId: TENANT_B, action: "preview", id: targets[0]!.promotion!.id })
     expect(preview.status).toBe(402)
-    expect(preview.body.upgrade).toBe("bulkActions")
-    expect(two.targets[TENANT_B]!.writeCount() + outside.targets[TENANT_B]!.writeCount() + later.targets[TENANT_B]!.writeCount()).toBe(0)
+    expect(preview.body.upgrade).toBe("sync")
+    expect(two.targets[TENANT_B]!.writeCount() + unentitled.targets[TENANT_B]!.writeCount() + later.targets[TENANT_B]!.writeCount()).toBe(0)
   })
 
   it("keeps acting on one target of a multi-target run an MSP action", async () => {
@@ -1097,14 +1097,14 @@ describe("Sync and Dev to Prod stay apart", () => {
     expect(changeSets(context, TENANT_B).find((changeSet) => changeSet.id === targets[0]!.promotion!.changeSetId)!.status).toBe("in-review")
   })
 
-  it("rejects a Sync target with no reviewer or note, inside the license rule", async () => {
+  it("rejects a Sync target with no reviewer or note while both tenants are entitled", async () => {
     const context = setup()
     const { targets } = await planned(context)
-    context.setSameLicense(false)
+    context.setProPair(false)
     const refused = await context.post({ tenantId: TENANT_B, action: "reject", id: targets[0]!.promotion!.id })
     expect(refused.status).toBe(402)
-    expect(refused.body.upgrade).toBe("bulkActions")
-    context.setSameLicense(true)
+    expect(refused.body.upgrade).toBe("sync")
+    context.setProPair(true)
     const rejected = await context.post({ tenantId: TENANT_B, action: "reject", id: targets[0]!.promotion!.id })
     expect(rejected.status).toBe(200)
     expect(rejected.body.promotion.status).toBe("rejected")
@@ -1119,7 +1119,7 @@ describe("Sync and Dev to Prod stay apart", () => {
     context.targets[TENANT_B]!.filters = [{ id: "f1", displayName: "Corporate devices" }]
     const objects = await context.post({ tenantId: TENANT_A, action: "target-objects", targetTenantId: TENANT_B, kind: "filter" })
     expect(objects.body).toEqual({ objects: [{ id: "f1", name: "Corporate devices" }], readable: true })
-    context.setSameLicense(false)
+    context.setProPair(false)
     expect((await context.post({ tenantId: TENANT_A, action: "target-objects", targetTenantId: TENANT_B, kind: "filter" })).status).toBe(402)
   })
 })
@@ -1129,8 +1129,7 @@ describe("Sync targets", () => {
 
   it("lists every other connected tenant with whether it can be a target, by the rule plan and status apply", async () => {
     const context = setup({ plans: { [TENANT_A]: "pro", [TENANT_B]: "pro", [TENANT_C]: "pro", [TENANT_D]: "community" } })
-    // Only A and B share the Pro license; E is connected but its plan cannot be read.
-    context.deps.sameLicense = (a, b) => [a, b].sort().join() === [TENANT_A, TENANT_B].join()
+    // E is connected but its plan cannot be read.
     context.deps.tenants = () => [TENANT_A, TENANT_B, TENANT_C, TENANT_D, TENANT_E]
     const response = await context.post({ tenantId: TENANT_A, action: "targets" })
     expect(response.status).toBe(200)
@@ -1138,14 +1137,14 @@ describe("Sync targets", () => {
       multiple: false,
       targets: [
         { tenantId: TENANT_B, eligible: true, multiple: false, reason: null },
-        { tenantId: TENANT_C, eligible: false, multiple: false, reason: "msp" },
+        { tenantId: TENANT_C, eligible: true, multiple: false, reason: null },
         { tenantId: TENANT_D, eligible: false, multiple: false, reason: "plan" },
         { tenantId: TENANT_E, eligible: false, multiple: false, reason: "unavailable" },
       ],
     })
     // The same tenants pass or fail requireSyncTenants on a gated action.
     expect((await status(context, [TENANT_B])).status).toBe(200)
-    expect((await status(context, [TENANT_C])).status).toBe(402)
+    expect((await status(context, [TENANT_C])).status).toBe(200)
     expect((await status(context, [TENANT_D])).status).toBe(402)
     expect(context.source.writeCount()).toBe(0)
   })

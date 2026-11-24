@@ -20,7 +20,7 @@ import { containsRedaction, MAX_OPERATIONS, sanitizeSnapshot, type ChangeSetReco
 import { comparePolicy, comparePolicySets, mergePolicy, policyHash, unresolvedKeys, type Choice, type PolicyComparison, type SettingDecision } from "../baseline-upgrades/merge"
 import { getBaselineSource, sourcePolicies, storeBaselineSource } from "../baseline-upgrades/service"
 import { defaultSources as upgradeSources, offeredOver, type BaselineSources } from "../baseline-upgrades/sources"
-import { requireSourceTenant } from "../promotion/targets"
+import { requireOtherTenant } from "../promotion/targets"
 import { collectFromBackup } from "../hygiene/inventory"
 import {
   applyEdits,
@@ -378,7 +378,10 @@ export function saveVersion(deps: FeatureDeps, tenantId: string, id: string, inp
  */
 export async function deployVersion(deps: FeatureDeps, context: { tenantId: string; plan: Plan; targetTenants: string[] }, input: { baselineId: string; sourceTenantId: string | null; version: number | null; policyKeys: string[] | null; title: string | null; ticket: string | null }, actor: Actor): Promise<{ deployment: Stored<DeploymentRecord>; changeSet: Stored<ChangeSetRecord> }> {
   const target = context.tenantId
-  const owner = input.sourceTenantId && input.sourceTenantId.toLowerCase() !== target ? requireSourceTenant({ ...context, deps }, input.sourceTenantId, { distinct: true }) : target
+  const owner = input.sourceTenantId && input.sourceTenantId.toLowerCase() !== target ? requireOtherTenant(context, input.sourceTenantId) : target
+  if (owner !== target && context.plan === "pro" && !deps.sameLicense(owner, target)) {
+    throw new FeatureError("On Pro, both tenants must be the two tenants covered by the same license, or two tenants that each run a Pro trial.", 403)
+  }
   const baseline = getBaseline(deps, owner, input.baselineId)
   const version = getVersion(deps, owner, baseline, input.version)
   const open = listDeployments(deps, target).filter((entry) => entry.baselineId === baseline.id && entry.baselineTenantId === owner).map((entry) => syncDeployment(deps, target, entry.id)).find((entry) => entry.status === "change-set")

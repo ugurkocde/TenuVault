@@ -153,12 +153,13 @@ export function ChooseSettings({ sources, sourceId, onSource, folder, onFolder, 
 }
 
 const REASON: Record<NonNullable<SyncTargetOption["reason"]>, { chip: string; title: string }> = {
-  msp: { chip: "MSP", title: "Copying to this tenant is part of MSP." },
-  plan: { chip: "Not in plan", title: "This tenant's plan does not include Copy to Tenants." },
+  plan: { chip: "Not in plan", title: "This tenant needs an active Pro or MSP plan to receive copies." },
   unavailable: { chip: "Not available", title: "Sign in to this tenant and check its license first." },
 }
 
-/** Step 2: every other connected tenant as a card; on Pro only the other tenant of the license can be chosen. */
+export const COPY_TARGET_PLAN_NOTE = "Pro copies to one tenant per run, including tenants on a Pro trial or MSP. Copying to several tenants at once requires MSP on every tenant in the run."
+
+/** Step 2: pick eligible targets. Pro allows one target per run. */
 export function ChooseTargets({ sourceName, options, loading, error, tenantOf, linked, selected, onToggle, onBack, onNext, planning }: {
   sourceName: string
   options: SyncTargetOption[]
@@ -172,7 +173,7 @@ export function ChooseTargets({ sourceName, options, loading, error, tenantOf, l
   onNext: () => void
   planning: boolean
 }) {
-  const mspOnly = options.some((option) => option.reason === "msp")
+  const singleTargetOnly = options.some((option) => option.eligible && !option.multiple)
   return (
     <section aria-label="Choose targets" className={card}>
       <CardHead title="Where should these settings go?" description={`Pick the tenants to copy to. ${sourceName} does not change.`} />
@@ -224,11 +225,11 @@ export function ChooseTargets({ sourceName, options, loading, error, tenantOf, l
             })}
           </div>
         )}
-        {mspOnly && (
+        {singleTargetOnly && (
           <p className="mt-3 flex items-center gap-2.5 rounded-2xl bg-secondary px-4 py-3 text-sm text-gray-700">
             <Info className="h-4 w-4 shrink-0" aria-hidden="true" />
             <span>
-              Pro copies between the two tenants of your license, or between two tenants that each run a Pro trial. Copying to more tenants is part of MSP.{" "}
+              {COPY_TARGET_PLAN_NOTE}{" "}
               <button type="button" className="font-semibold underline underline-offset-2" onClick={() => void bridge.license.open("buy", { source: "sync-targets" })}>See plans</button>
             </span>
           </p>

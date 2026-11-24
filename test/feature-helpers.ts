@@ -44,6 +44,7 @@ export function fakeDeps(options: { plans?: Record<string, Plan>; graph?: (tenan
       if (!plan) throw new Error("This tenant is not licensed.")
       return plan
     },
+    proPair: () => true,
     sameLicense: () => true,
     tenant: profile,
     tenants: () => Object.keys(plans),

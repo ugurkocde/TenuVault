@@ -50,20 +50,19 @@ const LISTS: Record<Exclude<ReferenceKind, "group">, { path: string; select: str
   reusableSetting: { path: "deviceManagement/reusablePolicySettings", select: "id,displayName,settingDefinitionId,lastModifiedDateTime,version" },
 }
 
-/**
- * Checks the source tenant of a two-tenant action. The source must be passed in
- * `targetTenants` so the route checked its license; on Pro both tenants must be covered by
- * the same license, or each by a Pro trial. MSP bulk or portfolio endpoints are not involved.
- */
-export function requireSourceTenant(context: { tenantId: string; plan: Plan; deps: FeatureDeps; targetTenants: string[] }, sourceTenantId: unknown, options: { distinct?: boolean } = {}): string {
+/** Requires a distinct source whose feature access the route has checked. */
+export function requireOtherTenant(context: { tenantId: string; targetTenants: string[] }, sourceTenantId: unknown): string {
   if (!isGuid(sourceTenantId)) throw new FeatureError("Choose the source tenant.")
   const source = sourceTenantId.toLowerCase()
-  if (source === context.tenantId) {
-    if (options.distinct) throw new FeatureError("Choose a source tenant different from the destination.")
-    return source
-  }
+  if (source === context.tenantId) throw new FeatureError("Choose a source tenant different from the destination.")
   if (!context.targetTenants.includes(source)) throw new FeatureError("The source tenant must be named in targetTenants so its license is checked.")
-  if (context.plan === "pro" && !context.deps.sameLicense(source, context.tenantId)) throw new FeatureError("On Pro, both tenants must be the two tenants covered by the same license, or two tenants that each run a Pro trial.", 403)
+  return source
+}
+
+/** Dev to Prod checks the same entitlement rule as single-target Copy to Tenants. */
+export function requireSourceTenant(context: { tenantId: string; deps: FeatureDeps; targetTenants: string[] }, sourceTenantId: unknown): string {
+  const source = requireOtherTenant(context, sourceTenantId)
+  if (!context.deps.proPair(source, context.tenantId)) throw new FeatureError("Both tenants need an active Pro or MSP plan, including Pro trials.", 403)
   return source
 }
 

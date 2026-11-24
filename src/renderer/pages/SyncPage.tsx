@@ -29,7 +29,7 @@ import {
   type SyncTargetOption,
 } from "../features/sync/api"
 import { awaitingReview, discardable, excludedReason, needsSecretAck, OUTCOME_CHIP, plural, policyKey, policyStatus, readiness, relativeTime, runOutcome, type ReviewState } from "../features/sync/model"
-import { card, ChooseSettings, ChooseTargets, ReviewStep, Stepper, type SelectedPolicy } from "../features/sync/SyncSteps"
+import { card, ChooseSettings, ChooseTargets, COPY_TARGET_PLAN_NOTE, ReviewStep, Stepper, type SelectedPolicy } from "../features/sync/SyncSteps"
 import { resultEntries, SyncResult } from "../features/sync/SyncResult"
 
 const LEAD = "Copy settings from one tenant to others, one way, when you start it. Every target is reviewed and can be rolled back."
@@ -63,7 +63,7 @@ export default function SyncPage() {
             "Pick policies in one tenant and copy them to another, for example from a lab tenant to production.",
             "Every target is reviewed against its live state before anything is written, with a backup first unless you skip it.",
             "The next copy updates the policies it created, so nothing is duplicated. Copy to Tenants never runs on its own.",
-            "Pro copies between the two tenants of your license, or between two tenants that each run a Pro trial. Copying to more tenants is part of MSP.",
+            COPY_TARGET_PLAN_NOTE,
           ]}
         />
       ) : (
