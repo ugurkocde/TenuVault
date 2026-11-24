@@ -72,7 +72,7 @@ import { createBridgedFetch } from "./api/fetch-bridge"
 import { rejectProxyAuthResponses, withNetworkErrors } from "./api/network-error"
 import { ApiHost } from "./api/host"
 import { routes } from "./api/routes"
-import { AuthManager, isResourceScope, requireOwnReauthenticationClient, SignInRequiredError } from "./auth/msal"
+import { isFreshIdToken, AuthManager, isResourceScope, requireOwnReauthenticationClient, SignInRequiredError } from "./auth/msal"
 import { TenantConnections } from "./auth/tenant-connections"
 import { ConnectionCapabilities } from "./auth/connection-capabilities"
 import { connectionChoice, connectionCoverage } from "./auth/connection-coverage"
@@ -403,7 +403,11 @@ async function bootstrap(): Promise<void> {
     appVersion: app.getVersion(),
     // The ID token proves the tenant for organization license sharing; its audience is
     // the app registration the tenant is signed in with.
-    idToken: async (tenantId) => stagedWizardProof.get(tenantId)?.idToken ?? auth.getIdToken(tenantId),
+    idToken: async (tenantId) => {
+      const staged = stagedWizardProof.get(tenantId)
+      if (!staged) return auth.getIdToken(tenantId)
+      return isFreshIdToken(staged.idToken) ? staged.idToken : null
+    },
     clientId: (tenantId) => stagedWizardProof.get(tenantId)?.clientId ?? accounts.get(tenantId)?.clientId ?? null,
     ownClientId: (tenantId) => {
       const connection = connections.get(tenantId)

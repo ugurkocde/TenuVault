@@ -338,7 +338,7 @@ export const TRIAL_END_NOTICE_DAYS = 60
 type ConnectMethod = "graphCli" | "tenuvaultApp"
 interface LicenseHealthResponse {
   connectMethods?: Partial<Record<ConnectMethod, unknown>>
-  organizationLicenses?: { clientIdSets?: unknown }
+  organizationLicenses?: { clientIdSets?: unknown; tenantIdHashes?: unknown }
   tenantTrials?: Partial<Record<"ok" | "enabled" | "days" | "extensionDays" | "extensionWindowDays" | "extensionGraceDays", unknown>>
 }
 
@@ -354,8 +354,7 @@ export class LicenseService {
   private healthFailures = 0
   private connectMethodsHealth?: { expiresAt: number; enabled: Record<ConnectMethod, boolean> }
   private healthFetch?: Promise<LicenseHealthResponse | null>
-  private sharingCapability?: { expiresAt: number; supported: boolean }
-  private sharingCheck?: Promise<boolean>
+  private organizationHealth?: { expiresAt: number; clientIdSets: boolean; tenantIdHashes: boolean }
   private trialRecords: Record<string, StoredTenantTrial> = {}
   private keyMutation: Promise<void> | null = null
   private readonly tenantMutations = new Map<string, Promise<void>>()
@@ -773,25 +772,47 @@ export class LicenseService {
         expiresAt: Date.now() + 2 * 60_000,
         enabled: { graphCli: data?.connectMethods?.graphCli === true, tenuvaultApp: data?.connectMethods?.tenuvaultApp === true },
       }
+      this.organizationHealth = {
+        expiresAt: this.connectMethodsHealth.expiresAt,
+        clientIdSets: data?.organizationLicenses?.clientIdSets === true,
+        tenantIdHashes: data?.organizationLicenses?.tenantIdHashes === true,
+      }
       return data
     })().finally(() => { this.healthFetch = undefined })
   }
 
   private async supportsClientIdSets(): Promise<boolean> {
-    if (this.sharingCapability && Date.now() < this.sharingCapability.expiresAt) return this.sharingCapability.supported
-    return this.sharingCheck ??= (async () => {
-      const data = await this.fetchHealth()
-      const supported = data?.organizationLicenses?.clientIdSets === true
-      this.sharingCapability = { supported, expiresAt: Date.now() + 2 * 60_000 }
-      return supported
-    })().finally(() => { this.sharingCheck = undefined })
+    if (!this.organizationHealth || Date.now() >= this.organizationHealth.expiresAt) await this.fetchHealth()
+    return this.organizationHealth?.clientIdSets === true
+  }
+
+  private supportsTenantHashes(): boolean {
+    return this.organizationHealth?.tenantIdHashes === true && Date.now() < this.organizationHealth.expiresAt
+  }
+
+  private tenantHashFields(tenantId: string, proof: unknown): { tenantIdHash?: string } {
+    const normalized = tenantId.toLowerCase()
+    if (!proof || !guidPattern.test(normalized) || !this.supportsTenantHashes()) return {}
+    return { tenantIdHash: createHash("sha256").update(normalized, "utf8").digest("hex") }
+  }
+
+  private async keyTenantFields(tenantId: string, share?: boolean, allowGraphCli?: boolean): Promise<Record<string, unknown>> {
+    const fields = await this.sharingFields(tenantId, share, allowGraphCli)
+    const hash = this.tenantHashFields(tenantId, fields.publicClientProof ?? fields.idToken)
+    return { ...fields, ...(hash.tenantIdHash ? hash : { tenantId }) }
   }
 
   private async sharingFields(tenantId: string, share?: boolean, allowGraphCli?: boolean): Promise<Record<string, unknown>> {
-    if (share === false) return { shareWithTenant: false }
     const clientId = this.clientId(tenantId)?.toLowerCase()
     const publicClient = isPublicClient(clientId)
     const supported = (publicClient || this.options.ownClientId || allowGraphCli !== undefined) && await this.supportsClientIdSets()
+    if (share === false) {
+      const choice = { shareWithTenant: false }
+      if (!this.supportsTenantHashes() || !clientId || !guidPattern.test(clientId)) return choice
+      const proof = await this.idToken(tenantId)
+      if (!proof || this.clientId(tenantId)?.toLowerCase() !== clientId) return choice
+      return publicClient ? { ...choice, publicClientProof: proof } : { ...choice, idToken: proof }
+    }
     if (allowGraphCli !== undefined && !supported) throw new Error("The license service does not support Start now sharing yet.")
     // The legacy server preserves the mapping when sharing is requested without proof.
     // Explicit true also avoids the MSP default of removing an existing mapping.
@@ -1222,10 +1243,9 @@ export class LicenseService {
     const data = await this.call("activate", {
       key,
       installId: this.installId,
-      tenantId,
       os: this.platform,
       appVersion: this.options.appVersion,
-      ...(await this.sharingFields(tenantId)),
+      ...(await this.keyTenantFields(tenantId)),
     }, current).catch((error: unknown) => {
       if (error instanceof LicenseDenied && error.reason === "trial_used" && current()) this.failures.set(tenantId, { error, until: Date.now() + FAILURE_COOLDOWN_MS, key })
       throw error
@@ -1250,6 +1270,7 @@ export class LicenseService {
     if (!idToken) throw new NoIdToken()
     return this.call("tenant", {
       ...(publicProof ? { publicClientProof: idToken } : { idToken }),
+      ...this.tenantHashFields(tenantId, idToken),
       installId: this.installId,
       os: this.platform,
       appVersion: this.options.appVersion,
@@ -1364,10 +1385,9 @@ export class LicenseService {
         key,
         activationId: entry.activationId,
         installId: this.installId,
-        tenantId,
         // Lets the service send version 2 tokens to apps that read them.
         appVersion: this.options.appVersion,
-        ...(await this.sharingFields(tenantId, shareWithTenant, allowGraphCli)),
+        ...(await this.keyTenantFields(tenantId, shareWithTenant, allowGraphCli)),
       }, current)
       this.assertCurrent(current)
       this.accept(tenantId, data, "key")

@@ -77,7 +77,7 @@ Large-inventory preparation uses encrypted temporary merge files for sorted obje
 
 The app talks to TenuVault services on `www.tenuvault.com`: the licensing service at `https://www.tenuvault.com/api/desktop-license/`, used for license activation, refresh, release and tenant trials, the trial key service at `https://www.tenuvault.com/api/desktop-trial`, used when you request a trial key by email, and on Pro and MSP the CIS Benchmarks content service at `https://www.tenuvault.com/cis/v1/` (see [CIS Benchmarks content](#cis-benchmarks-content) below). The app never contacts the payment provider directly.
 
-Before a new TenuVault app sign-in, the desktop app checks availability at `https://www.tenuvault.com/api/desktop-license/health`. This request carries no tenant details or Microsoft tokens. For work already running, the desktop app can reuse a successful availability result for up to two minutes. If any check of this endpoint finds the TenuVault app disabled or the service unreachable, the next request that uses the TenuVault app is blocked. Requests already sent can finish.
+The 0.6 release disables TenuVault app sign-in. Start now checks availability at `https://www.tenuvault.com/api/desktop-license/health`. This request carries no tenant details or Microsoft tokens. The desktop app can reuse a successful availability result for up to two minutes.
 
 When you open the pricing page or the checkout (`https://www.tenuvault.com/api/desktop-checkout`) from the app, the link names the screen it was opened from (for example `src=app-license-page`) and carries no identifier.
 
@@ -94,8 +94,8 @@ The link to the free setup call page (`https://www.tenuvault.com/setup-call`) wo
 
 | Request | Fields sent |
 | --- | --- |
-| Activate a license key for a tenant | License key, installation ID, raw tenant ID, operating system and app version. When the tenant has a valid app registration client ID, that client ID and, if available without a prompt, a Microsoft ID token. |
-| Refresh a license key activation | License key, activation ID, installation ID, raw tenant ID and app version. When sharing is on or undecided and the tenant has a valid app registration client ID, that client ID and, if available without a prompt, a Microsoft ID token. The sharing choice is included once set. |
+| Activate a license key for a tenant | License key, installation ID, tenant ID or its hash, operating system and app version. When the tenant has a valid app registration client ID, that client ID and, if available without a prompt, a Microsoft ID token. |
+| Refresh a license key activation | License key, activation ID, installation ID, tenant ID or its hash and app version. A Microsoft ID token is included when available for sharing or when the service supports tenant hashes. The sharing choice is included once set. |
 | Organization license (a license shared with your tenant) | Microsoft ID token, installation ID, operating system, app version, the action (activate, refresh or release) and, for refresh and release, the activation ID and the license's ID. The license key is not sent and never reaches your machine. |
 | Release (remove a tenant or deactivate the machine) | License key and activation ID. For an organization license, the fields in the row above. |
 | Start a tenant trial | Microsoft ID token, installation ID, operating system, app version, action (`start_trial`) and source (`auto` for an automatic start or `opt-in` when you choose to start it). |
@@ -106,7 +106,7 @@ What each field is:
 
 * **License key:** the key from your purchase email. Community sends no key.
 * **Installation ID:** a random identifier generated on your machine and kept in its encrypted store. It identifies this installation, not you or your device.
-* **Tenant ID:** key activation and refresh send the tenant identifier in the request. Organization license requests use the tenant claim in the Microsoft ID token. Licenses are counted per tenant.
+* **Tenant ID:** when the service supports tenant hashes and a recent Microsoft ID token is available, key activation and refresh send a SHA-256 hash of the tenant ID. Older services and key requests without proof receive the tenant ID. Organization license and trial requests use the tenant claim in the ID token and can include the same hash. The ID token still contains the original tenant ID. Licenses are counted per tenant.
 * **Client ID:** the application (client) ID of your app registration. When you share a license with your tenant, only admins who sign in through this app registration are licensed by it.
 * **Operating system and app version:** `win32` or `darwin`, and the TenuVault version number.
 * **Microsoft ID token:** proof of which tenant and app registration you signed in to. It contains identity claims, such as your name and user principal name. The app only sends a token issued within the last few minutes, and never sends access tokens or refresh tokens.

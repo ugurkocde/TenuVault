@@ -1,7 +1,7 @@
 import { GRAPH_CLI_CLIENT_ID, TENUVAULT_CLIENT_ID } from "../src/shared/tenant-connection"
 import { prepareScheduledCoverage } from "../src/main/backup/schedule-prepare"
 import { BackupScheduler } from "../src/main/backup/scheduler"
-import { generateKeyPairSync, sign } from "node:crypto"
+import { createHash, generateKeyPairSync, sign } from "node:crypto"
 import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
 import { MemoryRouter } from "react-router-dom"
@@ -2566,5 +2566,46 @@ describe("Desktop build sign-in availability", () => {
       expect(licensing.connectMethodEnabledNow(method)).toBe(true)
     }
     expect(fetch).not.toHaveBeenCalled()
+  })
+})
+
+describe("tenant hashes on the license wire", () => {
+  const digest = createHash("sha256").update(TENANT, "utf8").digest("hex")
+
+  it.each([
+    { enabled: true, proof: "fresh.signed.token", hashed: true },
+    { enabled: true, proof: null, hashed: false },
+    { enabled: false, proof: "fresh.signed.token", hashed: false },
+    { enabled: "true", proof: "fresh.signed.token", hashed: false },
+    { enabled: undefined, proof: "fresh.signed.token", hashed: false },
+  ])("negotiates key activation and refresh with health $enabled and proof $proof", async ({ enabled, proof, hashed }) => {
+    answer = ({ action }) => action === "health"
+      ? Response.json({ organizationLicenses: { clientIdSets: true, tenantIdHashes: enabled } })
+      : granted("act-1", { shared: true })
+    const licensing = service({ ownClientId: () => APP_ID, idTokenValue: proof })
+    await licensing.setKey("TEST-LICENSE-KEY", [TENANT])
+    await licensing.refreshAll()
+    for (const action of ["activate", "refresh"]) {
+      const body = calls.find(call => call.action === action)?.body
+      expect(body).toBeDefined()
+      if (hashed) {
+        expect(body).toMatchObject({ tenantIdHash: digest, idToken: proof })
+        expect(body).not.toHaveProperty("tenantId")
+      } else {
+        expect(body).toMatchObject({ tenantId: TENANT })
+        expect(body).not.toHaveProperty("tenantIdHash")
+      }
+    }
+  })
+
+  it("pairs the organization hash with the public-client proof", async () => {
+    answer = ({ action }) => action === "health"
+      ? Response.json({ organizationLicenses: { clientIdSets: true, tenantIdHashes: true } })
+      : granted("act-1")
+    const licensing = service({ clientId: () => GRAPH_CLI_CLIENT_ID, idTokenValue: "fresh.signed.token" })
+    await expect(licensing.requireEntitlement(TENANT)).resolves.toBe("pro")
+    expect(calls.find(call => call.action === "tenant")?.body).toMatchObject({
+      tenantIdHash: digest, publicClientProof: "fresh.signed.token", action: "activate",
+    })
   })
 })

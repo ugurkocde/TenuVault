@@ -208,6 +208,11 @@ const GRAPH_CLI_CONSENT_CANCELLED = `Start now sign-in did not complete. ${GRAPH
 const ID_TOKEN_MAX_AGE_MS = 10 * 60_000
 
 /** Issue time (ms) of a JWT, read without verification: the licensing service verifies the token, the app only decides whether to renew it. */
+export function isFreshIdToken(token: string): boolean {
+  const issued = idTokenIssuedAt(token)
+  return issued !== null && Date.now() - issued < ID_TOKEN_MAX_AGE_MS
+}
+
 export function idTokenIssuedAt(token: string): number | null {
   try {
     const claims = JSON.parse(Buffer.from(token.split(".")[1] ?? "", "base64url").toString("utf8")) as { iat?: unknown }
@@ -537,8 +542,7 @@ export class AuthManager {
           forceRefresh,
         })
         if (!result?.idToken) return null
-        const issued = idTokenIssuedAt(result.idToken)
-        if (issued !== null && Date.now() - issued < ID_TOKEN_MAX_AGE_MS) return result.idToken
+        if (isFreshIdToken(result.idToken)) return result.idToken
       } catch {
         return null
       }
