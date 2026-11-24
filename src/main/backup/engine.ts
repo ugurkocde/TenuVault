@@ -976,11 +976,14 @@ export class BackupEngine {
         outcome.saved++
         // Only a committed snapshot can say that the parent configuration was kept.
         for (const { property, error } of unreadExtras) {
-          const reason = `${type.label}: ${property} could not be read; the parent configuration was kept.`
-          const verdict = error instanceof GraphError ? classifyAnswer({ status: error.status, ...error.answer }, { mode: tokens.mode }) : { outcome: "failed" as const }
+          const answer = error instanceof GraphError ? { status: error.status, ...error.answer } : null
+          const code = providerErrorCode(answer?.code)
+          const detail = answer ? ` (${providerStatus(answer.status, code)})` : ""
+          const reason = `${type.label}${detail}: ${property} could not be read; the parent configuration was kept.`
+          const verdict = answer ? classifyAnswer(answer, { mode: tokens.mode }) : { outcome: "failed" as const }
           if (verdict.outcome === "skipped") {
             if (!skippedTypes.includes(type.folder)) skippedTypes.push(type.folder)
-            settle(type.folder, { outcome: "skipped", cause: verdict.cause, reason })
+            settle(type.folder, { outcome: "skipped", cause: verdict.cause, reason, status: answer?.status, ...(code ? { code } : {}) })
             Object.assign(result(type.folder), { state: "skipped", reason })
           } else {
             recordFailure(outcome, error)

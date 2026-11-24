@@ -173,7 +173,9 @@ describe("Entra backup integration", () => {
     }))
     const job = await setup.run({ scope: only("Domains") })
     expect(job.outcomes?.coverage).toBe("incomplete")
-    expect(job.outcomes?.types).toEqual([expect.objectContaining({ folder: "Domains", outcome: "skipped", cause: "permission", saved: 2 })])
+    const evidence = "HTTP 403, Authorization_RequestDenied"
+    expect(job.log.join("\n")).toContain(`Domains (${evidence}): federationConfiguration could not be read; the parent configuration was kept.`)
+    expect(job.outcomes?.types).toEqual([expect.objectContaining({ folder: "Domains", outcome: "skipped", cause: "permission", saved: 2, status: 403, code: "Authorization_RequestDenied" })])
     const objects = (await setup.files(job)).filter(file => file.startsWith("Domains/"))
     expect(objects).toHaveLength(2)
     for (const file of objects) {
@@ -181,7 +183,9 @@ describe("Entra backup integration", () => {
       expect(saved).toMatchObject({ isVerified: true, verificationDnsRecords: [], serviceConfigurationRecords: [] })
       expect(saved).not.toHaveProperty("federationConfiguration")
     }
-    expect((await setup.manifest(job)).SkippedTypes).toContain("Domains")
+    const manifest = await setup.manifest(job)
+    expect(manifest.SkippedTypes).toContain("Domains")
+    expect(manifest.Outcomes[0]).toMatchObject({ Status: 403, Code: "Authorization_RequestDenied", Reason: expect.stringContaining(evidence) })
   })
 
   for (const authenticationType of ["Managed", "Federated", undefined]) it(`treats a federation 404 as empty only for a managed domain (${authenticationType ?? "unknown"})`, async () => {
