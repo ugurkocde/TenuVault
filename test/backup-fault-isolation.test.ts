@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest"
 import { CONSECUTIVE_AUTH_FAILURE_LIMIT, NetworkCircuit } from "../src/main/backup/engine"
 import { GraphSession } from "../src/main/backup/graph-session"
+import { summarizeBackupResults } from "../src/portal/lib/backup-job-display"
 import { GRAPH_CLI_CLIENT_ID } from "../src/shared/tenant-connection"
 import { MODULES, type ModuleId, type ServiceModule } from "../src/shared/services/modules"
 import { fixture, refusal, registerTestTypes, scriptedGraph, testType, type GraphRoute } from "./helpers/backup-fixture"
@@ -594,6 +595,25 @@ describe("Start now backup evidence", () => {
     expect(await f.files(job)).toContain("DeviceConfigurations/Readable.json")
     expect(outcomeOf(job, "DeviceConfigurations")).toMatchObject({ outcome: "failed", error: expect.stringContaining("HTTP 403"), saved: 1 })
     expect(job.coverage).toBe("incomplete")
+  })
+
+  it("finishes with warnings and saves later types when five device profile details are denied", async () => {
+    const path = "/beta/deviceManagement/deviceConfigurations"
+    const profiles = Array.from({ length: 5 }, (_, index) => ({ id: `denied${index + 1}`, displayName: `Restricted ${index + 1}` }))
+    const deniedPaths = profiles.map(({ id }) => `${path}/${id}?$expand=assignments`)
+    const denied = refusal(403, "Forbidden", "Access denied")
+    const f = fixture(tenant({
+      [path]: { value: profiles },
+      ...Object.fromEntries(deniedPaths.map(detail => [detail, denied])),
+    }), { concurrency: 1, graphCliGrant: () => new Set(["DeviceManagementConfiguration.Read.All"]) })
+    const job = await f.run({ clientId })
+    expect(job.status).toBe("Completed")
+    expect(f.requests.filter(request => request.path.startsWith(`${path}/`)).map(request => request.path)).toEqual(deniedPaths)
+    expect(summarizeBackupResults(job.results!, true).partial).toContainEqual(expect.objectContaining({ folder: "DeviceConfigurations", found: 5, saved: 0, failed: 5 }))
+    expect(outcomeOf(job, "DeviceConfigurations")).toMatchObject({ outcome: "failed", saved: 0, error: expect.stringContaining("5 of 5 could not be saved") })
+    expect(outcomeOf(job, "CompliancePolicies")).toMatchObject({ outcome: "saved", saved: 1 })
+    expect(await f.files(job)).toContain("CompliancePolicies/Compliance.json")
+    expect(await f.manifest(job)).toMatchObject({ Status: "CompletedWithWarnings", Coverage: "Incomplete" })
   })
 
   it("uses beta continuation links for a type otherwise read on the stable endpoint", async () => {
