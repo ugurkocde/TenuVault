@@ -484,6 +484,17 @@ describe("Start now loopback sign-in", () => {
     expect(enabled.mock.calls).toEqual([[true], [true]])
   })
 
+  it("uses the signed-in tenant on organizations and refuses it during another tenant's switch", async () => {
+    const auth = manager(undefined, async () => true)
+    const result = { account, idToken: token({ tid: TENANT }),
+      accessToken: token({ tid: TENANT, appid: GRAPH_CLI_CLIENT_ID, scp: "DeviceManagementConfiguration.Read.All" }) }
+    msal.interactive.mockReset().mockResolvedValue(result)
+    await expect(auth.stageGraphCliSignIn("organizations", cache)).resolves.toMatchObject({ account: { tenantId: TENANT } })
+    expect(msal.interactive).toHaveBeenCalledWith(expect.objectContaining({ authority: "https://login.microsoftonline.com/organizations" }))
+    await expect(auth.stageGraphCliSignIn(CLIENT, cache)).rejects.toMatchObject({ code: "wrong_tenant" })
+    expect(auth.accounts()).toEqual([])
+  })
+
   it("keeps an opaque grant unknown and ignores MSAL's request-derived scope field", async () => {
     msal.interactive.mockReset().mockResolvedValue({ account, accessToken: "opaque", scopes: ["DeviceManagementConfiguration.Read.All"] })
     const staged = await manager(undefined, async () => true).stageGraphCliSignIn(TENANT, cache)

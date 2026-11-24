@@ -23,7 +23,8 @@ import { ConnectionCapabilities } from "../src/main/auth/connection-capabilities
 import { createBridgedFetch } from "../src/main/api/fetch-bridge"
 import { executionMetadata } from "../src/main/api/execution-metadata"
 import { suggestsCreatingByHand } from "../src/shared/app-registration"
-const host = () => ({ fetch: vi.fn() as unknown as typeof fetch, openBrowser: vi.fn(async () => undefined), progress: vi.fn() })
+const TENANT = "4c1e5b0a-7d3f-4e2a-9b61-0f8d2c7a9e15"
+const host = () => ({ fetch: vi.fn<typeof fetch>(async () => Response.json({ issuer: `https://login.microsoftonline.com/${TENANT}/v2.0` })), openBrowser: vi.fn(async () => undefined), progress: vi.fn() })
 beforeEach(() => { vi.clearAllMocks() })
 it("uses an isolated memory client, setup scopes and the chosen tenant", async () => {
   const h = host()
@@ -41,21 +42,21 @@ it("uses an isolated memory client, setup scopes and the chosen tenant", async (
     expect(request.errorPage).not.toContain("#16a34a")
     // The page loads nothing from anywhere: no script, no link, no image.
     for (const template of [request.successPage, request.errorPage]) expect(template).not.toMatch(/<script|<link|<img|https?:/)
-    return { account: { tenantId: "tenant", username: "admin" }, accessToken: "ephemeral" }
+    return { account: { tenantId: TENANT, username: "admin" }, idTokenClaims: { tid: TENANT }, accessToken: "ephemeral" }
   })
-  state.provision.mockResolvedValueOnce({ tenantId: "tenant", clientId: "client", username: "admin", reused: false, ready: true })
+  state.provision.mockResolvedValueOnce({ tenantId: TENANT, clientId: "client", username: "admin", reused: false, ready: true })
   const result = await new AppRegistrationSetup(h).create({ tenant: "example.test" })
-  expect(state.configuration?.auth.authority).toBe("https://login.microsoftonline.com/example.test")
+  expect(state.configuration?.auth.authority).toBe(`https://login.microsoftonline.com/${TENANT}`)
   expect(state.configuration).not.toHaveProperty("cache")
   expect(state.configuration?.system?.networkClient).toBeDefined()
-  expect(state.provision).toHaveBeenCalledWith(expect.objectContaining({ token: "ephemeral", tenantId: "tenant", username: "admin" }))
+  expect(state.provision).toHaveBeenCalledWith(expect.objectContaining({ token: "ephemeral", tenantId: TENANT, username: "admin" }))
   expect(result).not.toHaveProperty("token")
   expect(state.clear).toHaveBeenCalled()
 })
 it("hands a choice of services to the provisioning as it is, and none when the admin made none", async () => {
-  const signIn = async () => ({ account: { tenantId: "tenant", username: "admin" }, accessToken: "ephemeral" })
+  const signIn = async () => ({ account: { tenantId: TENANT, username: "admin" }, idTokenClaims: { tid: TENANT }, accessToken: "ephemeral" })
   state.interactive.mockImplementation(signIn)
-  state.provision.mockResolvedValue({ tenantId: "tenant", clientId: "client", username: "admin", reused: false, ready: true, missingConsent: [] })
+  state.provision.mockResolvedValue({ tenantId: TENANT, clientId: "client", username: "admin", reused: false, ready: true, missingConsent: [] })
   const choice = { entra: { access: "backup", areas: ["groups"] }, defender: { access: "backup" } }
   await new AppRegistrationSetup(host()).create({ choice })
   expect(state.provision.mock.calls.at(-1)![0].choice).toEqual(choice)
@@ -72,17 +73,17 @@ it.each([{}, { sharepoint: { access: "backup" } }, { intune: { access: "everythi
   expect(state.provision).not.toHaveBeenCalled()
   expect(h.progress).not.toHaveBeenCalled()
   // The refusal leaves the setup free for the next try.
-  state.interactive.mockImplementationOnce(async () => ({ account: { tenantId: "tenant", username: "admin" }, accessToken: "ephemeral" }))
-  state.provision.mockResolvedValueOnce({ tenantId: "tenant", clientId: "client", username: "admin", reused: false, ready: true, missingConsent: [] })
+  state.interactive.mockImplementationOnce(async () => ({ account: { tenantId: TENANT, username: "admin" }, idTokenClaims: { tid: TENANT }, accessToken: "ephemeral" }))
+  state.provision.mockResolvedValueOnce({ tenantId: TENANT, clientId: "client", username: "admin", reused: false, ready: true, missingConsent: [] })
   await expect(setup.create()).resolves.toMatchObject({ clientId: "client" })
 })
 it.each(["defender"])("refuses unsupported %s restore before any browser or Graph activity", async service => {
   const h = host()
   state.interactive.mockImplementation(async (request: InteractiveRequest) => {
     await request.openBrowser("https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize")
-    return { account: { tenantId: "tenant", username: "admin" }, accessToken: "ephemeral" }
+    return { account: { tenantId: TENANT, username: "admin" }, idTokenClaims: { tid: TENANT }, accessToken: "ephemeral" }
   })
-  state.provision.mockResolvedValue({ tenantId: "tenant", clientId: "client", username: "admin", reused: false, ready: true, missingConsent: [] })
+  state.provision.mockResolvedValue({ tenantId: TENANT, clientId: "client", username: "admin", reused: false, ready: true, missingConsent: [] })
   state.configuration = null
   await expect(new AppRegistrationSetup(h).create({ choice: { [service]: { access: "restore" } } })).rejects.toThrow("Restore access is not available")
   expect(state.configuration).toBeNull()
@@ -173,7 +174,7 @@ it("shows Microsoft's own words for a refusal it has no better text for", () => 
   expect((setupSignInError(new Error("AADSTS50011: The redirect URI does not match.")) as Error).message).toBe("AADSTS50011: The redirect URI does not match. Nothing was changed.")
 })
 it.each(["https://evil.example", "a b", "contoso", "x".repeat(300) + ".com", 42])("refuses a tenant that is not a tenant ID or a domain (%s)", async tenant => {
-  await expect(new AppRegistrationSetup(host()).create({ tenant: tenant as string })).rejects.toThrow("Enter a valid tenant ID or domain.")
+  await expect(new AppRegistrationSetup(host()).create({ tenant: tenant as string })).rejects.toThrow("Enter a tenant ID or verified domain.")
   expect(state.interactive).not.toHaveBeenCalled()
 })
 it("runs one setup at a time", async () => {
@@ -227,15 +228,15 @@ it("stops waiting for the browser after 15 minutes and discards a later answer",
 it("does not keep a timer running after a setup that finished", async () => {
   vi.useFakeTimers()
   try {
-    state.interactive.mockResolvedValueOnce({ account: { tenantId: "tenant", username: "admin" }, accessToken: "ephemeral" })
-    state.provision.mockResolvedValueOnce({ tenantId: "tenant", clientId: "client", username: "admin", reused: false, ready: true, displayName: "TenuVault Desktop", candidateCount: 0, missingConsent: [] })
+    state.interactive.mockResolvedValueOnce({ account: { tenantId: TENANT, username: "admin" }, idTokenClaims: { tid: TENANT }, accessToken: "ephemeral" })
+    state.provision.mockResolvedValueOnce({ tenantId: TENANT, clientId: "client", username: "admin", reused: false, ready: true, displayName: "TenuVault Desktop", candidateCount: 0, missingConsent: [] })
     await new AppRegistrationSetup(host()).create()
     expect(vi.getTimerCount()).toBe(0)
   } finally { vi.useRealTimers() }
 })
 
 it("passes cancellation through after the browser sign-in has finished", async () => {
-  state.interactive.mockResolvedValueOnce({ account: { tenantId: "tenant", username: "admin" }, accessToken: "ephemeral" })
+  state.interactive.mockResolvedValueOnce({ account: { tenantId: TENANT, username: "admin" }, idTokenClaims: { tid: TENANT }, accessToken: "ephemeral" })
   let started!: () => void
   const provisioning = new Promise<void>(resolve => { started = resolve })
   state.provision.mockImplementationOnce(({ signal }: { signal: AbortSignal }) => new Promise((_resolve, reject) => {
@@ -252,8 +253,8 @@ it("passes cancellation through after the browser sign-in has finished", async (
 
 it("reports how the setup sign-in and the provisioning ended, with codes and never messages", async () => {
   const report = vi.fn()
-  const result = { tenantId: "tenant", clientId: "client", username: "admin@contoso.com", reused: true, ready: true, displayName: "TenuVault Desktop", candidateCount: 1, missingConsent: [] }
-  state.interactive.mockResolvedValueOnce({ account: { tenantId: "tenant", username: "admin@contoso.com" }, accessToken: "ephemeral" })
+  const result = { tenantId: TENANT, clientId: "client", username: "admin@contoso.com", reused: true, ready: true, displayName: "TenuVault Desktop", candidateCount: 1, missingConsent: [] }
+  state.interactive.mockResolvedValueOnce({ account: { tenantId: TENANT, username: "admin@contoso.com" }, idTokenClaims: { tid: TENANT }, accessToken: "ephemeral" })
   state.provision.mockResolvedValueOnce(result)
   await new AppRegistrationSetup({ ...host(), report }).create()
   expect(report.mock.calls.map(([event]) => event)).toEqual([
@@ -267,7 +268,7 @@ it("reports how the setup sign-in and the provisioning ended, with codes and nev
   expect(report.mock.calls.map(([event]) => event)).toEqual([{ name: "setup_signin", props: { result: "failed", code: "AADSTS53003" } }])
 
   report.mockClear()
-  state.interactive.mockResolvedValueOnce({ account: { tenantId: "tenant", username: "admin" }, accessToken: "ephemeral" })
+  state.interactive.mockResolvedValueOnce({ account: { tenantId: TENANT, username: "admin" }, idTokenClaims: { tid: TENANT }, accessToken: "ephemeral" })
   state.provision.mockImplementationOnce(async ({ progress }: { progress: (value: { phase: string }) => void }) => {
     progress({ phase: "consent" })
     throw Object.assign(new Error("Graph POST failed: Insufficient privileges for contoso"), { status: 403 })
@@ -276,7 +277,7 @@ it("reports how the setup sign-in and the provisioning ended, with codes and nev
   expect(report.mock.calls.at(-1)?.[0]).toEqual({ name: "registration", props: { result: "failed", phase: "consent", code: "HTTP_403" } })
 
   report.mockClear()
-  state.interactive.mockResolvedValueOnce({ account: { tenantId: "tenant" }, accessToken: "ephemeral" })
+  state.interactive.mockResolvedValueOnce({ account: { tenantId: TENANT }, idTokenClaims: { tid: TENANT }, accessToken: "ephemeral" })
   await expect(new AppRegistrationSetup({ ...host(), report }).create()).rejects.toThrow("did not return the tenant")
   expect(report.mock.calls.map(([event]) => event)).toEqual([{ name: "setup_signin", props: { result: "failed", code: "other" } }])
 })
@@ -290,7 +291,7 @@ it("reports a cancelled sign-in, a cancelled provisioning and a timeout", async 
   await expect(pending).rejects.toThrow("Sign-in cancelled.")
   expect(report).toHaveBeenLastCalledWith({ name: "setup_signin", props: { result: "cancelled" } })
 
-  state.interactive.mockResolvedValueOnce({ account: { tenantId: "tenant", username: "admin" }, accessToken: "ephemeral" })
+  state.interactive.mockResolvedValueOnce({ account: { tenantId: TENANT, username: "admin" }, idTokenClaims: { tid: TENANT }, accessToken: "ephemeral" })
   let started!: () => void
   const provisioning = new Promise<void>(resolve => { started = resolve })
   state.provision.mockImplementationOnce(({ signal }: { signal: AbortSignal }) => new Promise((_resolve, reject) => {
@@ -342,13 +343,13 @@ it("keeps the Microsoft sign-in address only while the setup sign-in waits", asy
     opened()
     return new Promise(resolve => { finish = resolve })
   })
-  state.provision.mockResolvedValueOnce({ tenantId: "tenant", clientId: "client", username: "admin", reused: false, ready: true })
+  state.provision.mockResolvedValueOnce({ tenantId: TENANT, clientId: "client", username: "admin", reused: false, ready: true })
   const setup = new AppRegistrationSetup(host())
   expect(setup.signInLink()).toBeNull()
   const pending = setup.create()
   await browserOpened
   expect(setup.signInLink()).toBe(url)
-  finish({ account: { tenantId: "tenant", username: "admin" }, accessToken: "ephemeral" })
+  finish({ account: { tenantId: TENANT, username: "admin" }, idTokenClaims: { tid: TENANT }, accessToken: "ephemeral" })
   await pending
   expect(setup.signInLink()).toBeNull()
 })
@@ -386,10 +387,10 @@ it("Try again stops only a setup sign-in that waits for the browser, never the p
   const setup = new AppRegistrationSetup(host())
   expect(setup.cancelSignIn()).toBe(false)
   const pending = setup.create()
-  signedIn({ account: { tenantId: "tenant", username: "admin" }, accessToken: "ephemeral" })
+  signedIn({ account: { tenantId: TENANT, username: "admin" }, idTokenClaims: { tid: TENANT }, accessToken: "ephemeral" })
   await provisioning
   expect(setup.cancelSignIn()).toBe(false)
-  finishProvisioning({ tenantId: "tenant", clientId: "client", username: "admin", reused: false, ready: true })
+  finishProvisioning({ tenantId: TENANT, clientId: "client", username: "admin", reused: false, ready: true })
   await expect(pending).resolves.toMatchObject({ clientId: "client" })
 
   state.interactive.mockImplementationOnce(() => new Promise(() => undefined))
@@ -409,7 +410,7 @@ it("sends the opaque setup bearer through the bridge only during provisioning", 
   })
   const url = "https://graph.microsoft.com/beta/applications"
   const headers = { authorization: `Bearer ${token}` }
-  state.interactive.mockResolvedValueOnce({ account: { tenantId: tenant, username: "admin" }, accessToken: token })
+  state.interactive.mockResolvedValueOnce({ account: { tenantId: tenant, username: "admin" }, idTokenClaims: { tid: tenant }, accessToken: token })
   state.provision.mockImplementationOnce(async (input: { fetch: typeof fetch; token: string }) => {
     const context = executionMetadata.getStore()
     expect(context?.registrationSetup).toMatchObject({ tenantId: tenant })

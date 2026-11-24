@@ -1,6 +1,7 @@
+import { ORGANIZATIONS, resolveOnboardingTenant } from "./onboarding-tenant"
 import { randomUUID } from "node:crypto"
 import { checkedOnboardingChoice } from "../../shared/services/onboarding"
-import type { PermissionChoice } from "../../shared/services/manifest"
+import { missingForChoice, type PermissionChoice } from "../../shared/services/manifest"
 import { graphCliCoverage } from "../../shared/services/graph-cli-coverage"
 import { isGuid } from "../../shared/security"
 import { GRAPH_CLI_DISABLED, TENUVAULT_CLIENT_ID, GRAPH_CLI_CLIENT_ID, type WizardSignInMethod, type WizardSignInResponse } from "../../shared/tenant-connection"
@@ -32,6 +33,7 @@ export class WizardSignIn {
   private busy = false
 
   constructor(private readonly host: {
+    resolveTenant?: (input: unknown) => Promise<string>
     connected: (tenant: string) => boolean
     enabled: (method: WizardSignInMethod) => Promise<boolean>
     stage: (tenant: string, method: WizardSignInMethod, choice?: PermissionChoice) => Promise<StagedSignIn>
@@ -47,32 +49,35 @@ export class WizardSignIn {
   }
 
   async stage(tenantId: unknown, method: unknown, services: unknown): Promise<WizardSignInResponse> {
-    if (!isGuid(tenantId) || (method !== "graphCli" && method !== "tenuvaultApp")) {
-      return wizardFailure(new ConnectionSwitchError("invalid_request", "Enter a valid tenant ID."))
+    if (method !== "graphCli" && method !== "tenuvaultApp") {
+      return wizardFailure(new ConnectionSwitchError("invalid_request", "Choose a supported sign-in method."))
     }
-    const tenant = tenantId.toLowerCase()
-    if (this.busy || this.host.connected(tenant)) return wizardFailure(new ConnectionSwitchError("conflict", "This tenant is already connected or signing in."))
+    if (this.busy) return wizardFailure(new ConnectionSwitchError("conflict", "This tenant is already connected or signing in."))
     this.busy = true
     try {
-      const choice = method === "tenuvaultApp" ? wizardChoice(services) : undefined
+      const choice = method === "tenuvaultApp" || services !== undefined ? wizardChoice(services) : undefined
       await this.requireMethod(method)
+      const tenant = await (this.host.resolveTenant ?? resolveOnboardingTenant)(tenantId)
+      if (tenant !== ORGANIZATIONS && this.host.connected(tenant)) throw new ConnectionSwitchError("conflict", "This tenant is already connected.")
       const staged = await this.host.stage(tenant, method, choice)
       const clientId = method === "graphCli" ? GRAPH_CLI_CLIENT_ID : TENUVAULT_CLIENT_ID
-      if (staged.account.tenantId.toLowerCase() !== tenant) throw new ConnectionSwitchError("wrong_tenant", "Sign in with an account from this tenant.")
+      const actualTenant = staged.account.tenantId.toLowerCase()
+      if (!isGuid(actualTenant) || (tenant !== ORGANIZATIONS && actualTenant !== tenant)) throw new ConnectionSwitchError("wrong_tenant", "Sign in with an account from this tenant.")
       if (staged.account.clientId.toLowerCase() !== clientId) throw new ConnectionSwitchError("wrong_client", "Microsoft returned a sign-in for a different app.")
       if (!staged.idToken) throw new ConnectionSwitchError("no_account", "Microsoft did not return a sign-in proof for this tenant.")
-      if (this.host.connected(tenant)) throw new ConnectionSwitchError("conflict", "This tenant was connected during sign-in.")
-      await this.host.startTrial(staged)
+      if (this.host.connected(actualTenant)) throw new ConnectionSwitchError("conflict", "This tenant is already connected.")
+      if (!staged.missingOnboardingScopes?.length) await this.host.startTrial(staged)
       await this.requireMethod(method)
-      if (this.host.connected(tenant)) throw new ConnectionSwitchError("conflict", "This tenant was connected during sign-in.")
+      if (this.host.connected(actualTenant)) throw new ConnectionSwitchError("conflict", "This tenant is already connected.")
       const id = randomUUID()
       this.clear()
-      this.pending = { id, method, staged, choice }
+      this.pending = { id, method, staged, choice: method === "tenuvaultApp" ? choice : undefined }
       this.expiry = setTimeout(() => { void this.discard(id) }, 15 * 60_000)
       this.expiry.unref()
       const { homeAccountId: _, ...account } = staged.account
       const scopes = method === "graphCli" ? staged.graphScopes && new Set(staged.graphScopes) : sharedTokenScopes(staged.accessToken, staged.grantedScopes)
-      return { result: { id, account, coverage: graphCliCoverage(scopes, choice) } }
+      const missing = staged.missingOnboardingScopes ?? (method === "graphCli" && scopes && choice ? missingForChoice(choice, { kind: "delegated", permissions: scopes }) : undefined)
+      return { result: { id, account, coverage: graphCliCoverage(scopes, method === "tenuvaultApp" ? choice : undefined), missing } }
     } catch (error) {
       return wizardFailure(error)
     } finally {
@@ -91,7 +96,7 @@ export class WizardSignIn {
 
   trialContactProof(tenant: string): string | undefined {
     const staged = this.pending?.staged
-    return staged?.account.tenantId === tenant.toLowerCase() && !this.host.connected(tenant) ? staged.idToken : undefined
+    return staged?.account.tenantId === tenant.toLowerCase() && !staged.missingOnboardingScopes?.length && !this.host.connected(tenant) ? staged.idToken : undefined
   }
 
   async finish(id: unknown, profile: unknown, services: unknown) {
@@ -102,7 +107,8 @@ export class WizardSignIn {
     let checkedLicense = false
     try {
       if (typeof profile !== "string" || profile.length > 64_000) throw new ConnectionSwitchError("invalid_request", "Choose valid backup storage.")
-      const choice = pending.choice ?? wizardChoice(services)
+      if (pending.staged.missingOnboardingScopes?.length) throw new ConnectionSwitchError("AADSTS65001", "Check the selected permissions again before continuing.")
+      const choice = pending.method === "tenuvaultApp" ? pending.choice! : wizardChoice(services)
       if (pending.method === "graphCli") for (const service of Object.values(choice)) service.access = "backup"
       await this.requireMethod(pending.method)
       if (this.pending !== pending) throw new ConnectionSwitchError("sign_in_required", EXPIRED)

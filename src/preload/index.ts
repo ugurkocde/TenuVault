@@ -65,6 +65,7 @@ const bridge: TenuVaultPreloadBridge = {
     onAccountsChanged: (listener) => subscribe<string>("auth:accountsChanged", listener),
     reauthenticate: (tenantId, clientId, scope) => invoke("auth:reauthenticate", tenantId, clientId, scope),
     cancelSignIn: () => invoke("auth:cancelSignIn"),
+    reopenSignIn: (kind) => invoke("auth:reopenSignIn", kind),
     copySignInLink: (kind) => invoke("auth:copySignInLink", kind),
     onSignInPhase: (listener) => subscribe<"completing" | "license">("auth:signInPhase", listener),
     onSignInRequired: (listener) => {

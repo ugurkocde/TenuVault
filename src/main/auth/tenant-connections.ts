@@ -48,6 +48,7 @@ function targetOf(input: unknown): { method: SignInMethod; clientId: string } {
 }
 
 export interface StagedSignIn {
+  missingOnboardingScopes?: string[]
   account: StoredAccount
   accessToken: string
   idToken?: string

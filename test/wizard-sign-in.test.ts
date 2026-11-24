@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
+import type { StagedSignIn } from "../src/main/auth/tenant-connections"
 import { WizardSignIn } from "../src/main/auth/wizard-sign-in"
 import { GRAPH_CLI_CLIENT_ID, TENUVAULT_CLIENT_ID } from "../src/shared/tenant-connection"
 
@@ -8,9 +9,9 @@ const account = (clientId: string) => ({ tenantId: TENANT, clientId, homeAccount
 
 function fixture() {
   const host = {
-    connected: vi.fn(() => false),
+    connected: vi.fn((_tenant: string) => false),
     enabled: vi.fn(async () => true),
-    stage: vi.fn(async (_tenant, method) => ({
+    stage: vi.fn(async (_tenant, method): Promise<StagedSignIn> => ({
       account: account(method === "graphCli" ? GRAPH_CLI_CLIENT_ID : TENUVAULT_CLIENT_ID),
       accessToken: "opaque",
       idToken: "id-proof",
@@ -88,6 +89,30 @@ describe("staged wizard sign-in", () => {
     })
     expect(await wizard.stage(TENANT, "graphCli", undefined)).toMatchObject({ error: { code: "wrong_tenant" } })
     expect(host.checkLicense).not.toHaveBeenCalled()
+    expect(host.enroll).not.toHaveBeenCalled()
+  })
+
+  it("rejects a duplicate found after resolving the signed-in tenant", async () => {
+    const { host, wizard } = fixture()
+    host.connected.mockImplementation(tenant => tenant === TENANT)
+    expect(await wizard.stage("", "graphCli", undefined)).toMatchObject({ error: { code: "conflict" } })
+    expect(host.stage).toHaveBeenCalledWith("organizations", "graphCli", undefined)
+    expect(host.connected).toHaveBeenCalledWith(TENANT)
+    expect(host.startTrial).not.toHaveBeenCalled()
+    expect(host.enroll).not.toHaveBeenCalled()
+  })
+
+  it("allows a coverage preview for the app and refuses to enroll without the selected scopes", async () => {
+    const { host, wizard } = fixture()
+    host.stage.mockResolvedValueOnce({
+      ...(await host.stage(TENANT, "tenuvaultApp")),
+      missingOnboardingScopes: ["DeviceManagementApps.Read.All"],
+    })
+    const staged = await wizard.stage("", "tenuvaultApp", CHOICE)
+    expect(staged).toMatchObject({ result: { missing: ["DeviceManagementApps.Read.All"] } })
+    expect(host.startTrial).not.toHaveBeenCalled()
+    const id = "result" in staged ? staged.result.id : ""
+    expect(await wizard.finish(id, "profile", CHOICE)).toMatchObject({ error: { code: "AADSTS65001" } })
     expect(host.enroll).not.toHaveBeenCalled()
   })
 

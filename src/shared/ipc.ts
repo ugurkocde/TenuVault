@@ -501,6 +501,7 @@ export interface TenuVaultBridge {
      * (`setup`) opened to the clipboard. Returns whether there was one; the address itself stays in
      * the main process.
      */
+    reopenSignIn: (kind: "signin" | "setup" | "consent") => Promise<boolean>
     copySignInLink: (kind: "signin" | "setup") => Promise<boolean>
   }
   /** Sign-in for a proxy that requires authentication. */

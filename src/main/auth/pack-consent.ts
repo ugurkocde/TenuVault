@@ -1,3 +1,4 @@
+import { ORGANIZATIONS } from "./onboarding-tenant"
 import { randomBytes } from "node:crypto"
 import { isGuid } from "../../shared/security"
 import { TENUVAULT_CLIENT_ID } from "../../shared/tenant-connection"
@@ -9,7 +10,8 @@ export const HANDOFF_REDIRECT = "https://www.tenuvault.com/connect/consented"
 
 export function buildConsentUrl(tenant: string, pack: PermissionPack, redirect: string, state: string): string {
   const port = /^http:\/\/localhost:([1-9]\d{0,4})$/.exec(redirect)?.[1]
-  if (!isGuid(tenant) || !/^[\w-]{43}$/.test(state) ||
+  const forNewTenant = tenant === ORGANIZATIONS && pack.id === "onboarding-backup" && pack.resource === "graph"
+  if ((!forNewTenant && !isGuid(tenant)) || !/^[\w-]{43}$/.test(state) ||
     (redirect !== HANDOFF_REDIRECT && (!port || Number(port) > 65_535))) {
     throw new Error("The permission request has an invalid tenant, redirect or state.")
   }
@@ -34,7 +36,8 @@ export function parseConsentCallback(query: URLSearchParams, tenant: string, sta
   if (["state", "tenant", "scope", "admin_consent", "error", "error_description", "error_codes"].some(key => query.getAll(key).length > 1) ||
     !sameState(state, query.get("state"))) return failure("invalid_callback", "The consent response did not match this request. Try again.")
   const returnedTenant = query.get("tenant")
-  if ((returnedTenant !== null || !query.has("error")) && returnedTenant?.toLowerCase() !== tenant.toLowerCase()) {
+  const matchesTenant = tenant === ORGANIZATIONS ? isGuid(returnedTenant) : returnedTenant?.toLowerCase() === tenant.toLowerCase()
+  if ((returnedTenant !== null || !query.has("error")) && !matchesTenant) {
     return failure("wrong_tenant", "Microsoft returned consent for a different tenant. Try again with an administrator from this tenant.")
   }
   const error = query.get("error")
@@ -73,11 +76,15 @@ export async function openPackConsent(tenant: string, pack: PermissionPack, open
 
 export function handoffPack(tenant: string, pack: PermissionPack): PackConsentResult {
   const url = buildConsentUrl(tenant, pack, HANDOFF_REDIRECT, randomBytes(32).toString("base64url"))
-  return { status: "handoff", url, message: `Please review the ${pack.label} permission pack for the TenuVault app in tenant ${tenant}. If you approve, open this Microsoft consent link, then let me know so I can check the granted permissions in TenuVault.\n\n${url}` }
+  const directory = tenant === ORGANIZATIONS ? "your organization" : `tenant ${tenant}`
+  return { status: "handoff", url, message: `Please review the ${pack.label} permissions for the TenuVault app in ${directory}. If you approve, open this Microsoft consent link, then let me know so I can check the granted permissions in TenuVault.\n\n${url}` }
 }
 
 export class PackConsentFlow {
   private readonly pending = new Map<string, AbortController>()
+  private browserLink: string | null = null
+
+  signInLink(): string | null { return this.browserLink }
 
   constructor(private readonly host: {
     plan: (tenant: string) => Promise<readonly PermissionPack[] | null>
@@ -101,7 +108,10 @@ export class PackConsentFlow {
         await this.host.signInForPack(tenant, pack, action === "check")
         return { status: "verified" }
       }
-      const result = await openPackConsent(tenant, pack, this.host.openBrowser, AbortSignal.any([controller.signal, AbortSignal.timeout(180_000), ...(signal ? [signal] : [])]))
+      const result = await openPackConsent(tenant, pack, url => {
+        this.browserLink = url
+        return this.host.openBrowser(url)
+      }, AbortSignal.any([controller.signal, AbortSignal.timeout(180_000), ...(signal ? [signal] : [])]))
       return result.status === "error" && result.issue.code === "AADSTS90095" ? { status: "waiting", issue: result.issue } : result
     } catch (error) {
       const issue = consentIssue(error instanceof Error ? error.message : "")
@@ -112,6 +122,7 @@ export class PackConsentFlow {
       return { status: "error", issue: issue ?? { code: "consent_interrupted", message: "The permission request ended. Try again or send the pack to your administrator." } }
     } finally {
       this.pending.delete(tenant)
+      if (action === "open") this.browserLink = null
     }
   }
 

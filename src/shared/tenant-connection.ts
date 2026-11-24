@@ -3,7 +3,7 @@ import type { SignedInAccount } from "./ipc"
 export const GRAPH_CLI_CLIENT_ID = "14d82eec-204b-4c2f-b7e8-296a70dab67e"
 export const TENUVAULT_CLIENT_ID = "61eff188-672b-4be4-acac-2d254a6f9e05"
 
-export const GRAPH_CLI_CONSENT_WARNING = "If Microsoft asks you to approve permissions, cancel and choose another sign-in method."
+export const GRAPH_CLI_CONSENT_WARNING = "Start now uses access your tenant already gives Microsoft Graph Command Line Tools. If Microsoft asks you to approve new permissions, go back and choose the TenuVault app."
 export const GRAPH_CLI_UNAVAILABLE = "Start now is not available in this tenant."
 export const GRAPH_CLI_DISABLED = "Start now sign-in is currently unavailable."
 export const GRAPH_CLI_UPGRADE = "Upgrade to the TenuVault app"
@@ -72,6 +72,7 @@ export interface WizardSignInResult {
   id: string
   account: SignedInAccount
   coverage: BackupScopeCoverage[]
+  missing?: string[]
 }
 export type WizardSignInResponse = { result: WizardSignInResult } | { error: { code: string; message: string } }
 export type WizardFinishResponse = { result: true } | { error: { code: string; message: string } }

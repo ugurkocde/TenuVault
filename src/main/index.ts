@@ -1,3 +1,4 @@
+import { ORGANIZATIONS, resolveOnboardingTenant } from "./auth/onboarding-tenant"
 import { GRAPH_CLI_CLIENT_ID, GRAPH_CLI_CONSENT_WARNING, GRAPH_CLI_DISABLED, GRAPH_CLI_NEXT_STEP, TENUVAULT_CLIENT_ID } from "../shared/tenant-connection"
 import { WizardSignIn, wizardChoice, wizardFailure } from "./auth/wizard-sign-in"
 import { PackConsentFlow } from "./auth/pack-consent"
@@ -1713,21 +1714,15 @@ async function bootstrap(): Promise<void> {
     ? releaseWizardLicense(discardedTenant).catch(() => console.warn("[license] Could not clear an unfinished tenant sign-in"))
     : Promise.resolve()
   const wizard = new WizardSignIn({
+    resolveTenant: input => resolveOnboardingTenant(input, bridgedFetchLater),
     connected: tenant => wizardExistingTenant(tenant) || Boolean(accounts.get(tenant)),
     enabled: method => license.connectMethodEnabled(method, true),
     stage: async (tenant, method, choice) => {
       await cleanupWizard
-      if (method === "graphCli") {
-        const response = await dialog.showMessageBox(mainWindow!, {
-          title: "Sign in with Start now", message: GRAPH_CLI_CONSENT_WARNING,
-          buttons: ["Cancel", "Continue to Microsoft"], defaultId: 0, cancelId: 0,
-        })
-        if (response.response !== 1) throw new ConnectionSwitchError("cancelled", "Sign-in cancelled.")
-        return stageGraphCli(tenant).finally(returnToApp)
-      }
+      if (method === "graphCli") return stageGraphCli(tenant).finally(returnToApp)
       const staged = stageConnectionCache(cache, TENUVAULT_CLIENT_ID)
       const packs = tenantPermissionPacks(choice!, { azure: false, audit: false })
-      return { ...(await auth.stageTenuVaultSignIn(tenant, staged.plugin, packs).finally(returnToApp)), cacheWrites: staged.cacheWrites }
+      return { ...(await auth.stageTenuVaultSignIn(tenant, staged.plugin, packs, true).finally(returnToApp)), cacheWrites: staged.cacheWrites }
     },
     startTrial: async ({ account, idToken }) => {
       stagedWizardProof.set(account.tenantId, { idToken: idToken!, clientId: account.clientId })
@@ -1763,15 +1758,18 @@ async function bootstrap(): Promise<void> {
   handleTrusted("auth:wizardStage", (_event, tenant, method, choice) => wizard.stage(tenant, method, choice))
   handleTrusted("auth:wizardFinish", (_event, id, profile, choice) => wizard.finish(id, profile, choice))
   handleTrusted("auth:wizardDiscard", (_event, id) => wizard.discard(id))
-  handleTrusted("auth:wizardPackConsent", (_event, tenant, value, pack, action) => {
-    if (!isGuid(tenant)) return { status: "error", issue: { code: "invalid_request", message: "Enter a valid tenant ID." } }
-    const selected = () => {
-      try { return wizardChoice(value) } catch { return null }
-    }
-    return packConsent.act(tenant.toLowerCase(), pack, action, async id => {
-      const choice = selected()
-      if (!choice || wizardExistingTenant(id) || !await license.tenuvaultAppEnabled(true) || wizardExistingTenant(id)) return null
-      return tenantPermissionPacks(choice, { azure: false, audit: false })
+  handleTrusted("auth:wizardPackConsent", async (_event, input, value, pack, action) => {
+    const choice = (() => { try { return wizardChoice(value) } catch { return null } })()
+    if (!choice || !await license.tenuvaultAppEnabled(true)) return { status: "error", issue: { code: "unavailable", message: "This permission request is unavailable." } }
+    let tenant: string
+    try { tenant = await resolveOnboardingTenant(input, bridgedFetchLater) }
+    catch (error) { return { status: "error", issue: wizardFailure(error).error } }
+    // Consent is a browser receipt only. wizardStage still requires the signed-in tenant and all selected permissions.
+    if (tenant === ORGANIZATIONS && action !== "open" && action !== "handoff") return { status: "error", issue: { code: "invalid_request", message: "Sign in first to check permissions." } }
+    return packConsent.act(tenant, pack, action, async id => {
+      if (wizardExistingTenant(id) || !await license.tenuvaultAppEnabled(true) || wizardExistingTenant(id)) return null
+      const packs = tenantPermissionPacks(choice, { azure: false, audit: false })
+      return [{ id: "onboarding-backup", label: "selected backup", resource: "graph", scopes: [...new Set(packs.flatMap(item => item.scopes))] }, ...packs]
     }).finally(returnToApp)
   })
   handleTrusted("setup:enrollOwnApp", (_event, tenant, clientId, profile, value) => {
@@ -1845,6 +1843,12 @@ async function bootstrap(): Promise<void> {
   // Copies the sign-in address a waiting sign-in opened, for another browser. Only whether it was
   // copied goes back; the address goes from here to the clipboard.
   handleTrusted("auth:copySignInLink", (_event, kind: unknown) => copySignInLink(kind, { signin: () => auth.signInLink(), setup: () => registrationSetup.signInLink() }, (text) => clipboard.writeText(text)))
+  handleTrusted("auth:reopenSignIn", async (_event, kind: unknown) => {
+    const url = kind === "signin" ? auth.signInLink() : kind === "setup" ? registrationSetup.signInLink() : kind === "consent" ? packConsent.signInLink() : null
+    if (!url || !isMicrosoftLoginUrl(url)) return false
+    await shell.openExternal(url)
+    return true
+  })
   // The setup script leaves its two closing lines on the clipboard; only those two IDs are passed on.
   // Electron reads the clipboard asynchronously, so the text has to be awaited before it is parsed.
   handleTrusted("setup:clipboardIds", async () => setupIdsFromClipboard(await clipboard.readText()))
