@@ -16,6 +16,7 @@ import { ConnectionCapabilities, READ_ONLY } from "../src/main/auth/connection-c
 import { createBridgedFetch } from "../src/main/api/fetch-bridge"
 import { executionMetadata } from "../src/main/api/execution-metadata"
 import { ApiHost } from "../src/main/api/host"
+import { createArmCaller } from "../src/main/azure/arm"
 import { withRouteTenant } from "../src/main/storage/blob-emulator"
 
 const TENANT = "aaaaaaaa-1111-1111-1111-111111111111"
@@ -483,6 +484,76 @@ describe("Start now capability", () => {
 })
 
 
+describe("dispatch after asynchronous authorization", () => {
+  it.each([
+    ["ARM deployment", "https://management.azure.com/subscriptions/fixture/providers/Microsoft.Resources/deployments/watcher?api-version=2022-09-01", RESOURCE_SCOPES.management],
+    ["watcher alerts.json", "https://backupfixture.blob.core.windows.net/tenuvault-notification-state/alerts.json", RESOURCE_SCOPES.storage],
+  ])("stops the %s PUT when its tenant switches to Start now", async (_, url, scope) => {
+    const own = { version: 1, clientId: OWN, method: "ownApp", origin: "wizard", createdAt: NOW, updatedAt: NOW } as const
+    let current: TenantConnection = own
+    let next: TenantConnection = { ...own, clientId: NEXT }
+    const caps = new ConnectionCapabilities(id => id === TENANT ? current : null)
+    const network = vi.fn<typeof fetch>(async () => new Response("{}"))
+    const fetch = createBridgedFetch({
+      dispatch: vi.fn(), getDelegatedToken: vi.fn(), fetch: network,
+      authorizeRequest: async (...args) => {
+        const authorization = await caps.authorizeRequest(...args)
+        current = next
+        return authorization
+      },
+    })
+    const token = "opaque-azure-token"
+    caps.requireIssuedToken(TENANT, OWN, scope, token)
+    const run = () => executionMetadata.run({ connections: caps.bindConnections([TENANT]) }, () => {
+      if (scope === RESOURCE_SCOPES.management) {
+        const path = new URL(url)
+        return createArmCaller({ fetch, getToken: async () => token })({ method: "PUT", path: path.pathname + path.search, body: {} })
+      }
+      return fetch(url, { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: "{}" }).then(response => ({ status: response.status }))
+    })
+    await expect(run()).resolves.toMatchObject({ status: 200 })
+    expect(network).toHaveBeenCalledExactlyOnceWith(url, expect.objectContaining({ method: "PUT" }))
+
+    current = own
+    next = { ...own, clientId: GRAPH_CLI_CLIENT_ID, method: "graphCli" }
+    await expect(run()).rejects.toThrow(READ_ONLY)
+    expect(network).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    ["graphCli", GRAPH_CLI_CLIENT_ID, "GET"],
+    ["graphCli", GRAPH_CLI_CLIENT_ID, "POST"],
+    ["tenuvaultApp", TENUVAULT_CLIENT_ID, "GET"],
+    ["tenuvaultApp", TENUVAULT_CLIENT_ID, "POST"],
+  ] as const)("stops a read when cached availability changes for %s (%#)", async (method, clientId, verb) => {
+    let enabled = true
+    let disableBeforeDispatch = false
+    const caps = new ConnectionCapabilities(() => ({
+      version: 1, clientId, method, origin: "wizard", createdAt: NOW, updatedAt: NOW,
+    }), undefined, async () => enabled, () => enabled)
+    const network = vi.fn<typeof fetch>(async () => new Response("{}"))
+    const fetch = createBridgedFetch({
+      dispatch: vi.fn(), getDelegatedToken: vi.fn(), fetch: network,
+      authorizeRequest: async (...args) => {
+        const authorization = await caps.authorizeRequest(...args)
+        if (disableBeforeDispatch) enabled = false
+        return authorization
+      },
+    })
+    const token = "opaque-graph-token"
+    caps.requireIssuedToken(TENANT, clientId, RESOURCE_SCOPES.graph, token)
+    const send = () => fetch(`https://graph.microsoft.com/beta/${verb === "GET" ? "users" : "$batch"}`, {
+      method: verb,
+      headers: { authorization: `Bearer ${token}` },
+      ...(verb === "POST" ? { body: JSON.stringify({ requests: [{ id: "1", method: "GET", url: "/users" }] }) } : {}),
+    })
+    await expect(send()).resolves.toMatchObject({ status: 200 })
+    disableBeforeDispatch = true
+    await expect(send()).rejects.toThrow("currently unavailable")
+    expect(network).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe("TenuVault app capabilities", () => {
   it("requires the chosen, verified service restore pack and its scopes in the delegated token", async () => {
     let packs = tenantPermissionPacks({ intune: { access: "backup" } }, { azure: false, audit: false })
@@ -601,7 +672,7 @@ describe("TenuVault app capabilities", () => {
       cap.requireIssuedToken(TENANT, clientId, RESOURCE_SCOPES.graph, "opaque-shared-token", { grantedScopes: scopes })
       const read = cap.authorizeRequest(url, url, { headers }, TENANT)
       if (method === "graphCli") await expect(read).resolves.toMatchObject({ url: { href: url.href } })
-      else await expect(read).resolves.toBeUndefined()
+      else await expect(read).resolves.toMatchObject({ beforeDispatch: expect.any(Function) })
       const write = cap.authorizeRequest(url, url, { method: "POST", headers }, TENANT)
         .then(authorization => authorization?.beforeDispatch?.())
       if (method === "graphCli") await expect(write).rejects.toThrow(READ_ONLY)

@@ -724,6 +724,7 @@ async function bootstrap(): Promise<void> {
       const jobId = guidOf(body.jobId)
       return { status: "ok", runAt: body.runAt, lastError, alertsHash, runbookVersion, alertsSource, identityPrincipalId, jobId }
     },
+    withTenantConnection: (tenantId, run) => capabilities.withTenantConnection(tenantId, run),
     // The alerts the watcher reads on its next run, written next to its state (Alerts > Update watcher).
     watcherAlertsWrite: async (tenantId, text) => {
       const profile = tenantProfile(tenantId)

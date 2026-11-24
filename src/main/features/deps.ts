@@ -58,6 +58,8 @@ export interface FeatureDeps {
   externalFetch: typeof fetch
   /** A system notification on this computer. */
   notify: (title: string, body: string) => void
+  /** Keep the admitted sign-in through queued or background watcher work. */
+  withTenantConnection?: <T>(tenantId: string, run: () => T) => T
   /**
    * The Azure watcher's heartbeat.json from the tenant's backup storage account, read with the
    * signed-in admin's storage token. "missing" when there is none (or the storage is local).
@@ -78,6 +80,10 @@ export interface FeatureDeps {
   /** The PDF branding the tenant's plan allows. */
   pdfBranding?: (tenantId: string) => Promise<PdfBranding | undefined>
   now: () => Date
+}
+
+export function withTenantConnection<T>(deps: FeatureDeps, tenantId: string, run: () => T): T {
+  return deps.withTenantConnection ? deps.withTenantConnection(tenantId, run) : run()
 }
 
 /**

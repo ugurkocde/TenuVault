@@ -2566,11 +2566,12 @@ describe("TenuVault app availability", () => {
     const license = service({ fetch: health })
     const capabilities = new ConnectionCapabilities(() => ({
       version: 1, origin: "wizard", method: "tenuvaultApp", clientId: TENUVAULT_CLIENT_ID, createdAt: "", updatedAt: "",
-    }), undefined, method => license.connectMethodEnabled(method))
+    }), undefined, method => license.connectMethodEnabled(method), method => license.connectMethodEnabledNow(method))
     const url = new URL("https://graph.microsoft.com/beta/organization")
     const bearer = "opaque-shared-token"
     capabilities.requireIssuedToken(TENANT, TENUVAULT_CLIENT_ID, "https://graph.microsoft.com/.default", bearer)
     const request = () => capabilities.authorizeRequest(url, url, { headers: { Authorization: `Bearer ${bearer}` } }, TENANT)
+      .then(authorization => authorization?.beforeDispatch?.())
     await expect(request()).resolves.toBeUndefined()
     if (check === "new sign-in") expect(await license.tenuvaultAppEnabled(true)).toBe(false)
     else await license.checkTrialHealth()
