@@ -32,10 +32,10 @@ export function TenantConnectionSettings({ tenantId, clientId, onChanged }: {
       onChanged(result.connection.clientId)
       setOpen(false)
       toast(result.missing.length
-        ? "Sign-in method updated. Review missing permissions under Services and permissions."
-        : "Sign-in method updated.", "success")
+        ? "App registration updated. Review missing permissions under Services and permissions."
+        : "App registration updated.", "success")
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : "The sign-in method could not be changed.")
+      setError(failure instanceof Error ? failure.message : "The app registration could not be changed.")
     } finally {
       setBusy(false)
     }
@@ -46,13 +46,13 @@ export function TenantConnectionSettings({ tenantId, clientId, onChanged }: {
     <div className="mt-2 flex flex-wrap items-center gap-2">
       <p className="text-xs text-gray-500">Sign-in method: {SIGN_IN_METHODS[connection.method]}</p>
       <Button variant="outline" size="sm" onClick={() => { setNextClientId(""); setError(undefined); setOpen(true) }}>
-        Change sign-in method
+        Change app registration
       </Button>
       <Dialog open={open} onOpenChange={value => { if (!busy) setOpen(value) }}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Change sign-in method</DialogTitle>
-            <DialogDescription>Sign in with your own app registration for this tenant. Your backups, schedules and license stay with the tenant.</DialogDescription>
+            <DialogTitle>Change app registration</DialogTitle>
+            <DialogDescription>Sign in with your own app registration for this tenant. Your backups and schedules stay with the tenant.</DialogDescription>
           </DialogHeader>
           <label className="block text-sm font-medium">
             Application (client) ID

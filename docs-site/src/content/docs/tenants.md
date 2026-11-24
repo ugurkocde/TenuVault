@@ -220,4 +220,4 @@ See [Plans and features](/licensing/) for the full comparison.
 
 ## Tenant sign-in method
 
-Tenants connected with the original setup keep their own app registration and existing backup choices. If **Change sign-in method** appears for a tenant under **Settings > Sign-in**, you can sign in with a different app registration for the same tenant. TenuVault checks the tenant ID and permissions before saving the change. Your backups, history, schedules, settings and license or trial remain with the tenant.
+Tenants connected with the original setup keep their own app registration and existing backup choices. If **Change app registration** appears for a tenant under **Settings > Sign-in**, you can sign in with a different app registration for the same tenant. TenuVault checks the tenant ID and permissions before saving the change. Your backups, history, schedules, settings and trial remain with the tenant. An organization license follows a change to a shared sign-in client once the license service supports that client for your tenant. Until then, use the tenant's own app registration to renew an existing organization license.
