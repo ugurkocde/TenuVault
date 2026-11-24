@@ -72,7 +72,7 @@ describe("Backup Details and coverage", () => {
       skippedTypes: ["PowerShellScripts", "PowerShellScripts"], notReadCauses: { PowerShellScripts: "permission" },
     }))
     const card = page.querySelector('[data-notice-tone="error"]')!
-    expect(card.querySelector('[role="alert"]')?.textContent).toBe("Needs access for 1 backup type. 3 items or types could not be read.")
+    expect(card.querySelector('[role="alert"]')?.textContent).toBe("3 items or types could not be read. Needs access for 1 backup type.")
     const toggle = card.querySelector<HTMLButtonElement>('button[aria-expanded]')!
     const panel = document.getElementById(toggle.getAttribute("aria-controls")!)!
     expect(panel.hidden).toBe(true)

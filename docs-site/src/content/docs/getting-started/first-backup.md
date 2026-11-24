@@ -9,7 +9,7 @@ The last setup step takes a first backup, so you know sign-in, permissions and s
 
 Select **Start first backup** on **Where should backups go?**. The backup starts automatically and the progress bar shows what TenuVault is saving. Select **Cancel backup** to stop it.
 
-When **Your first backup is done** appears, you can review the counts and duration, expand **See backup details**, or set up the options below. Select **Go to dashboard** when you are ready to leave setup. The diagnostics question below the card is optional. On the Dashboard, **Turn on daily backups** opens Schedule, and **View backup** opens the saved backup. The first-backup card stays until you dismiss it or a second backup succeeds.
+When **Your first backup is done** appears, you can review the counts and duration, expand **See backup details**, or set up the options below. Select **Go to dashboard** when you are ready to leave setup. The diagnostics question below the card is optional. On the Dashboard, **Turn on daily backups** (or **Set up automatic backups** on Community) opens Schedule, and **View backup** opens the saved backup. The first-backup card stays until you dismiss it or a second backup succeeds.
 
 <figure class="docs-screenshot">
   <a href="/images/screenshots/setup-first-backup.webp" aria-label="Open the first backup screenshot">

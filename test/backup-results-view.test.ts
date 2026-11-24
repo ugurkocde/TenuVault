@@ -59,6 +59,8 @@ describe("backup results summary", () => {
     // The engine's count wins over the message wording.
     expect(completedWithWarnings({ ...done, progressMessage: "Backup completed successfully", results: { types: [], notices: [], warnings: 1 } })).toBe(true)
     expect(completedWithWarnings({ ...done, progressMessage: "Backup completed with 2 warnings", results: { types: [], notices: [], warnings: 0 } })).toBe(false)
+    const skipped = { folder: "DefenderCustomDetectionRules", label: "custom detection rules", state: "skipped", saved: 0, failed: 0 } as never
+    expect(completedWithWarnings({ ...done, progressMessage: "Backup completed successfully", results: { types: [skipped], notices: [], warnings: 0, coverage: "incomplete" } })).toBe(false)
   })
 })
 

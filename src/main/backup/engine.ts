@@ -765,8 +765,9 @@ export class BackupEngine {
     const scopeEvidence = (error: unknown) => ({ mode: tokens.mode, grantUnknown: startNow && !(error instanceof GraphError && error.grant) })
     // An access refusal can explain why a type was left out. Once its read has started,
     // or the request used a known grant, an incomplete capture must count as a failure.
-    const maySkipRead = (type: IntuneType, error: unknown, beforeCapture: boolean) =>
-      beforeCapture && !(error instanceof GraphError && error.continuationPage) && !grantedReadDenied(type, error)
+    // A tenant without the product or onboarding stays a skip even when the grant covers the type.
+    const maySkipRead = (type: IntuneType, error: unknown, beforeCapture: boolean, cause?: string) =>
+      beforeCapture && !(error instanceof GraphError && error.continuationPage) && (cause === "license" || !grantedReadDenied(type, error))
     const endType = (type: IntuneType, error: unknown, beforeCapture = false, ownList = beforeCapture): void => {
       if (endedTypes.has(type.folder)) return
       endedTypes.add(type.folder)
@@ -777,7 +778,7 @@ export class BackupEngine {
       const code = providerErrorCode(answer?.code)
       const evidence = answer ? { status: answer.status, ...(code ? { code } : {}) } : {}
       const entry = result(type.folder)
-      if (verdict.outcome === "skipped" && maySkipRead(type, error, beforeCapture)) {
+      if (verdict.outcome === "skipped" && maySkipRead(type, error, beforeCapture, verdict.cause)) {
         const needed = type.folder === "PolicySets" && !refusedGrant ? backupNeed(type.folder, signIn) : undefined
         const permission = needed && needed !== "unsupported" ? describeRequirement(needed) : undefined
         const reason = startNow && verdict.cause === "permission"

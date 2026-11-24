@@ -185,6 +185,16 @@ describe("a failing Entra ID or Defender endpoint", () => {
     expect(job.results!.types.find((type) => type.folder === "DefenderSecureScoreControlStates")).toMatchObject({ state: "saved", saved: 1 })
   })
 
+  it("leaves out a product the tenant never onboarded even when the token holds its permission", async () => {
+    const scopes = "DeviceManagementConfiguration.Read.All DeviceManagementManagedDevices.Read.All AdministrativeUnit.Read.All RoleManagement.Read.Directory Policy.Read.All SecurityEvents.Read.All CustomDetection.Read.All"
+    const token = `e30.${Buffer.from(JSON.stringify({ scp: scopes })).toString("base64url")}.sig`
+    const answer = GRAPH_ANSWERS.find((entry) => entry.name.startsWith("a tenant that never onboarded the product"))!
+    const { run, manifest } = fixture(tenant({ "/beta/security/rules/detectionRules": () => new Response(answer.body, { status: answer.status }) }), { getToken: async () => token })
+    const job = await run()
+    expect(outcomeOf(job, "DefenderCustomDetectionRules")).toMatchObject({ outcome: "skipped", cause: "license" })
+    expect(await manifest(job)).toMatchObject({ Status: "Success", Failures: 0 })
+  })
+
   it("names the account's role when the token holds the permission and Microsoft still refuses", async () => {
     const scopes = "DeviceManagementConfiguration.Read.All DeviceManagementManagedDevices.Read.All AdministrativeUnit.Read.All RoleManagement.Read.Directory Policy.Read.All SecurityEvents.Read.All CustomDetection.Read.All"
     const token = `e30.${Buffer.from(JSON.stringify({ scp: scopes })).toString("base64url")}.sig`

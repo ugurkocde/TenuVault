@@ -691,10 +691,11 @@ function BackupDetails({ credentials, service, backup, first, storageAccountName
   const unknown = omitted.filter(entry => entry.category === "unknown").length
   const failedTypes = omitted.filter(entry => entry.category === "failure").length
   const failures = service === "all" ? backup.failures ?? 0 : 0
+  // A real failure leads, so the warning tone never reads as if missing access were the error.
   const coverageSummary = [
-    access > 0 && `Needs access for ${access} backup ${access === 1 ? "type" : "types"}.`,
     failures > 0 ? `${failures} ${failures === 1 ? "item or type" : "items or types"} could not be read.`
       : failedTypes > 0 && `${failedTypes} ${failedTypes === 1 ? "type" : "types"} could not be read.`,
+    access > 0 && `Needs access for ${access} backup ${access === 1 ? "type" : "types"}.`,
     unknown > 0 && `Coverage unknown for ${unknown} ${unknown === 1 ? "type" : "types"}.`,
   ].filter(Boolean).join(" ")
   const statusSummary = unavailable ? "This backup could not be opened."
