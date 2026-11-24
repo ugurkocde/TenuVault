@@ -1282,6 +1282,54 @@ describe("LicenseService organization licenses", () => {
     expect(calls).toHaveLength(count)
   })
 
+  it("keeps the existing organization activation until the key holder shares the replacement registration", async () => {
+    const replacement = "4c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f"
+    let clientId = APP_ID
+    let sharedClient = APP_ID
+    let released = false
+    answer = ({ action, body }) => {
+      if (action === "health") return Response.json({})
+      if (body.idToken !== sharedClient) {
+        if (body.action === "refresh" && body.activationId === "act-org") released = true
+        return denied("tenant_not_licensed")
+      }
+      return granted("act-org", { source: "tenant", licenseKeyId: "5a0e2f6c-8a41-4a8e-9b33-0c6e2d1f7a10" })
+    }
+    const open = () => service({ clientId: () => clientId, idToken: async () => clientId })
+    const license = open()
+    await expect(license.requireEntitlement(TENANT)).resolves.toBe("pro")
+    const cached = license.entitlementToken(TENANT)
+    clientId = replacement
+    const restarted = open()
+    await restarted.refreshAll()
+    expect(released).toBe(false)
+    expect(restarted.entitlementToken(TENANT)).toBe(cached)
+    expect(restarted.status([TENANT]).tenants[0]).toMatchObject({ organizationRenewalPending: true })
+    expect(calls.at(-1)?.body).toMatchObject({ action: "activate", idToken: replacement })
+    expect(calls.at(-1)?.body).not.toHaveProperty("activationId")
+
+    sharedClient = replacement
+    await restarted.refreshAll()
+    expect(restarted.status([TENANT]).tenants[0]?.organizationRenewalPending).toBeFalsy()
+    await open().refreshAll()
+    expect(calls.at(-1)?.body).toMatchObject({ action: "refresh", activationId: "act-org", idToken: replacement })
+  })
+
+  it("records the original client of a pre-upgrade organization activation before switching", async () => {
+    answer = () => granted("act-org", { source: "tenant" })
+    await service().requireEntitlement(TENANT)
+    const state = JSON.parse(store.get("license.state")!)
+    delete state.activations[TENANT].organizationClientId
+    store.set("license.state", JSON.stringify(state))
+
+    service().rememberOrganizationClient(TENANT, APP_ID)
+    const replacement = "4c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f"
+    const restarted = service({ clientId: () => replacement })
+    expect(restarted.status([TENANT]).tenants[0]?.organizationRenewalPending).toBe(true)
+    restarted.rememberOrganizationClient(TENANT, replacement)
+    expect(restarted.status([TENANT]).tenants[0]?.organizationRenewalPending).toBe(true)
+  })
+
   it("keeps a cached organization entitlement when the old server cannot renew it for the current client", async () => {
     let clientId = APP_ID
     let capable = false

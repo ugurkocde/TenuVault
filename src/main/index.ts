@@ -307,6 +307,7 @@ async function bootstrap(): Promise<void> {
       },
     },
     coverage: (tenant, method, accessToken) => connectionCoverage(moduleSettings.get(tenant), method, accessToken),
+    beforeSwitch: (tenant, clientId) => license.rememberOrganizationClient(tenant, clientId),
   })
   connections.migrate()
   const accounts = accountStore(appStore, notifyAccountChange, tenant => {
@@ -1534,6 +1535,7 @@ async function bootstrap(): Promise<void> {
     if ("error" in outcome) return outcome
     const { account, ...result } = outcome.result
     try { notifyAccountChange(account.tenantId) } catch { console.warn("[auth] Could not notify the window of the sign-in change") }
+    try { pushLicense() } catch { console.warn("[auth] Could not notify the window of the license status") }
     void Promise.resolve().then(() => health.check(account.tenantId, "signIn")).catch(() => undefined)
     return { result }
   })

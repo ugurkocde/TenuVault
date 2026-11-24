@@ -1,6 +1,8 @@
 export const GRAPH_CLI_CLIENT_ID = "14d82eec-204b-4c2f-b7e8-296a70dab67e"
 export const TENUVAULT_CLIENT_ID = "61eff188-672b-4be4-acac-2d254a6f9e05"
 
+export const ORGANIZATION_RENEWAL_NOTICE = "Ask the license key holder to share the license using the new app registration. Your current license coverage lasts until its existing expiry unless it is renewed sooner."
+
 export const SIGN_IN_METHODS = {
   graphCli: "Start now",
   tenuvaultApp: "TenuVault app",

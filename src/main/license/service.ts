@@ -1,4 +1,4 @@
-import { GRAPH_CLI_CLIENT_ID, TENUVAULT_CLIENT_ID } from "../../shared/tenant-connection"
+import { GRAPH_CLI_CLIENT_ID, ORGANIZATION_RENEWAL_NOTICE, TENUVAULT_CLIENT_ID } from "../../shared/tenant-connection"
 import { organizationClientIds } from "./client-ids"
 import { readTenantTrials, TENANT_TRIAL_STATE_KEY, type StoredTenantTrial, type TrialTally } from "./tenant-trial-state"
 import { CommunityChoicePendingError, CommunityLimitError } from "../../shared/plan-errors"
@@ -59,6 +59,8 @@ interface StoredActivation {
   shareNeedsSignIn?: true
   // Tenant activations: the masked key, for display.
   displayKey?: string
+  // Tenant activations: the last client whose sign-in was accepted by the service.
+  organizationClientId?: string
   // Tenant activations: the Polar id of that key (never the key itself), so the
   // activation can be released after the tenant stops sharing it.
   licenseKeyId?: string
@@ -695,6 +697,27 @@ export class LicenseService {
     return this.options.platform ?? process.platform
   }
 
+  /** Older cached activations need their original audience recorded before the account is replaced. */
+  rememberOrganizationClient(tenant: string, clientId: string): void {
+    this.load()
+    const entry = this.state?.activations[tenant]
+    if (entry?.source !== "tenant" || entry.organizationClientId) return
+    entry.organizationClientId = clientId.toLowerCase()
+    try { this.save() } catch (error) {
+      delete entry.organizationClientId
+      throw error
+    }
+  }
+
+  private organizationRenewalPending(tenant: string): boolean {
+    const entry = this.state?.activations[tenant]
+    return Boolean(entry && this.organizationClientChanged(entry, this.clientId(tenant)))
+  }
+
+  private organizationClientChanged(entry: StoredActivation, clientId: string | null): boolean {
+    return entry.source === "tenant" && Boolean(clientId && entry.organizationClientId && clientId.toLowerCase() !== entry.organizationClientId)
+  }
+
   private async supportsClientIdSets(): Promise<boolean> {
     if (this.sharingCapability && Date.now() < this.sharingCapability.expiresAt) return this.sharingCapability.supported
     return this.sharingCheck ??= (async () => {
@@ -1037,7 +1060,7 @@ export class LicenseService {
 
   // Stores the activation the service returned, after verifying its token. persist false leaves
   // writing the state to the caller, which saves several activations at once.
-  private accept(tenantId: string, data: Record<string, unknown>, source: "key" | "tenant" | "trial", persist = true): void {
+  private accept(tenantId: string, data: Record<string, unknown>, source: "key" | "tenant" | "trial", persist = true, clientId?: string | null): void {
     if (typeof data.token !== "string" || typeof data.activationId !== "string") {
       throw new Error("The licensing service returned an invalid response.")
     }
@@ -1072,6 +1095,7 @@ export class LicenseService {
       ...(source === "trial" ? { source, canEnd: data.canEnd === true } : source === "tenant"
         ? {
             source,
+            ...(clientId ? { organizationClientId: clientId.toLowerCase() } : {}),
             ...(typeof data.displayKey === "string" ? { displayKey: data.displayKey.slice(0, 20) } : {}),
             ...(typeof data.licenseKeyId === "string" && guidPattern.test(data.licenseKeyId)
               ? { licenseKeyId: data.licenseKeyId }
@@ -1176,9 +1200,13 @@ export class LicenseService {
 
   private async activateTenant(tenantId: string): Promise<void> {
     const current = this.requestGuard(tenantId)
-    const data = await this.tenantCall(tenantId, "activate", current)
+    const clientId = this.clientId(tenantId)
+    const idToken = await this.idToken(tenantId)
+    this.assertCurrent(() => current() && this.clientId(tenantId) === clientId)
+    if (!idToken) throw new NoIdToken()
+    const data = await this.tenantCall(tenantId, "activate", current, undefined, idToken)
     this.assertCurrent(current)
-    this.accept(tenantId, data, "tenant")
+    this.accept(tenantId, data, "tenant", true, clientId)
   }
 
   // Activates with this machine's key, and falls back to the tenant's organization license
@@ -1232,10 +1260,20 @@ export class LicenseService {
     if (!this.state || !entry) return
     const current = this.requestGuard(tenantId)
     const key = this.state.key
+    const clientId = this.clientId(tenantId)
+    const organizationClientChanged = this.organizationClientChanged(entry, clientId)
+    if (organizationClientChanged && !isPublicClient(clientId)) {
+      // Legacy refresh releases the activation if the audience no longer matches the sharing
+      // registration. Activate checks the new sign-in without sending the old activation ID.
+      // Once the key holder shares this registration, the server reuses the existing slot.
+      await this.activateTenant(tenantId).catch((error: unknown) => {
+        if (!(error instanceof LicenseDenied) && !(error instanceof NoIdToken)) throw error
+      })
+      return
+    }
     try {
       if (entry.source === "trial" && await this.replaceTrialWithKey(tenantId)) return
       if (entry.source === "tenant" || entry.source === "trial") {
-        const clientId = this.clientId(tenantId)
         const publicProof = entry.source === "tenant" && isPublicClient(clientId)
         if (publicProof && !await this.supportsClientIdSets()) return
         const idToken = await this.idToken(tenantId)
@@ -1249,7 +1287,7 @@ export class LicenseService {
         // An old handler rejects publicClientProof before looking up or releasing the activation.
         const data = await this.tenantCall(tenantId, "refresh", current, entry, idToken, {}, publicProof)
         this.assertCurrent(current)
-        this.accept(tenantId, data, entry.source)
+        this.accept(tenantId, data, entry.source, true, clientId)
         if (entry.source === "trial") this.rememberTrial(tenantId, data)
         return
       }
@@ -1847,9 +1885,10 @@ export class LicenseService {
       this.assertCurrent(current)
       if (!this.valid(tenant)) {
         throw new Error(
-          this.state?.activations[tenant]?.source === "tenant"
-            ? "Sign in to this tenant again to check your organization's license."
-            : "The license is not valid for this tenant.",
+          this.organizationRenewalPending(tenant) ? ORGANIZATION_RENEWAL_NOTICE :
+            this.state?.activations[tenant]?.source === "tenant"
+              ? "Sign in to this tenant again to check your organization's license."
+              : "The license is not valid for this tenant.",
         )
       }
     } catch (caught) {
@@ -2093,6 +2132,7 @@ export class LicenseService {
         shared: source === "key" ? (entry?.shared ?? null) : null,
         shareNeedsSignIn: source === "key" && Boolean(entry?.shareNeedsSignIn),
         displayKey: source === "tenant" ? (entry?.displayKey ?? null) : null,
+        ...(this.organizationRenewalPending(tenantId) ? { organizationRenewalPending: true } : {}),
         message: payload ? null : (this.messages.get(tenantId) ?? null),
       }
     })

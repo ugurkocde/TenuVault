@@ -59,6 +59,7 @@ interface ConnectionHost {
   signIn: Partial<Record<SignInMethod, (tenantId: string, clientId: string) => Promise<StagedSignIn>>>
   coverage: (tenantId: string, method: SignInMethod, accessToken: string) => string[]
   now?: () => Date
+  beforeSwitch?: (tenantId: string, currentClientId: string) => void
 }
 
 function legacyClientId(connection: TenantConnection): string {
@@ -256,6 +257,7 @@ export class TenantConnections {
         ...record, ...selected, updatedAt: this.now().toISOString(),
         ...(selected.method === "ownApp" ? { ownClientId: selected.clientId } : {}),
       }
+      this.host.beforeSwitch?.(tenant, record.clientId)
       this.commit(tenant, raw, connection, staged)
       const { homeAccountId: _homeAccountId, ...account } = staged.account
       return { connection, missing, account }

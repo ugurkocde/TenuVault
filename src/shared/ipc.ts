@@ -133,6 +133,7 @@ export interface SignedInAccount {
 
 /** License state of one tenant on this machine. */
 export interface TenantLicenseStatus {
+  organizationRenewalPending?: true
   trialEndsAt?: string | null
   canEnd?: boolean
   trialRefusalPermanent?: boolean

@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react"
 import { Button } from "~/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "~/components/ui/dialog"
-import { SIGN_IN_METHODS, type TenantConnection } from "../../shared/tenant-connection"
+import { ORGANIZATION_RENEWAL_NOTICE, SIGN_IN_METHODS, type TenantConnection } from "../../shared/tenant-connection"
 import { isGuid } from "../../shared/security"
 import { bridge } from "../lib/bridge"
+import { useLicense } from "../lib/license"
 import { toast } from "../lib/toast"
 
 export function TenantConnectionSettings({ tenantId, clientId, onChanged }: {
@@ -12,6 +13,7 @@ export function TenantConnectionSettings({ tenantId, clientId, onChanged }: {
   onChanged: (clientId: string) => void
 }) {
   const [connection, setConnection] = useState<TenantConnection | null>(null)
+  const { status } = useLicense()
   const [open, setOpen] = useState(false)
   const [nextClientId, setNextClientId] = useState("")
   const [busy, setBusy] = useState(false)
@@ -22,6 +24,8 @@ export function TenantConnectionSettings({ tenantId, clientId, onChanged }: {
     void bridge.auth.connection(tenantId).then(value => { if (current) setConnection(value) }).catch(() => undefined)
     return () => { current = false }
   }, [tenantId, clientId])
+
+  const tenantLicense = status?.tenants.find(tenant => tenant.tenantId === tenantId.toLowerCase())
 
   const change = async () => {
     setBusy(true)
@@ -48,12 +52,18 @@ export function TenantConnectionSettings({ tenantId, clientId, onChanged }: {
       <Button variant="outline" size="sm" onClick={() => { setNextClientId(""); setError(undefined); setOpen(true) }}>
         Change app registration
       </Button>
+      {tenantLicense?.organizationRenewalPending && <p role="status" className="basis-full text-sm text-gray-600">{ORGANIZATION_RENEWAL_NOTICE}</p>}
       <Dialog open={open} onOpenChange={value => { if (!busy) setOpen(value) }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Change app registration</DialogTitle>
             <DialogDescription>Sign in with your own app registration for this tenant. Your backups and schedules stay with the tenant.</DialogDescription>
           </DialogHeader>
+          {(tenantLicense?.source === "tenant" || tenantLicense?.organizationRenewalPending) && (
+            <p className="rounded-md border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800">
+              Your organization license uses a shared app registration. Ask the license key holder to share the license using the new registration before your cached coverage expires.
+            </p>
+          )}
           <label className="block text-sm font-medium">
             Application (client) ID
             <input className="mt-1 w-full rounded-md border bg-background px-3 py-2" value={nextClientId} onChange={event => setNextClientId(event.target.value)} disabled={busy} />
