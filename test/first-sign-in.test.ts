@@ -83,6 +83,19 @@ describe("firstSignInError", () => {
 })
 
 describe("AuthManager sign-in", () => {
+  it.each([
+    ["AADSTS999999: User private.admin@example.test could not sign in", "The app registration could not be changed."],
+    ["AADSTS53003: User private.admin@example.test was blocked", "Conditional Access blocked this sign-in"],
+  ])("sanitizes a staged registration sign-in failure", async (description, message) => {
+    msal.interactive.mockRejectedValueOnce(new Error(description))
+    const cache = { beforeCacheAccess: async () => undefined, afterCacheAccess: async () => undefined }
+    const failure = await manager().stageSignIn(TENANT, CLIENT, cache).catch((error: unknown) => error)
+    expect(failure).toBeInstanceOf(Error)
+    expect(String(failure)).toContain(message)
+    expect(String(failure)).not.toContain("private.admin@example.test")
+    expect(String(failure)).not.toContain("AADSTS999999")
+  })
+
   it("maps a refused first sign-in to an actionable message", async () => {
     msal.interactive.mockRejectedValueOnce(new Error("AADSTS700016: Application not found"))
     await expect(manager().signIn(TENANT, CLIENT)).rejects.toThrow("No app registration with this client ID exists in this tenant")

@@ -30,3 +30,5 @@ export interface ConnectionSwitchResult {
   connection: TenantConnection
   missing: string[]
 }
+
+export type ConnectionSwitchResponse = { result: ConnectionSwitchResult } | { error: { code: string; message: string } }

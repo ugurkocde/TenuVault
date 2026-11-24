@@ -10,6 +10,7 @@ import type { SignedInAccount } from "../../shared/ipc"
 import { captureTokenActor } from "../api/execution-metadata"
 import { RESOURCE_SCOPES } from "../../shared/constants"
 import { FIRST_SIGN_IN_TIMEOUT_MESSAGE } from "../../shared/app-registration"
+import { ConnectionSwitchError } from "./switch-failure"
 import { namedSignInCode, signInErrorRow } from "../../shared/sign-in-errors"
 import { isMicrosoftLoginUrl } from "../../shared/security"
 import { fetchNetworkClient } from "./network-client"
@@ -242,11 +243,21 @@ export class AuthManager {
 
   /** Sign in without publishing either the profile or the token cache. */
   async stageSignIn(tenant: string, clientId: string, cache: ICachePlugin): Promise<Pick<StagedSignIn, "account" | "accessToken">> {
-    const result = await this.acquireInteractive(clientId, tenant, RESOURCE_SCOPES.graph, "select_account", undefined, true, undefined, this.createApp(clientId, cache)).catch((error: unknown) => {
-      throw firstSignInError(error)
+    const result = await this.acquireInteractive(clientId, tenant, RESOURCE_SCOPES.graph, "select_account", undefined, true, undefined, this.createApp(clientId, cache, true)).catch((error: unknown) => {
+      const description = error instanceof Error ? error.message : ""
+      const known = signInErrorRow(namedSignInCode(description))
+      if (known) {
+        const safe = firstSignInError(new Error(known.code)) as Error
+        throw new ConnectionSwitchError(known.code, safe.message === known.code ? `${known.meaning} (${known.code})` : safe.message)
+      }
+      if (error instanceof SignInCancelledError || /\b(access_denied|user_cancelled|user_canceled|authentication_canceled)\b/i.test(description)) {
+        throw new ConnectionSwitchError("cancelled", "Sign-in cancelled. Sign in again to continue.")
+      }
+      if (error instanceof SignInTimeoutError) throw new ConnectionSwitchError("timeout", FIRST_SIGN_IN_TIMEOUT_MESSAGE)
+      throw new ConnectionSwitchError("switch_failed")
     })
     const account = result.account
-    if (!account) throw new Error("Microsoft did not return an account for this sign-in.")
+    if (!account) throw new ConnectionSwitchError("no_account", "Microsoft did not return an account for this sign-in.")
     return {
       account: { tenantId: account.tenantId.toLowerCase(), clientId, username: account.username, name: account.name, homeAccountId: account.homeAccountId },
       accessToken: result.accessToken,
@@ -480,7 +491,7 @@ export class AuthManager {
     return app
   }
 
-  private createApp(clientId: string, cache: ICachePlugin): PublicClientApplication {
+  private createApp(clientId: string, cache: ICachePlugin, staged = false): PublicClientApplication {
     return new PublicClientApplication({
       auth: { clientId, authority: authority("organizations") },
       cache: { cachePlugin: cache },
@@ -489,7 +500,7 @@ export class AuthManager {
         loggerOptions: {
           logLevel: LogLevel.Warning,
           piiLoggingEnabled: false,
-          loggerCallback: (_level, message) => console.log(`[msal] ${message}`),
+          loggerCallback: (_level, message) => { if (!staged) console.log(`[msal] ${message}`) },
         },
       },
     })

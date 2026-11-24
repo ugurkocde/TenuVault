@@ -206,6 +206,23 @@ describe("in-place sign-in change", () => {
     await expect(f.connections.switch(TENANT, { method: "ownApp", clientId: NEXT })).resolves.toMatchObject({ connection: { clientId: NEXT } })
   })
 
+  it("returns a fixed error across IPC and logs only the code", async () => {
+    const f = fixture(); f.enroll()
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined)
+    const returnToApp = vi.fn()
+    try {
+      f.signIn.mockRejectedValueOnce(new Error("Microsoft could not authenticate private.admin@example.test"))
+      await expect(f.connections.switchForIpc(TENANT, { method: "ownApp", clientId: NEXT }, returnToApp)).resolves.toEqual({
+        error: { code: "switch_failed", message: "The app registration could not be changed. Try again." },
+      })
+      expect(warning.mock.calls).toEqual([["[auth:switchConnection]", "switch_failed"]])
+      expect(returnToApp).toHaveBeenCalledOnce()
+      expect(f.connections.get(TENANT)?.clientId).toBe(OWN)
+    } finally {
+      warning.mockRestore()
+    }
+  })
+
   it("refuses a second switch while one is pending and drops a late answer after removal", async () => {
     const f = fixture(); f.enroll()
     let finish!: (result: StagedSignIn) => void

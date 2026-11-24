@@ -5,6 +5,7 @@ import { GRAPH_CLI_CLIENT_ID, TENUVAULT_CLIENT_ID, type ConnectionSwitchResult, 
 import { DELEGATED_CLIENT_SECRET, LOCAL_STORAGE_PREFIX } from "../../shared/constants"
 import type { SecureStore } from "../storage/secure-store"
 import { parseStoredAccount, publicAccountKey, storedAccountKey, type StoredAccount } from "./stores"
+import { ConnectionSwitchError } from "./switch-failure"
 
 const PREFIX = "auth.connection."
 export const TENANT_LIST_KEY = "renderer.tenuvault_tenants"
@@ -34,14 +35,14 @@ function validTime(value: unknown): value is string {
 }
 
 function targetOf(input: unknown): { method: SignInMethod; clientId: string } {
-  if (!input || typeof input !== "object" || !("method" in input)) throw new Error("Choose a sign-in method.")
+  if (!input || typeof input !== "object" || !("method" in input)) throw new ConnectionSwitchError("invalid_request", "Choose a sign-in method.")
   if (input.method === "graphCli" || input.method === "tenuvaultApp") {
-    if ("clientId" in input) throw new Error("This sign-in method has a fixed client ID.")
+    if ("clientId" in input) throw new ConnectionSwitchError("invalid_request", "This sign-in method has a fixed client ID.")
     return { method: input.method, clientId: input.method === "graphCli" ? GRAPH_CLI_CLIENT_ID : TENUVAULT_CLIENT_ID }
   }
-  if (input.method !== "ownApp" || !("clientId" in input) || !isGuid(input.clientId)) throw new Error("Enter the application (client) ID of your app registration.")
+  if (input.method !== "ownApp" || !("clientId" in input) || !isGuid(input.clientId)) throw new ConnectionSwitchError("invalid_request", "Enter the application (client) ID of your app registration.")
   const clientId = input.clientId.toLowerCase()
-  if (clientId === GRAPH_CLI_CLIENT_ID || clientId === TENUVAULT_CLIENT_ID) throw new Error("Choose the sign-in method that uses this client ID.")
+  if (clientId === GRAPH_CLI_CLIENT_ID || clientId === TENUVAULT_CLIENT_ID) throw new ConnectionSwitchError("invalid_request", "Choose the sign-in method that uses this client ID.")
   return { method: "ownApp", clientId }
 }
 
@@ -194,17 +195,30 @@ export class TenantConnections {
     })
   }
 
+  async switchForIpc(tenantId: unknown, input: unknown, returnToApp: () => void): Promise<
+    { result: ConnectionSwitchResult & { account: SignedInAccount } } | { error: { code: string; message: string } }
+  > {
+    try {
+      return { result: await this.switch(tenantId, input).finally(returnToApp) }
+    } catch (error) {
+      const failure = error instanceof ConnectionSwitchError ? error : new ConnectionSwitchError("switch_failed")
+      console.warn("[auth:switchConnection]", failure.code)
+      // Electron logs rejected main-process handlers. The preload rejects with this message instead.
+      return { error: { code: failure.code, message: failure.message } }
+    }
+  }
+
   async switch(tenantId: unknown, input: unknown): Promise<ConnectionSwitchResult & { account: SignedInAccount }> {
-    if (!isGuid(tenantId)) throw new Error("Choose a connected tenant.")
+    if (!isGuid(tenantId)) throw new ConnectionSwitchError("invalid_request", "Choose a connected tenant.")
     const tenant = tenantId.toLowerCase()
     const selected = targetOf(input)
-    if (this.switching.has(tenant)) throw new Error("A sign-in method change is already in progress for this tenant.")
+    if (this.switching.has(tenant)) throw new ConnectionSwitchError("conflict", "A sign-in method change is already in progress for this tenant.")
     const record = this.get(tenant)
     const profile = this.profile(tenant, this.host.store.get(TENANT_LIST_KEY))
-    if (!profile || record?.origin !== "wizard") throw new Error("Only tenants connected through the new wizard can change sign-in method.")
-    if (selected.method === record.method && selected.clientId === record.clientId) throw new Error("Choose a different sign-in method or app registration.")
+    if (!profile || record?.origin !== "wizard") throw new ConnectionSwitchError("unavailable", "Only tenants connected through the new wizard can change sign-in method.")
+    if (selected.method === record.method && selected.clientId === record.clientId) throw new ConnectionSwitchError("invalid_request", "Choose a different sign-in method or app registration.")
     const signIn = this.host.signIn[selected.method]
-    if (!signIn) throw new Error("Sign-in with this method is unavailable in this version.")
+    if (!signIn) throw new ConnectionSwitchError("unavailable", "Sign-in with this method is unavailable in this version.")
     this.validateStorage(profile, selected.method)
     const accountKey = record.method === "ownApp" ? storedAccountKey(tenant) : publicAccountKey(tenant)
     const originalAccount = this.host.store.get(accountKey)
@@ -217,7 +231,7 @@ export class TenantConnections {
       const latest = this.profile(tenant, raw)
       if (!raw || !latest || current?.origin !== "wizard" || current.clientId !== record.clientId || current.updatedAt !== record.updatedAt ||
         this.host.store.get(accountKey) !== originalAccount) {
-        throw new Error("The tenant's connection changed during sign-in. Try again.")
+        throw new ConnectionSwitchError("conflict", "The tenant's connection changed during sign-in. Try again.")
       }
       this.validateStorage(latest, selected.method)
       const missing = this.host.coverage(tenant, selected.method, staged.accessToken)
@@ -234,13 +248,13 @@ export class TenantConnections {
   }
 
   private validateAccount(tenant: string, clientId: string, account: StoredAccount): void {
-    if (account.tenantId.toLowerCase() !== tenant) throw new Error("You signed in to a different tenant. Sign in with an account from this tenant.")
-    if (account.clientId.toLowerCase() !== clientId) throw new Error("Microsoft returned a sign-in for a different app registration.")
+    if (account.tenantId.toLowerCase() !== tenant) throw new ConnectionSwitchError("wrong_tenant", "You signed in to a different tenant. Sign in with an account from this tenant.")
+    if (account.clientId.toLowerCase() !== clientId) throw new ConnectionSwitchError("wrong_client", "Microsoft returned a sign-in for a different app registration.")
   }
 
   private validateStorage(profile: SavedTenant, method: SignInMethod): void {
     if (method === "graphCli" && !profile.resources?.storageAccountName?.startsWith(LOCAL_STORAGE_PREFIX)) {
-      throw new Error("Start now uses backups on this device. Choose local storage before switching.")
+      throw new ConnectionSwitchError("unavailable", "Start now uses backups on this device. Choose local storage before switching.")
     }
   }
 

@@ -1530,10 +1530,12 @@ async function bootstrap(): Promise<void> {
     return connections.get(tenantId)
   })
   handleTrusted("auth:switchConnection", async (_event, tenantId: unknown, target: unknown) => {
-    const { account, ...result } = await connections.switch(tenantId, target).finally(returnToApp)
+    const outcome = await connections.switchForIpc(tenantId, target, returnToApp)
+    if ("error" in outcome) return outcome
+    const { account, ...result } = outcome.result
     try { notifyAccountChange(account.tenantId) } catch { console.warn("[auth] Could not notify the window of the sign-in change") }
     void Promise.resolve().then(() => health.check(account.tenantId, "signIn")).catch(() => undefined)
-    return result
+    return { result }
   })
   handleTrusted("auth:savedDirectoryRestores", (_event, tenantId: unknown) => {
     if (typeof tenantId !== "string") throw new Error("Choose a signed-in tenant.")
