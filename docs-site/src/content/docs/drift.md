@@ -107,7 +107,7 @@ A change marked **Reverted** was already reverted with TenuVault. A change marke
 
 ### Examples by service
 
-For backups that record per-type outcomes, only complete reads are compared. For older backups, TenuVault uses the recorded scope and excludes types with known failures. If an older backup recorded a read failure without naming the type, the comparison still shows deletions and warns that some may be policies the backup failed to read.
+For backups that record per-type outcomes, only complete reads are compared. For older backups, TenuVault uses the recorded scope and excludes types with known failures. If an older backup recorded a read failure without naming the type, the comparison shows a coverage warning. Some reported additions or deletions may be policies that backup failed to read.
 
 | Service | Example of coverage shown as unknown |
 | --- | --- |

@@ -29,7 +29,9 @@ Reports generated on a paid plan stay readable and can still be saved as PDF, Ma
    * **Choose two backups**: pick the older and the newer backup yourself.
 3. Click **Generate report**.
 
-The report runs in the background and shows in the activity panel, so you can open another page meanwhile. It needs two complete backups. Backups that failed, are still running or completed with warnings are not offered by the first three periods; with **Choose two backups** you can pick a backup that completed with warnings, and policies it could not read may then show as deleted or added.
+The report runs in the background and shows in the activity panel, so you can open another page meanwhile. It needs two backups. The first three periods offer only backups that finished successfully. With **Choose two backups**, you can also pick a backup that completed with warnings.
+
+For backups that record per-type outcomes, the report lists types either backup could not read in full under **Types not compared** and leaves them out of the change counts. For older backups, TenuVault uses the recorded scope and excludes types with known failures. If an older backup recorded a read failure without identifying the type, some reported additions or deletions may be policies that backup failed to read.
 
 <figure class="docs-screenshot">
   <a href="/images/screenshots/reports.webp" aria-label="Open full-size screenshot: reports">
