@@ -36,10 +36,12 @@ export function restoreGraph(token: () => Promise<string>, fetchImpl: typeof fet
   }
 }
 /** SAS comes only from authenticated Graph. Never send Microsoft tokens to storage. */
-export async function putRestoreBlock(sas: string, query: Record<string, string>, body: Buffer | string, fetchImpl: typeof fetch, signal: AbortSignal): Promise<void> {
+export async function putRestoreBlock(sas: string, query: Record<string, string>, body: Buffer | string, fetchImpl: typeof fetch, signal: AbortSignal, authorizeUpload?: () => Promise<void>): Promise<void> {
   const url = new URL(sas)
   if (url.protocol !== "https:" || !/^[a-z0-9]+\.blob\.core\.windows\.net$/.test(url.hostname) || url.port || url.username || url.password || url.hash || !url.searchParams.has("sig")) throw new Error("Intune returned an unsupported upload location.")
   for (const [key, value] of Object.entries(query)) url.searchParams.set(key, value)
+  await authorizeUpload?.()
+  signal.throwIfAborted()
   let response: Response
   try { response = await fetchImpl(url.href, { method: "PUT", redirect: "error", credentials: "omit", headers: { "content-type": typeof body === "string" ? "application/xml" : "application/octet-stream", "x-ms-version": "2021-12-02" }, body: typeof body === "string" ? body : new Uint8Array(body), signal: AbortSignal.any([signal, AbortSignal.timeout(120000)]) }) }
   catch { signal.throwIfAborted(); throw new Error("The installer upload was interrupted. Retry this restore to resume the same destination app.") }

@@ -21,6 +21,9 @@ import { ingestContent, type ContentEncryption } from "../src/main/app-backup/co
 import { appRestoreAuditItem, restoreAppWithAudit, restoreCapturedApp, type AppRestoreAuditObservation } from "../src/main/app-backup/restore"
 import { restoreGraph, putRestoreBlock, type RestoreGraph } from "../src/main/app-backup/restore-graph"
 import { assertRestoredSettings, readRestoreSnapshot, restoreBody, snapshotHash, type AppRestoreSnapshot } from "../src/main/app-backup/restore-snapshot"
+import { ConnectionCapabilities, READ_ONLY } from "../src/main/auth/connection-capabilities"
+import { GRAPH_CLI_CLIENT_ID, TENUVAULT_CLIENT_ID, type TenantConnection } from "../src/shared/tenant-connection"
+import { resourcePackScopes, tenantPermissionPacks } from "../src/shared/services/permission-packs"
 import { encryptRestoreContent, newRestoreSecrets } from "../src/main/app-backup/restore-encryption"
 
 const tenant = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", target = "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff", appId = "33333333-3333-3333-3333-333333333333"
@@ -76,6 +79,32 @@ function destination() {
   return { graph, fetcher, calls, get app() { return app }, get wire() { return wire }, loseCreate: () => { failCreateResponse = true }, assign: () => { assigned = true } }
 }
 const options = (d: ReturnType<typeof destination>, signal = new AbortController().signal) => ({ graph: d.graph, fetch: d.fetcher as typeof fetch, signal, progress: vi.fn(), wait: async () => {} })
+
+it.each(["before block", "before block list", "read-only switch"])("checks the admitted connection %s", async boundary => {
+  const f = await fixture(), d = destination()
+  const packs = tenantPermissionPacks({ intune: { access: "restore" } }, { azure: false, audit: false })
+  let enabled = true
+  let connection: TenantConnection = {
+    version: 1, method: "tenuvaultApp", clientId: TENUVAULT_CLIENT_ID, origin: "wizard", createdAt: "", updatedAt: "",
+    graphScopes: resourcePackScopes(packs, "graph"),
+  }
+  const caps = new ConnectionCapabilities(() => connection, () => packs, async () => enabled)
+  const progress = vi.fn((value: import("../src/shared/app-sources/types").AppRestoreProgress) => {
+    if (value.phase !== "uploading") return
+    if (boundary === "before block" || (boundary === "before block list" && value.uploadedBytes > 0)) enabled = false
+    if (boundary === "read-only switch") connection = { ...connection, method: "graphCli", clientId: GRAPH_CLI_CLIENT_ID }
+  })
+  const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+    const url = new URL(String(input))
+    if (url.hostname.endsWith(".blob.core.windows.net")) return d.fetcher(input, init)
+    return Response.json(await d.graph(init?.method as "GET" | "POST" | "PATCH", url.href, init?.body ? JSON.parse(String(init.body)) : undefined))
+  })
+  await expect(restoreAppWithAudit(f.store, f.source, snapshot, target, "Restored", {
+    getGraphToken: async () => "fixture-token", fetch, signal: new AbortController().signal, progress, operationId: randomUUID(),
+    authorizeUpload: () => caps.requireAppRestoreWrite(target, TENUVAULT_CLIENT_ID),
+  })).rejects.toThrow(boundary === "read-only switch" ? READ_ONLY : "currently unavailable")
+  expect(d.fetcher).toHaveBeenCalledTimes(boundary === "before block list" ? 1 : 0)
+})
 
 describe("app restore snapshots", () => {
   it("retains full scripts encrypted, survives key rotation and rejects cross-tenant reads and tampering", async () => {
@@ -294,7 +323,7 @@ it.each(["cancelled", "failed"] as const)("queues one %s preflight outcome witho
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
   try {
     const operation = restoreAppWithAudit(f.store, f.source, snapshot, target, "Restored", {
-      operationId, getGraphToken, fetch, signal: controller.signal, progress: vi.fn(),
+      operationId, getGraphToken, authorizeUpload: async () => {}, fetch, signal: controller.signal, progress: vi.fn(),
     })
     await signingIn
     if (status === "cancelled") controller.abort()

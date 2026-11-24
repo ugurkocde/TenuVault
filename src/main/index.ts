@@ -1942,8 +1942,10 @@ async function bootstrap(): Promise<void> {
     loadRestoreSettings: async (tenant, appId) => readRestoreSnapshot(tenant, appId, (await auth.getAccessToken(tenant, signedInClient(tenant), RESOURCE_SCOPES.graph)).accessToken, bridgedFetch, "current-settings"),
     restore: (store, source, snapshot, target, name, signal, progress, operationId) => {
       capabilities.requireWrite([target])
+      const client = signedInClient(target)
       return disclaimer.run([target], () => restoreAppWithAudit(store, source, snapshot, target, name, {
-        getGraphToken: async () => (await auth.getAccessToken(target, signedInClient(target), RESOURCE_SCOPES.graph)).accessToken,
+        getGraphToken: async () => (await auth.getAccessToken(target, client, RESOURCE_SCOPES.graph)).accessToken,
+        authorizeUpload: () => capabilities.requireAppRestoreWrite(target, client),
         fetch: bridgedFetch, signal, progress, operationId,
       }))
     },
@@ -1952,14 +1954,15 @@ async function bootstrap(): Promise<void> {
       if (process.platform !== "win32") throw new Error("Back up Win32 installers on a Windows PC enrolled in this Intune tenant.")
       progress({ phase: "authorizing", receivedBytes: 0, totalBytes: null })
       await requireCaptureEnabled({ keys: LICENSE_PUBLIC_KEYS, appVersion: app.getVersion(), signal, fetch: bridgedFetch })
-      const token = await auth.getAccessToken(tenant, signedInClient(tenant), RESOURCE_SCOPES.graph, true)
+      const client = signedInClient(tenant)
+      const token = await auth.getAccessToken(tenant, client, RESOURCE_SCOPES.graph, true)
       signal.throwIfAborted()
       await checkCaptureMetadata(appId, token.accessToken, bridgedFetch)
       const snapshot = await readRestoreSnapshot(tenant, appId, token.accessToken, bridgedFetch, "capture")
       signal.throwIfAborted()
       progress({ phase: "windows-approval", receivedBytes: 0, totalBytes: null })
       const helper = app.isPackaged ? join(process.resourcesPath, "app-backup", "TenuVault.Capture.exe") : join(app.getAppPath(), "out", "helper", "TenuVault.Capture.exe")
-      const content = await requestWindowsContent(helper, { tenantId: tenant, appId, jobId, accessToken: token.accessToken }, signal)
+      const content = await requestWindowsContent(helper, { tenantId: tenant, appId, jobId, accessToken: token.accessToken }, signal, client)
       signal.throwIfAborted()
       const after = await readRestoreSnapshot(tenant, appId, token.accessToken, bridgedFetch, "capture")
       if (!sameRestoreSettings(snapshot, after) || snapshot.contentVersion !== content.identity.contentVersion) throw new Error("The app settings changed during capture. Start a new backup.")
