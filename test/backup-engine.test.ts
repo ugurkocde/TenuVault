@@ -241,6 +241,30 @@ describe("BackupEngine", () => {
     expect(JSON.stringify({ log: job.log, errors, outcomes: metadata.Outcomes })).not.toContain(accountPath)
   })
 
+  it.each([
+    [{ assignments: null }, "Graph returned an invalid policy collection"],
+    [{ assignments: [{}] }, "Microsoft Graph returned a collection entry without id"],
+    [{ assignments: [], "assignments@odata.nextLink": null }, "Graph returned an invalid continuation link"],
+    [{ assignments: [], "assignments@odata.nextLink": "https://graph.microsoft.com/beta/users?page=2" }, "Invalid Graph continuation link (it moves to another collection)"],
+    [{ assignments: [], "assignments@odata.nextLink": "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations/dc1/assignments?page=2" }, "Graph returned an invalid policy collection"],
+  ])("keeps a personal policy name out of expanded page diagnostics for %j", async (page, message) => {
+    const name = "Private Ada Lovelace"
+    const configs = "/beta/deviceManagement/deviceConfigurations"
+    const { engine, store, account } = setup(fakeGraph({
+      [configs]: Response.json({ value: [{ id: "dc1", displayName: name }] }),
+      [`${configs}/dc1?$expand=assignments`]: Response.json({ id: "dc1", displayName: name, ...page }),
+      [`${configs}/dc1/assignments?page=2`]: Response.json({ value: null }),
+    }))
+    const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)
+    const metadata = JSON.parse((await store.get(account, "intune-backups", `${job.backupFolder}/metadata.json`)).data.toString())
+    const errors = job.results?.types.find(type => type.folder === "DeviceConfigurations")?.errors
+    const reason = `device configuration profiles: ${message}`
+    expect.soft(job.log.join("\n")).toContain(`Could not back up ${reason}`)
+    expect.soft(errors).toEqual([reason])
+    expect.soft(manifestCoverage(metadata).notReadReasons?.DeviceConfigurations).toContain(reason)
+    expect(JSON.stringify({ log: job.log, errors, metadata })).not.toContain(name)
+  })
+
   it("keeps every policy when names and id prefixes repeat", async () => {
     // Intune's default enrollment configurations share a display name and the tenant GUID id prefix.
     const prefix = "7192bb9f-ffa6-4f50-9176-7603cd9450d6"

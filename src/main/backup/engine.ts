@@ -23,7 +23,8 @@ import { RetryDelayError } from "../graph-retry"
 import { isLocalAccount } from "../storage/blob-emulator"
 import { FetchApplicationError } from "../api/network-error"
 import { INTUNE_TYPES, itemName, typeForFolder, type GraphVersion, type IntuneType, type Item } from "../../shared/intune/registry"
-import { readEntries, ExpansionRecoveryError, PolicyDetailValidationError, ScopeDiscoveryError, OrganizationResolutionError, organizationReader, graphVersion, detailPath, listPath, listSnapshot, readObject, withMaskedSecrets, type GraphReader } from "../../shared/intune/read"
+import { GraphResponseValidationError } from "../../shared/graph-response-validation"
+import { readEntries, ExpansionRecoveryError, ScopeDiscoveryError, OrganizationResolutionError, organizationReader, graphVersion, detailPath, listPath, listSnapshot, readObject, withMaskedSecrets, type GraphReader } from "../../shared/intune/read"
 import { comparableSnapshot } from "../../shared/intune/compare"
 import type { BackupItems } from "../../shared/intune/backup-changes"
 import { EVERYTHING, includedTypes, normalizeScope, restorableFolders, type BackupScope } from "../../shared/intune/scope"
@@ -160,7 +161,7 @@ export interface BackupEngineDeps {
 function graphUrl(version: GraphVersion, path: string, additional: readonly GraphVersion[] = []): string {
   if (!URL.canParse(path)) return `${GRAPH}/${version}/${path}`
   const link = new URL(path)
-  if (link.origin !== GRAPH || ![version, ...additional].some(allowed => link.pathname.startsWith(`/${allowed}/`))) throw new Error("Invalid Graph continuation link")
+  if (link.origin !== GRAPH || ![version, ...additional].some(allowed => link.pathname.startsWith(`/${allowed}/`))) throw new GraphResponseValidationError("Invalid Graph continuation link")
   return path
 }
 
@@ -1049,7 +1050,7 @@ export class BackupEngine {
         // An expired sign-in fails every remaining item the same way, so it stops the backup once.
         if (signInEnded(error) || (!service.isolated && error instanceof GraphError && error.status === 401)) throw error
         failures++
-        const useTypeLabel = recoveryFailed || error instanceof PolicyDetailValidationError
+        const useTypeLabel = recoveryFailed || error instanceof GraphResponseValidationError || error instanceof SyntaxError || (error instanceof GraphError && error.continuationPage)
         const logName = useTypeLabel ? type.label : maskBackupAccountIdentifiers(displayName)
         const reason = error instanceof Error ? error.message : String(error)
         const warning = `Could not back up ${useTypeLabel ? logName : `"${logName}"`}: ${reason}`

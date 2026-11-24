@@ -1,4 +1,5 @@
 import { graphContinuation } from "../../shared/graph-continuation"
+import { GraphResponseValidationError } from "../../shared/graph-response-validation"
 import { retryDelay, retryableStatus, sleep } from "../graph-retry"
 import { FetchApplicationError } from "../api/network-error"
 import { signInRefused } from "../../shared/backup-outcomes"
@@ -78,7 +79,7 @@ export class GraphSession {
       const validated = validateListPage(page, url, seen, options)
       yield validated.items
       if (!validated.next) return
-      if (seen.size > MAX_LIST_PAGES) throw new Error(`Graph listing did not finish after ${MAX_LIST_PAGES} pages`)
+      if (seen.size > MAX_LIST_PAGES) throw new GraphResponseValidationError(`Graph listing did not finish after ${MAX_LIST_PAGES} pages`)
       try {
         page = await this.get(validated.next, options.headers, options)
       } catch (error) {
@@ -195,20 +196,20 @@ export class GraphSession {
 
 function validateListPage(page: unknown, url: string, seen: Set<string>, options: ListOptions): { items: Item[]; next?: string } {
   if (!page || typeof page !== "object" || Array.isArray(page) || !("value" in page) || !Array.isArray(page.value)) {
-    throw new Error("Graph returned an invalid policy collection")
+    throw new GraphResponseValidationError("Graph returned an invalid policy collection")
   }
   const idKey = options.idKey ?? "id"
   for (const entry of page.value) {
     const id = entry?.[idKey]
     if (!entry || typeof entry !== "object" || Array.isArray(entry) || typeof id !== "string" || !id.trim()) {
-      throw new Error(`Microsoft Graph returned a collection entry without ${idKey}`)
+      throw new GraphResponseValidationError(`Microsoft Graph returned a collection entry without ${idKey}`)
     }
   }
   if (!("@odata.nextLink" in page)) return { items: page.value }
-  if (options.singlePage) throw new Error("Microsoft Graph returned a list that continues on another page where one tenant-wide object was expected")
+  if (options.singlePage) throw new GraphResponseValidationError("Microsoft Graph returned a list that continues on another page where one tenant-wide object was expected")
   const next = page["@odata.nextLink"]
   if (typeof next !== "string" || !/^https?:\/\/[^/]/i.test(next) || next !== next.trim() || /[\s\\]/u.test(next.split("?")[0]!) || /[\t\r\n\\]/u.test(next) || !URL.canParse(next)) {
-    throw new Error("Graph returned an invalid continuation link")
+    throw new GraphResponseValidationError("Graph returned an invalid continuation link")
   }
   return { items: page.value, next: graphContinuation(url, next, seen, options.filter) }
 }

@@ -1,3 +1,4 @@
+import { GraphResponseValidationError } from "../graph-response-validation"
 import type { GraphVersion, IntuneType, Item, Json } from "./registry"
 
 /**
@@ -52,7 +53,7 @@ export async function readEntries(type: IntuneType, graph: GraphReader, discover
     const scopes = await discover(type.listSource.path).catch(error => { throw new ScopeDiscoveryError(error) })
     entries = []
     for (const scope of scopes) {
-      if (typeof scope.id !== "string" || !scope.id) throw new Error("Microsoft Graph returned a scope without an ID")
+      if (typeof scope.id !== "string" || !scope.id) throw new GraphResponseValidationError("Microsoft Graph returned a scope without an ID")
       const filter = type.listSource.filter(scope.id)
       entries.push(...await graph.list(`${type.path}?$filter=${encodeURIComponent(filter)}`))
     }
@@ -63,7 +64,7 @@ export async function readEntries(type: IntuneType, graph: GraphReader, discover
 function withIdentity(type: IntuneType, entry: Item): Item {
   if (!type.idKey) return entry
   const id = entry[type.idKey]
-  if (typeof id !== "string" || !id) throw new Error(`Microsoft Graph returned an object without ${type.idKey}`)
+  if (typeof id !== "string" || !id) throw new GraphResponseValidationError(`Microsoft Graph returned an object without ${type.idKey}`)
   return { ...entry, id }
 }
 
@@ -91,14 +92,12 @@ export function detailPath(type: IntuneType, id: string): string {
   return `${type.path}/${encodeURIComponent(id)}${query ? `?${query}` : ""}`
 }
 
-export class PolicyDetailValidationError extends Error {}
-
 function validateDetail(read: Item, expected?: { key: string; id: string }): Item {
   if (!read || typeof read !== "object" || Array.isArray(read) || Array.isArray(read.value) || Object.hasOwn(read, "@odata.nextLink")) {
-    throw new PolicyDetailValidationError("Microsoft Graph did not return a single policy object")
+    throw new GraphResponseValidationError("Microsoft Graph did not return a single policy object")
   }
   if (expected && (!Object.hasOwn(read, expected.key) || read[expected.key] !== expected.id)) {
-    throw new PolicyDetailValidationError(`Microsoft Graph returned a policy without the requested ${expected.key}`)
+    throw new GraphResponseValidationError(`Microsoft Graph returned a policy without the requested ${expected.key}`)
   }
   return read
 }
@@ -112,7 +111,7 @@ function policyDetail(type: IntuneType, id: string, path: string, read: Item): I
     if (detail.id === id) return detail
     const context = detail["@odata.context"]
     if (typeof detail.id !== "string" || !detail.id.trim() || typeof context !== "string" || !context.endsWith(`$metadata#${path}/$entity`)) {
-      throw new PolicyDetailValidationError("Microsoft Graph returned a policy without the requested template identity")
+      throw new GraphResponseValidationError("Microsoft Graph returned a policy without the requested template identity")
     }
     return detail
   }
@@ -188,12 +187,12 @@ export async function readObject(type: IntuneType, id: string, graph: GraphReade
       secret.apply(MASKED_VALUE)
       continue
     }
-    if (typeof plain.value !== "string") throw new Error("Microsoft Graph did not return an encrypted setting's value")
+    if (typeof plain.value !== "string") throw new GraphResponseValidationError("Microsoft Graph did not return an encrypted setting's value")
     secret.apply(plain.value)
   }
   delete detail["@odata.context"]
   const snapshot = storedSnapshot(type, type.singleton ? singletonSnapshot(type, detail) : detail)
-  if (type.maxSnapshotBytes && new TextEncoder().encode(JSON.stringify(snapshot, null, 2)).byteLength > type.maxSnapshotBytes) throw new Error(`The ${type.label} JSON exceeds the ${type.maxSnapshotBytes} byte limit`)
+  if (type.maxSnapshotBytes && new TextEncoder().encode(JSON.stringify(snapshot, null, 2)).byteLength > type.maxSnapshotBytes) throw new GraphResponseValidationError(`The ${type.label} JSON exceeds the ${type.maxSnapshotBytes} byte limit`)
   return snapshot
 }
 
@@ -242,11 +241,11 @@ async function completeExpanded(
     const key = `${property}${continuation}`
     const nextLink = value[key]
     if (graph.completeList) {
-      if (!path) throw new Error(`Invalid expanded collection ${property}`)
+      if (!path) throw new GraphResponseValidationError(`Invalid expanded collection ${property}`)
       if (declared.includes(property) && !Object.hasOwn(value, property)) {
         const relationship = fallbacks[prefix + property] ?? property
         try {
-          if (relationship === false) throw new Error(`Microsoft Graph did not return the expanded collection ${prefix}${property}`)
+          if (relationship === false) throw new GraphResponseValidationError(`Microsoft Graph did not return the expanded collection ${prefix}${property}`)
           value[property] = await graph.completeList(`${path}/${relationship}`)
         } catch (error) {
           throw new ExpansionRecoveryError(error)
@@ -257,7 +256,7 @@ async function completeExpanded(
       }
     } else {
       if (typeof nextLink !== "string") continue
-      if (!Array.isArray(value[property])) throw new Error(`Invalid expanded collection ${property}`)
+      if (!Array.isArray(value[property])) throw new GraphResponseValidationError(`Invalid expanded collection ${property}`)
       value[property] = [...value[property] as Json[], ...await graph.list(nextLink)]
     }
     delete value[key]
@@ -278,12 +277,12 @@ function orderedSnapshot(type: IntuneType, snapshot: Item): Item {
       const [name, ...rest] = path
       const entries = value[name!]
       if (entries === undefined || entries === null) {
-        if (type.requiredCollections?.includes(property)) throw new Error(`Microsoft Graph did not return the expanded collection ${property}`)
+        if (type.requiredCollections?.includes(property)) throw new GraphResponseValidationError(`Microsoft Graph did not return the expanded collection ${property}`)
         return
       }
       if (rest.length) { order(entries, rest); return }
       const identity = (entry: Item): string | undefined => key === "$content" ? stableContent(entry) : typeof entry[key] === "string" ? entry[key] as string : undefined
-      if (!Array.isArray(entries) || entries.some(entry => !entry || typeof entry !== "object" || Array.isArray(entry) || !identity(entry))) throw new Error(`Microsoft Graph returned an entry without ${key} in ${property}`)
+      if (!Array.isArray(entries) || entries.some(entry => !entry || typeof entry !== "object" || Array.isArray(entry) || !identity(entry))) throw new GraphResponseValidationError(`Microsoft Graph returned an entry without ${key} in ${property}`)
       value[name!] = [...entries].sort((a, b) => {
         const left = identity(a as Item)!
         const right = identity(b as Item)!
@@ -305,7 +304,7 @@ function stableContent(value: Json): string {
 /** The IDs of a collection's entries, each once and in a fixed order, so two reads of the same set compare equal. */
 export function sortedIds(entries: Item[], property: string): string[] {
   const ids = entries.map((entry) => {
-    if (typeof entry.id !== "string" || !entry.id) throw new Error(`Microsoft Graph returned an entry without an ID in ${property}`)
+    if (typeof entry.id !== "string" || !entry.id) throw new GraphResponseValidationError(`Microsoft Graph returned an entry without an ID in ${property}`)
     return entry.id
   })
   return [...new Set(ids)].sort()
@@ -383,11 +382,11 @@ export function withMaskedSecrets(type: IntuneType, snapshot: Item): Item | null
 function singletonObject(singleton: NonNullable<IntuneType["singleton"]>, read: Item): Item {
   if (!singleton.collection) return read
   // A list that goes on may hold a second object, or a page that cannot be read: its first entry is not the tenant's setting.
-  if (read && typeof read === "object" && Object.hasOwn(read, "@odata.nextLink")) throw new PolicyDetailValidationError("Microsoft Graph returned a list that continues on another page where one tenant-wide object was expected")
+  if (read && typeof read === "object" && Object.hasOwn(read, "@odata.nextLink")) throw new GraphResponseValidationError("Microsoft Graph returned a list that continues on another page where one tenant-wide object was expected")
   const entries = read?.value
   // Storing one of several, or nothing, would pass for the tenant's setting.
   if (!Array.isArray(entries) || entries.length !== 1 || !entries[0] || typeof entries[0] !== "object" || Array.isArray(entries[0])) {
-    throw new PolicyDetailValidationError(`Microsoft Graph returned ${Array.isArray(entries) ? entries.length : "no"} objects where one tenant-wide object was expected`)
+    throw new GraphResponseValidationError(`Microsoft Graph returned ${Array.isArray(entries) ? entries.length : "no"} objects where one tenant-wide object was expected`)
   }
   return entries[0] as Item
 }
@@ -447,7 +446,7 @@ export function organizationReader(graph: GraphReader): GraphReader {
   const resolve = async (path: string): Promise<string> => {
     if (!path.includes("{organizationId}")) return path
     organization ??= graph.list("organization?$select=id").then(entries => {
-      if (entries.length !== 1 || typeof entries[0]?.id !== "string" || !entries[0].id) throw new Error("Microsoft Graph did not return exactly one organization ID")
+      if (entries.length !== 1 || typeof entries[0]?.id !== "string" || !entries[0].id) throw new GraphResponseValidationError("Microsoft Graph did not return exactly one organization ID")
       return encodeURIComponent(entries[0].id)
     }).catch(error => { throw new OrganizationResolutionError(error) })
     return path.replaceAll("{organizationId}", await organization)
