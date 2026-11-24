@@ -1,7 +1,7 @@
 import { OnboardingSignIn, WizardCoverage, type MethodAvailability } from "../components/OnboardingSignIn"
 import { TenuVaultConsent } from "../components/TenuVaultConsent"
 import { GRAPH_CLI_CONSENT_WARNING, GRAPH_CLI_UPGRADE, OWN_APP_UPGRADE, SIGN_IN_METHODS, type BackupScopeCoverage, type SignInMethod, type WizardSignInResult } from "../../shared/tenant-connection"
-import { BACKUP_SERVICES } from "../../shared/services/presentation"
+import { DISPLAY_MODULE_ORDER } from "../../shared/services/presentation"
 import { tenantPermissionPacks } from "../../shared/services/permission-packs"
 import { isGuid } from "../../shared/security"
 import { serializeTenants } from "~/lib/tenant-state"
@@ -9,7 +9,10 @@ import { Input } from "~/components/ui/input"
 import { OnboardingServices } from "../components/OnboardingServices"
 import { PermissionRoutes } from "../components/ServicesSettings"
 import { checkedOnboardingChoice, choiceLabel, hasOnboardingBackups } from "../../shared/services/onboarding"
-import type { PermissionChoice } from "../../shared/services/manifest"
+import { areaPermissions, type PermissionChoice } from "../../shared/services/manifest"
+import { chosenBackupCoverage } from "../../shared/services/graph-cli-coverage"
+import { MODULE_BY_ID, moduleForFolder } from "../../shared/services/modules"
+import { typeForFolder } from "../../shared/intune/registry"
 import { trialKeyRefusalText } from "../../shared/trial-notices"
 import { showCommunityLimitError } from "../lib/plan-dialog"
 import { useEffect, useMemo, useRef, useState } from "react"
@@ -691,16 +694,25 @@ export default function OnboardingPage() {
   // is still set after Previous is not an error of this step.
   const signInStuck = Boolean(addError?.license)
   const stageIndex = step === 3 ? 4 : step === 2 ? 3 : step === 4 ? 2 : step === -1 || step === 0 ? 1 : 0
-  const coverage = sharedSignIn?.coverage ?? permissionResult?.coverage ?? []
-  const hasScopeGaps = coverage.some(row => (services[row.service] || (row.service === "entra" && services.conditionalAccess)) &&
-    row.readable && row.readable.length < row.folders.length)
+  const rawCoverage = sharedSignIn?.coverage ?? permissionResult?.coverage ?? []
+  const coverage = method === "graphCli"
+    ? chosenBackupCoverage(rawCoverage, services)
+    : rawCoverage.filter(row => services[row.service] || (row.service === "entra" && services.conditionalAccess))
+  const missing = permissionResult?.missing ?? []
+  const unreadable = coverage.flatMap(({ folders, readable }) => readable === null ? [] : folders.filter(folder => !readable.includes(folder)))
+  const hasScopeGaps = unreadable.length > 0
   const unknownCoverage = !coverage.length || coverage.some(row => row.readable === null)
   const targetTenant = account?.tenantId ?? publicTenant.trim()
   const canUpgrade = method === "graphCli"
-  const needsPack = BACKUP_SERVICES.find(({ id }) => {
-    const row = coverage.find(item => item.service === id)
-    return services[id] && (!row?.readable || row.readable.length < row.folders.length)
-  })?.id
+  const needsPack = DISPLAY_MODULE_ORDER.find(id => {
+    const picked = services[id]
+    if (!picked) return false
+    const missingForService = missing.length > 0 && MODULE_BY_ID.get(id)?.areas.some(area =>
+      (!area.optIn || picked.areas?.includes(area.id)) &&
+      areaPermissions(area, picked.access, "delegated").some(scope => missing.includes(scope)))
+    if (missingForService) return true
+    return coverage.some(row => row.folders.some(folder => moduleForFolder(folder)?.module.id === id && !row.readable?.includes(folder)))
+  })
   const missingPack = needsPack ? `${needsPack}-${services[needsPack]?.access ?? "backup"}` : "basics"
   const openSetupAction = <div className="space-y-2 rounded-2xl bg-secondary/60 px-4 py-3 text-sm text-gray-700">
     <div className="flex flex-wrap items-center justify-between gap-3">
@@ -897,19 +909,27 @@ export default function OnboardingPage() {
             {checkingPermissions || checkingResume ? <p role="status" className="text-sm text-gray-600">Checking permissions for your chosen services…</p> : <>
               <WizardCoverage coverage={coverage} />
               <p className="text-sm text-gray-600">Coverage shows what your permissions allow. If your role can't do this, the first backup reports the refusal separately from missing permissions.</p>
-              {(hasScopeGaps || Boolean(permissionResult?.missing.length)) && <p className="text-sm text-gray-700">Permission not granted for some of your chosen backup or restore types.</p>}
+              {(hasScopeGaps || missing.length > 0) && <p className="text-sm text-gray-700">Permission not granted for some of your chosen backup or restore types.</p>}
+              {hasScopeGaps && (
+                <details className="rounded-xl border p-3 text-sm text-gray-700">
+                  <summary className="cursor-pointer font-medium">Backup types missing permissions ({unreadable.length})</summary>
+                  <ul className="mt-2 list-disc space-y-1 pl-5">
+                    {unreadable.map(folder => <li key={folder}>{typeForFolder(folder)?.label ?? folder}</li>)}
+                  </ul>
+                </details>
+              )}
               {unknownCoverage && account && <p className="text-sm text-gray-700">Some coverage is unknown.</p>}
-              {method === "ownApp" && permissionResult && (permissionResult.missing.length > 0 || permissionResult.error) && <div className="space-y-2 rounded-xl border p-3 text-sm text-gray-700">
+              {method === "ownApp" && permissionResult && (missing.length > 0 || permissionResult.error) && <div className="space-y-2 rounded-xl border p-3 text-sm text-gray-700">
                 {permissionResult.error && <p>Permissions could not be checked. You can continue to storage or check again.</p>}
                 <SetupCallLink source="signin-error" variant="hint" />
-                <PermissionRoutes report={account!} missing={permissionResult.missing} />
+                <PermissionRoutes report={account!} missing={missing} />
                 <Button variant="outline" onClick={() => { if (account) setAccount({ ...account }) }}>Check again</Button>
               </div>}
               <div className="flex flex-wrap gap-2">
-                {method !== "tenuvaultApp" && available.tenuvaultApp === true && isGuid(targetTenant) && (canUpgrade || hasScopeGaps || Boolean(permissionResult?.missing.length)) &&
+                {method !== "tenuvaultApp" && available.tenuvaultApp === true && isGuid(targetTenant) && (canUpgrade || hasScopeGaps || missing.length > 0) &&
                   <Button variant="outline" disabled={releasing} onClick={() => void chooseMethod("tenuvaultApp", targetTenant)}>{GRAPH_CLI_UPGRADE}</Button>}
                 {method !== "ownApp" && <Button variant="outline" disabled={releasing} onClick={() => void chooseMethod("ownApp", isGuid(targetTenant) ? targetTenant : undefined)}>{OWN_APP_UPGRADE}</Button>}
-                {available.tenuvaultApp === true && method !== "tenuvaultApp" && isGuid(targetTenant) && confirmedChoice(services) && (hasScopeGaps || unknownCoverage || Boolean(permissionResult?.missing.length)) &&
+                {available.tenuvaultApp === true && method !== "tenuvaultApp" && isGuid(targetTenant) && confirmedChoice(services) && (hasScopeGaps || unknownCoverage || missing.length > 0) &&
                   <Button variant="outline" disabled={releasing} onClick={() => void chooseMethod("tenuvaultApp", targetTenant, missingPack)}>Send to my admin</Button>}
                 {account && <Button className="ml-auto" disabled={releasing} onClick={() => setStep(2)}>Continue to storage</Button>}
               </div>

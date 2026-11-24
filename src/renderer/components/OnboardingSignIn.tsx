@@ -61,13 +61,11 @@ export function OnboardingSignIn({ available, onChoose }: { available: MethodAva
 }
 
 export function WizardCoverage({ coverage }: { coverage: BackupScopeCoverage[] }) {
+  if (!coverage.length) return null
   return <dl className="grid grid-cols-3 gap-2" aria-label="Backup coverage">
-    {BACKUP_SERVICES.map(({ id, label }) => {
-      const row = coverage.find(item => item.service === id)
-      return <div key={id} className="rounded-xl border border-border px-3 py-2">
-        <dt className="text-xs font-medium text-gray-700">{label}</dt>
-        <dd className="text-base font-medium text-gray-900">{!row || row.readable === null ? "Unknown" : row.folders.length === 0 ? "Not selected" : `${row.readable.length} of ${row.folders.length}`}</dd>
-      </div>
-    })}
+    {coverage.map(row => <div key={row.service} className="rounded-xl border border-border px-3 py-2">
+      <dt className="text-xs font-medium text-gray-700">{BACKUP_SERVICES.find(({ id }) => id === row.service)?.label}</dt>
+      <dd className="text-base font-medium text-gray-900">{row.readable === null ? "Unknown" : `${row.readable.length} of ${row.folders.length}`}</dd>
+    </div>)}
   </dl>
 }

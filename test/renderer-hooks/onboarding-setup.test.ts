@@ -8,7 +8,7 @@ import type { SignedInAccount } from "../../src/shared/ipc"
 
 const state = vi.hoisted(() => ({
   createRegistration: vi.fn(),
-  checkPermissions: vi.fn(async () => ({ missing: [] as string[] })),
+  checkPermissions: vi.fn(async (): Promise<{ missing: string[]; coverage?: import("../../src/shared/tenant-connection").BackupScopeCoverage[] }> => ({ missing: [] })),
   enrollOwnApp: vi.fn(async () => ({ result: true })),
   graphCliAvailable: vi.fn(async () => false),
   tenuvaultAppAvailable: vi.fn(async () => false),
@@ -1486,7 +1486,7 @@ describe("sign-in method wizard", () => {
     id: "draft-1",
     account: { tenantId: TENANT, clientId: "14d82eec-204b-4c2f-b7e8-296a70dab67e", username: "admin@example.test" },
     coverage: [
-      { service: "defender", folders: ["one", "two"], readable: ["one"] },
+      { service: "defender", folders: ["DefenderCustomDetectionRules", "DefenderWorkbooks"], readable: ["DefenderCustomDetectionRules"] },
       { service: "entra", folders: ["three"], readable: null },
       { service: "intune", folders: ["four"], readable: ["four"] },
     ],
@@ -1575,11 +1575,48 @@ describe("sign-in method wizard", () => {
     await act(async () => button(container, "Continue with Defender")!.click())
     expect(container.textContent).toContain("Sign-in results")
     expect(container.textContent).toContain("Defender1 of 2")
-    expect(container.textContent).toContain("Entra IDUnknown")
     expect(container.textContent).toContain("Permission not granted")
     expect(container.textContent).toContain("your role can't do this")
     return container
   }
+
+  it("points to the tenant ID in the Entra admin center before Start now sign-in", async () => {
+    state.graphCliAvailable.mockResolvedValue(true)
+    const container = await render(createElement(OnboardingPage), false)
+    await act(async () => button(container, "Choose Start now")!.click())
+    const hintId = container.querySelector("input")?.getAttribute("aria-describedby")
+    expect(document.getElementById(hintId ?? "")?.textContent).toContain("Overview page in the Microsoft Entra admin center")
+  })
+
+  it("shows coverage only for the one service confirmed after Start now", async () => {
+    const container = await startNow()
+    expect([...container.querySelectorAll('[aria-label="Backup coverage"] dt')].map(dt => dt.textContent)).toEqual(["Defender"])
+    expect(container.textContent).not.toContain("Some coverage is unknown.")
+    expect(container.textContent).toContain("Backup types missing permissions (1)")
+  })
+
+  it("prefills the Intune restore pack when all chosen types can be backed up", async () => {
+    state.tenuvaultAppAvailable.mockResolvedValue(true)
+    const clientId = "5c3b8e21-7a4f-4d19-9c6e-2f81d0a4b7e3"
+    state.signIn.mockResolvedValue({ tenantId: TENANT, clientId, username: "admin@example.test" })
+    state.checkPermissions.mockResolvedValue({
+      missing: ["DeviceManagementConfiguration.ReadWrite.All"],
+      coverage: [{ service: "intune", folders: ["DeviceConfigurations"], readable: ["DeviceConfigurations"] }],
+    })
+    const container = await render(createElement(OnboardingPage), false)
+    await chooseOwnServices(container)
+    await act(async () => container.querySelector<HTMLInputElement>('[aria-label="Back up Intune"]')!.click())
+    await act(async () => container.querySelector<HTMLInputElement>('[aria-label="Also restore Intune"]')!.click())
+    await act(async () => button(container, "Continue with Intune")!.click())
+    await act(async () => button(container, "I already have an app registration")!.click())
+    type(container.querySelector<HTMLInputElement>("#tenant")!, TENANT)
+    type(container.querySelector<HTMLInputElement>("#clientId")!, clientId)
+    await act(async () => button(container, "Sign in with Microsoft")!.click())
+    expect(container.textContent).toContain("Intune1 of 1")
+    expect(container.textContent).toContain("DeviceManagementConfiguration.ReadWrite.All")
+    await act(async () => button(container, "Send to my admin")!.click())
+    expect(document.querySelector<HTMLSelectElement>('[role="dialog"] select')?.value).toBe("intune-restore")
+  })
 
   it("prefills the missing service pack in the TenuVault app admin handoff", async () => {
     const container = await startNow()
