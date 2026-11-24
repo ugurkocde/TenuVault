@@ -192,3 +192,7 @@ When chosen permissions are missing, **Review your chosen permissions** shows ex
 ![Permission result after sign-in](/images/onboarding/10-permissions-missing-light.png)
 
 The choice is saved to this tenant before it is added. On a tenant without Intune, Intune workflows such as OpenIntuneBaseline, frameworks, company baselines, App Backup and Copy to Tenants explain that they need Intune and link to **Settings > Services and permissions**. Other services and stored backups remain available.
+
+## Change a tenant's sign-in method
+
+This setup uses your own app registration. If your tenant was connected through a setup that supports method changes, **Settings > Sign-in** shows its current method and a **Change sign-in method** action. Enter the application (client) ID of your own registration and sign in to the same tenant. If sign-in fails or Microsoft returns a different tenant, TenuVault keeps your existing connection. See [Manage tenants](/tenants/#tenant-sign-in-method).

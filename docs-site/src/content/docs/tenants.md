@@ -217,3 +217,7 @@ See [Plans and features](/licensing/) for the full comparison.
 * [Many Intune tenants, one at a time or side by side](https://www.tenuvault.com/compare/manage-intune-tenants-one-by-one-vs-cross-tenant): working tenant by tenant in the Intune admin center compared with TenuVault MSP, on the product site
 * [Restore to another tenant](/restore/cross-tenant/)
 * [Plans and features](/licensing/)
+
+## Tenant sign-in method
+
+Tenants connected with the original setup keep their own app registration and existing backup choices. If **Change sign-in method** appears for a tenant under **Settings > Sign-in**, you can sign in with a different app registration for the same tenant. TenuVault checks the tenant ID and permissions before saving the change. Your backups, history, schedules, settings and license or trial remain with the tenant.
