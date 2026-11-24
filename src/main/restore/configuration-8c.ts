@@ -36,6 +36,9 @@ export function configuration8cPayload(folder: string, operation: "create" | "up
       if (value !== null) throw new RestoreSafetyError(`Catalog ${key} is configured and needs a reviewed request builder.`)
       continue
     }
+    if (folder === "AccessPackageCatalogs" && ((key === "privilegeLevel" && value === "standard") ||
+        (key === "dynamicPermissionSettings" && closed(value, { isDetectionAndRemediationEnabled: "boolean", isRequestAndAssignmentEnabled: "boolean" }) &&
+          value.isDetectionAndRemediationEnabled === false && value.isRequestAndAssignmentEnabled === false))) continue
     if (folder === "AccessPackageCatalogs" && key === "catalogType" && value !== "userManaged") throw new RestoreSafetyError("Only user-managed catalog backups can be restored.")
     if (folder === "AccessPackageCatalogs" && ((key === "catalogType" && value === "userManaged") || (key === "resources" && Array.isArray(value) && value.length === 0))) continue
     if (folder === "UserFlowAttributes" && (key === "userFlowAttributeType" || (operation === "update" && ["displayName", "dataType"].includes(key)))) continue

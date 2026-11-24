@@ -4,7 +4,7 @@
   "outcome": "saved",
   "objectCount": 1,
   "responses": {
-    "/v1.0/security/secureScoreControlProfiles": {
+    "/beta/security/secureScoreControlProfiles": {
       "status": 200,
       "body": {
         "value": [

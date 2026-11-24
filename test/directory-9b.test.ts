@@ -29,7 +29,7 @@ function world(opaque = false) {
   objects.set(`servicePrincipals/${id(10)}`, { ...app })
   objects.set(`servicePrincipals/${id(12)}`, { ...client })
   const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = new URL(String(input)), path = url.pathname.replace("/v1.0/", ""), method = init?.method ?? "GET"
+    const url = new URL(String(input)), path = url.pathname.replace("/beta/", ""), method = init?.method ?? "GET"
     if (method !== "GET") {
       writes.push(path)
       const body = JSON.parse(String(init?.body ?? "{}"))
@@ -326,7 +326,7 @@ it.each(optOutVariants)("rechecks saved %s opt-out during the final GET before r
   const run = runFor(candidate), original = env.fetcher.getMockImplementation()!, before = vi.fn()
   let reads = 0
   env.fetcher.mockImplementation((url, init) => {
-    if (new URL(String(url)).pathname === `/v1.0/applications/${app.id}` && (!init?.method || init.method === "GET") && ++reads === 2) optOut(env.settings, variant)
+    if (new URL(String(url)).pathname === `/beta/applications/${app.id}` && (!init?.method || init.method === "GET") && ++reads === 2) optOut(env.settings, variant)
     return original(url, init)
   })
   await expect(env.io.write(candidate, candidate.desired, candidate.targetId, before, run)).rejects.toThrow("Backup and restore access")
@@ -410,7 +410,7 @@ it("uses the same final preview preimage for displayed changes and fingerprint, 
   const original = env.fetcher.getMockImplementation()!
   let reads = 0
   env.fetcher.mockImplementation((url, init) => {
-    if (new URL(String(url)).pathname === `/v1.0/applications/${app.id}` && (!init?.method || init.method === "GET") && ++reads === 3) env.objects.get(`applications/${app.id}`)!.displayName = "Changed before preview"
+    if (new URL(String(url)).pathname === `/beta/applications/${app.id}` && (!init?.method || init.method === "GET") && ++reads === 3) env.objects.get(`applications/${app.id}`)!.displayName = "Changed before preview"
     return original(url, init)
   })
   const page = await env.service().prepare(actor.tenantId, request, options, async () => request.snapshot)
@@ -429,7 +429,7 @@ it.each(["displayName", "description", "notes"])("refuses final-read drift in re
   const run = runFor(candidate), original = env.fetcher.getMockImplementation()!, before = vi.fn()
   let reads = 0
   env.fetcher.mockImplementation((url, init) => {
-    if (new URL(String(url)).pathname === `/v1.0/applications/${app.id}` && (!init?.method || init.method === "GET") && ++reads === 2) env.objects.get(`applications/${app.id}`)![property] = "Concurrent edit"
+    if (new URL(String(url)).pathname === `/beta/applications/${app.id}` && (!init?.method || init.method === "GET") && ++reads === 2) env.objects.get(`applications/${app.id}`)![property] = "Concurrent edit"
     return original(url, init)
   })
   await expect(env.io.write(candidate, candidate.desired, candidate.targetId, before, run)).rejects.toThrow("tenant changed")
@@ -483,7 +483,7 @@ it.each(["microsoft", "microsoft-uppercase", "failed lookup", "ambiguous", "miss
   await env.io.preview(candidate)
   const run = runFor(candidate), original = env.fetcher.getMockImplementation()!
   env.fetcher.mockImplementation((url, init) => {
-    if (new URL(String(url)).pathname === "/v1.0/servicePrincipals") {
+    if (new URL(String(url)).pathname === "/beta/servicePrincipals") {
       if (variant === "failed lookup") return Promise.resolve(Response.json({ error: { code: "Authorization_RequestDenied" } }, { status: 403 }))
       const principal = { ...app }
       if (variant === "microsoft") principal.appOwnerOrganizationId = MICROSOFT_ORGANIZATION_ID
@@ -623,7 +623,7 @@ it.each(["misfiled", "saved-appId", "live-objectId", "preview-appId"])('rejects 
     const original = env.fetcher.getMockImplementation()!
     let reads = 0
     env.fetcher.mockImplementation((url, init) => {
-      if (new URL(String(url)).pathname === `/v1.0/applications/${app.id}` && (!init?.method || init.method === "GET") && ++reads === 3) env.objects.get(`applications/${app.id}`)!.appId = client.appId
+      if (new URL(String(url)).pathname === `/beta/applications/${app.id}` && (!init?.method || init.method === "GET") && ++reads === 3) env.objects.get(`applications/${app.id}`)!.appId = client.appId
       return original(url, init)
     })
   }
@@ -651,7 +651,7 @@ it.each(["before-execution", "final-read"])('refuses appId changes at %s through
       let reads = 0
       env.fetcher.mockImplementation((url, init) => {
         // Initial capture and reference review each read twice. Change at the writer's final read.
-        if (new URL(String(url)).pathname === `/v1.0/applications/${app.id}` && (!init?.method || init.method === "GET") && ++reads === 5) env.objects.get(`applications/${app.id}`)!.appId = client.appId
+        if (new URL(String(url)).pathname === `/beta/applications/${app.id}` && (!init?.method || init.method === "GET") && ++reads === 5) env.objects.get(`applications/${app.id}`)!.appId = client.appId
         return original(url, init)
       })
     }
@@ -680,7 +680,7 @@ it.each(["success", "503", "timeout"])("keeps cancellation plus %s during the fi
   const finalRead = new Promise<void>(resolve => { reached = resolve })
   env.fetcher.mockImplementation(async (input, init) => {
     // Capture, reference review and final writer read each resolve the application twice.
-    if (new URL(String(input)).pathname === `/v1.0/applications/${app.id}` && (!init?.method || init.method === "GET") && ++reads === 6) {
+    if (new URL(String(input)).pathname === `/beta/applications/${app.id}` && (!init?.method || init.method === "GET") && ++reads === 6) {
       reached(); await new Promise<void>(resolve => { release = resolve })
       expect(init?.signal?.aborted).toBe(true)
       if (failure === "503") return new Response(null, { status: 503 })
@@ -722,8 +722,8 @@ it("persists a confirmed 429 as unapplied and repeats final reads before exactly
     await vi.advanceTimersByTimeAsync(1)
     expect(await pending).toMatchObject({ status: "complete", failed: 0, outcomes: [{ state: "applied" }] })
     expect(sends).toBe(2)
-    expect(env.fetcher.mock.calls.filter(([url, init]) => new URL(String(url)).pathname === `/v1.0/applications/${app.id}` && init?.method === "GET")).toHaveLength(8)
-    expect(env.fetcher.mock.calls.filter(([url]) => new URL(String(url)).pathname === "/v1.0/servicePrincipals" && new URL(String(url)).searchParams.get("$filter")?.includes(app.appId))).toHaveLength(4)
+    expect(env.fetcher.mock.calls.filter(([url, init]) => new URL(String(url)).pathname === `/beta/applications/${app.id}` && init?.method === "GET")).toHaveLength(8)
+    expect(env.fetcher.mock.calls.filter(([url]) => new URL(String(url)).pathname === "/beta/servicePrincipals" && new URL(String(url)).searchParams.get("$filter")?.includes(app.appId))).toHaveLength(4)
     expect(env.writes).toEqual([`applications/${app.id}`])
     expect([...env.data.keys()].some(key => key.startsWith("restore.directory.unanswered."))).toBe(false)
   } finally { vi.useRealTimers() }
@@ -878,7 +878,7 @@ it.each([false, true])("keeps application cleanup queued across a failed review 
 
 it("defers an empty application continuation before accepting the reference list", async () => {
   const env = world(), original = env.fetcher.getMockImplementation()!
-  env.fetcher.mockImplementation((input, init) => new URL(String(input)).pathname === "/v1.0/servicePrincipals" ? Promise.resolve(Response.json({ value: [app], "@odata.nextLink": "" })) : original(input, init))
+  env.fetcher.mockImplementation((input, init) => new URL(String(input)).pathname === "/beta/servicePrincipals" ? Promise.resolve(Response.json({ value: [app], "@odata.nextLink": "" })) : original(input, init))
   await expect(env.io.preview(step("update"))).rejects.toThrow("temporary Microsoft Graph read failure")
   expect(env.writes).toEqual([])
 })
@@ -887,7 +887,7 @@ it.each(["appId", "appOwnerOrganizationId"])("resumes application metadata after
   await env.io.preview(candidate)
   const run = runFor(candidate), journal = new GuardedRunJournal(env.store), original = env.fetcher.getMockImplementation()!
   approveDirectory(candidate, run, "directory-item")
-  env.fetcher.mockImplementation((input, init) => new URL(String(input)).pathname === "/v1.0/servicePrincipals" ? Promise.resolve(Response.json({ value: [{ ...app, [field]: "invalid" }] })) : original(input, init))
+  env.fetcher.mockImplementation((input, init) => new URL(String(input)).pathname === "/beta/servicePrincipals" ? Promise.resolve(Response.json({ value: [{ ...app, [field]: "invalid" }] })) : original(input, init))
   expect((await executeGuardedRun(journal, run, env.io)).run.entries[0]!.state).toBe("deferred")
   expect(env.writes).toEqual([])
   env.fetcher.mockImplementation(original)
@@ -906,8 +906,8 @@ it("reads a user's opaque app role assignment from the users endpoint", async ()
   candidate.desired = { appRoleId: id(90) }
   expect(await env.io.read(candidate)).toEqual(assignment)
   const paths = env.fetcher.mock.calls.map(([input]) => new URL(String(input)).pathname)
-  expect(paths).toContain(`/v1.0/users/${userId}/appRoleAssignments`)
-  expect(paths).not.toContain(`/v1.0/servicePrincipals/${userId}/appRoleAssignments`)
+  expect(paths).toContain(`/beta/users/${userId}/appRoleAssignments`)
+  expect(paths).not.toContain(`/beta/servicePrincipals/${userId}/appRoleAssignments`)
   expect(env.writes).toEqual([])
 })
 it("finishes normal application metadata preview without reading app role assignments", async () => {
@@ -918,10 +918,10 @@ it("finishes normal application metadata preview without reading app role assign
 })
 it("defers a repeated application nextLink before fetching it again", async () => {
   const env = world(), original = env.fetcher.getMockImplementation()!
-  const next = "https://graph.microsoft.com/v1.0/servicePrincipals?$skiptoken=repeat"
+  const next = "https://graph.microsoft.com/beta/servicePrincipals?$skiptoken=repeat"
   let reads = 0
   env.fetcher.mockImplementation((input, init) => {
-    if (new URL(String(input)).pathname === "/v1.0/servicePrincipals") { reads++; return Promise.resolve(Response.json({ value: [], "@odata.nextLink": next })) }
+    if (new URL(String(input)).pathname === "/beta/servicePrincipals") { reads++; return Promise.resolve(Response.json({ value: [], "@odata.nextLink": next })) }
     return original(input, init)
   })
   await expect(async () => { for await (const _item of env.io.list("servicePrincipals")) {} }).rejects.toThrow("temporary Microsoft Graph read failure")
@@ -933,7 +933,7 @@ it.each([false, true])("previews and restores a home-tenant application name wit
   const store = { partitioned: true as const, get: (key: string) => data.get(key) ?? null, set: (key: string, value: string) => { data.set(key, value) }, delete: (key: string) => { data.delete(key) } }
   const application = { id: app.id, appId: app.appId, displayName: "API", description: null, notes: null }
   env.objects.set(`applications/${app.id}`, application)
-  env.fetcher.mockImplementation((input, init) => new URL(String(input)).pathname === "/v1.0/servicePrincipals" && new URL(String(input)).searchParams.get("$filter")?.includes(app.appId) ? Promise.resolve(Response.json({ value: [] })) : original(input, init))
+  env.fetcher.mockImplementation((input, init) => new URL(String(input)).pathname === "/beta/servicePrincipals" && new URL(String(input)).searchParams.get("$filter")?.includes(app.appId) ? Promise.resolve(Response.json({ value: [] })) : original(input, init))
   const candidate = await applicationObjectStep("Applications", { ...application, displayName: "Saved" }, env.io, async () => application)
   expect(await env.io.preview(candidate)).toMatchObject({ changes: [{ property: "displayName", before: "API", after: "Saved" }] })
   const run = runFor(candidate), journal = new GuardedRunJournal(store)
@@ -947,7 +947,7 @@ it.each(["desktop appId", "backup reader appId", "marked notes", "marked name"])
   const env = world(), original = env.fetcher.getMockImplementation()!
   const application = { id: app.id, appId: marker === "desktop appId" ? TENUVAULT_DESKTOP_APP_ID : marker === "backup reader appId" ? id(99) : app.appId, displayName: marker === "marked name" ? "TenuVault Backup Reader" : "API", description: null, notes: marker === "marked notes" ? "TenuVault Backup Reader: owned registration" : null }
   env.objects.set(`applications/${app.id}`, application)
-  env.fetcher.mockImplementation((input, init) => new URL(String(input)).pathname === "/v1.0/servicePrincipals" ? Promise.resolve(Response.json({ value: [] })) : original(input, init))
+  env.fetcher.mockImplementation((input, init) => new URL(String(input)).pathname === "/beta/servicePrincipals" ? Promise.resolve(Response.json({ value: [] })) : original(input, init))
   const io = directory9bIO(token, actor, env.fetcher, () => [id(99)], () => env.settings.get(actor.tenantId).entra)
   await expect(io.preview(step("update"))).rejects.toThrow("protected")
   expect(env.writes).toEqual([])
@@ -957,7 +957,7 @@ it.each(["ambiguous", "failed"])("defers %s optional service principal evidence 
   await env.io.preview(candidate)
   const run = runFor(candidate), journal = new GuardedRunJournal(env.store), original = env.fetcher.getMockImplementation()!
   approveDirectory(candidate, run, "directory-item")
-  env.fetcher.mockImplementation((input, init) => new URL(String(input)).pathname === "/v1.0/servicePrincipals" ? Promise.resolve(failure === "ambiguous" ? Response.json({ value: [app, app] }) : Response.json({ error: { code: "Authorization_RequestDenied" } }, { status: 403 })) : original(input, init))
+  env.fetcher.mockImplementation((input, init) => new URL(String(input)).pathname === "/beta/servicePrincipals" ? Promise.resolve(failure === "ambiguous" ? Response.json({ value: [app, app] }) : Response.json({ error: { code: "Authorization_RequestDenied" } }, { status: 403 })) : original(input, init))
   expect((await executeGuardedRun(journal, run, env.io)).run.entries[0]!.state).toBe("deferred")
   expect(env.writes).toEqual([])
   env.fetcher.mockImplementation(original)

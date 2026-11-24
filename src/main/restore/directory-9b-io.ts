@@ -13,7 +13,7 @@ import { appIdentity, applicationAdmission, applicationPermissions, applicationR
 import { assertNoSecrets, isRestorePersistenceError, restoreFingerprint, type GuardedIO, type GuardedStep } from "./guarded-run"
 import type { ModuleSetting } from "../services/settings"
 
-const root = "https://graph.microsoft.com/v1.0/"
+const root = "https://graph.microsoft.com/beta/"
 const collection = (folder: string) => {
   if (folder === "Applications") return "applications"
   if (folder === "ServicePrincipals") return "servicePrincipals"

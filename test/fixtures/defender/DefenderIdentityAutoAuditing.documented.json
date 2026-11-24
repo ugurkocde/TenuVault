@@ -4,7 +4,7 @@
   "outcome": "saved",
   "objectCount": 1,
   "responses": {
-    "/v1.0/security/identities/settings/autoAuditingConfiguration": {
+    "/beta/security/identities/settings/autoAuditingConfiguration": {
       "status": 200,
       "body": {
         "id": "example",

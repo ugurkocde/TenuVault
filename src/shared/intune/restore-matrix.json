@@ -7123,11 +7123,11 @@
   {
     "folder": "AccessPackageCatalogs",
     "resource": "accesspackagecatalog",
-    "readPath": "identityGovernance/entitlementManagement/catalogs",
+    "readPath": "identityGovernance/entitlementManagement/accessPackageCatalogs",
     "create": {
       "method": "POST",
-      "path": "identityGovernance/entitlementManagement/catalogs",
-      "version": "v1.0",
+      "path": "identityGovernance/entitlementManagement/accessPackageCatalogs",
+      "version": "beta",
       "properties": [
         "displayName",
         "description",
@@ -7137,35 +7137,31 @@
       "permissions": [
         "EntitlementManagement.ReadWrite.All"
       ],
-      "documentation": "https://learn.microsoft.com/en-us/graph/api/entitlementmanagement-post-catalogs?view=graph-rest-1.0",
-      "index": "not-matched",
+      "documentation": "https://learn.microsoft.com/en-us/graph/api/entitlementmanagement-post-accesspackagecatalogs?view=graph-rest-beta",
+      "index": "matched",
       "permissionDocumentation": [
-        "https://raw.githubusercontent.com/microsoftgraph/microsoft-graph-docs-contrib/main/api-reference/v1.0/includes/permissions/entitlementmanagement-post-catalogs-permissions.md"
+        "https://raw.githubusercontent.com/microsoftgraph/microsoft-graph-docs-contrib/main/api-reference/beta/includes/permissions/entitlementmanagement-post-accesspackagecatalogs-permissions.md"
       ],
       "propertyEvidence": "request-body-table",
       "propertyCoverage": "closed-subset",
       "schemaDocumentation": [
-        "https://learn.microsoft.com/en-us/graph/api/resources/accesspackagecatalog?view=graph-rest-1.0"
+        "https://learn.microsoft.com/en-us/graph/api/resources/accesspackagecatalog?view=graph-rest-beta"
       ],
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
-          "https://learn.microsoft.com/en-us/graph/api/entitlementmanagement-post-catalogs?view=graph-rest-1.0",
-          "https://learn.microsoft.com/en-us/graph/api/resources/accesspackagecatalog?view=graph-rest-1.0"
+          "https://learn.microsoft.com/en-us/graph/api/entitlementmanagement-post-accesspackagecatalogs?view=graph-rest-beta",
+          "https://learn.microsoft.com/en-us/graph/api/resources/accesspackagecatalog?view=graph-rest-beta"
         ],
         "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
       },
       "protections": [],
-      "protectionReason": "This closed subset cannot write identities, memberships, assignments, authentication methods, credentials or the connected registration. Workflow and detection execution is disabled; relationship-changing subsets are excluded.",
-      "liveVerification": {
-        "date": "2026-11-18",
-        "result": "round-trip-matched"
-      }
+      "protectionReason": "This closed subset cannot write identities, memberships, assignments, authentication methods, credentials or the connected registration. Workflow and detection execution is disabled; relationship-changing subsets are excluded."
     },
     "update": {
       "method": "PATCH",
-      "path": "identityGovernance/entitlementManagement/catalogs/{accessPackageCatalogId}",
-      "version": "v1.0",
+      "path": "identityGovernance/entitlementManagement/accessPackageCatalogs/{accessPackageCatalogId}",
+      "version": "beta",
       "properties": [
         "displayName",
         "description",
@@ -7175,10 +7171,10 @@
       "permissions": [
         "EntitlementManagement.ReadWrite.All"
       ],
-      "documentation": "https://learn.microsoft.com/en-us/graph/api/accesspackagecatalog-update?view=graph-rest-1.0",
-      "index": "not-matched",
+      "documentation": "https://learn.microsoft.com/en-us/graph/api/accesspackagecatalog-update?view=graph-rest-beta",
+      "index": "matched",
       "permissionDocumentation": [
-        "https://raw.githubusercontent.com/microsoftgraph/microsoft-graph-docs-contrib/main/api-reference/v1.0/includes/permissions/accesspackagecatalog-update-permissions.md"
+        "https://raw.githubusercontent.com/microsoftgraph/microsoft-graph-docs-contrib/main/api-reference/beta/includes/permissions/accesspackagecatalog-update-permissions.md"
       ],
       "propertyEvidence": "request-body-table",
       "propertyCoverage": "closed-subset",
@@ -7186,17 +7182,13 @@
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
-          "https://learn.microsoft.com/en-us/graph/api/accesspackagecatalog-update?view=graph-rest-1.0",
-          "https://learn.microsoft.com/en-us/graph/api/resources/accesspackagecatalog?view=graph-rest-1.0"
+          "https://learn.microsoft.com/en-us/graph/api/accesspackagecatalog-update?view=graph-rest-beta",
+          "https://learn.microsoft.com/en-us/graph/api/resources/accesspackagecatalog?view=graph-rest-beta"
         ],
         "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
       },
       "protections": [],
-      "protectionReason": "This closed subset cannot write identities, memberships, assignments, authentication methods, credentials or the connected registration. Workflow and detection execution is disabled; relationship-changing subsets are excluded.",
-      "liveVerification": {
-        "date": "2026-11-18",
-        "result": "round-trip-matched"
-      }
+      "protectionReason": "This closed subset cannot write identities, memberships, assignments, authentication methods, credentials or the connected registration. Workflow and detection execution is disabled; relationship-changing subsets are excluded."
     },
     "detection": {
       "kind": "properties",
@@ -7210,20 +7202,33 @@
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
     "reason": "Only unpublished, externally hidden user-managed catalog metadata is restored. Resources and assignments are excluded.",
-    "indexWrites": {},
+    "indexWrites": {
+      "POST": [
+        {
+          "path": "/identityGovernance/entitlementManagement/accessPackageCatalogs",
+          "permissions": ["EntitlementManagement.ReadWrite.All"]
+        }
+      ],
+      "PATCH": [
+        {
+          "path": "/identityGovernance/entitlementManagement/accessPackageCatalogs/{accessPackageCatalog-id}",
+          "permissions": ["EntitlementManagement.ReadWrite.All"]
+        }
+      ]
+    },
     "verification": {
       "date": "2026-11-18",
       "method": "local-graph-index-and-microsoft-documentation",
       "resourceFound": true,
-      "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/accesspackagecatalog?view=graph-rest-1.0",
-      "live": "live-create-read-change-restore-delete (2026-11-18)",
+      "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/accesspackagecatalog?view=graph-rest-beta",
+      "live": "Historical stable-route round trip (2026-11-18). Beta reads checked; beta writes pending.",
       "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
     },
     "disposition": "configuration",
     "supplementalWrites": [
       {
         "method": "DELETE",
-        "path": "identityGovernance/entitlementManagement/catalogs/{accessPackageCatalogId}",
+        "path": "identityGovernance/entitlementManagement/accessPackageCatalogs/{accessPackageCatalogId}",
         "properties": [],
         "permissions": [
           "EntitlementManagement.ReadWrite.All"
@@ -7241,7 +7246,7 @@
       "confirmation": "configuration",
       "blockedReason": "",
       "builder": "enabled-closed-subset",
-      "lab": "live-create-read-change-restore-delete",
+      "lab": "Historical stable-route round trip; beta write verification pending.",
       "capability": "create"
     }
   },

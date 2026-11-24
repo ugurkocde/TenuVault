@@ -4,7 +4,7 @@
   "outcome": "saved",
   "objectCount": 1,
   "responses": {
-    "/v1.0/security/identities/sensors": {
+    "/beta/security/identities/sensors": {
       "status": 200,
       "body": {
         "value": [
@@ -22,7 +22,7 @@
         ]
       }
     },
-    "/v1.0/security/identities/sensors/example": {
+    "/beta/security/identities/sensors/example": {
       "status": 200,
       "body": {
         "id": "example",

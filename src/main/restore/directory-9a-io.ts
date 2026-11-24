@@ -13,7 +13,7 @@ import { requireRestoreActor, type RestoreAuthorization } from "./restore-actor"
 import { directoryPayload, directoryReview, disabledUserBody, requireDirectoryApprovals, cloudObject, DIRECTORY_9A_BLOCKER } from "./directory-9a"
 import { isRestorePersistenceError, guardedProtections, restoreFingerprint, type GuardedIO, type GuardedStep } from "./guarded-run"
 
-const root = "https://graph.microsoft.com/v1.0/"
+const root = "https://graph.microsoft.com/beta/"
 const deletedItems = "https://graph.microsoft.com/beta/directory/deletedItems/"
 const identity = (id: unknown): string => {
   if (!isGuid(id)) throw new RestoreSafetyError("A directory object ID could not be resolved.")
@@ -90,7 +90,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
       if (method === "GET" && (response.status === 408 || response.status >= 500)) throw new DirectoryReadDeferredError()
       if (method === "GET" && response.ok && response.status !== 200) throw new DirectoryReadDeferredError()
       if (!response.ok) throw new Error("Directory request was not confirmed. No response body is retained.")
-      if (method !== "GET" && (method !== "POST" || /^(?:users|groups)$|\/\$ref$/.test(url.pathname.replace(/^\/v1\.0\//, "")))) return directoryWriteResponse(response, method, url, body)
+      if (method !== "GET" && (method !== "POST" || /^(?:users|groups)$|\/\$ref$/.test(url.pathname.replace(/^\/beta\//, "")))) return directoryWriteResponse(response, method, url, body)
       if (method === "GET" && !/^application\/(?:[\w.+-]+\+)?json(?:\s*;|$)/i.test(response.headers.get("Content-Type") ?? "")) throw new DirectoryReadDeferredError()
       if (response.status === 204) {
         if (method === "GET") throw new DirectoryReadDeferredError()
@@ -118,7 +118,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
     if (blocker) throw new RestoreWriteDeferredError(blocker)
   }
   const ids = async function* (id: string, kind: "members" | "owners"): AsyncGenerator<string> {
-    const start = `https://graph.microsoft.com/${kind === "members" ? "beta" : "v1.0"}/groups/${identity(id)}/${kind}?$select=id&$top=999`
+    const start = `${root}groups/${identity(id)}/${kind}?$select=id&$top=999`
     let next: string | undefined = start
     const seen = new Set<string>()
     while (next) {

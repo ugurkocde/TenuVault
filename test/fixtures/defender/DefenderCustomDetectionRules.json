@@ -1,7 +1,7 @@
 {
   "folder": "DefenderCustomDetectionRules",
   "path": "security/rules/detectionRules",
-  "apiVersion": "v1.0",
+  "apiVersion": "beta",
   "shape": "list",
   "signIn": "both",
   "objectCount": 0,
@@ -9,7 +9,7 @@
   "source": "Live app-only read through GraphSession and readObject",
   "outcome": "saved",
   "responses": {
-    "/v1.0/security/rules/detectionRules": {
+    "/beta/security/rules/detectionRules": {
       "status": 200,
       "body": {
         "value": []

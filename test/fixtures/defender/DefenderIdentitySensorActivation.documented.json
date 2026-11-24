@@ -4,7 +4,7 @@
   "outcome": "saved",
   "objectCount": 1,
   "responses": {
-    "/v1.0/security/identities/sensorCandidateActivationConfiguration": {
+    "/beta/security/identities/sensorCandidateActivationConfiguration": {
       "status": 200,
       "body": {
         "id": "example",

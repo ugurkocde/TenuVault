@@ -1,7 +1,7 @@
 {
   "folder": "DefenderIdentitySensorActivation",
   "path": "security/identities/sensorCandidateActivationConfiguration",
-  "apiVersion": "v1.0",
+  "apiVersion": "beta",
   "shape": "singleton",
   "signIn": "both",
   "objectCount": 0,
@@ -10,7 +10,7 @@
   "outcome": "skipped",
   "cause": "license",
   "responses": {
-    "/v1.0/security/identities/sensorCandidateActivationConfiguration": {
+    "/beta/security/identities/sensorCandidateActivationConfiguration": {
       "status": 403,
       "body": {
         "error": {

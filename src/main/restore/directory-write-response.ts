@@ -55,7 +55,7 @@ export async function directoryWriteNotFound(response: Response): Promise<void> 
 }
 /** Only the documented member-add replication failure proves this send was unapplied. */
 export async function directoryWriteReplication(response: Response, method: string, url: URL): Promise<void> {
-  if (response.status !== 400 || method !== "POST" || !/^\/v1\.0\/groups\/[^/]+\/members\/\$ref$/.test(url.pathname) || !jsonContent(response)) return
+  if (response.status !== 400 || method !== "POST" || !/^\/(?:beta|v1\.0)\/groups\/[^/]+\/members\/\$ref$/.test(url.pathname) || !jsonContent(response)) return
   let value: unknown
   try { value = await response.clone().json() } catch { return }
   if (object(value) && object(value.error) && value.error.code === "Request_BadRequest" && value.error.message === "The source resource object or one of the objects being referenced don't exist.") throw new DirectoryReplicationDeferredError()
@@ -74,7 +74,7 @@ export function directoryCreateMatches(folder: string, value: Item, approved: It
 /** Only the documented response acknowledges an admitted directory write. */
 export async function directoryWriteResponse(response: Response, method: string, url: URL, approved?: Item): Promise<Item> {
   const uncertain = () => new Error("The directory write did not return its documented success response. It must be read back before any retry.")
-  const path = url.pathname.replace(/^\/v1\.0\//, "")
+  const path = url.pathname.replace(/^\/(?:beta|v1\.0)\//, "")
   const create = method === "POST" && ["users", "groups"].includes(path)
   if (create) {
     if (response.status !== 201 || !jsonContent(response)) throw uncertain()

@@ -5,7 +5,7 @@ Layer base: c4bfee3eca8ae617c27dfae2ffbcf2c22a02d91d. Read 2026-11-16 with the l
 | Folder | Path | API | Shape | Sign-in | Live outcome | Verification |
 |---|---|---|---|---|---|---|
 | AccessPackageAssignmentPolicies | `/identityGovernance/entitlementManagement/assignmentPolicies` | v1.0 | list | both | saved (0) | Live through app read path |
-| AccessPackageCatalogs | `/identityGovernance/entitlementManagement/catalogs` | v1.0 | list | both | saved (1) | Live through app read path |
+| AccessPackageCatalogs | `/identityGovernance/entitlementManagement/accessPackageCatalogs` | beta | list | both | saved (1) | Historic fixture adapted to the beta lab GETs |
 | AccessPackages | `/identityGovernance/entitlementManagement/accessPackages` | v1.0 | list | both | saved (0) | Live through app read path |
 | AccessReviewDefinitions | `/identityGovernance/accessReviews/definitions` | v1.0 | list | both | saved (0) | Live through app read path |
 | AccessReviewPolicy | `/policies/accessReviewPolicy` | beta | singleton | both | saved (1) | Live through app read path |

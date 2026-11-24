@@ -224,7 +224,7 @@ it("journal and batch engine: processes 50,000 members and 2,000 users, persists
       if (writes === 23) controller.abort()
       return Response.json({ id: total === 2000 ? id : group.id })
     })
-    const io: GuardedIO = { token: token(), type: folder => typeForFolder(folder)!, replacedReferences: async () => [], read: async (step, targetId) => total === 2000 ? targetId && applied.has(targetId) ? { ...step.desired, id: targetId, userType: "Member" } : null : ({ id: group.id }), findCreated: async () => [], references: refs, write: async (_step, body, _target, before) => { before(); return (await fetcher("https://graph.microsoft.com/v1.0/$batch", { method: "POST", body: JSON.stringify(body) })).json() } }
+    const io: GuardedIO = { token: token(), type: folder => typeForFolder(folder)!, replacedReferences: async () => [], read: async (step, targetId) => total === 2000 ? targetId && applied.has(targetId) ? { ...step.desired, id: targetId, userType: "Member" } : null : ({ id: group.id }), findCreated: async () => [], references: refs, write: async (_step, body, _target, before) => { before(); return (await fetcher("https://graph.microsoft.com/beta/$batch", { method: "POST", body: JSON.stringify(body) })).json() } }
     const originalSet = store.set
     store.set = (key, value) => { largest = Math.max(largest, value.length); originalSet(key, value) }
     const identity = { ...runFor(stepFor("member")), entries: undefined, mappings: undefined }
@@ -243,7 +243,7 @@ for (const operation of ["create", "update"] as const) it(`group ${operation}: r
   step.desired = operation === "create" ? directoryPayload("Groups", operation, group) : { description: "Restored description" }; step.properties = Object.keys(step.desired)
   let writes = 0, live: Item | null = operation === "create" ? null : group
   const fetcher = vi.fn(async (_url: RequestInfo | URL, options?: RequestInit) => {
-    if (new URL(String(_url)).pathname === "/v1.0/groups" && options?.method === "GET") return Response.json({ value: [] })
+    if (new URL(String(_url)).pathname === "/beta/groups" && options?.method === "GET") return Response.json({ value: [] })
     if (String(_url).includes("roleAssignments")) return Response.json({ value: [{ principalId: actor.userId, directoryScopeId: "/", roleDefinitionId: uuid(50) }] })
     if (String(_url).includes("roleDefinitions")) {
       expect(new URL(String(_url)).searchParams.get("$select")).toBe("id,templateId")

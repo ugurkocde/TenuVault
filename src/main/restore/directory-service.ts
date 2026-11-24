@@ -1,5 +1,5 @@
 import { privilegedRestoreConsent } from "./privileged-consent"
-import { sharedSignInMethod, type SignInMethod } from "../../shared/tenant-connection"
+import type { SignInMethod } from "../../shared/tenant-connection"
 import { guardedRestoreJournal } from "../storage/restore-journal"
 import { mappedReference } from "../../shared/intune/restore-references"
 import { PRIVILEGED_REVIEW_FOLDERS, PRIVILEGED_RESTORE_BLOCKER } from "../../shared/intune/directory-review-folders"
@@ -62,7 +62,7 @@ export class DirectoryRestoreService {
   constructor(store: PartitionedRestoreStore, private readonly recovery: RecoveryAccounts, private readonly connection: (tenant: string) => Promise<RestoreConnection>, private readonly localOwner: (tenant: string) => Promise<Pick<RestoreConnection, "tenantId" | "userId" | "clientId">>, private readonly fetchImpl: typeof fetch = fetch, private readonly protectedAppIds: (tenant: string) => readonly string[] = () => [], private readonly settings?: Pick<ModuleSettings, "get">, private readonly now: () => number = () => Date.now(), private readonly signInMethod?: (tenant: string) => SignInMethod | undefined) {
     this.store = { partitioned: store.partitioned, get: name => restorePersistence(() => store.get(name)), set: (name, value) => restorePersistence(() => store.set(name, value)), delete: name => restorePersistence(() => store.delete(name)) }
   }
-  private async actorContext(tenant: string, onThrottled?: (retryAt: number) => void, validatedConnection?: RestoreConnection, version = "v1.0") {
+  private async actorContext(tenant: string, onThrottled?: (retryAt: number) => void, validatedConnection?: RestoreConnection, readByAppId = false) {
     const connection = validatedConnection ?? await this.connection(tenant)
     if (connection.tenantId.toLowerCase() !== restoreTenantKey(tenant)) fail("The connection belongs to another tenant.")
     requireRestoreActor(connection.token, connection, connection.authorization)
@@ -77,8 +77,8 @@ export class DirectoryRestoreService {
       try { await directoryWriteAuthorization(response, true) } catch (error) { if (error instanceof DirectoryAuthenticationDeferredError) throw error }
       return response
     }
-    const reader = safetyReader(connection.token, actorFetch, sharedSignInMethod(connection.clientId) ? "beta" : version)
-    const actor = await resolveRestoreActor(reader, connection, this.recovery.get(tenant), ["identity-references"], version === "beta")
+    const reader = safetyReader(connection.token, actorFetch, "beta")
+    const actor = await resolveRestoreActor(reader, connection, this.recovery.get(tenant), ["identity-references"], readByAppId)
     return { actor, connection, reader }
   }
   private async context(tenant: string, onThrottled?: (retryAt: number) => void, validatedConnection?: RestoreConnection, pageId?: string) {
@@ -412,7 +412,7 @@ export class DirectoryRestoreService {
     const options: DirectoryOptions = { stage: unitFolder ? "relationships" : "object", exactMembers, exactOwners: false }
     const retryAt = directoryObjectState(this.store, tenant, "").retryDeadline({ sourceId })
     if (retryAt && retryAt > this.now()) throw new RestoreWriteDeferredError("Microsoft Graph asked TenuVault to wait before reading this relationship again.", retryAt, "throttle")
-    const { actor, reader } = await this.actorContext(tenant, deadline => this.recordSourceThrottle(tenant, folder, sourceId, deadline), undefined, "beta")
+    const { actor, reader } = await this.actorContext(tenant, deadline => this.recordSourceThrottle(tenant, folder, sourceId, deadline), undefined, true)
     const source = { path: request.path, fingerprint: restoreFingerprint(snapshot) }
     const run: GuardedRun = { version: 1, id: randomUUID(), tenant, actor, origin: "restore", source, entries: [], mappings: [] }
     const page: DirectoryPage = { run, rows: [], more: false, options }
@@ -512,7 +512,7 @@ export class DirectoryRestoreService {
     const connection = await this.pageConnection(page)
     const privileged = PRIVILEGED_REVIEW_FOLDERS.includes(page.run.source?.path.split("/")[1] ?? "")
     const { actor } = privileged
-      ? await this.actorContext(tenant, retryAt => this.recordPageThrottle(page, retryAt), connection, "beta")
+      ? await this.actorContext(tenant, retryAt => this.recordPageThrottle(page, retryAt), connection, true)
       : await this.context(tenant, retryAt => this.recordPageThrottle(page, retryAt), connection, page.run.id)
     if (request.origin !== "restore" || page.run.origin !== request.origin || page.run.source?.path !== request.path || page.run.source.fingerprint !== restoreFingerprint(request.snapshot) || actor.userId !== page.run.actor.userId || actor.clientId !== page.run.actor.clientId) fail("Resume the original backup with the admin and connection that reviewed it.")
     return this.view(page)

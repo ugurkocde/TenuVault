@@ -28,7 +28,7 @@ async function backup(folder: string, detail = responses[folder]!) {
     },
     list: async path => {
       expect(folder).toBe("AccessPackageCatalogs")
-      expect(path).toBe(`${type.path}/${detail.id}/resources?$expand=roles,scopes`)
+      expect(path).toBe(`${type.path}/${detail.id}/accessPackageResources?$expand=accessPackageResourceRoles,accessPackageResourceScopes`)
       return []
     },
   })
@@ -95,7 +95,10 @@ for (const [folder, operation] of [["AccessReviewPolicy", "update"], ["CrossTena
     expect(final.entries[0]!.state).toBe("applied")
     expect(final.entries[0]!.before).toEqual(before)
     expect(final.entries[0]!.sent).toEqual(expected)
-    expect(state.writes).toEqual([{ method: operation === "create" ? "POST" : "PATCH", path: restoreMatrixRow(folder)![operation]!.path.replace("{accessPackageCatalogId}", source), body: expected }])
+    const { state: catalogState, ...metadata } = expected
+    const wireBody = folder === "AccessPackageCatalogs" ? { ...metadata, catalogStatus: "Unpublished" } : expected
+    if (folder === "AccessPackageCatalogs") expect(catalogState).toBe("unpublished")
+    expect(state.writes).toEqual([{ method: operation === "create" ? "POST" : "PATCH", path: restoreMatrixRow(folder)![operation]!.path.replace("{accessPackageCatalogId}", source), body: wireBody }])
     expect(final.mappings).toHaveLength(1)
   })
 }

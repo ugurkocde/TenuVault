@@ -4,7 +4,7 @@
   "outcome": "saved",
   "objectCount": 1,
   "responses": {
-    "/v1.0/security/attackSimulation/simulations": {
+    "/beta/security/attackSimulation/simulations": {
       "status": 200,
       "body": {
         "value": [
@@ -45,7 +45,7 @@
         ]
       }
     },
-    "/v1.0/security/attackSimulation/simulations/example": {
+    "/beta/security/attackSimulation/simulations/example": {
       "status": 200,
       "body": {
         "id": "example",
@@ -86,28 +86,28 @@
         "nextRunDateTime": "2026-11-17T00:00:00Z"
       }
     },
-    "/v1.0/security/attackSimulation/simulations/example/payload?$select=id": {
+    "/beta/security/attackSimulation/simulations/example/payload?$select=id": {
       "status": 200,
       "body": {
         "id": "payload-id",
         "displayName": "Reference label"
       }
     },
-    "/v1.0/security/attackSimulation/simulations/example/loginPage?$select=id": {
+    "/beta/security/attackSimulation/simulations/example/loginPage?$select=id": {
       "status": 200,
       "body": {
         "id": "loginPage-id",
         "displayName": "Reference label"
       }
     },
-    "/v1.0/security/attackSimulation/simulations/example/landingPage?$select=id": {
+    "/beta/security/attackSimulation/simulations/example/landingPage?$select=id": {
       "status": 200,
       "body": {
         "id": "landingPage-id",
         "displayName": "Reference label"
       }
     },
-    "/v1.0/security/attackSimulation/simulations/example/includedAccountTarget": {
+    "/beta/security/attackSimulation/simulations/example/includedAccountTarget": {
       "status": 200,
       "body": {
         "type": "addressBook",
@@ -120,7 +120,7 @@
         ]
       }
     },
-    "/v1.0/security/attackSimulation/simulations/example/excludedAccountTarget": {
+    "/beta/security/attackSimulation/simulations/example/excludedAccountTarget": {
       "status": 200,
       "body": {
         "type": "addressBook",

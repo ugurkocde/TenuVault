@@ -69,12 +69,12 @@ describe("Entra configuration coverage closes every configuration area", () => {
 describe("Governance completeness, ordering and exclusions", () => {
   it("reads nested expanded continuation pages before sorting resource roles and scopes", async () => {
     const type = typeOf("AccessPackageCatalogs")
-    const next = "https://graph.microsoft.com/v1.0/identityGovernance/entitlementManagement/catalogs/example/resources/resource/roles?$skiptoken=more"
+    const next = "https://graph.microsoft.com/beta/identityGovernance/entitlementManagement/accessPackageCatalogs/example/accessPackageResources/resource/accessPackageResourceRoles?$skiptoken=more"
     const data = documented(type.folder)
     const resourceAnswer = Object.values(data.responses).find(answer => Array.isArray(answer.body.value) && (answer.body.value[0] as Item)?.originSystem)!
     const resource = (resourceAnswer.body.value as Item[])[0]!
-    resource.roles = [{ id: "b" }]
-    resource["roles@odata.nextLink"] = next
+    resource.accessPackageResourceRoles = [{ id: "b" }]
+    resource["accessPackageResourceRoles@odata.nextLink"] = next
     data.responses[new URL(next).pathname + new URL(next).search] = { status: 200, body: { value: [{ id: "a" }] } }
     const result = await readEntraType(type, replay(data, type))
     expect(result.outcome).toBe("saved")
@@ -177,7 +177,7 @@ describe("Governance completeness, ordering and exclusions", () => {
       const type = typeOf(folder)
       const data = documented(folder)
       const extra = type.extras![0]!
-      const path = `/v1.0/${extra.path("example")}`
+      const path = `/${type.apiVersion}/${extra.path("example")}`
       const setup = fixture(scriptedGraph({ ...routes(data), [path]: refusal(status, "Denied", "Sub-read failed") }))
       const job = await setup.run({ scope: only(folder) })
       expect(job.outcomes?.coverage).toBe("incomplete")
@@ -203,7 +203,7 @@ describe("Governance per-type budgets", () => {
       const url = new URL(request.url)
       if (!url.pathname.includes(type.path)) return scriptedGraph(intune)(request)
       if (url.pathname.endsWith(type.path)) return Response.json({ value: [{ id: "example" }] })
-      if (url.pathname.endsWith("/resources")) return Response.json({ value: [], "@odata.nextLink": `https://graph.microsoft.com/v1.0/${type.path}/example/resources?$skiptoken=${Number(url.searchParams.get("$skiptoken") ?? 0) + 1}` })
+      if (url.pathname.endsWith("/accessPackageResources")) return Response.json({ value: [], "@odata.nextLink": `https://graph.microsoft.com/beta/${type.path}/example/accessPackageResources?$skiptoken=${Number(url.searchParams.get("$skiptoken") ?? 0) + 1}` })
       return Response.json({ id: url.pathname.split("/").pop() })
     })
     const job = await setup.run({ scope: only(type.folder, "DeviceConfigurations") })

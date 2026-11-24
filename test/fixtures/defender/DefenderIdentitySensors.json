@@ -1,7 +1,7 @@
 {
   "folder": "DefenderIdentitySensors",
   "path": "security/identities/sensors",
-  "apiVersion": "v1.0",
+  "apiVersion": "beta",
   "shape": "list",
   "signIn": "both",
   "objectCount": 0,
@@ -10,7 +10,7 @@
   "outcome": "skipped",
   "cause": "license",
   "responses": {
-    "/v1.0/security/identities/sensors": {
+    "/beta/security/identities/sensors": {
       "status": 403,
       "body": {
         "error": {

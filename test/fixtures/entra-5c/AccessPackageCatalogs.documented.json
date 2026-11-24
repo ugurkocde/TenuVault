@@ -4,7 +4,7 @@
   "objectCount": 1,
   "source": "Documented synthetic configuration, not a live successful detail read",
   "responses": {
-    "/v1.0/identityGovernance/entitlementManagement/catalogs": {
+    "/beta/identityGovernance/entitlementManagement/accessPackageCatalogs": {
       "status": 200,
       "body": {
         "value": [
@@ -15,17 +15,17 @@
         ]
       }
     },
-    "/v1.0/identityGovernance/entitlementManagement/catalogs/example": {
+    "/beta/identityGovernance/entitlementManagement/accessPackageCatalogs/example": {
       "status": 200,
       "body": {
         "id": "example",
         "displayName": "Example catalog",
-        "state": "published",
-        "catalogType": "userManaged",
+        "catalogStatus": "Published",
+        "catalogType": "UserManaged",
         "isExternallyVisible": true
       }
     },
-    "/v1.0/identityGovernance/entitlementManagement/catalogs/example/resources?$expand=roles,scopes": {
+    "/beta/identityGovernance/entitlementManagement/accessPackageCatalogs/example/accessPackageResources?$expand=accessPackageResourceRoles,accessPackageResourceScopes": {
       "status": 200,
       "body": {
         "value": [
@@ -33,7 +33,7 @@
             "id": "resource",
             "originId": "group-id",
             "originSystem": "AadGroup",
-            "roles": [
+            "accessPackageResourceRoles": [
               {
                 "id": "b",
                 "originId": "Member"
@@ -43,7 +43,7 @@
                 "originId": "Owner"
               }
             ],
-            "scopes": [
+            "accessPackageResourceScopes": [
               {
                 "id": "scope",
                 "isRootScope": true

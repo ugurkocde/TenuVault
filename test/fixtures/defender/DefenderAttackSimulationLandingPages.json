@@ -1,7 +1,7 @@
 {
   "folder": "DefenderAttackSimulationLandingPages",
   "path": "security/attackSimulation/landingPages",
-  "apiVersion": "v1.0",
+  "apiVersion": "beta",
   "shape": "list",
   "signIn": "both",
   "objectCount": 0,
@@ -9,7 +9,7 @@
   "source": "Live app-only read through GraphSession and readObject",
   "outcome": "saved",
   "responses": {
-    "/v1.0/security/attackSimulation/landingPages?$filter=source%20eq%20%27tenant%27": {
+    "/beta/security/attackSimulation/landingPages?$filter=source%20eq%20%27tenant%27": {
       "status": 200,
       "body": {
         "value": []

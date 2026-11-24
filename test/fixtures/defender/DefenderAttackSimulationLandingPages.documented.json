@@ -4,7 +4,7 @@
   "outcome": "saved",
   "objectCount": 1,
   "responses": {
-    "/v1.0/security/attackSimulation/landingPages?$filter=source%20eq%20'tenant'": {
+    "/beta/security/attackSimulation/landingPages?$filter=source%20eq%20'tenant'": {
       "status": 200,
       "body": {
         "value": [
@@ -30,7 +30,7 @@
         ]
       }
     },
-    "/v1.0/security/attackSimulation/landingPages/example": {
+    "/beta/security/attackSimulation/landingPages/example": {
       "status": 200,
       "body": {
         "id": "example",
@@ -52,7 +52,7 @@
         }
       }
     },
-    "/v1.0/security/attackSimulation/landingPages/example/details": {
+    "/beta/security/attackSimulation/landingPages/example/details": {
       "status": 200,
       "body": {
         "value": [

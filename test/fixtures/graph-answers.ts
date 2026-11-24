@@ -135,7 +135,7 @@ export const GRAPH_ANSWERS: GraphAnswerFixture[] = [
   {
     name: "a refusal that names nothing, in other words (entitlement management)",
     source: "lab",
-    endpoint: "v1.0/identityGovernance/entitlementManagement/catalogs",
+    endpoint: "beta/identityGovernance/entitlementManagement/accessPackageCatalogs",
     status: 403,
     body: graph("UnAuthorized", "User is not authorized to perform the operation. Reason: Unauthorized"),
     answer: { code: "UnAuthorized", message: "User is not authorized to perform the operation. Reason: Unauthorized" },

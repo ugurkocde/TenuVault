@@ -5,7 +5,7 @@ import { GraphResponseValidationError } from "../graph-response-validation"
 
 const secrets = ["clientSecret", "password", "privateKey", "sharedSecret", "secretKey", "tokenSeed", "seed", "tunnelKey", "keyCredentials", "passwordCredentials", "secret", "accessToken", "refreshToken", "clientAssertion", "pfx", "pkcs12", "secretText", "deploymentAccessKey"]
 const base = (folder: string, label: string, path: string, area: IntuneType["area"]): IntuneType => ({
-  folder, label, path, area, restoreSafety: "identity", nameKey: "displayName", apiVersion: "v1.0",
+  folder, label, path, area, restoreSafety: "identity", nameKey: "displayName", apiVersion: "beta",
   limitation: restoreMatrixRow(folder)?.configurationRestore?.blockedReason ?? "Defender configuration restore is not available yet.",
   neverStoredKeys: secrets, normalizeSnapshot: defenderSnapshot, unavailable: [],
   readBudget: { durationMs: 120_000, maxRequests: 500 },
@@ -40,13 +40,13 @@ export const DEFENDER_TYPES: IntuneType[] = [
     unorderedCollections: { "detectionAction.responseActions": "$content", "detectionAction.alertTemplate.impactedAssets": "$content" },
   },
   {
-    ...base("DefenderCaseTypeConfigurations", "Case type configurations", "security/caseManagement/caseTypeConfigurations", "Detection and response"), apiVersion: "beta",
+    ...base("DefenderCaseTypeConfigurations", "Case type configurations", "security/caseManagement/caseTypeConfigurations", "Detection and response"),
     unavailable: [{ status: 400, code: "badRequest", message: "Tenant's account is not active." }],
     extras: ["customFields", "statuses", "slaPolicies"].map(property => ({ property, path: id => `security/caseManagement/caseTypeConfigurations/${id}/${property}` })),
     unorderedCollections: { customFields: "id", statuses: "id", "statuses.customStatuses": "id", slaPolicies: "id" },
   },
   {
-    ...base("DefenderWorkbooks", "Security workbooks", "security/workbooks", "Detection and response"), apiVersion: "beta", nameKey: "name",
+    ...base("DefenderWorkbooks", "Security workbooks", "security/workbooks", "Detection and response"), nameKey: "name",
     // The list omits content. The detail GET must explicitly select the complete document.
     select: "id,name,content",
     normalizeSnapshot: item => {
@@ -63,7 +63,7 @@ export const DEFENDER_TYPES: IntuneType[] = [
     ],
   },
   campaign("DefenderAttackSimulationAutomations", "Simulation automations", "simulationAutomations"),
-  { ...campaign("DefenderAttackSimulationTrainingCampaigns", "Training campaigns", "trainingCampaigns"), apiVersion: "beta" },
+  campaign("DefenderAttackSimulationTrainingCampaigns", "Training campaigns", "trainingCampaigns"),
   {
     ...content("DefenderAttackSimulationPayloads", "Tenant simulation payloads", "payloads"),
     extras: [{ property: "detail", object: true, path: id => `${attack}/payloads/${id}/detail` }],
@@ -79,7 +79,7 @@ export const DEFENDER_TYPES: IntuneType[] = [
     extras: [{ property: "details", path: id => `${attack}/endUserNotifications/${id}/details` }], unorderedCollections: { details: "id" },
   },
   {
-    ...base("DefenderEmailSubmissionPolicies", "User reported settings policies", "security/threatSubmission/emailThreatSubmissionPolicies", "Email and collaboration"), apiVersion: "beta",
+    ...base("DefenderEmailSubmissionPolicies", "User reported settings policies", "security/threatSubmission/emailThreatSubmissionPolicies", "Email and collaboration"),
     detailEnvelope: { beta: "valueObject" },
     unorderedCollections: { policyReviewers: "$content" },
   },
@@ -87,8 +87,8 @@ export const DEFENDER_TYPES: IntuneType[] = [
     ...identity("DefenderIdentitySensors", "Identity sensor settings", "sensors"),
     neverStored: ["deploymentStatus", "healthStatus", "openHealthIssuesCount", "serviceStatus", "version", "createdDateTime"],
   },
-  { ...identity("DefenderIdentityAutoAuditing", "Identity automatic auditing", "settings/autoAuditingConfiguration"), detailEnvelope: { "v1.0": "valueObject", beta: "valueObject" }, singleton: { id: "DefenderIdentityAutoAuditing", name: "Identity automatic auditing" } },
-  { ...identity("DefenderIdentitySensorActivation", "Identity sensor activation", "sensorCandidateActivationConfiguration"), detailEnvelope: { "v1.0": "valueObject", beta: "valueObject" }, singleton: { id: "DefenderIdentitySensorActivation", name: "Identity sensor activation" } },
+  { ...identity("DefenderIdentityAutoAuditing", "Identity automatic auditing", "settings/autoAuditingConfiguration"), detailEnvelope: { beta: "valueObject" }, singleton: { id: "DefenderIdentityAutoAuditing", name: "Identity automatic auditing" } },
+  { ...identity("DefenderIdentitySensorActivation", "Identity sensor activation", "sensorCandidateActivationConfiguration"), detailEnvelope: { beta: "valueObject" }, singleton: { id: "DefenderIdentitySensorActivation", name: "Identity sensor activation" } },
   {
     ...base("DefenderSecureScoreControlStates", "Secure Score control states", "security/secureScoreControlProfiles", "Posture and access"), listOnly: true,
     skip: item => tenantControlStates(item).length ? undefined : "Default Microsoft control state",
@@ -97,11 +97,11 @@ export const DEFENDER_TYPES: IntuneType[] = [
     neverStoredKeys: [...secrets, "updatedDateTime"],
   },
   {
-    ...base("DefenderRoleDefinitions", "Defender role definitions", "roleManagement/defender/roleDefinitions", "Posture and access"), apiVersion: "beta",
+    ...base("DefenderRoleDefinitions", "Defender role definitions", "roleManagement/defender/roleDefinitions", "Posture and access"),
     unorderedCollections: { rolePermissions: "$content", inheritsPermissionsFrom: "id" },
   },
   {
-    ...base("DefenderRoleAssignments", "Defender role assignments", "roleManagement/defender/roleAssignments", "Posture and access"), apiVersion: "beta",
+    ...base("DefenderRoleAssignments", "Defender role assignments", "roleManagement/defender/roleAssignments", "Posture and access"),
     unorderedCollections: { principals: "id" },
   },
 ]

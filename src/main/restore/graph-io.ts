@@ -1,3 +1,4 @@
+import { accessPackageCatalogSnapshot } from "../../shared/intune/entra-snapshot"
 import { checkConfigurationLockout, configurationPayload, isEntraConfiguration, requireConfigurationApproval } from "./entra-configuration"
 import { safetyReader } from "./safety-reader"
 import { restorePermissionBlocker } from "../../shared/services/modules"
@@ -35,8 +36,11 @@ export function guardedGraphIO(token: string, actor: RestoreActor, references: G
     if (response.status === 204) return {}
     const value = await response.json() as Item
     if (new URL(url).pathname.endsWith("/branding") && value.usernameHintText === "") value.usernameHintText = null
+    const snapshot = new URL(url).pathname.includes("/accessPackageCatalogs") ?
+      Array.isArray(value.value) ? { ...value, value: (value.value as Item[]).map(accessPackageCatalogSnapshot) } : accessPackageCatalogSnapshot(value)
+      : value
     const currentEtag = response.headers.get("etag")
-    return currentEtag ? { ...value, "@odata.etag": currentEtag } : value
+    return currentEtag ? { ...snapshot, "@odata.etag": currentEtag } : snapshot
   }
   const pathOf = (step: GuardedStep, targetId?: string) => {
     const { row, write } = contract(step)
@@ -108,7 +112,13 @@ export function guardedGraphIO(token: string, actor: RestoreActor, references: G
       if (step.operation === "update" && restoreFingerprint(current) !== step.preview) throw new RestoreSafetyError("The tenant changed after this preview. Preview this item again.")
       if (isEntraConfiguration(step.folder) && restoreFingerprint(body) !== restoreFingerprint(addsOnlyPayload(current, step.desired, step.allowRemoval))) throw new RestoreSafetyError("The write no longer matches the confirmed configuration difference.")
       await checkConfigurationLockout(safetyReader(token, fetchImpl), step, current, body)
-      const response = await request(root + path, write.method, body, typeof current?.["@odata.etag"] === "string" ? current["@odata.etag"] : undefined, beforeSend)
+      let wireBody = body
+      if (step.folder === "AccessPackageCatalogs" && Object.hasOwn(body, "state")) {
+        const { state, ...metadata } = body
+        if (state !== "unpublished") throw new RestoreSafetyError("The catalog must remain unpublished.")
+        wireBody = { ...metadata, catalogStatus: "Unpublished" }
+      }
+      const response = await request(root + path, write.method, wireBody, typeof current?.["@odata.etag"] === "string" ? current["@odata.etag"] : undefined, beforeSend)
       return { id: typeof response?.id === "string" ? response.id : targetId ?? (row.detection.kind === "singleton" ? step.sourceId : undefined) }
     },
   }

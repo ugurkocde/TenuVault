@@ -238,19 +238,19 @@ it("keeps populated backup resources and service-default or published live catal
     await expect(checkConfigurationLockout(reader, step, current, cases.AccessPackageCatalogs!)).rejects.toThrow("user-managed")
   }
 })
-it("admits absent catalog index entries only with explicit documentation and verified live round-trip evidence", async () => {
-  const contract = restoreMatrixRow("AccessPackageCatalogs")!.create!, evidence = contract.liveVerification
-  expect(contract.index).toBe("not-matched")
+it("rejects catalog reads and writes when route evidence is unavailable", async () => {
+  const contract = restoreMatrixRow("AccessPackageCatalogs")!.create!, evidence = contract.index
+  expect(contract.index).toBe("matched")
   let reads = 0
   const token = `h.${Buffer.from(JSON.stringify({ tid: actor.tenantId, oid: actor.userId, appid: actor.clientId, scp: "EntitlementManagement.ReadWrite.All" })).toString("base64url")}.s`
   const io = guardedGraphIO(token, actor, async () => ({ complete: true, principals: [], applications: [] }), async () => { reads++; return Response.json({ value: [] }) })
   const step = { folder: "AccessPackageCatalogs", operation: "create", properties: contract.properties, desired: cases.AccessPackageCatalogs! } as GuardedStep
   try {
-    delete contract.liveVerification
+    contract.index = "not-matched"
     await expect(io.read(step)).rejects.toThrow("not been verified")
     expect(reads).toBe(0)
-    contract.liveVerification = evidence
+    contract.index = evidence
     await expect(io.read(step)).resolves.toBeNull()
     expect(reads).toBe(1)
-  } finally { contract.liveVerification = evidence }
+  } finally { contract.index = evidence }
 })

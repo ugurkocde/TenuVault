@@ -46,3 +46,5 @@ No supported type needs another app permission grant. Rerun the three Identity t
 - https://learn.microsoft.com/en-us/graph/api/rbacapplicationmultiple-list-roleassignments?view=graph-rest-beta
 - https://learn.microsoft.com/en-us/graph/api/unifiedroledefinition-get?view=graph-rest-beta
 - Local Graph index primary endpoints and resource schemas, including trainingAssignedTo enum collections, simulation targets and payload detail.
+
+The unit replay maps historical stable routes to beta for the launch paths. This does not add live beta evidence for any nonempty detail or child response.

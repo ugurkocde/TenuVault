@@ -1,7 +1,7 @@
 {
   "folder": "DefenderSecureScoreControlStates",
   "path": "security/secureScoreControlProfiles",
-  "apiVersion": "v1.0",
+  "apiVersion": "beta",
   "shape": "list",
   "signIn": "both",
   "objectCount": 0,
@@ -9,7 +9,7 @@
   "source": "Live app-only read through GraphSession and readObject",
   "outcome": "failed",
   "responses": {
-    "/v1.0/security/secureScoreControlProfiles": {
+    "/beta/security/secureScoreControlProfiles": {
       "status": 504,
       "body": {
         "error": {

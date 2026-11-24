@@ -45,3 +45,26 @@ export function entraSnapshot(snapshot: Item): Item {
   }
   return visit(snapshot) as Item
 }
+
+/** Keep the same stored catalog fields across Graph versions. */
+export function accessPackageCatalogSnapshot(snapshot: Item): Item {
+  const { catalogStatus, catalogType, ...content } = snapshot
+  if (catalogStatus === "Unpublished" || catalogStatus === "Published") {
+    content.state = catalogStatus.toLowerCase()
+  } else if (catalogStatus !== undefined) {
+    // An unknown beta status cannot fall back to an older state's value.
+    delete content.state
+    content.catalogStatus = catalogStatus
+  }
+  if (catalogType !== undefined) {
+    content.catalogType = catalogType === "UserManaged" ? "userManaged" : catalogType === "ServiceDefault" ? "serviceDefault" : catalogType
+  }
+  if (Array.isArray(content.resources)) content.resources = content.resources.map(resource => {
+    if (!resource || typeof resource !== "object" || Array.isArray(resource)) return resource
+    const { accessPackageResourceRoles, accessPackageResourceScopes, ...fields } = resource
+    if (accessPackageResourceRoles !== undefined) fields.roles = accessPackageResourceRoles
+    if (accessPackageResourceScopes !== undefined) fields.scopes = accessPackageResourceScopes
+    return fields
+  })
+  return content
+}

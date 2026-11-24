@@ -4,7 +4,7 @@
   "outcome": "saved",
   "objectCount": 1,
   "responses": {
-    "/v1.0/security/attackSimulation/simulationAutomations": {
+    "/beta/security/attackSimulation/simulationAutomations": {
       "status": 200,
       "body": {
         "value": [
@@ -41,7 +41,7 @@
         ]
       }
     },
-    "/v1.0/security/attackSimulation/simulationAutomations/example": {
+    "/beta/security/attackSimulation/simulationAutomations/example": {
       "status": 200,
       "body": {
         "id": "example",

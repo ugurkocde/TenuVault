@@ -15,7 +15,7 @@ function world(failure?: string) {
   const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input)), path = url.pathname, method = init?.method ?? "GET", body = init?.body ? JSON.parse(String(init.body)) as Item : undefined
     calls.push({ path, method, ...(body ? { body } : {}) })
-    const collection = /\/(userFlowAttributes|catalogs|detectionRules)$/.test(path)
+    const collection = /\/(userFlowAttributes|accessPackageCatalogs|detectionRules)$/.test(path)
     const singleton = singletons[path.split("/").at(-1)!]
     if (method === "GET") {
       if (collection) return Response.json({ value: [...objects.values()].filter(item => item.collection === path).map(({ collection: _collection, ...item }) => item), ...(failure === "continuation" ? { "@odata.nextLink": "https://evil.invalid/users" } : {}) })

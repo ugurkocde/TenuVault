@@ -4,7 +4,7 @@
   "outcome": "saved",
   "objectCount": 1,
   "responses": {
-    "/v1.0/security/attackSimulation/loginPages?$filter=source%20eq%20'tenant'": {
+    "/beta/security/attackSimulation/loginPages?$filter=source%20eq%20'tenant'": {
       "status": 200,
       "body": {
         "value": [
@@ -30,7 +30,7 @@
         ]
       }
     },
-    "/v1.0/security/attackSimulation/loginPages/example": {
+    "/beta/security/attackSimulation/loginPages/example": {
       "status": 200,
       "body": {
         "id": "example",

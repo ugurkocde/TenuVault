@@ -4,7 +4,7 @@
   "outcome": "saved",
   "objectCount": 1,
   "responses": {
-    "/v1.0/security/attackSimulation/payloads?$filter=source%20eq%20'tenant'": {
+    "/beta/security/attackSimulation/payloads?$filter=source%20eq%20'tenant'": {
       "status": 200,
       "body": {
         "value": [
@@ -30,7 +30,7 @@
         ]
       }
     },
-    "/v1.0/security/attackSimulation/payloads/example": {
+    "/beta/security/attackSimulation/payloads/example": {
       "status": 200,
       "body": {
         "id": "example",
@@ -52,7 +52,7 @@
         }
       }
     },
-    "/v1.0/security/attackSimulation/payloads/example/detail": {
+    "/beta/security/attackSimulation/payloads/example/detail": {
       "status": 200,
       "body": {
         "content": "<p>Example simulation message</p>",

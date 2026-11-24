@@ -4,7 +4,7 @@
   "outcome": "saved",
   "objectCount": 1,
   "responses": {
-    "/v1.0/security/rules/detectionRules": {
+    "/beta/security/rules/detectionRules": {
       "status": 200,
       "body": {
         "value": [
@@ -53,7 +53,7 @@
         ]
       }
     },
-    "/v1.0/security/rules/detectionRules/example": {
+    "/beta/security/rules/detectionRules/example": {
       "status": 200,
       "body": {
         "id": "example",

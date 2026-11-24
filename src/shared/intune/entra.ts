@@ -2,7 +2,7 @@ import { restoreMatrixRow } from "./restore-matrix"
 import type { Extra, IntuneType } from "./registry"
 import { ENTRA_DIRECTORY_TYPES } from "./entra-directory"
 import { isGuid } from "../security"
-import { entraSnapshot } from "./entra-snapshot"
+import { accessPackageCatalogSnapshot, entraSnapshot } from "./entra-snapshot"
 import { sortedIds } from "./read"
 import { GraphResponseValidationError } from "../graph-response-validation"
 
@@ -213,8 +213,10 @@ const lifecycleUnavailable = [{ status: 403, code: "Access denied", message: "In
 
 export const ENTRA_5C_TYPES: IntuneType[] = [
   {
-    ...governance("AccessPackageCatalogs", "Access package catalogs", `${entitlement}/catalogs`),
-    extras: [{ property: "resources", path: id => `${entitlement}/catalogs/${id}/resources?$expand=roles,scopes`, expandedCollections: ["roles", "scopes"], expansionFallbacks: { roles: false, scopes: false } }],
+    ...governance("AccessPackageCatalogs", "Access package catalogs", `${entitlement}/accessPackageCatalogs`),
+    apiVersion: "beta",
+    normalizeSnapshot: item => entraSnapshot(accessPackageCatalogSnapshot(item)),
+    extras: [{ property: "resources", path: id => `${entitlement}/accessPackageCatalogs/${id}/accessPackageResources?$expand=accessPackageResourceRoles,accessPackageResourceScopes`, expandedCollections: ["accessPackageResourceRoles", "accessPackageResourceScopes"], expansionFallbacks: { accessPackageResourceRoles: false, accessPackageResourceScopes: false } }],
     unorderedCollections: { resources: "id", "resources.roles": "id", "resources.scopes": "id", "resources.attributes": "name", "resources.attributes.source.question.localizations": "languageCode", "resources.attributes.source.question.choices.localizations": "languageCode" },
     requiredCollections: ["resources.roles", "resources.scopes"],
     neverStored: ["resources.isPendingOnboarding"],
