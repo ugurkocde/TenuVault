@@ -1171,7 +1171,7 @@ export const INTUNE_TYPES: IntuneType[] = [
     nameKey: "profileName",
     expand: "assignments",
     // Images are only returned when selected one at a time.
-    extras: BRANDING_IMAGES.map((image) => ({ property: image, single: true, path: (id: string) => `deviceManagement/intuneBrandingProfiles/${id}?$select=${image}` })),
+    extras: BRANDING_IMAGES.map((image) => ({ property: image, single: true, path: (id: string) => `deviceManagement/intuneBrandingProfiles/${id}?$select=id,${image}` })),
     restore: "create",
     restorable: (item) => (item.isDefaultProfile === true ? "This is the default branding. Restore updates it in place." : undefined),
     assign: { key: "assignments" },

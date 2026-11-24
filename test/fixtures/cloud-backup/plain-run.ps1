@@ -63,6 +63,8 @@ function Invoke-TvHttp {
         $text = "<EnumerationResults><Blobs /><NextMarker /></EnumerationResults>"
     } elseif (($Uri -like "*/tenuvault-backup-results/audit-*/*" -or $Uri -like "*/intune-backups/cloud-backup-status-*") -and $Method -eq "Get") {
         throw [TvHttpError]::new(404, "HTTP 404")
+    } elseif ($Uri -eq "https://graph.microsoft.com/beta/deviceManagement/settings") {
+        $text = '{"deviceComplianceCheckinThresholdDays":0,"isScheduledActionEnabled":true,"secureByDefault":false,"enhancedJailBreak":false}'
     } elseif ($Uri -eq "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations") {
         $text = '{"value":[{"id":"cfg-1","displayName":"Baseline Wi-Fi"}]}'
         if ($script:privateDetail) { $text = '{"value":[{"id":"cfg-1","displayName":"Private Ada admin+lab@example.test"}]}' }
@@ -76,6 +78,8 @@ function Invoke-TvHttp {
         $text = '{"value":[{"id":"ap-1","serialNumber":"SN-0001","manufacturer":"Contoso","model":"Laptop 7","groupTag":"Sales","displayName":null,"userPrincipalName":"","lastContactedDateTime":"2026-11-01T10:00:00Z","enrollmentState":"enrolled","deviceAccountPassword":"secret","productKey":"PK-1","managedDeviceId":"md-1"}]}'
     } elseif ($Uri -like "*getOmaSettingPlainTextValue*") {
         throw [TvHttpError]::new(403, "No access to plaintext")
+    } elseif ($Uri -eq "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations/cfg-1/assignments") {
+        $text = '{"value":[]}'
     } elseif ($Uri -like "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations/cfg-2*") {
         $text = '{"id":"cfg-2","displayName":"Second policy","assignments":[]}'
     } elseif ($Uri -like "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations/cfg-1*") {
@@ -188,7 +192,9 @@ $scenarios += @(foreach ($case in $expansions.cases) {
     if ($case.Contains("list")) {
         $responses["/beta/deviceManagement/deviceConfigurations"] = @{ value = $case.list }
     }
-    if ($case.Contains("assignments") -or $case.relationshipPages -or $case.relationshipStatus) {
+    if ($case.Contains("detail")) {
+        $responses['/beta/deviceManagement/deviceConfigurations/cfg-1?$expand=assignments'] = $case.detail
+    } elseif ($case.Contains("assignments") -or $case.relationshipPages -or $case.relationshipStatus) {
         $detail = @{ id = "cfg-1"; displayName = "Baseline Wi-Fi" }
         if ($case.Contains("assignments")) { $detail.assignments = $case.assignments }
         $responses['/beta/deviceManagement/deviceConfigurations/cfg-1?$expand=assignments'] = $detail

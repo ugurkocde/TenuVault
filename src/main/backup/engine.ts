@@ -23,7 +23,7 @@ import { RetryDelayError } from "../graph-retry"
 import { isLocalAccount } from "../storage/blob-emulator"
 import { FetchApplicationError } from "../api/network-error"
 import { INTUNE_TYPES, itemName, typeForFolder, type GraphVersion, type IntuneType, type Item } from "../../shared/intune/registry"
-import { readEntries, ScopeDiscoveryError, OrganizationResolutionError, organizationReader, graphVersion, detailPath, listPath, listSnapshot, readObject, withMaskedSecrets, type GraphReader } from "../../shared/intune/read"
+import { readEntries, ExpansionRecoveryError, ScopeDiscoveryError, OrganizationResolutionError, organizationReader, graphVersion, detailPath, listPath, listSnapshot, readObject, withMaskedSecrets, type GraphReader } from "../../shared/intune/read"
 import { comparableSnapshot } from "../../shared/intune/compare"
 import type { BackupItems } from "../../shared/intune/backup-changes"
 import { EVERYTHING, includedTypes, normalizeScope, restorableFolders, type BackupScope } from "../../shared/intune/scope"
@@ -699,6 +699,7 @@ export class BackupEngine {
       const singletonPath = type.singleton?.collection ? detailPath(type, type.singleton.id) : undefined
       const read = <T>(operation: (control: ReadControl) => Promise<T>) => budget ? budget(operation) : operation(control)
       return organizationReader({
+        validateDetails: true,
         get: (path: string) => read(async control => {
           const url = graphUrl(version, path, type.additionalReadVersions)
           if (path === singletonPath) return { value: await session.list(url, { ...control, headers: type.headers, singlePage: true }) }
@@ -1029,7 +1030,8 @@ export class BackupEngine {
           this.write(job, reason, "warning")
         }
       } catch (caught) {
-        const error = caught instanceof OrganizationResolutionError || caught instanceof ScopeDiscoveryError ? caught.cause : caught
+        const recoveryFailed = caught instanceof ExpansionRecoveryError
+        const error = recoveryFailed || caught instanceof OrganizationResolutionError || caught instanceof ScopeDiscoveryError ? caught.cause : caught
         if ((service.isolated || checkedReadDenied(type, error)) && !signInEnded(error) && !network.signal.aborted) {
           // A refusal, a pause longer than the bound or a request without an answer holds for every object of the type: the type ends, the backup goes on.
           const refused = error instanceof GraphError && classifyAnswer({ status: error.status, ...error.answer }, scopeEvidence(error)).outcome === "skipped"
@@ -1046,9 +1048,9 @@ export class BackupEngine {
         // An expired sign-in fails every remaining item the same way, so it stops the backup once.
         if (signInEnded(error) || (!service.isolated && error instanceof GraphError && error.status === 401)) throw error
         failures++
-        const logName = maskBackupAccountIdentifiers(displayName)
+        const logName = recoveryFailed ? type.label : maskBackupAccountIdentifiers(displayName)
         const reason = error instanceof Error ? error.message : String(error)
-        const warning = `Could not back up "${logName}": ${reason}`
+        const warning = `Could not back up ${recoveryFailed ? logName : `"${logName}"`}: ${reason}`
         if (error instanceof RequestTimeoutError) itemTimeoutWarnings.push(warning)
         const entry = result(type.folder)
         entry.failed++

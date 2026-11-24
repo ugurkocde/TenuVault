@@ -837,11 +837,11 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
     const folders = ["DeviceConfigurations", "CompliancePolicySettings"]
     const scope = { excluded: INTUNE_TYPES.filter(type => !folders.includes(type.folder)).map(type => type.folder) }
     const capture = async (scenario?: typeof expandedAssignments.cases[number]) => {
-      const { list, assignments, relationshipPages, relationshipStatus } = scenario ?? {}
+      const { list, detail: response, assignments, relationshipPages, relationshipStatus } = scenario ?? {}
       const omitted = relationshipPages || relationshipStatus
       const routes: Record<string, GraphRoute> = {
         [configs]: { value: list ?? [snapshot] },
-        [detail]: omitted ? { id: snapshot.id, displayName: snapshot.displayName } : { ...snapshot, assignments: assignments ?? snapshot.assignments },
+        [detail]: response ?? (omitted ? { id: snapshot.id, displayName: snapshot.displayName } : { ...snapshot, assignments: assignments ?? snapshot.assignments }),
       }
       for (const [index, entries] of (relationshipPages ?? []).entries()) {
         const path = index === 0 ? relationship : `${relationship}?page=${index + 1}`
@@ -874,6 +874,7 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
       expect.soft(after.manifest.Coverage, scenario.name).toBe(scenario.unread ? "Incomplete" : "Complete")
       expect.soft(comparisonCoverage(before.manifest, after.manifest).unknown, scenario.name).toEqual(unknown)
       expect.soft(changes.map(change => change.change), scenario.name).toEqual(removed.length ? ["modified"] : [])
+      expect.soft(after.policy?.id, scenario.name).toBe(scenario.unread ? undefined : snapshot.id)
       expect.soft(after.policy?.assignments, scenario.name).toEqual(scenario.unread ? undefined : scenario.assignments ?? snapshot.assignments.filter(assignment => !removed.includes(assignment.id)))
       const pages = scenario.relationshipPages?.length ?? (scenario.relationshipStatus ? 1 : 0)
       expect.soft(after.paths.filter(path => path.startsWith(relationship)), scenario.name).toEqual(Array.from({ length: pages }, (_, index) => index === 0 ? relationship : `${relationship}?page=${index + 1}`))

@@ -193,6 +193,22 @@ describe("BackupEngine", () => {
     expect(JSON.stringify({ log: job.log, errors, notReadReasons })).not.toMatch(/admin\+lab@|guest_example\.test#EXT#@/i)
   })
 
+  it("keeps a personal policy name out of failed assignment recovery diagnostics", async () => {
+    const name = "Private Ada Lovelace"
+    const { engine, store, account } = setup(fakeGraph({
+      "/beta/deviceManagement/deviceConfigurations": Response.json({ value: [{ id: "dc1", displayName: name }] }),
+      "/beta/deviceManagement/deviceConfigurations/dc1?$expand=assignments": Response.json({ id: "dc1", displayName: name }),
+      "/beta/deviceManagement/deviceConfigurations/dc1/assignments": Response.json({}, { status: 400 }),
+    }))
+    const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)
+    const metadata = JSON.parse((await store.get(account, "intune-backups", `${job.backupFolder}/metadata.json`)).data.toString())
+    const errors = job.results?.types.find(type => type.folder === "DeviceConfigurations")?.errors
+    const reason = manifestCoverage(metadata).notReadReasons?.DeviceConfigurations
+    expect.soft(job.log.join("\n")).toContain("Could not back up device configuration profiles:")
+    expect.soft(reason).toContain("device configuration profiles:")
+    expect(JSON.stringify({ log: job.log, errors, reason, outcomes: metadata.Outcomes })).not.toContain(name)
+  })
+
   it("keeps encoded account identifiers from rejected detail continuations out of backup diagnostics", async () => {
     const accountPath = encodeURIComponent("private-admin+backup@example.test")
     const graph = fakeGraph({

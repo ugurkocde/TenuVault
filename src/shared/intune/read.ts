@@ -10,6 +10,8 @@ import type { GraphVersion, IntuneType, Item, Json } from "./registry"
  */
 export interface GraphReader {
   get: (path: string) => Promise<Item>
+  /** Backup readers require a verified detail before recording coverage. */
+  validateDetails?: true
   /** Follows @odata.nextLink; accepts a relative path or an absolute nextLink. */
   list: (path: string, idKey?: string) => Promise<Item[]>
   /** Validates an expanded page and follows its continuation, or reads the beta relationship when the page is omitted. */
@@ -38,7 +40,12 @@ export class ScopeDiscoveryError extends Error {
 
 /** Lists the actual scopes before reading filtered collections; no unread scope becomes empty coverage. */
 export async function readEntries(type: IntuneType, graph: GraphReader, discover: (path: string) => Promise<Item[]> = graph.list): Promise<Item[]> {
-  if (type.singleton) return [{ ...await graph.get(detailPath(type, type.singleton.id)), id: type.singleton.id }]
+  if (type.singleton) {
+    const path = detailPath(type, type.singleton.id)
+    const read = await graph.get(path)
+    if (graph.validateDetails) policyDetail(type, type.singleton.id, path, read)
+    return [{ ...read, id: type.singleton.id }]
+  }
   if (type.staticIds) return type.staticIds.map(id => ({ id }))
   let entries: Item[]
   if (type.listSource) {
@@ -84,10 +91,46 @@ export function detailPath(type: IntuneType, id: string): string {
   return `${type.path}/${encodeURIComponent(id)}${query ? `?${query}` : ""}`
 }
 
+function validateDetail(read: Item, expected?: { key: string; id: string }): Item {
+  if (!read || typeof read !== "object" || Array.isArray(read) || Array.isArray(read.value) || Object.hasOwn(read, "@odata.nextLink")) {
+    throw new Error("Microsoft Graph did not return a single policy object")
+  }
+  if (expected && (!Object.hasOwn(read, expected.key) || read[expected.key] !== expected.id)) {
+    throw new Error(`Microsoft Graph returned a policy without the requested ${expected.key}`)
+  }
+  return read
+}
+
+function policyDetail(type: IntuneType, id: string, path: string, read: Item): Item {
+  if (type.singleton?.collection) return validateDetail(singletonObject(type.singleton, read))
+  if (type.singleton) return validateDetail(read)
+  if (type.staticIds) {
+    const detail = validateDetail(read)
+    // Fixed routes use stable keys, while Graph may identify the resource with a tenant-specific ID.
+    if (detail.id === id) return detail
+    const context = detail["@odata.context"]
+    if (typeof detail.id !== "string" || !detail.id.trim() || typeof context !== "string" || !context.endsWith(`$metadata#${path}/$entity`)) {
+      throw new Error("Microsoft Graph returned a policy without the requested template identity")
+    }
+    return detail
+  }
+  return validateDetail(read, { key: type.idKey ?? "id", id })
+}
+
+export class ExpansionRecoveryError extends Error {
+  constructor(override readonly cause: unknown) {
+    super("An expanded collection could not be recovered", { cause })
+  }
+}
+
 export async function readObject(type: IntuneType, id: string, graph: GraphReader, options: ReadOptions = {}): Promise<Item> {
   const path = detailPath(type, id)
   const read = await graph.get(path)
-  let detail = type.singleton ? singletonObject(type.singleton, read) : read
+  let detail = graph.validateDetails ? policyDetail(type, id, path, read) : type.singleton ? singletonObject(type.singleton, read) : read
+  const getDetail = async (path: string, expected?: { key: string; id: string }) => {
+    const response = await graph.get(path)
+    return graph.validateDetails ? validateDetail(response, expected) : response
+  }
   if (type.staticIds) detail = { ...detail, id }
   detail = withIdentity(type, detail)
   await completeExpanded(detail, graph, path.split("?")[0]!, type.expandedCollections ?? type.expand?.split(","), type.expansionFallbacks)
@@ -99,11 +142,11 @@ export async function readObject(type: IntuneType, id: string, graph: GraphReade
   for (const extra of type.extras ?? []) {
     try {
       if (extra.object) {
-        detail[extra.property] = await graph.get(extra.path(encodedId))
+        detail[extra.property] = await getDetail(extra.path(encodedId))
         continue
       }
       if (extra.single) {
-        detail[extra.property] = (await graph.get(extra.path(encodedId)))[extra.property] ?? null
+        detail[extra.property] = (await getDetail(extra.path(encodedId), { key: "id", id }))[extra.property] ?? null
         continue
       }
       const collection = extra.path(encodedId)
@@ -117,7 +160,7 @@ export async function readObject(type: IntuneType, id: string, graph: GraphReade
           const path = extra.each.path(encodedId, encodeURIComponent(String(entry.id)))
           if (extra.each.property) entry[extra.each.property] = await graph.list(path)
           else {
-            Object.assign(entry, await graph.get(path))
+            Object.assign(entry, await getDetail(path, { key: "id", id: String(entry.id) }))
             delete entry["@odata.context"]
           }
         }
@@ -137,7 +180,7 @@ export async function readObject(type: IntuneType, id: string, graph: GraphReade
   for (const secret of type.secrets?.(detail) ?? []) {
     let plain: Item
     try {
-      plain = await graph.get(secret.path)
+      plain = await getDetail(secret.path)
     } catch (error) {
       if (!options.keepMasked?.(error)) throw error
       secret.apply(MASKED_VALUE)
@@ -200,8 +243,12 @@ async function completeExpanded(
       if (!path) throw new Error(`Invalid expanded collection ${property}`)
       if (declared.includes(property) && !Object.hasOwn(value, property)) {
         const relationship = fallbacks[prefix + property] ?? property
-        if (relationship === false) throw new Error(`Microsoft Graph did not return the expanded collection ${prefix}${property}`)
-        value[property] = await graph.completeList(`${path}/${relationship}`)
+        try {
+          if (relationship === false) throw new Error(`Microsoft Graph did not return the expanded collection ${prefix}${property}`)
+          value[property] = await graph.completeList(`${path}/${relationship}`)
+        } catch (error) {
+          throw new ExpansionRecoveryError(error)
+        }
       } else {
         const page = { value: value[property], ...(Object.hasOwn(value, key) && { [continuation]: nextLink }) }
         value[property] = await graph.completeList(`${path}/${property}`, page)
@@ -334,8 +381,8 @@ export function withMaskedSecrets(type: IntuneType, snapshot: Item): Item | null
 function singletonObject(singleton: NonNullable<IntuneType["singleton"]>, read: Item): Item {
   if (!singleton.collection) return read
   // A list that goes on may hold a second object, or a page that cannot be read: its first entry is not the tenant's setting.
-  if ("@odata.nextLink" in read) throw new Error("Microsoft Graph returned a list that continues on another page where one tenant-wide object was expected")
-  const entries = read.value
+  if (read && typeof read === "object" && Object.hasOwn(read, "@odata.nextLink")) throw new Error("Microsoft Graph returned a list that continues on another page where one tenant-wide object was expected")
+  const entries = read?.value
   // Storing one of several, or nothing, would pass for the tenant's setting.
   if (!Array.isArray(entries) || entries.length !== 1 || !entries[0] || typeof entries[0] !== "object" || Array.isArray(entries[0])) {
     throw new Error(`Microsoft Graph returned ${Array.isArray(entries) ? entries.length : "no"} objects where one tenant-wide object was expected`)
@@ -404,6 +451,7 @@ export function organizationReader(graph: GraphReader): GraphReader {
     return path.replaceAll("{organizationId}", await organization)
   }
   return {
+    ...graph,
     get: async path => graph.get(await resolve(path)),
     list: async (path, idKey) => graph.list(await resolve(path), idKey),
     ...(graph.completeList && { completeList: async (path: string, page?: unknown) => graph.completeList!(await resolve(path), page) }),

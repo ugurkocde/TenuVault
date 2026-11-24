@@ -111,10 +111,16 @@ describe("Entra 5b declarations and sanitized live responses", () => {
   })
 })
 
+const templateDetail = (path: string, id: string) => ({
+  "@odata.context": `https://graph.microsoft.com/v1.0/$metadata#${path}/${id}/$entity`,
+  id: "tenant-specific-id",
+  templateApplicationLevel: "newPartners",
+})
+
 describe("Entra 5b engine paths", () => {
   it("reads both templates under stable distinct identities and never lists their container", async () => {
     const type = typeOf("CrossTenantAccessMtoTemplates")
-    const setup = fixture(scriptedGraph(Object.fromEntries(type.staticIds!.map(id => [`/v1.0/${type.path}/${id}`, { templateApplicationLevel: "newPartners" }]))))
+    const setup = fixture(scriptedGraph(Object.fromEntries(type.staticIds!.map(id => [`/v1.0/${type.path}/${id}`, templateDetail(type.path, id)]))))
     const job = await setup.run({ scope: only(type.folder) })
     expect(job.outcomes).toMatchObject({ coverage: "complete", types: [{ outcome: "saved", saved: 2 }] })
     const files = (await setup.files(job)).filter(file => file.startsWith(type.folder + "/"))
@@ -125,7 +131,7 @@ describe("Entra 5b engine paths", () => {
 
   it("keeps missing template coverage incomplete", async () => {
     const type = typeOf("CrossTenantAccessMtoTemplates")
-    const setup = fixture(scriptedGraph({ [`/v1.0/${type.path}/${type.staticIds![0]}`]: { templateApplicationLevel: "newPartners" } }))
+    const setup = fixture(scriptedGraph({ [`/v1.0/${type.path}/${type.staticIds![0]}`]: templateDetail(type.path, type.staticIds![0]!) }))
     const job = await setup.run({ scope: only(type.folder) })
     expect(job.outcomes).toMatchObject({ coverage: "incomplete", types: [{ outcome: "failed", saved: 1 }] })
   })

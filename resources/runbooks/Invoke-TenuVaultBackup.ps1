@@ -1198,6 +1198,18 @@ function Invoke-TvGraphGet {
     return ,(ConvertFrom-TvJson $result.Text)
 }
 
+function Invoke-TvGraphDetail {
+    param([string]$Path, [string]$Token, [string]$Id)
+    $detail = Invoke-TvGraphGet $Path $Token
+    if ($detail -isnot [System.Collections.IDictionary] -or $detail["value"] -is [array] -or $detail.psbase.Keys -ccontains "@odata.nextLink") {
+        throw "Microsoft Graph did not return a single policy object"
+    }
+    if ($Id -and ($detail.psbase.Keys -cnotcontains "id" -or $detail["id"] -isnot [string] -or $detail["id"] -cne $Id)) {
+        throw "Microsoft Graph returned a policy without the requested id"
+    }
+    return $detail
+}
+
 function Get-TvGraphReadError {
     param([Exception]$Exception)
     if ($Exception -is [TvHttpError] -and $Exception.Status) { return "HTTP $($Exception.Status)" }
@@ -1341,7 +1353,7 @@ function Read-TvObject {
         [Parameter(Mandatory)][hashtable]$Outcome
     )
     $path = Get-TvDetailPath $Type $Id
-    $detail = Invoke-TvGraphGet $path $Token
+    $detail = if ($Type.Singleton) { Invoke-TvGraphDetail $path $Token } else { Invoke-TvGraphDetail $path $Token $Id }
     if ($Type.Keep) { return Get-TvKeptSnapshot $Type $detail }
     if ($Type.Singleton) {
         $snapshot = [ordered]@{ id = $Type.Singleton.Id }
@@ -1358,7 +1370,7 @@ function Read-TvObject {
     foreach ($extra in $Type.Extras) {
         $extraPath = ([string]$extra.Template).Replace("{id}", $encodedId)
         if ($extra.Single) {
-            $one = Invoke-TvGraphGet $extraPath $Token
+            $one = Invoke-TvGraphDetail $extraPath $Token $Id
             Set-TvProp $detail $extra.Property (Get-TvProp $one $extra.Property)
             continue
         }
@@ -1366,13 +1378,14 @@ function Read-TvObject {
         Complete-TvGraphExpansion $entries ($extraPath -split '\?', 2)[0] $Token $extra.ExpandedCollections $extra.NoExpansionFallback
         if ($extra.Each) {
             foreach ($entry in $entries) {
-                $entryPath = ([string]$extra.Each.Template).Replace("{id}", $encodedId).Replace("{entryId}", [uri]::EscapeDataString([string](Get-TvProp $entry "id")))
+                $entryId = [string](Get-TvProp $entry "id")
+                $entryPath = ([string]$extra.Each.Template).Replace("{id}", $encodedId).Replace("{entryId}", [uri]::EscapeDataString($entryId))
                 if ($extra.Each.Property) {
                     $nested = @(Invoke-TvGraphList $entryPath $Token)
                     Complete-TvGraphExpansion $nested ($entryPath -split '\?', 2)[0] $Token
                     Set-TvProp $entry $extra.Each.Property $nested
                 } else {
-                    $full = Invoke-TvGraphGet $entryPath $Token
+                    $full = Invoke-TvGraphDetail $entryPath $Token $entryId
                     Complete-TvGraphExpansion $full ($entryPath -split '\?', 2)[0] $Token
                     foreach ($k in @(Get-TvKeys $full)) { if ($k -ne "@odata.context") { Set-TvProp $entry $k (Get-TvProp $full $k) } }
                 }
@@ -1385,7 +1398,7 @@ function Read-TvObject {
             $reference = ([string](Get-TvProp $setting "secretReferenceValueId")).Replace("'", "''")
             $secretPath = "deviceManagement/deviceConfigurations/$encodedId/getOmaSettingPlainTextValue(secretReferenceValueId='$([uri]::EscapeDataString($reference))')"
             try {
-                $plain = Invoke-TvGraphGet $secretPath $Token
+                $plain = Invoke-TvGraphDetail $secretPath $Token
                 $value = Get-TvProp $plain "value"
                 if ($value -isnot [string]) { throw "Microsoft Graph did not return an encrypted setting's value" }
                 Set-TvProp $setting "value" $value
@@ -1477,7 +1490,7 @@ function Get-TvTypes {
     @{ Folder = 'ScopeTags'; Label = 'scope tags'; Path = 'deviceManagement/roleScopeTags'; NameKey = 'displayName'; Expand = $null; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @(@{ Property = 'assignments'; Single = $false; Template = 'deviceManagement/roleScopeTags/{id}/assignments'; Each = $null }) }
     @{ Folder = 'RoleDefinitions'; Label = 'Intune roles'; Path = 'deviceManagement/roleDefinitions'; NameKey = 'displayName'; Expand = $null; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @(@{ Property = 'roleAssignments'; Single = $false; Template = 'deviceManagement/roleDefinitions/{id}/roleAssignments'; Each = @{ Property = $null; Template = 'deviceManagement/roleAssignments/{entryId}' } }) }
     @{ Folder = 'NotificationTemplates'; Label = 'compliance notification templates'; Path = 'deviceManagement/notificationMessageTemplates'; NameKey = 'displayName'; Expand = 'localizedNotificationMessages'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
-    @{ Folder = 'Branding'; Label = 'Company Portal branding'; Path = 'deviceManagement/intuneBrandingProfiles'; NameKey = 'profileName'; Expand = 'assignments'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @(@{ Property = 'themeColorLogo'; Single = $true; Template = 'deviceManagement/intuneBrandingProfiles/{id}?$select=themeColorLogo'; Each = $null }; @{ Property = 'lightBackgroundLogo'; Single = $true; Template = 'deviceManagement/intuneBrandingProfiles/{id}?$select=lightBackgroundLogo'; Each = $null }; @{ Property = 'landingPageCustomizedImage'; Single = $true; Template = 'deviceManagement/intuneBrandingProfiles/{id}?$select=landingPageCustomizedImage'; Each = $null }) }
+    @{ Folder = 'Branding'; Label = 'Company Portal branding'; Path = 'deviceManagement/intuneBrandingProfiles'; NameKey = 'profileName'; Expand = 'assignments'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @(@{ Property = 'themeColorLogo'; Single = $true; Template = 'deviceManagement/intuneBrandingProfiles/{id}?$select=id,themeColorLogo'; Each = $null }; @{ Property = 'lightBackgroundLogo'; Single = $true; Template = 'deviceManagement/intuneBrandingProfiles/{id}?$select=id,lightBackgroundLogo'; Each = $null }; @{ Property = 'landingPageCustomizedImage'; Single = $true; Template = 'deviceManagement/intuneBrandingProfiles/{id}?$select=id,landingPageCustomizedImage'; Each = $null }) }
     @{ Folder = 'DeviceCleanupRules'; Label = 'device clean-up rules'; Path = 'deviceManagement/managedDeviceCleanupRules'; NameKey = 'displayName'; Expand = $null; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
     @{ Folder = 'MultiAdminApprovalPolicies'; Label = 'multi admin approval policies'; Path = 'deviceManagement/operationApprovalPolicies'; NameKey = 'displayName'; Expand = $null; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
     @{ Folder = 'NamedLocations'; Label = 'named locations'; Path = 'identity/conditionalAccess/namedLocations'; NameKey = 'displayName'; Expand = $null; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
@@ -3432,7 +3445,7 @@ function Invoke-TvBackup {
             $listPath = [string]$type.Path
             if ($type.ListQuery) { $listPath += "?" + $type.ListQuery }
             $all = if ($type.Singleton) {
-                $one = Invoke-TvGraphGet $listPath $graphToken
+                $one = Invoke-TvGraphDetail $listPath $graphToken
                 Set-TvProp $one "id" $type.Singleton.Id
                 @($one)
             } else { @(Invoke-TvGraphList $listPath $graphToken) }
