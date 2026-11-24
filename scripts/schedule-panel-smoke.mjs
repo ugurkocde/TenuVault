@@ -121,7 +121,7 @@ export async function checkSchedulePanel({ check, evaluate, waitForCondition, wa
       for (let response = 0; response < 2; response++) {
         await evaluate(`window.__scheduleFixture.planChanged({ ...window.__scheduleFixture.status })`)
         assert(await waitForCondition(`${body}.innerText.includes("Plan not verified") && !${body}.innerText.includes("Checking plan")`), "loaded MSP denial still shows Checking plan")
-        assert(await evaluate(`${body}.innerText.includes("Your license does not cover Contoso 1 right now, so its automatic backups do not run.")`), "loaded MSP denial lost the coverage warning")
+        assert(await evaluate(`${body}.innerText.includes("Automatic backups need an active license.")`), "loaded MSP denial lost the coverage warning")
         assert(await evaluate(`!${doc}.querySelector('#schedule-frequency option[value="daily"]')`), "uncovered MSP tenant offers Daily")
       }
       await community()
