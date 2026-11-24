@@ -180,9 +180,12 @@ export function graphAnswer(text: string): GraphAnswer {
 }
 
 /** The error of a failed Graph response, with its message as before and what Graph answered. */
-export async function graphFailure(response: Response, grant?: GrantedPermissions): Promise<GraphError> {
+export async function graphFailure(response: Response, grant?: GrantedPermissions, grantUnknown = false): Promise<GraphError> {
   const text = await response.text()
-  return new GraphError(graphErrorMessage(response.status), response.status, graphAnswer(text), grant)
+  const message = response.status === 403 && grantUnknown
+    ? "Microsoft Graph refused this read (HTTP 403). TenuVault could not verify the permissions for this request."
+    : graphErrorMessage(response.status)
+  return new GraphError(message, response.status, graphAnswer(text), grant)
 }
 
 /** Provider code fields can contain free text too. Keep only short error identifiers. */

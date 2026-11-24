@@ -626,7 +626,9 @@ describe("Start now backup evidence", () => {
     const job = await f.run({ clientId })
     expect(f.requests.filter(request => request.path === path).map(request => request.headers.get("authorization")))
       .toEqual(["Bearer initial", "Bearer opaque"])
-    expect(outcomeOf(job, "DefenderCustomDetectionRules")).toMatchObject({ outcome: "failed", status: 403 })
+    expect(outcomeOf(job, "DefenderCustomDetectionRules")).toMatchObject({
+      outcome: "failed", status: 403, error: expect.stringContaining("could not verify the permissions for this request"),
+    })
   })
 
   it("records an opaque grant's 403 as unread and keeps account details out of history", async () => {
