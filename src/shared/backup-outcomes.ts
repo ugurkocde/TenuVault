@@ -184,15 +184,6 @@ export function classifyAnswer(answer: RefusedAnswer, context: AnswerContext): V
   return { outcome: "skipped", cause: context.held && context.mode === "delegated" ? "role" : "permission" }
 }
 
-const MAX_QUOTED = 300
-
-/** What Microsoft answered, short enough for a result line. */
-function quoted(message: string | undefined): string {
-  const text = (message ?? "").replace(/\s+/g, " ").trim()
-  if (!text) return ""
-  return `: "${text.length > MAX_QUOTED ? `${text.slice(0, MAX_QUOTED).trimEnd()}...` : text}"`
-}
-
 export interface ReasonContext {
   /** The service's name, such as "Entra ID". */
   service: string
@@ -229,8 +220,8 @@ export function nothingReadReason(types: readonly TypeOutcome[], context: Pick<R
   return `Nothing could be read. ${leftOut} because ${because}.${main === "permission" ? ` ${context.settingsPage} in Settings shows what is missing.` : ""}`
 }
 
-/** Why a type was left out, for the backup result. `message` is what Microsoft Graph answered. */
-export function skipReason(cause: SkipCause, context: ReasonContext, message?: string): string {
+/** Why a type was left out, for the backup result. */
+export function skipReason(cause: SkipCause, context: ReasonContext): string {
   const who = context.mode === "app-only" ? "Backup Reader" : "TenuVault app registration"
   switch (cause) {
     case "storage": return LARGE_STORAGE_UNAVAILABLE
@@ -239,10 +230,10 @@ export function skipReason(cause: SkipCause, context: ReasonContext, message?: s
     case "signedIn":
       return "Microsoft Graph lets only a signed-in admin read this type, so the Backup Reader leaves it out. Manual backups include it."
     case "license":
-      return `This tenant is not set up for it${quoted(message)}. Microsoft answers this when the product has no license in the tenant or was never set up.`
+      return "This tenant is not set up for it. Microsoft answers this when the product has no license in the tenant or was never set up."
     case "role":
-      return `Microsoft refused the read although the permission is granted${quoted(message)}. Your account may not have a role that can read ${context.service}${context.roles ? ` (${context.roles.split(";")[0]})` : ""}.`
+      return `Microsoft refused the read although the permission is granted. Your account may not have a role that can read ${context.service}${context.roles ? ` (${context.roles.split(";")[0]})` : ""}.`
     case "permission":
-      return `Microsoft refused the read${quoted(message)}. The ${who} may lack ${context.permission ? `${context.permission}, or admin consent for one of them` : "the permission or admin consent for it"}. ${context.settingsPage} in Settings shows what is missing.`
+      return `Microsoft refused the read. The ${who} may lack ${context.permission ? `${context.permission}, or admin consent for one of them` : "the permission or admin consent for it"}. ${context.settingsPage} in Settings shows what is missing.`
   }
 }

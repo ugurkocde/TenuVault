@@ -14,7 +14,7 @@ import { resolveBackupOwnership, type OwnershipFile } from "../../shared/backup-
 import { BlobWriter } from "./blob-writer"
 import { GraphSession, type GraphItem, type ReadControl } from "./graph-session"
 import { ReadBudgetError, typeReadBudget, withReadBudget } from "./read-budget"
-import { GRAPH, BlobClaimError, ImmutableBlobError, GraphError, GraphUnansweredError, InventoryDamagedError, ProtectedBlobError, RequestTimeoutError, StorageError, LargeStorageError, TokenError, isUnreachable, withAbort, withRequestTimeout } from "./request"
+import { GRAPH, BlobClaimError, ImmutableBlobError, GraphError, GraphUnansweredError, InventoryDamagedError, ProtectedBlobError, RequestTimeoutError, StorageError, LargeStorageError, TokenError, isUnreachable, providerErrorCode, providerStatus, withAbort, withRequestTimeout } from "./request"
 import { RetryDelayError } from "../graph-retry"
 import { isLocalAccount } from "../storage/blob-emulator"
 import { FetchApplicationError } from "../api/network-error"
@@ -720,7 +720,8 @@ export class BackupEngine {
       const { module } = serviceOf(type)
       const answer = error instanceof GraphError ? { status: error.status, ...error.answer } : null
       const verdict = answer ? classifyAnswer(answer, { held: granted ? canBackUp(type.folder, granted) : undefined, mode: tokens.mode, ...(type.unavailable !== undefined ? { unavailable: ownList ? type.unavailable : [] } : {}) }) : { outcome: "failed" as const }
-      const evidence = answer ? { status: answer.status, ...(answer.code ? { code: answer.code } : {}) } : {}
+      const code = providerErrorCode(answer?.code)
+      const evidence = answer ? { status: answer.status, ...(code ? { code } : {}) } : {}
       const entry = result(type.folder)
       if (error instanceof LargeStorageError) {
         const reason = error.message
@@ -733,11 +734,12 @@ export class BackupEngine {
       if (verdict.outcome === "skipped") {
         const needed = type.folder === "PolicySets" && !granted ? backupNeed(type.folder, signIn) : undefined
         const permission = needed && needed !== "unsupported" ? describeRequirement(needed) : undefined
-        const reason = skipReason(verdict.cause, { service: module?.label ?? "this service", roles: module?.roles, mode: tokens.mode, settingsPage: SERVICES_PAGE, permission }, checkedReadDenied(type, error) ? undefined : answer?.message)
+        const reason = skipReason(verdict.cause, { service: module?.label ?? "this service", roles: module?.roles, mode: tokens.mode, settingsPage: SERVICES_PAGE, permission })
         skippedTypes.push(type.folder)
         Object.assign(entry, { state: "skipped", reason })
         settle(type.folder, { outcome: "skipped", cause: verdict.cause, reason, ...evidence })
-        this.write(job, `Skipped ${type.label}: ${reason.charAt(0).toLowerCase()}${reason.slice(1)}`)
+        const detail = answer ? ` (${providerStatus(answer.status, code)})` : ""
+        this.write(job, `Skipped ${type.label}${detail}: ${reason.charAt(0).toLowerCase()}${reason.slice(1)}`)
         return
       }
       recordFailure(outcome, error)
@@ -823,7 +825,8 @@ export class BackupEngine {
             ? `Access was denied. The app registration may lack the permission or admin consent, or your account may not have a role that can read ${module.label}${module.roles ? ` (${module.roles.split(";")[0]})` : ""}.`
             : `Access was denied. The app registration may lack the permission or admin consent, or your ${module?.label ?? "Intune"} role may not allow it.`
           Object.assign(result(type.folder), { state: "skipped", reason })
-          settle(type.folder, { outcome: "skipped", cause: "permission", reason, status: 403, ...(error.answer.code ? { code: error.answer.code } : {}) })
+          const code = providerErrorCode(error.answer.code)
+          settle(type.folder, { outcome: "skipped", cause: "permission", reason, status: 403, ...(code ? { code } : {}) })
           this.write(job, `Skipped ${type.label}: ${reason.charAt(0).toLowerCase()}${reason.slice(1)}`)
           return
         }
@@ -832,7 +835,8 @@ export class BackupEngine {
         failedTypes.push(type.folder)
         const reason = error instanceof Error ? error.message : String(error)
         Object.assign(result(type.folder), { state: "unreadable", reason })
-        settle(type.folder, { outcome: "failed", error: reason, ...(error instanceof GraphError ? { status: error.status, ...(error.answer.code ? { code: error.answer.code } : {}) } : {}) })
+        const code = error instanceof GraphError ? providerErrorCode(error.answer.code) : undefined
+        settle(type.folder, { outcome: "failed", error: reason, ...(error instanceof GraphError ? { status: error.status, ...(code ? { code } : {}) } : {}) })
         this.write(job, `Could not read ${type.label}: ${reason}`)
       }
     }, network.signal)

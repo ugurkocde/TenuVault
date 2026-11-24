@@ -1,5 +1,6 @@
 import { LARGE_STORAGE_UNAVAILABLE } from "../../shared/backup-storage"
 import { FetchApplicationError, NetworkUnreachableError } from "../api/network-error"
+import { isLocalAccount } from "../storage/blob-emulator"
 
 export const GRAPH = "https://graph.microsoft.com"
 /** Far above any real listing; stops a storage service that keeps returning continuation markers. */
@@ -74,7 +75,7 @@ export class InventoryDamagedError extends StorageError {}
 /** The error for a failed storage response, keeping the local store's damage refusals apart. */
 export async function storageFailure(response: Response, account: string): Promise<StorageError> {
   const code = response.headers.get("x-ms-error-code")
-  if (code === "InventoryIncomplete" || code === "BackupUnavailable") {
+  if (isLocalAccount(account) && (code === "InventoryIncomplete" || code === "BackupUnavailable")) {
     const text = await response.text()
     const message = /<Message>([^<]+)<\/Message>/.exec(text)?.[1]
     const decoded = (message ?? "Files in the backup folder could not be read.").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&amp;/g, "&")
@@ -177,18 +178,27 @@ export async function graphFailure(response: Response): Promise<GraphError> {
   return new GraphError(graphErrorMessage(response.status), response.status, graphAnswer(text))
 }
 
+/** Provider code fields can contain free text too. Keep only short error identifiers. */
+export function providerErrorCode(code: string | undefined): string | undefined {
+  return code && /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(code) ? code : undefined
+}
+
+export function providerStatus(status: number, code: string | undefined): string {
+  return `HTTP ${status}${code ? `, ${code}` : ""}`
+}
+
 /** The message for a failed storage response. A network error response rejects with a StorageUnreachableError instead. */
 export async function storageError(response: Response, account: string): Promise<string> {
   if (response.status === 0 || response.type === "error") throw new StorageUnreachableError(`Storage account ${account} could not be reached.`)
   const text = await response.text()
   const code = /<Code>([^<]+)<\/Code>/.exec(text)?.[1] ?? response.headers.get("x-ms-error-code") ?? ""
+  const detail = providerStatus(response.status, providerErrorCode(code))
   // AuthorizationFailure is the storage firewall or network rules rejecting this computer, not a missing role.
   if (code === "AuthorizationFailure") {
-    return `Storage account ${account} rejected the request from this network. Allow this computer's public IP address in the storage account's networking settings, or connect through a network it allows.`
+    return `Storage account ${account} rejected the request from this network (${detail}). Allow this computer's public IP address in the storage account's networking settings, or connect through a network it allows.`
   }
   if (response.status === 403 || code.startsWith("Authorization")) {
-    return `You do not have write access to storage account ${account}. Ask an Azure administrator for the "Storage Blob Data Contributor" role on it. New role assignments can take a few minutes to apply.`
+    return `You do not have write access to storage account ${account} (${detail}). Ask an Azure administrator for the "Storage Blob Data Contributor" role on it. New role assignments can take a few minutes to apply.`
   }
-  const message = /<Message>([^<]+)<\/Message>/.exec(text)?.[1]
-  return `Storage account ${account} returned ${response.status}${code ? ` (${code})` : ""}${message ? `: ${message.split("\n")[0]}` : ""}`
+  return `Storage account ${account} rejected the backup request (${detail}). Check that the backup storage is available and retry.`
 }

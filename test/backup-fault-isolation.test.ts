@@ -185,10 +185,14 @@ describe("a failing Entra ID or Defender endpoint", () => {
   it("names the account's role when the token holds the permission and Microsoft still refuses", async () => {
     const scopes = "DeviceManagementConfiguration.Read.All DeviceManagementManagedDevices.Read.All AdministrativeUnit.Read.All RoleManagement.Read.Directory Policy.Read.All SecurityEvents.Read.All CustomDetection.Read.All"
     const token = `e30.${Buffer.from(JSON.stringify({ scp: scopes })).toString("base64url")}.sig`
-    const { run } = fixture(tenant({ "/beta/security/rules/detectionRules": refusal(403, "Forbidden", "Access denied.") }), { getToken: async () => token })
+    const account = "private-admin@example.test"
+    const { run, manifest } = fixture(tenant({ "/beta/security/rules/detectionRules": refusal(403, "Forbidden", `Access denied for ${account}.`) }), { getToken: async () => token })
     const job = await run()
-    expect(outcomeOf(job, "DefenderCustomDetectionRules")).toMatchObject({ outcome: "skipped", cause: "role" })
-    expect(job.results!.types.find((type) => type.folder === "DefenderCustomDetectionRules")!.reason).toBe('Microsoft refused the read although the permission is granted: "Access denied.". Your account may not have a role that can read Defender (Security Reader or Global Reader to back up).')
+    const metadata = await manifest(job)
+    expect(JSON.stringify({ job, metadata })).not.toContain(account)
+    expect(outcomeOf(job, "DefenderCustomDetectionRules")).toMatchObject({ outcome: "skipped", cause: "role", status: 403, code: "Forbidden" })
+    expect(job.results!.types.find((type) => type.folder === "DefenderCustomDetectionRules")!.reason).toContain("Your account may not have a role that can read Defender")
+    expect(job.log.join("\n")).toContain("HTTP 403, Forbidden")
   })
 
   it("still stops the backup when the sign-in itself fails, whichever service asks first", async () => {

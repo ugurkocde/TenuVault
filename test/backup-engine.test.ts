@@ -6,12 +6,15 @@ import { join } from "node:path"
 import { describe, expect, it, vi } from "vitest"
 import { BackupEngine, CONSECUTIVE_AUTH_FAILURE_LIMIT, NetworkCircuit, safeFileName, verifyStorageAccess } from "../src/main/backup/engine"
 import { scheduledResult } from "../src/main/backup/scheduler"
+import { FailedAttemptLog } from "../src/main/backup/failed-attempts"
+import { firstBackupEvent } from "../src/main/setup-diagnostics/hooks"
 import { backupRoutes, jobStatus, surfaceTokenErrors } from "../src/main/api/desktop-routes"
 import { NextRequest } from "../src/main/api/next-server-shim"
 import { handleLocalBlobRequest, localAccountFromUrl } from "../src/main/storage/blob-emulator"
 import { LocalBlobStore } from "../src/main/storage/local-blob-store"
 import { localStorageAccountName } from "../src/shared/constants"
 import { INTUNE_TYPES } from "../src/shared/intune/registry"
+import { memoryStore } from "./helpers"
 
 const TENANT = "11111111-1111-1111-1111-111111111111"
 const CLIENT = "22222222-2222-2222-2222-222222222222"
@@ -70,6 +73,23 @@ async function finished(engine: BackupEngine, id: string) {
 }
 
 describe("BackupEngine", () => {
+  it("reports Azure Blob failures without copying the provider message into the job or history", async () => {
+    const identifier = "private-admin@example.test"
+    const history = new FailedAttemptLog(memoryStore())
+    const engine = new BackupEngine({
+      fetch: async () => new Response(`<Error><Code>InvalidHeaderValue</Code><Message>Could not use ${identifier}.</Message></Error>`, { status: 400 }),
+      getToken: async () => "token",
+      onFinished: (job, request) => history.finished(job, request),
+    })
+    const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: "example" }).id)
+    const attempts = history.list(TENANT)
+    expect(job.status).toBe("Failed")
+    expect(JSON.stringify({ job, attempts })).not.toContain(identifier)
+    expect(job.log.join("\n")).toContain("HTTP 400, InvalidHeaderValue")
+    expect(attempts).toMatchObject([{ runId: job.id, message: expect.stringContaining("HTTP 400, InvalidHeaderValue") }])
+    expect(firstBackupEvent(job)).toEqual({ name: "first_backup", props: { result: "failed", errorClass: "storage" } })
+  })
+
   it("keeps every policy when names and id prefixes repeat", async () => {
     // Intune's default enrollment configurations share a display name and the tenant GUID id prefix.
     const prefix = "7192bb9f-ffa6-4f50-9176-7603cd9450d6"

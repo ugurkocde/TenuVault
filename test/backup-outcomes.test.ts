@@ -140,18 +140,11 @@ describe("a backup that read nothing", () => {
 describe("the reason shown for a type that was left out", () => {
   const context = { service: "Defender", roles: "Security Reader or Global Reader to back up; Security Administrator to restore.", mode: "delegated" as const, settingsPage: "Services and permissions" }
 
-  it("names the cause in plain words and quotes what Microsoft answered", () => {
-    expect(skipReason("license", context, "Tenant is not onboarded to Microsoft Defender for Identity.")).toBe('This tenant is not set up for it: "Tenant is not onboarded to Microsoft Defender for Identity.". Microsoft answers this when the product has no license in the tenant or was never set up.')
+  it("names the cause in plain words", () => {
+    expect(skipReason("license", context)).toBe("This tenant is not set up for it. Microsoft answers this when the product has no license in the tenant or was never set up.")
     expect(skipReason("role", context)).toBe("Microsoft refused the read although the permission is granted. Your account may not have a role that can read Defender (Security Reader or Global Reader to back up).")
     expect(skipReason("permission", context)).toBe("Microsoft refused the read. The TenuVault app registration may lack the permission or admin consent for it. Services and permissions in Settings shows what is missing.")
     expect(skipReason("permission", { ...context, mode: "app-only" })).toContain("The Backup Reader may lack the permission")
     expect(skipReason("signedIn", context)).toBe("Microsoft Graph lets only a signed-in admin read this type, so the Backup Reader leaves it out. Manual backups include it.")
-  })
-
-  it("shortens a long answer and keeps it on one line", () => {
-    const reason = skipReason("permission", context, `Missing application roles.\r\n API required roles: A,B, application roles: ${"X.Read.All,".repeat(80)}`)
-    expect(reason).toContain('"Missing application roles. API required roles: A,B, application roles: ')
-    expect(reason.length).toBeLessThan(520)
-    expect(reason).not.toMatch(/[\r\n]/)
   })
 })
