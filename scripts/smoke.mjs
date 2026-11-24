@@ -20,7 +20,7 @@ import { createRequire } from "node:module"
 import { availableParallelism, tmpdir, uptime } from "node:os"
 import { join, resolve } from "node:path"
 import { checkSchedulePanel } from "./schedule-panel-smoke.mjs"
-import { checkBackupCancel } from "./backup-cancel-smoke.mjs"
+import { checkBackupCancel, checkSignInRequired } from "./backup-cancel-smoke.mjs"
 import { checkAppBackupCompletion } from "./app-backup-completion-smoke.mjs"
 import { checkRestoreService } from "./restore-service-smoke.mjs"
 import { disableAutoUpdate, RUN_SWITCH } from "./smoke-update-policy.mjs"
@@ -2208,6 +2208,7 @@ if (licenseKey) {
   })
 }
 
+await checkSignInRequired({ check, evaluate, waitForCondition, assert, desktopDir, inspectorPort: packagedApp ? undefined : inspectorPort })
 await finish()
 
 async function finish() {
