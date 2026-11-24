@@ -13,6 +13,7 @@ import { useTenants } from "~/contexts/TenantContext"
 import type { ServicesStatus } from "../../shared/ipc"
 import type { AreaHealth, ConnectionHealthReport, ServiceHealth, SignInHealth } from "../../shared/connection-health/model"
 import { PERSONAL_DATA } from "../../shared/services/onboarding"
+import { typeForFolder } from "../../shared/intune/registry"
 import { graphCliCoverage } from "../../shared/services/graph-cli-coverage"
 import { BACKUP_SERVICES } from "../../shared/services/presentation"
 import { MODULE_BY_ID, entraApiPermissionsUrl } from "../../shared/services/modules"
@@ -242,18 +243,20 @@ function TenantServices({ tenantId, clientId, name, active }: { tenantId: string
         {graphCliCoverage(report.granted ? new Set(report.granted) : undefined).map((service, index) =>
           <details key={service.service} className="rounded-md border px-3 py-2 text-sm">
             <summary className="cursor-pointer">{BACKUP_SERVICES[index]!.label} {service.readable ? `${service.readable.length} of ${service.folders.length}` : "coverage unknown"}</summary>
-            {service.readable && <ul className="ml-4 list-disc text-xs text-gray-600">{service.readable.map(folder => <li key={folder}>{folder}</li>)}</ul>}
+            {service.readable && <ul className="ml-4 list-disc text-xs text-gray-600">{service.readable.map(folder => <li key={folder}>{typeForFolder(folder)?.label ?? folder}</li>)}</ul>}
           </details>)}
         <p className="text-xs text-gray-600">Your Microsoft role and service licenses can limit what a backup reads.</p>
       </section>}
       <div className="grid gap-2 sm:grid-cols-3">
         <SignInState label="Microsoft Graph sign-in" state={report.graph} readOnly={report.readOnly} />
         <div className="min-w-0 rounded-xl bg-muted p-3"><h3 className="text-sm font-medium text-gray-900">Backup Reader</h3>
-          <p className="mt-1 text-xs text-gray-600">{READER_HEALTH_TEXT[report.reader.state]}</p>
-          {report.reader.notAfter && <p className="mt-1 text-xs text-gray-500">Certificate expires {healthDate(report.reader.notAfter)}{report.reader.daysLeft !== undefined ? ` (${report.reader.daysLeft} days left)` : ""}.</p>}
-          {report.reader.code && <p className="mt-1 text-xs text-gray-600">{report.reader.code}{report.reader.link && <>: <a className="underline" href={report.reader.link} target="_blank" rel="noreferrer">Microsoft's description</a></>}</p>}
-          {report.reader.roleChange && <p className="mt-1 break-words text-xs text-gray-600">Added: {report.reader.roleChange.added.join(", ") || "none"}. Removed: {report.reader.roleChange.removed.join(", ") || "none"}.</p>}
-          <Link className="mt-2 inline-block text-xs font-medium text-blue-700 underline" to={settingsHref("background")}>Open Backup Reader settings</Link>
+          {report.readOnly ? <p className="mt-1 text-xs text-gray-600">Scheduled backups use your Start now sign-in. To use a Backup Reader, change the sign-in method.</p> : <>
+            <p className="mt-1 text-xs text-gray-600">{READER_HEALTH_TEXT[report.reader.state]}</p>
+            {report.reader.notAfter && <p className="mt-1 text-xs text-gray-500">Certificate expires {healthDate(report.reader.notAfter)}{report.reader.daysLeft !== undefined ? ` (${report.reader.daysLeft} days left)` : ""}.</p>}
+            {report.reader.code && <p className="mt-1 text-xs text-gray-600">{report.reader.code}{report.reader.link && <>: <a className="underline" href={report.reader.link} target="_blank" rel="noreferrer">Microsoft's description</a></>}</p>}
+            {report.reader.roleChange && <p className="mt-1 break-words text-xs text-gray-600">Added: {report.reader.roleChange.added.join(", ") || "none"}. Removed: {report.reader.roleChange.removed.join(", ") || "none"}.</p>}
+            <Link className="mt-2 inline-block text-xs font-medium text-blue-700 underline" to={settingsHref("background")}>Open Backup Reader settings</Link>
+          </>}
         </div>
         <SignInState label="Backup storage" state={report.storage} storage />
       </div>
