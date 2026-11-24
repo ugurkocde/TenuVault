@@ -19,6 +19,8 @@ function setup(licenses: License[]) {
   const promotion = promotionRoutes(deps)
   const items = [{ sourceId: policy.id, folder: "ConfigurationPolicies" }]
   return {
+    deps,
+    reject: (tenantId: string, id: string) => call(promotion, "/api/promotion", { tenantId, action: "reject", id }),
     targets: () => call(sync, "/api/sync", { tenantId: TENANT_A, action: "targets" }),
     copy: (...ids: string[]) => call(sync, "/api/sync", { tenantId: TENANT_A, action: "plan", title: "Copy policy", items, targetTenants: named(ids) }),
     promote: (tenantId: string) => call(promotion, "/api/promotion", { tenantId, sourceTenantId: TENANT_A, targetTenants: named([TENANT_A]), action: "plan", title: "Promote policy", items }),
@@ -73,5 +75,16 @@ describe("Copy to Tenants and Dev to Prod licensing", () => {
   it("allows Dev to Prod from a Pro key to a Pro trial", async () => {
     const context = setup([key, trial, msp])
     expect(await context.promote(TENANT_B)).toMatchObject({ status: 200, body: { promotion: { sourceTenantId: TENANT_A } } })
+  })
+
+  it("lets a pending promotion be rejected after the source tenant's plan lapses", async () => {
+    const context = setup([key, trial, msp])
+    const planned = await context.promote(TENANT_B)
+    const plan = context.deps.plan
+    context.deps.plan = async (tenantId) => {
+      if (tenantId.toLowerCase() === TENANT_A) throw new Error("This tenant is not licensed.")
+      return plan(tenantId)
+    }
+    expect((await context.reject(TENANT_B, planned.body.promotion.id)).status).toBe(200)
   })
 })

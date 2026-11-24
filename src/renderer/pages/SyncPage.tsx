@@ -104,10 +104,11 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
   // sync, rollback or new start, so a chip never shows a state from before a change.
   const policies = useQuery({ queryKey: ["sync", "policies", sourceId, folder], queryFn: () => syncPolicies(source, folder), refetchOnWindowFocus: true })
   const options = useQuery({ queryKey: ["sync", "targets", sourceId], queryFn: () => syncTargets(source) })
-  const eligibleOptions = (options.data?.targets ?? []).filter((option) => option.eligible).slice(0, 25)
+  const eligibleOptions = (options.data?.targets ?? []).filter((option) => option.eligible)
   const eligible = eligibleOptions.map((option) => option.tenantId)
   // A request may name several targets only when the source and every named target are on MSP.
-  // MSP targets of an MSP source are read together; every other eligible target is read on its own.
+  // MSP targets of an MSP source are read together, at most 25 per request (the route's limit);
+  // every other eligible target is read on its own.
   const multiple = options.data?.multiple === true
   const batched = multiple ? eligibleOptions.filter((option) => option.multiple).map((option) => option.tenantId) : []
   const single = eligible.filter((id) => !batched.includes(id))
@@ -116,7 +117,7 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
     queryFn: async () => {
       const failed = (ids: string[]) => (error: unknown) => ({ targets: ids.map((id) => ({ targetTenantId: id, links: [], error: error instanceof Error ? error.message : String(error) })) })
       const answers = await Promise.all([
-        ...(batched.length ? [syncStatus(source, batched).catch(failed(batched))] : []),
+        ...Array.from({ length: Math.ceil(batched.length / 25) }, (_, index) => batched.slice(index * 25, index * 25 + 25)).map((ids) => syncStatus(source, ids).catch(failed(ids))),
         ...single.map((id) => syncStatus(source, [id]).catch(failed([id]))),
       ])
       return { targets: answers.flatMap((answer) => answer.targets) }
