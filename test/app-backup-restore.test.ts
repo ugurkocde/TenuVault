@@ -106,6 +106,51 @@ it.each(["before block", "before block list", "read-only switch"])("checks the a
   expect(d.fetcher).toHaveBeenCalledTimes(boundary === "before block list" ? 1 : 0)
 })
 
+it.each([
+  ["ownApp", appId, "ownApp", tenant, true],
+  ["ownApp", appId, "tenuvaultApp", TENUVAULT_CLIENT_ID, false],
+  ["tenuvaultApp", TENUVAULT_CLIENT_ID, "ownApp", tenant, false],
+] as const)("handles a switch from %s (%s) to %s (%s) between installer blocks", async (method, clientId, nextMethod, nextClient, completes) => {
+  const f = await fixture(snapshot, true), d = destination()
+  const packs = tenantPermissionPacks({ intune: { access: "restore" } }, { azure: false, audit: false })
+  let connection: TenantConnection = {
+    version: 1, method, clientId, origin: "wizard", createdAt: "", updatedAt: "",
+    graphScopes: resourcePackScopes(packs, "graph"),
+  }
+  const caps = new ConnectionCapabilities(() => connection, () => packs, async () => true)
+  const authorizeRestore = () => caps.requireAppRestoreWrite(target, clientId)
+  const graphClients: string[] = []
+  const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+    const url = new URL(String(input))
+    if (url.hostname.endsWith(".blob.core.windows.net")) {
+      const response = await d.fetcher(input, init)
+      if (d.fetcher.mock.calls.length === 1) connection = { ...connection, method: nextMethod, clientId: nextClient }
+      return response
+    }
+    graphClients.push(new Headers(init?.headers).get("authorization")!.slice("Bearer ".length))
+    return Response.json(await d.graph(init?.method as "GET" | "POST" | "PATCH", url.href, init?.body ? JSON.parse(String(init.body)) : undefined))
+  })
+  const work = restoreAppWithAudit(f.store, f.source, snapshot, target, "Restored", {
+    getGraphToken: async () => {
+      const currentClient = connection.clientId
+      await authorizeRestore()
+      return currentClient
+    },
+    authorizeUpload: authorizeRestore,
+    fetch, signal: new AbortController().signal, progress: vi.fn(), operationId: randomUUID(),
+  })
+  if (completes) {
+    await work
+    expect(d.fetcher.mock.calls.length).toBeGreaterThan(2)
+    expect(graphClients[0]).toBe(clientId)
+    expect(graphClients.at(-1)).toBe(nextClient)
+  } else {
+    await expect(work).rejects.toThrow("sign-in method changed")
+    expect(d.fetcher).toHaveBeenCalledTimes(1)
+    expect(graphClients.every(client => client === clientId)).toBe(true)
+  }
+})
+
 describe("app restore snapshots", () => {
   it("retains full scripts encrypted, survives key rotation and rejects cross-tenant reads and tampering", async () => {
     const f = await fixture(), retained = new AppSourceStore(f.root, () => [randomBytes(32), f.master])

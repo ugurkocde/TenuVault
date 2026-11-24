@@ -4,7 +4,7 @@ import { admittedDirectoryPermissions } from "../../shared/intune/restore-matrix
 import { tenantWriteTargets } from "../../shared/tenant-writes"
 import { accessTokenDigest, sharedTokenScopes, tokenIdentity } from "./token-identity"
 import { isPackWriteScope, missingPackScopes, type PermissionPack } from "../../shared/services/permission-packs"
-import { GRAPH_CLI_CLIENT_ID, TENUVAULT_CLIENT_ID } from "../../shared/tenant-connection"
+import { GRAPH_CLI_CLIENT_ID, sharedSignInMethod as sharedMethod } from "../../shared/tenant-connection"
 import type { TenantConnection } from "../../shared/tenant-connection"
 import { executionMetadata } from "../api/execution-metadata"
 
@@ -12,12 +12,8 @@ export const READ_ONLY = "Start now is read-only. Change sign-in method to resto
 const PACK_REQUIRED = "Approve the restore permission pack for this service in Sign-in and access."
 const CONNECTION_CHANGED = "This tenant's sign-in method changed. Reload the tenant and try again."
 const TOKEN_UNVERIFIED = "TenuVault could not verify the tenant and app in this access token. Sign in again."
-type SharedMethod = "graphCli" | "tenuvaultApp"
+type SharedMethod = NonNullable<ReturnType<typeof sharedMethod>>
 type IssuedToken = { tenantId: string; clientId: string; scope: string; expiresAt: number; scopes?: string[]; reader?: true }
-const sharedMethod = (clientId: string | null): SharedMethod | undefined =>
-  clientId && normalizeGuid(clientId) === TENUVAULT_CLIENT_ID ? "tenuvaultApp"
-    : clientId && normalizeGuid(clientId) === GRAPH_CLI_CLIENT_ID ? "graphCli" : undefined
-
 const GRAPH_ONLY = "Start now only connects to Microsoft Graph. Change sign-in method to access other Microsoft services."
 
 export class ConnectionCapabilities {
@@ -90,9 +86,14 @@ export class ConnectionCapabilities {
     this.issued.set(accessTokenDigest(token), binding)
   }
 
-  async requireAppRestoreWrite(tenantId: string, clientId: string): Promise<void> {
+  async requireAppRestoreWrite(tenantId: string, admittedClientId: string | null): Promise<void> {
     this.requireWrite([tenantId])
-    await this.requireConnectionEnabled(tenantId, clientId)
+    const currentClientId = this.record(tenantId)?.clientId ?? null
+    if (!sharedMethod(admittedClientId) && !sharedMethod(currentClientId)) return
+    if (!admittedClientId || !currentClientId || normalizeGuid(admittedClientId) !== normalizeGuid(currentClientId)) {
+      throw new Error(CONNECTION_CHANGED)
+    }
+    await this.requireConnectionEnabled(tenantId, admittedClientId)
     this.requireWrite([tenantId])
   }
 

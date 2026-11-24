@@ -1941,10 +1941,15 @@ async function bootstrap(): Promise<void> {
     loadRestoreSettings: async (tenant, appId) => readRestoreSnapshot(tenant, appId, (await auth.getAccessToken(tenant, signedInClient(tenant), RESOURCE_SCOPES.graph)).accessToken, bridgedFetch, "current-settings"),
     restore: (store, source, snapshot, target, name, signal, progress, operationId) => {
       capabilities.requireWrite([target])
-      const client = signedInClient(target)
+      const admittedClient = connections.get(target)?.clientId ?? null
+      const authorizeRestore = () => capabilities.requireAppRestoreWrite(target, admittedClient)
       return disclaimer.run([target], () => restoreAppWithAudit(store, source, snapshot, target, name, {
-        getGraphToken: async () => (await auth.getAccessToken(target, client, RESOURCE_SCOPES.graph)).accessToken,
-        authorizeUpload: () => capabilities.requireAppRestoreWrite(target, client),
+        getGraphToken: async () => {
+          const client = signedInClient(target)
+          await authorizeRestore()
+          return (await auth.getAccessToken(target, client, RESOURCE_SCOPES.graph)).accessToken
+        },
+        authorizeUpload: authorizeRestore,
         fetch: bridgedFetch, signal, progress, operationId,
       }))
     },

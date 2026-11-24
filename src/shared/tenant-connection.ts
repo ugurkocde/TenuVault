@@ -11,6 +11,12 @@ export const SIGN_IN_METHODS = {
 
 export type SignInMethod = keyof typeof SIGN_IN_METHODS
 
+export function sharedSignInMethod(clientId: string | null): "graphCli" | "tenuvaultApp" | undefined {
+  const id = clientId?.toLowerCase()
+  if (id === GRAPH_CLI_CLIENT_ID) return "graphCli"
+  if (id === TENUVAULT_CLIENT_ID) return "tenuvaultApp"
+}
+
 export interface TenantConnection {
   version: 1
   method: SignInMethod
