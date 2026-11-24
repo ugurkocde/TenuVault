@@ -71,7 +71,7 @@ import { createBridgedFetch } from "./api/fetch-bridge"
 import { rejectProxyAuthResponses, withNetworkErrors } from "./api/network-error"
 import { ApiHost } from "./api/host"
 import { routes } from "./api/routes"
-import { AuthManager, SignInRequiredError } from "./auth/msal"
+import { AuthManager, isResourceScope, requireOwnReauthenticationClient, SignInRequiredError } from "./auth/msal"
 import { TenantConnections } from "./auth/tenant-connections"
 import { ConnectionCapabilities } from "./auth/connection-capabilities"
 import { graphCliCoverage } from "../shared/services/graph-cli-coverage"
@@ -1580,7 +1580,9 @@ async function bootstrap(): Promise<void> {
     return account
   }))
   // Signing in again also renews the ID token an organization license is checked with.
-  handleTrusted("auth:reauthenticate", async (_event, tenantId: string, clientId: string, scope?: unknown) => {
+  handleTrusted("auth:reauthenticate", async (_event, tenantId: unknown, clientId: unknown, scope?: unknown) => {
+    if (!isGuid(tenantId) || !isGuid(clientId)) throw new Error("Choose a tenant and a valid application ID.")
+    if (scope !== undefined && !isResourceScope(scope)) throw new Error("Unknown sign-in scope.")
     const account = await reauthenticate(tenantId, clientId, scope)
     void health.check(tenantId, "signIn").catch(() => undefined)
     try {
@@ -1590,10 +1592,10 @@ async function bootstrap(): Promise<void> {
     }
     return account
   })
-  const reauthenticate = async (tenantId: string, clientId: string, scope?: unknown) => {
+  const reauthenticate = async (tenantId: string, clientId: string, scope: string = RESOURCE_SCOPES.graph) => {
     if (capabilities.isGraphOnly(tenantId)) {
-      capabilities.requireResource(tenantId, scope === undefined ? RESOURCE_SCOPES.graph : String(scope))
-      if (clientId?.toLowerCase() !== GRAPH_CLI_CLIENT_ID) throw new Error("Reload the tenant and try again.")
+      capabilities.requireResource(tenantId, scope)
+      if (clientId.toLowerCase() !== GRAPH_CLI_CLIENT_ID) throw new Error("Reload the tenant and try again.")
       if (!await license.connectMethodEnabled("graphCli", true)) throw new Error(`${GRAPH_CLI_DISABLED} ${GRAPH_CLI_NEXT_STEP}`)
       const response = await dialog.showMessageBox(mainWindow!, {
         title: "Sign in with Start now", message: GRAPH_CLI_CONSENT_WARNING,
@@ -1606,7 +1608,8 @@ async function bootstrap(): Promise<void> {
       notifyAccountChange(outcome.result.account.tenantId)
       return outcome.result.account
     }
-    return auth.reauthenticate(tenantId, clientId, scope === undefined ? undefined : String(scope)).finally(returnToApp)
+    requireOwnReauthenticationClient(clientId)
+    return auth.reauthenticate(tenantId, clientId, scope).finally(returnToApp)
   }
   handleTrusted("auth:signOut", async (_event, tenantId: string) => {
     await auth.signOut(tenantId)

@@ -2209,6 +2209,22 @@ if (licenseKey) {
 }
 
 await checkSignInRequired({ check, evaluate, waitForCondition, assert, desktopDir, inspectorPort: packagedApp ? undefined : inspectorPort })
+
+await check("generic reauthentication IPC refuses shared clients and invalid input", async () => {
+  const tenantId = "11111111-1111-1111-1111-111111111111"
+  const ownClient = "22222222-2222-2222-2222-222222222222"
+  const cases = [
+    [[tenantId, "14D82EEC-204B-4C2F-B7E8-296A70DAB67E"], "Choose Start now in the sign-in method settings."],
+    [[tenantId, "61EFF188-672B-4BE4-ACAC-2D254A6F9E05"], "Choose TenuVault app in the sign-in method settings."],
+    [[tenantId, null], "Choose a tenant and a valid application ID."],
+    [[null, ownClient], "Choose a tenant and a valid application ID."],
+    [[tenantId, ownClient, ["https://graph.microsoft.com/.default"]], "Unknown sign-in scope."],
+  ]
+  for (const [args, expected] of cases) {
+    const error = await evaluate(`window.tenuvault.auth.reauthenticate(...${JSON.stringify(args)}).then(() => "", error => error.message)`)
+    assert(error.includes(expected), `reauthentication IPC did not return "${expected}"`)
+  }
+})
 await finish()
 
 async function finish() {

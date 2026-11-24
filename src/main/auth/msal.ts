@@ -113,6 +113,11 @@ export function isResourceScope(scope: unknown): scope is string {
   return typeof scope === "string" && Object.hasOwn(RESOURCE_NAMES, scope)
 }
 
+export function requireOwnReauthenticationClient(clientId: string): void {
+  if (normalizeGuid(clientId) === GRAPH_CLI_CLIENT_ID) throw new Error("Choose Start now in the sign-in method settings.")
+  if (normalizeGuid(clientId) === TENUVAULT_CLIENT_ID) throw new Error("Choose TenuVault app in the sign-in method settings.")
+}
+
 function resourceName(scope: string): string {
   return isResourceScope(scope) ? RESOURCE_NAMES[scope]! : "Microsoft"
 }
@@ -542,13 +547,12 @@ export class AuthManager {
    * Conditional Access step that resource requires instead of succeeding for Graph alone.
    */
   async reauthenticate(tenantId: string, clientId: string, scope: string = RESOURCE_SCOPES.graph): Promise<SignedInAccount> {
+    requireOwnReauthenticationClient(clientId)
     this.host.authorizeInteractive?.(tenantId)
     if (!isResourceScope(scope)) throw new Error("Unknown sign-in scope.")
     this.host.authorizeConnection?.(tenantId, clientId, scope)
     const stored = this.host.accountStore.get(normalizeGuid(tenantId))
-    const scopes = normalizeGuid(clientId) === TENUVAULT_CLIENT_ID ? await this.connectionScopes(tenantId, clientId, scope, true) : [scope]
-    const result = await this.acquireInteractive(clientId, tenantId, scopes, undefined, stored?.username).catch((error: unknown) => {
-      if (normalizeGuid(clientId) === TENUVAULT_CLIENT_ID) throw sharedSignInFailure(error, false)
+    const result = await this.acquireInteractive(clientId, tenantId, scope, undefined, stored?.username).catch((error: unknown) => {
       throw missingPermissionError(scope, error) ?? error
     })
     const account = result.account

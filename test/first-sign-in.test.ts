@@ -92,6 +92,19 @@ describe("firstSignInError", () => {
 
 describe("AuthManager sign-in", () => {
   it.each([
+    [GRAPH_CLI_CLIENT_ID, "Start now"],
+    [TENUVAULT_CLIENT_ID, "TenuVault app"],
+  ])("refuses generic reauthentication with the %s shared client", async (clientId, method) => {
+    const enabled = vi.fn(async () => false)
+    const auth = manager(undefined, enabled)
+    const attempts = msal.interactive.mock.calls.length
+    await expect(auth.reauthenticate(TENANT, clientId.toUpperCase())).rejects.toThrow(`Choose ${method} in the sign-in method settings.`)
+    expect(msal.interactive).toHaveBeenCalledTimes(attempts)
+    expect(enabled).not.toHaveBeenCalled()
+    expect(auth.accounts()).toEqual([])
+  })
+
+  it.each([
     ["AADSTS999999: User private.admin@example.test could not sign in", "The app registration could not be changed."],
     ["AADSTS53003: User private.admin@example.test was blocked", "Conditional Access blocked this sign-in"],
   ])("sanitizes a staged registration sign-in failure", async (description, message) => {
