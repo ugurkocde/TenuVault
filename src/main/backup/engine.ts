@@ -23,7 +23,7 @@ import { RetryDelayError } from "../graph-retry"
 import { isLocalAccount } from "../storage/blob-emulator"
 import { FetchApplicationError } from "../api/network-error"
 import { INTUNE_TYPES, itemName, typeForFolder, type GraphVersion, type IntuneType, type Item } from "../../shared/intune/registry"
-import { readEntries, ExpansionRecoveryError, ScopeDiscoveryError, OrganizationResolutionError, organizationReader, graphVersion, detailPath, listPath, listSnapshot, readObject, withMaskedSecrets, type GraphReader } from "../../shared/intune/read"
+import { readEntries, ExpansionRecoveryError, PolicyDetailValidationError, ScopeDiscoveryError, OrganizationResolutionError, organizationReader, graphVersion, detailPath, listPath, listSnapshot, readObject, withMaskedSecrets, type GraphReader } from "../../shared/intune/read"
 import { comparableSnapshot } from "../../shared/intune/compare"
 import type { BackupItems } from "../../shared/intune/backup-changes"
 import { EVERYTHING, includedTypes, normalizeScope, restorableFolders, type BackupScope } from "../../shared/intune/scope"
@@ -1049,9 +1049,10 @@ export class BackupEngine {
         // An expired sign-in fails every remaining item the same way, so it stops the backup once.
         if (signInEnded(error) || (!service.isolated && error instanceof GraphError && error.status === 401)) throw error
         failures++
-        const logName = recoveryFailed ? type.label : maskBackupAccountIdentifiers(displayName)
+        const useTypeLabel = recoveryFailed || error instanceof PolicyDetailValidationError
+        const logName = useTypeLabel ? type.label : maskBackupAccountIdentifiers(displayName)
         const reason = error instanceof Error ? error.message : String(error)
-        const warning = `Could not back up ${recoveryFailed ? logName : `"${logName}"`}: ${reason}`
+        const warning = `Could not back up ${useTypeLabel ? logName : `"${logName}"`}: ${reason}`
         if (error instanceof RequestTimeoutError) itemTimeoutWarnings.push(warning)
         const entry = result(type.folder)
         entry.failed++

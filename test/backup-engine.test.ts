@@ -209,6 +209,22 @@ describe("BackupEngine", () => {
     expect(JSON.stringify({ log: job.log, errors, reason, outcomes: metadata.Outcomes })).not.toContain(name)
   })
 
+  it("keeps a personal policy name out of invalid detail diagnostics", async () => {
+    const name = "Ada Lovelace"
+    const { engine, store, account } = setup(fakeGraph({
+      "/beta/deviceManagement/deviceConfigurations": Response.json({ value: [{ id: "dc1", displayName: name }] }),
+      "/beta/deviceManagement/deviceConfigurations/dc1?$expand=assignments": Response.json({ id: "wrong-id", displayName: name, assignments: [] }),
+    }))
+    const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)
+    const metadata = JSON.parse((await store.get(account, "intune-backups", `${job.backupFolder}/metadata.json`)).data.toString())
+    const errors = job.results?.types.find(type => type.folder === "DeviceConfigurations")?.errors
+    const reason = "device configuration profiles: Microsoft Graph returned a policy without the requested id"
+    expect.soft(job.log.join("\n")).toContain(`Could not back up ${reason}`)
+    expect.soft(errors).toEqual([reason])
+    expect.soft(manifestCoverage(metadata).notReadReasons?.DeviceConfigurations).toContain(reason)
+    expect(JSON.stringify({ log: job.log, errors, metadata })).not.toContain(name)
+  })
+
   it("keeps encoded account identifiers from rejected detail continuations out of backup diagnostics", async () => {
     const accountPath = encodeURIComponent("private-admin+backup@example.test")
     const graph = fakeGraph({

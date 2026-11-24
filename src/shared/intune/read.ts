@@ -91,12 +91,14 @@ export function detailPath(type: IntuneType, id: string): string {
   return `${type.path}/${encodeURIComponent(id)}${query ? `?${query}` : ""}`
 }
 
+export class PolicyDetailValidationError extends Error {}
+
 function validateDetail(read: Item, expected?: { key: string; id: string }): Item {
   if (!read || typeof read !== "object" || Array.isArray(read) || Array.isArray(read.value) || Object.hasOwn(read, "@odata.nextLink")) {
-    throw new Error("Microsoft Graph did not return a single policy object")
+    throw new PolicyDetailValidationError("Microsoft Graph did not return a single policy object")
   }
   if (expected && (!Object.hasOwn(read, expected.key) || read[expected.key] !== expected.id)) {
-    throw new Error(`Microsoft Graph returned a policy without the requested ${expected.key}`)
+    throw new PolicyDetailValidationError(`Microsoft Graph returned a policy without the requested ${expected.key}`)
   }
   return read
 }
@@ -110,7 +112,7 @@ function policyDetail(type: IntuneType, id: string, path: string, read: Item): I
     if (detail.id === id) return detail
     const context = detail["@odata.context"]
     if (typeof detail.id !== "string" || !detail.id.trim() || typeof context !== "string" || !context.endsWith(`$metadata#${path}/$entity`)) {
-      throw new Error("Microsoft Graph returned a policy without the requested template identity")
+      throw new PolicyDetailValidationError("Microsoft Graph returned a policy without the requested template identity")
     }
     return detail
   }
@@ -381,11 +383,11 @@ export function withMaskedSecrets(type: IntuneType, snapshot: Item): Item | null
 function singletonObject(singleton: NonNullable<IntuneType["singleton"]>, read: Item): Item {
   if (!singleton.collection) return read
   // A list that goes on may hold a second object, or a page that cannot be read: its first entry is not the tenant's setting.
-  if (read && typeof read === "object" && Object.hasOwn(read, "@odata.nextLink")) throw new Error("Microsoft Graph returned a list that continues on another page where one tenant-wide object was expected")
+  if (read && typeof read === "object" && Object.hasOwn(read, "@odata.nextLink")) throw new PolicyDetailValidationError("Microsoft Graph returned a list that continues on another page where one tenant-wide object was expected")
   const entries = read?.value
   // Storing one of several, or nothing, would pass for the tenant's setting.
   if (!Array.isArray(entries) || entries.length !== 1 || !entries[0] || typeof entries[0] !== "object" || Array.isArray(entries[0])) {
-    throw new Error(`Microsoft Graph returned ${Array.isArray(entries) ? entries.length : "no"} objects where one tenant-wide object was expected`)
+    throw new PolicyDetailValidationError(`Microsoft Graph returned ${Array.isArray(entries) ? entries.length : "no"} objects where one tenant-wide object was expected`)
   }
   return entries[0] as Item
 }
