@@ -28,7 +28,7 @@ const PRIVILEGED_WRITES = [
   "AdministrativeUnit.ReadWrite.All",
 ]
 const EXCLUDED = new Set(["Organization.ReadWrite.All", "Directory.ReadWrite.All", ...PRIVILEGED_WRITES])
-export const isPackWriteScope = (scope: string) => /ReadWrite|\.Create\b|\.ReadUpdate\b/.test(scope)
+export const isPackWriteScope = (scope: string) => /ReadWrite|\.Create\b|\.ReadUpdate\b|\.DeleteRestore\b/.test(scope)
 const unique = (scopes: string[]) => [...new Set(scopes)]
 
 /** Every group requires one of its alternatives. Select the fewest additional scopes. */

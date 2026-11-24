@@ -5,12 +5,14 @@ import { restoreMatrixRow } from "../src/shared/intune/restore-matrix"
 import { typeForFolder, restoreCapability } from "../src/shared/intune/registry"
 import type { GuardedStep } from "../src/main/restore/guarded-run"
 it("requests only admitted directory operation scopes above each area's unchanged backup requirements", () => {
-  const operations = { groups: ["Group.ReadWrite.All", "GroupMember.ReadWrite.All", "User.Read.All", "Application.Read.All", "Policy.Read.All", "RoleManagement.Read.Directory"], usersAndDevices: ["User.Create", "User.ReadUpdate.All", "User.ReadWrite.All", "Application.Read.All"] }
+  const operations = { groups: ["Group.ReadWrite.All", "GroupMember.ReadWrite.All", "User.Read.All", "Application.Read.All", "Policy.Read.All", "RoleManagement.Read.Directory"], usersAndDevices: ["User.Create", "User.ReadUpdate.All", "User.ReadWrite.All", "User.DeleteRestore.All", "Application.Read.All"] }
   for (const [area, permissions] of Object.entries(operations)) {
     const backup = graphPermissions({ entra: { access: "backup", areas: [area] } }, "delegated")
     const restore = graphPermissions({ entra: { access: "restore", areas: [area] } }, "delegated")
     for (const permission of permissions) expect(restore).toContain(permission)
-    for (const forbidden of ["Organization.ReadWrite.All", "Directory.ReadWrite.All", "User.DeleteRestore.All", "User.EnableDisableAccount.All", "User.Invite.All", "LicenseAssignment.ReadWrite.All", "RoleManagement.ReadWrite.Directory"]) expect(restore).not.toContain(forbidden)
+    for (const forbidden of ["Organization.ReadWrite.All", "Directory.ReadWrite.All", "User.EnableDisableAccount.All", "User.Invite.All", "LicenseAssignment.ReadWrite.All", "RoleManagement.ReadWrite.Directory"]) expect(restore).not.toContain(forbidden)
+    expect(backup).not.toContain("User.DeleteRestore.All")
+    if (area === "groups") expect(restore).not.toContain("User.DeleteRestore.All")
     expect(restore.includes("Directory.Read.All")).toBe(backup.includes("Directory.Read.All"))
     expect(graphPermissions({ entra: { access: "restore", areas: [area] } }, "application")).toEqual(graphPermissions({ entra: { access: "backup", areas: [area] } }, "application"))
   }

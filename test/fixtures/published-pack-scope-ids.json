@@ -69,6 +69,7 @@
     "User.Create": "d8ce6a2a-46ff-438e-96bc-020f23870a55",
     "User.Read": "e1fe6dd8-ba31-4d61-89e7-88639da4683d",
     "User.Read.All": "a154be20-db9c-4678-8ab7-66f6cc099a59",
+    "User.DeleteRestore.All": "4bb440cd-2cf2-4f90-8004-aa2acd2537c5",
     "User.ReadUpdate.All": "f8b099f1-a6ce-4e00-8fff-5f783ff4faeb",
     "User.ReadWrite.All": "204e0828-b5ca-4ad8-b9f3-f32a958e7cc4",
     "Workbooks.Read.All": "e37141d2-4e2c-459d-8e5b-5214ae4af482",

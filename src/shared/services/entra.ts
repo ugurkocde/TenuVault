@@ -100,7 +100,7 @@ export const ENTRA_AREAS: readonly PermissionArea[] = [
     part(["OwnerlessGroupPolicy"], [["Group.Read.All", "Group.ReadWrite.All"]], "unsupported", "unsupported"),
   ]),
   area({ id: "usersAndDevices", label: "Users and devices", optIn: true, personalData: true }, [
-    part(["Users"], [["User.Read.All", "User.ReadWrite.All", "Directory.Read.All", "Directory.ReadWrite.All"]], [["User.Read.All"]], [["User.Create"], ["User.ReadUpdate.All"], ["User.ReadWrite.All"], ["Application.Read.All"]]),
+    part(["Users"], [["User.Read.All", "User.ReadWrite.All", "Directory.Read.All", "Directory.ReadWrite.All"]], [["User.Read.All"]], [["User.Create"], ["User.ReadUpdate.All"], ["User.ReadWrite.All"], ["User.DeleteRestore.All"], ["Application.Read.All"]]),
     // Never restored: a device object is created by registration.
     part(["EntraDevices"], [["Device.Read.All", "Directory.Read.All", "Directory.ReadWrite.All"]], [["Device.Read.All"]], "unsupported"),
     // Never restored: contacts are managed through Exchange.
