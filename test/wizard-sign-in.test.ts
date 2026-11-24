@@ -134,6 +134,7 @@ describe("staged wizard sign-in", () => {
     const staged = await wizard.stage("", "tenuvaultApp", CHOICE)
     expect(staged).toMatchObject({ result: { missing: ["DeviceManagementApps.Read.All"] } })
     expect(host.startTrial).not.toHaveBeenCalled()
+    expect(wizard.trialContactProof(TENANT)).toBeUndefined()
     const id = "result" in staged ? staged.result.id : ""
     expect(await wizard.finish(id, "profile", CHOICE)).toMatchObject({ error: { code: "AADSTS65001" } })
     expect(host.enroll).not.toHaveBeenCalled()
@@ -155,11 +156,27 @@ describe("staged wizard sign-in", () => {
       expect.objectContaining({ service: "defender", readable: [] }),
       expect.objectContaining({ service: "intune", readable: expect.arrayContaining(["DeviceConfigurations"]) }),
     ]) } })
+    expect(host.startTrial).toHaveBeenCalledOnce()
+    expect(wizard.trialContactProof(TENANT)).toBe("id-proof")
     const id = "result" in staged ? staged.result.id : ""
     expect(await wizard.finish(id, "profile", { intune: { access: "backup" } })).toEqual({ result: true })
     expect(host.enroll).toHaveBeenCalledWith(expect.objectContaining({
       staged: expect.objectContaining({ graphScopes: [held, "offline_access"] }),
     }), "profile", choice)
+  })
+
+  it("rejects Start now at finish when none of the final choices can be read", async () => {
+    const { host, wizard } = fixture()
+    host.stage.mockResolvedValueOnce({
+      ...(await host.stage(TENANT, "graphCli")),
+      graphScopes: ["DeviceManagementConfiguration.Read.All"],
+    })
+    const staged = await wizard.stage(TENANT, "graphCli", undefined)
+    expect(staged).toHaveProperty("result.id")
+    const id = "result" in staged ? staged.result.id : ""
+    await expect(wizard.finish(id, "profile", { defender: { access: "backup" } })).resolves.toMatchObject({ error: { code: "AADSTS65001" } })
+    expect(host.checkLicense).not.toHaveBeenCalled()
+    expect(host.enroll).not.toHaveBeenCalled()
   })
 
   it("rechecks the flag at storage and expires staged sign-ins", async () => {
