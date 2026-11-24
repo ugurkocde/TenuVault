@@ -87,7 +87,9 @@ export class ConnectionCapabilities {
     const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase()
     let writes = graph && method !== "GET" && method !== "HEAD" ? [url.pathname] : []
     if (graph && method === "POST" && /^\/(?:beta|v1\.0)\/\$batch$/i.test(url.pathname)) {
-      const batch = await new Request(input, init).clone().json().catch(() => null) as { requests?: Array<{ method?: unknown; url?: unknown }> } | null
+      // Inspect a copy so the real request keeps its body. Treat an uncopyable body as a write.
+      const batch = init?.body instanceof ReadableStream ? null
+        : await new Request(input instanceof Request ? input.clone() : input, init).json().catch(() => null) as { requests?: Array<{ method?: unknown; url?: unknown }> } | null
       writes = Array.isArray(batch?.requests) && batch.requests.length
         ? batch.requests.filter(step => step?.method !== "GET" && step?.method !== "HEAD").map(step =>
           typeof step?.url === "string" && step.url.startsWith("/") && !step.url.startsWith("//") ? step.url : "")

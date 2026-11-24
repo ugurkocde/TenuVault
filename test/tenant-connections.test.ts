@@ -443,6 +443,22 @@ describe("TenuVault app capabilities", () => {
     expect(network).toHaveBeenCalledTimes(paths.length)
   })
 
+  it("keeps a read-only batch Request body available for dispatch", async () => {
+    const caps = new ConnectionCapabilities(() => ({
+      version: 1, method: "tenuvaultApp", origin: "wizard", clientId: TENUVAULT_CLIENT_ID, createdAt: NOW, updatedAt: NOW,
+    }), undefined, async () => true)
+    const network = vi.fn<typeof fetch>(async input => new Response(await (input as Request).text()))
+    const fetch = createBridgedFetch({
+      dispatch: vi.fn(), getDelegatedToken: vi.fn(), fetch: network,
+      authorizeRequest: (url, input, init, tenant) => caps.authorizeRequest(url, input, init, tenant),
+    })
+    const body = JSON.stringify({ requests: [{ method: "GET", url: "/organization" }] })
+    const request = new Request("https://graph.microsoft.com/beta/$batch", {
+      method: "POST", body, headers: { authorization: `Bearer ${jwt({ tid: TENANT, azp: TENUVAULT_CLIENT_ID })}` },
+    })
+    expect(await (await fetch(request)).text()).toBe(body)
+  })
+
   it("refuses opaque and mismatched bearer tokens within a bound tenant operation", async () => {
     const record = { version: 1 as const, clientId: OWN, method: "ownApp" as const, origin: "wizard" as const, createdAt: NOW, updatedAt: NOW }
     const cap = new ConnectionCapabilities(id => id === TENANT ? record : null)
