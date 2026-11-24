@@ -1091,6 +1091,7 @@ export class BackupEngine {
             try { await largeStorage.put(`${largeFolder}/${path}`, body, undefined, false, undefined, typeSignal) }
             catch (error) {
               typeSignal.throwIfAborted()
+              if (error instanceof TokenError && causedBy(error, "SignInRequiredError")) throw error
               throw error instanceof LargeStorageError ? error : new LargeStorageError(undefined, { cause: error })
             }
             largeSizes[type.folder] = (largeSizes[type.folder] ?? 0) + Buffer.byteLength(body)
@@ -1140,7 +1141,8 @@ export class BackupEngine {
         // Any other failure, such as a server error or an unanswered commit, leaves snapshots whose
         // inventory may not exist. That is a failure of each type that was read, so the run and its
         // audit report warnings, never success.
-        const reason = "The directory inventory could not be saved to large backup storage."
+        const signInRequired = error instanceof TokenError && causedBy(error, "SignInRequiredError")
+        const reason = signInRequired ? error.message : "The directory inventory could not be saved to large backup storage."
         for (const type of largeTypes) {
           if (endedTypes.has(type.folder) || settled.get(type.folder)?.outcome === "failed") continue
           endedTypes.add(type.folder)
@@ -1149,8 +1151,9 @@ export class BackupEngine {
           failedTypes.push(type.folder)
           Object.assign(result(type.folder), { state: "unreadable", reason, errors: [reason] })
           settle(type.folder, { outcome: "failed", error: reason })
-          this.write(job, `Could not save ${type.label}: ${reason}`, "warning")
+          if (!signInRequired) this.write(job, `Could not save ${type.label}: ${reason}`, "warning")
         }
+        if (signInRequired) throw error
         // A large-only run has no other record: without its manifest there is no backup, so the run fails.
         // Only a 403 or 404 carries the provisioning guidance; another failure is reported as what it was.
         // An ended sign-in keeps its own handling; anything else, including a commit that got no answer,

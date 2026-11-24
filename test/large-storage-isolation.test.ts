@@ -6,6 +6,7 @@ import { Readable } from "node:stream"
 import { runObservation } from "../src/shared/connection-health/observe"
 import { SignInRequiredError } from "../src/main/auth/msal"
 import { BackupEngine } from "../src/main/backup/engine"
+import { FailedAttemptLog } from "../src/main/backup/failed-attempts"
 import { LocalBlobStore } from "../src/main/storage/local-blob-store"
 import { handleLocalBlobRequest } from "../src/main/storage/blob-emulator"
 import { NextRequest } from "../src/main/api/next-server-shim"
@@ -20,6 +21,7 @@ import { POST as contents } from "../src/portal/app/api/list-backup-contents/rou
 import { POST as validate } from "../src/portal/app/api/restore-validate/route"
 import { exportLargeArchive, importLargeArchive, reviewLargeArchive, saveLargeDownload } from "../src/main/backup/large-archive"
 import { CLIENT, jwt, registerTestTypes, TENANT, testType } from "./helpers/backup-fixture"
+import { memoryStore } from "./helpers"
 
 const roots: string[] = []
 let undo: (() => void) | undefined
@@ -98,6 +100,43 @@ for (const azure of [false, true]) describe(azure ? "Azure emulator isolation" :
     expect(job.status).toBe("Failed")
     expect(job.log.join("\n")).toContain(`Backup failed: ${resource} (AADSTS50076). Sign in again to this tenant.`)
     expect(job.log.join("\n")).not.toContain("private-admin@example.test")
+  })
+
+  if (azure) it.each(["directory payload upload", "large manifest commit"])("keeps sign-in guidance when delegated sign-in ends before %s", async phase => {
+    undo = registerTestTypes([largeType])
+    const f = await setup()
+    const original = f.fetcher.getMockImplementation()!
+    let expire = false
+    f.fetcher.mockImplementation(async (input, init) => {
+      const response = await original(input, init)
+      const path = new URL(String(input)).pathname
+      if (phase === "directory payload upload" ? path === "/v1.0/synthetic" : path.includes("/_index/AuthorizationPolicy/")) expire = true
+      return response
+    })
+    const history = new FailedAttemptLog(memoryStore())
+    const engine = new BackupEngine({
+      fetch: f.fetcher,
+      getToken: async (tenantId, clientId, scope) => {
+        if (expire && scope === RESOURCE_SCOPES.storage) {
+          expire = false
+          throw new SignInRequiredError(tenantId, clientId, "Sign in again as private-admin@example.test.", scope, { errorNo: "50076" })
+        }
+        return jwt({ scp: "Policy.Read.All" })
+      },
+      services: () => ({ services: ["intune", "entra"] }),
+      onFinished: (job, request) => history.finished(job, request),
+    })
+    const job = await engine.waitForJob(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: f.account, scope: { excluded: INTUNE_TYPES.filter(type => !["DeviceCategories", "AuthorizationPolicy"].includes(type.folder)).map(type => type.folder) } }))
+    const guidance = "Azure Storage (AADSTS50076). Sign in again to this tenant."
+    const attempts = history.list(TENANT)
+    expect(job.log.join("\n")).toContain(`Backup failed: ${guidance}`)
+    expect(job.status).toBe("Failed")
+    expect(attempts).toMatchObject([{ runId: job.id, message: guidance }])
+    expect(JSON.stringify({ job, attempts })).not.toContain("private-admin@example.test")
+    expect(job.outcomes?.types).toEqual(expect.arrayContaining([
+      expect.objectContaining({ folder: "DeviceCategories", outcome: "saved", saved: 2 }),
+      expect.objectContaining({ folder: "AuthorizationPolicy", outcome: "failed", saved: 0 }),
+    ]))
   })
   for (const status of [403, 404]) for (const at of ["all", "payload/", "metadata.json"]) it(`saves all ordinary snapshots in a scheduled app-only run with large storage ${status} at ${at}`, async () => {
     undo = registerTestTypes([largeType])
