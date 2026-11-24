@@ -291,11 +291,11 @@ export class NetworkCircuit {
   }
 }
 
-async function tokenOrStop<T>(get: () => Promise<T>, outcome: RunOutcome): Promise<T> {
+async function tokenOrStop<T>(get: () => Promise<T>, outcome?: RunOutcome): Promise<T> {
   try {
     return await get()
   } catch (error) {
-    recordFailure(outcome, error)
+    if (outcome) recordFailure(outcome, error)
     // Token acquisition errors can reach the job, manifest and history through several paths.
     // Keep the original cause for classification and use only fixed text for a raw silent refusal.
     const message = error instanceof Error ? error.message : String(error)
@@ -1309,7 +1309,7 @@ export class BackupEngine {
     timer.unref?.()
     const deadline = Date.now() + FAILED_MANIFEST_GRACE_MS
     const network = new NetworkCircuit(3, controller.signal, deadline)
-    const token = isLocalAccount(request.storageAccountName) ? async () => "" : tokens.storage
+    const token = isLocalAccount(request.storageAccountName) ? async () => "" : () => tokenOrStop(tokens.storage)
     const storage = new BlobWriter(this.deps.fetch, request.storageAccountName, token, network)
     const recorded = metadata.Status === "Cancelled" ? "cancelled" : "failed"
     try {

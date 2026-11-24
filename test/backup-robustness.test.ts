@@ -82,6 +82,33 @@ describe("bounded backup jobs", () => {
     expect(next.status).toBe("Completed")
   })
 
+  it("keeps storage account identifiers out of failed-manifest recovery logs", async () => {
+    vi.useFakeTimers()
+    const username = "admin@contoso.test"
+    let storageTokens = 0
+    const { engine, calls } = setup({
+      getToken: async (_tenant, _client, scope) => {
+        if (!scope.includes("storage.azure.com")) return "token"
+        if (++storageTokens === 3) return new Promise(() => {})
+        if (storageTokens === 4) {
+          throw Object.assign(new Error(`AADSTS50058: No session for ${username}.`), { errorCode: "interaction_required" })
+        }
+        return "token"
+      },
+    })
+    const job = engine.start(request)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(storageTokens).toBe(3)
+    engine.cancel(job.id)
+    await engine.waitForJob(job)
+    expect(storageTokens).toBe(4)
+    expect(job.status).toBe("Cancelled")
+    expect(calls.some(({ url }) => url.pathname.endsWith("/metadata.json"))).toBe(false)
+    const log = job.log.join("\n")
+    expect(log).not.toContain(username)
+    expect(log).toContain("Could not record this backup as cancelled: Microsoft sign-in (AADSTS50058). Sign in again to this tenant.")
+  })
+
   it("stops a healthy but endless listing at 30 minutes and never retries a pause past the deadline", async () => {
     vi.useFakeTimers()
     let pages = 0

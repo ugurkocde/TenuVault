@@ -139,7 +139,7 @@ If Microsoft Graph throttles requests, TenuVault pauses and retries automaticall
 
 For Azure Blob Storage failures, the log gives the HTTP status, the error code when available, and what to check. For `AuthenticationFailed`, sign in to the tenant again. For an unexpected `BlobNotFound`, check the configured container or backup location. Graph skip messages and Azure Blob Storage failures use built-in guidance to keep account details from provider messages out of the log.
 
-If Microsoft asks you to sign in again during a backup, the job log and Backup History show the sign-in error code when available and leave out the account name.
+If Microsoft asks you to sign in again during a backup, the job log and Backup History show the sign-in error code when available and leave out the account name. If Azure Storage also needs a new sign-in when TenuVault records the stopped backup, the log uses the same guidance.
 
 When a policy name appears in a backup error, **Copy log** and **Backup History** mask email addresses and user principal names in it. Downloading an older failed backup as a ZIP also masks these identifiers in the error recorded in the archive's metadata.
 
