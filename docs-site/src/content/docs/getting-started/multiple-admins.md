@@ -20,17 +20,17 @@ Several admins can use TenuVault for the same tenant, each on their own computer
 The quickest way is a setup file. An admin who already uses TenuVault for the tenant opens **Settings** > **Import and export**, selects **Export settings**, ticks the tenant and **Include connection details**, and sends the file. The file holds the tenant ID, the client ID, the storage account and settings such as the services that are on and what is backed up. It holds no secret or sign-in. See [Import and export](/settings/#import-and-export).
 
 1. Make sure the admin is in the admin group with the roles above, and, if sign-in is restricted, in the group that may sign in. See [Restrict who can sign in](/deploy/#restrict-who-can-sign-in).
-2. The admin installs TenuVault, selects **Connect your tenant**, then **Set up from a file** on the **Connect** step. See [Set up from a file](/getting-started/connect-tenant/#set-up-from-a-file).
-3. They sign in with their own account and select **Check access** on the **Storage** step.
-4. Before the first backup, they select **Review settings from the file** and choose which settings to apply, so the first backup already uses the file's services and scope. The backup schedule starts unticked, so the tenant is not backed up twice by accident.
-5. They take the first backup.
+2. The admin installs TenuVault, selects **Connect your tenant** and chooses the services. On **How do you want to connect?**, the admin selects **Another admin sent you a setup file?**. See [Set up from a file](/getting-started/connect-tenant/#set-up-from-a-file).
+3. They sign in with their own account and review **Check**. On **Storage**, TenuVault automatically checks access to the Azure account from the file.
+4. They select **Start first backup**. On **First backup**, they can select **Review settings from the file** to apply services and scope to future backups. The backup schedule starts unticked to avoid duplicate scheduled backups.
+5. When the first backup completes, they select **Go to dashboard**.
 
 To set up the second admin by hand instead:
 
 1. Make sure the admin is in the admin group with the roles above, and, if sign-in is restricted, in the group that may sign in. See [Restrict who can sign in](/deploy/#restrict-who-can-sign-in).
 2. The admin installs TenuVault and selects **Connect your tenant**. See [Start TenuVault for the first time](/getting-started/first-launch/).
-3. On the **Connect** step, they select **I already have an app registration**, because the tenant already has one. They enter the tenant ID and the client ID of the existing app registration and sign in with their own account. An admin who can grant admin consent can select **Set up with Microsoft sign-in** instead: TenuVault finds the existing app registration and uses it. See [Sign in to your tenant](/getting-started/connect-tenant/).
-4. On the **Storage** step, they select **Your Azure storage account**, choose the same storage account and select **Check access**. No recovery key is needed.
+3. They choose **Your own app registration** and open **Can’t sign in as an admin here?**. Then they select **I already have an app registration**. They enter the tenant ID and the client ID of the existing app registration and sign in with their own account. An admin who can grant admin consent can select **Set up with Microsoft sign-in** instead: TenuVault finds the existing app registration and uses it. See [Sign in to your tenant](/getting-started/connect-tenant/).
+4. On the **Storage** step, they select **Your Azure storage account**, choose the same storage account and wait for **Access confirmed**. Then they select **Start first backup**. No recovery key is needed.
 5. The existing backups appear in **Backup & Restore** right away.
 
 ## Who is trusted
