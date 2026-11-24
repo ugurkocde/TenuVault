@@ -197,8 +197,8 @@ export async function checkBackupCancel({ check, evaluate, waitForCondition, scr
           await evaluate(`${button("Sign in with Microsoft")}.click()`)
           assert(await waitForCondition(`${button("Continue to storage")}?.disabled === false`), "sign-in results did not load")
           await evaluate(`${button("Continue to storage")}.click()`)
-          assert(await waitForCondition(`${button("Continue")}?.disabled === false`), "local storage choice did not load")
-          await evaluate(`${button("Continue")}.click()`)
+          assert(await waitForCondition(`${button("Start first backup")}?.disabled === false`), "local storage choice did not load")
+          await evaluate(`${button("Start first backup")}.click()`)
           assert(await waitForCondition(`Boolean(${button("Cancel backup")})`), "first backup did not start automatically")
         } else {
           assert(await waitForCondition(`Boolean(${button("Run Backup")})`), "backup page did not load")
