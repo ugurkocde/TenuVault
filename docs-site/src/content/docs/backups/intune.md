@@ -9,7 +9,7 @@ Intune is preselected in setup. For a connected tenant, open **Settings > Servic
 
 ## Coverage
 
-TenuVault backs up [41 Intune types](/backups/coverage/#intune) across nine areas. These include device configuration, compliance, endpoint security, scripts, Windows updates, apps and app protection, enrollment and tenant administration. Supported assignment references are stored with the policies.
+TenuVault backs up [41 Intune types](/backups/coverage/#intune) across nine areas. These include device configuration, compliance, endpoint security, scripts, Windows updates, apps and app protection, enrollment and tenant administration. Supported assignment references are stored with the policies. Desktop and Azure Automation backups accept documented response wrappers for supported Intune policies and check the enclosed policy ID before saving.
 
 The default scope leaves out app details. Choose **Everything** to include them, or use **Custom** to choose types. Use [App Backup](/apps/app-backup/) to capture supported Win32 installers separately.
 

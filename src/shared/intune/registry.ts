@@ -15,6 +15,7 @@ import { AUTOPILOT_DEVICE_DELAY, AUTOPILOT_DEVICE_PROPERTIES, AUTOPILOT_DEVICE_R
 
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json }
 export type Item = { [key: string]: Json }
+export type DetailEnvelope = "valueObject" | "singleValueArray"
 
 export type Area =
   | "Device configuration"
@@ -128,6 +129,8 @@ export interface IntuneType {
   keep?: string[]
   /** The list GET returns every property `keep` names, so backups store the list entry and skip the detail GET. */
   listOnly?: true
+  /** Documented alternative to a bare entity, scoped to the version used for the detail GET. */
+  detailEnvelope?: Readonly<Partial<Record<GraphVersion, DetailEnvelope>>>
   /**
    * Property that identifies the same object after it was deleted and added again under a new ID.
    * Replacing in the same tenant looks the object up by it when the backed-up ID no longer exists.
@@ -421,6 +424,7 @@ export const INTUNE_TYPES: IntuneType[] = [
   // Device configuration
   {
     folder: "DeviceConfigurations",
+    detailEnvelope: { beta: "valueObject" },
     label: "device configuration profiles",
     area: "Device configuration",
     path: "deviceManagement/deviceConfigurations",
@@ -454,6 +458,7 @@ export const INTUNE_TYPES: IntuneType[] = [
   },
   {
     folder: "ConfigurationPolicies",
+    detailEnvelope: { beta: "valueObject" },
     label: "settings catalog and endpoint security policies",
     area: "Device configuration",
     path: "deviceManagement/configurationPolicies",
@@ -476,6 +481,7 @@ export const INTUNE_TYPES: IntuneType[] = [
   },
   {
     folder: "GroupPolicyConfigurations",
+    detailEnvelope: { beta: "valueObject" },
     label: "administrative templates",
     area: "Device configuration",
     path: "deviceManagement/groupPolicyConfigurations",
@@ -516,6 +522,7 @@ export const INTUNE_TYPES: IntuneType[] = [
   },
   {
     folder: "ReusablePolicySettings",
+    detailEnvelope: { beta: "valueObject" },
     label: "reusable settings",
     area: "Device configuration",
     path: "deviceManagement/reusablePolicySettings",
@@ -529,6 +536,7 @@ export const INTUNE_TYPES: IntuneType[] = [
   },
   {
     folder: "HardwareConfigurations",
+    detailEnvelope: { beta: "valueObject" },
     label: "BIOS configurations",
     area: "Device configuration",
     path: "deviceManagement/hardwareConfigurations",
@@ -541,6 +549,7 @@ export const INTUNE_TYPES: IntuneType[] = [
   // Compliance
   {
     folder: "CompliancePolicies",
+    detailEnvelope: { beta: "valueObject" },
     label: "compliance policies",
     area: "Compliance",
     path: "deviceManagement/deviceCompliancePolicies",
@@ -573,6 +582,7 @@ export const INTUNE_TYPES: IntuneType[] = [
   },
   {
     folder: "ComplianceSettingsPolicies",
+    detailEnvelope: { beta: "valueObject" },
     label: "settings catalog compliance policies",
     area: "Compliance",
     path: "deviceManagement/compliancePolicies",
@@ -605,6 +615,7 @@ export const INTUNE_TYPES: IntuneType[] = [
   },
   {
     folder: "ComplianceScripts",
+    detailEnvelope: { beta: "valueObject" },
     label: "compliance scripts",
     area: "Compliance",
     path: "deviceManagement/deviceComplianceScripts",
@@ -629,6 +640,7 @@ export const INTUNE_TYPES: IntuneType[] = [
   // Endpoint security (template based profiles and security baselines)
   {
     folder: "EndpointSecurityIntents",
+    detailEnvelope: { beta: "valueObject" },
     label: "security baselines and template profiles",
     area: "Endpoint security",
     path: "deviceManagement/intents",
@@ -665,6 +677,7 @@ export const INTUNE_TYPES: IntuneType[] = [
   // Scripts and remediations
   {
     folder: "PowerShellScripts",
+    detailEnvelope: { beta: "valueObject" },
     label: "Windows PowerShell scripts",
     area: "Scripts and remediations",
     path: "deviceManagement/deviceManagementScripts",
@@ -675,6 +688,7 @@ export const INTUNE_TYPES: IntuneType[] = [
   },
   {
     folder: "ShellScripts",
+    detailEnvelope: { beta: "valueObject" },
     label: "macOS shell scripts",
     area: "Scripts and remediations",
     path: "deviceManagement/deviceShellScripts",
@@ -686,6 +700,7 @@ export const INTUNE_TYPES: IntuneType[] = [
   },
   {
     folder: "CustomAttributeScripts",
+    detailEnvelope: { beta: "valueObject" },
     label: "macOS custom attributes",
     area: "Scripts and remediations",
     path: "deviceManagement/deviceCustomAttributeShellScripts",
@@ -704,6 +719,7 @@ export const INTUNE_TYPES: IntuneType[] = [
   },
   {
     folder: "Remediations",
+    detailEnvelope: { beta: "valueObject" },
     label: "remediations",
     area: "Scripts and remediations",
     path: "deviceManagement/deviceHealthScripts",
@@ -723,6 +739,7 @@ export const INTUNE_TYPES: IntuneType[] = [
   // Windows updates (update rings are device configuration profiles)
   {
     folder: "FeatureUpdateProfiles",
+    detailEnvelope: { beta: "valueObject" },
     label: "feature update profiles",
     area: "Windows updates",
     path: "deviceManagement/windowsFeatureUpdateProfiles",
@@ -739,6 +756,7 @@ export const INTUNE_TYPES: IntuneType[] = [
   },
   {
     folder: "QualityUpdateProfiles",
+    detailEnvelope: { beta: "valueObject" },
     label: "expedited quality update profiles",
     area: "Windows updates",
     path: "deviceManagement/windowsQualityUpdateProfiles",
@@ -750,6 +768,7 @@ export const INTUNE_TYPES: IntuneType[] = [
   },
   {
     folder: "QualityUpdatePolicies",
+    detailEnvelope: { beta: "valueObject" },
     label: "hotpatch quality update policies",
     area: "Windows updates",
     path: "deviceManagement/windowsQualityUpdatePolicies",
@@ -760,6 +779,7 @@ export const INTUNE_TYPES: IntuneType[] = [
   },
   {
     folder: "DriverUpdateProfiles",
+    detailEnvelope: { beta: "valueObject" },
     label: "driver update profiles",
     area: "Windows updates",
     path: "deviceManagement/windowsDriverUpdateProfiles",
@@ -773,6 +793,7 @@ export const INTUNE_TYPES: IntuneType[] = [
   // Apps
   {
     folder: "AppCategories",
+    detailEnvelope: { beta: "valueObject" },
     label: "app categories",
     area: "Apps",
     path: "deviceAppManagement/mobileAppCategories",
@@ -783,6 +804,7 @@ export const INTUNE_TYPES: IntuneType[] = [
   },
   {
     folder: "Apps",
+    detailEnvelope: { beta: "valueObject" },
     label: "apps",
     area: "Apps",
     path: "deviceAppManagement/mobileApps",
@@ -842,6 +864,7 @@ export const INTUNE_TYPES: IntuneType[] = [
   },
   {
     folder: "AppConfigurationPolicies",
+    detailEnvelope: { beta: "valueObject" },
     label: "app configuration policies for managed devices",
     area: "App protection and configuration",
     path: "deviceAppManagement/mobileAppConfigurations",
@@ -852,6 +875,7 @@ export const INTUNE_TYPES: IntuneType[] = [
   },
   {
     folder: "ManagedAppConfigurations",
+    detailEnvelope: { beta: "valueObject" },
     label: "app configuration policies for managed apps",
     area: "App protection and configuration",
     path: "deviceAppManagement/targetedManagedAppConfigurations",
@@ -865,6 +889,7 @@ export const INTUNE_TYPES: IntuneType[] = [
   },
   {
     folder: "AppProtectionIOS",
+    detailEnvelope: { beta: "valueObject" },
     label: "iOS app protection policies",
     area: "App protection and configuration",
     path: "deviceAppManagement/iosManagedAppProtections",
@@ -878,6 +903,7 @@ export const INTUNE_TYPES: IntuneType[] = [
   },
   {
     folder: "AppProtectionAndroid",
+    detailEnvelope: { beta: "valueObject" },
     label: "Android app protection policies",
     area: "App protection and configuration",
     path: "deviceAppManagement/androidManagedAppProtections",
@@ -891,6 +917,7 @@ export const INTUNE_TYPES: IntuneType[] = [
   },
   {
     folder: "AppProtectionWindows",
+    detailEnvelope: { beta: "valueObject" },
     label: "Windows app protection policies",
     area: "App protection and configuration",
     path: "deviceAppManagement/windowsManagedAppProtections",
@@ -908,6 +935,7 @@ export const INTUNE_TYPES: IntuneType[] = [
   },
   {
     folder: "PolicySets",
+    detailEnvelope: { beta: "valueObject" },
     label: "policy sets",
     area: "Apps",
     path: "deviceAppManagement/policySets",
@@ -958,6 +986,7 @@ export const INTUNE_TYPES: IntuneType[] = [
   // Enrollment
   {
     folder: "EnrollmentConfigurations",
+    detailEnvelope: { beta: "valueObject" },
     label: "enrollment configurations",
     area: "Enrollment",
     path: "deviceManagement/deviceEnrollmentConfigurations",
@@ -978,6 +1007,7 @@ export const INTUNE_TYPES: IntuneType[] = [
   },
   {
     folder: "AutopilotProfiles",
+    detailEnvelope: { beta: "valueObject" },
     label: "Windows Autopilot deployment profiles",
     area: "Enrollment",
     path: "deviceManagement/windowsAutopilotDeploymentProfiles",
@@ -1008,6 +1038,7 @@ export const INTUNE_TYPES: IntuneType[] = [
   },
   {
     folder: "AppleEnrollmentProfiles",
+    detailEnvelope: { beta: "valueObject" },
     label: "Apple user enrollment profiles",
     area: "Enrollment",
     path: "deviceManagement/appleUserInitiatedEnrollmentProfiles",
@@ -1019,6 +1050,7 @@ export const INTUNE_TYPES: IntuneType[] = [
   },
   {
     folder: "AppleAutomatedEnrollment",
+    detailEnvelope: { beta: "valueObject" },
     label: "Apple automated device enrollment tokens and profiles",
     area: "Enrollment",
     path: "deviceManagement/depOnboardingSettings",
@@ -1029,6 +1061,7 @@ export const INTUNE_TYPES: IntuneType[] = [
   },
   {
     folder: "AndroidEnrollmentProfiles",
+    detailEnvelope: { beta: "valueObject" },
     label: "Android Enterprise enrollment profiles",
     area: "Enrollment",
     path: "deviceManagement/androidDeviceOwnerEnrollmentProfiles",
@@ -1055,6 +1088,7 @@ export const INTUNE_TYPES: IntuneType[] = [
   },
   {
     folder: "DeviceCategories",
+    detailEnvelope: { beta: "valueObject" },
     label: "device categories",
     area: "Enrollment",
     path: "deviceManagement/deviceCategories",
@@ -1063,6 +1097,7 @@ export const INTUNE_TYPES: IntuneType[] = [
   },
   {
     folder: "TermsAndConditions",
+    detailEnvelope: { beta: "valueObject" },
     label: "terms and conditions",
     area: "Enrollment",
     path: "deviceManagement/termsAndConditions",
@@ -1088,6 +1123,7 @@ export const INTUNE_TYPES: IntuneType[] = [
   // Tenant administration
   {
     folder: "AssignmentFilters",
+    detailEnvelope: { beta: "valueObject" },
     label: "assignment filters",
     area: "Tenant administration",
     path: "deviceManagement/assignmentFilters",
@@ -1102,6 +1138,7 @@ export const INTUNE_TYPES: IntuneType[] = [
   },
   {
     folder: "ScopeTags",
+    detailEnvelope: { beta: "valueObject" },
     label: "scope tags",
     area: "Tenant administration",
     path: "deviceManagement/roleScopeTags",
@@ -1115,6 +1152,7 @@ export const INTUNE_TYPES: IntuneType[] = [
   },
   {
     folder: "RoleDefinitions",
+    detailEnvelope: { beta: "valueObject" },
     label: "Intune roles",
     area: "Tenant administration",
     path: "deviceManagement/roleDefinitions",
@@ -1140,6 +1178,7 @@ export const INTUNE_TYPES: IntuneType[] = [
   },
   {
     folder: "NotificationTemplates",
+    detailEnvelope: { beta: "valueObject" },
     label: "compliance notification templates",
     area: "Tenant administration",
     path: "deviceManagement/notificationMessageTemplates",
@@ -1167,6 +1206,7 @@ export const INTUNE_TYPES: IntuneType[] = [
   },
   {
     folder: "Branding",
+    detailEnvelope: { beta: "valueObject" },
     label: "Company Portal branding",
     area: "Tenant administration",
     path: "deviceManagement/intuneBrandingProfiles",
@@ -1198,6 +1238,7 @@ export const INTUNE_TYPES: IntuneType[] = [
   },
   {
     folder: "DeviceCleanupRules",
+    detailEnvelope: { beta: "valueObject" },
     label: "device clean-up rules",
     area: "Tenant administration",
     path: "deviceManagement/managedDeviceCleanupRules",
@@ -1206,6 +1247,7 @@ export const INTUNE_TYPES: IntuneType[] = [
   },
   {
     folder: "MultiAdminApprovalPolicies",
+    detailEnvelope: { beta: "valueObject" },
     label: "multi admin approval policies",
     area: "Tenant administration",
     path: "deviceManagement/operationApprovalPolicies",

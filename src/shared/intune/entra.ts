@@ -4,6 +4,7 @@ import { ENTRA_DIRECTORY_TYPES } from "./entra-directory"
 import { isGuid } from "../security"
 import { entraSnapshot } from "./entra-snapshot"
 import { sortedIds } from "./read"
+import { GraphResponseValidationError } from "../graph-response-validation"
 
 /** Configuration restore capabilities come only from individually verified matrix subsets. */
 const limitation = "Entra ID configuration restore is not available yet."
@@ -39,15 +40,15 @@ export const ENTRA_5A_TYPES: IntuneType[] = [
   },
   { ...base("PermissionGrantPreApprovalPolicies", "Permission grant pre-approval policies", "policies/permissionGrantPreApprovalPolicies"), apiVersion: "beta" },
   { ...singleton("DefaultAppManagementPolicy", "Default app management policy", "policies/defaultAppManagementPolicy"), neverStoredKeys: credentialRestrictions, neverStored: ["keyCredentials", "passwordCredentials"] },
-  { ...policy("AppManagementPolicies", "App management policies", "appManagementPolicies"), neverStoredKeys: credentialRestrictions, neverStored: ["keyCredentials", "passwordCredentials"] },
+  { ...policy("AppManagementPolicies", "App management policies", "appManagementPolicies"), detailEnvelope: { "v1.0": "singleValueArray", beta: "singleValueArray" }, neverStoredKeys: credentialRestrictions, neverStored: ["keyCredentials", "passwordCredentials"] },
   policy("TokenLifetimePolicies", "Token lifetime policies", "tokenLifetimePolicies"),
   policy("TokenIssuancePolicies", "Token issuance policies", "tokenIssuancePolicies"),
   policy("ClaimsMappingPolicies", "Claims mapping policies", "claimsMappingPolicies"),
   policy("HomeRealmDiscoveryPolicies", "Home realm discovery policies", "homeRealmDiscoveryPolicies"),
-  base("ActivityBasedTimeoutPolicies", "Activity-based timeout policies", "policies/activityBasedTimeoutPolicies"),
+  { ...base("ActivityBasedTimeoutPolicies", "Activity-based timeout policies", "policies/activityBasedTimeoutPolicies"), detailEnvelope: { "v1.0": "singleValueArray", beta: "singleValueArray" } },
   singleton("DeviceRegistrationPolicy", "Device registration policy", "policies/deviceRegistrationPolicy"),
   ...[["MdmEnrollmentPolicies", "MDM enrollment policies", "mobileDeviceManagementPolicies"], ["MamEnrollmentPolicies", "MAM enrollment policies", "mobileAppManagementPolicies"]].map(([folder, label, path]) => ({
-    ...base(folder!, label!, `policies/${path}`), apiVersion: "beta" as const,
+    ...base(folder!, label!, `policies/${path}`), apiVersion: "beta" as const, detailEnvelope: { beta: "valueObject" as const },
     extras: [{ property: "includedGroups", path: (id: string) => `policies/${path}/${id}/includedGroups?$select=id`, ids: true as const }],
   })),
   { ...base("DirectorySettings", "Directory settings", "groupSettings"), betaReadPath: "settings" },
@@ -79,18 +80,20 @@ export const ENTRA_5A_TYPES: IntuneType[] = [
   base("CertificateBasedAuthConfigurations", "Certificate-based authentication configurations", `${organization}/certificateBasedAuthConfiguration`, "Authentication"),
   {
     ...base("CertificateBasedAuthPki", "Certificate-based authentication PKI", "directory/publicKeyInfrastructure/certificateBasedAuthConfigurations", "Authentication"),
+    detailEnvelope: { "v1.0": "valueObject", beta: "valueObject" },
     neverStored: ["status", "statusDetails"],
     extras: [{ property: "certificateAuthorities", path: id => `directory/publicKeyInfrastructure/certificateBasedAuthConfigurations/${id}/certificateAuthorities` }],
   },
   {
     ...singleton("FederatedTokenValidationPolicy", "Federated token validation policy", "policies/federatedTokenValidationPolicy", "Authentication"),
+    detailEnvelope: { beta: "valueObject" },
     notConfigured: [{ status: 404, code: "Request_ResourceNotFound" }],
   },
   {
     ...singleton("ContinuousAccessEvaluationPolicy", "Continuous access evaluation policy", "identity/continuousAccessEvaluationPolicy", "Authentication"), apiVersion: "beta",
     notConfigured: [{ status: 404, message: "CAE settings not found" }],
   },
-  { ...base("HardwareOathDevices", "Hardware OATH devices", "directory/authenticationMethodDevices/hardwareOathDevices", "Authentication"), nameKey: "serialNumber", apiVersion: "beta", inventory: true, neverStored: ["lastUsedDateTime", "status"] },
+  { ...base("HardwareOathDevices", "Hardware OATH devices", "directory/authenticationMethodDevices/hardwareOathDevices", "Authentication"), detailEnvelope: { beta: "valueObject" }, nameKey: "serialNumber", apiVersion: "beta", inventory: true, neverStored: ["lastUsedDateTime", "status"] },
   base("GroupLifecyclePolicies", "Group lifecycle policies", "groupLifecyclePolicies", "Groups"),
   singleton("OwnerlessGroupPolicy", "Ownerless group policy", "policies/ownerlessGroupPolicy", "Groups"),
 ]
@@ -111,7 +114,7 @@ const groupSchedules = (folder: string, label: string, collection: string): Intu
 })
 
 export const ENTRA_5B_TYPES: IntuneType[] = [
-  singleton("CrossTenantAccessPolicy", "Cross-tenant access policy", "policies/crossTenantAccessPolicy", "External identities"),
+  { ...singleton("CrossTenantAccessPolicy", "Cross-tenant access policy", "policies/crossTenantAccessPolicy", "External identities"), detailEnvelope: { "v1.0": "valueObject", beta: "valueObject" } },
   singleton("CrossTenantAccessDefault", "Cross-tenant access defaults", "policies/crossTenantAccessPolicy/default", "External identities"),
   {
     ...external("CrossTenantAccessPartners", "Cross-tenant access partners", "policies/crossTenantAccessPolicy/partners"), idKey: "tenantId",
@@ -122,7 +125,7 @@ export const ENTRA_5B_TYPES: IntuneType[] = [
     ...external("CrossTenantAccessMtoTemplates", "Multitenant organization templates", "policies/crossTenantAccessPolicy/templates"),
     staticIds: ["multiTenantOrganizationIdentitySynchronization", "multiTenantOrganizationPartnerConfiguration"],
   },
-  { ...singleton("ExternalIdentitiesPolicy", "External identities policy", "policies/externalIdentitiesPolicy", "External identities"), apiVersion: "beta" },
+  { ...singleton("ExternalIdentitiesPolicy", "External identities policy", "policies/externalIdentitiesPolicy", "External identities"), detailEnvelope: { beta: "valueObject" }, apiVersion: "beta" },
   { ...external("B2bManagementPolicies", "B2B management policies", "policies/b2bManagementPolicies"), apiVersion: "beta" },
   { ...external("IdentityProviders", "Identity providers", "identity/identityProviders"), listOnly: true },
   {
@@ -133,7 +136,7 @@ export const ENTRA_5B_TYPES: IntuneType[] = [
     ],
   },
   { ...external("UserFlowAttributes", "User flow attributes", "identity/userFlowAttributes"), unavailable: selfServiceUnavailable },
-  { ...external("AuthenticationEventsFlows", "Authentication events flows", "identity/authenticationEventsFlows"), unavailable: [{ status: 403, code: "AADB2C", message: "requires feature: 'EnableMsGraphAuthenticationEventListener'" }] },
+  { ...external("AuthenticationEventsFlows", "Authentication events flows", "identity/authenticationEventsFlows"), detailEnvelope: { "v1.0": "valueObject", beta: "valueObject" }, unavailable: [{ status: 403, code: "AADB2C", message: "requires feature: 'EnableMsGraphAuthenticationEventListener'" }] },
   external("AuthenticationEventListeners", "Authentication event listeners", "identity/authenticationEventListeners"),
   external("CustomAuthenticationExtensions", "Custom authentication extensions", "identity/customAuthenticationExtensions"),
   // No delegated call has established APIConnectors.Read.All. Keep this type app-only.
@@ -163,7 +166,7 @@ export const ENTRA_5B_TYPES: IntuneType[] = [
     normalizeSnapshot: snapshot => {
       if (Array.isArray(snapshot.members)) {
         const members = snapshot.members.map(entry => {
-          if (!entry || typeof entry !== "object" || Array.isArray(entry)) throw new Error("Microsoft Graph returned an invalid administrative unit member")
+          if (!entry || typeof entry !== "object" || Array.isArray(entry)) throw new GraphResponseValidationError("Microsoft Graph returned an invalid administrative unit member")
           return entry
         })
         const types = members.flatMap(entry => {
@@ -236,8 +239,8 @@ export const ENTRA_5C_TYPES: IntuneType[] = [
     extras: ["internalSponsors", "externalSponsors"].map(property => ({ property, path: id => `${entitlement}/connectedOrganizations/${id}/${property}?$select=id`, ids: true })),
   },
   { ...governance("EntitlementManagementSettings", "Entitlement management settings", `${entitlement}/settings`), singleton: { id: "EntitlementManagementSettings", name: "Entitlement management settings" } },
-  { ...governance("AccessReviewDefinitions", "Access review definitions", "identityGovernance/accessReviews/definitions"), unorderedCollections: { reviewers: "$content", fallbackReviewers: "$content", backupReviewers: "$content", additionalNotificationRecipients: "$content", stageSettings: "stageId", "stageSettings.reviewers": "$content", "stageSettings.fallbackReviewers": "$content", "stageSettings.recommendationInsightsSettings": "$content", "settings.applyActions": "$content", "settings.recommendationInsightSettings": "$content", "settings.defaultReviewers": "$content", "settings.fallbackReviewers": "$content" }, neverStored: ["instances", "status"] },
-  { ...governance("AccessReviewPolicy", "Access review policy", "policies/accessReviewPolicy"), apiVersion: "beta", singleton: { id: "AccessReviewPolicy", name: "Access review policy" } },
+  { ...governance("AccessReviewDefinitions", "Access review definitions", "identityGovernance/accessReviews/definitions"), detailEnvelope: { "v1.0": "valueObject" }, unorderedCollections: { reviewers: "$content", fallbackReviewers: "$content", backupReviewers: "$content", additionalNotificationRecipients: "$content", stageSettings: "stageId", "stageSettings.reviewers": "$content", "stageSettings.fallbackReviewers": "$content", "stageSettings.recommendationInsightsSettings": "$content", "settings.applyActions": "$content", "settings.recommendationInsightSettings": "$content", "settings.defaultReviewers": "$content", "settings.fallbackReviewers": "$content" }, neverStored: ["instances", "status"] },
+  { ...governance("AccessReviewPolicy", "Access review policy", "policies/accessReviewPolicy"), detailEnvelope: { beta: "valueObject" }, apiVersion: "beta", singleton: { id: "AccessReviewPolicy", name: "Access review policy" } },
   {
     ...governance("LifecycleWorkflows", "Lifecycle workflows", `${workflows}/workflows`), unavailable: lifecycleUnavailable,
     extras: [{ property: "tasks", path: id => `${workflows}/workflows/${id}/tasks` }],

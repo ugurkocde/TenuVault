@@ -701,7 +701,7 @@ export class BackupEngine {
       const singletonPath = type.singleton?.collection ? detailPath(type, type.singleton.id) : undefined
       const read = <T>(operation: (control: ReadControl) => Promise<T>) => budget ? budget(operation) : operation(control)
       return organizationReader({
-        validateDetails: true,
+        detailVersion: version,
         get: (path: string) => read(async control => {
           const url = graphUrl(version, path, type.additionalReadVersions)
           if (path === singletonPath) return { value: await session.list(url, { ...control, headers: type.headers, singlePage: true }) }

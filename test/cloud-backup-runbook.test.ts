@@ -566,6 +566,7 @@ describe("Invoke-TenuVaultBackup.ps1 type table", () => {
       expect(row, type.folder).toBeTruthy()
       expect(row).toContain(`Path = '${type.path}'`)
       expect(row).toContain(`NameKey = '${type.nameKey}'`)
+      expect(row?.includes("DetailValueObject = $true"), type.folder).toBe(type.detailEnvelope?.beta === "valueObject")
       expect(row).toContain(type.expand ? `Expand = '${type.expand}'` : "Expand = $null")
       expect(row).toContain(type.select ? `Select = '${type.select}'` : "Select = $null")
       expect(row).toContain(type.listQuery ? `ListQuery = '${type.listQuery}'` : "ListQuery = $null")

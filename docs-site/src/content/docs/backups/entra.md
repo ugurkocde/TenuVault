@@ -15,7 +15,7 @@ Seven configuration types support individually confirmed restore subsets: token 
 
 **Both** means the signed-in admin or the optional Backup Reader with application permissions. **Admin** means a signed-in admin only. Holding the permission does not replace an admin role or license. All rows exclude passwords, client secrets, private keys, shared secrets, credential values, tokens, OATH seeds and tunnel keys at every depth. Public certificates are allowed.
 
-Paths are relative to Microsoft Graph. `{organizationId}` is resolved through the organization's ID, not a name. A singleton is stored under a stable type ID, including an object that Graph returns without an ID. Reference sub-collections are stored as sorted unique IDs, without expanding people or groups.
+Paths are relative to Microsoft Graph. Backups accept the documented response wrappers for supported Entra ID types and store the policy fields from the enclosed object. `{organizationId}` is resolved through the organization's ID, not a name. A singleton is stored under a stable type ID, including an object that Graph returns without an ID. Reference sub-collections are stored as sorted unique IDs, without expanding people or groups.
 
 | Folder or configuration | What is saved | Path | Version | Sign-in | Limits or exclusion reason |
 |---|---|---|---|---|---|

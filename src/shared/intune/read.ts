@@ -1,5 +1,5 @@
 import { GraphResponseValidationError } from "../graph-response-validation"
-import type { GraphVersion, IntuneType, Item, Json } from "./registry"
+import type { DetailEnvelope, GraphVersion, IntuneType, Item, Json } from "./registry"
 
 /**
  * Reads one Intune object the way a backup stores it: the detail GET with the type's $expand and
@@ -11,8 +11,8 @@ import type { GraphVersion, IntuneType, Item, Json } from "./registry"
  */
 export interface GraphReader {
   get: (path: string) => Promise<Item>
-  /** Backup readers require a verified detail before recording coverage. */
-  validateDetails?: true
+  /** Backup readers validate detail responses against the version they request. */
+  detailVersion?: GraphVersion
   /** Follows @odata.nextLink; accepts a relative path or an absolute nextLink. */
   list: (path: string, idKey?: string) => Promise<Item[]>
   /** Validates an expanded page and follows its continuation, or reads the beta relationship when the page is omitted. */
@@ -43,8 +43,8 @@ export class ScopeDiscoveryError extends Error {
 export async function readEntries(type: IntuneType, graph: GraphReader, discover: (path: string) => Promise<Item[]> = graph.list): Promise<Item[]> {
   if (type.singleton) {
     const path = detailPath(type, type.singleton.id)
-    const read = await graph.get(path)
-    if (graph.validateDetails) policyDetail(type, type.singleton.id, path, read)
+    const response = await graph.get(path)
+    const read = graph.detailVersion ? policyDetail(type, type.singleton.id, path, response, graph.detailVersion) : response
     return [{ ...read, id: type.singleton.id }]
   }
   if (type.staticIds) return type.staticIds.map(id => ({ id }))
@@ -92,8 +92,16 @@ export function detailPath(type: IntuneType, id: string): string {
   return `${type.path}/${encodeURIComponent(id)}${query ? `?${query}` : ""}`
 }
 
-function validateDetail(read: Item, expected?: { key: string; id: string }): Item {
-  if (!read || typeof read !== "object" || Array.isArray(read) || Array.isArray(read.value) || Object.hasOwn(read, "@odata.nextLink")) {
+function validateDetail(read: Json, expected?: { key: string; id: string }, envelope?: DetailEnvelope): Item {
+  if (!read || typeof read !== "object" || Array.isArray(read) || Object.hasOwn(read, "@odata.nextLink")) {
+    throw new GraphResponseValidationError("Microsoft Graph did not return a single policy object")
+  }
+  const value = read.value
+  if (envelope === "valueObject" && value && typeof value === "object" && !Array.isArray(value)) {
+    return validateDetail(value, expected)
+  }
+  if (Array.isArray(value)) {
+    if (envelope === "singleValueArray" && value.length === 1) return validateDetail(value[0]!, expected)
     throw new GraphResponseValidationError("Microsoft Graph did not return a single policy object")
   }
   if (expected && (!Object.hasOwn(read, expected.key) || read[expected.key] !== expected.id)) {
@@ -102,9 +110,10 @@ function validateDetail(read: Item, expected?: { key: string; id: string }): Ite
   return read
 }
 
-function policyDetail(type: IntuneType, id: string, path: string, read: Item): Item {
+function policyDetail(type: IntuneType, id: string, path: string, read: Item, version: GraphVersion): Item {
   if (type.singleton?.collection) return validateDetail(singletonObject(type.singleton, read))
-  if (type.singleton) return validateDetail(read)
+  const envelope = type.detailEnvelope?.[version]
+  if (type.singleton) return validateDetail(read, undefined, envelope)
   if (type.staticIds) {
     const detail = validateDetail(read)
     // Fixed routes use stable keys, while Graph may identify the resource with a tenant-specific ID.
@@ -115,7 +124,7 @@ function policyDetail(type: IntuneType, id: string, path: string, read: Item): I
     }
     return detail
   }
-  return validateDetail(read, { key: type.idKey ?? "id", id })
+  return validateDetail(read, { key: type.idKey ?? "id", id }, envelope)
 }
 
 export class ExpansionRecoveryError extends Error {
@@ -127,10 +136,10 @@ export class ExpansionRecoveryError extends Error {
 export async function readObject(type: IntuneType, id: string, graph: GraphReader, options: ReadOptions = {}): Promise<Item> {
   const path = detailPath(type, id)
   const read = await graph.get(path)
-  let detail = graph.validateDetails ? policyDetail(type, id, path, read) : type.singleton ? singletonObject(type.singleton, read) : read
-  const getDetail = async (path: string, expected?: { key: string; id: string }) => {
+  let detail = graph.detailVersion ? policyDetail(type, id, path, read, graph.detailVersion) : type.singleton ? singletonObject(type.singleton, read) : read
+  const getDetail = async (path: string, expected?: { key: string; id: string }, envelope?: DetailEnvelope) => {
     const response = await graph.get(path)
-    return graph.validateDetails ? validateDetail(response, expected) : response
+    return graph.detailVersion ? validateDetail(response, expected, envelope) : response
   }
   if (type.staticIds) detail = { ...detail, id }
   detail = withIdentity(type, detail)
@@ -147,7 +156,8 @@ export async function readObject(type: IntuneType, id: string, graph: GraphReade
         continue
       }
       if (extra.single) {
-        detail[extra.property] = (await getDetail(extra.path(encodedId), { key: "id", id }))[extra.property] ?? null
+        const envelope = graph.detailVersion && type.detailEnvelope?.[graph.detailVersion]
+        detail[extra.property] = (await getDetail(extra.path(encodedId), { key: "id", id }, envelope))[extra.property] ?? null
         continue
       }
       const collection = extra.path(encodedId)

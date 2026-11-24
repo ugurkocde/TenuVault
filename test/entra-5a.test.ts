@@ -128,6 +128,25 @@ describe("Entra 5a declarations and live fixtures", () => {
 })
 
 describe("Entra backup integration", () => {
+  it("accepts the documented one-entry timeout policy envelope and checks its identity and page", async () => {
+    const type = ENTRA_TYPES.find(type => type.folder === "ActivityBasedTimeoutPolicies")!
+    const policy = { id: "policy-1", displayName: "Activity timeout", definition: [] }
+    const read = (response: Item) => readObject(type, policy.id, { get: async () => structuredClone(response), list: async () => [], detailVersion: "v1.0" })
+    await expect(read({ value: [{ ...policy, id: "wrong-id" }] })).rejects.toThrow("without the requested id")
+    await expect(read({ value: [policy, policy] })).rejects.toThrow("did not return a single policy object")
+    await expect(read({ value: [policy], "@odata.nextLink": null })).rejects.toThrow("did not return a single policy object")
+    await expect(read({ value: [policy] })).resolves.toEqual(policy)
+  })
+
+  it("uses the declared version of an object envelope for a tenant-wide policy", async () => {
+    const type = ENTRA_TYPES.find(type => type.folder === "FederatedTokenValidationPolicy")!
+    const policy = { id: "provider-id", validatingDomains: { rootDomains: "enumerated", domainNames: ["example.test"] } }
+    const backup = await readObject(type, type.singleton!.id, {
+      get: async () => ({ value: structuredClone(policy) }), list: async () => [], detailVersion: "beta",
+    })
+    expect(backup).toEqual({ ...policy, id: type.singleton!.id })
+  })
+
   it.each([
     ["Start now", GRAPH_CLI_CLIENT_ID, "/beta/policies/authorizationPolicy/authorizationPolicy"],
     ["own registration", CLIENT, "/v1.0/policies/authorizationPolicy"],

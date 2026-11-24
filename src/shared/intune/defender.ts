@@ -1,6 +1,7 @@
 import { restoreMatrixRow } from "./restore-matrix"
 import type { IntuneType } from "./registry"
 import { defenderSnapshot, tenantControlStates } from "./defender-snapshot"
+import { GraphResponseValidationError } from "../graph-response-validation"
 
 const secrets = ["clientSecret", "password", "privateKey", "sharedSecret", "secretKey", "tokenSeed", "seed", "tunnelKey", "keyCredentials", "passwordCredentials", "secret", "accessToken", "refreshToken", "clientAssertion", "pfx", "pkcs12", "secretText", "deploymentAccessKey"]
 const base = (folder: string, label: string, path: string, area: IntuneType["area"]): IntuneType => ({
@@ -21,7 +22,7 @@ const content = (folder: string, label: string, collection: string): IntuneType 
   skip: item => item.source !== "tenant" ? "Microsoft or unknown-source content" : undefined,
   normalizeSnapshot: item => {
     // Recheck the detail response too: a filtered list never authorizes storing global content.
-    if (item.source !== "tenant") throw new Error("Microsoft Graph returned non-tenant attack simulation content")
+    if (item.source !== "tenant") throw new GraphResponseValidationError("Microsoft Graph returned non-tenant attack simulation content")
     return defenderSnapshot(item)
   },
   neverStored: ["lastModifiedDateTime"],
@@ -49,7 +50,7 @@ export const DEFENDER_TYPES: IntuneType[] = [
     // The list omits content. The detail GET must explicitly select the complete document.
     select: "id,name,content",
     normalizeSnapshot: item => {
-      if (!item.content || typeof item.content !== "object" || Array.isArray(item.content)) throw new Error("Microsoft Graph did not return workbook content")
+      if (!item.content || typeof item.content !== "object" || Array.isArray(item.content)) throw new GraphResponseValidationError("Microsoft Graph did not return workbook content")
       return defenderSnapshot(item)
     },
     neverStored: ["createdByUpn", "lastUpdatedByUpn", "createdAtDateTime", "updatedAtDateTime", "etag", "@odata.etag"], maxSnapshotBytes: 4 * 1024 * 1024,
@@ -79,14 +80,15 @@ export const DEFENDER_TYPES: IntuneType[] = [
   },
   {
     ...base("DefenderEmailSubmissionPolicies", "User reported settings policies", "security/threatSubmission/emailThreatSubmissionPolicies", "Email and collaboration"), apiVersion: "beta",
+    detailEnvelope: { beta: "valueObject" },
     unorderedCollections: { policyReviewers: "$content" },
   },
   {
     ...identity("DefenderIdentitySensors", "Identity sensor settings", "sensors"),
     neverStored: ["deploymentStatus", "healthStatus", "openHealthIssuesCount", "serviceStatus", "version", "createdDateTime"],
   },
-  { ...identity("DefenderIdentityAutoAuditing", "Identity automatic auditing", "settings/autoAuditingConfiguration"), singleton: { id: "DefenderIdentityAutoAuditing", name: "Identity automatic auditing" } },
-  { ...identity("DefenderIdentitySensorActivation", "Identity sensor activation", "sensorCandidateActivationConfiguration"), singleton: { id: "DefenderIdentitySensorActivation", name: "Identity sensor activation" } },
+  { ...identity("DefenderIdentityAutoAuditing", "Identity automatic auditing", "settings/autoAuditingConfiguration"), detailEnvelope: { "v1.0": "valueObject", beta: "valueObject" }, singleton: { id: "DefenderIdentityAutoAuditing", name: "Identity automatic auditing" } },
+  { ...identity("DefenderIdentitySensorActivation", "Identity sensor activation", "sensorCandidateActivationConfiguration"), detailEnvelope: { "v1.0": "valueObject", beta: "valueObject" }, singleton: { id: "DefenderIdentitySensorActivation", name: "Identity sensor activation" } },
   {
     ...base("DefenderSecureScoreControlStates", "Secure Score control states", "security/secureScoreControlProfiles", "Posture and access"), listOnly: true,
     skip: item => tenantControlStates(item).length ? undefined : "Default Microsoft control state",

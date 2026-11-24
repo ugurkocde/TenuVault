@@ -226,6 +226,25 @@ describe("endpoint refusal and throttle isolation", () => {
     expect(getToken.mock.calls.every(([request]) => !(request as { fresh?: boolean }).fresh)).toBe(true)
   })
 
+  it("saves bare and wrapped email submission policies only when the entity ID matches", async () => {
+    const type = typeOf("DefenderEmailSubmissionPolicies")
+    const root = `/beta/${type.path}`
+    const policy = { id: "example", isReportToMicrosoftEnabled: true }
+    for (const response of [policy, { value: { ...policy, id: "different" } }, { value: policy }]) {
+      const setup = fixture(scriptedGraph({ [root]: { value: [policy] }, [`${root}/example`]: response }))
+      const job = await setup.run({ scope: only(type.folder) })
+      const files = (await setup.files(job)).filter(file => file.startsWith(type.folder + "/"))
+      if ("value" in response && response.value.id !== policy.id) {
+        expect(job.outcomes?.types).toMatchObject([{ outcome: "failed", saved: 0, error: expect.stringContaining("without the requested id") }])
+        expect(files).toEqual([])
+      } else {
+        expect(job.outcomes?.types).toMatchObject([{ outcome: "saved", saved: 1 }])
+        expect(files).toHaveLength(1)
+        expect(await setup.file(job, files[0]!)).toEqual(policy)
+      }
+    }
+  })
+
   it.each(["DefenderRoleDefinitions", "DefenderRoleAssignments", "DefenderCustomDetectionRules"])("keeps the recorded %s permission answer separate", async folder => {
     const type = typeOf(folder)
     const setup = fixture(scriptedGraph({ ...intune, [`/${graphVersion(type)}/${type.path}`]: refusal(403, folder.includes("Role") ? "UnknownError" : "Forbidden", folder.includes("Role") ? "" : "Missing application roles. API required roles: CustomDetection.ReadWrite.All, CustomDetection.Read.All") }))
