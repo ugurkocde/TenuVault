@@ -154,7 +154,7 @@ Devices are counted as items of the backup, not as policies, and hygiene checks 
 | --- | --- | --- |
 | Assignment filters | No | |
 | Scope tags | Yes | Built-in scope tags are skipped |
-| Intune roles | Yes | Custom roles with their role assignments, including members and scopes. Built-in roles are skipped. |
+| Intune roles | Yes | Custom roles with their role assignments, including members and scopes. Desktop and cloud backups read each assignment separately. If an assignment cannot be read, the role is left out and coverage for Intune roles is incomplete. Built-in roles are skipped. |
 | Compliance notification templates | No | With their messages in every language |
 | Company Portal branding | Yes | With the logos and images |
 | Device clean-up rules | No | In a scheduled backup made by the [Backup Reader](/backups/backup-reader/), only with its optional device inventory permission; otherwise left out |

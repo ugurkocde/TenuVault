@@ -9,6 +9,7 @@ import { createHash } from "node:crypto"
 import { fixture, scriptedGraph, type GraphRoute } from "./helpers/backup-fixture"
 import listPages from "./fixtures/cloud-backup/list-pages.json"
 import expandedAssignments from "./fixtures/cloud-backup/expanded-assignments.json"
+import roleDetails from "./fixtures/cloud-backup/role-details.json"
 import { compareObjects } from "../src/portal/app/api/detect-drifts/route"
 import { moduleForFolder } from "../src/shared/services/modules"
 import { INTUNE_TYPES, typeForFolder } from "../src/shared/intune/registry"
@@ -890,6 +891,26 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
       }
       expect.soft(rows.filter(row => row.field.startsWith("assignments[") && row.oldValue?.id && !row.newValue?.id).map(row => row.oldValue?.id), scenario.name).toEqual(removed)
     }
+  }, 60_000)
+
+  it.each(["desktop", ...(pwsh ? ["runbook"] : [])])("saves wrapped role assignments and bare role values in the %s backup", async engine => {
+    const roleSnapshot = async (name: string) => {
+      const file = `RoleDefinitions/${name}.json`
+      if (engine === "runbook") {
+        const blobs = writtenBlobs(runPlainFixture().at(-1)!)
+        const policy = blobs.get(`${folderOf(blobs)}/${file}`)
+        return policy ? JSON.parse(policy) : undefined
+      }
+      return desktop!.file(job!, file)
+    }
+    const desktop = engine === "desktop" ? fixture(scriptedGraph(roleDetails)) : undefined
+    const job = await desktop?.run({ scope: { excluded: INTUNE_TYPES.filter(type => type.folder !== "RoleDefinitions").map(type => type.folder) } })
+    expect.soft(await roleSnapshot("Help desk")).toEqual({
+      ...roleDetails["/beta/deviceManagement/roleDefinitions/role-1"],
+      roleAssignments: [roleDetails["/beta/deviceManagement/roleAssignments/assignment-1"].value],
+    })
+    expect.soft(await roleSnapshot("Object value")).toEqual({ ...roleDetails["/beta/deviceManagement/roleDefinitions/role-2"], roleAssignments: [] })
+    expect(await roleSnapshot("Array value")).toEqual({ ...roleDetails["/beta/deviceManagement/roleDefinitions/role-3"], roleAssignments: [] })
   }, 60_000)
 
   it.runIf(Boolean(pwsh))("keeps personal identifiers out of cloud detail failure output and outcomes", () => {

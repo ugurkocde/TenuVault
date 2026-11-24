@@ -210,6 +210,8 @@ $scenarios += @(foreach ($case in $expansions.cases) {
     }
     @{ Responses = $responses; RelationshipStatus = $case.relationshipStatus }
 })
+$roleDetails = Get-Content (Join-Path $PSScriptRoot "role-details.json") -Raw | ConvertFrom-Json -AsHashtable
+$scenarios += @{ Responses = $roleDetails }
 foreach ($scenario in $scenarios) {
     $script:calls.Clear()
     $script:OutcomeSent = $false

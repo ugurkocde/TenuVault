@@ -1201,14 +1201,19 @@ function Invoke-TvGraphGet {
 function Invoke-TvGraphDetail {
     param([string]$Path, [string]$Token, [string]$Id, [switch]$ValueObject)
     $detail = Invoke-TvGraphGet $Path $Token
-    if ($ValueObject -and $detail -is [System.Collections.IDictionary] -and
-        $detail.psbase.Keys -cnotcontains "@odata.nextLink" -and $detail["value"] -is [System.Collections.IDictionary]) {
-        $detail = $detail["value"]
-    }
-    if ($detail -isnot [System.Collections.IDictionary] -or $detail["value"] -is [array] -or $detail.psbase.Keys -ccontains "@odata.nextLink") {
+    if ($detail -isnot [System.Collections.IDictionary] -or $detail.psbase.Keys -ccontains "@odata.nextLink") {
         throw "Microsoft Graph did not return a single policy object"
     }
-    if ($Id -and ($detail.psbase.Keys -cnotcontains "id" -or $detail["id"] -isnot [string] -or $detail["id"] -cne $Id)) {
+    $matchesId = $Id -and $detail.psbase.Keys -ccontains "id" -and $detail["id"] -is [string] -and $detail["id"] -ceq $Id
+    $value = $detail["value"]
+    if ($ValueObject -and $value -is [System.Collections.IDictionary] -and (-not $matchesId -or $value.psbase.Keys -ccontains "id")) {
+        $detail = $value
+        $matchesId = $Id -and $detail.psbase.Keys -ccontains "id" -and $detail["id"] -is [string] -and $detail["id"] -ceq $Id
+    }
+    if ($detail.psbase.Keys -ccontains "@odata.nextLink" -or ($detail["value"] -is [array] -and -not $matchesId)) {
+        throw "Microsoft Graph did not return a single policy object"
+    }
+    if ($Id -and -not $matchesId) {
         throw "Microsoft Graph returned a policy without the requested id"
     }
     return $detail
@@ -1390,9 +1395,9 @@ function Read-TvObject {
                     Complete-TvGraphExpansion $nested ($entryPath -split '\?', 2)[0] $Token
                     Set-TvProp $entry $extra.Each.Property $nested
                 } else {
-                    $full = Invoke-TvGraphDetail $entryPath $Token $entryId
+                    $full = Invoke-TvGraphDetail $entryPath $Token $entryId -ValueObject:($Type.DetailValueObject -eq $true)
                     Complete-TvGraphExpansion $full ($entryPath -split '\?', 2)[0] $Token
-                    foreach ($k in @(Get-TvKeys $full)) { if ($k -ne "@odata.context") { Set-TvProp $entry $k (Get-TvProp $full $k) } }
+                    foreach ($k in $full.psbase.Keys) { if ($k -cne "@odata.context") { Set-TvProp $entry $k $full[$k] } }
                 }
             }
         }
@@ -3450,7 +3455,7 @@ function Invoke-TvBackup {
             $listPath = [string]$type.Path
             if ($type.ListQuery) { $listPath += "?" + $type.ListQuery }
             $all = if ($type.Singleton) {
-                $one = Invoke-TvGraphDetail $listPath $graphToken
+                $one = Invoke-TvGraphDetail $listPath $graphToken -ValueObject:($type.DetailValueObject -eq $true)
                 Set-TvProp $one "id" $type.Singleton.Id
                 @($one)
             } else { @(Invoke-TvGraphList $listPath $graphToken) }

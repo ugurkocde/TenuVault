@@ -96,15 +96,18 @@ function validateDetail(read: Json, expected?: { key: string; id: string }, enve
   if (!read || typeof read !== "object" || Array.isArray(read) || Object.hasOwn(read, "@odata.nextLink")) {
     throw new GraphResponseValidationError("Microsoft Graph did not return a single policy object")
   }
+  const matchesIdentity = expected && Object.hasOwn(read, expected.key) && read[expected.key] === expected.id
   const value = read.value
-  if (envelope === "valueObject" && value && typeof value === "object" && !Array.isArray(value)) {
-    return validateDetail(value, expected)
-  }
-  if (Array.isArray(value)) {
-    if (envelope === "singleValueArray" && value.length === 1) return validateDetail(value[0]!, expected)
+  const inner = envelope === "valueObject" && value && typeof value === "object" && !Array.isArray(value)
+    ? value
+    : envelope === "singleValueArray" && Array.isArray(value) && value.length === 1 ? value[0] : undefined
+  // A bare entity can have a value property of its own. A declared wrapper with its own identity still has to match.
+  const innerHasIdentity = expected && inner && typeof inner === "object" && !Array.isArray(inner) && Object.hasOwn(inner, expected.key)
+  if (inner !== undefined && (!matchesIdentity || innerHasIdentity)) return validateDetail(inner, expected)
+  if (Array.isArray(value) && !matchesIdentity) {
     throw new GraphResponseValidationError("Microsoft Graph did not return a single policy object")
   }
-  if (expected && (!Object.hasOwn(read, expected.key) || read[expected.key] !== expected.id)) {
+  if (expected && !matchesIdentity) {
     throw new GraphResponseValidationError(`Microsoft Graph returned a policy without the requested ${expected.key}`)
   }
   return read
@@ -137,6 +140,7 @@ export async function readObject(type: IntuneType, id: string, graph: GraphReade
   const path = detailPath(type, id)
   const read = await graph.get(path)
   let detail = graph.detailVersion ? policyDetail(type, id, path, read, graph.detailVersion) : type.singleton ? singletonObject(type.singleton, read) : read
+  const envelope = graph.detailVersion && type.detailEnvelope?.[graph.detailVersion]
   const getDetail = async (path: string, expected?: { key: string; id: string }, envelope?: DetailEnvelope) => {
     const response = await graph.get(path)
     return graph.detailVersion ? validateDetail(response, expected, envelope) : response
@@ -152,11 +156,10 @@ export async function readObject(type: IntuneType, id: string, graph: GraphReade
   for (const extra of type.extras ?? []) {
     try {
       if (extra.object) {
-        detail[extra.property] = await getDetail(extra.path(encodedId))
+        detail[extra.property] = await getDetail(extra.path(encodedId), undefined, envelope)
         continue
       }
       if (extra.single) {
-        const envelope = graph.detailVersion && type.detailEnvelope?.[graph.detailVersion]
         detail[extra.property] = (await getDetail(extra.path(encodedId), { key: "id", id }, envelope))[extra.property] ?? null
         continue
       }
@@ -171,7 +174,7 @@ export async function readObject(type: IntuneType, id: string, graph: GraphReade
           const path = extra.each.path(encodedId, encodeURIComponent(String(entry.id)))
           if (extra.each.property) entry[extra.each.property] = await graph.list(path)
           else {
-            Object.assign(entry, await getDetail(path, { key: "id", id: String(entry.id) }))
+            Object.assign(entry, await getDetail(path, { key: "id", id: String(entry.id) }, envelope))
             delete entry["@odata.context"]
           }
         }
