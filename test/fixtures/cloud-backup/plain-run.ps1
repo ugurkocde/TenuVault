@@ -211,7 +211,7 @@ $scenarios += @(foreach ($case in $expansions.cases) {
     @{ Responses = $responses; RelationshipStatus = $case.relationshipStatus }
 })
 $roleDetails = Get-Content (Join-Path $PSScriptRoot "role-details.json") -Raw | ConvertFrom-Json -AsHashtable
-$scenarios += @{ Responses = $roleDetails }
+$scenarios += @{ Name = "role-details"; Responses = $roleDetails }
 foreach ($scenario in $scenarios) {
     $script:calls.Clear()
     $script:OutcomeSent = $false
@@ -235,5 +235,5 @@ foreach ($scenario in $scenarios) {
         if ($write) { return ConvertFrom-TvJson $write.body }
         return $null
     }
-    Write-Output (@{ calls = @($script:calls.ToArray()); output = $output.ToArray(); error = $errorText; compared = $compared } | ConvertTo-Json -Compress -Depth 10)
+    Write-Output (@{ scenario = $scenario.Name; calls = @($script:calls.ToArray()); output = $output.ToArray(); error = $errorText; compared = $compared } | ConvertTo-Json -Compress -Depth 10)
 }

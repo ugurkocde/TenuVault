@@ -36,7 +36,7 @@ function runAuditSetup(shell: (file: string, args: string[], options: { encoding
 }
 type RunCall = { condition?: string; uri: string; method: string; contentType: string | null; ifNoneMatch: string | null; body: string | null }
 type DriftRow = { field: string; oldValue?: { id?: string } | null; newValue?: { id?: string } | null }
-type Run = { calls: RunCall[]; error?: string | null; output?: string[]; compared?: { Drifts: Array<{ configId: string; changes?: DriftRow[] }>; UnknownTypes: string[] } }
+type Run = { scenario?: string | null; calls: RunCall[]; error?: string | null; output?: string[]; compared?: { Drifts: Array<{ configId: string; changes?: DriftRow[] }>; UnknownTypes: string[] } }
 let plainRuns: Run[] | undefined
 /** The scenarios of the plain-run fixture, in the order printed by the PowerShell harness. */
 function runPlainFixture(): Run[] {
@@ -895,23 +895,23 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
   }, 60_000)
 
   it.each(["desktop", ...(pwsh ? ["runbook"] : [])])("saves wrapped role assignments and bare role values in the %s backup", async engine => {
-    const roleSnapshot = async (name: string) => {
-      const file = `RoleDefinitions/${name}.json`
-      if (engine === "runbook") {
-        const blobs = writtenBlobs(runPlainFixture().at(-1)!)
-        const policy = blobs.get(`${folderOf(blobs)}/${file}`)
-        return policy ? JSON.parse(policy) : undefined
-      }
-      return desktop!.file(job!, file)
-    }
     const desktop = engine === "desktop" ? fixture(scriptedGraph(roleDetails)) : undefined
     const job = await desktop?.run({ scope: { excluded: INTUNE_TYPES.filter(type => type.folder !== "RoleDefinitions").map(type => type.folder) } })
-    expect.soft(await roleSnapshot("Help desk")).toEqual({
+    const run = engine === "runbook" ? runPlainFixture().find(result => result.scenario === "role-details") : undefined
+    if (engine === "runbook" && !run) throw new Error("The plain runbook fixture did not emit the role details scenario")
+    const blobs = run ? writtenBlobs(run) : undefined
+    const root = blobs ? folderOf(blobs) : undefined
+    const readFile = async (file: string) => {
+      if (!blobs) return desktop!.file(job!, file)
+      const body = blobs.get(`${root}/${file}`)
+      return body ? JSON.parse(body) : undefined
+    }
+    expect.soft(await readFile("RoleDefinitions/Help desk.json")).toEqual({
       ...roleDetails["/beta/deviceManagement/roleDefinitions/role-1"],
       roleAssignments: [roleDetails["/beta/deviceManagement/roleAssignments/assignment-1"].value],
     })
-    expect.soft(await roleSnapshot("Object value")).toEqual({ ...roleDetails["/beta/deviceManagement/roleDefinitions/role-2"], roleAssignments: [] })
-    expect(await roleSnapshot("Array value")).toEqual({ ...roleDetails["/beta/deviceManagement/roleDefinitions/role-3"], roleAssignments: [] })
+    expect.soft(await readFile("RoleDefinitions/Object value.json")).toEqual({ ...roleDetails["/beta/deviceManagement/roleDefinitions/role-2"], roleAssignments: [] })
+    expect(await readFile("RoleDefinitions/Array value.json")).toEqual({ ...roleDetails["/beta/deviceManagement/roleDefinitions/role-3"], roleAssignments: [] })
 
     const file = "Help desk.json"
     const key = "RoleDefinitions/role-1"
@@ -923,9 +923,7 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
         { ...detail, members: member, resourceScopes: null, scopeMembers: "scope-member-1", roleScopeTagIds: null },
       ] }) } },
     })
-    const manifest = engine === "runbook"
-      ? JSON.parse(runPlainFixture().at(-1)!.calls.find(call => call.method === "Put" && call.uri.endsWith("/metadata.json"))!.body!)
-      : await desktop!.file(job!, "metadata.json")
+    const manifest = await readFile("metadata.json")
     expect(manifest.Items[key].hash).toBe(snapshotHash(snapshot))
     expect(historical("member-1").Items[key].hash).toBe("nqJCtL/UMTIVAlR3MX8WAX")
     const current = { ...manifest, Items: { [key]: manifest.Items[key] } }
